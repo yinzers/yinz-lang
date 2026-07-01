@@ -3,7 +3,7 @@
 > Audience: compiler contributors. For user docs, see `spec/watch.md` (ships with v0.2.0 final).
 > Spec file for end users: `spec/watch.md`
 
-Cross-references: `design/compiler.md`, `design/compiler-language.md`, `design/feature-registry.md`, `design/lsp.md`, `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md`
+Cross-references: `design/compiler.md`, `design/compiler-language.md`, `design/feature-registry.md`, `design/lsp.md`, `.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`
 
 ---
 
@@ -410,6 +410,6 @@ Phase 6 results will be filled in here after measurement.
 - `design/compiler-errors.md` — banned-jargon source-of-truth; watch must not emit banned words
 - `design/versioning.md` — pre-v1.0 breaking-change policy; `--json` schema version strategy
 - `registry/features.toml` — `ynz-watch-interactive-commands`, `ynz-watch-config-file` deferred entries
-- `.claude/plans/active/v0-2-m4-watch.md` — implementation plan; all constraints + locked decisions
-- `.claude/plans/done/v0-2-m2-lsp-thin-slice.md` — daemon-with-CompilerDb pattern reference
-- `.claude/plans/done/v0-2-m3-fmt.md` — library + CLI shape reference; cross-platform test patterns
+- `.claude/planning/done/2026-05-20-v0-2-m4-watch/plan.md` — implementation plan; all constraints + locked decisions
+- `.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md` — daemon-with-CompilerDb pattern reference
+- `.claude/planning/done/2026-05-20-v0-2-m3-fmt/plan.md` — library + CLI shape reference; cross-platform test patterns

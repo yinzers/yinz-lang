@@ -295,7 +295,7 @@ There are two sleep intrinsics, distinguished by what they do to the OS thread:
 | **`--kernel` mode** | `wait sleep(ms)` (no scheduler to yield to) | **COMPILE ERROR** — `KernelModeRejectsWait`, with WHAT-INSTEAD redirecting to `sleepBlocking(ms)` (pauses without a scheduler). Ships when `--kernel` is wired to emit (post-v0.3; reserved in the registry, 0 code sites today). See `design/no-runtime-mode.md`. |
 | **Normal mode** | `sleepBlocking(ms)` (holds a thread idle when a scheduler is available) | **Tier 3 lint** `prefer-yielding-sleep` (suggestion, dismissable — NOT an error) → use `wait sleep(ms)`. Ships in **M4** (rides the `[[lint_rule]]` infra built there; M4's `background` handle-form also removes the last legit non-kernel blocking-sleep use — the keepalive pattern — so the lint stops nagging a valid case). Must be a suggestion, not an error: rare legit uses exist + respect explicit intent (`.claude/rules/auto-promotion.md`). |
 
-Tracked for execution in `.claude/plans/roadmaps/v0-3-concurrency-perf.md` ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope).
+Tracked for execution in `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md` ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope).
 
 ---
 

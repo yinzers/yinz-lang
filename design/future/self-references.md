@@ -151,4 +151,4 @@ The v0.3 milestone plan must include:
 - [`design/ownership.md`](../ownership.md) (general ownership semantics — self-references extend these)
 - [`design/ide-hints.md`](../ide-hints.md) (muted `self-referential` hint protocol)
 - [`design/future/index.md`](index.md) (status: locked, v0.3+)
-- [`.claude/plans/done/design-lockdown-from-gemini-review.md`](../../.claude/plans/done/design-lockdown-from-gemini-review.md) (originating discussion + Patrick's Approach A confirmation)
+- [`.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md`](../../.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md) (originating discussion + Patrick's Approach A confirmation)

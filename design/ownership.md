@@ -137,7 +137,7 @@ When `shape` declarations land in M4, field assignment (`player.field = x`) beco
 
 Cross-references:
 - `spec/variables.md` "What const blocks" section (user-facing)
-- `.claude/plans/active/v0-1-compiler.md` Forward-Compatibility Constraints (locked decisions for M4+)
+- `.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md` Forward-Compatibility Constraints (locked decisions for M4+)
 - `.claude/graveyard.md` Entry 1 (mechanical enforcement for M4+ plans)
 
 ---

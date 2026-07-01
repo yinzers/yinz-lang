@@ -146,7 +146,7 @@ The extension requires the `ynz-lsp` binary on your PATH: `cargo build -p ynz-ls
 
 ## Status
 
-The compiler is in active development. See [`design/mvp-scope.md`](design/mvp-scope.md) for the milestone roadmap, and [`.claude/plans/active/v0-1-compiler.md`](.claude/plans/active/v0-1-compiler.md) for the current v0.1 implementation plan.
+The compiler is in active development. See [`design/mvp-scope.md`](design/mvp-scope.md) for the milestone roadmap, and [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) for the (now-shipped) v0.1 implementation plan — active work has moved on to the v0.3 concurrency roadmap, [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
 
 **Current shipped milestones**:
 - M1 ✓ — Hello world end-to-end (tag `v0.1.0-m1`)

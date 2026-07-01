@@ -14,7 +14,7 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 
 ## Const Deep-Immutability Invariant Unstated in Milestone Plans — 2026-05-14
 
-**Scope**: `.claude/plans/active/m[0-9]+-*.md` and `.claude/plans/done/m[0-9]+-*.md` for milestones M4 and later. Plans for M1, M2, M3 are exempt (predate the rule).
+**Scope**: `.claude/planning/{active,paused,done}/<plan-id>/plan.md` where `<plan-id>` (the directory name) contains a milestone marker `m[0-9]+` for milestones M4 and later. Plans for M1, M2, M3 are exempt (predate the rule). (Migrated 2026-07-01 from the pre-migration `.claude/plans/(active|done)/m[0-9]+-*.md` flat-file scope — plans are now nested `<plan-id>/plan.md` directories, not files named after the milestone.)
 **Exemption**:
 - Pre-M4 plan files (M1, M2, M3 — these predate the plan-invariants rule)
 - Plans explicitly marked `## Invariants This Milestone Must Preserve` with all required subsections containing the const semantics
@@ -24,7 +24,7 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 
 **Pre-filter patterns**:
 ```
-\.claude/plans/(active|done)/m[0-9]+-
+\.claude/planning/(active|paused|done)/[0-9]{4}-[0-9]{2}-[0-9]{2}-.*m[0-9]+.*/plan\.md$
 ownership
 const binding
 borrow checker
@@ -38,7 +38,7 @@ borrow checker
 **Constraint**: Every M4+ milestone plan that touches ownership, types, or the `const`/`let` distinction MUST include `## Invariants This Milestone Must Preserve` with `### Safety` enumerating the five paths const blocks (reassignment, `.lend`, `.give`, field mutation, mutable inference) AND `### Performance` naming the LLVM attribute contract (`readonly` on share params and params figured-out from const bindings; `noalias` where ownership rules prove non-aliasing). See `.claude/rules/plan-invariants.md` for the full required subsection list.
 
 **Bouncer checks** (each runnable as shell against a diff):
-- [ ] For each plan-file diff matching `.claude/plans/{active,done}/m[0-9]+-*.md`: extract the milestone number from the filename. If number >= 4, grep the file body for `^## Invariants This Milestone Must Preserve$`. Missing → CRITICAL.
+- [ ] For each `plan.md` diff under `.claude/planning/{active,paused,done}/<plan-id>/`: extract the milestone number from the `<plan-id>` directory name (or the `legacy.milestone`/`legacy.slug` frontmatter field for migrated plans). If number >= 4, grep the file body for `^## Invariants This Milestone Must Preserve$`. Missing → CRITICAL.
 - [ ] For each M4+ plan file with the heading present: check the `### Safety` subsection (lines between `^### Safety$` and the next `^### ` or `^## `) contains ALL FIVE substrings: `cannot be reassigned`, `cannot be lent`, `cannot be given`, `field mutation`, AND (case-insensitive) one of `readonly`, `noalias`, `LLVM` somewhere in the Performance subsection. Missing any → CRITICAL.
 - [ ] If the plan mentions `ownership system`, `borrow checker`, or `const binding` in its body but lacks a `## Invariants This Milestone Must Preserve` heading entirely → CRITICAL.
 
@@ -50,7 +50,7 @@ borrow checker
 
 ## Plan Contradicts a Governing Design Doc, Caught By No Review — 2026-05-31
 
-**Scope**: `.claude/plans/active/*.md` and `.claude/plans/paused/*.md` (execution plans). Roadmaps + done plans exempt from the section requirement (done plans are historical; roadmaps don't have phases).
+**Scope**: `.claude/planning/active/<plan-id>/plan.md` and `.claude/planning/paused/<plan-id>/plan.md` (execution plans — `legacy.type: execution` or `metadata.type: plan` with phases). Roadmaps + done plans exempt from the section requirement (done plans are historical; roadmaps don't have phases). (Migrated 2026-07-01 — see the const-immutability entry above for the same path-shape update.)
 **Exemption**:
 - Plans containing a `## Design-Doc Alignment` section that cites the governing `/design/` doc(s) and either confirms match OR enumerates each divergence as "design doc X says A; plan does B because <reason>" with sign-off.
 - Plans where `/design/` genuinely has no relevant doc AND the `## Design-Doc Alignment` section states that explicitly.
@@ -60,7 +60,7 @@ borrow checker
 
 **Pre-filter patterns**:
 ```
-\.claude/plans/(active|paused)/.*\.md$
+\.claude/planning/(active|paused)/[0-9]{4}-[0-9]{2}-[0-9]{2}-.*/plan\.md$
 block_on
 bridge
 defer.*to (M|v0\.)[0-9]
@@ -76,13 +76,13 @@ no.*coloring
 **Constraint**: Every execution plan MUST include `## Design-Doc Alignment` citing the governing `/design/` doc(s) and confirming match or enumerating each divergence with sign-off (see `.claude/rules/plan-invariants.md` "Design-Doc Alignment"). Plan-review (Step 7) and per-phase review (Step 9a) MUST diff the plan/diff against the cited design docs, not only against the plan's internal consistency. A plan contradicting a design doc is a BLOCK with the citation regardless of internal consistency — surfaced as "design doc X says A; plan says B."
 
 **Bouncer checks** (each runnable as shell against a diff):
-- [ ] For each added/modified `.claude/plans/{active,paused}/*.md` that is an execution plan (front-matter `type: execution` or absent): grep the body for `^## Design-Doc Alignment$`. Missing → WARNING.
+- [ ] For each added/modified `.claude/planning/{active,paused}/<plan-id>/plan.md` that is an execution plan (`legacy.type: execution` or absent): grep the body for `^## Design-Doc Alignment$`. Missing → WARNING.
 - [ ] If a plan body contains a deferral phrase (`defer.*to (M|v0\.)[0-9]`, `is (M[0-9]|v0\.[0-9])`, `deferred to`) for a capability, the `## Design-Doc Alignment` section MUST acknowledge whether that deferral is documented in the roadmap/mvp-scope or invented by the plan. Deferral phrase present + no Design-Doc Alignment acknowledgment → WARNING.
 - [ ] If a plan introduces `block_on` / "sync bridge" / "hold the thread" / "blocking pool" language for a behavior, and `design/no-function-coloring.md` (or any cited design doc) describes that behavior as compile-time-inferred → judgment BLOCK, cite "design doc says inferred-at-compile-time; plan introduces a runtime block".
 
 **Severity**: critical (a plan that contradicts the governing design ships the WRONG language; this one cost a halted milestone + a full re-plan).
 
-**Originating incident**: 2026-05-31 — during the v0.3-M2 re-spike + re-plan, Patrick asked "if `wait` is inferred at compile time, why is anything slower at runtime?" and "did we have this documented?" Reading `design/no-function-coloring.md` (which the `/plan` research step had skipped — only the codebase was mapped) revealed the doc had the correct transitive-inference / no-bridge model all along. The bridge was a plan invention contradicting it. See `.claude/plans/active/v0-3-m2-wait-and-state-machines.md` Findings Log "🔴 VERIFIED ROOT CAUSE."
+**Originating incident**: 2026-05-31 — during the v0.3-M2 re-spike + re-plan, Patrick asked "if `wait` is inferred at compile time, why is anything slower at runtime?" and "did we have this documented?" Reading `design/no-function-coloring.md` (which the `/plan` research step had skipped — only the codebase was mapped) revealed the doc had the correct transitive-inference / no-bridge model all along. The bridge was a plan invention contradicting it. See `.claude/planning/done/2026-05-30-v0-3-m2-wait-and-state-machines/plan.md` Findings Log "🔴 VERIFIED ROOT CAUSE."
 
 ---
 
@@ -128,7 +128,7 @@ at every call
 
 ## M4+ Milestone Plans Missing the 5-Subsection Invariants Structure — 2026-05-14
 
-**Scope**: `.claude/plans/active/m[0-9]+-*.md` and `.claude/plans/done/m[0-9]+-*.md` for M4 and later. M1, M2, M3 exempt (predate the rule). This is a STRUCTURAL check (does the section exist? do all 5 subsections exist?), distinct from the const-deep-immutability entry above which checks specific CONTENT.
+**Scope**: `.claude/planning/{active,paused,done}/<plan-id>/plan.md` where `<plan-id>` contains a milestone marker `m[0-9]+`, for M4 and later. M1, M2, M3 exempt (predate the rule). (Migrated 2026-07-01 — same path-shape update as the const-immutability entry above.) This is a STRUCTURAL check (does the section exist? do all 5 subsections exist?), distinct from the const-deep-immutability entry above which checks specific CONTENT.
 **Exemption**:
 - Pre-M4 milestone plans
 - Plans not associated with a specific milestone (cross-cutting plans, design plans, refactoring plans)
@@ -138,7 +138,7 @@ at every call
 
 **Pre-filter patterns**:
 ```
-\.claude/plans/(active|done)/m[0-9]+-
+\.claude/planning/(active|paused|done)/[0-9]{4}-[0-9]{2}-[0-9]{2}-.*m[0-9]+.*/plan\.md$
 ^## Invariants This Milestone Must Preserve$
 ```
 
@@ -161,7 +161,7 @@ at every call
 
 ## Language or Stdlib Features Without Runtime + Kernel-Mode Declaration — 2026-05-14
 
-**Scope**: `.claude/plans/active/*.md` and `.claude/plans/done/*.md` for plans dated 2026-05-15 or later (one day after this entry lands). Includes both milestone plans AND cross-cutting plans.
+**Scope**: `.claude/planning/active/<plan-id>/plan.md` and `.claude/planning/done/<plan-id>/plan.md` for plans dated 2026-05-15 or later (one day after this entry lands). Includes both milestone plans AND cross-cutting plans. (Migrated 2026-07-01 — same path-shape update as the const-immutability entry above. `roadmap.md`/`capability-ledger.md` companion files never carry an Invariants section and are out of this entry's scope by construction — they're not `plan.md`.)
 **Exemption**:
 - Plans whose `files:` front-matter does NOT include `crates/**` (pure docs/rules plans don't add features)
 - Plans dated before 2026-05-15 (rule applies forward from when it lands)
@@ -171,7 +171,7 @@ at every call
 
 **Pre-filter patterns**:
 ```
-\.claude/plans/(active|done)/.*\.md$
+\.claude/planning/(active|done)/[0-9]{4}-[0-9]{2}-[0-9]{2}-.*/plan\.md$
 crates/
 ^### Runtime Dependencies$
 ^### Kernel-Mode Behavior$
@@ -185,7 +185,7 @@ crates/
 **Constraint**: Any plan adding language or stdlib features must declare runtime dependencies and kernel-mode behavior in the `### Runtime Dependencies` and `### Kernel-Mode Behavior` subsections of `## Invariants This Milestone Must Preserve`. Each lists per-feature: what the feature depends on at runtime, and what happens in `--kernel` mode (compile error with which message? plug-in API? always works?). See `.claude/rules/plan-invariants.md` and `design/no-runtime-mode.md`.
 
 **Bouncer checks**:
-- [ ] For each plan-file diff dated 2026-05-15+ with `files:` containing `crates/`: grep file body for `^### Runtime Dependencies$` AND `^### Kernel-Mode Behavior$`. Missing either → WARNING.
+- [ ] For each `plan.md` diff dated 2026-05-15+ (via `created_at`/`legacy.created`) with `legacy.files:` containing `crates/`: grep file body for `^### Runtime Dependencies$` AND `^### Kernel-Mode Behavior$`. Missing either → WARNING.
 
 **Severity**: warning (forward-compat hygiene; kernel-mode is a v0.3+ target so consequences are forward-looking).
 
@@ -447,7 +447,7 @@ to_i64_bits
 
 **Severity**: critical — silent-wrong codegen across a suspension is the worst failure class (no crash, no panic; the program runs and prints the wrong number). This exact disease cost ~10 silent-miscompile rounds in M3a P1+P3.
 
-**Originating incident**: 2026-06-04, v0.3-M3a suspension codegen. Two parallel per-type flush dispatches drifted (decimal128/shape/string/options branches present in one, missing/wrong in the other) → `0.000`/stack-garbage across `wait` suspensions; ~10 whack-a-mole rounds. Root fix round 5: unify into `flush_var_slot_to_frame` + symmetric `reload_params_from_frame`; `flush_for_loop_var` became a thin wrapper. Second instance: `is_let_declared_before_wait_in_stmts` flat-scan re-derived the crossing set → under/over-rejection on the `ArrayShapeRuntimeFieldWithWait` guard; fixed by consuming the authoritative `crossing_names`. The cumulative Opus code-reviewer that finally certified the milestone called it "the unified flush killed the hydra." See `.claude/plans/done/v0-3-m3a-suspension-codegen.md` Phase 1/3 Findings Logs.
+**Originating incident**: 2026-06-04, v0.3-M3a suspension codegen. Two parallel per-type flush dispatches drifted (decimal128/shape/string/options branches present in one, missing/wrong in the other) → `0.000`/stack-garbage across `wait` suspensions; ~10 whack-a-mole rounds. Root fix round 5: unify into `flush_var_slot_to_frame` + symmetric `reload_params_from_frame`; `flush_for_loop_var` became a thin wrapper. Second instance: `is_let_declared_before_wait_in_stmts` flat-scan re-derived the crossing set → under/over-rejection on the `ArrayShapeRuntimeFieldWithWait` guard; fixed by consuming the authoritative `crossing_names`. The cumulative Opus code-reviewer that finally certified the milestone called it "the unified flush killed the hydra." See `.claude/planning/done/2026-06-01-v0-3-m3a-suspension-codegen/plan.md` Phase 1/3 Findings Logs.
 
 ---
 
@@ -486,7 +486,7 @@ FRAME_HEADER_SIZE
 
 **Severity**: critical — silent under-sizing of an embedded sub-frame → SIGILL/memory corruption, and the test goes green because the resolved value coincides with the fallback. Worst failure class (no crash in the happy-path fixture; detonates only on a callee with a non-trivial frame).
 
-**Originating incident**: 2026-06-06, v0.3-M3e Phase 1. `build_frame_layouts_with_resolver`'s `compute_frame_size` loop cached the `FRAME_HEADER_SIZE` fallback for imported callees before the `or_insert_with(resolver)` seed ran → the cross-module resolver was dead code. The recursion unit test passed at `doWork.total_size==64` only because the leaf callee's real frame happened to equal the 32-byte fallback. code-reviewer's adversarial probe (vary the resolver return → output invariant; `Cell` counter → resolver never fired) caught it; acceptance-verifier's claim-trusting PASS missed it. Fixed: resolver-seed moved before `compute_frame_size`; test rewritten with a >32 callee frame + anti-bypass sentinel (`resolver→56 → 88`). See `.claude/plans/active/v0-3-m3e-cross-module-frame-serialization.md` Phase 1 Findings Log (round-2/round-3).
+**Originating incident**: 2026-06-06, v0.3-M3e Phase 1. `build_frame_layouts_with_resolver`'s `compute_frame_size` loop cached the `FRAME_HEADER_SIZE` fallback for imported callees before the `or_insert_with(resolver)` seed ran → the cross-module resolver was dead code. The recursion unit test passed at `doWork.total_size==64` only because the leaf callee's real frame happened to equal the 32-byte fallback. code-reviewer's adversarial probe (vary the resolver return → output invariant; `Cell` counter → resolver never fired) caught it; acceptance-verifier's claim-trusting PASS missed it. Fixed: resolver-seed moved before `compute_frame_size`; test rewritten with a >32 callee frame + anti-bypass sentinel (`resolver→56 → 88`). See `.claude/planning/done/2026-06-05-v0-3-m3e-cross-module-frame-serialization/plan.md` Phase 1 Findings Log (round-2/round-3).
 
 ## Silent Envelope Narrowing — Gated-Path Decline Widens While Output Tests Stay Green — 2026-06-12
 
@@ -522,4 +522,4 @@ YNZ_M3D_SPIKE
 
 **Severity**: critical — the feature under test silently stops existing while its entire test suite stays green; downstream phases inherit "proven" machinery with zero live coverage. Cost when it fired: rounds 6–8 of an 8-round gate saga (one full extra fix round + re-gate) to discover and undo a narrowing that a plan-time envelope table would have flagged instantly.
 
-**Originating incident**: 2026-06-12, v0.3-M3d Phase 0 round 7. The ISSUE-B fix declined post-pair statements on `stmt_contains_wait || stmt_contains_suspending_call`; the `stmt_contains_wait` clause also caught intrinsic `wait sleep(0)`, flipping fixtures (g)/(h)/(i)/(j)/(n) from FIRE to DECLINE — IR-verified zero `ynz_rt_spawn_blocking_joinable` call sites — making the cross-suspension reload machinery (built and debugged across 5 prior fix rounds, deviations #9/#14) dead code while all 17 fixtures stayed byte-identical green. Caught only because the coordinator primed all four round-7 gate agents on the "does the spike still FIRE, not just match output" question; deviation-judge #15 traced it at IR level and named the one-clause fix (keep only `stmt_contains_suspending_call`, which already excludes sleep via `M2_MAY_BLOCK_INTRINSICS`). Fixed in round 8; FIRES restored 0→2 spawn calls per fixture. See `.claude/plans/active/v0-3-m3d-cpu-parallelization.md` Phase 0 Findings Log (R7/R8 entries) — committed dcc1432.
+**Originating incident**: 2026-06-12, v0.3-M3d Phase 0 round 7. The ISSUE-B fix declined post-pair statements on `stmt_contains_wait || stmt_contains_suspending_call`; the `stmt_contains_wait` clause also caught intrinsic `wait sleep(0)`, flipping fixtures (g)/(h)/(i)/(j)/(n) from FIRE to DECLINE — IR-verified zero `ynz_rt_spawn_blocking_joinable` call sites — making the cross-suspension reload machinery (built and debugged across 5 prior fix rounds, deviations #9/#14) dead code while all 17 fixtures stayed byte-identical green. Caught only because the coordinator primed all four round-7 gate agents on the "does the spike still FIRE, not just match output" question; deviation-judge #15 traced it at IR level and named the one-clause fix (keep only `stmt_contains_suspending_call`, which already excludes sleep via `M2_MAY_BLOCK_INTRINSICS`). Fixed in round 8; FIRES restored 0→2 spawn calls per fixture. See `.claude/planning/done/2026-06-11-v0-3-m3d-cpu-parallelization/plan.md` Phase 0 Findings Log (R7/R8 entries) — committed dcc1432.

@@ -195,7 +195,7 @@ Single source of truth for all feature inventories. `registry/features.toml` + `
 - `format_range(source, range)` API added to `ynz-fmt` library
 - VSCode extension v0.2.0: screenshots, `\n\n` separator polish, all 8 new capabilities wired
 
-**Cuts the `v0.2.0` release tag** (first plain-version tag; no `-mN` suffix) in Phase 12. Plan: `.claude/plans/active/v0-2-m5-lsp-full-and-release.md`.
+**Cuts the `v0.2.0` release tag** (first plain-version tag; no `-mN` suffix) in Phase 12. Plan: `.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md`.
 
 > **⚠️ DO NOT FORGET** (checklist at top): registry entries (SSOT keyword/intrinsic/jargon/hint domains); LSP capabilities wired; WHAT/WHAT-INSTEAD/WHY for every new error; extension version bump + screenshots; `pirates-roster` demo; error gallery files. *(v0.2 shipped — checklist applied across M1–M5.)*
 
@@ -223,7 +223,7 @@ The compiler auto-transforms `array<Shape>` storage from Array-of-Structs to Str
 - **Substitute used pre-this-version**: Default Array-of-Structs layout. Manual SoA via parallel `array<T>` of each field is possible if a user really needs it pre-v0.3, but no compiler help.
 - **Locked design**: See `design/future/auto-soa.md`
 
-> **⚠️ DO NOT FORGET** (checklist at top): new `[[muted_hint_domain]]` registry entries for `background_routing` and `channel_capacity` and `auto_arc`; `wait_points` domain activated (was protocol-only); `wait`/`background` hover docs updated (behavior changes from sequential); new lint rules `array-using-soa-layout` + `cross-thread-fields-not-padded` in registry; WHAT/WHAT-INSTEAD/WHY for all new errors (lend-across-thread, wait-on-non-may-block, channel-closed, large-copy warning); SoA debugger DAP integration; extension bump + screenshots for each new IDE surface; `pirates-roster` demo extended per milestone; per-milestone error gallery files (`v0_3_m{1..4}_errors.ynz`). Roadmap: `.claude/plans/roadmaps/v0-3-concurrency-perf.md`.
+> **⚠️ DO NOT FORGET** (checklist at top): new `[[muted_hint_domain]]` registry entries for `background_routing` and `channel_capacity` and `auto_arc`; `wait_points` domain activated (was protocol-only); `wait`/`background` hover docs updated (behavior changes from sequential); new lint rules `array-using-soa-layout` + `cross-thread-fields-not-padded` in registry; WHAT/WHAT-INSTEAD/WHY for all new errors (lend-across-thread, wait-on-non-may-block, channel-closed, large-copy warning); SoA debugger DAP integration; extension bump + screenshots for each new IDE surface; `pirates-roster` demo extended per milestone; per-milestone error gallery files (`v0_3_m{1..4}_errors.ynz`). Roadmap: `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`.
 
 ---
 

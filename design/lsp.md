@@ -3,9 +3,9 @@
 This doc is for **compiler contributors and milestone implementers**, not Yinz language users. It covers how `ynz-lsp` is structured, why it works the way it does, and what is deferred to v0.2-M5.
 
 User spec reference: N/A (tooling internals)
-Plan reference: `.claude/plans/done/v0-2-m2-lsp-thin-slice.md` (M2); `.claude/plans/active/v0-2-m5-lsp-full-and-release.md` (M5)
+Plan reference: `.claude/planning/done/2026-05-20-v0-2-m2-lsp-thin-slice/plan.md` (M2); `.claude/planning/done/2026-05-20-v0-2-m5-lsp-full-and-release/plan.md` (M5)
 
-Cross-references: `design/compiler-language.md`, `design/feature-registry.md`, `design/teaching-mission.md`, `.claude/rules/inference.md`, `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md`
+Cross-references: `design/compiler-language.md`, `design/feature-registry.md`, `design/teaching-mission.md`, `.claude/rules/inference.md`, `.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md`
 
 ---
 
@@ -61,7 +61,7 @@ Rationale: salsa inputs require `&mut db` access. Salsa is `Send` but not `Sync`
 - If `didChange` arrives while a previous response is being computed: the worker drains pending mutations BEFORE replying. The in-flight response reflects state N-1 but is sent unmodified; the next request sees post-mutation state.
 - For requests the LSP spec marks cancellable (`completion`, `hover`): `$/cancelRequest` is handled BEST-EFFORT. If the query hasn't started (still queued), it's dropped and a `RESPONSE_ERROR_REQUEST_CANCELLED` is returned. If already running, it completes; the client receives the late response (LSP spec permits this).
 
-**v0.2-M5 note:** When go-to-def / rename / find-refs scale horizontally (multi-window, background analysis), this model is revisited with salsa snapshots. See `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` M5 entry.
+**v0.2-M5 note:** When go-to-def / rename / find-refs scale horizontally (multi-window, background analysis), this model is revisited with salsa snapshots. See `.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md` M5 entry.
 
 ---
 

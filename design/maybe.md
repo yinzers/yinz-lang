@@ -23,7 +23,7 @@ The earlier milestone plan put `maybe T` in M6 alongside `options`, union types,
 
 Pulling `maybe<T>` into M5 produces the cleanest API: `.get()` returns `maybe<T>` from day 1; no rename, no breaking change. M6 still ships unions / options / narrowing — but `maybe<T>` is structurally a primitive of the type system, not a narrowing case.
 
-Locked 2026-05-17 in `.claude/plans/active/m5-generics.md`.
+Locked 2026-05-17 in `.claude/planning/done/2026-05-17-m5-generics/plan.md`.
 
 ---
 
@@ -129,7 +129,7 @@ If `maybe<T>` were a stdlib generic (defined in `std/maybe.ynz` and imported), e
 ## Cross-References
 
 - `spec/maybe.md` — user-facing surface
-- `.claude/plans/active/m5-generics.md` — M5 implementation plan (where all of the above tables were originally locked)
+- `.claude/planning/done/2026-05-17-m5-generics/plan.md` — M5 implementation plan (where all of the above tables were originally locked)
 - `design/generics.md` — generics engine that `maybe<T>` is built on top of
 - `design/collections.md` — collections whose `.get()` returns `maybe<T>`
 - `design/golden-rules.md` — Rule 5 (compile-time safety) governs the flow-sensitive `.value` check

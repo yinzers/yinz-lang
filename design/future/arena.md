@@ -169,4 +169,4 @@ If/when Option B is implemented:
 - [`design/ide-hints.md`](../ide-hints.md) (muted `.in(arena)` rendering protocol)
 - [`design/ownership.md`](../ownership.md) (escape-analysis rules apply to arena-allocated values)
 - `.claude/todos.md` (Yinz compiler internals should use arenas — M8 polish task)
-- [`.claude/plans/done/design-lockdown-from-gemini-review.md`](../../.claude/plans/done/design-lockdown-from-gemini-review.md) (originating decision)
+- [`.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md`](../../.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md) (originating decision)

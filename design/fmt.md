@@ -121,7 +121,7 @@ pub enum CommentKind {
 }
 ```
 
-**Comment attachment rules** (locked at plan time — see `.claude/plans/active/v0-2-m3-fmt.md` Phase 3 spec table for the full 15-case matrix):
+**Comment attachment rules** (locked at plan time — see `.claude/planning/done/2026-05-20-v0-2-m3-fmt/plan.md` Phase 3 spec table for the full 15-case matrix):
 
 - **Leading**: a `//` block whose end-byte is immediately before a decl (separated by whitespace + ≤1 blank line) attaches to that decl and moves with it.
 - **Inline**: a `//` comment on the same line as code, after the code — stays on that line (2 spaces before `//`).
@@ -294,6 +294,6 @@ Prettier output (top) is canonical for any user. Rustfmt output (bottom) is only
 - `design/feature-registry.md` — registry schema + carve-out policy (formatter is consumer-only)
 - `design/lsp.md` — format-on-save wiring (textDocument/formatting deferred to v0.2-M5)
 - `.claude/rules/inference.md` — muted-hint protocol (consumption deferred to v0.2-M5)
-- `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` — parent roadmap
+- `.claude/planning/done/2026-05-18-v0-2-dev-loop-tooling/roadmap.md` — parent roadmap
 - `crates/ynz-registry/src/lib.rs` — registry consumer adapters
 - `crates/ynz-parser/src/lexer.rs` — comment-handling refactor point

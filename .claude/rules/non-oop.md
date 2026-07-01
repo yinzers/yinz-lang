@@ -280,4 +280,4 @@ The Bouncer + compile diagnostics catch these:
 - `.claude/rules/vocabulary.md` (Yinz user-facing terms — non-OOP framing in error messages)
 - `design/type-system.md` (shapes, extends, follows, dynamic — the full type system spec)
 - `design/ownership.md` (ownership modifiers — declared at signatures, inferred at call sites)
-- `.claude/plans/active/m4-shapes-methods-ownership.md` (M4 — where the non-OOP model lands in the compiler)
+- `.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md` (M4 — where the non-OOP model lands in the compiler)

@@ -45,7 +45,7 @@ Only proceed past Step 0 once the user confirms or the signals are clean.
 1. `git status` — warn on uncommitted changes
 2. `git branch --show-current` — must NOT be `main`
 3. `grep '^version' /workspaces/ynz/Cargo.toml` — read shipped version (e.g. `0.1.0-m1`)
-4. `ls /workspaces/ynz/.claude/plans/active/*.md 2>/dev/null` — find the active plan file (see Step 2)
+4. `find /workspaces/ynz/.claude/planning/active -maxdepth 2 -name plan.md 2>/dev/null` — find the active plan file(s) (see Step 2). (Migrated 2026-07-01 from the old flat `.claude/plans/active/*.md` layout to `.claude/planning/active/<plan-id>/plan.md`.)
 5. If there are uncommitted changes, commit them (Conventional Commits style) — never push without user approval
 
 ---
@@ -60,7 +60,7 @@ Algorithm:
 3. v0.X comes from Cargo.toml major.minor (e.g. `0.1.0-m1` → `v0.1`)
 
 **Plan file reference** (for the PR body):
-- One file in `.claude/plans/active/` → use it
+- One file in `.claude/planning/active/*/plan.md` → use it
 - Multiple files → ask user which one this PR relates to (or "none")
 - Zero files → omit the Plan line from the PR body
 
@@ -80,7 +80,7 @@ gh pr create --draft --base main --title "{title}" --body "$(cat <<'EOF'
 
 {motivation — what design decision, milestone task, or bug this addresses}
 
-📋 **Plan**: `.claude/plans/active/{plan-filename}.md` (omit line if no active plan)
+📋 **Plan**: `.claude/planning/active/{plan-id}/plan.md` (omit line if no active plan)
 🎯 **Milestone**: v{X.Y} M{N} — {milestone name if known, else omit}
 
 ---

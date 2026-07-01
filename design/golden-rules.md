@@ -17,7 +17,7 @@ Before applying the 12 rules, internalize this: **Yinz is data shapes + standalo
 
 This is a deliberate alignment with Rust/Go (zero per-instance method storage; ownership tracking simpler) and away from Java/Swift (no implicit `this` binding; no virtual dispatch by default). The TypeScript-friendly part is preserved by UFCS — `player.heal(20)` reads like a TS method call but compiles to the standalone function `heal(player, 20)`.
 
-Locked r10–r13 (2026-05-16). Full discussion: `.claude/plans/active/m4-shapes-methods-ownership.md` Reviewer Disputes rounds 10–13. Canonical rule: `.claude/rules/non-oop.md`.
+Locked r10–r13 (2026-05-16). Full discussion: `.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md` Reviewer Disputes rounds 10–13. Canonical rule: `.claude/rules/non-oop.md`.
 
 When the 12 rules below mention "method" or "dispatch," apply them with the non-OOP interpretation: methods are functions; dispatch is overload resolution by argument type (plus contract-table lookup for `dynamic Foo`).
 

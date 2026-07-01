@@ -170,7 +170,7 @@ Bouncer checks are runnable shell commands. False-positives are fixed by tighten
 
 The Gemini code review on 2026-05-14 flagged that the M3 plan said "ownership system" without enumerating what `const` blocks at call sites or which LLVM attributes get emitted. The gap WAS real and would have shipped a less-safe + less-performant M4 if not caught. The rule prevents recurrence.
 
-See `.claude/plans/active/design-lockdown-from-gemini-review.md` for the originating incident and the locked decisions.
+See `.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md` for the originating incident and the locked decisions.
 
 ---
 
@@ -178,5 +178,5 @@ See `.claude/plans/active/design-lockdown-from-gemini-review.md` for the origina
 
 - `~/.claude/skills/plan/SKILL.md` (the global /plan skill — its plan template can/should be extended to include this section by default once /plan is project-aware)
 - `.claude/graveyard.md` (Entries 1, 3, 4 enforce this rule)
-- `.claude/plans/active/v0-1-compiler.md` `## Forward-Compatibility Constraints` (cites this rule)
+- `.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md` `## Forward-Compatibility Constraints` (cites this rule)
 - `design/no-runtime-mode.md` (defines the kernel-mode behavior the rule references)

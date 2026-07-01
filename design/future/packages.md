@@ -98,4 +98,4 @@ The v0.2 milestone plan must include these. The format-design decision itself ca
 - [`design/no-runtime-mode.md`](../no-runtime-mode.md) (consumer of kernel-mode compatibility flags)
 - [`design/future/self-references.md`](self-references.md) (consumer of self-referential markers)
 - [`design/ownership.md`](../ownership.md) (consumer of ownership signatures for cross-package call-site analysis)
-- [`.claude/plans/done/v0-1-compiler.md`](../../.claude/plans/done/v0-1-compiler.md) "Forward-Compatibility Constraints" (Phase 5 locks the v0.1 obligation)
+- [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](../../.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) "Forward-Compatibility Constraints" (Phase 5 locks the v0.1 obligation)

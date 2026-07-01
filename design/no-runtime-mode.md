@@ -156,4 +156,4 @@ The v0.3 milestone plan must address:
 - [`design/no-function-coloring.md`](no-function-coloring.md) (background/wait require the scheduler, which is disabled in kernel mode unless custom-provided)
 - [`design/future/arena.md`](future/arena.md) (arenas work in kernel mode with user-provided base allocator)
 - [`design/future/packages.md`](future/packages.md) (binary metadata includes per-item kernel-mode compatibility flags)
-- [`.claude/plans/active/v0-1-compiler.md`](../.claude/plans/done/v0-1-compiler.md) "Forward-Compatibility Constraints" (Phase 5 locks the requirement)
+- [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](../.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) "Forward-Compatibility Constraints" (Phase 5 locks the requirement)

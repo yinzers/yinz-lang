@@ -1,6 +1,6 @@
 # Cross-Module Frame Serialization (M3e)
 
-**Status**: Shipped in v0.3-M3e. See `.claude/plans/active/v0-3-m3e-cross-module-frame-serialization.md`
+**Status**: Shipped in v0.3-M3e. See `.claude/planning/done/2026-06-05-v0-3-m3e-cross-module-frame-serialization/plan.md`
 for the full execution record (Phases 0–3). Implemented in commit `cbd027e`
 (Phase 2 — the lift) on branch `feat/m3b-auto-parallelization`.
 

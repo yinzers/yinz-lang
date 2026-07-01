@@ -53,7 +53,7 @@ See the 12-step sketch in the round-6 risk analysis (chat 2026-06-04). Core: add
 2-3 sessions minimum. Its own `/plan` (`v0-3-m3c-array-by-value`). On completion, **remove** the M3a `ArrayShapeRuntimeFieldWithWait` loud-reject guard + its registry deferral (the feature now works).
 
 ## Cross-references
-- `.claude/plans/active/v0-3-m3a-suspension-codegen.md` (where the interim loud-reject ships)
+- `.claude/planning/done/2026-06-01-v0-3-m3a-suspension-codegen/plan.md` (where the interim loud-reject ships)
 - `registry/features.toml` `array-shape-runtime-field-with-wait` (the interim deferral this milestone lifts)
 - `design/concurrency.md` M3a Scope Boundaries (the interim deferral note)
 - `design/collections.md` (array semantics), `design/ownership.md` (GR3 value semantics)
