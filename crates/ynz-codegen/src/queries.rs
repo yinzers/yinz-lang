@@ -107,11 +107,11 @@ pub fn frame_layouts_query(
     // callee-eligibility filter reads, silently declining the host's group. Probing with
     // the effective set (the SAME set codegen_query uses) keeps both query boundaries'
     // host-admission decisions identical. See `spike_host_subset` for the full rationale.
-    // `base_suspend_set` is the AUTHORITATIVE pre-CPU-promotion suspend set — the exact value
-    // `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension decline reads (see that
-    // function's doc comment). It is kept UNMUTATED here (never unioned with `spike_hosts`) and
-    // threaded through to `build_frame_layouts_with_resolver` as a separate argument from the
-    // union `effective_suspend_set` below, so a legitimate pure-CPU host (no suspension of its
+    // `base_suspend_set` is the AUTHORITATIVE pre-CPU-promotion suspend set — no longer consulted
+    // by `admitted_cpu_group` itself post-v0.3-M3g-Phase-3 (that function dropped the parameter;
+    // see its doc comment), but still threaded, kept UNMUTATED here (never unioned with
+    // `spike_hosts`), through to `build_frame_layouts_with_resolver` as a separate argument from
+    // the union `effective_suspend_set` below, so a legitimate pure-CPU host (no suspension of its
     // own) is never wrongly self-declined once its own name lands in the union.
     let base_suspend_set: SuspendSet =
         build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
@@ -332,12 +332,12 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
     // sub-frame and corrupting it when the imported child writes at its layout offset. One
     // canonical set across both query boundaries is the only thing that keeps the two
     // sizing decisions in lock-step.
-    // `base_suspend_set` is the AUTHORITATIVE pre-CPU-promotion suspend set — the exact value
-    // `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension decline reads (see that
-    // function's doc comment). Kept UNMUTATED (never unioned with `spike_hosts`) and threaded
-    // through to `emit_artifact` as a separate argument from the union `suspends_with_promotions`
-    // below, so a legitimate pure-CPU host is never wrongly self-declined once its own name lands
-    // in the union.
+    // `base_suspend_set` is the AUTHORITATIVE pre-CPU-promotion suspend set — no longer consulted
+    // by `admitted_cpu_group` itself post-v0.3-M3g-Phase-3 (that function dropped the parameter;
+    // see its doc comment), but still kept UNMUTATED (never unioned with `spike_hosts`) and
+    // threaded through to `emit_artifact` as a separate argument from the union
+    // `suspends_with_promotions` below, so a legitimate pure-CPU host is never wrongly
+    // self-declined once its own name lands in the union.
     let base_suspend_set: SuspendSet =
         build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
     let promotion = cpu_promotion_query(db, source);
@@ -386,7 +386,6 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         &sig_output.imported_fns,
         &layouts_arc,
         &spike_hosts,
-        &check.does_real_work_set,
     ) {
         Ok(artifact) => Arc::new(CodegenOutput {
             artifact,

@@ -105,14 +105,6 @@ fn empty_sig_table() -> &'static SignatureTable {
     EMPTY_SIG_TABLE.get_or_init(SignatureTable::empty)
 }
 
-// v0.3-M3g Phase 2: generic functions never enter the CPU-promotion/classified-partition
-// path (no `CpuCandidacy` is ever constructed for them), so an empty `does_real_work` set
-// satisfies `Cg`'s field without allocating per-instantiation. See `Cg::does_real_work`.
-static EMPTY_DOES_REAL_WORK: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
-fn empty_does_real_work() -> &'static HashSet<String> {
-    EMPTY_DOES_REAL_WORK.get_or_init(HashSet::new)
-}
-
 /// Build the `WaitCache` for all non-generic functions in the module.
 ///
 /// Generic functions are excluded because their concrete instantiations are lowered
@@ -236,10 +228,11 @@ fn is_number_errors_return(f: &FunctionDecl) -> bool {
 /// Guard G2). For a local-only module the pre-seed loop (step 2) is empty and behavior is
 /// byte-identical to pre-M3e.
 ///
-/// `base_suspends` is threaded through to `spike_cpu_candidates`/`admitted_cpu_group`'s Phase-2
-/// temporary co-resident-suspension decline (see `admitted_cpu_group`'s doc comment). At this
-/// call site it is the pure pre-promotion effective suspend set — the caller passes it BEFORE
-/// unioning in the spike-host names it computes into `suspend_set`.
+/// `base_suspends` is threaded through to `spike_cpu_candidates` (which no longer consumes it as
+/// of the v0.3-M3g Phase 3 admission flip — see `spike_cpu_candidates`'s doc comment for why it
+/// stays a parameter here anyway). At this call site it is the pure pre-promotion effective
+/// suspend set — the caller passes it BEFORE unioning in the spike-host names it computes into
+/// `suspend_set`.
 pub fn build_frame_layouts_with_resolver(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
@@ -855,7 +848,6 @@ pub fn emit_artifact(
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     frame_layouts: &HashMap<String, FrameLayout>,
     cpu_promoted: &HashSet<String>,
-    does_real_work: &HashSet<String>,
 ) -> Result<CompiledArtifact, String> {
     let context = Context::create();
     let module_id = module_identifier(source_path);
@@ -896,12 +888,12 @@ pub fn emit_artifact(
     // has suspends=false for all fns; the real transitive set comes from check_query.
     let suspend_set: SuspendSet = suspends_set_arg.clone();
     // The AUTHORITATIVE pre-CPU-promotion suspend set (`suspends_set` ∪ imported-suspending
-    // names, BEFORE the spike-host names below are unioned in). Threaded, unchanged, to
-    // `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension decline — see that
-    // function's doc comment for why it must be a set SEPARATE from `suspend_set` here (the
-    // union already contains every spike-host candidate's own name by the time this function
-    // runs, so re-probing a legitimate pure-CPU host against `suspend_set` would self-declines
-    // it the moment it is admitted).
+    // names, BEFORE the spike-host names below are unioned in). Threaded, unchanged, down through
+    // `spike_cpu_candidates` and friends (kept as a parameter there even though it is no longer
+    // consulted post-v0.3-M3g-Phase-3 — see `spike_cpu_candidates`'s doc comment) as a SET
+    // SEPARATE from `suspend_set` here: the union already contains every spike-host candidate's
+    // own name by the time this function runs, so a probe against `suspend_set` instead would be
+    // self-referential for a legitimate pure-CPU host the instant it is admitted.
     let base_suspends: SuspendSet = base_suspends_arg.clone();
     let _ = sig_table; // sig_table kept in signature for API compatibility
 
@@ -943,7 +935,6 @@ pub fn emit_artifact(
         frame_layouts,
         no_auto_parallel,
         m3d_spike,
-        does_real_work,
     )?;
 
     module
@@ -1012,8 +1003,15 @@ fn build_module<'ctx, 'g>(
     frame_layouts_arg: &HashMap<String, FrameLayout>,
     no_auto_parallel: bool,
     m3d_spike: bool,
-    does_real_work: &'g HashSet<String>,
 ) -> Result<(), String> {
+    // E5 compile-time-adjacent link (should-fix, cumulative M3g review): cross-check codegen's
+    // AST-level CPU-ABI-support gate against typeck's resolved-level gate for every function in
+    // this module, once per compile. See `debug_assert_cpu_abi_gate_parity`'s doc for why the
+    // two predicates stay independently written (genuinely different type representations)
+    // rather than merged into one.
+    #[cfg(debug_assertions)]
+    debug_assert_cpu_abi_gate_parity(typed, sig_table);
+
     let rt = RuntimeDecls::declare(ctx, module);
 
     // M6: collect options table for variant tag lookups during codegen.
@@ -1237,7 +1235,6 @@ fn build_module<'ctx, 'g>(
                 sig_table,
                 no_auto_parallel,
                 m3d_spike,
-                does_real_work,
             )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -1446,8 +1443,6 @@ fn lower_generic_function<'ctx>(
         m3d_spike_cpu_result_names: Vec::new(),
         m3d_spike_cpu_result_allocas: HashMap::new(),
         m3d_spike_fired: false,
-        // Generic functions never enter the CPU-promotion/classified-partition path.
-        does_real_work: empty_does_real_work(),
         // Generic functions never enter the M3g fused-group path.
         fused_group: None,
         fused_group_fired: false,
@@ -1797,17 +1792,6 @@ struct Cg<'ctx, 'g> {
     // single eligible group spawns exactly once — the FIRST group encountered in lowering
     // order fires while this is false, then sets it. Reset per function.
     m3d_spike_fired: bool,
-    // v0.3-M3g Phase 2: the `does_real_work` set (`CheckOutput::does_real_work_set`), threaded
-    // through to codegen's input surface so Phase 3 can construct a
-    // `ynz_typeck::independence::CpuCandidacy` and call `partition_groups_classified` /
-    // `ClassifiedGroup` without any further plumbing. Phase 2 ships this field STRUCTURALLY
-    // WIRED BUT UNCONSUMED — no lowering path reads it yet (the block walker still routes
-    // through `partition_independent_groups`, per this milestone's behavior-neutral Phase 2
-    // discipline) — mirroring the same "computed but unconsumed" pattern v0.3-M3d's Phase 2
-    // shipped for `cpu_promotion_query`/`PromotionOutput`. Removed once Phase 3 wires a real
-    // consumer.
-    #[allow(dead_code)]
-    does_real_work: &'g HashSet<String>,
     // v0.3-M3g Phase 3: the admitted FUSED (mixed CPU+I/O) top-level group for this function,
     // or `None`. Computed once in `lower_function_with_waits` from
     // `ynz_typeck::cpu_admission::admitted_fused_group`, ONLY when the pure-CPU spike gate
@@ -2131,7 +2115,6 @@ fn lower_function<'ctx, 'g>(
     sig_table: &'g SignatureTable,
     no_auto_parallel: bool,
     m3d_spike: bool,
-    does_real_work: &'g HashSet<String>,
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
@@ -2158,7 +2141,6 @@ fn lower_function<'ctx, 'g>(
             sig_table,
             no_auto_parallel,
             m3d_spike,
-            does_real_work,
         );
     }
 
@@ -2228,7 +2210,6 @@ fn lower_function<'ctx, 'g>(
         m3d_spike_cpu_result_names: Vec::new(),
         m3d_spike_cpu_result_allocas: HashMap::new(),
         m3d_spike_fired: false,
-        does_real_work,
         // Non-SM functions never reach lower_sm_block — the M3g fused path is never consulted.
         fused_group: None,
         fused_group_fired: false,
@@ -2386,7 +2367,6 @@ fn lower_function_with_waits<'ctx, 'g>(
     sig_table: &'g SignatureTable,
     no_auto_parallel: bool,
     m3d_spike: bool,
-    does_real_work: &'g HashSet<String>,
 ) -> Result<(), String> {
     // Collect the names of parameters. ALL parameters are live across any wait.
     let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
@@ -2725,7 +2705,6 @@ fn lower_function_with_waits<'ctx, 'g>(
         m3d_spike_cpu_result_names: Vec::new(),
         m3d_spike_cpu_result_allocas: HashMap::new(), // populated in Step 1c below
         m3d_spike_fired: false,
-        does_real_work,
         // v0.3-M3g Phase 3: mirrors the m3d_spike gate-1/gate-2 coherence note above — forward
         // the same `fused_candidates` gate-1 decision so `lower_sm_block`'s fused gate (gate 2)
         // only fires for a group gate 1 actually allocated state slots and frame reserve for.
@@ -6797,9 +6776,13 @@ const SPIKE_FRAME_TAG: u32 = ynz_abi::SPIKE_FRAME_TAG;
 /// codegen has at its candidacy gates; the typeck predicate classifies the resolved `Type`.
 /// Both MUST admit/decline the IDENTICAL set so the IDE `parallel_groups` hint (driven by
 /// typeck promotion) and the emitted binary (driven by this gate) never disagree on which
-/// calls overlap. That equivalence is not left to inspection — it is locked by the
-/// `cpu_result_abi_gate_parity` test below, which resolves a representative spread of types
-/// and asserts both gates agree.
+/// calls overlap. That equivalence is not left to inspection alone — it is locked TWO ways:
+/// (1) the `cpu_result_abi_gate_parity` test below, compile-forced-exhaustive over every
+/// resolved `Type` variant; (2) `debug_assert_cpu_abi_gate_parity`, which cross-checks this
+/// predicate against typeck's `cpu_result_abi_supports` for every real function on every debug
+/// build/`cargo test` that reaches `build_module` — not only when the test above is run by
+/// name. The two predicates are kept as separate functions (not merged into one) because they
+/// classify genuinely different type representations — see that function's doc for why.
 ///
 /// **ADMITS** (value or heap-stable pointer fits the 16-byte `YnzCpuResult` slot and outlives
 /// the worker frame that produced it):
@@ -6882,6 +6865,48 @@ fn cpu_supported_callees(typed: &TypedModule) -> std::collections::HashSet<Strin
         .collect()
 }
 
+/// Debug-build compile-time link between codegen's AST-level CPU-ABI-support predicate
+/// (`return_type_fits_cpu_result_abi`, above) and typeck's resolved-level twin
+/// (`ynz_typeck::independence::cpu_result_abi_supports`) — the two are NOT merged into one
+/// function because they classify genuinely different type representations
+/// (`ynz_ast::nodes::Type`, pre-resolution, vs `ynz_typeck::types::Type`, post name-resolution
+/// and generic substitution) and codegen's existing AST→resolved converter
+/// (`ast_type_to_typeck_type`) is unsuitable here: it deliberately UNWRAPS `T errors` to bare
+/// `T` for its own (materialization) purposes, which would silently erase exactly the
+/// wide-EC-vs-scalar distinction this predicate exists to enforce (the number-errors UAF
+/// class). Reusing it would introduce the bug this check exists to catch.
+///
+/// So both predicates stay independently written, and THIS function is the compile-time-
+/// adjacent link `cpu_result_abi_gate_parity` (the `#[test]`, exhaustive over every resolved
+/// `Type` variant with no `_` arm) does not by itself provide: it fires on every real debug
+/// build/`cargo test` that reaches `build_module` for a module containing at least one
+/// suspending function — not only when a developer remembers to run the parity test. A future
+/// hand-edit to one predicate's admit/decline set that forgets its sibling panics the very
+/// next local build touching real source, closing the "only a test failure IF a fixture
+/// happens to exercise the diverged class" gap.
+///
+/// Time: O(items)  Space: O(1). Compiled out entirely in release builds
+/// (`debug_assert_eq!` is a no-op there) — this is a correctness net, not a runtime feature.
+#[cfg(debug_assertions)]
+fn debug_assert_cpu_abi_gate_parity(typed: &TypedModule, sig_table: &SignatureTable) {
+    for item in &typed.module.items {
+        let Item::Function(func) = item else { continue };
+        let Some(sig) = sig_table.fns.get(&func.name) else {
+            continue;
+        };
+        let codegen_verdict = return_type_fits_cpu_result_abi(&func.return_type);
+        let typeck_verdict = ynz_typeck::independence::cpu_result_abi_supports(&sig.ret);
+        debug_assert_eq!(
+            codegen_verdict, typeck_verdict,
+            "CPU-ABI-support gate divergence for `{}`: codegen(AST)={codegen_verdict} \
+             typeck(resolved)={typeck_verdict} — return_type_fits_cpu_result_abi and \
+             cpu_result_abi_supports must classify every return type identically \
+             (E5: the parallel_groups hint and the emitted binary must never disagree)",
+            func.name
+        );
+    }
+}
+
 /// The CPU-supported callee set to hand the crossing-local collector for `f`, as borrowed
 /// `&str`s owned by `owner`.
 ///
@@ -6948,18 +6973,22 @@ fn spike_host_cpu_supported<'a>(
 /// Used in both `emit_artifact` (suspend_set extension) and `lower_function_with_waits`
 /// (frame-size + state-count injection).
 ///
-/// `base_suspends` is threaded through, UNCHANGED, to `admitted_cpu_group`'s Phase-2 temporary
-/// co-resident-suspension decline — it MUST be the authoritative pre-promotion suspend set (not
-/// `suspend_set`, which is `base_suspends ∪ spike_hosts` at every call site downstream of
-/// `codegen_query`, so checking `f`'s name against `suspend_set` there would be self-referential
-/// once `f` itself is admitted). See `admitted_cpu_group`'s doc comment for the full rationale.
+/// `base_suspends` is UNUSED as of the v0.3-M3g Phase 3 admission flip — it fed
+/// `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension decline, which Phase 3 removed
+/// along with that function's parameter (see `admitted_cpu_group`'s doc comment). Kept as this
+/// function's own parameter (not removed) because it is ALSO unused, for the identical reason, in
+/// every one of this function's callers all the way up to `emit_artifact`/`build_frame_layouts_
+/// with_resolver`/`spike_host_subset` (three of them public API, ~10 signatures total) — a full
+/// removal is a genuinely separate, wider cleanup pass than this should-fix's named scope
+/// (`admitted_cpu_group`'s own two params), deferred rather than risked this late in the
+/// milestone. See `.claude/todos.md` for the tracked follow-up.
 ///
 /// Time: O(N) where N = AST nodes scanned  Space: O(k) where k = CPU-ABI-returning fns
 fn spike_cpu_candidates(
     f: &FunctionDecl,
     typed: &TypedModule,
     suspend_set: &SuspendSet,
-    base_suspends: &SuspendSet,
+    _base_suspends: &SuspendSet,
 ) -> Option<String> {
     // Any promoted host (not just `entrypoint`) may spike-host its own CPU group. The frame
     // a non-entrypoint host needs is sized through the SAME `cpu_group_slots_and_reserve`
@@ -6971,7 +7000,6 @@ fn spike_cpu_candidates(
     // host this gate's later checks decline.
 
     let supported = cpu_supported_callees(typed);
-    let spike_capable = module_spike_capable_names(typed, suspend_set, &supported);
 
     // The admission DECISION (single-group constraint, post-join param-read decline,
     // nested-suspension decline, nested-param decline, nested-path selection) is owned by
@@ -6982,13 +7010,7 @@ fn spike_cpu_candidates(
     // When the authority declines (`None`), the whole function lowers sequentially, byte-
     // identical to `--no-auto-parallel`. When it admits, this function maps the admitted group
     // to its representative (first) callee — an EXTRACTION step, not a re-decision.
-    let group = ynz_typeck::cpu_admission::admitted_cpu_group(
-        f,
-        suspend_set,
-        base_suspends,
-        &supported,
-        &spike_capable,
-    )?;
+    let group = ynz_typeck::cpu_admission::admitted_cpu_group(f, suspend_set, &supported)?;
     spike_group_representative_callee(f, &group, suspend_set, &supported)
 }
 
@@ -7009,23 +7031,6 @@ fn fused_admitted_group(
 ) -> Option<ynz_typeck::cpu_admission::AdmittedFusedGroup> {
     let supported = cpu_supported_callees(typed);
     ynz_typeck::cpu_admission::admitted_fused_group(f, suspend_set, &supported)
-}
-
-/// Compute [`ynz_typeck::cpu_admission::spike_capable_function_names`] over every local function
-/// in `typed` — the module-wide set `admitted_cpu_group`'s nested-branch HALT-and-surface decline
-/// consults (see that function's doc comment; v0.3-M3g Phase 3).
-///
-/// Time: O(F · N) where F = functions in the module, N = AST nodes per function. Space: O(F).
-fn module_spike_capable_names(
-    typed: &TypedModule,
-    suspend_set: &SuspendSet,
-    supported: &std::collections::HashSet<String>,
-) -> std::collections::HashSet<String> {
-    let fns = typed.module.items.iter().filter_map(|item| match item {
-        Item::Function(f) => Some(f),
-        _ => None,
-    });
-    ynz_typeck::cpu_admission::spike_capable_function_names(fns, suspend_set, supported)
 }
 
 /// Map an admitted CPU group to its representative (first) callee name by navigating the group's
@@ -7239,12 +7244,13 @@ fn stmt_block_has_direct_cpu_group(
 /// (removing a host can re-admit a fn that declined only because that host was suspending,
 /// which can in turn re-decline a third fn), so it is deferred rather than approximated here.
 ///
-/// `base_suspends` is forwarded, UNCHANGED, to `spike_cpu_candidates` → `admitted_cpu_group`'s
-/// Phase-2 temporary co-resident-suspension decline. At BOTH real call sites (`frame_layouts_query`
-/// and `codegen_query`) this is the SAME value as `suspend_set` — the pure pre-promotion effective
-/// suspend set, probed BEFORE the spike-host names are unioned in — so passing it separately here
-/// costs nothing at the real call sites and keeps this function honest about which set plays which
-/// role, rather than silently assuming `suspend_set` doubles as the authoritative base.
+/// `base_suspends` is forwarded, UNCHANGED, to `spike_cpu_candidates`, which no longer consumes it
+/// as of the v0.3-M3g Phase 3 admission flip (see that function's doc comment for why it stays a
+/// parameter here anyway). At BOTH real call sites (`frame_layouts_query` and `codegen_query`)
+/// this is the SAME value as `suspend_set` — the pure pre-promotion effective suspend set, probed
+/// BEFORE the spike-host names are unioned in — so passing it separately here costs nothing at the
+/// real call sites and keeps this function honest about which set plays which role, rather than
+/// silently assuming `suspend_set` doubles as the authoritative base.
 ///
 /// Time: O(p · k) where p = promoted fns, k = AST nodes scanned per candidate.
 /// Space: O(p).

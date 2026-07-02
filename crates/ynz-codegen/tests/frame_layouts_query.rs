@@ -459,16 +459,20 @@ fn spike_host_subset_base_suspends_decline_masks_bare_vs_effective_divergence() 
     // proved `admitted_cpu_group`'s (now-REMOVED) Phase-2 temporary co-resident-suspension decline
     // — keyed on `base_suspends.contains(&f.name)` — made the admission outcome INSENSITIVE to
     // the (unrelated) `suspend_set` argument whenever `base_suspends` was correct. Phase 3 removes
-    // that decline entirely (see `cpu_admission.rs`'s `admitted_cpu_group` doc comment) — the
-    // `base_suspends` parameter is now UNUSED by `admitted_cpu_group` (kept only for call-surface
-    // stability, prefixed `_base_suspends`). This test now proves exactly that non-consultation:
-    // the result is IDENTICAL whether `base_suspends` is CORRECT (the real, authoritative set) or
-    // deliberately WRONG (empty) — a regression where a future change re-adds `base_suspends`
-    // consultation to `admitted_cpu_group` without updating this test would make these two probes
-    // DIVERGE, failing this assertion. (The suspend_set-sensitivity this test used to attribute to
-    // "base_suspends being wrong" is now attributable ENTIRELY to the pre-existing, unrelated
-    // post-pair suspending-callee gate in `cpu_group_member_indices` — see the sibling test below,
-    // which already documents that gate's own bare-vs-effective sensitivity directly.)
+    // that decline entirely, and `admitted_cpu_group` has since dropped the parameter outright
+    // (see `cpu_admission.rs`'s `admitted_cpu_group` doc comment) — codegen's own
+    // `spike_cpu_candidates`/`spike_host_subset`/`build_frame_layouts_with_resolver` chain still
+    // threads `base_suspends` through to `spike_cpu_candidates` (which itself ignores it, via
+    // `_base_suspends`), a deliberately deferred wider cleanup (see `spike_cpu_candidates`'s doc
+    // comment). This test now proves exactly that non-consultation: the result is IDENTICAL
+    // whether `base_suspends` is CORRECT (the real, authoritative set) or deliberately WRONG
+    // (empty) — a regression where a future change re-adds `base_suspends` consultation to
+    // `admitted_cpu_group` (or its removal is reversed) without updating this test would make
+    // these two probes DIVERGE, failing this assertion. (The suspend_set-sensitivity this test
+    // used to attribute to "base_suspends being wrong" is now attributable ENTIRELY to the
+    // pre-existing, unrelated post-pair suspending-callee gate in `cpu_group_member_indices` — see
+    // the sibling test below, which already documents that gate's own bare-vs-effective
+    // sensitivity directly.)
     let mut db = CompilerDb::default();
     let entry_sf = register_inline(&mut db, "entrypoint.ynz", IO_WORK_POST_PAIR_SRC);
 

@@ -66,73 +66,24 @@ pub struct BlockStep {
 /// read, no nested group sharing the host with a call to another CPU-group-capable function,
 /// no nested param-host.
 ///
-/// **TEMPORARY (v0.3-M3g Phase 2):** a top-level group ALSO declines when the host `f` is ITSELF
-/// a member of `base_suspends` (co-resident-suspension decline) — the mirror of the nested
-/// branch's pre-existing check, added so lifting `compute_cpu_promotions`'s `base_suspends` skip
-/// stays behavior-neutral until Phase 3 builds the real fused CPU+I/O continuation and removes
-/// both declines together.
-///
-/// `base_suspends` MUST be the authoritative pre-CPU-promotion suspend set (`check_query`'s
-/// `suspends_set`, extended with imported-suspending names — i.e. the SAME set
-/// `compute_cpu_promotions` reads as `base_suspends` when it decides a host is newly candidate-
-/// eligible). It is deliberately a SEPARATE parameter from `suspend_set`: at the codegen call
-/// site `suspend_set` is `base_suspends ∪ spike_hosts` (every function codegen may spike-host,
-/// including `f` itself once `f` admits) — checking `f`'s own name against THAT union would be
-/// self-referential (a pure-CPU host with no suspension of its own gets unioned in the moment it
-/// is admitted, so re-probing it against the union would wrongly decline it the second time
-/// `admitted_cpu_group` runs). `base_suspends` never contains a name for the sole reason that name
-/// was CPU-promoted, so checking membership there is airtight in both directions: it declines
-/// every genuine co-resident-suspension host (the case Phase 2 newly makes reachable — an explicit
-/// `wait`, a suspending callee, OR a bare may-block intrinsic call with no `wait` wrapper, since
-/// `may_block::analyze` seeds `calls_may_block_intrinsic` independent of `wait` syntax) and never
-/// declines a host whose only suspension is its own CPU join.
-///
-/// **v0.3-M3g Phase 3 — RESOLVED (the residual decline this doc comment used to describe is
-/// REMOVED; kept for history + the next session's cross-check):** a previous session's HALT
-/// left a NESTED-branch residual decline for a nested group co-resident with a call to another
-/// spike-capable host (`spike_capable_names`), attributing the crash it guarded against to a
-/// "genuine, pre-existing runtime defect in the `ynz_rt_join_poll`/`CpuJoinHandle` handle
-/// lifecycle." That attribution was **wrong** — re-investigated this session with runtime-level
-/// `eprintln!` tracing (added, exercised, fully reverted) of every spawn/poll/free on the exact
-/// repro (`v0_3_m3d_nested_group_with_suspending_callee.ynz`, the shape this decline used to
-/// guard): every handle spawn/poll/free traced CORRECTLY — Ready polls freed cleanly, address
-/// reuse between a freed handle and a later spawn is ordinary, safe allocator behavior (the freed
-/// handle was fully consumed and nulled in its frame slot before the reused address was handed to
-/// a new spawn). The runtime handle machinery is sound. The REAL root cause, found by reading the
-/// emitted LLVM IR directly: `crates/ynz-codegen/src/emit.rs`'s `frame_bytes` computation for a
-/// spike-active host used a stale special-case formula (`FRAME_HEADER_SIZE +
-/// own_locals_size(n_locals)`) that silently DROPPED every embedded child sub-frame — a genuine
-/// heap-buffer-overflow bug (the `combine` host's wrapper allocated only 88 bytes when the
-/// composed frame, including the embedded 80-byte `other` child sub-frame, needed 168). Fixed
-/// directly in `emit.rs` (see that fix's doc comment) by always trusting `frame_layout.total_size`
-/// (which already correctly includes both the CPU reserve and every embedded child), the same way
-/// the non-spike branch already did. With the real bug fixed, the decline this doc comment used to
-/// describe was verified (20/20 clean runs, correct oracle output, no crash, no hang) to be
-/// unnecessary and has been removed — a nested group co-resident with a call into ANOTHER
-/// promoted CPU-group host is ADMITTED, exactly like the plain-`wait`/ordinary-suspending-callee
-/// case the note below already covers. See the plan's audit trail for the full repro + fix.
+/// **History (v0.3-M3g Phases 2–3):** Phase 2 temporarily declined a top-level group whenever the
+/// host `f` was itself a member of the pre-promotion suspend set (co-resident-suspension decline),
+/// keeping the promotion lift behavior-neutral. Phase 3 built the real fused CPU+I/O continuation
+/// and removed that decline (a host that also suspends elsewhere is now admitted — the state
+/// machine's ordinary multi-suspension-point dispatch already shares one continuation across every
+/// suspension state). The same phase also root-caused and removed a NESTED-branch residual decline
+/// that had been guarding a co-resident call to another spike-capable host: the crash it guarded
+/// against was a frame-size under-allocation bug in `crates/ynz-codegen/src/emit.rs` (a spike-active
+/// host's `frame_bytes` computation silently dropped an embedded child sub-frame), not a runtime
+/// handle-lifecycle defect — fixed directly in `emit.rs`, verified 20/20 clean runs. Both declines'
+/// former parameters (`base_suspends`, `spike_capable_names`) are gone with them; see the plan's
+/// audit trail for the full repro + fix history.
 ///
 /// Time: O(1) amortized (`HashSet::contains`) plus the O(N) AST work shared with the other gates.
 pub fn admitted_cpu_group(
     f: &FunctionDecl,
     suspend_set: &SuspendSet,
-    // Unused as of the v0.3-M3g Phase 3 admission flip (the Phase-2 temporary co-resident-
-    // suspension decline that consulted this set is removed — see the doc comment above and the
-    // in-body notes). Kept as a parameter (not removed) so the call surface across
-    // `ynz-codegen`/`ynz-typeck` and their test suites — which threads `base_suspends` as a
-    // genuinely separate value from `suspend_set` at every call site down to here (see the
-    // `admitted_cpu_group`/`spike_cpu_candidates` doc history) — does not need a second wide
-    // signature-churn pass in the same phase that also builds the fused-group admission path.
-    _base_suspends: &SuspendSet,
     supported_callees: &HashSet<String>,
-    // Unused as of this session's root-cause fix (the doc comment above explains why the
-    // NESTED-branch decline this set used to gate is gone — the crash it guarded against was a
-    // frame-size bug, fixed directly in `emit.rs`, not a soundness gap this set needed to police).
-    // Kept as a parameter for the same reason `_base_suspends` above is kept: every caller across
-    // `ynz-codegen`/`ynz-typeck` and their test suites already threads a `spike_capable_names`
-    // value down to this call, and a second wide signature-churn pass is not worth it purely to
-    // delete a now-inert parameter.
-    _spike_capable_names: &HashSet<String>,
 ) -> Option<AdmittedCpuGroup> {
     // Single-group constraint: a function spike-hosts IFF it has EXACTLY ONE CPU group across all
     // depths. Two-or-more groups would alias the single group-0 slot region — a silent wrong
@@ -208,28 +159,6 @@ pub fn admitted_cpu_group(
     }
 
     nested_group_member_path(&f.body.stmts, suspend_set, supported_callees)
-}
-
-/// Function names whose OWN body contains at least one adjacent CPU-eligible pair at any depth —
-/// a conservative, syntactic proxy for "this function could itself become a promoted CPU-group
-/// host," used ONLY to keep [`admitted_cpu_group`]'s nested-branch HALT-and-surface decline
-/// narrow (see that function's doc comment). Deliberately does NOT require the callee to be
-/// actually ADMITTED (that would need the full recursive decision this module computes
-/// per-function, and — for THIS conservative-decline purpose — a syntactic over-approximation is
-/// safe: declining a few more shapes than strictly necessary is always correct, per this whole
-/// module's "sequential fallback is always correct" discipline).
-///
-/// Time: O(F · N) where F = functions in the module, N = AST nodes per function.
-/// Space: O(F).
-pub fn spike_capable_function_names<'a>(
-    functions: impl Iterator<Item = &'a FunctionDecl>,
-    suspend_set: &SuspendSet,
-    supported_callees: &HashSet<String>,
-) -> HashSet<String> {
-    functions
-        .filter(|f| count_cpu_groups_all_depths(&f.body.stmts, suspend_set, supported_callees) > 0)
-        .map(|f| f.name.clone())
-        .collect()
 }
 
 // ── Fused (mixed CPU+I/O) top-level group — v0.3-M3g Phase 3 ───────────────────────────────

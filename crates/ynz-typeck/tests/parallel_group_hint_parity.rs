@@ -101,7 +101,7 @@ fn clean_cpu_group_hint_fires_and_matches_admission() {
         })
         .expect("entrypoint present");
     assert!(
-        admitted_cpu_group(entry, &suspends, &suspends, &supported, &HashSet::new()).is_some(),
+        admitted_cpu_group(entry, &suspends, &supported).is_some(),
         "admission gate must admit the clean group (binary spawns it)"
     );
 }
@@ -135,7 +135,7 @@ fn two_cpu_groups_decline_emits_no_hint() {
         })
         .expect("entrypoint present");
     assert!(
-        admitted_cpu_group(entry, &suspends, &suspends, &supported, &HashSet::new()).is_none(),
+        admitted_cpu_group(entry, &suspends, &supported).is_none(),
         "admission gate must DECLINE a two-group function (no spawn → no hint)"
     );
 }
@@ -167,7 +167,7 @@ fn param_read_after_join_declines_emits_no_hint() {
         })
         .expect("host present");
     assert!(
-        admitted_cpu_group(host, &suspends, &suspends, &supported, &HashSet::new()).is_none(),
+        admitted_cpu_group(host, &suspends, &supported).is_none(),
         "admission gate must DECLINE a post-join param read"
     );
 }
@@ -488,14 +488,7 @@ function entrypoint() -> nothing {
         })
         .expect("pureHelper present");
     assert!(
-        admitted_cpu_group(
-            pure_helper,
-            &suspends,
-            &suspends,
-            &supported,
-            &HashSet::new()
-        )
-        .is_some(),
+        admitted_cpu_group(pure_helper, &suspends, &supported).is_some(),
         "sanity: pureHelper must be a genuine, self-admitting CPU-group host for this test to \
          actually exercise the spike_hosts union"
     );

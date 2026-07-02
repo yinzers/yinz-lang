@@ -2033,26 +2033,13 @@ pub fn parallel_group_hints(
     let source_text = source.text(db);
     let mut hints: Vec<ParallelGroupHint> = Vec::new();
 
-    // Module-wide, computed once (does not depend on the function being examined below) — see
-    // `admitted_cpu_group`'s doc comment for why the nested-branch decline needs it.
-    let spike_capable = crate::cpu_admission::spike_capable_function_names(
-        parse.module.items.iter().filter_map(|item| match item {
-            Item::Function(g) => Some(g),
-            _ => None,
-        }),
-        &effective_suspends,
-        &supported_callees,
-    );
-
     // `spike_hosts`: every CPU-promotion candidate whose OWN top-level/nested group is genuinely
     // admitted under `effective_suspends` — the SAME set `ynz_codegen::emit::spike_host_subset`
-    // computes (its call site passes `base_suspend_set` for BOTH the `suspend_set` and
-    // `base_suspends` arguments of `admitted_cpu_group`, exactly mirrored here). Re-derived
-    // rather than called directly: `ynz-typeck` cannot depend on `ynz-codegen` (crate direction
-    // is codegen → typeck — see `cpu_admission.rs`'s module doc), so the only way to read
-    // codegen's real suspend set from this crate is to recompute it from the SAME shared
-    // authority (`admitted_cpu_group`) codegen's helper itself composes — a re-derivation, not a
-    // second decision.
+    // computes, exactly mirrored here. Re-derived rather than called directly: `ynz-typeck`
+    // cannot depend on `ynz-codegen` (crate direction is codegen → typeck — see
+    // `cpu_admission.rs`'s module doc), so the only way to read codegen's real suspend set from
+    // this crate is to recompute it from the SAME shared authority (`admitted_cpu_group`)
+    // codegen's helper itself composes — a re-derivation, not a second decision.
     let promotion = crate::queries::cpu_promotion_query(db, source);
     let spike_hosts: HashSet<String> = parse
         .module
@@ -2063,14 +2050,8 @@ pub fn parallel_group_hints(
             _ => None,
         })
         .filter(|g| {
-            crate::cpu_admission::admitted_cpu_group(
-                g,
-                &effective_suspends,
-                &effective_suspends,
-                &supported_callees,
-                &spike_capable,
-            )
-            .is_some()
+            crate::cpu_admission::admitted_cpu_group(g, &effective_suspends, &supported_callees)
+                .is_some()
         })
         .map(|g| g.name.clone())
         .collect();
@@ -2155,19 +2136,12 @@ pub fn parallel_group_hints(
 
         // Non-suspending function: emit a hint ONLY for the single CPU group codegen admits.
         //
-        // `suspend_set` = `suspends_with_promotions` (codegen's real unioned set — see this
-        // function's doc comment); `base_suspends` = `effective_suspends`, mirroring codegen's
-        // real call site (`spike_cpu_candidates`, which is always invoked with the unmutated
-        // `base_suspend_set` for this second argument). `admitted_cpu_group`'s current
-        // implementation does not read `base_suspends` (kept only for call-surface parity — see
-        // its own doc comment), so this argument is inert either way; passing the authoritative
-        // value keeps the call honest about which set plays which role.
+        // `suspend_set` = `suspends_with_promotions` — codegen's real unioned set, see this
+        // function's doc comment.
         let Some(group) = crate::cpu_admission::admitted_cpu_group(
             f,
             &suspends_with_promotions,
-            &effective_suspends,
             &supported_callees,
-            &spike_capable,
         ) else {
             continue;
         };

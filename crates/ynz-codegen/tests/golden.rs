@@ -945,21 +945,7 @@ fn admitted_group_for(
         ynz_ast::nodes::Item::Function(f) if f.name == fn_name => Some(f),
         _ => None,
     })?;
-    let spike_capable = ynz_typeck::cpu_admission::spike_capable_function_names(
-        parse.module.items.iter().filter_map(|it| match it {
-            ynz_ast::nodes::Item::Function(g) => Some(g),
-            _ => None,
-        }),
-        &effective_suspends,
-        &supported,
-    );
-    admitted_cpu_group(
-        f,
-        &effective_suspends,
-        &effective_suspends,
-        &supported,
-        &spike_capable,
-    )
+    admitted_cpu_group(f, &effective_suspends, &supported)
 }
 
 const XPIN_FIRE_SOURCE: &str = r#"

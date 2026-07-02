@@ -384,6 +384,110 @@ the current-truth plan.md slice).
     (minor #3), `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md` (minor
     #2 + Future Requirements row amended for minor #4), this audit.md entry.
 
+- session-id: (ad-hoc should-fix closeout session, dispatched directly outside the phase-loop) —
+  2026-07-02 — **Cumulative cross-phase review should-fix closeout (2 should-fix + 1 minor,
+  covering all 5 committed phases d184934/5a4835b/87a63b7/b1307bb/3f28246).**
+  - **Should-fix 1 — dead `does_real_work` codegen scaffolding (FIXED — deleted, not kept).**
+    Confirmed via exhaustive grep that `Cg::does_real_work` (and its `CheckOutput::
+    does_real_work_set` → `emit_artifact` threading) had ZERO field-access reads anywhere in
+    `ynz-codegen` — Phase 3 wired a DIFFERENT, narrower consumer (`admitted_fused_group`
+    directly, not `partition_groups_classified`/`ClassifiedGroup`) and never removed this dead
+    field, leaving its doc comment's "Removed once Phase 3 wires a real consumer" promise false.
+    Deleted the field, `empty_does_real_work()`/`EMPTY_DOES_REAL_WORK`, and all ~10 threading
+    sites end-to-end (`queries.rs`'s `emit_artifact` call → `emit_artifact` → `build_module` →
+    `lower_function`/`lower_generic_function` → `lower_function_with_waits` → the `Cg` struct
+    literal). `partition_groups_classified`/`ClassifiedGroup`/`CpuCandidacy` themselves untouched
+    (still live via typeck's `walk_cpu_groups`, per the should-fix's own scoping) — only the
+    codegen-side dead field is gone. The plan's own Future Requirements "Block-walker wholesale
+    swap to `partition_groups_classified`" row already tracks the real deferred consumer wiring,
+    so no new deferral needed.
+  - **Should-fix 2 — duplicated CPU-supported-return-class ABI predicate (FALLBACK taken, not
+    real consolidation — recorded decision).** Investigated hoisting a single shared predicate
+    into `ynz-typeck` as the task preferred. Found the two predicates classify GENUINELY
+    different type representations (codegen: unresolved `ynz_ast::nodes::Type`; typeck: resolved
+    `ynz_typeck::types::Type`, post name-resolution/generic-substitution) with no free conversion
+    — codegen's existing `ast_type_to_typeck_type` helper actively UNWRAPS `T errors` to bare `T`
+    for its own (materialization) purposes, so reusing it for this predicate would silently erase
+    the wide-EC-vs-scalar distinction the predicate exists to enforce (the number-errors UAF
+    class) — a real correctness trap, not a style nit. A genuine consolidation via `sig_table`
+    (which DOES carry the correctly-resolved type) would require threading a new parameter
+    through ~10 function signatures across the entire fusion call graph (`cpu_supported_callees`
+    and every one of its callers up through 3 public APIs), touching the hottest part of the
+    codegen path this late in the milestone. Took the documented fallback instead: added
+    `debug_assert_cpu_abi_gate_parity` (`emit.rs`, `#[cfg(debug_assertions)]`), called once per
+    compile from `build_module`, which cross-checks both predicates for EVERY real function in
+    the module using the already-available `sig_table`. This is a REAL production-code-path
+    check (fires on every debug build/`cargo test` that reaches `build_module`, not only when a
+    developer remembers to run the pre-existing `cpu_result_abi_gate_parity` unit test) — stronger
+    than the should-fix's literal "fixture-parity tests only" framing already was, since that test
+    is itself compile-forced-exhaustive over every resolved `Type` variant (pre-existing, from
+    M3d). Doc comments on both predicates cross-reference each other and this new check. Verified
+    it does not fire (zero panics) across the full M3d/M3g driver corpus (96/96 tests, both full
+    `cargo test --workspace` runs) — proof the two predicates already agree over every return
+    class the real fixture corpus exercises.
+  - **Minor — inert `_base_suspends`/`_spike_capable_names` params on `admitted_cpu_group`
+    (FIXED for the named function; deferred further per its own cascade, RECORDED).** Removed
+    both dead params from `admitted_cpu_group` (`cpu_admission.rs`) outright (not merely
+    `_`-prefixed — actually deleted) and updated all 8 call sites (`emit.rs` ×1, `golden.rs` ×1,
+    `inlay_hint_passes.rs` ×2, `parallel_group_hint_parity.rs` ×4). This cascaded one level: the
+    codegen-side `spike_capable_function_names`/`module_spike_capable_names` machinery that fed
+    the now-gone `spike_capable_names` param became fully dead (zero callers) — deleted both
+    functions entirely (`cpu_admission.rs`, `emit.rs`), not left as further inert code. The
+    cascade continued past that: `spike_cpu_candidates`'s own `base_suspends` parameter also
+    became genuinely unused (its only consumer was the now-gone `admitted_cpu_group` argument) —
+    traced the FULL chain by direct code reading and confirmed `base_suspends` is dead across
+    ~10 signatures in `ynz-codegen` (`emit_artifact`, `build_module`, `lower_function`,
+    `lower_function_with_waits`, `build_frame_layouts_with_resolver` (pub),
+    `compute_frame_size` (recursive), `cpu_group_slots_and_reserve`, `spike_host_cpu_supported`,
+    `spike_cpu_candidates`, `spike_host_subset` (pub)) — 3 of them public API with real external
+    callers in `queries.rs` and test files. Judged this genuinely wider than the should-fix's
+    "cheap" bar (large mechanical sweep, real public-API churn, no behavior risk but real
+    diff-size/review risk this late in the milestone) and deferred per the task's own explicit
+    permission: `_`-prefixed `spike_cpu_candidates`'s `base_suspends` param with a doc comment
+    naming the full cascade and the deferral, and recorded a proper four-field
+    (WHAT/WHY/COST/TRIGGER) deferral in `.claude/todos.md`
+    ("`base_suspends`-dead-parameter-sweep"). Swept every now-stale doc comment claiming
+    `admitted_cpu_group` still reads `base_suspends`/`spike_capable_names` (6 sites across
+    `emit.rs` ×4, `queries.rs` ×2, plus the `frame_layouts_query.rs` test-comment) so no false
+    forward-reference survives this closeout (the exact class of staleness should-fix 1 itself
+    was about).
+  - **Verification:** `cargo build --workspace` clean; `cargo build --workspace --tests` clean
+    (only pre-existing warnings in files this session did not touch, confirmed by file-path cross-
+    check against `git status`); `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all
+    -- --check` clean. Targeted suites green: `ynz-typeck --lib` 93/93, `ynz-typeck --test
+    parallel_group_hint_parity` 9/9, `ynz-typeck --test inlay_hint_passes` 8/8, `ynz-codegen --lib`
+    13/13 (including `cpu_result_abi_gate_parity`), `ynz-codegen --test golden` 34/34, `ynz-codegen
+    --test frame_layouts_query` 9/9. Full `cargo test --workspace --no-fail-fast` run TWICE: run 1
+    — 6 failures (the 5 always-failing pre-existing baseline — `no_banned_jargon_in_deferred_
+    feature_user_facing_fields`, `parser_precedence_table_matches_spec`, `every_future_doc_has_a_
+    registry_entry_or_is_skipped`, `deferred_language_feature_lookup`,
+    `deferred_tooling_feature_lookup` — plus `ynz-runtime`'s `spawn_panic_ctx_no_leak`, a
+    many-concurrent-panicking-tasks stress test in a crate this session never touched); run 2 — the
+    same 5 pre-existing baseline failures, zero others (`spawn_panic_ctx_no_leak` passed clean,
+    confirming run 1's extra failure was CI-contention flake, not a regression — independently
+    re-confirmed by running it standalone, 1/1 pass). Zero new failures introduced by this
+    session's diff in either run. All 96 `v03_m3d`/`v03_m3g` driver fixture tests green in both
+    runs. Golden-IR corpus confirmed byte-identical: zero `.snap.new` files anywhere in the tree
+    after every build/test invocation this session. Did NOT commit to git (per dispatch scope).
+  - **Files touched this session:** `crates/ynz-codegen/src/emit.rs` (deleted dead
+    `does_real_work` field/threading + `module_spike_capable_names`; added
+    `debug_assert_cpu_abi_gate_parity`; updated `admitted_cpu_group` call site; stale-comment
+    sweep), `crates/ynz-codegen/src/queries.rs` (dropped `does_real_work_set` arg to
+    `emit_artifact`; stale-comment sweep), `crates/ynz-typeck/src/cpu_admission.rs` (removed
+    `admitted_cpu_group`'s 2 inert params + deleted dead `spike_capable_function_names`),
+    `crates/ynz-typeck/src/inlay_hint_passes.rs` (updated 2 `admitted_cpu_group` call sites,
+    removed dead `spike_capable` local), `crates/ynz-codegen/tests/golden.rs` (updated
+    `admitted_group_for` helper), `crates/ynz-codegen/tests/frame_layouts_query.rs` (stale-comment
+    update only, no behavior change), `crates/ynz-typeck/tests/parallel_group_hint_parity.rs`
+    (updated 4 `admitted_cpu_group` call sites), `.claude/todos.md` (new deferral entry), this
+    audit.md entry.
+  - **Recorded decisions:** (1) prefer the debug-time cross-check fallback over full predicate
+    consolidation for should-fix 2 (real type-representation mismatch + hot-path risk this late,
+    named above); (2) stop the inert-param sweep at `admitted_cpu_group` + its one direct
+    unavoidable ripple (`spike_capable_function_names`), deferring the further `base_suspends`
+    cascade through ~10 more signatures/3 public APIs as a named four-field todos.md entry rather
+    than risking a wide mechanical sweep this late in the milestone.
+
 ## FRAGO log
 (FRAGO delta records append here — see the FRAGO template in REF-plan-format.)
 
