@@ -1,7 +1,7 @@
 ---
 name: "v0-3-m3g-mixed-cpu-io-overlap"
 plan-id: "2026-07-01-v0-3-m3g-mixed-cpu-io-overlap"
-status: "active"
+status: "done"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
 session-id: ["1b30f567-887b-42a7-990a-0eb5323207a9", "ee4baaa2-24e0-4064-966f-f9ad907f8751", "21509b0d-6bd4-43d6-b66a-34a7551619c6"]
 created_at: "2026-07-01"

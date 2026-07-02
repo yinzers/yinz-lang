@@ -1911,3 +1911,209 @@ Override:  N/A — no risk residual rose to HIGH. All six Phase 4 steps are DONE
   — ZERO new failures either run. The documented `v03_m3e_alias_local_name_collision_runs_
   correctly` CI-contention flake did not fire in either run.
   Override: N/A — no risk residual, no new design decision.
+
+## After-Action Review — 2026-07-02
+
+Dispatched fresh-context per box 10b / IMP-frago-aar §3, at completion-gate CLEARED. Full text below,
+verbatim from the `aar` agent's return; the conductor appended it (the AAR agent writes nothing itself).
+
+---
+
+# After-Action Review — v0.3-M3g Mixed CPU+I/O Overlap (poll-path fusion)
+
+**Plan:** `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md`
+**Audit sidecar:** `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/audit.md`
+**Diff range:** `a8e11fa..25dd9a9` (commits `d184934, 5a4835b, 87a63b7, b1307bb, 3f28246, b192b32, 25dd9a9`)
+
+---
+
+## Q1 — What was supposed to happen
+
+**Mission (¶2):** fuse the M3b I/O inline-poll path and the M3d CPU join-poll path so one `Parallel`
+group's shared continuation drives N CPU members and M I/O members concurrently instead of
+sequentially, before the v0.3.0 tag — closing the last gap in "the compiler overlaps everything it
+can prove independent."
+
+**Intent & End State (¶3.1) — 6 Key Outcomes, all conjunctive:**
+1. The three M3d DECLINE fixtures flip from decline-asserting to fire-asserting.
+2. General N-CPU + M-I/O fusion within one group — no member-count hardcode.
+3. The safe-DECLINE floor never regresses (byte-identical everywhere it doesn't fire); kernel-mode
+   is a separate, unconditional hard-reject floor.
+4. No deadlock — every resume re-drives every live CPU handle and every pending I/O sub-frame.
+5. Teaching surfaces (`parallel_groups` hint) never disagree with the emitted binary.
+6. Demo + error gallery extended, IMP-concurrency amended, registry entries enumerated, release tagged.
+
+**Definition of done:** all six hold on `main`, full workspace green, `v0.3.0-m{next}` tag cut.
+
+**Plan structure:** 5 strictly-sequenced phases (P1 ABI/baseline → P2 typeck front-half,
+behavior-neutral → P3 fusion core, the heart, zero-gates-outstanding merge → P4 generality/boundary
+matrix → P5 teaching/docs/registry/release), governed by an explicit disciplined-initiative priority
+order (never a sync bridge > never regress the floor > the 3 flip fixtures are non-negotiable > edge
+shapes may decline safely with a locked test + 4-field deferral) and explicit CCIR STOP-conditions
+(any hang, any `default ≠ --no-auto-parallel` divergence, any sync-bridge pressure, any flip fixture
+resisting a safe fire → HALT-and-surface, never a quiet decline). 8 scored risks, 4 of them PLAN
+OBLIGATIONS (E4 ABI drift, E6 guard-probe completeness, E7 wide-EC ratchet, E8 pool exhaustion), no
+HIGH residual.
+
+---
+
+## Q2 — What actually happened
+
+All 5 phases plus a cumulative cross-phase completion gate landed and are committed on `main`.
+Checkbox state in `plan.md` is 100% ticked except the deliberately-deferred Phase 5 step 6
+(`/pr`/`/release`).
+
+- **Phase 1 (ABI/baseline)** — landed cleanly in essentially one pass. One cheap-gate follow-up
+  fixed a genuine **Test-Weakening corpse**: a diagnostic-text unification silently made a
+  regression test's `.contains("never suspends")` substring filter pass unconditionally, gutting a
+  real regression guard — caught by graveyard-auditor, fixed, and proven non-vacuous by fault
+  injection.
+- **Phase 2 (typeck front-half, behavior-neutral)** — landed with two real findings: (a) a
+  Paper-Traced **pre-existing latent misfire** (fixture-b variant) found on the *unmodified Phase 1
+  baseline* before any Phase 2 code was touched (FRAGO 002) — not a Phase 2 bug, a genuine A9-predicted
+  gap the phase's own mechanism happened to close; (b) a **code-reviewer BLOCKER post-landing**: the
+  temporary admission decline was implemented as a fresh AST re-scan that missed a bare may-block
+  intrinsic (`sleep(0)`, no `wait` keyword) — fixed by re-keying the decline off the authoritative
+  `base_suspends` set instead of a second detector.
+- **Phase 3 (fusion core, the heart)** — took **4 separate dispatches**, not one:
+  - FRAGO 003: two **honest HALTs** per the plan's own CCIR rule, after lifting the Phase-2 temporary
+    decline unmasked two genuinely pre-existing bugs. Root cause #1 was (wrongly) attributed to a
+    runtime handle-lifecycle defect and HALTed. Root cause #3 (a control-flow-body-suspension gap in
+    the crossing analysis) was found and root-caused but only worked around with a residual decline,
+    not fixed at the source.
+  - FRAGO 004: **re-diagnosed root cause #1** — the prior session's attribution was wrong; the actual
+    bug was a stale frame-size fallback formula ignoring `frame_layout.total_size` for a spike-active
+    host, a classic under-allocation bug, genuinely fixed. Root cause #3 was fixed for real this
+    session (not just worked around) — and the fix itself **self-caught and self-fixed a regression**
+    in an unrelated pre-existing fixture within the same session, before returning.
+  - FRAGO 005: the milestone's actual core novel work — `emit_fused_group_spawn_poll` consuming
+    `admitted_fused_group`. All three non-negotiable fixtures now fire. A dispatch-sanctioned
+    deviation kept the narrow third-gate mechanism instead of the plan's literal wholesale
+    block-walker swap (recorded, not a blocker — tracked in Future Requirements).
+  - A reviewer-fleet should-fix closeout (session `ee4baaa2`) found real drift/DRY issues (4
+    duplicated helper blocks, missing Future Requirements rows, an E8 fixture that **overstated its
+    own concurrent pressure** — claimed 20-simultaneous, actually ran 4 sequential chains — a stale
+    invariant-text mismatch, a missing safety comment). All fixed.
+  - FRAGO 006 closed the remaining exit-criteria gaps (E1 adversarial multi-resume fixtures, E8,
+    the overlap proof built per A7's own already-recorded refined protocol, demo/gallery).
+  - A second cheap-gate pass on the Phase 5 record found a real **BLOCKER** (nested I/O-overlap hints
+    double-emitted on one branch after a refactor) and a real **should-fix** (the hint pass classified
+    against a narrower suspend set than codegen's real call site — a genuine E5 hint==binary parity
+    divergence), plus 4 minor items. All fixed.
+- **Phase 4 (generality matrix)** — FRAGO 007: all steps done. One genuine **plan-vs-reality
+  divergence**: the Kernel-Mode Behavior subsection's original assumption ("declines to sequential")
+  was wrong — reality is an unconditional, pre-existing (pre-dating M3g) hard compile error. Corrected
+  through the plan's own pre-registered escape valve, exactly as designed.
+- **Phase 5 (teaching/docs/registry/release)** — engineering steps 1–5 done against plan text (not a
+  FRAGO); step 6 (`/pr`/`/release`) deliberately not attempted, out of executor scope.
+- **Cumulative completion gate** — ran (correct coupling decision: 5 files touched by 3+ phases →
+  default-to-run). Found 2 should-fix + 1 minor across the *whole-plan* diff — dead `does_real_work`
+  scaffolding whose own doc comment's removal-promise had gone false, a duplicated CPU-ABI predicate
+  with no compile-time link, inert admission-gate params — none of which any single-phase reviewer
+  could see. Fixed in `b192b32`. Resolution: **CLEARED**.
+
+---
+
+## Q3 — Why the gaps (root cause per divergence)
+
+| Divergence | Root cause | Evidence |
+|---|---|---|
+| Phase 3 took 4 dispatches, not 1 | **Reality was different, justified** — lifting a conservative decline unmasked two genuine pre-existing bugs the CCIR rule explicitly required surfacing via HALT rather than papering over. Not a plan defect; the plan's own disciplined-initiative rule 1/CCIR anticipated exactly this. | FRAGO 003/004; plan ¶3.1 disciplined-initiative rule 1, ¶3.4 CCIR |
+| Root cause #1 misattributed (handle-lifecycle) then corrected (frame-size under-allocation) | **Verification gap, not plan-wrong** — the first Paper-Trace's evidence (timing/address-reuse pattern) was circumstantial and consistent with the wrong hypothesis; the evidence path didn't trace forward to the actual size-computation code before the verdict was recorded. | FRAGO 003 "root cause #2" vs FRAGO 004 "RE-INVESTIGATED... prior session's root-cause attribution was WRONG" |
+| Phase 2's bare-intrinsic admission hole | **The executor strayed, but self-recorded, then reviewer-caught** — a fresh AST re-scan was written to answer a question (`does this host suspend?`) an authoritative set (`base_suspends`) already answered; the re-derivation diverged on a bare-intrinsic edge the AST scan's other, unrelated exemption masked. Caught by code-reviewer post-landing, not self-caught. | audit.md Phase-2 blocker-fix entry, `cpu_admission.rs` |
+| Phase 5's suspend-set-parity gap (hint pass vs codegen's real call site) | **Same class of stray as the Phase 2 hole** — the hint pass independently re-derived a narrower `effective_suspends` instead of threading codegen's real unioned `suspends_with_promotions`. Caught by should-fix review, not self-caught. | audit.md Phase-5 cheap-gate should-fix entry |
+| Cumulative gate's duplicated CPU-ABI predicate | **Same class again, a third occurrence** — two independent predicates over genuinely different type representations, judged too risky to fully consolidate this late; closed with a `debug_assert` cross-check instead of true unification. Justified deviation, recorded. | completion-gate log, "Should-fix 2" |
+| Phase 5 double-emitted nested hints | **The executor strayed, reviewer-caught** — a refactor hoisted a call to a nested-blocks helper unconditionally after an if/else, when the `else` arm already internally called the same helper. Mechanical extraction bug. | audit.md Phase-5 cheap-gate BLOCKER entry |
+| E8 fixture overstated its own concurrent pressure | **The executor strayed, reviewer-caught** — a fixture's WHY comment claimed 20-simultaneous when the actual topology ran 4 strictly-sequential chains. | audit.md Phase-3 should-fix closeout, "E8 fixture overstates concurrent pressure" |
+| Kernel-Mode Behavior premise wrong | **Plan was wrong** — a recon-time assumption about pre-existing, adjacent-but-untouched code, asserted without a direct-code-read at authoring time. Correction mechanism (pre-registered FRAGO escape valve) worked exactly as designed. | FRAGO 007 Paper-Trace |
+| "Both files get insta snapshots" invariant text | **Plan was wrong** — aspirational boilerplate that never matched the established M3b/M3d/M3e/M3f precedent (byte-exact `expected_stdout.txt`, no insta for gallery files). Reconciled twice (Phase 3 closeout, then again flagged stale in ¶4 by the second reviewer pass). | audit.md Phase-3 closeout "Stale Demo & Error Gallery invariant text"; FRAGO 006 "Minor #2" |
+
+No divergence in this plan is **undetermined** — every gap traces to a named cause with evidence in
+the sidecar.
+
+---
+
+## Q4 — Lessons (classified by durable home, for rule-author to dispose)
+
+**A. [RULE candidate] Twin-computation drift — thread one authoritative source, don't let a second
+surface re-derive an "equivalent" answer.** This exact shape recurred **three times** in one plan:
+Phase 2's admission decline re-scanned the AST instead of reading `base_suspends`; Phase 5's hint pass
+classified against a narrower `effective_suspends` instead of codegen's real unioned set; the
+cumulative gate's two independently-computed CPU-ABI predicates. Three independent occurrences of the
+same failure class in a single plan is a strong signal this deserves a durable rule: when two+ code
+paths must agree on a derived question, thread the same query/authoritative value into both — a fresh
+re-derivation that is "currently equivalent" at today's call sites is exactly the kind of thing that
+silently diverges the next time context differs. Ties into this project's own DRY/single-source
+philosophy (`stdlib-design.md` Rule 2, the E5/hint-parity risk framing already in this plan).
+
+**B. [Graveyard CORPSE candidate] Diagnostic-text/wording unification silently blinds a
+substring-filter test.** After unifying or rewording diagnostic text, a test asserting
+`.contains("<old substring>")` can start passing unconditionally instead of red — a real
+regression-guard silently gutted. Recurred here (FRAGO 001 cheap-gate fix) as a fresh, mechanical,
+diff-greppable instance of the Test-Weakening pattern: grep every test filtering on a literal
+substring of changed diagnostic text after any wording dedup.
+
+**C. [Graveyard CORPSE candidate] Refactor-extracted helper double-invoked on one branch.** Extracting
+a shared helper out of a function called from an if/else, then adding a hoisted call to that same
+helper after the if/else, without checking whether one arm already calls it internally — a mechanical,
+diff-greppable extraction bug (Phase 5's double-emitted-hint blocker).
+
+**D. [Graveyard CORPSE candidate] Concurrency-stress fixture's claimed pressure vs. its actual
+topology.** A stress/exhaustion fixture's WHY comment or test name asserting a concurrency level (e.g.
+"20 simultaneous") must be verified against the fixture's real spawn topology, not just its total
+worker count.
+
+**E. [Rule reinforcement, not new — sustain] Honest HALT over quiet decline or hacky fix, even under
+milestone-acceptance pressure.** Phase 3 HALTed twice rather than papering over two genuine pre-existing
+bugs, and both were later root-caused and fixed for real (one requiring re-diagnosis of an earlier wrong
+attribution). This validates the plan's own CCIR/disciplined-initiative rule and this project's global
+`verification.md`/`no-duct-tape.md` rules in practice — worth citing as a strong real-world example, not
+a new rule.
+
+**F. [Rule refinement candidate, for `REF-verification.md`] Paper-Trace evidence-path discipline for
+memory-corruption-class symptoms.** FRAGO 003's root-cause attribution for a SIGILL/crash was
+circumstantial (timing + address-reuse pattern near handle spawn/poll/free) and was recorded as a
+confirmed verdict before tracing forward to the actual failing computation. FRAGO 004 found the real
+cause several layers downstream (a frame-size formula). Suggested refinement: for a
+corruption/crash-class symptom, the Paper-Trace "evidence path" should point at the code computing the
+failing *value* (allocation size, offset, layout) whenever plausible, not merely the subsystem where the
+crash was observed — corruption symptoms routinely surface far from their cause. This sharpens the
+existing global rule; it does not conflict with it.
+
+**G. [Rule candidate — recon discipline] Verify cheap, adjacent-but-untouched-by-this-plan behavior
+claims at plan-authoring time, not by inference deferred to execution.** The Kernel-Mode Behavior
+subsection's wrong assumption was resolved cleanly via a pre-registered FRAGO escape valve — but the
+check itself (one grep/read of `check.rs`'s kernel dispatch arm) was cheap enough it could have been
+done at Phase-1-recon time instead of surfacing 3 phases later. When an invariant subsection asserts
+behavior of pre-existing code the plan's own phases won't directly touch, do the direct-code-read
+verification during recon if it's cheap — don't defer a cheap check just because the surrounding
+feature work is deferred.
+
+**H. [Project memory] This project's M3-series milestones use byte-exact `expected_stdout.txt`
+comparison for demo coverage, never `insta`, for gallery files.** The plan's own invariant-subsection
+boilerplate ("Both files get insta snapshots") never matched established M3b/M3d/M3e/M3f precedent and
+had to be reconciled twice. Worth banking as a repo fact in `plan-invariants.md`'s `### Demo & Error
+Gallery` template text so the next milestone plan doesn't reinherit and re-correct the same stale
+clause.
+
+**I. [Project memory / process validation, not a new rule] The multi-lens reviewer fleet + cumulative
+cross-phase completion gate earned its cost on this plan.** Every should-fix/blocker finding across the
+plan's cheap-gate and cumulative-gate passes (dead scaffolding, duplicated predicate, double-emitted
+hints, suspend-set-parity, E8 topology overstatement, the Test-Weakening corpse) was a real, valuable
+catch that a green `cargo test --workspace` alone never surfaced. This is a concrete, real-world
+validation of this project's completion-gate coupling-decision heuristic (default-to-run when touched
+surfaces aren't pairwise disjoint) — worth citing as supporting evidence, not a new rule.
+
+---
+
+## End-State verdict (restating the completion gate's already-rendered verdict, not re-deciding it)
+
+**PARTIAL** — restating the cumulative completion-gate's deviation-judge finding
+(`audit.md` Completion-gate log, "Resolution: CLEARED"): **all 6 Definition-of-Done Key Outcomes hold**
+at the final committed state (`25dd9a9`), zero unjustified strays, zero outstanding findings, zero
+unresolved FRAGO candidates. The one remaining item — `/pr` + `/release` for the `v0.3.0-m{next}` tag —
+is deliberately, explicitly, and consistently out of executor scope across every phase that touched it
+(a human-gated, outward-facing action), not a gap this gate is responsible for closing. Graded PARTIAL
+rather than SUCCESS only because that one deliberate deferral is still open pending human action, per
+this plan's own frontmatter (`status: "active"`, pending the human completion-approval gate) — not
+because any engineering criterion is unmet.
