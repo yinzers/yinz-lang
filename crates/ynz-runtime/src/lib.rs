@@ -1,4 +1,8 @@
+pub mod channel;
 pub mod runtime;
+pub use channel::{
+    ynz_channel_create, ynz_channel_free, ynz_channel_recv_poll, ynz_channel_send_poll, YnzChannel,
+};
 pub use runtime::{
     ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_check_preempt, ynz_rt_init,
     ynz_rt_join_handle_free, ynz_rt_join_poll, ynz_rt_run_entrypoint, ynz_rt_shutdown,

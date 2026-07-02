@@ -164,6 +164,107 @@ current-truth plan.md slice).
   file touched; no cargo build/test re-run (nothing code-level changed). Session-id appended; status
   remains active.
 
+- executor-2026-07-02-m4-p1 — 2026-07-02 — EXECUTED Phase 1 PARTIALLY (runtime substrate only). NO
+  STOP condition triggered (no synchronous blocking call, no deadlock — the substrate is proven
+  suspends-not-blocks); NO dormant override armed. Grounded in the P1 slice + IMP-no-function-coloring
+  (Channel/Queue Primitives §94-165) + IMP-concurrency (handle/backpressure §146-181) +
+  authoritative-derivation.md + the P0 STATUS locks (esp. Lock 8/9/11) + the persisted P0 spike report.
+  Producer does NOT self-grade — this entry is the honest record, pending reviewer fan-out.
+  **What landed & verified (the R1 deadlock-safety RUNTIME SUBSTRATE — the highest-risk slice):** a
+  new `crates/ynz-runtime/src/channel.rs` module with the channel C-ABI over `tokio::sync::mpsc`
+  (`sync` feature already enabled in P0): `ynz_channel_create(capacity)` (bounded — clamps `<1 → 1`;
+  NO unbounded constructor, stdlib-design Rule 4), `ynz_channel_send_poll(chan, value, waker_ctx)`,
+  `ynz_channel_recv_poll(chan, out, waker_ctx)`, `ynz_channel_free(chan)`, exported from
+  `crates/ynz-runtime/src/lib.rs:3-5`. Return ABI mirrors `ynz_rt_async_sleep_poll`: 0=Ready /
+  1=Pending / 2=Closed. Deadlock-safe BY CONSTRUCTION: endpoint futures live in the runtime-owned
+  `YnzChannel` object (NOT the type-punned `sleep_handle` slot — trap door 1c avoided, Lock 11
+  honored); the boxed send future owns a CLONED sender + value (no self-reference); the ONLY channel
+  operations in the path are `try_send`, `poll_recv`, and one `send().await` future polled with the
+  FORWARDED waker — zero `block_on`/`blocking_send`/`spawn_blocking`/`thread::sleep`/`.park()` (R1's
+  no-blocking-call guarantee). This makes durable exactly what the P0 R5 spike proved with throwaway
+  shims. 4 substrate tests GREEN via `cargo test -p ynz-runtime channel`
+  (`send_on_full_suspends_then_resumes_after_drain` = the R1 proof; `recv_on_empty_suspends_then_delivers`;
+  `send_to_closed_returns_closed` = Lock 8 typed-Closed shape; `recv_on_closed_drained_returns_closed`);
+  `cargo build --workspace` GREEN; `cargo clippy -p ynz-runtime -- -D warnings` (lib) clean.
+  **NOT the ynz-run gate:** these Rust runtime tests are SUBSTRATE evidence; the Step-6 `ynz run`
+  deadlock-safety GATE is NOT satisfied for Phase 1 (it needs the codegen + Deviation A's resolution).
+  **NOT done (Step 1 typeck/codegen half, Steps 2–7):** no `Type::BuiltinChannel`, no typeck/parser
+  wiring, no `.send`/`.receive` method typeck, no codegen lowering, no R6 classifier sibling arm, no
+  kernel gate, no `channel_capacity` muted hint, no registry entry, no hostile fixtures, no
+  demo/gallery. `channel<T>` is NOT yet user-reachable — the substrate is an exported C-ABI awaiting
+  its codegen consumer (deliberately NOT half-wired into a broken user surface).
+  **Deviation A surfaced (for the deviation-judge → FRAGO seam; NOT self-decided, NOT self-applied):**
+  Phase 1 step 6's `ynz run` "full-channel backpressure" hostile fixture + its "send-on-full suspends,
+  timing-verified" exit criterion (plan.md:594-602) structurally require TWO Yinz tasks sharing ONE
+  channel (producer fills+suspends, consumer drains) — a single-task send-on-full hangs with no
+  drainer. The only Phase-1 spawn primitive is `background` fire-and-forget (M3b); the handle-form is
+  Phase 2. But a `channel<T>` cannot be shared across a `background` boundary today: mpsc splits into a
+  cloneable Sender + a single non-cloneable Receiver, `.give` moves the whole value, and `.share`/`.lend`
+  across `background` are compile errors (`check.rs:2275-2280`/`2287-2292`). Phase 1's plan text does
+  not specify cross-task channel sharing, and the P0 seed `p0-spike/composed-scenario.ynz:26` is itself
+  a Phase-2 fixture using `lend out: channel<int>` (a cross-background compile error). Candidate durable
+  fix (channel `.copy` clones the sender-half, sharing an Arc-backed receiver) overlaps Phase-3 auto-Arc
+  ownership work — a real design decision the deviation-judge/Patrick must classify, not the executor.
+  **Deviation B surfaced:** Lock 11 (plan.md:563-570) assigned the cross-suspension endpoint-persistence
+  slot decision to P2, but a bare `channel.send()`-on-full in P1 also needs the CHANNEL handle local to
+  persist across its own suspension (to re-poll the same in-flight send on resume). Runtime half honors
+  Lock 11 (endpoint future in the runtime object); the open P1 codegen call is only WHERE the channel
+  local persists — most likely the existing crossing-local frame-slot mechanism (`sm_crossing_names` /
+  `FRAME_OFFSET_LOCALS_START`), needing no new frame-header slot. Surfaced for classification, not
+  self-decided. **Recorded durable decisions (made without a human, reasons on record):** (a) channel
+  value model = ONE combined object holding both mpsc endpoints (Phase-1 single-value shape; Phase 2
+  splits for cross-task); (b) element type carried as i64 bits at the ABI (consistent with array/map
+  runtime); (c) send/recv poll return codes 0/1/2 mirroring the sleep poll ABI; (d) in-flight send
+  future owns a cloned sender (avoids self-reference AND the sleep_handle slot — trap door 1c). **Files
+  touched:** `crates/ynz-runtime/src/channel.rs` (new), `crates/ynz-runtime/src/lib.rs` (module + 4
+  exports), `plan.md` (Phase 1 PARTIAL STATUS banner), `audit.md` (this entry). **Pre-existing/out of
+  scope (noted like P0's `design_future_sync`):** `cargo clippy -p ynz-runtime --all-targets` flags a
+  `duplicated_attributes` lint at `crates/ynz-runtime/tests/m2_runtime.rs:275` (`#[repr(C)]`), a
+  clippy-version sensitivity in a file P1 never touched (git-confirmed: only `src/lib.rs` + new
+  `src/channel.rs` changed). Session-id appended; status remains active.
+
+- executor-2026-07-02-m4-p1-r2 — 2026-07-02 — P1 CONTINUATION (dispatched by the execution conductor
+  after the P1 reviewer fleet + human decision gate on the two surfaced deviations). Producer does NOT
+  self-grade — this is the honest record, pending reviewer fan-out. Grounded in the P1 slice +
+  IMP-no-function-coloring + IMP-concurrency + authoritative-derivation.md + the P0 STATUS locks + the
+  persisted P0 spike + no-duct-tape. Three parts:
+  **Part 1 — FRAGO application (both human-approved, deviation-judge-classified; APPLIED, not
+  re-decided).** FRAGO 002 (descope Phase 1 Step 6's two-task `ynz run` backpressure fixture — Patrick
+  confirmed via AskUserQuestion "yes his descop is ok"): struck the two-task/composed requirement from
+  Step 6 + exit criteria; replaced with the runtime-substrate proof
+  (`send_on_full_suspends_then_resumes_after_drain`) + grep-audit + single-task hostile fixtures;
+  relocated the two-task composed proof to Phase 2's own R5 B2 gate (no coverage lost — Phase 2 already
+  carries it). FRAGO 003 (bare-send channel-local persistence resolves via the existing crossing-local
+  mechanism, risk-neutral): amended Lock 11 + Phase 1 Step 2 so the next executor does not re-derive it.
+  BOTH written into `plan.md` in-place AND recorded as `## FRAGO 002` / `## FRAGO 003` in this file in
+  the canonical FRAGO 001 Base/Trigger/Changes/Unchanged/Override shape. Deviations A/B in the P1
+  banner marked RESOLVED. **Part 3 — three reviewer-fleet minor fixes to
+  `crates/ynz-runtime/src/channel.rs`:** (1) `ynz_channel_create` doc rewritten to name typeck as the
+  primary no-unbounded / non-positive-capacity gate with the clamp as a release-mode floor (the
+  present-tense claim is now anchored to the typeck gate Part 2 will build, with the clamp/debug_assert
+  as the defensive backstop); (2) `catch_unwind` added around BOTH `ynz_channel_send_poll` and
+  `ynz_channel_recv_poll` polls (returning `CHANNEL_PENDING` on panic) via a shared `panic_payload_msg`
+  helper — chose genuine panic-parity with the `ynz_rt_async_sleep_poll` "mirror" claim over narrowing
+  the doc; (3) `debug_assert!(capacity >= 1, …)` above the release clamp. 4 channel substrate tests
+  GREEN; `cargo clippy -p ynz-runtime -- -D warnings` (lib) clean. **Part 2 — typeck/codegen half +
+  Steps 2–7: DELIBERATELY NOT half-wired (recorded durable decision, reason on the record).** Adding
+  `Type::BuiltinChannel` end-to-end is a monolithic build (~24 typeck + ~27 codegen match sites);
+  `llvm_type_for_ctx` returns `Option`/`None` for unhandled types, so the instant typeck resolves
+  `channel<int>()` a user program reaches codegen — anything short of the complete chain is a
+  type-checks-but-miscompiles broken surface (the exact half-feature `executor-2026-07-02-m4-p1`
+  refused; no-duct-tape forbids). The load-bearing piece — mirroring `emit_wait_point`
+  (`emit.rs:9731`) / `emit_sleep_poll_branch` (`state_machine.rs:697`) for a NEW suspension source
+  whose handle persists as a crossing-local (FRAGO 003) — is the maximum-adversarial suspension-codegen
+  domain P0 spent a HARD GATE de-risking and the silent-miscompile-across-suspension class that burned
+  M3a/M3d/M3e/M3g. Shipping an unverified partial there would reintroduce exactly the R5/R1 risk. Part 2
+  stands as documented remaining work (the `executor-2026-07-02-m4-p1` remaining-work map holds, now
+  FRAGO-002-rescoped) and is surfaced as needing its own focused, end-to-end-verified execution — not
+  silently skipped. **No new deviation surfaced.** **Files touched:**
+  `crates/ynz-runtime/src/channel.rs` (three fixes), `plan.md` (FRAGO 002/003 in-place + Lock 11 +
+  Step 2/6 + exit criteria + P1 banner + frontmatter session-id), `audit.md` (FRAGO 002, FRAGO 003,
+  this entry). NO STOP condition fired; NO dormant override armed. Session-id appended; status remains
+  active.
+
 ## FRAGO log
 (r3/r4 were pre-execution plan corrections, logged as session entries per the r2 precedent;
 FRAGOs record execution-time divergences against a running phase — FRAGO 001 is the first.)
@@ -216,3 +317,63 @@ Unchanged: everything not listed — ¶1, ¶2, ¶3.1, ¶3.2, Phases 1-6, ¶4, ¶
 Override:  N/A — risk-neutral, no signature required (per Command & Signal / IMP-frago-aar.md).
   Distinct from the R6 content-list twin, which — being drift-prone — would require the full
   unification + parity-test treatment, not a bare auto-apply.
+
+## FRAGO 002 — 2026-07-02 — session-id: executor-2026-07-02-m4-p1-r2 (P1 continuation; deviation-judge-classified, Patrick-confirmed via the execution conductor)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 1 (Step 6 + exit criteria)
+Trigger:   Deviation A (surfaced by `executor-2026-07-02-m4-p1`, session log above) — Phase 1 Step 6
+           and its exit criteria, as originally written, demanded a "full-channel backpressure"
+           `ynz run` fixture that structurally requires TWO Yinz tasks sharing ONE `channel<T>` (a
+           producer that fills + suspends, a consumer that drains). But `channel<T>` cannot cross a
+           `background` boundary today: `.share`/`.lend` across `background` are compile errors
+           (`crates/ynz-typeck/src/check.rs:2275-2280`/`2287-2292`) and `.give` moves the whole value,
+           leaving the other side with nothing. The P0 spike seed `p0-spike/composed-scenario.ynz` is
+           itself labeled (its own header, lines 1-9) as the SEED for Phase 2's build-blocking composed
+           fixture, not Phase 1's — confirming the two-task cross-boundary capability genuinely lands in
+           Phase 2 (handle-form), not Phase 1. deviation-judge confirmed the SCOPE reading; Patrick
+           confirmed the descope via AskUserQuestion on 2026-07-02 ("yes his descop is ok"). This is
+           the recorded APPLICATION of that human-approved classification, not a re-decision by the
+           executor.
+Changes:
+  - `plan.md` Phase 1 Step 6: STRUCK the two-task / `ynz run`-composed-backpressure requirement.
+    REPLACED with: Phase 1's R1 (send-on-full-suspends-without-blocking) evidence is the
+    runtime-substrate proof already GREEN (`cargo test -p ynz-runtime channel`, specifically
+    `send_on_full_suspends_then_resumes_after_drain`) PLUS the grep-audit (no synchronous blocking
+    call in the emitted path) PLUS Phase-1-achievable SINGLE-TASK hostile fixtures through `ynz run`
+    (closed-channel send/recv, never-drained, capacity clamp / no-unbounded — none needing cross-task
+    sharing), alloc=free. Explicitly notes the end-to-end two-task composed suspend-then-resume proof
+    is NOT lost — it is Phase 2's OWN pre-existing build-blocking R5 B2 composed fixture (Phase 2
+    Step 6), grown from the same `composed-scenario.ynz` seed.
+  - `plan.md` Phase 1 exit criteria: the `ynz-run` composed-fixture bullet removed; the send-on-full
+    proof re-pointed to the runtime-substrate test + grep-audit; single-task hostile fixtures named;
+    a parenthetical relocates the two-task composed proof to Phase 2's R5 gate.
+Unchanged: Phase 2 text (already correct — already carries the identical two-task composed fixture as
+  its own build-blocking R5 gate, so NO coverage is lost); Phase 0; Phases 3-6; the R1/R5/R6/R7
+  risk-table rows and their scores (no re-scoring — residual stays L as designed; this FRAGO only
+  relocates WHERE a proof-obligation is textually gated, not the risk score); §3.1 Intent/End-State
+  outcomes; the Invariants section; Design-Doc Alignment; Future Requirements.
+Override:  N/A — risk-neutral (deviation-judge classification, confirmed by Patrick via
+  AskUserQuestion on 2026-07-02). No coverage is lost — Phase 2 already carries the identical fixture
+  as its own build-blocking gate — so no signed override is required.
+
+## FRAGO 003 — 2026-07-02 — session-id: executor-2026-07-02-m4-p1-r2 (P1 continuation; deviation-judge-classified, auto-applied per the risk-neutral disposition)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 0 STATUS Lock 11 + Phase 1 Step 2
+Trigger:   Deviation B (surfaced by `executor-2026-07-02-m4-p1`, session log above) — Lock 11 (P0)
+           resolved WHERE endpoint futures live (the runtime/handle object, NOT the frame header) but
+           left open where the channel-LOCAL HANDLE POINTER persists across the calling task's OWN
+           suspension on a bare `send()`-on-full in Phase 1 (a question distinct from Phase 2's
+           handle-form endpoint-future placement). deviation-judge confirmed this resolves via the
+           EXISTING crossing-local frame-slot mechanism — the same mechanism `emit.rs` already uses
+           for locals crossing a `wait` point (`sm_crossing_names` / `FRAME_OFFSET_LOCALS_START`) —
+           with NO new frame-header slot and no `FRAME_HEADER_SIZE`/`FrameLayout` ripple.
+Changes:
+  - `plan.md` Phase 0 STATUS, Lock 11 bullet: appended an explicit note that P1's bare-`send()`-on-full
+    channel-local persistence is a SEPARATE, narrower question from P2's endpoint-future placement, and
+    resolves via the EXISTING crossing-local mechanism (no new frame-header slot), confirmed by FRAGO 003.
+  - `plan.md` Phase 1 Step 2: added the same note in the step's own text so the NEXT executor does not
+    re-derive it — the channel-handle local persists across a bare-send suspension via the existing
+    `sm_crossing_names` / `FRAME_OFFSET_LOCALS_START` crossing-local path.
+Unchanged: everything else in Lock 11 (the frame-header-not-forced verdict, endpoints-in-runtime-object,
+  the P2 endpoint-future placement decision); all other P0 design locks (8/9/10); all other phases; the
+  risk table (no re-scoring).
+Override:  N/A — risk-neutral, auto-applied per the deviation-judge's classification (narrow; it
+  identifies the EXISTING mechanism that already resolves the question, introducing no new machinery).
