@@ -491,6 +491,37 @@ the current-truth plan.md slice).
 ## FRAGO log
 (FRAGO delta records append here — see the FRAGO template in REF-plan-format.)
 
+## Completion-gate log
+
+- **2026-07-02 — Step 9.0 coupling decision: RUN.** All 5 phases' declared touched-surfaces are
+  NOT pairwise disjoint — `crates/ynz-codegen/src/emit.rs`, `crates/ynz-codegen/src/queries.rs`,
+  `crates/ynz-typeck/src/cpu_admission.rs`, `crates/ynz-driver/tests/integration.rs`, and
+  `plan.md`/`audit.md` were each touched by 3+ phases across the plan. Per the fail-safe
+  default-to-run heuristic, the cumulative cross-phase gate ran (not skipped).
+- **Cumulative pass (three lenses over the whole-plan diff `a8e11fa..3f28246`):** code-reviewer
+  (cross-phase correctness/reuse) found 2 should-fix + 1 minor (dead `does_real_work` scaffolding
+  with a stale removal-promise comment; a duplicated CPU-ABI predicate with no compile-time link
+  between codegen and typeck copies; inert admission-gate params left over from the Phase 3 flip).
+  deviation-judge (whole-plan FRAGO-log completeness + Definition-of-Done re-verification) found
+  0 unjustified strays, all 6 Key Outcomes hold at the final committed state, 1 minor process-hygiene
+  note (two FRAGOs' requested ratification entries were never logged separately — de-facto ratified
+  by subsequent phase dispatch only). green-check (full workspace, twice) — clean, zero new failures
+  beyond the established pre-existing baseline (5 docs-migration/jargon failures unrelated to this
+  plan, confirmed via repeated bisection against the pre-plan baseline `a8e11fa` across every phase
+  this session).
+- **Fix round:** commit `b192b32` (`Completion-Gate: 2026-07-01-v0-3-m3g-mixed-cpu-io-overlap#fix`)
+  closed both should-fix findings for real — deleted the dead `does_real_work` field + threading
+  (confirmed zero readers); added `debug_assert_cpu_abi_gate_parity` as a compile-time-adjacent
+  cross-check between the two ABI predicates (full consolidation judged too risky this late given
+  the predicates operate over genuinely different type representations — recorded, not hidden);
+  removed the inert admission-gate params, deferring the wider `base_suspends` dead-parameter
+  cascade in codegen as a proper four-field `.claude/todos.md` entry. Re-verified clean by a second
+  code-reviewer pass (0 findings) and green-check (go).
+- **Resolution: CLEARED.** No outstanding findings, no unresolved FRAGO candidates, all 6
+  Definition-of-Done Key Outcomes hold. The sole remaining open item — `/pr`/merge/`/release` for
+  the `v0.3.0-m{next}` tag — is deliberately, explicitly, and consistently out of executor scope
+  (a human-gated, outward-facing action), not a gap this gate is responsible for closing.
+
 ## FRAGO 001 — 2026-07-01 — session-id: (Phase 1 executor session, dispatched by orchestrator)
 Base:      2026-07-01-v0-3-m3g-mixed-cpu-io-overlap @ Phase 1
 Trigger:   Phase-1-mandated baseline resolution — not a plan-vs-reality divergence, the plan's own
