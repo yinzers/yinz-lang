@@ -2557,6 +2557,11 @@ impl<'b> Checker<'b> {
                     inner: Box::new(Type::String),
                 }
             }
+            // v0.3-M4: `channel<T>()` / `channel<T>(N)` — bounded task-communication channel
+            // construction. A built-in generic constructor (like the `range(...)` free fn), NOT a
+            // user function and NOT a `[[keyword]]` (P0 Lock 9). The suspending `.send()`/
+            // `.receive()` method surface is Phase 2 (FRAGO 004) — Phase 1 ships only construction.
+            "channel" => self.check_channel_construction(call),
             name => {
                 // Non-generic user-defined function?
                 if let Some(sig) = self.sig_table.fns.get(name) {
@@ -2646,6 +2651,130 @@ impl<'b> Checker<'b> {
         self.inside_wait = was_inside_wait;
         self.inside_background = was_inside_background;
         result
+    }
+
+    /// Typecheck a `channel<T>()` / `channel<T>(N)` construction (v0.3-M4 Phase 1).
+    ///
+    /// - Exactly one type argument (the element type `T`).
+    /// - Zero args → default capacity 64 (the P0-locked constant); one arg → an `int` capacity.
+    /// - A non-positive integer LITERAL capacity is rejected at compile time (bounded by
+    ///   construction, no unbounded constructor — stdlib-design Rule 4). A dynamic (non-literal)
+    ///   int capacity is allowed; the runtime shim clamps `< 1 → 1` as a defensive floor.
+    /// - Kernel-mode gate (R7): channel construction is a COMPILE ERROR under `--kernel` (the
+    ///   scheduler runtime the channel needs does not run there), matching the `wait`/`background`
+    ///   gates.
+    ///
+    /// Returns `Type::BuiltinChannel { elem }`. The suspending `.send()`/`.receive()` method
+    /// surface is Phase 2 (FRAGO 004) — this Phase-1 path is construction only.
+    fn check_channel_construction(&mut self, call: &CallExpr) -> Type {
+        /// P0-locked default channel capacity. Re-tune is a one-constant change parked with a
+        /// trigger (real workload evidence) — see the plan's Future Requirements.
+        const DEFAULT_CHANNEL_CAPACITY: i64 = 64;
+
+        // Resolve the element type from the required single type argument.
+        let elem = match &call.type_args {
+            Some(args) if args.len() == 1 => self.ast_type_to_type(&args[0]),
+            Some(args) => {
+                self.diags.push(Diagnostic::error(
+                    call.span.clone(),
+                    format!(
+                        "`channel<T>` takes exactly one type argument — the element type — but got {}.",
+                        args.len()
+                    ),
+                    "Write `channel<int>()` or `channel<Order>(32)`.",
+                    "A channel carries values of a single element type `T` between tasks.",
+                ));
+                for a in args {
+                    let _ = self.ast_type_to_type(a);
+                }
+                Type::Error
+            }
+            None => {
+                self.diags.push(Diagnostic::error(
+                    call.span.clone(),
+                    "`channel` needs an element type — write `channel<int>()`.",
+                    "Add the element type in angle brackets: `channel<int>()` (default capacity 64) or `channel<int>(32)`.",
+                    "A channel carries values of a single element type `T`; the compiler needs to know `T` to check `send`/`receive` later.",
+                ));
+                Type::Error
+            }
+        };
+
+        // Kernel-mode gate (R7): no scheduler runtime in --kernel, so channels cannot exist there.
+        if self.kernel_mode {
+            self.diags.push(Diagnostic::error(
+                call.span.clone(),
+                "`channel<T>` is not available in --kernel mode.",
+                "Remove the channel, or build without `--kernel`. Kernel-mode programs run without a scheduler runtime, so there are no tasks to communicate between.",
+                "A `channel<T>` suspends a task on `send()`-when-full and `receive()`-when-empty, which requires the thread-pool runtime started by `ynz_rt_init` — that runtime does not run in kernel mode. See `IMP-no-runtime-mode.md` for the kernel-mode contract.",
+            ));
+        }
+
+        // Capacity argument: 0 → default 64; 1 → an int (non-positive literal rejected); >1 → error.
+        match call.args.len() {
+            0 => {}
+            1 => {
+                let cap_ty = self.infer_expr(&call.args[0], Some(&Type::Int));
+                if cap_ty != Type::Int && cap_ty != Type::Error {
+                    self.diags.push(Diagnostic::error(
+                        call.args[0].span().clone(),
+                        format!(
+                            "A channel's capacity must be an `int`, not `{}`.",
+                            type_name(&cap_ty)
+                        ),
+                        "Pass a whole number of slots: `channel<int>(32)`.",
+                        "The capacity is how many values the channel can hold before `send()` suspends the producer (backpressure), so it must be a count.",
+                    ));
+                }
+                // Reject a non-positive literal capacity at compile time (no unbounded/empty
+                // channel — stdlib-design Rule 4). Handles both `channel<int>(0)` (`IntLit`) and
+                // `channel<int>(-5)` (unary-negated literal). A dynamic int capacity is allowed;
+                // the runtime clamps `< 1 → 1` defensively.
+                let literal_cap: Option<(i64, SourceSpan)> = match &call.args[0] {
+                    Expr::IntLit(v, span) => Some((*v, span.clone())),
+                    Expr::UnaryOp {
+                        op: UnaryOpKind::Neg,
+                        operand,
+                        span,
+                    } => match operand.as_ref() {
+                        Expr::IntLit(v, _) => Some((v.wrapping_neg(), span.clone())),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((v, span)) = literal_cap {
+                    if v < 1 {
+                        self.diags.push(Diagnostic::error(
+                            span,
+                            format!("A channel's capacity must be at least 1, but got {v}."),
+                            "Use a positive capacity: `channel<int>(64)`. For very large buffering, pass a large explicit number — there is deliberately no unbounded channel.",
+                            "A zero- or negative-capacity channel could never accept a value (or would be unbounded), so it is rejected. Bounded capacity is what makes `send()` apply backpressure instead of growing memory without limit.",
+                        ));
+                    }
+                }
+            }
+            n => {
+                self.diags.push(Diagnostic::error(
+                    call.span.clone(),
+                    format!("`channel<T>(...)` takes at most one argument — the capacity — but got {n}."),
+                    "Write `channel<int>()` for the default capacity (64) or `channel<int>(32)` for an explicit capacity.",
+                    "A channel is constructed with just its bounded capacity; values are added later with `send()`.",
+                ));
+                for a in &call.args {
+                    let _ = self.infer_expr(a, None);
+                }
+            }
+        }
+
+        let _ = DEFAULT_CHANNEL_CAPACITY; // codegen supplies the literal 64 default; kept for docs.
+
+        if matches!(elem, Type::Error) {
+            Type::Error
+        } else {
+            Type::BuiltinChannel {
+                elem: Box::new(elem),
+            }
+        }
     }
 
     fn check_print_call(&mut self, call: &CallExpr) -> Type {
@@ -3740,7 +3869,10 @@ impl<'b> Checker<'b> {
                 end_inclusive: false,
             },
             AstType::Named(n, span)
-                if matches!(n.as_str(), "array" | "fixed" | "maybe" | "map" | "MapEntry") =>
+                if matches!(
+                    n.as_str(),
+                    "array" | "fixed" | "maybe" | "map" | "MapEntry" | "channel"
+                ) =>
             {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
@@ -3811,7 +3943,7 @@ impl<'b> Checker<'b> {
                 // capital letter = type, everything else = lowercase. Built-ins are lowercase.
                 let lower = name.to_lowercase();
                 if name.as_str() != lower.as_str()
-                    && matches!(lower.as_str(), "array" | "fixed" | "map")
+                    && matches!(lower.as_str(), "array" | "fixed" | "map" | "channel")
                 {
                     self.diags.push(Diagnostic::error(
                         name_span.clone(),
@@ -3862,6 +3994,23 @@ impl<'b> Checker<'b> {
                         Type::MapEntry {
                             key: Box::new(key),
                             val: Box::new(val),
+                        }
+                    }
+                    // v0.3-M4: `channel<T>` type annotation. One type argument (the element
+                    // type). Construction (`channel<T>()` / `channel<T>(N)`) is a separate path
+                    // handled in `check_channel_construction` (call position, not type position).
+                    "channel" => {
+                        if resolved_args.len() != 1 {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                "`channel<T>` takes exactly one type argument — the element type.",
+                                "Write `channel<int>` — for example, `channel<int>` or `channel<Order>`.",
+                                "A `channel<T>` carries values of a single element type `T` between tasks.",
+                            ));
+                        }
+                        let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
+                        Type::BuiltinChannel {
+                            elem: Box::new(elem),
                         }
                     }
                     _ => {

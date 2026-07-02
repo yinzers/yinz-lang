@@ -384,6 +384,158 @@ current-truth plan.md slice).
   probe was reverted). No cargo build/test re-run needed (no code-level change persisted). Session-id
   appended; status remains active.
 
+- executor-2026-07-02-m4-p1-r4 — 2026-07-02 — P1 CONTINUATION (dispatched to execute the r3 blueprint
+  end-to-end). Producer does NOT self-grade — honest record, pending reviewer fan-out. Grounded in the
+  P1 slice (post-FRAGO-002/003) + the r3 blueprint in this file + P0 STATUS locks (8/9/11) +
+  IMP-no-function-coloring + IMP-concurrency + authoritative-derivation.md + no-duct-tape + verification.md
+  + the committed substrate (`channel.rs`) + the P0 seed. **Outcome: BUILT-AND-COMPILED the entire typeck
+  half + the codegen extern/mangle/construction pieces against the live tree, then REVERTED to
+  substrate-good on two NEW findings; net source change this round = zero (by design, all-or-nothing).**
+  NO STOP condition fired; NO dormant override armed.
+  **What was built and VERIFIED-COMPILING this round (then reverted per all-or-nothing):**
+  - **Typeck half (blueprint steps 1–6, `cargo build -p ynz-typeck` GREEN):**
+    (1) `Type::BuiltinChannel { elem: Box<Type> }` + `type_name` arm (`types.rs`); the variant-count
+    lock tests don't enumerate it (`m4`/`m5p3c`/`m7` lock SUBSETS), so no ratchet edit needed — the
+    exhaustive-match compiler errors are the real safety net.
+    (2) Resolution arms: `check.rs::ast_type_to_type` Generic `"channel"` arm + the
+    `array|fixed|maybe|map|MapEntry|channel` bare-name-requires-args arm + the capital-letter guard;
+    `shapes.rs::resolve_ast_type` Generic `"channel"` arm (signatures.rs `sig_ast_type_to_type` gets it
+    free — it delegates to `resolve_ast_type`).
+    (3) `check_channel_construction`: exactly-one-type-arg, default-64 / explicit-int capacity,
+    non-positive-LITERAL reject (stdlib Rule 4), non-int capacity reject, kernel gate (R7). Wired as a
+    `"channel"` arm in `check_call`.
+    (4) `check_channel_method`: `.send(value)` typechecks arg against `elem` → `nothing errors`
+    (Lock 8), `.receive()` (0 args) → `elem`, unknown-method + kernel-gate arms. Wired into the
+    `Expr::MethodCall` handler ahead of the intrinsic/collection dispatch (args are in scope there).
+    (5) R6 sibling classifier `channel_method_suspends(receiver: &Type, method: &str) -> bool` added to
+    `suspension_source.rs` — the ONE authoritative home the module doc earmarked; no second list.
+    (6) may-block SEED wiring in `queries.rs`: `channel_suspending_fn_seeds(module, expr_types)` (a new
+    `expr_types`-keyed walker in `check.rs` using the R6 classifier) → `suspends_with_extra_seeds`, run
+    AFTER `check` produces `expr_types`, GATED on channel-presence so `channel_seeds.is_empty()`
+    reproduces `may_block_result.suspends` byte-for-byte (zero change for non-channel programs). Also a
+    supplementary channel-augmented mutual-recursion cycle check that skips already-name-based-reported
+    cycles.
+  - **Codegen pieces that compiled:** 4 channel C-ABI extern decls in `runtime_decls.rs`
+    (signatures matched against `channel.rs:104/148/231/274`); the `mangle_type` `"channel"` arm; the
+    `channel<T>()` construction lowering (`ynz_channel_create(capacity)`) in `lower_expr`'s Call
+    dispatch (default 64 / lowered int arg). `llvm_type_for_ctx` already routes unknown types to `ptr`
+    via its `_ =>` arm, so channel-as-ptr fell out for free.
+  **The two NEW findings that drove the revert (concrete, previously-unstated — NOT a re-run of r3):**
+  - **FINDING 1 — the crossing-local / suspension-counting / SM-routing machinery is FUNCTION-NAME-keyed
+    and cannot see a channel MethodCall; r3's "reuse the EXISTING crossing-local mechanism (FRAGO 003)"
+    understates the work.** `crossing_local_names_with_cpu_spike` → `locals_crossing_wait` →
+    `collect_crossings_in_stmts` (`check.rs:6779/7394/7510`, consumed by codegen at `emit.rs:327/751/2414`)
+    decide "suspension point?" via `is_suspending_call(c, suspending)` (function-NAME-keyed, `check.rs`)
+    and `block_contains_inferred_suspension` — a channel `ch.send()`/`ch.receive()` `Expr::MethodCall`
+    matches NONE. Same for `count_suspension_expr` (`emit.rs:3410`, returns 0 for `MethodCall`) and the
+    SM routing gate (`emit.rs:4142`). Without threading TYPE-awareness (`expr_types` +
+    `channel_method_suspends`) through all of it, the channel handle is not marked crossing → not
+    persisted → garbage ptr on resume (the M3a/M3d/M3e/M3g silent-miscompile class). A more-tractable
+    decomposition recorded for the next round: mark every `channel<T>`-typed local as crossing via the
+    already-threaded `expr_types` in `crossing_local_names` (a SOUND over-approximation — over-marking
+    reserves a harmless slot; under-marking is the M3-class bug) rather than rewriting the sprawling
+    suspension-trigger detection; then make only `count_suspension_points` + the routing gate +
+    `lower_sm_stmt_with_wait` channel-aware via `cg.typed`, plus the new 3-way
+    `emit_channel_suspend_point` (Ready/Pending/Closed) + the channel-ptr arm in `value_to_i64_bits`
+    (`emit.rs:9905`).
+  - **FINDING 2 (decisive) — per FRAGO 002, Phase 1's single-task scope has NO `ynz run` fixture that
+    exercises the codegen SEND-ON-FULL SUSPEND→persist→resume path.** That path only fires when a
+    producer suspends on a full channel WHILE another task drains — the two-task composed scenario the
+    P0 seed `p0-spike/composed-scenario.ynz` itself labels Phase-2 (needs `background`-handle cross-task
+    sharing, `lend out: channel<int>` across a `background` boundary), which FRAGO 002 explicitly
+    relocated to Phase 2's build-blocking R5 gate. Every Phase-1 single-task fixture exercises only the
+    fast-path Ready (interleaved send/receive within capacity), the Closed branch, or clean free/no-leak.
+    So building `emit_channel_suspend_point`'s suspend path in Phase 1 ships the maximum-adversarial
+    M3-class suspension codegen with its generated-IR persist/resume path un-`ynz-run`-provable until
+    Phase 2 — a direct tension with verify-don't-assert and R1/R5.
+  **DECISION (on the record; no-duct-tape all-or-nothing + the plan's priority "honest PARTIAL +
+  no-R-regression > completion"):** landing the typeck half alone REGRESSES today's clean "channel is
+  not a known type" diagnostic into a codegen miscompile/crash (`llvm_type_for_ctx` routes it to `ptr`,
+  and the suspension path isn't channel-aware), so the whole chain was `git checkout`-reverted. Tree
+  verified back at substrate-good: `cargo build --workspace` GREEN, all 4 `ynz-runtime` channel
+  substrate tests GREEN post-revert. The typeck half is proven implementable-and-compiling (built, not
+  inspected — verification.md satisfied for the typeck half); the codegen suspension path + its
+  verification placement is surfaced, not self-decided.
+  **DEVIATION C surfaced (for the deviation-judge → FRAGO seam; NOT self-decided, NOT self-applied):**
+  the codegen suspension-point build's PLACEMENT is a phase-boundary scope call — (a) build the full
+  Phase-1 codegen with the suspend path verified only by the runtime substrate + grep-audit + deferred
+  to Phase 2's composed fixture, OR (b) fold the suspension-codegen build into Phase 2 where the
+  two-task composed R5 fixture (already Phase 2's build-blocking gate) can end-to-end-verify it. The
+  executor does NOT choose; the orchestrator's seam does. **Recorded durable decisions (made without a
+  human, reasons on record):** (a) mark-all-channel-typed-locals-as-crossing is the sound
+  over-approximation for the crossing gap (over-marking safe, under-marking is the M3 bug); (b) the
+  may-block channel seed is gated on channel-presence so non-channel programs are byte-identical; (c)
+  the R6 classifier is a single `channel_method_suspends` fn keyed on receiver-type + method-name, never
+  a second list. **Files touched this round:** `plan.md` (Phase 1 STATUS r4 bullet + frontmatter
+  session-id), `audit.md` (this entry). NO `.rs`/`registry`/example source persisted (all built-then-reverted).
+  No cargo build/test re-run needed beyond the post-revert substrate confirmation above. Session-id
+  appended; status remains active.
+
+- executor-2026-07-02-m4-p1-r5 — 2026-07-02 — P1 COMPLETION (dispatched to apply the human-approved
+  FRAGO 004 and BUILD Phase 1's now-correctly-scoped construction-only work). Producer does NOT
+  self-grade — honest record, pending reviewer fan-out. Grounded in the P1 slice + P0 STATUS locks
+  (esp. Lock 8/9/11) + FRAGO 002/003 + the r4 blueprint (audit.md) + IMP-concurrency +
+  IMP-no-function-coloring + authoritative-derivation.md + no-duct-tape + verification.md + the
+  committed substrate (`channel.rs`) + the P0 seed. NO STOP condition fired; NO dormant override
+  armed.
+  **Part 1 — FRAGO 004 APPLIED (Patrick-approved disposition (b) via the recommended default;
+  deviation-judge-verified; APPLIED, not re-decided).** Redrew the Phase 1/Phase 2 boundary: the
+  suspending `.send()`/`.receive()` method surface and ALL its suspension codegen (the R6 sibling
+  arm, the crossing-local/count-suspension/SM-routing type-awareness threading, `emit_channel_suspend_point`,
+  Lock 8's typed-`errors` on `.send()`, the backpressure teaching text, AND the bare-channel
+  send/recv suspend→resume proof) moved to Phase 2, where the two-task composed R5 fixture can
+  end-to-end-verify it. Phase 1 rescoped to the fully-verifiable construction-only subset. Written
+  into `plan.md` in-place (Phase 1 header/task/steps/exit-criteria + a concise COMPLETE STATUS
+  banner replacing the r1–r4 saga; Phase 2 task/purpose/steps/exit-criteria grown; §5 slice map;
+  frontmatter session-id) AND recorded as `## FRAGO 004` below in the canonical
+  Base/Trigger/Changes/Unchanged/Override shape.
+  **Part 2 — BUILT Phase 1's construction-only scope, end-to-end and verified GREEN:**
+  (1) `Type::BuiltinChannel { elem }` (`types.rs`, 20→21, `type_name`) + the three resolution arms
+  (`check.rs` `ast_type_to_type` Generic `"channel"` arm, bare-name-requires-args arm, capital-letter
+  guard). (2) `check_channel_construction` (`check.rs`): one-type-arg, default-64 / explicit-int
+  capacity, non-positive-LITERAL reject (handles `0` AND negated `-N` via `UnaryOp::Neg`), non-int
+  reject, too-many-args reject, missing-element reject, kernel gate (R7) — wired as the `"channel"`
+  arm in `check_call`. (3) Codegen: `ynz_channel_create` extern (`runtime_decls.rs`); `mangle_type`
+  + `llvm_type_for` + `alloca` channel-as-`ptr` arms; the `"channel"` construction lowering in
+  `lower_expr` → `ynz_channel_create(capacity)`; the two compile-forced exhaustive classifiers
+  (`parity_case` + `value_to_i64_bits` in `emit.rs`; `runtime_axis_coverage` in `integration.rs`)
+  extended — channel = single owning heap ptr that Phase 1 DECLINES as a CPU-background return (both
+  CPU-result-ABI gates already agree on `false` via their catch-alls; NEITHER gate touched —
+  authoritative-derivation.md honored). 13 IR golden snapshots updated (each: only the new
+  `declare ptr @ynz_channel_create(i64)` line). (4) `channel_capacity` `[[muted_hint_domain]]`
+  registered (`registry/features.toml`, Addition, `⟨64⟩` + hover WHAT/WHAT-INSTEAD/WHY); LSP
+  inlay-firing wiring is P5 (the `allocators` registered-not-yet-firing precedent). (5)+(6) Fixtures:
+  `v0_3_m4_channel_construct.ynz` (runs GREEN) + `v0_3_m4_channel_bad_capacity.ynz` (compile-rejected);
+  integration tests `v0_3_m4_channel_construct_{runs_through_real_compiler,alloc_equals_free,no_auto_parallel_byte_identical}`
+  + `_bad_capacity_rejected_at_compile_time`; 4 typeck unit tests
+  (`channel_construction_in_kernel_mode_rejected` = the R7 kernel trigger, `_default_and_explicit_capacity_typecheck`,
+  `_non_positive_capacity_literal_rejected`, `_missing_element_type_and_wrong_capacity_type_rejected`).
+  (7) Demo: documented construction placeholder in `pirates-roster/entrypoint.ynz` (construction-only
+  has no observable output → real round-trip grows the demo in Phase 2; golden unchanged); gallery
+  `examples/primantis-orders/v0_3_m4_errors.ynz` (5 construction diagnostics) + `v0_3_m4_gallery_fires_expected_diagnostics`.
+  **Verification:** `cargo build --workspace` GREEN; `cargo test -p ynz-typeck` / `-p ynz-codegen`
+  / `-p ynz-driver` (435-integration + galleries + cross_impl + demo golden) / `-p ynz-registry`
+  all GREEN; `cargo clippy -p ynz-typeck -p ynz-codegen -- -D warnings` clean.
+  **alloc=free (honest, on record):** `ynz_channel_create` uses Rust `Box`, NOT the counted
+  `ynz_alloc` (like `map`/`array`'s libc `malloc`), so a channel-construction program keeps
+  `ynz_alloc`/`ynz_free` balanced at `alloc==free` (0==0), and — matching maps/arrays — a channel
+  local is NOT scope-freed in Phase 1 (no scope-drop mechanism exists to hook; a language-wide gap,
+  not channel-specific); `ynz_channel_free` is runtime-test-proven and reserved for Phase 2's
+  handle-drop.
+  **Recorded durable decisions (made without a human, reasons on record):** (a) `channel_capacity`
+  ships as a REGISTERED-not-yet-firing muted-hint domain in Phase 1 (registry SSOT) with the
+  inlay-firing wiring in P5 — mirroring the `allocators` precedent and the plan's own P5 step 1
+  assignment; a typeck detection pass with no LSP consumer would be a dangling half-surface. (b)
+  Channel construction follows the existing heap-local pattern (constructed, not scope-freed —
+  identical to `map`/`array`), rather than special-casing a channel-only scope-drop (there is no
+  drop-insertion pass to hook, and special-casing channels would be inconsistent); recorded so the
+  Phase-2 executor wires `ynz_channel_free` deliberately at handle-drop, not as an ad-hoc Phase-1
+  patch. (c) Channel DECLINES the CPU-background result ABI in Phase 1 (both gates already agree via
+  catch-alls; no gate edited) rather than admitting it — sequential lowering is always correct and
+  admitting would touch the authoritative-derivation-sensitive CPU-result-ABI gate pair for a
+  capability Phase 1 does not need. **No new deviation surfaced.** **Files touched:** see FRAGO 004
+  Changes + this entry. Session-id appended; status remains active (P1 COMPLETE; P2 next).
+
 ## FRAGO log
 (r3/r4 were pre-execution plan corrections, logged as session entries per the r2 precedent;
 FRAGOs record execution-time divergences against a running phase — FRAGO 001 is the first.)
@@ -496,3 +648,55 @@ Unchanged: everything else in Lock 11 (the frame-header-not-forced verdict, endp
   risk table (no re-scoring).
 Override:  N/A — risk-neutral, auto-applied per the deviation-judge's classification (narrow; it
   identifies the EXISTING mechanism that already resolves the question, introducing no new machinery).
+
+## FRAGO 004 — 2026-07-02 — session-id: executor-2026-07-02-m4-p1-r5 (P1 completion; conductor-classified, Patrick-approved via the recommended default per the decision-philosophy safe-default protocol)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ the Phase 1 / Phase 2 boundary
+Trigger:   Deviation C (surfaced by `executor-2026-07-02-m4-p1-r4`, session log above) — the channel
+           send/recv suspension-codegen build's PLACEMENT is a phase-boundary scope call. deviation-judge
+           VERIFIED independently (by reading the live code) that the channel send/recv
+           suspend→persist→resume codegen path CANNOT be end-to-end-verified by any Phase-1 fixture, on
+           two confirmed facts: (1) the crossing-local / suspension-detection machinery (`is_suspending_call`
+           at `check.rs` — the r4 report's `~8332` may have shifted, verify via grep; `collect_crossings_in_stmts`;
+           `count_suspension_expr` at `emit.rs`; the SM routing gate) is entirely function-NAME-keyed and does
+           NOT fire on an `Expr::MethodCall` like `ch.send(v)` — real, material threading work beyond what
+           FRAGO 003 implied; (2) a parked/suspended task cannot drain itself, so the suspend→resume path can
+           ONLY be exercised by a two-task scenario (one suspends on send-full, another drains) — and FRAGO 002
+           already established two-task channel sharing is a Phase-2-only capability (no `.share`/`.lend` across
+           `background` in Phase 1). No single-task alternative exists (deviation-judge checked + confirmed
+           explicitly). Building the suspension codegen in Phase 1 would ship unverified maximum-adversarial
+           suspension IR for an entire phase — the "shipping on faith" posture R1/R5/dormant-override-#2 forbid.
+           Disposition (b) — fold the send/recv suspension-codegen build into Phase 2 — was the deviation-judge's
+           verified recommendation; Patrick approved it. Classification (conductor authority): risk-neutral
+           relocation — it moves WHERE work is gated, not the risk assessment. Applied per the
+           decision-philosophy safe-default protocol: Patrick did not respond within the timeout window, so the
+           recommended default (verified independently by BOTH the r4 executor's live-code build-then-revert AND
+           deviation-judge's separate code-read) was applied.
+Changes:
+  - `plan.md` Phase 1 — REWROTE scope to construction-only: header (`send/recv suspension codegen → Phase 2
+    per FRAGO 004`, dropped the `⚠ M2-HALT-adjacent` marker — no suspension point remains in P1),
+    Task+purpose, Steps (1 type/resolution, 2 construction+capacity+codegen, 3 kernel gate, 4 `channel_capacity`
+    domain registered, 5 alloc=free, 6 single-task fixtures, 7 demo+gallery — REMOVED the `.send()`/`.receive()`
+    method surface, the R6 sibling arm, the suspension codegen, Lock 8's typed-`errors` on `.send()`, and the
+    backpressure teaching text), Exit criteria, and the P1 STATUS banner (concise COMPLETE banner replacing the
+    r1–r4 saga — full history preserved in the session log above).
+  - `plan.md` Phase 2 — GREW scope: Task+purpose now names the folded-in bare-channel send/recv
+    suspension-codegen build (the R6 `channel_method_suspends` sibling arm, the type-awareness threading through
+    the function-name-keyed crossing/counting/routing machinery — the real Finding-1 work — `emit_channel_suspend_point`,
+    Lock 8 typed `errors`, backpressure text), notes the LIKELY-SHARED implementation between the bare-channel
+    and handle-form suspension drives (ONE mechanism, build once — authoritative-derivation.md), added a new
+    Step 2 (bare-channel method surface + suspension codegen) and renumbered Steps 3–8, added the bare-channel
+    two-task send/recv suspend→resume proof to the Step-7 gates + Exit criteria, and grew the demo/gallery step
+    to add the real send/recv round-trip + closed-channel/backpressure diagnostics.
+  - `plan.md` §5 slice map: P1 now carries R7 + R1's runtime-substrate proof only; P2 carries
+    R5+R2+R8+R1+R6-sibling-arm (R1's send/recv suspension-codegen gate relocated to P2).
+  - `plan.md` frontmatter: session-id `executor-2026-07-02-m4-p1-r5` appended.
+Unchanged: Phase 0; Phases 3–6; the R1/R5/R6/R7 risk-table SCORES themselves (NO re-scoring — this FRAGO
+  relocates WHERE work is gated, not the risk assessment; residuals stay as designed); FRAGO 001/002/003
+  (untouched, still valid); §3.1 Intent/End-State outcomes; the dormant overrides; the Invariants section;
+  Design-Doc Alignment; Future Requirements.
+Override:  N/A — risk-neutral relocation (conductor classification). Patrick did not respond within the
+  timeout window, so the recommended default — verified independently by BOTH the r4 executor's live-code
+  build-then-revert AND deviation-judge's separate code-read — was applied per the decision-philosophy
+  safe-default protocol. No coverage is lost: the send/recv suspend→resume proof lands in Phase 2 where the
+  two-task composed R5 fixture (already Phase 2's build-blocking gate) can end-to-end-verify it. No signed
+  override required.

@@ -1,0 +1,14 @@
+// v0.3-M4 Phase 1 — single-task hostile fixture: rejected channel capacities.
+//
+// A channel is bounded by construction (stdlib-design Rule 4) — there is no unbounded or
+// zero-capacity channel. These constructions must all be rejected at compile time.
+
+function entrypoint() -> nothing {
+  // Zero capacity: a channel that could never accept a value.
+  let empty: channel<int> = channel<int>(0)
+  // Negative capacity: a negated literal is also caught at compile time.
+  let neg: channel<int> = channel<int>(-3)
+  // Wrong capacity type: capacity must be a whole number of slots.
+  let wrong: channel<int> = channel<int>(`lots`)
+  print(`unreachable`)
+}

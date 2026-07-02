@@ -1337,6 +1337,7 @@ fn mangle_type(ty: &Type) -> String {
         Type::MapEntry { key, val } => {
             format!("mapentry_{}_{}", mangle_type(key), mangle_type(val))
         }
+        Type::BuiltinChannel { elem } => format!("channel_{}", mangle_type(elem)),
         Type::Options { name } => format!("options_{name}"),
         Type::Union { variants } => {
             let parts: Vec<_> = variants.iter().map(mangle_type).collect();
@@ -1887,6 +1888,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Maybe { .. } => Some(self.ptr().into()),
             Type::MapEntry { .. } => Some(self.ptr().into()),
             Type::BuiltinMap { .. } => Some(self.ptr().into()),
+            // v0.3-M4: a channel value is a heap-owned bounded mpsc channel — an opaque pointer.
+            Type::BuiltinChannel { .. } => Some(self.ptr().into()),
             // M6: options values are i8 tags; union values are opaque pointers (heap tagged-struct).
             Type::Options { .. } => Some(self.ctx.i8_type().into()),
             Type::Union { .. } => Some(self.ptr().into()),
@@ -1915,6 +1918,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             | Type::Maybe { .. }
             | Type::BuiltinMap { .. }
             | Type::MapEntry { .. }
+            // v0.3-M4: a channel local holds an opaque pointer to the heap-owned mpsc channel.
+            | Type::BuiltinChannel { .. }
             | Type::Union { .. } => self
                 .builder
                 .build_alloca(self.ptr(), name)
@@ -9917,6 +9922,9 @@ fn value_to_i64_bits<'ctx>(
         | Type::Maybe { .. }
         | Type::BuiltinMap { .. }
         | Type::MapEntry { .. }
+        // v0.3-M4: a channel value is a single owning heap pointer — staged as its i64 pointer
+        // bits (e.g. when a channel local crosses a `wait sleep` suspension point).
+        | Type::BuiltinChannel { .. }
         | Type::Union { .. }
         | Type::Sensitive { .. } => builder
             .build_ptr_to_int(val.into_pointer_value(), i64_ty, "ptr_to_i")
@@ -11950,6 +11958,26 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         .build_store(e_ptr, end_v)
                         .map_err(|e| format!("{e}"))?;
                     Ok(slot.into())
+                }
+                // v0.3-M4 Phase 1: `channel<T>()` / `channel<T>(N)` — bounded channel construction.
+                // Lowers to `ynz_channel_create(capacity)` returning an opaque channel pointer.
+                // Default capacity 64 (P0-locked) when no argument; the typeck path
+                // (`check_channel_construction`) has already rejected a non-positive literal
+                // capacity and gated `--kernel` mode, so codegen only supplies the value. The
+                // suspending `.send()`/`.receive()` surface is Phase 2 (FRAGO 004).
+                "channel" => {
+                    let capacity = match call.args.len() {
+                        0 => cg.i64().const_int(64, false),
+                        _ => lower_expr(cg, &call.args[0])?.into_int_value(),
+                    };
+                    let chan = cg
+                        .builder
+                        .build_call(cg.rt.ynz_channel_create, &[capacity.into()], "channel_new")
+                        .map_err(|e| format!("channel construction: {e}"))?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or("ynz_channel_create returned void")?;
+                    Ok(chan)
                 }
                 // v0.3-M2: sleep(ms: int) — non-blocking sleep; lowers to state-machine wait point.
                 // Only reaches here when called WITHOUT `wait` wrapping (e.g., bare `sleep(100)`).
@@ -17543,6 +17571,27 @@ mod tests {
                 },
                 bare_expected: true,
                 ec_expected: true,
+            },
+            // v0.3-M4: a `channel<T>` return resolves to `Resolved::BuiltinChannel`. Like `fixed`,
+            // it DECLINES the CPU-background result ABI in both positions: the codegen gate's
+            // `Generic { name }` arm only admits `array`/`map`, and the typeck gate's catch-all
+            // declines everything past `BuiltinArray`/`BuiltinMap` — so both agree on `false`.
+            // Phase 1 does not admit a channel as a CPU-background return value; sequential
+            // lowering is always correct. (Admitting it later — a channel IS a single owning heap
+            // pointer — would extend BOTH gates together, per authoritative-derivation.md.)
+            Resolved::BuiltinChannel { .. } => ParityCase::Reachable {
+                label: "channel<int>",
+                ast: Ast::Generic {
+                    name: "channel".to_string(),
+                    name_span: span.clone(),
+                    args: vec![Ast::Int],
+                    span: span.clone(),
+                },
+                resolved: Resolved::BuiltinChannel {
+                    elem: Box::new(Resolved::Int),
+                },
+                bare_expected: false,
+                ec_expected: false,
             },
             // Declined classes: sequential lowering is always correct, never an error.
             // `fixed` lowers to `BuiltinFixed`; its non-suspending return path is a pre-existing

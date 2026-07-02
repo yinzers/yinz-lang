@@ -2727,6 +2727,103 @@ fn wait_in_kernel_mode_rejected() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M4 Phase 1 — channel<T> construction typeck (FRAGO 004: methods land in Phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// WHY: kernel mode must reject `channel<T>` construction (R7 gate) — a channel needs the Tokio
+// scheduler to suspend a task on send-when-full / receive-when-empty, and that scheduler does not
+// run in kernel mode. This is the trigger the v0_3_m4_errors.ynz gallery documents as a commented
+// block (the --kernel flag is hidden from the public CLI), so this test IS the real trigger.
+#[test]
+fn channel_construction_in_kernel_mode_rejected() {
+    let src = "function entrypoint() -> nothing { let ch: channel<int> = channel<int>() }";
+    let out = run_kernel(src);
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.what.contains("channel") && d.what.contains("--kernel")),
+        "channel construction in kernel mode must be rejected with a channel/kernel diagnostic; \
+         got: {:?}",
+        errors
+    );
+}
+
+// WHY: the happy path — `channel<T>()` (default capacity) and `channel<T>(N)` both typecheck with
+// no diagnostics. If a valid channel construction ever starts emitting an error, this fails.
+#[test]
+fn channel_construction_default_and_explicit_capacity_typecheck() {
+    let src = "function entrypoint() -> nothing {\n\
+               let a: channel<int> = channel<int>()\n\
+               let b: channel<string> = channel<string>(16)\n }";
+    let out = run(src);
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "valid channel construction must typecheck with no errors; got: {:?}",
+        errors
+    );
+}
+
+// WHY: bounded-by-construction (stdlib-design Rule 4) — a non-positive capacity literal (`0` and a
+// negated literal `-N`) is rejected at compile time. Both forms must be caught.
+#[test]
+fn channel_non_positive_capacity_literal_rejected() {
+    for cap in ["0", "-1", "-99"] {
+        let src = format!(
+            "function entrypoint() -> nothing {{ let c: channel<int> = channel<int>({cap}) }}"
+        );
+        let out = run(&src);
+        let errors: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+            .collect();
+        assert!(
+            errors
+                .iter()
+                .any(|d| d.what.contains("capacity must be at least 1")),
+            "channel<int>({cap}) must be rejected as non-positive; got: {:?}",
+            errors
+        );
+    }
+}
+
+// WHY: a channel needs its element type `T` to check send/receive later, so `channel()` with no
+// `<T>` and a wrong-typed capacity are both rejected with teaching diagnostics.
+#[test]
+fn channel_missing_element_type_and_wrong_capacity_type_rejected() {
+    let missing = run("function entrypoint() -> nothing { let c = channel() }");
+    assert!(
+        missing
+            .diagnostics
+            .iter()
+            .any(|d| d.what.contains("channel` needs an element type")),
+        "channel() with no element type must be rejected; got: {:?}",
+        missing.diagnostics
+    );
+
+    let wrong =
+        run("function entrypoint() -> nothing { let c: channel<int> = channel<int>(`nope`) }");
+    assert!(
+        wrong
+            .diagnostics
+            .iter()
+            .any(|d| d.what.contains("capacity must be an `int`")),
+        "a string capacity must be rejected; got: {:?}",
+        wrong.diagnostics
+    );
+}
+
 // WHY: `wait suspendingFn()` in kernel mode must produce exactly ONE diagnostic, not two.
 // Before the fix, `Expr::Wait` emitted the kernel reject and then recursed into the inner
 // `Expr::Call` via `self.infer_expr(inner, hint)`. That recursion hit the call-dispatch

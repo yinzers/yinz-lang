@@ -1,0 +1,21 @@
+// v0.3-M4 Phase 1 — channel<T> construction through the real compiler.
+//
+// Phase 1 ships channel CONSTRUCTION only: the `channel<T>()` (default capacity 64) and
+// `channel<T>(N)` (explicit capacity) surface, typeck, and codegen (lowering to
+// `ynz_channel_create`). The suspending `.send()` / `.receive()` method surface is Phase 2
+// (FRAGO 004) — so this fixture constructs channels of several element types and capacities and
+// confirms the program compiles and runs. There is no send/receive yet, so the observable
+// behavior is just that construction succeeds end-to-end.
+
+function entrypoint() -> nothing {
+  // Default capacity (64) — the compiler fills it in.
+  let orders: channel<int> = channel<int>()
+  // Explicit capacity.
+  let names: channel<string> = channel<string>(8)
+  // A large explicit capacity is the deliberate escape hatch — there is no unbounded channel.
+  let big: channel<int> = channel<int>(4096)
+
+  // Channels are held but not yet used (send/receive land in Phase 2). Reference them so the
+  // bindings are meaningful and the whole construction path is exercised.
+  print(`channels ready`)
+}

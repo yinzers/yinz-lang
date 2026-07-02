@@ -1,0 +1,47 @@
+// v0.3-M4 compile-error and warning gallery (Phase 1 — channel<T> construction)
+//
+// Every block below intentionally triggers a diagnostic class added in v0.3-M4 Phase 1.
+// Run `ynz build v0_3_m4_errors.ynz` to see all diagnostics.
+// Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
+//
+// Each block has a // WHY: comment naming the diagnostic class.
+//
+// SCOPE: Phase 1 ships channel CONSTRUCTION only. The suspending `.send()` / `.receive()` method
+// surface — and its diagnostics (closed-channel send, backpressure teaching text) — land in
+// Phase 2 (FRAGO 004) and will be added to this gallery then.
+
+function entrypoint() -> nothing {
+  // WHY: channel-capacity-non-positive — a channel is bounded by construction (stdlib-design
+  // Rule 4); a zero-capacity channel could never accept a value, so it is rejected.
+  let zeroCap: channel<int> = channel<int>(0)
+
+  // WHY: channel-capacity-non-positive (negated literal) — `-3` is caught at compile time too;
+  // a negative capacity is meaningless.
+  let negCap: channel<int> = channel<int>(-3)
+
+  // WHY: channel-capacity-wrong-type — the capacity is a count of slots, so it must be an `int`,
+  // not a string.
+  let wrongCapType: channel<int> = channel<int>(`plenty`)
+
+  // WHY: channel-missing-element-type — the compiler needs the element type `T` to check
+  // `send`/`receive` later, so `channel()` with no `<T>` is rejected.
+  let noElem = channel()
+
+  // WHY: channel-too-many-args — a channel takes at most one argument, its capacity.
+  let tooMany: channel<int> = channel<int>(8, 16)
+
+  print(`unreachable`)
+}
+
+// -- v0.3-M4 Error Class: kernel-mode rejects channel<T> construction --
+//
+// WHY: kernel-channel-rejected — `channel<T>` needs the Tokio scheduler started by ynz_rt_init to
+// suspend a task on send-when-full / receive-when-empty; that scheduler does not run in kernel
+// mode, so channel construction is a compile error under --kernel.
+//
+// Cannot be triggered via the public CLI in v0.3-M4 (the --kernel flag is hidden until it becomes
+// a public build mode). Triggered in-process via check_with_kernel_mode() — see
+// crates/ynz-typeck/tests/check.rs `channel_construction_in_kernel_mode_rejected`. When --kernel
+// is a public flag, this block will be updated with a real trigger:
+//
+//     let ch: channel<int> = channel<int>()   // ERROR in --kernel mode

@@ -1048,3 +1048,19 @@ function m3g_demo() -> nothing {
   print(`latest report: ${report}`)
 }
 
+
+// ── v0.3-M4 Phase 1: channel<T> construction ─────────────────────────────────
+//
+// v0.3-M4 Phase 1 ships bounded task-communication channels — CONSTRUCTION only:
+//
+//     let orders: channel<int> = channel<int>()      // default capacity 64
+//     let names:  channel<string> = channel<string>(8)   // explicit capacity
+//
+// Channels are bounded by construction (there is no unbounded channel), and the compiler fills in
+// the default capacity of 64 when you leave the parens empty (the IDE shows a muted ⟨64⟩ hint).
+//
+// The suspending `.send()` / `.receive()` surface — where a producer that outruns a bounded
+// channel WAITS for the consumer instead of the buffer growing forever — lands in Phase 2 with the
+// `background` handle-form (FRAGO 004). A channel you can only construct does nothing observable
+// yet, so it is documented here rather than run: this demo grows a real channel round-trip in
+// Phase 2, in the same place the other concurrency demos live.

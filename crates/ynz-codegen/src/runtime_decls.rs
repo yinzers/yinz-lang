@@ -78,6 +78,13 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_map_iter_get_str: FunctionValue<'ctx>,
     pub ynz_map_drop: FunctionValue<'ctx>,
 
+    // Channel runtime (v0.3-M4 Phase 1) — bounded task-communication channels over
+    // `tokio::sync::mpsc`. Phase 1 lowers construction only; the suspending send/recv poll ABI
+    // (`ynz_channel_send_poll` / `ynz_channel_recv_poll`) and the free path (`ynz_channel_free`)
+    // are wired in Phase 2 with the handle-form (FRAGO 004).
+    // ynz_channel_create(i64 capacity) -> ptr
+    pub ynz_channel_create: FunctionValue<'ctx>,
+
     // M6: string-to-numeric fallible conversions.
     // ABI: (ptr: *const u8, len: i64, out: *mut [i64; 2]) → void
     // out[0] = has_value (1 or 0), out[1] = value bits on success.
@@ -412,6 +419,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
             ),
             ynz_map_drop: declare_fn(module, "ynz_map_drop", void.fn_type(&[ptr.into()], false)),
+            ynz_channel_create: declare_fn(
+                module,
+                "ynz_channel_create",
+                ptr.fn_type(&[i64.into()], false),
+            ),
 
             // M6: string-to-numeric ABI: (ptr, i64 len, ptr out) -> void
             ynz_string_to_int: declare_fn(

@@ -307,3 +307,44 @@ fn v0_3_m3b_gallery_fires_expected_diagnostics() {
         "v0_3_m3b gallery must include share→explicit-lend escalation diagnostic; got:\n{stderr}"
     );
 }
+
+// WHY: the v0.3-M4 Phase-1 error gallery is the hands-on review surface for the channel<T>
+// construction diagnostics (per plan-invariants `### Demo & Error Gallery`). If the error count
+// drops, a construction-diagnostic class regressed; if it rises, a new class was added without a
+// key-phrase check here. Phase 1 covers construction only; the suspending .send()/.receive()
+// diagnostics land in Phase 2 (FRAGO 004) and will grow this test then.
+#[test]
+fn v0_3_m4_gallery_fires_expected_diagnostics() {
+    let (stderr, code) = compile_gallery(&gallery("v0_3_m4_errors.ynz"));
+    assert_ne!(code, 0, "v0_3_m4 gallery must exit non-zero");
+
+    let error_count = count_errors(&stderr);
+    // Expected 5 construction errors: non-positive (0), non-positive (negated -3), wrong capacity
+    // type, missing element type, too-many-args. Range gives headroom for incidental diagnostic
+    // refinements without masking a class regression.
+    assert!(
+        (4..=8).contains(&error_count),
+        "v0_3_m4 gallery must produce 4–8 errors; got {error_count}.\nstderr:\n{stderr}"
+    );
+
+    // Non-positive capacity (bounded-by-construction, stdlib-design Rule 4).
+    assert!(
+        stderr.contains("capacity must be at least 1"),
+        "v0_3_m4 gallery must include non-positive-capacity diagnostic; got:\n{stderr}"
+    );
+    // Wrong capacity type.
+    assert!(
+        stderr.contains("capacity must be an `int`"),
+        "v0_3_m4 gallery must include wrong-capacity-type diagnostic; got:\n{stderr}"
+    );
+    // Missing element type.
+    assert!(
+        stderr.contains("`channel` needs an element type"),
+        "v0_3_m4 gallery must include missing-element-type diagnostic; got:\n{stderr}"
+    );
+    // Too many arguments.
+    assert!(
+        stderr.contains("takes at most one argument"),
+        "v0_3_m4 gallery must include too-many-args diagnostic; got:\n{stderr}"
+    );
+}

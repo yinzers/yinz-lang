@@ -98,6 +98,8 @@ declare void @ynz_map_iter_get_str(ptr, i64, ptr)
 
 declare void @ynz_map_drop(ptr)
 
+declare ptr @ynz_channel_create(i64)
+
 declare void @ynz_string_to_int(ptr, i64, ptr)
 
 declare void @ynz_string_to_float(ptr, i64, ptr)

@@ -1,7 +1,7 @@
 /// The types known to the M7 type checker.
 ///
 /// Variant count is pinned by `m4_type_variant_count_locked` in tests.
-/// Current count: 20 (M7 P3a adds ErrorsCapable; total 20 across M1–M7)
+/// Current count: 21 (v0.3-M4 adds BuiltinChannel; total 21 across M1–v0.3-M4)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     /// Functions that don't return a value.
@@ -96,6 +96,20 @@ pub enum Type {
     /// `entry.key: K`, `entry.value: V` field access is valid.
     MapEntry { key: Box<Type>, val: Box<Type> },
 
+    // ── v0.3-M4 ────────────────────────────────────────────────────────────────
+
+    // test-ratchet: v0.3-M4 adds BuiltinChannel for bounded task-communication channels.
+    /// Bounded task-communication channel: `channel<T>` in source.
+    ///
+    /// A `channel<T>` value is a heap-owned bounded `tokio::sync::mpsc` channel — an opaque
+    /// pointer at the ABI (like `array`/`map`). Constructed with `channel<T>()` (default
+    /// capacity 64) or `channel<T>(N)`; bounded by construction, no unbounded constructor
+    /// (stdlib-design Rule 4). Phase 1 ships construction + typeck only; the suspending
+    /// `.send()`/`.receive()` method surface is Phase 2 (they route through the state-machine
+    /// suspension protocol, which is why they are gated to the phase whose two-task composed
+    /// fixture can end-to-end-verify the suspend→resume codegen — FRAGO 004).
+    BuiltinChannel { elem: Box<Type> },
+
     // ── M6 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M6 adds Options and Union.
@@ -173,6 +187,7 @@ pub fn type_name(t: &Type) -> String {
         Type::Maybe { inner } => format!("maybe<{}>", type_name(inner)),
         Type::BuiltinMap { key, val } => format!("map<{}, {}>", type_name(key), type_name(val)),
         Type::MapEntry { key, val } => format!("MapEntry<{}, {}>", type_name(key), type_name(val)),
+        Type::BuiltinChannel { elem } => format!("channel<{}>", type_name(elem)),
         Type::Options { name } => name.clone(),
         Type::Union { variants } => variants
             .iter()

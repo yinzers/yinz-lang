@@ -3,7 +3,7 @@ name: "v0-3-m4-channels-arc-release"
 plan-id: "2026-07-02-v0-3-m4-channels-arc-release"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3"]
+session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5"]
 created_at: "2026-07-02"
 updated_at: "2026-07-02"
 metadata:
@@ -581,221 +581,132 @@ Handoff = checkbox state + session-id chain.
     to may-block/spike/registry-entry work; a TOML edit cannot cause a directory-read error. Noted, not
     fixed (scope). Belongs on a docs-migration cleanup pass.
 
-#### Phase 1 — `channel<T>()` type + bounded send/recv + suspension via the unified source + kernel gate  ⚠ M2-HALT-adjacent
-- **Task + purpose.** Make `channel<T>()` real: bounded typed construct whose `send()`-on-full
-  suspends the task through the poll-yield protocol — R1 and R7 mitigations in code.
+#### Phase 1 — `channel<T>()` type + bounded construction + kernel gate  (send/recv suspension codegen → Phase 2 per FRAGO 004)
+- **Task + purpose.** Make `channel<T>()` real as a fully-verifiable subset: the bounded typed
+  construct + its construction + the kernel gate (R7) — NO suspending method surface. FRAGO 004
+  moved the `.send()`/`.receive()` methods (and all their suspension codegen) to Phase 2, because
+  the suspend→persist→resume path cannot be end-to-end-verified by any single-task Phase-1 fixture
+  (a parked task cannot drain itself; the only exercise is the two-task composed scenario, which is
+  a Phase-2 capability). Removing the methods also removes every suspension point from Phase 1, so
+  the crossing-local/SM-codegen threading, the R6 classifier sibling arm, and
+  `emit_channel_suspend_point` all move to Phase 2 with the methods — leaving Phase 1 a clean
+  construction-only build that ships the real interface without any unverified maximum-adversarial
+  suspension IR.
 - **Steps.**
-  1. `channel<T>` type + typeck + codegen; `ynz_channel_send`/`ynz_channel_recv` C-ABI over
-     `tokio::sync::mpsc`; bounded default 64, `channel<T>(N)` override, no unbounded constructor.
-  2. Route send/recv suspension through the state-machine protocol per the spike-proven design;
-     classify channel ops as suspension sources **via the R6 authoritative classifier only** (this
-     also makes `cpu_admission` decline channel-using closures for free — verify with a decline
-     fixture). The channel-handle LOCAL's persistence across a bare-`send()`-on-full suspension (so
-     the same in-flight send is re-polled on resume) resolves via the EXISTING crossing-local
-     frame-slot mechanism (`sm_crossing_names` / `FRAME_OFFSET_LOCALS_START` — the same path
-     `emit.rs` already uses for locals crossing a `wait` point), needing NO new frame-header slot
-     (FRAGO 003 — this is a SEPARATE, narrower question from P2's endpoint-future placement).
-  3. **Kernel-mode gate (R7):** channel ops → COMPILE ERROR in `--kernel`, matching the
+  1. `Type::BuiltinChannel { elem }` typeck (Lock 9 — a built-in generic type like
+     `array`/`map`/`fixed`, NO `[[keyword]]`) + resolution arms + `type_name`.
+  2. Construction: `channel<T>()` (default capacity 64) / `channel<T>(N)`; reject a non-positive
+     capacity LITERAL and a non-int capacity at compile time (bounded by construction, no unbounded
+     constructor — stdlib-design Rule 4); codegen lowers to the existing `ynz_channel_create`
+     C-ABI (already committed in `crates/ynz-runtime/src/channel.rs`); channel value lowers as an
+     opaque `ptr` (like `array`/`map`).
+  3. **Kernel-mode gate (R7):** channel construction → COMPILE ERROR in `--kernel`, matching the
      `check.rs:2223-2233` pattern, WHAT/WHAT-INSTEAD/WHY.
-  4. Closed-channel/dropped-receiver `send()` → typed `errors` per the P0 lock; channel-full
-     backpressure teaching text; never a silent drop.
-  5. `channel_capacity` muted-hint domain (Addition, `⟨64⟩` in the empty parens; hover shows
-     capacity AND default-vs-user-set per IMP-no-function-coloring).
-  6. **Deadlock-safety gate (build-blocking, re-scoped by FRAGO 002).** The R1
-     send-on-full-suspends-WITHOUT-blocking proof is the RUNTIME-SUBSTRATE evidence already GREEN
-     (`cargo test -p ynz-runtime channel`, specifically `send_on_full_suspends_then_resumes_after_drain`)
-     PLUS the grep-audit (no synchronous blocking call in the emitted path) PLUS the
-     Phase-1-achievable SINGLE-TASK hostile fixtures through the real compiler (`ynz run`):
-     closed-channel send/recv, never-drained channel, capacity clamp / no-unbounded — none of which
-     require cross-task channel sharing; alloc=free via `YNZ_ALLOC_COUNTER_OUTPUT`. The end-to-end
-     TWO-task `ynz run` composed suspend-then-resume proof is NOT a Phase 1 gate — it requires a
-     `channel<T>` to cross a `background` boundary (a Phase 2 handle-form capability) and is carried
-     as Phase 2's OWN build-blocking R5 B2 composed fixture (Phase 2 step 6), grown from the same
-     `p0-spike/composed-scenario.ynz` seed. No coverage is lost; the proof is relocated to where the
-     capability lands.
-  7. Extend demo + `v0_3_m4_errors.ynz` (channel surface; kernel-gate + closed-channel triggers
+  4. `channel_capacity` muted-hint domain (Addition, `⟨64⟩` in the empty parens; hover shows
+     capacity AND default-vs-user-set) — REGISTERED in `registry/features.toml` this phase (the
+     domain is defined; the LSP inlay-firing wiring lands in P5 step 1, mirroring the `allocators`
+     registered-not-yet-firing precedent).
+  5. alloc=free for construction/free via `YNZ_ALLOC_COUNTER_OUTPUT`.
+  6. **Single-task hostile fixtures through `ynz run`** (none requiring cross-task sharing or any
+     suspension — there are no methods): construction runs; capacity default/override; non-positive
+     capacity rejected at compile time; `--no-auto-parallel` byte-identical. The kernel-gate trigger
+     is a typeck unit test (`check_with_kernel_mode`) + a documented commented gallery block (the
+     `--kernel` CLI flag is hidden — the v0_3_m1 precedent). NO send/recv fixture — that whole
+     surface, including the send-on-full suspend→resume proof for the bare channel, is Phase 2.
+  7. Extend demo (a documented channel-construction placeholder — construction-only has no
+     observable output, so real channel round-trip usage grows the demo in Phase 2) + create
+     `v0_3_m4_errors.ynz` (channel construction-error triggers: non-positive capacity, wrong
+     capacity type, missing element type, too-many-args, + the documented kernel-gate block, each
      with `// WHY:` comments).
-- **Exit criteria (re-scoped by FRAGO 002).** Channel programs run via `./target/debug/ynz run`;
-  send-on-full-suspends-without-blocking is proven by the runtime-substrate test
-  (`send_on_full_suspends_then_resumes_after_drain`) PLUS the grep-audit (no blocking call in the
-  emitted path); kernel gate + admission decline fire; closed-channel `errors` handled; the
-  SINGLE-TASK hostile fixtures (closed-channel, never-drained, capacity clamp) GREEN through
-  `ynz run`; alloc=free; `--no-auto-parallel` byte-identical on channel fixtures. (The two-task
-  composed suspend-then-resume `ynz run` proof is Phase 2's R5 gate, not Phase 1's — FRAGO 002.)
-- **Reviewer fan-out.** code-reviewer + adversarial-tester (deadlock-safety gate, MANDATORY) +
-  per-phase opus adversarial gate.
+- **Exit criteria (rescoped by FRAGO 004).** `channel<T>()`/`channel<T>(N)` programs compile and
+  run via `./target/debug/ynz run`; the kernel gate fires (typeck unit test); non-positive / wrong
+  / missing-element / too-many-args construction forms are rejected with WHAT/WHAT-INSTEAD/WHY
+  diagnostics; the `channel_capacity` domain is registered; alloc=free (channel construction adds
+  no unbalanced counted allocation — `alloc==free`); the single-task hostile fixtures GREEN through
+  `ynz run`; `--no-auto-parallel` byte-identical; demo + gallery extended. The bare-channel
+  send/recv suspend→resume codegen and its two-task `ynz run` proof are Phase 2 (FRAGO 004), not
+  Phase 1.
+- **Reviewer fan-out.** code-reviewer + adversarial-tester (construction-diagnostic + alloc=free
+  coverage) + per-phase opus adversarial gate.
 - **Model tag.** `(concurrency-codegen-runtime, maximum-adversarial, large)`.
-- **🔶 P1 STATUS — PARTIAL / IN PROGRESS (executor-2026-07-02-m4-p1 → executor-2026-07-02-m4-p1-r2 →
-  executor-2026-07-02-m4-p1-r3, 2026-07-02). The R1 deadlock-safety RUNTIME SUBSTRATE is landed and
-  verified GREEN, now hardened by the three reviewer-fleet minor fixes (r2); the FRAGO seam for both
-  surfaced deviations is APPLIED (FRAGO 002 re-scopes Step 6's hostile-fixture gate; FRAGO 003
-  resolves the cross-suspension persistence question via the existing crossing-local mechanism). The
-  typeck / codegen / kernel-gate / muted-hint / registry / hostile-fixture / demo-gallery layers above
-  the substrate are STILL NOT built. NO STOP condition fired; NO dormant override armed.**
-  - **r3 round (executor-2026-07-02-m4-p1-r3) — deep codegen recon + execution-ready blueprint; NO
-    source built this pass, tree deliberately left at the verified-good substrate state (audit.md has
-    the full blueprint).** The r3 executor ground the ENTIRE remaining typeck→codegen chain against the
-    live codebase (every file:line site enumerated in `audit.md`), confirmed the load-bearing design
-    facts, and made ONE durable, evidence-backed decision — then declined to ship a partial because the
-    build is genuinely **all-or-nothing** and the codegen half is the maximum-adversarial R1/R5/R6
-    surface (details below). Concretely established this round:
-    - **Method-name lock CONFIRMED: the bare `channel<T>` value's operations are `.send(value)` and
-      `.receive()`** (NOT `.recv()`). Evidence, three independent sources agreeing: the plan's own
-      remaining-work map #2 (this Phase's text), `docs/internal/implementation/IMP-concurrency.md:174-178`
-      (`monitor.send(...)` / `monitor.receive()`), `docs/internal/implementation/IMP-no-function-coloring.md:258`
-      (`.send()`/`.receive()` are regular method calls detected by may-block analysis, not a type-level
-      marker), and the persisted P0 seed `p0-spike/composed-scenario.ynz:28,32,44,46`
-      (`out.send(10)` / `ch.receive()`). The dispatcher's `.recv()` uncertainty is resolved: `.receive()`.
-    - **The all-or-nothing constraint is REAL and forbids a foundation-only partial.** `llvm_type_for_ctx`
-      (`emit.rs:1360`) returns `Option`/`None` for an unhandled type, so the instant typeck resolves
-      `channel<int>()` to a `Type::BuiltinChannel`, any program using it reaches codegen and either
-      crashes or miscompiles. A typeck-only foundation is strictly WORSE than today (it replaces the
-      clean "`channel` is not a known type" diagnostic with a codegen crash) — a no-duct-tape regression.
-      Therefore the r3 executor built the `Type::BuiltinChannel` variant + `type_name` arm to prove the
-      approach compiles, then REVERTED it (`git checkout`) so the tree stays at the verified-good
-      substrate-only state rather than leaving a half-wired broken surface. Net source change this
-      round: zero (by design).
-    - **The codegen suspension-on-a-channel-method is a genuinely NEW lowering shape, not a mirror.**
-      `emit_wait_point` (`emit.rs:9731`) is hardcoded to `Expr::Wait` wrapping a `sleep(ms)` CREATE call;
-      the statement dispatch `lower_sm_stmt_with_wait` (`emit.rs:4571`) keys exclusively on
-      `is_sleep_call` / `is_direct_suspending_call` over `Expr::Call` IDENT callees. A channel
-      `ch.send(v)` / `let x = ch.receive()` is an `Expr::MethodCall` that matches NONE of those arms, so
-      it needs a purpose-built `emit_channel_suspend_point` (no create call — the channel handle is
-      already a live local; call `ynz_channel_send_poll(chan, value, waker)` / `ynz_channel_recv_poll(chan,
-      out, waker)`; three-way Ready/Pending/Closed branch; Closed→typed `errors`). AND the suspension
-      counting `count_suspension_expr` (`emit.rs:3410`, returns 0 for `MethodCall`) plus the may-block
-      seeding must become channel-aware — both are currently name-keyed with NO expr-type access, so
-      classifying a channel method requires threading `expr_types` (available via `cg.expr_type`,
-      `emit.rs:1860`) through the type-free counting/dispatch machinery, and seeding channel-containing
-      functions into the may-block fixpoint via the existing `suspends_with_extra_seeds` extra-seeds path
-      (`may_block.rs:163`). This is the exact silent-miscompile-across-a-suspension domain P0 spent a HARD
-      GATE de-risking; it warrants its own focused, end-to-end-`ynz-run`-verified execution (deadlock-safe
-      + alloc=free + grep-audit gates), NOT a rushed one-pass build that would reintroduce R1/R5/R6.
-  - **r2 continuation (executor-2026-07-02-m4-p1-r2) — what landed:** (1) Applied the two
-    human-approved, deviation-judge-classified FRAGOs to the plan seam — FRAGO 002 (descope Step 6's
-    two-task `ynz run` backpressure fixture; the R1 send-on-full-suspends proof is now the
-    runtime-substrate test + grep-audit + single-task hostile fixtures; the two-task composed proof is
-    Phase 2's own R5 gate) and FRAGO 003 (P1's bare-send channel-local persistence resolves via the
-    existing crossing-local mechanism, no new frame-header slot) — both written into this plan text
-    in-place AND recorded in [`audit.md`](audit.md) `## FRAGO 002`/`## FRAGO 003`. Deviations A and B
-    below are thereby RESOLVED (no longer open). (2) Fixed the three reviewer-fleet minor findings in
-    `crates/ynz-runtime/src/channel.rs`: the `ynz_channel_create` doc now names typeck as the primary
-    no-unbounded/non-positive-capacity gate with the clamp as a release-mode floor (finding 1); both
-    `ynz_channel_send_poll` and `ynz_channel_recv_poll` now wrap their poll in `catch_unwind`
-    returning `CHANNEL_PENDING` on panic — genuine parity with the `ynz_rt_async_sleep_poll` "mirror"
-    claim, via a shared `panic_payload_msg` helper (finding 2, chose parity over narrowing the doc);
-    a `debug_assert!(capacity >= 1, …)` sits above the release clamp so a typeck/codegen regression
-    trips loudly in debug while release still avoids the `mpsc::channel(0)` panic-abort (finding 3).
-    All 4 channel substrate tests remain GREEN (`cargo test -p ynz-runtime channel`); `cargo clippy
-    -p ynz-runtime -- -D warnings` (lib) clean.
-  - **r2 decision — Part 2 (typeck/codegen half + Steps 2–7) NOT half-wired, on the record.** Adding
-    `Type::BuiltinChannel` end-to-end (typeck resolution + capacity-checked construction + `.send`/
-    `.recv` method typeck + R6 classifier sibling arm + kernel gate + **codegen state-machine
-    suspension lowering** + `channel_capacity` muted hint + registry entry + `ynz run` hostile
-    fixtures + demo/gallery) is a MONOLITHIC end-to-end build: `llvm_type_for_ctx` returns
-    `Option`/`None` for unhandled types, so the instant typeck resolves `channel<int>()` a user
-    program reaches codegen — anything short of the COMPLETE chain is a type-checks-but-miscompiles
-    broken surface (the exact half-feature `executor-2026-07-02-m4-p1` deliberately refused, and
-    no-duct-tape forbids). The load-bearing piece — mirroring `emit_wait_point`'s frame-slot/
-    resume-point machinery (`emit.rs:9731`, `state_machine.rs:697`) for a NEW suspension source whose
-    handle is constructed earlier and persists as a crossing-local (FRAGO 003) — is the
-    maximum-adversarial suspension-codegen domain P0 spent a HARD GATE de-risking and the exact
-    silent-miscompile-across-a-suspension class that burned M3a/M3d/M3e/M3g. The r2 continuation
-    consciously did NOT ship an unverified partial of that chain: a rushed half here would reintroduce
-    precisely the risk R5/R1 exist to eliminate. Part 2's typeck+codegen build stands as documented
-    remaining work (the `executor-2026-07-02-m4-p1` remaining-work map below still holds, now
-    FRAGO-002-rescoped for the Step-6 gate) and warrants its own focused, end-to-end-verified
-    execution — surfaced as a recommendation, not silently skipped.
-  - **Step 1 (runtime half — DONE & VERIFIED):** channel C-ABI over `tokio::sync::mpsc` landed in the
-    new module `crates/ynz-runtime/src/channel.rs`, exported from `crates/ynz-runtime/src/lib.rs:3-5`:
-    `ynz_channel_create(capacity)` (bounded — clamps `<1 → 1`; NO unbounded constructor),
-    `ynz_channel_send_poll(chan, value, waker_ctx)`, `ynz_channel_recv_poll(chan, out, waker_ctx)`,
-    `ynz_channel_free(chan)`. Return ABI mirrors `ynz_rt_async_sleep_poll` exactly: `0`=Ready /
-    `1`=Pending / `2`=Closed (`channel.rs:36-41`). The in-flight `send()` endpoint future lives in the
-    runtime-owned `YnzChannel` object (`channel.rs:52-70`) — the `sleep_handle` frame slot is never
-    touched, so trap door 1c is avoided by construction (Lock 11 honored). The boxed send future owns
-    a CLONED sender + the value (no self-reference into `self.sender`, `channel.rs:158-172`). No
-    synchronous blocking call anywhere in the path — only `try_send` (`channel.rs:161`), `poll_recv`
-    (`channel.rs:210`), and one `send().await` future polled with the FORWARDED waker
-    (`channel.rs:150-156`). This is R1's no-blocking-call guarantee in code, and it makes durable the
-    exact design the P0 R5 spike proved with throwaway shims.
-  - **Step 1 (typeck/codegen half), Steps 2–7: NOT STARTED.** `channel<T>` has NO `Type::BuiltinChannel`
-    variant, no parser/typeck resolution, no `.send()`/`.receive()` method typeck, no codegen lowering,
-    no R6 classifier sibling arm in `suspension_source.rs`, no `--kernel` gate, no `channel_capacity`
-    muted-hint domain, no `registry/features.toml` entry, no hostile fixtures, no demo/gallery. The
-    channel type is therefore NOT yet reachable from user Yinz source — the substrate is an exported
-    C-ABI awaiting its codegen consumer (not a broken user surface: nothing typechecks `channel<T>`
-    yet, so no half-feature ships).
-  - **Verification of what landed:** 4 substrate tests GREEN (`cargo test -p ynz-runtime channel`):
-    `send_on_full_suspends_then_resumes_after_drain` (THE R1 proof — send-on-full returns Pending, not
-    a thread block, and resumes to Ready after a drain), `recv_on_empty_suspends_then_delivers`,
-    `send_to_closed_returns_closed` (typed-Closed signal, never a silent success — Lock 8 shape),
-    `recv_on_closed_drained_returns_closed`. `cargo build --workspace` GREEN; `cargo clippy
-    -p ynz-runtime -- -D warnings` (lib) clean. **These Rust runtime tests are SUBSTRATE evidence, NOT
-    the Step-6 `ynz run` deadlock-safety GATE** — that gate stays unbuilt (it needs the codegen and
-    Deviation A's resolution). The `ynz run` "real compiler, not a hand-modeled spike" discipline is
-    not yet satisfied for Phase 1 as a whole.
-  - **DEVIATION A (RESOLVED by FRAGO 002 — deviation-judge-classified, Patrick-confirmed; applied in
-    the r2 continuation). Retained below for the record.**
-    Plan-said: Phase 1 step 6 requires "hostile fixtures (full-channel backpressure … never-drained)
-    GREEN through the real compiler" and exit criterion "send-on-full suspends (timing-verified, no
-    thread block)" via `ynz run` (plan.md:594-602). Reality-is: proving send-on-full
-    suspends-without-blocking through `ynz run` structurally requires TWO Yinz tasks sharing ONE
-    channel (a producer that fills + suspends AND a consumer that drains) — a single-task send-on-full
-    just hangs forever with no drainer. The only spawn primitive available in Phase 1 is `background`
-    fire-and-forget (M3b); the handle-form is Phase 2. But a `channel<T>` value cannot currently be
-    shared across a `background` boundary: `tokio::sync::mpsc` splits into a cloneable `Sender` + a
-    single non-cloneable `Receiver`, `.give` moves the whole value (leaving the other side with
-    nothing), and `.share`/`.lend` across `background` are compile errors
-    (`crates/ynz-typeck/src/check.rs:2275-2280`/`2287-2292`). Phase 1's plan text never specifies how a
-    channel is shared across tasks, and the P0 composed-scenario seed
-    (`p0-spike/composed-scenario.ynz:26`) is itself a Phase-2 fixture that even uses `lend out:
-    channel<int>` — a compile error across `background`. A candidate durable resolution (channel
-    `.copy` clones the sender-half while sharing the receiver, à la an Arc-backed handle) overlaps the
-    Phase-3 auto-Arc ownership work and is a real design decision — surfaced, NOT self-decided, NOT
-    self-applied. IMP-no-function-coloring:146-150 confirms backpressure needs a consumer to be
-    observable.
-  - **DEVIATION B (RESOLVED by FRAGO 003 — deviation-judge-classified, risk-neutral, auto-applied in
-    the r2 continuation). Retained below for the record.** Plan-said: Lock 11
-    (plan.md:563-570) resolved that "endpoint futures live in the handle/runtime object, not the frame
-    header," and that whether a dedicated cross-suspension persistence slot is a new frame-header slot
-    vs. a crossing-local is "a P2 codegen decision, named-but-not-forced P2 work." Reality-is: a bare
-    `channel.send()` in Phase 1 that suspends on a full channel must persist the opaque CHANNEL handle
-    pointer across the task's own suspension (to re-poll the same in-flight send on resume) — the same
-    cross-suspension persistence question, needed in P1, not only P2. The runtime half already keeps
-    the endpoint future in the runtime object (Lock 11 honored); the open P1 codegen decision is only
-    where the channel-handle LOCAL persists — which most likely resolves cleanly through the EXISTING
-    crossing-local frame-slot mechanism (`emit.rs` `sm_crossing_names` / `FRAME_OFFSET_LOCALS_START`),
-    needing NO new frame-header slot. Surfaced so the deviation-judge classifies whether P1 making this
-    codegen call is in-scope necessity or a FRAGO — NOT self-decided.
-  - **Pre-existing, out of scope (noted like P0's `design_future_sync`):** `cargo clippy -p ynz-runtime
-    --all-targets` flags a `duplicated_attributes` lint at `crates/ynz-runtime/tests/m2_runtime.rs:275`
-    (`#[repr(C)]`) — a clippy-version sensitivity in a test file P1 never touched (git-confirmed: only
-    `src/lib.rs` + new `src/channel.rs` changed); not caused by channel work. Belongs on a lint-sweep pass.
-  - **Remaining-work map for the next P1 executor (so the substrate research is not re-derived):**
-    (1) `Type::BuiltinChannel { elem }` in `crates/ynz-typeck/src/types.rs` (mirror `BuiltinMap`,
-    `types.rs:92`); resolve `channel<T>` annotations in `crates/ynz-typeck/src/shapes.rs:143` +
-    `signatures.rs:422` (the `AstType::Generic` arms); construction typeck near `check.rs:3814-3853`
-    (the `array`/`map`/`fixed` construction block); no-unbounded + capacity-int checks.
-    (2) `.send(v)` → `nothing errors` and `.receive()` → `T` method typeck (the method-call path at
-    `check.rs:1951-2044`; these are UFCS over standalone ops on the channel value, NOT OOP methods).
-    (3) R6 classifier: add a sibling arm to `crates/ynz-typeck/src/suspension_source.rs` (its module
-    doc `suspension_source.rs:32-38` already earmarks this exact P1 extension — key on receiver-type +
-    method-name; thread it into the same consumers, NEVER a new list).
-    (4) Kernel gate mirroring `check.rs:2223-2233`.
-    (5) Codegen: channel construction (call `ynz_channel_create`) + send/recv suspension points lowered
-    into the state machine by MIRRORING `emit_wait_point` (`emit.rs:9711-9885`) and
-    `emit_sleep_poll_branch` (`state_machine.rs:697-734`) — first-poll-Ready fast path for the
-    non-suspending case, Pending path persisting the channel handle across suspension (Deviation B).
-    (6) `channel_capacity` `[[muted_hint_domain]]` (Addition) in `registry/features.toml`; wire
-    `inlay_hint.rs`. (7) Hostile fixtures through `ynz run` (blocked on Deviation A) + alloc=free +
-    cross-impl. (8) Demo + `v0_3_m4_errors.ynz` gallery.
+- **✅ P1 STATUS — COMPLETE (rescoped by FRAGO 004; executor-2026-07-02-m4-p1-r5, 2026-07-02).
+  Every Phase-1 exit criterion — as rescoped by FRAGO 004 to construction-only — is met with
+  evidence through the real compiler. NO STOP condition fired; NO dormant override armed.** FRAGO 004
+  (Patrick-approved disposition (b) via the recommended default) redrew the Phase 1/Phase 2 boundary:
+  the suspending `.send()`/`.receive()` method surface and ALL its suspension codegen moved to
+  Phase 2, because the suspend→persist→resume path cannot be end-to-end-verified by any single-task
+  Phase-1 fixture (a parked task cannot drain itself; only the two-task composed scenario exercises
+  it, and that is a Phase-2 capability per FRAGO 002). Removing the methods removed every suspension
+  point from Phase 1, which is exactly what made the previously-blocked partial build (r1–r4 all
+  reverted on the all-or-nothing/verification hazard — see [`audit.md`](audit.md)) SAFE to land now.
+  - **Landed & verified (construction-only subset):**
+    - **Type + resolution:** `Type::BuiltinChannel { elem }` (`crates/ynz-typeck/src/types.rs`,
+      variant count 20→21, `type_name` arm) + the three resolution paths in `check.rs`
+      (`ast_type_to_type` Generic `"channel"` arm, the bare-name-requires-args arm, the
+      capital-letter guard). Lock 9 honored — a built-in generic type, NO `[[keyword]]`.
+    - **Construction typeck:** `check_channel_construction` (`check.rs`) — exactly-one-type-arg,
+      default-64 / explicit-int capacity, non-positive-LITERAL reject (handles `0` AND negated
+      `-N`), non-int-capacity reject, too-many-args reject, missing-element-type reject, all
+      WHAT/WHAT-INSTEAD/WHY. Wired as the `"channel"` arm in `check_call`.
+    - **Kernel gate (R7):** channel construction rejects in `--kernel` (in
+      `check_channel_construction`), proven by the typeck unit test
+      `channel_construction_in_kernel_mode_rejected` (`crates/ynz-typeck/tests/check.rs`).
+    - **Codegen:** `ynz_channel_create` extern decl (`runtime_decls.rs`); `mangle_type` +
+      `llvm_type_for` + `alloca` channel-as-`ptr` arms; the `"channel"` construction lowering in
+      `lower_expr` (`emit.rs`) → `ynz_channel_create(capacity)` (default 64). Two compile-forced
+      exhaustive classifiers extended: `parity_case` + `value_to_i64_bits` (`emit.rs`) and
+      `runtime_axis_coverage` (`integration.rs`) — channel classified as a single owning heap
+      pointer that Phase 1 declines as a CPU-background return (both CPU-result-ABI gates agree on
+      `false` via their catch-alls; no gate touched — authoritative-derivation.md honored). 13 IR
+      golden snapshots updated (each: the one new `declare ptr @ynz_channel_create(i64)` line).
+    - **`channel_capacity` muted-hint domain** REGISTERED in `registry/features.toml` (Addition,
+      `⟨64⟩`, with hover WHAT/WHAT-INSTEAD/WHY); LSP inlay-firing wiring is P5 step 1 (the
+      `allocators` registered-not-yet-firing precedent).
+    - **Fixtures + demo + gallery:** `v0_3_m4_channel_construct.ynz` (runs GREEN, `channels ready`),
+      `v0_3_m4_channel_bad_capacity.ynz` (compile-rejected); integration tests
+      `v0_3_m4_channel_construct_runs_through_real_compiler`, `_alloc_equals_free` (alloc==free),
+      `_no_auto_parallel_byte_identical`, `_bad_capacity_rejected_at_compile_time`; gallery
+      `examples/primantis-orders/v0_3_m4_errors.ynz` (5 construction diagnostics) + its
+      `v0_3_m4_gallery_fires_expected_diagnostics` test; demo placeholder in
+      `examples/pirates-roster/entrypoint.ynz` (documented — construction-only has no observable
+      output, so the real round-trip grows the demo in Phase 2).
+  - **alloc=free note (honest, on the record):** `ynz_channel_create` allocates via Rust `Box`, NOT
+    the counted `ynz_alloc` (exactly like `map`/`array`'s libc `malloc`), so a channel-construction
+    program leaves the `ynz_alloc`/`ynz_free` counter balanced at `alloc==free` (0==0). Matching
+    maps/arrays, a constructed channel local is NOT scope-freed in Phase 1 (no scope-drop mechanism
+    exists to hook — a language-wide gap, not channel-specific); the `ynz_channel_free` ABI is
+    proven by the runtime substrate tests and reserved for Phase 2's explicit handle-drop.
+  - **Suites GREEN:** `cargo build --workspace`; `cargo test -p ynz-typeck` (all, incl. 4 new
+    channel tests); `cargo test -p ynz-codegen` (incl. the parity/golden tests); `cargo test
+    -p ynz-driver` (435-integration + galleries + cross-impl, incl. 4 new channel tests + the demo
+    golden `examples_basics_runs_end_to_end`); `cargo test -p ynz-registry`.
+  - **Prior rounds (full detail in [`audit.md`](audit.md)):** the runtime substrate
+    (`crates/ynz-runtime/src/channel.rs`, R1 deadlock-safety) landed and was hardened in r1/r2;
+    r3/r4 built-then-reverted the typeck+codegen chain on the all-or-nothing + verification hazard
+    and surfaced Deviation C (the suspension-codegen phase-placement call), which FRAGO 004 resolves.
+    FRAGO 002 (single-task Step-6 rescope) and FRAGO 003 (crossing-local persistence) still hold.
 
 #### Phase 2 — Background handle-form `.send()` / repeated `.receive()` + the composed fixture  ⚠ M2-HALT-adjacent
 - **Task + purpose.** Lift `check.rs:1331-1342`; ship the handle-form on the spike-proven
   substrate — including the EC copy-before-free collection fix the design doc gates on this exact
   feature (R8, IMP-concurrency:463-479); lock R5 with the composed hostile fixture and R8 with the
-  collection fixture matrix.
+  collection fixture matrix. **FRAGO 004 folded the ENTIRE channel send/recv SUSPENSION-CODEGEN
+  build into this phase** — not just the handle-form's, but the BARE-channel `.send()`/`.receive()`
+  method surface too (moved out of Phase 1), because both share the identical suspension mechanism
+  and neither can be end-to-end-verified without the two-task composed scenario that only lands
+  here. So this phase owns: the bare `.send()`/`.receive()` method typeck (Lock 8 typed `errors` on
+  `.send()`), the R6 `suspension_source.rs` sibling classifier arm for channel methods
+  (`channel_method_suspends`), the type-awareness threading through the crossing-local /
+  suspension-counting / SM-routing machinery that is function-NAME-keyed today (the real Finding-1
+  work — `crossing_local_names_with_cpu_spike` → `locals_crossing_wait` →
+  `collect_crossings_in_stmts`, `count_suspension_points`, the SM routing gate), the new 3-way
+  `emit_channel_suspend_point` (Ready/Pending/Closed) codegen, and the channel-full backpressure
+  teaching text — plus the handle-form on top. **Likely-shared implementation (verify at build):**
+  a channel method call is the same `Expr::MethodCall` on a `channel<T>` value whether the channel
+  is a bare local or reached through a handle, so `emit_channel_suspend_point` + the R6 arm + the
+  crossing/counting/routing threading are ONE mechanism serving BOTH surfaces — building it for the
+  bare channel substantially finishes the handle-form's suspension drive and vice versa; do not
+  build two parallel suspension classifiers (authoritative-derivation.md).
 - **Steps.**
   1. New C-ABI handle machinery per the spike design: independent joinable Tokio task + real
      channel(s) wired into the spawned frame; endpoint futures owned by the handle object (never
@@ -803,12 +714,36 @@ Handoff = checkbox state + session-id chain.
      `CpuJoinHandle` model (1a). If the spike verdicted that a frame-header slot is unavoidable,
      execute the named `FRAME_HEADER_SIZE`/`SPIKE_HANDLE_BASE_OFFSET`/`FrameLayout` ripple here —
      explicitly, const-asserts updated, M3e cross-module serialization included.
-  2. Lift + re-type the handle-form compile error at `check.rs:1331-1342`; typeck the handle's
-     `.send()`/`.receive()` surface.
-  3. Handle-drop semantics per the locked cancel-via-drop model: no leak, no type-confused free;
+  2. **Bare-channel send/recv suspension codegen (folded in from Phase 1 by FRAGO 004 — the
+     load-bearing, maximum-adversarial piece).** Typeck the bare `channel<T>` value's `.send(value)`
+     (`-> nothing errors` per Lock 8 — a dropped/closed receiver yields a TYPED Yinz channel-closed
+     error, never the raw Tokio `SendError`) and `.receive()` (`-> elem`) method surface (moved out
+     of Phase 1). Add the R6 sibling classifier `channel_method_suspends(receiver, method)` to
+     `crates/ynz-typeck/src/suspension_source.rs` (the ONE authoritative home — its module doc
+     already earmarks this arm; NEVER a second list) and thread it into every consumer. Make the
+     crossing-local / suspension-counting / SM-routing machinery type-aware: it is function-NAME-keyed
+     today (`is_suspending_call` in `check.rs` — verify the current line via grep; the r4 report's
+     `~8332` may have shifted; `collect_crossings_in_stmts`, `count_suspension_expr` at `emit.rs`,
+     the SM routing gate) and does NOT fire on a channel `Expr::MethodCall`, so thread `expr_types`
+     + `channel_method_suspends` through it (the recorded-durable decomposition: mark every
+     `channel<T>`-typed local as crossing — a SOUND over-approximation — then make
+     `count_suspension_points` + the routing gate + `lower_sm_stmt_with_wait` channel-aware). Emit
+     the new 3-way `emit_channel_suspend_point` (Ready→post-wait / Pending→persist +
+     `store_resume_point` + suspend / Closed→typed `errors`) calling `ynz_channel_send_poll` /
+     `ynz_channel_recv_poll`. The channel-handle LOCAL persists across a bare-`send()`-on-full
+     suspension via the EXISTING crossing-local frame-slot mechanism (`sm_crossing_names` /
+     `FRAME_OFFSET_LOCALS_START`, FRAGO 003 — no new frame-header slot). GREP-AUDIT the emitted path
+     for any synchronous blocking call (R1). Classify channel methods as suspension sources via the
+     R6 authoritative classifier ONLY (this also makes `cpu_admission` decline channel-using
+     closures — verify with a decline fixture). Channel-full backpressure teaching text; never a
+     silent drop. This is the same suspension mechanism the handle-form's send/recv drive reuses
+     (see task+purpose) — build it once.
+  3. Lift + re-type the handle-form compile error at `check.rs:1331-1342`; typeck the handle's
+     `.send()`/`.receive()` surface (reusing the step-2 method typeck + suspension codegen).
+  4. Handle-drop semantics per the locked cancel-via-drop model: no leak, no type-confused free;
      cancellation injected at the child's next suspension point — or, if milestone-sized, the
      recorded four-field deferral (surface, never silently detach-and-leak).
-  4. **`ECWrapperResultCollection` lift (R8, build-blocking — the fix IMP-concurrency:475/477
+  5. **`ECWrapperResultCollection` lift (R8, build-blocking — the fix IMP-concurrency:475/477
      gates on THIS feature):** implement copy-before-free in the standalone EC wrapper per the §3.1
      recorded design — spawn-form-keyed at compile time: handle spawns read the EC struct BEFORE
      `free_frame`, copy the ok-value to a handle-owned heap buffer, repoint the ok-word, THEN free
@@ -817,10 +752,10 @@ Handoff = checkbox state + session-id chain.
      grep-audited). `.receive()` on a plain suspending `-> T errors` child delivers the completion
      value (typed `T errors`) as the task's final delivery, through the same handle machinery as
      message replies.
-  5. Retire the M1 `[[deferred_tooling_feature]]` `background-handle-form` entry AND the
+  6. Retire the M1 `[[deferred_tooling_feature]]` `background-handle-form` entry AND the
      `[[deferred_language_feature]]` `ec-wrapper-collect-on-completion` entry (`features.toml:1164`)
      — both ship here; the IMP-concurrency §463-479 shipped-status amendment lands at P6 step 1.
-  6. **R5 composed + R8 collection gates (build-blocking):** the composed hostile fixture grown
+  7. **R5 composed + R8 collection gates (build-blocking):** the composed hostile fixture grown
      from the persisted spike `.ynz` (child sends-on-full while parent polls receive) GREEN; plus
      never-received-handle and pool-exhaustion hostile fixtures (DECLINE→FIRE pattern); PLUS the R8
      RED-repro matrix — collected vs. fire-and-forget × `-> T errors` ok/error paths ×
@@ -833,16 +768,29 @@ Handoff = checkbox state + session-id chain.
      is collected via `.receive()` through the copy-before-free path (R8's scenario) — asserting
      the frame survives the channel suspension correctly, the collected value is byte-correct, no
      dangling ok-pointer, no double-free, and the frame + buffer are each freed exactly once;
-     alloc=free proof including handle-drop and buffer-free paths.
-  7. Extend demo + gallery (handle-form surface).
-- **Exit criteria.** Handle round-trips run through the real compiler; the composed fixture GREEN
-  and build-blocking; never-received handle does NOT deadlock (bounded/observed, not a hang);
-  grep-audit clean (no blocking call; no runtime conditional-on-receive copy path); pool-exhaustion
-  GREEN; the R8 collection matrix — including the composed R5×R8 suspend-then-collect cell — GREEN
-  and build-blocking (collected `-> T errors` values byte-correct; the frame survives a
-  mid-execution channel suspension and is then freed exactly once at collection; fire-and-forget
-  unchanged); alloc=free (including handle-drop and R8 buffer-free
-  paths); both registry retirements landed; `--no-auto-parallel` byte-identical.
+     alloc=free proof including handle-drop and buffer-free paths. **PLUS the bare-channel
+     send/recv suspend→resume proof (folded in from Phase 1 by FRAGO 004):** the two-task composed
+     `ynz run` scenario (a `background`-shared channel where one task suspends on send-on-full while
+     another drains) proves the bare-channel `emit_channel_suspend_point` suspend→persist→resume
+     path end-to-end — the exact path no single-task Phase-1 fixture could exercise, which is WHY
+     FRAGO 004 relocated the build here; grown from the `p0-spike/composed-scenario.ynz` seed.
+  8. Extend demo + gallery (bare-channel send/recv usage — the real round-trip Phase 1 deferred —
+     AND the handle-form surface; add the closed-channel-`send()` + backpressure diagnostics to
+     `v0_3_m4_errors.ynz`).
+- **Exit criteria.** The bare-channel `.send()`/`.receive()` method surface typechecks (Lock 8
+  typed `errors` on `.send()`) and its suspend→persist→resume codegen runs through the real
+  compiler, proven end-to-end by the two-task composed `ynz run` scenario (FRAGO 004 — the proof
+  Phase 1 could not stage); channel methods classify as suspension sources via the R6 authoritative
+  classifier ONLY (grep-audit: no second suspension list; `cpu_admission` declines a channel-using
+  closure — decline fixture GREEN); handle round-trips run through the real compiler; the composed
+  fixture GREEN and build-blocking; never-received handle does NOT deadlock (bounded/observed, not a
+  hang); grep-audit clean (no synchronous blocking call in the send/recv/handle path; no runtime
+  conditional-on-receive copy path); pool-exhaustion GREEN; the R8 collection matrix — including the
+  composed R5×R8 suspend-then-collect cell — GREEN and build-blocking (collected `-> T errors`
+  values byte-correct; the frame survives a mid-execution channel suspension and is then freed
+  exactly once at collection; fire-and-forget unchanged); alloc=free (including handle-drop and R8
+  buffer-free paths); closed-channel `send()` returns a typed `errors` value; both registry
+  retirements landed; `--no-auto-parallel` byte-identical.
 - **Reviewer fan-out.** code-reviewer + adversarial-tester (composed + deadlock gates, MANDATORY) +
   per-phase opus adversarial gate.
 - **Model tag.** `(concurrency-codegen-runtime, maximum-adversarial, large)`.
@@ -988,7 +936,9 @@ Handoff = checkbox state + session-id chain.
   authority sits with the orchestrator (override signatures are Patrick's); P6 tag gated on Patrick.
 - **Succession.** Resume from `plan-id: 2026-07-02-v0-3-m4-channels-arc-release` + the session-id
   chain + checkbox state. Slices travel with ¶2 Mission, ¶3.1 Intent & End State, and the dispatched
-  phase's ¶1 risk rows (P0 carries R6+R5; P1 carries R1+R7; P2 carries R5+R2+R8; P3 carries R3; P6
+  phase's ¶1 risk rows (P0 carries R6+R5; P1 carries R7 + R1's runtime-substrate proof only —
+  FRAGO 004 moved R1's send/recv suspension-codegen gate to P2; P2 carries R5+R2+R8+R1+R6-sibling-arm;
+  P3 carries R3; P6
   carries R4).
 - **Audit trail.** `audit.md` in this directory (append-only; this correction pass is logged
   there). Roadmap back-pointer: `roadmap-id: 2026-05-21-v0-3-concurrency-perf`.

@@ -6255,6 +6255,12 @@ fn runtime_axis_coverage(variant: &ynz_typeck::types::Type) -> RuntimeAxisCovera
         Type::Nothing => RuntimeAxisCoverage::Declines("no value to join-bind"),
         Type::Error => RuntimeAxisCoverage::Declines("poisoned sig from an earlier type error"),
         Type::MapEntry { .. } => RuntimeAxisCoverage::Declines("MapEntry is not a carried class"),
+        // v0.3-M4: a channel is a single owning heap pointer, but Phase 1 does not admit it as a
+        // CPU-background return (both gates decline it — see parity_case's channel arm); sequential
+        // lowering is always correct, so no runtime FIRE fixture is owed.
+        Type::BuiltinChannel { .. } => RuntimeAxisCoverage::Declines(
+            "channel not admitted as a CPU-background return in v0.3-M4",
+        ),
         Type::TypeParam { .. } => RuntimeAxisCoverage::Declines(
             "generic-fn returns live in GenericFnTable, never in the CPU-gated SignatureTable",
         ),
@@ -6336,6 +6342,9 @@ fn cpu_runtime_axis_fixtures_compile_forced_exhaustive() {
         Type::MapEntry {
             key: Box::new(Type::Int),
             val: Box::new(Type::Int),
+        },
+        Type::BuiltinChannel {
+            elem: Box::new(Type::Int),
         },
         Type::TypeParam {
             name: "T".to_string(),
@@ -9370,5 +9379,80 @@ fn v0_3_m3f_ec_failed_then_ok_no_cross_contamination() {
         par, seq,
         "failed-then-ok EC: default and --no-auto-parallel must be byte-identical; \
          par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M4 Phase 1 — channel<T> construction (FRAGO 004: methods land in Phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// WHY: proves `channel<T>()` (default capacity 64) and `channel<T>(N)` construction compiles and
+// runs end-to-end through the real compiler — the typeck → codegen (`ynz_channel_create`) chain.
+// If channel construction ever regresses to a codegen crash / miscompile (the all-or-nothing
+// hazard that made a partial typeck build unsafe before FRAGO 004 removed the suspending method
+// surface from Phase 1), this fixture stops exiting 0 with the expected output.
+#[test]
+fn v0_3_m4_channel_construct_runs_through_real_compiler() {
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m4_channel_construct.ynz"));
+    assert_eq!(
+        code, 0,
+        "channel construction must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "channels ready\n",
+        "channel construction fixture must run to completion; stdout:\n{stdout}"
+    );
+}
+
+// WHY: channel construction must not leak a COUNTED allocation. `ynz_channel_create` heap-allocates
+// via Rust `Box` (not the counted `ynz_alloc`, exactly like `map`/`array`'s libc `malloc`), so a
+// channel-construction program leaves the `ynz_alloc`/`ynz_free` counter balanced (0 == 0). This
+// pins that channel construction introduces no unbalanced counted allocation on the program path —
+// a regression that routed a channel through `ynz_alloc` without a matching free would break this.
+#[test]
+fn v0_3_m4_channel_construct_alloc_equals_free() {
+    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m4_channel_construct.ynz");
+    assert_eq!(
+        alloc, free,
+        "channel construction must keep ynz_alloc==ynz_free (got alloc={alloc}, free={free})"
+    );
+}
+
+// WHY: the cross-impl oracle — a channel-construction program must produce byte-identical output
+// under default auto-parallelization and `--no-auto-parallel` sequential lowering. Channel
+// construction has no suspension point in Phase 1 (no methods), so the two lowerings must agree
+// exactly; a divergence would signal channel codegen leaking into the parallelization analysis.
+#[test]
+fn v0_3_m4_channel_construct_no_auto_parallel_byte_identical() {
+    let src = fixture("v0_3_m4_channel_construct.ynz");
+    let (par, _e1, c1) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _e2, c2) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(c1, 0, "default build+run must succeed");
+    assert_eq!(c2, 0, "--no-auto-parallel build+run must succeed");
+    assert_eq!(
+        par, seq,
+        "channel construction: default and --no-auto-parallel must be byte-identical;\n\
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+// WHY: the compile-time bounded-by-construction gate (stdlib-design Rule 4) — a non-positive
+// capacity LITERAL (`0` or a negated literal) must be rejected at compile time, and the too-many
+// / wrong type-argument forms must produce teaching diagnostics. These are the single-task hostile
+// fixtures the Phase-1 error gallery documents; this test pins that they fail to compile.
+#[test]
+fn v0_3_m4_channel_bad_capacity_rejected_at_compile_time() {
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m4_channel_bad_capacity.ynz"));
+    assert_ne!(
+        code, 0,
+        "non-positive / malformed channel capacity must not compile"
+    );
+    assert!(
+        stdout.is_empty(),
+        "a rejected program must not run; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("capacity must be at least 1"),
+        "must reject non-positive capacity with a teaching diagnostic; got:\n{stderr}"
     );
 }
