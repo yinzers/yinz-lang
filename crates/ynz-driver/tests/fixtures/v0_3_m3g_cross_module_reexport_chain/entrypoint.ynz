@@ -1,0 +1,32 @@
+// v0.3-M3g cross-module fused group — re-export chain (the deepest boundary-matrix cell).
+// `crunch` (local) and `doWork` (imported from `b_ops`, itself wrapping `a_ops.getValue`) form
+// one fused group. `entrypoint`'s frame reserves the CPU handle/result region locally AND embeds
+// `doWork`'s child sub-frame — `doWork`'s own total_size is ITSELF resolver-composed one hop
+// further (from `a_ops`), so this fixture is the deepest exercise of frame_layouts_query's
+// recursive cross-module composition inside a dual-kind (fused) parent frame.
+//
+// crunch(n) loops 0..50 (sum 1225); doWork(n) = getValue() (7) + n.
+//
+// Arithmetic: crunch(1) = 1225+1=1226; doWork(2) = 7+2=9.
+//   sum = 1226 + 9 = 1235.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   1235
+
+import { doWork } from `b_ops`
+
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(1)
+  let b = doWork(2)
+  print(a + b)
+}

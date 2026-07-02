@@ -1,0 +1,39 @@
+// v0.3-M3g Phase 4 (Panic re-raise — the mirror). Companion to
+// v0_3_m3g_panic_cpu_member_with_io_in_flight.ynz: THAT fixture panics on the CPU member while
+// the I/O member is still pending; THIS fixture panics on the I/O member (`fetchFast`, division
+// by zero right after its `wait sleep(0)` resumes — essentially instant) while the CPU member
+// (`crunchBig`, a real 150-million-iteration loop, ~130-180ms in a debug build — same timing-bias
+// idiom as v0_3_m3g_e1_cpu_lags_multi_resume.ynz) is still genuinely running on the blocking
+// pool, nowhere near finished. Per IMP-concurrency.md "Panic Re-Raise" (first-panic-wins): the
+// panic that originates on the DRIVING coroutine itself (not a spawned blocking-pool task) must
+// still terminate the program with the SAME diagnostic and the SAME non-zero exit in both modes,
+// and must not leak the still-pending CPU handle — the mirror proof that resource cleanup during
+// a panic is correct regardless of WHICH member panics first.
+//
+// crunchBig(seed) does real, 150-million-iteration work. fetchFast(seed) waits ~0ms then divides
+// by seed; called with seed=0, it panics almost immediately, long before crunchBig can finish.
+//
+// Expected (both modes): the program stops with a "division by zero" error and a non-zero exit.
+// No number is printed.
+
+function crunchBig(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 150000000) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function fetchFast(seed: int) -> int {
+  wait sleep(0)
+  let guard = 10 / seed
+  return guard + seed
+}
+
+function entrypoint() -> nothing {
+  let a = crunchBig(1)
+  let b = fetchFast(0)
+  print(a + b)
+}

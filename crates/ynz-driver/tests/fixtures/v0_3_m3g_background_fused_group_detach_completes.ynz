@@ -1,0 +1,41 @@
+// v0.3-M3g Phase 4 (Resource cleanup — the "task completes, result discarded" limb). Companion to
+// v0_3_m3g_background_fused_group_detach.ynz, whose 5ms I/O member races an IMMEDIATE main-thread
+// exit and therefore lands entirely in the "task gets ABORTED at shutdown" regime. THIS fixture
+// proves the complementary regime: `entrypoint` gives the background-hosted fused group a
+// generous head start (`fetchSlow`'s I/O member is 5ms; `entrypoint` itself waits 50ms — a 10x
+// margin, matching the established margin idiom in v0_3_m2_background_from_sm.ynz) before
+// returning, so the fused group provably COMPLETES on its own thread before the process exits.
+// Nothing ever joins `fusedHost()`'s result (it returns `nothing` anyway, and `background` never
+// exposes a join handle to Yinz source) — this fixture proves cleanup after a COMPLETED-and-
+// discarded fused group works identically (alloc==free, no leak in the dual-kind frame's I/O
+// sub-frame region) to the ABORTED-and-discarded regime the sibling fixture covers, rather than
+// leaving that limb of the resource-cleanup proof entirely unexercised.
+//
+// crunch(n) loops 0..50 (sum 1225); fetchSlow(n) waits 5ms on a timer.
+
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function fetchSlow(n: int) -> int {
+  wait sleep(5)
+  return n + 1
+}
+
+function fusedHost() -> nothing {
+  let a = crunch(1)
+  let b = fetchSlow(2)
+  print(a + b)
+}
+
+function entrypoint() -> nothing {
+  background fusedHost()
+  wait sleep(50)
+  print(`main-done`)
+}

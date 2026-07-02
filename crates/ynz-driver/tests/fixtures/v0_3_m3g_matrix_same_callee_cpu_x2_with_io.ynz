@@ -1,0 +1,35 @@
+// v0.3-M3g N+M matrix — same-callee CPU members ×2 alongside one I/O member. M3d's "Same-Callee
+// Amendment" already lifts the same-callee restriction for CPU members (two data-independent
+// calls to the SAME CPU callee run in parallel, each with a per-invocation ctx); this fixture
+// proves the fused-group admission gate carries that amendment through unchanged — `crunch` is
+// called TWICE with different, independent arguments, alongside one I/O member.
+//
+// crunch(n) loops 0..50 (sum 1225); fetch(n) waits on a timer.
+//
+// Arithmetic: crunch(1)=1226; crunch(2)=1227; fetch(3)=4.
+//   sum = 1226 + 1227 + 4 = 2457.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   2457
+
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function fetch(n: int) -> int {
+  wait sleep(0)
+  return n + 1
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(1)
+  let b = crunch(2)
+  let c = fetch(3)
+  print(a + b + c)
+}

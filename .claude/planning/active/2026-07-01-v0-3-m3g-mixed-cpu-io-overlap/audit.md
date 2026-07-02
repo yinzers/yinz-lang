@@ -1235,3 +1235,306 @@ Override:  N/A — no risk residual rose to HIGH. This session closes every gap 
   the orchestrator/deviation-judge should ratify (whether Phase 3 is ready to merge and Phase 4
   can begin), not a self-declared merge; the plan's own conjunctive exit-criteria list and this
   FRAGO's line-by-line proof are the record for that review.
+
+## FRAGO 007 — 2026-07-02 — session-id: (Phase 4 executor session, dispatched by orchestrator)
+Base:      2026-07-01-v0-3-m3g-mixed-cpu-io-overlap @ Phase 4 (Generality + boundary matrix)
+Trigger:   Phase 4 dispatch — prove the fused mechanism is general (N+M shapes, cross-module,
+           cleanup/panic, interaction sweeps) within the mechanism Phase 3 shipped. All six Phase
+           4 steps are now DONE; one step (kernel-mode) surfaced a genuine plan-vs-reality
+           divergence, corrected per the plan's own pre-authorized escape valve ("if a fixture
+           proves otherwise mid-execution... this subsection gets FRAGO'd," Kernel-Mode Behavior
+           subsection, original text).
+Changes:
+  - **N+M member matrix — DONE.** A8 resolved: no N=2 codegen guard ever existed in the fused
+    path (grep-gate confirmed zero hits outside `#[cfg(test)]`). 7 new fixtures + 7 tests
+    (`crates/ynz-driver/tests/fixtures/v0_3_m3g_matrix_*.ynz`,
+    `crates/ynz-driver/tests/integration.rs`), covering 2+1, 1+2, 3+2 CPU+IO combinations,
+    same-callee CPU ×2, both declaration orders, and an errors-capable I/O member — every cell
+    fires with the exact expected CPU-class spawn count, byte-identical output across modes,
+    alloc==free.
+  - **Cross-module mixed group (the named gap) — DONE.** 3 new multi-file fixture projects
+    (`v0_3_m3g_cross_module_{direct,reexport_chain,errors_capable}/`) + 3 dedicated tests. The
+    re-export-chain variant is the deepest boundary-matrix cell (entrypoint fuses local `crunch`
+    with `b_ops.doWork`, which itself wraps `a_ops.getValue` — a two-hop chain, exercising
+    `frame_layouts_query`'s recursive cross-module composition inside a fused parent frame). Full
+    oracle on every cell: output correctness, default==--no-auto-parallel byte-identity, exact
+    spawn count via IR.
+    **Enabling infra change (in-scope, not itself a deviation):**
+    `crates/ynz-driver/src/build.rs`'s `BuildResult.ir_text` was unconditionally `None` for
+    project-mode (`ynz build <dir>`) builds — its OWN doc comment documented this as a deliberate
+    scope limit ("IR is per-file; the driver surfaces the first file's IR for single-file builds
+    only"). Cross-module fixtures need the SAME IR-based spawn-count oracle every other fixture in
+    this suite already has (the plan's own "first-class byte-identity target" mandate for this
+    step), so `build_project` was extended to concatenate every compiled file's IR (each preceded
+    by a `; file: <path>` comment) into `ir_text` — a genuine capability extension, not a silent
+    behavior change to an existing contract (no test relied on the old `None`; verified via
+    `cargo test -p ynz-driver --test integration`, 430/430, and `-p ynz-codegen --test
+    frame_layouts_query`, 9/9, both unaffected).
+  - **Resource cleanup — DONE.** New runtime unit test
+    `cleanup_on_dual_kind_frame_leaves_io_subframe_region_untouched`
+    (`crates/ynz-runtime/src/lib.rs`) proves the discriminator-count-driven CPU-handle free scan
+    on a dual-kind (fused) frame frees exactly its N handle slots and leaves an adjacent
+    sentinel-filled "embedded I/O sub-frame" region byte-for-byte untouched. Corrected a stale doc
+    comment on the pre-existing `cleanup_is_layout_driven_for_n_greater_than_two` test (it claimed
+    "N>2 not yet reachable end-to-end" — made FALSE by this same phase's N+M matrix work, which
+    reaches N=3 CPU members end-to-end via `v0_3_m3g_matrix_3cpu_2io.ynz`; updated to name it).
+    **Early-return-before-join reasoning (not a gap, a scope finding):** a fused group's OWN poll
+    loop has no mid-join yield point reachable from Yinz source — it either resolves `all_done_bb`
+    or yields Pending to the SCHEDULER (never to a sibling statement), so "early return before the
+    join" for a fused group specifically can only manifest via `background` + the driving process
+    exiting while the task is mid-poll. That is the SAME shape the Interaction-sweeps step's
+    `background`+shutdown-abort-race ask already covers — one fixture
+    (`v0_3_m3g_background_fused_group_detach.ynz`) was built to serve both.
+  - **Panic re-raise — DONE.** New fixture `v0_3_m3g_panic_cpu_member_with_io_in_flight.ynz`
+    (`crunch(0)` divides by zero while `fetchSlow`, a 50ms sleep, is still genuinely pending) +
+    test `v03_m3g_panic_cpu_member_with_io_in_flight_fires_byte_identical`. Generalized
+    `m3d_assert_panic_fires_byte_identical` (`crates/ynz-driver/tests/integration.rs`) to accept
+    an expected spawn count via a new `m3d_assert_panic_fires_n_byte_identical` (the pure-CPU M3d
+    fixtures fix at 2; this fused fixture has 1 — mirrors the pre-existing
+    `m3d_assert_fires_byte_identical_alloc_free` → `_n_` generalization pattern from Phase 3).
+    Both modes stop with the SAME `RUNTIME ERROR: division by zero (int)` diagnostic and the SAME
+    non-zero exit (134). Confirmed the pre-existing M3d panic-re-raise mechanism
+    (`ynz_rt_join_poll`'s `resume_unwind` on a panicking JoinHandle, first-panic-wins) needed ZERO
+    new code to cover the fused case — `emit_fused_group_spawn_poll` calls the exact same shared
+    `emit_cpu_member_poll` helper `emit_cpu_group_spawn_join` uses, so the panic path is identical
+    code, not a re-derivation.
+  - **Interaction sweeps — DONE, with one corrected premise (kernel-mode).**
+    - **Spike host-set reconciliation:** the pre-existing LOW-severity over-allocation class
+      (`.claude/todos.md` "spike host-set reconciliation") is keyed on `base_suspends`/
+      `suspend_set`, threaded identically to both the pure-CPU and fused admission paths since
+      FRAGO 002/003 (verified by direct code read: `fused_admitted_group`'s call site in
+      `cpu_group_slots_and_reserve` uses the SAME `suspend_set` parameter passed in, never a
+      separately re-derived one — no NEW instance of the class can arise from fusion). Re-ran its
+      regression-guard tests (`crates/ynz-codegen/tests/frame_layouts_query.rs`, 9/9 green)
+      unmodified.
+    - **`background` + mixed-group shutdown-abort race:** new fixture
+      `v0_3_m3g_background_fused_group_detach.ynz` + test
+      `v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged` — 20 repeated runs.
+      Observed (this run): main always exits 0 (20/20); alloc==free on EVERY run including
+      panicking ones (20/20); every observed panic (8/20 this run) is the SAME pre-existing benign
+      message ("ynz runtime: CPU child task was aborted before it could produce a result",
+      `runtime.rs:1332:17`, the pre-existing non-panic-JoinError arm of `ynz_rt_join_poll`) — a
+      rate in the same ballpark as the documented ~5/20 pure-CPU baseline
+      (`.claude/todos.md`). Verdict: fusion does not worsen this pre-existing, benign,
+      timing-dependent shutdown-race noise; the decline-around (there isn't one — this is an
+      accepted, tracked residual, not a decline) stands unchanged.
+    - **Kernel-mode — CORRECTED PREMISE (the substantive finding this FRAGO records).** See the
+      Paper-Trace below.
+  - **Cross-impl consistency sweep — DONE.** `cross_impl_consistency`'s two corpus-wide sweeps
+    (`corpus_byte_identical_across_auto_parallel_modes`,
+    `corpus_produces_deterministic_output_across_runs`) both green over the full corpus (332+
+    files, includes every new top-level fixture this phase added) — no new exclusion needed.
+
+  **Paper-Trace — kernel-mode premise correction (plan-said-X / reality-is-Y, surfaced per
+  dispatch instructions, not self-decided in isolation from the plan's own escape valve):**
+  - Observed — direct code read of `crates/ynz-typeck/src/check.rs`'s `Expr::Call` dispatch arm
+    (the "Kernel-mode rejection for bare suspending calls" block): `if self.kernel_mode &&
+    callee_suspends { self.diags.push(Diagnostic::error(...)) }` — fires for EVERY function
+    containing a bare (no explicit `wait`) call to a suspending callee, unconditionally, with no
+    carve-out for any CPU-group/fused-group shape. This is PRE-EXISTING (M3e Phase 2, confirmed by
+    the already-shipped test `kernel_mode_rejects_cross_module_suspending_call`, which predates
+    M3g entirely). Also confirmed: `--kernel` is not wired as a real CLI flag on `ynz build`/
+    `ynz run` at all (`check_with_kernel_mode`'s own doc comment: "the `--kernel` build mode
+    arrives in a later version" — it is a `crates/ynz-typeck`-crate test-only entry point).
+  - Expected (per the plan's original Kernel-Mode Behavior subsection + Phase 4's step text): "a
+    mixed group under `--kernel` declines to sequential (promotion is off entirely without a
+    scheduler), byte-identical [to `--no-auto-parallel`], fixture-asserted."
+  - Residual — a mixed group's Suspending-class member is, by `admitted_fused_group`'s own
+    admission rule (`crates/ynz-typeck/src/cpu_admission.rs`), ALWAYS a bare suspending call (an
+    explicit `wait` on a member statement is an unconditional decline per `classify`'s first
+    check, `stmt_has_explicit_wait_stmt`). So a mixed group's host function ALWAYS contains a bare
+    suspending call, and therefore ALWAYS hits the kernel-mode compile-error rejection above,
+    unconditionally, BEFORE promotion/admission is ever computed. There is no "sequential
+    lowering" branch reachable under `--kernel` for a mixed group — the compile stops at typeck.
+  - Hypothesis — the plan's original text assumed kernel mode's "no scheduler" property manifests
+    as "promotion silently declines, sequential lowering still compiles" (the SAME shape
+    `--no-auto-parallel` produces) — by analogy with how kernel mode is documented to behave for
+    OTHER promotion-gated features. But kernel mode's actual mechanism for SUSPENSION (not merely
+    promotion) is a hard compile-time REJECTION, not a silent decline — this was already the
+    established, shipped, tested behavior for every plain suspending function since M2/M3e, and
+    the plan's authoring session did not re-verify it against a mixed-group-shaped host before
+    writing the invariant.
+  - Evidence path — `crates/ynz-typeck/src/check.rs` (the call-dispatch kernel guard, `Expr::Call`
+    arm) × `crates/ynz-typeck/src/cpu_admission.rs::admitted_fused_group`'s `classify` closure
+    (the `stmt_has_explicit_wait_stmt` early-return) × `crates/ynz-typeck/tests/check.rs::kernel_
+    mode_rejects_cross_module_suspending_call` (the pre-existing, pre-M3g test proving the general
+    rejection).
+  - Verdict — real, reproducible (not self-graded): confirmed via a NEW test,
+    `kernel_mode_rejects_mixed_cpu_io_shaped_host_with_no_new_error_class`
+    (`crates/ynz-typeck/tests/check.rs`) — a mixed CPU+I/O-shaped host (a CPU-group-eligible
+    `crunch` call adjacent to a bare `sleep`-based `fetchIt` call) is REJECTED in `--kernel` mode
+    with the SAME pre-existing kernel-suspend diagnostic (mentions "kernel"; does NOT mention
+    "parallel"/"fused"/"group" anywhere), proving the CPU-group-eligible sibling plays no role in
+    the outcome and no new, mixed-group-specific compile-error class exists.
+  - **Correction applied:** the plan's Kernel-Mode Behavior invariant subsection is rewritten in
+    place (current-truth body, this session — see plan.md) to state the verified reality: `--kernel`
+    rejects any function containing a bare suspending call as a hard compile error, unconditionally
+    (pre-existing, universal, not new to M3g); a mixed group therefore never reaches codegen under
+    `--kernel` at all; "no new compile-error class is needed in kernel mode" remains TRUE (and is
+    now proven, not merely asserted) for the corrected reason. Phase 4's own kernel-mode step text
+    is updated with the same DONE detail. This is the plan's OWN pre-authorized escape valve firing
+    ("if a fixture proves otherwise mid-execution... this subsection gets FRAGO'd") — not a
+    self-decided scope change to the mechanism itself.
+  - Files touched this session: `crates/ynz-driver/tests/fixtures/v0_3_m3g_matrix_{2cpu_1io,
+    1cpu_2io,3cpu_2io,same_callee_cpu_x2_with_io,io_first_order,cpu_first_order,
+    errors_capable_io}.ynz` (new); `crates/ynz-driver/tests/fixtures/v0_3_m3g_cross_module_
+    {direct,reexport_chain,errors_capable}/` (new, multi-file projects);
+    `crates/ynz-driver/tests/fixtures/v0_3_m3g_background_fused_group_detach.ynz` (new);
+    `crates/ynz-driver/tests/fixtures/v0_3_m3g_panic_cpu_member_with_io_in_flight.ynz` (new);
+    `crates/ynz-driver/tests/integration.rs` (7 N+M-matrix tests, 3 cross-module tests + 3 new
+    helpers `build_multimodule_and_run_watchdog`/`build_multimodule_emit_ir`/
+    `build_multimodule_run_with_alloc_counter`, 1 background-detach test, 1 panic-re-raise test +
+    `m3d_assert_panic_fires_n_byte_identical` generalization); `crates/ynz-driver/src/build.rs`
+    (`build_project` IR concatenation — see enabling-infra note above);
+    `crates/ynz-runtime/src/lib.rs` (1 new dual-kind-frame cleanup test + 1 stale-comment
+    correction); `crates/ynz-typeck/tests/check.rs` (1 new kernel-mode test);
+    `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md` (Phase 4 checkboxes
+    ticked with DONE detail; Kernel-Mode Behavior invariant subsection corrected; this FRAGO
+    entry).
+Unchanged: ¶1, ¶2, ¶3.1, ¶3.2, Phases 1-3 (already closed), Phase 5, ¶4, ¶5, the Safety/
+  Performance/Teaching/Runtime-Dependencies/Demo-&-Error-Gallery/Feature-Registry-Entries
+  Invariant subsections, Design-Doc Alignment, Future Requirements — no new compile-error class,
+  no registry entry, no demo/gallery extension needed (Phase 3 already covers the milestone's
+  demo/gallery obligation; this phase surfaced zero new user-facing diagnostics, confirmed by grep
+  across this session's diffs for new `Diagnostic::error`/`Diagnostic::warning` call sites).
+Verification (this session, full sweeps): `cargo build --workspace` clean; `cargo clippy
+  --workspace -- -D warnings` clean (zero warnings — the project's documented gate; a broader
+  `--tests`/`--all-targets` sweep surfaces pre-existing warnings in files this session did not
+  touch, matching the precedent every prior phase's own FRAGO already established for that
+  distinction); `cargo fmt --all -- --check` clean (after one `cargo fmt --all` pass on the newly
+  added test code). `cross_impl_consistency`'s two corpus-wide sweeps green (332+ files, ~178s).
+  `cargo test -p ynz-driver --test integration` 430/430 green (up from the Phase-3-closing
+  baseline). `cargo test -p ynz-codegen --test frame_layouts_query` 9/9 green. `cargo test
+  -p ynz-runtime --lib cleanup` 3/3 green (incl. the new dual-kind test). `cargo test -p ynz-typeck
+  --test check kernel_mode` 7/7 green (incl. the new mixed-group kernel test). Full `cargo test
+  --workspace --no-fail-fast` (112 test-result blocks): the SAME 5 pre-existing, unrelated
+  failures across the SAME 4 targets as every prior phase's established baseline —
+  `ynz-diagnostics::jargon_audit::no_banned_jargon_in_deferred_feature_user_facing_fields`,
+  `ynz-parser::parse::parser_precedence_table_matches_spec`,
+  `ynz-registry::design_future_sync::every_future_doc_has_a_registry_entry_or_is_skipped`,
+  `ynz-registry::schema_smoke::{deferred_language_feature_lookup,deferred_tooling_feature_lookup}`
+  — ZERO new failures. The documented `v03_m3e_alias_local_name_collision_runs_correctly`
+  CI-contention flake did not fire this run (consistent with its known intermittent nature).
+Override:  N/A — no risk residual rose to HIGH. All six Phase 4 steps are DONE; the kernel-mode
+  premise correction is the one consequential finding, surfaced with full Paper-Trace above for
+  the orchestrator/deviation-judge to ratify — not self-decided beyond executing the plan's own
+  pre-authorized escape valve for exactly this subsection.
+
+- (Phase 4 reviewer-fleet follow-up session, dispatched by orchestrator for rules-compliance
+  blocker follow-up) — 2026-07-02 — Fix to FRAGO 007's own record, not a new FRAGO (mirrors the
+  Phase 1/Phase 2 cheap-gate-fix correction pattern above: a correction to the prior session's own
+  work found by the reviewer fleet, not a new plan-vs-reality divergence or a new design decision).
+  rules-compliance flagged a blocker: FRAGO 007's "Unchanged" line (above) claims "¶3.1, ...the
+  Safety/Performance/Teaching/Runtime-Dependencies/Demo-&-Error-Gallery/Feature-Registry-Entries
+  Invariant subsections... [unchanged]" — but that claim is FALSE. Two occurrences of the
+  now-falsified kernel-mode premise ("kernel-mode builds decline to sequential") survived FRAGO
+  007's own correction pass, contradicting the `### Kernel-Mode Behavior` subsection FRAGO 007
+  DID correctly rewrite:
+  1. `### Safety` invariant subsection (`plan.md`, pre-fix) listed "kernel-mode builds" alongside
+     loop-body/multi-group-≥2/wide-EC/guard-tripping as part of the "M3d safe-DECLINE floor" that
+     "decline to sequential, locked by decline-tests." Kernel-mode does not decline to sequential —
+     it hard-rejects at typeck before a decline-vs-fire branch is ever reached (FRAGO 007's own
+     Paper-Trace). Fixed: removed kernel-mode from the decline-floor list; added a cross-reference
+     sentence to the `### Kernel-Mode Behavior` subsection stating the corrected mechanism inline.
+  2. ¶3.1 Intent & End State, Key outcome #3 ("The floor never regresses") listed "kernel mode"
+     inside the same decline-to-sequential parenthetical as the four genuine decline shapes. Same
+     fix: removed "kernel mode" from the parenthetical; added a clarifying sentence that kernel-
+     mode is a separate floor (hard compile-time rejection, not a decline-to-sequential shape) with
+     a cross-reference to the `### Kernel-Mode Behavior` subsection.
+  Verified no other occurrence of the stale claim survives: `grep -n kernel plan.md` post-fix shows
+  every remaining hit either (a) the corrected `### Kernel-Mode Behavior` subsection itself, (b)
+  Phase 4's own step text, which already carries the original pre-correction ask immediately
+  followed by FRAGO 007's "DONE, with one corrected premise" annotation (the established
+  preserve-original-then-annotate pattern this plan already uses throughout — not a stale,
+  uncorrected claim), or (c) the two edits above.
+  Files touched this session: `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/
+  plan.md` (`### Safety` subsection, ¶3.1 Key outcome #3); this audit.md entry.
+  Unchanged: everything else — no code touched, no new design decision, no risk reclassification.
+  Override: N/A.
+
+- (Phase 4 reviewer-fleet follow-up session, dispatched by orchestrator for code-reviewer
+  should-fix + minor follow-up) — 2026-07-02 — Fix to Phase 4's own record, not a new FRAGO
+  (mirrors the cheap-gate-fix correction pattern above: real should-fix/minor code-quality items
+  found by the reviewer fleet on already-DONE Phase 4 work, not a plan-vs-reality divergence or a
+  new design decision; no plan checkbox changes — Resource cleanup and Panic re-raise were already
+  ticked DONE and remain accurately described).
+  - **Resource-cleanup fixture positively proves the complete-and-discard limb (should-fix,
+    FIXED).** `v0_3_m3g_background_fused_group_detach.ynz`'s 5ms-I/O-vs-immediate-exit shape lands
+    almost entirely in the "task gets ABORTED at shutdown" regime — it did not positively prove
+    the "task completes normally, result discarded because nothing ever joins it" regime. Added a
+    complementary fixture, `v0_3_m3g_background_fused_group_detach_completes.ynz`: `entrypoint`
+    waits 50ms (a 10x margin over `fetchSlow`'s 5ms I/O member, matching the established margin
+    idiom in `v0_3_m3g_background_from_sm.ynz`) before returning, so the background-hosted fused
+    group is deterministically FINISHED before the process exits. New test
+    `v03_m3g_background_fused_group_detach_completes_before_exit_no_leak`
+    (`crates/ynz-driver/tests/integration.rs`) asserts: 1 spawn, exit 0, ZERO panic noise (unlike
+    the abort-regime sibling), both the fused group's own print (`1229`) AND `main-done` observed
+    (proving genuine completion, not merely a clean exit), and alloc==free. Kept the original
+    abort-regime fixture/test unchanged (still valid — just no longer the only proof); updated its
+    header comment to cross-reference the new companion and name which regime each covers.
+  - **Test-helper duplication (should-fix, FIXED).** `build_multimodule_and_run` plus 3 Phase-4
+    helpers (`build_multimodule_and_run_watchdog`, `build_multimodule_run_with_alloc_counter`,
+    `build_multimodule_emit_ir`) each re-implemented an identical ~10-line prefix (new tmpdir →
+    `copy_dir_recursive` to an isolated root → `ynz build [extra_args]` → collect the `Output`).
+    Extracted `build_multimodule_to_isolated_tmpdir(project_root, extra_args) -> (TempDir,
+    PathBuf, Output)` (`crates/ynz-driver/tests/integration.rs`); all 4 callers now call it and
+    keep only their own divergent run-step logic (bare `.output()` vs. `run_with_watchdog` vs.
+    alloc-counter env vars vs. `bin.ll` read). The returned `TempDir` is bound (not `let _ =`'d) by
+    every caller so the per-invocation isolation guarantee is preserved byte-for-byte — same
+    flake-avoidance property, confirmed by 2 full `cargo test --workspace --no-fail-fast` runs
+    (see Verification below) plus a standalone 4x repeat of `cargo test -p ynz-driver --test
+    integration` filtered to `m3g_cross_module` (uses `build_multimodule_and_run_watchdog` +
+    `build_multimodule_emit_ir` + `build_multimodule_run_with_alloc_counter` — 3 of the 4 extracted
+    callers) and `m3g_matrix` (the multi-module-heaviest test groups): 40/40 individual test
+    invocations green (4 rounds × (3 cross-module + 7 matrix)), zero flakes across all 4 repeats.
+  - **Minor #5 — hardcoded frame-header-size literal (FIXED).**
+    `crates/ynz-runtime/src/lib.rs`'s `cleanup_on_dual_kind_frame_leaves_io_subframe_region_
+    untouched` test hardcoded `io_subframe_len = 32usize` with a comment naming
+    `FRAME_HEADER_SIZE=32`. Now imports and references `ynz_abi::FRAME_HEADER_SIZE` directly
+    (`FRAME_HEADER_SIZE as usize`) — single-homed, matching Phase 1's whole point for this exact
+    offset. Verified: `cargo test -p ynz-runtime --lib cleanup` still 3/3 green.
+  - **Minor #6 — panic-fixture mirror (optional, judged cheap, DONE).** The existing panic
+    fixture only covered CPU-panics-while-I/O-in-flight. Added the mirror:
+    `v0_3_m3g_panic_io_member_with_cpu_in_flight.ynz` — `fetchFast` divides by zero right after
+    its near-instant `wait sleep(0)` resumes, while `crunchBig` (a real 150-million-iteration CPU
+    member, same timing-bias idiom as `v0_3_m3g_e1_cpu_lags_multi_resume.ynz`) is still genuinely
+    running on the blocking pool. The panic here originates on the DRIVING coroutine itself (not a
+    spawned blocking-pool task's `resume_unwind`), a structurally different origin than the
+    sibling fixture — proving cleanup (no leaked/double-freed CPU handle) holds regardless of
+    WHICH member panics first. New test
+    `v03_m3g_panic_io_member_with_cpu_in_flight_fires_byte_identical` reuses the existing
+    `m3d_assert_panic_fires_n_byte_identical(fixture, "RUNTIME ERROR: division by zero (int)", 1)`
+    helper unmodified (no new helper needed — the generalization already existed).
+  Files touched this session: `crates/ynz-driver/tests/fixtures/
+  v0_3_m3g_background_fused_group_detach_completes.ynz` (new),
+  `crates/ynz-driver/tests/fixtures/v0_3_m3g_background_fused_group_detach.ynz` (header comment
+  cross-reference only, no behavior change),
+  `crates/ynz-driver/tests/fixtures/v0_3_m3g_panic_io_member_with_cpu_in_flight.ynz` (new),
+  `crates/ynz-driver/tests/integration.rs` (`build_multimodule_to_isolated_tmpdir` extraction +
+  its 4 callers refactored; 2 new tests), `crates/ynz-runtime/src/lib.rs`
+  (`FRAME_HEADER_SIZE` import + literal replacement); this audit.md entry.
+  Unchanged: plan.md (no new plan step — Phase 4's Resource-cleanup and Panic-re-raise checkboxes
+  were already DONE and remain accurately described; these are code-quality fixes to already-DONE
+  work, not new deliverables), everything else in the plan.
+  Verification (this session): `cargo build --workspace` clean; `cargo build --workspace --tests`
+  clean (only pre-existing, this-session-untouched-file warnings, matching precedent); `cargo
+  clippy --workspace -- -D warnings` clean (zero warnings — the project's documented gate; a
+  broader `--all-targets` sweep surfaces the SAME pre-existing warnings/errors in files this
+  session did not touch, matching every prior phase's own established distinction); `cargo fmt
+  --all -- --check` clean (no reformatting needed). `cargo test -p ynz-driver --test integration`
+  434/434 green, matching `grep -c '^#\[test\]' integration.rs` (434) exactly — this session added
+  exactly 2 new `#[test]` functions (the completes-before-exit test and the panic-mirror test); no
+  work was committed between FRAGO 007's session and this one (per this dispatch's own "do not
+  commit" instruction), so FRAGO 007's stated "430/430" cannot be reconciled against this session's
+  count via `git diff` — not claimed as reconciled, only that this session's own 434/434 is
+  independently verified against the file's actual test-function count. `cargo test -p ynz-runtime
+  --lib cleanup` 3/3 green. Full `cargo test --workspace --no-fail-fast` run TWICE (112 test-result
+  blocks both times): the SAME 5 pre-existing, unrelated failures across the SAME 4 targets as
+  FRAGO 007's established baseline —
+  `ynz-diagnostics::jargon_audit::no_banned_jargon_in_deferred_feature_user_facing_fields`,
+  `ynz-parser::parse::parser_precedence_table_matches_spec`,
+  `ynz-registry::design_future_sync::every_future_doc_has_a_registry_entry_or_is_skipped`,
+  `ynz-registry::schema_smoke::{deferred_language_feature_lookup,deferred_tooling_feature_lookup}`
+  — ZERO new failures either run. The documented `v03_m3e_alias_local_name_collision_runs_
+  correctly` CI-contention flake did not fire in either run.
+  Override: N/A — no risk residual, no new design decision.

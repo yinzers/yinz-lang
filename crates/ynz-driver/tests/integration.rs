@@ -2309,17 +2309,23 @@ fn v03_m3e_alias_local_name_collision_runs_correctly() {
 
 // ── v0.3-M3e cross-impl consistency: --no-auto-parallel byte-identical ────────
 
-/// Build a multi-module fixture project to a tmpdir binary (default or --no-auto-parallel)
-/// and run it. Multi-module projects have a project root dir and write the binary as
-/// `<root>/bin` (not `<entrypoint>.with_extension("")`), so `build_to_tmpdir_and_run`
-/// (designed for single-file fixtures) does not apply.
-fn build_multimodule_and_run(project_root: &Path, no_auto_parallel: bool) -> (String, String, i32) {
+/// Shared prefix for every multi-module build helper below: copy `project_root` into a fresh,
+/// per-invocation tmpdir, then `ynz build` it there with `extra_args` appended (e.g.
+/// `&["--no-auto-parallel"]`, `&["--emit-ir"]`).
+///
+/// Copying into a unique tmpdir isolates the binary `ynz build` produces at a per-invocation
+/// path. Without isolation, parallel test calls for the same project root would both build to
+/// `<project_root>/bin` and race on that shared path (same class of flake as
+/// `build_to_tmpdir_and_run` — ExecutableFileBusy under parallelism).
+///
+/// Returns `(tmp, isolated_root, build_out)`. The caller MUST keep `tmp` alive (bind it, don't
+/// `let _ =` it) for as long as `isolated_root` is used — dropping the `TempDir` deletes the
+/// directory tree, including the built `<isolated_root>/bin` binary.
+fn build_multimodule_to_isolated_tmpdir(
+    project_root: &Path,
+    extra_args: &[&str],
+) -> (tempfile::TempDir, PathBuf, Output) {
     let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
-
-    // Copy the entire project directory into the unique tmpdir so the binary `ynz build`
-    // produces lands at a per-invocation path. Without isolation, parallel test calls for
-    // the same project root both build to `<project_root>/bin` and race on that shared path
-    // (same class of flake as build_to_tmpdir_and_run — ExecutableFileBusy under parallelism).
     let proj_name = project_root
         .file_name()
         .expect("project_root must have a directory name");
@@ -2331,10 +2337,25 @@ fn build_multimodule_and_run(project_root: &Path, no_auto_parallel: bool) -> (St
         .arg("build")
         .arg(&isolated_root)
         .env("CLICOLOR", "0");
-    if no_auto_parallel {
-        build_cmd.arg("--no-auto-parallel");
+    for arg in extra_args {
+        build_cmd.arg(arg);
     }
     let build_out = build_cmd.output().expect("failed to spawn ynz build");
+    (tmp, isolated_root, build_out)
+}
+
+/// Build a multi-module fixture project to a tmpdir binary (default or --no-auto-parallel)
+/// and run it. Multi-module projects have a project root dir and write the binary as
+/// `<root>/bin` (not `<entrypoint>.with_extension("")`), so `build_to_tmpdir_and_run`
+/// (designed for single-file fixtures) does not apply.
+fn build_multimodule_and_run(project_root: &Path, no_auto_parallel: bool) -> (String, String, i32) {
+    let extra_args: &[&str] = if no_auto_parallel {
+        &["--no-auto-parallel"]
+    } else {
+        &[]
+    };
+    let (_tmp, isolated_root, build_out) =
+        build_multimodule_to_isolated_tmpdir(project_root, extra_args);
     if !build_out.status.success() {
         let stderr = String::from_utf8_lossy(&build_out.stderr).into_owned();
         return (String::new(), format!("build failed: {stderr}"), 1);
@@ -2349,6 +2370,105 @@ fn build_multimodule_and_run(project_root: &Path, no_auto_parallel: bool) -> (St
     let stderr = String::from_utf8_lossy(&run_out.stderr).into_owned();
     let code = run_out.status.code().unwrap_or(-1);
     (stdout, stderr, code)
+}
+
+/// Like [`build_multimodule_and_run`], but routes the compiled-binary RUN step through
+/// [`run_with_watchdog`] instead of a bare blocking `.output()`. v0.3-M3g Phase 4: the first
+/// time a genuinely-fused (mixed CPU+I/O) group runs through the multi-module build path — a
+/// deadlock here (E1) must fail fast, exactly like every single-file fused fixture already does
+/// via `build_to_tmpdir_and_run`.
+fn build_multimodule_and_run_watchdog(
+    project_root: &Path,
+    no_auto_parallel: bool,
+) -> (String, String, i32) {
+    let extra_args: &[&str] = if no_auto_parallel {
+        &["--no-auto-parallel"]
+    } else {
+        &[]
+    };
+    let (_tmp, isolated_root, build_out) =
+        build_multimodule_to_isolated_tmpdir(project_root, extra_args);
+    if !build_out.status.success() {
+        let stderr = String::from_utf8_lossy(&build_out.stderr).into_owned();
+        return (String::new(), format!("build failed: {stderr}"), 1);
+    }
+    let run_binary = isolated_root.join("bin");
+    let mut run_cmd = Command::new(&run_binary);
+    run_cmd.env("CLICOLOR", "0");
+    let run_out = run_with_watchdog(run_cmd);
+    let stdout = String::from_utf8_lossy(&run_out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&run_out.stderr).into_owned();
+    let code = run_out.status.code().unwrap_or(-1);
+    (stdout, stderr, code)
+}
+
+/// Build a multi-module fixture project (default mode) and run the compiled binary directly
+/// (bypassing `ynz run`, which is single-file-only) with `YNZ_ALLOC_COUNTER` set, returning
+/// (alloc, free) — the multi-module twin of `ynz_run_with_alloc_counter`. `YNZ_ALLOC_COUNTER`/
+/// `YNZ_ALLOC_COUNTER_OUTPUT` are read by the RUNTIME at process start (`ynz_rt_init`), not by
+/// the `ynz` driver, so setting them directly on the compiled binary's own `Command` works
+/// identically to routing through `ynz run`.
+fn build_multimodule_run_with_alloc_counter(project_root: &Path) -> (u64, u64) {
+    let (_tmp, isolated_root, build_out) = build_multimodule_to_isolated_tmpdir(project_root, &[]);
+    assert!(
+        build_out.status.success(),
+        "build must succeed for {}; stderr:\n{}",
+        project_root.display(),
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+
+    let proj_name = project_root
+        .file_name()
+        .expect("project_root must have a directory name");
+    let count_file = std::env::temp_dir().join(format!(
+        "ynz_audit_alloc_multimodule_{}_{}.txt",
+        proj_name.to_string_lossy(),
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&count_file);
+    let mut run_cmd = Command::new(isolated_root.join("bin"));
+    run_cmd
+        .env("CLICOLOR", "0")
+        .env("YNZ_ALLOC_COUNTER", "1")
+        .env(
+            "YNZ_ALLOC_COUNTER_OUTPUT",
+            count_file.to_str().expect("valid path"),
+        );
+    let _ = run_with_watchdog(run_cmd);
+    let content =
+        std::fs::read_to_string(&count_file).unwrap_or_else(|_| "alloc=0\nfree=0\n".to_string());
+    let _ = std::fs::remove_file(&count_file);
+    let parse_count = |prefix: &str| -> u64 {
+        content
+            .lines()
+            .find(|l| l.starts_with(prefix))
+            .and_then(|l| l.split('=').nth(1))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0)
+    };
+    (parse_count("alloc"), parse_count("free"))
+}
+
+/// Build a multi-module fixture project with `--emit-ir` and return the concatenated LLVM IR
+/// (every compiled file's IR, per `BuildResult::ir_text`'s multi-file contract — v0.3-M3g Phase
+/// 4 extended `build_project` to populate this for project-mode builds; it was `None`
+/// unconditionally before). Panics on build failure — callers only use this after confirming the
+/// build succeeds via `build_multimodule_and_run`/`_watchdog`.
+fn build_multimodule_emit_ir(project_root: &Path, no_auto_parallel: bool) -> String {
+    let mut extra_args: Vec<&str> = vec!["--emit-ir"];
+    if no_auto_parallel {
+        extra_args.push("--no-auto-parallel");
+    }
+    let (_tmp, isolated_root, build_out) =
+        build_multimodule_to_isolated_tmpdir(project_root, &extra_args);
+    assert!(
+        build_out.status.success(),
+        "build --emit-ir must succeed for {}; stderr:\n{}",
+        project_root.display(),
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+    std::fs::read_to_string(isolated_root.join("bin.ll"))
+        .unwrap_or_else(|e| panic!("failed to read bin.ll for {}: {e}", project_root.display()))
 }
 
 /// Recursively copy a directory tree to `dst`.
@@ -5389,13 +5509,25 @@ fn strip_runtime_error_path(stderr: &str) -> String {
 /// Time: O(n)  Space: O(n)  where n = fixture source size; one IR build + IR scan plus two
 /// compile-and-run passes (parallel + sequential) dominate — the cost is two full compilations.
 fn m3d_assert_panic_fires_byte_identical(fixture_name: &str, expected_error_prefix: &str) {
+    m3d_assert_panic_fires_n_byte_identical(fixture_name, expected_error_prefix, 2);
+}
+
+/// `m3d_assert_panic_fires_byte_identical` parametrized on the expected CPU-class spawn count —
+/// v0.3-M3g Phase 4's fused-group panic fixtures have exactly 1 CPU-class member (the
+/// Suspending member never spawns), not the pure-CPU M3d fixtures' fixed 2.
+fn m3d_assert_panic_fires_n_byte_identical(
+    fixture_name: &str,
+    expected_error_prefix: &str,
+    expected_spawns: usize,
+) {
     let src = fixture(fixture_name);
 
     let ir = build_to_tmpdir_emit_ir(&src);
     assert_eq!(
         count_spawn_calls(&ir),
-        2,
-        "a panicking CPU group must still FIRE 2 spawns (0 = silently sequential); IR:\n{ir}"
+        expected_spawns,
+        "a panicking group must still FIRE {expected_spawns} spawns (0 = silently sequential); \
+         IR:\n{ir}"
     );
 
     let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
@@ -5437,6 +5569,47 @@ fn v03_m3d_cpu_child_panic_fires_byte_identical() {
     m3d_assert_panic_fires_byte_identical(
         "v0_3_m3d_cpu_child_panic.ynz",
         "RUNTIME ERROR: division by zero (int)",
+    );
+}
+
+#[test]
+fn v03_m3g_panic_cpu_member_with_io_in_flight_fires_byte_identical() {
+    // WHY (Panic re-raise, v0.3-M3g Phase 4): a CPU member (`crunch(0)`) panics via a runtime
+    // error while a SEPARATE I/O member (`fetchSlow`, 50ms sleep) is still genuinely in flight in
+    // the SAME fused group — proves the panic re-raise path (established for pure-CPU M3d groups
+    // above) survives fusion: the shared poll's CPU-member poll observes the panic and re-raises
+    // via `resume_unwind` (per IMP-concurrency.md "Panic Re-Raise" — first-panic-wins) without
+    // ever needing the I/O sub-frame to resolve first. Both modes stop with the SAME diagnostic
+    // and the SAME non-zero exit; running the I/O member alongside the panicking CPU member must
+    // never hide or change the error. 1 spawn (the CPU member only; the Suspending member never
+    // spawns) — if this regresses to 0, the fused pair silently declined to sequential instead of
+    // proving the re-raise path under genuine concurrency.
+    m3d_assert_panic_fires_n_byte_identical(
+        "v0_3_m3g_panic_cpu_member_with_io_in_flight.ynz",
+        "RUNTIME ERROR: division by zero (int)",
+        1,
+    );
+}
+
+#[test]
+fn v03_m3g_panic_io_member_with_cpu_in_flight_fires_byte_identical() {
+    // WHY (Panic re-raise, v0.3-M3g Phase 4 — the mirror): the sibling test above panics on the
+    // CPU member while the I/O member is still pending. This fixture panics on the I/O member
+    // (`fetchFast`, division by zero right after `wait sleep(0)` resumes — essentially instant)
+    // while the CPU member (`crunchBig`, a real 150-million-iteration loop) is still genuinely
+    // running on the blocking pool, nowhere near finished. The panic here originates on the
+    // DRIVING coroutine itself (not a spawned blocking-pool task) — a structurally different
+    // panic origin than the sibling test's `resume_unwind`-on-join-poll path — so this proves
+    // resource cleanup (freeing the still-pending CPU handle without a leak or a double-free)
+    // holds regardless of WHICH member panics first, not merely the CPU-panics-first direction.
+    // Both modes stop with the SAME diagnostic and the SAME non-zero exit. 1 spawn (the CPU
+    // member only; the Suspending member never spawns) — if this regresses to 0, the fused pair
+    // silently declined to sequential instead of proving the re-raise path under genuine
+    // concurrency.
+    m3d_assert_panic_fires_n_byte_identical(
+        "v0_3_m3g_panic_io_member_with_cpu_in_flight.ynz",
+        "RUNTIME ERROR: division by zero (int)",
+        1,
     );
 }
 
@@ -6783,6 +6956,364 @@ fn v03_m3g_overlap_proof_cpu_and_io_members_genuinely_run_concurrently() {
     assert_eq!(
         alloc, free,
         "alloc must equal free on the fused group's task frame; alloc={alloc}, free={free}"
+    );
+}
+
+// ── v0.3-M3g Phase 4: N+M generality matrix ──────────────────────────────────
+//
+// WHY (group): Phase 3 proved the fused mechanism FIRES on exactly one shape (1 CPU + 1
+// Suspending, the milestone's non-negotiable acceptance signal). Phase 4 proves it is general —
+// N CPU members + M Suspending members in one group, same-callee CPU ×2 alongside I/O, both
+// declaration orders, and an `errors`-capable I/O member — with no member-count hardcode
+// anywhere in the fused path (grep-gate: `grep -n "== 2\b\|!= 2\b" crates/ynz-codegen/src/emit.rs
+// crates/ynz-typeck/src/cpu_admission.rs`, outside `#[cfg(test)]`, returns zero hits — the fused
+// emission loops over `cpu_members`/`io_members` unconditionally, and `admitted_fused_group`
+// admits a maximal adjacent run of any length). A8 (the N=2 codegen guard) was ALREADY GENERAL —
+// no guard ever existed in the fused path to lift; `build_cpu_group_slots`/
+// `emit_fused_group_spawn_poll` were built N-general from Phase 3 (FRAGO 005) onward. Every test
+// below asserts the EXACT expected spawn count (CPU-class member count only — Suspending members
+// never spawn) + byte-identical output across modes + alloc==free.
+
+#[test]
+fn v03_m3g_matrix_2cpu_1io_fires_byte_identical() {
+    // WHY: 2 CPU members (different callees) + 1 I/O member — proves N=2 CPU is not a ceiling.
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_2cpu_1io.ynz", "1667", 2);
+}
+
+#[test]
+fn v03_m3g_matrix_1cpu_2io_fires_byte_identical() {
+    // WHY: 1 CPU member + 2 I/O members (distinct callees, each own embedded sub-frame) —
+    // proves M=2 Suspending members compose in one fused group. 1 spawn (I/O members never
+    // spawn — they inline-poll via their embedded child sub-frames).
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_1cpu_2io.ynz", "1261", 1);
+}
+
+#[test]
+fn v03_m3g_matrix_3cpu_2io_fires_byte_identical() {
+    // WHY: 3 CPU + 2 I/O, the widest cell in this milestone's matrix — 5 total members sharing
+    // ONE continuation. 3 spawns (CPU-class count only).
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_3cpu_2io.ynz", "2165", 3);
+}
+
+#[test]
+fn v03_m3g_matrix_same_callee_cpu_x2_with_io_fires_byte_identical() {
+    // WHY: same-callee CPU members ×2 (M3d's Same-Callee Amendment) alongside one I/O member —
+    // the fused-group admission gate must carry the amendment through unchanged. 2 spawns (the
+    // two `crunch` invocations, each with a per-invocation ctx).
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3g_matrix_same_callee_cpu_x2_with_io.ynz",
+        "2457",
+        2,
+    );
+}
+
+#[test]
+fn v03_m3g_matrix_io_first_order_fires_byte_identical() {
+    // WHY: I/O member declared FIRST, CPU member SECOND — declaration order must not affect
+    // admission or correctness. Twin of the CPU-first fixture below (same callees, same total).
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_io_first_order.ynz", "1229", 1);
+}
+
+#[test]
+fn v03_m3g_matrix_cpu_first_order_fires_byte_identical() {
+    // WHY: CPU member declared FIRST, I/O member SECOND — the order twin of the fixture above.
+    // Both fixtures sum to the identical total (1229), proving declaration order is immaterial.
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_cpu_first_order.ynz", "1229", 1);
+}
+
+#[test]
+fn v03_m3g_matrix_errors_capable_io_fires_byte_identical() {
+    // WHY: an `errors`-capable I/O member (`-> int errors`) mixed with a CPU member. The
+    // fused-group I/O-member binding must register the bound name in `errors_capable_locals`
+    // (mirrors M3b's `v0_3_m3b_p4_parallel_errors_return.ynz`) so `.or(...)` unwraps correctly
+    // instead of dereferencing a mis-typed slot (a segfault, not a silent wrong answer, if broken).
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3g_matrix_errors_capable_io.ynz",
+        "1229",
+        1,
+    );
+}
+
+// ── v0.3-M3g Phase 4: cross-module fused group (the named gap) ───────────────
+//
+// WHY (group): the plan's Terrain section flags this explicitly: "Cross-module frame
+// reconstruction goes through the M3e `frame_layouts_query` — a mixed group crossing a module
+// boundary touches this path and no fixture exercises it today." A frame sized by one query
+// boundary (codegen_query's local admission) and laid out by the other
+// (frame_layouts_query's cross-module resolver) is exactly the silent-corruption class the
+// byte-identity oracle exists to catch — every cell here is a FIRST-CLASS byte-identity target,
+// not a smoke test: default-mode output correctness, default==--no-auto-parallel byte-identity,
+// AND the exact expected CPU-class spawn count via the (Phase-4-added) multi-file IR extraction.
+
+#[test]
+fn v03_m3g_cross_module_direct_fires_byte_identical() {
+    // WHY: `entrypoint` fuses a local CPU member (`crunch`) with an I/O member imported DIRECTLY
+    // from `io_lib` (one module hop). `entrypoint`'s frame reserves the CPU handle/result region
+    // locally AND embeds the imported `fetchRemote`'s child sub-frame at the resolver-computed
+    // offset — the two computations (local CPU reserve, cross-module child sizing) must agree.
+    let project_root = fixture("v0_3_m3g_cross_module_direct");
+    let (par_stdout, par_stderr, par_code) =
+        build_multimodule_and_run_watchdog(&project_root, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "1229",
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) =
+        build_multimodule_and_run_watchdog(&project_root, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+    let default_ir = build_multimodule_emit_ir(&project_root, false);
+    assert_eq!(
+        count_spawn_calls(&default_ir),
+        1,
+        "the cross-module fused group must FIRE with 1 spawn (the local CPU member; the \
+         imported I/O member never spawns — it inline-polls); IR:\n{default_ir}"
+    );
+    let seq_ir = build_multimodule_emit_ir(&project_root, true);
+    assert_eq!(
+        count_spawn_calls(&seq_ir),
+        0,
+        "--no-auto-parallel lowering must be plain sequential (0 spawns) — the SAME sequential \
+         lowering `--no-auto-parallel` always produces, unaffected by fusion; IR:\n{seq_ir}"
+    );
+    let (alloc, free) = build_multimodule_run_with_alloc_counter(&project_root);
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free on the cross-module fused group's frame; alloc={alloc}, free={free}"
+    );
+}
+
+#[test]
+fn v03_m3g_cross_module_reexport_chain_fires_byte_identical() {
+    // WHY: the deepest boundary-matrix cell — `entrypoint` fuses local `crunch` with `doWork`
+    // (imported from `b_ops`), and `doWork` ITSELF wraps `a_ops.getValue` (a genuine two-hop
+    // re-export chain, M3e's `reexport_chain_b_total_size_includes_a_sub_frame` style).
+    // `doWork`'s own total_size is resolver-composed one hop further; this is the deepest
+    // exercise of `frame_layouts_query`'s recursive cross-module composition inside a dual-kind
+    // (fused) parent frame.
+    let project_root = fixture("v0_3_m3g_cross_module_reexport_chain");
+    let (par_stdout, par_stderr, par_code) =
+        build_multimodule_and_run_watchdog(&project_root, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "1235",
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) =
+        build_multimodule_and_run_watchdog(&project_root, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+    let default_ir = build_multimodule_emit_ir(&project_root, false);
+    assert_eq!(
+        count_spawn_calls(&default_ir),
+        1,
+        "the re-export-chain fused group must FIRE with 1 spawn (the local CPU member); \
+         IR:\n{default_ir}"
+    );
+    let seq_ir = build_multimodule_emit_ir(&project_root, true);
+    assert_eq!(
+        count_spawn_calls(&seq_ir),
+        0,
+        "--no-auto-parallel lowering must be plain sequential (0 spawns); IR:\n{seq_ir}"
+    );
+    let (alloc, free) = build_multimodule_run_with_alloc_counter(&project_root);
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free on the cross-module fused group's frame; alloc={alloc}, free={free}"
+    );
+}
+
+#[test]
+fn v03_m3g_cross_module_errors_capable_fires_byte_identical() {
+    // WHY: intersects the two first-class targets in one frame — an imported I/O member that is
+    // ALSO `errors`-capable (`-> int errors`). The fused-group binding must register the bound
+    // name in `errors_capable_locals` (the local-only matrix cell,
+    // v03_m3g_matrix_errors_capable_io_fires_byte_identical, proved the binding mechanism; this
+    // cell proves it survives cross-module child-frame resolution too).
+    let project_root = fixture("v0_3_m3g_cross_module_errors_capable");
+    let (par_stdout, par_stderr, par_code) =
+        build_multimodule_and_run_watchdog(&project_root, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "1229",
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) =
+        build_multimodule_and_run_watchdog(&project_root, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+    let default_ir = build_multimodule_emit_ir(&project_root, false);
+    assert_eq!(
+        count_spawn_calls(&default_ir),
+        1,
+        "the errors-capable cross-module fused group must FIRE with 1 spawn; IR:\n{default_ir}"
+    );
+    let seq_ir = build_multimodule_emit_ir(&project_root, true);
+    assert_eq!(
+        count_spawn_calls(&seq_ir),
+        0,
+        "--no-auto-parallel lowering must be plain sequential (0 spawns); IR:\n{seq_ir}"
+    );
+    let (alloc, free) = build_multimodule_run_with_alloc_counter(&project_root);
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free on the cross-module fused group's frame; alloc={alloc}, free={free}"
+    );
+}
+
+// ── v0.3-M3g Phase 4: resource cleanup + background/mixed-group interaction sweep ────────────
+//
+// WHY (group): "early-return-before-join" (detach semantics) for a FUSED group has no stable,
+// deterministic Yinz-source expression — a fused group's own poll loop never yields control back
+// to a caller mid-join (it either resolves all_done_bb or yields Pending to the SCHEDULER, never
+// to a sibling statement), so the only way a fused group's spawned CPU task and embedded I/O
+// sub-frame can be abandoned before completing is via `background` + the driving process exiting
+// while the task is still mid-poll — exactly the SAME pre-existing, timing-dependent shape the
+// project's OWN precedent (`.claude/todos.md` "background + CPU-group shutdown abort race") says
+// cannot be pinned as a single deterministic fixture (the panic is benign, ~5/20 runs, confirmed
+// pre-existing at M3d's own baseline). This test empirically drives that scenario many times for
+// a FUSED (not pure-CPU) group and asserts what CAN be asserted deterministically: main always
+// exits 0, alloc==free on every run (proving no NEW leak from the dual-kind frame's extra
+// I/O-sub-frame region), and any observed panic noise is the SAME pre-existing benign message —
+// never a hang (routed through the watchdog) and never a new crash class.
+
+#[test]
+fn v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged() {
+    let src = fixture("v0_3_m3g_background_fused_group_detach.ynz");
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        1,
+        "the background-hosted fused group must FIRE (1 CPU spawn); IR:\n{ir}"
+    );
+
+    const RUNS: usize = 20;
+    let mut panic_count = 0usize;
+    for run_idx in 0..RUNS {
+        let (stdout, stderr, code) = build_to_tmpdir_and_run(&src, false);
+        assert_eq!(
+            code, 0,
+            "run {run_idx}: main must always exit 0 regardless of background-task timing; \
+             stderr:\n{stderr}"
+        );
+        assert_eq!(
+            stdout.trim(),
+            "main-done",
+            "run {run_idx}: main thread's own output must be unaffected by the detached \
+             background task's timing; stdout:\n{stdout}"
+        );
+        if stderr.contains("panicked") {
+            panic_count += 1;
+            assert!(
+                stderr.contains("CPU child task was aborted before it could produce a result"),
+                "run {run_idx}: any observed panic noise must be the SAME pre-existing, \
+                 documented, benign shutdown-race message (.claude/todos.md) — a DIFFERENT \
+                 panic/crash message here means fusion introduced a new failure mode; \
+                 stderr:\n{stderr}"
+            );
+        }
+
+        let (alloc, free) =
+            ynz_run_with_alloc_counter("v0_3_m3g_background_fused_group_detach.ynz");
+        assert_eq!(
+            alloc, free,
+            "run {run_idx}: alloc must equal free on every run regardless of whether the \
+             background task's shutdown-race panic fired — no leak from the dual-kind frame's \
+             extra I/O-sub-frame region beyond what the pre-existing pure-CPU case already \
+             tolerates; alloc={alloc}, free={free}"
+        );
+    }
+    // Rate sanity check (not a strict assertion — CI-contention-sensitive per A7's own caveat):
+    // the pre-existing pure-CPU baseline is characterized as ~5/20 in .claude/todos.md. This is
+    // NOT asserted as an exact match (timing-dependent counts don't reproduce exactly run-to-run
+    // or box-to-box) — the meaningful invariant already enforced above is that every panic, when
+    // it occurs, is the SAME benign pre-existing message, never a new one; the rate is recorded
+    // here for the audit trail rather than gated.
+    eprintln!(
+        "v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged: \
+         {panic_count}/{RUNS} runs observed the pre-existing benign shutdown-race panic"
+    );
+}
+
+#[test]
+fn v03_m3g_background_fused_group_detach_completes_before_exit_no_leak() {
+    // WHY: the sibling test above (`..._no_leak_and_rate_unchanged`) lands almost entirely in the
+    // "task gets ABORTED at shutdown" regime — its 5ms I/O member races an immediate main-thread
+    // exit. It does NOT positively prove the complementary "task completes normally, result
+    // discarded because nothing ever joins it" regime. This fixture's `entrypoint` waits 50ms
+    // (10x the fused group's 5ms I/O member) before returning, so the background-hosted fused
+    // group is deterministically FINISHED before the process exits — proving cleanup after a
+    // COMPLETED-and-discarded fused group works identically to the aborted-and-discarded case.
+    let src = fixture("v0_3_m3g_background_fused_group_detach_completes.ynz");
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        1,
+        "the background-hosted fused group must FIRE (1 CPU spawn); IR:\n{ir}"
+    );
+
+    let (stdout, stderr, code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        code, 0,
+        "main must exit 0 once the background-hosted fused group has provably completed; \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "the background group is given a generous head start (50ms main wait vs. 5ms I/O \
+         member) — it must complete cleanly with ZERO shutdown-race panic noise, unlike the \
+         abort-regime sibling fixture; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("1229"),
+        "the fused group's own print (a + b == 1229) must be observed — proving the background \
+         task actually ran to completion, not merely that main exited cleanly; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("main-done"),
+        "main thread's own output must still land after its 50ms wait; stdout:\n{stdout}"
+    );
+
+    let (alloc, free) =
+        ynz_run_with_alloc_counter("v0_3_m3g_background_fused_group_detach_completes.ynz");
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free once the background-hosted fused group has completed and its \
+         (unjoined) result is discarded — no leak from the dual-kind frame's extra I/O-sub-frame \
+         region in the complete-and-discard regime; alloc={alloc}, free={free}"
     );
 }
 

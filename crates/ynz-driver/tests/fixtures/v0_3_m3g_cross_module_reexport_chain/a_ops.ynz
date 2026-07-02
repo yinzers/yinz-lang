@@ -1,0 +1,9 @@
+// v0.3-M3g cross-module fused group, re-export-chain variant — leaf module. `getValue` suspends;
+// `b_ops.doWork` wraps it (a two-hop chain: entrypoint -> b_ops.doWork -> a_ops.getValue).
+// `frame_layouts_query(b_ops)` recursively queries `frame_layouts_query(a_ops)` (the M3e
+// mechanism, unmodified) so `doWork`'s total_size correctly includes `getValue`'s sub-frame.
+
+export function getValue() -> int {
+  wait sleep(0)
+  return 7
+}

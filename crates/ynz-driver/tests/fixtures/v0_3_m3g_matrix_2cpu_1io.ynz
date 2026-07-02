@@ -1,0 +1,47 @@
+// v0.3-M3g N+M matrix — 2 CPU members + 1 I/O member in one fused group. `admitted_fused_group`
+// admits a MAXIMAL adjacent run mixing any number of CPU-eligible and Suspending-eligible
+// members (no member-count cap, per the plan's own Design-Doc-Alignment SCOPE ruling — Model A
+// has no count cap). This fixture proves N=2 CPU is not a hardcoded ceiling: crunchA and crunchB
+// are two DIFFERENT CPU callees, each independently spawned onto the blocking pool, alongside
+// one I/O member.
+//
+// crunchA(n) loops 0..50 (sum 1225), crunchB(n) loops 0..30 (sum 435); fetchX(n) waits on a
+// timer. All three are independent (no data dependency between them).
+//
+// Arithmetic: crunchA(1) = 1225+1=1226; crunchB(2) = 435+2=437; fetchX(3) = 3+1=4.
+//   sum = 1226 + 437 + 4 = 1667.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   1667
+
+function crunchA(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function crunchB(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 30) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function fetchX(n: int) -> int {
+  wait sleep(0)
+  return n + 1
+}
+
+function entrypoint() -> nothing {
+  let a = crunchA(1)
+  let b = crunchB(2)
+  let c = fetchX(3)
+  print(a + b + c)
+}

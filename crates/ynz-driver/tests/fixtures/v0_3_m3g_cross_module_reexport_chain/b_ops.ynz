@@ -1,0 +1,12 @@
+// v0.3-M3g cross-module fused group, re-export-chain variant — middle module. `doWork` is what
+// `entrypoint` actually calls as its fused-group I/O member; internally it wraps `a_ops.getValue`
+// — a genuine re-export CHAIN (entrypoint -> b_ops -> a_ops), not a single hop. `doWork` takes
+// exactly one scalar arg (the fused-group single-scalar-arg restriction) and auto-suspends
+// because it calls a suspending function, without needing its own `wait` keyword.
+
+import { getValue } from `a_ops`
+
+export function doWork(n: int) -> int {
+  let v = getValue()
+  return v + n
+}

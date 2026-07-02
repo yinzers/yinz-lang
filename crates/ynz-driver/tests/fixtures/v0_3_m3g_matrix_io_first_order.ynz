@@ -1,0 +1,36 @@
+// v0.3-M3g N+M matrix — order permutation: I/O member declared FIRST, CPU member SECOND.
+// `admitted_fused_group` classifies each top-level statement independently (Cpu / Suspending /
+// ineligible) and admits a maximal adjacent run regardless of which class comes first — this
+// fixture and its CPU-first twin (v0_3_m3g_matrix_cpu_first_order.ynz) use the SAME two callees
+// with the argument roles swapped, so both fixtures sum to the identical total: proof that
+// declaration order changes nothing about correctness, only which class the emitter sees first
+// in `members`.
+//
+// crunch(n) loops 0..50 (sum 1225); fetch(n) waits on a timer.
+//
+// Arithmetic: fetch(1) = 1+1=2; crunch(2) = 1225+2=1227.
+//   sum = 2 + 1227 = 1229.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   1229
+
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function fetch(n: int) -> int {
+  wait sleep(0)
+  return n + 1
+}
+
+function entrypoint() -> nothing {
+  let a = fetch(1)
+  let b = crunch(2)
+  print(a + b)
+}

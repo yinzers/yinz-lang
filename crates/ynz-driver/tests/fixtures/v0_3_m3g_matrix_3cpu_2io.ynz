@@ -1,0 +1,62 @@
+// v0.3-M3g N+M matrix — 3 CPU members + 2 I/O members, the widest cell in this milestone's
+// matrix. Proves the fused group generalizes past any small-N assumption: 5 total members, 3
+// distinct CPU callees spawned onto the blocking pool, 2 distinct I/O callees inline-polled via
+// their embedded child sub-frames, all sharing ONE continuation.
+//
+// crunchA(n) loops 0..50 (sum 1225); crunchB(n) loops 0..30 (sum 435); crunchC(n) loops 0..20
+// (sum 190); fetchA(n) and fetchB(n) each wait on a timer.
+//
+// Arithmetic: crunchA(1)=1226; crunchB(2)=437; crunchC(3)=193; fetchA(4)=104; fetchB(5)=205.
+//   sum = 1226 + 437 + 193 + 104 + 205 = 2165.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   2165
+
+function crunchA(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function crunchB(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 30) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function crunchC(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 20) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function fetchA(n: int) -> int {
+  wait sleep(0)
+  return n + 100
+}
+
+function fetchB(n: int) -> int {
+  wait sleep(0)
+  return n + 200
+}
+
+function entrypoint() -> nothing {
+  let a = crunchA(1)
+  let b = crunchB(2)
+  let c = crunchC(3)
+  let d = fetchA(4)
+  let e = fetchB(5)
+  print(a + b + c + d + e)
+}

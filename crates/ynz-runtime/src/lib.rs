@@ -2800,8 +2800,8 @@ mod m3d_join_shims {
     // same discriminator + handle slots codegen emits, so they import the shared constants
     // rather than hardcoding 0x5350 / frame offsets at each spawn site.
     use ynz_abi::{
-        SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET,
-        SPIKE_HANDLE_SLOT_BYTES,
+        FRAME_HEADER_SIZE, SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG,
+        SPIKE_HANDLE_BASE_OFFSET, SPIKE_HANDLE_SLOT_BYTES,
     };
 
     // A trivially-copyable int result: [42, 0]
@@ -3699,10 +3699,11 @@ mod m3d_join_shims {
 
     /// Verify the cleanup is correct-by-construction for N>2: a discriminator count of 3
     /// drives the scan over three contiguous handle slots (offsets 32/40/48), freeing the
-    /// live ones and skipping a null. Codegen currently emits only two-member groups, so a
-    /// live N>2 group is not yet reachable end-to-end; the runtime free-path is nonetheless
-    /// count-driven and layout-agnostic. This pins that the free-path handles any member
-    /// count, so widening the codegen group size needs no runtime change.
+    /// live ones and skipping a null. A live N>2 group IS now reachable end-to-end since
+    /// v0.3-M3g Phase 4's N+M matrix (e.g. `v0_3_m3g_matrix_3cpu_2io.ynz` hosts 3 CPU-class
+    /// fused-group members) — this test predates that fixture and stays as the fast, isolated,
+    /// runtime-crate-level pin of the SAME count-driven mechanism, independent of any specific
+    /// codegen-emitted frame shape.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cleanup_is_layout_driven_for_n_greater_than_two() {
         use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
@@ -3743,6 +3744,84 @@ mod m3d_join_shims {
             drop2.load(Ordering::SeqCst),
             1,
             "slot 2 handle freed once — third slot reached by the count-driven scan"
+        );
+    }
+
+    /// v0.3-M3g Phase 4 (Resource cleanup): a FUSED (dual-kind) frame's discriminator count is
+    /// the CPU-class member count ONLY (`emit_fused_group_spawn_poll`'s doc comment — I/O
+    /// sub-frames carry no separate handle and free with the parent frame, unmodified M3b
+    /// behavior). This test proves the count-driven scan is correctly bounded: with 2 live CPU
+    /// handles and an ADJACENT byte region standing in for an embedded I/O child sub-frame
+    /// (populated with a non-null, non-handle sentinel pattern immediately after the handle
+    /// region), `cleanup_spike_cpu_handles` frees exactly the 2 handle slots and leaves the
+    /// "child sub-frame" bytes byte-for-byte untouched — proving the scan cannot mistake
+    /// adjacent embedded-child bytes for a third handle slot, which would be a double-free /
+    /// wild-pointer-drop the instant those bytes happened to look like a live pointer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cleanup_on_dual_kind_frame_leaves_io_subframe_region_untouched() {
+        use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let drop0 = Arc::new(AtomicUsize::new(0));
+        let drop1 = Arc::new(AtomicUsize::new(0));
+        let plant = |probe: &Arc<AtomicUsize>| -> *mut u8 {
+            let jh = tokio::task::spawn_blocking(|| -> YnzCpuResult { YnzCpuResult([9, 0]) });
+            let mut h = CpuJoinHandle::new(jh);
+            h.set_drop_probe(Arc::clone(probe));
+            Box::into_raw(Box::new(h)) as *mut u8
+        };
+        let handle0 = plant(&drop0);
+        let handle1 = plant(&drop1);
+
+        // 2 CPU handle slots (32..48), then an "embedded I/O child sub-frame" region (48..80)
+        // sized like a real M3b child (FRAME_HEADER_SIZE bytes — single-homed in `ynz_abi`, never
+        // hardcoded here) — filled with a sentinel byte pattern that is emphatically non-null
+        // when read as a pointer (0xAB repeating), so an out-of-bounds scan would try to drop a
+        // wild `*mut CpuJoinHandle` and crash/corrupt rather than silently succeed.
+        let slot0 = SPIKE_HANDLE_BASE_OFFSET;
+        let slot1 = SPIKE_HANDLE_BASE_OFFSET + SPIKE_HANDLE_SLOT_BYTES;
+        let io_subframe_start = SPIKE_HANDLE_BASE_OFFSET + 2 * SPIKE_HANDLE_SLOT_BYTES;
+        let io_subframe_len = FRAME_HEADER_SIZE as usize;
+        let total_len = io_subframe_start + io_subframe_len;
+        let frame_ptr = unsafe { ynz_alloc_zeroed(total_len) };
+        assert!(!frame_ptr.is_null(), "frame alloc must succeed");
+        unsafe {
+            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 2);
+            (frame_ptr.add(slot0) as *mut *mut u8).write(handle0);
+            (frame_ptr.add(slot1) as *mut *mut u8).write(handle1);
+            std::ptr::write_bytes(frame_ptr.add(io_subframe_start), 0xAB, io_subframe_len);
+
+            cleanup_spike_cpu_handles(frame_ptr);
+
+            assert!(
+                (*(frame_ptr.add(slot0) as *const *mut u8)).is_null(),
+                "CPU handle slot 0 must be freed and nulled"
+            );
+            assert!(
+                (*(frame_ptr.add(slot1) as *const *mut u8)).is_null(),
+                "CPU handle slot 1 must be freed and nulled"
+            );
+            let io_bytes =
+                std::slice::from_raw_parts(frame_ptr.add(io_subframe_start), io_subframe_len);
+            assert!(
+                io_bytes.iter().all(|&b| b == 0xAB),
+                "the embedded I/O child sub-frame region must be byte-for-byte untouched by the \
+                 count-driven CPU-handle scan (count=2 must not read past the 2nd slot)"
+            );
+            ynz_free(frame_ptr, total_len);
+        }
+
+        assert_eq!(
+            drop0.load(Ordering::SeqCst),
+            1,
+            "handle 0 freed exactly once"
+        );
+        assert_eq!(
+            drop1.load(Ordering::SeqCst),
+            1,
+            "handle 1 freed exactly once"
         );
     }
 

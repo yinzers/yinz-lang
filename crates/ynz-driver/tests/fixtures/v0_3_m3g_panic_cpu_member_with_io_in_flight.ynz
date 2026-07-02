@@ -1,0 +1,39 @@
+// v0.3-M3g Phase 4 (Panic re-raise). `crunch(0)` divides by zero inside a fused group's CPU
+// member while `fetchSlow` (the I/O member, embedded child sub-frame) is still in flight — the
+// I/O member waits long enough (50ms) that the CPU member's blocking-pool task panics well
+// before the I/O sub-frame's timer fires, forcing the shared poll to observe the CPU panic on an
+// early poll pass while the I/O member is still genuinely pending. Per
+// IMP-concurrency.md "Panic Re-Raise": the panic is re-raised on the driving coroutine once
+// `ynz_rt_join_poll` observes it (first-panic-wins; the still-in-flight I/O sub-frame's own
+// suspend never gets a chance to independently raise anything — the panic short-circuits the
+// shared poll's remaining passes). Both modes (default and --no-auto-parallel) must stop with
+// the SAME diagnostic and the SAME non-zero exit — running the I/O member alongside the panicking
+// CPU member must never hide or change the error.
+//
+// crunch(seed) loops (so it is worth running alongside fetchSlow), then divides by seed.
+// crunch(0) divides by zero and stops the program. fetchSlow waits 50ms — long enough that the
+// CPU member's division-by-zero panic (near-instant once scheduled) reliably wins the race.
+//
+// Expected (both modes): the program stops with a "division by zero" error and a non-zero exit.
+// No number is printed.
+function crunch(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  let guard = total / seed
+  return guard + seed
+}
+
+function fetchSlow(seed: int) -> int {
+  wait sleep(50)
+  return seed + 1
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(0)
+  let b = fetchSlow(4)
+  print(a + b)
+}

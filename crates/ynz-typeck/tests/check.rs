@@ -3402,6 +3402,82 @@ function entrypoint() -> nothing {
     );
 }
 
+// WHY (v0.3-M3g Phase 4, Kernel-Mode Behavior — surfaces a plan-vs-reality deviation, see
+// audit.md): the plan's Invariants "Kernel-Mode Behavior" subsection states a mixed CPU+I/O
+// group under `--kernel` "compiles to plain sequential lowering, byte-identical to
+// --no-auto-parallel." That premise does not hold for ANY function containing a bare suspending
+// call — kernel mode rejects it as a hard COMPILE ERROR (the call-dispatch kernel guard at
+// `check.rs`'s `Expr::Call` arm, pre-dating M3g entirely — `kernel_mode_rejects_cross_module_
+// suspending_call` above already pins this for a single suspending call). A fused group's
+// Suspending-class member is, by `admitted_fused_group`'s own admission rule, ALWAYS a bare
+// suspending call — so a mixed group can NEVER reach codegen under `--kernel`; there is no
+// "sequential lowering" branch to reach, because the compile stops at typeck first, before
+// promotion is ever computed. This test proves the shape of the CPU-group-eligible member plays
+// NO role in the rejection (it fires identically whether or not the host also contains a
+// CPU-eligible sibling call) — confirming the plan's own escape valve applies: "no new
+// compile-error class is needed in kernel mode" is TRUE (the general kernel-suspend rejection
+// already covers it), but "compiles to plain sequential lowering" is FALSE and the Invariants
+// subsection is corrected accordingly (see plan.md's Kernel-Mode Behavior subsection + audit.md).
+#[test]
+fn kernel_mode_rejects_mixed_cpu_io_shaped_host_with_no_new_error_class() {
+    let src = r#"
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < n) {
+    total = total + i
+    i = i + 1
+  }
+  return total
+}
+
+function fetchIt(n: int) -> int {
+  sleep(100)
+  return n
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(50)
+  let b = fetchIt(4)
+  print(a + b)
+}
+"#;
+    let out = run_kernel(src);
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "a mixed CPU+I/O-shaped host must be REJECTED in --kernel mode (the bare suspending \
+         call `fetchIt` alone triggers the pre-existing kernel-suspend guard) — the presence of \
+         a CPU-group-eligible sibling call must not change that outcome"
+    );
+    let has_kernel = errors.iter().any(|d| d.what.contains("kernel"));
+    assert!(
+        has_kernel,
+        "the rejection must be the SAME pre-existing kernel-suspend diagnostic (mentions \
+         'kernel'), not a new mixed-group-specific error class; got: {errors:#?}"
+    );
+    // No new error class: the ONLY error class present is the pre-existing suspend-rejection
+    // (WHAT text names the suspending callee); nothing mentions "parallel"/"group"/"fused" —
+    // confirming promotion/admission is never even reached (the compile stops at the suspend
+    // check before any CPU-group analysis runs).
+    let mentions_group_machinery = errors.iter().any(|d| {
+        d.what.to_lowercase().contains("parallel")
+            || d.what.to_lowercase().contains("fused")
+            || d.why.to_lowercase().contains("parallel")
+            || d.why.to_lowercase().contains("fused")
+    });
+    assert!(
+        !mentions_group_machinery,
+        "the kernel-mode rejection must be the plain suspend-rejection, with no CPU-group/fused \
+         wording — confirming no new, mixed-group-specific compile-error class exists; \
+         got: {errors:#?}"
+    );
+}
+
 // WHY: M3e Phase 2 lifts the universal cross-module reject so suspending cross-module
 // calls compile and run. This guard confirms that --kernel mode still REJECTS bare
 // (auto-suspension, no `wait` keyword) cross-module suspending calls. In Yinz the

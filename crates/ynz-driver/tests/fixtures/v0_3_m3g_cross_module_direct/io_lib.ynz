@@ -1,0 +1,11 @@
+// v0.3-M3g cross-module fused group (the named gap, direct-import variant). `fetchRemote` is
+// exported and imported DIRECTLY by `entrypoint.ynz` — one module hop. Called bare (no `wait`)
+// as a fused-group I/O member, its embedded child sub-frame is sized by `frame_layouts_query`'s
+// resolver-based cross-module path (build_frame_layouts_with_resolver's Step 2 pre-seed), the
+// same mechanism M3b/M3e already established — this fixture is the FIRST to exercise it inside
+// a fused (dual-kind) parent frame.
+
+export function fetchRemote(n: int) -> int {
+  wait sleep(0)
+  return n + 1
+}

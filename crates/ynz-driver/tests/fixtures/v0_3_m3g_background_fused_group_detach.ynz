@@ -1,0 +1,45 @@
+// v0.3-M3g Phase 4 (Resource cleanup — detach semantics + background/mixed-group shutdown-abort
+// interaction sweep). `background fusedHost()` spawns a fused CPU+I/O group onto a detached
+// task, then `entrypoint` returns immediately WITHOUT waiting on it. Per IMP-concurrency's
+// "Cancellation Detach Constraint," spawned CPU tasks cannot be cancelled once dispatched — they
+// run to completion and their results are discarded; a `background`-driven fused group whose
+// OWN driving task is cancelled mid-poll (because the process is exiting) must not crash, hang,
+// or double-free. The panic-noise class documented in .claude/todos.md ("background + CPU-group
+// shutdown abort race") is PRE-EXISTING (confirmed at M3d's own baseline, before any fused-group
+// mechanism existed) and benign — this fixture proves fusion does not WORSEN it: main always
+// exits 0, and alloc==free holds when the background task happens to finish before the process
+// exits (the alloc-counter test runs this fixture many times to catch both cases).
+//
+// crunch(n) loops 0..50 (sum 1225); fetchSlow(n) waits 5ms on a timer — long enough that most
+// runs exit before it resolves, deliberately racing the process shutdown path.
+//
+// This fixture deliberately lands mostly in the "task gets ABORTED at shutdown" regime — see
+// v0_3_m3g_background_fused_group_detach_completes.ynz for the complementary "task COMPLETES,
+// result discarded" regime (main thread waits long enough for the background group to finish
+// before exiting), so the resource-cleanup proof covers both limbs rather than only this one.
+
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function fetchSlow(n: int) -> int {
+  wait sleep(5)
+  return n + 1
+}
+
+function fusedHost() -> nothing {
+  let a = crunch(1)
+  let b = fetchSlow(2)
+  print(a + b)
+}
+
+function entrypoint() -> nothing {
+  background fusedHost()
+  print(`main-done`)
+}

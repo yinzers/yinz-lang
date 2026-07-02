@@ -1,0 +1,39 @@
+// v0.3-M3g N+M matrix — 1 CPU member + 2 I/O members in one fused group. The Suspending class
+// requires DISTINCT callee names (M3b's pre-existing same-callee-I/O restriction — one embedded
+// child sub-frame per unique suspending callee name), so fetchA and fetchB are two different
+// functions, each independently embedded.
+//
+// crunch(n) loops 0..50 (sum 1225); fetchA(n) and fetchB(n) each wait on a timer.
+//
+// Arithmetic: crunch(1) = 1225+1=1226; fetchA(2) = 2+10=12; fetchB(3) = 3+20=23.
+//   sum = 1226 + 12 + 23 = 1261.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   1261
+
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function fetchA(n: int) -> int {
+  wait sleep(0)
+  return n + 10
+}
+
+function fetchB(n: int) -> int {
+  wait sleep(0)
+  return n + 20
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(1)
+  let b = fetchA(2)
+  let c = fetchB(3)
+  print(a + b + c)
+}

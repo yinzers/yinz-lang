@@ -1,0 +1,11 @@
+// v0.3-M3g cross-module fused group, errors-capable variant. `fetchRemoteWithErrors` is exported
+// and returns `-> int errors` — the 2-slot `{i64, i64}` errors ABI struct in its embedded child
+// sub-frame's return slot, now reconstructed across a module boundary AND inside a fused parent
+// frame. Combines two previously-separate first-class targets: the M3b errors-capable ABI
+// (`v0_3_m3b_p4_parallel_errors_return.ynz`) and the M3e cross-module frame reconstruction
+// (`v0_3_m3e_reexport_ec_number`).
+
+export function fetchRemoteWithErrors(n: int) -> int errors {
+  wait sleep(0)
+  return n + 1
+}

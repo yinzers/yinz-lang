@@ -55,9 +55,11 @@ pub struct BuildResult {
     pub success: bool,
     /// Populated on failure — classifies the failure for exit-code purposes.
     pub failure_kind: Option<FailureKind>,
-    /// LLVM IR text from the last compiled source file, if available.
-    /// `None` on multi-file projects (IR is per-file; the driver surfaces the
-    /// first file's IR for single-file builds only).
+    /// LLVM IR text. Single-file builds: the one file's IR. Multi-file projects: every
+    /// compiled file's IR concatenated, each preceded by a `; file: <path>` comment line —
+    /// callers that need one file's IR (e.g. a spawn-count check on the entrypoint) grep for
+    /// its section. `None` only when codegen produced no IR at all (should not happen on a
+    /// successful build).
     pub ir_text: Option<String>,
 }
 
@@ -285,6 +287,10 @@ fn build_project(root: &Path, output_dir: Option<&Path>) -> BuildResult {
 
     let mut object_files: Vec<PathBuf> = Vec::new();
     let mut had_error = false;
+    // Per-file IR, concatenated below into one BuildResult.ir_text (see its doc comment) —
+    // multi-module concurrency fixtures (v0.3-M3g cross-module fused groups) need the
+    // entrypoint file's spawn-count assertions the same way single-file fixtures already do.
+    let mut ir_sections: Vec<String> = Vec::new();
 
     for (sf, entry) in &source_files {
         let sf = *sf;
@@ -297,6 +303,14 @@ fn build_project(root: &Path, output_dir: Option<&Path>) -> BuildResult {
         if has_error {
             had_error = true;
             continue;
+        }
+
+        if !codegen_out.artifact.ir_text.is_empty() {
+            ir_sections.push(format!(
+                "; file: {}\n{}",
+                entry.path.display(),
+                codegen_out.artifact.ir_text
+            ));
         }
 
         let object_bytes = &codegen_out.artifact.object_bytes;
@@ -346,12 +360,17 @@ fn build_project(root: &Path, output_dir: Option<&Path>) -> BuildResult {
     match result {
         Ok(()) => {
             let stderr_output = render_warnings(&diags, &all_source_texts);
+            let ir_text = if ir_sections.is_empty() {
+                None
+            } else {
+                Some(ir_sections.join("\n"))
+            };
             BuildResult {
                 binary: Some(binary_path),
                 stderr_output,
                 success: true,
                 failure_kind: None,
-                ir_text: None,
+                ir_text,
             }
         }
         Err(()) => {

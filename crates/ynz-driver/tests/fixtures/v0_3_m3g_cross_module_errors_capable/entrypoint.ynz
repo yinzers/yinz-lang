@@ -1,0 +1,33 @@
+// v0.3-M3g cross-module fused group — errors-capable imported I/O member. `crunch` (local) and
+// `fetchRemoteWithErrors` (imported, `-> int errors`) form one fused group. The I/O-member
+// binding must register the bound name in `errors_capable_locals` (mirrors the local-only
+// errors-capable matrix cell, `v0_3_m3g_matrix_errors_capable_io.ynz`) AND the child sub-frame's
+// return slot must be correctly resolved at the cross-module-computed offset — the intersection
+// of both first-class targets in one frame.
+//
+// crunch(n) loops 0..50 (sum 1225); fetchRemoteWithErrors(n) waits on a timer then returns n+1.
+//
+// Arithmetic: crunch(1) = 1225+1=1226; fetchRemoteWithErrors(2) = 2+1=3.
+//   sum = 1226 + 3 = 1229.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   1229
+
+import { fetchRemoteWithErrors } from `io_lib`
+
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(1)
+  let b = fetchRemoteWithErrors(2)
+  let bv = b.or(0)
+  print(a + bv)
+}
