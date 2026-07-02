@@ -33,7 +33,7 @@
 //! # Algorithm
 //!
 //! 1. Seed the `suspends` set with every function that directly calls a may-block
-//!    intrinsic (inlining `M2_MAY_BLOCK_INTRINSICS`).
+//!    intrinsic (classified via `suspension_source::is_base_suspension_intrinsic`).
 //! 2. Iteratively mark a function `suspends` if it calls (non-background) any
 //!    function already in the set.
 //! 3. Repeat until no new entries are added (Kleene fixpoint over a finite set).
@@ -49,7 +49,7 @@ use std::collections::{HashMap, HashSet};
 
 use ynz_ast::nodes::{Expr, Item, Module, Stmt};
 
-use crate::intrinsics::M2_MAY_BLOCK_INTRINSICS;
+use crate::suspension_source::is_base_suspension_intrinsic;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -913,7 +913,7 @@ fn collect_calls_in_expr(
                         if !edges.direct.contains(&name) {
                             edges.direct.push(name.clone());
                         }
-                    } else if M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str()) {
+                    } else if is_base_suspension_intrinsic(&name) {
                         // May-block intrinsic (not shadowed by a local fn of the same name) —
                         // record the boolean flag. This avoids putting intrinsic names into
                         // `direct`, which would cause a user function named `sleep` to

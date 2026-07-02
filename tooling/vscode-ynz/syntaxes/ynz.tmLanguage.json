@@ -46,7 +46,7 @@
       ]
     },
     "deferred-features": {
-      "match": "\\b(array-shape-runtime-field-with-wait|ec-wrapper-collect-on-completion|unsupported-crossing-local-type|fixed-crossing-local-with-wait|range-crossing-local-with-wait|shadow-crossing-local-support|wide-value-suspending-return|map-entry-fields-after-wait|nested-shape-crossing-wait|fixed-array-iter-with-wait|expression-iter-with-wait|stored-range-with-wait|self-referential-shape|scratch|foreign|test|f32|f64|i16|i32|i64|u16|u32|u64|gpu|i8|u8)\\b",
+      "match": "\\b(array-shape-runtime-field-with-wait|ec-wrapper-collect-on-completion|unsupported-crossing-local-type|fixed-crossing-local-with-wait|range-crossing-local-with-wait|shadow-crossing-local-support|wide-value-suspending-return|map-entry-fields-after-wait|nested-shape-crossing-wait|fixed-array-iter-with-wait|expression-iter-with-wait|seq-cst-ordering-opt-in|stored-range-with-wait|self-referential-shape|scratch|foreign|test|f32|f64|i16|i32|i64|u16|u32|u64|gpu|i8|u8)\\b",
       "name": "invalid.illegal"
     },
     "keywords": {

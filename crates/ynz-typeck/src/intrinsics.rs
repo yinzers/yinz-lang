@@ -10,32 +10,13 @@ pub struct FreeFnSig {
     pub ret: Type,
 }
 
-/// Free-function intrinsic names whose calls may suspend (pause) the calling state machine.
-///
-/// v0.3-M2 has exactly two such intrinsics. v0.3-M3 will replace this set with a transitive
-/// call-graph analysis pass — at that point `M2_MAY_BLOCK_INTRINSICS` and `is_may_block_callee`
-/// can be deleted and replaced with the transitive predicate.
-///
-/// Legitimate deferral: a 2-element list does not justify a `FreeFnSig` `may_block` field +
-/// registry schema migration. The cost of the deferral is concrete: every new may-block intrinsic
-/// added before M3 must explicitly edit this const (caught at code review). That is cheaper than
-/// schema migration for a list that M3 makes obsolete.
-// CARVE-OUT: compiler-internal constant; M2 predicate only; M3 replaces via call-graph analysis.
-pub const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleep", "__testFallibleAsync"];
-
-/// Returns true when a call to `callee_name` may pause the calling state machine.
-///
-/// The M2 predicate has two signals:
-/// 1. Callee is a known may-block intrinsic (in `M2_MAY_BLOCK_INTRINSICS`).
-/// 2. Callee is a user-defined function whose body syntactically contains `wait`
-///    (the `FunctionSig.contains_wait` flag — see `signatures.rs`).
-///
-/// NOT transitive: if `foo()` calls `bar()` and `bar()` calls `sleep(100)` without
-/// `wait`, then `bar.contains_wait == false` and `bar` is NOT flagged as may-block in M2.
-/// M3 ships the transitive predicate.
-pub fn is_may_block_callee(callee_name: &str, callee_contains_wait: bool) -> bool {
-    M2_MAY_BLOCK_INTRINSICS.contains(&callee_name) || callee_contains_wait
-}
+// The base suspension-source classifier (the set of leaf may-block intrinsic names + the
+// membership classifier over it) is NOT defined here. It is the SINGLE authoritative source in
+// [`crate::suspension_source`] — `BASE_SUSPENSION_INTRINSICS` + `is_base_suspension_intrinsic`,
+// consumed by both typeck and codegen. See that module for the R6 unification rationale
+// (authoritative-derivation: never a second copy). The former `is_may_block_callee` local-syntactic
+// predicate was dead (no callers — the transitive `SuspendSet` from `crate::may_block` replaced it)
+// and was removed with the twin const at the R6 unification.
 
 /// The table of primitive intrinsics.
 ///
@@ -212,7 +193,7 @@ impl PrimitiveIntrinsicTable {
     ///
     /// # USAGE GUARD
     /// Only call this from M2 state-machine test fixtures or callee dispatch for names
-    /// registered in `M2_MAY_BLOCK_INTRINSICS`. Production user-code paths should call
+    /// registered in `suspension_source::BASE_SUSPENSION_INTRINSICS`. Production user-code paths should call
     /// `lookup_free_fn` (which excludes `internal_fns`) — `internal_fns` are never
     /// visible in user source or LSP completion.
     #[doc(hidden)]

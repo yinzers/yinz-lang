@@ -30,8 +30,8 @@ use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
     build_effective_suspend_set, crossing_local_names_with_cpu_spike,
     independence::{partition_independent_groups, IndependentGroup},
-    type_attached_const_type, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable,
-    Type, TypedModule,
+    is_base_suspension_intrinsic, type_attached_const_type, GenericFnTable, MonomorphizationTable,
+    ShapeTable, SignatureTable, Type, TypedModule,
 };
 
 use crate::{
@@ -122,14 +122,19 @@ fn build_wait_cache(typed: &TypedModule) -> WaitCache {
     cache
 }
 
-// ── v0.3-M2 Phase 7: Composed-frame layout + SuspendSet ─────────────────────
+// ── v0.3-M2 Phase 7: Composed-frame layout ──────────────────────────────────
 
 /// The set of user-defined function names that transitively reach a suspension point
 /// (computed by `ynz_typeck::may_block::analyze` and stored in `FunctionSig.suspends`).
 ///
 /// Functions in this set are compiled as state machines. Functions NOT in this set
 /// compile to straight-line code with zero suspension overhead.
-pub type SuspendSet = HashSet<String>;
+///
+/// Re-exported from the ONE authoritative home (`ynz_typeck::cpu_admission::SuspendSet`) so this
+/// crate's `emit::SuspendSet` consumers keep their path while exactly one `type SuspendSet = ...`
+/// declaration exists in the workspace — collapsing the former twin alias per
+/// `.claude/rules/authoritative-derivation.md`.
+pub use ynz_typeck::cpu_admission::SuspendSet;
 
 /// Per-member slot reservation for one member of a CPU-parallel group (v0.3-M3d).
 ///
@@ -624,7 +629,7 @@ fn collect_callees_in_expr(
         Expr::Call(c) => {
             if let Expr::Ident(name, _) = &c.callee {
                 if suspend_set.contains(name.as_str())
-                    && !M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str())
+                    && !is_base_suspension_intrinsic(name.as_str())
                     && seen.insert(name.clone())
                 {
                     out.push(name.clone());
@@ -807,20 +812,15 @@ fn compute_frame_size(
     total
 }
 
-/// The set of free-function intrinsic names that are may-block (can contain suspension points).
-///
-/// M2 uses a fixed 2-element set. M3 will replace this with a transitive call-graph analysis
-/// pass, at which point this constant can be removed.
-///
-/// The cost of keeping this as an in-code constant (rather than a registry field) is explicit:
-/// every new may-block intrinsic added before M3 must edit this list. Caught at code review.
-// CARVE-OUT: compiler-internal constant — predicate for M2 sleep dispatch in codegen.
-// Not a user-facing feature. M3's transitive analysis replaces this entirely.
-const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleep", "__testFallibleAsync"];
-
-// is_may_block_callee (local-syntactic predicate) removed in P7.
-// The SM-selection predicate is now SuspendSet (transitive, from typeck).
-// Kept only as a dead-code stub; M3 will remove it entirely.
+// The base suspension-source classifier (`is_base_suspension_intrinsic`) is threaded from the
+// single authoritative home `ynz_typeck::suspension_source` (imported above). Codegen MUST NOT
+// re-derive a local copy of the leaf may-block intrinsic set — the twin definition that used to
+// live here was the exact drift class of `.claude/rules/authoritative-derivation.md`, deleted at
+// the R6 unification (v0.3-M4 Phase 0). A build-blocking tripwire test
+// (`ynz-typeck/tests/suspension_source_single_definition.rs`) fails the build if a second copy
+// reappears in this crate. The SM-selection predicate proper is `SuspendSet` (transitive, from
+// typeck); this classifier only answers the leaf-intrinsic question the transitive analysis seeds
+// from.
 
 /// The file ID embedded in the LLVM module for deterministic IR and object output.
 pub fn module_identifier(source_path: &str) -> String {
@@ -3415,7 +3415,7 @@ fn count_suspension_expr(expr: &Expr, suspend_set: &SuspendSet) -> usize {
         Expr::Call(c) => {
             if let Expr::Ident(name, _) = &c.callee {
                 if suspend_set.contains(name.as_str())
-                    && !M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str())
+                    && !is_base_suspension_intrinsic(name.as_str())
                 {
                     // This suspending call needs a poll-loop state.
                     return 1 + c
@@ -6723,7 +6723,7 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
     if let Expr::Call(c) = expr {
         if let Expr::Ident(name, _) = &c.callee {
             return suspend_set.contains(name.as_str())
-                && !M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str());
+                && !is_base_suspension_intrinsic(name.as_str());
         }
     }
     false

@@ -27,7 +27,7 @@ use std::collections::HashSet;
 use ynz_ast::nodes::{Block, Expr, FunctionDecl, Stmt};
 
 use crate::independence::collect_ident_names;
-use crate::intrinsics::M2_MAY_BLOCK_INTRINSICS;
+use crate::suspension_source::is_base_suspension_intrinsic;
 
 /// The transitive suspending-function name set (same shape codegen uses).
 pub type SuspendSet = HashSet<String>;
@@ -803,7 +803,7 @@ fn expr_contains_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool 
         Expr::Call(c) => {
             if let Expr::Ident(name, _) = &c.callee {
                 if suspend_set.contains(name.as_str())
-                    && !M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str())
+                    && !is_base_suspension_intrinsic(name.as_str())
                 {
                     return true;
                 }

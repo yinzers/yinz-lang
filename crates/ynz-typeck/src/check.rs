@@ -16,12 +16,13 @@ use crate::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
     },
-    intrinsics::{PrimitiveIntrinsicTable, M2_MAY_BLOCK_INTRINSICS},
+    intrinsics::PrimitiveIntrinsicTable,
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
     scope::{Scope, ScopeEntry},
     shapes::ShapeTable,
     signatures::SignatureTable,
+    suspension_source::is_base_suspension_intrinsic,
     types::{type_name, Type},
 };
 
@@ -483,8 +484,9 @@ impl<'b> Checker<'b> {
 
         // Build the suspending-function set once; reused by checks 2 and 3.
         // Contains all user-defined functions whose `suspends` flag is set by the
-        // Phase-6 may-block fixpoint. `is_suspending_call` also folds in
-        // `M2_MAY_BLOCK_INTRINSICS` (`sleep` etc.) which are not in sig_table.
+        // Phase-6 may-block fixpoint. `is_suspending_call` also folds in the base
+        // suspension intrinsics (`sleep` etc., via `is_base_suspension_intrinsic`) which
+        // are not in sig_table.
         let suspending_fns: std::collections::HashSet<&str> = if is_suspending_fn {
             self.sig_table
                 .fns
@@ -2590,10 +2592,7 @@ impl<'b> Checker<'b> {
                     // Phase 6: explicit `wait` on a non-suspending callee — redundant hint.
                     // Uses the transitive `suspends` predicate (not the local `contains_wait`).
                     // Explicit `wait` on a suspending callee is valid-but-redundant; no warning.
-                    if was_inside_wait
-                        && !callee_suspends
-                        && !M2_MAY_BLOCK_INTRINSICS.contains(&name)
-                    {
+                    if was_inside_wait && !callee_suspends && !is_base_suspension_intrinsic(name) {
                         let what_instead_args = params
                             .iter()
                             .map(|(n, _)| n.as_str())
@@ -7865,8 +7864,8 @@ struct SubExprSuspendViolation {
 /// positions (not the direct-statement forms the M2 codegen handles).
 ///
 /// `suspending` is the set of user-defined function names whose `suspends == true`
-/// in the current compilation unit. May-block intrinsics (`sleep`,
-/// `__testFallibleAsync`) are included via `M2_MAY_BLOCK_INTRINSICS`.
+/// in the current compilation unit. Base suspension intrinsics (`sleep`,
+/// `__testFallibleAsync`) are included via `is_base_suspension_intrinsic`.
 pub(crate) fn suspending_calls_in_subexpr_position(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
@@ -8335,8 +8334,7 @@ fn is_suspending_call(
     suspending: &std::collections::HashSet<&str>,
 ) -> bool {
     if let Some(name) = call_name(c) {
-        return suspending.contains(name.as_str())
-            || M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str());
+        return suspending.contains(name.as_str()) || is_base_suspension_intrinsic(name.as_str());
     }
     false
 }

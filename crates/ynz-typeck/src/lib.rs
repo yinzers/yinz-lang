@@ -56,6 +56,7 @@ pub mod return_paths;
 pub mod scope;
 pub mod shapes;
 pub mod signatures;
+pub mod suspension_source;
 pub mod symbol_lookup;
 pub mod type_at_offset;
 pub mod types;
@@ -81,6 +82,7 @@ pub use queries::{
 };
 pub use shapes::{ShapeDef, ShapeTable};
 pub use signatures::{build_effective_suspend_set, SignatureTable};
+pub use suspension_source::{is_base_suspension_intrinsic, BASE_SUSPENSION_INTRINSICS};
 pub use symbol_lookup::{
     cross_file_reference_count_estimate, def_site_for_offset, references_for_offset,
     rename_locations, resolve_symbol_at, RenameError, ResolvedSymbol, SymbolKind,
