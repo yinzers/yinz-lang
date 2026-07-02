@@ -1599,8 +1599,8 @@ fn parentheses_override_precedence() {
 #[test]
 fn parser_precedence_table_matches_spec() {
     // WHY: the Pratt binding powers in parser.rs must match the precedence table
-    // in spec/operators.md. If these drift, the compiler enforces different
-    // precedence than the language spec promises — a silent correctness bug.
+    // in docs/reference/REF-operators.md. If these drift, the compiler enforces
+    // different precedence than the language spec promises — a silent correctness bug.
     // This test parses the spec table at runtime and compares it to the code.
     use std::collections::HashMap;
     use ynz_parser::Token;
@@ -1611,7 +1611,7 @@ fn parser_precedence_table_matches_spec() {
         .unwrap() // crates/
         .parent()
         .unwrap() // workspace root
-        .join("spec/operators.md");
+        .join("docs/reference/REF-operators.md");
     let spec = std::fs::read_to_string(&spec_path)
         .unwrap_or_else(|_| panic!("Could not read {:?}", spec_path));
 
