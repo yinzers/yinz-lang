@@ -307,7 +307,7 @@ registry, and the release. Handoff between phases is the merged PR + this plan's
   codegen's inputs — while the admission gate still declines mixed shapes, so the phase is
   provably inert. Closes E6 at the cheapest stage.
 - **Steps:**
-  - [ ] Lift the `base_suspends` skip in `compute_cpu_promotions` (`queries.rs:761`) so a host
+  - [x] Lift the `base_suspends` skip in `compute_cpu_promotions` (`queries.rs:761`) so a host
         that already suspends (own `wait` or suspending callee) can still host a CPU group —
         **and, in the SAME change, add a temporary co-resident-suspension decline to
         `admitted_cpu_group`'s TOP-LEVEL branch** (the mirror of the nested branch's
@@ -331,7 +331,13 @@ registry, and the release. Handoff between phases is the merged PR + this plan's
         decline are removed together in Phase 3, traveling with the fused codegen they enable
         (flipping earlier would either crash or make the hint lie — E5). The byte-identity exit
         gate remains the PROOF of neutrality; this step is the mechanism that makes it pass.
-  - [ ] **Neutrality fixtures for the wrong-premise class (pinned by test, not prose):**
+        **DONE:** `crates/ynz-typeck/src/cpu_admission.rs` `admitted_cpu_group` top-level branch
+        now declines when `f.body.stmts.iter().any(stmt_contains_wait_deep ||
+        stmt_contains_suspending_call_deep)`, mirroring the nested branch exactly, with an inline
+        `TEMPORARY (v0.3-M3g Phase 2)` comment naming the Phase-3 removal. `queries.rs`'s
+        candidate-identification skip (`base_suspends.contains(&f.name) || ...`) now only excludes
+        `cyclic_members`.
+  - [x] **Neutrality fixtures for the wrong-premise class (pinned by test, not prose):**
         (a) a top-level CPU group in a suspending host — `crunch(x); crunch(y); wait sleep(5)`
         — decline-asserting (0 spawns) + byte-identical; (b) the same host in a module that
         ALSO contains a separately promoted pure-CPU function (module-global `m3d_spike` true
@@ -343,21 +349,126 @@ registry, and the release. Handoff between phases is the merged PR + this plan's
         Caution: dormant fixtures `v0_3_m3d_spike_g_mixed.ynz` / `v0_3_m3d_spike_h_two_waits.ynz`
         describe this shape FIRING — they are unreferenced Phase-0-spike leftovers (no test
         consumes them; verified this session); do not treat their comments as current truth.
-  - [ ] **E6 obligation:** extend the guard-probe (`queries.rs:684-692`) to `base_suspends`
+        **DONE:** fixture (a) = `v0_3_m3g_top_level_group_in_suspending_host_declines.ynz` +
+        `v03_m3g_top_level_group_in_suspending_host_declines_byte_identical` — declines both
+        before and after this phase's change (0 spawns), confirmed by direct build probe against
+        the unmodified Phase 1 baseline commit `d184934` before any code was touched this
+        session. Fixture (b) = `v0_3_m3g_mixed_host_with_promoted_sibling_declines.ynz` +
+        `v03_m3g_mixed_host_with_promoted_sibling_declines_byte_identical` — **Paper-Traced: this
+        DID already fire on the Phase 1 baseline `d184934`, unmodified** (4 spawn calls observed:
+        2 legitimate from `pureCpuHost`, 2 from the pre-existing latent misfire in `mixedHost`,
+        confirmed via a direct `--emit-ir` build probe before any Phase 2 code change). Recorded
+        as FRAGO 002 in `audit.md`. The Phase 2 temporary decline closes it (now exactly 2
+        spawns, both `pureCpuHost`'s).
+  - [x] **E6 obligation:** extend the guard-probe (`queries.rs:684-692`) to `base_suspends`
         hosts — a guard-tripping local crossing a CPU join inside a suspending host must
         DECLINE. **Proof artifact = adversarial fixtures**: guard-tripping shapes inside
         suspending hosts, decline-asserting + byte-identical (these are permanent safety
         declines, NOT flip candidates).
-  - [ ] Plumb `partition_groups_classified` / `ClassifiedGroup` through to the codegen input
+        **DONE:** `compute_cpu_promotions`'s rollback loop now also probes every `base_suspends`
+        host that is itself a direct promotion candidate (`is_base_suspends_direct_candidate`),
+        not just the newly-SM closure. Proof artifacts: (1) two `ynz-typeck` unit tests —
+        `base_suspends_host_with_clean_cpu_group_promotes` (positive control) and
+        `base_suspends_host_with_subexpr_position_guard_declines_promotion` (the E6 proof,
+        fault-injection-verified red→green: reverting the extension makes the test fail with
+        `entrypoint` wrongly promoted, confirming the test is non-vacuous); (2) the integration
+        fixture `v0_3_m3g_guard_tripping_crossing_in_suspending_host_declines.ynz` +
+        `v03_m3g_guard_tripping_crossing_in_suspending_host_declines_byte_identical` (0 spawns,
+        byte-identical). **Deviation from the plan's literal guard-type suggestion:** the plan's
+        prose example (a nested-shape crossing) turned out to be UNREACHABLE as an E6-isolated
+        fixture — ANY nested-shape `let` anywhere in ANY function containing a real `wait`
+        ALREADY hard-errors at ordinary (pre-promotion) `check_query` time, regardless of
+        position relative to the wait (verified empirically) — so a nested-shape guard can never
+        isolate the CPU-join-specific E6 hazard from the pre-existing whole-function hard error.
+        Used the "suspending call in sub-expression position" guard instead (a third, separate
+        call to the CPU-group's own callee in subexpr position — invisible to ordinary check,
+        visible only once the guard-probe augments `suspending_fns` with the candidate's own CPU
+        callees) — a different guard TYPE from the plan's example, but the same E6 MECHANISM
+        (probing `base_suspends` direct candidates). Surfaced here per dispatch instructions
+        (plan-said-nested-shape / reality-is-unreachable-for-this-purpose).
+  - [x] Plumb `partition_groups_classified` / `ClassifiedGroup` through to the codegen input
         surface (types/queries only; the block walker still routes the old paths).
-  - [ ] Unit-test the promotion of suspending hosts (the `compute_cpu_promotions` test harness
+        **DONE (recorded interpretation):** `CheckOutput::does_real_work_set` — the one input
+        `ynz_typeck::independence::CpuCandidacy` needs beyond what codegen already has
+        (`sig_table`, `suspend_set`, `imported_fns`) to call `partition_groups_classified` — is
+        now threaded through the real production call chain (`codegen_query` →
+        `emit_artifact` → `build_module` → `lower_function` → `lower_function_with_waits` →
+        `Cg::does_real_work`), mirroring the exact established pattern for sibling fields.
+        Structurally wired but genuinely UNCONSUMED this phase (`#[allow(dead_code)]` + WHY
+        comment, mirroring the pre-existing `Cg::wait_cache` precedent) — no lowering path reads
+        it; the block walker is untouched. `ClassifiedGroup`/`MemberClass`/
+        `partition_groups_classified` themselves were already `pub` and crate-reachable from
+        `ynz-codegen` (no typeck-side visibility change needed) — `does_real_work` was the one
+        missing plumbing gap. Mirrors the "computed but unconsumed" pattern M3d's own Phase 2
+        established for `PromotionOutput`.
+  - [x] Unit-test the promotion of suspending hosts (the `compute_cpu_promotions` test harness
         at `queries.rs:1046+` already takes `base_suspends` explicitly — extend it).
+        **DONE** — see the two new `promotion_tests` in `queries.rs` cited above.
 - **Exit criteria:** workspace green; **golden corpus byte-identical to the Phase 1 baseline**
   (the proof of behavior-neutrality); the three M3d DECLINE fixtures still decline (floor
   intact); the top-level-group-in-suspending-host neutrality fixtures (both variants) committed
   and green (decline-asserting + byte-identical, or the variant-(b) Paper-Traced divergence
   recorded); new guard-probe adversarial fixtures committed and green; no `_` catch-all in any
   new `MemberClass`/classification match.
+  **STATUS: ALL MET.** `cargo build --workspace` clean; `cargo clippy --workspace -- -D
+  warnings` clean (the project's documented gate — a broader `--all-targets` sweep surfaces
+  ~25 pre-existing warnings across `ynz-numerics`/`ynz-fmt`/`ynz-registry`/`ynz-lsp`/
+  `ynz-runtime` test targets, confirmed via `git stash` bisection to exist unchanged on the
+  Phase 1 baseline `d184934`, zero new); `cargo fmt --all -- --check` clean. Golden-IR corpus:
+  all 34 `ynz-codegen` tests pass including all `*_ir_snapshot` insta assertions, zero
+  `.snap.new` produced anywhere in the tree. The three M3d DECLINE fixtures re-run individually
+  and still decline. Both neutrality fixtures + the E6 adversarial fixture green. One
+  PRE-EXISTING `ynz-codegen` test
+  (`spike_host_subset_bare_admits_effective_declines_on_imported_post_pair`) broke as a direct,
+  foreseeable consequence of this phase's OWN temporary decline (Paper-Traced below) — fixed by
+  changing its INPUT CONSTRUCTION (inline local-function source + synthetic suspend-set
+  split) to isolate its original divergence again, without weakening any assertion; see the
+  session-log entry in `audit.md` for the full Paper-Trace. `cargo test --workspace
+  --no-fail-fast`: **2084 passed / 5 failed** — the 5 failures are BY NAME the same 5 of A5's 6
+  pre-existing failures that are NOT the documented flake (`no_banned_jargon_in_deferred_
+  feature_user_facing_fields`, `parser_precedence_table_matches_spec`, `every_future_doc_has_a_
+  registry_entry_or_is_skipped`, `deferred_language_feature_lookup`,
+  `deferred_tooling_feature_lookup`); the 6th A5 failure
+  (`v03_m3e_alias_local_name_collision_runs_correctly`, the documented CI-contention flake) PASSED
+  this run — consistent with its known flaky nature, not a fix. Zero new failures introduced by
+  this phase's diff; the +8 net new passes over A5's 2076 include this phase's 5 new tests (3
+  integration fixtures + 2 `queries.rs` unit tests) plus the flake's this-run pass plus normal
+  run-to-run doctest/count variance.
+- **BLOCKER FIX (code-reviewer, post-landing):** the reviewer fleet found the temporary top-level
+  co-resident-suspension decline (`admitted_cpu_group`, `cpu_admission.rs:92-137` as landed) missed
+  a BARE may-block-intrinsic call (`sleep(0)` with no `wait` keyword) — the decline re-derived
+  "does this host suspend?" via an AST scan (`stmt_contains_wait_deep` — literal `wait` node only —
+  OR `stmt_contains_suspending_call_deep` — which explicitly exempts may-block intrinsics for a
+  DIFFERENT, unrelated reason) that never recognized a bare `sleep()` call as a suspension point,
+  even though `may_block::analyze` genuinely seeds `calls_may_block_intrinsic` for it independent
+  of `wait` syntax. A host with `crunch(x); crunch(y); sleep(0)` (no `wait`) would have admitted
+  and FIRED its CPU group at codegen — breaking the "provably inert" neutrality promise for a legal
+  Yinz shape, untested by any of this phase's three fixtures (all three use explicit
+  `wait sleep(...)`). **FIXED**: the decline now reads `base_suspends.contains(&f.name)` — the
+  SAME authoritative pre-promotion suspend set `compute_cpu_promotions` already reads as
+  `base_suspends` — instead of a second AST scan, closing the bare-intrinsic hole (and any future
+  may-block-intrinsic or bare-suspension shape) without a second detector to keep in sync.
+  `base_suspends` is threaded as a genuinely separate parameter from `suspend_set` at every call
+  site down to `admitted_cpu_group` (typeck: `admitted_cpu_group`, `inlay_hint_passes.rs`; codegen:
+  `spike_cpu_candidates` → `cpu_group_slots_and_reserve` / `spike_host_cpu_supported` /
+  `compute_frame_size` / `build_frame_layouts_with_resolver` / `spike_host_subset` →
+  `lower_function_with_waits` → `lower_function` → `build_module` → `emit_artifact`; queries.rs
+  computes the pure pre-promotion set ONCE per query boundary and never mutates it, passing the
+  union-with-spike-hosts set separately as `suspend_set`) — NOT reused from `suspend_set`, because
+  at every codegen call site `suspend_set` is `base_suspends ∪ spike_hosts` (every function codegen
+  may spike-host, including `f` itself once admitted), so checking `f`'s own name against THAT
+  union would self-decline a legitimate pure-CPU host the instant it is admitted. New regression
+  fixture `v0_3_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines.ynz` (bare-intrinsic
+  twin of neutrality fixture (a)) added to `ynz-driver/tests/integration.rs`; empirically confirmed
+  (temporary revert to the old AST-scan predicate) to show 2 spawns pre-fix, 0 spawns post-fix.
+  One pre-existing `ynz-codegen` test
+  (`spike_host_subset_bare_admits_effective_declines_on_imported_post_pair`) broke AGAIN as a
+  direct, foreseeable consequence of this fix (the same class of consequence Phase 2's own landing
+  already hit once, above) — split into two single-purpose tests documenting the NEW, STRONGER
+  invariant (a correct `base_suspends` now makes `spike_host_subset` insensitive to a bare-vs-
+  effective `suspend_set` split, structurally rather than by convention) plus an artificial
+  isolation test proving WHY `base_suspends` correctness is the one input that still matters. Full
+  Paper-Trace in `audit.md`.
 - **Reviewer fan-out:** code-reviewer + adversarial deviation-judge (typeck soundness — can a
   guard-tripping crossing sneak past the extended probe?).
 - **Model tag:** `(coding, high, large)`

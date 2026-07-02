@@ -1,0 +1,41 @@
+// v0.3-M3g Phase 2 (E6) adversarial fixture: `entrypoint` is a suspending host (`wait sleep(0)`)
+// that ALSO owns a clean top-level CPU group (`crunch(3)`, `crunch(4)`) — a genuine promotion
+// candidate once Phase 2 lifts the `base_suspends` skip — PLUS a THIRD, separate call to the
+// SAME CPU-group callee used in a sub-expression position (`crunch(5) + 1`). `crunch` is NOT a
+// suspending function under the REAL suspend set, so ordinary `check_query` never flags
+// `crunch(5) + 1` as a suspending-call-in-subexpr-position violation — this compiles clean at
+// the plain compile layer. The hazard is visible ONLY to the promotion-layer guard-probe, which
+// augments `suspending_fns` with THIS candidate's own CPU-group callee (`crunch`) before
+// probing — exactly the E6 extension: the guard-probe must now probe `base_suspends` hosts that
+// are themselves direct promotion candidates, not just skip them outright.
+//
+// This is a PERMANENT safety decline, not a flip candidate (unlike the Phase-2 neutrality
+// fixtures a/b): the guard-tripping crossing must decline even after Phase 3 removes the
+// temporary co-resident-suspension check, because "a suspending call inside a larger
+// expression" is a real, permanent codegen constraint (Golden Rule 7 step-by-step style), not a
+// milestone-scoping placeholder.
+//
+// Arithmetic: crunch(seed) = 4950 + seed.
+//   crunch(3) = 4953
+//   crunch(4) = 4954
+//   crunch(5) + 1 = 4955 + 1 = 4956
+//   sum = 4953 + 4954 + 4956 = 14863
+//
+// Expected output (both modes — default and --no-auto-parallel): 14863
+function crunch(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(3)
+  let b = crunch(4)
+  let c = crunch(5) + 1
+  wait sleep(0)
+  print(a + b + c)
+}

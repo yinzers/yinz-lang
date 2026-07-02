@@ -105,6 +105,14 @@ fn empty_sig_table() -> &'static SignatureTable {
     EMPTY_SIG_TABLE.get_or_init(SignatureTable::empty)
 }
 
+// v0.3-M3g Phase 2: generic functions never enter the CPU-promotion/classified-partition
+// path (no `CpuCandidacy` is ever constructed for them), so an empty `does_real_work` set
+// satisfies `Cg`'s field without allocating per-instantiation. See `Cg::does_real_work`.
+static EMPTY_DOES_REAL_WORK: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+fn empty_does_real_work() -> &'static HashSet<String> {
+    EMPTY_DOES_REAL_WORK.get_or_init(HashSet::new)
+}
+
 /// Build the `WaitCache` for all non-generic functions in the module.
 ///
 /// Generic functions are excluded because their concrete instantiations are lowered
@@ -227,9 +235,15 @@ fn is_number_errors_return(f: &FunctionDecl) -> bool {
 /// (resolving recursively via `frame_layouts_query(callee_file)` for cross-module accuracy —
 /// Guard G2). For a local-only module the pre-seed loop (step 2) is empty and behavior is
 /// byte-identical to pre-M3e.
+///
+/// `base_suspends` is threaded through to `spike_cpu_candidates`/`admitted_cpu_group`'s Phase-2
+/// temporary co-resident-suspension decline (see `admitted_cpu_group`'s doc comment). At this
+/// call site it is the pure pre-promotion effective suspend set — the caller passes it BEFORE
+/// unioning in the spike-host names it computes into `suspend_set`.
 pub fn build_frame_layouts_with_resolver(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
+    base_suspends: &SuspendSet,
     shape_abi_sizes: &HashMap<String, u64>,
     callee_size_resolver: &dyn Fn(&str) -> Option<u64>,
 ) -> HashMap<String, FrameLayout> {
@@ -282,6 +296,7 @@ pub fn build_frame_layouts_with_resolver(
             &direct_children,
             typed,
             suspend_set,
+            base_suspends,
             shape_abi_sizes,
             &mut sizes,
             &mut visiting,
@@ -304,8 +319,13 @@ pub fn build_frame_layouts_with_resolver(
             // set (non-empty only for a spike host) makes the collector reserve those slots so
             // the reservation here matches what the join emission flushes/reloads.
             let cpu_supported_owner = cpu_supported_callees(typed);
-            let cpu_supported_refs =
-                spike_host_cpu_supported(f, typed, suspend_set, &cpu_supported_owner);
+            let cpu_supported_refs = spike_host_cpu_supported(
+                f,
+                typed,
+                suspend_set,
+                base_suspends,
+                &cpu_supported_owner,
+            );
             let crossing = crossing_local_names_with_cpu_spike(
                 &f.body.stmts,
                 &param_names_ref,
@@ -328,7 +348,8 @@ pub fn build_frame_layouts_with_resolver(
             // member count. A param-host's params share the slot region with the handles (param
             // slot 0 at byte 32 overlaps SPIKE_HANDLE_0); the reserve and `n_locals` below both
             // count `f.params.len()`, so the frame is sized for params + reserve + crossings.
-            let (cpu_group_slots, cpu_reserve) = cpu_group_slots_and_reserve(f, typed, suspend_set);
+            let (cpu_group_slots, cpu_reserve) =
+                cpu_group_slots_and_reserve(f, typed, suspend_set, base_suspends);
 
             let n_locals = f.params.len() + crossing_slots;
             // own_base (start of own-local slots) is pushed past the CPU-slot reserve so
@@ -472,8 +493,9 @@ fn cpu_group_slots_and_reserve(
     f: &FunctionDecl,
     typed: &TypedModule,
     suspend_set: &SuspendSet,
+    base_suspends: &SuspendSet,
 ) -> (Vec<CpuGroupSlot>, u64) {
-    let member_count = if spike_cpu_candidates(f, typed, suspend_set).is_some() {
+    let member_count = if spike_cpu_candidates(f, typed, suspend_set, base_suspends).is_some() {
         spike_cpu_group_member_count(f, typed, suspend_set)
     } else {
         0
@@ -664,11 +686,13 @@ fn collect_callees_in_expr(
 /// Recursively compute the total frame size for `fn_name`, memoizing in `sizes`.
 ///
 /// `visiting` tracks the ancestor path to detect recursion cycles.
+#[allow(clippy::too_many_arguments)]
 fn compute_frame_size(
     fn_name: &str,
     direct_children: &HashMap<String, Vec<String>>,
     typed: &TypedModule,
     suspend_set: &SuspendSet,
+    base_suspends: &SuspendSet,
     shape_abi_sizes: &HashMap<String, u64>,
     sizes: &mut HashMap<String, u64>,
     visiting: &mut HashSet<String>,
@@ -703,8 +727,13 @@ fn compute_frame_size(
                     // size memo this produces (read as `child_frame_size` when a parent embeds
                     // this callee) reserves the same locals-across-the-join slots.
                     let cpu_supported_owner = cpu_supported_callees(typed);
-                    let cpu_supported_refs =
-                        spike_host_cpu_supported(f, typed, suspend_set, &cpu_supported_owner);
+                    let cpu_supported_refs = spike_host_cpu_supported(
+                        f,
+                        typed,
+                        suspend_set,
+                        base_suspends,
+                        &cpu_supported_owner,
+                    );
                     let crossing = crossing_local_names_with_cpu_spike(
                         &f.body.stmts,
                         &param_names,
@@ -714,7 +743,8 @@ fn compute_frame_size(
                     );
                     let crossing_slots =
                         crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
-                    let (_, reserve) = cpu_group_slots_and_reserve(f, typed, suspend_set);
+                    let (_, reserve) =
+                        cpu_group_slots_and_reserve(f, typed, suspend_set, base_suspends);
                     return Some((
                         f.params.len() + crossing_slots,
                         is_number_errors_return(f),
@@ -746,6 +776,7 @@ fn compute_frame_size(
                     direct_children,
                     typed,
                     suspend_set,
+                    base_suspends,
                     shape_abi_sizes,
                     sizes,
                     visiting,
@@ -804,9 +835,11 @@ pub fn emit_artifact(
     target_triple: Option<&str>,
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
     suspends_set_arg: &HashSet<String>,
+    base_suspends_arg: &HashSet<String>,
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     frame_layouts: &HashMap<String, FrameLayout>,
     cpu_promoted: &HashSet<String>,
+    does_real_work: &HashSet<String>,
 ) -> Result<CompiledArtifact, String> {
     let context = Context::create();
     let module_id = module_identifier(source_path);
@@ -846,6 +879,14 @@ pub fn emit_artifact(
     // This is the Phase-7 seam fix: the pre-analysis sig_table (from module_signatures_query)
     // has suspends=false for all fns; the real transitive set comes from check_query.
     let suspend_set: SuspendSet = suspends_set_arg.clone();
+    // The AUTHORITATIVE pre-CPU-promotion suspend set (`suspends_set` ∪ imported-suspending
+    // names, BEFORE the spike-host names below are unioned in). Threaded, unchanged, to
+    // `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension decline — see that
+    // function's doc comment for why it must be a set SEPARATE from `suspend_set` here (the
+    // union already contains every spike-host candidate's own name by the time this function
+    // runs, so re-probing a legitimate pure-CPU host against `suspend_set` would self-declines
+    // it the moment it is admitted).
+    let base_suspends: SuspendSet = base_suspends_arg.clone();
     let _ = sig_table; // sig_table kept in signature for API compatibility
 
     // Read the auto-parallel kill switch set by main.rs before the salsa dispatch.
@@ -881,10 +922,12 @@ pub fn emit_artifact(
         mono_table,
         imported_options,
         &suspend_set,
+        &base_suspends,
         imported_fns,
         frame_layouts,
         no_auto_parallel,
         m3d_spike,
+        does_real_work,
     )?;
 
     module
@@ -948,10 +991,12 @@ fn build_module<'ctx, 'g>(
     mono_table: &'g MonomorphizationTable,
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
     suspend_set: &'g SuspendSet,
+    base_suspends: &'g SuspendSet,
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     frame_layouts_arg: &HashMap<String, FrameLayout>,
     no_auto_parallel: bool,
     m3d_spike: bool,
+    does_real_work: &'g HashSet<String>,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
@@ -1170,11 +1215,13 @@ fn build_module<'ctx, 'g>(
                 &options_table,
                 &wait_cache,
                 suspend_set,
+                base_suspends,
                 frame_layouts,
                 imported_fns,
                 sig_table,
                 no_auto_parallel,
                 m3d_spike,
+                does_real_work,
             )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -1383,6 +1430,8 @@ fn lower_generic_function<'ctx>(
         m3d_spike_cpu_result_names: Vec::new(),
         m3d_spike_cpu_result_allocas: HashMap::new(),
         m3d_spike_fired: false,
+        // Generic functions never enter the CPU-promotion/classified-partition path.
+        does_real_work: empty_does_real_work(),
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1729,6 +1778,17 @@ struct Cg<'ctx, 'g> {
     // single eligible group spawns exactly once — the FIRST group encountered in lowering
     // order fires while this is false, then sets it. Reset per function.
     m3d_spike_fired: bool,
+    // v0.3-M3g Phase 2: the `does_real_work` set (`CheckOutput::does_real_work_set`), threaded
+    // through to codegen's input surface so Phase 3 can construct a
+    // `ynz_typeck::independence::CpuCandidacy` and call `partition_groups_classified` /
+    // `ClassifiedGroup` without any further plumbing. Phase 2 ships this field STRUCTURALLY
+    // WIRED BUT UNCONSUMED — no lowering path reads it yet (the block walker still routes
+    // through `partition_independent_groups`, per this milestone's behavior-neutral Phase 2
+    // discipline) — mirroring the same "computed but unconsumed" pattern v0.3-M3d's Phase 2
+    // shipped for `cpu_promotion_query`/`PromotionOutput`. Removed once Phase 3 wires a real
+    // consumer.
+    #[allow(dead_code)]
+    does_real_work: &'g HashSet<String>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -2033,11 +2093,13 @@ fn lower_function<'ctx, 'g>(
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
+    base_suspends: &'g SuspendSet,
     frame_layouts: &'g HashMap<String, FrameLayout>,
     imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     sig_table: &'g SignatureTable,
     no_auto_parallel: bool,
     m3d_spike: bool,
+    does_real_work: &'g HashSet<String>,
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
@@ -2058,11 +2120,13 @@ fn lower_function<'ctx, 'g>(
             options_table,
             wait_cache,
             suspend_set,
+            base_suspends,
             frame_layouts,
             imported_fns,
             sig_table,
             no_auto_parallel,
             m3d_spike,
+            does_real_work,
         );
     }
 
@@ -2132,6 +2196,7 @@ fn lower_function<'ctx, 'g>(
         m3d_spike_cpu_result_names: Vec::new(),
         m3d_spike_cpu_result_allocas: HashMap::new(),
         m3d_spike_fired: false,
+        does_real_work,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -2280,11 +2345,13 @@ fn lower_function_with_waits<'ctx, 'g>(
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
+    base_suspends: &'g SuspendSet,
     frame_layouts: &'g HashMap<String, FrameLayout>,
     imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     sig_table: &'g SignatureTable,
     no_auto_parallel: bool,
     m3d_spike: bool,
+    does_real_work: &'g HashSet<String>,
 ) -> Result<(), String> {
     // Collect the names of parameters. ALL parameters are live across any wait.
     let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
@@ -2293,7 +2360,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     // to identify an adjacent pure-CPU pair; calling it three times per function would
     // triple that scan cost. The result is stable (pure read of f + typed + suspend_set).
     let spike_candidates = if m3d_spike {
-        spike_cpu_candidates(f, typed, suspend_set)
+        spike_cpu_candidates(f, typed, suspend_set, base_suspends)
     } else {
         None
     };
@@ -2582,6 +2649,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         m3d_spike_cpu_result_names: Vec::new(),
         m3d_spike_cpu_result_allocas: HashMap::new(), // populated in Step 1c below
         m3d_spike_fired: false,
+        does_real_work,
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -6653,9 +6721,10 @@ fn spike_host_cpu_supported<'a>(
     f: &FunctionDecl,
     typed: &TypedModule,
     suspend_set: &SuspendSet,
+    base_suspends: &SuspendSet,
     owner: &'a std::collections::HashSet<String>,
 ) -> std::collections::HashSet<&'a str> {
-    if spike_cpu_candidates(f, typed, suspend_set).is_some() {
+    if spike_cpu_candidates(f, typed, suspend_set, base_suspends).is_some() {
         owner.iter().map(String::as_str).collect()
     } else {
         std::collections::HashSet::new()
@@ -6702,11 +6771,18 @@ fn spike_host_cpu_supported<'a>(
 /// Used in both `emit_artifact` (suspend_set extension) and `lower_function_with_waits`
 /// (frame-size + state-count injection).
 ///
+/// `base_suspends` is threaded through, UNCHANGED, to `admitted_cpu_group`'s Phase-2 temporary
+/// co-resident-suspension decline — it MUST be the authoritative pre-promotion suspend set (not
+/// `suspend_set`, which is `base_suspends ∪ spike_hosts` at every call site downstream of
+/// `codegen_query`, so checking `f`'s name against `suspend_set` there would be self-referential
+/// once `f` itself is admitted). See `admitted_cpu_group`'s doc comment for the full rationale.
+///
 /// Time: O(N) where N = AST nodes scanned  Space: O(k) where k = CPU-ABI-returning fns
 fn spike_cpu_candidates(
     f: &FunctionDecl,
     typed: &TypedModule,
     suspend_set: &SuspendSet,
+    base_suspends: &SuspendSet,
 ) -> Option<String> {
     // Any promoted host (not just `entrypoint`) may spike-host its own CPU group. The frame
     // a non-entrypoint host needs is sized through the SAME `cpu_group_slots_and_reserve`
@@ -6728,7 +6804,8 @@ fn spike_cpu_candidates(
     // When the authority declines (`None`), the whole function lowers sequentially, byte-
     // identical to `--no-auto-parallel`. When it admits, this function maps the admitted group
     // to its representative (first) callee — an EXTRACTION step, not a re-decision.
-    let group = ynz_typeck::cpu_admission::admitted_cpu_group(f, suspend_set, &supported)?;
+    let group =
+        ynz_typeck::cpu_admission::admitted_cpu_group(f, suspend_set, base_suspends, &supported)?;
     spike_group_representative_callee(f, &group, suspend_set, &supported)
 }
 
@@ -6943,17 +7020,27 @@ fn stmt_block_has_direct_cpu_group(
 /// (removing a host can re-admit a fn that declined only because that host was suspending,
 /// which can in turn re-decline a third fn), so it is deferred rather than approximated here.
 ///
+/// `base_suspends` is forwarded, UNCHANGED, to `spike_cpu_candidates` → `admitted_cpu_group`'s
+/// Phase-2 temporary co-resident-suspension decline. At BOTH real call sites (`frame_layouts_query`
+/// and `codegen_query`) this is the SAME value as `suspend_set` — the pure pre-promotion effective
+/// suspend set, probed BEFORE the spike-host names are unioned in — so passing it separately here
+/// costs nothing at the real call sites and keeps this function honest about which set plays which
+/// role, rather than silently assuming `suspend_set` doubles as the authoritative base.
+///
 /// Time: O(p · k) where p = promoted fns, k = AST nodes scanned per candidate.
 /// Space: O(p).
 pub fn spike_host_subset(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
+    base_suspends: &SuspendSet,
     promoted: &HashSet<String>,
 ) -> HashSet<String> {
     let mut hosts: HashSet<String> = HashSet::new();
     for item in &typed.module.items {
         let Item::Function(f) = item else { continue };
-        if promoted.contains(&f.name) && spike_cpu_candidates(f, typed, suspend_set).is_some() {
+        if promoted.contains(&f.name)
+            && spike_cpu_candidates(f, typed, suspend_set, base_suspends).is_some()
+        {
             hosts.insert(f.name.clone());
         }
     }

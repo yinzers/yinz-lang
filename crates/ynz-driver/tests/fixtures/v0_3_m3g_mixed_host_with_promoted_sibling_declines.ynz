@@ -1,0 +1,56 @@
+// v0.3-M3g Phase 2 neutrality fixture (b) — the A9 gating-asymmetry variant, REACHABLE ON
+// `main` TODAY, independent of Phase 2's `base_suspends` skip lift.
+//
+// `pureCpuHost` is an ordinary, legitimate CPU-promotion candidate (no suspension of its own) —
+// it promotes and flips the MODULE-GLOBAL `m3d_spike` flag to true. `mixedHost` is a suspending
+// host (`wait sleep(0)`) that ALSO owns its own top-level CPU group. The emit-side spike fire
+// site gates purely on the module-global flag plus `spike_cpu_candidates` -> `admitted_cpu_group`
+// — with NO per-function check that `mixedHost` itself is in the typeck `cpu_promoted` set (that
+// per-function reconciliation, `spike_host_subset`, feeds frame sizing / suspend-set union, not
+// the fire site). So BEFORE any Phase 2 code change, `pureCpuHost`'s legitimate promotion alone
+// was already enough to make `mixedHost`'s co-resident group admit and fire — a pre-existing
+// latent misfire (Paper-Traced and recorded in the Phase 2 FRAGO; see audit.md). The SAME
+// Phase-2 temporary co-resident-suspension decline that neutralizes fixture (a) also closes this
+// gap, because `admitted_cpu_group` is the one authority both `spike_cpu_candidates` and the
+// promotion/hint surfaces read.
+//
+// Invariant asserted: `pureCpuHost`'s group still FIRES (2 spawns) — its own promotion is
+// unaffected — but `mixedHost`'s group is DECLINED (0 of its own spawns), for exactly 2 spawns
+// total. If this ever shows 4 spawns, the pre-existing latent misfire reopened.
+//
+// Arithmetic: crunch(seed) = 4950 + seed.
+//   pureCpuHost = crunch(3) + crunch(4) = 4953 + 4954 = 9907
+//   mixedHost   = crunch(5) + crunch(6) = 4955 + 4956 = 9911
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   9907
+//   9911
+function crunch(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function pureCpuHost() -> int {
+  let a = crunch(3)
+  let b = crunch(4)
+  return a + b
+}
+
+function mixedHost() -> int {
+  let c = crunch(5)
+  let d = crunch(6)
+  wait sleep(0)
+  return c + d
+}
+
+function entrypoint() -> nothing {
+  let x = pureCpuHost()
+  let y = mixedHost()
+  print(x)
+  print(y)
+}

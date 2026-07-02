@@ -1946,9 +1946,20 @@ pub fn parallel_group_hints(
         }
 
         // Non-suspending function: emit a hint ONLY for the single CPU group codegen admits.
-        let Some(group) =
-            crate::cpu_admission::admitted_cpu_group(f, &effective_suspends, &supported_callees)
-        else {
+        //
+        // `base_suspends` == `suspend_set` here (both `&effective_suspends`): this hint pass
+        // never unions in the CPU-promotion set the way codegen's `suspend_set` does at the
+        // emission boundary, so the plain effective suspend set IS the authoritative
+        // pre-promotion signal `admitted_cpu_group`'s Phase-2 temporary decline reads. (In
+        // practice this call is only reached when `f` is NOT in `effective_suspends` — see the
+        // guard above — so the decline never fires here; passing the true value keeps this call
+        // consistent with the authority's contract rather than relying on the caller-side skip.)
+        let Some(group) = crate::cpu_admission::admitted_cpu_group(
+            f,
+            &effective_suspends,
+            &effective_suspends,
+            &supported_callees,
+        ) else {
             continue;
         };
         let Some(block) = resolve_block_path(&f.body.stmts, &group.block_path) else {

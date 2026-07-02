@@ -1,0 +1,42 @@
+// v0.3-M3g Phase 2 blocker-fix regression fixture: the BARE-INTRINSIC twin of
+// v0_3_m3g_top_level_group_in_suspending_host_declines.ynz.
+//
+// Same shape as fixture (a) — `entrypoint` hosts its own top-level CPU group (`crunch(3)`,
+// `crunch(4)`) immediately followed by an unrelated suspension — but the trailing suspension is
+// a BARE `sleep(0)` call with NO explicit `wait` keyword, instead of `wait sleep(0)`.
+//
+// This is the exact shape the code-reviewer's blocker finding identified: a bare may-block
+// intrinsic call still makes `entrypoint` a genuine `base_suspends` host at runtime
+// (`may_block::analyze` sets `calls_may_block_intrinsic` independent of `wait` syntax), but the
+// OLD `admitted_cpu_group` Phase-2 temporary decline re-derived "does this host suspend?" via an
+// AST scan (`stmt_contains_wait_deep` — literal `wait` node only — OR
+// `stmt_contains_suspending_call_deep` — which explicitly EXEMPTS may-block intrinsics like
+// `sleep`) that MISSED this exact case: no literal `wait` node, and `sleep` exempted from the
+// suspending-call scan. The old code would have admitted and fired this host's CPU group despite
+// the host genuinely suspending — breaking Phase 2's "provably inert" neutrality promise. The
+// fix keys the decline off `base_suspends.contains(&f.name)` (the authoritative pre-promotion
+// suspend set, which DOES include `entrypoint` here regardless of `wait` syntax) instead of the
+// AST re-scan, closing this hole.
+//
+// Arithmetic: crunch(seed) = (0+1+...+99) + seed = 4950 + seed.
+//   crunch(3) = 4953
+//   crunch(4) = 4954
+//   sum       = 9907
+//
+// Expected output (both modes — default and --no-auto-parallel): 9907
+function crunch(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(3)
+  let b = crunch(4)
+  sleep(0)
+  print(a + b)
+}

@@ -6366,6 +6366,139 @@ fn v03_m3d_mixed_cpu_io_group_declines_byte_identical() {
     m3d_assert_declines_byte_identical("v0_3_m3d_mixed_cpu_io_group_declines.ynz", "4958");
 }
 
+// WHY (group): v0.3-M3g Phase 2 (typeck front half — behavior-neutral) neutrality fixtures.
+// Phase 2 lifts `compute_cpu_promotions`'s `base_suspends` skip so a suspending host can host
+// its own CPU-promotion candidate group, and extends the guard-probe (E6) to `base_suspends`
+// hosts that are themselves direct candidates. Both are TYPECK-side machinery changes; the
+// admission gate (`ynz_typeck::cpu_admission::admitted_cpu_group`) carries a TEMPORARY
+// co-resident-suspension decline on its top-level branch (mirroring the pre-existing nested-
+// branch check) so this phase stays provably behavior-neutral — every fixture below must
+// decline (0 spawns) and stay byte-identical to `--no-auto-parallel`. Phase 3 removes the
+// temporary decline in the same change that builds the real fused CPU+I/O continuation and
+// flips the three M3d DECLINE fixtures above to fire.
+
+#[test]
+fn v03_m3g_top_level_group_in_suspending_host_declines_byte_identical() {
+    // WHY (Phase 2 neutrality fixture a): `entrypoint` owns a top-level CPU group
+    // (`crunch(3)`, `crunch(4)`) immediately followed by an unrelated `wait sleep(0)` — a
+    // suspending host that also hosts its own CPU-promotion candidate group, for the FIRST time
+    // reachable once Phase 2 lifts the `base_suspends` skip. With no fused continuation yet, the
+    // admission gate's temporary co-resident-suspension decline must keep this sequential: 0
+    // spawns, byte-identical to `--no-auto-parallel` (9907). If this shows ANY spawns, the
+    // Phase-2 temporary decline regressed — fix `admitted_cpu_group`'s top-level branch, not
+    // this test.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3g_top_level_group_in_suspending_host_declines.ynz",
+        "9907",
+    );
+}
+
+#[test]
+fn v03_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines_byte_identical() {
+    // WHY (Phase-2-blocker-fix regression fixture, bare-intrinsic twin of fixture (a)):
+    // `entrypoint` owns a top-level CPU group (`crunch(3)`, `crunch(4)`) immediately followed by
+    // a BARE `sleep(0)` call — no explicit `wait` keyword. `may_block::analyze` still seeds
+    // `calls_may_block_intrinsic` for a bare may-block-intrinsic call (`may_block.rs`), so
+    // `entrypoint` is a genuine `base_suspends` host at runtime regardless of `wait` syntax at
+    // the call site.
+    //
+    // Before the blocker fix, `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension
+    // decline re-derived "does this host suspend?" via an AST scan
+    // (`stmt_contains_wait_deep` — literal `wait` node only — OR
+    // `stmt_contains_suspending_call_deep` — which explicitly EXEMPTS may-block intrinsics) that
+    // MISSED this exact shape: no literal `wait`, and `sleep` exempted from the suspending-call
+    // scan. The decline predicate would have stayed false, `admitted_cpu_group` would have
+    // returned `Some`, and the host's CPU group would have FIRED at codegen — breaking Phase 2's
+    // "provably inert / behavior-neutral" promise for a legal Yinz shape. The fix keys the
+    // decline off `base_suspends.contains(&f.name)` — the authoritative pre-promotion suspend
+    // set, which DOES include `entrypoint` here — instead of the AST re-scan.
+    //
+    // 0 spawns, byte-identical to `--no-auto-parallel` (9907). If this shows ANY spawns, the
+    // bare-may-block-intrinsic hole in `admitted_cpu_group`'s Phase-2 temporary decline
+    // reopened — fix `admitted_cpu_group`'s top-level branch (key off `base_suspends`, not a
+    // second AST scan), not this test.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines.ynz",
+        "9907",
+    );
+}
+
+#[test]
+fn v03_m3g_mixed_host_with_promoted_sibling_declines_byte_identical() {
+    // WHY (Phase 2 neutrality fixture b — the A9 gating-asymmetry variant): `pureCpuHost` is an
+    // ordinary, legitimately-promoted CPU host (no suspension) that flips the module-global
+    // `m3d_spike` flag; `mixedHost` is a suspending host that ALSO owns its own top-level CPU
+    // group. `spike_cpu_candidates` -> `admitted_cpu_group` is reached for EVERY suspend_set
+    // function once the module-global flag is true, with no per-function `cpu_promoted.contains`
+    // check at the fire site — so BEFORE any Phase 2 code change, `pureCpuHost`'s legitimate
+    // promotion alone was already enough to make `mixedHost`'s co-resident group admit and fire
+    // (a pre-existing latent misfire, Paper-Traced against the Phase 1 baseline commit `d184934`
+    // and recorded in this phase's FRAGO — see audit.md). The invariant: exactly 2 spawns total
+    // (both `pureCpuHost`'s — its own promotion is untouched) and 0 from `mixedHost`. 4 spawns =
+    // the pre-existing latent misfire reopened; 0 spawns = `pureCpuHost` stopped firing.
+    let fixture_name = "v0_3_m3g_mixed_host_with_promoted_sibling_declines.ynz";
+    let src = fixture(fixture_name);
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "9907\n9911",
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        2,
+        "exactly 2 spawns — both from pureCpuHost's legitimate promotion; mixedHost's \
+         co-resident group must decline (0 of its own spawns). 4 spawns = the pre-existing \
+         latent misfire reopened; 0 = pureCpuHost stopped firing. IR:\n{ir}"
+    );
+
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free (no leak on the declined-mixed-host path); alloc={alloc}, free={free}"
+    );
+}
+
+#[test]
+fn v03_m3g_guard_tripping_crossing_in_suspending_host_declines_byte_identical() {
+    // WHY (Phase 2 E6 adversarial fixture): a suspending host (`wait sleep(0)`) that also owns
+    // a clean top-level CPU group (`crunch(3)`, `crunch(4)`), PLUS a THIRD, separate call to the
+    // SAME callee in a sub-expression position (`crunch(5) + 1`). `crunch` never suspends under
+    // the REAL suspend set, so this compiles clean at the plain layer (no pre-existing hard
+    // error) — the hazard is visible ONLY to the promotion-layer guard-probe, which augments
+    // `suspending_fns` with this candidate's own CPU-group callee before probing. This is a
+    // PERMANENT safety decline (unlike the neutrality fixtures above) — the guard-probe
+    // extension to `base_suspends` hosts (`compute_cpu_promotions`'s rollback loop) must exclude
+    // this host from the typeck `promoted` set regardless of the Phase-2 temporary
+    // admission-gate decline, because "a suspending call inside a larger expression" is a real,
+    // permanent codegen constraint. 0 spawns, byte-identical to `--no-auto-parallel`. If this
+    // shows ANY spawns, the guard-probe extension regressed — fix `compute_cpu_promotions`'s
+    // rollback loop, not this test. (Direct, precise proof of the `promoted`-set exclusion lives
+    // in `ynz-typeck`'s `base_suspends_host_with_subexpr_position_guard_declines_promotion` unit
+    // test — this fixture proves the observable byte-identical behavior.)
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3g_guard_tripping_crossing_in_suspending_host_declines.ynz",
+        "14863",
+    );
+}
+
 // WHY (group): the feature-development tests (slices 1–4) covered the simple top-level
 // distinct/same-callee return-class FIRE and the int-only placement FIRE/DECLINE. The danger
 // matrix targets the UNCOVERED cross-product cells where a return-class ABI pack/bind path

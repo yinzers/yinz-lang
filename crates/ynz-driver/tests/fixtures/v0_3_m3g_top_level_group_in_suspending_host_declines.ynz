@@ -1,0 +1,32 @@
+// v0.3-M3g Phase 2 neutrality fixture (a): `entrypoint` hosts its own top-level CPU group
+// (`crunch(3)`, `crunch(4)`) directly followed by an unrelated `wait sleep(0)` — a suspending
+// host that ALSO owns a CPU group in the same body. Phase 2 lifts `compute_cpu_promotions`'s
+// `base_suspends` skip, so `entrypoint` becomes a genuine CPU-promotion candidate for the first
+// time — but the fused CPU+I/O continuation that would let the group's join and the trailing
+// `wait` share one continuation does not exist until Phase 3. `admitted_cpu_group`'s Phase-2
+// temporary co-resident-suspension decline (mirroring the pre-existing nested-branch check)
+// keeps this host declining to plain sequential lowering: 0 spawns, byte-identical to
+// `--no-auto-parallel`.
+//
+// Arithmetic: crunch(seed) = (0+1+...+99) + seed = 4950 + seed.
+//   crunch(3) = 4953
+//   crunch(4) = 4954
+//   sum       = 9907
+//
+// Expected output (both modes — default and --no-auto-parallel): 9907
+function crunch(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(3)
+  let b = crunch(4)
+  wait sleep(0)
+  print(a + b)
+}

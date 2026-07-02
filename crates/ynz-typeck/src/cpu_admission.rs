@@ -65,10 +65,32 @@ pub struct BlockStep {
 /// Mirrors the codegen admission decision exactly: single-group constraint, no post-join param
 /// read, no nested group sharing the host with another suspension, no nested param-host.
 ///
-/// Time: O(N) where N = AST nodes in `f`  Space: O(D) recursion depth + O(m) members.
+/// **TEMPORARY (v0.3-M3g Phase 2):** a top-level group ALSO declines when the host `f` is ITSELF
+/// a member of `base_suspends` (co-resident-suspension decline) — the mirror of the nested
+/// branch's pre-existing check, added so lifting `compute_cpu_promotions`'s `base_suspends` skip
+/// stays behavior-neutral until Phase 3 builds the real fused CPU+I/O continuation and removes
+/// both declines together.
+///
+/// `base_suspends` MUST be the authoritative pre-CPU-promotion suspend set (`check_query`'s
+/// `suspends_set`, extended with imported-suspending names — i.e. the SAME set
+/// `compute_cpu_promotions` reads as `base_suspends` when it decides a host is newly candidate-
+/// eligible). It is deliberately a SEPARATE parameter from `suspend_set`: at the codegen call
+/// site `suspend_set` is `base_suspends ∪ spike_hosts` (every function codegen may spike-host,
+/// including `f` itself once `f` admits) — checking `f`'s own name against THAT union would be
+/// self-referential (a pure-CPU host with no suspension of its own gets unioned in the moment it
+/// is admitted, so re-probing it against the union would wrongly decline it the second time
+/// `admitted_cpu_group` runs). `base_suspends` never contains a name for the sole reason that name
+/// was CPU-promoted, so checking membership there is airtight in both directions: it declines
+/// every genuine co-resident-suspension host (the case Phase 2 newly makes reachable — an explicit
+/// `wait`, a suspending callee, OR a bare may-block intrinsic call with no `wait` wrapper, since
+/// `may_block::analyze` seeds `calls_may_block_intrinsic` independent of `wait` syntax) and never
+/// declines a host whose only suspension is its own CPU join.
+///
+/// Time: O(1) amortized (`HashSet::contains`) plus the O(N) AST work shared with the other gates.
 pub fn admitted_cpu_group(
     f: &FunctionDecl,
     suspend_set: &SuspendSet,
+    base_suspends: &SuspendSet,
     supported_callees: &HashSet<String>,
 ) -> Option<AdmittedCpuGroup> {
     // Single-group constraint: a function spike-hosts IFF it has EXACTLY ONE CPU group across all
@@ -83,6 +105,36 @@ pub fn admitted_cpu_group(
     // occupies, so a post-join reload returns the handle pointer's bytes instead of the value.
     // A param used only in spawn args round-trips safely (the load precedes the handle store).
     if let Some(members) = cpu_group_member_indices(&f.body.stmts, suspend_set, supported_callees) {
+        // TEMPORARY (v0.3-M3g Phase 2, removed by Phase 3's admission flip): decline a
+        // top-level group when the host `f` is ITSELF a `base_suspends` host (an explicit
+        // `wait`, a suspending callee, or a bare may-block-intrinsic call — anywhere in `f`'s
+        // body, not just co-resident with the group), mirroring the nested branch's
+        // co-resident-suspension check below. Phase 2 lifts `compute_cpu_promotions`'s
+        // `base_suspends` skip (`queries.rs:761`), so a host that already suspends (e.g.
+        // `crunch(x); crunch(y); wait sleep(5)`) becomes a promotion candidate for the first
+        // time — but the fused continuation that would let the CPU join and the OTHER
+        // suspension share one continuation doesn't exist until Phase 3. Without this decline,
+        // such a host would admit here today (this is the ONLY per-function binary-side gate —
+        // the module-global `m3d_spike` flag plus `spike_cpu_candidates` reach
+        // `admitted_cpu_group` for EVERY suspend_set function once ANY function in the module
+        // promotes, with no per-function promoted-set check at the codegen fire site — see plan
+        // `v0-3-m3g-mixed-cpu-io-overlap` ¶1 A9) and the mixed group would fire, deadlocking or
+        // racing against the fused continuation this milestone hasn't built yet. Phase 3 removes
+        // this decline in the SAME change that removes the nested branch's `:102-108` decline
+        // and wires the real fused poll, so hint==binary parity never has a window where it lies.
+        //
+        // Keyed off `base_suspends` membership (the AUTHORITATIVE pre-promotion signal), NOT a
+        // second re-derived AST scan of `f`'s own statements: a re-derived scan that exempts
+        // may-block intrinsics (as `stmt_contains_suspending_call_deep` correctly does for OTHER
+        // purposes — an intrinsic wait has no embedded child sub-frame to alias) MISSES a bare
+        // `sleep(0)` call with no `wait` wrapper, which still makes `f` suspend at runtime
+        // (`may_block.rs` sets `calls_may_block_intrinsic` independent of `wait` syntax) — a real
+        // co-resident-suspension host the old scan let straight through to codegen. Reading
+        // `base_suspends` instead closes that hole and any future may-block-intrinsic or
+        // bare-suspension shape without a second detector to keep in sync.
+        if base_suspends.contains(&f.name) {
+            return None;
+        }
         let last_idx = *members.last().expect("group has ≥2 members");
         let post_stmts = &f.body.stmts[(last_idx + 1)..];
         if param_read_after_join(f, post_stmts) {

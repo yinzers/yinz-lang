@@ -107,15 +107,22 @@ pub fn frame_layouts_query(
     // callee-eligibility filter reads, silently declining the host's group. Probing with
     // the effective set (the SAME set codegen_query uses) keeps both query boundaries'
     // host-admission decisions identical. See `spike_host_subset` for the full rationale.
-    let effective_suspend_set: SuspendSet =
+    // `base_suspend_set` is the AUTHORITATIVE pre-CPU-promotion suspend set — the exact value
+    // `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension decline reads (see that
+    // function's doc comment). It is kept UNMUTATED here (never unioned with `spike_hosts`) and
+    // threaded through to `build_frame_layouts_with_resolver` as a separate argument from the
+    // union `effective_suspend_set` below, so a legitimate pure-CPU host (no suspension of its
+    // own) is never wrongly self-declined once its own name lands in the union.
+    let base_suspend_set: SuspendSet =
         build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
     let promotion = cpu_promotion_query(db, source);
     let spike_hosts = spike_host_subset(
         &check.typed_module,
-        &effective_suspend_set,
+        &base_suspend_set,
+        &base_suspend_set,
         &promotion.promoted,
     );
-    let mut effective_suspend_set = effective_suspend_set;
+    let mut effective_suspend_set = base_suspend_set.clone();
     for name in &spike_hosts {
         effective_suspend_set.insert(name.clone());
     }
@@ -236,6 +243,7 @@ pub fn frame_layouts_query(
     let mut layouts = build_frame_layouts_with_resolver(
         &check.typed_module,
         &effective_suspend_set,
+        &base_suspend_set,
         &shape_abi_sizes,
         &callee_size_resolver,
     );
@@ -324,12 +332,19 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
     // sub-frame and corrupting it when the imported child writes at its layout offset. One
     // canonical set across both query boundaries is the only thing that keeps the two
     // sizing decisions in lock-step.
-    let effective_suspend_set: SuspendSet =
+    // `base_suspend_set` is the AUTHORITATIVE pre-CPU-promotion suspend set — the exact value
+    // `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension decline reads (see that
+    // function's doc comment). Kept UNMUTATED (never unioned with `spike_hosts`) and threaded
+    // through to `emit_artifact` as a separate argument from the union `suspends_with_promotions`
+    // below, so a legitimate pure-CPU host is never wrongly self-declined once its own name lands
+    // in the union.
+    let base_suspend_set: SuspendSet =
         build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
     let promotion = cpu_promotion_query(db, source);
     let spike_hosts = spike_host_subset(
         &check.typed_module,
-        &effective_suspend_set,
+        &base_suspend_set,
+        &base_suspend_set,
         &promotion.promoted,
     );
     // emit_artifact's emit-time re-probe (`lower_function_with_waits` → `spike_cpu_candidates`)
@@ -343,7 +358,7 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
     // The admitted-but-declined host gets a dead 48-byte reserve (OVER-allocation, never
     // under, so output stays correct and alloc==free). Exact reconciliation needs a fixpoint
     // over the host set, so it is deferred rather than approximated. See `spike_host_subset`.
-    let mut suspends_with_promotions = effective_suspend_set;
+    let mut suspends_with_promotions = base_suspend_set.clone();
     for name in &spike_hosts {
         suspends_with_promotions.insert(name.clone());
     }
@@ -367,9 +382,11 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         None,
         &sig_output.imported_options,
         &suspends_with_promotions,
+        &base_suspend_set,
         &sig_output.imported_fns,
         &layouts_arc,
         &spike_hosts,
+        &check.does_real_work_set,
     ) {
         Ok(artifact) => Arc::new(CodegenOutput {
             artifact,

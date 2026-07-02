@@ -675,14 +675,23 @@ pub fn cpu_promotion_query(
 
 /// Pure core of the CPU-promotion analysis (Decision Record item 8b/8c).
 ///
-/// 1. **Candidate identification** (bottom-up, deterministic): a NON-suspending,
-///    non-cyclic function whose body contains at least one CPU-parallelizable group
-///    (a `Parallel` group of ≥2 members with ≥1 CPU member) is a promotion candidate.
+/// 1. **Candidate identification** (bottom-up, deterministic): a non-cyclic function whose body
+///    contains at least one CPU-parallelizable group (a `Parallel` group of ≥2 members with ≥1
+///    CPU member) is a promotion candidate — **v0.3-M3g Phase 2:** this now includes hosts that
+///    already suspend (`base_suspends`, e.g. a function with its own `wait` or a suspending
+///    callee) so a co-resident CPU group can be identified as a candidate too. This ships
+///    computed but STRUCTURALLY INERT for the codegen fire site: `admitted_cpu_group`'s Phase-2
+///    temporary co-resident-suspension decline (`cpu_admission.rs`) still blocks a
+///    `base_suspends` host's top-level (and, pre-existing, nested) group from ever firing until
+///    Phase 3's admission flip — this phase only makes the TYPECK-side `promoted` set correctly
+///    inclusive (a prerequisite for the Phase 3 fusion and the E6 guard-probe extension below).
 /// 2. **Transitive-SM closure**: a promoted function becomes a state machine, so the
 ///    closure is `base_suspends ∪ closure(promoted)` — every caller of a promoted
 ///    function becomes SM too.
 /// 3. **Guard-probe transitive rollback**: probe EVERY newly-SM function (the closure
-///    minus the base suspends) against the suspension guards via
+///    minus the base suspends) — **plus, v0.3-M3g Phase 2 (E6), every `base_suspends` host that
+///    is ITSELF a direct promotion candidate** (its own CPU join is a NEW suspension point the
+///    pre-promotion `suspends_set` never accounted for) — against the suspension guards via
 ///    `suspension_guards_fire_for_fn`. If a guard fires on a function `F`, remove
 ///    from the candidate set every promotion in `F`'s call-closure (any of them being
 ///    SM forces `F` to be SM). Recompute and re-probe until no guard fires — monotone
@@ -755,10 +764,16 @@ pub(crate) fn compute_cpu_promotions(
 
     let mut candidates: HashSet<String> = HashSet::new();
     for f in &fn_decls {
-        // A function that already suspends is already a state machine — not a
-        // promotion. A cyclic function is excluded. Only non-suspending, non-cyclic
-        // functions with a CPU group are candidates.
-        if base_suspends.contains(&f.name) || cyclic_members.contains(&f.name) {
+        // A cyclic function is excluded (mutual-suspension prevention — see below). A
+        // `base_suspends` host (already a state machine for its OWN wait/suspending-callee
+        // reasons) is v0.3-M3g Phase 2's extension: it can STILL be a candidate when it hosts
+        // its own CPU group, because promoting it costs nothing extra at the typeck layer (it
+        // was already going to be a state machine) and the guard-probe below (E6) still checks
+        // its own CPU-join crossings before admitting it into `candidates`. This lift is
+        // structurally inert for codegen today: `admitted_cpu_group`'s Phase-2 temporary
+        // co-resident-suspension decline keeps every such host's group from actually firing
+        // until Phase 3.
+        if cyclic_members.contains(&f.name) {
             continue;
         }
         let cpu_here = crate::independence::CpuCandidacy {
@@ -826,14 +841,31 @@ pub(crate) fn compute_cpu_promotions(
             cpu_callees_by_candidate.insert(f.name.clone(), callees);
         }
 
-        // Probe every NEWLY-SM function (closure minus base suspends). A guard firing
-        // on `F` means `F` cannot be a state machine — roll back every candidate in
-        // `F`'s call-closure.
+        // Probe every NEWLY-SM function (closure minus base suspends) — PLUS (v0.3-M3g Phase 2,
+        // E6) every `base_suspends` host that is ITSELF a direct promotion candidate. A guard
+        // firing on `F` means `F` cannot be a state machine — roll back every candidate in `F`'s
+        // call-closure (which, for a directly-candidate `base_suspends` host, includes `F`
+        // itself, since `candidates_reachable_from` starts its DFS at `f.name`).
+        //
+        // WHY the extension: the standard "newly-SM" loop deliberately EXCLUDES `base_suspends`
+        // hosts, because normally they were already state machines for reasons unrelated to CPU
+        // promotion (their own `wait`/suspending callee), and nothing new needs re-checking.
+        // That reasoning breaks once a `base_suspends` host can itself be a CPU-promotion
+        // candidate (the `:761`-era skip lifted above): its OWN CPU join is a suspension point
+        // the pre-promotion `suspends_set` never accounted for, so a guard-tripping local
+        // crossing THAT join (a nested shape, an unsupported crossing type, …) must still be
+        // caught here — the guard-probe is the only mechanism that keeps the TYPECK-side
+        // `promoted`/`cpu_promoted` set (and everything that reads it: the `parallel_groups`
+        // hint, the eventual Phase-3 fused-continuation admission) honest about which
+        // `base_suspends` hosts are actually safe to treat as CPU-promoted.
         let closure_suspending: HashSet<&str> = closure.iter().map(String::as_str).collect();
         let mut to_remove: HashSet<String> = HashSet::new();
         for f in &fn_decls {
-            if !closure.contains(&f.name) || base_suspends.contains(&f.name) {
-                continue; // not newly-SM
+            let is_newly_sm = closure.contains(&f.name) && !base_suspends.contains(&f.name);
+            let is_base_suspends_direct_candidate =
+                base_suspends.contains(&f.name) && candidates.contains(&f.name);
+            if !is_newly_sm && !is_base_suspends_direct_candidate {
+                continue; // not newly-SM and not a base_suspends host with its own CPU join
             }
             // Augment the suspending set with this function's OWN CPU callees only when
             // it is itself a promotion candidate (its CPU joins are its suspension points).
@@ -1898,6 +1930,86 @@ function entrypoint() -> nothing {
         assert!(
             !has_errors(src),
             "the guard-clean control must compile with no errors"
+        );
+    }
+
+    // v0.3-M3g Phase 2: `base_suspends` host promotion + guard-probe extension (E6).
+    // These probe `compute_cpu_promotions`'s `promoted` set DIRECTLY — the precise, internal
+    // proof that the integration-level `v03_m3g_*_declines_byte_identical` fixtures cannot give
+    // by themselves, because `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension
+    // decline ALSO forces every such fixture to 0 spawns regardless of whether this typeck-side
+    // set is correct. Both proofs matter: the fixtures lock the observable (byte-identical)
+    // behavior; these unit tests lock the underlying `promoted`-set correctness the fixtures
+    // can't directly see.
+
+    #[test]
+    fn base_suspends_host_with_clean_cpu_group_promotes() {
+        // WHY: a suspending host (`wait sleep(...)`) that ALSO owns a clean (non-guard-tripping)
+        // top-level CPU group must now be a genuine `promoted` candidate — the `base_suspends`
+        // skip this phase lifts from `compute_cpu_promotions`'s candidate identification. This
+        // is the positive companion to the E6 decline test below: lifting the skip must not
+        // ALSO make every base_suspends host universally decline via the guard-probe — a clean
+        // one must still promote.
+        let src = format!(
+            r#"{FIB}
+function entrypoint() -> nothing {{
+    let a = fib(20)
+    let b = fib(21)
+    wait sleep(0)
+    print(a)
+    print(b)
+}}
+"#
+        );
+        let inputs = build_inputs(&src);
+        let promoted = promote(&inputs, false, false);
+        assert!(
+            promoted.contains("entrypoint"),
+            "a base_suspends host with a clean top-level CPU group must promote once the \
+             base_suspends skip is lifted; got: {promoted:?}"
+        );
+    }
+
+    #[test]
+    fn base_suspends_host_with_subexpr_position_guard_declines_promotion() {
+        // WHY (E6 proof): `entrypoint` is a `base_suspends` host (`wait sleep(0)`) that ALSO
+        // owns its own top-level CPU group (`fib(20)`, `fib(21)`) — a genuine candidate once
+        // the base_suspends skip is lifted — PLUS a THIRD, separate call to the same CPU-group
+        // callee used in a sub-expression position (`fib(22) + 1`). `fib` is NOT suspending
+        // under the REAL suspend set (ordinary `check_query` never flags this — it compiles
+        // clean), so the hazard is invisible to the plain compile pass. It becomes visible ONLY
+        // when the guard-probe augments `suspending_fns` with THIS candidate's own CPU-group
+        // callee (`fib`, per-candidate seeding), which is exactly the E6 extension: the
+        // guard-probe must now probe `base_suspends` hosts that are themselves direct
+        // candidates, not just skip them. If the E6 extension regresses (the guard-probe loop
+        // reverts to skipping `base_suspends` hosts entirely), this candidate would wrongly stay
+        // in `promoted` — this test would then fail to observe the decline.
+        let src = format!(
+            r#"{FIB}
+function entrypoint() -> nothing {{
+    let a = fib(20)
+    let b = fib(21)
+    let c = fib(22) + 1
+    wait sleep(0)
+    print(a + b + c)
+}}
+"#
+        );
+        // Non-vacuous control: the program compiles clean BEFORE promotion is even considered —
+        // `fib(22) + 1` is not a suspending-call-in-subexpr-position violation under the real
+        // suspend set, so this isn't accidentally testing a pre-existing hard compile error.
+        assert!(
+            !has_errors(&src),
+            "the subexpr-position fib call must compile clean under the REAL suspend set \
+             (fib never suspends) — this test must isolate the guard-probe decline, not a \
+             pre-existing compile error"
+        );
+        let inputs = build_inputs(&src);
+        let promoted = promote(&inputs, false, false);
+        assert!(
+            !promoted.contains("entrypoint"),
+            "a base_suspends host whose own CPU-group callee ALSO appears in a sub-expression \
+             position elsewhere must decline promotion (E6 guard-probe extension); got: {promoted:?}"
         );
     }
 }
