@@ -1339,7 +1339,7 @@ triggers = "`wait`-auto-insertion analysis ships in the concurrency milestone."
 [[deferred_tooling_feature]]
 name = "lsp-inlay-hint-lifetimes"
 substitute = "No user-facing scope-annotation UI exists in v0.1. The compiler tracks value scopes fully internally."
-why = "The `lifetimes` muted-hint domain (Informational category; opt-in only) shows scope annotations the compiler figures out automatically. Yinz v0.1 has no explicit scope-annotation surface. The M5 LSP protocol handler emits no hints. If value scopes stay fully implicit (possible per docs/internal/implementation/IMP-ownership.md), this entry remains protocol-only indefinitely."
+why = "The `lifetimes` muted-hint domain (Informational category; opt-in only) shows scope annotations the compiler figures out automatically. Yinz v0.1 has no explicit scope-annotation surface. The M5 LSP protocol handler emits no hints. If value scopes stay fully implicit (possible per the ownership design doc), this entry remains protocol-only indefinitely."
 ships_in = "TBD — may never ship if value scopes stay fully implicit"
 design_doc = "docs/internal/implementation/IMP-ownership.md"
 triggers = "Explicit scope annotations get a user-facing surface, OR user demand surfaces for seeing implicit scope annotations in the IDE."
