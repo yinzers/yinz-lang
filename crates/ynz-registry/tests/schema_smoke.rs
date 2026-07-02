@@ -263,7 +263,10 @@ fn deferred_tooling_feature_lookup() {
         .find(|e| e.name == "--kernel")
         .expect("--kernel deferred_tooling_feature not found (Phase 5b migration)");
     assert_eq!(entry.ships_in, "v0.3");
-    assert_eq!(entry.design_doc, "design/no-runtime-mode.md");
+    assert_eq!(
+        entry.design_doc,
+        "docs/internal/implementation/IMP-no-runtime-mode.md"
+    );
 }
 
 #[test]
@@ -272,7 +275,7 @@ fn deferred_language_feature_lookup() {
         .expect("f32 deferred_language_feature not found (Phase 5a migration)");
     assert_eq!(entry.ships_in, "v2+");
     assert!(!entry.why.is_empty());
-    assert_eq!(entry.design_doc, "design/mvp-scope.md");
+    assert_eq!(entry.design_doc, "docs/reference/REF-mvp-scope.md");
 }
 
 #[test]

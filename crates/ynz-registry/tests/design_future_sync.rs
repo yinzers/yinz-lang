@@ -1,13 +1,21 @@
-// WHY: Every file in design/future/ that describes a user-facing feature must have a
+// WHY: Every "future design" doc that describes a user-facing feature must have a
 // corresponding registry entry so the LSP, docs generator, and error messages can read it.
 // If a new future-design doc is added without a registry entry, the compiler has no way
 // to render a consistent deferred-feature error when users accidentally use that syntax.
 // This test catches the missing-entry direction. The registry→filesystem direction is also
 // checked: every entry's design_doc field must reference an existing file.
+//
+// Post-2026-07-01 docs/ taxonomy migration (see crates/ynz-registry/tests/schema_smoke.rs
+// for the same migration's effect on registry design_doc values): the old design/future/
+// directory (plus its nested design/future/gui/ subfolder) was flattened into
+// docs/internal/scratchpad/ with every future-design file renamed to a SCRATCH-future-*
+// prefix. That scratchpad directory is now SHARED with SCRATCH-stdlib-*.md and
+// SCRATCH-open-questions.md, so this test filters to the SCRATCH-future- prefix to
+// preserve the original "just the future/ docs" scan scope.
 
 use std::path::PathBuf;
 
-fn design_future_dir() -> PathBuf {
+fn workspace_root() -> PathBuf {
     // CARGO_MANIFEST_DIR = .../crates/ynz-registry
     // parent() x2 → workspace root
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -15,45 +23,72 @@ fn design_future_dir() -> PathBuf {
         .unwrap() // crates/
         .parent()
         .unwrap() // workspace root
-        .join("design")
-        .join("future")
+        .to_path_buf()
 }
 
-/// Files in design/future/ that intentionally have no registry entry.
-/// Rationale for each in the comment.
+fn design_future_dir() -> PathBuf {
+    workspace_root()
+        .join("docs")
+        .join("internal")
+        .join("scratchpad")
+}
+
+const FUTURE_PREFIX: &str = "SCRATCH-future-";
+
+/// Files in docs/internal/scratchpad/ (SCRATCH-future- prefixed) that intentionally have
+/// no registry entry. Rationale for each in the comment.
 const SKIP: &[(&str, &str)] = &[
-    ("index.md", "index file, not a feature doc"),
     (
-        "auto-soa.md",
+        "SCRATCH-future-designs-index.md",
+        "index file, not a feature doc",
+    ),
+    (
+        "SCRATCH-future-auto-soa.md",
         "codegen-only optimization, no user-facing token",
     ),
     (
-        "http-framework.md",
+        "SCRATCH-future-http-framework.md",
         "deferred_stdlib_api kind, zero M1 entries per schema",
     ),
     (
-        "panic-safety.md",
+        "SCRATCH-future-panic-safety.md",
         "covered by errors keyword + panic isolation, no deferred token",
     ),
     (
-        "string-ptr-len-overhaul.md",
+        "SCRATCH-future-string-ptr-len-overhaul.md",
         "compiler-internal representation change, no user token",
     ),
     (
-        "supervisor.md",
+        "SCRATCH-future-supervisor.md",
         "deferred_stdlib_api kind, zero M1 entries per schema",
     ),
     (
-        "doc-generator.md",
+        "SCRATCH-future-doc-generator.md",
         "parking-lot tooling direction (`ynz doc`), no concrete deferred user token yet",
     ),
     (
-        "macos-platform-support.md",
+        "SCRATCH-future-macos-platform-support.md",
         "CI/infra deferral (macOS dropped from matrix), no user-facing token",
     ),
     (
-        "cross-module-frame-serialization.md",
+        "SCRATCH-future-cross-module-frame-serialization.md",
         "shipped in v0.3-M3e — deferred_language_feature entry retired; file kept as design record",
+    ),
+    (
+        "SCRATCH-future-gui-index.md",
+        "index file for the GUI design subfolder, not a feature doc (formerly design/future/gui/index.md)",
+    ),
+    (
+        "SCRATCH-future-gui-architecture.md",
+        "parking-lot far-future stdlib direction (webview-shell model, post-v0.5), no concrete deferred user token yet",
+    ),
+    (
+        "SCRATCH-future-gui-build-targets.md",
+        "parking-lot far-future stdlib direction (webview-shell model, post-v0.5), no concrete deferred user token yet",
+    ),
+    (
+        "SCRATCH-future-gui-capabilities.md",
+        "parking-lot far-future stdlib direction (webview-shell model, post-v0.5), no concrete deferred user token yet",
     ),
 ];
 
@@ -75,7 +110,7 @@ fn every_future_doc_has_a_registry_entry_or_is_skipped() {
     let design_docs = deferred_design_docs();
 
     let entries = std::fs::read_dir(&future_dir)
-        .unwrap_or_else(|e| panic!("cannot read design/future/: {e}"));
+        .unwrap_or_else(|e| panic!("cannot read docs/internal/scratchpad/: {e}"));
 
     let mut missing = Vec::new();
 
@@ -87,14 +122,21 @@ fn every_future_doc_has_a_registry_entry_or_is_skipped() {
             continue;
         }
 
+        // Only the SCRATCH-future- prefixed files correspond to the old design/future/
+        // scan scope — docs/internal/scratchpad/ is now shared with SCRATCH-stdlib-*.md
+        // and SCRATCH-open-questions.md, which this test never covered.
+        if !filename_str.starts_with(FUTURE_PREFIX) {
+            continue;
+        }
+
         if is_skipped(&filename_str) {
             continue;
         }
 
-        let design_doc_path = format!("design/future/{filename_str}");
+        let design_doc_path = format!("docs/internal/scratchpad/{filename_str}");
         if !design_docs.iter().any(|doc| *doc == design_doc_path) {
             missing.push(format!(
-                "design/future/{filename_str} has no registry entry — \
+                "docs/internal/scratchpad/{filename_str} has no registry entry — \
                  add a [[deferred_language_feature]] or [[deferred_tooling_feature]] entry \
                  to registry/features.toml with design_doc = {design_doc_path:?}, \
                  OR add it to the SKIP list in this test with a rationale"
@@ -111,12 +153,7 @@ fn every_future_doc_has_a_registry_entry_or_is_skipped() {
 
 #[test]
 fn every_registry_entry_design_doc_exists() {
-    let workspace_root = design_future_dir()
-        .parent()
-        .unwrap() // design/
-        .parent()
-        .unwrap() // workspace root
-        .to_path_buf();
+    let workspace_root = workspace_root();
 
     let mut broken = Vec::new();
 
