@@ -56,13 +56,13 @@ Building the site now (pre-v1.0) is the correct sequencing: it gives the languag
 ## Constraints
 
 - **Mono-repo**: site lives at `website/` in `yinzers/yinz-lang` repo. Builds in CI alongside the compiler workspace.
-- **Yinz snippet drift is unacceptable**: every Yinz code snippet inline on the site lives as a real `.ynz` file in `examples/website/` that CI builds + runs. Output captured via `insta` snapshots. Drift = red CI build. Same SSOT discipline as `registry/features.toml`.
-- **No hand-maintained roadmap rows**: roadmap status pills derive from `registry/roadmap.toml` + plan-file front-matter + GitHub release state. Hardcoded version strings (`v0.2.0-m3`) are prohibited — read from `Cargo.toml` or release tags at build time.
+- **Yinz snippet drift is unacceptable**: every Yinz code snippet inline on the site lives as a real `.ynz` file in `examples/website/` that CI builds + runs. Output captured via `insta` snapshots. Drift = red CI build. Same SSOT discipline as [`registry/features.toml`](../../../../registry/features.toml).
+- **No hand-maintained roadmap rows**: roadmap status pills derive from `registry/roadmap.toml` + plan-file front-matter + GitHub release state. Hardcoded version strings (`v0.2.0-m3`) are prohibited — read from [`Cargo.toml`](../../../../Cargo.toml) or release tags at build time.
 - **License**: Apache 2.0 (matches the language repo).
 - **Pre-v1.0 honesty**: site cannot overpromise. Status indicators must accurately reflect "Shipped / In progress / Planned" per release-tag state. Educator-facing pages must say "v1.0 curriculum-readiness target 2027" — not "use Yinz to teach today."
 - **English only** at MVP. Translations are out of scope.
 - **No user accounts, no auth, no CMS.** All content is MD-in-repo via `@nuxt/content`. Anything that would require a backend is out of scope.
-- **All four audience tracks visible from the homepage**: sr devs, jr devs, educators, self-teachers. The teaching mission (`design/teaching-mission.md`) is the differentiating moat.
+- **All four audience tracks visible from the homepage**: sr devs, jr devs, educators, self-teachers. The teaching mission ([`docs/reference/REF-teaching-mission.md`](../../../../docs/reference/REF-teaching-mission.md)) is the differentiating moat.
 
 ## Architectural Decisions Made
 
@@ -139,7 +139,7 @@ Phase 1 (MVP) ships in order. Phase 2 milestones unblock after Phase 1 lands and
 **Value delivered**: roadmap rows on the landing page are no longer hardcoded — they read from `registry/roadmap.toml` + plan-file frontmatter + GitHub release tag state. Status pill logic implemented per Patrick's design-comment spec (no tag → Planned, draft/pre-release → In progress, published → Shipped). Adding a new version to the roadmap means editing `registry/roadmap.toml`, never the HTML.
 **Execution plan**: `webpage-roadmap-registry` (status: planned)
 **Depends on**: Milestone 2
-**Rough scope**: design `registry/roadmap.toml` schema (one entry per version, with: version string, name, description, expected milestone slug list, optional notes). Write a build-time scanner that joins this with `.claude/plans/{active,paused,done}/*.md` front-matter (for in-progress signal) and `gh release list` output (for shipped signal). Build `<YRoadmap>` Vue component that consumes the joined data. Replace the hardcoded landing-page roadmap rows with this component. Update `.claude/rules/feature-registry.md` to mention the new TOML file.
+**Rough scope**: design `registry/roadmap.toml` schema (one entry per version, with: version string, name, description, expected milestone slug list, optional notes). Write a build-time scanner that joins this with `.claude/plans/{active,paused,done}/*.md` front-matter (for in-progress signal) and `gh release list` output (for shipped signal). Build `<YRoadmap>` Vue component that consumes the joined data. Replace the hardcoded landing-page roadmap rows with this component. Update [`.claude/rules/feature-registry.md`](../../../rules/feature-registry.md) to mention the new TOML file.
 
 #### Milestone 4: webpage-docs-pipeline
 **Value delivered**: `/docs` route renders all `spec/*.md` and `design/*.md` files. Sidebar nav generated from file tree + frontmatter weighting. Pagefind search integrated and indexes docs. Frontmatter-slug routing implemented via `[slug].vue` (file moves don't break URLs). Redirect map generated at build time for any slug changes. MDC components available (callouts, comparison tables, code-with-output blocks).

@@ -16,7 +16,7 @@ The Yinz VSCode extension. Spawns the `ynz-lsp` binary over stdio and registers 
 3. Package the extension: `npx vsce package`
 4. Install locally: `code --install-extension yinz-*.vsix`
 
-The extension is published to the VSCode Marketplace as a preview. See `tooling/vscode-ynz/README.md` for marketplace install instructions.
+The extension is published to the VSCode Marketplace as a preview. See [`tooling/vscode-ynz/README.md`](vscode-ynz/README.md) for marketplace install instructions.
 
 ## Conventions
 

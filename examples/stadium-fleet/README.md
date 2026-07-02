@@ -80,4 +80,4 @@ Per-ship versioning is the only thing this loses vs the per-toml model, and it i
 - CLI ergonomics: `ynz build scoreboard` reads naturally (the entry NAMES read like ships' names).
 - The `ships/` folder convention reads as documentation — anyone seeing the layout instantly knows "these are this project's binaries."
 
-See `design/open-questions.md` "Workspace / Multi-Package Projects (v0.22+)" for the locked design rationale.
+See [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../../docs/internal/scratchpad/SCRATCH-open-questions.md) "Workspace / Multi-Package Projects (v0.22+)" for the locked design rationale.

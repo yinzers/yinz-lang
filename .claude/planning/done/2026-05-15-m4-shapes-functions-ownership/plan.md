@@ -23,13 +23,13 @@ legacy:
     - crates/ynz-runtime/src/**
     - crates/ynz-diagnostics/src/banned_jargon.rs
     - crates/ynz-driver/tests/fixtures/**
-    - design/decisions.md
-    - design/type-system.md
-    - design/ownership.md
-    - design/numeric-types.md
-    - spec/types.md
-    - spec/ownership.md
-    - spec/variables.md
+    - docs/README.md
+    - docs/internal/implementation/IMP-type-system.md
+    - docs/internal/implementation/IMP-ownership.md
+    - docs/internal/implementation/IMP-numeric-types.md
+    - docs/reference/REF-types.md
+    - docs/reference/REF-ownership.md
+    - docs/reference/REF-variables.md
   created: 2026-05-15
   last_updated: 2026-05-17-r20
   depends_on: [v0-1-compiler]
@@ -52,15 +52,15 @@ Status: pending_approval
 
 **Why.** M4 is the spine of the language's safety + performance moat. Until M4, every program is primitive-only (M2/M3) — no user types, no ownership, no heap. M4 introduces all three together because they're inseparable: types need ownership (a heap value must have one owner); ownership needs types (the borrow checker tracks per-binding lifetimes); both need codegen (heap alloc, drop, LLVM attributes). The roadmap (`.claude/plans/active/v0-1-compiler.md:178`) calls this the hardest milestone in v0.1.
 
-**Background.** M1 shipped end-to-end pipeline (hello-world, `820bfdc`). M2 shipped numerics + variables + arithmetic + bool (118 tests, decimal128). M3 shipped control flow + user-defined functions + return-path analysis (310 tests, `fib(10) = 55`). All M3 source structures (Scope, signatures pre-pass, Diagnostic infrastructure, salsa queries, intrinsic table) are in place and ready to extend. The design-lockdown plan (closed 2026-05-14) reserved `shape` as the keyword (NOT `type`), produced the 5-subsection Invariants rule (`.claude/rules/plan-invariants.md`), the auto-promotion rule (`.claude/rules/auto-promotion.md`), the inference rule (`.claude/rules/inference.md`), and the dual-audience vocabulary rule (`.claude/rules/vocabulary.md`). M3's plan now carries a retroactive Invariants section that we model M4's after.
+**Background.** M1 shipped end-to-end pipeline (hello-world, `820bfdc`). M2 shipped numerics + variables + arithmetic + bool (118 tests, decimal128). M3 shipped control flow + user-defined functions + return-path analysis (310 tests, `fib(10) = 55`). All M3 source structures (Scope, signatures pre-pass, Diagnostic infrastructure, salsa queries, intrinsic table) are in place and ready to extend. The design-lockdown plan (closed 2026-05-14) reserved `shape` as the keyword (NOT `type`), produced the 5-subsection Invariants rule ([`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md)), the auto-promotion rule ([`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)), the inference rule ([`.claude/rules/inference.md`](../../../rules/inference.md)), and the dual-audience vocabulary rule ([`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md)). M3's plan now carries a retroactive Invariants section that we model M4's after.
 
 **Constraints.**
-- M4 plan MUST include `## Invariants This Milestone Must Preserve` with all five subsections (`### Safety` · `### Performance` · `### Teaching` · `### Runtime Dependencies` · `### Kernel-Mode Behavior`) per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertions, not aspirations.
-- `const` deep-immutability MUST be enforced in M4 typeck (block `.lend`, `.give`, field-mutation on const bindings) AND the LLVM `readonly`/`noalias` contract MUST be emitted by M4 codegen. Both are enforced by `.claude/graveyard.md` Entry 1.
+- M4 plan MUST include `## Invariants This Milestone Must Preserve` with all five subsections (`### Safety` · `### Performance` · `### Teaching` · `### Runtime Dependencies` · `### Kernel-Mode Behavior`) per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md). Each subsection lists testable assertions, not aspirations.
+- `const` deep-immutability MUST be enforced in M4 typeck (block `.lend`, `.give`, field-mutation on const bindings) AND the LLVM `readonly`/`noalias` contract MUST be emitted by M4 codegen. Both are enforced by [`.claude/graveyard.md`](../../../graveyard.md) Entry 1.
 - `shape` is the reserved declaration keyword (per design-lockdown locked decision). `type` MUST be a banned-keyword token in the lexer with a teaching diagnostic (same pattern M3 used for `fn`, `match`, `switch`).
 - The M2 catch-up list explicitly named M4 as the owner of overflow escape methods AND type-attached constants (`v0-1-compiler.md:651-664`). Per user direction this milestone honors that.
-- No `try`/`catch`/`recover` syntax (`.claude/graveyard.md` Entry 5 — critical).
-- No requiring explicit ownership annotation at CALL sites (`.claude/graveyard.md` Entry 2 — warning). Call sites infer; signatures declare.
+- No `try`/`catch`/`recover` syntax ([`.claude/graveyard.md`](../../../graveyard.md) Entry 5 — critical).
+- No requiring explicit ownership annotation at CALL sites ([`.claude/graveyard.md`](../../../graveyard.md) Entry 2 — warning). Call sites infer; signatures declare.
 - All user-facing diagnostics use WHAT/WHAT-INSTEAD/WHY three-part format (Golden Rule 11). Banned jargon stays banned (`infer`/`inference`/`narrowing`/`monomorphize`/...) — verified by `tests/jargon_audit.rs`.
 
 **Success criteria.**
@@ -71,7 +71,7 @@ Status: pending_approval
 - A negative fixture passing a `const`-bound value where a function declares `lend` produces a three-part diagnostic explaining `const` blocks mutation paths (asserted by snapshot).
 - The catch-up fixtures from M2 (`m2_wrapping_add_deferred.ynz`, `m2_int_max_deferred.ynz`) are CLOSED — they now compile and run, replacing their deferral-stderr snapshots with success-stdout assertions, and the catch-up entries in the M2 plan get marked done in `v0-1-compiler.md`.
 - The plan-reviewer agent issues PASS on this plan before any P1 code lands.
-- M4 ships behind the `v0.1.0-m4` tag with an updated `CHANGELOG.md` listing every catch-up + new feature.
+- M4 ships behind the `v0.1.0-m4` tag with an updated [`CHANGELOG.md`](../../../../CHANGELOG.md) listing every catch-up + new feature.
 
 ---
 
@@ -79,28 +79,28 @@ Status: pending_approval
 
 **Locked decisions from prior milestones / design-lockdown** (each shapes M4):
 
-1. **`shape` keyword reserved for M4 type declarations** (NOT `type`). Lexer adds `Shape` token in P1; `type` becomes a banned-keyword diagnostic. Source: `v0-1-compiler.md:1399-1403`, `design/decisions.md`, design-lockdown plan.
-2. **Const deep-immutability** — `const` blocks all five paths to mutation: reassignment (already enforced M2 `check.rs:264`), field mutation (M4 to enforce), `.lend` mutable-borrow (M4), `.give` ownership transfer (M4), mutable inference (M4 — compiler never infers `.lend`/`.give` for a `const` binding). Source: `design/ownership.md:33-76`.
-3. **Uniform inference + IDE muted hints at CALL sites; explicit at SIGNATURES.** Inverse anti-pattern (requiring `.share` at call sites) is in `.claude/graveyard.md` Entry 2. Source: `.claude/rules/inference.md`.
-4. **Static dispatch is the default; `dynamic T` is opt-in.** Naming locked: `dynamic` NOT `dyn` (anti-jargon). Source: `design/type-system.md:57-210`.
-5. **Method receiver = `share self` / `lend self` / `give self` at first parameter position.** Source: `design/type-system.md:75-89`.
-6. **Structural typing.** `return { quotient: a / b, remainder: a % b }` works when return type is `DivResult` — no `return DivResult { ... }` needed. Source: `design/type-system.md:49-55`.
-7. **`hidden field: T = default` requires a default value.** Hidden fields are invisible outside the declaring shape's methods; defaults make initial state explicit. Source: `design/type-system.md:243-260`.
-8. **`override` keyword required in both directions.** Missing `override` when parent has the method = error; using `override` when parent doesn't = error. Source: `design/type-system.md:41-47`.
-9. **Single inheritance with `extends`; any number of `follows`.** `shape Warrior extends Entity follows Damageable, Attackable`. Source: `design/type-system.md:15-46`.
-10. **Default args owned at first call, not shared mutable.** Ownership prevents Python's mutable-default bug by construction — no special compiler rule needed. Source: `design/functions.md:47-58`.
-11. **Capital letter = type; lowercase = everything else** (Golden Rule 13). `Player`/`Self` = types; `player`/`self` = values/instances. Source: project `CLAUDE.md`.
-12. **No tuples.** Returning multiple values requires defining a shape. Source: `design/functions.md:23-28`. M4 makes this finally possible (M1–M3 had no user shapes, so multi-return wasn't expressible).
+1. **`shape` keyword reserved for M4 type declarations** (NOT `type`). Lexer adds `Shape` token in P1; `type` becomes a banned-keyword diagnostic. Source: `v0-1-compiler.md:1399-1403`, [`docs/README.md`](../../../../docs/README.md), design-lockdown plan.
+2. **Const deep-immutability** — `const` blocks all five paths to mutation: reassignment (already enforced M2 `check.rs:264`), field mutation (M4 to enforce), `.lend` mutable-borrow (M4), `.give` ownership transfer (M4), mutable inference (M4 — compiler never infers `.lend`/`.give` for a `const` binding). Source: `docs/internal/implementation/IMP-ownership.md:33-76`.
+3. **Uniform inference + IDE muted hints at CALL sites; explicit at SIGNATURES.** Inverse anti-pattern (requiring `.share` at call sites) is in [`.claude/graveyard.md`](../../../graveyard.md) Entry 2. Source: [`.claude/rules/inference.md`](../../../rules/inference.md).
+4. **Static dispatch is the default; `dynamic T` is opt-in.** Naming locked: `dynamic` NOT `dyn` (anti-jargon). Source: `docs/internal/implementation/IMP-type-system.md:57-210`.
+5. **Method receiver = `share self` / `lend self` / `give self` at first parameter position.** Source: `docs/internal/implementation/IMP-type-system.md:75-89`.
+6. **Structural typing.** `return { quotient: a / b, remainder: a % b }` works when return type is `DivResult` — no `return DivResult { ... }` needed. Source: `docs/internal/implementation/IMP-type-system.md:49-55`.
+7. **`hidden field: T = default` requires a default value.** Hidden fields are invisible outside the declaring shape's methods; defaults make initial state explicit. Source: `docs/internal/implementation/IMP-type-system.md:243-260`.
+8. **`override` keyword required in both directions.** Missing `override` when parent has the method = error; using `override` when parent doesn't = error. Source: `docs/internal/implementation/IMP-type-system.md:41-47`.
+9. **Single inheritance with `extends`; any number of `follows`.** `shape Warrior extends Entity follows Damageable, Attackable`. Source: `docs/internal/implementation/IMP-type-system.md:15-46`.
+10. **Default args owned at first call, not shared mutable.** Ownership prevents Python's mutable-default bug by construction — no special compiler rule needed. Source: `docs/internal/implementation/IMP-functions.md:47-58`.
+11. **Capital letter = type; lowercase = everything else** (Golden Rule 13). `Player`/`Self` = types; `player`/`self` = values/instances. Source: project [`CLAUDE.md`](../../../../CLAUDE.md).
+12. **No tuples.** Returning multiple values requires defining a shape. Source: `docs/internal/implementation/IMP-functions.md:23-28`. M4 makes this finally possible (M1–M3 had no user shapes, so multi-return wasn't expressible).
 13. **No `try`/`catch`/`recover` syntax** (graveyard Entry 5 — critical).
-14. **LLVM attribute contract**: `readonly` on every `share T` param (and every param inferred from a `const` binding); `noalias` on every param the borrow checker proved non-aliased. Source: `design/ownership.md:51-66`.
+14. **LLVM attribute contract**: `readonly` on every `share T` param (and every param inferred from a `const` binding); `noalias` on every param the borrow checker proved non-aliased. Source: `docs/internal/implementation/IMP-ownership.md:51-66`.
 
 **Salsa-query architecture continuity.** M3 added `signatures` pre-pass + `return_paths` + `check` queries. M4 adds two more salsa queries: `shapes` (resolves every shape declaration in a module → field table + method table) and `ownership` (per-function borrow-check result). Both must be cache-invalidated by changes to their dependencies; both produce `DiagnosticBucket`s; both lower into the existing `check` flow.
 
 **Heap allocation strategy.** M4 emits `malloc(size)` / `free(ptr)` calls via the runtime crate `ynz-runtime`. The runtime adds two new extern declarations (`ynz_alloc` / `ynz_free`) that thin-wrap libc for telemetry hooks v0.3+ may add. Drop-on-scope-exit emits `free` calls at scope end, reverse declaration order. No reference counting; no GC; no per-instance metadata.
 
-**Vtable strategy for `dynamic`.** `dynamic Foo` lowers to a fat pointer `{ data_ptr, vtable_ptr }`. The vtable is a per-(concrete-type, contract) constant pointer table emitted at compile time, indexed by method slot. Method call on a `dynamic Foo` value compiles to: load vtable_ptr → load method slot → indirect call. Polar Signals' Go benchmark (`design/type-system.md:114`) puts the runtime cost at ~3× a direct call, which is exactly why dynamic is opt-in.
+**Vtable strategy for `dynamic`.** `dynamic Foo` lowers to a fat pointer `{ data_ptr, vtable_ptr }`. The vtable is a per-(concrete-type, contract) constant pointer table emitted at compile time, indexed by method slot. Method call on a `dynamic Foo` value compiles to: load vtable_ptr → load method slot → indirect call. Polar Signals' Go benchmark (`docs/internal/implementation/IMP-type-system.md:114`) puts the runtime cost at ~3× a direct call, which is exactly why dynamic is opt-in.
 
-**Object layout for shapes.** Compiler auto-reorders fields for ABI tightness (per `.claude/rules/auto-promotion.md` example — no opt-out keyword; FFI handled at the boundary). For M4 we default to insertion order (declaration order); the auto-reorder optimization is locked to v0.3+ and the design doc reservation is noted here. Each shape becomes an LLVM `%StructName = type { field0_ty, field1_ty, ... }` definition.
+**Object layout for shapes.** Compiler auto-reorders fields for ABI tightness (per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md) example — no opt-out keyword; FFI handled at the boundary). For M4 we default to insertion order (declaration order); the auto-reorder optimization is locked to v0.3+ and the design doc reservation is noted here. Each shape becomes an LLVM `%StructName = type { field0_ty, field1_ty, ... }` definition.
 
 **Method dispatch — name resolution.** Method lookup is two-phase: (a) inherent methods on the receiver's concrete type, (b) `follows`-contract methods inherited from declared contracts. M4 does (a) for static dispatch + (b) for `dynamic Foo` dispatch. No automatic method-from-extends lookup yet — `extends` methods are inherited but `override` is required to redeclare. Method overloading by argument count or type is NOT supported (one method name = one signature per concrete type, modulo `override` which keeps the parent's signature).
 
@@ -134,7 +134,7 @@ Status: pending_approval
 | Heap-alloc failure (OOM) handling undefined | Medium | Medium (forward-compat for embedded/--kernel) | M4 panics on malloc failure for now (the system isn't going to recover from OOM in normal user code anyway); kernel-mode (v0.3+) plan adds plug-in allocator with user-defined OOM behavior; recorded in `### Runtime Dependencies` and `### Kernel-Mode Behavior` |
 | Plan size collapses into a "one giant milestone" trap | Medium | Medium | Phase split below has 9 phases — each is one PR, each has objective + acceptance criteria; verification phase confirms `cargo test --workspace` + IR snapshots + jargon audit + Bouncer-clean before tag |
 | `dynamic` is added with no use case in M4 itself | Medium | Low | M4 demos `dynamic Foo` with a Drawable-like contract + array of mixed concrete types; even without M5 generics, `dynamic` lowering is exercised end-to-end |
-| `hidden` field default-value evaluation has unexpected runtime cost | Low | Low | Default expressions are evaluated at every `Player { ... }` construction, NOT at type-decl-time (Python footgun avoided by ownership per `design/functions.md:47`); test confirms `hidden cache: map<string, number> = {}` produces a fresh map per construction |
+| `hidden` field default-value evaluation has unexpected runtime cost | Low | Low | Default expressions are evaluated at every `Player { ... }` construction, NOT at type-decl-time (Python footgun avoided by ownership per `docs/internal/implementation/IMP-functions.md:47`); test confirms `hidden cache: map<string, number> = {}` produces a fresh map per construction |
 
 ---
 
@@ -147,7 +147,7 @@ Status: pending_approval
 1. **Yinz is NOT object-oriented.** Data shapes + standalone functions + UFCS dot-call sugar (Go/Rust style, not Java/Swift). [r10]
 2. **Shapes hold ONLY data fields + contract method-signature declarations.** NO method implementations inside shape declarations. [r10]
 3. **Methods are standalone functions** taking the receiver as the first parameter. **OPEN-Q11 LOCKED (r13): Option A — UFCS.** Both `value.method()` and `method(value)` are legal; compiler treats them as identical at parse time. Per-codebase style is a Tier 3 lint concern (v0.4+), not a language constraint. The dot-call form preserves Golden Rule 1 (dot-first / autocomplete discoverability) and TS familiarity; the function-call form serves utility-function ergonomics (`max(a, b)` reads better than `a.max(b)`). [r10, r13]
-3a. **Dual-style teaching in diagnostics (locked r13)**: every UFCS-related error message MUST show BOTH call forms in its WHAT-INSTEAD section so users learn both styles from the same diagnostic. Compiler "did-you-mean" suggester searches both directions: (a) functions of the same name with mismatched signatures (explain WHY), (b) functions of any name whose first param matches the receiver type (show "things you CAN do with this value"). IDE renders the same suggestion via hover/tooltip. First-encounter teaching: the FIRST `tower.foo()` error a new user hits teaches both call styles in one shot. See `.claude/rules/non-oop.md` for the canonical diagnostic format.
+3a. **Dual-style teaching in diagnostics (locked r13)**: every UFCS-related error message MUST show BOTH call forms in its WHAT-INSTEAD section so users learn both styles from the same diagnostic. Compiler "did-you-mean" suggester searches both directions: (a) functions of the same name with mismatched signatures (explain WHY), (b) functions of any name whose first param matches the receiver type (show "things you CAN do with this value"). IDE renders the same suggestion via hover/tooltip. First-encounter teaching: the FIRST `tower.foo()` error a new user hits teaches both call styles in one shot. See [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) for the canonical diagnostic format.
 4. **`function` keyword ALWAYS requires a body.** Body-less `function f() -> nothing` is a parse error. [r9]
 5. **Contract method signatures use bare-signature form (NO `function` keyword)**: `compare(share self, share other: Self) -> int` inside a `shape` block. [r9]
 6. **`extends` is DATA-only inheritance.** Child shape gets parent's fields; behavior comes from standalone functions. [r10]
@@ -171,7 +171,7 @@ Status: pending_approval
 
 ### Syntax + style rules (locked r4 / r9 / r10)
 
-18. **Dot-postfix rule** [r4]: actions use parens (`value.method()`, `value.copy()`, `value.freeze()`, `intrinsic.parse(...)`); field/constant access uses no parens (`player.health`, `int.max`, `number.epsilon`). Does NOT apply to ownership modifiers (which have no body syntax per #10). New rule file: `.claude/rules/dot-postfix.md`.
+18. **Dot-postfix rule** [r4]: actions use parens (`value.method()`, `value.copy()`, `value.freeze()`, `intrinsic.parse(...)`); field/constant access uses no parens (`player.health`, `int.max`, `number.epsilon`). Does NOT apply to ownership modifiers (which have no body syntax per #10). New rule file: [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md).
 19. **Struct literals: ANNOTATION-ONLY form.** `let p: Player = { name: "...", health: ... }` is the only legal form. `Player { ... }` prefix form is a compile error with teaching diagnostic redirecting to annotation form. [r4]
 20. **`shape` is the locked declaration keyword** for type declarations (NOT `type`). `type`/`struct`/`class`/`interface`/`enum`/`abstract` are banned-keyword diagnostic tokens (lexer-level). [design-lockdown]
 21. **Hidden-field defaults: constants + empty literals only.** No function calls, no field references, no `self`. Hidden fields require a default because callers can't see them at construction. [r4]
@@ -184,7 +184,7 @@ Status: pending_approval
 25. **All M4 diagnostics follow WHAT/WHAT-INSTEAD/WHY three-part format** — enforced by the `Diagnostic` constructor (M1+ carried through). [Golden Rule 11]
 26. **Banned-jargon enforcement** (`crates/ynz-diagnostics/src/banned_jargon.rs`) stays active. New diagnostics must pass `tests/jargon_audit.rs`. [M1+]
 27. **IDE muted hints** render at call sites showing the inferred modifier (e.g., `db.save(p [.give()])`) and on bare free-function signatures showing inferred parameter ownership (e.g., `function save([give] p: Player)`). v0.2 LSP carries this; M4 generates the inference data the LSP renders. [r4 / r11]
-28. **Tier 3 lint surfaces** (`design/linting.md`): the `ownership-contract-changed` lint warns when a body change in PR review shifts a function's inferred ownership contract (caller-visible behavior change). v0.4 deliverable. [r7]
+28. **Tier 3 lint surfaces** ([`docs/internal/implementation/IMP-linting.md`](../../../../docs/internal/implementation/IMP-linting.md)): the `ownership-contract-changed` lint warns when a body change in PR review shifts a function's inferred ownership contract (caller-visible behavior change). v0.4 deliverable. [r7]
 
 ### M4 phase impact (Doc-PR 3 rewrites the body)
 
@@ -204,8 +204,8 @@ Status: pending_approval
 
 ### Pre-P1 doc-PR sequence (Tasks #7 / #8 / #9)
 
-- **Doc-PR 1** (Task #7 — FOUNDATION): NEW `.claude/rules/non-oop.md` codifying the model. Project `CLAUDE.md` note. `design/golden-rules.md` non-OOP principle. `design/decisions.md` entry. `.claude/rules/language-design.md` checklist update. NEW `.claude/rules/dot-postfix.md`. Grep-first process verification.
-- **Doc-PR 2** (Task #8 — DOCS REWRITE): Major rewrite of `design/type-system.md` + `spec/types.md` (remove methods-inside-shapes; document standalone+UFCS pattern; remove `override`; redocument `extends` as data-only). Update `design/ownership.md` + `spec/ownership.md` (REMOVE body-level `.share()/.lend()/.give()` syntax — they don't exist; rewrite examples to use signatures + call-site inference only; `.copy()` and `.freeze()` stay as body operations). Update `.claude/rules/inference.md` (new domain row for ownership inference at call sites + signatures of free functions). Update `.claude/rules/vocabulary.md`.
+- **Doc-PR 1** (Task #7 — FOUNDATION): NEW [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) codifying the model. Project [`CLAUDE.md`](../../../../CLAUDE.md) note. [`docs/reference/REF-golden-rules.md`](../../../../docs/reference/REF-golden-rules.md) non-OOP principle. [`docs/README.md`](../../../../docs/README.md) entry. [`.claude/rules/language-design.md`](../../../rules/language-design.md) checklist update. NEW [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md). Grep-first process verification.
+- **Doc-PR 2** (Task #8 — DOCS REWRITE): Major rewrite of [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md) + [`docs/reference/REF-types.md`](../../../../docs/reference/REF-types.md) (remove methods-inside-shapes; document standalone+UFCS pattern; remove `override`; redocument `extends` as data-only). Update [`docs/internal/implementation/IMP-ownership.md`](../../../../docs/internal/implementation/IMP-ownership.md) + [`docs/reference/REF-ownership.md`](../../../../docs/reference/REF-ownership.md) (REMOVE body-level `.share()/.lend()/.give()` syntax — they don't exist; rewrite examples to use signatures + call-site inference only; `.copy()` and `.freeze()` stay as body operations). Update [`.claude/rules/inference.md`](../../../rules/inference.md) (new domain row for ownership inference at call sites + signatures of free functions). Update [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md).
 - **Doc-PR 3** (Task #9 — PLAN REWRITE): Rewrite this plan's phase bodies (P2/P3a/P3b/P4) for the standalone+UFCS model per items #29-#37 above. Update success criteria, invariants Safety/Performance/Teaching subsections, anti-pattern callouts, M4 catch-up obligations.
 
 After Doc-PR 3 merges, M4 P1 (lexer) starts.
@@ -214,8 +214,8 @@ After Doc-PR 3 merges, M4 P1 (lexer) starts.
 
 | Doc-PR | Task | Status | Files landed / pending |
 |---|---|---|---|
-| **Doc-PR 1** (Foundation) | #7 | ✅ COMPLETE | NEW `.claude/rules/non-oop.md`, NEW `.claude/rules/dot-postfix.md`, UPDATED `CLAUDE.md`, `design/golden-rules.md`, `design/decisions.md`, `.claude/rules/language-design.md`. **Committed in `54521dd`** (batch with Doc-PR 2). |
-| **Doc-PR 2** (Docs rewrite) | #8 | ✅ COMPLETE | REWRITTEN `design/type-system.md`, `design/ownership.md`, `spec/types.md`, `spec/ownership.md`, `spec/operators.md`, `spec/concurrency.md`. MEDIUM EDITS `design/iterables.md`, `spec/iterables.md`, `design/ide-hints.md`, `.claude/rules/inference.md`, `.claude/rules/vocabulary.md`. Small edits 8 more files. **Committed in `54521dd`**. Commit message says "M4 P1 (lexer) cleared to start." |
+| **Doc-PR 1** (Foundation) | #7 | ✅ COMPLETE | NEW [`.claude/rules/non-oop.md`](../../../rules/non-oop.md), NEW [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md), UPDATED [`CLAUDE.md`](../../../../CLAUDE.md), [`docs/reference/REF-golden-rules.md`](../../../../docs/reference/REF-golden-rules.md), [`docs/README.md`](../../../../docs/README.md), [`.claude/rules/language-design.md`](../../../rules/language-design.md). **Committed in `54521dd`** (batch with Doc-PR 2). |
+| **Doc-PR 2** (Docs rewrite) | #8 | ✅ COMPLETE | REWRITTEN [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md), [`docs/internal/implementation/IMP-ownership.md`](../../../../docs/internal/implementation/IMP-ownership.md), [`docs/reference/REF-types.md`](../../../../docs/reference/REF-types.md), [`docs/reference/REF-ownership.md`](../../../../docs/reference/REF-ownership.md), [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md), [`docs/reference/REF-concurrency.md`](../../../../docs/reference/REF-concurrency.md). MEDIUM EDITS [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md), [`docs/reference/REF-iterables.md`](../../../../docs/reference/REF-iterables.md), [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md), [`.claude/rules/inference.md`](../../../rules/inference.md), [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md). Small edits 8 more files. **Committed in `54521dd`**. Commit message says "M4 P1 (lexer) cleared to start." |
 | **Doc-PR 3** (Plan rewrite) | #9 | PENDING | Rewrite this plan's phase bodies (P2/P3a/P3b/P4) for standalone+UFCS model per FINAL LOCKED DECISIONS items #29-#37. Update success criteria + invariants subsections + anti-pattern callouts. DEFERRED — FINAL LOCKED DECISIONS section above is authoritative for implementation; plan body rewrite can happen concurrently or after P1 merges. |
 
 ### Phase execution status (r20, 2026-05-17)
@@ -256,20 +256,20 @@ All six r3 OPEN questions resolved + one new design rule adopted. See `## Review
 | Q4 | Struct literals: **Option A — annotation only**. `Player { ... }` becomes a compile error with teaching diagnostic redirecting to `let p: Player = { ... }` |
 | Q5 | `.copy()` strict cheap-only; user defines `copy()` method for deep copies |
 | Q6 | Drop order: locals reverse-decl-order BEFORE return; given value moves to caller |
-| **NEW-R4** | **Dot-postfix rule** locked: actions use parens (`value.method()`, `value.share()`, `value.give()`, `value.freeze()`); field/constant access uses no parens (`player.health`, `int.max`). New rule file `.claude/rules/dot-postfix.md` to be added. |
-| **NEW-R4** | All five ownership modifiers move to parens form: `.share()` / `.lend()` / `.give()` / `.copy()` / `.freeze()`. Updates `spec/ownership.md`, `design/ownership.md`, plan P1+P2+P3c, `.claude/rules/inference.md`, `.claude/rules/vocabulary.md`. |
-| **NEW-R4** | Plan examples reframed: `.give()` / `.share()` / `.lend()` are INFERRED at call sites + return statements per `.claude/rules/inference.md`. The user rarely types them; IDE renders muted hints. Plan's success-criteria fixture rewritten to reflect this. |
+| **NEW-R4** | **Dot-postfix rule** locked: actions use parens (`value.method()`, `value.share()`, `value.give()`, `value.freeze()`); field/constant access uses no parens (`player.health`, `int.max`). New rule file [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md) to be added. |
+| **NEW-R4** | All five ownership modifiers move to parens form: `.share()` / `.lend()` / `.give()` / `.copy()` / `.freeze()`. Updates [`docs/reference/REF-ownership.md`](../../../../docs/reference/REF-ownership.md), [`docs/internal/implementation/IMP-ownership.md`](../../../../docs/internal/implementation/IMP-ownership.md), plan P1+P2+P3c, [`.claude/rules/inference.md`](../../../rules/inference.md), [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md). |
+| **NEW-R4** | Plan examples reframed: `.give()` / `.share()` / `.lend()` are INFERRED at call sites + return statements per [`.claude/rules/inference.md`](../../../rules/inference.md). The user rarely types them; IDE renders muted hints. Plan's success-criteria fixture rewritten to reflect this. |
 
 **Pre-P1 doc + plan rewrite obligations** (one consolidated PR, branch `docs/m4-dot-postfix-and-annotation-only`):
 
-1. NEW: `.claude/rules/dot-postfix.md` — codifies the parens-for-actions / no-parens-for-access rule with examples + design-doc checklist item
-2. UPDATE: `.claude/rules/language-design.md` — add dot-postfix checklist item to "Before Adding Anything New"
-3. UPDATE: `.claude/rules/inference.md` — replace `.share` / `.lend` / `.give` examples with parens forms; the muted-hint examples become `// muted: .give()` (with parens) etc.
-4. UPDATE: `.claude/rules/vocabulary.md` — rename-table entries for ownership modifiers get `()` suffix
-5. UPDATE: `design/ownership.md` — rewrite dot-modifier examples with parens; clarify inference at call sites AND return statements
-6. UPDATE: `spec/ownership.md` — same; also remove "you write `.share` at the call site" framing — replace with "the IDE shows the inferred modifier as muted text; type it explicitly if you want to be loud about it"
-7. UPDATE: `design/type-system.md:53` — remove the `DivResult { ... }` prefix-form example; replace with anonymous + annotation
-8. UPDATE: `spec/types.md` — rewrite all struct-literal examples (lines 83, 107, 120, 130, 174, 183, 205) to annotation form
+1. NEW: [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md) — codifies the parens-for-actions / no-parens-for-access rule with examples + design-doc checklist item
+2. UPDATE: [`.claude/rules/language-design.md`](../../../rules/language-design.md) — add dot-postfix checklist item to "Before Adding Anything New"
+3. UPDATE: [`.claude/rules/inference.md`](../../../rules/inference.md) — replace `.share` / `.lend` / `.give` examples with parens forms; the muted-hint examples become `// muted: .give()` (with parens) etc.
+4. UPDATE: [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) — rename-table entries for ownership modifiers get `()` suffix
+5. UPDATE: [`docs/internal/implementation/IMP-ownership.md`](../../../../docs/internal/implementation/IMP-ownership.md) — rewrite dot-modifier examples with parens; clarify inference at call sites AND return statements
+6. UPDATE: [`docs/reference/REF-ownership.md`](../../../../docs/reference/REF-ownership.md) — same; also remove "you write `.share` at the call site" framing — replace with "the IDE shows the inferred modifier as muted text; type it explicitly if you want to be loud about it"
+7. UPDATE: `docs/internal/implementation/IMP-type-system.md:53` — remove the `DivResult { ... }` prefix-form example; replace with anonymous + annotation
+8. UPDATE: [`docs/reference/REF-types.md`](../../../../docs/reference/REF-types.md) — rewrite all struct-literal examples (lines 83, 107, 120, 130, 174, 183, 205) to annotation form
 9. UPDATE: this plan file — P1 parser examples use parens forms; P2 parser drops `Identifier {` lookahead (no more prefix-form struct literals); P3a typeck adds prefix-form teaching diagnostic; P3c ownership examples reframed to inferred; M4 success criteria fixture rewritten
 
 After this consolidated doc-PR merges, P1 (lexer) starts.
@@ -301,7 +301,7 @@ Bare signature; body declares ownership via dot-postfix `.give()`. The compiler 
 
 Planner-leaning: **Form A**. Cleanest, no new syntax, compiler does the work (Golden Rule 4). The IDE LSP surface (v0.2) carries the teaching load — muted hint shows the inferred contract; click-to-make-explicit would convert source to... well, Form A has nothing TO convert to. So if Patrick wants click-to-make-explicit, we need Form B or C as the explicit form.
 
-**Direct contradiction with previously-locked design**: `design/ownership.md:14` says "Function signatures always declare intent (`share`, `lend`, `give`). The contract is visible at the definition — no surprises for callers." OPEN-Q10 PROPOSES REVERSING this. If Patrick approves, the design doc must be updated under a clear "Reversed decision (r6 2026-05-15): inside-out inference replaces explicit signature modifier" block.
+**Direct contradiction with previously-locked design**: `docs/internal/implementation/IMP-ownership.md:14` says "Function signatures always declare intent (`share`, `lend`, `give`). The contract is visible at the definition — no surprises for callers." OPEN-Q10 PROPOSES REVERSING this. If Patrick approves, the design doc must be updated under a clear "Reversed decision (r6 2026-05-15): inside-out inference replaces explicit signature modifier" block.
 
 **Trade-offs Patrick is implicitly accepting** (planner-flagged for transparency):
 - (+) Less typing — bare signature is shorter
@@ -367,12 +367,12 @@ Six items pending Patrick's explicit confirm before P1 lands. Planner recommenda
 
 **OPEN-Q3: Hidden-field default-expression scope.** **Planner-leaning + Patrick-leaning: constants + empty literals only.** Aligns with Patrick's "shape is contract not implementation" framing in r3 — function-call defaults would put implementation logic in the contract. Defaults are only on hidden fields (where they're load-bearing because hidden fields can't be construction-provided). Visible fields have NO defaults — always provided at construction. Locks if Patrick confirms.
 
-**OPEN-Q4 (NEW in r3): Idiomatic struct-literal syntax — `Player { ... }` vs `let p: Player = { ... }`.** Patrick raised in r3: prefer the annotation-driven form over the type-name-prefix form because the prefix form reads OOP-y. Both forms ARE legal per `design/type-system.md:53` (structural typing — either way produces the same value).
+**OPEN-Q4 (NEW in r3): Idiomatic struct-literal syntax — `Player { ... }` vs `let p: Player = { ... }`.** Patrick raised in r3: prefer the annotation-driven form over the type-name-prefix form because the prefix form reads OOP-y. Both forms ARE legal per `docs/internal/implementation/IMP-type-system.md:53` (structural typing — either way produces the same value).
 - **Option A**: ban prefix form entirely. Breaks generic-with-inline-literal (no way to disambiguate what type the literal is in a generic call site).
 - **Option B (planner-leaning)**: annotation idiomatic at let/const declarations + Tier 3 lint suggestion (`prefer-typed-literal-over-prefix-construction`). Prefix form stays legal for inline construction in generic function args where type isn't inferable. Spec/types.md examples switch to annotation form.
 - **Option C**: keep both equal weight.
 
-Lock if Patrick confirms Option B. Affects: `spec/types.md` examples (rewrite to annotation form), parser (no change — both already parsed), v0.4 lint catalog.
+Lock if Patrick confirms Option B. Affects: [`docs/reference/REF-types.md`](../../../../docs/reference/REF-types.md) examples (rewrite to annotation form), parser (no change — both already parsed), v0.4 lint catalog.
 
 **OPEN-Q5 (re-asking): `.copy` strict cheap-only — confirm or relax?** Currently locked: `.copy` only on transitively-trivially-copyable shapes; user defines `copy()` method (called as `value.copy()`) for expensive deep-copies. Mirrors Rust's Copy vs Clone separation. The compiler picks `.copy` (modifier) when type is trivially-copyable, falls through to `.copy()` (method call) when there's a user-defined method on a non-trivial type — teaching diagnostic if neither applies. **Planner-leaning: KEEP strict.** Patrick raised in r3 ("regardless probably isn't the best use in this case BUT as long as we teach that maybe having it exist is still a nice feature"). Could relax to allow auto-deep-copy with teaching warning, but that violates "cheap by design" + creates a footgun (silent expensive copies in hot loops). Locks if Patrick confirms.
 
@@ -453,7 +453,7 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 - Concurrency keyword parsing — M8
 - Bignum `number[N]` for N > 34 — M8
 - `ynz watch` / `ynz fmt` / LSP — v0.2 (separate plan)
-- Auto-SoA layout transform — v0.3+ (`design/future/auto-soa.md`)
+- Auto-SoA layout transform — v0.3+ ([`docs/internal/scratchpad/SCRATCH-future-auto-soa.md`](../../../../docs/internal/scratchpad/SCRATCH-future-auto-soa.md))
 - Auto-Arc cross-thread inference — v0.3+ (`design/future/concurrency.md`)
 
 **If a phase below feels like it's drifting into any of the above, STOP and re-plan.**
@@ -462,7 +462,7 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 
 ## Phases
 
-> **READ FIRST (r17 added Demo & Error Gallery requirement)**: Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` subsection (added 2026-05-16 per r17), every M4 phase that adds executable surface MUST also:
+> **READ FIRST (r17 added Demo & Error Gallery requirement)**: Per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Demo & Error Gallery` subsection (added 2026-05-16 per r17), every M4 phase that adds executable surface MUST also:
 > - **Extend `examples/pirates-roster/entrypoint.ynz`** with the new feature in context (showing it doing real work, not isolated `print(featureName())`)
 > - **Extend `examples/primantis-orders/m4_errors.ynz`** with intentional triggers for every new compile-error class added by that phase (each trigger gets a `// WHY:` comment naming the diagnostic class)
 > - Both files get `insta` stdout/stderr snapshots in the phase's verification step
@@ -543,8 +543,8 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 **Current-state anchors**:
 - `crates/ynz-ast/src/nodes.rs` — current Expr/Stmt/Item variants (`316` lines); M4 extends. Confirm variant-count comment exists per M3 pattern.
 - `crates/ynz-parser/src/parser.rs` — Pratt-style precedence climbing; M3 added method-call postfix (around `parse_postfix_chain`); M4 extends with field access, dot-modifiers, struct literals.
-- `design/type-system.md` — full spec for shape/follows/extends/override/hidden/dynamic syntax (this is the source-of-truth document).
-- `spec/types.md` / `spec/ownership.md` — user-facing spec for the same constructs.
+- [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md) — full spec for shape/follows/extends/override/hidden/dynamic syntax (this is the source-of-truth document).
+- [`docs/reference/REF-types.md`](../../../../docs/reference/REF-types.md) / [`docs/reference/REF-ownership.md`](../../../../docs/reference/REF-ownership.md) — user-facing spec for the same constructs.
 **Files (expected scope)**:
 - `crates/ynz-ast/src/nodes.rs` (add new variants; bump variant-count test if M3 had one)
 - `crates/ynz-parser/src/parser.rs` (extend with shape parsing, method parsing, field-access postfix, dot-modifier postfix, struct literal vs block disambiguation)
@@ -663,8 +663,8 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 **Current-state anchors**:
 - `crates/ynz-typeck/src/shapes.rs` (added in P3a) — ShapeDef stores `extends` + `follows`; P3b adds the resolution logic.
 - `crates/ynz-typeck/src/check.rs` — P3a added field-access/field-assign/method-call paths for shapes; P3b extends method-lookup to walk the `extends` chain.
-- `design/type-system.md:15-46` — single-inheritance + override + multiple-follows spec.
-- `design/type-system.md:104-110` — `dynamic` example (heterogeneous collection).
+- `docs/internal/implementation/IMP-type-system.md:15-46` — single-inheritance + override + multiple-follows spec.
+- `docs/internal/implementation/IMP-type-system.md:104-110` — `dynamic` example (heterogeneous collection).
 **Files (expected scope)**:
 - `crates/ynz-typeck/src/shapes.rs` (extends-chain walker, follows-contract verifier, override checker, base-shape instantiation guard)
 - `crates/ynz-typeck/src/check.rs` (method lookup with parent-chain; dynamic dispatch type-check; struct-literal-rejection on base shapes)
@@ -674,7 +674,7 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 2. `follows`-contract verifier: for every `ShapeName follows Contract`, verify the shape (including inherited methods) provides every method the contract declares with matching signature. Three-part diagnostic per missing method names the contract + the method name + the expected signature.
 3. `override` checker (bidirectional):
    - For every method in the shape's body with `is_override: true`, look up the same method name in the parent-chain. If not found → three-part WHAT (method declared `override` but parent doesn't have it) / WHAT-INSTEAD (remove `override` if this is a new method, or check the parent has the method spelled the same way) / WHY (override prevents typo-shadowing — the keyword guarantees you're replacing a known parent method).
-   - For every method in the shape's body NOT marked `override`, check the parent-chain. If found with the same signature → three-part WHAT (method shadows parent's method without `override`) / WHAT-INSTEAD (add `override` keyword if intentional, rename if not) / WHY (silent shadowing is a typo magnet — see `design/type-system.md:41-47`).
+   - For every method in the shape's body NOT marked `override`, check the parent-chain. If found with the same signature → three-part WHAT (method shadows parent's method without `override`) / WHAT-INSTEAD (add `override` keyword if intentional, rename if not) / WHY (silent shadowing is a typo magnet — see `docs/internal/implementation/IMP-type-system.md:41-47`).
 4. Base-shape instantiation guard. In `check_expr(Expr::StructLit { name, .. })` — BEFORE field-resolution — look up `name` in the ShapeTable and check `shape_def.is_base`. If set, emit three-part WHAT (cannot instantiate a base shape — base shapes are partial declarations meant to be extended) / WHAT-INSTEAD (declare a derived shape and instantiate it, or remove the `base` keyword from Player) / WHY (`base` exists for sharing fields and methods across multiple derived shapes; instantiating it would leave some semantic gap). The early-check ordering matters: if a base-shape struct literal also has wrong field types, we emit the base-instantiation error FIRST (it's the higher-level violation) rather than cascading two errors.
 5. Method-lookup with parent-chain: when resolving `value.method()` on a shape value, search the receiver's ShapeDef first; if not found, walk `extends` to parent's ShapeDef. Stop at first match. If found, dispatch is STATIC (concrete type is known). No virtual-method-table; the parent-method is inlined directly via the parent's signature.
 6. `dynamic Foo` typeck. Type-checking a `let x: dynamic Foo = somePlayer` requires `Player` to follow Foo (asserted via the `follows`-resolver). Method call on a `dynamic Foo` resolves via the CONTRACT's method-table, NOT the receiver's concrete shape (because we don't know the concrete shape at compile time). Codegen builds the vtable (P4); typeck just confirms the method exists on the contract.
@@ -693,7 +693,7 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
     - `shape A extends B`; `shape B extends A` (cyclic extends) → three-part
     - Override with wrong return type → three-part comparing expected vs actual signature
     - Override with wrong receiver kind (`override function greet(lend self)` when parent is `share self`) → three-part
-    - **Cyclic `follows` graph**: contracts declaring they follow other contracts in a cycle (`shape Contract A follows B; shape Contract B follows A`) → three-part naming the cycle. Verify against `design/type-system.md` whether contracts-that-follow-other-contracts is even legal in M4; if NOT legal, the test asserts a different three-part error (contract cannot follow another contract — contracts are leaf nodes in the follows graph). Either way, locked here.
+    - **Cyclic `follows` graph**: contracts declaring they follow other contracts in a cycle (`shape Contract A follows B; shape Contract B follows A`) → three-part naming the cycle. Verify against [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md) whether contracts-that-follow-other-contracts is even legal in M4; if NOT legal, the test asserts a different three-part error (contract cannot follow another contract — contracts are leaf nodes in the follows graph). Either way, locked here.
     - **`dynamic Foo` returned across a function boundary**: `function pickGreeter() -> dynamic Greetable { return Player { ... } }`. Positive test (returning a fat pointer works) + negative test (returning a concrete type with no follows relationship → three-part error).
     - **`.copy` of shape inheriting from a `base shape` with non-trivial fields**: `base shape Owner { name: string, owned: array<int> }; shape Player extends Owner { health: int }` — `.copy` on a Player must traverse inherited fields too; transitive-trivially-copyable check walks the inheritance chain. Negative test asserts the error names the `owned: array<int>` field in the parent.
 **Acceptance criteria**:
@@ -722,7 +722,7 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 **Current-state anchors**:
 - `crates/ynz-typeck/src/scope.rs:8-18` — `ScopeEntry` adds new flags: `is_consumed: bool`, `is_freezed: bool`, `outstanding_shares: u32`, `outstanding_lend: Option<SpanId>`.
 - `crates/ynz-typeck/src/check.rs` — P3a/P3b establish field-assign-on-const error; P3c expands to all four mutation paths.
-- `design/ownership.md:33-76` — the full const deep-immutability spec.
+- `docs/internal/implementation/IMP-ownership.md:33-76` — the full const deep-immutability spec.
 - `.claude/graveyard.md:14-37` — Entry 1's Bouncer-enforceable detection signature.
 **Files (expected scope)**:
 - `crates/ynz-typeck/src/scope.rs` (add ownership-tracking flags to ScopeEntry)
@@ -736,7 +736,7 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
    - `let binding = expr` — new owned binding, drop-list adds it; state: live.
    - `const binding = expr` — same as let plus `is_const: true`.
    - `binding.share` — outstanding_share_count += 1; valid when binding is live AND no outstanding_lend.
-   - `binding.lend` — outstanding_lend = Some(span); valid when binding is live AND outstanding_share_count == 0 AND NOT is_const. If `is_const`: three-part WHAT (`.lend` requires mutable access; binding is `const`) / WHAT-INSTEAD (declare with `let` if mutation is intended; the function signature requires `lend` so the caller commits to mutation) / WHY (see `design/ownership.md:33-76`).
+   - `binding.lend` — outstanding_lend = Some(span); valid when binding is live AND outstanding_share_count == 0 AND NOT is_const. If `is_const`: three-part WHAT (`.lend` requires mutable access; binding is `const`) / WHAT-INSTEAD (declare with `let` if mutation is intended; the function signature requires `lend` so the caller commits to mutation) / WHY (see `docs/internal/implementation/IMP-ownership.md:33-76`).
    - `binding.give` — `is_consumed = true`; remove from drop-list (receiver inherits); valid when binding is live AND outstanding_share_count == 0 AND outstanding_lend is None AND NOT is_const. If `is_const`: three-part WHAT (`.give` transfers ownership; binding is `const` and cannot be transferred) / WHAT-INSTEAD (use `.share` or `.lend` if you need to pass it; declare with `let` if you need to transfer ownership) / WHY.
    - `binding.copy` — produces a new owned value; binding state unchanged. Validity: check the binding's type is trivially copyable (transitively: every field of every field… is a primitive or another trivially-copyable shape). If not: three-part WHAT (cannot `.copy` — type X contains field Y of non-trivially-copyable type Z) / WHAT-INSTEAD (define a `copy()` method that explicitly handles non-trivial fields; or use `.give` to transfer ownership) / WHY (.copy is the cheap-by-design escape valve; non-trivial copy needs explicit semantics).
    - `binding.freeze` — `is_freezed = true`; `is_const = true` from this statement onward; valid when binding is live AND outstanding_share_count == 0 AND outstanding_lend is None.
@@ -786,7 +786,7 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 - [ ] All M3 + P3a + P3b fixtures still pass on this branch.
 - [ ] `jargon_audit` green on every ownership diagnostic.
 **Quality gate**:
-- [ ] Borrow-check correctness verified against design/ownership.md spec — every rule has a dedicated test (positive + negative).
+- [ ] Borrow-check correctness verified against docs/internal/implementation/IMP-ownership.md spec — every rule has a dedicated test (positive + negative).
 - [ ] No `unwrap()` outside test code.
 - [ ] No fallthrough states (e.g., `is_consumed && is_freezed` simultaneously) — assert these can't happen by construction OR test them explicitly.
 - [ ] No banned-jargon (specifically: `infer`/`inference`/`narrowing` MUST NOT appear in ANY diagnostic produced by P3c).
@@ -801,13 +801,13 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 **Est. lines**: ~1300
 **Ships via**: `/pr`
 **Objective**: The success-criteria fixture (`examples/m4_player.ynz`) compiles to a binary that prints expected output. LLVM IR snapshot tests assert: `readonly` on `share` params, `noalias` on borrow-check-proven-non-aliased params, no `readonly` on `give` params, `malloc`/`free` calls emitted at correct positions, vtable globals declared once per `(shape, contract)` pair.
-**Why this phase exists**: Types are useless without codegen. The LLVM attribute contract from `design/ownership.md:51-66` and graveyard Entry 1 is enforced only when codegen actually emits the attributes.
+**Why this phase exists**: Types are useless without codegen. The LLVM attribute contract from `docs/internal/implementation/IMP-ownership.md:51-66` and graveyard Entry 1 is enforced only when codegen actually emits the attributes.
 **Current-state anchors**:
 - `crates/ynz-codegen/src/emit.rs` — M1/M2/M3 lowering (currently 1084 lines). M4 extends with shape struct types, method definitions, heap alloc/free calls, drops, attributes.
 - `crates/ynz-codegen/src/runtime_decls.rs:151` — extern C declarations; M4 adds `ynz_alloc(size: usize) -> *mut u8` and `ynz_free(ptr: *mut u8, size: usize)`.
 - `crates/ynz-runtime/src/` — currently has decimal128 + string + print runtime; M4 adds `ynz_alloc` and `ynz_free` thin-wrapping libc malloc/free (with abort-on-OOM behavior locked in `### Runtime Dependencies`).
 - `crates/ynz-typeck/src/ownership.rs` (added in P3c) — OwnershipReport is the input to codegen's drop emission + attribute emission.
-- `design/ownership.md:51-66` — LLVM attribute contract: `readonly` on share; `noalias` on borrow-checker-proven non-aliased.
+- `docs/internal/implementation/IMP-ownership.md:51-66` — LLVM attribute contract: `readonly` on share; `noalias` on borrow-checker-proven non-aliased.
 **Files (expected scope)**:
 - `crates/ynz-codegen/src/emit.rs` (extend with shape lowering, method lowering, heap alloc/free, drops, attributes, dynamic vtables)
 - `crates/ynz-codegen/src/runtime_decls.rs` (add `ynz_alloc`/`ynz_free` extern decls)
@@ -816,7 +816,7 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 - `crates/ynz-codegen/tests/` (LLVM IR snapshot tests + binary-execution tests)
 - `crates/ynz-driver/tests/fixtures/m4_*.ynz` (positive end-to-end fixtures)
 **Steps**:
-1. **Shape struct types.** For every ShapeDef in the ShapeTable, emit an LLVM struct type `%ShapeName = type { field0_ty, field1_ty, ... }`. Field order matches declaration order in M4 (auto-reorder is v0.3+ per `.claude/rules/auto-promotion.md`). Hidden fields are LAID OUT identically to visible fields — visibility is a typeck concern, not a layout concern. Inherited shapes lay parent fields first, then child fields (single-inheritance struct embedding, classic Rust/C++ approach without virtual methods).
+1. **Shape struct types.** For every ShapeDef in the ShapeTable, emit an LLVM struct type `%ShapeName = type { field0_ty, field1_ty, ... }`. Field order matches declaration order in M4 (auto-reorder is v0.3+ per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)). Hidden fields are LAID OUT identically to visible fields — visibility is a typeck concern, not a layout concern. Inherited shapes lay parent fields first, then child fields (single-inheritance struct embedding, classic Rust/C++ approach without virtual methods).
 2. **Struct literal lowering.** `Player { name: "Patrick", health: 100 }` lowers to:
    - `%player = alloca %Player` (stack allocation; codegen later promotes to heap if the value's lifetime is non-stack — see step 3)
    - `store "Patrick", %player.name`
@@ -896,7 +896,7 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 - `.claude/plans/active/v0-1-compiler.md` (mark M2 catch-up entries closed)
 **Steps**:
 1. Extend `PrimitiveIntrinsicTable` with 6 method entries on `int`: each takes `(self: int, other: int) -> int`. Wrapping methods: native `add`/`sub`/`mul` with overflow ignored (compile to `add nuw`-free `add` — wrapping is the default no-overflow-check operation). Saturating methods: lower to `llvm.uadd.sat.i64`, `llvm.usub.sat.i64`, `llvm.smul.fix.sat.i64` (or signed variant; confirm intrinsic name during P5).
-2. Add type-attached constants: `int.max = 9223372036854775807`, `int.min = -9223372036854775808`, `number.epsilon` (decimal128 smallest representable positive — exact value from `design/numeric-types.md`), `number.max`, `number.min`. Constant table: `HashMap<(TypeName, ConstName), ConstValue>` in `intrinsics.rs`.
+2. Add type-attached constants: `int.max = 9223372036854775807`, `int.min = -9223372036854775808`, `number.epsilon` (decimal128 smallest representable positive — exact value from [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md)), `number.max`, `number.min`. Constant table: `HashMap<(TypeName, ConstName), ConstValue>` in `intrinsics.rs`.
 3. Parser handling for type-attached constants. `int.max` parses as `Expr::FieldAccess { receiver: Expr::TypeName("int"), field: "max" }`. The parser already handles `Identifier Dot Identifier` for method calls and field access; we need to recognize when the receiver is a Type-name (`int`, `float`, `number`, `bool`, `string`). Since M3 already parses `int` as a Type only in type-annotation position, M4 adds a parser path: in expression position, an identifier that matches a primitive type name OR a user-shape name is parsed as a `TypeName` reference; followed by `Dot Identifier` it becomes a type-attached lookup.
 4. Typeck for type-attached constants: when `Expr::FieldAccess` has a TypeName receiver, look up the constant in the `(TypeName, ConstName)` table. Three-part error if not found, naming available constants on that type.
 5. Codegen for wrapping/saturating: lower each method-call expression to the corresponding LLVM intrinsic. For wrapping: `add %a, %b` (no overflow check). For saturating: `call @llvm.uadd.sat.i64(%a, %b)`.
@@ -969,27 +969,27 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 **Why this phase exists**: Every milestone gets its own sweep. M1-M3 each had one; M4 follows the precedent so future contributors have a stable artifact to look at when learning the pipeline.
 **Current-state anchors**:
 - `.claude/plans/active/v0-1-compiler.md` — roadmap; M4 status updated to SHIPPED + commit SHA + test count
-- `Cargo.toml` — workspace `version` field; bump from M3 version
-- `CHANGELOG.md` — append M4 entry
+- [`Cargo.toml`](../../../../Cargo.toml) — workspace `version` field; bump from M3 version
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) — append M4 entry
 - `.github/workflows/ci.yml` — confirm M4 fixtures run in CI
 **Files (expected scope)**:
-- `Cargo.toml` (version bump)
-- `CHANGELOG.md` (final M4 entry)
+- [`Cargo.toml`](../../../../Cargo.toml) (version bump)
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) (final M4 entry)
 - `.claude/plans/active/v0-1-compiler.md` (M4 status update)
 - `.claude/plans/active/m4-shapes-methods-ownership.md` (move to `done/` via `git mv`)
-- `.claude/todos.md` (M4 entries marked done)
-- `.claude/state.md` (M4 decision row added)
+- [`.claude/todos.md`](../../../todos.md) (M4 entries marked done)
+- [`.claude/state.md`](../../../state.md) (M4 decision row added)
 **Steps**:
-1. **TODO sweep.** Grep all crates for `TODO`/`FIXME`/`HACK`/`Phase`/`will be`/`later`/`eventually` in source comments. Any found = move to `.claude/todos.md` with ownership; delete the comment per global rule 6 ("no TODOs in code").
+1. **TODO sweep.** Grep all crates for `TODO`/`FIXME`/`HACK`/`Phase`/`will be`/`later`/`eventually` in source comments. Any found = move to [`.claude/todos.md`](../../../todos.md) with ownership; delete the comment per global rule 6 ("no TODOs in code").
 2. **Catch-up audit.** Walk every catch-up entry in `v0-1-compiler.md` and this plan file. Each entry must be either CLOSED (with commit SHA + closing test) or DEFERRED (with explicit forward-owner milestone). No orphan catch-ups.
-3. **Jargon audit.** Run `cargo test --workspace jargon_audit`. Confirm green. Also manually grep this plan file + `done/m4-shapes-methods-ownership.md` (after move) for any banned-jargon leakage in user-facing diagnostic strings (`design/compiler-errors.md` source-of-truth).
-4. **Bouncer audit.** Run `.claude/graveyard.md` Entries 1, 2, 3, 4 checks against this plan (after move to `done/`). Each must pass. Entry 1: Safety subsection enumerates 5 paths const blocks + Performance subsection names `readonly` + `noalias` + LLVM. Entry 2: no "must annotate at call site" framing. Entry 3: all 5 Invariants subsections present + non-empty. Entry 4: this plan's `files:` includes `crates/**` AND has `### Runtime Dependencies` + `### Kernel-Mode Behavior` non-empty.
+3. **Jargon audit.** Run `cargo test --workspace jargon_audit`. Confirm green. Also manually grep this plan file + `done/m4-shapes-methods-ownership.md` (after move) for any banned-jargon leakage in user-facing diagnostic strings ([`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) source-of-truth).
+4. **Bouncer audit.** Run [`.claude/graveyard.md`](../../../graveyard.md) Entries 1, 2, 3, 4 checks against this plan (after move to `done/`). Each must pass. Entry 1: Safety subsection enumerates 5 paths const blocks + Performance subsection names `readonly` + `noalias` + LLVM. Entry 2: no "must annotate at call site" framing. Entry 3: all 5 Invariants subsections present + non-empty. Entry 4: this plan's `files:` includes `crates/**` AND has `### Runtime Dependencies` + `### Kernel-Mode Behavior` non-empty.
 5. **CHANGELOG entry final.** Author the v0.1.0-m4 entry with: feature list (shapes, methods, inheritance, contracts, override, hidden, dynamic, ownership modifiers, heap alloc, drops, LLVM attributes, catch-up wrapping/saturating + int.max/min/number constants), test-count delta (M3 = 310; M4 expected 470-520), commit SHA range from M3 tag.
-6. **Cargo version bump.** Bump workspace `version` in root `Cargo.toml`. Sequence: M3 = 0.1.0-m3, M4 = 0.1.0-m4.
+6. **Cargo version bump.** Bump workspace `version` in root [`Cargo.toml`](../../../../Cargo.toml). Sequence: M3 = 0.1.0-m3, M4 = 0.1.0-m4.
 7. **Plan move.** `git mv .claude/plans/active/m4-shapes-methods-ownership.md .claude/plans/done/`. Update `last_updated` front-matter to the commit date. Update `status: done`.
 8. **Tag + push.** `git tag v0.1.0-m4 -a -m "M4: shapes + methods + ownership"` + push.
-9. **State + todos update.** Add M4 row to `.claude/state.md` "Active Decisions" section: `[2026-MM-DD] M4 complete (<sha>, tag v0.1.0-m4): shapes + methods + ownership + inheritance + contracts + override + hidden + dynamic + .share/.lend/.give/.copy/.freeze + heap alloc + drop-on-scope-exit + LLVM readonly/noalias. Test count: <N>. Plan: .claude/plans/done/m4-shapes-methods-ownership.md.`
-10. Mark `.claude/todos.md` M4 entries done.
+9. **State + todos update.** Add M4 row to [`.claude/state.md`](../../../state.md) "Active Decisions" section: `[2026-MM-DD] M4 complete (<sha>, tag v0.1.0-m4): shapes + methods + ownership + inheritance + contracts + override + hidden + dynamic + .share/.lend/.give/.copy/.freeze + heap alloc + drop-on-scope-exit + LLVM readonly/noalias. Test count: <N>. Plan: .claude/plans/done/m4-shapes-methods-ownership.md.`
+10. Mark [`.claude/todos.md`](../../../todos.md) M4 entries done.
 **Acceptance criteria**:
 - [ ] All P1-P6 features verified end-to-end via `ynz run`.
 - [ ] All M4 fixtures green; all M3 fixtures green; all M2 fixtures green; all M1 fixtures green.
@@ -1042,11 +1042,11 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 
 ## Invariants This Milestone Must Preserve
 
-> Required by `.claude/rules/plan-invariants.md`. Each subsection lists testable assertions, not vague aspirations. Bouncer entries 1, 3, 4 check this section's existence + content; entry 2 checks call-site annotation framing across the plan body.
+> Required by [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md). Each subsection lists testable assertions, not vague aspirations. Bouncer entries 1, 3, 4 check this section's existence + content; entry 2 checks call-site annotation framing across the plan body.
 
 ### Safety
 
-The const deep-immutability spec (`design/ownership.md:33-76`) is enforced by M4. Each rule below is a testable assertion with an accompanying negative fixture:
+The const deep-immutability spec (`docs/internal/implementation/IMP-ownership.md:33-76`) is enforced by M4. Each rule below is a testable assertion with an accompanying negative fixture:
 
 - `const` bindings cannot be reassigned — already enforced M2 at `crates/ynz-typeck/src/check.rs:264`. M4 carries this forward unchanged; positive test confirms `const x = 5; x = 6` still errors.
 - `const` bindings cannot be lent for mutation (`.lend` rejected at compile time) — M4 P3c enforces; negative fixture `m4_const_lend_rejected.ynz` produces three-part error naming `const` as the blocker.
@@ -1067,7 +1067,7 @@ The const deep-immutability spec (`design/ownership.md:33-76`) is enforced by M4
 
 ### Performance
 
-The LLVM attribute contract from `design/ownership.md:51-66` is enforced by M4 codegen. Each invariant has an IR-snapshot test asserting attribute presence in the lowered output:
+The LLVM attribute contract from `docs/internal/implementation/IMP-ownership.md:51-66` is enforced by M4 codegen. Each invariant has an IR-snapshot test asserting attribute presence in the lowered output:
 
 - Function parameters declared `share T` emit LLVM `readonly` attribute on the parameter — M4 P4 emits at function-decl-time; IR-snapshot `m4_share_readonly_attr.ll` asserts presence.
 - Function parameters declared `lend T` emit LLVM `noalias` + writable (no `readonly`) — M4 P4 emits; IR-snapshot `m4_lend_noalias_attr.ll` asserts presence + absence.
@@ -1076,18 +1076,18 @@ The LLVM attribute contract from `design/ownership.md:51-66` is enforced by M4 c
 - `noalias` is emitted on every parameter the borrow checker has proven non-aliased — for M4, `share T` + `lend T` parameters are always non-aliased (M4 has no multiple-borrow-with-overlap paths). `give T` parameters get `noalias` too (owned value, by definition no other live alias). IR-snapshot covers each kind.
 - Field access on a shape value compiles to a direct memory offset (LLVM `getelementptr` + `load`) — no runtime field-name lookup, no hash, no indirection. IR-snapshot `m4_field_access_direct_offset.ll` asserts.
 - Static method dispatch compiles to a direct call (`call @ShapeName_methodName(...)`) — IR-snapshot asserts.
-- Dynamic method dispatch compiles to vtable-load + indirect-call (~3× cost of static, per design/type-system.md:114) — IR-snapshot asserts the load + indirect-call pattern.
+- Dynamic method dispatch compiles to vtable-load + indirect-call (~3× cost of static, per docs/internal/implementation/IMP-type-system.md:114) — IR-snapshot asserts the load + indirect-call pattern.
 - Drop emission produces zero overhead for non-heap (stack-only) bindings; heap bindings get exactly one `ynz_free` call per scope exit per non-consumed binding — IR-snapshot + valgrind assert.
 - Drop-flag for conditionally-consumed bindings is a single i1/i8 alloca + flip + check at scope-exit — only emitted when borrow-check proves the consume is conditional. Unconditional consumes skip the drop-flag entirely (zero runtime overhead).
 - Default field expressions are evaluated at construction site, not at type-declaration-time — Python's mutable-default footgun is avoided by construction (ownership rules + per-construction-eval).
 
-**Auto-promotion analysis** (mandatory per `.claude/rules/auto-promotion.md`):
+**Auto-promotion analysis** (mandatory per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)):
 
-- **`array<T>` → `fixed<T>` promotion** (canonical example from `design/collections.md`): does NOT land in M4. M5 introduces `array<T>` and `fixed<T>`; M4 has neither. The promotion path is documented as M5 work; the catch-up obligation table (below) records this so M5 plans pick it up.
-- **`let` → `const` promotion** (per `.claude/rules/inference.md`): does NOT land in M4 codegen. The lint suggestion (`mutable-when-const-suffices` in `design/linting.md`) is a v0.4 deliverable; M4 doesn't introduce the lint. M4 DOES emit `readonly` on parameters inferred from `const` bindings at call sites — that's the codegen surface ALREADY in scope. No additional auto-promotion needed.
-- **Static dispatch by default for shape methods** (`design/type-system.md:57-210`): codegen surface IS in M4 P4. No muted IDE hint or Tier 3 lint surface for M4 — IDE hints land in v0.2 LSP per `design/ide-hints.md`. M4 emits the static-dispatch codegen unconditionally when concrete receiver type is known.
-- **No new auto-promotion candidates** introduced by M4's NEW features (shape declarations, hidden fields, inheritance, follows contracts, override, dynamic dispatch, ownership modifiers, heap alloc, drops, type-attached constants, wrapping/saturating methods). Each was evaluated; none has a stricter-form-the-compiler-could-have-picked that wasn't already addressed by an existing rule (`design/ownership.md` for ownership modifiers; `design/type-system.md` for dispatch).
-- **Hover-tooltip text for static-dispatch is v0.2 work** per `design/ide-hints.md`; M4 doesn't ship the tooltip. M4 ships the codegen; v0.2 ships the IDE surface. Cross-reference recorded.
+- **`array<T>` → `fixed<T>` promotion** (canonical example from [`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md)): does NOT land in M4. M5 introduces `array<T>` and `fixed<T>`; M4 has neither. The promotion path is documented as M5 work; the catch-up obligation table (below) records this so M5 plans pick it up.
+- **`let` → `const` promotion** (per [`.claude/rules/inference.md`](../../../rules/inference.md)): does NOT land in M4 codegen. The lint suggestion (`mutable-when-const-suffices` in [`docs/internal/implementation/IMP-linting.md`](../../../../docs/internal/implementation/IMP-linting.md)) is a v0.4 deliverable; M4 doesn't introduce the lint. M4 DOES emit `readonly` on parameters inferred from `const` bindings at call sites — that's the codegen surface ALREADY in scope. No additional auto-promotion needed.
+- **Static dispatch by default for shape methods** (`docs/internal/implementation/IMP-type-system.md:57-210`): codegen surface IS in M4 P4. No muted IDE hint or Tier 3 lint surface for M4 — IDE hints land in v0.2 LSP per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md). M4 emits the static-dispatch codegen unconditionally when concrete receiver type is known.
+- **No new auto-promotion candidates** introduced by M4's NEW features (shape declarations, hidden fields, inheritance, follows contracts, override, dynamic dispatch, ownership modifiers, heap alloc, drops, type-attached constants, wrapping/saturating methods). Each was evaluated; none has a stricter-form-the-compiler-could-have-picked that wasn't already addressed by an existing rule ([`docs/internal/implementation/IMP-ownership.md`](../../../../docs/internal/implementation/IMP-ownership.md) for ownership modifiers; [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md) for dispatch).
+- **Hover-tooltip text for static-dispatch is v0.2 work** per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md); M4 doesn't ship the tooltip. M4 ships the codegen; v0.2 ships the IDE surface. Cross-reference recorded.
 
 ### Teaching
 
@@ -1095,7 +1095,7 @@ M4 adds approximately 35 new diagnostic classes (P1: 6 banned-keyword + various 
 
 - Every M4 diagnostic follows WHAT/WHAT-INSTEAD/WHY three-part format — enforced by the `Diagnostic` constructor's three-non-empty-field assertion (M1 + M2 + M3 carried forward).
 - Every banned-keyword diagnostic (`type`/`struct`/`class`/`interface`/`enum`/`abstract`) names the correct Yinz replacement keyword (`shape`/`shape`/`shape`/`shape`/`options`/`base shape`) — covered by snapshot tests in P1.
-- Every const-mutation-path diagnostic explicitly names `const` and proposes `let` as the alternative — required by `### Safety` invariant chain (`design/ownership.md:33-76`).
+- Every const-mutation-path diagnostic explicitly names `const` and proposes `let` as the alternative — required by `### Safety` invariant chain (`docs/internal/implementation/IMP-ownership.md:33-76`).
 - Use-after-give diagnostics include BOTH the give-site span (using Ariadne's related-span feature) AND the use-site span — P3c assertion.
 - Banned-jargon does NOT appear in any M4 diagnostic (`infer`/`inference`/`narrowing`/`monomorphize`/`polymorphic`/`covariant`/`contravariant`/`deref`/`shadow`/`coerce`/`fallible`/`infallible`/`first-class`/`idiomatic`/`arity`/`variadic`/`residual`/`referentially transparent`/`immutable`/`mutable`/`invariant violation`/`ADT`/`AST`) — `crates/ynz-diagnostics/tests/jargon_audit.rs` (workspace-wide grep) is the enforcement; CI fails on first banned word.
 - Override-required diagnostic names the parent shape AND the method signature being shadowed — P3b assertion.
@@ -1107,8 +1107,8 @@ M4 adds approximately 35 new diagnostic classes (P1: 6 banned-keyword + various 
 - Default-expression-with-self diagnostic names `self` as the disallowed reference — P3a assertion.
 - Cyclic-field-dependency diagnostic names the cycle — P3a assertion.
 - Wrong-receiver-kind override diagnostic names the parent's receiver kind vs the override's — P3b assertion.
-- IDE muted-hint for `.share`/`.lend`/`.give` at call sites: M4 does NOT ship this; v0.2 LSP does (per `design/ide-hints.md`). Cross-reference recorded; M4 plan does NOT introduce inverse-anti-pattern call-site annotation requirements (`.claude/graveyard.md` Entry 2 confirmed clean by Bouncer check on this plan).
-- IR-snapshot diff failures in CI fail with a teaching message naming the snapshot file and the parameter-kind that changed (per `design/compiler-errors.md` shape) — P4 + P6 wiring.
+- IDE muted-hint for `.share`/`.lend`/`.give` at call sites: M4 does NOT ship this; v0.2 LSP does (per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md)). Cross-reference recorded; M4 plan does NOT introduce inverse-anti-pattern call-site annotation requirements ([`.claude/graveyard.md`](../../../graveyard.md) Entry 2 confirmed clean by Bouncer check on this plan).
+- IR-snapshot diff failures in CI fail with a teaching message naming the snapshot file and the parameter-kind that changed (per [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) shape) — P4 + P6 wiring.
 
 ### Runtime Dependencies
 
@@ -1164,13 +1164,13 @@ Restated here as the bottom-line guardrail; redundant with the "What M4 explicit
 - `sensitive` modifier — M8
 - Concurrency keyword parsing — M8
 - Bignum `number[N]` for N > 34 — M8
-- IDE muted-hint surfaces (`.share`/`.lend`/`.give` annotations at call sites) — v0.2 LSP (`design/ide-hints.md`)
-- Tier 3 lint suggestions (`mutable-when-const-suffices`, etc.) — v0.4 (`design/linting.md`)
-- Auto-SoA layout transform — v0.3+ (`design/future/auto-soa.md`)
+- IDE muted-hint surfaces (`.share`/`.lend`/`.give` annotations at call sites) — v0.2 LSP ([`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md))
+- Tier 3 lint suggestions (`mutable-when-const-suffices`, etc.) — v0.4 ([`docs/internal/implementation/IMP-linting.md`](../../../../docs/internal/implementation/IMP-linting.md))
+- Auto-SoA layout transform — v0.3+ ([`docs/internal/scratchpad/SCRATCH-future-auto-soa.md`](../../../../docs/internal/scratchpad/SCRATCH-future-auto-soa.md))
 - Auto-Arc cross-thread inference — v0.3+ (`design/future/concurrency.md`)
 - Plug-in allocator API (`... .in(myAllocator)`) — v0.3 (`design/future/no-runtime-mode.md`)
 - `super.method()` for explicit parent-method call — M5+ (M4 requires child to redeclare and call mangled parent name; clean alternative deferred)
-- Field auto-reorder for ABI tightness — v0.3+ (`design/collections.md`)
+- Field auto-reorder for ABI tightness — v0.3+ ([`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md))
 
 If you find yourself adding code that touches any item above, STOP and either re-plan this milestone or escalate the work to its proper milestone.
 
@@ -1184,7 +1184,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 - **`super.method()` syntax**: deferred until generics make method dispatch lookup more flexible. Either M5+ or never (depends on what need emerges).
 - **Plug-in allocator API for `--kernel` mode**: v0.3+ per `design/future/no-runtime-mode.md`. M4's `ynz_alloc`/`ynz_free` are the v0.1 libc-wrappers; v0.3 swaps in the plug-in surface.
 - **Method overloading by argument-count or type**: explicitly declined for v0.1. Structural typing handles ad-hoc polymorphism; if a real use emerges, document in `design/future/`.
-- **Auto-SoA layout transform**: v0.3+ per `design/future/auto-soa.md`. M4 lays fields in declaration order; auto-reorder is forward work.
+- **Auto-SoA layout transform**: v0.3+ per [`docs/internal/scratchpad/SCRATCH-future-auto-soa.md`](../../../../docs/internal/scratchpad/SCRATCH-future-auto-soa.md). M4 lays fields in declaration order; auto-reorder is forward work.
 - **Vtable cross-module ABI**: v0.1 has no modules until M8. When M8 lands, vtable layout becomes an ABI question. Recorded here so M8 plans address it.
 
 ---
@@ -1217,9 +1217,9 @@ Plan-reviewer issued PASS — "Required Fixes: None — plan ready to implement.
 
 ### Round 16 (2026-05-16) — Doc-PR 2 complete; Doc-PR 3 partial (phases section gets prominent FINAL LOCKED DECISIONS pointer)
 
-Doc-PR 2 completed: 19 files touched. Major rewrites (design/type-system.md, design/ownership.md, spec/types.md, spec/ownership.md, spec/operators.md). Medium rewrites (spec/iterables.md, design/iterables.md, spec/concurrency.md, design/ide-hints.md, .claude/rules/inference.md, .claude/rules/vocabulary.md). Small surgical fixes (spec/overview.md, spec/variables.md, spec/functions.md, spec/linting.md, design/errors.md, design/decisions.md, design/golden-rules.md, design/collections.md, design/stdlib/database.md).
+Doc-PR 2 completed: 19 files touched. Major rewrites (docs/internal/implementation/IMP-type-system.md, docs/internal/implementation/IMP-ownership.md, docs/reference/REF-types.md, docs/reference/REF-ownership.md, docs/reference/REF-operators.md). Medium rewrites (docs/reference/REF-iterables.md, docs/internal/implementation/IMP-iterables.md, docs/reference/REF-concurrency.md, docs/reference/REF-ide-hints.md, .claude/rules/inference.md, .claude/rules/vocabulary.md). Small surgical fixes (docs/reference/REF-language-overview.md, docs/reference/REF-variables.md, docs/reference/REF-functions.md, docs/reference/REF-linting.md, docs/internal/implementation/IMP-errors.md, docs/README.md, docs/reference/REF-golden-rules.md, docs/internal/implementation/IMP-collections.md, docs/internal/scratchpad/SCRATCH-stdlib-database.md).
 
-Verification: final grep showed all body-level `.share/.lend/.give` no-parens patterns removed from spec/design (except in non-oop.md and dot-postfix.md which intentionally reference the form for teaching). All prefix-form struct literals removed (except in spec/types.md where it appears as an explicit COMPILE ERROR example showing what's banned). `override` keyword removed from all spec/design content. Methods-inside-shapes removed from all spec/design content. Total: 25 files in diff (Doc-PR 1 + Doc-PR 2), +2452 insertions / -403 deletions.
+Verification: final grep showed all body-level `.share/.lend/.give` no-parens patterns removed from spec/design (except in non-oop.md and dot-postfix.md which intentionally reference the form for teaching). All prefix-form struct literals removed (except in docs/reference/REF-types.md where it appears as an explicit COMPILE ERROR example showing what's banned). `override` keyword removed from all spec/design content. Methods-inside-shapes removed from all spec/design content. Total: 25 files in diff (Doc-PR 1 + Doc-PR 2), +2452 insertions / -403 deletions.
 
 Doc-PR 3 partial: rather than rewriting the M4 plan's phase bodies in full (which would duplicate the FINAL LOCKED DECISIONS section's content in detailed prose), added a prominent READ-FIRST pointer at the top of the Phases section explicitly listing how each phase changes for the non-OOP / UFCS / standalone-functions model. Phase bodies retain their useful content (test counts, file:line anchors, LLVM attribute requirements, fixture lists) — only the OOP-leaning sections get tweaked during implementation per the pointer's guidance.
 
@@ -1229,7 +1229,7 @@ All design-doc-rewrite work for the non-OOP transition is now complete. M4 P1 (l
 
 ### Round 15 (2026-05-16) — Mid-Doc-PR-2 surface: two design questions surfaced during type-system.md rewrite review
 
-Patrick reviewed the `design/type-system.md` partial rewrite and raised two questions:
+Patrick reviewed the [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md) partial rewrite and raised two questions:
 
 **OPEN-Q12: What's the purpose of `hidden` keyword in the non-OOP model?** Patrick: "in theory if we don't want the scope outside the file, we just don't export the function right? or the shape? so there is no 'hidden' keyword."
 
@@ -1239,11 +1239,11 @@ Planner answered: `hidden` solves a problem that module-export rules can't — *
 
 Planner answered: type aliases exist in TS because TS has `interface` AND `type` as separate concepts. Yinz only has `shape` — the tension that birthed type aliases doesn't exist. Type aliases provide zero functionality (UserId IS string at compile/runtime); they're pure documentation sugar. Parameter names + comments do the same job. Planner-recommends: **DROP type aliases entirely from M4 and the spec**.
 
-### Round 14 (2026-05-16) — Doc-PR 1 complete; Doc-PR 2 chunk 1 (design/type-system.md) in progress
+### Round 14 (2026-05-16) — Doc-PR 1 complete; Doc-PR 2 chunk 1 (docs/internal/implementation/IMP-type-system.md) in progress
 
-Doc-PR 1 (Task #7) completed: 5 foundation files landed (.claude/rules/non-oop.md, .claude/rules/dot-postfix.md, project CLAUDE.md update, design/golden-rules.md cross-cutting principle, design/decisions.md Cross-Cutting Architectural Principles section, .claude/rules/language-design.md OOP Drift Test). Grep verification clean. Not yet committed — Patrick locked "batch all three doc-PRs at the end" so commit deferred.
+Doc-PR 1 (Task #7) completed: 5 foundation files landed (.claude/rules/non-oop.md, .claude/rules/dot-postfix.md, project CLAUDE.md update, docs/reference/REF-golden-rules.md cross-cutting principle, docs/README.md Cross-Cutting Architectural Principles section, .claude/rules/language-design.md OOP Drift Test). Grep verification clean. Not yet committed — Patrick locked "batch all three doc-PRs at the end" so commit deferred.
 
-Doc-PR 2 started: chunk-by-chunk approach (5 chunks). Chunk 1 = `design/type-system.md` partial rewrite:
+Doc-PR 2 started: chunk-by-chunk approach (5 chunks). Chunk 1 = [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md) partial rewrite:
 - §"One Keyword `type`" → §"One Keyword `shape`" + non-OOP cross-reference
 - §"Single Inheritance with `extends`" → reframed as DATA-ONLY inheritance with standalone-function example
 - §"`override` Keyword Required" REMOVED; replaced with §"Function Overloading by Argument Type"
@@ -1261,7 +1261,7 @@ Patrick locked **Option A** for OPEN-Q11 after planner clarified the IDE/compile
 
 **Patrick's UX addition (new requirement)**: every UFCS-related error message must teach BOTH call styles in its WHAT-INSTEAD section. His framing: "you can't do that, try tower.whateverWorks or tower(a,b)" — showing the user both alternatives.
 
-Canonical diagnostic format (to be codified in `.claude/rules/non-oop.md` rewrite):
+Canonical diagnostic format (to be codified in [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) rewrite):
 
 ```
 COMPILE ERROR: No function `attack` accepts (Building, Enemy, int).
@@ -1286,11 +1286,11 @@ Implementation requirements:
 - First-encounter teaching: the FIRST `value.foo()` error a new Yinz user hits should teach both call styles in one shot
 
 Status of artifacts:
-- `.claude/rules/non-oop.md` draft: still held (will be rewritten cleanly now that OPEN-Q11 is locked, incorporating the Building example + dual-style diagnostic format)
-- `.claude/rules/dot-postfix.md`: still pending (Doc-PR 1)
+- [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) draft: still held (will be rewritten cleanly now that OPEN-Q11 is locked, incorporating the Building example + dual-style diagnostic format)
+- [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md): still pending (Doc-PR 1)
 - Doc-PR 1: cleared to proceed once non-oop.md rewrite ships
 
-### Round 12 (2026-05-16) — Patrick reviewed `.claude/rules/non-oop.md` draft; surfaced UFCS-vs-function-call-only as an unresolved design decision; rule file draft held pending lock
+### Round 12 (2026-05-16) — Patrick reviewed [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) draft; surfaced UFCS-vs-function-call-only as an unresolved design decision; rule file draft held pending lock
 
 Patrick's r12 reactions to the non-OOP rule file draft:
 
@@ -1312,13 +1312,13 @@ Patrick's r12 reactions to the non-OOP rule file draft:
 
    Planner-leaning: **Option C** (preserves Golden Rule 1 intact; the OOP-ness fear is about WHERE methods are declared, not about call syntax; dot-call on a value where the function is a standalone declaration is just a parsing convention).
 
-   **DECISION REQUIRED before `.claude/rules/non-oop.md` finalizes.** The entire "How Methods Work," "Coming from TypeScript," and "How Inheritance Works" sections depend on which option is locked. The rule file draft is held pending Patrick's call.
+   **DECISION REQUIRED before [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) finalizes.** The entire "How Methods Work," "Coming from TypeScript," and "How Inheritance Works" sections depend on which option is locked. The rule file draft is held pending Patrick's call.
 
 3. **Damageable example fix**: trivial cleanup once UFCS question is resolved — rewrite using `Comparable` (which IS defined in the file) or define Damageable first.
 
 4. **Status of FINAL LOCKED DECISIONS section (top of plan)**: items #3 ("Methods are standalone functions taking the receiver as the first parameter. `value.method()` is sugar for `method(value)` — Uniform Function Call Syntax (UFCS).") needs the same lock. UPDATE pending OPEN-Q11 resolution.
 
-5. **Doc-PR 1 status**: BLOCKED on OPEN-Q11. Once locked, planner rewrites `.claude/rules/non-oop.md` cleanly (one-line rule, 6-row OOP-translation table, no duplicate TS section, Damageable→Comparable fix) and then proceeds with the batch (project CLAUDE.md note, golden-rules entry, decisions log, language-design checklist update, dot-postfix rule file — the dot-postfix rule file is also blocked because parens-on-method-calls only matters if method-calls exist as a syntactic form, which OPEN-Q11 decides).
+5. **Doc-PR 1 status**: BLOCKED on OPEN-Q11. Once locked, planner rewrites [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) cleanly (one-line rule, 6-row OOP-translation table, no duplicate TS section, Damageable→Comparable fix) and then proceeds with the batch (project CLAUDE.md note, golden-rules entry, decisions log, language-design checklist update, dot-postfix rule file — the dot-postfix rule file is also blocked because parens-on-method-calls only matters if method-calls exist as a syntactic form, which OPEN-Q11 decides).
 
 No planner pushback. Awaiting Patrick's A/B/C call on UFCS.
 
@@ -1340,8 +1340,8 @@ What's gone from the body:
 - `value.give()` — same
 
 Plan impact:
-- `.claude/rules/dot-postfix.md`: no longer needs to handle ownership modifiers; just methods + `.copy()` + `.freeze()` + intrinsics
-- `.claude/rules/inference.md`: ownership-inference domain row simplifies to "infer at call sites from callee signature; render as muted hint"
+- [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md): no longer needs to handle ownership modifiers; just methods + `.copy()` + `.freeze()` + intrinsics
+- [`.claude/rules/inference.md`](../../../rules/inference.md): ownership-inference domain row simplifies to "infer at call sites from callee signature; render as muted hint"
 - M4 P2 parser: no `.share() / .lend() / .give()` postfix-modifier parsing — drops a chunk of complexity
 - M4 P3c ownership analysis: simpler — no body-level modifier expressions to check; just check parameter usage against signature
 - M4 success-criteria fixture: cleaner — no `.give()` calls
@@ -1353,7 +1353,7 @@ Also confirmed in r11:
 
 ### Round 10 (2026-05-16) — Patrick CONFIRMED non-OOP model: data shapes + standalone functions + UFCS dot-call sugar. This is the LARGEST design decision in this plan's history.
 
-**Patrick's framing**: he showed his mental model that shapes are contracts (types + signatures) and instance literals (`const player: Player = { ... }`) hold values. Planner had been assuming OOP-like methods-inside-shapes per `design/type-system.md`. Patrick called this out — he never intended OOP; the language was being built non-OOP-by-default and OOP was an unstated assumption planner kept making.
+**Patrick's framing**: he showed his mental model that shapes are contracts (types + signatures) and instance literals (`const player: Player = { ... }`) hold values. Planner had been assuming OOP-like methods-inside-shapes per [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md). Patrick called this out — he never intended OOP; the language was being built non-OOP-by-default and OOP was an unstated assumption planner kept making.
 
 Planner's recommendation (accepted): **standalone functions + UFCS** (Rust/Go style)
 - Shapes hold data fields + contract method-signature declarations only — NO method implementations
@@ -1374,8 +1374,8 @@ Planner's recommendation (accepted): **standalone functions + UFCS** (Rust/Go st
 
 **Doc + plan rewrite scope** (THREE sequential doc-PRs before P1 starts):
 
-- **Doc-PR 1** (Task #7): Foundation. NEW `.claude/rules/non-oop.md` codifying the model. Project `CLAUDE.md` note. `design/golden-rules.md` non-OOP principle. `design/decisions.md` entry. `.claude/rules/language-design.md` checklist update.
-- **Doc-PR 2** (Task #8): Apply to existing docs. Major rewrite of `design/type-system.md` (remove methods-inside-shapes; document standalone+UFCS pattern; remove `override`; redocument `extends` as data-only). Same for `spec/types.md`. Update ownership docs (`design/ownership.md`, `spec/ownership.md`) — ownership concepts unchanged but examples use standalone-function-with-receiver. Also folds in: `.claude/rules/dot-postfix.md`, `.freeze()` and other ownership-modifier paren updates, annotation-only struct-literal form.
+- **Doc-PR 1** (Task #7): Foundation. NEW [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) codifying the model. Project [`CLAUDE.md`](../../../../CLAUDE.md) note. [`docs/reference/REF-golden-rules.md`](../../../../docs/reference/REF-golden-rules.md) non-OOP principle. [`docs/README.md`](../../../../docs/README.md) entry. [`.claude/rules/language-design.md`](../../../rules/language-design.md) checklist update.
+- **Doc-PR 2** (Task #8): Apply to existing docs. Major rewrite of [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md) (remove methods-inside-shapes; document standalone+UFCS pattern; remove `override`; redocument `extends` as data-only). Same for [`docs/reference/REF-types.md`](../../../../docs/reference/REF-types.md). Update ownership docs ([`docs/internal/implementation/IMP-ownership.md`](../../../../docs/internal/implementation/IMP-ownership.md), [`docs/reference/REF-ownership.md`](../../../../docs/reference/REF-ownership.md)) — ownership concepts unchanged but examples use standalone-function-with-receiver. Also folds in: [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md), `.freeze()` and other ownership-modifier paren updates, annotation-only struct-literal form.
 - **Doc-PR 3** (Task #9): Rewrite M4 plan phases P2/P3a/P3b/P4 for the standalone+UFCS model. Plan simplifies significantly:
   - P2 parser: ShapeDecl body has FieldDecl + bare-signature contract-method declarations only; NO MethodDecl with body inside shape
   - P3a typeck: no method type-check inside shapes; standalone functions normal; UFCS resolution at call sites
@@ -1387,7 +1387,7 @@ Planner's recommendation (accepted): **standalone functions + UFCS** (Rust/Go st
 - Q8 (signature ownership default): collapsed into Q10 — bare = implicit share for free functions; contract signatures and function-type annotations require explicit
 - Q9 (call-site inference table): confirmed
 - Q10 (signature ownership): confirmed — `function` keyword requires body, ownership inferred from body; contract bare-signatures must be explicit
-- **NEW R10**: non-OOP standalone+UFCS model adopted — REVERSES the methods-inside-shapes assumption in `design/type-system.md`
+- **NEW R10**: non-OOP standalone+UFCS model adopted — REVERSES the methods-inside-shapes assumption in [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md)
 
 **Status**: ALL major design questions resolved. Three sequential doc-PRs (Tasks #7, #8, #9) before P1 starts. After Doc-PR 3 merges, M4 P1 (lexer) begins.
 
@@ -1427,7 +1427,7 @@ The syntactic distinction is clear: `function` = has body = infer ownership. Bar
 
 If user forgets ownership on a contract signature: COMPILE ERROR. If user forgets ownership on a `function` declaration: compiler infers it (no error unless body is inconsistent). NO runtime ownership errors in either case.
 
-**Design doc update required**: `design/type-system.md` and `spec/types.md` currently show contract shapes using `function` keyword in method declarations. Must be removed — contract methods use bare-signature form only. This goes in the consolidated pre-P1 doc-PR (Task #6).
+**Design doc update required**: [`docs/internal/implementation/IMP-type-system.md`](../../../../docs/internal/implementation/IMP-type-system.md) and [`docs/reference/REF-types.md`](../../../../docs/reference/REF-types.md) currently show contract shapes using `function` keyword in method declarations. Must be removed — contract methods use bare-signature form only. This goes in the consolidated pre-P1 doc-PR (Task #6).
 
 **OPEN-Q10 is now locked.** Awaiting Patrick's explicit confirm before folding into plan body and starting doc-PR.
 
@@ -1495,7 +1495,7 @@ Trade-offs Patrick is accepting:
 - (+) Matches mental model (params = types)
 - (−) Caller without IDE must read body to see contract — mitigated by IDE hover + generated docs
 
-**Pending Patrick's explicit confirm of the four locks** (OPEN-Q7, Q8, Q9, Q10). Plan-text changes after confirm: design/ownership.md:14 rewrite + .claude/rules/inference.md new domain row + spec/ownership.md rewrite + plan P2 (no signature modifier) + plan P3c (produces inferred contract per function) + add `ownership-contract-changed` Tier 3 lint to M4 catch-up obligations OR v0.2/v0.4 work list.
+**Pending Patrick's explicit confirm of the four locks** (OPEN-Q7, Q8, Q9, Q10). Plan-text changes after confirm: docs/internal/implementation/IMP-ownership.md:14 rewrite + .claude/rules/inference.md new domain row + docs/reference/REF-ownership.md rewrite + plan P2 (no signature modifier) + plan P3c (produces inferred contract per function) + add `ownership-contract-changed` Tier 3 lint to M4 catch-up obligations OR v0.2/v0.4 work list.
 
 ### Round 6 (2026-05-15) — Patrick spotted that keyword-prefix on signature params violates the just-locked dot-postfix rule; proposed inside-out ownership inference; planner-recommends Form A (bare-only, infer from body)
 
@@ -1511,7 +1511,7 @@ His observation: putting `share`/`lend`/`give` as a keyword prefix in the signat
 Planner's response:
 - Conceded the point — Patrick is correct that signature-keyword form is now inconsistent with the dot-postfix rule
 - Surfaced as OPEN-Q10 (see above) — proposed Form A (bare signature, inside-out inference) as planner-leaning
-- Flagged this REVERSES `design/ownership.md:14`'s "explicit in signatures" rule
+- Flagged this REVERSES `docs/internal/implementation/IMP-ownership.md:14`'s "explicit in signatures" rule
 - Walked through trade-offs (− cross-module ABI requires exported inference metadata; − body changes silently shift contract; + dot-postfix uniformity; + less typing)
 - Proposed mitigation: v0.2 LSP shows inferred contract prominently; Tier 3 lint catches body changes that shift ownership
 
@@ -1529,7 +1529,7 @@ He's right. The planner was imprecise about WHEN exactly `.give()` is inferred. 
 2. **Field-read semantics**: `return p.name` where `name` is a primitive string — no modifier needed; primitives are copy-on-read in M4. `return p.inner` where `inner` is a nested shape — UNRESOLVED, surfaced as OPEN-Q7.
 3. **Function signature default**: `function f(p: T)` without ownership modifier — was implicitly assumed, never actually locked. Surfaced as OPEN-Q8. Planner-leaning: no implicit default; compile error.
 4. **DB-scenario walked through** with three stories (DB shares / DB consumes / caller wants player back) — clarified that the SIGNATURE drives every ownership decision; call sites just satisfy what the signature requires.
-5. **Also corrected the `int.parse("42")` example earlier**: that's not a real Yinz operation. Replaced with M2-shipped `.toNumber()` / `.toFloat()` / `.toString()` instance methods + M4-P5 `int.max`/`number.epsilon` type-attached constants. **Added to the dot-postfix-rule design checklist**: "Every example MUST use a real Yinz operation from the current scope — no invented APIs for illustration." Cross-referenced in `.claude/rules/spec-writing.md` and `.claude/rules/docs-checklist.md`.
+5. **Also corrected the `int.parse("42")` example earlier**: that's not a real Yinz operation. Replaced with M2-shipped `.toNumber()` / `.toFloat()` / `.toString()` instance methods + M4-P5 `int.max`/`number.epsilon` type-attached constants. **Added to the dot-postfix-rule design checklist**: "Every example MUST use a real Yinz operation from the current scope — no invented APIs for illustration." Cross-referenced in [`.claude/rules/spec-writing.md`](../../../rules/spec-writing.md) and [`.claude/rules/docs-checklist.md`](../../../rules/docs-checklist.md).
 
 Net plan changes pending Patrick's r5 confirm (three OPEN-Qs):
 - OPEN-Q7 (partial moves out of nested-shape field): planner-leaning Option X (no partial moves; M4 simplicity)
@@ -1542,7 +1542,7 @@ If all three confirmed, the pre-P1 doc-PR scope grows by ~3 small additions (Saf
 
 Patrick's decisions:
 
-1. **Q1 `.freeze`**: KEEP, but with parens. **NEW META-RULE proposed by Patrick**: "if it performs an action (not updating a field), it is represented like a function" — i.e., parens-for-actions, no-parens-for-field/constant-access. Planner agreed: cleaner generalization, removes the field-like reading of ownership modifiers. New rule file `.claude/rules/dot-postfix.md` to be added.
+1. **Q1 `.freeze`**: KEEP, but with parens. **NEW META-RULE proposed by Patrick**: "if it performs an action (not updating a field), it is represented like a function" — i.e., parens-for-actions, no-parens-for-field/constant-access. Planner agreed: cleaner generalization, removes the field-like reading of ownership modifiers. New rule file [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md) to be added.
 2. **Q1 freeze NAMING**: KEEP "freeze" — matches JS `Object.freeze()` (Golden Rule 6), universal English metaphor, no better alternative survives scrutiny (.seal/.lock/.fix/.commit/.solidify/.finalize all have problems).
 3. **Q2 `extends`**: KEEP.
 4. **Q3 hidden-field defaults**: constants + empty literals only.
@@ -1563,7 +1563,7 @@ No planner pushback in r4. All Patrick decisions accepted; the dot-postfix meta-
 Patrick worked through OPEN-Q1/Q2/Q3 and the example-requested questions. Outcomes:
 
 1. **`.freeze` (OPEN-Q1)**: Patrick said "if this is a legit pattern I say keep freeze honestly. It reads better to me." Planner walked through the build-then-lock pattern with conditional/intermediate mutation (the case where const-shadowing doesn't cleanly work). Both leaning KEEP. Awaiting confirm.
-2. **`Self` semantics**: Patrick confirmed locked, but raised an idiomatic-syntax adjustment: `let p2 = Player { ... }` reads OOP-y; should be `let p2: Player = { ... }`. Planner identified this as a NEW design-doc-aligned improvement → OPEN-Q4. `design/type-system.md:53` already supports both forms (structural typing); question is which form is idiomatic + whether to lint the other.
+2. **`Self` semantics**: Patrick confirmed locked, but raised an idiomatic-syntax adjustment: `let p2 = Player { ... }` reads OOP-y; should be `let p2: Player = { ... }`. Planner identified this as a NEW design-doc-aligned improvement → OPEN-Q4. `docs/internal/implementation/IMP-type-system.md:53` already supports both forms (structural typing); question is which form is idiomatic + whether to lint the other.
 3. **Default expressions (OPEN-Q3)**: Patrick reframed "shape is a contract not the actual implementation of key value pairs" — planner reconciled by clarifying defaults are ONLY on hidden fields (load-bearing because hidden fields can't be construction-provided); visible fields have NO defaults; the OPEN question is what EXPRESSIONS are legal in the hidden-field defaults. Patrick's "contract not implementation" framing matches the plan's lock (constants + empty literals only).
 4. **`.copy` (Q5)**: Patrick said "regardless probably isn't the best use in this case BUT as long as we teach that maybe having it exist is still a nice feature. How else would you handle that in other languages anyway if you wanted to copy it?" Planner provided cross-language comparison (Rust Copy/Clone, TS spread, Go shallow, Swift COW, C++ copy-ctor footgun) — Yinz currently mirrors Rust's good model. Re-surfaced as OPEN-Q5 for confirm.
 5. **`.give` and drops (Q7)**: Patrick asked "what does p.give do and when you say drop are you saying..." Planner walked through the TS-vs-Yinz mental model (no GC, ownership-based cleanup, drop = compile-time-inserted `free()` at scope exit, `.give` = explicit ownership transfer). Patrick's TS intuition matched the locked design exactly. Re-surfaced as OPEN-Q6 for confirm.
@@ -1574,11 +1574,11 @@ No planner pushback. All r3 surfaces map to OPEN-Q1 through OPEN-Q6 above; await
 
 Patrick raised four concerns during r2 review:
 
-1. **"We are landing on the word `follows` I believe — is `extends` even right?"** — Planner re-grepped `design/type-system.md:15-46` and `spec/types.md:83-205`. Both `extends` (single inheritance — fields+methods come with you) AND `follows` (multiple contracts — promise to provide signatures yourself) ARE locked in current design. They're mechanically opposite (extends = incoming code; follows = outgoing promise). Whether the keyword name `extends` itself is right is now OPEN-Q2.
+1. **"We are landing on the word `follows` I believe — is `extends` even right?"** — Planner re-grepped `docs/internal/implementation/IMP-type-system.md:15-46` and `docs/reference/REF-types.md:83-205`. Both `extends` (single inheritance — fields+methods come with you) AND `follows` (multiple contracts — promise to provide signatures yourself) ARE locked in current design. They're mechanically opposite (extends = incoming code; follows = outgoing promise). Whether the keyword name `extends` itself is right is now OPEN-Q2.
 
 2. **"For `Self` — auto-promotes with muted-text + comment learning patterns?"** — Planner confirmed: yes. `Self` resolves to the concrete implementing type (Player, not Entity, even when inherited via extends). IDE renders a muted-text annotation showing what `Self` resolved to in context; click-to-make-explicit replaces with the concrete name. Auto-promotion compatible — codegen unchanged, only IDE surface added (v0.2 LSP work). Locked as before.
 
-3. **"`.freeze` — didn't we remove this? What's it useful for?"** — Planner re-grepped `spec/ownership.md:18,100`: `.freeze` IS still in the locked spec. But Patrick's auto-promotion observation is sound — `let → const` auto-promotion + shadow rebinding (`const buf = buf`) covers the in-place-lock use case without a dedicated keyword. Surfaced as OPEN-Q1 awaiting decision.
+3. **"`.freeze` — didn't we remove this? What's it useful for?"** — Planner re-grepped `docs/reference/REF-ownership.md:18,100`: `.freeze` IS still in the locked spec. But Patrick's auto-promotion observation is sound — `let → const` auto-promotion + shadow rebinding (`const buf = buf`) covers the in-place-lock use case without a dedicated keyword. Surfaced as OPEN-Q1 awaiting decision.
 
 4. **"Other questions need examples"** — Planner provided concrete examples for Q#3 (default-expression scope), Q#4 (fat-pointer layout for `dynamic`), Q#5 (.copy on shape with non-trivial fields), Q#7 (drop order at `.give`-return). Patrick implicitly accepted Q#4/Q#5/Q#7; Q#3 remains OPEN-Q3 awaiting decision.
 

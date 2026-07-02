@@ -274,10 +274,10 @@ The Bouncer + compile diagnostics catch these:
 
 ## Cross-References
 
-- `design/golden-rules.md` Rule 1 (dot-first, satisfied by UFCS), Rule 4 (compiler does hard work), Rule 8 (zero-cost abstractions — UFCS is parse-time sugar), Rule 12 (human-readable over jargon)
-- `.claude/rules/dot-postfix.md` (parens-for-actions / no-parens-for-access — applies to method-call syntax)
-- `.claude/rules/inference.md` (call-site ownership inference for implicit `.share()` / `.lend()` / `.give()` at every call site)
-- `.claude/rules/vocabulary.md` (Yinz user-facing terms — non-OOP framing in error messages)
-- `design/type-system.md` (shapes, extends, follows, dynamic — the full type system spec)
-- `design/ownership.md` (ownership modifiers — declared at signatures, inferred at call sites)
-- `.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md` (M4 — where the non-OOP model lands in the compiler)
+- [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 1 (dot-first, satisfied by UFCS), Rule 4 (compiler does hard work), Rule 8 (zero-cost abstractions — UFCS is parse-time sugar), Rule 12 (human-readable over jargon)
+- [`.claude/rules/dot-postfix.md`](dot-postfix.md) (parens-for-actions / no-parens-for-access — applies to method-call syntax)
+- [`.claude/rules/inference.md`](inference.md) (call-site ownership inference for implicit `.share()` / `.lend()` / `.give()` at every call site)
+- [`.claude/rules/vocabulary.md`](vocabulary.md) (Yinz user-facing terms — non-OOP framing in error messages)
+- [`docs/internal/implementation/IMP-type-system.md`](../../docs/internal/implementation/IMP-type-system.md) (shapes, extends, follows, dynamic — the full type system spec)
+- [`docs/internal/implementation/IMP-ownership.md`](../../docs/internal/implementation/IMP-ownership.md) (ownership modifiers — declared at signatures, inferred at call sites)
+- [`.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md`](../planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md) (M4 — where the non-OOP model lands in the compiler)

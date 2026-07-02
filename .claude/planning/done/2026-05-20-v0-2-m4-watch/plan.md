@@ -35,9 +35,9 @@ legacy:
   files:
     - crates/ynz-watch/**
     - crates/ynz-driver/src/**
-    - design/watch.md
-    - design/compiler.md
-    - design/mvp-scope.md
+    - docs/internal/implementation/IMP-watch.md
+    - docs/internal/implementation/IMP-compiler.md
+    - docs/reference/REF-mvp-scope.md
     - CLAUDE.md
     - examples/pirates-roster/entrypoint.ynz
     - examples/primantis-orders/v0_2_m4_errors.ynz
@@ -67,21 +67,21 @@ Status: pending_approval
 - The `ynz` driver CLI has `Build`, `Run`, and `Fmt` subcommands (`crates/ynz-driver/src/main.rs:39-130`). M4 adds `Watch`.
 - Salsa 0.26.2 (`#[salsa::tracked]` style, salsa-2022 architecture) is used throughout. `CompilerDb` is `Default`-constructible and holds `SourceFileRegistry`. Inputs (`SourceFile.text`) are mutated via `.set(&mut db, text).to(new_text)`; salsa invalidates dependent queries automatically.
 - `ynz run` builds + executes a `.ynz` file once (`crates/ynz-driver/src/run.rs`). The compiled artifact is deleted by default (`--keep` to retain). Watch reuses the same Build→Run pipeline but in a loop.
-- Yinz's "sub-second incremental recompile" target is stated in `design/compiler.md:11` and the watch section at `design/compiler.md:138-146`. M4 turns that paragraph into a working command.
+- Yinz's "sub-second incremental recompile" target is stated in `docs/internal/implementation/IMP-compiler.md:11` and the watch section at `docs/internal/implementation/IMP-compiler.md:138-146`. M4 turns that paragraph into a working command.
 - 1143 tests passing on `main` as of M3 ship (2026-05-20).
 
 **Constraints (locked from roadmap + this planning session)**:
 - **Daemon architecture LOCKED** (no spike): one long-running process holds one `CompilerDb` instance; file events mutate `SourceFile.text` inputs; salsa invalidates downstream queries. Sub-second target depends on this. Confirmed by Patrick this session.
 - **Default behavior = build + run** (mirrors `ynz run`): `ynz watch foo.ynz` rebuilds AND re-executes on save. `--check` flag skips the run step (CI gate / "I just want to see if it compiles" use case). Confirmed by Patrick this session.
 - **Output style LOCKED**: clear screen by default; `--no-clear` flag preserves scrollback (CI logs, debugging the watcher itself).
-- **`--json` mode SHIPS IN M4** (not deferred): emits NDJSON event stream on stdout, suppresses normal text output. Schema documented in `design/watch.md` and registered as a stable interface (semver applies once v0.2.0 ships).
+- **`--json` mode SHIPS IN M4** (not deferred): emits NDJSON event stream on stdout, suppresses normal text output. Schema documented in [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) and registered as a stable interface (semver applies once v0.2.0 ships).
 - **Memory safety LOCKED — multi-layered defense** (per Patrick "100 extra lines, worth the initial investment"):
   - **Layer 1 — Salsa LRU caps**: VERIFIED EXISTS in salsa 0.26.2 (`/home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/salsa-0.26.2/src/function/eviction/lru.rs`; macro syntax confirmed in `tests/lru.rs:40`; runtime `set_lru_capacity` confirmed in `tests/lru.rs:90`). Syntax: `#[salsa::tracked(lru = N)]` per-query macro option + `set_lru_capacity(&mut db, N)` runtime API. Locked caps: `parse_query` lru=128, `module_signatures_query` lru=128, `check_query` lru=64, `codegen_query` lru=32 (codegen is heaviest; smaller cap acceptable). **User-facing tuning surface**: ONE env var `YNZ_WATCH_LRU_SCALE` (default 1.0) — multiplies all four defaults proportionally. ADVANCED escape hatches `YNZ_WATCH_LRU_PARSE`, `YNZ_WATCH_LRU_SIG`, `YNZ_WATCH_LRU_CHECK`, `YNZ_WATCH_LRU_CODEGEN` override individual caps if the scale multiplier isn't fine-grained enough. Per plan-review Round 2 ergonomics concern: most users will never touch these; SCALE is the primary knob.
   - **Layer 2 — Periodic DB rebuild**: drop + recreate `CompilerDb` every N=500 rebuilds OR T=4h elapsed (whichever first). Time-source = `std::time::Instant::now()` (monotonic; immune to clock skew). State persistence across rebuild: `WatchDb` holds a shadow `HashMap<PathBuf, String>` outside salsa (see Research Findings "WatchDb shadow state"). On rebuild_db(): drop salsa DB; create `Default`; iterate shadow map; populate new DB's `SourceFile` inputs from shadow map. ZERO source-state loss across rebuild.
   - **Layer 3 — RSS polling via `memory-stats` crate** (LOCKED — version 1.2; cross-platform: Linux `/proc/self/status` + macOS `task_info` + Windows `GetProcessMemoryInfo`). Sample after every rebuild. Soft warn (single message + JSON `MemoryWarning` event) at default 1024MB; hard stop (exit code 2 + JSON `MemoryStop` event) at default 4096MB. Tunable via env vars `YNZ_WATCH_MAX_RSS_MB` + `YNZ_WATCH_RSS_WARN_MB`. Warning rate-limited to 1-per-60s.
 - **File watching via `notify = "8.2"` + `notify-debouncer-mini = "0.7"` LOCKED** (verified current stable 2026-05-20 via crates.io API; 9.0.0-rc.* family rejected because still rc). Cross-platform: Linux inotify / macOS FSEvents / Windows ReadDirectoryChangesW. Debouncer ONLY (no second dedup layer in event_loop — single source of truth).
 - **No new language features** — M4 is pure tooling. Zero new tokens, zero new typeck/codegen behavior. `ynz build` / `ynz run` / `ynz fmt` behavior byte-identical to pre-M4 for every existing fixture.
-- **Symlinks: follow** (consistent with M3 fmt). Watching the symlink path resolves to the target; saves to the underlying file trigger events. **Symlink target swap mid-watch**: if user runs `ln -sfn newfile foo.ynz`, the next file event watch receives is whatever `notify` delivers — we do NOT special-case symlink swaps. Documented in `design/watch.md`: "If you swap a symlink's target while watching, restart `ynz watch` for guaranteed correct behavior."
+- **Symlinks: follow** (consistent with M3 fmt). Watching the symlink path resolves to the target; saves to the underlying file trigger events. **Symlink target swap mid-watch**: if user runs `ln -sfn newfile foo.ynz`, the next file event watch receives is whatever `notify` delivers — we do NOT special-case symlink swaps. Documented in [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md): "If you swap a symlink's target while watching, restart `ynz watch` for guaranteed correct behavior."
 - **File deletion while watched**: if a `.ynz` file disappears mid-watch, watch logs a single warning line (`"path/to/foo.ynz vanished; watch continues, will re-pick-up on re-creation"`) + emits JSON `file-removed` event. Watch does NOT crash; the shadow source state retains the last-known text (so next rebuild includes the file's pre-deletion contents until it returns or watch restarts). The lockout against silent-zero-rebuilds: a project-mode rebuild on a partly-deleted project still uses the shadow state for the missing file.
 - **Child process group**: child spawned in its own process group via `setpgid(0, 0)` (Unix) so SIGTERM/SIGKILL hit the whole tree, NOT just PID 1 (prevents `program &` double-fork from leaving zombies). Cross-platform: Unix uses `nix::unistd::setsid()` (LOCKED dep — see below); Windows uses `CREATE_NEW_PROCESS_GROUP` flag.
 - **SIGTERM via `nix = "0.31"` LOCKED**: `child.kill()` from stdlib sends SIGKILL on Unix (no grace; can leave terminal in raw mode if child uses raw input). `nix` crate provides `nix::sys::signal::killpg(pgid, Signal::SIGTERM)` for graceful 2s shutdown, then stdlib SIGKILL fallback. Dep weight ~50KB compile; established crate. Cross-platform: Windows path uses `child.kill()` (TerminateProcess) directly — no graceful semantics on Windows (Windows console programs rarely have terminal-state cleanup needs).
@@ -97,7 +97,7 @@ Status: pending_approval
 - **Tempdir-disk-full handling LOCKED**: codegen step writes to per-pid tempdir (`$TMPDIR/ynz-watch-<pid>-<seq>/`). If write fails (disk full, permissions): codegen step returns error; emit JSON `BuildEnd { outcome: "errors" }` (NOT "ok"); status line shows "✗ build failed (codegen write error: ...)"; NO child spawn; NO ChildSpawn event in --json. Event ordering: BuildStart → BuildEnd("errors") → (no ChildSpawn). Consumers can rely on "no ChildSpawn after BuildEnd('errors')" invariant.
 - **RSS poll failure (zero or error)**: if `memory-stats::memory_stats()` returns `None` or 0 unexpectedly: log a one-time stderr warning ("memory polling unavailable; hard-stop disabled this session"), set an internal flag, emit JSON `MemoryUnavailable` event. Watch continues without the hard-stop safety net. Phase 5 test injects a None RSS reading and asserts the warning fires + watch continues.
 - **Save during DB rebuild**: file events arriving while `db.rebuild_db()` is dropping+recreating get queued in the event channel (single-event-at-a-time invariant holds). After rebuild completes, the queued event is processed against the fresh DB; no events lost, no crashes against stale handles.
-- **Zero config**: no `.ynzwatch.toml`. Env vars only for memory tuning (`YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_MAX_RSS_MB`, `YNZ_WATCH_DEBOUNCE_MS`) — documented in `--help` and `design/watch.md` but invisible by default.
+- **Zero config**: no `.ynzwatch.toml`. Env vars only for memory tuning (`YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_MAX_RSS_MB`, `YNZ_WATCH_DEBOUNCE_MS`) — documented in `--help` and [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) but invisible by default.
 - **All compile errors continue WHAT/WHAT-INSTEAD/WHY format** — watch uses the existing `ynz-diagnostics` rendering. New error paths (file-watcher infra errors, child-process spawn errors) follow the same constructor.
 - **Existing 1143+ tests must still pass.** New tests added; no existing tests weakened.
 
@@ -107,7 +107,7 @@ Status: pending_approval
 - Watching `yinz.toml` itself for changes (package add/remove triggering full reload) — v0.5 package-manager milestone.
 - Distributed / network file watching (Docker volumes, NFS shares, SSHFS) — out of scope; `notify` falls back to polling for those (slow but functional).
 - "Pause watch" / "trigger manual rebuild" interactive commands (press 'r' to rebuild) — possible follow-up; M4 ships a non-interactive loop only.
-- `ynz watch --release` mode (cross-reference: `--release` flag itself ships post-v0.1, currently TBD per `design/mvp-scope.md`) — defer until `--release` exists.
+- `ynz watch --release` mode (cross-reference: `--release` flag itself ships post-v0.1, currently TBD per [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md)) — defer until `--release` exists.
 
 **Success criteria**:
 - `ynz watch examples/pirates-roster/entrypoint.ynz` builds the file, runs it, prints output, waits. On next save: rebuilds, kills old child, runs new child. Cycle stays sub-second on warm cache for single-file edits.
@@ -208,10 +208,10 @@ Event-ordering invariants (consumers can rely on):
 | Salsa 0.26 LRU API absent or unstable; periodic-rebuild has subtle bugs that compound over hours | Medium | High | Phase 5 first step inspects salsa 0.26 source/docs and locks LRU strategy. Long-running test (10k synthetic rebuild cycles) runs in CI on every PR touching Phase 5 code. If LRU absent, Layer 2 (periodic rebuild) + Layer 3 (RSS hard stop) carry full load — explicitly designed redundant. |
 | File-event coalescing wrong on macOS — atomic-write editor saves trigger 3+ rebuilds | Medium | Medium | `notify-debouncer-mini` with 100ms window is industry-standard (cargo-watch uses similar). Phase 1 integration test simulates VSCode-style atomic-write (write tempfile + rename) on Linux + macOS containers; asserts ≤1 rebuild per save. CI runs both platforms. |
 | Child process kill race — SIGTERM sent, child ignores, SIGKILL fires mid-stdin-write, terminal state corrupted | Low | Medium | 2s SIGTERM grace; SIGKILL fallback. Watch resets terminal via `\x1bc` or similar on every cycle if `--no-clear` not set. Manual test on M7's interactive `examples/pirates-roster/entrypoint.ynz` if it has any `terminal.readLine()` calls (likely doesn't at M3 — confirmed). |
-| Child program takes >2s to terminate; user's save events queue up indefinitely | Medium | Medium | Locked design: watch processes one event at a time. Events arriving during a build/run cycle are coalesced into "one pending rebuild" — multiple saves during one cycle collapse to a single next rebuild. Documented in `design/watch.md` + `--help`. |
-| `--json` schema cracks between M4 ship and v0.2.0 final — automation tools break | Low | Medium | Schema includes `schema_version` field. Consumers pin a version. Schema changes between intermediate tags (v0.2.0-m4 → v0.2.0-m5) are allowed per pre-v1.0 policy (see `design/versioning.md`); document changes in CHANGELOG. After v0.2.0, semver applies. |
+| Child program takes >2s to terminate; user's save events queue up indefinitely | Medium | Medium | Locked design: watch processes one event at a time. Events arriving during a build/run cycle are coalesced into "one pending rebuild" — multiple saves during one cycle collapse to a single next rebuild. Documented in [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) + `--help`. |
+| `--json` schema cracks between M4 ship and v0.2.0 final — automation tools break | Low | Medium | Schema includes `schema_version` field. Consumers pin a version. Schema changes between intermediate tags (v0.2.0-m4 → v0.2.0-m5) are allowed per pre-v1.0 policy (see [`docs/internal/decisions/ADR-versioning.md`](../../../../docs/internal/decisions/ADR-versioning.md)); document changes in CHANGELOG. After v0.2.0, semver applies. |
 | Long-session memory growth ships despite multi-layer defense — user's watch process slowly OOMs | Low | High | 10k-cycle synthetic test (Phase 5) catches steady-state leaks. Manual 24h smoke test catches periodic-rebuild bugs (e.g., rebuild fires correctly but doesn't actually free memory). RSS hard-stop at 4GB is the safety net — at worst user sees friendly stop message + restart hint. |
-| `notify` crate's polling fallback (NFS, Docker volumes) makes "sub-second" target laughable on certain setups | Medium | Low | Detect polling-mode at boot (`notify` API exposes); print warning: "ynz watch is using filesystem polling on this mount; rebuild may lag by up to N seconds." Users see the warning, understand, OK to ship. Documented in `design/watch.md`. |
+| `notify` crate's polling fallback (NFS, Docker volumes) makes "sub-second" target laughable on certain setups | Medium | Low | Detect polling-mode at boot (`notify` API exposes); print warning: "ynz watch is using filesystem polling on this mount; rebuild may lag by up to N seconds." Users see the warning, understand, OK to ship. Documented in [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md). |
 | Ctrl+C handler races with rebuild-in-progress — child orphaned, zombie process left behind | Low | Medium | Signal handler sets shutdown flag; main loop checks flag at every event-loop iteration AND at every salsa-query call. Child kill happens unconditionally in the Drop impl on the watch state struct. Integration test: spawn watch, send SIGINT, assert no zombie via `ps`. |
 | (Removed per plan-review: "initial-build-on-start" semantic is LOCKED behavior, not a risk. Documented in Constraints as: watch runs one rebuild+run pass on boot before entering event loop.) |
 | `--json` output is interleaved with stderr (panic, oom-killer message) breaking line-oriented parsers | Low | Low | `--json` only structures stdout; stderr is unstructured. Document this in schema doc: "parse stdout as NDJSON; stderr is human-readable diagnostic for the watch process itself, not the user's program." Schema spec is explicit. |
@@ -220,8 +220,8 @@ Event-ordering invariants (consumers can rely on):
 | Watch holding compiled binary in memory blocks subsequent rebuilds if linker can't overwrite | Low | Medium | Build output goes to a unique tempfile per rebuild (`$TMPDIR/ynz-watch-<pid>-<seq>/`); child runs from that tempfile; on next rebuild, old tempfile is cleaned up on next iteration (or in Drop). Avoids "binary is busy" lock contention on Windows. |
 | Reading `/proc/self/status` on non-Linux returns garbage; RSS poll reports 0 → hard stop never triggers | Low | High | Phase 5 has per-platform RSS implementation with unit tests on each. CI matrix includes Linux + macOS. Windows path either ships (preferred) or errors at boot: "memory-RSS polling not supported on Windows; --max-rss has no effect." Documented. |
 | Plan-invariants rule violated by missing 7-subsection block | Low | Low | Plan structure below explicitly contains the 7-subsection `## Invariants This Milestone Must Preserve` block. Bouncer entries 1, 3, 4 enforce. |
-| Feature registry entry forgotten for `--json` mode (it's a tooling feature) | Low | Low | Phase 0 acceptance criteria includes registering `ynz-watch-json` as a TOOLING feature in `registry/features.toml` — confirmed presence via Phase 0 build-output. `--json` becomes a stable tracked surface from M4 onward. Schema versioning lives in `design/watch.md` referenced from the registry entry. |
-| Cross-platform symlink follow semantics differ — M3 fmt and M4 watch diverge | Low | Low | Locked: both follow symlinks. M4 reads file content through symlink resolution (same as `std::fs::read_to_string` default). File watcher watches the resolved target path (notify follows symlinks by default). Documented in `design/watch.md` cross-referencing M3's locked behavior. |
+| Feature registry entry forgotten for `--json` mode (it's a tooling feature) | Low | Low | Phase 0 acceptance criteria includes registering `ynz-watch-json` as a TOOLING feature in [`registry/features.toml`](../../../../registry/features.toml) — confirmed presence via Phase 0 build-output. `--json` becomes a stable tracked surface from M4 onward. Schema versioning lives in [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) referenced from the registry entry. |
+| Cross-platform symlink follow semantics differ — M3 fmt and M4 watch diverge | Low | Low | Locked: both follow symlinks. M4 reads file content through symlink resolution (same as `std::fs::read_to_string` default). File watcher watches the resolved target path (notify follows symlinks by default). Documented in [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) cross-referencing M3's locked behavior. |
 
 ## Questions
 
@@ -279,8 +279,8 @@ Two architectural sub-questions decided locally (no Patrick input needed):
 - **Monotonic time only**: all time thresholds (4h DB rebuild, 60s warning rate-limit, 2s SIGTERM grace) use `std::time::Instant::now()`. NEVER `SystemTime::now()`. Immune to NTP / clock-skew.
 - `ynz-watch` does NOT depend on `ynz-lsp` (parallel daemons; no code shared)
 - `ynz-watch` does NOT depend on `ynz-fmt` (formatting is not a watch concern)
-- **Windows is best-effort for M4**: RSS polling via `memory-stats` (works); child process group via `CREATE_NEW_PROCESS_GROUP` (works); SIGTERM-vs-SIGKILL graceful semantics NOT applicable on Windows (TerminateProcess only). **Documented Windows limitation** (per plan-review Round 2 concern): On Windows, Ctrl+C immediately terminates the child via TerminateProcess; in-flight writes (file handles, partial stdout flushes) may be lost. This is fundamental to Windows' lack of POSIX signals and not a watch-specific bug. `design/watch.md` notes this prominently in the "Cross-platform" section. Cross-platform tests run on Linux + macOS in CI; Windows tested manually by Patrick if/when relevant. Tracked in todos.md as `watch-windows-validation` (Phase 0 deferred entry).
-- **`yinz.toml` edits during watch are IGNORED until restart** (per plan-review Round 2 adversarial): the `notify` watcher subscribes to `.ynz` files only; `yinz.toml` is read once at watch boot. Edits to `yinz.toml` (adding files, changing project config) do NOT trigger rebuild or re-discovery. Documented in `--help` + `design/watch.md`. Restart watch to pick up `yinz.toml` changes. Tracked in v0.5 package-manager milestone as `watch-yinz-toml-reload`.
+- **Windows is best-effort for M4**: RSS polling via `memory-stats` (works); child process group via `CREATE_NEW_PROCESS_GROUP` (works); SIGTERM-vs-SIGKILL graceful semantics NOT applicable on Windows (TerminateProcess only). **Documented Windows limitation** (per plan-review Round 2 concern): On Windows, Ctrl+C immediately terminates the child via TerminateProcess; in-flight writes (file handles, partial stdout flushes) may be lost. This is fundamental to Windows' lack of POSIX signals and not a watch-specific bug. [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) notes this prominently in the "Cross-platform" section. Cross-platform tests run on Linux + macOS in CI; Windows tested manually by Patrick if/when relevant. Tracked in todos.md as `watch-windows-validation` (Phase 0 deferred entry).
+- **`yinz.toml` edits during watch are IGNORED until restart** (per plan-review Round 2 adversarial): the `notify` watcher subscribes to `.ynz` files only; `yinz.toml` is read once at watch boot. Edits to `yinz.toml` (adding files, changing project config) do NOT trigger rebuild or re-discovery. Documented in `--help` + [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md). Restart watch to pick up `yinz.toml` changes. Tracked in v0.5 package-manager milestone as `watch-yinz-toml-reload`.
 
 ### Performance
 
@@ -298,7 +298,7 @@ Two architectural sub-questions decided locally (no Patrick input needed):
 
 **Hard ceilings (CI medians; ANY breach = BLOCK pending profile + fix, NEVER budget raise)**:
 - **Cold start** (`ynz watch perf_500.ynz`, first build from empty cache): ≤ `ynz build --release perf_500.ynz` time + 200ms file-watcher init overhead. Measured via stopwatch from process spawn to first BuildEnd event.
-- **Warm rebuild p50** (single-file edit, salsa cache warm; perf_500.ynz): ≤ 500ms wall-clock (per `design/compiler.md:146` sub-second target).
+- **Warm rebuild p50** (single-file edit, salsa cache warm; perf_500.ynz): ≤ 500ms wall-clock (per `docs/internal/implementation/IMP-compiler.md:146` sub-second target).
 - **Warm rebuild p99**: ≤ 1500ms (3× p50; catches occasional GC pause / cache miss).
 - **Warm rebuild p50** (perf_5000.ynz): ≤ 2000ms wall-clock.
 - **Event-to-build-start latency p50**: ≤ 100ms debounce + ≤ 50ms event-handling overhead = ≤ 150ms. Measured via integration test capturing fs event time vs BuildStart event time.
@@ -317,7 +317,7 @@ Two architectural sub-questions decided locally (no Patrick input needed):
   - Layer 2 periodic DB rebuild fires AT LEAST ONCE during the loop (verified by counting `db.rebuild_db()` invocations; expected at iteration 500 if N=500 default).
 - Test marked `#[ignore]` for default runs (takes ~5min); CI runs with `--include-ignored` flag.
 
-**Auto-promotion analysis** (per `.claude/rules/auto-promotion.md`):
+**Auto-promotion analysis** (per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)):
 - This milestone does NOT introduce any new language feature, stdlib type, or compiler codegen optimization.
 - Watch is a pure orchestration layer over existing `ynz build` + `ynz run` codepaths; no codegen change.
 - No codegen auto-promotion candidates. No new muted-hint domain (consumption deferred to v0.2-M5). No Tier 3 lint suggestion (lint tier ships in v0.4).
@@ -328,8 +328,8 @@ Two architectural sub-questions decided locally (no Patrick input needed):
 - Watch's parse/typeck/codegen errors are reported using the EXISTING `ynz-diagnostics` machinery (WHAT/WHAT-INSTEAD/WHY format). When watch hits a compile error, it prints the same diagnostic `ynz build foo.ynz` would.
 - New infra-level error paths (file-watcher init fail, no `yinz.toml` for project mode, child-spawn failure, RSS hard-stop) use the same `Diagnostic` constructor → WHAT/WHAT-INSTEAD/WHY enforced.
 - Memory hard-stop message is teaching-friendly: "ynz watch hit 4GB memory; this is the safety stop. Run: ynz watch <args> to restart. If this happens frequently, set YNZ_WATCH_REBUILD_AFTER=200 (default 500) to rebuild the compiler state more often."
-- NEW design doc: `design/watch.md` — architectural reference: daemon model, file-watcher integration, child process lifecycle, --json schema (with version field), memory-defense layers, debounce strategy, future-proofing for interactive commands (`r` to rebuild) if added v0.3+.
-- UPDATE `design/compiler.md` watch section (currently lines 138-146 is a bare paragraph) — expand to reference `design/watch.md` for full architecture; keep the paragraph as a quick-start summary.
+- NEW design doc: [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) — architectural reference: daemon model, file-watcher integration, child process lifecycle, --json schema (with version field), memory-defense layers, debounce strategy, future-proofing for interactive commands (`r` to rebuild) if added v0.3+.
+- UPDATE [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md) watch section (currently lines 138-146 is a bare paragraph) — expand to reference [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) for full architecture; keep the paragraph as a quick-start summary.
 - No new `.claude/rules/` files needed — registry-consumer rule from M1 covers watch's registry consumption; no new project-rule surface.
 - No new banned-jargon words slip into watch-emitted text — `tests/jargon_audit.rs` extended in Phase 6 to walk every string watch produces (status lines, --help text, error messages, --json event field names checked separately for stability).
 
@@ -379,10 +379,10 @@ Two architectural sub-questions decided locally (no Patrick input needed):
 This milestone introduces ONE new SSOT registry entry:
 
 - **NEW `[[deferred_tooling_feature]]`** entries (TWO total; ONE has been removed vs initial plan):
-  - `ynz-watch-interactive-commands` (press 'r' to rebuild) — deferred to v0.3+; locked design pointer to `design/watch.md` future-proofing section
+  - `ynz-watch-interactive-commands` (press 'r' to rebuild) — deferred to v0.3+; locked design pointer to [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) future-proofing section
   - `ynz-watch-config-file` (`.ynzwatch.toml` opt-in) — REJECTED by Yinz zero-config ethos; entry marks the explicit rejection so a future contributor doesn't propose it without seeing the rationale
   - (REMOVED per plan-review concern: the `ynz-watch-tcp-pause-signal` placeholder was polluting the registry without representing a real deferred feature — only register deferrals that have an actual locked design + trigger.)
-- **`--json` mode is NOT a deferred-tooling-feature entry**: ships in M4 (per Constraints). It IS noted in `design/watch.md` as a stable interface from M4 onward; schema version field `"v0.2-m4-unstable"` announces its pre-v0.2.0 status.
+- **`--json` mode is NOT a deferred-tooling-feature entry**: ships in M4 (per Constraints). It IS noted in [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) as a stable interface from M4 onward; schema version field `"v0.2-m4-unstable"` announces its pre-v0.2.0 status.
 - **NEW `[[diagnostic_template]]`** entries (locked count: 5):
   - `watch-no-yinz-toml` — project-mode invocation without yinz.toml; WHAT/WHAT-INSTEAD/WHY filled
   - `watch-child-spawn-failed` — binary built but couldn't exec (permissions, tempdir issue); WHAT/WHAT-INSTEAD/WHY filled
@@ -414,10 +414,10 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 ### Phase 0: Doc lockdown + crate scaffolding (no behavior change)
 
-**PR scope**: Land `design/watch.md`, expand `design/compiler.md` watch section, update `design/mvp-scope.md` v0.2-M4 entry, scaffold empty `crates/ynz-watch/` with `lib.rs` + module stubs + Cargo.toml entry, add a `watch` subcommand stub to `crates/ynz-driver/src/main.rs` (parses CLI args, prints "not yet implemented", exits 0). Register one new deferred-tooling-feature entry in `registry/features.toml`. No watch behavior. No driver behavior change for `build` / `run` / `fmt`.
+**PR scope**: Land [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md), expand [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md) watch section, update [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M4 entry, scaffold empty `crates/ynz-watch/` with `lib.rs` + module stubs + Cargo.toml entry, add a `watch` subcommand stub to `crates/ynz-driver/src/main.rs` (parses CLI args, prints "not yet implemented", exits 0). Register one new deferred-tooling-feature entry in [`registry/features.toml`](../../../../registry/features.toml). No watch behavior. No driver behavior change for `build` / `run` / `fmt`.
 **Branch**: `chore/v0-2-m4-doc-lockdown`
 **Flag**: N/A
-**Est. lines**: ~550 (design/watch.md ~250, design/compiler.md edit ~30, design/mvp-scope.md edit ~30, cargo updates ~30, scaffolding stubs ~80, driver subcommand stub ~70, registry entry + tests ~30, CLAUDE.md ~20, todos.md ~10)
+**Est. lines**: ~550 (docs/internal/implementation/IMP-watch.md ~250, docs/internal/implementation/IMP-compiler.md edit ~30, docs/reference/REF-mvp-scope.md edit ~30, cargo updates ~30, scaffolding stubs ~80, driver subcommand stub ~70, registry entry + tests ~30, CLAUDE.md ~20, todos.md ~10)
 **Ships via**: `/pr`
 
 **Objective**: Lock the architectural decisions made this planning session into committed docs. Create the crate skeleton so Phase 1's file-watcher work has somewhere to land without tangling production paths. Register the --json deferral entries so they have a permanent home from M4 onward.
@@ -427,27 +427,27 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Current-state anchors**:
 - `Cargo.toml:18` — workspace version (`0.2.0-m3` as of 2026-05-20)
 - `Cargo.toml:3-17` — workspace member list; M4 adds `ynz-watch`
-- `design/mvp-scope.md` v0.2-M4 entry stub; needs expansion with locked decisions
-- `design/compiler.md:138-146` — current bare watch paragraph; needs expansion or cross-reference to new `design/watch.md`
+- [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M4 entry stub; needs expansion with locked decisions
+- `docs/internal/implementation/IMP-compiler.md:138-146` — current bare watch paragraph; needs expansion or cross-reference to new [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md)
 - `crates/ynz-driver/src/main.rs:39-130` — `Cli` and `Command` enums; M4 adds `Watch` variant
-- `CLAUDE.md` Project Layout table — adds `crates/ynz-watch/` row
-- `registry/features.toml` — accepts new `[[deferred_tooling_feature]]` entries
+- [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout table — adds `crates/ynz-watch/` row
+- [`registry/features.toml`](../../../../registry/features.toml) — accepts new `[[deferred_tooling_feature]]` entries
 
 **Files (expected scope)**:
-- NEW: `design/watch.md` — architectural reference doc covering: daemon model, file-watcher integration, child process lifecycle, --json schema (with `schema_version` field), memory-defense layers, debounce strategy, cross-platform notes, future-proofing section (interactive commands, config file rejection rationale)
-- EDIT: `design/compiler.md` — replace lines 138-146 watch paragraph with a short quick-start summary + cross-reference to `design/watch.md`
-- EDIT: `design/mvp-scope.md` v0.2-M4 entry: enumerate locked decisions (daemon architecture, --json in M4, build+run default, clear+--no-clear, memory layers)
-- EDIT: `CLAUDE.md` — Project Layout table: add row for `crates/ynz-watch/` (purpose: "Watch daemon — long-running terminal command for rebuild-on-save + re-run; consumes salsa-backed compiler queries shared with the rest of the workspace")
-- NEW: `crates/ynz-watch/Cargo.toml` — workspace=true edition/version/authors/license; deps on `ynz-parser`, `ynz-ast`, `ynz-typeck`, `ynz-codegen`, `ynz-registry`, `ynz-diagnostics`, `ynz-runtime`, `salsa`; placeholder for `notify` + `notify-debouncer-mini` + `serde_json` to be wired in Phase 1
+- NEW: [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) — architectural reference doc covering: daemon model, file-watcher integration, child process lifecycle, --json schema (with `schema_version` field), memory-defense layers, debounce strategy, cross-platform notes, future-proofing section (interactive commands, config file rejection rationale)
+- EDIT: [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md) — replace lines 138-146 watch paragraph with a short quick-start summary + cross-reference to [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md)
+- EDIT: [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M4 entry: enumerate locked decisions (daemon architecture, --json in M4, build+run default, clear+--no-clear, memory layers)
+- EDIT: [`CLAUDE.md`](../../../../CLAUDE.md) — Project Layout table: add row for `crates/ynz-watch/` (purpose: "Watch daemon — long-running terminal command for rebuild-on-save + re-run; consumes salsa-backed compiler queries shared with the rest of the workspace")
+- NEW: [`crates/ynz-watch/Cargo.toml`](../../../../crates/ynz-watch/Cargo.toml) — workspace=true edition/version/authors/license; deps on `ynz-parser`, `ynz-ast`, `ynz-typeck`, `ynz-codegen`, `ynz-registry`, `ynz-diagnostics`, `ynz-runtime`, `salsa`; placeholder for `notify` + `notify-debouncer-mini` + `serde_json` to be wired in Phase 1
 - NEW: `crates/ynz-watch/src/lib.rs` — pub API stubs: `pub fn run(config: WatchConfig) -> i32 { eprintln!("ynz watch: not yet implemented"); 1 }` and the `WatchConfig` struct skeleton (path, check, json, no_clear, all four locked flag bools)
 - NEW: `crates/ynz-watch/src/error.rs` — `WatchError` enum + `Result<T>` alias
 - NEW: `crates/ynz-driver/src/watch.rs` — thin shim: parses CLI args into `WatchConfig`, calls `ynz_watch::run(config)`, returns exit code
 - EDIT: `crates/ynz-driver/src/main.rs` — add `mod watch;` + `Watch` variant on `Command` enum with all flags + match arm calling `watch::watch(...)`
-- EDIT: `crates/ynz-driver/Cargo.toml` — depend on `ynz-watch`
-- EDIT: `Cargo.toml` — (a) add `crates/ynz-watch` to workspace members; (b) add `ynz-watch = { path = "crates/ynz-watch" }` to workspace deps; (c) ADD locked deps to `[workspace.dependencies]`: `notify = "8"`, `notify-debouncer-mini = "0.7"`, `memory-stats = "1.2"`, `nix = { version = "0.31", features = ["signal", "process"] }`, `ctrlc = "3"`, `chrono = { version = "0.4", features = ["serde"] }`
-- EDIT: `registry/features.toml` — add `[[deferred_tooling_feature]]` entries for the items listed in "Feature Registry Entries" subsection above (interactive commands, config file rejection)
-- EDIT: `.claude/todos.md` — ADD durable-home entries per `deferrals-must-be-tracked` rule:
-  - `- [ ] **watch-interactive-commands** — press 'r' to rebuild, 'q' to quit, etc. in ynz watch. Deferred from v0.2-M4; not blocking ship. Pick up IF terminal-only users surface real demand. Locked design pointer in design/watch.md future-proofing section.`
+- EDIT: [`crates/ynz-driver/Cargo.toml`](../../../../crates/ynz-driver/Cargo.toml) — depend on `ynz-watch`
+- EDIT: [`Cargo.toml`](../../../../Cargo.toml) — (a) add `crates/ynz-watch` to workspace members; (b) add `ynz-watch = { path = "crates/ynz-watch" }` to workspace deps; (c) ADD locked deps to `[workspace.dependencies]`: `notify = "8"`, `notify-debouncer-mini = "0.7"`, `memory-stats = "1.2"`, `nix = { version = "0.31", features = ["signal", "process"] }`, `ctrlc = "3"`, `chrono = { version = "0.4", features = ["serde"] }`
+- EDIT: [`registry/features.toml`](../../../../registry/features.toml) — add `[[deferred_tooling_feature]]` entries for the items listed in "Feature Registry Entries" subsection above (interactive commands, config file rejection)
+- EDIT: [`.claude/todos.md`](../../../todos.md) — ADD durable-home entries per `deferrals-must-be-tracked` rule:
+  - `- [ ] **watch-interactive-commands** — press 'r' to rebuild, 'q' to quit, etc. in ynz watch. Deferred from v0.2-M4; not blocking ship. Pick up IF terminal-only users surface real demand. Locked design pointer in docs/internal/implementation/IMP-watch.md future-proofing section.`
   - `- [ ] **watch-lsp-shared-daemon** — investigate sharing the long-lived CompilerDb between ynz-watch and ynz-lsp. Deferred from v0.2-M4 (independent daemons OK for M4). Pick up IF v0.3 needs both running concurrently against the same project.`
   - `- [ ] **watch-windows-validation** — full Windows validation pass: RSS via memory-stats, child kill via TerminateProcess, process group via CREATE_NEW_PROCESS_GROUP. Implementation present from M4 but tested manually only. Pick up when Yinz formally supports Windows.`
   - `- [ ] **watch-json-schema-stabilize** — at v0.2.0 final tag, drop `-unstable` suffix from --json schema_version field; commit to semver-bound schema changes. Locked trigger: v0.2.0 release.`
@@ -455,36 +455,36 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work. Document each deviation in the PR description; if it's its own concern, split.
 
 **Steps**:
-1. Write `design/watch.md` covering all sections listed in Files above. Algorithm: open file, write headings, fill each section with locked decisions from this plan's Constraints + Research Findings. Cross-reference `design/compiler.md`, `design/compiler-language.md`, `design/feature-registry.md`, roadmap.
-2. Update `design/compiler.md` lines 138-146: replace with 4-line quick-start summary + cross-reference to `design/watch.md`.
-3. Update `design/mvp-scope.md` v0.2-M4 entry: enumerate all locked decisions.
-4. Update `CLAUDE.md` Project Layout: add row for `crates/ynz-watch/`.
+1. Write [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) covering all sections listed in Files above. Algorithm: open file, write headings, fill each section with locked decisions from this plan's Constraints + Research Findings. Cross-reference [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md), [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](../../../../docs/internal/implementation/IMP-feature-registry.md), roadmap.
+2. Update [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md) lines 138-146: replace with 4-line quick-start summary + cross-reference to [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md).
+3. Update [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M4 entry: enumerate all locked decisions.
+4. Update [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout: add row for `crates/ynz-watch/`.
 5. Scaffold `crates/ynz-watch/`: Cargo.toml with workspace deps; src/lib.rs with `run(WatchConfig) -> i32` stub returning "not yet implemented" + exit 1; src/error.rs with WatchError enum.
-6. Add `crates/ynz-watch` to root `Cargo.toml` workspace members + workspace deps; lock the SIX workspace deps listed in Files (versions pinned NOW — `notify = "8"`, `notify-debouncer-mini = "0.7"`, `memory-stats = "1.2"`, `nix = "0.31"` (signal+process features), `ctrlc = "3"`, `chrono = "0.4"` (serde feature)).
+6. Add `crates/ynz-watch` to root [`Cargo.toml`](../../../../Cargo.toml) workspace members + workspace deps; lock the SIX workspace deps listed in Files (versions pinned NOW — `notify = "8"`, `notify-debouncer-mini = "0.7"`, `memory-stats = "1.2"`, `nix = "0.31"` (signal+process features), `ctrlc = "3"`, `chrono = "0.4"` (serde feature)).
 7. Add `Watch` variant to `Command` enum in `crates/ynz-driver/src/main.rs` with `file: Option<PathBuf>`, `check: bool`, `json: bool`, `no_clear: bool` flags + match arm calling `watch::watch(...)`. Lock flag mutual-exclusion: `--check` and `--json` can coexist; no other restrictions (locked here).
 8. Create `crates/ynz-driver/src/watch.rs` with the thin shim handler.
-9. Add `ynz-watch` to `crates/ynz-driver/Cargo.toml` deps.
-10. Add TWO `[[deferred_tooling_feature]]` entries + FIVE `[[diagnostic_template]]` entries to `registry/features.toml` per the Feature Registry subsection. Each diagnostic template carries the WHAT/WHAT-INSTEAD/WHY fields (templates are skeletons; the live diagnostic emits them with phase-specific context).
-11. Append the FOUR deferral entries to `.claude/todos.md` "Later" section verbatim per `deferrals-must-be-tracked` rule.
+9. Add `ynz-watch` to [`crates/ynz-driver/Cargo.toml`](../../../../crates/ynz-driver/Cargo.toml) deps.
+10. Add TWO `[[deferred_tooling_feature]]` entries + FIVE `[[diagnostic_template]]` entries to [`registry/features.toml`](../../../../registry/features.toml) per the Feature Registry subsection. Each diagnostic template carries the WHAT/WHAT-INSTEAD/WHY fields (templates are skeletons; the live diagnostic emits them with phase-specific context).
+11. Append the FOUR deferral entries to [`.claude/todos.md`](../../../todos.md) "Later" section verbatim per `deferrals-must-be-tracked` rule.
 12. Run `cargo build --workspace` — confirms compilation with the placeholder `notify` deps. If notify versions cause issues, downgrade or pick stable Phase 0; Phase 1 finalizes.
 13. Run `cargo test --workspace` — confirms no regressions (1143+ tests pass).
 14. Run `./target/debug/ynz watch foo.ynz` — confirms stub prints message + exits 1.
 15. Run `./target/debug/ynz build crates/ynz-driver/tests/fixtures/m3_fib.ynz` — confirms existing build path unchanged.
 
 **Acceptance criteria** (observable conditions that define DONE — TRIMMED per plan-review):
-- [x] `design/watch.md` exists and is substantive (>200 lines; covers all sections enumerated in Step 1)
+- [x] [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) exists and is substantive (>200 lines; covers all sections enumerated in Step 1)
 - [x] `cargo build --workspace` succeeds with the new empty crate + workspace `notify = "8.2"` + `notify-debouncer-mini = "0.7"` + `memory-stats = "1.2"` + `nix = "0.31"` deps locked
 - [x] `cargo test --workspace` passes (1143+ tests; new crate adds no breaking changes)
 - [x] `./target/debug/ynz watch --help` prints help for the new subcommand with all four flags
 - [x] `./target/debug/ynz watch foo.ynz` prints "not yet implemented", exits 1
-- [x] `registry/features.toml` contains the TWO new `[[deferred_tooling_feature]]` entries + the FIVE new `[[diagnostic_template]]` entries (registry-consistency test still green)
-- [x] `.claude/todos.md` "Later" section contains all four deferral entries verbatim (watch-interactive-commands, watch-lsp-shared-daemon, watch-windows-validation, watch-json-schema-stabilize)
+- [x] [`registry/features.toml`](../../../../registry/features.toml) contains the TWO new `[[deferred_tooling_feature]]` entries + the FIVE new `[[diagnostic_template]]` entries (registry-consistency test still green)
+- [x] [`.claude/todos.md`](../../../todos.md) "Later" section contains all four deferral entries verbatim (watch-interactive-commands, watch-lsp-shared-daemon, watch-windows-validation, watch-json-schema-stabilize)
 
 **Quality gate** (observable facts to confirm — check BEFORE moving to next phase):
 - [x] No `// TODO` / `// FIXME` / `// HACK` left in any new file
-- [x] No new banned-jargon in user-facing prose (design/watch.md is for engineers — "infer" / "inference" OK per dual-audience rule; never in user-rendered text)
+- [x] No new banned-jargon in user-facing prose (docs/internal/implementation/IMP-watch.md is for engineers — "infer" / "inference" OK per dual-audience rule; never in user-rendered text)
 - [x] No `as any` / `#[allow(...)]` swallows
-- [x] `design/watch.md` cross-references `design/compiler.md`, `design/compiler-language.md`, `design/feature-registry.md`, `design/lsp.md`, roadmap
+- [x] [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) cross-references [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md), [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](../../../../docs/internal/implementation/IMP-feature-registry.md), [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md), roadmap
 - [x] No commented-out code; no orphan files
 - [x] `cargo clippy --workspace -- -D warnings` passes
 
@@ -492,7 +492,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - `cargo build --workspace 2>&1 | tail -5` — clean
 - `cargo test --workspace 2>&1 | grep 'test result'` — all pass
 - `./target/debug/ynz watch --help 2>&1` — help text shows all four flags + brief description
-- `cat design/watch.md | wc -l` — substantive (>200 lines)
+- `cat docs/internal/implementation/IMP-watch.md | wc -l` — substantive (>200 lines)
 
 **Exit Sequence — RUN THESE STEPS:**
 
@@ -513,7 +513,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **PR scope**: Wire `notify = "8"` + `notify-debouncer-mini = "0.7"` (locked Phase 0) into `crates/ynz-watch/`. Build the event loop: receive events from the debouncer, log "would rebuild X" (no actual rebuild). Implement clear-screen logic + `--no-clear`. Implement file-removed detection (vanished file → log warning + emit JSON file-removed event later in Phase 4). Integration tests: touch file via tempdir fixture, assert event received within 200ms; delete file via tempdir fixture, assert "vanished" log line. NO salsa, NO actual compilation, NO child spawn.
 **Branch**: `feat/v0-2-m4-file-watcher`
 **Flag**: N/A
-**Est. lines**: ~600 (notify wiring ~150, event loop ~150, clear-screen + flags ~80, integration tests ~150, version-lock research notes in design/watch.md ~30, error handling ~40)
+**Est. lines**: ~600 (notify wiring ~150, event loop ~150, clear-screen + flags ~80, integration tests ~150, version-lock research notes in docs/internal/implementation/IMP-watch.md ~30, error handling ~40)
 **Ships via**: `/pr`
 
 **Objective**: Get file events plumbed into the watch process. Validate cross-platform behavior (Linux + macOS) with editor-save simulation. Lock the `notify` version pinning. Build the event coalescing layer that downstream phases assume works.
@@ -522,19 +522,19 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Current-state anchors**:
 - `crates/ynz-watch/src/lib.rs` from Phase 0 (`run(WatchConfig) -> i32` stub)
-- `crates/ynz-watch/Cargo.toml` from Phase 0 (deps locked; this phase finalizes notify versions)
-- `Cargo.toml` workspace deps from Phase 0 (placeholder notify entries; this phase pins exact versions)
+- [`crates/ynz-watch/Cargo.toml`](../../../../crates/ynz-watch/Cargo.toml) from Phase 0 (deps locked; this phase finalizes notify versions)
+- [`Cargo.toml`](../../../../Cargo.toml) workspace deps from Phase 0 (placeholder notify entries; this phase pins exact versions)
 
 **Files (expected scope)**:
 - NEW: `crates/ynz-watch/src/watcher.rs` — wraps `notify` + `notify-debouncer-mini`; exposes a `WatchEvents` iterator that yields debounced events
 - NEW: `crates/ynz-watch/src/event_loop.rs` — main loop: receive events, log "would rebuild X" (no actual rebuild yet), handle Ctrl+C
 - NEW: `crates/ynz-watch/src/ui.rs` — clear-screen logic (`\x1bc` or `ANSI clear` + position); `--no-clear` flag bypasses
 - EDIT: `crates/ynz-watch/src/lib.rs` — `run(config)` now sets up the watcher + spawns the event loop (returns to "not yet implemented" for the salsa work in Phase 2)
-- EDIT: `crates/ynz-watch/Cargo.toml` — add `notify` (pinned stable major) + `notify-debouncer-mini` + `ctrlc` (signal handler crate, ~5KB) deps
-- EDIT: `Cargo.toml` — finalize `notify` + `notify-debouncer-mini` versions (replace Phase 0 placeholders)
+- EDIT: [`crates/ynz-watch/Cargo.toml`](../../../../crates/ynz-watch/Cargo.toml) — add `notify` (pinned stable major) + `notify-debouncer-mini` + `ctrlc` (signal handler crate, ~5KB) deps
+- EDIT: [`Cargo.toml`](../../../../Cargo.toml) — finalize `notify` + `notify-debouncer-mini` versions (replace Phase 0 placeholders)
 - NEW: `crates/ynz-watch/tests/file_watching.rs` — integration test: tempdir fixture, touch file, assert event received within 200ms. Run on Linux + macOS in CI.
 - NEW: `crates/ynz-watch/tests/coalescing.rs` — atomic-write simulation (write tempfile + rename via `std::fs`); assert ≤1 event despite N filesystem events
-- EDIT: `design/watch.md` — fill in the "file watcher" + "debounce strategy" sections with locked `notify` version + observed editor-save patterns
+- EDIT: [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) — fill in the "file watcher" + "debounce strategy" sections with locked `notify` version + observed editor-save patterns
 
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work (e.g., add a `tempfile` dev-dep if the test fixture needs it). Document each deviation.
 
@@ -546,7 +546,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 5. Write integration test: spawn watch in subprocess via `assert_cmd`, touch a file in tempdir, parse stdout, assert "[file change]" line within 200ms. Run on Linux + macOS via CI matrix.
 6. Write atomic-write integration test: write to `foo.ynz.tmp`, rename to `foo.ynz`, assert exactly ONE "[file change]" event delivered (not the 3-4 events `notify` would otherwise deliver pre-coalescing). Validates the debouncer is doing its job.
 7. Write file-removal integration test: touch + delete a `.ynz` file in a watched dir, assert exactly one "[file removed]" line, assert watch process does NOT crash.
-8. Update `design/watch.md` "file watcher" section: confirm `notify = "8.2"` + `notify-debouncer-mini = "0.7"` (locked); document observed editor-save event patterns per OS.
+8. Update [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) "file watcher" section: confirm `notify = "8.2"` + `notify-debouncer-mini = "0.7"` (locked); document observed editor-save event patterns per OS.
 9. Run `cargo build --workspace` + `cargo test --workspace`.
 10. Manual smoke: `./target/debug/ynz watch examples/pirates-roster/entrypoint.ynz` → save the file in another terminal → confirm "[file change]" line appears within 200ms → Ctrl+C → confirm clean exit code 0.
 
@@ -558,7 +558,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] Integration test `coalescing.rs` asserts EXACTLY 1 event per atomic-write sequence (not 3-4)
 - [x] Integration test `file_removed.rs` asserts EXACTLY 1 "[file removed]" event + watch process does not crash
 - [x] `./target/debug/ynz watch examples/pirates-roster/entrypoint.ynz` logs "[file change]" on save within 200ms; Ctrl+C exits 0 with no zombie (manual smoke pending)
-- [x] `design/watch.md` "file watcher" + "debounce strategy" sections completed with locked versions + observed per-OS save patterns (covered in Phase 0 design/watch.md — file watcher section complete)
+- [x] [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) "file watcher" + "debounce strategy" sections completed with locked versions + observed per-OS save patterns (covered in Phase 0 docs/internal/implementation/IMP-watch.md — file watcher section complete)
 
 **Quality gate**:
 - [x] No `// TODO` / `// FIXME` / `// HACK`
@@ -604,7 +604,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - NEW: `crates/ynz-watch/src/project.rs` — discover `yinz.toml` project root; enumerate `.ynz` files to watch
 - NEW: `crates/ynz-watch/tests/rebuild_incremental.rs` — integration test: edit file twice, assert second rebuild is faster (salsa cache hit; not full re-parse)
 - NEW: `crates/ynz-watch/tests/rebuild_errors.rs` — integration test: introduce a compile error mid-watch, assert diagnostic rendered, assert next valid save recovers cleanly
-- EDIT: `design/watch.md` — fill in "incremental rebuild" + "project mode" + "initial build" sections
+- EDIT: [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) — fill in "incremental rebuild" + "project mode" + "initial build" sections
 
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work.
 
@@ -617,7 +617,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 6. Update `lib.rs::run(config)` to run an initial build before entering the event loop. User sees compile status immediately on watch start.
 7. Write integration test `rebuild_incremental.rs`: spawn watch, save file twice with no AST change between, assert second rebuild ≤30% the duration of first (salsa cache hit).
 8. Write integration test `rebuild_errors.rs`: start watch on a clean file, save with intentional error (e.g., unknown identifier), assert diagnostic rendered (parse stdout for "WHAT:" header), save a fix, assert clean build.
-9. Update `design/watch.md` with the rebuild + project mode + initial build details.
+9. Update [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) with the rebuild + project mode + initial build details.
 10. Run full test suite. Manual smoke: `ynz watch examples/pirates-roster/entrypoint.ynz` → save → see clean build status → introduce error → see diagnostic → fix → see clean rebuild.
 
 **Acceptance criteria**:
@@ -670,7 +670,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - NEW: `crates/ynz-watch/src/child.rs` — `ChildHandle` newtype wrapping `std::process::Child`; methods `spawn(binary_path)`, `kill_gracefully()` (SIGTERM + 2s + SIGKILL), `is_alive()`. Drop impl ensures cleanup.
 - EDIT: `crates/ynz-watch/src/rebuild.rs` — after successful codegen (if --check not set): kill prior child (if any), spawn new
 - EDIT: `crates/ynz-watch/src/event_loop.rs` — track the current child in a `Option<ChildHandle>`; pass to rebuild
-- EDIT: `crates/ynz-watch/Cargo.toml` — add `nix.workspace = true` (Unix path uses signal + process features; locked in Phase 0). Windows-only blocks use `std::os::windows::process::CommandExt`.
+- EDIT: [`crates/ynz-watch/Cargo.toml`](../../../../crates/ynz-watch/Cargo.toml) — add `nix.workspace = true` (Unix path uses signal + process features; locked in Phase 0). Windows-only blocks use `std::os::windows::process::CommandExt`.
 - NEW: `crates/ynz-watch/tests/child_lifecycle.rs` — integration tests:
   - Clean spawn-kill-respawn (fixture binary prints "started" + sleeps; watch saves source; assert "killed" line + "started" line in expected order)
   - Interactive stdin (fixture reads stdin echoes; watch pipes input; assert echo round-trip)
@@ -678,7 +678,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
   - `--check` mode skips spawn (assert no child PID logged in stdout)
   - **Double-fork child** (per plan-review Round 1 adversarial): fixture forks a grandchild via `&` or `daemon(3)` style; watch saves source; assert BOTH parent AND grandchild killed (no zombie grandchild). Validates process-group SIGTERM correctness.
   - **Status-line / child-stdout interleaving** (per plan-review Round 2 adversarial): fixture prints 1KB/sec to stdout; trigger 3 consecutive rebuilds; assert watch's status line is intact (not split mid-character) via stdout regex pattern matching. Validates flush-before-stream ordering.
-- EDIT: `design/watch.md` — fill in "child process lifecycle" section: SIGTERM/SIGKILL flow, grace period, stdio inheritance, --check flag
+- EDIT: [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) — fill in "child process lifecycle" section: SIGTERM/SIGKILL flow, grace period, stdio inheritance, --check flag
 
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work.
 
@@ -692,7 +692,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - Test 2: Spawn watch on a fixture that reads stdin + echoes; send "hello" to watch stdin; assert "hello" in output.
    - Test 3: Spawn watch, wait for build, send SIGINT to watch; assert exit code 0 AND `ps` shows no child PID still alive.
    - Test 4: Spawn watch with `--check`; save file; assert no child PID logged anywhere in stdout/stderr.
-7. Update `design/watch.md` "child process lifecycle" section.
+7. Update [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) "child process lifecycle" section.
 8. Manual smoke: `ynz watch examples/pirates-roster/entrypoint.ynz` → confirm program runs → save → confirm old run interrupted + new run starts → Ctrl+C → confirm clean exit + no zombie.
 
 **Acceptance criteria**:
@@ -722,10 +722,10 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 ### Phase 4: --json structured event mode
 
-**PR scope**: Implement `--json` flag emitting NDJSON event stream on stdout (suppresses normal status output). Schema defined in design/watch.md. Includes `schema_version` field on every event. Phase 0 already registered the schema's stability commitment in the SSOT registry; this phase wires the actual event emitter. Integration tests: spawn `ynz watch --json`, send file change, parse NDJSON, assert each expected event type with correct fields.
+**PR scope**: Implement `--json` flag emitting NDJSON event stream on stdout (suppresses normal status output). Schema defined in docs/internal/implementation/IMP-watch.md. Includes `schema_version` field on every event. Phase 0 already registered the schema's stability commitment in the SSOT registry; this phase wires the actual event emitter. Integration tests: spawn `ynz watch --json`, send file change, parse NDJSON, assert each expected event type with correct fields.
 **Branch**: `feat/v0-2-m4-json-mode`
 **Flag**: N/A
-**Est. lines**: ~450 (event types ~100, emitter ~100, integration with existing logging ~80, integration tests ~150, schema doc completion in design/watch.md ~20)
+**Est. lines**: ~450 (event types ~100, emitter ~100, integration with existing logging ~80, integration tests ~150, schema doc completion in docs/internal/implementation/IMP-watch.md ~20)
 **Ships via**: `/pr`
 
 **Objective**: Make watch consumable by build-automation tooling. CI dashboards, custom progress UIs, etc. can spawn `ynz watch --json` and parse a deterministic event stream.
@@ -733,9 +733,9 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Why this phase exists**: Patrick locked `--json` in M4 scope. Separating from Phase 2/3 keeps the JSON schema design from contaminating the text-output development (which has its own UX concerns).
 
 **Current-state anchors**:
-- `design/watch.md` "schema" section from Phase 0 (preliminary; this phase finalizes)
+- [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) "schema" section from Phase 0 (preliminary; this phase finalizes)
 - `crates/ynz-watch/src/output.rs` from Phase 2 — current text-mode output; this phase adds a JSON-mode branch
-- `Cargo.toml` workspace deps — `serde` + `serde_json` (verify Phase 0 added or add here)
+- [`Cargo.toml`](../../../../Cargo.toml) workspace deps — `serde` + `serde_json` (verify Phase 0 added or add here)
 
 **Files (expected scope)**:
 - NEW: `crates/ynz-watch/src/json_events.rs` — typed event structs with `#[derive(Serialize)]`: `BuildStart`, `BuildEnd`, `Diagnostic`, `ChildSpawn`, `ChildExit`, `MemoryWarning`, `MemoryStop`, `WatchReady`, `WatchShutdown`
@@ -744,7 +744,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - EDIT: `crates/ynz-watch/src/rebuild.rs` — emit `BuildStart`, `BuildEnd` events with timing; emit `Diagnostic` for each diagnostic in the bucket
 - EDIT: `crates/ynz-watch/src/child.rs` — emit `ChildSpawn` on spawn (with PID), `ChildExit` on observed exit (with code)
 - EDIT: `crates/ynz-watch/src/event_loop.rs` — emit `WatchReady` on startup, `WatchShutdown` on Ctrl+C / fatal exit
-- EDIT: `crates/ynz-watch/Cargo.toml` — add `serde` + `serde_json` deps (workspace = true)
+- EDIT: [`crates/ynz-watch/Cargo.toml`](../../../../crates/ynz-watch/Cargo.toml) — add `serde` + `serde_json` deps (workspace = true)
 - NEW: `crates/ynz-watch/tests/json_mode.rs` — integration tests:
   - Schema validation: spawn `ynz watch --json` on a clean fixture; parse each output line as JSON; assert each event has `type`, `timestamp`, `schema_version: "v0.2-m4-unstable"` fields
   - Timestamp format: assert every `timestamp` field matches regex `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$` (RFC 3339 UTC + ms)
@@ -756,7 +756,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
   - **EPIPE handling** (NEW per plan-review adversarial): spawn `ynz watch --json | head -1` (consumer closes pipe after first event); assert watch exits 0 with stderr containing `pipe-closed`; assert no zombie child
   - **Tempdir-full ordering** (per plan-review Round 1 adversarial): simulate codegen tempdir write failure (mock or read-only mount); assert event ordering `build-start` → `build-end { outcome: "errors" }` → NO `child-spawn`
   - **`yinz.toml` edit during watch** (per plan-review Round 2 adversarial): start `ynz watch --json ./project/` in project mode; edit `yinz.toml` mid-watch; assert NO `build-start`/`build-end` events fire for `yinz.toml`; assert watch does NOT crash; verify behavior documented to user via `--help` text.
-- EDIT: `design/watch.md` — finalize the "JSON schema" section with all event types + field shapes + the schema_version + change policy (pre-v0.2.0 may change; post-v0.2.0 follows semver)
+- EDIT: [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) — finalize the "JSON schema" section with all event types + field shapes + the schema_version + change policy (pre-v0.2.0 may change; post-v0.2.0 follows semver)
 
 **Deviation rule**: Executor MAY touch files not listed if serializing a new event shape is genuinely needed (e.g., the parse-error case wasn't anticipated). Document.
 
@@ -769,7 +769,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 6. Wire `child.rs` to emit `ChildSpawn` on spawn, `ChildExit` when child exits (catch in a thread or async).
 7. Wire `event_loop.rs` to emit `WatchReady` on startup (with list of watched paths), `WatchShutdown` on Ctrl+C.
 8. Write integration tests in `json_mode.rs`. Use `assert_cmd` + `predicates` for stdout parsing.
-9. Finalize `design/watch.md` JSON schema section.
+9. Finalize [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) JSON schema section.
 10. Manual smoke: `ynz watch examples/pirates-roster/entrypoint.ynz --json | jq .` → confirm each event is valid JSON with expected fields; save file → confirm new events appear.
 
 **Acceptance criteria**:
@@ -781,7 +781,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] Diagnostic events emitted per compile error (tested in diagnostic_events_emitted_on_compile_error)
 - [x] Child-spawn emitted after successful non-check build (build_end_outcome_ok test + code path)
 - [x] WatchReady on start; WatchShutdown on SIGINT wired in lib.rs
-- [x] design/watch.md JSON schema section was completed in Phase 0 (see "JSON schema" section)
+- [x] docs/internal/implementation/IMP-watch.md JSON schema section was completed in Phase 0 (see "JSON schema" section)
 - [x] All json_mode.rs integration tests pass (6 tests)
 - [x] cargo test --workspace passes
 - [x] EPIPE detection wired: BrokenPipe propagated from emit() → rebuild_one_with_emitter → event loop exit
@@ -810,7 +810,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH_MAX_RSS_MB`, `YNZ_WATCH_RSS_WARN_MB`, `YNZ_WATCH_LRU_PARSE`, `YNZ_WATCH_LRU_CHECK`, `YNZ_WATCH_LRU_CODEGEN`. 10k-rebuild synthetic test (tightened pass conditions per Performance Invariants) gates this phase.
 **Branch**: `feat/v0-2-m4-memory-safety`
 **Flag**: N/A
-**Est. lines**: ~500 (salsa LRU research notes ~30, periodic-rebuild logic ~120, RSS polling per-OS ~150, env var parsing ~50, 10k-cycle test ~100, schema events for memory ~30, design/watch.md memory section ~20)
+**Est. lines**: ~500 (salsa LRU research notes ~30, periodic-rebuild logic ~120, RSS polling per-OS ~150, env var parsing ~50, 10k-cycle test ~100, schema events for memory ~30, docs/internal/implementation/IMP-watch.md memory section ~20)
 **Ships via**: `/pr`
 
 **Objective**: Make watch safe for 24h+ continuous operation. No silent OOM. No degradation. Friendly stop message + restart hint if memory limits hit.
@@ -824,13 +824,13 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 
 **Files (expected scope)**:
 - NEW: `crates/ynz-watch/src/memory.rs` — cross-platform RSS reader: `current_rss_bytes() -> Result<u64>`. One impl per OS via `#[cfg(target_os = "...")]`.
-- NEW: `crates/ynz-watch/src/lru.rs` — IF salsa 0.26 supports LRU annotations: wires caps onto `parse_query`, `check_query`, `codegen_query`. IF NOT: this file is a 2-line note explaining why + cross-reference to Phase 5 Step 1 research notes in `design/watch.md`.
+- NEW: `crates/ynz-watch/src/lru.rs` — IF salsa 0.26 supports LRU annotations: wires caps onto `parse_query`, `check_query`, `codegen_query`. IF NOT: this file is a 2-line note explaining why + cross-reference to Phase 5 Step 1 research notes in [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md).
 - EDIT: `crates/ynz-watch/src/db.rs` — `rebuild_db()` method: drop current DB, create fresh, re-populate from current source file paths. Tracked counter triggers this after N rebuilds or T elapsed.
 - EDIT: `crates/ynz-watch/src/event_loop.rs` — after each rebuild: call `memory::check_rss(&config, &mut emitter)`; if soft-warn threshold hit, emit `MemoryWarning`; if hard-stop hit, emit `MemoryStop` + clean shutdown.
 - EDIT: `crates/ynz-watch/src/rebuild.rs` — increment rebuild-count after each cycle; check threshold; trigger `db.rebuild_db()` if exceeded.
 - EDIT: `crates/ynz-watch/src/lib.rs` — parse env vars at startup; validate values; set thresholds on WatchConfig.
 - NEW: `crates/ynz-watch/tests/long_session.rs` — synthetic 10k-rebuild test (uses a small fixture; reads `current_rss_bytes()` periodically; asserts RSS stays within 1.5× baseline + 100MB margin). RUN in CI but marked `#[ignore]` for normal runs (takes ~5 min); explicit `cargo test --test long_session -- --include-ignored` in CI.
-- EDIT: `design/watch.md` — fill in "memory defense" section: three layers, env var docs, 10k-cycle test rationale
+- EDIT: [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) — fill in "memory defense" section: three layers, env var docs, 10k-cycle test rationale
 
 **Deviation rule**: Executor MAY touch files not listed (e.g., add `libc` for RSS on Unix if rolled-our-own).
 
@@ -844,7 +844,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 7. Write `long_session.rs` test (per Performance Invariants protocol): 10k-rebuild loop against `perf_project`; sample RSS at iterations [500, 1000, 2000, 5000, 7500, 10000]; pass conditions per Invariants. Mark `#[ignore]`; CI runs with `--include-ignored`.
 8. Write `rss_unavailable.rs` test (NEW per plan-review adversarial): inject `memory_stats() = None` via a feature-flag mock in `crates/ynz-watch/src/memory.rs`; spawn watch; assert `MemoryUnavailable` event emitted once; watch continues without hard-stop.
 9. Write `db_rebuild_preserves_state.rs` test (NEW per plan-review concern): populate shadow with 3 files; call `rebuild_db()`; assert each file's source text + last parse output match pre-rebuild values.
-10. Update `design/watch.md` memory section with locked thresholds, env vars, layer descriptions.
+10. Update [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) memory section with locked thresholds, env vars, layer descriptions.
 11. Manual smoke: `YNZ_WATCH_MAX_RSS_MB=1 ynz watch examples/pirates-roster/entrypoint.ynz` (forces near-immediate hit) → confirm friendly WHAT/WHAT-INSTEAD/WHY stop message + exit code 2.
 
 **Acceptance criteria**:
@@ -857,8 +857,8 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 - [x] RSS polled after every rebuild; soft-warn rate-limited 1/60s; hard-stop wired to exit 2
 - [x] MemoryWarning / MemoryStop / MemoryUnavailable events emitted in --json mode (wired in lib.rs)
 - [x] long_session.rs #[ignore] test: 10k rebuilds; Layer 2 fires at least once; RSS bounded
-- [x] All env vars documented in design/watch.md (already in Phase 0 doc) + ynz-driver --help
-- [ ] YNZ_WATCH_LRU_* runtime tuning env vars: documented in design/watch.md but NOT yet wired to set_lru_capacity — tracked in todos.md as `watch-lru-runtime-tuning`
+- [x] All env vars documented in docs/internal/implementation/IMP-watch.md (already in Phase 0 doc) + ynz-driver --help
+- [ ] YNZ_WATCH_LRU_* runtime tuning env vars: documented in docs/internal/implementation/IMP-watch.md but NOT yet wired to set_lru_capacity — tracked in todos.md as `watch-lru-runtime-tuning`
 
 **Quality gate**:
 - [x] Memory hard-stop message follows WHAT/WHAT-INSTEAD/WHY format (hard_stop_message fn)
@@ -877,10 +877,10 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 
 ### Phase 6: Verification sweep + cumulative review + v0.2.0-m4 tag prep
 
-**PR scope**: End-of-milestone verification per `/plan` Step 10. TODO sweep, todos.md cross-check, shortcut detection, Quality Checklist verification, plan-file persistence pass, final cumulative code-reviewer invocation. Demo & Error Gallery extension (NEW `examples/incline-watcher/` project + NEW `examples/primantis-orders/v0_2_m4_errors.ynz`). Bump `Cargo.toml` workspace version to `0.2.0-m4`. Cross-platform smoke tests on Linux + macOS. Cut `v0.2.0-m4` tag (release-skill-driven, separate from this PR).
+**PR scope**: End-of-milestone verification per `/plan` Step 10. TODO sweep, todos.md cross-check, shortcut detection, Quality Checklist verification, plan-file persistence pass, final cumulative code-reviewer invocation. Demo & Error Gallery extension (NEW `examples/incline-watcher/` project + NEW `examples/primantis-orders/v0_2_m4_errors.ynz`). Bump [`Cargo.toml`](../../../../Cargo.toml) workspace version to `0.2.0-m4`. Cross-platform smoke tests on Linux + macOS. Cut `v0.2.0-m4` tag (release-skill-driven, separate from this PR).
 **Branch**: `chore/v0-2-m4-verification`
 **Flag**: N/A
-**Est. lines**: ~400 (examples/incline-watcher/ ~80, examples/primantis-orders/v0_2_m4_errors.ynz ~60, jargon audit extension ~30, cross-platform CI matrix tweaks ~30, Cargo.toml + CHANGELOG ~30, plan checklist updates ~50, perf measurement notes ~30, design/watch.md final pass ~30, insta snapshot fixtures ~60)
+**Est. lines**: ~400 (examples/incline-watcher/ ~80, examples/primantis-orders/v0_2_m4_errors.ynz ~60, jargon audit extension ~30, cross-platform CI matrix tweaks ~30, Cargo.toml + CHANGELOG ~30, plan checklist updates ~50, perf measurement notes ~30, docs/internal/implementation/IMP-watch.md final pass ~30, insta snapshot fixtures ~60)
 **Ships via**: `/pr` (then `/release` cuts the tag separately)
 
 **Objective**: Close out the milestone with the standard verification gate. Ensure every acceptance criterion across Phases 0-5 is met. Catch issues per-phase reviews missed.
@@ -890,35 +890,35 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 **Current-state anchors**:
 - All Phase 0-5 work complete on main
 - `Cargo.toml:18` at `0.2.0-m3` going to `0.2.0-m4`
-- `CHANGELOG.md` — append v0.2.0-m4 section
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) — append v0.2.0-m4 section
 - `examples/pirates-roster/entrypoint.ynz` (per Demo & Error Gallery subsection — add watch-related top comment)
 - `examples/primantis-orders/` — companion to existing m1/m2/m3 error galleries
 
 **Files (expected scope)**:
-- NEW: `examples/incline-watcher/yinz.toml` + `examples/incline-watcher/entrypoint.ynz` — minimal project demonstrating watch's full feature set (build + run, --check, --json, --no-clear). Top-of-file comment documents how to exercise each.
+- NEW: [`examples/incline-watcher/yinz.toml`](../../../../examples/incline-watcher/yinz.toml) + `examples/incline-watcher/entrypoint.ynz` — minimal project demonstrating watch's full feature set (build + run, --check, --json, --no-clear). Top-of-file comment documents how to exercise each.
 - NEW: `examples/primantis-orders/v0_2_m4_errors.ynz` — intentional triggers for every watch-introduced error path (per Demo & Error Gallery subsection)
 - EDIT: `examples/pirates-roster/entrypoint.ynz` — top-of-file comment block referencing watch
-- EDIT: `Cargo.toml` — `version = "0.2.0-m4"` (workspace package)
-- EDIT: `CHANGELOG.md` — new `v0.2.0-m4` section with the milestone summary
+- EDIT: [`Cargo.toml`](../../../../Cargo.toml) — `version = "0.2.0-m4"` (workspace package)
+- EDIT: [`CHANGELOG.md`](../../../../CHANGELOG.md) — new `v0.2.0-m4` section with the milestone summary
 - EDIT: `tests/jargon_audit.rs` — extend to walk `crates/ynz-watch/` (mirrors Phase 5 of M3 plan; check banned jargon doesn't leak)
 - EDIT: `crates/ynz-watch/tests/insta_snapshots.rs` — insta snapshots for `v0_2_m4_errors.ynz` CLI stdout/stderr renders
-- EDIT: `design/watch.md` — final consistency pass; cross-check all sections match shipped behavior
+- EDIT: [`docs/internal/implementation/IMP-watch.md`](../../../../docs/internal/implementation/IMP-watch.md) — final consistency pass; cross-check all sections match shipped behavior
 - EDIT: `.claude/plans/active/v0-2-m4-watch.md` (this file) — Phase 10e final persistence pass
 
 **Deviation rule**: Executor MAY touch files not listed for legitimate verification needs.
 
 **Steps**:
-1. **TODO sweep** (per `/plan` Step 10a): grep codebase for `TODO`, `FIXME`, `HACK`, `XXX`, `TEMP`, `PLACEHOLDER`, future-phase references. Move to `.claude/todos.md` or delete.
+1. **TODO sweep** (per `/plan` Step 10a): grep codebase for `TODO`, `FIXME`, `HACK`, `XXX`, `TEMP`, `PLACEHOLDER`, future-phase references. Move to [`.claude/todos.md`](../../../todos.md) or delete.
 2. **Todos cross-check** (per `/plan` Step 10b): verify each item the milestone said it would address is actually addressed. Specifically: M4-phase deferrals committed in Phase 0 are still in todos.md.
 3. **Shortcut detection** (per `/plan` Step 10c): scan for placeholder implementations, hardcoded values that should be env-var-driven, etc. Specifically check:
    - RSS polling on Windows: was it actually attempted or skipped? If skipped, confirm Windows todos.md entry exists.
-   - Salsa LRU: was the Phase 5 step 1 research actually done? Confirm decision documented in design/watch.md.
+   - Salsa LRU: was the Phase 5 step 1 research actually done? Confirm decision documented in docs/internal/implementation/IMP-watch.md.
 4. **Quality Checklist verification** (per `/plan` Step 10d): tick every box in the milestone-wide Quality Checklist below with evidence.
 5. **Plan-file final persistence pass** (per `/plan` Step 10e): ensure every phase's acceptance criteria + quality gate checkbox is in the correct state. Bump `last_updated:`.
 6. **Cross-platform smoke**: run `cargo test --workspace` on Linux + macOS CI matrix. Manual smoke per-OS: `ynz watch examples/incline-watcher/` → save → verify clean rebuild + run cycle on each OS.
-7. **Perf measurement** (per Performance invariants): measure cold-start, warm-rebuild, event-to-build-start latency, child-spawn overhead, --json output latency. Document in design/watch.md "Measurement (Phase 6)" subsection. ANY ceiling breach = BLOCK pending profile + fix; not a budget raise.
+7. **Perf measurement** (per Performance invariants): measure cold-start, warm-rebuild, event-to-build-start latency, child-spawn overhead, --json output latency. Document in docs/internal/implementation/IMP-watch.md "Measurement (Phase 6)" subsection. ANY ceiling breach = BLOCK pending profile + fix; not a budget raise.
 8. **Demo & Error Gallery extension**:
-   - Create `examples/incline-watcher/yinz.toml` + `examples/incline-watcher/entrypoint.ynz`. Entrypoint prints a counter that's incremented per build (writes a small `.ynz-watch-demo.counter` sibling file). Demonstrates: live program output, rebuild cycle visible, --json shows ChildExit + ChildSpawn pairs.
+   - Create [`examples/incline-watcher/yinz.toml`](../../../../examples/incline-watcher/yinz.toml) + `examples/incline-watcher/entrypoint.ynz`. Entrypoint prints a counter that's incremented per build (writes a small `.ynz-watch-demo.counter` sibling file). Demonstrates: live program output, rebuild cycle visible, --json shows ChildExit + ChildSpawn pairs.
    - Create `examples/primantis-orders/v0_2_m4_errors.ynz` with intentional triggers for: file watcher init fail (simulated via mock), no yinz.toml in project mode, child spawn failure (binary not executable simulated), RSS hard-stop (via env override), mutually-exclusive-flags-when-none-exist (commented as "no error here, --check + --json coexist").
    - Update `examples/pirates-roster/entrypoint.ynz` top-of-file comment per Demo & Error Gallery subsection.
    - Run `ynz fmt --all` to canonicalize new files (M3 formatter handles this).
@@ -930,16 +930,16 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 
 **Acceptance criteria** (Phase 6 specific; full Quality Checklist at end):
 - [ ] No `TODO` / `FIXME` / `HACK` left in any M4 code
-- [ ] All Phase 0-5 deferrals tracked in `.claude/todos.md`
+- [ ] All Phase 0-5 deferrals tracked in [`.claude/todos.md`](../../../todos.md)
 - [ ] Cross-platform smoke green on Linux + macOS CI
-- [ ] All Performance ceilings measured; documented in design/watch.md
+- [ ] All Performance ceilings measured; documented in docs/internal/implementation/IMP-watch.md
 - [ ] `examples/incline-watcher/` ships + works (`ynz watch examples/incline-watcher/` exits cleanly on Ctrl+C)
 - [ ] `examples/primantis-orders/v0_2_m4_errors.ynz` exists with all error triggers
 - [ ] `examples/pirates-roster/entrypoint.ynz` has watch-related top-of-file comment
 - [ ] insta snapshots for v0_2_m4_errors.ynz committed
 - [ ] `tests/jargon_audit.rs` extended to walk `crates/ynz-watch/` + passes
-- [ ] `Cargo.toml` workspace version = `0.2.0-m4`
-- [ ] `CHANGELOG.md` has v0.2.0-m4 section
+- [ ] [`Cargo.toml`](../../../../Cargo.toml) workspace version = `0.2.0-m4`
+- [ ] [`CHANGELOG.md`](../../../../CHANGELOG.md) has v0.2.0-m4 section
 - [ ] Plan front-matter `last_updated:` = today; `status:` ready to flip to `done` after final reviewer PASS
 - [ ] Cumulative code-reviewer PASS
 
@@ -976,7 +976,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 - [ ] No auth/authz applicable (dev tool, no surface)
 - [ ] Error handling: specific messages (WHAT/WHAT-INSTEAD/WHY), no stack traces to user, proper exit codes (0/1/2)
 - [ ] No SQL injection, XSS, path traversal, or secret exposure (no SQL; tempdir paths sanitized; no secrets)
-- [ ] Performance: every ceiling in Invariants/Performance measured + documented in design/watch.md; ANY breach was profiled + fixed (not budget-raised)
+- [ ] Performance: every ceiling in Invariants/Performance measured + documented in docs/internal/implementation/IMP-watch.md; ANY breach was profiled + fixed (not budget-raised)
 - [ ] Tests: happy path + error cases + edge cases + 10k-cycle long-session + cross-platform CI
 - [ ] Existing 1143+ tests still pass
 - [ ] Types are complete (no `any` not applicable in Rust; no `Box<dyn Any>`; no excessive `.unwrap()` per coding-style.md)
@@ -1047,20 +1047,20 @@ Seven bugs found immediately after v0.2.0-m4 shipped, all during real-world use 
 ## Cross-References
 
 - `~/.claude/skills/plan/SKILL.md` — the global /plan skill this plan follows
-- `.claude/rules/plan-invariants.md` — 7-subsection Invariants block required
-- `.claude/rules/auto-promotion.md` — auto-promotion analysis subsection requirement
-- `.claude/rules/feature-registry.md` — registry consumer + producer rules
-- `.claude/rules/inference.md` — dual-audience disclaimer (infer/inference allowed in design docs, banned in user-facing diagnostics)
-- `.claude/rules/vocabulary.md` — Yinz user-facing terms
-- `.claude/rules/non-oop.md` — Yinz is not OOP (watch is procedural; no class-style state)
-- `.claude/rules/stdlib-design.md` — (not directly applicable; watch is not stdlib but the principles cross over)
+- [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) — 7-subsection Invariants block required
+- [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md) — auto-promotion analysis subsection requirement
+- [`.claude/rules/feature-registry.md`](../../../rules/feature-registry.md) — registry consumer + producer rules
+- [`.claude/rules/inference.md`](../../../rules/inference.md) — dual-audience disclaimer (infer/inference allowed in design docs, banned in user-facing diagnostics)
+- [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) — Yinz user-facing terms
+- [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) — Yinz is not OOP (watch is procedural; no class-style state)
+- [`.claude/rules/stdlib-design.md`](../../../rules/stdlib-design.md) — (not directly applicable; watch is not stdlib but the principles cross over)
 - `~/.claude/memory/branching.md` — branch prefix + PR sizing
 - `~/.claude/rules/verification.md` — Paper-Trace for any bug-fix work (none expected in M4 unless a Phase 5 issue surfaces)
 - `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` — parent roadmap
 - `.claude/plans/done/v0-2-m2-lsp-thin-slice.md` — daemon-with-CompilerDb pattern reference
 - `.claude/plans/done/v0-2-m3-fmt.md` — library + CLI shape reference; cross-platform test patterns
-- `design/compiler.md` — current bare watch paragraph (lines 138-146) being expanded
-- `design/mvp-scope.md` — v0.2-M4 entry
-- `design/teaching-mission.md` — WHAT/WHAT-INSTEAD/WHY format the watch diagnostics use
-- `design/compiler-errors.md` — banned-jargon source-of-truth
-- `design/compiler-language.md` — salsa-first architecture; "Why Salsa" section
+- [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md) — current bare watch paragraph (lines 138-146) being expanded
+- [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) — v0.2-M4 entry
+- [`docs/reference/REF-teaching-mission.md`](../../../../docs/reference/REF-teaching-mission.md) — WHAT/WHAT-INSTEAD/WHY format the watch diagnostics use
+- [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) — banned-jargon source-of-truth
+- [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md) — salsa-first architecture; "Why Salsa" section

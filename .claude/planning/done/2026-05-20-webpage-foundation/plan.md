@@ -47,7 +47,7 @@ Status: done — all phases complete
 
 ### 2026-05-20 — Phase 1 execution
 - Scaffolded Nuxt 4 minimal template via `bunx nuxi@latest init` + `docker cp` (devcontainer is DooD; volume mounts don't pass through to devcontainer filesystem).
-- Created: `docker-compose.yml`, `Dockerfile.dev`, `.dockerignore`, `.gitignore`, `package.json`, `nuxt.config.ts`, `tsconfig.json`, `bun.lock`, `app/app.vue`, `app/pages/index.vue`, `public/favicon.ico`, `website/README.md`.
+- Created: `docker-compose.yml`, `Dockerfile.dev`, `.dockerignore`, `.gitignore`, `package.json`, `nuxt.config.ts`, `tsconfig.json`, `bun.lock`, `app/app.vue`, `app/pages/index.vue`, `public/favicon.ico`, [`website/README.md`](../../../../website/README.md).
 - Updated root `.gitignore` with belt-and-suspenders website artifact exclusions.
 - Deviation: lockfile is `bun.lock` (text format, bun 1.2+) not `bun.lockb` (old binary format). Better for diffs; plan updated accordingly.
 - Smoke-tested via `bun run dev` (local bun 1.3.14) + `bun run generate`: dev server returned 200 with under-construction content; SSG produced clean hash-based assets.
@@ -118,7 +118,7 @@ Status: done — all phases complete
 ### 2026-05-20 — Phase 7 execution
 - Created `website/Dockerfile`: multi-stage bun:1.2.21-alpine → nginx:1.27-alpine. Build context = repo root (required for grammar sync). Built successfully in devcontainer Docker.
 - Created `website/.do/app.yaml`: DO App Platform spec (static_site, main branch, dockerfile_path: website/Dockerfile).
-- Updated `website/README.md`: Deployment section with docker build command (repo-root context), DO App Platform Option A/B, CSP warning, HMR caveat, host-bun-install reminder.
+- Updated [`website/README.md`](../../../../website/README.md): Deployment section with docker build command (repo-root context), DO App Platform Option A/B, CSP warning, HMR caveat, host-bun-install reminder.
 - Updated roadmap `webpage-docs.md`: Cloudflare Pages → DigitalOcean App Platform in 3 locations (Architectural Decisions, Risks table, Open Questions). last_updated bumped.
 - Final smoke test: `bun run generate` passes (8 routes, all SEO/Shiki/components working).
 - DooD note: Production container port binding not verifiable from devcontainer (same DooD limitation as dev server). Docker image builds clean and nginx logs show worker processes started. Patrick verifies HTTP response from his local machine.
@@ -193,7 +193,7 @@ Roadmap "Aesthetic locked" section reversed Space Grotesk → athletic display f
 | CI bun installation adds significant time to every PR | Low | Low — minor CI slowdown | Cache `~/.bun` and `website/node_modules` (yes, bun installs to node_modules) across runs. Only run website-build job when `website/**` or `.github/workflows/website.yml` changed (path filter on the workflow). |
 | Roadmap front-matter still lists Cloudflare Pages as hosting; needs update | High | Low — documentation drift | Phase 7 updates `webpage-docs.md` roadmap to reflect DigitalOcean App Platform as the locked hosting choice. Same chat, same plan. |
 | Stub homepage with no real content looks broken to a casual visitor before M2 lands | Medium | Low — staging URL is unindexed | Stub page says date-free: "Yinz language — site under construction. v0.2 in progress. Check the [GitHub repo] for release status." No hardcoded dates that age into lies; live status lives on the M3 roadmap component. Robots disallow blocks indexing until M7. |
-| Shiki emits inline `<span style="color:...">` styles; future strict CSP at the DO edge or via `nuxt-security` would silently strip them, making every code block monochrome | Low | High (when triggered) — every `<YCode>` on every page goes colorless | Document in `website/README.md` "Deployment" section: any CSP added later MUST include `'unsafe-inline'` for `style-src` OR migrate Shiki to class-based theming (which Shiki supports — different theme JSON shape). Flag this for M7 launch planning so it's not discovered when CSP gets turned on. |
+| Shiki emits inline `<span style="color:...">` styles; future strict CSP at the DO edge or via `nuxt-security` would silently strip them, making every code block monochrome | Low | High (when triggered) — every `<YCode>` on every page goes colorless | Document in [`website/README.md`](../../../../website/README.md) "Deployment" section: any CSP added later MUST include `'unsafe-inline'` for `style-src` OR migrate Shiki to class-based theming (which Shiki supports — different theme JSON shape). Flag this for M7 launch planning so it's not discovered when CSP gets turned on. |
 | `@nuxt/fonts` downloads Google Fonts at build time; DigitalOcean App Platform build container may rate-limit-hit or fail with no network, making builds non-deterministic | Medium | High — silent build failure or missing fonts | Use `@nuxt/fonts` `download: true` + commit the downloaded font files to `website/public/_fonts/` (or `app/assets/fonts/`) so production builds are NOT network-dependent. README documents the "fonts are vendored at install time, not build time" discipline. If a font swap happens, refresh the vendored files in the same PR. |
 
 ## Risk Assessment & Rollout Strategy
@@ -306,7 +306,7 @@ Each phase = one PR via `/pr`. Phases ordered so each ends in a working state.
 - `website/Dockerfile.dev` (new — optional bun base for consistency)
 - `website/.dockerignore` (new)
 - `website/.gitignore` (new — `.nuxt/`, `.output/`, `node_modules/`, `bun.lock` checked in)
-- `website/README.md` (new — dev workflow section)
+- [`website/README.md`](../../../../website/README.md) (new — dev workflow section)
 - `.gitignore` (root — append `website/node_modules`, `website/.nuxt`, `website/.output`)
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work (e.g., a `tsconfig.json` root-level reference, missing `.gitkeep` files). Document each deviation in the PR description with one-line reason. If a deviation is its own concern (unrelated bug, opportunistic refactor), STOP — split into a separate PR.
 **Steps**:
@@ -318,7 +318,7 @@ Each phase = one PR via `/pr`. Phases ordered so each ends in a working state.
 6. Add `website/.dockerignore` excluding `node_modules`, `.nuxt`, `.output`.
 7. Add `website/.gitignore` per Nuxt convention (`.nuxt/`, `.output/`, `node_modules/`, `.env`). Commit `bun.lock`.
 8. Append `website/node_modules`, `website/.nuxt`, `website/.output` to root `.gitignore` belt-and-suspenders.
-9. Write `website/README.md` "Dev workflow" section: prereqs (docker), `docker compose -f website/docker-compose.yml up`, `http://localhost:6002`, troubleshooting (WSL polling, bun cache).
+9. Write [`website/README.md`](../../../../website/README.md) "Dev workflow" section: prereqs (docker), `docker compose -f website/docker-compose.yml up`, `http://localhost:6002`, troubleshooting (WSL polling, bun cache).
 10. Smoke-test: `docker compose up`, open browser, verify the under-construction page renders, hot-reload works (edit stub text, see change).
 **Acceptance criteria**:
 - [x] `docker compose -f website/docker-compose.yml up` brings the site up on http://localhost:6002 and `curl -sf http://localhost:6002` returns 200 with the under-construction text in the response body (no hard timing SLA — first-run cold cache is hardware-variable)
@@ -363,7 +363,7 @@ Each phase = one PR via `/pr`. Phases ordered so each ends in a working state.
 - `website/app/assets/css/tailwind.css` (new — `@import "tailwindcss"` + `@theme` block)
 - `website/app/app.vue` or `website/app/layouts/default.vue` (apply base classes — coal bg, ink text)
 - `website/app/pages/index.vue` (replace plain HTML with token-styled version)
-- `website/README.md` (append "Design tokens" section pointing at `shared.css` as historical reference)
+- [`website/README.md`](../../../../website/README.md) (append "Design tokens" section pointing at `shared.css` as historical reference)
 **Deviation rule**: same as Phase 1.
 **Steps**:
 1. `docker compose exec web bun add -D tailwindcss@4 @tailwindcss/vite@4 @nuxt/fonts`.
@@ -427,7 +427,7 @@ Each phase = one PR via `/pr`. Phases ordered so each ends in a working state.
 - `website/app/components/primitives/YPill.vue`
 - `website/app/components/primitives/YCallout.vue`
 - `website/app/pages/_dev/components.vue` (new — gallery scaffold; Phase 3b extends)
-- `website/README.md` (append "Component library" section)
+- [`website/README.md`](../../../../website/README.md) (append "Component library" section)
 **Deviation rule**: same.
 **Steps**:
 1. For each component: TypeScript-typed `<script setup lang="ts">` with `defineProps<{...}>()`, scoped `<style>` only when Tailwind utilities are insufficient. No `any`. Use `T \| null` for optional structural fields per `coding-style.md`. Arrow functions only — no `function` keyword in `.vue`/`.ts` files (composables, helpers).
@@ -547,7 +547,7 @@ Each phase = one PR via `/pr`. Phases ordered so each ends in a working state.
 - `website/app/components/primitives/YCode.vue` (consumes pre-rendered HTML if available; falls back to client-side highlight only for dynamic code-rendering scenarios — none in M1)
 - `website/app/composables/useShikiTheme.ts` (singleton Shiki highlighter; used by the module at build time AND as the runtime fallback path)
 - `website/app/pages/_dev/components.vue` (append a `<YCode>` example with a real Yinz snippet)
-- `website/README.md` (append "Yinz grammar sync" section explaining the source-of-truth and the prebuild discipline)
+- [`website/README.md`](../../../../website/README.md) (append "Yinz grammar sync" section explaining the source-of-truth and the prebuild discipline)
 **Deviation rule**: same. Grammar coverage gaps surface as un-highlighted tokens — do NOT fix the grammar in this phase. File a follow-up plan if gaps are severe; foundation ships with whatever the grammar covers today.
 **Steps**:
 1. Add `shiki` dep via bun. Pin version.
@@ -632,7 +632,7 @@ Each phase = one PR via `/pr`. Phases ordered so each ends in a working state.
 - `website/app/app.vue` (or `default.vue` layout) — base `useHead` with title template, description, OG defaults
 - `website/public/robots.txt` (handled by `nuxt-robots` config; pre-launch = disallow all)
 - `website/app/assets/images/og-default.png` (placeholder — derived from `website/yinz.png`)
-- `website/README.md` (append "SEO + images" section)
+- [`website/README.md`](../../../../website/README.md) (append "SEO + images" section)
 **Deviation rule**: same.
 **Deferral — Font vendoring (from Phase 2):**
 `@nuxt/fonts v0.14.0` downloads fonts AT BUILD TIME (during `bun run generate`) and writes them to `.output/public/_fonts/` (the build output), NOT to `website/public/_fonts/` (the source tree). This means: (1) production builds require network access to download from Google Fonts; (2) font files cannot be committed to git via the current module version.
@@ -747,7 +747,7 @@ Until then: CI and production builds require internet access at build time. The 
 - `website/Dockerfile` (new — production multi-stage: bun-build → nginx-static-serve OR bun-static-serve)
 - `website/.do/app.yaml` (new — DigitalOcean App Spec for a static site referencing the Dockerfile)
 - `website/.dockerignore` (update — exclude `.output/`, `node_modules/`, `.nuxt/` if not already)
-- `website/README.md` (append "Deployment" section)
+- [`website/README.md`](../../../../website/README.md) (append "Deployment" section)
 - `.claude/plans/roadmaps/webpage-docs.md` (edit hosting decision line + open question line)
 **Deviation rule**: roadmap update is in-scope — it's the SSOT for the initiative and the decision genuinely changed. Other roadmap edits are OUT of scope.
 **Steps**:
@@ -854,6 +854,6 @@ Until then: CI and production builds require internet access at build time. The 
 
 ## Plan-Invariants applicability
 
-This is a **website plan**, not a compiler milestone plan. Per `.claude/rules/plan-invariants.md`, the 7-subsection Invariants block (Safety / Performance / Teaching / Runtime Dependencies / Kernel-Mode Behavior / Demo & Error Gallery / Feature Registry Entries) is mandatory for compiler milestones (M4+) — not for website infra. Skipping the block deliberately. Safety / performance / teaching considerations are still threaded through phase Quality Gates (typed components, SSG correctness, accessible markup, etc.) — they just don't get a dedicated section because the language-level framing doesn't apply.
+This is a **website plan**, not a compiler milestone plan. Per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md), the 7-subsection Invariants block (Safety / Performance / Teaching / Runtime Dependencies / Kernel-Mode Behavior / Demo & Error Gallery / Feature Registry Entries) is mandatory for compiler milestones (M4+) — not for website infra. Skipping the block deliberately. Safety / performance / teaching considerations are still threaded through phase Quality Gates (typed components, SSG correctness, accessible markup, etc.) — they just don't get a dedicated section because the language-level framing doesn't apply.
 
 No new language features, no new keywords, no compiler runtime dependencies. `### Feature Registry Entries` therefore N/A.

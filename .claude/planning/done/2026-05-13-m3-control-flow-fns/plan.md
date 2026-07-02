@@ -21,8 +21,8 @@ legacy:
     - crates/ynz-typeck/**
     - crates/ynz-codegen/**
     - crates/ynz-driver/**
-    - spec/control-flow.md
-    - spec/functions.md
+    - docs/reference/REF-control-flow.md
+    - docs/reference/REF-functions.md
   created: 2026-05-13
   last_updated: 2026-05-13-r1
   depends_on: v0-1-compiler
@@ -44,7 +44,7 @@ Status: active
 
 **Why now.** M2 just shipped (commit `c39fe8a`, tag `v0.1.0-m2`). M2 gave the language variables, arithmetic, decimal128, and the polymorphic primitive intrinsic table. M3 is the next step on the v0.1 critical path per the roadmap. Every later milestone (M4 types, M5 generics, M6 options, M7 errors, M8 modules) needs user-defined functions and control flow to be testable — without M3, none of them can be demoed end-to-end.
 
-**Background.** Yinz spec defines control flow tersely (`spec/control-flow.md`): two forms of `if` (simple + multi-case with `=>` arrows), `while`, `for x in collection`. **There is no standalone `else { }` block** — the spec is explicit: "Two patterns [early return + pre-assignment], zero `else` blocks." The roadmap entry's "if/else" phrasing is shorthand for "if + multi-case `if`-with-`else =>`-catch-all" — not C-style `if/else`. This plan implements per spec, not per roadmap shorthand.
+**Background.** Yinz spec defines control flow tersely ([`docs/reference/REF-control-flow.md`](../../../../docs/reference/REF-control-flow.md)): two forms of `if` (simple + multi-case with `=>` arrows), `while`, `for x in collection`. **There is no standalone `else { }` block** — the spec is explicit: "Two patterns [early return + pre-assignment], zero `else` blocks." The roadmap entry's "if/else" phrasing is shorthand for "if + multi-case `if`-with-`else =>`-catch-all" — not C-style `if/else`. This plan implements per spec, not per roadmap shorthand.
 
 **Constraints.**
 - Inherits every v0.1 architectural lock: salsa-from-day-1, three-part diagnostics, banned-jargon audit, object-file SHA-256 reproducibility, `inkwell` types confined to `emit.rs`, etc. See `.claude/plans/active/v0-1-compiler.md` "Locked Decisions" section.
@@ -114,7 +114,7 @@ Additionally:
 | `main` signature check from M1 needs updating to coexist with user functions | Low | `main` validation breaks when other functions are defined | M1's check ("there's exactly one item, it's a function called main with `() -> nothing`") gets replaced by: (a) find the `main` function in the module — error if missing, (b) verify its signature is `() -> nothing` — error if not, (c) other functions get their own typeck per their declared signatures. The M1 test that asserts "missing main is an error" still passes because the new logic preserves that behavior. The M1 "wrong main return type" and "main with parameters" tests also still pass. |
 | Variant-count test ratchet bumps could be forgotten | Medium | Silent scope creep — adding a variant without updating the lock test | M2 already locks variant counts via `// test-ratchet: <reason>` markers. Every M3 variant addition (Token, Stmt, Expr, Type) bumps the counter with a marker. The immutable-test-check.sh PreToolUse hook globally enforces the marker on Edit/Write. The M2 pattern is mechanical — M3 inherits it directly. |
 | Object-file SHA-256 reproducibility regression | Low | M3 fixtures' golden hashes drift between runs | M1/M2's reproducibility contract is unchanged — explicit module identifier, fixed target triple, no debug info, deterministic LLVM options. M3 fixtures get their own per-triple golden hashes. The reproducibility test (codegen-twice asserts identical SHA-256) runs on every M3 fixture. |
-| Banned-jargon audit fails on new diagnostic strings | Medium | CI red, blocks merge | Every new diagnostic in P1-P5 written following `design/compiler-errors.md` three-part format. The jargon audit runs in CI on every PR. Test-driven: write the diagnostic, then run `cargo test --workspace` to confirm clean. |
+| Banned-jargon audit fails on new diagnostic strings | Medium | CI red, blocks merge | Every new diagnostic in P1-P5 written following [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) three-part format. The jargon audit runs in CI on every PR. Test-driven: write the diagnostic, then run `cargo test --workspace` to confirm clean. |
 | Spec/code drift: spec says one thing, parser does another | Medium | User confusion; design intent lost | M3 ships with a spec-correction note in P3 if any drift is found during typeck implementation. Same PR as the implementation, no separate fix PR. |
 | Comment rules sweep regression | Low | Section banners or "what" comments re-introduced | M2 P7 stripped 148 banners and "what" comments. M3 P6 runs the same sweep — `rg '// ──' crates/` must return empty, `rg '// [A-Z][a-z]+ part' crates/` returns near-empty. Comment rules from `~/.claude/rules/comments.md` apply: Tier 1 default no-comment, durable-not-changelog. |
 
@@ -122,7 +122,7 @@ Additionally:
 
 ## Questions
 
-- **Should the unreachable-code detection be a warning or a suggestion?** Per `design/compiler-errors.md`, the three severity tiers exist (Error / Warning / Suggestion). Suggestion tier is reserved-but-unused until v0.4. M3 will emit unreachable-code as a **Warning** (compile succeeds, message rendered). If patrick prefers Suggestion (silent in M3, surfaced in v0.4), flip the tier in P3 — single-line change. **Default in this plan: Warning.**
+- **Should the unreachable-code detection be a warning or a suggestion?** Per [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md), the three severity tiers exist (Error / Warning / Suggestion). Suggestion tier is reserved-but-unused until v0.4. M3 will emit unreachable-code as a **Warning** (compile succeeds, message rendered). If patrick prefers Suggestion (silent in M3, surfaced in v0.4), flip the tier in P3 — single-line change. **Default in this plan: Warning.**
 
 - **Multi-case `if` on `string` values**: should `if (s) { "yes" => ...; "no" => ...; else => ... }` work in M3? Spec example only shows int values, but the value form's design clearly extends to strings. **Default in this plan: yes — string multi-case ships in M3** because strings already exist (M1) and the codegen is straightforward (`strcmp` against each case literal until a match; LLVM optimizes to a jump table or hash for many cases). Push back if you want to defer strings.
 
@@ -218,7 +218,7 @@ Each phase is one PR. Branch merges to `main` before the next phase starts. Each
 **Current-state anchors**:
 - `crates/ynz-ast/src/nodes.rs` — current AST. `Stmt` variant count 3, `Expr` count 10, `Type` count 7 (all locked by tests).
 - `crates/ynz-parser/src/parser.rs` — Pratt precedence climber + recovery strategy (`is_stmt_boundary()`).
-- `spec/control-flow.md`, `spec/functions.md`, `spec/scope.md` — canonical syntax.
+- [`docs/reference/REF-control-flow.md`](../../../../docs/reference/REF-control-flow.md), [`docs/reference/REF-functions.md`](../../../../docs/reference/REF-functions.md), [`docs/reference/REF-scope.md`](../../../../docs/reference/REF-scope.md) — canonical syntax.
 **Files (expected scope)**:
 - `crates/ynz-ast/src/nodes.rs` (extend `Stmt`, extend `FunctionDecl`, add `Param`, add `MatchArm`)
 - `crates/ynz-parser/src/parser.rs` (add statement parsers + parameter parser)
@@ -338,7 +338,7 @@ Each phase is one PR. Branch merges to `main` before the next phase starts. Each
 - `crates/ynz-typeck/src/intrinsics.rs` (add `range` free-fn entries; introduce a `FreeFnSig` table parallel to `methods` table)
 - `crates/ynz-typeck/src/queries.rs` (add `module_signatures` query, extend `check` to depend on it)
 - `crates/ynz-typeck/tests/check.rs` + snapshots
-- `design/decisions.md` (record the loop-var-const decision)
+- [`docs/README.md`](../../../../docs/README.md) (record the loop-var-const decision)
 
 **Steps**:
 1. Add `Type::Range { ... }` variant. Update `m3_type_variant_count_locked` test with marker. Update `Type::display` / `PartialEq` impls.
@@ -352,7 +352,7 @@ Each phase is one PR. Branch merges to `main` before the next phase starts. Each
    - `check_stmt_if(stmt)`: type-check condition (must be `bool`), push scope, walk body, pop scope.
    - `check_stmt_match(stmt)`: type-check scrutinee, for each arm verify pattern type matches scrutinee type and arm body has no parse errors. Push/pop scope per arm. Reject `IsType` and `Variant` patterns with M6 deferral.
    - `check_stmt_while(stmt)`: condition must be `bool`, push/pop scope, walk body.
-   - `check_stmt_for(stmt)`: iterable must be `Type::Range` (with int element); push scope; insert loop var as `(int, is_param=false, is_const=true)`. **Design decision locked in P3**: the loop variable is **const** (immutable inside the body); assignment to the loop var is a three-part diagnostic. Rationale: spec/scope.md models loop-locals as fresh bindings each iteration; allowing mutation would make `i = 10` inside `for (i in range(0, 5))` ambiguous (skip ahead? rebind for the remainder? both are bad answers). Decision recorded in `design/decisions.md` in the same PR as P3 implementation (P3 ships the spec/design edit, not just the code).
+   - `check_stmt_for(stmt)`: iterable must be `Type::Range` (with int element); push scope; insert loop var as `(int, is_param=false, is_const=true)`. **Design decision locked in P3**: the loop variable is **const** (immutable inside the body); assignment to the loop var is a three-part diagnostic. Rationale: docs/reference/REF-scope.md models loop-locals as fresh bindings each iteration; allowing mutation would make `i = 10` inside `for (i in range(0, 5))` ambiguous (skip ahead? rebind for the remainder? both are bad answers). Decision recorded in [`docs/README.md`](../../../../docs/README.md) in the same PR as P3 implementation (P3 ships the spec/design edit, not just the code).
    - `check_stmt_return(stmt)`: type-check value against function's expected return type. If value is `None`, function must be `-> nothing`. If value is `Some` and function is `-> nothing`, three-part error.
 6. Implement `analyze_return_paths` in `return_paths.rs`. Pure function over `&Block`. Returns `ReturnAnalysis`. Unit-tested with adversarial cases (see Risks table).
 7. After each function body check, call `analyze_return_paths`. Emit warnings for dead code, errors for missing returns.
@@ -583,7 +583,7 @@ Each phase is one PR. Branch merges to `main` before the next phase starts. Each
 **Steps**:
 1. **Broad TODO sweep** (same grep as M1/M2):
    `rg -i 'TODO|FIXME|HACK|XXX|TEMP|PLACEHOLDER|acceptable for now|works in current state|fine until|we.?ll revisit|for now|good enough for the MVP|executor will figure' crates/`
-   Migrate findings to plan files / `.claude/todos.md` / delete. Zero results required.
+   Migrate findings to plan files / [`.claude/todos.md`](../../../todos.md) / delete. Zero results required.
 2. **Comment rules sweep** (per `~/.claude/rules/comments.md` Hard Rules):
    - `rg '// ──|// ───|// ════' crates/` returns empty (no section banners).
    - Spot-check for "what" comments describing the obvious; delete them.
@@ -594,8 +594,8 @@ Each phase is one PR. Branch merges to `main` before the next phase starts. Each
 4. **M3 explicitly-NOT list audit**: confirm nothing slipped in. Variant-count tests for `Token`, `Stmt`, `Expr`, `Type`, `MatchPatternKind` confirm mechanically; this is a sanity audit.
 5. **Spec-correction verification**: if P1–P5 surfaced any spec drift (e.g., functions.md's ownership-annotation examples vs. the M4 deferral), commit corrections in this PR. Document each correction in the CHANGELOG.
 6. **Quality checklist verification**: run through the M3 checklist below; each item checked with evidence (file path, test name, or grep + result).
-7. Add `CHANGELOG.md` entry for M3.
-8. Bump `Cargo.toml` workspace version to `v0.1.0-m3` (per `/release` skill).
+7. Add [`CHANGELOG.md`](../../../../CHANGELOG.md) entry for M3.
+8. Bump [`Cargo.toml`](../../../../Cargo.toml) workspace version to `v0.1.0-m3` (per `/release` skill).
 9. Tag `v0.1.0-m3` after merge.
 
 **Acceptance criteria**:
@@ -713,7 +713,7 @@ If a phase below feels like it's drifting into any of the above, STOP and re-pla
 
 ## Invariants This Milestone Must Preserve
 
-Retroactive section added per `.claude/rules/plan-invariants.md` as a template
+Retroactive section added per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) as a template
 reference for M4+ plan authors. M3 is the first milestone with non-trivial control
 flow; these invariants establish the baseline codegen and typeck contracts.
 

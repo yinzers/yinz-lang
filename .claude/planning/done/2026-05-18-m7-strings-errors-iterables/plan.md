@@ -18,12 +18,12 @@ legacy:
   files:
     - Cargo.toml
     - crates/**
-    - design/strings.md
-    - design/errors.md
-    - design/iterables.md
-    - spec/strings.md
-    - spec/errors.md
-    - spec/iterables.md
+    - docs/internal/implementation/IMP-strings.md
+    - docs/internal/implementation/IMP-errors.md
+    - docs/internal/implementation/IMP-iterables.md
+    - docs/reference/REF-strings.md
+    - docs/reference/REF-errors.md
+    - docs/reference/REF-iterables.md
     - examples/pirates-roster/**
     - examples/primantis-orders/**
     - .claude/plans/active/v0-1-compiler.md
@@ -75,7 +75,7 @@ Splitting (e.g., "M7a strings, M7b errors+iterables") would force a transient st
 - M7 ships behind no feature flag. All features unconditionally enabled when merged.
 
 **Success criteria for M7 (this milestone's contract):**
-1. `errors`-capable functions compile, run, and auto-propagate per `design/errors.md` flow-sensitive rules (matching M6's narrowing infrastructure).
+1. `errors`-capable functions compile, run, and auto-propagate per [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) flow-sensitive rules (matching M6's narrowing infrastructure).
 2. Strings ship with SSO (23-byte inline) and SIMD-accelerated UTF-8 validation/search. `.byteAt`, `.get`/`[n]` (code points), `.graphemeAt`, `.contains`, `.indexOf`, `.startsWith`, `.endsWith`, `.toUpperCase`, `.toLowerCase`, `.substring`, `.trim`, `.split`, `.replace` work. Interpolation works (backtick + `${expr}`). Multi-line strings work.
 3. `Iterable<T>` and `FallibleIterable<T>` contract shapes exist as built-in primitives. Built-in collections (`array<T>`, `fixed<T, N>`, `map<K, V>`, `Range`, `string`) follow `Iterable<T>` via synthesized iterator wrapper shapes (`ArrayIter<T>`, `FixedIter<T, N>`, `MapIter<K, V>`, `Range` itself, `StringCodePointIter`). User-defined shapes can `follows Iterable<T>` by writing a standalone `function next(lend self: Foo) -> maybe T`. The for-loop dispatches uniformly. `range()` is first-class (storable, passable, returnable). `MapEntry<K, V>` remains a built-in shape carrying iteration entries.
 4. NFC canonical equivalence for `ynz_string_eq` (M3 catch-up closed).
@@ -88,7 +88,7 @@ Splitting (e.g., "M7a strings, M7b errors+iterables") would force a transient st
 
 ## FINAL LOCKED DECISIONS (pre-draft, confirmed by Patrick)
 
-1. **SSO ships in M7** (23-byte inline threshold per `design/strings.md`). String runtime built right from day 1. String value is a 24-byte struct: `{ tag_or_len: u8, data: 23 bytes }` (inline) OR `{ tag: u8 = 0xFF marker, len: i64, ptr: *u8, cap: i64, padding: ... }` (heap, fitting in 24 bytes via packed layout). Exact layout locked in P0.
+1. **SSO ships in M7** (23-byte inline threshold per [`docs/internal/implementation/IMP-strings.md`](../../../../docs/internal/implementation/IMP-strings.md)). String runtime built right from day 1. String value is a 24-byte struct: `{ tag_or_len: u8, data: 23 bytes }` (inline) OR `{ tag: u8 = 0xFF marker, len: i64, ptr: *u8, cap: i64, padding: ... }` (heap, fitting in 24 bytes via packed layout). Exact layout locked in P0.
 2. **SIMD UTF-8 ships in M7** (validation + search). Rust-native SIMD via `std::simd` (portable) OR a vetted crate (`simdutf8` — Rust port of simdjson UTF-8 validator). Choose specific crate vs handrolled in P0; if a crate, vendor or pin exact version. Fallback path on architectures without SIMD: scalar implementation.
 3. **Synthesized iterator wrapper + muted-hint teaching surface** for `Iterable<T>` dispatch. Built-in collections formally follow `Iterable<T>` through compiler-synthesized wrapper shapes (`ArrayIter<T>`, `FixedIter<T, N>`, `MapIter<K, V>`, `StringCodePointIter`). `Range` is a user-visible shape that follows `Iterable<int>` directly. User-defined iterables write a standalone `next()` function. M7 ships the codegen; the muted-hint surface showing the implicit `.items()` / `.entries()` insertion defers to v0.2 LSP per `inference.md`. M7 emits the data salsa side-table for v0.2 to consume.
 4. **Full base error shape ships in M7**: `.message: string`, `.suggestions: array<string>`, `.trace: array<Frame>`, `.source: SourceLoc`. Trace capture: each `errors` function entry pushes a `Frame { file: string, line: int, function: string }`; auto-propagation captures the call site. Source position emitted at every `errors` call site via salsa-tracked debug-info side-table. Runtime: `ynz_error_new`, `ynz_error_drop`, accessor functions for each field. Stack-walking is salsa-emitted compile-time data, NOT libunwind dynamic capture — keeps M7 hermetic from system unwinder ABI.
@@ -99,20 +99,20 @@ These four decisions answer the four Pre-Draft questions confirmed in chat 2026-
 
 ## Research Findings
 
-- `design/strings.md` is the authoritative source: UTF-8 internal encoding (locked), SSO 23-byte (locked), SIMD goal (locked), locale-invariant case (locked), `.byteAt` / `.get` / `.graphemeAt` API surface (locked).
-- `design/errors.md` is the authoritative source for `errors` semantics: flow-sensitive auto-propagation under-the-hood, eager-feel for users, base error shape `{ message, suggestions, trace, source }`, identical method set in errors-and-non-errors contexts. The "Implementation Note (for M7)" section explicitly scopes the work to this milestone.
-- `design/iterables.md` is the authoritative source for `Iterable<T>` and `FallibleIterable<T>` contracts. The `next(lend self) -> maybe T` (or `maybe T errors`) shape signature is locked. The `.orSkipFailures()` and `.withErrors()` adapter API is locked.
-- `design/narrowing.md` (M6) locks the flow-sensitive narrowing rules. M7 extends this machinery to `errors`-capable values — same rules table, new binding flavor.
-- `design/collections.md` "String Methods" section is the M7 string method surface area. `design/stdlib/strings.md` (if it exists; should be created in P0 if not) hosts the per-method documentation.
-- `unicode-segmentation` (1.13.2) is already in `Cargo.toml` workspace deps — handles graphemes. M7 wires it up.
-- `unicode-normalization` is NOT yet in `Cargo.toml`. Pin in P0 (latest stable: 0.1.x as of 2026-01; verify exact version at P0 time). Needed for NFC normalization in `ynz_string_eq`.
+- [`docs/internal/implementation/IMP-strings.md`](../../../../docs/internal/implementation/IMP-strings.md) is the authoritative source: UTF-8 internal encoding (locked), SSO 23-byte (locked), SIMD goal (locked), locale-invariant case (locked), `.byteAt` / `.get` / `.graphemeAt` API surface (locked).
+- [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) is the authoritative source for `errors` semantics: flow-sensitive auto-propagation under-the-hood, eager-feel for users, base error shape `{ message, suggestions, trace, source }`, identical method set in errors-and-non-errors contexts. The "Implementation Note (for M7)" section explicitly scopes the work to this milestone.
+- [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md) is the authoritative source for `Iterable<T>` and `FallibleIterable<T>` contracts. The `next(lend self) -> maybe T` (or `maybe T errors`) shape signature is locked. The `.orSkipFailures()` and `.withErrors()` adapter API is locked.
+- [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) (M6) locks the flow-sensitive narrowing rules. M7 extends this machinery to `errors`-capable values — same rules table, new binding flavor.
+- [`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md) "String Methods" section is the M7 string method surface area. [`docs/internal/scratchpad/SCRATCH-stdlib-strings.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-strings.md) (if it exists; should be created in P0 if not) hosts the per-method documentation.
+- `unicode-segmentation` (1.13.2) is already in [`Cargo.toml`](../../../../Cargo.toml) workspace deps — handles graphemes. M7 wires it up.
+- `unicode-normalization` is NOT yet in [`Cargo.toml`](../../../../Cargo.toml). Pin in P0 (latest stable: 0.1.x as of 2026-01; verify exact version at P0 time). Needed for NFC normalization in `ynz_string_eq`.
 - SIMD UTF-8 validation crate selection: `simdutf8` (Rust port of simdjson's UTF-8 validator, MIT/Apache-2.0, ~700 LOC, no dependencies, runtime CPU feature detection with scalar fallback). Decision in P0; default leaning is `simdutf8`.
 - Stack unwinding for `.trace`: NOT using libunwind / backtrace crate. Compile-time-emitted frame data via salsa debug-info table. Each `errors` function gets a `static FRAME: Frame = { file: __FILE__, line: __LINE__, function: __NAME__ }` global; entry IR pushes onto a thread-local frame stack via `ynz_frame_push` / `ynz_frame_pop`; `ynz_error_new` snapshots the current stack into the error.
 - SSO layout precedent: libc++ uses 22 bytes (one less than what we lock). Rust's `compact_str` crate uses 24-byte struct with inline 24 bytes-1 = 23 inline. Yinz's 23-byte choice aligns with `compact_str`. Storage decision in P0.
 - M5 `MonomorphizationTable` and `GenericShapeTable` carry forward unchanged. M7's new generic instantiations (`Iterable<int>`, `Iterable<Player>`, `FallibleIterable<string>`, the iter wrapper shapes) flow through M5's machinery — no new generics infrastructure.
 - M5's `BuiltinArray`, `BuiltinFixed`, `BuiltinMap`, `Maybe` types stay. M7 ADDS `BuiltinString` (or extends the existing `String` primitive type) with the new layout, and adds synthesized-wrapper types `ArrayIter<T>`, `FixedIter<T, N>`, `MapIter<K, V>`, `StringCodePointIter`, `Range`. Each iter wrapper is a real `shape` (gets `ShapeTable` entry, monomorphizes per concrete T).
 - M6's narrowing infrastructure for `maybe<T>` is the template for `errors`-capable narrowing. The salsa-tracked `NarrowingTable` is extended; no new infrastructure file.
-- Multi-error cap (50/compile per `design/compiler-errors.md`) is already implemented and carries over.
+- Multi-error cap (50/compile per [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md)) is already implemented and carries over.
 
 ---
 
@@ -133,16 +133,16 @@ These four decisions answer the four Pre-Draft questions confirmed in chat 2026-
 | Trace capture overhead under recursion | Medium | Deeply recursive `errors` functions push/pop hundreds of frames | Frame stack is a thread-local `array<Frame>` capped at 1024 frames; overflow truncates with a "trace truncated" sentinel. Cap chosen to fit recursion depth of any reasonable real-world program (Rust default recursion limit is 128; we accept 1024 as 8× headroom). |
 | Iterable<T> Wrapper monomorphization explosion | Medium | Every concrete `array<T>` for-loop instantiates a new `ArrayIter<T>` — same combinatorial as M5 generics | Reuse M5's `MonomorphizationTable` directly. M5's dedup logic ensures `ArrayIter<int>` is one specialized shape across all uses. IR-snapshot asserts. |
 | String runtime ABI break vs M1-M6 stored strings | High | Shape fields of type `string` were M1's i8*. M7 changes to 24-byte struct. Every existing fixture has stored strings | M7 P4b ships the new layout. All existing fixtures using `string` re-compile under the new ABI (the source doesn't change; only the codegen output does). Verification: rerun every M1-M6 fixture under M7 and confirm identical stdout (golden-file comparison on the snapshot harness). |
-| FallibleIterable adapter `.orSkipFailures()` swallows errors | High | Same trap the design rejected (silent stop on I/O error returning truncated data) | `.orSkipFailures()` MUST log each skip via the panic-but-don't-exit infrastructure — the design says "silently logs and continues" but "silently" is for the user code, NOT for system observability. Log goes to stderr at a configurable threshold; documented in `design/iterables.md` deep-dive in P0. |
-| `.trace` array<Frame> requires `Frame` shape | Medium | Frame is a new built-in shape — must be defined for users to read via `err.trace[i].file` | Define `Frame` as a public built-in shape in P0; document in `spec/errors.md`. Fields: `file: string, line: int, function: string`. |
+| FallibleIterable adapter `.orSkipFailures()` swallows errors | High | Same trap the design rejected (silent stop on I/O error returning truncated data) | `.orSkipFailures()` MUST log each skip via the panic-but-don't-exit infrastructure — the design says "silently logs and continues" but "silently" is for the user code, NOT for system observability. Log goes to stderr at a configurable threshold; documented in [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md) deep-dive in P0. |
+| `.trace` array<Frame> requires `Frame` shape | Medium | Frame is a new built-in shape — must be defined for users to read via `err.trace[i].file` | Define `Frame` as a public built-in shape in P0; document in [`docs/reference/REF-errors.md`](../../../../docs/reference/REF-errors.md). Fields: `file: string, line: int, function: string`. |
 | Cycle in iterator state (CountDown's hidden current field) interacting with M5 cycle-leak | Low | M5 documented that `maybe<Node<T>>` cycles leak. Iterators with hidden fields holding references could similarly cycle | M7 iterator wrappers hold `share` borrows of the source, not owned references. No cycle possible. P0 documents the borrow contract. |
 
 ---
 
 ## Questions (for Patrick to answer at plan-review time if not covered)
 
-1. **Multi-line string escape rules**: backtick-quoted strings — does `` `\n` `` produce a newline (interpreted) or the literal two-char `\n` (raw)? `spec/strings.md` shows multi-line examples without addressing escapes. Recommendation: interpret escapes inside backticks (TS-compatible). Lock in P0.
-2. **String iteration default — code points or graphemes?** `for c in "café"` — does each `c` step a code point or a grapheme cluster? Recommendation: code points (matches `s.get(n)` default per `spec/strings.md`). Graphemes available via `s.graphemes()` returning `Iterable<string>`. Lock in P0.
+1. **Multi-line string escape rules**: backtick-quoted strings — does `` `\n` `` produce a newline (interpreted) or the literal two-char `\n` (raw)? [`docs/reference/REF-strings.md`](../../../../docs/reference/REF-strings.md) shows multi-line examples without addressing escapes. Recommendation: interpret escapes inside backticks (TS-compatible). Lock in P0.
+2. **String iteration default — code points or graphemes?** `for c in "café"` — does each `c` step a code point or a grapheme cluster? Recommendation: code points (matches `s.get(n)` default per [`docs/reference/REF-strings.md`](../../../../docs/reference/REF-strings.md)). Graphemes available via `s.graphemes()` returning `Iterable<string>`. Lock in P0.
 3. **`Frame.line` zero-based or one-based?** Both have precedent. Recommendation: one-based (matches editor / compiler error line numbering convention). Lock in P0.
 4. **Stack-trace truncation behavior — at 1024 frames** — silent truncation with sentinel frame, or panic?  Recommendation: silent truncation; the user can still see what's at the top + bottom of the stack which is what matters for debugging. The truncation point gets a sentinel `Frame { file: "<truncated at depth 1024>", line: -1, function: "<...>" }`.
 5. **`file.lines(path)` — ships as M7 stub or full v0.5 implementation?** Recommendation: ship a one-page minimal `file.lines()` implementation in M7 (just `BufReader::lines` wrapped to expose `next() -> maybe string errors`) so we have a real fallible iterable to test. Full v0.5 file system module supersedes it later with same surface.
@@ -181,7 +181,7 @@ These four decisions answer the four Pre-Draft questions confirmed in chat 2026-
 - **P1 lexer**: ONE state machine for backtick-strings. Enters `${...}` expression mode on `${`; exits on matching `}`; closes string on `` ` ``. Removes any planned dual-form lexer logic. Per-string state-machine complexity drops vs the original draft.
 - **P1 AST**: still `InterpolatedString(Vec<StringPart>)` — every string IS an interpolated string at the AST level (parts list may be a single Lit chunk if no `${}` appeared).
 - **P2 parser**: simpler — no "is this `"..."` or backtick?" branching at string entry. Every string-literal call site produces an InterpolatedString.
-- **spec/strings.md**: section rewrite — remove all references to double-quote strings. All examples use backticks. Update the "two quote forms" table to a one-form description.
+- **docs/reference/REF-strings.md**: section rewrite — remove all references to double-quote strings. All examples use backticks. Update the "two quote forms" table to a one-form description.
 - **examples/pirates-roster/entrypoint.ynz**: sweep — convert any remaining `"..."` literals (M1-M6 era) to backtick form. May need a migration phase as part of P5 demo-extension OR a one-time conversion in P0.
 - **All M1-M6 fixtures**: must convert `"..."` to `` `...` `` since double-quote form no longer exists. THIS IS A BREAKING CHANGE TO EVERY EXISTING FIXTURE. Migration approach: one-time sed-pass in P0 step (new step) converts `"..."` to `` `...` ``; verify by re-running every M1-M6 fixture and confirming identical stdout.
 - **P1 MUST include unterminated-`${` negative fixture**: `` `hi ${name` `` (forgot `}`) produces a three-part diagnostic; lexer error recovery doesn't run off into the next 50 lines.
@@ -223,11 +223,11 @@ These four decisions answer the four Pre-Draft questions confirmed in chat 2026-
 
 - **`errors`-capable values must be checked-or-propagated before re-binding**: assignment to an `errors`-capable variable clears the prior auto-prop state. M7 P3a enforces; negative fixture `m7_errors_reassign_before_handle.ynz`.
 - **`.message` access requires the binding to be flow-narrowed to the failed branch via `.failed() === true`**: accessing `.message` on an errors-capable binding is permitted ONLY inside a block where the compiler has narrowed the binding to the "failed" state — i.e., the body of an `if (x.failed())` true-branch, or after an early-return on `!x.failed()`. Direct `err.message` without that proof is rejected. (This precise statement supersedes the earlier "without prior .failed() returning true" wording — what matters is the flow-narrowing into the failed branch, which IS the gate for `.message`/`.suggestions`/`.trace`/`.source` access.) M7 P3a enforces; negative fixture `m7_message_without_check.ynz`. Positive fixture `m7_message_inside_failed_branch.ynz`.
-- **Checking after use is a compile error** (matches `design/errors.md` example): `let parsed = parseConfig(raw); if (raw.failed()) {...}` is rejected when `raw` was auto-propagated by `parseConfig(raw)`. M7 P3a enforces; negative fixture `m7_check_after_use.ynz`.
+- **Checking after use is a compile error** (matches [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) example): `let parsed = parseConfig(raw); if (raw.failed()) {...}` is rejected when `raw` was auto-propagated by `parseConfig(raw)`. M7 P3a enforces; negative fixture `m7_check_after_use.ynz`.
 - **`errors` function calling another `errors` function inside non-errors context is rejected**: explicit handler required (`.or()`, `.failed()`, OR wrap caller in `errors`). M7 P3a enforces; negative fixture `m7_unhandled_errors_call.ynz`.
 - **`for x in fallible_iter` outside an `errors` function is rejected**: must use `.orSkipFailures()` / `.withErrors()` adapter OR mark caller `errors`. M7 P3c enforces; negative fixture `m7_fallible_iter_no_errors.ynz`.
 - **String bracket access out of bounds returns `none`** (not panic): `let c = "ab"[100]` returns `maybe<string>::none`. M7 P3c enforces consistent with existing M5 bracket sugar on collections. Positive fixture `m7_string_index_oob.ynz`.
-- **String mutation via bracket is rejected**: `s[0] = "B"` produces the diagnostic per `spec/strings.md`. M7 P3c enforces; negative fixture `m7_string_immutable.ynz`.
+- **String mutation via bracket is rejected**: `s[0] = "B"` produces the diagnostic per [`docs/reference/REF-strings.md`](../../../../docs/reference/REF-strings.md). M7 P3c enforces; negative fixture `m7_string_immutable.ynz`.
 - **`next()` on an iterator must take `lend self`**: a user-defined `next(share self: Foo)` doesn't satisfy `follows Iterable<T>`. M7 P3c enforces; negative fixture `m7_next_wrong_ownership.ynz`.
 - **`Iterable<T>` instantiation requires concrete T at every for-loop site**: `for x in someFn()` where `someFn() -> Iterable<T>` for unresolved T is rejected. M7 P3c enforces; negative fixture `m7_iter_unresolved_type.ynz`.
 - **Iter wrapper holds `share` borrow of source — source cannot be mutated mid-iteration**: `for x in arr { arr.add(...) }` is rejected (M4 borrow rules: cannot `lend` while `share` is outstanding). M7 P3c enforces via existing M4 ownership machinery; negative fixture `m7_iter_mutate_source.ynz`.
@@ -236,7 +236,7 @@ These four decisions answer the four Pre-Draft questions confirmed in chat 2026-
 - **`range` stored or returned is now allowed** (M3 catch-up): `let r = range(0, 10); for i in r { ... }` works. Positive fixture `m7_range_first_class.ynz`. M3's "M7 deferral" diagnostic at `crates/ynz-typeck/src/check.rs:300` removed.
 - **All M4 ownership invariants carry forward**: `const` bindings still emit `readonly`; iter wrappers' `next(lend self)` emits proper noalias; `errors`-capable values participate in consume-tracking (cannot use after auto-propagation). P4a/P4c IR-snapshot tests assert.
 - **All M5 generics invariants carry forward**: monomorphization dedup applies to `ArrayIter<int>` etc. IR-snapshot tests assert.
-- **All M6 narrowing invariants carry forward**: `errors`-capable values use the same narrowing infrastructure as `maybe<T>`. M6 rules table is reused; M7 adds the `errors`-specific rows in `design/narrowing.md`.
+- **All M6 narrowing invariants carry forward**: `errors`-capable values use the same narrowing infrastructure as `maybe<T>`. M6 rules table is reused; M7 adds the `errors`-specific rows in [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md).
 - **NFC canonical equivalence for `ynz_string_eq`**: M3 catch-up — `"é"` (one code point U+00E9) and `"é"` (two code points: e + combining acute) compare equal. Positive fixture `m7_nfc_equivalence.ynz`. M3 catch-up obligation closed.
 
 ### Performance
@@ -256,9 +256,9 @@ These four decisions answer the four Pre-Draft questions confirmed in chat 2026-
 - **NFC equality fast path**: if both strings have the `is_nfc_known` cache bit set, equality is a byte-by-byte loop with no normalization work. Cache bit logic locked in P0. Microbenchmark `m7_nfc_fast_path.ynz` measures.
 - **All M4/M5/M6 codegen invariants carry forward**: `readonly` attributes, monomorphization dedup, Swiss Tables hash dispatch. IR-snapshots from M4/M5/M6 fixtures all re-pass on the M7 ABI.
 
-**Auto-promotion analysis** (mandatory per `.claude/rules/auto-promotion.md`):
+**Auto-promotion analysis** (mandatory per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)):
 
-- **Short string SSO auto-promotion**: per `design/strings.md` "Auto-promotion" section. Codegen ALWAYS picks inline storage for strings ≤ 23 bytes. Tier 3 lint NOT applicable (no source-level "make explicit" rewrite). Muted IDE hint deferred to v0.2 LSP: shows `// fits inline — no heap` after a known-short binding. M7 emits the data side-table.
+- **Short string SSO auto-promotion**: per [`docs/internal/implementation/IMP-strings.md`](../../../../docs/internal/implementation/IMP-strings.md) "Auto-promotion" section. Codegen ALWAYS picks inline storage for strings ≤ 23 bytes. Tier 3 lint NOT applicable (no source-level "make explicit" rewrite). Muted IDE hint deferred to v0.2 LSP: shows `// fits inline — no heap` after a known-short binding. M7 emits the data side-table.
 - **`array<T>` → `fixed<T>` promotion from M5 carries forward**, now interacts with iter wrappers: a promoted `fixed<T, N>` for-loop uses `FixedIter<T, N>` wrapper, not `ArrayIter<T>`. M7 P3c handles correctly.
 - **String interpolation builder pre-size**: when all `${expr}` segments are statically-bounded length (e.g., int → max 20 chars; bool → max 5 chars), the builder pre-sizes to the upper bound. Codegen auto-promotion only — no source-level form. IR-snapshot asserts.
 - **Iter wrapper inline-promotion when `next()` is trivial** (built-in array, fixed, range): LLVM `alwaysinline` codegen attribute. No source-level form — codegen auto-promotion only. IR-snapshot of optimized output asserts.
@@ -274,16 +274,16 @@ M7 adds approximately 40-50 new diagnostic classes. Each invariant below is test
 - **`errors` keyword diagnostics use plain English**: "this function might fail — handle the failure or mark the caller `errors`" — never "fallible callee in non-errors context."
 - **Auto-propagation point diagnostic on misuse**: when user writes `if (raw.failed())` AFTER first-use, the diagnostic names BOTH spans (the first-use line, the .failed() line) using Ariadne's related-span feature. `m7_check_after_use.ynz` stderr snapshot asserts.
 - **`.message` without `.failed()` check** suggests both alternatives (`.failed()` check, `.or()` fallback): three-part diagnostic with code-suggestion blocks per `m7_message_without_check.ynz`.
-- **Unhandled errors call** names the function, says "this function might fail", and lists the three handling options from `spec/errors.md`: mark caller `errors`, use `.or(default)`, check `.failed()` explicitly.
-- **String mutation via bracket** suggests the rebuild pattern from `spec/strings.md`: "let newName = "B" + name.substring(1)" OR rebind.
+- **Unhandled errors call** names the function, says "this function might fail", and lists the three handling options from [`docs/reference/REF-errors.md`](../../../../docs/reference/REF-errors.md): mark caller `errors`, use `.or(default)`, check `.failed()` explicitly.
+- **String mutation via bracket** suggests the rebuild pattern from [`docs/reference/REF-strings.md`](../../../../docs/reference/REF-strings.md): "let newName = "B" + name.substring(1)" OR rebind.
 - **String OOB indexing returns `none` (not error)**: a `.value` access on the result triggers the M5 maybe-narrowing diagnostic — already taught. Crossreference noted.
 - **`for x in fallible_iter` outside errors function** says "this iteration step can fail" and lists adapter options (`.orSkipFailures()`, `.withErrors()`) AND the mark-caller-errors path.
 - **`Iterable<T>` constraint violation** when user shape's `next()` has wrong signature: names the contract, names the concrete-type, names the missing-or-mismatched method signatures.
 - **`range` first-class diagnostic for M3-style "range arrives in M7"** REMOVED. Positive fixture asserts the previously-deferred form now compiles.
 - **NFC canonical equivalence DEMO** in `examples/pirates-roster/`: shows `"café" == "café"` returning true with a comment explaining NFC. Teaching surface for users who hit Unicode equivalence issues.
-- **`.trace` access teaches stack walking**: doc example in `spec/errors.md` shows iterating `err.trace` to print the call chain. Teaching surface for "why did this error happen here?"
+- **`.trace` access teaches stack walking**: doc example in [`docs/reference/REF-errors.md`](../../../../docs/reference/REF-errors.md) shows iterating `err.trace` to print the call chain. Teaching surface for "why did this error happen here?"
 - **String interpolation diagnostic when `${expr}` evaluates to a type without `.toString()`**: names the type, suggests `.toString()` or struct literal. Negative fixture `m7_interpolate_no_tostring.ynz`.
-- **IDE muted-hint surfaces (iter `.items()` insertion, SSO inline, errors auto-prop point)** — M7 does NOT ship; v0.2 LSP does (per `design/ide-hints.md`). Cross-reference recorded.
+- **IDE muted-hint surfaces (iter `.items()` insertion, SSO inline, errors auto-prop point)** — M7 does NOT ship; v0.2 LSP does (per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md)). Cross-reference recorded.
 
 ### Runtime Dependencies
 
@@ -346,7 +346,7 @@ For each M7 runtime dependency above, the `--kernel` mode (v0.3+) behavior is lo
   - `.trace` introspection — print the call chain after catching an error in a non-errors caller
 - **`examples/primantis-orders/m7_errors.ynz` MUST be created in P5** with intentional triggers for every M7 compile-error class (~40-50 triggers). Each trigger has a `// WHY:` comment naming the diagnostic class.
 - **Both files get insta stdout/stderr snapshots** committed. Updating these snapshots requires a `// test-ratchet: <reason>` marker.
-- **Patrick must read and sign off on both files before P5 merges** — hands-on UX validation per `.claude/rules/plan-invariants.md`.
+- **Patrick must read and sign off on both files before P5 merges** — hands-on UX validation per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md).
 
 ---
 
@@ -363,12 +363,12 @@ Restated as the bottom-line guardrail:
 - Tier 3 lint suggestions — v0.4 lint tier
 - Full file system module (`file.read`, `file.write`, `file.exists`, etc.) — v0.5 (M7 ships only `file.lines` stub for FallibleIterable testing)
 - HTTP / network / database stdlib — v0.14+
-- Regex (`s.find(pattern)` style) — v0.13 (already locked to RE2-style per `.claude/rules/stdlib-design.md` Rule 7)
+- Regex (`s.find(pattern)` style) — v0.13 (already locked to RE2-style per [`.claude/rules/stdlib-design.md`](../../../rules/stdlib-design.md) Rule 7)
 - Locale-aware `.toLowerCaseLocale(locale)` — v0.5+ stdlib (M7 ships locale-invariant only)
 - `string.fromBytes(bytes)` constructor — v0.5+ (M7 strings only constructed from literal source bytes or runtime concat)
 - Stack-trace .toString() formatting customization — v0.2+ (M7 ships a default formatter)
 - `errors` propagation through closures — v0.3+ (closures don't exist in v0.1)
-- `errors` types other than the base shape (typed stdlib errors like `DatabaseError`) — v0.15+ (`design/stdlib/database.md` written against this; not in v0.1 scope)
+- `errors` types other than the base shape (typed stdlib errors like `DatabaseError`) — v0.15+ ([`docs/internal/scratchpad/SCRATCH-stdlib-database.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-database.md) written against this; not in v0.1 scope)
 - Async iteration / `wait` in iterators — v0.3+
 - libunwind / backtrace-crate integration — never (we use compile-time emitted frames)
 - Higher-kinded `Iterable<F<_>>` style abstractions — NEVER in v0.1
@@ -398,7 +398,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 
 **M3 NFC equivalence catch-up** — addressed in P4b: `ynz_string_eq` now uses NFC canonical equivalence via `unicode-normalization`.
 
-**M3 share-param deferral fixture** (from `.claude/state.md` line 95 "M4 catch-up obligations from M3"): the `m3_share_param_deferral.ynz` stderr snapshot must be updated when `share` parameter ownership works — this was already done in M4 P3c. Verify still up-to-date in P6.
+**M3 share-param deferral fixture** (from [`.claude/state.md`](../../../state.md) line 95 "M4 catch-up obligations from M3"): the `m3_share_param_deferral.ynz` stderr snapshot must be updated when `share` parameter ownership works — this was already done in M4 P3c. Verify still up-to-date in P6.
 
 **M2/M3 fallible-string-conversion catch-up** — already closed in M6 (`.toInt()`, `.toFloat()`, `.toNumber()` on strings ship as `maybe<T>` per M6 plan). M7 verifies no regression.
 
@@ -460,28 +460,28 @@ If you find yourself adding code that touches any item above, STOP and either re
 **Why this phase exists**: SSO layout, NFC strategy, trace mechanism, error shape — these affect every code phase. Locking them in doc form, with concrete decision tables and ABI specs, prevents drift mid-implementation.
 
 **Current-state anchors**:
-- `design/strings.md` — has SSO and SIMD sections; needs the locked exact bit layout written out + NFC fast-path cache bit semantics
-- `design/errors.md` — has flow-sensitive rules; needs frame-stack mechanism documented + Frame shape spec
-- `design/iterables.md` — has contract shapes; needs the synthesized wrapper mechanism documented + adapter logging semantics
-- `spec/strings.md`, `spec/errors.md`, `spec/iterables.md` — user-facing surface needs the M7-locked decisions reflected
-- `design/narrowing.md` — needs new rows for `errors`-capable values
+- [`docs/internal/implementation/IMP-strings.md`](../../../../docs/internal/implementation/IMP-strings.md) — has SSO and SIMD sections; needs the locked exact bit layout written out + NFC fast-path cache bit semantics
+- [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) — has flow-sensitive rules; needs frame-stack mechanism documented + Frame shape spec
+- [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md) — has contract shapes; needs the synthesized wrapper mechanism documented + adapter logging semantics
+- [`docs/reference/REF-strings.md`](../../../../docs/reference/REF-strings.md), [`docs/reference/REF-errors.md`](../../../../docs/reference/REF-errors.md), [`docs/reference/REF-iterables.md`](../../../../docs/reference/REF-iterables.md) — user-facing surface needs the M7-locked decisions reflected
+- [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) — needs new rows for `errors`-capable values
 
 **Files (expected scope)**:
-- `design/strings.md` — SSO exact bit layout, NFC cache bit, SIMD crate choice (simdutf8 vs portable_simd)
-- `design/errors.md` — Frame shape spec, frame stack mechanism, trace truncation rule
-- `design/iterables.md` — synthesized wrapper shapes, adapter logging semantics, MapEntry destructuring forms
-- `design/narrowing.md` — rows for `errors` auto-propagation (matches `maybe<T>` patterns)
-- `design/stdlib/strings.md` — NEW FILE if not present (per-method documentation for the M7 string API)
-- `spec/strings.md`, `spec/errors.md`, `spec/iterables.md` — updates per locked decisions
+- [`docs/internal/implementation/IMP-strings.md`](../../../../docs/internal/implementation/IMP-strings.md) — SSO exact bit layout, NFC cache bit, SIMD crate choice (simdutf8 vs portable_simd)
+- [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) — Frame shape spec, frame stack mechanism, trace truncation rule
+- [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md) — synthesized wrapper shapes, adapter logging semantics, MapEntry destructuring forms
+- [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) — rows for `errors` auto-propagation (matches `maybe<T>` patterns)
+- [`docs/internal/scratchpad/SCRATCH-stdlib-strings.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-strings.md) — NEW FILE if not present (per-method documentation for the M7 string API)
+- [`docs/reference/REF-strings.md`](../../../../docs/reference/REF-strings.md), [`docs/reference/REF-errors.md`](../../../../docs/reference/REF-errors.md), [`docs/reference/REF-iterables.md`](../../../../docs/reference/REF-iterables.md) — updates per locked decisions
 - `.claude/plans/active/v0-1-compiler.md` — M7 paragraph refreshed with locked decisions
-- `.claude/state.md` — Active Decisions append (per global rule)
-- `.claude/rules/vocabulary.md` — banned-jargon additions (`monad`, `lift`, `wrap`, etc.)
+- [`.claude/state.md`](../../../state.md) — Active Decisions append (per global rule)
+- [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) — banned-jargon additions (`monad`, `lift`, `wrap`, etc.)
 - `crates/ynz-diagnostics/src/banned_jargon.rs` — extend the const slice (this file is doc-aligned banned terms; counts as P0 doc work)
 
 **Deviation rule**: Standard. P0 may touch additional design files if a discovered ambiguity blocks subsequent phases. Each deviation noted in the PR description.
 
 **Steps**:
-1. **Lock SSO 24-byte layout** in `design/strings.md`. The compact_str-style scheme: ALL 24 bytes are either three i64s (heap form) or 23 data bytes + tag byte (inline form). The TAG BYTE LIVES AT THE LAST OFFSET (byte 23) and serves as the discriminator AND the inline length AND flag carrier. This works because UTF-8 source bytes cannot produce a final byte in the 0xC0..0xFF range when valid (and UTF-8 SHOULD never have a final continuation byte in 0x80..0xBF as the LAST byte of a complete string — but to be safe we pick a tag-byte range that is unambiguous).
+1. **Lock SSO 24-byte layout** in [`docs/internal/implementation/IMP-strings.md`](../../../../docs/internal/implementation/IMP-strings.md). The compact_str-style scheme: ALL 24 bytes are either three i64s (heap form) or 23 data bytes + tag byte (inline form). The TAG BYTE LIVES AT THE LAST OFFSET (byte 23) and serves as the discriminator AND the inline length AND flag carrier. This works because UTF-8 source bytes cannot produce a final byte in the 0xC0..0xFF range when valid (and UTF-8 SHOULD never have a final continuation byte in 0x80..0xBF as the LAST byte of a complete string — but to be safe we pick a tag-byte range that is unambiguous).
 
    **Locked layout**:
 
@@ -526,21 +526,21 @@ If you find yourself adding code that touches any item above, STOP and either re
    | `string.fromBytes(bytes)` (v0.5+ — deferred) | FALSE always | Runtime byte input may not be normalized |
    | `ynz_string_codepoint_at(s, n).value` (single code point) | FALSE | A single code point in isolation cannot be verified NFC without context; cheaper to assume false |
 
-   `ynz_string_eq` fast path: both sides have `is_nfc_known = true` → byte-compare. Slow path: normalize-both-via-`unicode-normalization::nfc()`-then-byte-compare. Document the table in `design/strings.md`.
+   `ynz_string_eq` fast path: both sides have `is_nfc_known = true` → byte-compare. Slow path: normalize-both-via-`unicode-normalization::nfc()`-then-byte-compare. Document the table in [`docs/internal/implementation/IMP-strings.md`](../../../../docs/internal/implementation/IMP-strings.md).
 
-3. **Pin exact crate versions** in `Cargo.toml` workspace deps in P0 text (actual file edit deferred to P4b but the PINNED versions are locked here): `simdutf8 = "=0.1.4"`, `unicode-normalization = "=0.1.24"`, `memchr = "=2.7.4"` (for SIMD-accelerated string search). Verify each version is available on crates.io at P0 time; if not, lock to the latest stable equivalent. Crates pinned with `=` to prevent surprise upgrades during late-phase debugging.
+3. **Pin exact crate versions** in [`Cargo.toml`](../../../../Cargo.toml) workspace deps in P0 text (actual file edit deferred to P4b but the PINNED versions are locked here): `simdutf8 = "=0.1.4"`, `unicode-normalization = "=0.1.24"`, `memchr = "=2.7.4"` (for SIMD-accelerated string search). Verify each version is available on crates.io at P0 time; if not, lock to the latest stable equivalent. Crates pinned with `=` to prevent surprise upgrades during late-phase debugging.
 
 4. **Lock SIMD crate choice**: `simdutf8` (Rust port of simdjson's UTF-8 validator). MIT/Apache-2.0 licensed. Runtime CPU feature detection with scalar fallback. Used for: literal validation at parse time, runtime byte-to-string construction, and as a building block for `.contains` long-pattern path. Document the decision with rationale: vetted, maintained, scalar fallback baked in, no transitive deps.
 
-5. **Lock Frame shape** in `design/errors.md` and add row to `spec/errors.md`. Fields: `file: string, line: maybe int, function: string`. **`line` is `maybe int`** (not `int`) so the truncation-sentinel frame can use `none` instead of a magic -1 value (closes reviewer Required Fix #9 + `comments.md` ambiguous-sentinel rule). Real frames have `line: <one-based positive int>`. Truncation sentinel: `Frame { file: "<trace truncated at depth 1024>", line: none, function: "<...>" }`. **Frame.line CONTRACT**: one-based; matches the compiler's diagnostic line numbering exactly. Tools integrating with `.trace` MUST treat this as one-based; do not subtract 1 to map to LSP zero-based positions — convert at the tool boundary instead. Document in `spec/errors.md`.
+5. **Lock Frame shape** in [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) and add row to [`docs/reference/REF-errors.md`](../../../../docs/reference/REF-errors.md). Fields: `file: string, line: maybe int, function: string`. **`line` is `maybe int`** (not `int`) so the truncation-sentinel frame can use `none` instead of a magic -1 value (closes reviewer Required Fix #9 + `comments.md` ambiguous-sentinel rule). Real frames have `line: <one-based positive int>`. Truncation sentinel: `Frame { file: "<trace truncated at depth 1024>", line: none, function: "<...>" }`. **Frame.line CONTRACT**: one-based; matches the compiler's diagnostic line numbering exactly. Tools integrating with `.trace` MUST treat this as one-based; do not subtract 1 to map to LSP zero-based positions — convert at the tool boundary instead. Document in [`docs/reference/REF-errors.md`](../../../../docs/reference/REF-errors.md).
 
 6. **Lock frame-stack mechanism**: thread-local `array<Frame>` capped at 1024. Document overflow behavior (silent truncation; the 1024th push records the LAST useful frame; the 1025th push and onward are dropped; when the error surfaces, an additional sentinel Frame with `line: none` is appended to the trace marking the truncation point).
 
 7. **Lock trace capture timing**: `ynz_frame_push` at the START of every `errors` function body; `ynz_frame_pop` before every return path; `ynz_error_new` snapshots the current frame stack. Auto-propagation re-uses the snapshot (no re-capture). Document.
 
-8. **Lock SourceLoc vs Frame distinction**: `SourceLoc { file: string, line: maybe int }` is the "where did this error originate" record carried by `ErrorBaseShape.source`. `Frame { file: string, line: maybe int, function: string }` is one entry in the call-chain `.trace`. They're distinct because `.source` answers "where did THIS specific failure originate" (often the leaf-call's site), while `.trace[0..N]` is the full call chain. `Frame` has `function` because the call chain needs function names to be useful; `SourceLoc` doesn't because the leaf failure site is one specific line/file pair without a function-name context that isn't already in the trace's top frame. Document both shapes in `design/errors.md` AND `spec/errors.md`.
+8. **Lock SourceLoc vs Frame distinction**: `SourceLoc { file: string, line: maybe int }` is the "where did this error originate" record carried by `ErrorBaseShape.source`. `Frame { file: string, line: maybe int, function: string }` is one entry in the call-chain `.trace`. They're distinct because `.source` answers "where did THIS specific failure originate" (often the leaf-call's site), while `.trace[0..N]` is the full call chain. `Frame` has `function` because the call chain needs function names to be useful; `SourceLoc` doesn't because the leaf failure site is one specific line/file pair without a function-name context that isn't already in the trace's top frame. Document both shapes in [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) AND [`docs/reference/REF-errors.md`](../../../../docs/reference/REF-errors.md).
 
-9. **Lock synthesized iterator wrapper mechanism** in `design/iterables.md`. Document the four built-in wrappers: `ArrayIter<T>`, `FixedIter<T, N>`, `MapIter<K, V>`, `StringCodePointIter`. Document that `Range` is a user-visible shape (not synthesized; ships in `design/iterables.md` as a worked example). Document that user shapes following `Iterable<T>` are not wrapped — they ARE the iterator. Document the codegen contract: wrappers are stack-allocated; `next()` is always-inlinable for built-ins.
+9. **Lock synthesized iterator wrapper mechanism** in [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md). Document the four built-in wrappers: `ArrayIter<T>`, `FixedIter<T, N>`, `MapIter<K, V>`, `StringCodePointIter`. Document that `Range` is a user-visible shape (not synthesized; ships in [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md) as a worked example). Document that user shapes following `Iterable<T>` are not wrapped — they ARE the iterator. Document the codegen contract: wrappers are stack-allocated; `next()` is always-inlinable for built-ins.
 
 10. **Lock contract instantiation for built-in wrappers**:
     - `ArrayIter<T> follows Iterable<T>` — next returns `maybe T`.
@@ -549,7 +549,7 @@ If you find yourself adding code that touches any item above, STOP and either re
     - `StringCodePointIter follows Iterable<string>` — next returns `maybe string` (one code point as a 1-character string).
     - `Range follows Iterable<int>` — next returns `maybe int`.
     - User shapes write `function next(lend self: TheirShape) -> maybe T` (or `maybe T errors` for FallibleIterable).
-    Document the contract-T resolution table in `design/iterables.md`.
+    Document the contract-T resolution table in [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md).
 
 11. **Lock adapter logging semantics — `.orSkipFailures()` is PURE** (no I/O side effects). The previous draft had `.orSkipFailures()` log each skip to stderr; that violates `stdlib-design.md` Rule 1 (pure-named methods must be pure). REVISED: `.orSkipFailures()` silently drops failed iterations and continues. For users who want logging, ship a separate composable builder `.logSkippedFailuresTo(sink)` which takes a `LogSink` (initially just `terminal.stderr` and `terminal.stdout` in M7; expandable in v0.5+ stdlib). The user composes them: `iter.logSkippedFailuresTo(terminal.stderr).orSkipFailures()`. Two methods, two explicit names, no hidden side effects. Lock the `LogSink` shape spec in P0:
     ```
@@ -557,7 +557,7 @@ If you find yourself adding code that touches any item above, STOP and either re
         write(lend self, message: string) -> nothing
     }
     ```
-    `terminal.stderr` and `terminal.stdout` follow `LogSink`. Document in `spec/iterables.md`.
+    `terminal.stderr` and `terminal.stdout` follow `LogSink`. Document in [`docs/reference/REF-iterables.md`](../../../../docs/reference/REF-iterables.md).
 
 12. **Lock `.withErrors()` return type — Iterable<maybe T errors>, NOT a new Result<T> shape**. The previous draft proposed `Iterable<Result<T>>` with `Result<T>` defined as a tagged shape. `Result` is on the banned-jargon list per `vocabulary.md` (and M7's P0 adds it explicitly). REVISED: `.withErrors()` returns `Iterable<maybe T errors>` — each iteration step yields an errors-capable maybe-value that the user inspects with the standard `.failed()` / `.message` / `.or()` machinery from `errors`-context. No new shape; reuses M7's own errors-capable mechanism uniformly. Example:
     ```ynz
@@ -572,7 +572,7 @@ If you find yourself adding code that touches any item above, STOP and either re
         }
     }
     ```
-    Document in `design/iterables.md` AND `spec/iterables.md`. Update `design/errors.md` if it referenced the old `Result<T>` path.
+    Document in [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md) AND [`docs/reference/REF-iterables.md`](../../../../docs/reference/REF-iterables.md). Update [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) if it referenced the old `Result<T>` path.
 
 13. **Lock MapEntry destructuring forms**: `for (entry in m) { entry.key; entry.value }` (single-binding) AND `for ((k, v) in m) { ... }` (tuple-destructure). Both desugar identically at codegen. Document.
 
@@ -580,17 +580,17 @@ If you find yourself adding code that touches any item above, STOP and either re
 
 15. **Lock multi-line string escape rules**: backtick-quoted strings interpret `\n`, `\t`, `\\`, `\``, `${`, but NOT `\u{...}` (deferred to v0.5+). Document.
 
-16. **Lock interpolation expression evaluation semantics**: `` `${x}-${x}` `` evaluates `x` ONCE per occurrence in source (TWO evaluations for two `${x}`s). Repeated identical expressions are NOT memoized. This matches user-written `x.toString() + "-" + x.toString()` — two evaluations. If `x` has side effects, both fire. Document in `spec/strings.md` with a worked example.
+16. **Lock interpolation expression evaluation semantics**: `` `${x}-${x}` `` evaluates `x` ONCE per occurrence in source (TWO evaluations for two `${x}`s). Repeated identical expressions are NOT memoized. This matches user-written `x.toString() + "-" + x.toString()` — two evaluations. If `x` has side effects, both fire. Document in [`docs/reference/REF-strings.md`](../../../../docs/reference/REF-strings.md) with a worked example.
 
-17. **Add banned-jargon entries** to `.claude/rules/vocabulary.md` and `crates/ynz-diagnostics/src/banned_jargon.rs`: `monad`, `lift`, `wrap` (`unwrap` was already added by M5/M6); `Result`, `Option`, `Either`, `exception`, `try`, `catch`, `throw`. Verify M6's earlier additions (`fallible`, `infallible`) are still present.
+17. **Add banned-jargon entries** to [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) and `crates/ynz-diagnostics/src/banned_jargon.rs`: `monad`, `lift`, `wrap` (`unwrap` was already added by M5/M6); `Result`, `Option`, `Either`, `exception`, `try`, `catch`, `throw`. Verify M6's earlier additions (`fallible`, `infallible`) are still present.
 
 18. **Update `.claude/plans/active/v0-1-compiler.md`** M7 paragraph to reflect locked decisions.
 
-19. **Update `.claude/state.md`** Active Decisions with the four pre-draft locks AND the locked items above.
+19. **Update [`.claude/state.md`](../../../state.md)** Active Decisions with the four pre-draft locks AND the locked items above.
 
-20. **Update `design/narrowing.md`** with new rows for `errors`-capable values (mirror the `maybe<T>` rules; the auto-propagation is the M7 analog of `.exists()` check).
+20. **Update [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md)** with new rows for `errors`-capable values (mirror the `maybe<T>` rules; the auto-propagation is the M7 analog of `.exists()` check).
 
-21. **Create OR extend `design/stdlib/strings.md`** — unconditional. If the file already exists, extend with M7 sections; if not, create it. Sections required: per-method documentation for `.contains`, `.indexOf`, `.startsWith`, `.endsWith`, `.toUpperCase`, `.toLowerCase`, `.substring`, `.trim`, `.split`, `.replace`, `.byteAt`, `.get`, `.graphemeAt`, `.count`, `.byteCount`, `.graphemeCount`. Lock each method's signature (return type, fallibility, ownership).
+21. **Create OR extend [`docs/internal/scratchpad/SCRATCH-stdlib-strings.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-strings.md)** — unconditional. If the file already exists, extend with M7 sections; if not, create it. Sections required: per-method documentation for `.contains`, `.indexOf`, `.startsWith`, `.endsWith`, `.toUpperCase`, `.toLowerCase`, `.substring`, `.trim`, `.split`, `.replace`, `.byteAt`, `.get`, `.graphemeAt`, `.count`, `.byteCount`, `.graphemeCount`. Lock each method's signature (return type, fallibility, ownership).
 
 22. **Lock case-folding crate decision — `unicode-normalization` is NOT sufficient for case folding; add `unicase = "=2.7.0"` OR vendor case-fold tables**. `unicode-normalization` provides NFC/NFD/NFKC/NFKD only — NOT case-folding. For `.toUpperCase()` / `.toLowerCase()` (locale-invariant): pick ONE: (a) `unicase` crate (small, well-maintained, Unicode case-folding tables, no transitive deps beyond `version_check`); OR (b) vendor the Unicode CaseFolding.txt tables ourselves (one-time generator script + 30KB of static tables). **LOCKED: option (a) — pin `unicase = "=2.7.0"`** unless P0 verification finds licensing issues (MIT/Apache-2.0 expected). Document in P0; add to Cargo.toml pins. NOT "executor decides at code time" — locked here.
 
@@ -599,15 +599,15 @@ If you find yourself adding code that touches any item above, STOP and either re
 24. **Lock runtime representation of `maybe int` (the type of `Frame.line`)**: use M5's existing maybe-int encoding (locked in M5 P3b/P4a). M5 lowers `maybe<int>` to `{ tag: i8 (0 = none, 1 = some), value: i64 }` for general use — `Frame.line` uses the same. P4a step 2 `Frame` struct layout is therefore `{ file: *u8, line: { tag: i8, padding: 7 bytes, value: i64 }, function: *u8 }` = `8 + 16 + 8 = 32 bytes` (16-byte aligned). NOT a sentinel-int — the tag byte makes "none" unambiguous. This is the same machinery M5 ships, no new representation. Document the cross-reference in P4a step 2.
 
 **Acceptance criteria** (observable conditions that define DONE):
-- [x] `design/strings.md` has a "M7 SSO Layout" subsection with the bit layout written out
-- [x] `design/errors.md` has a "M7 Frame Stack" subsection with the mechanism written out
-- [x] `design/iterables.md` has a "M7 Synthesized Wrappers" subsection
-- [x] `design/narrowing.md` has new rows for `errors`-capable narrowing
-- [x] `design/stdlib/strings.md` exists with per-method signatures
-- [x] `.claude/rules/vocabulary.md` banned-jargon table updated with M7 entries
+- [x] [`docs/internal/implementation/IMP-strings.md`](../../../../docs/internal/implementation/IMP-strings.md) has a "M7 SSO Layout" subsection with the bit layout written out
+- [x] [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) has a "M7 Frame Stack" subsection with the mechanism written out
+- [x] [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md) has a "M7 Synthesized Wrappers" subsection
+- [x] [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) has new rows for `errors`-capable narrowing
+- [x] [`docs/internal/scratchpad/SCRATCH-stdlib-strings.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-strings.md) exists with per-method signatures
+- [x] [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) banned-jargon table updated with M7 entries
 - [x] `crates/ynz-diagnostics/src/banned_jargon.rs` const slice extended (matches vocabulary)
 - [x] `.claude/plans/active/v0-1-compiler.md` M7 paragraph reflects locked decisions
-- [x] `.claude/state.md` Active Decisions has the locks
+- [x] [`.claude/state.md`](../../../state.md) Active Decisions has the locks
 - [x] No design file says "M7 will decide" or "TBD" about any locked-in-P0 question — all questions answered
 
 **Quality gate** (check BEFORE moving to next phase):
@@ -615,7 +615,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 - [x] No locked decision contradicts existing design docs
 - [ ] Patrick reads + signs off on the P0 merge
 
-**Verification**: `cargo test --workspace` (no test changes; should pass unchanged); `git diff` review of doc changes; manual read-through of `design/strings.md`, `design/errors.md`, `design/iterables.md`, `design/narrowing.md` for consistency.
+**Verification**: `cargo test --workspace` (no test changes; should pass unchanged); `git diff` review of doc changes; manual read-through of [`docs/internal/implementation/IMP-strings.md`](../../../../docs/internal/implementation/IMP-strings.md), [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md), [`docs/internal/implementation/IMP-iterables.md`](../../../../docs/internal/implementation/IMP-iterables.md), [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) for consistency.
 
 ---
 
@@ -733,7 +733,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 - `crates/ynz-typeck/src/check.rs` — current typeck (M6 narrowing for maybe + unions lives here)
 - `crates/ynz-typeck/src/narrowing.rs` (if present; else inline in check.rs) — M6 narrowing infrastructure
 - `crates/ynz-typeck/src/types.rs` — current Type enum
-- `design/errors.md` — flow-sensitive auto-propagation rules
+- [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) — flow-sensitive auto-propagation rules
 
 **Files (expected scope)**:
 - `crates/ynz-typeck/src/check.rs` — add ErrorCapable narrowing analysis; method dispatch for `.failed()`/`.message`/etc.
@@ -745,7 +745,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 **Deviation rule**: Standard.
 
 **Steps**:
-1. Define `ErrorBaseShape` as a built-in shape (added to `ShapeTable` at typeck init). Fields per `design/errors.md`: `message: string`, `suggestions: array<string>`, `trace: array<Frame>`, `source: SourceLoc`.
+1. Define `ErrorBaseShape` as a built-in shape (added to `ShapeTable` at typeck init). Fields per [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md): `message: string`, `suggestions: array<string>`, `trace: array<Frame>`, `source: SourceLoc`.
 2. Define `Frame` as a built-in shape: `file: string, line: int, function: string`. Define `SourceLoc` as a built-in shape: `file: string, line: int`.
 3. Implement narrowing fact `ErrorChecked(binding_name)`. Same shape as M6's `MaybeExists` fact. Cleared on reassignment, on `lend` call (conservative).
 4. At a call site to an `errors` function:
@@ -755,14 +755,14 @@ If you find yourself adding code that touches any item above, STOP and either re
 6. After auto-prop, accessing `.failed()` / `.message` / `.suggestions` / `.trace` / `.source` on the binding produces the "check after use" compile error.
 7. `.or(default: T)` returns `T` (unwrapped); clears auto-prop pending; narrows binding to `T`.
 8. `.failed() -> bool` is the gate for explicit handling. After `if (x.failed()) { return defaultPath }`, the rest of the block narrows `x` to `T` (just like `if (!m.exists()) { return } m.value` from M6).
-9. Implement all narrowing rules from `design/errors.md` AND extend rows in `design/narrowing.md`.
+9. Implement all narrowing rules from [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) AND extend rows in [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md).
 10. Add comprehensive typeck tests:
     - Happy path: errors function calls errors function, auto-propagates
     - Explicit handle: `.or(default)`
     - Explicit handle: `if (x.failed()) { return defaultValue }`
     - Negative: unhandled errors call in non-errors function
     - Negative: `.message` without `.failed()` check
-    - Negative: check after use (the canonical example from `spec/errors.md`)
+    - Negative: check after use (the canonical example from [`docs/reference/REF-errors.md`](../../../../docs/reference/REF-errors.md))
     - Negative: `.failed()` after auto-prop
     - Negative: re-binding clears the narrowing
     - Negative: nested errors call inside an `errors` function — verify auto-prop chains correctly
@@ -783,7 +783,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 **Quality gate**:
 - [ ] Every new diagnostic uses three-part format
 - [ ] No banned jargon (`fallible`, `Result`, `try`, `catch`, etc.)
-- [ ] Tests cover every row in the `design/errors.md` rules table
+- [ ] Tests cover every row in the [`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) rules table
 
 **Verification**: `cargo test -p ynz-typeck --test errors`; `cargo test -p ynz-diagnostics --test jargon_audit`; manual review of narrowing rule coverage matrix.
 
@@ -985,11 +985,11 @@ If you find yourself adding code that touches any item above, STOP and either re
 - `crates/ynz-codegen/src/emit.rs` — current string codegen (M1 emit_string_literal)
 - `crates/ynz-runtime/src/lib.rs:195` — `ynz_string_eq` byte-eq (REPLACE-AT M7 site #4)
 - `crates/ynz-codegen/src/runtime_decls.rs` — current string runtime decls
-- `Cargo.toml` — workspace deps (add `unicode-normalization`, `simdutf8`)
+- [`Cargo.toml`](../../../../Cargo.toml) — workspace deps (add `unicode-normalization`, `simdutf8`)
 
 **Files (expected scope)**:
-- `Cargo.toml` — add `unicode-normalization = "0.1.x"` and `simdutf8 = "0.x.y"` (exact versions locked in P0)
-- `crates/ynz-runtime/Cargo.toml` — add deps
+- [`Cargo.toml`](../../../../Cargo.toml) — add `unicode-normalization = "0.1.x"` and `simdutf8 = "0.x.y"` (exact versions locked in P0)
+- [`crates/ynz-runtime/Cargo.toml`](../../../../crates/ynz-runtime/Cargo.toml) — add deps
 - `crates/ynz-runtime/src/lib.rs` — REPLACE `ynz_string_eq` with NFC-aware version; ADD `ynz_string_concat`, `ynz_string_codepoint_at`, `ynz_string_byte_at`, `ynz_string_grapheme_at`, `ynz_string_count`, `ynz_string_byte_count`, `ynz_string_grapheme_count`, `ynz_string_contains`, `ynz_string_index_of`, `ynz_string_starts_with`, `ynz_string_ends_with`, `ynz_string_to_upper`, `ynz_string_to_lower`, `ynz_string_substring`, `ynz_string_trim`, `ynz_string_split`, `ynz_string_replace`, `ynz_string_builder_*` for interpolation
 - `crates/ynz-codegen/src/emit.rs` — emit new 24-byte string struct for literals (SSO discriminator + inline/heap path); emit method-call lowerings for all new methods
 - `crates/ynz-codegen/src/runtime_decls.rs` — declare all new string runtime symbols
@@ -999,7 +999,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 **Deviation rule**: Standard. P4b touches a lot of cross-cutting code — verifying every M1-M6 fixture still works is required acceptance.
 
 **Steps**:
-1. Pin `unicode-normalization` and `simdutf8` versions in `Cargo.toml` workspace. Wire into `ynz-runtime` Cargo.toml.
+1. Pin `unicode-normalization` and `simdutf8` versions in [`Cargo.toml`](../../../../Cargo.toml) workspace. Wire into `ynz-runtime` Cargo.toml.
 2. Define the 24-byte string struct in `ynz-runtime`. Document the bit-layout per P0. Implement SSO discriminator inspection.
 3. Replace M1's string-literal emission: emit either an inline 24-byte struct (for ≤ 23 byte literals) or a heap-allocated buffer with header (for > 23). Mark `is_nfc_known = true` for all literals (pre-normalize at compile time if not already NFC).
 4. Implement `ynz_string_eq` with NFC fast/slow path:
@@ -1209,8 +1209,8 @@ If you find yourself adding code that touches any item above, STOP and either re
     - Unicode normalization forms: `NFC`, `NFD`, `NFKC`, `NFKD` (may already be in the default dict; verify)
     - Confirm `simdutf`/`simdjson` family is the locked SIMD crate vocabulary per P0 step 4.
     Verification: re-render this plan file in the IDE; cSpell warnings count drops from ~60/file to zero.
-7. Update `.claude/state.md` Active Decisions with M7 ship details.
-8. Update `.claude/todos.md`: close M7-completed items; surface M8 catch-up obligations (modules, imports, doc comments, sensitive, concurrency keyword parsing, bignum reservation).
+7. Update [`.claude/state.md`](../../../state.md) Active Decisions with M7 ship details.
+8. Update [`.claude/todos.md`](../../../todos.md): close M7-completed items; surface M8 catch-up obligations (modules, imports, doc comments, sensitive, concurrency keyword parsing, bignum reservation).
 
 **Acceptance criteria** (P5 status — 2026-05-18):
 - [x] `examples/pirates-roster/entrypoint.ynz` demonstrates every M7 feature in context (strings, errors, iterables, user-defined iterator shape)
@@ -1240,23 +1240,23 @@ If you find yourself adding code that touches any item above, STOP and either re
 **Objective**: M7 ships as a clean, verified, tagged milestone release.
 
 **Current-state anchors**:
-- `Cargo.toml` workspace `version = "0.1.0-m6"` — bump to `0.1.0-m7`
-- `CHANGELOG.md` (if present; create if not)
+- [`Cargo.toml`](../../../../Cargo.toml) workspace `version = "0.1.0-m6"` — bump to `0.1.0-m7`
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) (if present; create if not)
 
 **Files (expected scope)**:
-- `Cargo.toml` — version bump
-- `CHANGELOG.md` — M7 entry with summary of strings/errors/iterables + REPLACE-AT M7 markers removed
-- `.claude/state.md` — Active Decisions append; update Last Updated date
+- [`Cargo.toml`](../../../../Cargo.toml) — version bump
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) — M7 entry with summary of strings/errors/iterables + REPLACE-AT M7 markers removed
+- [`.claude/state.md`](../../../state.md) — Active Decisions append; update Last Updated date
 - `.claude/plans/active/v0-1-compiler.md` — mark M7 status as shipped; refresh radar
 - `.claude/plans/done/m7-strings-errors-iterables.md` — archive this plan (mv from active/)
-- `.claude/todos.md` — final M7 close-out
+- [`.claude/todos.md`](../../../todos.md) — final M7 close-out
 
 **Deviation rule**: Standard. P6 should not need to touch source code.
 
 **Steps**:
 1. **TODO sweep**: `grep -rE "TODO|FIXME|HACK|XXX|TEMP|PLACEHOLDER|REPLACE-AT" crates/` — every hit must be resolved or documented (a deferred-to-M8 marker is acceptable IF documented in `M8 catch-up obligations`).
-2. **Todos cross-check**: walk `.claude/todos.md`; verify every "completed" item is actually done (read the code; not just the checkbox).
-3. **Shortcut detection**: look for `// will do later`, `// stub`, "TODO" comments. Any found must either be removed (work done) or moved to `.claude/todos.md` as M8-catch-up.
+2. **Todos cross-check**: walk [`.claude/todos.md`](../../../todos.md); verify every "completed" item is actually done (read the code; not just the checkbox).
+3. **Shortcut detection**: look for `// will do later`, `// stub`, "TODO" comments. Any found must either be removed (work done) or moved to [`.claude/todos.md`](../../../todos.md) as M8-catch-up.
 4. **Quality checklist verification**: walk through every box in the master quality checklist. Mark each with evidence.
 5. **Banned-jargon audit**: `cargo test -p ynz-diagnostics --test jargon_audit` clean.
 6. **Test count**: target ≥ 750 tests (M6 was 631). Document final count in CHANGELOG.
@@ -1264,10 +1264,10 @@ If you find yourself adding code that touches any item above, STOP and either re
 8. **Cargo.toml version bump** to `0.1.0-m7`.
 9. **Generate CHANGELOG section**: summarize strings (SSO, SIMD, NFC, methods, interpolation, multi-line), errors (keyword, auto-propagation, base error shape, trace), iterables (protocol, wrappers, range first-class, adapters), REPLACE-AT M7 unwinds, M3 catch-ups closed.
 10. **Tag**: `git tag v0.1.0-m7` after commit.
-11. **Update `.claude/state.md`**: Active Decisions entry "M7 SHIPPED (tag v0.1.0-m7, N tests)".
+11. **Update [`.claude/state.md`](../../../state.md)**: Active Decisions entry "M7 SHIPPED (tag v0.1.0-m7, N tests)".
 12. **Archive plan**: `mv .claude/plans/active/m7-strings-errors-iterables.md .claude/plans/done/`.
 13. **Update v0.1 master plan radar**: M7 status → shipped.
-14. **Surface M8 catch-up obligations** in `.claude/state.md` "Project-Wide Notes" so M8 doesn't orphan anything.
+14. **Surface M8 catch-up obligations** in [`.claude/state.md`](../../../state.md) "Project-Wide Notes" so M8 doesn't orphan anything.
 
 **Acceptance criteria**:
 - [ ] TODO sweep clean (no orphaned TODOs/FIXMEs/REPLACE-ATs)
@@ -1277,7 +1277,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 - [ ] Cargo.toml version is `0.1.0-m7`
 - [ ] Tag `v0.1.0-m7` exists
 - [ ] Plan moved to `done/`
-- [ ] `.claude/state.md` reflects M7 ship
+- [ ] [`.claude/state.md`](../../../state.md) reflects M7 ship
 - [ ] M8 catch-up obligations surfaced
 
 **Quality gate**:
@@ -1325,7 +1325,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 - **Typed stdlib errors** (e.g., `DatabaseError`): the base error shape ships in M7; per-domain typed errors land with their respective stdlib modules (v0.14+ http; v0.15+ database; etc.). Recorded.
 - **Stack-trace .toString() formatter customization**: v0.2+ — M7 ships a default formatter. Recorded.
 - **`unicode-normalization` NFC normalization perf**: if profiling shows NFC normalization dominates string-equality hot paths, consider SIMD-accelerated NFC (research target; no current implementation in stdlib). Recorded as v0.2+ revisit.
-- **Closure errors-propagation**: closures don't exist in v0.1. When they ship (v0.3+), they must NOT carry narrowing facts (per `design/narrowing.md` row for `maybe` closures). Same rule applies to errors-capable values. Recorded.
+- **Closure errors-propagation**: closures don't exist in v0.1. When they ship (v0.3+), they must NOT carry narrowing facts (per [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) row for `maybe` closures). Same rule applies to errors-capable values. Recorded.
 - **Async iter / `wait` in iterators**: v0.3+ — M7 ships sequential FallibleIterable only. Recorded.
 - **Range improvements**: M7 ships Range as a minimal shape (`start, end, hidden current`). Adding `.contains(n)`, `.toArray()`, step parameters, etc. is v0.5+ collections-stdlib expansion. Recorded.
 

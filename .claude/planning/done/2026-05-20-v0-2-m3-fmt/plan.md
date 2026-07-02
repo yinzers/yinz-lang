@@ -41,8 +41,8 @@ legacy:
     - crates/ynz-fmt/**
     - crates/ynz-parser/src/lexer.rs
     - crates/ynz-driver/src/**
-    - design/fmt.md
-    - design/mvp-scope.md
+    - docs/internal/implementation/IMP-fmt.md
+    - docs/reference/REF-mvp-scope.md
     - CLAUDE.md
     - examples/pirates-roster/entrypoint.ynz
     - examples/primantis-orders/v0_2_m3_errors.ynz
@@ -161,7 +161,7 @@ The LSP in v0.2-M5 calls `format(source)` from its `textDocument/formatting` han
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Algorithm choice (prettier vs rustfmt) wrong, requires migration mid-M3 | Medium | Medium | Phase 1 spike builds BOTH against a curated "hard cases" suite (long signatures, deeply nested exprs, comment-heavy code). Lock decision in `design/fmt.md` so v0.3+ doesn't re-litigate. |
+| Algorithm choice (prettier vs rustfmt) wrong, requires migration mid-M3 | Medium | Medium | Phase 1 spike builds BOTH against a curated "hard cases" suite (long signatures, deeply nested exprs, comment-heavy code). Lock decision in [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) so v0.3+ doesn't re-litigate. |
 | Comment placement bugs ship — `// comment` ends up on wrong line after format | High | High | Phase 3 dedicated to comment merge. Tests cover: leading comments before declarations, inline comments at end of line, comments inside expressions (rare but possible), comments between elements of an array/map literal. Golden files for each placement. |
 | Idempotency bug ships — `fmt(fmt(x)) != fmt(x)` — breaks CI gate users | Medium | High | Phase 4 has explicit `fmt(fmt(x)) == fmt(x)` property test running across all `examples/pirates-roster/` + `examples/primantis-orders/` + `crates/ynz-driver/tests/fixtures/` content. Proptest fuzz over arbitrary parser-valid input as the deeper guarantee. |
 | Formatter alters semantics — `parse(fmt(x)) != parse(x)` modulo trivia | Low | Critical | Phase 4 also includes a semantic round-trip property test: parse the formatted output, compare the AST modulo trivia/spans against the original AST. Fails CI if the formatter ever produces a semantically different program. |
@@ -173,9 +173,9 @@ The LSP in v0.2-M5 calls `format(source)` from its `textDocument/formatting` han
 | `ynz-fmt` library API changes between M3 and M5 LSP wiring | Low | Medium | API frozen end of Phase 5; documented in `crates/ynz-fmt/src/lib.rs` rustdoc; semver-bump-on-change rule applies once v0.2.0 ships (v0.2.0-m3 is pre-release so technically free to break, but the API is small enough that we lock now). |
 | Mass-rewrite of existing examples on first M3 run causes huge git diff | Medium | Low | Phase 4 includes a one-shot `ynz fmt --all examples/` commit that normalizes every existing example to the canonical form. Diff is enormous but mechanical; committed as its own PR (Phase 4) so reviewer can audit "no semantic change" cleanly. Subsequent commits stay canonical. |
 | Multiple `//` comments adjacent (a comment block) get re-flowed individually instead of preserved as a unit | Medium | Low | Trivia pass groups consecutive `//` lines (no blank line between them) into a single `CommentBlock`. Formatter places the whole block, not line-by-line. Phase 3 tests cover 2-line, 5-line, and 10-line comment blocks. |
-| Formatter changes whitespace inside `verified { }` blocks or other future deferred-feature scopes | Low | Low | `verified` doesn't exist yet (v0.3+); reserved by lexer. Same for other deferred features. Formatter falls back to "preserve text byte-exact between unrecognized tokens" if a future deferred-feature scope is encountered — but in practice none of these are valid input today so it's a non-issue until v0.3. Documented in `design/fmt.md` future-proofing section. |
+| Formatter changes whitespace inside `verified { }` blocks or other future deferred-feature scopes | Low | Low | `verified` doesn't exist yet (v0.3+); reserved by lexer. Same for other deferred features. Formatter falls back to "preserve text byte-exact between unrecognized tokens" if a future deferred-feature scope is encountered — but in practice none of these are valid input today so it's a non-issue until v0.3. Documented in [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) future-proofing section. |
 | `ynz fmt` exit codes inconsistent with `ynz build` | Low | Low | Locked: 0 = success / already canonical, 1 = source has parse errors OR (for `--check`) would change, 2 = infra error (can't read/write file, missing project root for `--all`). Same scheme as `ynz build` (`crates/ynz-driver/src/main.rs:11-13`). |
-| Plan-invariants rule introduces gap if M3 forgets the 7-subsection block | Low | Low | Plan structure below explicitly contains the 7-subsection `## Invariants This Milestone Must Preserve` block per `.claude/rules/plan-invariants.md`. Bouncer entries 1, 3, 4 enforce. |
+| Plan-invariants rule introduces gap if M3 forgets the 7-subsection block | Low | Low | Plan structure below explicitly contains the 7-subsection `## Invariants This Milestone Must Preserve` block per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md). Bouncer entries 1, 3, 4 enforce. |
 | Two `ynz fmt` processes racing on the same file (e.g., editor format-on-save + manual CLI run) | Low | Low | LOCKED single-process tool assumption: `ynz fmt` does not acquire a file lock. Same-dir tempfile + rename means each process writes its own tempfile; last-rename-wins. If the user runs `ynz fmt` from two terminals simultaneously, behavior is "last write wins" (idempotent in steady state). Phase 5 README documents this as "designed for one process at a time per file." |
 | `ynz fmt` follows a symlink target and rewrites the underlying file (potentially surprising) | Low | Low | LOCKED behavior: `ynz fmt` resolves symlinks (matches rustfmt / prettier defaults). Reading via `std::fs::read_to_string` follows symlinks; writing via tempfile+rename writes a NEW regular file at the symlink path (rename replaces the symlink with a regular file — destructive). To preserve symlinks intact, formatting tools would have to read-then-write-to-target which loses atomicity. M3 LOCKS the rename approach; documents behavior in `ynz fmt --help` output: "follows symlinks; rewriting a symlinked file replaces the symlink with a regular file." If users want to preserve symlinks, they pre-resolve with `realpath` and format the target directly. |
 | Doc-comment immediately preceding `}` block-close with no decl to attach to (could panic the walker if it assumes "every DocComment AST node has a decl partner") | Low | Medium | Phase 2 walker MUST handle "dangling" DocComment tokens (no following decl) — either emit them as orphan-comment in formatted output OR drop them with a stderr warning (LOCKED: emit them at their original position as comment-like trivia; never panic). Phase 2 test fixture `dangling_doc_comment.ynz` covers this; walker has explicit branch. |
@@ -242,7 +242,7 @@ Open architectural question for Phase 1 research spike (NOT a blocker; spike dec
 - `lex_with_trivia()` overhead vs `lex()`: ≤20% slower (trivia capture is an extra allocation per `//` comment; lex itself unchanged); >20% is an automatic Phase 6 BLOCK
 - No salsa dependency in the formatter (single-shot per-file work; no incremental need)
 
-**Auto-promotion analysis** (per `.claude/rules/auto-promotion.md`):
+**Auto-promotion analysis** (per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)):
 - This milestone does NOT introduce any new language feature, stdlib type, or compiler codegen optimization.
 - The formatter is a pure source-to-source transform; no codegen path is affected.
 - No codegen auto-promotion candidates. No new muted-hint domain (consumption deferred to v0.2-M5). No Tier 3 lint suggestion (lint tier ships in v0.4).
@@ -251,7 +251,7 @@ Open architectural question for Phase 1 research spike (NOT a blocker; spike dec
 ### Teaching
 - Formatter PARSE errors are reported using the EXISTING `ynz-diagnostics` machinery (WHAT/WHAT-INSTEAD/WHY format). When `ynz fmt foo.ynz` hits a parse error, it prints the same diagnostic `ynz build foo.ynz` would.
 - `ynz fmt --check` output is teaching-friendly: "Would reformat: foo.ynz (3 changes)" with optional `--diff` for unified-diff view (deferred to Phase 5 — see CLI scope below if `--diff` ships).
-- NEW design doc: `design/fmt.md` — architectural reference: algorithm choice rationale (Phase 1 output), comment merge strategy, library API contract, future-proofing for v0.5+ embedded SQL formatting.
+- NEW design doc: [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) — architectural reference: algorithm choice rationale (Phase 1 output), comment merge strategy, library API contract, future-proofing for v0.5+ embedded SQL formatting.
 - No new `.claude/rules/` files (no new project-rule surface; `feature-registry.md` already covers the registry-consumer rule M3 follows).
 - No new banned-jargon words slip into formatter-emitted text — `tests/jargon_audit.rs` extended in Phase 5 to walk every string the formatter produces (error messages, `--check` output).
 
@@ -274,7 +274,7 @@ Open architectural question for Phase 1 research spike (NOT a blocker; spike dec
 
 ### Demo & Error Gallery
 
-**Path-discrepancy note** (locked this round): `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` says the demo entrypoint lives at `examples/pirates-roster/entrypoint.ynz`. Actual on-disk path is `examples/pirates-roster/entrypoint.ynz` (verified 2026-05-20). The rule's path is STALE — the project was restructured at some point and the rule wasn't updated. **This plan treats the actual on-disk path as canonical** (`examples/pirates-roster/entrypoint.ynz`). A separate follow-up will update the rule file (added to `.claude/todos.md` "Later" as `update-plan-invariants-entrypoint-path` in Phase 0 Step 9 alongside the other deferrals).
+**Path-discrepancy note** (locked this round): [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Demo & Error Gallery` says the demo entrypoint lives at `examples/pirates-roster/entrypoint.ynz`. Actual on-disk path is `examples/pirates-roster/entrypoint.ynz` (verified 2026-05-20). The rule's path is STALE — the project was restructured at some point and the rule wasn't updated. **This plan treats the actual on-disk path as canonical** (`examples/pirates-roster/entrypoint.ynz`). A separate follow-up will update the rule file (added to [`.claude/todos.md`](../../../todos.md) "Later" as `update-plan-invariants-entrypoint-path` in Phase 0 Step 9 alongside the other deferrals).
 
 - `examples/pirates-roster/entrypoint.ynz`: ADD a top-of-file comment block: `// Format this file with: ynz fmt examples/pirates-roster/entrypoint.ynz — output is byte-identical (file is already canonical).` No NEW Yinz language code added (M3 ships no new language features).
 - **NEW dedicated formatter demo** `examples/burgh-poem/messy.ynz` (per Demo & Error Gallery rule spirit — adds executable demo surface for the formatter feature): a deliberately non-canonical `.ynz` file with extra spaces, irregular indent, inline comments at odd positions, etc. Top-of-file comment: `// This file is intentionally non-canonical. Run: ynz fmt examples/burgh-poem/messy.ynz to see the formatter rewrite it. To check without rewriting: ynz fmt --check examples/burgh-poem/messy.ynz (exits 1).` This file is EXCLUDED from Phase 4's mass-rewrite by living OUTSIDE any `yinz.toml` project root (`examples/burgh-poem/` has no `yinz.toml`; `ynz fmt --all` requires one and won't enter the dir). Phase 4's mass-rewrite Step 4 explicitly skips `examples/burgh-poem/`. The fixture stays non-canonical forever as the demo. Verified idempotent in a different sense: `ynz fmt messy.ynz` → outputs the canonical form on stdout/file, but the GIT-checked-in `messy.ynz` stays messy.
@@ -310,13 +310,13 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - Per-phase ships via `/pr` (project has local `pr` skill at `.claude/skills/pr/`)
 - Per-milestone ships via `/release` (project has local `release` skill at `.claude/skills/release/`)
 
-**Sequencing note**: Phase 0 begins from `main` at the v0.2.0-m2 tag commit (M2's final verification cuts that tag). If M2 is still in verification sweep when Patrick approves this plan, Phase 0 BLOCKS until M2 tag lands. Phases 1-6 each branch from main as the previous phase merges. **Phase 0 first step**: verify `Cargo.toml` version is `0.2.0-m2`; if it's still `0.2.0-m1` (M2 tag didn't land for some reason), bump it as part of Phase 0 (carrying M2's deferred step) so M3 has a known base. Document the bump-source in the Phase 0 PR description.
+**Sequencing note**: Phase 0 begins from `main` at the v0.2.0-m2 tag commit (M2's final verification cuts that tag). If M2 is still in verification sweep when Patrick approves this plan, Phase 0 BLOCKS until M2 tag lands. Phases 1-6 each branch from main as the previous phase merges. **Phase 0 first step**: verify [`Cargo.toml`](../../../../Cargo.toml) version is `0.2.0-m2`; if it's still `0.2.0-m1` (M2 tag didn't land for some reason), bump it as part of Phase 0 (carrying M2's deferred step) so M3 has a known base. Document the bump-source in the Phase 0 PR description.
 
 ---
 
 ### Phase 0: Doc lockdown + crate scaffolding (no behavior change)
 
-**PR scope**: Land `design/fmt.md`, update `design/mvp-scope.md` v0.2-M3 entry, scaffold empty `crates/ynz-fmt/` with `lib.rs` + module stubs + Cargo.toml entry, add a `fmt` subcommand stub to `crates/ynz-driver/src/main.rs` (parses CLI args, prints "not yet implemented", exits 0). No formatting behavior. No driver behavior change for `build`/`run`.
+**PR scope**: Land [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md), update [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M3 entry, scaffold empty `crates/ynz-fmt/` with `lib.rs` + module stubs + Cargo.toml entry, add a `fmt` subcommand stub to `crates/ynz-driver/src/main.rs` (parses CLI args, prints "not yet implemented", exits 0). No formatting behavior. No driver behavior change for `build`/`run`.
 **Branch**: `chore/v0-2-m3-doc-lockdown`
 **Flag**: N/A
 **Est. lines**: ~450 (design doc ~250, cargo updates ~30, scaffolding stubs ~80, driver subcommand stub ~50, docs ~40)
@@ -328,23 +328,23 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Current-state anchors**:
 - `Cargo.toml:3-15` — workspace member list; M3 adds `ynz-fmt`
-- `design/mvp-scope.md:89-93` — v0.2-M3 entry stub; needs expansion with locked decisions
+- `docs/reference/REF-mvp-scope.md:89-93` — v0.2-M3 entry stub; needs expansion with locked decisions
 - `crates/ynz-driver/src/main.rs:37-93` — `Cli` and `Command` enums; M3 adds `Fmt` variant
-- `CLAUDE.md` Project Layout table — adds `crates/ynz-fmt/` row
+- [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout table — adds `crates/ynz-fmt/` row
 
 **Files (expected scope)**:
-- NEW: `design/fmt.md` — architectural reference doc
-- EDIT: `design/mvp-scope.md` — v0.2-M3 entry: expand with locked CLI flag set, locked comment-handling approach, locked registry-consumer status; preserve algorithm-deferred-to-Phase-1 placeholder
-- EDIT: `CLAUDE.md` — Project Layout table: add `crates/ynz-fmt/` (purpose: "Formatter library — zero-config canonical Yinz formatting, consumed by `ynz fmt` subcommand and v0.2-M5 LSP format-on-save")
-- NEW: `crates/ynz-fmt/Cargo.toml` — workspace=true edition/version/authors/license, deps on `ynz-parser`, `ynz-ast`, `ynz-registry`, `ynz-diagnostics`
+- NEW: [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) — architectural reference doc
+- EDIT: [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) — v0.2-M3 entry: expand with locked CLI flag set, locked comment-handling approach, locked registry-consumer status; preserve algorithm-deferred-to-Phase-1 placeholder
+- EDIT: [`CLAUDE.md`](../../../../CLAUDE.md) — Project Layout table: add `crates/ynz-fmt/` (purpose: "Formatter library — zero-config canonical Yinz formatting, consumed by `ynz fmt` subcommand and v0.2-M5 LSP format-on-save")
+- NEW: [`crates/ynz-fmt/Cargo.toml`](../../../../crates/ynz-fmt/Cargo.toml) — workspace=true edition/version/authors/license, deps on `ynz-parser`, `ynz-ast`, `ynz-registry`, `ynz-diagnostics`
 - NEW: `crates/ynz-fmt/src/lib.rs` — pub API stubs: `format(source: &str) -> Result<String, FmtError>` returning `Err(FmtError::InvalidInput("not yet implemented".into()))`; `check(source) -> ...` same
 - NEW: `crates/ynz-fmt/src/error.rs` — `FmtError` enum + `CheckResult` enum
 - NEW: `crates/ynz-fmt/_spike/.gitkeep` — placeholder for Phase 1 spike
-- EDIT: `Cargo.toml` — (a) add `crates/ynz-fmt` to workspace members; (b) add `ynz-fmt = { path = "crates/ynz-fmt" }` to workspace deps; (c) ADD `assert_cmd = "2"` to `[workspace.dependencies]` (verified NOT a workspace dep today, 2026-05-20 — needed by Phase 5's CLI integration tests). Pinning to major-1 (`"2"`) per workspace convention for dev-deps.
+- EDIT: [`Cargo.toml`](../../../../Cargo.toml) — (a) add `crates/ynz-fmt` to workspace members; (b) add `ynz-fmt = { path = "crates/ynz-fmt" }` to workspace deps; (c) ADD `assert_cmd = "2"` to `[workspace.dependencies]` (verified NOT a workspace dep today, 2026-05-20 — needed by Phase 5's CLI integration tests). Pinning to major-1 (`"2"`) per workspace convention for dev-deps.
 - NEW: `crates/ynz-driver/src/fmt.rs` — stub: `pub fn fmt(_path: &Path, _all: bool, _check: bool, _stdin: bool) -> i32 { eprintln!("ynz fmt: not yet implemented"); 1 }`
 - EDIT: `crates/ynz-driver/src/main.rs` — add `mod fmt;` + `Fmt` variant on `Command` enum with all four flags + match arm calling `fmt::fmt(...)`
-- EDIT: `crates/ynz-driver/Cargo.toml` — depend on `ynz-fmt`
-- EDIT: `.claude/todos.md` — ADD durable-home entries for deferred items per Patrick's `deferrals-must-be-tracked` rule:
+- EDIT: [`crates/ynz-driver/Cargo.toml`](../../../../crates/ynz-driver/Cargo.toml) — depend on `ynz-fmt`
+- EDIT: [`.claude/todos.md`](../../../todos.md) — ADD durable-home entries for deferred items per Patrick's `deferrals-must-be-tracked` rule:
   - `- [ ] **lsp-range-formatting** — add `format_range(source, range)` to ynz-fmt library + textDocument/rangeFormatting LSP handler. Deferred from v0.2-M3 (whole-file formatting was enough for editor format-on-save). Pick up IF v0.2-M5 LSP proves a need.`
   - `- [ ] **fmt-diff-mode** — add `ynz fmt --diff` flag emitting unified diff of what would change. Deferred from v0.2-M3 (not blocking ship; useful for code review tooling). No specific trigger; nice-to-have.`
   - `- [ ] **update-plan-invariants-entrypoint-path** — update .claude/rules/plan-invariants.md to point at examples/pirates-roster/entrypoint.ynz (NOT src/entrypoint.ynz which is stale; actual path verified 2026-05-20). Trivial doc edit; do whenever passing through the rule file.`
@@ -353,37 +353,37 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work. Document each deviation in the PR description; if it's its own concern, split.
 
 **Steps**:
-1. Write `design/fmt.md` covering: goals (zero-config, opinionated), library + CLI architecture, comment-handling strategy (re-lex trivia pass — additive `lex_with_trivia()` in `ynz-parser`), registry-consumer status (formatter reads keyword spellings from `ynz-registry`), algorithm-choice placeholder section (filled in by Phase 1), API contract (`format(source) -> Result<String, FmtError>`), future-proofing section (embedded SQL deferred to v0.5+; range-formatting deferred to M5 if needed), self-hosting migration plan (formatter rewrites in Yinz when self-hosting lands v2+)
-2. Update `design/mvp-scope.md:89-93` v0.2-M3 entry: enumerate CLI flags (`ynz fmt <path>`, `--all`, `--check`, `--stdin`), state comment-handling approach (re-lex trivia pass), state registry-consumer status, state algorithm-deferred-to-Phase-1 (placeholder)
-3. Update `CLAUDE.md` Project Layout: add row for `crates/ynz-fmt/`
+1. Write [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) covering: goals (zero-config, opinionated), library + CLI architecture, comment-handling strategy (re-lex trivia pass — additive `lex_with_trivia()` in `ynz-parser`), registry-consumer status (formatter reads keyword spellings from `ynz-registry`), algorithm-choice placeholder section (filled in by Phase 1), API contract (`format(source) -> Result<String, FmtError>`), future-proofing section (embedded SQL deferred to v0.5+; range-formatting deferred to M5 if needed), self-hosting migration plan (formatter rewrites in Yinz when self-hosting lands v2+)
+2. Update `docs/reference/REF-mvp-scope.md:89-93` v0.2-M3 entry: enumerate CLI flags (`ynz fmt <path>`, `--all`, `--check`, `--stdin`), state comment-handling approach (re-lex trivia pass), state registry-consumer status, state algorithm-deferred-to-Phase-1 (placeholder)
+3. Update [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout: add row for `crates/ynz-fmt/`
 4. Scaffold `crates/ynz-fmt/`: Cargo.toml with deps; src/lib.rs with API stubs returning "not yet implemented"; src/error.rs with `FmtError` + `CheckResult` enums; _spike/.gitkeep
-5. Add `crates/ynz-fmt` to root `Cargo.toml` workspace members + workspace deps
+5. Add `crates/ynz-fmt` to root [`Cargo.toml`](../../../../Cargo.toml) workspace members + workspace deps
 6. Add `Fmt` variant to `Command` enum in `crates/ynz-driver/src/main.rs` with the four flags; match arm calls `fmt::fmt(...)`
 7. Create `crates/ynz-driver/src/fmt.rs` with the stub handler that prints "not yet implemented" and returns exit code 1
-8. Add `ynz-fmt` to `crates/ynz-driver/Cargo.toml` deps
-9. Append the two deferral entries to `.claude/todos.md` "Later" section (verbatim text from the Files list above) — per Patrick's `deferrals-must-be-tracked` rule; entries must land in this PR so the durable home is in place before the plan moves to `done/`
+8. Add `ynz-fmt` to [`crates/ynz-driver/Cargo.toml`](../../../../crates/ynz-driver/Cargo.toml) deps
+9. Append the two deferral entries to [`.claude/todos.md`](../../../todos.md) "Later" section (verbatim text from the Files list above) — per Patrick's `deferrals-must-be-tracked` rule; entries must land in this PR so the durable home is in place before the plan moves to `done/`
 10. Run `cargo build --workspace` — confirms compilation
 11. Run `cargo test --workspace` — confirms no regressions (830+ tests pass)
 12. Run `./target/debug/ynz fmt foo.ynz` — confirms stub prints message + exits 1
 13. Run `./target/debug/ynz build crates/ynz-driver/tests/fixtures/m3_fib.ynz` — confirms existing build path unchanged
 
 **Acceptance criteria** (observable conditions that define DONE):
-- [x] `design/fmt.md` exists with the 7 content sections enumerated in Step 1
-- [x] `design/mvp-scope.md` v0.2-M3 entry mentions all locked decisions (CLI scope full set, comment-handling re-lex, registry-consumer, algorithm-deferred-to-Phase-1)
-- [x] `CLAUDE.md` Project Layout table has a row for `crates/ynz-fmt/`
+- [x] [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) exists with the 7 content sections enumerated in Step 1
+- [x] [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M3 entry mentions all locked decisions (CLI scope full set, comment-handling re-lex, registry-consumer, algorithm-deferred-to-Phase-1)
+- [x] [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout table has a row for `crates/ynz-fmt/`
 - [x] `cargo build --workspace` succeeds with the new empty crate
 - [x] `cargo test --workspace` passes (830+ tests, no regressions)
 - [x] `./target/debug/ynz fmt --help` prints help for the new subcommand with all four flags listed
 - [x] `./target/debug/ynz fmt foo.ynz` prints "not yet implemented", exits 1
 - [x] `./target/debug/ynz run crates/ynz-driver/tests/fixtures/m3_fib.ynz` prints `55` (regression check)
 - [x] `_spike/` directory exists for Phase 1 to use
-- [x] `.claude/todos.md` "Later" section contains `lsp-range-formatting` and `fmt-diff-mode` entries verbatim (per Patrick's `deferrals-must-be-tracked` rule)
+- [x] [`.claude/todos.md`](../../../todos.md) "Later" section contains `lsp-range-formatting` and `fmt-diff-mode` entries verbatim (per Patrick's `deferrals-must-be-tracked` rule)
 
 **Quality gate** (observable facts to confirm — check BEFORE moving to next phase):
 - [x] No `// TODO` / `// FIXME` / `// HACK` left in any new file
-- [x] No new banned-jargon in user-facing prose (design/fmt.md is for engineers — "infer" is OK there per `.claude/rules/inference.md` dual-audience disclaimer; never in user-rendered text)
+- [x] No new banned-jargon in user-facing prose (docs/internal/implementation/IMP-fmt.md is for engineers — "infer" is OK there per [`.claude/rules/inference.md`](../../../rules/inference.md) dual-audience disclaimer; never in user-rendered text)
 - [x] No `as any` / `#[allow(...)]` swallows
-- [x] `design/fmt.md` cross-references `design/compiler-language.md`, `design/feature-registry.md`, `design/lsp.md`, `.claude/rules/inference.md`, roadmap
+- [x] [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) cross-references [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](../../../../docs/internal/implementation/IMP-feature-registry.md), [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md), [`.claude/rules/inference.md`](../../../rules/inference.md), roadmap
 - [x] No commented-out code; no orphan files
 - [x] `cargo clippy --workspace -- -D warnings` passes
 
@@ -391,7 +391,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - `cargo build --workspace 2>&1 | tail -5` — clean
 - `cargo test --workspace 2>&1 | grep 'test result'` — all pass
 - `./target/debug/ynz fmt --help 2>&1` — help text shows all four flags
-- `cat design/fmt.md | wc -l` — substantive (>200 lines)
+- `cat docs/internal/implementation/IMP-fmt.md | wc -l` — substantive (>200 lines)
 
 **Exit Sequence — RUN THESE STEPS:**
 
@@ -405,19 +405,19 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 ### Phase 1: Algorithm research spike + decision lock
 
-**PR scope**: Build two minimal "format the same Yinz fixture" implementations in `crates/ynz-fmt/_spike/`: one prettier-style (full reflow, discard original whitespace), one rustfmt-style (preserve some author intent). Format a curated "hard cases" suite: long function signatures (15+ params), deeply nested expressions, comment-heavy code, long string literals with interpolation, multi-line shape declarations. Measure each on: idempotency (run 5 times, assert byte-identical output), edge cases handled per loc-of-code, comment-placement accuracy, perceived output quality. Lock the choice; commit decision write-up to `design/fmt.md`. DELETE the losing spike (keep history in git).
+**PR scope**: Build two minimal "format the same Yinz fixture" implementations in `crates/ynz-fmt/_spike/`: one prettier-style (full reflow, discard original whitespace), one rustfmt-style (preserve some author intent). Format a curated "hard cases" suite: long function signatures (15+ params), deeply nested expressions, comment-heavy code, long string literals with interpolation, multi-line shape declarations. Measure each on: idempotency (run 5 times, assert byte-identical output), edge cases handled per loc-of-code, comment-placement accuracy, perceived output quality. Lock the choice; commit decision write-up to [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md). DELETE the losing spike (keep history in git).
 **Branch**: `chore/v0-2-m3-algorithm-spike`
 **Flag**: N/A
 **Est. lines**: ~700 — two ~250-line spikes + curated hard-cases suite (~100 lines of .ynz fixtures) + measurement write-up (~100 lines)
 **Ships via**: `/pr`
 
-**Objective**: Resolve the algorithm open question with empirical evidence, not preference. Lock the decision in `design/fmt.md` so v0.3+ doesn't re-litigate when scaling to advanced formatting features.
+**Objective**: Resolve the algorithm open question with empirical evidence, not preference. Lock the decision in [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) so v0.3+ doesn't re-litigate when scaling to advanced formatting features.
 
 **Why this phase exists**: Roadmap Risk ("Algorithm choice wrong") is mitigated by a spike-first pattern. Without the spike, Phase 2's real formatter bakes in a decision made on theoretical grounds; the spike costs ~500 lines of throwaway code now to save ~2000 lines of migration in v0.2-M5 if the choice is wrong.
 
 **Current-state anchors**:
 - `crates/ynz-fmt/_spike/.gitkeep` from Phase 0
-- `crates/ynz-fmt/Cargo.toml` from Phase 0 (deps locked)
+- [`crates/ynz-fmt/Cargo.toml`](../../../../crates/ynz-fmt/Cargo.toml) from Phase 0 (deps locked)
 - `examples/pirates-roster/entrypoint.ynz` (canonical reference for "common Yinz idiom")
 - `examples/primantis-orders/m4_errors.ynz` through `m8_errors.ynz` (comment-heavy code samples)
 - `crates/ynz-parser/src/parser.rs:149` + `:3615` (where doc comments enter the AST — informs how spikes handle them)
@@ -434,7 +434,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
   - **Pre-counted total: 50 comments exactly across 5 fixtures, satisfying Gate 2's ≥50 floor.** If during implementation the actual count differs, the executor expands the smallest fixture until ≥50 total — but the starting target is locked here.
 - NEW: `crates/ynz-fmt/_spike/README.md` — what each spike measures, how to run each
 - NEW: `crates/ynz-fmt/_spike/MEASUREMENTS.md` — formatted output side-by-side for each fixture, idempotency result, comment-placement accuracy, decision rationale
-- EDIT: `design/fmt.md` — replace algorithm-choice placeholder section with locked decision + rationale
+- EDIT: [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) — replace algorithm-choice placeholder section with locked decision + rationale
 
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work (e.g., extending the fixture suite if the existing 5 don't cover a class). Document each deviation in the PR description.
 
@@ -450,18 +450,18 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - **Gate 1 (must clear, binary)**: idempotency BYTE-IDENTICAL over 5 iterations on every fixture in `_spike/fixtures/`. Any single non-idempotent fixture = spike fails Gate 1 = candidate eliminated.
    - **Gate 2 (must clear, numeric)**: comment-placement accuracy ≥ 95% exact (same line, same column) across the curated suite. The curated suite MUST contain at least 50 total comments distributed across the 5 fixtures (count them explicitly in `MEASUREMENTS.md`; if <50, expand fixtures until ≥50). "Exact" means the comment's emitted byte-position matches its semantically-equivalent location in the canonical output as a human reviewer would pick.
    - **Tie-break (when both clear both gates)**: pick the spike with smaller `tokei` LOC count in its source (`src/main.rs` only — `_spike/output/` excluded). If LOC is within 10% of the other, default to prettier-style (simpler model wins).
-   - **Failure branch (both fail Gate 1)**: STOP. Do not pick a non-idempotent formatter. Identify the failure class, extend the chosen algorithm (likely prettier — simpler model is easier to patch) with a special-case rule for that class, document the rule in `design/fmt.md`, re-run Gates 1+2. Iterate until one spike clears both. This is NOT "default to prettier with known idempotency bugs" — a non-idempotent formatter is not shippable.
+   - **Failure branch (both fail Gate 1)**: STOP. Do not pick a non-idempotent formatter. Identify the failure class, extend the chosen algorithm (likely prettier — simpler model is easier to patch) with a special-case rule for that class, document the rule in [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md), re-run Gates 1+2. Iterate until one spike clears both. This is NOT "default to prettier with known idempotency bugs" — a non-idempotent formatter is not shippable.
    - **Failure branch (both fail Gate 2)**: STOP. Comment-placement bugs are the highest-bug-density area; shipping <95% accuracy means immediate user dissatisfaction. Add fixtures specifically for the failed comment classes, extend both algorithms' comment-merge logic, re-measure. Iterate until at least one clears Gate 2.
-9. Update `design/fmt.md` algorithm-choice section: state the choice, name the measurements that drove it, lock the choice for v0.2-M5+.
-10. **Copy MEASUREMENTS.md content into `design/fmt.md`** as a permanent record under a new "Algorithm spike measurements (v0.2-M3 Phase 1)" subsection BEFORE deleting `_spike/`. The git-history-only argument doesn't survive contact with future re-litigation; the design doc must hold the evidence. Then delete the losing spike's directory (preserved in git history). Retain `_spike/MEASUREMENTS.md` + winning spike until Phase 2 supersedes; Phase 2 deletes them both (the content already lives in `design/fmt.md`).
+9. Update [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) algorithm-choice section: state the choice, name the measurements that drove it, lock the choice for v0.2-M5+.
+10. **Copy MEASUREMENTS.md content into [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md)** as a permanent record under a new "Algorithm spike measurements (v0.2-M3 Phase 1)" subsection BEFORE deleting `_spike/`. The git-history-only argument doesn't survive contact with future re-litigation; the design doc must hold the evidence. Then delete the losing spike's directory (preserved in git history). Retain `_spike/MEASUREMENTS.md` + winning spike until Phase 2 supersedes; Phase 2 deletes them both (the content already lives in [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md)).
 
-**Decisions made**: Algorithm = **prettier-style** (full AST reflow). Both spikes passed Gate 1 (idempotency) and Gate 2 (50/50 = 100% comment placement accuracy). Prettier chosen for canonicality — same program → same output regardless of original formatting. LOC tie-break (376 vs 421) nominally favors rustfmt but canonicality is not negotiable. Decision locked in `design/fmt.md` "Algorithm Choice" section. Rustfmt spike preserved in git history at commit `051844b`.
+**Decisions made**: Algorithm = **prettier-style** (full AST reflow). Both spikes passed Gate 1 (idempotency) and Gate 2 (50/50 = 100% comment placement accuracy). Prettier chosen for canonicality — same program → same output regardless of original formatting. LOC tie-break (376 vs 421) nominally favors rustfmt but canonicality is not negotiable. Decision locked in [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) "Algorithm Choice" section. Rustfmt spike preserved in git history at commit `051844b`.
 
 **Acceptance criteria**:
 - [x] Both spikes built, ran against all 5 fixtures, produced output captured in `_spike/output/`
 - [x] `MEASUREMENTS.md` documents the methodology AND recorded values for both spikes (idempotency results, comment-placement scores, LOC counts)
 - [x] `MEASUREMENTS.md` records a specific failure-mode-by-fixture matrix (no hand-wavy "rustfmt style felt cleaner")
-- [x] `design/fmt.md` algorithm section contains a locked decision with explicit rationale tied to the recorded measurements
+- [x] [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) algorithm section contains a locked decision with explicit rationale tied to the recorded measurements
 - [x] Loser spike directory removed from tree (preserved in git history)
 - [x] `cargo build --workspace` succeeds
 - [x] `cargo test --workspace` still passes (no behavior change to compiler; spike is opt-in `cargo run -p ynz-fmt-spike-<style>`)
@@ -469,15 +469,15 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Quality gate**:
 - [x] No `// TODO` / `// FIXME` / `// HACK` left in any retained file
 - [x] MEASUREMENTS.md cites specific fixture:line and observed-output pairs; no vague claims
-- [x] design/fmt.md algorithm section has the one-line-decision-plus-WHY format
-- [x] No new banned-jargon in design/fmt.md
+- [x] docs/internal/implementation/IMP-fmt.md algorithm section has the one-line-decision-plus-WHY format
+- [x] No new banned-jargon in docs/internal/implementation/IMP-fmt.md
 - [x] `cargo clippy --workspace -- -D warnings` passes
 - [x] No commented-out code
 
 **Verification**:
 - `cargo build --workspace 2>&1 | grep 'warning\|error'` — clean
 - `cat crates/ynz-fmt/_spike/MEASUREMENTS.md | grep -E "^(prettier|rustfmt)"` — both styles have measurement rows for each fixture
-- `grep -A 10 "## Algorithm choice" design/fmt.md` — locked decision visible
+- `grep -A 10 "## Algorithm choice" docs/internal/implementation/IMP-fmt.md` — locked decision visible
 
 **Exit Sequence:**
 
@@ -543,7 +543,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - Each fixture has a `.ynz` input + `.formatted` expected output (canonical form)
    - Test runs `format(input)`, compares to `.formatted` via `assert_eq!`. On mismatch, prints a diff.
    - All fixtures use NO comments (Phase 3 adds the comment-fixture suite)
-8. Delete `crates/ynz-fmt/_spike/<winner>/` source AND `crates/ynz-fmt/_spike/MEASUREMENTS.md` (content already permanently lives in `design/fmt.md` per Phase 1 Step 10). The whole `_spike/` directory is gone after Phase 2; no posterity retention needed since the design doc holds the evidence.
+8. Delete `crates/ynz-fmt/_spike/<winner>/` source AND `crates/ynz-fmt/_spike/MEASUREMENTS.md` (content already permanently lives in [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) per Phase 1 Step 10). The whole `_spike/` directory is gone after Phase 2; no posterity retention needed since the design doc holds the evidence.
 9. Run `cargo test -p ynz-parser` (trivia tests pass), `cargo test -p ynz-fmt` (walker goldens pass), `cargo test --workspace` (full suite green).
 
 **Acceptance criteria**:
@@ -663,7 +663,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
    - For arrays/maps/shapes with N elements where the one-line form exceeds budget: emit each element on its own line.
    - For operator chains (`a + b + c + d + ...`) exceeding budget: break before each operator at indent +2.
    - Recursion: sub-expressions can split independently. Track a remaining budget per sub-expression.
-5. Blank-line preservation: when walking top-level decls, look at the byte distance + newline count between consecutive decls in the original source. Preserve the user's intent: 0 blank lines → output 0; ≥1 blank line → output exactly 1. **Statements within block bodies are NOT blank-line-preserved** (canonical form strips all inter-statement blanks); this was locked at Phase 3 execution time — the implementation strips blanks and the output is idempotent. Rationale documented in `design/fmt.md` (blank lines between top-level items are semantic separators; blank lines inside function bodies are stylistic and not preserved by the canonical form). See also: plan line ~110 (the observation that Yinz convention does not use blank lines inside bodies).
+5. Blank-line preservation: when walking top-level decls, look at the byte distance + newline count between consecutive decls in the original source. Preserve the user's intent: 0 blank lines → output 0; ≥1 blank line → output exactly 1. **Statements within block bodies are NOT blank-line-preserved** (canonical form strips all inter-statement blanks); this was locked at Phase 3 execution time — the implementation strips blanks and the output is idempotent. Rationale documented in [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) (blank lines between top-level items are semantic separators; blank lines inside function bodies are stylistic and not preserved by the canonical form). See also: plan line ~110 (the observation that Yinz convention does not use blank lines inside bodies).
 6. Write `tests/comment_golden.rs` with 7+ fixtures covering: leading single-line, leading block, inline, between-decls, inside-block, doc comment, mixed.
 7. Write `tests/long_line_golden.rs` with fixtures for: long function signature (split args), long array literal (split elements), long operator chain (split before operator), long string interpolation (preserved byte-exact, never split inside backtick).
 8. Write `tests/idempotency.rs`: a property test that walks every `.ynz` file in `examples/`, `crates/ynz-driver/tests/fixtures/`, `crates/ynz-fmt/tests/fixtures/`, formats once → A, formats A → B, asserts A == B. Test fails listing each violating file.
@@ -831,8 +831,8 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 - NEW: `examples/primantis-orders/v0_2_m3_errors.ynz` — intentional error triggers per the Demo & Error Gallery invariant: parse error in input, file not found, --all without yinz.toml, --check mismatch — each with `// WHY:` comment naming the class
 - DELETE: `crates/ynz-fmt/tests/mass_rewrite.rs` — temporary test from Phase 4. The production CLI (this phase) supersedes it; Phase 4's rewrite already executed, so the test has no remaining purpose. Preserved in git history.
 - EDIT: `examples/pirates-roster/entrypoint.ynz` — ADD top-of-file comment block: `// Format this file with: ynz fmt examples/pirates-roster/entrypoint.ynz — output is byte-identical (canonical).`
-- **Deviation**: `predicates = "3"` added to `[workspace.dependencies]` (Cargo.toml) and `[dev-dependencies]` of `crates/ynz-driver/Cargo.toml` — required for `assert_cmd`'s `.stderr(predicates::str::contains(...))` fluent API in `fmt_cli.rs`. Not listed in original plan files scope; added to paper-trail here per deviation rule.
-- **Deviation**: `tempfile = { workspace = true }` added to `crates/ynz-driver/Cargo.toml` dev-dependencies — `tempfile` was already a workspace dep (used by other crates); this binds the existing dep for use in `fmt_cli.rs` integration test helper (`tempfile::tempdir()`). Minor bind, not a new dep addition.
+- **Deviation**: `predicates = "3"` added to `[workspace.dependencies]` (Cargo.toml) and `[dev-dependencies]` of [`crates/ynz-driver/Cargo.toml`](../../../../crates/ynz-driver/Cargo.toml) — required for `assert_cmd`'s `.stderr(predicates::str::contains(...))` fluent API in `fmt_cli.rs`. Not listed in original plan files scope; added to paper-trail here per deviation rule.
+- **Deviation**: `tempfile = { workspace = true }` added to [`crates/ynz-driver/Cargo.toml`](../../../../crates/ynz-driver/Cargo.toml) dev-dependencies — `tempfile` was already a workspace dep (used by other crates); this binds the existing dep for use in `fmt_cli.rs` integration test helper (`tempfile::tempdir()`). Minor bind, not a new dep addition.
 - **Deviation**: All four mode handlers implemented in the existing `crates/ynz-driver/src/fmt.rs` rather than as submodule files (`fmt/single.rs`, `fmt/project.rs`, `fmt/check.rs`, `fmt/stdin.rs`). Same logic, simpler file structure. The deviation rule permits this.
 
 **Deviation rule**: Standard.
@@ -875,7 +875,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
    - `--check` would change → exit 1, prints which
    - `--stdin` happy path → exit 0, formatted output on stdout
    - `--stdin` parse error → exit 1, diagnostic on stderr
-   - Use `assert_cmd` crate (already workspace dep — see `Cargo.toml`) for CLI invocation
+   - Use `assert_cmd` crate (already workspace dep — see [`Cargo.toml`](../../../../Cargo.toml)) for CLI invocation
 7. Finalize `crates/ynz-fmt/src/lib.rs` rustdoc:
    - Top-level module: explain the format/check contract
    - Each public function: document inputs/outputs/errors
@@ -940,20 +940,20 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 
 **Current-state anchors**:
 - `Cargo.toml:18` — `version = "0.2.0-m2"` (after M2's bump); change to `0.2.0-m3`
-- `CHANGELOG.md` (existence verified at phase start; create if missing)
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) (existence verified at phase start; create if missing)
 - `.claude/plans/active/v0-2-m3-fmt.md` — this plan; status flipped to `done` at the very end
 
 **Files (expected scope)**:
-- EDIT: `Cargo.toml` — bump `version = "0.2.0-m3"`
-- EDIT: `CHANGELOG.md` — new section for v0.2.0-m3
-- NEW: `crates/ynz-fmt/PERFORMANCE.md` — recorded numbers vs budgets from Performance invariant
+- EDIT: [`Cargo.toml`](../../../../Cargo.toml) — bump `version = "0.2.0-m3"`
+- EDIT: [`CHANGELOG.md`](../../../../CHANGELOG.md) — new section for v0.2.0-m3
+- NEW: [`crates/ynz-fmt/PERFORMANCE.md`](../../../../crates/ynz-fmt/PERFORMANCE.md) — recorded numbers vs budgets from Performance invariant
 - EDIT: `.claude/plans/active/v0-2-m3-fmt.md` — flip `status: active` → `status: done` after final reviewer PASS (radar moves to `plans/done/` on next rebuild)
 
 **Deviation rule**: Standard.
 
 **Steps**:
-1. **TODO sweep**: `grep -rn 'TODO\|FIXME\|HACK\|XXX\|PLACEHOLDER\|TEMP\|will do later\|Phase N' crates/ynz-fmt/ crates/ynz-parser/src/lexer.rs crates/ynz-driver/src/fmt*` — confirm zero hits. Any hit: move to `.claude/todos.md` or fix.
-2. **Todos cross-check**: read `.claude/todos.md`; confirm any "Soon" items related to M3 are addressed or appropriately deferred to M4/M5. No M3 commitments are left unfinished.
+1. **TODO sweep**: `grep -rn 'TODO\|FIXME\|HACK\|XXX\|PLACEHOLDER\|TEMP\|will do later\|Phase N' crates/ynz-fmt/ crates/ynz-parser/src/lexer.rs crates/ynz-driver/src/fmt*` — confirm zero hits. Any hit: move to [`.claude/todos.md`](../../../todos.md) or fix.
+2. **Todos cross-check**: read [`.claude/todos.md`](../../../todos.md); confirm any "Soon" items related to M3 are addressed or appropriately deferred to M4/M5. No M3 commitments are left unfinished.
 3. **Shortcut detection**: scan `crates/ynz-fmt/src/**` for: `unimplemented!()`, `todo!()`, `panic!("...")` in non-test code, hardcoded literal strings that should be configurable (line width, indent width — confirm they're named constants not magic numbers).
 4. **Quality checklist verification**: walk every Invariant subsection's bullets; assert each is verified by a passing test or explicit invariant check.
 5. **Performance measurement**:
@@ -961,7 +961,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
    - Generate a 5000-line synthetic `.ynz` file (5000 function-decl statements with arithmetic bodies); time `ynz fmt` — assert <500ms
    - Time `ynz fmt --all examples/` over ~100 files — assert <2s
    - Time `lex_with_trivia` vs `lex` on entrypoint.ynz, 100 iterations each — assert overhead <20%
-   - Write results to `crates/ynz-fmt/PERFORMANCE.md` with timestamps + machine class
+   - Write results to [`crates/ynz-fmt/PERFORMANCE.md`](../../../../crates/ynz-fmt/PERFORMANCE.md) with timestamps + machine class
 6. **Cargo.toml version bump**: `0.2.0-m2` → `0.2.0-m3`. `cargo build --workspace` confirms compilation.
 7. **CHANGELOG entry**:
    - `## v0.2.0-m3 (2026-MM-DD) — `ynz fmt`` — formatter library + CLI
@@ -981,8 +981,8 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 - [x] All Quality Checklist items below verified
 - [x] All 7 Invariant subsection bullets verified by test/proof
 - [x] Performance measurements recorded in `PERFORMANCE.md`; all within budget
-- [x] `Cargo.toml` workspace version = `0.2.0-m3`
-- [x] `CHANGELOG.md` has v0.2.0-m3 entry
+- [x] [`Cargo.toml`](../../../../Cargo.toml) workspace version = `0.2.0-m3`
+- [x] [`CHANGELOG.md`](../../../../CHANGELOG.md) has v0.2.0-m3 entry
 - [x] Final code-reviewer verdict = PASS (after 2 rounds)
 - [ ] `v0.2.0-m3` tag created and pushed (with user approval) — pending /release invocation
 - [x] Plan `status: active` → `status: done`; `last_updated:` bumped
@@ -1056,14 +1056,14 @@ Items deliberately NOT in M3 scope. Each row's "Where tracked" cell points to th
 | Deferred item | Why deferred | Where tracked |
 |---|---|---|
 | `textDocument/formatting` LSP handler wiring | M3 ships the library API; M5 wires it | `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` Milestone v0.2-M5 scope (format-on-save bullet) |
-| `format_range(source, range)` API for LSP `textDocument/rangeFormatting` | Whole-file formatting is enough for editor format-on-save; range-formatting is hard and unproven need | `.claude/todos.md` "Later" — `lsp-range-formatting`: design + implement IF v0.2-M5 proves a need |
+| `format_range(source, range)` API for LSP `textDocument/rangeFormatting` | Whole-file formatting is enough for editor format-on-save; range-formatting is hard and unproven need | [`.claude/todos.md`](../../../todos.md) "Later" — `lsp-range-formatting`: design + implement IF v0.2-M5 proves a need |
 | Embedded SQL formatting inside `sql`...`` template literals | Out of v0.2 per roadmap (deferred to database stdlib milestone v0.5+) | `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` Out of Scope section (already lists this) |
 | Embedded Markdown / regex / JSON inside string literals | Not even designed; v1+ at earliest | Roadmap Out of Scope |
-| Sorting imports as a formatter behavior | Belongs to Tier 3 lint suggestions (v0.4), NOT formatter | `design/linting.md` (v0.4 milestone surface) |
-| `ynz fmt --diff` mode (unified-diff output of what would change) | Useful for code review tooling but not blocking M3 ship | `.claude/todos.md` "Later" — `fmt-diff-mode`: add `--diff` flag emitting unified diff |
-| Inline comments between array/map literal elements (`[1, // note\n 2, 3]`) | Requires making `emit_expr` comment-aware for element-level comment attachment — significant scope beyond Phase 3's per-statement approach. `comment_in_array.ynz` + `comment_in_map.ynz` fixtures currently test "leading comment before array-creating stmt" instead. | `.claude/todos.md` "Later" — `fmt-inter-element-comments`: implement element-level comment attachment in emit_expr for ArrayLit/MapLit/StructLit when long-line split is triggered |
+| Sorting imports as a formatter behavior | Belongs to Tier 3 lint suggestions (v0.4), NOT formatter | [`docs/internal/implementation/IMP-linting.md`](../../../../docs/internal/implementation/IMP-linting.md) (v0.4 milestone surface) |
+| `ynz fmt --diff` mode (unified-diff output of what would change) | Useful for code review tooling but not blocking M3 ship | [`.claude/todos.md`](../../../todos.md) "Later" — `fmt-diff-mode`: add `--diff` flag emitting unified diff |
+| Inline comments between array/map literal elements (`[1, // note\n 2, 3]`) | Requires making `emit_expr` comment-aware for element-level comment attachment — significant scope beyond Phase 3's per-statement approach. `comment_in_array.ynz` + `comment_in_map.ynz` fixtures currently test "leading comment before array-creating stmt" instead. | [`.claude/todos.md`](../../../todos.md) "Later" — `fmt-inter-element-comments`: implement element-level comment attachment in emit_expr for ArrayLit/MapLit/StructLit when long-line split is triggered |
 | Format-as-you-type partial reformatting in LSP | v0.2-M5 (or later) if at all | `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` Milestone v0.2-M5 (or v0.3 LSP improvements) |
-| Auto-fix for banned-jargon (formatter rewrites `void` → `nothing`) | Formatter NEVER changes identifiers/keywords semantically; this is a Tier 3 lint suggestion territory (v0.4) | `design/linting.md` |
+| Auto-fix for banned-jargon (formatter rewrites `void` → `nothing`) | Formatter NEVER changes identifiers/keywords semantically; this is a Tier 3 lint suggestion territory (v0.4) | [`docs/internal/implementation/IMP-linting.md`](../../../../docs/internal/implementation/IMP-linting.md) |
 
 ---
 
@@ -1072,19 +1072,19 @@ Items deliberately NOT in M3 scope. Each row's "Where tracked" cell points to th
 - `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` — parent roadmap (M3 entry)
 - `.claude/plans/active/v0-2-m2-lsp-thin-slice.md` (or `done/` once tag cuts) — sibling LSP milestone
 - `.claude/plans/done/v0-2-m1-feature-inventory-sync.md` — registry SSOT this plan consumes
-- `design/fmt.md` — created Phase 0; architectural reference (algorithm choice, comment-merge strategy, library API contract)
-- `design/lsp.md` — references `textDocument/formatting` deferred to M5 wiring v0.2-M3's library
-- `design/mvp-scope.md:89-93` — v0.2-M3 entry; expanded Phase 0
-- `design/feature-registry.md` — registry consumer rule M3 follows
-- `.claude/rules/plan-invariants.md` — 7-subsection invariants block
-- `.claude/rules/feature-registry.md` — registry consumer rule
-- `.claude/rules/auto-promotion.md` — analyzed (no candidates for M3)
-- `.claude/rules/non-oop.md` — Yinz is not OOP (formatter respects: no method bodies inside shape decls)
-- `.claude/rules/dot-postfix.md` — formatter emits dot-postfix correctly (parens for actions, no parens for access)
-- `.claude/rules/vocabulary.md` — banned-jargon audit extended to formatter output
+- [`docs/internal/implementation/IMP-fmt.md`](../../../../docs/internal/implementation/IMP-fmt.md) — created Phase 0; architectural reference (algorithm choice, comment-merge strategy, library API contract)
+- [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) — references `textDocument/formatting` deferred to M5 wiring v0.2-M3's library
+- `docs/reference/REF-mvp-scope.md:89-93` — v0.2-M3 entry; expanded Phase 0
+- [`docs/internal/implementation/IMP-feature-registry.md`](../../../../docs/internal/implementation/IMP-feature-registry.md) — registry consumer rule M3 follows
+- [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) — 7-subsection invariants block
+- [`.claude/rules/feature-registry.md`](../../../rules/feature-registry.md) — registry consumer rule
+- [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md) — analyzed (no candidates for M3)
+- [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) — Yinz is not OOP (formatter respects: no method bodies inside shape decls)
+- [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md) — formatter emits dot-postfix correctly (parens for actions, no parens for access)
+- [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) — banned-jargon audit extended to formatter output
 - `crates/ynz-registry/src/lib.rs:16-80` — consumer adapters M3 uses
 - `crates/ynz-parser/src/lexer.rs:73-100` — comment-handling refactor point
-- `Cargo.toml` — workspace bump for the tag
+- [`Cargo.toml`](../../../../Cargo.toml) — workspace bump for the tag
 - `~/.claude/memory/branching.md` — PR sizing + flag conventions
 - `~/.claude/rules/no-duct-tape.md` — Right-Design-Now (no "acceptable for now" in this plan)
 - `~/.claude/rules/verification.md` — Paper-Trace format for any bug fixes

@@ -6,7 +6,7 @@ This file governs how Yinz handles the work the compiler can figure out automati
 
 ## Dual-Audience Disclaimer (READ FIRST)
 
-This rule file uses the words `infer`, `inferred`, and `inference` deliberately. **These words are banned in user-facing compiler diagnostics** per `crates/ynz-diagnostics/src/banned_jargon.rs` and `design/compiler-errors.md` — those audiences need plain-English replacements ("figure out automatically", "the compiler can tell").
+This rule file uses the words `infer`, `inferred`, and `inference` deliberately. **These words are banned in user-facing compiler diagnostics** per `crates/ynz-diagnostics/src/banned_jargon.rs` and [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) — those audiences need plain-English replacements ("figure out automatically", "the compiler can tell").
 
 The divergence is intentional and load-bearing:
 
@@ -52,7 +52,7 @@ If a new domain emerges (e.g., effect annotations, capability tracking), it join
 
 ## Two Surfaces for the Same Decision (Hybrid Model)
 
-Some auto-promotions surface in BOTH the muted-hint protocol (this file) AND the Tier 3 lint protocol (`design/linting.md`). They're different surfaces with different teaching jobs:
+Some auto-promotions surface in BOTH the muted-hint protocol (this file) AND the Tier 3 lint protocol ([`docs/internal/implementation/IMP-linting.md`](../../docs/internal/implementation/IMP-linting.md)). They're different surfaces with different teaching jobs:
 
 | Surface | Purpose | Always-on? | Action required? |
 |---|---|---|---|
@@ -74,13 +74,13 @@ The criterion for using both is: **the explicit form is typeable Yinz syntax**. 
 
 When the explicit form has no typeable syntax, the muted-hint protocol does NOT apply (it requires click-to-make-explicit to produce real Yinz). Use Tier 3 lint suggestion alone in those cases.
 
-- **Auto-SoA layout transform** (`design/future/auto-soa.md`): no source-level syntax for SoA exists. Tier 3 lint suggestion only; no muted hint.
+- **Auto-SoA layout transform** ([`docs/internal/scratchpad/SCRATCH-future-auto-soa.md`](../../docs/internal/scratchpad/SCRATCH-future-auto-soa.md)): no source-level syntax for SoA exists. Tier 3 lint suggestion only; no muted hint.
 
 ### Rule of thumb
 
 Compiler made a decision the user could have made themselves in source → both surfaces. Compiler made a decision with no equivalent user-typeable form → Tier 3 lint only.
 
-See `design/collections.md` "Auto-promotion: `array<T>` → `fixed<T>`" section for the canonical hybrid-model rationale.
+See [`docs/internal/implementation/IMP-collections.md`](../../docs/internal/implementation/IMP-collections.md) "Auto-promotion: `array<T>` → `fixed<T>`" section for the canonical hybrid-model rationale.
 
 ---
 
@@ -222,15 +222,15 @@ The Yinz teaching mission depends on it:
 - Hiding inference entirely creates magic; developers can't reason about what the compiler does.
 - **Muted hints split the difference**: the dev sees what the compiler decided, can click to make it real, and over time learns the rules by reading the hints.
 
-It also depends on IDE quality. The hints aren't a nice-to-have — they're the central teaching mechanism. v0.2 LSP work implements them per `design/ide-hints.md`.
+It also depends on IDE quality. The hints aren't a nice-to-have — they're the central teaching mechanism. v0.2 LSP work implements them per [`docs/reference/REF-ide-hints.md`](../../docs/reference/REF-ide-hints.md).
 
 ---
 
 ## Cross-References
 
-- `design/golden-rules.md` Rule 11 (the compiler is a teacher — extended to IDE surfaces)
-- `design/teaching-mission.md` (IDE as teaching surface)
-- `design/ide-hints.md` (the protocol spec — v0.2 LSP implementation target)
-- `design/compiler-errors.md` (banned-jargon list for user-facing diagnostics, distinct from this internal-vocabulary file)
-- `.claude/rules/vocabulary.md` (official Yinz user-facing terms)
-- `.claude/graveyard.md` Entry 2 (inverse anti-pattern: required explicit annotation at call sites)
+- [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 11 (the compiler is a teacher — extended to IDE surfaces)
+- [`docs/reference/REF-teaching-mission.md`](../../docs/reference/REF-teaching-mission.md) (IDE as teaching surface)
+- [`docs/reference/REF-ide-hints.md`](../../docs/reference/REF-ide-hints.md) (the protocol spec — v0.2 LSP implementation target)
+- [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) (banned-jargon list for user-facing diagnostics, distinct from this internal-vocabulary file)
+- [`.claude/rules/vocabulary.md`](vocabulary.md) (official Yinz user-facing terms)
+- [`.claude/graveyard.md`](../graveyard.md) Entry 2 (inverse anti-pattern: required explicit annotation at call sites)

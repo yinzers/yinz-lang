@@ -22,9 +22,9 @@ legacy:
     - crates/ynz-typeck/**
     - crates/ynz-codegen/**
     - crates/ynz-driver/**
-    - spec/operators.md
-    - spec/variables.md
-    - spec/numeric-types.md
+    - docs/reference/REF-operators.md
+    - docs/reference/REF-variables.md
+    - docs/reference/REF-numeric-types.md
   created: 2026-05-12
   last_updated: 2026-05-13
   completed: 2026-05-13
@@ -82,9 +82,9 @@ This file compiles, runs, and prints exactly `0.3\n1763\ntrue\n` on both Linux a
 
 | Inconsistency | Canonical decision | Fixed in phase |
 |---|---|---|
-| `spec/variables.md:48` said `let x = 42 // compiler knows: number`; `spec/numeric-types.md:206` said `let x = 42 // inferred as int`. | **`let x = 42` infers as `int`** per Golden Rule 10 ("efficiency first, dynamic after — default = most performant"). | P4 (typeck) |
-| `spec/numeric-types.md:211` said "Mixed-type expressions promote to the most capable type in the expression." | **Mixed-type expressions are a compile error** with a three-part diagnostic pointing at the relevant `.toX()` method. No implicit numeric coercion. | P4 (typeck) |
-| `spec/operators.md` did not list `%` in the arithmetic section. | Added `%` at precedence level 3. | P2 (lexer) |
+| `docs/reference/REF-variables.md:48` said `let x = 42 // compiler knows: number`; `docs/reference/REF-numeric-types.md:206` said `let x = 42 // inferred as int`. | **`let x = 42` infers as `int`** per Golden Rule 10 ("efficiency first, dynamic after — default = most performant"). | P4 (typeck) |
+| `docs/reference/REF-numeric-types.md:211` said "Mixed-type expressions promote to the most capable type in the expression." | **Mixed-type expressions are a compile error** with a three-part diagnostic pointing at the relevant `.toX()` method. No implicit numeric coercion. | P4 (typeck) |
+| [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) did not list `%` in the arithmetic section. | Added `%` at precedence level 3. | P2 (lexer) |
 
 ---
 
@@ -132,7 +132,7 @@ This file compiles, runs, and prints exactly `0.3\n1763\ntrue\n` on both Linux a
 **PR scope**: Extend `ynz-parser::lex` to recognize the M2 token set: `let`, `const`, `true`, `false` keywords; integer / float / decimal literals; arithmetic / comparison / boolean / bitwise operators; `=` and `:` punctuation.
 **Branch**: `feat/m2-lexer`
 **Est. lines**: ~400
-**Status**: COMPLETE (2026-05-12) — commit a8c3efe. 39 lex tests green. Token count locked at 42 (10 M1 + 32 M2). Key implementation: `//` comments stripped before `lex_one`; dot-method-call disambiguation (`.` only consumed as decimal point when followed by a digit so `42.toString()` works); `validate_underscores` checks each digit segment; 4 plumbing tokens (Dot, LBracket, RBracket, Comma) added ahead of schedule for P3; `spec/operators.md` updated to include `%`.
+**Status**: COMPLETE (2026-05-12) — commit a8c3efe. 39 lex tests green. Token count locked at 42 (10 M1 + 32 M2). Key implementation: `//` comments stripped before `lex_one`; dot-method-call disambiguation (`.` only consumed as decimal point when followed by a digit so `42.toString()` works); `validate_underscores` checks each digit segment; 4 plumbing tokens (Dot, LBracket, RBracket, Comma) added ahead of schedule for P3; [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) updated to include `%`.
 
 **New `Token` variants (M2)**:
 - Keywords: `Let`, `Const`, `True`, `False`
@@ -158,7 +158,7 @@ This file compiles, runs, and prints exactly `0.3\n1763\ntrue\n` on both Linux a
 ---
 
 ## Phase 3: AST + parser extension (M2 surface)
-**PR scope**: Extend `ynz-ast::nodes` with `Stmt::Let`, `Stmt::Assign`, `Expr::IntLit`/`NumberLit`/`BoolLit`/`BinOp`/`UnaryOp`/`MethodCall`. Add `Type::Int`/`Float`/`Number`/`Bool`. Implement Pratt-style precedence climbing per `spec/operators.md`.
+**PR scope**: Extend `ynz-ast::nodes` with `Stmt::Let`, `Stmt::Assign`, `Expr::IntLit`/`NumberLit`/`BoolLit`/`BinOp`/`UnaryOp`/`MethodCall`. Add `Type::Int`/`Float`/`Number`/`Bool`. Implement Pratt-style precedence climbing per [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md).
 **Branch**: `feat/m2-parser`
 **Est. lines**: ~700
 **Status**: COMPLETE (2026-05-12) — commit 6cee795 on main. 30 parse tests green. Key decisions: Pratt BP table encoded as `infix_bp()` (pub for spec-parity test); `is_stmt_boundary()` recovery avoids consuming `}` / keywords as atoms; `parse_method_call` handles `receiver.method(args)`; `number[N]` deferral diagnostic for N != 34 points at v0.7; `parser_precedence_table_matches_spec` test reads spec at runtime and asserts BP/level alignment.
@@ -179,7 +179,7 @@ This file compiles, runs, and prints exactly `0.3\n1763\ntrue\n` on both Linux a
 **PR scope**: Extend type system with `Type::{Int, Float, Number, Bool}`. Type-check M2 expression set. Add `PrimitiveIntrinsicTable` (polymorphic `print` + 8 conversion methods).
 **Branch**: `feat/m2-typeck`
 **Est. lines**: ~900
-**Status**: COMPLETE (2026-05-12) — 38 typeck tests green. Key decisions: `builtins.rs` git-mv'd to `intrinsics.rs` (clean blame); `BuiltinTable` → `PrimitiveIntrinsicTable`; `scope.rs` (new) with Levenshtein-distance suggestion for undefined vars; literal inference with annotation hint (`IntLit` → number/float when annotated); mixed-type-arithmetic suggestion picks `.toNumber()` / `.toFloat()` per direction, lists both for number+float tradeoff; `spec/variables.md:48` corrected (int not number); `spec/numeric-types.md:211` corrected (compile-error behavior).
+**Status**: COMPLETE (2026-05-12) — 38 typeck tests green. Key decisions: `builtins.rs` git-mv'd to `intrinsics.rs` (clean blame); `BuiltinTable` → `PrimitiveIntrinsicTable`; `scope.rs` (new) with Levenshtein-distance suggestion for undefined vars; literal inference with annotation hint (`IntLit` → number/float when annotated); mixed-type-arithmetic suggestion picks `.toNumber()` / `.toFloat()` per direction, lists both for number+float tradeoff; `docs/reference/REF-variables.md:48` corrected (int not number); `docs/reference/REF-numeric-types.md:211` corrected (compile-error behavior).
 
 **Type rules (locked)**:
 
@@ -208,7 +208,7 @@ This file compiles, runs, and prints exactly `0.3\n1763\ntrue\n` on both Linux a
 - [x] All mismatch-matrix cells covered by negative tests.
 - [x] Each diagnostic suggests the correct `.toX()` method.
 - [x] Const-reassignment, undefined-variable, arity, deferral errors all produce three-part diagnostics.
-- [x] `spec/variables.md` and `spec/numeric-types.md` corrections committed.
+- [x] [`docs/reference/REF-variables.md`](../../../../docs/reference/REF-variables.md) and [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md) corrections committed.
 - [x] Variant-count test for `Type` pins M2 count.
 
 ---
@@ -307,6 +307,6 @@ M2 inherited every M1 quality-checklist item. Additional M2-specific items, all 
 - [x] M2 div-by-zero runtime tests (int + number) panic; float div-by-zero produces `inf` and exits 0
 - [x] Mixed-type arithmetic compile errors point at the correct `.toX()` method per the type-rule matrix
 - [x] `number[N]` for N != 34 produces the M8-deferral compile error
-- [x] Spec corrections committed (`spec/variables.md`, `spec/numeric-types.md`, `spec/operators.md`)
+- [x] Spec corrections committed ([`docs/reference/REF-variables.md`](../../../../docs/reference/REF-variables.md), [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md), [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md))
 - [x] M2-extended variant-count tests pin their new counts with `// test-ratchet:` markers
 - [x] Object-file SHA-256 reproducibility contract still holds

@@ -35,7 +35,7 @@ borrow checker
 
 **Detection signature**: An M4-or-later milestone plan file mentions any of `ownership`, `const`, `let`, `.lend`, `.give`, `.share` in its body but does NOT contain a literal `## Invariants This Milestone Must Preserve` heading AND a `### Safety` subheading enumerating const semantics (cannot reassign, cannot be lent, cannot be given, field mutation blocked) AND a `### Performance` subheading naming LLVM `readonly` / `noalias` attribute emission.
 
-**Constraint**: Every M4+ milestone plan that touches ownership, types, or the `const`/`let` distinction MUST include `## Invariants This Milestone Must Preserve` with `### Safety` enumerating the five paths const blocks (reassignment, `.lend`, `.give`, field mutation, mutable inference) AND `### Performance` naming the LLVM attribute contract (`readonly` on share params and params figured-out from const bindings; `noalias` where ownership rules prove non-aliasing). See `.claude/rules/plan-invariants.md` for the full required subsection list.
+**Constraint**: Every M4+ milestone plan that touches ownership, types, or the `const`/`let` distinction MUST include `## Invariants This Milestone Must Preserve` with `### Safety` enumerating the five paths const blocks (reassignment, `.lend`, `.give`, field mutation, mutable inference) AND `### Performance` naming the LLVM attribute contract (`readonly` on share params and params figured-out from const bindings; `noalias` where ownership rules prove non-aliasing). See [`.claude/rules/plan-invariants.md`](rules/plan-invariants.md) for the full required subsection list.
 
 **Bouncer checks** (each runnable as shell against a diff):
 - [ ] For each `plan.md` diff under `.claude/planning/{active,paused,done}/<plan-id>/`: extract the milestone number from the `<plan-id>` directory name (or the `legacy.milestone`/`legacy.slug` frontmatter field for migrated plans). If number >= 4, grep the file body for `^## Invariants This Milestone Must Preserve$`. Missing → CRITICAL.
@@ -69,20 +69,20 @@ may-block
 no.*coloring
 ```
 
-**Cause**: The v0.3-M2 plan shipped a `block_on` sync bridge as its "no-coloring delivery mechanism." `design/no-function-coloring.md` ("Concurrency — No Function Coloring") documents the actual model: whole-program TRANSITIVE may-block analysis up the call graph + auto-inserted `wait` at every suspension point + stackless state machines; FFI declares `may-block` (the only "can't infer → user" case). **There is no bridge in the design.** The bridge was invented to fill the gap created by cutting the M2/M3 milestone boundary at the wrong line (state machines in M2, may-block analysis deferred to M3 — but a correct state-machine layer REQUIRES the analysis). It both crashed at runtime (the HALT) and contradicted the documented design. Three rounds of adversarial plan-review + a P0 spike gate + five per-phase 4-agent review gates all PASSED it — because every review checked the plan against ITSELF (internal consistency, AC evidence, rule violations), never against the design doc it was violating.
+**Cause**: The v0.3-M2 plan shipped a `block_on` sync bridge as its "no-coloring delivery mechanism." [`docs/internal/implementation/IMP-no-function-coloring.md`](../docs/internal/implementation/IMP-no-function-coloring.md) ("Concurrency — No Function Coloring") documents the actual model: whole-program TRANSITIVE may-block analysis up the call graph + auto-inserted `wait` at every suspension point + stackless state machines; FFI declares `may-block` (the only "can't infer → user" case). **There is no bridge in the design.** The bridge was invented to fill the gap created by cutting the M2/M3 milestone boundary at the wrong line (state machines in M2, may-block analysis deferred to M3 — but a correct state-machine layer REQUIRES the analysis). It both crashed at runtime (the HALT) and contradicted the documented design. Three rounds of adversarial plan-review + a P0 spike gate + five per-phase 4-agent review gates all PASSED it — because every review checked the plan against ITSELF (internal consistency, AC evidence, rule violations), never against the design doc it was violating.
 
 **Detection signature**: (1) An execution plan file lacks a `## Design-Doc Alignment` section. OR (2) A plan defers a capability to a later milestone (`defer ... to M3`, `... is M3`, "deferred to v0.x") where that capability is named load-bearing for the CURRENT milestone in a `/design/` doc. OR (3) A plan introduces a runtime mechanism (`block_on`, sync bridge, thread-hold) for a behavior a `/design/` doc says is resolved at COMPILE time (inference / whole-program analysis).
 
-**Constraint**: Every execution plan MUST include `## Design-Doc Alignment` citing the governing `/design/` doc(s) and confirming match or enumerating each divergence with sign-off (see `.claude/rules/plan-invariants.md` "Design-Doc Alignment"). Plan-review (Step 7) and per-phase review (Step 9a) MUST diff the plan/diff against the cited design docs, not only against the plan's internal consistency. A plan contradicting a design doc is a BLOCK with the citation regardless of internal consistency — surfaced as "design doc X says A; plan says B."
+**Constraint**: Every execution plan MUST include `## Design-Doc Alignment` citing the governing `/design/` doc(s) and confirming match or enumerating each divergence with sign-off (see [`.claude/rules/plan-invariants.md`](rules/plan-invariants.md) "Design-Doc Alignment"). Plan-review (Step 7) and per-phase review (Step 9a) MUST diff the plan/diff against the cited design docs, not only against the plan's internal consistency. A plan contradicting a design doc is a BLOCK with the citation regardless of internal consistency — surfaced as "design doc X says A; plan says B."
 
 **Bouncer checks** (each runnable as shell against a diff):
 - [ ] For each added/modified `.claude/planning/{active,paused}/<plan-id>/plan.md` that is an execution plan (`legacy.type: execution` or absent): grep the body for `^## Design-Doc Alignment$`. Missing → WARNING.
 - [ ] If a plan body contains a deferral phrase (`defer.*to (M|v0\.)[0-9]`, `is (M[0-9]|v0\.[0-9])`, `deferred to`) for a capability, the `## Design-Doc Alignment` section MUST acknowledge whether that deferral is documented in the roadmap/mvp-scope or invented by the plan. Deferral phrase present + no Design-Doc Alignment acknowledgment → WARNING.
-- [ ] If a plan introduces `block_on` / "sync bridge" / "hold the thread" / "blocking pool" language for a behavior, and `design/no-function-coloring.md` (or any cited design doc) describes that behavior as compile-time-inferred → judgment BLOCK, cite "design doc says inferred-at-compile-time; plan introduces a runtime block".
+- [ ] If a plan introduces `block_on` / "sync bridge" / "hold the thread" / "blocking pool" language for a behavior, and [`docs/internal/implementation/IMP-no-function-coloring.md`](../docs/internal/implementation/IMP-no-function-coloring.md) (or any cited design doc) describes that behavior as compile-time-inferred → judgment BLOCK, cite "design doc says inferred-at-compile-time; plan introduces a runtime block".
 
 **Severity**: critical (a plan that contradicts the governing design ships the WRONG language; this one cost a halted milestone + a full re-plan).
 
-**Originating incident**: 2026-05-31 — during the v0.3-M2 re-spike + re-plan, Patrick asked "if `wait` is inferred at compile time, why is anything slower at runtime?" and "did we have this documented?" Reading `design/no-function-coloring.md` (which the `/plan` research step had skipped — only the codebase was mapped) revealed the doc had the correct transitive-inference / no-bridge model all along. The bridge was a plan invention contradicting it. See `.claude/planning/done/2026-05-30-v0-3-m2-wait-and-state-machines/plan.md` Findings Log "🔴 VERIFIED ROOT CAUSE."
+**Originating incident**: 2026-05-31 — during the v0.3-M2 re-spike + re-plan, Patrick asked "if `wait` is inferred at compile time, why is anything slower at runtime?" and "did we have this documented?" Reading [`docs/internal/implementation/IMP-no-function-coloring.md`](../docs/internal/implementation/IMP-no-function-coloring.md) (which the `/plan` research step had skipped — only the codebase was mapped) revealed the doc had the correct transitive-inference / no-bridge model all along. The bridge was a plan invention contradicting it. See [`.claude/planning/done/2026-05-30-v0-3-m2-wait-and-state-machines/plan.md`](planning/done/2026-05-30-v0-3-m2-wait-and-state-machines/plan.md) Findings Log "🔴 VERIFIED ROOT CAUSE."
 
 ---
 
@@ -91,7 +91,7 @@ no.*coloring
 **Scope**: `spec/*.md` and `design/*.md`, except `design/future/*` (parking-lot speculation only).
 **Exemption**:
 - Function signature documentation — signatures correctly declare `share`/`lend`/`give` at the parameter level. The anti-pattern is requiring annotation at the CALL site, NOT at the signature.
-- Documentation explicitly describing the inverse-anti-pattern as wrong (cites this entry or `.claude/rules/inference.md`).
+- Documentation explicitly describing the inverse-anti-pattern as wrong (cites this entry or [`.claude/rules/inference.md`](rules/inference.md)).
 - Examples showing `foo(player.share)` as one of several legal forms, not as a requirement.
 **Last verified**: 2026-05-14
 **Category**: regex+judgment
@@ -114,7 +114,7 @@ at every call
 
 **Detection signature**: A spec or design doc (excluding `design/future/*`) introduces language requiring ownership annotation at CALL sites. Phrases that signal the anti-pattern: "must annotate at the call site", "explicit ownership at every call", "call sites must declare share/lend/give", "required at call site", or code examples showing `foo(player.share)` with surrounding text stating this is REQUIRED (rather than optional/click-to-make-explicit-from-the-muted-hint).
 
-**Constraint**: Spec and design docs describe call-site ownership as INFERRED-WITH-MUTED-IDE-HINT (per `.claude/rules/inference.md`). Function SIGNATURES correctly require explicit `share`/`lend`/`give` declarations; CALL SITES infer. Explicit `.share`/`.lend` typing at call sites is documented as AVAILABLE for clarity, NEVER REQUIRED.
+**Constraint**: Spec and design docs describe call-site ownership as INFERRED-WITH-MUTED-IDE-HINT (per [`.claude/rules/inference.md`](rules/inference.md)). Function SIGNATURES correctly require explicit `share`/`lend`/`give` declarations; CALL SITES infer. Explicit `.share`/`.lend` typing at call sites is documented as AVAILABLE for clarity, NEVER REQUIRED.
 
 **Bouncer checks**:
 - [ ] For each diff to `spec/*.md` or `design/*.md` (excluding `design/future/*`): grep added lines (case-insensitive) for `must annotate at`, `required at call site`, `must declare.*at every call`, `explicit annotation.*at the call site`. Any match → WARNING.
@@ -122,7 +122,7 @@ at every call
 
 **Severity**: warning (re-relitigation risk; not a runtime safety violation).
 
-**Originating incident**: 2026-05-14 — during the design-lockdown conversation, Patrick and Claude initially considered requiring explicit `.share`/`.lend` at call sites for teaching visibility. Rejected in favor of uniform inference + IDE muted hints (which preserves teaching value without the syntactic burden). Documented in `.claude/rules/inference.md` "Inverse Anti-Pattern" section. The spec file `spec/ownership.md` previously had a "smart defaults at call sites" section that was rewritten to the inferred-with-hints framing in Phase 3 of the plan.
+**Originating incident**: 2026-05-14 — during the design-lockdown conversation, Patrick and Claude initially considered requiring explicit `.share`/`.lend` at call sites for teaching visibility. Rejected in favor of uniform inference + IDE muted hints (which preserves teaching value without the syntactic burden). Documented in [`.claude/rules/inference.md`](rules/inference.md) "Inverse Anti-Pattern" section. The spec file [`docs/reference/REF-ownership.md`](../docs/reference/REF-ownership.md) previously had a "smart defaults at call sites" section that was rewritten to the inferred-with-hints framing in Phase 3 of the plan.
 
 ---
 
@@ -147,7 +147,7 @@ at every call
 
 **Detection signature**: An M4-or-later milestone plan file contains `## Invariants This Milestone Must Preserve` but is missing one or more of the required 5 subsections: `### Safety`, `### Performance`, `### Teaching`, `### Runtime Dependencies`, `### Kernel-Mode Behavior`. Also: a present subsection has no meaningful content within 10 lines of its header.
 
-**Constraint**: Every M4+ milestone plan with `## Invariants This Milestone Must Preserve` MUST contain all 5 named subsections, each non-empty (at least one non-blank, non-heading line within 10 lines of the subsection heading). See `.claude/rules/plan-invariants.md` for what each subsection should contain.
+**Constraint**: Every M4+ milestone plan with `## Invariants This Milestone Must Preserve` MUST contain all 5 named subsections, each non-empty (at least one non-blank, non-heading line within 10 lines of the subsection heading). See [`.claude/rules/plan-invariants.md`](rules/plan-invariants.md) for what each subsection should contain.
 
 **Bouncer checks**:
 - [ ] For each M4+ plan file in the diff that contains `^## Invariants This Milestone Must Preserve$`: extract the section body (between that line and the next `^## ` or EOF). Within that body, grep for each of `^### Safety$`, `^### Performance$`, `^### Teaching$`, `^### Runtime Dependencies$`, `^### Kernel-Mode Behavior$`. Missing any → WARNING.
@@ -178,11 +178,11 @@ crates/
 ```
 
 
-**Cause**: The `--kernel` mode design (see `design/no-runtime-mode.md`) for chipset/NASA/embedded targets requires every Yinz language and stdlib feature to declare its runtime dependencies (heap allocator? scheduler? OS I/O? none?) and kernel-mode behavior (compile error? works with user-provided primitive? always works?). Without enforcement, features ship with hidden heap dependencies and the v0.3 kernel-mode work hits a wall trying to retroactively analyze every feature.
+**Cause**: The `--kernel` mode design (see [`docs/internal/implementation/IMP-no-runtime-mode.md`](../docs/internal/implementation/IMP-no-runtime-mode.md)) for chipset/NASA/embedded targets requires every Yinz language and stdlib feature to declare its runtime dependencies (heap allocator? scheduler? OS I/O? none?) and kernel-mode behavior (compile error? works with user-provided primitive? always works?). Without enforcement, features ship with hidden heap dependencies and the v0.3 kernel-mode work hits a wall trying to retroactively analyze every feature.
 
 **Detection signature**: A plan file dated 2026-05-15+ with `files:` matching `crates/**` (i.e., adds compiler or stdlib features) does NOT contain `### Runtime Dependencies` AND `### Kernel-Mode Behavior` subsections within its Invariants section. These are required parts of the 5-subsection structure but called out separately because they're the KERNEL-specific check.
 
-**Constraint**: Any plan adding language or stdlib features must declare runtime dependencies and kernel-mode behavior in the `### Runtime Dependencies` and `### Kernel-Mode Behavior` subsections of `## Invariants This Milestone Must Preserve`. Each lists per-feature: what the feature depends on at runtime, and what happens in `--kernel` mode (compile error with which message? plug-in API? always works?). See `.claude/rules/plan-invariants.md` and `design/no-runtime-mode.md`.
+**Constraint**: Any plan adding language or stdlib features must declare runtime dependencies and kernel-mode behavior in the `### Runtime Dependencies` and `### Kernel-Mode Behavior` subsections of `## Invariants This Milestone Must Preserve`. Each lists per-feature: what the feature depends on at runtime, and what happens in `--kernel` mode (compile error with which message? plug-in API? always works?). See [`.claude/rules/plan-invariants.md`](rules/plan-invariants.md) and [`docs/internal/implementation/IMP-no-runtime-mode.md`](../docs/internal/implementation/IMP-no-runtime-mode.md).
 
 **Bouncer checks**:
 - [ ] For each `plan.md` diff dated 2026-05-15+ (via `created_at`/`legacy.created`) with `legacy.files:` containing `crates/`: grep file body for `^### Runtime Dependencies$` AND `^### Kernel-Mode Behavior$`. Missing either → WARNING.
@@ -195,10 +195,10 @@ crates/
 
 ## Re-Introducing Try/Catch / Recover Blocks After Rejection — 2026-05-14
 
-**Scope**: `crates/ynz-parser/src/lexer.rs`, `crates/ynz-parser/src/token.rs`, `crates/ynz-parser/src/parser.rs`, `crates/ynz-ast/src/nodes.rs`, `spec/*.md`, `design/*.md`. Excludes `design/future/panic-safety.md` (which DOCUMENTS the rejection rationale).
+**Scope**: `crates/ynz-parser/src/lexer.rs`, `crates/ynz-parser/src/token.rs`, `crates/ynz-parser/src/parser.rs`, `crates/ynz-ast/src/nodes.rs`, `spec/*.md`, `design/*.md`. Excludes [`docs/internal/scratchpad/SCRATCH-future-panic-safety.md`](../docs/internal/scratchpad/SCRATCH-future-panic-safety.md) (which DOCUMENTS the rejection rationale).
 **Exemption**:
-- `design/future/panic-safety.md` — this file documents WHY try/catch was rejected; it must mention the syntax to do so
-- Documentation that explicitly cites this entry or `design/future/panic-safety.md` as the rejection rationale (e.g., "Yinz rejects try/catch — see X")
+- [`docs/internal/scratchpad/SCRATCH-future-panic-safety.md`](../docs/internal/scratchpad/SCRATCH-future-panic-safety.md) — this file documents WHY try/catch was rejected; it must mention the syntax to do so
+- Documentation that explicitly cites this entry or [`docs/internal/scratchpad/SCRATCH-future-panic-safety.md`](../docs/internal/scratchpad/SCRATCH-future-panic-safety.md) as the rejection rationale (e.g., "Yinz rejects try/catch — see X")
 - Test fixtures specifically testing that try/catch produces a parse error (banned-keyword diagnostic test)
 **Last verified**: 2026-05-14
 **Category**: regex+judgment
@@ -220,17 +220,17 @@ recover \(
 
 **Detection signature**:
 - In compiler source (`crates/ynz-parser/**`, `crates/ynz-ast/**`): added lines introducing a `Try`, `Catch`, or `Recover` token/keyword/AST variant (excluding lines that are clearly comments or banned-keyword test fixtures).
-- In spec/design docs (excluding `design/future/panic-safety.md`): added lines introducing `try {` or `catch (` or `recover (` syntax inside a Yinz code block as legal syntax (not as "this is rejected" demonstration).
+- In spec/design docs (excluding [`docs/internal/scratchpad/SCRATCH-future-panic-safety.md`](../docs/internal/scratchpad/SCRATCH-future-panic-safety.md)): added lines introducing `try {` or `catch (` or `recover (` syntax inside a Yinz code block as legal syntax (not as "this is rejected" demonstration).
 
-**Constraint**: Yinz panic handling uses `errors` keyword for KNOWN failures (auto-propagate) + task-isolation via `background` + supervisor pattern at the task boundary for UNKNOWN panics. NO try/catch/recover syntax at the language level. See `design/future/panic-safety.md` for the full rationale and rejected alternatives.
+**Constraint**: Yinz panic handling uses `errors` keyword for KNOWN failures (auto-propagate) + task-isolation via `background` + supervisor pattern at the task boundary for UNKNOWN panics. NO try/catch/recover syntax at the language level. See [`docs/internal/scratchpad/SCRATCH-future-panic-safety.md`](../docs/internal/scratchpad/SCRATCH-future-panic-safety.md) for the full rationale and rejected alternatives.
 
 **Bouncer checks**:
 - [ ] For diff entries touching `crates/ynz-parser/src/lexer.rs`, `crates/ynz-parser/src/token.rs`, `crates/ynz-parser/src/parser.rs`, or `crates/ynz-ast/src/nodes.rs`: grep added (non-comment) lines for `\bTry\b`, `\bCatch\b`, `\bRecover\b` (excluding lines containing `// banned`, `// rejected`, or matching banned-keyword test fixture patterns). Any match → CRITICAL.
-- [ ] For diff entries touching `spec/*.md` or `design/*.md` (use pathspec exclusion `:!design/future/panic-safety.md` to exclude the rationale file properly — NOT `grep -v` which only strips lines, leaving offending content visible): grep added lines for ` try \{`, ` catch \(`, ` recover \(` patterns. Any match → WARNING.
+- [ ] For diff entries touching `spec/*.md` or `design/*.md` (use pathspec exclusion `:!docs/internal/scratchpad/SCRATCH-future-panic-safety.md` to exclude the rationale file properly — NOT `grep -v` which only strips lines, leaving offending content visible): grep added lines for ` try \{`, ` catch \(`, ` recover \(` patterns. Any match → WARNING.
 
 **Severity**: critical for compiler source changes (would land in the compiler if merged); warning for docs changes (re-relitigation risk only).
 
-**Originating incident**: 2026-05-14 — earlier in the design-lockdown conversation, Claude proposed `try { } recover (e: Panic) { }` blocks for explicit panic recovery in scope. Patrick correctly identified this as try/catch under a different name and rejected it. The supervisor pattern at the task boundary handles every legitimate use case (per-request isolation in HTTP servers, per-job isolation in queue workers, per-order isolation in trading bots). Adding a second recovery mechanism would violate Yinz's "one concept = one keyword" principle and re-introduce all the problems Java/Python have with try/catch (catch-and-silently-continue, exception-as-flow-control, etc.). See `design/future/panic-safety.md` for the full design rationale.
+**Originating incident**: 2026-05-14 — earlier in the design-lockdown conversation, Claude proposed `try { } recover (e: Panic) { }` blocks for explicit panic recovery in scope. Patrick correctly identified this as try/catch under a different name and rejected it. The supervisor pattern at the task boundary handles every legitimate use case (per-request isolation in HTTP servers, per-job isolation in queue workers, per-order isolation in trading bots). Adding a second recovery mechanism would violate Yinz's "one concept = one keyword" principle and re-introduce all the problems Java/Python have with try/catch (catch-and-silently-continue, exception-as-flow-control, etc.). See [`docs/internal/scratchpad/SCRATCH-future-panic-safety.md`](../docs/internal/scratchpad/SCRATCH-future-panic-safety.md) for the full design rationale.
 
 ---
 
@@ -306,7 +306,7 @@ macro_rules!
 
 **Exemption**:
 - Definitions marked `#[cfg(test)]` (test-only intrinsics — registry is for production surface only)
-- Definitions with `// CARVE-OUT: <reason>` on the definition line (explicitly declared legitimate parallel registries per `design/feature-registry.md` "Carve-Outs" section)
+- Definitions with `// CARVE-OUT: <reason>` on the definition line (explicitly declared legitimate parallel registries per [`docs/internal/implementation/IMP-feature-registry.md`](../docs/internal/implementation/IMP-feature-registry.md) "Carve-Outs" section)
 - Definitions that are lookup tables OVER the registry's generated output (e.g., a perf-critical wrapper that caches registry data)
 
 **Last verified**: 2026-05-19 — pattern tested against current codebase. Matches: `crates/ynz-diagnostics/src/banned_jargon.rs:21` (migrating in Phase 2) and `crates/ynz-typeck/src/builtins.rs:101` (migrating in Phase 3, undiscovered in original research). Zero false positives in other files in those crates.
@@ -326,11 +326,11 @@ pub (const|static).*&\[
 - Does NOT have `#[cfg(test)]` on the preceding line or the definition line itself
 - Does NOT have a `// CARVE-OUT:` comment within 3 lines above the definition
 
-**Constraint**: All new user-facing feature inventories go in `registry/features.toml` first. Code (Rust constant, adapter function) is derived from the registry, not the other way. See `design/feature-registry.md` for the schema and `.claude/rules/feature-registry.md` for the entry-type checklist.
+**Constraint**: All new user-facing feature inventories go in [`registry/features.toml`](../registry/features.toml) first. Code (Rust constant, adapter function) is derived from the registry, not the other way. See [`docs/internal/implementation/IMP-feature-registry.md`](../docs/internal/implementation/IMP-feature-registry.md) for the schema and [`.claude/rules/feature-registry.md`](rules/feature-registry.md) for the entry-type checklist.
 
 **Bouncer checks** (each runnable as shell against a diff):
 - [ ] For each diff line adding `pub const.*&\[.*&str\].*=.*&\[` or `pub static.*&\[.*&str\].*=.*&\[` in `crates/ynz-diagnostics/src/`, `crates/ynz-typeck/src/`, or `crates/ynz-parser/src/`: check that within the 3 lines ABOVE the definition (in the same diff context) there is either `#[cfg(test)]` or `// CARVE-OUT:`. Missing either → WARNING: "New string-array registry detected without SSOT link — add to registry/features.toml or annotate // CARVE-OUT: <reason>."
-- [ ] For each diff adding `pub const` or `pub static` matching the above pattern: additionally grep the diff for a corresponding `[[` TOML entry in `registry/features.toml` within the same PR. Missing → WARNING: "Registry entry not found for new constant — was this added to registry/features.toml?"
+- [ ] For each diff adding `pub const` or `pub static` matching the above pattern: additionally grep the diff for a corresponding `[[` TOML entry in [`registry/features.toml`](../registry/features.toml) within the same PR. Missing → WARNING: "Registry entry not found for new constant — was this added to registry/features.toml?"
 
 **Severity**: warning (the pre-M1 code is being migrated; the Bouncer prevents NEW drift from being introduced post-M1).
 
@@ -447,7 +447,7 @@ to_i64_bits
 
 **Severity**: critical — silent-wrong codegen across a suspension is the worst failure class (no crash, no panic; the program runs and prints the wrong number). This exact disease cost ~10 silent-miscompile rounds in M3a P1+P3.
 
-**Originating incident**: 2026-06-04, v0.3-M3a suspension codegen. Two parallel per-type flush dispatches drifted (decimal128/shape/string/options branches present in one, missing/wrong in the other) → `0.000`/stack-garbage across `wait` suspensions; ~10 whack-a-mole rounds. Root fix round 5: unify into `flush_var_slot_to_frame` + symmetric `reload_params_from_frame`; `flush_for_loop_var` became a thin wrapper. Second instance: `is_let_declared_before_wait_in_stmts` flat-scan re-derived the crossing set → under/over-rejection on the `ArrayShapeRuntimeFieldWithWait` guard; fixed by consuming the authoritative `crossing_names`. The cumulative Opus code-reviewer that finally certified the milestone called it "the unified flush killed the hydra." See `.claude/planning/done/2026-06-01-v0-3-m3a-suspension-codegen/plan.md` Phase 1/3 Findings Logs.
+**Originating incident**: 2026-06-04, v0.3-M3a suspension codegen. Two parallel per-type flush dispatches drifted (decimal128/shape/string/options branches present in one, missing/wrong in the other) → `0.000`/stack-garbage across `wait` suspensions; ~10 whack-a-mole rounds. Root fix round 5: unify into `flush_var_slot_to_frame` + symmetric `reload_params_from_frame`; `flush_for_loop_var` became a thin wrapper. Second instance: `is_let_declared_before_wait_in_stmts` flat-scan re-derived the crossing set → under/over-rejection on the `ArrayShapeRuntimeFieldWithWait` guard; fixed by consuming the authoritative `crossing_names`. The cumulative Opus code-reviewer that finally certified the milestone called it "the unified flush killed the hydra." See [`.claude/planning/done/2026-06-01-v0-3-m3a-suspension-codegen/plan.md`](planning/done/2026-06-01-v0-3-m3a-suspension-codegen/plan.md) Phase 1/3 Findings Logs.
 
 ---
 
@@ -486,7 +486,7 @@ FRAME_HEADER_SIZE
 
 **Severity**: critical — silent under-sizing of an embedded sub-frame → SIGILL/memory corruption, and the test goes green because the resolved value coincides with the fallback. Worst failure class (no crash in the happy-path fixture; detonates only on a callee with a non-trivial frame).
 
-**Originating incident**: 2026-06-06, v0.3-M3e Phase 1. `build_frame_layouts_with_resolver`'s `compute_frame_size` loop cached the `FRAME_HEADER_SIZE` fallback for imported callees before the `or_insert_with(resolver)` seed ran → the cross-module resolver was dead code. The recursion unit test passed at `doWork.total_size==64` only because the leaf callee's real frame happened to equal the 32-byte fallback. code-reviewer's adversarial probe (vary the resolver return → output invariant; `Cell` counter → resolver never fired) caught it; acceptance-verifier's claim-trusting PASS missed it. Fixed: resolver-seed moved before `compute_frame_size`; test rewritten with a >32 callee frame + anti-bypass sentinel (`resolver→56 → 88`). See `.claude/planning/done/2026-06-05-v0-3-m3e-cross-module-frame-serialization/plan.md` Phase 1 Findings Log (round-2/round-3).
+**Originating incident**: 2026-06-06, v0.3-M3e Phase 1. `build_frame_layouts_with_resolver`'s `compute_frame_size` loop cached the `FRAME_HEADER_SIZE` fallback for imported callees before the `or_insert_with(resolver)` seed ran → the cross-module resolver was dead code. The recursion unit test passed at `doWork.total_size==64` only because the leaf callee's real frame happened to equal the 32-byte fallback. code-reviewer's adversarial probe (vary the resolver return → output invariant; `Cell` counter → resolver never fired) caught it; acceptance-verifier's claim-trusting PASS missed it. Fixed: resolver-seed moved before `compute_frame_size`; test rewritten with a >32 callee frame + anti-bypass sentinel (`resolver→56 → 88`). See [`.claude/planning/done/2026-06-05-v0-3-m3e-cross-module-frame-serialization/plan.md`](planning/done/2026-06-05-v0-3-m3e-cross-module-frame-serialization/plan.md) Phase 1 Findings Log (round-2/round-3).
 
 ## Silent Envelope Narrowing — Gated-Path Decline Widens While Output Tests Stay Green — 2026-06-12
 
@@ -522,4 +522,4 @@ YNZ_M3D_SPIKE
 
 **Severity**: critical — the feature under test silently stops existing while its entire test suite stays green; downstream phases inherit "proven" machinery with zero live coverage. Cost when it fired: rounds 6–8 of an 8-round gate saga (one full extra fix round + re-gate) to discover and undo a narrowing that a plan-time envelope table would have flagged instantly.
 
-**Originating incident**: 2026-06-12, v0.3-M3d Phase 0 round 7. The ISSUE-B fix declined post-pair statements on `stmt_contains_wait || stmt_contains_suspending_call`; the `stmt_contains_wait` clause also caught intrinsic `wait sleep(0)`, flipping fixtures (g)/(h)/(i)/(j)/(n) from FIRE to DECLINE — IR-verified zero `ynz_rt_spawn_blocking_joinable` call sites — making the cross-suspension reload machinery (built and debugged across 5 prior fix rounds, deviations #9/#14) dead code while all 17 fixtures stayed byte-identical green. Caught only because the coordinator primed all four round-7 gate agents on the "does the spike still FIRE, not just match output" question; deviation-judge #15 traced it at IR level and named the one-clause fix (keep only `stmt_contains_suspending_call`, which already excludes sleep via `M2_MAY_BLOCK_INTRINSICS`). Fixed in round 8; FIRES restored 0→2 spawn calls per fixture. See `.claude/planning/done/2026-06-11-v0-3-m3d-cpu-parallelization/plan.md` Phase 0 Findings Log (R7/R8 entries) — committed dcc1432.
+**Originating incident**: 2026-06-12, v0.3-M3d Phase 0 round 7. The ISSUE-B fix declined post-pair statements on `stmt_contains_wait || stmt_contains_suspending_call`; the `stmt_contains_wait` clause also caught intrinsic `wait sleep(0)`, flipping fixtures (g)/(h)/(i)/(j)/(n) from FIRE to DECLINE — IR-verified zero `ynz_rt_spawn_blocking_joinable` call sites — making the cross-suspension reload machinery (built and debugged across 5 prior fix rounds, deviations #9/#14) dead code while all 17 fixtures stayed byte-identical green. Caught only because the coordinator primed all four round-7 gate agents on the "does the spike still FIRE, not just match output" question; deviation-judge #15 traced it at IR level and named the one-clause fix (keep only `stmt_contains_suspending_call`, which already excludes sleep via `M2_MAY_BLOCK_INTRINSICS`). Fixed in round 8; FIRES restored 0→2 spawn calls per fixture. See [`.claude/planning/done/2026-06-11-v0-3-m3d-cpu-parallelization/plan.md`](planning/done/2026-06-11-v0-3-m3d-cpu-parallelization/plan.md) Phase 0 Findings Log (R7/R8 entries) — committed dcc1432.

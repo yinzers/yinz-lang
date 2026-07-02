@@ -2,50 +2,64 @@
 
 ## Structure
 
-Two parallel doc trees with distinct audiences:
+This project follows the **global `docs/` taxonomy** (`~/.claude/docs/internal/implementation/IMP-documentation-system.md`), migrated 2026-07-01 off the old two-tree `spec/`+`design/` layout. Four buckets carry this project's content:
 
-- **`spec/`** — for language users. Written for a HS grad who knows JavaScript. Explains what to write and what it does. Examples-heavy, plain English. No design rationale.
-- **`design/`** — for language contributors and architects. Explains WHY decisions were made, implementation approach, tradeoffs. Audience is the compiler team.
+- **`docs/reference/REF-*.md`** — the shared, cited-as-authority source of truth. Two kinds: (1) **user-facing language spec** (formerly `/spec/`) — written for a HS grad who knows JavaScript, examples-heavy, no design rationale, see [`.claude/rules/spec-writing.md`](spec-writing.md); (2) **cross-cutting compiler principles** other docs cite as the one canonical home (golden rules, teaching mission, naming, compiler-errors, mvp-scope, ide-hints).
+- **`docs/internal/implementation/IMP-*.md`** — living engineering blueprints (formerly `/design/`). Contributor/architect audience. What was decided, how it's implemented, alternatives considered, tradeoffs. Amended in place as the compiler evolves — NOT an immutable log (that's ADRs, below).
+- **`docs/internal/decisions/ADR-*.md`** — one-time, immutable, sequentially-numbered architecture decision records (tech-stack choices, governance policy). Never edit an accepted ADR's decision — a new ADR supersedes it.
+- **`docs/internal/scratchpad/SCRATCH-*.md`** — unresolved design questions (formerly `design/open-questions.md`) and locked-but-not-yet-built future/stdlib design ideas (formerly `design/future/`, `design/stdlib/`). Exempt from frontmatter/linking gates per the global standard — a frictionless sandbox.
 
-Every topic gets its own dedicated file. No threshold judgment about "is this major enough." Related things can be grouped within a single file. `design/decisions.md` is the index — it links to everything, contains nothing itself.
+Every topic gets its own dedicated file. No threshold judgment about "is this major enough." Related things can be grouped within a single file. [`docs/README.md`](../../docs/README.md) is the index — it links to everything, contains nothing itself.
 
 ---
 
 ## Adding a Language Feature — Checklist
 
-- [ ] Create or update `spec/feature.md` — user-facing (HS-grad readable, examples-heavy, compiler errors shown)
-- [ ] Create or update `design/feature.md` — design rationale (what was decided, alternatives considered, why this won)
-- [ ] Add `spec/feature.md` to `spec/overview.md` table of contents
-- [ ] Add `design/feature.md` to `design/decisions.md` index table
-- [ ] Close relevant items in `design/open-questions.md` — move resolved content to the design file
-- [ ] Sweep existing spec files for examples that reference the new feature — update them
+- [ ] Create or update `docs/reference/REF-feature.md` — user-facing (HS-grad readable, examples-heavy, compiler errors shown)
+- [ ] Create or update `docs/internal/implementation/IMP-feature.md` — design rationale (what was decided, alternatives considered, why this won)
+- [ ] Add `docs/reference/REF-feature.md` to [`docs/reference/REF-language-overview.md`](../../docs/reference/REF-language-overview.md) table of contents
+- [ ] Add `docs/internal/implementation/IMP-feature.md` to [`docs/README.md`](../../docs/README.md) index table
+- [ ] Close relevant items in [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../../docs/internal/scratchpad/SCRATCH-open-questions.md) — move resolved content to the implementation file
+- [ ] Sweep existing `docs/reference/REF-*.md` spec files for examples that reference the new feature — update them
+- [ ] If the feature graduates a `docs/internal/scratchpad/SCRATCH-future-*.md`/`SCRATCH-stdlib-*.md` idea from "future" to "shipping now," delete or trim the scratch file and point it at the new `IMP-*.md`/`REF-*.md` home instead of leaving a stale duplicate
 
 ---
 
 ## Making a Design Decision — Checklist
 
-- [ ] Add to the relevant `design/feature.md` file (create it if it doesn't exist)
-- [ ] If it resolves an open question, remove from `design/open-questions.md`
-- [ ] Add a row to `design/decisions.md` index if this is a new design file
-- [ ] If the decision changes existing spec content, update the spec file
+- [ ] **Living/amendable decision** (the normal case — a feature's design evolves with the compiler): add to the relevant `docs/internal/implementation/IMP-feature.md` file (create it if it doesn't exist)
+- [ ] **One-time, locked, unlikely-to-be-revisited decision** (tech-stack choice, versioning policy — see `.claude/rules/docs-checklist.md` "What Goes Where" below): write a new `docs/internal/decisions/ADR-NNN-short-name.md` instead. Never edit an accepted ADR's Decision section — write a new ADR that supersedes it.
+- [ ] If it resolves an open question, remove from [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../../docs/internal/scratchpad/SCRATCH-open-questions.md)
+- [ ] Add a row to [`docs/README.md`](../../docs/README.md) index if this is a new file
+- [ ] If the decision changes existing user-facing behavior, update the matching `docs/reference/REF-*.md` spec file
 
 ---
 
 ## File Content Rules
 
-### `spec/` files
+### `docs/reference/REF-*.md` (language-spec files)
 - Written for a HS grad who knows JavaScript
 - Short sections, lots of code examples
 - Show the actual compiler error message when demonstrating mistakes
-- No design rationale (that goes in `design/`)
-- No unresolved questions (those go in `design/open-questions.md`)
-- Follow `.claude/rules/spec-writing.md` for tone and format
+- No design rationale (that goes in `docs/internal/implementation/`)
+- No unresolved questions (those go in [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../../docs/internal/scratchpad/SCRATCH-open-questions.md))
+- Follow [`.claude/rules/spec-writing.md`](spec-writing.md) for tone and format
 
-### `design/` files
+### `docs/internal/implementation/IMP-*.md` (design files)
 - Written for compiler engineers and language architects
 - Each decision: what was decided, alternatives considered, why this one won
-- Link to the relevant `spec/` file at the top
-- Can reference open questions — link to `design/open-questions.md`
+- Link to the relevant `docs/reference/REF-*.md` spec file at the top, when a user-facing counterpart exists
+- Can reference open questions — link to [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../../docs/internal/scratchpad/SCRATCH-open-questions.md)
+
+### `docs/internal/decisions/ADR-*.md` (decision records)
+- Immutable once accepted — a new ADR supersedes, never edits, an old one
+- Follows the ADR template: Status / Context / Decision / Consequences
+- Reserved for genuinely one-time, hard-to-reverse calls — not every feature design belongs here (most do NOT; see `IMP-*.md` above)
+
+### `docs/internal/scratchpad/SCRATCH-*.md` (open questions + future ideas)
+- Exempt from frontmatter/linking/kebab-case gates per the global standard — write loosely
+- `SCRATCH-open-questions.md` — one entry per unresolved question; move to its dedicated `IMP-*.md`/`ADR-*.md` and delete the entry once resolved
+- `SCRATCH-future-*.md` / `SCRATCH-stdlib-*.md` — locked-but-unbuilt design ideas; states what's deferred, why, target milestone, what's locked vs still open
 
 ---
 
@@ -53,18 +67,20 @@ Every topic gets its own dedicated file. No threshold judgment about "is this ma
 
 | Content | Location |
 |---------|----------|
-| How to use a language feature | `spec/feature.md` |
-| Why a design decision was made | `design/feature.md` |
-| Design decision index | `design/decisions.md` |
-| Unresolved design questions | `design/open-questions.md` |
-| The 13 golden rules with rationale | `design/golden-rules.md` |
-| Standard library module design | `design/stdlib/module.md` |
-| Naming conventions (renamed keywords, casing) | `.claude/rules/naming.md` |
-| How to write spec files | `.claude/rules/spec-writing.md` |
-| How to make design decisions | `.claude/rules/language-design.md` |
+| How to use a language feature | `docs/reference/REF-feature.md` |
+| Why a design decision was made (living, amendable) | `docs/internal/implementation/IMP-feature.md` |
+| A one-time, locked, immutable architecture call | `docs/internal/decisions/ADR-NNN-short-name.md` |
+| Design decision index | [`docs/README.md`](../../docs/README.md) |
+| Unresolved design questions | [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../../docs/internal/scratchpad/SCRATCH-open-questions.md) |
+| Locked-but-unbuilt future feature design | `docs/internal/scratchpad/SCRATCH-future-topic.md` |
+| Locked-but-unbuilt stdlib module design (v0.5+) | `docs/internal/scratchpad/SCRATCH-stdlib-module.md` |
+| The 13 golden rules with rationale | [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) |
+| Naming conventions (renamed keywords, casing) | [`.claude/rules/naming.md`](naming.md) |
+| How to write language-spec files | [`.claude/rules/spec-writing.md`](spec-writing.md) |
+| How to make design decisions | [`.claude/rules/language-design.md`](language-design.md) |
 
 ---
 
 ## One Rule, No Exceptions
 
-Every topic gets its own dedicated file. There is no threshold for "is this big enough to deserve a file." If you're writing a design decision, it goes in a file. Group related things within a single file if they belong together. Never add design content to `design/decisions.md` — that file is an index only.
+Every topic gets its own dedicated file. There is no threshold for "is this big enough to deserve a file." If you're writing a design decision, it goes in a file. Group related things within a single file if they belong together. Never add design content to [`docs/README.md`](../../docs/README.md) — that file is an index only.

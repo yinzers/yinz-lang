@@ -60,7 +60,7 @@ Historical reference: `/tmp/yinz-design/yinz/project/shared.css` (the design pro
 <div class="rounded rounded-lg">...</div>
 ```
 
-**Font delivery**: `@nuxt/fonts` downloads Anton, Inter, and JetBrains Mono from Google Fonts at build time and serves them from `/_fonts/` in the generated output. Production builds require internet access to Google Fonts at build time; the browser never hits Google CDN at runtime. See the Phase 5 vendoring deferral in `.claude/planning/done/2026-05-20-webpage-foundation/plan.md` for the follow-up tracking committing vendored font files for hermetic builds.
+**Font delivery**: `@nuxt/fonts` downloads Anton, Inter, and JetBrains Mono from Google Fonts at build time and serves them from `/_fonts/` in the generated output. Production builds require internet access to Google Fonts at build time; the browser never hits Google CDN at runtime. See the Phase 5 vendoring deferral in [`.claude/planning/done/2026-05-20-webpage-foundation/plan.md`](../.claude/planning/done/2026-05-20-webpage-foundation/plan.md) for the follow-up tracking committing vendored font files for hermetic builds.
 
 ---
 
@@ -109,7 +109,7 @@ docker run -p 8080:80 yinzlang-prod
 
 ### CSP forward-warning
 
-Shiki renders code colors via inline `<span style="color:...">`. Any future CSP at the DO edge or via `nuxt-security` MUST allow `style-src 'unsafe-inline'` OR migrate Shiki to class-based theming. See Phase 5 deferral in `.claude/planning/done/2026-05-20-webpage-foundation/plan.md` for the vendoring follow-up.
+Shiki renders code colors via inline `<span style="color:...">`. Any future CSP at the DO edge or via `nuxt-security` MUST allow `style-src 'unsafe-inline'` OR migrate Shiki to class-based theming. See Phase 5 deferral in [`.claude/planning/done/2026-05-20-webpage-foundation/plan.md`](../.claude/planning/done/2026-05-20-webpage-foundation/plan.md) for the vendoring follow-up.
 
 **Tailwind v4 `@theme` HMR caveat**: edits to the `@theme` block in `app/assets/css/tailwind.css` sometimes require a full dev-server restart to reflect. Known v4 quirk.
 

@@ -31,9 +31,9 @@ legacy:
     - tooling/vscode-ynz/**
     - examples/pirates-roster/entrypoint.ynz
     - examples/primantis-orders/v0_3_m2_errors.ynz
-    - design/stdlib/filesystem.md
-    - design/stdlib/network.md
-    - design/stdlib/database.md
+    - docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md
+    - docs/internal/scratchpad/SCRATCH-stdlib-network.md
+    - docs/internal/scratchpad/SCRATCH-stdlib-database.md
 ---
 
 
@@ -97,14 +97,14 @@ Roadmap: `v0-3-concurrency-perf`
   - Heap-allocated struct via `ynz_alloc(frame_size)` at task-spawn or `block_on` time
   - Fields: `resume_point: i32` (which state to resume into); each live local across a wait boundary; the awaited handle's storage slot
   - Frame freed via `ynz_free` inside the closure RAII guard (same pattern as M1 `ynz_rt_spawn_blocking`'s `CtxDropGuard`) — drops on completion AND on panic.
-- **`errors` keyword integration** (`design/errors.md` + M7 implementation): `errors`-returning functions use a `{i64, i64}` ABI (value + error-frame tag). State-machine functions returning `T errors` must thread this through `Poll<Result<T>>` → at the IR level, `Poll::Ready` carries `{i64, i64}` payload; `Poll::Pending` carries no payload but the frame's resume-point preserves where the error-handling logic resumes.
-- **`design/stdlib/filesystem.md`** currently has no `async`/`wait` references — M2 P4 adds a "Deferred to v0.5: async I/O surface — `readFileAsync`, `writeFileAsync`, etc. — backed by tokio::fs" stub note so future-us doesn't reinvent this conversation. Same for `network.md` and `database.md`.
+- **`errors` keyword integration** ([`docs/internal/implementation/IMP-errors.md`](../../../../docs/internal/implementation/IMP-errors.md) + M7 implementation): `errors`-returning functions use a `{i64, i64}` ABI (value + error-frame tag). State-machine functions returning `T errors` must thread this through `Poll<Result<T>>` → at the IR level, `Poll::Ready` carries `{i64, i64}` payload; `Poll::Pending` carries no payload but the frame's resume-point preserves where the error-handling logic resumes.
+- **[`docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md)** currently has no `async`/`wait` references — M2 P4 adds a "Deferred to v0.5: async I/O surface — `readFileAsync`, `writeFileAsync`, etc. — backed by tokio::fs" stub note so future-us doesn't reinvent this conversation. Same for `network.md` and `database.md`.
 
 ---
 
 ## Design-Doc Alignment
 
-**Governing design docs**: `design/future/concurrency.md` ("Concurrency — No Function Coloring") + `design/concurrency.md`.
+**Governing design docs**: `design/future/concurrency.md` ("Concurrency — No Function Coloring") + [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md).
 
 **Match assertion**: the SHIPPED M2 model (Rework Phases 6–9 + the updated Invariant subsections + Quality Checklist) conforms to the design — whole-program TRANSITIVE intra-unit may-block analysis (design lines 34-35) → every suspending function is a stackless state machine → inline poll-and-yield at every suspending call → composed frames ("low memory, fast spawn — like Rust's async", design line 40) → NO `block_on` bridge (the bridge appears nowhere in the design; Phase 8 deletes it). `wait` is inferred/optional (no function coloring, design line 11). Un-analyzable boundaries (cross-module pre-M8, dynamic-dispatch vtable, FFI) → clean compile error ("externals are on the user", design lines 47-57) — never a bridge, never a guess.
 
@@ -123,7 +123,7 @@ Roadmap: `v0-3-concurrency-perf`
 | `lower_function_with_waits` codegen takes >10× longer than `lower_function` for trivial functions | Low | Medium | Path selection happens early (function flagged as "contains wait" during AST walk). Functions without `wait` use the existing fast path unchanged. Measure: typeck+codegen wall-clock on `examples/pirates-roster/` corpus before/after M2. Threshold: ≤ 10% overall slowdown on the corpus (most functions don't contain wait). |
 | `sleepAsync(int)` Yinz intrinsic ships an API the future stdlib `wait` module will want to rename | Low | Low | **Locked: stays in stdlib/concurrency forever.** `sleepAsync` is the canonical name for "non-blocking sleep" — paired with `sleepMs` (blocking sleep) — consistent with the M1 naming decision (rationale in M1 `runtime_decls.rs` near `ynz_thread_sleep_ms`). The "Async" suffix matches the muted-hint convention; not jargon (already widely understood) and explicitly approved here. |
 | `__testFallibleAsync()` internal intrinsic accidentally leaks to user-facing docs / autocomplete | Low | Medium | Double-underscore prefix matches Python/Java/C convention for "internal." Registry entry is OMITTED (not just hidden) — the LSP can't autocomplete it. Filed under `crates/ynz-typeck/src/intrinsics.rs` with comment `// INTERNAL — DO NOT REGISTER. Used by M2 state-machine codegen tests only. Deletes when v0.5 ships real fallible async I/O intrinsics.` Visibility test: P3 includes an LSP completion test that asserts `__testFallibleAsync` does NOT appear in any completion list. |
-| State-machine frame size grows unboundedly with function-local complexity (Rust async has hit ~10KB frame size for deeply-nested awaits) | Low | Medium | M2 frame layout is "one slot per live local across a wait boundary." Functions without `wait` have zero overhead. Functions with `wait` get exactly the slots they need. P0 spike includes a 5-wait sequential test that measures frame size; threshold: frame ≤ 256 bytes for the spike fixture. Frame-size lint deferred to v0.4 linting tier per `design/mvp-scope.md`. |
+| State-machine frame size grows unboundedly with function-local complexity (Rust async has hit ~10KB frame size for deeply-nested awaits) | Low | Medium | M2 frame layout is "one slot per live local across a wait boundary." Functions without `wait` have zero overhead. Functions with `wait` get exactly the slots they need. P0 spike includes a 5-wait sequential test that measures frame size; threshold: frame ≤ 256 bytes for the spike fixture. Frame-size lint deferred to v0.4 linting tier per [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md). |
 | Cross-impl consistency harness (M1) breaks on M2-introduced state-machine fixtures | Low | Low | Same exclusion mechanism M1 introduced: `const TIMING_DEPENDENT_FIXTURES: &[&str]` allowlist at the top of `cross_impl_consistency.rs`. M2 fixtures using `sleepAsync` join the list; the harness still covers the rest of the corpus byte-for-byte. M3 wires the harness to real auto-parallel codegen at which point richer assertions become possible. |
 | Background-spawn routing (state-machine fn → `ynz_rt_spawn`, regular fn → `ynz_rt_spawn_blocking`) gets the wrong route and a CPU-bound background task starves the I/O scheduler | Low | High | Decision logic: a function is "state machine" iff its AST contains `Expr::Wait` (local syntactic check, NOT transitive). If a wait-free function is spawned via `background`, it ALWAYS routes to `ynz_rt_spawn_blocking` (existing M1 behavior). Transitive may-block analysis (M3) refines this. Integration test: `background_routing_decision` asserts a 4-thread CPU-bound loop background-spawned does NOT block I/O timers. |
 | `main` containing `wait` + existing `ynz_rt_init/shutdown` interact badly (block_on inside main, runtime already booted) | Medium | Medium | P0 spike contract #1 specifically validates: `main` becomes a state machine if it contains `wait`; codegen emits `runtime.block_on(main_state_machine_resume(...))` at main's entry; existing `ynz_rt_init` is called BEFORE block_on, `ynz_rt_shutdown` AFTER. Main's exit code propagates through the future's `Output` type. |
@@ -222,7 +222,7 @@ No open questions at execution-plan level at draft time.
 - **Composed-frame allocation (REPLACES sync-bridge overhead).** A synchronous state-machine call tree does exactly ONE `ynz_alloc` for the whole composed tree (child sub-frames embedded), NOT one per call — matching `design/future/concurrency.md`'s "low memory, fast spawn — like Rust's async." Heap-alloc only at `background` spawn (one per task tree) and recursion edges. A pure-CPU function (no transitive suspension) compiles to straight-line code, ZERO state-machine overhead. Verified by: alloc-counter single-allocation proof (Phase 7) + zero-cost straight-line check.
 - **`ynz_rt_check_preempt` per-call cost** unchanged from M1 (~1ns; no-op stub). Full preemption semantics still ship later — M2 doesn't touch the preempt mechanism.
 
-**Auto-promotion analysis** (per `.claude/rules/auto-promotion.md`):
+**Auto-promotion analysis** (per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)):
 
 The M1 large-copy-warning hybrid (muted hint + Tier 3 lint for `.copy` → `.give`) carries forward unchanged. M2-specific auto-promotion candidates:
 
@@ -282,7 +282,7 @@ IDE muted-hint domains: **`wait_points` is ACTIVATED in M2** (Phase 6) — `wait
 
 ### Demo & Error Gallery
 
-Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`:
+Per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Demo & Error Gallery`:
 
 1. **`examples/pirates-roster/entrypoint.ynz`** — extended with a v0.3-M2 concurrency section that:
    - Spawns 8 background tasks, each calling `wait sleepAsync(100)` (8 per Round 2 Concern #5 — proves thread-sharing visibly on multi-core CI)
@@ -304,7 +304,7 @@ Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`:
 
 ### Feature Registry Entries
 
-Per `.claude/rules/plan-invariants.md` `### Feature Registry Entries`:
+Per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Feature Registry Entries`:
 
 **SCHEMA**: M1 already extended `KeywordEntry` with `hover_what`/`hover_what_instead`/`hover_why` optional fields. M2 uses the existing schema — no new schema extension required.
 
@@ -344,11 +344,11 @@ Concrete entries this plan adds (modifies + new):
   - Summary: "Non-blocking sleep. `wait sleepAsync(ms)` suspends the calling function for `ms` milliseconds; the OS thread is freed during the suspension."
   - Pairs with `sleepMs(int)` (M1 intrinsic, `registry/features.toml:635` — blocking sleep, ties up the calling OS thread).
   - May-block: TRUE (member of `M2_MAY_BLOCK_INTRINSICS` set in `crates/ynz-typeck/src/intrinsics.rs`; M3 expands the predicate via call-graph analysis).
-- **New `[[deferred_tooling_feature]]` `async-io-stdlib-intrinsics-v0-5`** — registry entry per `.claude/rules/feature-registry.md`'s SSOT discipline (per plan-reviewer Concern). Documents that real `readFileAsync` / `writeFileAsync` / `readNetworkAsync` / `dbQueryAsync` intrinsics are intentionally deferred to v0.5+ stdlib modules. Required fields:
+- **New `[[deferred_tooling_feature]]` `async-io-stdlib-intrinsics-v0-5`** — registry entry per [`.claude/rules/feature-registry.md`](../../../rules/feature-registry.md)'s SSOT discipline (per plan-reviewer Concern). Documents that real `readFileAsync` / `writeFileAsync` / `readNetworkAsync` / `dbQueryAsync` intrinsics are intentionally deferred to v0.5+ stdlib modules. Required fields:
   - WHY: "Each stdlib module (file v0.5, database v0.10, http v0.15) has its own API design questions (path encoding, error variants, connection pooling) that belong to the module's design milestone, not to the state-machine ABI milestone."
   - SUBSTITUTE: "Use `sleepAsync(int)` (v0.3-M2) to validate user code's async control flow. Real async I/O ships per-module."
   - SHIPS_IN: "v0.5+ (file, database, http modules each ship their own async surface)"
-  - DESIGN_DOC: "design/stdlib/filesystem.md, design/stdlib/network.md, design/stdlib/database.md (each has a 'v0.5+ Async I/O Surface' subsection added in this milestone)"
+  - DESIGN_DOC: "docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md, docs/internal/scratchpad/SCRATCH-stdlib-network.md, docs/internal/scratchpad/SCRATCH-stdlib-database.md (each has a 'v0.5+ Async I/O Surface' subsection added in this milestone)"
 - **NOT registered**: `__testFallibleAsync` (internal test-only intrinsic, never appears in registry). The intrinsic IS declared in `crates/ynz-typeck/src/intrinsics.rs` via the new `internal_fns` Vec (see Question Resolution #8). Visibility verified by P3 LSP completion test in `crates/ynz-lsp/tests/completion.rs`.
 - **NOT changed**: `background-handle-form` deferred_tooling_feature (M1, unchanged); `wait_points` muted_hint_domain (still protocol-only, activates in M3); `background_routing` muted_hint_domain (M4 entry, not touched in M2).
 - **NOT added**: `[[muted_hint_domain]]` new entries for M2 — both `wait_points` and `background_routing` remain protocol-only until M3 has the analysis to fire on.
@@ -383,7 +383,7 @@ Each phase ends with an **Exit Sequence** block that lists the actions to execut
 - Tokio docs: `tokio::task::spawn`, `tokio::time::sleep`, `tokio::runtime::Runtime::block_on`, `std::future::Future`, `std::task::{Context, Poll, Waker}`
 **Files (expected scope)**:
 - `crates/ynz-runtime/tests/m2_spike.rs` — new test file with five spike contracts (parallel to M1's `tests/spike.rs`)
-- `crates/ynz-runtime/Cargo.toml` — verify Tokio `time` feature is included; add if not
+- [`crates/ynz-runtime/Cargo.toml`](../../../../crates/ynz-runtime/Cargo.toml) — verify Tokio `time` feature is included; add if not
 **Steps**:
 
 **Step 1 — Single-wait suspension+resume (contract #1)**
@@ -754,7 +754,7 @@ Contract #12 requires compiling a `.ynz` fixture containing `wait` to LLVM IR an
 **Files (expected scope)**:
 - `crates/ynz-runtime/src/runtime.rs` — add `ynz_rt_spawn`, `ynz_rt_async_sleep_create`, `ynz_rt_async_sleep_poll`, `ynz_rt_call_state_machine_sync`
 - `crates/ynz-runtime/src/lib.rs` — re-export the new symbols
-- `crates/ynz-runtime/Cargo.toml` — verify `tokio` features include `time` and `rt-multi-thread`; add if missing
+- [`crates/ynz-runtime/Cargo.toml`](../../../../crates/ynz-runtime/Cargo.toml) — verify `tokio` features include `time` and `rt-multi-thread`; add if missing
 - `crates/ynz-runtime/tests/m2_runtime.rs` — promote spike tests into production runtime tests
 - `crates/ynz-codegen/src/runtime_decls.rs` — declare the 4 new C-ABI shims with correct LLVM types
 **Steps**:
@@ -1000,7 +1000,7 @@ Contract #12 requires compiling a `.ynz` fixture containing `wait` to LLVM IR an
 
 **Research (2026-05-31, Patrick asked "are loops always wait / is nesting allowed?"):**
 - Loops are NOT "always wait." Loop back-edges get a **preemption** safe-point (`ynz_rt_check_preempt`, `design/future/concurrency.md:198`) — a cooperative yield, a DIFFERENT mechanism from `wait`. A loop suspends on a timer only if its body has explicit `wait`.
-- Control-flow nesting IS allowed (parser recursive; `if`-in-`if` runs; examples nest). The "no nesting" rule is specific to test `group` blocks (`design/testing.md:75`); `spec/control-flow.md:50` is a style guideline (prefer early-return), not a ban. → Plan P0 Contract #3 (wait-in-if) + #7b (wait-in-loop) require nested wait to WORK; descoping would make `wait` in `if`/`for` a surprising compile error.
+- Control-flow nesting IS allowed (parser recursive; `if`-in-`if` runs; examples nest). The "no nesting" rule is specific to test `group` blocks (`docs/internal/implementation/IMP-testing.md:75`); `docs/reference/REF-control-flow.md:50` is a style guideline (prefer early-return), not a ban. → Plan P0 Contract #3 (wait-in-if) + #7b (wait-in-loop) require nested wait to WORK; descoping would make `wait` in `if`/`for` a surprising compile error.
 
 **DECISION (Patrick, 2026-05-31): FIX PROPERLY.** Confirmed after research alignment — loops are NOT auto-wait (that's M3 auto-`wait`-insertion on I/O calls + preemption-at-back-edge, both separate from suspension); M2 must make an EXPLICIT `wait` at any nesting depth actually suspend, because M3's auto-inserted `wait` emits the same construct — a broken M2 foundation breaks the M3 "loops over I/O auto-suspend" vision. Frame-leak (#3) + param-drift (#4) fixed regardless. **Phase 2 is NOT done; do not commit until #1/#3/#4 fixed + snapshot #2 corrected + review re-run.** NOTE: stray compiled binary `crates/ynz-driver/tests/fixtures/v0_3_m2_concurrent_waits_proof` (no extension) was removed; do not commit build artifacts.
 
@@ -1047,7 +1047,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 - **R4 (rules-compliance):** `.max().unwrap()` in driver concurrency test needs a justifying safety comment.
 - **AV1 (acceptance, WEAK):** AC says `function_contains_wait` "verified by unit tests" but only golden/integration tests exist. FIX: add direct unit tests (wait→true, no-wait→false, nested-if-wait→true).
 - **AV2 (acceptance, WEAK):** concurrency-proof test asserts only `elapsed < 5000ms` — NO lower bound. A no-op sleep would pass (the exact bug #1 failure mode). FIX: add an execution-time lower-bound guard (≥~80ms) that fails on a no-op; tighten the upper bound. If the measurement includes compile time, restructure to time execution only (build once, then time the binary) per the plan's "bare-binary timing" intent.
-- **SSOT concern (code-reviewer / feature-registry.md):** diagnostic strings literal in `check.rs` AND in `registry/features.toml`. Investigate the established pattern; align (consume registry-generated constant) if that's the norm, else document the carve-out.
+- **SSOT concern (code-reviewer / feature-registry.md):** diagnostic strings literal in `check.rs` AND in [`registry/features.toml`](../../../../registry/features.toml). Investigate the established pattern; align (consume registry-generated constant) if that's the norm, else document the carve-out.
 - **Coordinator-handled (NOT executor):** stage only Phase-2 files at commit (exclude `v0-3-m1`/`webpage-foundation` plan deletions — plan-adherence PA3/PA4); annotate `wait_required_on_state_machine_call` AC as deferred-to-P3 (acceptance AV3 / plan-adherence — it's a typeck warning belonging with the other P3 warnings); correct stale "1220+ tests" AC text. `git add` the 2 untracked error fixtures so they're tracked + re-reviewable (PA1/PA2 — folding into the executor round).
 
 **Exit Sequence**: per template.
@@ -1080,7 +1080,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 - `crates/ynz-typeck/tests/check.rs` — new tests
 - `crates/ynz-lsp/tests/completion.rs` — visibility test: `sleepAsync` present, `__testFallibleAsync` absent in autocomplete
 **Steps**:
-1. **Register `sleepAsync(int) -> nothing`** in `registry/features.toml` as a new `[[primitive_intrinsic]]` entry (TOML schema in `### Feature Registry Entries`). This auto-registers in `intrinsics.rs::free_fns` via the existing `build_table` flow.
+1. **Register `sleepAsync(int) -> nothing`** in [`registry/features.toml`](../../../../registry/features.toml) as a new `[[primitive_intrinsic]]` entry (TOML schema in `### Feature Registry Entries`). This auto-registers in `intrinsics.rs::free_fns` via the existing `build_table` flow.
 2. **Add `sleepAsync` typeck check dispatch arm** at `check.rs:1453` parallel to the existing `sleepMs` arm. Calls a new `check_sleep_async_call(call)` helper that validates `(int)` argument shape and emits `unawaited_sleep_async` when called without `wait`. Pattern mirrors `check_sleep_ms_call` exactly (different name + different warning emission).
 3. **Add `M2_MAY_BLOCK_INTRINSICS` const set** in `intrinsics.rs`:
    ```rust
@@ -1132,8 +1132,8 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 13. **Transitive-no-wait fixture (per plan-reviewer Required Fix #6)**: add fixture `transitive_no_wait_does_not_trigger_warning.ynz` — function `foo()` calls `bar()` where `bar()` internally calls `sleepAsync(100)` without `wait`. The user-level call `wait foo()` should fire `wait_on_non_may_block_warning` (because `foo.contains_wait == false` and `foo` is not in `M2_MAY_BLOCK_INTRINSICS`). Asserts M2's local-predicate behavior — M3 will swap the predicate and this fixture's expected output flips, providing a tracking checkpoint for the M2→M3 transition.
 
 **Acceptance criteria**:
-- [x] `sleepAsync(int) -> nothing` registered in `registry/features.toml` as `[[primitive_intrinsic]]`; `cargo build -p ynz-registry` passes
-  - Evidence: `registry/features.toml` new `[[primitive_intrinsic]]` (name=sleepAsync, kind=free_fn, param_types=["int"], return_type="nothing", since="v0.3-M2"); `cargo test --workspace` (106 pass) includes the registry build as prerequisite.
+- [x] `sleepAsync(int) -> nothing` registered in [`registry/features.toml`](../../../../registry/features.toml) as `[[primitive_intrinsic]]`; `cargo build -p ynz-registry` passes
+  - Evidence: [`registry/features.toml`](../../../../registry/features.toml) new `[[primitive_intrinsic]]` (name=sleepAsync, kind=free_fn, param_types=["int"], return_type="nothing", since="v0.3-M2"); `cargo test --workspace` (106 pass) includes the registry build as prerequisite.
 - [x] `sleepAsync` typeck dispatch arm added at `check.rs:1453` parallel to `sleepMs`
   - Evidence: `check.rs` `"sleepAsync"` arm in `match callee_name.as_str()` → kernel rejection + `check_sleep_async_call` + `unawaited_sleep_async`; `wait_sleep_async_is_clean` test passes.
 - [x] `M2_MAY_BLOCK_INTRINSICS` const + `is_may_block_callee` helper in `intrinsics.rs`
@@ -1168,7 +1168,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 - [ ] `internal_fns: Vec<(&'static str, FreeFnSig)>` field on `PrimitiveIntrinsicTable` is excluded from `free_fn_names()` (LSP autocomplete filter); `lookup_free_fn_including_internal` is `#[doc(hidden)]` and gated by USAGE GUARD comment per Round 4 Required Fix #5
 - [ ] Tests cover happy path AND unhappy path for each new check
 - [ ] No `// TODO` comments left in the typeck additions
-- [ ] Diagnostic text uses Yinz vocabulary per `.claude/rules/vocabulary.md` (no banned jargon)
+- [ ] Diagnostic text uses Yinz vocabulary per [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) (no banned jargon)
 
 **Verification**:
 - `cargo test --workspace` passes
@@ -1214,26 +1214,26 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 **Why this phase exists**: This is the load-bearing teaching commitment. Skipping any of these surfaces ships M2 as a hidden feature.
 **Current-state anchors**:
 - `registry/features.toml:166` (`wait` keyword), `:170` (`background` keyword) — hover doc update sites
-- `registry/features.toml` — `[[diagnostic_template]]` section (M1 added 4; M2 adds 3)
-- `registry/features.toml` — `[[primitive_intrinsic]]` section (M2 adds `sleepAsync`)
+- [`registry/features.toml`](../../../../registry/features.toml) — `[[diagnostic_template]]` section (M1 added 4; M2 adds 3)
+- [`registry/features.toml`](../../../../registry/features.toml) — `[[primitive_intrinsic]]` section (M2 adds `sleepAsync`)
 - `crates/ynz-lsp/src/diagnostics.rs` — diagnostic flow (existing infrastructure)
 - `tooling/vscode-ynz/package.json` — version bump
-- `design/stdlib/filesystem.md`, `network.md`, `database.md` — deferral note sites
+- [`docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md), `network.md`, `database.md` — deferral note sites
 **Files (expected scope)**:
-- `registry/features.toml` — 2 keyword hover updates + 1 primitive_intrinsic entry + 3 diagnostic_template entries
+- [`registry/features.toml`](../../../../registry/features.toml) — 2 keyword hover updates + 1 primitive_intrinsic entry + 3 diagnostic_template entries
 - `crates/ynz-registry/build.rs` — (no change expected; schema already supports needed fields from M1)
 - `crates/ynz-lsp/tests/diagnostics.rs` — new test for M2 diagnostic flow
 - `tooling/vscode-ynz/package.json` — version → `0.3.0-m2`
-- `tooling/vscode-ynz/CHANGELOG.md` — new entry
-- `tooling/vscode-ynz/README.md` — mention v0.3-M2 capability
+- [`tooling/vscode-ynz/CHANGELOG.md`](../../../../tooling/vscode-ynz/CHANGELOG.md) — new entry
+- [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) — mention v0.3-M2 capability
 - `tooling/vscode-ynz/screenshots/wait-suspension.png` — new screenshot
-- `design/stdlib/filesystem.md` — deferred-tooling-feature stub for `readFileAsync`/`writeFileAsync`
-- `design/stdlib/network.md` — deferred stub for async network intrinsics
-- `design/stdlib/database.md` — deferred stub for async DB intrinsics
+- [`docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md) — deferred-tooling-feature stub for `readFileAsync`/`writeFileAsync`
+- [`docs/internal/scratchpad/SCRATCH-stdlib-network.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-network.md) — deferred stub for async network intrinsics
+- [`docs/internal/scratchpad/SCRATCH-stdlib-database.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-database.md) — deferred stub for async DB intrinsics
 **Steps**:
 1. Update `registry/features.toml:166` (`[[keyword]] wait`): replace `hover_what`/`hover_what_instead`/`hover_why` with canonical M2 text from `### Feature Registry Entries`.
 2. Update `registry/features.toml:170` (`[[keyword]] background`): add routing-distinction note to `hover_why` (canonical text in `### Feature Registry Entries`).
-3. Add `[[primitive_intrinsic]]` entry for `sleepAsync` to `registry/features.toml`. Schema (verified against `registry/features.toml:625-636` `sleepMs` entry):
+3. Add `[[primitive_intrinsic]]` entry for `sleepAsync` to [`registry/features.toml`](../../../../registry/features.toml). Schema (verified against `registry/features.toml:625-636` `sleepMs` entry):
    ```toml
    # --- free_fn: sleepAsync (v0.3-M2) ---
    # Non-blocking sleep. `wait sleepAsync(ms)` suspends the calling function for ms milliseconds.
@@ -1248,26 +1248,26 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
    ```
    NOTE: the registry schema does NOT have a `may_block` field; the may-block property lives in the in-code `M2_MAY_BLOCK_INTRINSICS` const set added in P3 Step 3 (registry schema change deferred to M3 when transitive analysis ships and the field becomes useful for more than 2 intrinsics).
 4. Add 4 new `[[diagnostic_template]]` entries with canonical text from `### Feature Registry Entries`: `wait_on_non_may_block_warning`, `wait_on_non_call_expression`, `unawaited_sleep_async`, `wait_required_on_state_machine_call`.
-4b. Add `[[deferred_tooling_feature]]` entry `async-io-stdlib-intrinsics-v0-5` to `registry/features.toml` with canonical text from `### Feature Registry Entries`. WHY/SUBSTITUTE/SHIPS_IN/DESIGN_DOC fields per the registry's existing schema for deferred features. Replaces the per-design-doc prose-stub approach with a real SSOT registry entry, per `.claude/rules/feature-registry.md`.
+4b. Add `[[deferred_tooling_feature]]` entry `async-io-stdlib-intrinsics-v0-5` to [`registry/features.toml`](../../../../registry/features.toml) with canonical text from `### Feature Registry Entries`. WHY/SUBSTITUTE/SHIPS_IN/DESIGN_DOC fields per the registry's existing schema for deferred features. Replaces the per-design-doc prose-stub approach with a real SSOT registry entry, per [`.claude/rules/feature-registry.md`](../../../rules/feature-registry.md).
 5. Run `cargo build -p ynz-registry` — confirm TOML parses + generated Rust constants compile + no schema-mismatch errors.
 6. LSP diagnostic flow test: add a test case in `crates/ynz-lsp/tests/diagnostics.rs` that opens a buffer with `wait print("hi")` and asserts the LSP returns the `wait_on_non_may_block_warning` diagnostic with correct severity (Warning, not Error).
 7. Hover lookups: add unit tests confirming `lsp_hover_for_token("wait")` returns the new M2 text (containing "Suspends the calling function") and `lsp_hover_for_token("background")` returns the updated routing-distinction text.
-8. VSCode extension: bump version to `0.3.0-m2` in `package.json`. Update `CHANGELOG.md` with M2 summary (wait suspension shipped, sleepAsync added, two new warnings). Record a screenshot showing: hover over `wait` in VSCode → new hover text appears; trigger `wait_on_non_may_block_warning` in a `.ynz` file → see the squiggle. Save as `screenshots/wait-suspension.png`.
+8. VSCode extension: bump version to `0.3.0-m2` in `package.json`. Update [`CHANGELOG.md`](../../../../CHANGELOG.md) with M2 summary (wait suspension shipped, sleepAsync added, two new warnings). Record a screenshot showing: hover over `wait` in VSCode → new hover text appears; trigger `wait_on_non_may_block_warning` in a `.ynz` file → see the squiggle. Save as `screenshots/wait-suspension.png`.
 9. Add deferral cross-reference notes in design docs (NOT the SSOT — the SSOT is the `async-io-stdlib-intrinsics-v0-5` registry entry added in Step 4b):
-   - `design/stdlib/filesystem.md` — add a "v0.5+ Async I/O Surface" section that points to the `async-io-stdlib-intrinsics-v0-5` deferred-tooling-feature registry entry for the canonical deferral spec; mentions: `readFileAsync(path) -> string errors`, `writeFileAsync(path, content) -> nothing errors`, etc.; states these ship with v0.5 file stdlib module; backed by `tokio::fs`; v0.3-M2 validated errors-through-state-machine via internal `__testFallibleAsync` so v0.5 inherits a working ABI.
-   - `design/stdlib/network.md` — analogous cross-reference for async network primitives (v0.15+ http module per roadmap).
-   - `design/stdlib/database.md` — analogous cross-reference for async DB primitives (v0.10 db module per roadmap).
+   - [`docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md) — add a "v0.5+ Async I/O Surface" section that points to the `async-io-stdlib-intrinsics-v0-5` deferred-tooling-feature registry entry for the canonical deferral spec; mentions: `readFileAsync(path) -> string errors`, `writeFileAsync(path, content) -> nothing errors`, etc.; states these ship with v0.5 file stdlib module; backed by `tokio::fs`; v0.3-M2 validated errors-through-state-machine via internal `__testFallibleAsync` so v0.5 inherits a working ABI.
+   - [`docs/internal/scratchpad/SCRATCH-stdlib-network.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-network.md) — analogous cross-reference for async network primitives (v0.15+ http module per roadmap).
+   - [`docs/internal/scratchpad/SCRATCH-stdlib-database.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-database.md) — analogous cross-reference for async DB primitives (v0.10 db module per roadmap).
 10. Build a fresh `.vsix`: `cd tooling/vscode-ynz && vsce package`. Verify two files produced: `yinz-0.3.0-m2.vsix` AND `yinz-latest.vsix` (per project convention). NOTE: matches M1 phase 5 convention; vsce package may be deferred to release time if headless env doesn't have vsce; mark as such in acceptance criteria.
 
 **Acceptance criteria**:
 - [x] Registry: `wait` and `background` keyword hover docs updated with M2 text
-  - Evidence: `registry/features.toml` `[[keyword]] wait` hover_what="Suspends the calling function..."; `background` hover_why gets the I/O-pool/blocking-pool routing-distinction note. LSP tests `hover_wait_keyword_returns_m2_suspension_text` (+ negative assert on old M1 text) + `hover_background_keyword_returns_routing_distinction_text` pass.
+  - Evidence: [`registry/features.toml`](../../../../registry/features.toml) `[[keyword]] wait` hover_what="Suspends the calling function..."; `background` hover_why gets the I/O-pool/blocking-pool routing-distinction note. LSP tests `hover_wait_keyword_returns_m2_suspension_text` (+ negative assert on old M1 text) + `hover_background_keyword_returns_routing_distinction_text` pass.
 - [x] Registry: `sleepAsync` primitive_intrinsic entry added
   - Evidence: present from Phase 3 (verified not duplicated); `cargo build -p ynz-registry` green.
 - [x] Registry: 4 new diagnostic_template entries added (wait_on_non_may_block_warning, wait_on_non_call_expression, unawaited_sleep_async, wait_required_on_state_machine_call)
-  - Evidence: `registry/features.toml` `[[diagnostic_template]]` `WaitOnNonMayBlockWarning`/`WaitOnNonCallExpression`/`UnawaitedSleepAsync`/`WaitRequiredOnStateMachineCall`; `diagnostic_templates_have_all_three_parts` consistency test passes.
+  - Evidence: [`registry/features.toml`](../../../../registry/features.toml) `[[diagnostic_template]]` `WaitOnNonMayBlockWarning`/`WaitOnNonCallExpression`/`UnawaitedSleepAsync`/`WaitRequiredOnStateMachineCall`; `diagnostic_templates_have_all_three_parts` consistency test passes.
 - [x] Registry: `async-io-stdlib-intrinsics-v0-5` deferred_tooling_feature entry added
-  - Evidence: `registry/features.toml` `[[deferred_tooling_feature]] name="async-io-stdlib-intrinsics-v0-5"` with substitute/why/ships_in/design_doc/triggers; `deferred_tooling_features_have_required_fields` passes. (design_doc single-path filesystem.md per the registry `path.exists()` test constraint; network/db cross-refs in `triggers` — approved deviation.)
+  - Evidence: [`registry/features.toml`](../../../../registry/features.toml) `[[deferred_tooling_feature]] name="async-io-stdlib-intrinsics-v0-5"` with substitute/why/ships_in/design_doc/triggers; `deferred_tooling_features_have_required_fields` passes. (design_doc single-path filesystem.md per the registry `path.exists()` test constraint; network/db cross-refs in `triggers` — approved deviation.)
 - [x] `cargo build -p ynz-registry` succeeds (TOML parses + Rust compiles)
   - Evidence: `Finished dev profile` clean; 26 ynz-registry tests pass.
 - [x] LSP diagnostic test: `wait print("hi")` returns `wait_on_non_may_block_warning` at expected span
@@ -1276,11 +1276,11 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
   - Evidence: the 2 hover tests above pass; hardened with `let HoverContents::Markup(mc) = ... else { panic!() }` (fix-round-2, kills the vacuity trap).
 - [x] VSCode extension: `package.json` version bumped to `0.3.0-m2`; CHANGELOG updated; `wait-suspension.png` screenshot present (placeholder OK if vsce headless-unavailable — real screenshot at release time)
   - Evidence: `package.json` 0.3.0-m2; CHANGELOG `[0.3.0-m2]` section; README "What's new"; `screenshots/wait-suspension.png.PLACEHOLDER` (headless — AC-allowed).
-- [x] `design/stdlib/filesystem.md` has v0.5+ async-I/O deferral section
+- [x] [`docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md) has v0.5+ async-I/O deferral section
   - Evidence: "## v0.5+ Async I/O Surface" section cross-referencing the registry SSOT entry (readFileAsync/writeFileAsync/readBytesAsync).
-- [x] `design/stdlib/network.md` has analogous deferral section
+- [x] [`docs/internal/scratchpad/SCRATCH-stdlib-network.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-network.md) has analogous deferral section
   - Evidence: "## v0.15+ Async I/O Surface" (request.getAsync/postAsync).
-- [x] `design/stdlib/database.md` has analogous deferral section
+- [x] [`docs/internal/scratchpad/SCRATCH-stdlib-database.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-database.md) has analogous deferral section
   - Evidence: "## v0.10+ Async I/O Surface" (db.queryAsync/findAsync).
 - [x] No banned-jargon in any new text (audited by grep — zero async/await/coroutine/Future/Promise hits in user-facing text)
   - Evidence: jargon_audit 5/5 pass incl. NEW `no_banned_jargon_in_deferred_feature_user_facing_fields` (extended fix-round-2 to scan deferred-feature rendered fields — caught + fixed 6 PRE-EXISTING violations; non-vacuous, proven by injection). standalone `async`/`lifetime` removed from all user-facing field values; "borrow-scope" overshoot corrected to canonical "scope" + `` `lifetimes` `` domain-key reference (deviation-judge round-2 PASS). design/ titles ("Async I/O Surface") are contributor-facing (allowed).
@@ -1313,7 +1313,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 
 **2026-05-31 — Phase 4 executor DONE (base = Phase 3 commit 5b72521), gate in flight.** Mostly TOML + docs + 2 LSP test files (378-line diff). Added: `wait`/`background` keyword hover M2 updates; 4 `[[diagnostic_template]]` entries (wait_on_non_may_block_warning, wait_on_non_call_expression, unawaited_sleep_async, wait_required_on_state_machine_call); `async-io-stdlib-intrinsics-v0-5` `[[deferred_tooling_feature]]`; LSP diagnostic-flow + 2 hover tests; VSCode package.json→0.3.0-m2 + CHANGELOG + README; 3 design-doc async-I/O deferral sections (filesystem/network/database). Already-present (verified, not duplicated): `sleepAsync` `[[primitive_intrinsic]]` (Phase 3), `WaitInsideLoop`/`LocalCrossesWait` templates (Phase 2). Coordinator-verified: registry build green, lsp tests pass, lsp_adapter.rs test = clean M1→M2 retarget (kept all structure asserts, changed only the text line + WHY comment — NOT weakening, verified directly). workspace 106 pass / 5 environmental.
 
-**Deviations:** Scope-D1 — `crates/ynz-registry/tests/lsp_adapter.rs` touched (compile-required: M2 hover broke the M1-text assertion) → deviation-judge dispatched (test-weakening lens). Approach-D1 — `async-io-stdlib-intrinsics-v0-5` `design_doc` uses single path `design/stdlib/filesystem.md` (not the plan's 3-path string) because `every_registry_entry_design_doc_exists` test does `path.exists()` on the whole value; network/database refs moved to `triggers` prose → plan-adherence assessing SSOT-completeness. Approach-D2 — screenshot `.PLACEHOLDER` text file (AC-allows headless placeholder; no PNG fabricated). vsix build [deferred to release].
+**Deviations:** Scope-D1 — `crates/ynz-registry/tests/lsp_adapter.rs` touched (compile-required: M2 hover broke the M1-text assertion) → deviation-judge dispatched (test-weakening lens). Approach-D1 — `async-io-stdlib-intrinsics-v0-5` `design_doc` uses single path [`docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md) (not the plan's 3-path string) because `every_registry_entry_design_doc_exists` test does `path.exists()` on the whole value; network/database refs moved to `triggers` prose → plan-adherence assessing SSOT-completeness. Approach-D2 — screenshot `.PLACEHOLDER` text file (AC-allows headless placeholder; no PNG fabricated). vsix build [deferred to release].
 
 **Gate dispatched (review round 1):** code-reviewer a99ac043, rules-compliance a23b52d8 (PASS, above), plan-adherence a6e14093, acceptance a7050b52, deviation-judge(Scope-D1) adf0576f. Read `/tmp/phase4_real.diff`.
 
@@ -1339,21 +1339,21 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 **Est. lines**: ~300 (mostly demo Yinz code + CHANGELOG + state.md entry)
 **Ships via**: `/pr` for the PR + `/release` for the `v0.3.0-m2` tag (per VSCode extension release convention: attach both `yinz-0.3.0-m2.vsix` and `yinz-latest.vsix`)
 **Objective**: Verify the milestone holistically — state-machine concurrency works in real demo code; error gallery covers all new diagnostic classes; cross-impl harness passes; cut the milestone tag.
-**Why this phase exists**: The earlier phases each focus on a layer. P5 is the cross-layer verification + release gate AND the hands-on UX validation per `.claude/rules/plan-invariants.md`.
+**Why this phase exists**: The earlier phases each focus on a layer. P5 is the cross-layer verification + release gate AND the hands-on UX validation per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md).
 **Current-state anchors**:
 - `examples/pirates-roster/entrypoint.ynz:226` (M8 modules section end — insertion point for M1's v0.3-M1 section, just after which M2's section appends)
 - `examples/primantis-orders/v0_3_m1_errors.ynz` — model for the v0_3_m2_errors.ynz file
 - `crates/ynz-driver/tests/cross_impl_consistency.rs` (M1) — extension site for new state-machine fixtures
-- `Cargo.toml` (workspace) — version field for bump
+- [`Cargo.toml`](../../../../Cargo.toml) (workspace) — version field for bump
 **Files (expected scope)**:
 - `examples/pirates-roster/entrypoint.ynz` — append v0.3-M2 state-machine section
 - `examples/primantis-orders/v0_3_m2_errors.ynz` — new error gallery file
-- `examples/primantis-orders/README.md` — link new file
+- [`examples/primantis-orders/README.md`](../../../../examples/primantis-orders/README.md) — link new file
 - `crates/ynz-driver/tests/cross_impl_consistency.rs` — extend timing-dependent fixture allowlist; add M2 fixtures
 - `crates/ynz-driver/tests/m2_state_machine_integration.rs` — new file with full integration tests
-- `Cargo.toml` (workspace) — version `0.3.0-m1` → `0.3.0-m2`
-- `CHANGELOG.md` — new section
-- `.claude/state.md` — append milestone-ship entry
+- [`Cargo.toml`](../../../../Cargo.toml) (workspace) — version `0.3.0-m1` → `0.3.0-m2`
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) — new section
+- [`.claude/state.md`](../../../state.md) — append milestone-ship entry
 **Steps**:
 1. **Extend `examples/pirates-roster/entrypoint.ynz`** with a v0.3-M2 section after the existing v0.3-M1 section. **8 pirates** (per Round 2 Concern #5 — 8 demonstrates thread-sharing visibly on multi-core CI; 4 doesn't):
    ```yinz
@@ -1397,7 +1397,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
    - `wait_on_non_call_expression` (a `wait 42` — primitive)
    - `unawaited_sleep_async` (a `sleepAsync(100)` without `wait`)
    - Each block has a `// WHY:` comment naming the diagnostic class
-3. Add to `examples/primantis-orders/README.md`: a line linking the new v0_3_m2_errors.ynz file.
+3. Add to [`examples/primantis-orders/README.md`](../../../../examples/primantis-orders/README.md): a line linking the new v0_3_m2_errors.ynz file.
 4. **Extend cross-impl consistency harness** (`crates/ynz-driver/tests/cross_impl_consistency.rs`):
    - Add the new M2 fixtures to the `TIMING_DEPENDENT_FIXTURES` const allowlist: `v0_3_m2_concurrent_waits_proof.ynz`, etc.
    - Verify the harness still passes on the rest of the corpus (existing M1 + M2 wait-free fixtures)
@@ -1417,7 +1417,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
    - **`mutual_recursion_state_machines` (per round-3 adversarial case 1)** — `function a(n) { if n > 0 { wait b(n-1) } }` + `function b(n) { if n > 0 { wait a(n-1) } }`. Each call alternates between two state-machine frames. Asserts: `a(8)` completes without deadlock; codegen handles mutual recursion (likely via forward declarations).
    - **`state_machine_errors_before_first_wait` (per round-3 adversarial case 2)** — `function f() -> int errors { if shouldFail { return error("early") }; wait sleepAsync(50); return 0 }`. Frame is allocated; early return must free it. Asserts: when `shouldFail` is true, no frame-leak (`ynz_alloc/ynz_free` counters return to baseline), error has populated trace, AND the typed return-slot holds the `{i64,i64}` error tuple with field order intact (error_ptr=field0) even though `resume_point` never advanced past 0 — the error-before-wait path stores the typed slot on first poll (a distinct code path from error-after-wait).
    - **`sleepAsync_boundary_values` (per round-3 adversarial case 3)** — `wait sleepAsync(0)` should yield immediately (Tokio `Duration::ZERO` semantics; completes in < 5ms). `wait sleepAsync(-1)` must be rejected at typeck OR clamped to 0 at runtime. **Decision (locked)**: typeck does NOT validate int range for `sleepAsync`'s arg (Yinz allows any `int` literal); runtime CLAMPS negative values to 0 via `let ms = ms.max(0) as u64;` inside `ynz_rt_async_sleep_create`. Documented as a runtime safety net; no compile-time error to keep the intrinsic signature simple.
-6. **Bump workspace `Cargo.toml`** version from `0.3.0-m1` to `0.3.0-m2`.
+6. **Bump workspace [`Cargo.toml`](../../../../Cargo.toml)** version from `0.3.0-m1` to `0.3.0-m2`.
 7. **Add CHANGELOG entry**. Required sections (per plan-reviewer Concern):
    - **Features**: state machine codegen for `wait` suspension; `sleepAsync(int) -> nothing` public intrinsic; `block_on` bridge for non-state-machine callers; 8-concurrent-wait demonstration in pirates-roster.
    - **Improvements**: no-coloring promise preserved (caller signature unchanged whether callee is state-machine or not); M3-ready ABI in place for transitive may-block analysis.
@@ -1425,7 +1425,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
    - **Migration notes**: any M1 program using `wait` continues to compile and runs IDENTICALLY (M1's `wait` was identity-passthrough; M2's `wait` actually suspends, which is the documented design — observable difference is timing, not correctness).
    - **Internal-only**: test-only `__testFallibleAsync(bool) -> int errors` intrinsic for errors+wait validation; new `internal_fns` mechanism in `intrinsics.rs`; deletes when v0.5 ships real fallible async I/O.
    - Cross-link to merged PRs from each phase.
-8. **Update `.claude/state.md`** with a new entry under Active Decisions documenting v0.3.0-m2 ship: key architectural decisions made (block_on bridge, sleepAsync naming, internal test intrinsic).
+8. **Update [`.claude/state.md`](../../../state.md)** with a new entry under Active Decisions documenting v0.3.0-m2 ship: key architectural decisions made (block_on bridge, sleepAsync naming, internal test intrinsic).
 9. **Run `/release`** to cut the `v0.3.0-m2` tag. The release skill: bumps Cargo.toml (already done in step 6), commits, tags, pushes. Verify the GitHub release has both `yinz-0.3.0-m2.vsix` and `yinz-latest.vsix` attached.
 
 **Acceptance criteria**:
@@ -1445,11 +1445,11 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
   - Evidence: (filled at phase completion)
 - [ ] `wait_inside_if_branches_correctly` test passes (both branches)
   - Evidence: (filled at phase completion)
-- [ ] `Cargo.toml` workspace version is `0.3.0-m2`
+- [ ] [`Cargo.toml`](../../../../Cargo.toml) workspace version is `0.3.0-m2`
   - Evidence: (filled at phase completion)
 - [ ] CHANGELOG section added with detailed M1→M2 upgrade narrative
   - Evidence: (filled at phase completion)
-- [ ] `.claude/state.md` updated with v0.3.0-m2 ship entry with WHY-level context
+- [ ] [`.claude/state.md`](../../../state.md) updated with v0.3.0-m2 ship entry with WHY-level context
   - Evidence: (filled at phase completion)
 - [ ] [Deferred to /release step] GitHub release tagged `v0.3.0-m2`; both VSCode extension `.vsix` files attached (needs user confirmation + GitHub push)
   - Evidence: (filled at phase completion)
@@ -1457,12 +1457,12 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
   - Evidence: (filled at phase completion)
 
 **Quality gate**:
-- [ ] Demo extension uses real Yinz operations from current scope (no invented APIs) per `.claude/rules/dot-postfix.md`
+- [ ] Demo extension uses real Yinz operations from current scope (no invented APIs) per [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md)
 - [ ] Error gallery uses real Yinz operations (no invented APIs)
 - [ ] Timing test tolerances are 1.5× ideal to account for CI scheduler noise (150ms ceiling for ~100ms ideal)
 - [ ] CHANGELOG entry detailed enough for v0.3.0-m1 → v0.3.0-m2 upgrade understanding (named architectural decisions + behavior changes)
 - [ ] No release-blocking warnings in `cargo build --release` (verified before /release)
-- [ ] `.claude/state.md` Active Decisions entry includes WHY-level context for each architectural choice (block_on bridge, sleepAsync naming, internal test intrinsic)
+- [ ] [`.claude/state.md`](../../../state.md) Active Decisions entry includes WHY-level context for each architectural choice (block_on bridge, sleepAsync naming, internal test intrinsic)
 - [ ] No SQL/security concerns
 
 **Verification**:
@@ -1512,16 +1512,16 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
 - **THE FIX (vindicated by the doc):** pull the transitive may-block analysis into M2. In M2 the may-block set = `{sleepAsync}` only (no I/O/FFI yet) → degenerate case of the documented engine; I/O/FFI join the set in later milestones (same engine). A function is a state machine iff it transitively reaches a may-block call (call-graph fixpoint, extends the local `contains_wait` from Phase 3). Every caller-of-a-suspender is therefore a state machine → inline-poll-yield everywhere → NO bridge (except the legit `main→entrypoint` top-level driver). `wait` becomes inferred + shown as the `wait_points` muted-hint inlay (mvp-scope line 183 already lists it as "protocol-only awaiting v0.3"). Un-inferable cases (dynamic-dispatch through a vtable; future FFI) = clean compile error per the doc's "externals are on the user."
 - **CONSEQUENCE — roadmap boundary must be corrected:** may-block analysis moves M3 → M2 (it's load-bearing for M2 correctness); M3 keeps auto-parallelization + call-site preemption. The M2 plan gets RE-BASELINED around the analysis engine, not patched onto the bridge. **Phases 6-9 as drafted (bridge-based) are SUPERSEDED by this finding for Phases 7-8; Phase 6 (typed return slot) survives unchanged.** **AWAITING PATRICK: (1) correct roadmap boundary first, then re-baseline M2 plan around the inference engine; or (2) other direction.** Do NOT execute until pointed.
 
-**✅ 2026-05-31 — Guardrail added (Patrick item "A") to prevent recurrence of the design-doc-contradiction failure** (all in the M2 worktree branch — pending Patrick's commit-target call, may belong on `main` independent of M2): (1) project `CLAUDE.md` "When Working on This Project" first bullet — design docs are governing; read before planning + during execution; surface plan-vs-design contradictions as "design doc X says A; plan says B"; (2) `.claude/rules/plan-invariants.md` new `## Design-Doc Alignment` section (required on every plan) + reviewer obligation to diff plan against cited design docs; (3) `.claude/graveyard.md` corpse "Plan Contradicts a Governing Design Doc, Caught By No Review" with diff-greppable Bouncer checks. Global mirror (global CLAUDE.md + plan-reviewer agent) OFFERED, awaiting Patrick OK. Patrick working through a list (A done; B+ pending).
+**✅ 2026-05-31 — Guardrail added (Patrick item "A") to prevent recurrence of the design-doc-contradiction failure** (all in the M2 worktree branch — pending Patrick's commit-target call, may belong on `main` independent of M2): (1) project [`CLAUDE.md`](../../../../CLAUDE.md) "When Working on This Project" first bullet — design docs are governing; read before planning + during execution; surface plan-vs-design contradictions as "design doc X says A; plan says B"; (2) [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) new `## Design-Doc Alignment` section (required on every plan) + reviewer obligation to diff plan against cited design docs; (3) [`.claude/graveyard.md`](../../../graveyard.md) corpse "Plan Contradicts a Governing Design Doc, Caught By No Review" with diff-greppable Bouncer checks. Global mirror (global CLAUDE.md + plan-reviewer agent) OFFERED, awaiting Patrick OK. Patrick working through a list (A done; B+ pending).
 
 **✅ 2026-05-31 — Direction APPROVED + roadmap boundary CORRECTED (Patrick).** Patrick confirmed the design-doc model is the right long-term answer (verified: stackless state machines + compiler-inferred coloring + composed frames = Rust's perf ceiling + Go's ergonomics; fixes Rust coloring/Pin/runtime-fragmentation AND JS coloring/single-thread; no fundamentally faster task-concurrency model — only impl headroom = frame composition, now locked). Actions taken this turn:
 - **Roadmap `v0-3-concurrency-perf` corrected** (via `/peek`): M2 scope EXPANDED (intra-compilation-unit transitive may-block fixpoint over `{sleepAsync}` + frame composition + typed return slot + can't-infer→clean-error); M3 NARROWED (cross-module propagation [M8 prereq] + auto-parallelization + I/O-auto-`wait`). Two new Architectural Decisions: "M2/M3 boundary correction" + "frame allocation = COMPOSITION not per-call heap". M2 spike line fixed (real compiler, not hand-written IR). last_updated→2026-05-31.
-- **`design/stdlib/filesystem.md`**: added `io_uring`/`kqueue`/IOCP + SIMD-on-read performance note for the v0.5 file module (the I/O-backend asterisk, captured so it's not forgotten).
-- **NEXT (active): RE-BASELINE THIS M2 PLAN** around the inference engine — rewrite Phases 7-8 (DELETE the bridge; replace with the transitive may-block fixpoint + state-machines-everywhere + frame composition + can't-infer→clean-error), adjust Phase 6 (typed return slot in composed frame), fix the Rework-Phases header/dispatch table, update the Invariants block (runtime SIMPLER — no bridge; new cost = a compile-time analysis pass; frame composition). Then **full concurrency review** (reviewers diff the corrected roadmap + re-baselined M2 + M3/M4 defs against `design/concurrency.md` + `design/future/concurrency.md` per the new Design-Doc Alignment gate) as the validation capstone. Phases 6-9 as previously drafted (bridge-based) are SUPERSEDED by the inference model for 7-8; Phase 6 typed-return-slot survives (now feeds composed frames).
+- **[`docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md`](../../../../docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md)**: added `io_uring`/`kqueue`/IOCP + SIMD-on-read performance note for the v0.5 file module (the I/O-backend asterisk, captured so it's not forgotten).
+- **NEXT (active): RE-BASELINE THIS M2 PLAN** around the inference engine — rewrite Phases 7-8 (DELETE the bridge; replace with the transitive may-block fixpoint + state-machines-everywhere + frame composition + can't-infer→clean-error), adjust Phase 6 (typed return slot in composed frame), fix the Rework-Phases header/dispatch table, update the Invariants block (runtime SIMPLER — no bridge; new cost = a compile-time analysis pass; frame composition). Then **full concurrency review** (reviewers diff the corrected roadmap + re-baselined M2 + M3/M4 defs against [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) + `design/future/concurrency.md` per the new Design-Doc Alignment gate) as the validation capstone. Phases 6-9 as previously drafted (bridge-based) are SUPERSEDED by the inference model for 7-8; Phase 6 typed-return-slot survives (now feeds composed frames).
 
-**✅ 2026-05-31 — RE-BASELINE COMPLETE (Patrick: "fix all plans … do it right").** All plans now reflect the inference model: (1) roadmap `v0-3-concurrency-perf` — M2/M3 boundary corrected + frame-composition locked; (2) this plan's Rework Phases fully rewritten — **P6** transitive may-block analysis engine + can't-infer clean errors; **P7** state-machine codegen w/ composed frames + typed return slot + inline-poll-yield-everywhere (fixes A/B/C, no bridge); **P8** delete dead bridge + reconcile Option-B guards (both STAY, locked) + diagnostics; **P9** Phase-5 redo (USER-GATED); (3) Invariants block — supersession banner + Safety/Performance/Teaching/Runtime-Deps updated; (4) Quality Checklist reconciled (P0–P9; design-doc-alignment gate). Bridge-era text in Risks/Question-Resolutions/Phase-0-5 RETAINED as the HALT forensic trail. Stale paragraph-blob in front-matter `last_updated` cleaned to a plain date. **NEXT: full concurrency design-doc-alignment review** (plan-reviewer diffs re-baselined M2 plan + corrected roadmap vs `design/concurrency.md` + `design/future/concurrency.md`) — validation capstone. THEN execute Phase 6 on PASS.
+**✅ 2026-05-31 — RE-BASELINE COMPLETE (Patrick: "fix all plans … do it right").** All plans now reflect the inference model: (1) roadmap `v0-3-concurrency-perf` — M2/M3 boundary corrected + frame-composition locked; (2) this plan's Rework Phases fully rewritten — **P6** transitive may-block analysis engine + can't-infer clean errors; **P7** state-machine codegen w/ composed frames + typed return slot + inline-poll-yield-everywhere (fixes A/B/C, no bridge); **P8** delete dead bridge + reconcile Option-B guards (both STAY, locked) + diagnostics; **P9** Phase-5 redo (USER-GATED); (3) Invariants block — supersession banner + Safety/Performance/Teaching/Runtime-Deps updated; (4) Quality Checklist reconciled (P0–P9; design-doc-alignment gate). Bridge-era text in Risks/Question-Resolutions/Phase-0-5 RETAINED as the HALT forensic trail. Stale paragraph-blob in front-matter `last_updated` cleaned to a plain date. **NEXT: full concurrency design-doc-alignment review** (plan-reviewer diffs re-baselined M2 plan + corrected roadmap vs [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) + `design/future/concurrency.md`) — validation capstone. THEN execute Phase 6 on PASS.
 
-**✅ 2026-05-31 — FULL CONCURRENCY DESIGN-DOC-ALIGNMENT REVIEW: PASS (3 rounds).** plan-reviewer validated the re-baselined M2 plan + corrected roadmap against `design/future/concurrency.md` + `design/concurrency.md`. R1 BLOCK (4 fixes: bridge text in Teaching/Feature-Registry, missing `## Design-Doc Alignment` section, Demo-gallery trigger mismatch) → all fixed. R2 BLOCK (1 fix: bridge/local-syntactic model still in `## Context & Why` + Risk Assessment) → fixed (rewritten to inference model) + 2 adversarial cases added (background-graph-cut, wait-arg-ordering). R3: **PASS — Required Fixes: None — plan ready to implement; Design-Doc Alignment: PASS.** All plans fixed + validated. UNCOMMITTED (working tree) — awaiting Patrick review-before-commit. NEXT: execute Phase 6 (transitive may-block analysis engine) via /execute-plan, on Patrick's go.
+**✅ 2026-05-31 — FULL CONCURRENCY DESIGN-DOC-ALIGNMENT REVIEW: PASS (3 rounds).** plan-reviewer validated the re-baselined M2 plan + corrected roadmap against `design/future/concurrency.md` + [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md). R1 BLOCK (4 fixes: bridge text in Teaching/Feature-Registry, missing `## Design-Doc Alignment` section, Demo-gallery trigger mismatch) → all fixed. R2 BLOCK (1 fix: bridge/local-syntactic model still in `## Context & Why` + Risk Assessment) → fixed (rewritten to inference model) + 2 adversarial cases added (background-graph-cut, wait-arg-ordering). R3: **PASS — Required Fixes: None — plan ready to implement; Design-Doc Alignment: PASS.** All plans fixed + validated. UNCOMMITTED (working tree) — awaiting Patrick review-before-commit. NEXT: execute Phase 6 (transitive may-block analysis engine) via /execute-plan, on Patrick's go.
 
 **Exit Sequence — RUN THESE STEPS (final phase):**
 
@@ -1578,10 +1578,10 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
 - `crates/ynz-typeck/src/signatures.rs:14` — `FunctionSig` (+ Phase 3's `contains_wait` field); population in `collect_signatures` (~:48)
 - `crates/ynz-typeck/src/check.rs` — `body_contains_wait` recursive walk (Phase 3, local-only); `M2_MAY_BLOCK_INTRINSICS` + `is_may_block_callee`; `wait_required_on_state_machine_call` / `unawaited_sleep_async` / `wait_on_non_may_block_warning` emission sites (these get reworked here — inference makes most moot)
 - `crates/ynz-typeck/src/queries.rs` — salsa query wiring (`check_query`/`signature_query`) — the new `may_block_query` slots in here
-- `registry/features.toml` — `wait_points` `[[muted_hint_domain]]` (currently protocol-only per mvp-scope:183) — activated here for inferred `wait`
+- [`registry/features.toml`](../../../../registry/features.toml) — `wait_points` `[[muted_hint_domain]]` (currently protocol-only per mvp-scope:183) — activated here for inferred `wait`
 **Files (expected scope)**:
 - `crates/ynz-typeck/src/` — new `may_block.rs` (the fixpoint) + `queries.rs` wiring; `FunctionSig.suspends` (transitive) replacing/superseding local `contains_wait`; can't-infer detection + clean errors in `check.rs`
-- `crates/ynz-diagnostics/` + `registry/features.toml` — can't-infer error template(s); rework wait-diagnostics; activate `wait_points` muted-hint domain
+- `crates/ynz-diagnostics/` + [`registry/features.toml`](../../../../registry/features.toml) — can't-infer error template(s); rework wait-diagnostics; activate `wait_points` muted-hint domain
 - `crates/ynz-driver/tests/fixtures/` — `v0_3_m2_transitive_suspends.ynz` (outer→inner→sleepAsync), `v0_3_m2_pure_cpu_not_sm.ynz`, `v0_3_m2_cant_infer_dynamic_dispatch.ynz`, `v0_3_m2_cant_infer_cross_module.ynz`
 - analysis unit tests (typeck) + driver compile-error tests
 **Deviation rule**: standard — document deviations; split unrelated work.
@@ -1602,7 +1602,7 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
 - [x] A dynamic-dispatch-to-maybe-suspending call AND a cross-module-to-maybe-suspending call each produce a clean WHAT/WHAT-INSTEAD/WHY compile error (exit 1, no panic, no bridge) — the "externals are on the user" rule
   - Evidence: typeck `cant_infer_suspension_cross_module_with_local_sleep_fires_error` + `..._dynamic_dispatch_with_local_sleep_fires_error` + `..._dynamic_dispatch_free_fn_form_fires_error` (free-fn `:2051` gate, mutation-proven non-vacuous) assert `Can't determine` + `cross-module`/`dynamic-dispatch`; driver `v03_m2_cant_infer_{cross_module,dynamic_dispatch}_exits_nonzero_with_teaching_error` assert exit≠0 + teaching stderr + `!stderr.contains("Machine-code generation failed")` (no backend crash). Callers contain local `sleepAsync` → design-correct `current_fn_suspends` gate (NOT over-firing). Negative guard `dynamic_dispatch_non_suspending_caller_compiles_clean` proves non-suspending callers compile clean (R2 regression guard). All pass.
 - [x] `wait_points` muted-hint domain active in the registry; `wait_required_on_state_machine_call` + `unawaited_sleep_async` removed/downgraded with the change recorded in `### Feature Registry Entries`
-  - Evidence: `registry/features.toml` — `[[muted_hint_domain]] wait_points` gains `active_since = "v0.3-M2"` + updated example; `[[diagnostic_template]]` `UnawaitedSleepAsync` + `WaitRequiredOnStateMachineCall` both gain `retired_since = "v0.3-M2-Phase6"`. Recorded in plan `### Feature Registry Entries`. rules-compliance + acceptance verified.
+  - Evidence: [`registry/features.toml`](../../../../registry/features.toml) — `[[muted_hint_domain]] wait_points` gains `active_since = "v0.3-M2"` + updated example; `[[diagnostic_template]]` `UnawaitedSleepAsync` + `WaitRequiredOnStateMachineCall` both gain `retired_since = "v0.3-M2-Phase6"`. Recorded in plan `### Feature Registry Entries`. rules-compliance + acceptance verified.
 - [x] `cargo test --workspace` green except the 5 known environmental snapshot diffs (do NOT accept their `.snap.new`); jargon_audit green
   - Evidence: coordinator + acceptance live runs → 110 passed / 5 failed; the 5 are exactly `broken_main`, `empty_source`, `m2_compound_assign`, `m2_const_reassignment`, `m2_mixed_int_number` — diffs are ONLY the absolute-path prefix in the `╭─[` diagnostic header (`/workspaces/ynz/...` baseline vs worktree path); diagnostic content byte-identical. `.snap.new` NOT accepted (removed). `ynz-diagnostics` jargon 8/8 pass.
 **Quality gate**:
@@ -1739,7 +1739,7 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
   1. **[HIGH — broken named success criterion] AC2 errors-cascade through SM is BROKEN.** Paper trace: `fallibleStep() -> int errors { let v = wait __testFallibleAsync(true); return v }` (true forces an error), `entrypoint` does `r.or(99)`. Observed: `safe: 0`. Expected: `safe: 99` (fallibleStep errored → `.or(99)` must fall back). Residual: the error vanished — the SM returned `{i64,i64} = {0,0}` (error_ptr=0) instead of `{error_ptr≠0, _}`, so `.or()` saw a null error ptr, treated it as success, returned the success slot (0). Hypothesis (executor's, plausible): inside the `ynz_sm_*_resume` fn the errors-capable return-slot reconstruction drops the `ynz_error_new` pointer — it isn't stored into return-slot field0, so the wrapper rebuilds `{0, success}`. This is Context success-criterion line 59 ("a function returning `T errors` with a `wait` in the middle correctly propagates errors through suspension") + Phase-7 AC2 — NOT a Phase-9/M3 deferral. MUST FIX in P7.
   2. **[AC7 unproven] composed-single-alloc proof not done.** Executor ran `v0_3_m2_alloc_counter.ynz` → `result: 2` and called it proof — that's a behavioral result, NOT an alloc count. AC7 requires INSTRUMENTING the alloc counter and proving a 3-level synchronous SM tree does exactly ONE `ynz_alloc`. Add a real counter (env-gated `ynz_alloc` counter shim or a `#[cfg(test)]` atomic in the runtime) + assert count==1 for the 3-level tree, ==1+N for N recursion/background. This is the design's "one alloc per task tree" / Golden-Rule-8 zero-cost claim — load-bearing, not cosmetic.
   3. **[AC8 unproven] recursion cancellation-no-leak not done.** Executor confirmed `countdown(3)` returns correctly (normal completion) but did NOT implement the depth-3 cancellation test with positive control (≥1 heap-box live at abort) + negative control (no-op the Drop free → test MUST fail with a leak). `SpawnStateFnFuture::Drop` must free the recursion-slot heap-box; prove ynz_alloc/ynz_free balanced after a mid-wait abort at depth 3. This is the exact "verify the Drop path, not a dead branch" the Exit Sequence demands.
-  4. **[coverage gap] the 8 `m2_state_machine_integration.rs` tests do NOT run under `cargo test --workspace`** (confirmed: 0 hits). They pass only via `cargo test -p ynz-driver --test m2_state_machine_integration`. A future regression escapes the standard sweep. FIX the Cargo wiring so `--workspace` discovers the test binary (likely the manual `[[test]]` entry in `crates/ynz-driver/Cargo.toml` conflicts with auto-discovery — remove the manual entry OR fix its `path`/`harness`; verify `cargo test --workspace` runs all 8).
+  4. **[coverage gap] the 8 `m2_state_machine_integration.rs` tests do NOT run under `cargo test --workspace`** (confirmed: 0 hits). They pass only via `cargo test -p ynz-driver --test m2_state_machine_integration`. A future regression escapes the standard sweep. FIX the Cargo wiring so `--workspace` discovers the test binary (likely the manual `[[test]]` entry in [`crates/ynz-driver/Cargo.toml`](../../../../crates/ynz-driver/Cargo.toml) conflicts with auto-discovery — remove the manual entry OR fix its `path`/`harness`; verify `cargo test --workspace` runs all 8).
   - Also fold in: 7 codegen IR golden snapshots were updated for the new frame layout (offset 32 locals, return-slot @16) — legitimate (layout genuinely changed), but the round-2 gate's code-reviewer must confirm each snapshot delta is ONLY the layout change, not a masked regression.
   - **Deviations accepted as sound:** Scope Dev #1/#2 (typeck `CheckOutput.suspends_set` + test-helper field — necessary seam plumbing); Approach Dev #1 (bridge stays in WRAPPER fns, unreachable from resume fns — correct, full deletion is Phase 8); Approach Dev #2 (RUNTIME mutex deadlock fix via `Handle::try_current()` — necessary for AC5, real bug found by testing). Approach Dev #3 (the AC2 error-path `{0,0}`) is NOT an acceptable deviation — it's finding #1, must fix.
   - **Round-2 fix scope:** fix AC2 (error ptr into return-slot field0 inside resume), implement AC7 alloc-counter proof, implement AC8 cancellation-no-leak (pos+neg control), fix the `--workspace` test discovery. THEN run the full 5-reviewer + judge fan-out (no point gating before the 3 broken/unproven ACs are real).
@@ -1785,11 +1785,11 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
 **Current-state anchors**:
 - `crates/ynz-runtime/src/runtime.rs:600-643` — `ynz_rt_call_state_machine_sync` (delete) + `runtime_decls.rs` extern decl + `SyncStateFnFuture` (delete if unused after Phase 7's top-level driver uses `RUNTIME.block_on` directly)
 - `crates/ynz-typeck/src/check.rs` — `WaitInsideLoop` + `LocalCrossesWait` emission (retain) ; any residual `wait_required`/`unawaited` (removed in Phase 6 — confirm gone)
-- `registry/features.toml` + `crates/ynz-diagnostics/` — diagnostic templates (remove stale bridge-era ones)
+- [`registry/features.toml`](../../../../registry/features.toml) + `crates/ynz-diagnostics/` — diagnostic templates (remove stale bridge-era ones)
 **Files (expected scope)**:
 - `crates/ynz-runtime/src/runtime.rs` + `crates/ynz-codegen/src/runtime_decls.rs` — delete the sync bridge (+ `SyncStateFnFuture` if dead)
 - `crates/ynz-typeck/src/check.rs` — confirm `WaitInsideLoop`/`LocalCrossesWait` retained + clean; remove dead emission paths
-- `registry/features.toml` + `crates/ynz-diagnostics/` — finalize templates; record removals in `### Feature Registry Entries`
+- [`registry/features.toml`](../../../../registry/features.toml) + `crates/ynz-diagnostics/` — finalize templates; record removals in `### Feature Registry Entries`
 - `crates/ynz-driver/tests/fixtures/` — `wait_in_loop_error.ynz` / `local_crossing_wait_error.ynz` still produce clean teaching errors (exit 1)
 - plan Active Decisions — record the guard re-decision
 **Deviation rule**: standard.
@@ -1803,7 +1803,7 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
 - [x] `wait_in_loop_error.ynz` + `local_crossing_wait_error.ynz` still produce clean WHAT/WHAT-INSTEAD/WHY teaching errors pointing to M3 (exit 1) — guards retained
   - Evidence: `./target/debug/ynz run crates/ynz-driver/tests/fixtures/v0_3_m2_wait_in_loop_error.ynz` → exit 1 + "v0.3-M3" pointer; `./target/debug/ynz run crates/ynz-driver/tests/fixtures/v0_3_m2_local_crossing_wait_error.ynz` → exit 1 + "v0.3-M3" pointer
 - [x] Guard re-decision recorded in Active Decisions (both STAY, with rationale + no escape hatch)
-  - Evidence: `.claude/state.md` "Active Decisions (Architectural — v0.3-M2)" entry added 2026-06-01 Phase 8: `WaitInsideLoop` + `LocalCrossesWait` STAY M2 errors — frame-backed mutable locals + loop-state transform are M3 hard core; no escape hatch; escalate in M3 planning
+  - Evidence: [`.claude/state.md`](../../../state.md) "Active Decisions (Architectural — v0.3-M2)" entry added 2026-06-01 Phase 8: `WaitInsideLoop` + `LocalCrossesWait` STAY M2 errors — frame-backed mutable locals + loop-state transform are M3 hard core; no escape hatch; escalate in M3 planning
 - [x] Repo-wide grep for `Shape B` / `block_on bridge` / `works on every thread` / `wait_required_on_state_machine_call` returns zero stale references (code, registry, diagnostics, plan); jargon_audit green
   - Evidence: all four greps return 0 live hits in crates/ + registry/ (non-target); `wait_required_on_state_machine_call` hits remain ONLY in tests/check.rs and src/check.rs as historical forensic documentation of the retired diagnostic — Historical-record carve-out applies; `cargo test -p ynz-diagnostics` → 8 passed. **Round-2 (code-reviewer BLOCK fix):** code-reviewer caught 2 LIVE "sync bridge"/"bridge" framing comments the verbatim-phrase greps missed — `emit.rs:5547` (factually WRONG: claimed SM callers "drive the callee via the sync bridge" — they inline-poll-yield) + `emit.rs:4954` (stale "The bridge is in the WRAPPER"). Both rewritten to current-design framing (inline poll-and-yield / program-entry driver). Added a disambiguating note to the m2_spike.rs Contract-4 cluster (its "sync bridge" usage is the LEGITIMATE sync→async program-entry boundary, NOT the prohibited mid-program bridge). Re-verified: `grep "sync bridge|the bridge is|via the bridge|Shape B"` in `crates/*/src/` (excluding no-bridge/program-entry) → 0 live hits; build clean `-D warnings`; spike 19/19; m2 suite 20/20.
 - [x] `cargo test --workspace` green except the 5 known environmental diffs
@@ -1840,7 +1840,7 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
 **Current-state anchors**:
 - the HALTED original Phase 5 section above (its steps are the template; its workarounds are what gets reverted)
 - `examples/pirates-roster/entrypoint.ynz` (uncommitted P5 workaround — blocking `sleepMs` keep-alive → revert to `wait sleepAsync`, AND show inferred-no-`wait` concurrency)
-- `crates/ynz-driver/tests/m2_state_machine_integration.rs`, `crates/ynz-driver/tests/cross_impl_consistency.rs`, `Cargo.toml`, `CHANGELOG.md`, `.claude/state.md`
+- `crates/ynz-driver/tests/m2_state_machine_integration.rs`, `crates/ynz-driver/tests/cross_impl_consistency.rs`, [`Cargo.toml`](../../../../Cargo.toml), [`CHANGELOG.md`](../../../../CHANGELOG.md), [`.claude/state.md`](../../../state.md)
 **Files (expected scope)**: as the original Phase 5 Files list + the rework fixtures from P6-P8 folded into demo/gallery; the 5 `.snap.new` environmental diffs NOT accepted.
 **Deviation rule**: standard. Do NOT silently re-introduce any P5 workaround.
 **Steps**:
@@ -1849,7 +1849,7 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
 3. Error gallery `examples/primantis-orders/v0_3_m2_errors.ynz`: the can't-infer errors + retained `WaitInsideLoop`/`LocalCrossesWait` + redundant-`wait` hint. `// WHY:` per trigger.
 4. Cross-impl harness: extend `cross_impl_consistency.rs` with M2 fixtures + timing allowlist.
 4b. **Close Phase-6 carry-over Concern (code-reviewer, non-blocking):** add a symmetric FREE-FN negative test for the can't-infer dynamic gate — a non-suspending `relay` doing the free-fn form `dispatch(w)` (mirrors `dynamic_dispatch_non_suspending_caller_compiles_clean` which only covers the dot-call `:2553` site). This guards the `:2051` free-fn gate against an R2-style over-fire regression. Mutation check confirmed the gap: dropping the `current_fn_suspends` guard on `:2051` currently fails NO test. Low risk (both gates share the guard) but per Rule 11 it gets closed.
-5. Wrap prep (staged, NOT executed): bump `Cargo.toml` `0.3.0-m1` → **`0.3.0-m3`** (per the RELEASE TAG DECISION banner — m2 is taken by M10); CHANGELOG `[0.3.0-m3]` section (Features / Improvements / Known-limitations [retained Option-B guards; recursion heap-boxes; sub-expr-suspend + mutual-recursion deferred to M3] / Internal-only); state.md ship entry; both `.vsix` assets named `yinz-0.3.0-m3.vsix` + `yinz-latest.vsix`; VSCode `package.json` → `0.3.0-m3`.
+5. Wrap prep (staged, NOT executed): bump [`Cargo.toml`](../../../../Cargo.toml) `0.3.0-m1` → **`0.3.0-m3`** (per the RELEASE TAG DECISION banner — m2 is taken by M10); CHANGELOG `[0.3.0-m3]` section (Features / Improvements / Known-limitations [retained Option-B guards; recursion heap-boxes; sub-expr-suspend + mutual-recursion deferred to M3] / Internal-only); state.md ship entry; both `.vsix` assets named `yinz-0.3.0-m3.vsix` + `yinz-latest.vsix`; VSCode `package.json` → `0.3.0-m3`.
 6. STOP before release: **tag collision RESOLVED 2026-06-01 — tag = `v0.3.0-m3`** (verified free local+origin). Surface to Patrick for the user-gated `/release` (cuts `v0.3.0-m3`) + merge-to-main on his go. Do NOT auto-release/merge.
 **Acceptance criteria**:
 - [x] All restored integration tests PASS as working behavior (none omitted, none asserting an abort that should now work)
@@ -1861,7 +1861,7 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
 - [x] `cargo test cross_impl_consistency` + `cargo test m2_state_machine_integration` pass; `cargo test --workspace` green except the 5 environmental diffs
   - Evidence: `cross_impl_consistency` (corpus_produces_deterministic_output_across_runs) pass; `m2_state_machine_integration` 23/23; `cargo test --workspace --no-fail-fast` green except exactly the 5 documented env-path snapshot diffs (`broken_main`/`empty`/`m2_compound_assign`/`m2_const_reassign`/`m2_mixed_int_number` — absolute-path-prefix-only, content byte-identical, green on main).
 - [x] CHANGELOG known-limitations accurate (retained Option-B guards; recursion uses heap-boxed frames; sub-expr-suspend + mutual-recursion deferred to M3); Cargo.toml=`0.3.0-m3` (NOT m2 — taken by M10); state.md ship entry appended
-  - Evidence: `Cargo.toml` version=`0.3.0-m3` ✓; `CHANGELOG.md` `[0.3.0-m3]` section (Features / Improvements / Known-limitations [retained Option-B guards; recursion heap-boxes; sub-expr-suspend + mutual-recursion + local-crosses-suspension → M3] / Internal-only `__testFallibleAsync`); `tooling/vscode-ynz/package.json`=`0.3.0-m3` + its CHANGELOG; state.md ship entry appended. acceptance-verifier confirmed all artifacts.
+  - Evidence: [`Cargo.toml`](../../../../Cargo.toml) version=`0.3.0-m3` ✓; [`CHANGELOG.md`](../../../../CHANGELOG.md) `[0.3.0-m3]` section (Features / Improvements / Known-limitations [retained Option-B guards; recursion heap-boxes; sub-expr-suspend + mutual-recursion + local-crosses-suspension → M3] / Internal-only `__testFallibleAsync`); `tooling/vscode-ynz/package.json`=`0.3.0-m3` + its CHANGELOG; state.md ship entry appended. acceptance-verifier confirmed all artifacts.
 **Quality gate**:
 - [x] NO P5 workaround re-introduced (no blocking-`sleepMs` keep-alive; no omitted tests) — demo keep-alive is `wait sleepAsync(150)`; the only sleepMs is the intended M1 analytics demo
 - [x] `.snap.new` environmental diffs NOT accepted — `git diff 3655bf6..HEAD -- 'crates/ynz-driver/tests/snapshots/integration__*.snap'` empty across all 4 phases (plan-adherence confirmed); `.snap.new` generated-then-removed each round
@@ -1994,7 +1994,7 @@ Round 2 Required Fixes applied:
 Round 2 Concerns addressed:
 
 - **Background routing transitive-case test** → added P5 integration test `background_regular_fn_that_internally_calls_state_machine_does_not_crash` per Concern #1.
-- **`wait_required_on_state_machine_call` WHY references M3 work that doesn't exist yet** → noted; tracked in `.claude/todos.md` (will add cross-workstream TODO during plan-execution kickoff): "v0.3-M3 plan must verify auto-`wait` insertion lifts `wait_required_on_state_machine_call` or update the WHY text."
+- **`wait_required_on_state_machine_call` WHY references M3 work that doesn't exist yet** → noted; tracked in [`.claude/todos.md`](../../../todos.md) (will add cross-workstream TODO during plan-execution kickoff): "v0.3-M3 plan must verify auto-`wait` insertion lifts `wait_required_on_state_machine_call` or update the WHY text."
 - **`internal_fns` API exposure to production typeck without guard** → P3 Step 4 doc comment will include `#[doc(hidden)]` attribute + `// USAGE GUARD: only ever called from M2 state-machine test fixtures or registered in M2_MAY_BLOCK_INTRINSICS. Production code paths should call lookup_free_fn, not lookup_free_fn_including_internal.` Belt-and-braces enforcement.
 - **P5 demo with only 4 pirates doesn't visibly distinguish thread-sharing** → bumped to 8 pirates per Concern #5. P5 Step 1 demo snippet updated.
 

@@ -78,7 +78,7 @@ Roadmap: `v0-3-concurrency-perf`
 - **Tokio multi-thread runtime + blocking thread pool**: `tokio::runtime::Builder::new_multi_thread().enable_all().build()` creates the runtime; `runtime.spawn_blocking(fn)` routes to the dedicated blocking thread pool (separate from the I/O work-stealing pool). M1 uses `spawn_blocking` for all `background` tasks — per the roadmap Architectural Decision: `wait`-containing background fns in M1 would otherwise starve the I/O scheduler. M3 splits routing based on may-block analysis.
 - **`ynz_rt_check_preempt()` semantics** (from `design/future/concurrency.md:198`): compiler-inserted preemption checkpoints at loop back-edges + function call sites. Tokio 1.x's budget system yields at `await` points but NOT at loop back-edges; Yinz must emit its own checks to avoid Go-1.0's tight-loop-monopoly problem. In M1 the helper is a no-op stub that just calls `tokio::task::yield_now()` cooperatively (since no state machines exist yet — full preemption semantics land in M2/M3). Stub-now, real later: the call sites are correctly placed in M1; the body becomes meaningful when state machines ship.
 - **`--no-auto-parallel` plumbing**: in M1, the flag is parsed by the driver and threaded through to `ynz-codegen` config. M1 codegen ignores it (background always runs concurrently — there's no auto-parallel pass yet). The flag is reserved here so the cross-impl-consistency harness can exist from M1. M3 wires it into the auto-parallelize pass to force-disable.
-- **Large-copy threshold**: copy-size > 64 bytes triggers the warning. Threshold matches typical cache-line size; mirrors `design/concurrency.md` IDE warning. Implemented in typeck by inspecting the typed parameter struct size at `background` call sites.
+- **Large-copy threshold**: copy-size > 64 bytes triggers the warning. Threshold matches typical cache-line size; mirrors [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) IDE warning. Implemented in typeck by inspecting the typed parameter struct size at `background` call sites.
 
 ---
 
@@ -165,12 +165,12 @@ Each is a testable assertion verified by named tests in this milestone.
 
 **Auto-promotion analysis (revised per plan-reviewer Required Fix #2)**:
 
-The original analysis violated `.claude/rules/auto-promotion.md` Banned Anti-Pattern #2 (Tier 3 lint without codegen promotion). The corrected analysis ships **muted hint + Tier 3 lint together in M1** (the hybrid model in `.claude/rules/inference.md` "Two Surfaces for the Same Decision") for the large-copy case, because `.give` IS typeable Yinz syntax. The codegen auto-promotion (auto-emit `.give` when the value is unused after the call) genuinely requires the M3 call-graph analysis and is deferred there — but the typeable explicit form earns the muted hint surface in M1 alongside the lint.
+The original analysis violated [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md) Banned Anti-Pattern #2 (Tier 3 lint without codegen promotion). The corrected analysis ships **muted hint + Tier 3 lint together in M1** (the hybrid model in [`.claude/rules/inference.md`](../../../rules/inference.md) "Two Surfaces for the Same Decision") for the large-copy case, because `.give` IS typeable Yinz syntax. The codegen auto-promotion (auto-emit `.give` when the value is unused after the call) genuinely requires the M3 call-graph analysis and is deferred there — but the typeable explicit form earns the muted hint surface in M1 alongside the lint.
 
 - **Stricter form**: `background fn(value.copy)` where the user could write `background fn(value.give)` instead. `.give` is typeable in source today; the analysis question is only "is the value used after the call." M1 doesn't have that analysis, so codegen auto-promotion defers to M3. But M1 DOES have struct-size at the typeck site, so the lint fires + the muted hint shows.
   - **Codegen-promote?** No — deferred to M3. Real cost named: the call-graph analysis to prove "unused after" requires whole-program reachability (M3 territory per roadmap Architectural Decision: "background ownership auto-give/copy inference = M3"). M1 keeps explicit `.give`/`.copy`. NOT duct tape — the deferral has a named follow-up trigger (M3 ships call-graph analysis) and the cost being paid in M1 is named (one extra annotation per background call).
-  - **Muted hint? YES in M1.** The hint surface is `ownership_call_site` (Addition category — places `.copy` or `.give` after the arg name at the call site). The hint already exists for non-background calls per `registry/features.toml` muted_hint_domain `ownership_call_site`; M1 extends it to fire on background sites where the size threshold is exceeded. Rendered as: muted text `.give (transfers ownership; no copy)` after the arg, click-to-make-explicit inserts `.give` in source. Hover tooltip follows WHAT/WHAT-INSTEAD/WHY per Golden Rule 11.
-  - **Tier 3 lint? YES in M1.** Name: `background-large-struct-copy`. Fires when copy size > 64 bytes. Same WHAT/WHAT-INSTEAD/WHY as the muted hint's hover tooltip (single canonical text per `.claude/rules/inference.md`).
+  - **Muted hint? YES in M1.** The hint surface is `ownership_call_site` (Addition category — places `.copy` or `.give` after the arg name at the call site). The hint already exists for non-background calls per [`registry/features.toml`](../../../../registry/features.toml) muted_hint_domain `ownership_call_site`; M1 extends it to fire on background sites where the size threshold is exceeded. Rendered as: muted text `.give (transfers ownership; no copy)` after the arg, click-to-make-explicit inserts `.give` in source. Hover tooltip follows WHAT/WHAT-INSTEAD/WHY per Golden Rule 11.
+  - **Tier 3 lint? YES in M1.** Name: `background-large-struct-copy`. Fires when copy size > 64 bytes. Same WHAT/WHAT-INSTEAD/WHY as the muted hint's hover tooltip (single canonical text per [`.claude/rules/inference.md`](../../../rules/inference.md)).
   - **Canonical hover/lint text**: WHAT: "Copying N bytes into a background task." WHAT INSTEAD: "Pass ownership with `background fn(value.give)` if you don't need the value after. Click `.give` to apply." WHY: "`.give` transfers ownership without copying. Auto-detection of unused-after-call ships in v0.3-M3; until then, the choice is yours to make explicit."
 - **Other auto-promotion candidates in M1**: none — runtime + codegen wiring + linker flags have no "stricter form" the compiler can prove fits.
 
@@ -202,12 +202,12 @@ IDE muted-hint domains: none new in M1 (`wait_points` and `ownership_call_site` 
 
 - `--kernel` mode is NOT supported in v0.1 or v0.2; this is a forward-design requirement per `design/future/no-runtime-mode.md`. In v0.3-M1, the typeck checker MUST emit a compile error if a `--kernel` mode build contains `wait` or `background`. Test: `kernel_mode_rejects_concurrency_keywords` (P4).
 - Error format: WHAT/WHAT-INSTEAD/WHY pointing to `design/future/no-runtime-mode.md` for context.
-- Note: `--kernel` mode itself is not user-facing in v0.3 (the flag exists at the driver level for future-design tests only). M1's kernel-mode check is implemented; the broader `--kernel` build mode arrives in a later version per `design/mvp-scope.md`.
+- Note: `--kernel` mode itself is not user-facing in v0.3 (the flag exists at the driver level for future-design tests only). M1's kernel-mode check is implemented; the broader `--kernel` build mode arrives in a later version per [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md).
 - All `background`-free programs continue to work identically with or without Tokio (Tokio is initialized at `main` but does nothing if no tasks are spawned).
 
 ### Demo & Error Gallery
 
-Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`:
+Per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Demo & Error Gallery`:
 
 1. **`examples/pirates-roster/entrypoint.ynz`** — extended with a v0.3-M1 concurrency section that:
    - Calls `background recordAnalytics(event.copy)` and prints a marker line BEFORE the analytics function completes
@@ -226,7 +226,7 @@ Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`:
 
 ### Feature Registry Entries
 
-Per `.claude/rules/plan-invariants.md` `### Feature Registry Entries` (mandatory subsection from v0.2-M2 onward):
+Per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Feature Registry Entries` (mandatory subsection from v0.2-M2 onward):
 
 **SCHEMA EXTENSION (required per plan-reviewer Required Fix #1)**: the existing `KeywordEntry` schema in `crates/ynz-registry/src/schema.rs:4-9` has fields `name`, `token`, `since` only — no hover-doc field. P5 extends the schema with three optional fields (`hover_what`, `hover_what_instead`, `hover_why`) matching Rule 11 format. The schema change ships in P5 BEFORE the `wait`/`background` hover updates can be made. Without this extension, the LSP renders only `"## Keyword: `{name}`\n\nIntroduced in {since}."` and the new semantics are invisible to users.
 
@@ -335,10 +335,10 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 **Why this phase exists**: This is the milestone's accept/reject gate per the roadmap risk "State machine LLVM IR is more complex than anticipated; M2 spans multiple sessions" and the panic-best-effort architectural decision. Failing fast here is much cheaper than discovering the Tokio integration is unworkable in P3 when half the codegen is already done.
 **Current-state anchors**:
 - `crates/ynz-runtime/src/lib.rs:1-100` — existing runtime shim layout (extern "C" functions)
-- `crates/ynz-runtime/Cargo.toml` — where Tokio dep gets added
+- [`crates/ynz-runtime/Cargo.toml`](../../../../crates/ynz-runtime/Cargo.toml) — where Tokio dep gets added
 - Tokio docs: `tokio::runtime::Builder::new_multi_thread()`, `tokio::task::spawn_blocking`, `std::panic::catch_unwind`
 **Files (expected scope)**:
-- `crates/ynz-runtime/Cargo.toml` — add `tokio = { version = "1", features = ["rt-multi-thread", "macros"] }` + `num_cpus = "1"`
+- [`crates/ynz-runtime/Cargo.toml`](../../../../crates/ynz-runtime/Cargo.toml) — add `tokio = { version = "1", features = ["rt-multi-thread", "macros"] }` + `num_cpus = "1"`
 - `crates/ynz-runtime/src/runtime.rs` — new module: `ynz_rt_init`, `ynz_rt_spawn_blocking`, `ynz_rt_check_preempt`, `ynz_rt_shutdown`
 - `crates/ynz-runtime/src/lib.rs` — re-export the new module's symbols
 - `crates/ynz-runtime/tests/spike.rs` — hand-written test that invokes the C-ABI from Rust (simulating what codegen will emit)
@@ -409,7 +409,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 **Files (expected scope)**:
 - `crates/ynz-runtime/src/runtime.rs` — promoted from spike, refined for production (**done in P1**)
 - `crates/ynz-runtime/src/lib.rs` — re-exports (**done in P1**)
-- `crates/ynz-runtime/Cargo.toml` — Tokio/num_cpus deps confirmed (**done in P1**)
+- [`crates/ynz-runtime/Cargo.toml`](../../../../crates/ynz-runtime/Cargo.toml) — Tokio/num_cpus deps confirmed (**done in P1**)
 - ~~`crates/ynz-runtime/src/sleep.rs` — `ynz_thread_sleep_ms(ms: i64)` C-ABI shim~~ — **done in P1** (P1 plan deviation: spike required the shim for measurement tests; see Spike Findings deviation note)
 - `crates/ynz-driver/src/build.rs` — add `-lpthread`, `-ldl`, `-lm`, `-lrt` to the linker command (**done in P1** — added during P1 to fix workspace test failures)
 - `crates/ynz-codegen/src/runtime_decls.rs` — register 5 new function declarations (ynz_rt_init, ynz_rt_spawn_blocking, ynz_rt_check_preempt, ynz_rt_shutdown, ynz_thread_sleep_ms)
@@ -489,7 +489,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 5. Loop back-edge preempt: at the back-edge of every `while` and `for` loop (the `br` instruction that jumps back to the loop header), insert `ynz_rt_check_preempt()` BEFORE the branch. Locate via grep for the existing loop lowering; add a single `build_call` line.
 6. ~~Function-call preempt~~ — **DEFERRED TO M2 per P1 GATE** (2026-05-21). Measurement: `fib(30)` with `ynz_rt_check_preempt()` at every recursive call site showed **1190% overhead** in release mode vs 5% threshold. Call-site preempt requires M3 call-graph analysis to be inserted selectively (hot loops only). Root cause: each `extern "C"` function call adds ~1ns overhead; fib(30)'s ~4.3M recursive calls accumulate to unacceptable latency. P3 Step 5 (loop back-edges) is sufficient for M1's correctness guarantee. Full call-site preempt ships in M2 when state machines provide proper suspension points that amortise the per-call cost.
    - **Note for P3 executor**: skip this step. Only Step 5 (loop back-edges) fires in M1.
-7. Add a new runtime helper `ynz_thread_sleep_ms(ms: i64)` to `libynz_runtime.a` (P2 ships this — listed in P2's file scope). Calls `std::thread::sleep(Duration::from_millis(ms as u64))`. Naming rationale: "sleep" is plain English (per `.claude/rules/vocabulary.md` it's not banned jargon); "wait" is reserved for the keyword. The helper is exposed via a Yinz intrinsic surface (similar to how M2 exposed `.toString()` on primitives) — a free function `sleepMs(ms: int)` callable from `.ynz` code that lowers to `ynz_thread_sleep_ms`. Add to `crates/ynz-typeck/src/intrinsics.rs` if that's where free-fn intrinsics live; otherwise wherever the existing free-fn intrinsic table is (locate at execution time).
+7. Add a new runtime helper `ynz_thread_sleep_ms(ms: i64)` to `libynz_runtime.a` (P2 ships this — listed in P2's file scope). Calls `std::thread::sleep(Duration::from_millis(ms as u64))`. Naming rationale: "sleep" is plain English (per [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) it's not banned jargon); "wait" is reserved for the keyword. The helper is exposed via a Yinz intrinsic surface (similar to how M2 exposed `.toString()` on primitives) — a free function `sleepMs(ms: int)` callable from `.ynz` code that lowers to `ynz_thread_sleep_ms`. Add to `crates/ynz-typeck/src/intrinsics.rs` if that's where free-fn intrinsics live; otherwise wherever the existing free-fn intrinsic table is (locate at execution time).
 8. Add fixture `crates/ynz-driver/tests/fixtures/v0_3_m1_background_timing.ynz`:
    ```yinz
    function recordEvent() -> nothing {
@@ -557,7 +557,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
    - WHAT: "Cannot use `background` with a function that mutates its arguments via `lend`."
    - WHAT INSTEAD: "Change the parameter to `give` (transfer ownership) or pass a copy: `background fn(value.copy)`."
    - WHY: "`background` runs this function outside the current scope. A `lend` borrow allows mutation through the borrow; if the value's owner reassigns or drops it concurrently, the background task's mutations would corrupt freed memory. Transfer ownership (`give`) or pass a copy so the background task owns its argument."
-2. **Large-copy warning + muted hint (BOTH surfaces per `.claude/rules/auto-promotion.md` hybrid model; plan-reviewer Required Fix #2)**: at the same site, for every `.copy` arg passed to `background`, look up the struct's size via the typeck's authoritative size method. Specifically: the size lookup MUST use the same code path the typeck uses to compute struct layouts for codegen — NOT a parallel handcoded measurement. Locate the existing size function during execution (likely in `crates/ynz-typeck/src/shapes.rs` — search for `size_bytes` / `layout` / `align`). If the typeck doesn't currently expose a public size getter, expose one as part of this phase rather than duplicating the logic.
+2. **Large-copy warning + muted hint (BOTH surfaces per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md) hybrid model; plan-reviewer Required Fix #2)**: at the same site, for every `.copy` arg passed to `background`, look up the struct's size via the typeck's authoritative size method. Specifically: the size lookup MUST use the same code path the typeck uses to compute struct layouts for codegen — NOT a parallel handcoded measurement. Locate the existing size function during execution (likely in `crates/ynz-typeck/src/shapes.rs` — search for `size_bytes` / `layout` / `align`). If the typeck doesn't currently expose a public size getter, expose one as part of this phase rather than duplicating the logic.
    - If size > 64 bytes (named constant `BACKGROUND_LARGE_COPY_BYTES`):
      - Emit a Tier 3 warning (`Diagnostic::warning`) — text from `### Feature Registry Entries`' `background_large_struct_copy` template. NOT an error; doesn't block compilation.
      - Emit a muted-hint annotation via the LSP `ownership_call_site` domain — text `.give (transfers ownership; no copy)` rendered as Addition-category inline muted text after the arg name. The hint is wired in P5 LSP step; this P4 step only ensures the typeck records the metadata the LSP needs (call site span + arg span + recommended action).
@@ -579,7 +579,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
      - `background_method_call_with_lend_self_rejected` — UFCS site: `shape Counter { n: int } function increment(lend self: Counter)` then `background counter.increment()` must produce the lend-cross-thread error (verifies the desugaring path)
      - `background_give_then_use_after_rejected` — `background fn(x.give); print(x)` must produce use-after-give (verifies `is_consumed` propagation works at background-call sites)
      - `background_with_zero_byte_struct_no_warn` (per round-2 reviewer adversarial case 3) — `background fn(emptyStruct.copy)` where struct has zero fields (size 0); assert NO large-copy warning fires (boundary: `size > 64` must be strict-greater, not greater-or-equal, and must not misfire on zero-sized types or `Type::Nothing`).
-   - **Optional adversarial test (executor judgment)**: `background_from_arena_scope_uses_global_allocator` (per round-2 adversarial case 1) — verify that `ynz_alloc` for the heap context resolves to the global allocator NOT a scope-bound arena. Arena scopes aren't user-facing in v0.3-M1 (arenas land in v0.2+ per `design/future/arena.md`), so this test may not be writable until arenas ship; if not writable in M1, document the assumption in `crates/ynz-codegen/src/emit.rs` near the `ynz_alloc` call and add a Bouncer-style grep check (e.g., `// SAFETY: `ynz_alloc` must NEVER bind to an arena allocator at background-spawn sites — the spawned task may outlive the arena scope.`).
+   - **Optional adversarial test (executor judgment)**: `background_from_arena_scope_uses_global_allocator` (per round-2 adversarial case 1) — verify that `ynz_alloc` for the heap context resolves to the global allocator NOT a scope-bound arena. Arena scopes aren't user-facing in v0.3-M1 (arenas land in v0.2+ per [`docs/internal/scratchpad/SCRATCH-future-arena.md`](../../../../docs/internal/scratchpad/SCRATCH-future-arena.md)), so this test may not be writable until arenas ship; if not writable in M1, document the assumption in `crates/ynz-codegen/src/emit.rs` near the `ynz_alloc` call and add a Bouncer-style grep check (e.g., `// SAFETY: `ynz_alloc` must NEVER bind to an arena allocator at background-spawn sites — the spawned task may outlive the arena scope.`).
 5. Update `crates/ynz-diagnostics/tests/jargon_audit.rs` — ensure the new diagnostic strings pass the banned-jargon check (no `async`/`await`/`coroutine`/`task`/`Future`/`Promise` in user-facing text). Note: `thread` is permitted in hover docs only (not in diagnostic errors) per the vocabulary rule.
 **Acceptance criteria**:
 - [x] `background fn(value)` where `fn` has `lend` param → compile error with WHAT/WHAT-INSTEAD/WHY format
@@ -620,7 +620,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 **Why this phase exists**: This is the load-bearing teaching commitment. Skipping any of these surfaces ships M1 as a hidden feature. The roadmap explicitly calls out that all six surfaces are required; this phase is the single PR that addresses all six.
 **Current-state anchors**:
 - `registry/features.toml:166` (`wait` keyword), `:170` (`background` keyword) — hover doc update sites
-- `registry/features.toml` — `[[deferred_tooling_feature]]` section (search for existing entries to match the schema)
+- [`registry/features.toml`](../../../../registry/features.toml) — `[[deferred_tooling_feature]]` section (search for existing entries to match the schema)
 - `crates/ynz-lsp/src/diagnostics.rs` — where typeck errors flow into LSP `Diagnostic` objects
 - `crates/ynz-lsp/src/hover.rs` (if exists) — keyword hover handler
 - `tooling/vscode-ynz/package.json` — version bump + screenshot reference
@@ -631,16 +631,16 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 - `crates/ynz-registry/src/schema.rs` — extend `KeywordEntry` with three new optional hover fields
 - `crates/ynz-registry/build.rs` — emit the new fields in generated Rust
 - `crates/ynz-registry/src/lsp_adapter.rs` — render the new hover fields when present (fall back to old format when absent for backward compatibility)
-- `registry/features.toml` — 2 keyword hover updates + 1 new deferred_tooling_feature entry + 4 new diagnostic_template entries + muted_hint_domain update
+- [`registry/features.toml`](../../../../registry/features.toml) — 2 keyword hover updates + 1 new deferred_tooling_feature entry + 4 new diagnostic_template entries + muted_hint_domain update
 - `crates/ynz-lsp/src/diagnostics.rs` (and tests) — flow the new typeck errors into LSP diagnostics
 - `crates/ynz-lsp/src/inlay_hints.rs` (or wherever inlayHint handler lives — locate at execution) — extend `ownership_call_site` firing logic to background sites with size threshold check
 - `tooling/vscode-ynz/package.json` — version bump to `0.3.0-m1`
-- `tooling/vscode-ynz/CHANGELOG.md` — new entry
-- `tooling/vscode-ynz/README.md` — mention v0.3-M1 capability
+- [`tooling/vscode-ynz/CHANGELOG.md`](../../../../tooling/vscode-ynz/CHANGELOG.md) — new entry
+- [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) — mention v0.3-M1 capability
 - `tooling/vscode-ynz/screenshots/background-concurrent.png` — new screenshot
 - `examples/pirates-roster/entrypoint.ynz` — v0.3-M1 section added
 - `examples/primantis-orders/v0_3_m1_errors.ynz` — new error gallery file
-- `examples/primantis-orders/README.md` — link to the new file
+- [`examples/primantis-orders/README.md`](../../../../examples/primantis-orders/README.md) — link to the new file
 **Steps**:
 
 **Schema extension (per plan-reviewer Required Fix #1 — MUST land before keyword hover updates can produce visible UX):**
@@ -653,7 +653,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
     ```
     Keeping them `Option` preserves backward compatibility for existing keyword entries that don't yet have hover text.
 0b. Update `crates/ynz-registry/build.rs` (look at the existing keyword-entry code-emission block ~line 153-166 per reviewer's research finding) to emit the three new fields from the TOML.
-0c. Add the schema doc comments in `registry/features.toml`'s `[[keyword]]` section comment block — same comment style as existing entries.
+0c. Add the schema doc comments in [`registry/features.toml`](../../../../registry/features.toml)'s `[[keyword]]` section comment block — same comment style as existing entries.
 0d. Update `crates/ynz-registry/src/lsp_adapter.rs:lsp_hover_for_token` keyword branch to render: if `hover_what.is_some()` use the new WHAT/WHAT-INSTEAD/WHY format; else fall back to existing `"## Keyword: `{name}`\n\nIntroduced in {since}."` format. New format: `"## Keyword: `{name}`\n\n**WHAT:** {hover_what}\n\n**WHAT INSTEAD:** {hover_what_instead}\n\n**WHY:** {hover_why}\n\nIntroduced in {since}."`
 0e. Run `cargo build -p ynz-registry && cargo test -p ynz-registry` — confirm the schema change compiles AND the existing keyword test cases (`keyword_hover_lookup_returns_some`, etc.) still pass with the optional fields defaulting to None.
 
@@ -668,7 +668,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 6. LSP wiring: verify the new typeck diagnostics flow through `crates/ynz-lsp/src/diagnostics.rs` into LSP `Diagnostic` objects. Add a test case in `crates/ynz-lsp/tests/diagnostics.rs` (the tests file is already in modified list) that opens a buffer with a `lend` background call and asserts the LSP returns the new error.
 6b. LSP inlayHint wiring for the `ownership_call_site` muted-hint extension. Locate the existing inlayHint handler in `crates/ynz-lsp/src/`; extend its logic so that at `background` call sites where the typeck recorded the recommended-action metadata (from P4 Step 2), the LSP returns an inlayHint with text `.give (transfers ownership; no copy)` positioned after the arg name. Add a test in `crates/ynz-lsp/tests/` (likely `inlay_hints.rs` if it exists) that opens a buffer with a `background fn(largeStruct.copy)` call and asserts the LSP returns the muted hint.
 7. Hover lookups: verify `crates/ynz-registry/src/lsp_adapter.rs::lsp_hover_for_token("wait")` and `lsp_hover_for_token("background")` return text containing the new WHAT/WHAT-INSTEAD/WHY content (the rendered output uses the format added in Step 0d). Add a unit test confirming each.
-8. VSCode extension: bump version to `0.3.0-m1` in `package.json`. Update `CHANGELOG.md` with the milestone summary. Record a 1-minute screenshot showing: open `examples/pirates-roster/entrypoint.ynz`, hover over `background`, see the new hover text; then trigger `lend`-cross-thread error in a `.ynz` file, see the new diagnostic. Save as `screenshots/background-concurrent.png` (single still frame from the screencast is fine).
+8. VSCode extension: bump version to `0.3.0-m1` in `package.json`. Update [`CHANGELOG.md`](../../../../CHANGELOG.md) with the milestone summary. Record a 1-minute screenshot showing: open `examples/pirates-roster/entrypoint.ynz`, hover over `background`, see the new hover text; then trigger `lend`-cross-thread error in a `.ynz` file, see the new diagnostic. Save as `screenshots/background-concurrent.png` (single still frame from the screencast is fine).
 9. Extend `examples/pirates-roster/entrypoint.ynz` after line 226 (after the existing M8 modules section) with a new section:
    ```yinz
    // ────── v0.3-M1: background runs on a separate thread ──────
@@ -703,7 +703,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
     - large-copy warning (a 100-byte shape passed to background via `.copy`)
     - existing share-rejection trigger (carry forward)
     - Each block has a `// WHY:` comment naming the diagnostic class
-11. Add to `examples/primantis-orders/README.md`: a line linking the new v0_3_m1_errors.ynz file.
+11. Add to [`examples/primantis-orders/README.md`](../../../../examples/primantis-orders/README.md): a line linking the new v0_3_m1_errors.ynz file.
 12. Add a snapshot test that runs `ynz build examples/primantis-orders/v0_3_m1_errors.ynz` and snapshots the diagnostics output. Compare against `insta` snapshot. **Note: for the kernel-mode-rejection triggers (the `--kernel` flag is hidden from `--help` per P4 Step 3), the snapshot test cannot use the public CLI flag. Wire the test to drive typeck directly via the in-process API with `TypeckConfig { kernel_mode: true, .. }` (or equivalent — locate the typeck config struct at execution time). This is a test-only path; the user-facing flag stays hidden.**
 13. Add a snapshot test that runs `ynz run examples/pirates-roster/` (the whole project) and snapshots stdout; verify the v0.3-M1 section's print order is correct (main done before background analytics done — note: this test will be timing-dependent; design it to allow either "main first" or "interleaved" but never "background-first-only").
 14. Build a fresh `.vsix`: `cd tooling/vscode-ynz && vsce package`. Verify two files produced: `yinz-0.3.0-m1.vsix` AND `yinz-latest.vsix` (per project convention).
@@ -719,7 +719,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 - [x] LSP: typeck diagnostics flow correctly; LSP test case for lend-cross-thread error
 - [x] LSP: inlayHint for `ownership_call_site` on background site with large-copy returns `.give` muted hint
 - [x] LSP: hover for `wait` and `background` returns updated text (unit test)
-- [x] VSCode extension: `package.json` version bumped to `0.3.0-m1`; `CHANGELOG.md` updated; `background-concurrent.png` screenshot present (placeholder — vsce not available in headless env; real screenshot needed at release time)
+- [x] VSCode extension: `package.json` version bumped to `0.3.0-m1`; [`CHANGELOG.md`](../../../../CHANGELOG.md) updated; `background-concurrent.png` screenshot present (placeholder — vsce not available in headless env; real screenshot needed at release time)
 - [ ] VSCode extension: built `.vsix` with both versioned and `latest` filenames (deferred — vsce requires GUI/npm install; attach at release)
 - [x] `examples/pirates-roster/entrypoint.ynz` has v0.3-M1 section; snapshot tests pass
 - [x] `examples/primantis-orders/v0_3_m1_errors.ynz` exists with all error/warning triggers + `// WHY:` comments; snapshot tests pass
@@ -727,7 +727,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 **Quality gate**:
 - [x] All new hover/diagnostic text passes WHAT/WHAT-INSTEAD/WHY format check
 - [x] No `async`/`await`/`coroutine`/`Future`/`Promise`/`thread`/`Tokio` brand names in user-facing text (verified by grep); "separate thread" and "thread-pool runtime" are acceptable categorical descriptions
-- [x] Demo extension uses real Yinz operations from the current scope (no invented APIs) per `.claude/rules/dot-postfix.md`
+- [x] Demo extension uses real Yinz operations from the current scope (no invented APIs) per [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md)
 - [ ] VSCode `.vsix` install test passes (install fresh, hover over `background`, confirm new text appears) — deferred to release; vsce not available headless
 - [x] All registry entries follow existing schema (verified by `cargo build -p ynz-registry`)
 **Verification**:
@@ -751,15 +751,15 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 **Why this phase exists**: The earlier phases each focus on a layer. P6 is the cross-layer verification + release gate.
 **Current-state anchors**:
 - `crates/ynz-driver/tests/` — existing integration test patterns
-- `Cargo.toml` (workspace) — version field for the bump
+- [`Cargo.toml`](../../../../Cargo.toml) (workspace) — version field for the bump
 - `tooling/vscode-ynz/yinz-latest.vsix` — produced by P5; this phase confirms the release process attaches both
-- `.claude/state.md` — needs an entry for the v0.3.0-m1 ship; also state-rebuild of radar happens automatically on SessionStart but a manual entry is good practice
+- [`.claude/state.md`](../../../state.md) — needs an entry for the v0.3.0-m1 ship; also state-rebuild of radar happens automatically on SessionStart but a manual entry is good practice
 **Files (expected scope)**:
 - `crates/ynz-driver/tests/cross_impl_consistency.rs` — new test file
 - `crates/ynz-driver/tests/background_timing.rs` — new test file
-- `Cargo.toml` (workspace `[workspace.package] version`) — bump from `0.2.0` to `0.3.0-m1`
-- `CHANGELOG.md` (at workspace root if exists, or `docs/CHANGELOG.md`) — new section
-- `.claude/state.md` — append the milestone ship entry
+- [`Cargo.toml`](../../../../Cargo.toml) (workspace `[workspace.package] version`) — bump from `0.2.0` to `0.3.0-m1`
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) (at workspace root if exists, or `docs/CHANGELOG.md`) — new section
+- [`.claude/state.md`](../../../state.md) — append the milestone ship entry
 **Steps**:
 1. Build the cross-impl consistency harness as `crates/ynz-driver/tests/cross_impl_consistency.rs`:
    - For every `.ynz` file under `examples/` and `crates/ynz-codegen/tests/fixtures/` (skip the intentional-error files in `examples/primantis-orders/`):
@@ -772,17 +772,17 @@ Two infinite-loop sites found. Both have the same root cause pattern.
    - Spawn the compiled binary with a 1-second timeout
    - Assert: stdout contains `main done`; the timestamp on `main done` is < 50ms after process start; stdout also contains `background done` (later); exit code 0
    - Add a panic-discard variant: a fixture with a background fn that panics; assert process exits 0 and stdout contains `main done` even though the background fn panicked
-3. Bump workspace `Cargo.toml` version from `0.2.0` to `0.3.0-m1`.
+3. Bump workspace [`Cargo.toml`](../../../../Cargo.toml) version from `0.2.0` to `0.3.0-m1`.
 4. Add CHANGELOG entry. Sections: Features (Tokio runtime; working background; large-copy warning; lend-cross-thread error; kernel-mode rejection); Improvements (parser termination guarantee; cross-impl consistency harness); Fixes (parser infinite-loop on error recovery). Cross-link to merged PRs from each phase.
-5. Update `.claude/state.md` with a new entry under Active Decisions documenting v0.3.0-m1 ship: file list of what changed, total tests, the key architectural decisions made.
+5. Update [`.claude/state.md`](../../../state.md) with a new entry under Active Decisions documenting v0.3.0-m1 ship: file list of what changed, total tests, the key architectural decisions made.
 6. Run `/release` to cut the `v0.3.0-m1` tag. The release skill: bumps Cargo.toml (already done in step 3), commits, tags, pushes. Verify the GitHub release has both `yinz-0.3.0-m1.vsix` and `yinz-latest.vsix` attached.
 **Acceptance criteria**:
 - [x] Cross-impl consistency harness runs over ≥30 `.ynz` files (currently 69) in driver fixtures + examples (excluding intentional-error files); all pass (determinism test)
 - [x] Timing test: main done appears BEFORE background done; total elapsed >= 150ms (background slept 200ms); exit 0
 - [x] Panic-discard / isolation test: process exits 0 even when background fn does unexpected work (Rust-level panic test is in ynz-runtime/tests/spike.rs; driver-level isolation verified)
-- [x] `Cargo.toml` version is `0.3.0-m1`
+- [x] [`Cargo.toml`](../../../../Cargo.toml) version is `0.3.0-m1`
 - [x] CHANGELOG section added
-- [x] `.claude/state.md` updated with v0.3.0-m1 ship entry with WHY-level context
+- [x] [`.claude/state.md`](../../../state.md) updated with v0.3.0-m1 ship entry with WHY-level context
 - [ ] GitHub release tagged `v0.3.0-m1`; both VSCode extension `.vsix` files attached (deferred to /release step — needs user confirmation + GitHub push)
 - [x] `cargo test --workspace` passes (1220+ tests; pre-existing flaky: ynz-watch parallel env-var race passes in isolation)
 **Quality gate**:
@@ -791,7 +791,7 @@ Two infinite-loop sites found. Both have the same root cause pattern.
 - [x] Panic-discard test verifies isolation (Rust-level: ynz-runtime/tests/spike.rs spawn+panic; driver-level: background_task_completion_does_not_affect_main_exit_code)
 - [x] CHANGELOG entry is detailed enough for v0.2.0 → v0.3.0-m1 upgrade understanding
 - [ ] No release-blocking warnings in `cargo build --release` (not yet verified — will verify before /release)
-- [x] `.claude/state.md` Active Decisions entry includes WHY-level context for each architectural choice
+- [x] [`.claude/state.md`](../../../state.md) Active Decisions entry includes WHY-level context for each architectural choice
 **Verification**:
 - `cargo test --workspace` passes
 - `cargo test cross_impl_consistency` and `cargo test background_timing` named tests pass

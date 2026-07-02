@@ -1,6 +1,6 @@
 # Dot-Postfix Rule — Parens for Actions, No Parens for Access
 
-Loaded when designing any new syntax that uses dot-postfix (`value.something`) or when writing examples in spec/design docs. Apply alongside `.claude/rules/non-oop.md` (UFCS context) and `.claude/rules/inference.md` (call-site modifier inference).
+Loaded when designing any new syntax that uses dot-postfix (`value.something`) or when writing examples in spec/design docs. Apply alongside [`.claude/rules/non-oop.md`](non-oop.md) (UFCS context) and [`.claude/rules/inference.md`](inference.md) (call-site modifier inference).
 
 ---
 
@@ -71,8 +71,8 @@ This matches Yinz's broader "self-documenting syntax" rule (Golden Rule 2). A jr
 
 ## What this rule DOES NOT govern
 
-- **Ownership modifiers** (`share`/`lend`/`give`) are NOT body-level dot-postfix operations. They're inferred at call sites from the callee's signature and rendered as IDE muted hints. See `.claude/rules/inference.md`.
-- **Operator overloading** at definition time uses bare-signature contract syntax inside `shape` blocks (per `.claude/rules/non-oop.md`). The dot-postfix rule applies at call sites; contract declarations are a different syntactic position.
+- **Ownership modifiers** (`share`/`lend`/`give`) are NOT body-level dot-postfix operations. They're inferred at call sites from the callee's signature and rendered as IDE muted hints. See [`.claude/rules/inference.md`](inference.md).
+- **Operator overloading** at definition time uses bare-signature contract syntax inside `shape` blocks (per [`.claude/rules/non-oop.md`](non-oop.md)). The dot-postfix rule applies at call sites; contract declarations are a different syntactic position.
 - **Module imports** (`request.get(url)`) follow the same rule — `request` is a module name; `.get(url)` is a function call with parens. Consistent.
 
 ---
@@ -92,9 +92,9 @@ If a new API name appears in your example, check it's real before saving. Cross-
 
 ## Cross-References
 
-- `.claude/rules/non-oop.md` (UFCS — defines `value.method()` as sugar for `method(value)`; this file says when method calls use parens)
-- `.claude/rules/inference.md` (ownership modifier inference at call sites — NOT body-level dot-postfix)
-- `.claude/rules/vocabulary.md` (Yinz user-facing terms — field vs method vocabulary)
-- `.claude/rules/spec-writing.md` (examples must be runnable Yinz; aligns with the real-operations rule above)
-- `design/golden-rules.md` Rule 2 (self-documenting syntax) — this rule operationalizes Rule 2 for dot-postfix
+- [`.claude/rules/non-oop.md`](non-oop.md) (UFCS — defines `value.method()` as sugar for `method(value)`; this file says when method calls use parens)
+- [`.claude/rules/inference.md`](inference.md) (ownership modifier inference at call sites — NOT body-level dot-postfix)
+- [`.claude/rules/vocabulary.md`](vocabulary.md) (Yinz user-facing terms — field vs method vocabulary)
+- [`.claude/rules/spec-writing.md`](spec-writing.md) (examples must be runnable Yinz; aligns with the real-operations rule above)
+- [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 2 (self-documenting syntax) — this rule operationalizes Rule 2 for dot-postfix
 - `crates/ynz-typeck/src/intrinsics.rs` (M2 primitive intrinsic table — source of truth for which dot-postfix methods exist on primitives)

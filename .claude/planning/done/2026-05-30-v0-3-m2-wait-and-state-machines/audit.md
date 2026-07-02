@@ -80,7 +80,7 @@ D_count: 1
 
 ## Scope Deviations (verbatim from executor report)
 
-Scope Devs #1-#5 (all necessary follow-ons of the rename, NOT creep): `m2_runtime.rs` + `m2_spike.rs` (import/call old symbol name → must update to compile); 13 golden IR snapshots (literal `declare i32 @ynz_rt_call_state_machine_sync` in IR text → symbol-name substitution only, no semantic change, avoids `.snap.new`); 2 `.ll` fixtures (hand-written IR referencing the old symbol — NOTE: `.ll` is gitignored so these edits are untracked/moot); `.claude/state.md` (Phase 8 Step 2 explicitly directs recording the guard re-decision there). Coordinator: all necessary for the rename to compile + the guard-decision deliverable. None are scope creep.
+Scope Devs #1-#5 (all necessary follow-ons of the rename, NOT creep): `m2_runtime.rs` + `m2_spike.rs` (import/call old symbol name → must update to compile); 13 golden IR snapshots (literal `declare i32 @ynz_rt_call_state_machine_sync` in IR text → symbol-name substitution only, no semantic change, avoids `.snap.new`); 2 `.ll` fixtures (hand-written IR referencing the old symbol — NOTE: `.ll` is gitignored so these edits are untracked/moot); [`.claude/state.md`](../../../state.md) (Phase 8 Step 2 explicitly directs recording the guard re-decision there). Coordinator: all necessary for the rename to compile + the guard-decision deliverable. None are scope creep.
 
 ## Approach Deviations (verbatim from executor report)
 

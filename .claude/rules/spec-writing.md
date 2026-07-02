@@ -1,6 +1,6 @@
-# Spec Writing Rules
+# Spec Writing Rules (docs/reference/REF-*.md language-spec files)
 
-Rules for writing and editing files in `/spec/`.
+Rules for writing and editing the **user-facing language spec** files, which live at `docs/reference/REF-*.md` under the global `docs/` taxonomy (migrated 2026-07-01 from the old `/spec/` directory — same audience and rules, new location). Not every `docs/reference/REF-*.md` file is a language-spec file (some are cross-cutting compiler principles like `REF-golden-rules.md`) — this rule applies to the ones documenting a language feature for end users (collections, ownership, control-flow, etc.).
 
 ---
 
@@ -32,7 +32,7 @@ Every spec file follows this order:
 - "You" — not "the developer" or "the programmer."
 - Define any technical term immediately when you use it.
 - Don't say "unlike Rust" or "like TypeScript" — explain it fresh.
-- Don't explain WHY a design decision was made in the spec — that belongs in `/design/decisions.md`. Spec files just show how to use it.
+- Don't explain WHY a design decision was made in the spec — that belongs in `/docs/README.md`. Spec files just show how to use it.
 
 ---
 
@@ -62,5 +62,5 @@ rgb.add(50)
 - No implementation details (how the compiler works internally)
 - No performance benchmarks (until there are real numbers)
 - No comparisons to other languages in the main flow
-- No unresolved design questions — move those to `/design/open-questions.md`
+- No unresolved design questions — move those to `/docs/internal/scratchpad/SCRATCH-open-questions.md`
 - No TODO comments — open questions live in the design folder

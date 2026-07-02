@@ -2,7 +2,7 @@
 
 This is the authoritative reference for Yinz user-facing terminology. **All user-facing docs (`spec/`), design docs (`design/`), compiler diagnostics, and Claude-chat output use these terms.** Never use legacy terms from other languages.
 
-For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` allowed in design docs but banned in compiler errors), see `.claude/rules/inference.md`.
+For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` allowed in design docs but banned in compiler errors), see [`.claude/rules/inference.md`](inference.md).
 
 ---
 
@@ -54,7 +54,7 @@ const p: Player = { name: "Patrick", health: 100 }   // creating a value (annota
 
 When writing prose: "Players" or "a Player value" — never "a Player object" or "a Player instance" or "a Player struct."
 
-Yinz is not object-oriented — see `.claude/rules/non-oop.md`. Methods are standalone functions, not bound to shape declarations. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax).
+Yinz is not object-oriented — see [`.claude/rules/non-oop.md`](non-oop.md). Methods are standalone functions, not bound to shape declarations. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax).
 
 ### `shape` vs `map<K, V>`
 
@@ -79,7 +79,7 @@ JavaScript conflates these (an "object" is both `{ name: "x" }` (record) and `{ 
 ### `options` vs `union`
 
 - `options Status { active, inactive, banned }` — replaces `enum`. A finite set of named constants.
-- `union` is the concept; **`|` is the syntax**: `shape Result = Success | Failure`. Yinz keeps `|` from TypeScript (locked by Patrick 2026-05-14). The `or` keyword was considered but rejected because it's triple-overloaded (boolean operator + union syntax + prose word). See `design/golden-rules.md` Rule 12 expanded version for the full rationale.
+- `union` is the concept; **`|` is the syntax**: `shape Result = Success | Failure`. Yinz keeps `|` from TypeScript (locked by Patrick 2026-05-14). The `or` keyword was considered but rejected because it's triple-overloaded (boolean operator + union syntax + prose word). See [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 12 expanded version for the full rationale.
 
 ### `maybe T`
 
@@ -160,7 +160,7 @@ If a concept doesn't have an official term yet, **ask Patrick before inventing o
 
 ## Cross-References
 
-- `.claude/rules/naming.md` (capital-letter rule, module/type case distinctions)
-- `.claude/rules/inference.md` (dual-audience rule for `infer`/`inference` etc.)
-- `design/compiler-errors.md` (banned-jargon source-of-truth for user-facing diagnostics)
+- [`.claude/rules/naming.md`](naming.md) (capital-letter rule, module/type case distinctions)
+- [`.claude/rules/inference.md`](inference.md) (dual-audience rule for `infer`/`inference` etc.)
+- [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) (banned-jargon source-of-truth for user-facing diagnostics)
 - `crates/ynz-diagnostics/src/banned_jargon.rs` (compile-time enforcement)

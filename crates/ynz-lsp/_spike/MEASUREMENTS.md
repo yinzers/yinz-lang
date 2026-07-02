@@ -52,7 +52,7 @@ async fn did_change(&self, params: ...) {
 }
 ```
 
-For thin-slice (one Patrick, one editor), the `Arc<Mutex<Db>>` is fine — there's rarely contention. But the single-threaded dispatch model we're building (see `design/lsp.md`) maps naturally to `lsp-server`'s sync model. The wrapper adds boilerplate that adds no value for our architecture.
+For thin-slice (one Patrick, one editor), the `Arc<Mutex<Db>>` is fine — there's rarely contention. But the single-threaded dispatch model we're building (see [`docs/internal/implementation/IMP-lsp.md`](../../../docs/internal/implementation/IMP-lsp.md)) maps naturally to `lsp-server`'s sync model. The wrapper adds boilerplate that adds no value for our architecture.
 
 ---
 

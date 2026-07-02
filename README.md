@@ -4,7 +4,7 @@ A compiled systems programming language. Rust-level performance, TypeScript-leve
 
 File extension: `.ynz`. Compiler target: LLVM native machine code.
 
-For the language specification, see [`spec/overview.md`](spec/overview.md).
+For the language specification, see [`docs/reference/REF-language-overview.md`](docs/reference/REF-language-overview.md).
 
 ---
 
@@ -42,7 +42,7 @@ brew install llvm@18
 export LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)
 ```
 
-Add the `LLVM_SYS_181_PREFIX` export to your shell profile on macOS. On Linux it is set automatically via `.cargo/config.toml`.
+Add the `LLVM_SYS_181_PREFIX` export to your shell profile on macOS. On Linux it is set automatically via [`.cargo/config.toml`](.cargo/config.toml).
 
 **Rust stable toolchain:** Install via [rustup](https://rustup.rs).
 
@@ -146,7 +146,7 @@ The extension requires the `ynz-lsp` binary on your PATH: `cargo build -p ynz-ls
 
 ## Status
 
-The compiler is in active development. See [`design/mvp-scope.md`](design/mvp-scope.md) for the milestone roadmap, and [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) for the (now-shipped) v0.1 implementation plan — active work has moved on to the v0.3 concurrency roadmap, [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
+The compiler is in active development. See [`docs/reference/REF-mvp-scope.md`](docs/reference/REF-mvp-scope.md) for the milestone roadmap, and [`.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md`](.claude/planning/done/2026-05-12-v0-1-compiler/roadmap.md) for the (now-shipped) v0.1 implementation plan — active work has moved on to the v0.3 concurrency roadmap, [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
 
 **Current shipped milestones**:
 - M1 ✓ — Hello world end-to-end (tag `v0.1.0-m1`)

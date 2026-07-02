@@ -3,7 +3,7 @@
 # Parsed by crates/ynz-registry/build.rs at compile time.
 # Generates: target/.../<hash>/out/registry.rs (static arrays consumed by ynz-registry crate).
 #
-# Schema reference:  design/feature-registry.md
+# Schema reference:  docs/internal/implementation/IMP-feature-registry.md
 # Project rule:      .claude/rules/feature-registry.md
 # Consumer API:      crates/ynz-registry/src/lib.rs
 #
@@ -1022,7 +1022,7 @@ name = "f32"
 substitute = "Use `float` (f64) for floating-point math. Sized floats ship in v2+ for GPU and embedded work."
 why = "Yinz keeps the numeric type system small in v0.1: `int` (i64), `float` (f64), `number` (decimal128). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `f32` or `f64` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
@@ -1030,7 +1030,7 @@ name = "f64"
 substitute = "Use `float` (f64) for floating-point math. `float` in Yinz is already f64."
 why = "Yinz keeps the numeric type system small in v0.1: `int` (i64), `float` (f64), `number` (decimal128). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `f64` as a type annotation in Yinz source"
 
 # --- Sized integer variants (ship in v2+) ---
@@ -1039,7 +1039,7 @@ name = "i8"
 substitute = "Use `int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
 why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `i8` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
@@ -1047,7 +1047,7 @@ name = "i16"
 substitute = "Use `int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
 why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `i16` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
@@ -1055,7 +1055,7 @@ name = "i32"
 substitute = "Use `int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
 why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `i32` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
@@ -1063,7 +1063,7 @@ name = "i64"
 substitute = "Use `int` for whole numbers. `int` in Yinz is already i64."
 why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `i64` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
@@ -1071,7 +1071,7 @@ name = "u8"
 substitute = "Use `int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
 why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `u8` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
@@ -1079,7 +1079,7 @@ name = "u16"
 substitute = "Use `int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
 why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `u16` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
@@ -1087,7 +1087,7 @@ name = "u32"
 substitute = "Use `int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
 why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `u32` as a type annotation in Yinz source"
 
 [[deferred_language_feature]]
@@ -1095,7 +1095,7 @@ name = "u64"
 substitute = "Use `int` for non-negative whole numbers. `int` in Yinz covers 0 to 9.2 × 10^18 — bigger than any count a human writes by hand."
 why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `u64` as a type annotation in Yinz source"
 
 # --- `test` keyword (reserved for v0.13 built-in testing) ---
@@ -1104,7 +1104,7 @@ name = "test"
 substitute = "Use a different identifier. The built-in test framework ships in v0.13 and will use `test` as a keyword."
 why = "`test` is reserved for the built-in test framework shipping in v0.13. Pre-reserving it now means your existing code will not break when v0.13 ships."
 ships_in = "v0.13"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Using `test` as an identifier in Yinz source"
 
 # ---------------------------------------------------------------------------
@@ -1112,34 +1112,34 @@ triggers = "Using `test` as an identifier in Yinz source"
 # Required fields: name, substitute, why, ships_in, design_doc, triggers
 # ---------------------------------------------------------------------------
 
-# --- `scratch` keyword — arena allocators (design/future/arena.md) ---
+# --- `scratch` keyword — arena allocators (docs/internal/scratchpad/SCRATCH-future-arena.md) ---
 [[deferred_language_feature]]
 name = "scratch"
 substitute = "Use regular `let` bindings for now. Arena allocators ship in v0.2 with the `scratch` scope keyword for scope-bounded memory pools."
 why = "Arena allocators give 10-100x faster allocation for scope-bounded workloads. The `scratch { ... }` syntax is locked but not yet implemented — v0.2 is the target."
 ships_in = "v0.2"
-design_doc = "design/future/arena.md"
+design_doc = "docs/internal/scratchpad/SCRATCH-future-arena.md"
 triggers = "Writing `scratch { ... }` in Yinz source (keyword not yet reserved — no current trigger)"
 
-# --- Nested-shape crossing a wait (design/concurrency.md M3a scope) ---
+# --- Nested-shape crossing a wait (docs/internal/implementation/IMP-concurrency.md M3a scope) ---
 [[deferred_language_feature]]
 name = "nested-shape-crossing-wait"
 substitute = "Flatten the nested shape into primitive fields, or store the outer shape as a non-crossing local (assign it entirely after the last suspension in the function)."
 why = "The frame-embed codegen copies the outer shape's bytes into the composed heap frame at suspension time. Nested shape fields are opaque pointers — the recursive memcpy that would copy the inner shape's bytes is not yet implemented. The fix requires extending frame layout to recursively embed all nested shape bytes (1-2 sessions of work)."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `let` binding whose type is a shape with nested-shape fields, where that binding is read after a `wait` suspension in the same function"
 
-# --- Shadowing a crossing local — same name re-used around a suspension (design/concurrency.md M3a scope) ---
+# --- Shadowing a crossing local — same name re-used around a suspension (docs/internal/implementation/IMP-concurrency.md M3a scope) ---
 [[deferred_language_feature]]
 name = "shadow-crossing-local-support"
 substitute = "Rename the colliding binding to a distinct name (e.g. `innerX` instead of `x`, or `xAfter` for a post-wait rebinding). Two values with different semantics should have different names anyway — the rename produces clearer code."
 why = "The frame-slot system keys crossing-local slots by name (one slot per name). Two bindings with the same name around a suspension share one slot — the second write silently clobbers the first. The guard is deliberately conservative: it rejects all same-name re-uses around a suspension, including cases where reads might not reach the clobbered value, because the alternative is a silent wrong answer. Lifting this requires per-binding slot identity: each `let` declaration gets a unique ID, and flush/reload use that ID instead of the name. This is 1-2 sessions of work in the crossing analysis, frame layout, and codegen layers."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "Two cases both trigger the error: (1) a `let x` inside a nested scope (if/while/for/match body) when an outer `let x` declared before a `wait` is read after the `wait` at the outer scope; (2) a second top-level `let x` in the function body after a suspension when a first top-level `let x` was declared before the suspension. Both produce a silent slot-collision miscompile if allowed. Parameters count as an outer binding for both shapes."
 
-# --- Wide-value shape returns from suspending functions (design/concurrency.md) ---
+# --- Wide-value shape returns from suspending functions (docs/internal/implementation/IMP-concurrency.md) ---
 # Note: `-> number errors` (decimal128 EC) is SUPPORTED as of M3a Phase 1 — a 16-byte
 # staging slot in the composed frame stores the i128 and is freed with the frame (alloc=1/free=1).
 # This entry covers only the remaining deferred cases: `-> Shape` and `-> Shape errors`.
@@ -1148,142 +1148,142 @@ name = "wide-value-suspending-return"
 substitute = "For `-> Shape`: return the shape's fields individually as primitives, or bind the shape to a crossing local and return a primitive derived from it. For `-> Shape errors`: return the shape's fields individually (e.g. `-> int errors`) or compute a primitive value inside the function and return that."
 why = "Returning a Shape value from a suspending function needs a variable-size frame staging slot entangled with the pre-existing non-suspending shape-return base bug (shapes returned by value produce garbage for int fields even without suspension). Without it: `-> Shape` clobbers child sub-frames (staging bytes at FRAME_OFFSET_LOCALS_START=32 overwrites the sleep sub-frame's resume_point → SIGSEGV); `-> Shape errors` needs the same variable-size staging. The shape base bug must be fixed first. `-> number errors` is fully supported (16-byte fixed staging slot, alloc=1/free=1)."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A suspending function (one whose body contains a `wait`) whose return type is `Shape` or `Shape errors` — these trigger the WideValueSuspendingReturn compile error."
 
-# --- union/maybe/dynamic crossing locals (design/concurrency.md) ---
+# --- union/maybe/dynamic crossing locals (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "unsupported-crossing-local-type"
 substitute = "Extract the inner value before the `wait`, or restructure so the `union`, `maybe`, or `dynamic` value is not needed after the suspension."
 why = "The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. `union`, `maybe<T>`, and `dynamic Contract` values are internally represented as pointers to {tag, payload} allocas on the resume function's stack — stack frames that are destroyed between suspension and resume. Flushing the alloca pointer to the frame and reloading it after resume produces undefined behavior (reading a dangling stack address). The UnsupportedCrossingLocalType guard in typeck/check.rs rejects these crossing locals at compile time, converting what was previously a raw LLVM ICE into a clean teaching diagnostic."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A local binding of type `union`, `maybe<T>`, or `dynamic Contract` that is declared before a `wait` and read after it — any of these triggers the UnsupportedCrossingLocalType compile error."
 
-# --- EC wrapper collect-on-completion (design/concurrency.md M3a Scope Boundaries) ---
+# --- EC wrapper collect-on-completion (docs/internal/implementation/IMP-concurrency.md M3a Scope Boundaries) ---
 [[deferred_language_feature]]
 name = "ec-wrapper-collect-on-completion"
 substitute = "Use the inline-poll path: a suspending function that calls another suspending `-> T errors` function composes the callee inline (the state-machine resume path). Only `background` (fire-and-forget) hits the standalone EC wrapper, and it safely discards the completed value. Reading the completed value of a `background`-spawned `-> T errors` task requires the `background` handle-collection form (`.send`/`.receive`), which itself ships with the `background-handle-form` feature."
 why = "The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reads the `{i64, i64}` EC value from the frame return slot and then frees the frame. For `-> number errors`, the ok-word in that value points into the composed frame's 16-byte staging slot — storage freed at the same time as the frame. The ok-pointer therefore becomes invalid after the wrapper returns. This is safe today because the only reachable caller is `background` (fire-and-forget), which DISCARDS the EC value without dereferencing the ok-pointer. A caller that reads and uses the ok-pointer must copy it BEFORE freeing the frame; implementing that copy requires the scheduler to know whether a spawned task's completed value is read or discarded. That knowledge only exists once the `background` handle-collection form (`.send`/`.receive`, the `background-handle-form` feature) lands — there is no syntax in M3b to collect a `background` task's completed value (`let h = background ecFn()` is rejected by typeck), so this deferral is vacuous until handle-collection ships and must stay gated on it."
 ships_in = "v0.3-M4"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "Collecting the completed value of a `background`-spawned suspending `-> T errors` function via its handle (`.send`/`.receive`) — gated on the `background-handle-form` feature; until that ships there is no way to reach the standalone-wrapper copy-before-free path."
 
-# --- Stored range variable as a suspending for-loop iterator (design/concurrency.md) ---
+# --- Stored range variable as a suspending for-loop iterator (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "stored-range-with-wait"
 substitute = "Inline the range directly in the loop header: `for (i in range(0, n)) { ... }`. If `n` is a local that crosses a `wait`, it is already frame-backed and the inline form works without any extra changes."
 why = "The state-machine codegen for `for (i in range(...))` re-evaluates the range bounds at each loop header by calling `extract_range_bounds(iter)`, which requires the iterator to be a literal `range(...)` call expression. When the iterator is a stored variable (`let r = range(0,3); for (i in r)`), the bounds must be recovered from the range alloca in the composed frame. That recovery path is not yet implemented; the codegen would ICE on 'for-loop iter is not a call expression'. This guard converts the raw ICE into a clean compile error."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `for` loop whose body contains a `wait` and whose iterator is an identifier with `Type::Range` — e.g. `let r = range(0,3); for (i in r) { wait sleep(1) }`"
 
-# --- fixed<T> array iterator in a suspending for-loop (design/concurrency.md) ---
+# --- fixed<T> array iterator in a suspending for-loop (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "fixed-array-iter-with-wait"
 substitute = "Use `array<T>` instead: `let items: array<T> = [...]`. An `array<T>` is heap-allocated so its pointer survives suspension."
 why = "fixed<T> arrays are stack-allocated using LLVM allocas in the current resume-function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume, the crossing-local frame slot holds the pointer to the old stack-allocated array — a dangling pointer. Reading it is undefined behavior. Two fix paths: (a) heap-allocating fixed arrays (changing their semantics), or (b) a different frame-embedding strategy (store the fixed-array bytes directly in the composed heap frame, similar to how Shape crossing locals work)."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `for` loop whose body contains a `wait` and whose iterator resolves to a `fixed<T>` variable or literal — e.g. `let flags: fixed<boolean> = [true,false]; for (b in flags) { wait sleep(1) }`"
 
-# --- Call-expression iterator in a suspending for-loop (design/concurrency.md) ---
+# --- Call-expression iterator in a suspending for-loop (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "expression-iter-with-wait"
 substitute = "Bind the collection to a local variable first: `let items = makeArray()` then `for (x in items) { ... }`. The `items` variable is frame-backed and survives `wait` correctly, and the collection expression is evaluated exactly once."
 why = "The state-machine codegen re-evaluates `lower_expr(iter)` at each loop header visit — once for the element count check and once for the element load — meaning a call-expression iterator would be called once per iteration instead of once total. For expressions with side effects (heap allocation, I/O), this breaks the one-alloc-per-task invariant and produces wrong semantics. Binding the collection first ensures a single evaluation; the bound variable becomes a frame-backed crossing local whose pointer is stable across resumes."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `for` loop whose body contains a `wait` and whose iterator is a call expression — e.g. `for (x in makeArray()) { wait sleep(1) }`"
 
-# --- fixed<T> binding (not iter) as a crossing local across a wait (design/concurrency.md) ---
+# --- fixed<T> binding (not iter) as a crossing local across a wait (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "fixed-crossing-local-with-wait"
 substitute = "Declare the variable as `array<T>` instead of `fixed<T>`. An `array<T>` is heap-allocated so its pointer survives suspension across a `wait`."
 why = "fixed<T> values are stack-allocated allocas (LLVM build_alloca) in the resume function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume call, the crossing-local frame slot holds a dangling pointer to the old stack-allocated array. Reading elements after resume is undefined behavior — silently wrong values or memory corruption. This guard catches `let arr: fixed<T> = ...; wait ...; use(arr)` (the variable itself is the crossing local); the for-loop-iterator form is caught separately by fixed-array-iter-with-wait."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `fixed<T>` binding declared before a `wait` and used after — e.g. `let arr: fixed<int> = [1,2,3]; wait sleep(1); for (v in arr) { print(v) }`"
 
-# --- Range binding (not iter) as a crossing local across a wait (design/concurrency.md) ---
+# --- Range binding (not iter) as a crossing local across a wait (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "range-crossing-local-with-wait"
 substitute = "Inline the range directly in the `for` loop header: `for (i in range(0, n))` instead of binding to a `let` first. An inline `range(...)` call expression is reconstructed on each resume from its literal arguments; a stored range binding is a stack-allocated value whose pointer dangles after suspension."
 why = "A range binding (`let r = range(0,3)`) is stored on the resume function's stack as a pair of bounds. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume, the crossing-local frame slot holds a dangling stack pointer; iterating that range produces zero iterations (silent wrong output). The iterator form is caught separately by stored-range-with-wait when the wait is inside the loop body; this guard catches the case where the wait is at the TOP LEVEL of the function before the loop (the range crossing a suspension boundary)."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `range` binding declared before a top-level `wait` and used as a `for`-loop iterator after the suspension — e.g. `let r = range(0,3); wait sleep(1); for (i in r) { print(i) }`"
 
-# --- Map entry fields (entry.key/entry.value) across a wait (design/concurrency.md) ---
+# --- Map entry fields (entry.key/entry.value) across a wait (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
 name = "map-entry-fields-after-wait"
 substitute = "Read `entry.key` and `entry.value` before the `wait` and bind them to separate primitive crossing locals (e.g. `let k = entry.key; let v = entry.value`), then use `k` and `v` after the suspension. An outer counter or accumulator that does not access entry fields can cross the wait freely."
 why = "A for-loop variable over a map (`for (entry in m)`) is a {key, value} pair (MapEntry<K,V>). The current frame-slot mechanism assigns one i64 slot per crossing local — sufficient for scalar types (int, bool, float) and pointer types (string, array, map) but not for a two-field pair. Only the first field (entry.key via field[0]) would survive suspension; entry.value (field[1]) would read garbage from an uninitialized frame slot. Full MapEntry frame-backing (two consecutive frame slots, mirroring the ErrorsCapable 2-slot path) ships in a later milestone."
 ships_in = "v0.3+"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `for (entry in map)` loop whose body contains a `wait` and reads `entry.key` or `entry.value` after the suspension — e.g. `for (entry in m) { wait sleep(1); total = total + entry.value }`"
 
-# --- array<Shape> with runtime field values crossing a wait (design/concurrency.md + design/future/array-by-value-element-storage.md) ---
+# --- array<Shape> with runtime field values crossing a wait (docs/internal/implementation/IMP-concurrency.md + docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md) ---
 [[deferred_language_feature]]
 name = "array-shape-runtime-field-with-wait"
 substitute = "Two options work today: (1) Use only plain literal numbers or true/false as field values — `let items = [{ id: 1, qty: 10 }]` works. (2) Move the array and all its uses into a separate helper function that does not contain any `wait` — `function buildItems(qty: int) -> array<Item> { return [{ id: 1, qty: qty }] }` works because there is no suspension in that function. Full support ships in the m3c-array-by-value milestone."
-why = "Each element of an array<Shape> is stored as a reference pointing to memory created while the array is built. When a field value is a simple literal (a plain number or true/false), the compiler places that element in permanent memory that outlives any suspension. When a field value is computed at runtime (a variable, a function call, an expression), the element is placed in temporary memory tied to the current call — that temporary memory is released when the function pauses at a `wait`. On the next resume, the reference points at freed memory, and reading it gives wrong values (stack garbage or a crash). The permanent fix is storing shape bytes directly in the array buffer so no separate reference is needed — this ships in the m3c-array-by-value milestone. See design/future/array-by-value-element-storage.md for the full design."
+why = "Each element of an array<Shape> is stored as a reference pointing to memory created while the array is built. When a field value is a simple literal (a plain number or true/false), the compiler places that element in permanent memory that outlives any suspension. When a field value is computed at runtime (a variable, a function call, an expression), the element is placed in temporary memory tied to the current call — that temporary memory is released when the function pauses at a `wait`. On the next resume, the reference points at freed memory, and reading it gives wrong values (stack garbage or a crash). The permanent fix is storing shape bytes directly in the array buffer so no separate reference is needed — this ships in the m3c-array-by-value milestone. See docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md for the full design."
 ships_in = "v0.3+"
-design_doc = "design/future/array-by-value-element-storage.md"
+design_doc = "docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md"
 triggers = "An `array<Shape>` local declared before a `wait` and read after it (crossing local), where the array literal contains at least one element whose field values are runtime-computed (not compile-time `IntLit` or `BoolLit`). The `ArrayShapeRuntimeFieldWithWait` guard in typeck/check.rs rejects these at compile time with a WHAT/WHAT-INSTEAD/WHY error. Lifted when the m3c-array-by-value milestone ships by-value element storage and removes this guard."
 
-# --- Self-referential shapes (design/future/self-references.md) ---
+# --- Self-referential shapes (docs/internal/scratchpad/SCRATCH-future-self-references.md) ---
 [[deferred_language_feature]]
 name = "self-referential-shape"
 substitute = "Self-referential shapes are not yet supported. Use a `maybe T` field or restructure the data to avoid cycles."
 why = "Self-referential shapes (e.g. a `Node` with a `children: array<Node>` field) require relative/offset pointers. The compiler will detect these automatically in v0.3+ using Approach A (relative pointers) — no user-visible keyword needed."
 ships_in = "v0.3+"
-design_doc = "design/future/self-references.md"
+design_doc = "docs/internal/scratchpad/SCRATCH-future-self-references.md"
 triggers = "Declaring a shape with a field whose type is the same shape — not yet enforced at compile time"
 
-# --- `foreign` keyword — FFI (design/mvp-scope.md v2+ section) ---
+# --- `foreign` keyword — FFI (docs/reference/REF-mvp-scope.md v2+ section) ---
 [[deferred_language_feature]]
 name = "foreign"
 substitute = "Stdlib modules that need C interop (file I/O, networking, math) call C internally. User-facing FFI ships in v2+."
 why = "FFI has significant design surface: ownership across the boundary, type mapping, safety guarantees. Most v0.1 code does not need it. When v2+ ships, `foreign` will be the keyword for declaring foreign function bindings."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `foreign` as an identifier (not yet a reserved keyword)"
 
-# --- `gpu` keyword — GPU dispatch (design/mvp-scope.md v2+ section) ---
+# --- `gpu` keyword — GPU dispatch (docs/reference/REF-mvp-scope.md v2+ section) ---
 [[deferred_language_feature]]
 name = "gpu"
 substitute = "GPU dispatch is not yet available. GPU compute workloads require v2+ and GPU dispatch support."
 why = "GPU dispatch requires kernel compilation to shader/compute languages — massive scope. It was tagged v2+ in the original design. When it ships, `gpu` will be the call-site keyword for dispatching to GPU kernels."
 ships_in = "v2+"
-design_doc = "design/mvp-scope.md"
+design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `gpu` as an identifier (not yet a reserved keyword)"
 
-# --- `--kernel` flag — no-runtime mode (design/no-runtime-mode.md) ---
+# --- `--kernel` flag — no-runtime mode (docs/internal/implementation/IMP-no-runtime-mode.md) ---
 [[deferred_tooling_feature]]
 name = "--kernel"
 substitute = "All programs currently require the full Yinz runtime. Bare-metal / kernel-mode targets ship in v0.3."
 why = "The `--kernel` (or `--bare`) compiler flag disables runtime-dependent features and requires the user to provide their own allocator, scheduler, and panic handler. Design is locked; the flag ships in v0.3."
 ships_in = "v0.3"
-design_doc = "design/no-runtime-mode.md"
+design_doc = "docs/internal/implementation/IMP-no-runtime-mode.md"
 triggers = "Passing `--kernel` to `ynz build` (flag not yet recognized)"
 
-# --- Binary package format reservation (design/future/packages.md) ---
+# --- Binary package format reservation (docs/internal/scratchpad/SCRATCH-future-packages.md) ---
 [[deferred_tooling_feature]]
 name = "package-binary-format"
 substitute = "Compiled packages are not yet distributed. Source-level imports work within a single workspace. Binary package distribution ships in v0.2."
 why = "Yinz compiled packages must embed enough metadata for downstream consumers to do all compile-time analyses without re-parsing source. The binary format is reserved in v0.1 even though population happens in v0.2."
 ships_in = "v0.2"
-design_doc = "design/future/packages.md"
+design_doc = "docs/internal/scratchpad/SCRATCH-future-packages.md"
 triggers = "No user-facing trigger — binary format is a compiler-internal concern"
 
-# --- `--release` flag (design/future/release-mode.md) ---
+# --- `--release` flag (docs/internal/scratchpad/SCRATCH-future-release-mode.md) ---
 [[deferred_tooling_feature]]
 name = "--release"
 substitute = "All builds are currently debug builds (unoptimized, full debug info). Release builds ship in v0.4 (or a later perf-focused slot)."
 why = "The `--release` flag enables LLVM optimization passes, strips debug info, and hardens panic/overflow behavior. Dev builds are the default; release builds are opt-in for production deployments."
 ships_in = "v0.4"
-design_doc = "design/future/release-mode.md"
+design_doc = "docs/internal/scratchpad/SCRATCH-future-release-mode.md"
 triggers = "Passing `--release` to `ynz build` (flag not yet recognized)"
 
 # --- v0.2-M4 watch daemon deferred features ---
@@ -1294,7 +1294,7 @@ name = "ynz-watch-interactive-commands"
 substitute = "ynz watch v0.2-M4 ships a non-interactive loop only. Keyboard commands (r = rebuild, q = quit, p = pause) are deferred to v0.3+."
 why = "Interactive commands require a raw-mode terminal event loop alongside the file-event loop. The architecture is compatible (both would live in event_loop.rs) but the UX design for which keys do what needs more user feedback from the non-interactive version first."
 ships_in = "v0.3+"
-design_doc = "design/watch.md"
+design_doc = "docs/internal/implementation/IMP-watch.md"
 triggers = "No user-facing trigger in v0.2-M4 — non-interactive loop only"
 
 # Config file — explicitly rejected by Yinz zero-config ethos.
@@ -1303,7 +1303,7 @@ name = "ynz-watch-config-file"
 substitute = "Use env vars for watch tuning (YNZ_WATCH_DEBOUNCE_MS, YNZ_WATCH_MAX_RSS_MB, etc.). No .ynzwatch.toml config file exists or will be added."
 why = "EXPLICIT REJECTION (not a deferral). A per-watch config file would add discovery logic, schema versioning, and documentation overhead for parameters most users never touch. Yinz's zero-config ethos means env vars only. If overwhelming user demand emerges, this decision can be revisited with a concrete use case."
 ships_in = "never — explicit rejection"
-design_doc = "design/watch.md"
+design_doc = "docs/internal/implementation/IMP-watch.md"
 triggers = "N/A — this feature is explicitly rejected, not deferred"
 
 # --- v0.2-M5 LSP full deferred entries ---
@@ -1314,7 +1314,7 @@ name = "lsp-pull-diagnostics"
 substitute = "Push-via-publishDiagnostics model (M2) works fine for v0.2. Pull adds API surface without user-visible value while push already works."
 why = "Pull-diagnostics (LSP 3.17 textDocument/diagnostic) lets the client control when to request diagnostic updates, which can reduce latency on slow connections or powerful machines. Push is simpler and sufficient for v0.2's single-editor-one-Patrick use case."
 ships_in = "v0.3+"
-design_doc = "design/lsp.md"
+design_doc = "docs/internal/implementation/IMP-lsp.md"
 triggers = "A client that requires pull-mode AND VSCode push integration begins to lag — rare in 2026."
 
 # Inlay hint — function_param_type domain (awaiting lambdas).
@@ -1323,7 +1323,7 @@ name = "lsp-inlay-hint-function-param-type"
 substitute = "Users write explicit param types on named functions. No lambda surface exists in v0.1."
 why = "The canonical use-case for function_param_type hints is `foo(x => x + 1)` where `x` type is inferred from `foo`'s expected parameter type. Yinz v0.1 has no lambda syntax. The M5 LSP protocol handler emits no hints until lambdas land."
 ships_in = "v0.3+"
-design_doc = "design/ide-hints.md"
+design_doc = "docs/reference/REF-ide-hints.md"
 triggers = "First-class lambdas/closures milestone ships."
 
 # Inlay hint — wait_points domain (awaiting I/O suspension analysis).
@@ -1332,16 +1332,16 @@ name = "lsp-inlay-hint-wait-points"
 substitute = "Users write explicit `wait` at I/O call sites. No auto-insertion analysis exists in v0.1."
 why = "The wait_points muted-hint domain (Addition category) emits `wait (db.fetch may suspend on I/O)` before I/O calls the compiler can prove suspend. Yinz v0.1 has no I/O-suspension analysis — all calls are synchronous. The M5 LSP protocol handler emits no hints until the analysis ships."
 ships_in = "v0.3"
-design_doc = "design/no-function-coloring.md"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "`wait`-auto-insertion analysis ships in the concurrency milestone."
 
 # Inlay hint — lifetimes domain (awaiting explicit lifetime UI, may stay fully implicit).
 [[deferred_tooling_feature]]
 name = "lsp-inlay-hint-lifetimes"
 substitute = "No user-facing scope-annotation UI exists in v0.1. The compiler tracks value scopes fully internally."
-why = "The `lifetimes` muted-hint domain (Informational category; opt-in only) shows scope annotations the compiler figures out automatically. Yinz v0.1 has no explicit scope-annotation surface. The M5 LSP protocol handler emits no hints. If value scopes stay fully implicit (possible per design/ownership.md), this entry remains protocol-only indefinitely."
+why = "The `lifetimes` muted-hint domain (Informational category; opt-in only) shows scope annotations the compiler figures out automatically. Yinz v0.1 has no explicit scope-annotation surface. The M5 LSP protocol handler emits no hints. If value scopes stay fully implicit (possible per docs/internal/implementation/IMP-ownership.md), this entry remains protocol-only indefinitely."
 ships_in = "TBD — may never ship if value scopes stay fully implicit"
-design_doc = "design/ownership.md"
+design_doc = "docs/internal/implementation/IMP-ownership.md"
 triggers = "Explicit scope annotations get a user-facing surface, OR user demand surfaces for seeing implicit scope annotations in the IDE."
 
 # Inlay hint — allocators domain (awaiting arena keyword).
@@ -1350,7 +1350,7 @@ name = "lsp-inlay-hint-allocators"
 substitute = "No allocator selection in v0.1 — heap is the only target."
 why = "The allocators muted-hint domain (Addition category) emits `.in(scratch)` after constructors inside `arena scratch { }` blocks. Yinz v0.1 has no arenas. The M5 LSP protocol handler emits no hints until arenas land."
 ships_in = "v0.3"
-design_doc = "design/future/arena.md"
+design_doc = "docs/internal/scratchpad/SCRATCH-future-arena.md"
 triggers = "`arena scratch { }` keyword ships in the v0.3 concurrency/memory milestone."
 
 # background handle-form — `let h = background fn()` is rejected by typeck; ships in v0.3-M4.
@@ -1359,7 +1359,7 @@ name = "background-handle-form"
 substitute = "Use fire-and-forget `background fn(value.give)` or `background fn(value.copy)` for now. Handles (`let h = background fn()`) and channel-based value passing ship in v0.3-M4."
 why = "The handle form needs channels to pass results back to the caller. Channels ship in v0.3-M4 alongside the handle-form syntax."
 ships_in = "v0.3-M4"
-design_doc = "design/no-function-coloring.md"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "`let h = background fn()` — already rejected by typeck with a compile error pointing to this deferred feature"
 
 # Rename — aliased re-export deferred to v0.3+.
@@ -1368,7 +1368,7 @@ name = "lsp-rename-aliased-re-export"
 substitute = "Aliased re-exports (`export { Crew as Captain }`) are REJECTED in v0.2-M5 rename (treated same as bare re-exports). Must rename `Crew` at its origin file `services/crew.ynz`."
 why = "Renaming an aliased re-export (the local binding is owned by the importing file, not the origin) has subtle semantics: renaming `Captain` in `entrypoint.ynz` should update every file that imports `Captain` from `entrypoint.ynz` but leave `services/crew.ynz` alone. Correct handling requires typeck to own local-re-export-binding metadata — not yet wired in v0.2-M5."
 ships_in = "v0.3+"
-design_doc = "design/lsp.md"
+design_doc = "docs/internal/implementation/IMP-lsp.md"
 triggers = "User request OR a real codebase pattern emerges where aliased re-exports are common and users hit the rejection wall."
 
 # v0.3-M2 async I/O deferral — real file/network/db async intrinsics wait for their stdlib modules
@@ -1377,10 +1377,10 @@ name = "async-io-stdlib-intrinsics-v0-5"
 substitute = "Use `sleep(int)` (v0.3-M2) to test suspension in your code. Real file, network, and database intrinsics ship per-module starting in v0.5."
 why = "Each stdlib module (file v0.5, database v0.10, http v0.15) has its own API design questions (path encoding, error variants, connection pooling) that belong to the module's design milestone, not to the state-machine ABI milestone."
 ships_in = "v0.5+ (file, database, http modules each ship their own suspension intrinsics)"
-design_doc = "design/stdlib/filesystem.md"
-triggers = "Each module's milestone plan — file v0.5 adds readFileAsync/writeFileAsync; db v0.10 adds dbQueryAsync; http v0.15 adds request.getAsync/postAsync. Cross-references also in design/stdlib/network.md and design/stdlib/database.md."
+design_doc = "docs/internal/scratchpad/SCRATCH-stdlib-filesystem.md"
+triggers = "Each module's milestone plan — file v0.5 adds readFileAsync/writeFileAsync; db v0.10 adds dbQueryAsync; http v0.15 adds request.getAsync/postAsync. Cross-references also in docs/internal/scratchpad/SCRATCH-stdlib-network.md and docs/internal/scratchpad/SCRATCH-stdlib-database.md."
 
-# v0.3-M3b deferred: IDE graphical execution-plan view (design/concurrency.md
+# v0.3-M3b deferred: IDE graphical execution-plan view (docs/internal/implementation/IMP-concurrency.md
 # "IDE Execution Plan" section). The muted-hint surfaces (wait_points,
 # background_routing) ship in M3b. The graphical DAG/timeline visualization
 # belongs to a future LSP + tooling milestone that pairs with profiling data.
@@ -1389,7 +1389,7 @@ name = "ide-execution-plan-graphical-view"
 substitute = "IDE muted hints for `wait` suspension points (wait_points domain) and background routing (background_routing domain) ship in v0.3-M3b and teach the same information inline."
 why = "The graphical execution-plan view (DAG + timeline overlay in the editor panel) requires LSP custom notifications, a client-side panel extension in the VSCode plugin, and runtime profiling data piped back through the language server — all of which exceed the M3b scope of teaching surfaces. The muted-hint protocol covers the static-analysis teaching surface; the graphical view adds dynamic profiling insight that needs its own milestone."
 ships_in = "v0.4+ (pending LSP custom notification design + VSCode panel scaffold)"
-design_doc = "design/concurrency.md"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "Patrick explicitly schedules the IDE graphical view milestone AND the LSP custom-notification protocol for client-side panels is designed."
 
 # ---------------------------------------------------------------------------
@@ -1516,13 +1516,13 @@ why_template = "`background` runs this function outside the current scope. A `le
 kind_name = "KernelModeRejectsBackground"
 what_template = "`background` is not available in --kernel mode."
 what_instead_template = "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."
-why_template = "The thread-pool runtime that powers `background` does not run in kernel mode. See design/no-runtime-mode.md for the kernel-mode contract."
+why_template = "The thread-pool runtime that powers `background` does not run in kernel mode. See docs/internal/implementation/IMP-no-runtime-mode.md for the kernel-mode contract."
 
 [[diagnostic_template]]
 kind_name = "KernelModeRejectsWait"
 what_template = "`wait` is not available in --kernel mode."
 what_instead_template = "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."
-why_template = "The thread-pool runtime that powers `wait` does not run in kernel mode. See design/no-runtime-mode.md for the kernel-mode contract."
+why_template = "The thread-pool runtime that powers `wait` does not run in kernel mode. See docs/internal/implementation/IMP-no-runtime-mode.md for the kernel-mode contract."
 
 [[diagnostic_template]]
 kind_name = "BackgroundLargeStructCopy"
@@ -2143,4 +2143,4 @@ example_hint_rendered = "// effectively const — never reassigned"
 
 # Cross-module frame serialization shipped in v0.3-M3e.
 # The deferred_language_feature entry has been retired — the feature is live.
-# See design/future/cross-module-frame-serialization.md for the full design record.
+# See docs/internal/scratchpad/SCRATCH-future-cross-module-frame-serialization.md for the full design record.

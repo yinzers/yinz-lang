@@ -30,16 +30,16 @@ source $HOME/.cargo/env
 
 Some features are locked but ship after v0.1. They appear in the source as commented placeholders pointing to their design docs:
 
-- `arena scratch { ... }` — v0.2 per `design/future/arena.md`
-- `verified { ... }` — v0.3+ (unsafe escape hatch, name reserved per `.claude/rules/vocabulary.md`)
-- Self-referential shapes — v0.3+ per `design/future/self-references.md`
-- `--kernel` mode (custom allocator plug-in) — v0.3+ per `design/no-runtime-mode.md`
+- `arena scratch { ... }` — v0.2 per [`docs/internal/scratchpad/SCRATCH-future-arena.md`](../../docs/internal/scratchpad/SCRATCH-future-arena.md)
+- `verified { ... }` — v0.3+ (unsafe escape hatch, name reserved per [`.claude/rules/vocabulary.md`](../../.claude/rules/vocabulary.md))
+- Self-referential shapes — v0.3+ per [`docs/internal/scratchpad/SCRATCH-future-self-references.md`](../../docs/internal/scratchpad/SCRATCH-future-self-references.md)
+- `--kernel` mode (custom allocator plug-in) — v0.3+ per [`docs/internal/implementation/IMP-no-runtime-mode.md`](../../docs/internal/implementation/IMP-no-runtime-mode.md)
 
 When they ship, they replace the placeholder comments with real demo content.
 
 ## Why this exists
 
-`.claude/rules/plan-invariants.md` `### Demo & Error Gallery` subsection: every milestone phase that adds executable surface MUST extend this file with the new feature in context. This is the human-eyes-on layer for the language UX — Patrick reviews each phase's demo to ensure the feature feels right before it ships.
+[`.claude/rules/plan-invariants.md`](../../.claude/rules/plan-invariants.md) `### Demo & Error Gallery` subsection: every milestone phase that adds executable surface MUST extend this file with the new feature in context. This is the human-eyes-on layer for the language UX — Patrick reviews each phase's demo to ensure the feature feels right before it ships.
 
 ## Companion: `examples/primantis-orders/`
 

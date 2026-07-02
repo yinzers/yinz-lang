@@ -1,0 +1,551 @@
+---
+name: "SCRATCH-stdlib-database"
+description: "Early, unapproved brainstorm on a future db stdlib module (DuckDB then Postgres) covering GC-pressure-free query results and open design questions."
+tags:
+  - "yinz-compiler"
+created_at: "2026-05-14"
+updated_at: "2026-07-01"
+status: "active"
+author: "patrick"
+metadata:
+  type: "scratchpad"
+---
+
+# Database Standard Library — Early Thoughts
+
+> **STATUS: NOT PLANNED — JUST THOUGHTS**
+> This file captures early design ideas from a brainstorm session.
+> Nothing here is approved, scoped, or scheduled for implementation.
+> Do not implement any of this until it is formally planned and milestoned.
+> Other chats: treat this as read-only background context, not a work order.
+
+---
+
+## Scope (rough idea)
+
+A built-in `db` module supporting **DuckDB and Postgres to start, in that priority order**:
+
+1. **DuckDB** (priority 1) — embedded analytical DB, in-process, zero-network-config. Easiest path to "hello world with a database" for Yinz users.
+2. **Postgres** (priority 2) — the network-database workhorse. Once DuckDB ships and the API shape is locked, Postgres gets implemented against that same surface.
+
+**All other drivers (MySQL, SQLite, MariaDB, MS SQL, etc.) deferred until after v1.0 launch.** Don't expand the matrix until DuckDB + Postgres are both shipping and stable.
+
+> **DuckDB vs Postgres architectural note**: DuckDB is embedded (in-process, no network). Postgres is client/server (TCP wire protocol). Several sections below ("binary wire protocol by default", connection pooling, TLS, network retries) apply to Postgres but NOT to DuckDB embedded. The `db` module surface should hide this distinction at the API level — the developer writes `db.query()` regardless — but the implementation diverges. Flagged as a discussion point in the "Discussion Points (not yet decided)" section below.
+
+---
+
+## The Core Problem: GC Pressure from Conversion Layers
+
+Traditional ORMs have multiple layers of allocation per query result:
+
+1. Build the query object (heap allocation)
+2. Receive raw wire bytes → convert to generic intermediate objects
+3. "Restructure" — map intermediate objects onto model instances (second round of allocations)
+
+On millions of rows this means millions of short-lived heap objects. Even if the SQL runs fast, the restructuring step creates massive GC pressure. Real-world example: a 320-million-row query where the SQL ran fine but restructuring took ~30 seconds.
+
+Yinz has no GC. The goal is to also eliminate the intermediate allocation layers entirely.
+
+---
+
+## Fix 1: Direct Wire-to-Struct Deserialization
+
+Since the compiler knows the target type at compile time, it generates a direct deserializer — one pass from wire bytes to typed Yinz struct. No intermediate map, no generic object, no two-step conversion.
+
+The compiler generates the exact byte-reading code for a given struct shape once, at compile time. Runtime cost is a straight memory write per field.
+
+---
+
+## Fix 2: Binary Wire Protocol by Default
+
+**Applies to Postgres (and any future network-DB backend).** Postgres supports a binary wire protocol in addition to text. The text protocol sends everything as strings which must be parsed at runtime. The binary protocol sends typed bytes directly. Binary mode by default eliminates all string-parsing overhead for numbers, booleans, dates, and other primitive types.
+
+**DuckDB embedded note**: DuckDB is in-process, so there is no wire protocol — values cross the FFI boundary as typed C-struct fields. The "binary mode" framing is moot for DuckDB; the same parsing-overhead-avoided goal is achieved structurally by virtue of not having a wire at all.
+
+---
+
+## Fix 3: Iterator Model by Default (Flat Memory)
+
+`db.query()` returns an iterator — rows are processed as they arrive off the wire. At any moment, only a small fixed-size buffer of rows is in memory regardless of total result count.
+
+`.collect()` exists as an explicit opt-in for cases where all rows are genuinely needed in memory simultaneously. It is not the default.
+
+### Small Ring Buffer, Not Strict 1-at-a-Time
+
+The iterator uses a small fixed-size ring buffer (exact size TBD — likely 64–512 rows). This keeps CPU cache lines warm while still bounding memory to a constant regardless of result size.
+
+---
+
+## Fix 4: Compile-Time Query Strings
+
+Parameterized queries validated and constructed at compile time. No runtime query-AST allocation, no string-building overhead per call. The SQL becomes a compile-time constant handed to the driver.
+
+---
+
+## Parallelization
+
+The iterator model composes naturally with Yinz's auto-parallelization:
+
+- One thread streams rows off the wire into the ring buffer
+- N worker threads pull from that buffer and process rows in parallel
+- CPU count is the ceiling, not row count
+
+**Caveat**: the bottleneck is usually the database and network, not the CPU. Parallel row processing helps most when per-row computation is expensive. For simple read-and-write-through workloads, wire speed is the ceiling regardless of CPU parallelism.
+
+---
+
+## INSERT Performance: The Bulk Seeding Problem
+
+GC pressure on bulk inserts (seeding millions of rows from an external API) is just as bad as on SELECT. The problem: intermediate model-instance objects created per row during INSERT aren't freed until GC runs. With multiple worker threads inserting in parallel, dead objects pile up faster than GC can collect them, causing main-thread GC pauses that stall everything.
+
+### What Yinz does instead
+
+**Ownership frees memory immediately.** When a batch finishes, its memory is freed at that exact instruction. No GC backlog, no pauses, no main thread involvement. Next batch starts clean.
+
+**No intermediate model layer.** The compiler generates a direct serializer for each type at compile time. Your struct goes straight to wire bytes — no model-instance wrapper.
+
+**Result**: same batch sizes, same thread count — memory stays flat because each batch is deterministically freed the moment it's done.
+
+### The Postgres COPY protocol (worth exploring)
+
+Postgres has a `COPY` command for bulk inserts that bypasses row-by-row INSERT overhead entirely — streams raw data directly into a table at wire speed. A Yinz `db` module could use COPY automatically for batches above a certain size. Speculative — research at design time.
+
+---
+
+## How Byte Translation Works
+
+The Postgres wire protocol is a public specification defining exactly how every type is encoded:
+
+- `number` → 8-byte IEEE 754 float
+- `string` → 4-byte length prefix + UTF-8 bytes
+- `Date` → 8-byte microseconds since epoch
+- `boolean` → 1 byte
+
+The Yinz compiler authors implement these translations once per supported database. Wire protocols don't change, so these translations never change. Given a user-defined type, the compiler generates a serializer and deserializer for that exact shape — one pass, no runtime lookups, no branching.
+
+**DuckDB note**: DuckDB has its own internal value representation (vectorized columnar). The compiler still generates a per-shape deserializer, but it reads from DuckDB's in-process result buffers via FFI rather than a wire protocol. Same end result (one pass, no intermediate allocation); different mechanism.
+
+---
+
+## CRUD Convenience Layer
+
+The goal is ergonomic CRUD with none of the allocation overhead. These are not in conflict — the convenience layer is a compiler problem, not a runtime problem.
+
+```
+const quote: Quote = { symbol: "AAPL", price: 189.50, timestamp: date.now() }
+quote.save()
+quote.destroy()
+
+let found = db.find(Quote, { symbol: "AAPL" })
+```
+
+The compiler generates `save()` and `destroy()` specifically for `Quote` at compile time — they compile to direct wire bytes for that type's INSERT/DELETE. No generic model instance layer underneath.
+
+**Open question**: change tracking (knowing which fields changed before `.save()`). Sequelize tracks this via dirty-field state on the model instance. Yinz's ownership model may offer a cleaner approach. Defer to design time.
+
+---
+
+## Query Expressiveness
+
+### Known gaps to close (things Sequelize can't do cleanly)
+
+- `NOT EXISTS` / `EXISTS` — no clean structured representation in Sequelize, forces raw SQL
+- Window functions — not supported
+- CTEs (`WITH` clauses) — not supported
+- Lateral joins — not supported
+- Conditional aggregates — awkward
+- Subqueries in `WHERE` / `FROM` — limited support
+
+The goal is to push the structured layer far enough that raw SQL is rarely needed. If it's a standard SQL pattern that appears in real production queries, the structured layer should cover it.
+
+### Two-layer API
+
+**Structured layer** — type-safe, compiler-validated. Should cover at minimum:
+
+- Filters, joins, group by, order by
+- Aggregates: `count`, `sum`, `avg`, `min`, `max`
+- Subqueries in `WHERE` and `FROM`
+- `NOT EXISTS` / `EXISTS`
+- `HAVING`, `DISTINCT`, `LIMIT`, `OFFSET`
+- Basic window functions
+
+**Raw escape hatch** — for what the structured layer can't express. User writes SQL directly but still gets typed results back. Type safety on the output is never sacrificed.
+
+### API shape
+
+**Top-level dot notation only — no chained query builders.** A single call on the `db` object (e.g., `db.findFirst(Order, {...})`, `db.findMany(Order, {...})`, `db.count(Order, {...})`) takes a structured options object that describes the entire query. We do NOT use the Laravel/Eloquent / Knex / Sequelize-scope chained-builder style.
+
+❌ **Banned (chained dot-method builder)**:
+```
+db.find(Order)
+  .where({ status: "shipped" })
+  .orderBy("createdAt", "desc")
+  .limit(10)
+```
+
+✅ **Yinz style (one top-level dot call + structured options)**:
+```
+let orders = db.findMany(Order, {
+    where:   { status: "shipped" },
+    orderBy: { createdAt: "desc" },
+    limit:   10,
+})
+```
+
+The Sequelize structured-object style is the closest existing reference and a good starting point — worth evaluating whether we can improve on it, but don't start from scratch for the sake of it. Autocomplete works because the options object's shape is fully typed against the model.
+
+Why no chaining: chained builders force you to mentally re-execute the chain to know the resulting SQL; they fragment the query across multiple lines that each look like a complete value; they make the type of each intermediate stage either incoherent (Sequelize) or absurdly complex (Knex with generics). One options object = one SQL statement, fully visible at one call site.
+
+### Compiler as query advisor (Rule 11)
+
+The compiler knows the schema — types, indexes, constraints — because those are defined in the same Yinz models used for migrations. It should use this to:
+
+- Warn when a query pattern would do a full table scan on an unindexed column
+- Suggest `NOT EXISTS` over `LEFT JOIN ... WHERE NULL` when the optimizer would prefer it
+- Flag missing indexes for common query patterns it sees in the codebase
+- Suggest query rewrites with reasoning attached (not just "this is faster" but "this avoids a seq scan on `quotes.symbol` — add an index or rewrite as NOT EXISTS")
+
+This is the teaching-compiler principle applied to database access. The compiler mentors the developer toward efficient queries the same way it mentors them toward correct code.
+
+---
+
+## Security
+
+### SQL injection is structurally impossible in the structured layer
+
+When using the structured query API, the user never writes SQL. The compiler generates it. There is no surface for injection — parameters are always passed separately as typed values, never interpolated into a string. This is the goal: security by construction, not by convention.
+
+### The raw escape hatch is the only real injection surface
+
+When a user drops to `db.raw()`, they're writing SQL directly. This is where injection becomes possible. The compiler should:
+
+- Refuse to compile `db.raw()` calls where a variable is directly interpolated into the SQL string
+- Require parameters to be passed as separate typed arguments, never string-concatenated in
+- Warn loudly at the call site when it detects unsafe patterns
+
+```
+// compiler blocks this
+let sql = "SELECT * FROM quotes WHERE symbol = " + userInput
+db.raw(sql)
+
+// required pattern — parameter passed separately, never interpolated
+db.raw("SELECT * FROM quotes WHERE symbol = ?", userInput)
+```
+
+### One parameterization mechanism, always safe
+
+Sequelize has two ways to pass parameters — `replacements` (string interpolation under the hood, can be unsafe) and `bind` (true parameterized queries, always safe). Having two options means developers pick the wrong one.
+
+Yinz has one way. Parameters are always passed as separate typed values and sent to the database as bound parameters via the wire protocol — never interpolated into the SQL string at any layer. There is no unsafe option to accidentally choose.
+
+### TLS by default
+
+Database connections should use TLS by default. Plaintext should require an explicit opt-in with a hard-to-miss config flag. Accidentally shipping a plaintext DB connection to production because TLS was the opt-in is a real failure mode.
+
+### Least privilege (documentation / convention)
+
+The db module can't enforce what DB user you connect as, but the docs and compiler warnings should steer toward least privilege — separate read and write credentials, no app-level connections as superuser. Worth calling out explicitly in the stdlib docs when those are written.
+
+---
+
+## Things Sequelize Misses (Yinz Should Do Better)
+
+### N+1 detection
+
+Sequelize never warns when you call `db.find()` inside a loop — the classic N+1 problem. The compiler sees the call site, knows you're in a loop, and can flag it with a suggestion to use a JOIN or batch fetch instead. This is especially valuable for junior devs who haven't learned what N+1 is yet.
+
+### Cursor-based pagination as a first-class primitive
+
+Offset pagination (`LIMIT x OFFSET y`) makes the database scan and discard all rows up to the offset. On large tables this gets slow fast. Cursor-based pagination (`WHERE id > last_seen_id`) doesn't have this problem — cost is constant regardless of page depth.
+
+Yinz should have a first-class cursor pagination primitive. `LIMIT/OFFSET` can exist as an escape hatch but shouldn't be the default pattern the API steers you toward.
+
+### Transaction scoping via ownership
+
+Sequelize requires manually passing the transaction object into every call (`{ transaction: t }`). Forget it once and you silently execute outside the transaction — no error, no warning. Yinz's ownership model may be able to scope the transaction at the language level so forgetting is a compile error. Open question — needs design work.
+
+### Schema drift detection
+
+Sequelize does nothing to validate the DB schema matches the code. You find out at runtime when a query fails because a column was renamed or a table was dropped. Yinz should validate schema-vs-code alignment at compile time or startup and fail fast with a clear error. The compiler already knows the types — this is a natural extension.
+
+### Default query timeout (required, not optional)
+
+Sequelize has no default query timeout. A hung query holds a connection indefinitely. Yinz's db module should require a timeout to be configured — infinity should not be the silent default. If a user wants no timeout they should have to opt in explicitly.
+
+### Deadlock auto-retry for transactions
+
+Deadlocks under high concurrency are expected behavior, not errors. Sequelize surfaces them as exceptions and leaves retry logic to the user. Yinz's transaction primitive should retry automatically on deadlock with configurable backoff strategy.
+
+---
+
+## Connection Pool and Retry Configuration
+
+These need to be first-class configurable options, not afterthoughts. Rough list of what should be configurable:
+
+**Pool config**
+- Min / max pool size
+- Connection timeout (how long to wait for a connection from the pool)
+- Idle timeout (how long before an unused connection is closed)
+- Connection health check / keepalive interval
+
+**Retry config**
+- Max retry attempts on connection failure
+- Backoff strategy (exponential recommended as default)
+- Which errors are retryable vs fatal
+
+**Query config**
+- Default query timeout (required — no infinity default)
+- Statement timeout (separate from query timeout, Postgres-specific)
+
+**Transaction config**
+- Deadlock retry attempts
+- Deadlock retry backoff
+- Isolation level
+
+Exact API shape TBD at design time. These should all have sensible defaults so a basic setup is 2-3 lines, with full control available when needed.
+
+---
+
+## Rust Ecosystem Inspiration
+
+### SQLx — compile-time query verification (via schema snapshot)
+
+SQLx verifies SQL queries against the real schema at compile time. The practical problem: requiring a live DB connection during every build is painful for CI/CD.
+
+Yinz approach: after each migration runs, the tooling generates a **schema snapshot file** committed to the repo. The compiler validates all queries against the snapshot — no live connection needed at build time. The snapshot is always accurate because it's regenerated automatically on every migration run.
+
+### SQLC — schema-first, no separate model files
+
+Migrations define the schema. The compiler derives types from the migration history automatically. There is no separate model file to write or maintain. You import the generated type — you never define it manually.
+
+This eliminates an entire class of bugs: a developer runs a migration and forgets to update the model. In Yinz this is impossible because the model IS the migration output. One source of truth, zero drift.
+
+### Diesel — queries that can't be valid don't compile
+
+With schema-first types, the compiler knows the full schema at compile time. Querying a column that doesn't exist is a compile error. Type mismatch between a query result and a struct field is a compile error. The error messages follow Rule 11 — WHAT went wrong, WHAT to do instead, WHY — not Diesel's wall of unreadable trait bounds.
+
+---
+
+## Migrations
+
+### Atomic migrations via transactional DDL
+
+Each migration runs inside a single database transaction. If anything fails, the whole migration rolls back — the DB is left exactly as it was before the migration started. No partial state, no manual cleanup.
+
+Postgres and DuckDB both support transactional DDL natively (DuckDB is fully ACID, including for schema changes). If a non-transactional-DDL backend is added post-v1.0 (MySQL is the canonical example), the migration runner needs a separate code path that handles partial-failure recovery without transaction rollback — documented when that driver is added.
+
+### Pre-flight schema validation
+
+Before running a migration, validate that the current DB state matches what the previous migrations expect. This catches anyone who manually altered the DB outside of migrations — added a column, dropped an index, renamed a table — before any migration logic runs.
+
+Flow:
+1. Assert current DB state matches expected state (from snapshot)
+2. If mismatch → stop with a clear error, touch nothing
+3. If match → run migration inside a transaction
+4. On success → update schema snapshot
+
+This prevents the "half-ran migration" failure mode entirely. You either never start (failed pre-flight) or fully complete (transactional DDL).
+
+### Migration metadata
+
+Sequelize tracks migrations by filename in a meta table. This is fragile — rename a file and Sequelize thinks it's a new migration. Yinz should track migrations by a content hash or a stable ID defined inside the migration itself, not the filename. Exact mechanism TBD at design time.
+
+### Idempotent seeds
+
+Seeds should be safe to run multiple times without creating duplicates or errors. The db module should provide primitives that make idempotent seeding the easy path — upsert-by-default for seed operations, not plain insert.
+
+---
+
+## Structured Runtime Errors
+
+Sequelize throws untyped exceptions with string error messages that must be caught and parsed manually. Every db call wrapped in try/catch, string matching on `.message` to figure out what went wrong — fragile and exhausting.
+
+Yinz uses the `errors` keyword to make database errors typed at the call site:
+
+```
+function findUser(id: number) -> User errors DatabaseError
+```
+
+`DatabaseError` is a first-class type in the stdlib:
+
+```
+shape DatabaseError {
+    summary: string             // short human-readable: "Unique constraint violated on quotes.symbol"
+    suggestions: array<string>  // ["Check for duplicates before inserting", "Use upsert instead"]
+    code: string | null         // raw DB error code ("23505", "08006", etc.)
+    query: string | null        // sanitized query that triggered the error
+    detail: string | null       // full DB-level detail message
+}
+```
+
+Postgres error codes are a public specification — every 5-character code is documented. The stdlib maps all of them to human-readable summaries and suggestions. Examples:
+
+- `23505` (unique_violation) → "Unique constraint violated" + suggest upsert
+- `23503` (foreign_key_violation) → "Referenced record does not exist" + suggest checking parent record first
+- `08006` (connection_failure) → "Lost connection to database" + suggest checking pool config
+- `40P01` (deadlock_detected) → "Transaction deadlock" + suggest retry or reorder operations
+
+The caller gets a typed, structured error they can pattern match on — no string parsing, no try/catch, no guessing what went wrong.
+
+**Compile-time vs runtime errors are different mechanisms but both structured.** Compile-time errors are the compiler's domain — location, message, suggestion, already formatted by the teaching-compiler. Runtime errors are the `DatabaseError` type — handled by the `errors` keyword, propagated up the call stack as a typed value. Same philosophy (WHAT/WHAT-INSTEAD/WHY), different layer.
+
+---
+
+## Embedded SQL Syntax + IDE Support
+
+The raw escape hatch needs a Yinz syntax that:
+
+1. Signals to the compiler "this content is SQL" so injection safety checks, compile-time validation, IDE coloring, and the formatter all engage
+2. Still passes typed parameters separately (never interpolated into the string)
+3. Looks natural in Yinz source
+
+**Direction (not fully locked — see Discussion Points)**: a `.raw` method on `db` (better name TBD) is the end goal. The SQL gets passed as a tagged-string-style literal so the compiler/IDE know "this is SQL, treat the content as SQL." Both pieces combine — they're not competing alternatives:
+
+```
+let result = db.raw(sql`SELECT * FROM orders WHERE status = ?`, "shipped")
+```
+
+Here `.raw` is the call surface; `sql\`...\`` is how the string is passed so the IDE knows to syntax-highlight inside the backticks and the compiler engages injection-safety + (eventually) compile-time SQL validation. A plain string passed to `.raw` could also be supported — but plain strings get no IDE highlighting and no compile-time SQL checks, so the `sql\`...\`` form is the recommended path.
+
+**Open sub-questions**:
+- Is `.raw` the right name? Candidates: `.sql`, `.execute`, `.exec`. `.raw` is short but doesn't convey "this returns typed rows."
+- If plain strings are also accepted (no `sql\`...\`` tag), is that a parallel-API violation per `stdlib-design.md` Rule 2? Likely yes — pick one form.
+
+The syntax decision belongs in the v0.10 execution plan's research phase. Whatever is chosen must be a single canonical form.
+
+**IDE coloring (ships with v0.10)**:
+
+The VSCode extension and LSP must provide SQL syntax coloring inside the embedded SQL construct. The LSP delivers this via embedded language injection — the same technique editors use for CSS-in-JS. The SQL content gets a SQL TextMate grammar scope injected at the boundaries of the construct. This is a v0.10 LSP feature.
+
+**Formatter behavior (ships with v0.10)**:
+
+`ynz fmt` formats SQL inside the embedded construct following standard SQL indentation conventions. Specific requirement from Patrick:
+
+- The first SQL keyword (`INSERT INTO`, `SELECT`, `FROM`, `WHERE`, `GROUP BY`, etc.) is indented at the surrounding `const`-indentation + project-standard indent width (2 or 4 spaces — decided when the formatter is designed in v0.2-M3; the same standard applies here)
+- Subsequent SQL lines follow standard SQL indentation relative to that baseline — column lists indented one level deeper than their keyword, `FROM`/`WHERE`/`GROUP BY` at the same level as `SELECT`, etc.
+
+Reference example (using 4-space indent, `const` at column 0):
+
+```
+const query = sql`
+    INSERT INTO bars
+    SELECT
+        symbol,
+        time_bucket(INTERVAL '5 minutes', timestamp) AS timestamp,
+        'fiveMinute'                                  AS timeframe,
+        count(*) < 5                                  AS incompleteBarData,
+        first(open  ORDER BY timestamp)               AS open,
+        max(high)                                     AS high,
+        min(low)                                      AS low,
+        last(close  ORDER BY timestamp)               AS close,
+        sum(volume)                                   AS volume,
+        sum(tradeCount)                               AS tradeCount
+    FROM bars
+    WHERE timeframe = 'oneMinute'
+    GROUP BY symbol, timestamp;
+`
+```
+
+The column-alignment of `AS alias` names (right-aligning the `AS` keyword across a column list) is optional — decide in the formatter research phase whether Yinz SQL formatting enforces that or leaves it to the user.
+
+---
+
+## Discussion Points (not yet decided)
+
+These are open questions Patrick wants to think through at design time. Captured here so they don't get lost. Not decisions — discussion seeds.
+
+### Auto-flush / auto-save semantics
+
+When a developer does `quote.save()` on a row-bound value, what actually hits the database and when?
+
+- **Immediate flush** (every `.save()` immediately writes to the DB): simplest mental model, but kills throughput on bulk operations where the developer mutates many rows in a loop.
+- **Auto-buffered with end-of-scope flush** (`.save()` queues the write; the buffer flushes when the surrounding scope ends, transaction commits, or the iterator/connection closes): better perf, but the user might be surprised that "save" doesn't immediately persist.
+- **Explicit `.flush()` required** after `.save()`: most predictable, but adds ceremony that other ORMs don't.
+
+Sub-question: does Yinz's ownership model give us a clean "flush on scope exit" mechanism (the same way arena `scratch` blocks auto-free on exit)? That would be the most Yinz-native answer — `.save()` queues, scope exit flushes, no explicit `.flush()` needed.
+
+DuckDB and Postgres have different buffering semantics under the hood (DuckDB is in-process so the cost asymmetry is different) — the surface API has to be the same but the implementation may differ.
+
+### Transactions — already a partial design
+
+Transactions are touched in two existing sections of this doc:
+- "Transaction scoping via ownership" (under "Things Sequelize Misses") — the idea that the ownership model could scope a transaction so forgetting to pass it is a compile error.
+- "Transaction config" (under "Connection Pool and Retry Configuration") — deadlock retry attempts, backoff, isolation level.
+- "Deadlock auto-retry for transactions" — automatic retry on deadlock with configurable backoff.
+
+Discussion seed: lock in the scope-binding API early so the whole stdlib is designed around it. Strawman:
+
+```
+db.transact(function (tx) {
+    let order = tx.find(Order, { id: 42 })
+    order.status = "shipped"
+    order.save()
+    // tx auto-commits on successful function exit, auto-rolls-back on error or panic
+})
+```
+
+The `tx` handle is the only thing that can write inside the transaction — there's no global `db.save()` accessible from inside the lambda. That makes "forgot to pass the transaction" a compile error structurally.
+
+### Gradual / accumulated mutations (build up state, save once)
+
+Pattern Patrick wants supported:
+
+```
+let order = db.find(Order, { id: 42 })
+order.status = "shipped"
+order.shippedAt = date.now()
+order.trackingNumber = "1Z999AA..."
+order.save()    // one INSERT/UPDATE round-trip, not three
+```
+
+Three mutations, one save. The compiler/runtime should accumulate the changes and emit a single UPDATE statement at `.save()` time, NOT three round-trips.
+
+This intersects with:
+- **Dirty-field tracking** (already flagged as "open question" in the CRUD Convenience Layer section) — Yinz's ownership model may give us a cleaner mechanism than Sequelize's per-instance dirty-state.
+- **Auto-flush semantics** above — if auto-flush is "on scope exit," then `.save()` becomes the explicit "I'm done mutating this row" marker.
+
+Sub-question: should there be a `db.build()` or similar primitive for the "construct a value from scratch, then INSERT once at the end" case? Or does annotation-driven literal construction (`const order: Order = { ... }`) + `.save()` cover it cleanly?
+
+### DuckDB-vs-Postgres surface unification
+
+DuckDB is embedded; Postgres is client/server. The user shouldn't care which one they're talking to at the API level — but several existing sections in this doc assume client/server semantics:
+
+- "Binary wire protocol by default" — irrelevant for DuckDB embedded (no wire)
+- "Connection pool and retry configuration" — pool/retry don't apply to embedded DuckDB
+- "TLS by default" — irrelevant for embedded
+- "Postgres COPY protocol" — DuckDB has an equivalent (Appender API + its own COPY). Worth designing the bulk-insert primitive once, with both backends implementing it.
+
+The unifying surface needs design work. Strawman: `db.connect(...)` returns a `Database` handle; the type of the connection string (`duckdb://path.db` vs `postgres://...`) determines which backend implementation is used; the user-facing API is identical on both.
+
+---
+
+## What This Does NOT Cover Yet
+
+- Exact query builder API / syntax
+- Migrations
+- Transactions (transaction scope binding — see Discussion Points)
+- Connection pooling (Postgres-specific; N/A for DuckDB embedded)
+- Schema inference / compile-time schema validation
+- Additional drivers beyond DuckDB and Postgres (deferred until after v1.0 launch)
+
+---
+
+## v0.10+ Async I/O Surface
+
+The canonical deferral spec for async database operations lives in the feature registry:
+
+```
+registry/features.toml → [[deferred_tooling_feature]] name = "async-io-stdlib-intrinsics-v0-5"
+```
+
+That registry entry is the SSOT — this section is a cross-reference, not the authority.
+
+**Planned async surface (ships with v0.10 db module)**:
+
+- `db.queryAsync(sql, params) -> array<T> errors` — non-blocking query; `wait db.queryAsync(...)` suspends the caller while the DB responds.
+- `db.findAsync(Shape, options) -> array<Shape> errors` — non-blocking structured query.
+- All existing `db.*` methods get `*Async` variants for use inside `wait` call sites.
+
+These back onto Tokio I/O (for Postgres) or DuckDB's async query API (for DuckDB embedded). The state-machine ABI that makes `wait` work was validated in v0.3-M2 using the internal `__testFallibleAsync` intrinsic, which exercises the same errors-through-state-machine path that `db.queryAsync` will use.
+
+**Why deferred**: connection pool state management under suspension, error variant taxonomy (`DatabaseError` design), and the Postgres-vs-DuckDB ABI unification (discussed in "DuckDB-vs-Postgres surface unification" above) all belong to the v0.10 milestone where the full db surface is designed.

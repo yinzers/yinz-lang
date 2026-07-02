@@ -44,4 +44,4 @@
 ## Standalone plans
 
 - [design-lockdown-from-gemini-review](done/2026-05-14-design-lockdown-from-gemini-review/plan.md) `done`
-- [docs-tree-restructure](active/2026-06-14-docs-tree-restructure/plan.md) `active`
+- [docs-tree-restructure](done/2026-06-14-docs-tree-restructure/plan.md) `superseded`

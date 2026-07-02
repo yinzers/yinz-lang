@@ -7,7 +7,7 @@ paths:
 
 # Nuxt 4 + Tailwind v4 + Bun — Website Standards
 
-The Yinz website (`yinzlang.com`) is a Nuxt 4 SSG site under `website/`. Stack locked per `.claude/planning/active/2026-05-20-webpage-docs/roadmap.md`:
+The Yinz website (`yinzlang.com`) is a Nuxt 4 SSG site under `website/`. Stack locked per [`.claude/planning/active/2026-05-20-webpage-docs/roadmap.md`](../planning/active/2026-05-20-webpage-docs/roadmap.md):
 
 - **Nuxt 4** with the `app/` directory layout (auto-imports for components, composables, utils)
 - **Bun** for all package management — pinned in `website/docker-compose.yml`; never run `bun install` from the host
@@ -350,6 +350,6 @@ If a future milestone genuinely needs one of these, justify it in the plan first
 ## Cross-References
 
 - `~/.claude/rules/coding-style.md` — `T | null` over `T?`, no `any`, arrow functions, satisfies/as guidance
-- `.claude/planning/active/2026-05-20-webpage-docs/roadmap.md` — locked stack decisions (Nuxt 4, Tailwind v4, Bun, hosting, fonts, SSG)
-- `.claude/planning/done/2026-05-20-webpage-foundation/plan.md` — foundation milestone (component inventory, phase breakdown; status done)
+- [`.claude/planning/active/2026-05-20-webpage-docs/roadmap.md`](../planning/active/2026-05-20-webpage-docs/roadmap.md) — locked stack decisions (Nuxt 4, Tailwind v4, Bun, hosting, fonts, SSG)
+- [`.claude/planning/done/2026-05-20-webpage-foundation/plan.md`](../planning/done/2026-05-20-webpage-foundation/plan.md) — foundation milestone (component inventory, phase breakdown; status done)
 - `/tmp/yinz-design/yinz/project/shared.css` — design token source-of-truth (extracted into `@theme` block in foundation Phase 2)

@@ -1,6 +1,6 @@
 # Stdlib Design Rules
 
-Rules every Yinz stdlib module must follow. Distinct from `.claude/rules/language-design.md` (which covers language features) — this file covers stdlib API contracts.
+Rules every Yinz stdlib module must follow. Distinct from [`.claude/rules/language-design.md`](language-design.md) (which covers language features) — this file covers stdlib API contracts.
 
 Loaded when designing or reviewing any new stdlib module (v0.5 file system, v0.6 math, v0.7 cli/env/process, v0.8 json, v0.9 date/duration, v0.10 db (DuckDB + Postgres only), v0.11 log, v0.12 random, v0.13 testing, v0.14 regex, v0.15 http, etc.).
 
@@ -63,7 +63,7 @@ In Yinz: `terminal.print()` writes without flushing. If you want to flush, you c
 
 **Why this rule exists**: Java NIO vs IO (24+ years and counting), Python `os.path` vs `pathlib` (10+ years and counting), Go `sort.Sort` vs `sort.Slice` vs `slices.Sort` (3 generations all live), Node.js callbacks vs promises (8-year migration), Python `%`/`.format()`/f-strings (3 string formatting systems). Every one of these started as "we'll deprecate the old one once the new one matures" — and never did. The "old" API never goes away because too much code depends on it.
 
-`design/versioning.md` already establishes the macro policy: pre-v1.0, breaking changes are fine; post-v1.0, strict major-version-bump compatibility. THIS rule operationalizes that for stdlib API design: never ship a "v2 alongside v1" — fix the v1 in place pre-1.0, or wait until you can do a major version bump.
+[`docs/internal/decisions/ADR-versioning.md`](../../docs/internal/decisions/ADR-versioning.md) already establishes the macro policy: pre-v1.0, breaking changes are fine; post-v1.0, strict major-version-bump compatibility. THIS rule operationalizes that for stdlib API design: never ship a "v2 alongside v1" — fix the v1 in place pre-1.0, or wait until you can do a major version bump.
 
 ### What to do when you want to redesign a stdlib API
 
@@ -86,7 +86,7 @@ If two genuinely-different concerns share a name in another language but should 
 If Yinz wants to support a non-default behavior (different encoding, different time zone, different locale), the API takes an EXPLICIT parameter. The default is the same everywhere.
 
 This applies to:
-- Text encoding (always UTF-8 — see `design/strings.md`)
+- Text encoding (always UTF-8 — see [`docs/internal/implementation/IMP-strings.md`](../../docs/internal/implementation/IMP-strings.md))
 - Time zone for date construction (always explicit — no "default JVM tz")
 - Locale for case conversion (always explicit — no "system locale `tolower`" Turkish-bug class)
 - Path separator (Yinz uses logical paths, separator is internal)
@@ -123,7 +123,7 @@ For the rare case where a stdlib FREE function takes two arguments of the same t
 
 When Yinz designs the JSON module (v0.8), the marshal/unmarshal API uses compiler-generated specialized serializers per `shape`. The compiler emits a typed serializer at the time the `shape` is declared (or at first serialization use). Same rule applies to any future serialization formats (CSV v0.20, msgpack/cbor if added).
 
-This rule should be cross-referenced into `design/stdlib/data.md` (when written) and the v0.8 milestone plan.
+This rule should be cross-referenced into [`docs/internal/scratchpad/SCRATCH-stdlib-data.md`](../../docs/internal/scratchpad/SCRATCH-stdlib-data.md) (when written) and the v0.8 milestone plan.
 
 ---
 
@@ -131,7 +131,7 @@ This rule should be cross-referenced into `design/stdlib/data.md` (when written)
 
 ## Rule 7: Regex Engine Is Linear-Time NFA Only — No PCRE Backtracking
 
-**The rule**: Yinz's stdlib regex (when designed in v0.14 per `design/mvp-scope.md`) MUST be a linear-time NFA-based engine (RE2-style). Backtracking engines (PCRE, Python `re`, Ruby `=~`, PHP) are explicitly rejected. No backreferences, no lookahead/lookbehind, no possessive quantifiers in stdlib regex.
+**The rule**: Yinz's stdlib regex (when designed in v0.14 per [`docs/reference/REF-mvp-scope.md`](../../docs/reference/REF-mvp-scope.md)) MUST be a linear-time NFA-based engine (RE2-style). Backtracking engines (PCRE, Python `re`, Ruby `=~`, PHP) are explicitly rejected. No backreferences, no lookahead/lookbehind, no possessive quantifiers in stdlib regex.
 
 **Why this rule exists**: backtracking regex engines have exponential worst-case complexity. A pattern like `(a+)+$` against a long string of `a`s followed by a non-matching character explores O(2^n) states. Cloudflare's July 2, 2019 global outage was caused by exactly this — a WAF regex with catastrophic backtracking exhausted CPU globally for 27 minutes (per Cloudflare's own post-mortem at https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/). Cloudflare subsequently switched their WAF from PCRE to RE2-inspired.
 
@@ -173,12 +173,12 @@ This rule should be cross-referenced into the v0.8 (`json`), v0.14 (`regex`), an
 
 ## Cross-References
 
-- `.claude/rules/language-design.md` (covers LANGUAGE features; this file covers STDLIB APIs)
-- `.claude/rules/vocabulary.md` (Yinz terminology — uses correct terms in error messages)
-- `design/golden-rules.md` Rule 11 (compiler is a teacher — applies to stdlib diagnostics too)
-- `design/golden-rules.md` Rule 12 (human-readable over jargon — stdlib method names too)
-- `design/versioning.md` (no-backwards-compat-pre-v1.0; this rule is the operational corollary)
-- `design/strings.md` (Rule 3 — UTF-8 default cited there)
-- `design/stdlib/data.md` (where Rule 6 — codegen serialization — lands when JSON v0.8 is designed; currently a stub)
+- [`.claude/rules/language-design.md`](language-design.md) (covers LANGUAGE features; this file covers STDLIB APIs)
+- [`.claude/rules/vocabulary.md`](vocabulary.md) (Yinz terminology — uses correct terms in error messages)
+- [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 11 (compiler is a teacher — applies to stdlib diagnostics too)
+- [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 12 (human-readable over jargon — stdlib method names too)
+- [`docs/internal/decisions/ADR-versioning.md`](../../docs/internal/decisions/ADR-versioning.md) (no-backwards-compat-pre-v1.0; this rule is the operational corollary)
+- [`docs/internal/implementation/IMP-strings.md`](../../docs/internal/implementation/IMP-strings.md) (Rule 3 — UTF-8 default cited there)
+- [`docs/internal/scratchpad/SCRATCH-stdlib-data.md`](../../docs/internal/scratchpad/SCRATCH-stdlib-data.md) (where Rule 6 — codegen serialization — lands when JSON v0.8 is designed; currently a stub)
 - `lockin-stdlib-and-syntax.md` Findings #5 (Java URL.equals), #14 (Go encoding/json), #30 (Java NIO/IO duality)
 - `lockin-build-and-crossplat.md` Finding #8 (Python encoding default)

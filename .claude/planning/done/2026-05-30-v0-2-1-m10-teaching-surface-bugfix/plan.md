@@ -133,7 +133,7 @@ All anchors below are CURRENT line numbers, re-verified post-`v0.3.0-m1`. Every 
 | Phase 7 `BannedJargon` quick-fix assumes a `DiagnosticKind::BannedJargon { term }` variant exists; it may not | Medium | Medium | Phase 7 Step 1 confirms what `DiagnosticKind` variant the banned-jargon diagnostic uses. If no `term`-carrying variant exists, Phase 7 adds one (or extends the existing one) before wiring the code action — see Questions. |
 | Phase 4 end-of-statement positioning helper needs source text; `inlay_hint_passes` is a salsa query | Low | Low | The pass already has `sf.text(db)`; the helper takes `(text, stmt_span)`. Verified the pass keys on `SourceFile`. No new salsa input. |
 | Phase 0 unified PR (6 sites + 2 walks) rejected by reviewer as "too many changes" | Low | Medium | Shared root cause + shared regression-test file; splitting creates 6 near-duplicate PRs. If the reviewer insists, fall back to 3 PRs grouped by AST-position-family (variant/pattern access; declaration walks; type-position annotations). |
-| Array→fixed click-edit (Phase 5) produces invalid source if `fixed<T>` needs an explicit size | Low | Medium | Roadmap locked the approach as a keyword token-swap (`array` → `fixed`), size inferred from the literal — consistent with `design/collections.md` auto-promotion. Phase 5 verification compiles the post-edit source to prove it's valid. |
+| Array→fixed click-edit (Phase 5) produces invalid source if `fixed<T>` needs an explicit size | Low | Medium | Roadmap locked the approach as a keyword token-swap (`array` → `fixed`), size inferred from the literal — consistent with [`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md) auto-promotion. Phase 5 verification compiles the post-edit source to prove it's valid. |
 
 ---
 
@@ -179,12 +179,12 @@ All anchors below are CURRENT line numbers, re-verified post-`v0.3.0-m1`. Every 
 - No new salsa query is introduced; all fixes are inside existing queries (`check_query`, the inlay-hint passes). Salsa per-file memoization unchanged.
 - Phase 3 replaces an unconditional `out.insert(name)` per call arg with a `sig_table` HashMap lookup + conditional insert — O(1) per arg, no asymptotic change; lookups hit the already-built `sig_table`.
 - Phase 0 adds at most one `HashSet::insert` per shape-decl/const-decl/type-position visited during `check_module` — bounded by AST size, already walked.
-- **Auto-promotion analysis**: this milestone IS the correctness layer of two existing auto-promotions (`array<T>→fixed<T>` via `prefer-fixed-when-immutable`; `let→const` via `mutable-when-const-suffices`). No NEW auto-promotion candidate is introduced. The codegen auto-promotion itself is unchanged — only the IDE teaching surface (muted hint + click-to-make-explicit) is being corrected. Phase 5 completes the `array→fixed` click-to-make-explicit surface so it matches `let→const` per `.claude/rules/inference.md` "Two Surfaces" (Replacement category). No lint-rule names change (the M4 lint tier-3 milestone owns `prefer-fixed-when-immutable` / `mutable-when-const-suffices`; M10 only fixes the hint analyses they share).
+- **Auto-promotion analysis**: this milestone IS the correctness layer of two existing auto-promotions (`array<T>→fixed<T>` via `prefer-fixed-when-immutable`; `let→const` via `mutable-when-const-suffices`). No NEW auto-promotion candidate is introduced. The codegen auto-promotion itself is unchanged — only the IDE teaching surface (muted hint + click-to-make-explicit) is being corrected. Phase 5 completes the `array→fixed` click-to-make-explicit surface so it matches `let→const` per [`.claude/rules/inference.md`](../../../rules/inference.md) "Two Surfaces" (Replacement category). No lint-rule names change (the M4 lint tier-3 milestone owns `prefer-fixed-when-immutable` / `mutable-when-const-suffices`; M10 only fixes the hint analyses they share).
 
 ### Teaching
 - Every diagnostic and hover touched keeps the WHAT/WHAT-INSTEAD/WHY three-part format.
 - Phase 7 adds a `BannedJargon` quick-fix lightbulb so users clicking it convert `enum`→`options` etc. — turning a passive warning into an actionable teaching moment.
-- Phase 8 removes banned jargon (`infers`) from user-facing diagnostic WHY strings (per `.claude/rules/vocabulary.md` — `infer`/`inferred` banned in user-facing text) and fixes the `booleanean` typo.
+- Phase 8 removes banned jargon (`infers`) from user-facing diagnostic WHY strings (per [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) — `infer`/`inferred` banned in user-facing text) and fixes the `booleanean` typo.
 - No new banned-jargon word is introduced; `tests/jargon_audit.rs` (or equivalent) stays green. Phase 8 adds the `booleanean`/`infers` strings to whatever audit guards them so they can't regress.
 
 ### Runtime Dependencies
@@ -199,7 +199,7 @@ All anchors below are CURRENT line numbers, re-verified post-`v0.3.0-m1`. Every 
 
 ### Feature Registry Entries
 - **No new registry entries.** M10 adds zero keywords, zero banned-jargon words, zero primitive intrinsics, zero type-attached constants, zero deferred features, zero diagnostic templates, zero muted-hint domains.
-- The only registry-adjacent change is Phase 7: `lsp_code_action_replacement_for` gains a `"BannedJargon"` arm that READS existing `[[banned_jargon]]` entries (already in `registry/features.toml`) to source the replacement text. No schema change, no new entry — read-only consumption of an existing catalog.
+- The only registry-adjacent change is Phase 7: `lsp_code_action_replacement_for` gains a `"BannedJargon"` arm that READS existing `[[banned_jargon]]` entries (already in [`registry/features.toml`](../../../../registry/features.toml)) to source the replacement text. No schema change, no new entry — read-only consumption of an existing catalog.
 - Phase 8 may edit the *description text* of up to 3 existing `[[muted_hint_domain]]` entries to remove banned `infer`/`inferred` wording — that's a content edit to existing entries, not a new entry. Listed explicitly so the `### Feature Registry Entries` audit sees it was considered.
 
 ---
@@ -416,7 +416,7 @@ _(empty until a reviewer returns BLOCK)_
 **Branch**: `fix/m10-inlay-position-and-color`
 **Est. lines**: ~40 (helper + two position swaps + one package.json block + tests)
 **Objective**: The promotion decorations sit at the natural read position (end of line) and are visually distinct in `.ynz` files.
-**Why this phase exists**: `position: span.start` puts the hint on the `let` keyword, mid-statement — wrong place for a Replacement-category annotation per `.claude/rules/inference.md`.
+**Why this phase exists**: `position: span.start` puts the hint on the `let` keyword, mid-statement — wrong place for a Replacement-category annotation per [`.claude/rules/inference.md`](../../../rules/inference.md).
 **Current-state anchors**: `crates/ynz-typeck/src/inlay_hint_passes.rs:464` (`array_to_fixed` position) and `:515` (`let_to_const` position), both `position: span.start`. `PromotionHint` struct at 73–80. `tooling/vscode-ynz/package.json` (no `contributes.configurationDefaults` for inlay color yet).
 **Files (expected scope)**: `crates/ynz-typeck/src/inlay_hint_passes.rs`, `tooling/vscode-ynz/package.json`, `crates/ynz-typeck/tests/inlay_hint_position.rs` (new).
 **Steps**:
@@ -458,7 +458,7 @@ _(empty until a reviewer returns BLOCK)_
 **PR scope**: The `array→fixed` inlay hint attaches a `TextEdit` that swaps the `array` keyword for `fixed` in the type annotation, matching the `let→const` hint's click-to-make-explicit behavior.
 **Branch**: `fix/m10-array-to-fixed-edit`
 **Est. lines**: ~50 (new `array_to_fixed_edit` helper + `PromotionHint` field + `make_hint`→`make_hint_with_edit` switch + test)
-**Objective**: Clicking the `array→fixed` decoration rewrites the source, per `.claude/rules/inference.md` "Two Surfaces for the Same Decision" (Replacement category — both auto-promotions get click-to-make-explicit).
+**Objective**: Clicking the `array→fixed` decoration rewrites the source, per [`.claude/rules/inference.md`](../../../rules/inference.md) "Two Surfaces for the Same Decision" (Replacement category — both auto-promotions get click-to-make-explicit).
 **Why this phase exists**: `let→const` is clickable; `array→fixed` is a dead decoration. Inconsistent teaching surface.
 **Current-state anchors**: `crates/ynz-lsp/src/inlay_hint.rs:221–226` (`array_to_fixed` uses plain `make_hint`, no edit); `:120` (`let_to_const_edit` helper to mirror); `:232+` (`let_to_const` uses `make_hint_with_edit`). `PromotionHint` at `inlay_hint_passes.rs:73–80` (carries no type-annotation span yet).
 **Files (expected scope)**: `crates/ynz-typeck/src/inlay_hint_passes.rs` (extend `PromotionHint`), `crates/ynz-lsp/src/inlay_hint.rs` (new helper + switch), `crates/ynz-lsp/tests/inlay_hint_array_to_fixed_edit.rs` (new).
@@ -562,11 +562,11 @@ _(empty until a reviewer returns BLOCK)_
 - [x] Banned-jargon diagnostic produces a working replacement code action.
   - Evidence: `lexer.rs` `emit_banned_jargon_identifier` emits `DiagnosticKind::BannedJargon { term }` (variant added `diagnostic.rs:43`); `code_action.rs:63–65` BannedJargon arm → `build_banned_jargon_action`; test `banned_jargon_identifier_produces_replacement_code_action` (`code_action_jargon.rs:60–121`) drives lexer→typeck→code_action end-to-end. code-reviewer confirmed NON-TAUTOLOGICAL: neutralized the arm (`=> None`), test failed with "expected a code action…got none", then restored.
 - [x] Replacement text is sourced from the registry `[[banned_jargon]]` entry (no hardcoded duplicate).
-  - Evidence: `ynz-registry/src/lib.rs:189` `"BannedJargon" => banned_jargon_lookup(token).map(|e| e.replacement)`; `BANNED_JARGON` baked from `registry/features.toml` via `build.rs` (no LSP-layer constant). Test asserts `edits[0].new_text == ynz_registry::banned_jargon_lookup("infer").unwrap().replacement` — RHS is a live registry read, not a literal, so hardcoded drift fails the test.
+  - Evidence: `ynz-registry/src/lib.rs:189` `"BannedJargon" => banned_jargon_lookup(token).map(|e| e.replacement)`; `BANNED_JARGON` baked from [`registry/features.toml`](../../../../registry/features.toml) via `build.rs` (no LSP-layer constant). Test asserts `edits[0].new_text == ynz_registry::banned_jargon_lookup("infer").unwrap().replacement` — RHS is a live registry read, not a literal, so hardcoded drift fails the test.
 - [x] The code action surfaces the WHY (lesson) from the registry `why` field, not just the replacement word.
   - Evidence: `ynz-registry/src/lib.rs:196–205` `lsp_code_action_label_for_jargon` formats title `"Replace \`{term}\` with \`{replacement}\` — {reason}"` from `entry.reason`; test asserts `action.title.contains(expected_reason)` where `expected_reason = banned_jargon_lookup("infer").unwrap().reason` (live read). NOTE: plan text says "registry `why` field"; the actual schema field is `reason` — implementation correctly uses `reason` (all 4 reviewers confirmed; tracked for the end-of-plan report).
 **Quality gate**:
-- [x] No new registry ENTRY added — only a read of existing `[[banned_jargon]]`. (rules-compliance + acceptance-verifier confirmed `registry/features.toml` not in diff; registry change is two READ functions consuming existing entries.)
+- [x] No new registry ENTRY added — only a read of existing `[[banned_jargon]]`. (rules-compliance + acceptance-verifier confirmed [`registry/features.toml`](../../../../registry/features.toml) not in diff; registry change is two READ functions consuming existing entries.)
 - [x] Code-action arm follows the existing `BannedKeyword`/`UnusedImport` arm idiom. (code-reviewer: `build_banned_jargon_action` mirrors `build_banned_keyword_action` byte-for-byte; same range-computation, `TextEdit`/`WorkspaceEdit`/`is_preferred` shape.)
 **Verification**: `cargo test -p ynz-lsp code_action_jargon` green; manual: open a file with `enum`, confirm the lightbulb fixes it.
 
@@ -587,14 +587,14 @@ _(no BLOCK rounds — all 4 reviewers PASS on round 1. Non-blocking concerns rec
 **Branch**: `fix/m10-typo-and-jargon-cleanup`
 **Est. lines**: ~15 (3 string edits + audit-guard extension)
 **Objective**: No user-facing diagnostic contains `booleanean` or `infers`.
-**Why this phase exists**: `booleanean` is a visible typo in the `print` diagnostic; `infers`/`inferred` are banned in user-facing text per `.claude/rules/vocabulary.md`.
+**Why this phase exists**: `booleanean` is a visible typo in the `print` diagnostic; `infers`/`inferred` are banned in user-facing text per [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md).
 **Current-state anchors**: `check.rs:1577` (`booleanean`); `check.rs:1997` and `:2010` (`"infers"` — 2 sites, not 3). Banned-jargon enforcement lives in `crates/ynz-diagnostics/src/banned_jargon.rs`.
-**Files (expected scope)**: `crates/ynz-typeck/src/check.rs`, `registry/features.toml` (if any `[[muted_hint_domain]]` description uses `infer`/`inferred`), the jargon-audit test.
+**Files (expected scope)**: `crates/ynz-typeck/src/check.rs`, [`registry/features.toml`](../../../../registry/features.toml) (if any `[[muted_hint_domain]]` description uses `infer`/`inferred`), the jargon-audit test.
 **Steps**:
 1. Write/extend a test that scans the two diagnostic strings (or runs the jargon audit over typeck diagnostics) asserting no `booleanean` and no `infers`. Confirm FAIL today.
 2. `check.rs:1577`: `booleanean` → `boolean`.
 3. `check.rs:1997`, `:2010`: `"... Yinz infers type parameters ..."` → `"... Yinz figures out type parameters ..."` (keep WHY meaning, drop banned word).
-4. Grep `registry/features.toml` `[[muted_hint_domain]]` description fields for `infer`/`inferred`; replace with "figures out" / "the compiler picks" per vocabulary.md. (Audit suggested up to 3 such fields — fix whatever actually exists.)
+4. Grep [`registry/features.toml`](../../../../registry/features.toml) `[[muted_hint_domain]]` description fields for `infer`/`inferred`; replace with "figures out" / "the compiler picks" per vocabulary.md. (Audit suggested up to 3 such fields — fix whatever actually exists.)
 5. Ensure `banned_jargon.rs` (or the doc-grep audit) covers these strings so they can't regress.
 **Acceptance criteria**:
 - [x] No `booleanean` anywhere in user-facing diagnostics.
@@ -685,7 +685,7 @@ _**TRACKED FOLLOW-UP (out of M10 scope — Rule 11 / deferrals-must-be-tracked)*
 
 **Findings Log**:
 _(no BLOCK rounds — all 4 reviewers PASS round 1, no documented deviations.)_
-_**TRACKED FOLLOW-UPS (out of M10 scope — Rule 11 / deferrals-must-be-tracked; recorded in `.claude/todos.md` per code-reviewer's insistence they not live only in chat)**: two adjacent inlay-hint-walker completeness gaps surfaced during Phase 10, both PRE-EXISTING and NOT among the 14 cataloged audit bugs:_
+_**TRACKED FOLLOW-UPS (out of M10 scope — Rule 11 / deferrals-must-be-tracked; recorded in [`.claude/todos.md`](../../../todos.md) per code-reviewer's insistence they not live only in chat)**: two adjacent inlay-hint-walker completeness gaps surfaced during Phase 10, both PRE-EXISTING and NOT among the 14 cataloged audit bugs:_
 _  1. `collect_copy_hints_expr` only handles `Expr::Call`, not `Expr::MethodCall` (UFCS) — `player.greet(n)` gives `n` no copy hint. This is the EXACT class Phase 9 fixed for the OWNERSHIP walker (Bug 2.11); the copy walker now lags — a sibling-walker asymmetry (no-duct-tape #7 smell)._
 _  2. `collect_copy_hints_block` walks only `Stmt::Expr`+`Stmt::Let`, skipping `Stmt::Assign`/`FieldAssign`/`IndexAssign`/`Return` value exprs (the ownership block walker covers more). Joins the Phase 9 `Stmt::Return` ownership-walker gap — together these three form a coherent "inlay-hint walker completeness" follow-up workstream for a future v0.2.1 milestone._
 
@@ -697,12 +697,12 @@ _  2. `collect_copy_hints_block` walks only `Stmt::Expr`+`Stmt::Let`, skipping `
 **Est. lines**: ~40 (demo additions + snapshot)
 **Objective**: Hands-on demo proof that the unused-import fixes hold in a realistic project, plus the cumulative end-of-plan review.
 **Why this phase exists**: The `### Demo & Error Gallery` invariant requires the demo extension; the plan skill requires a final verification sweep.
-**Current-state anchors**: `examples/pirates-roster/entrypoint.ynz` (single-entry layout per `examples/README.md`).
+**Current-state anchors**: `examples/pirates-roster/entrypoint.ynz` (single-entry layout per [`examples/README.md`](../../../../examples/README.md)).
 **Files (expected scope)**: `examples/pirates-roster/entrypoint.ynz` (+ any imported service/util files needed for the patterns), the project's `insta` snapshot for the demo build.
 **Steps**:
 1. Add a Pittsburgh-themed section to `pirates-roster` that imports symbols used ONLY via: options-variant access, `is`-narrowing, `follows`, `extends`, shape-field-type annotation, module-`const`, `dynamic`, and generic position.
 2. Build the demo (`./target/debug/ynz build examples/pirates-roster/entrypoint.ynz`); assert ZERO unused-import warnings. Capture `insta` stdout/stderr snapshot.
-3. Step-10 sweep: TODO grep (no `TODO`/`FIXME`/`Phase N` left in touched code); confirm `.claude/todos.md` LSP bug items reflect what shipped; cumulative `git diff <m10-base>..HEAD` four-reviewer pass; verify Quality Checklist below.
+3. Step-10 sweep: TODO grep (no `TODO`/`FIXME`/`Phase N` left in touched code); confirm [`.claude/todos.md`](../../../todos.md) LSP bug items reflect what shipped; cumulative `git diff <m10-base>..HEAD` four-reviewer pass; verify Quality Checklist below.
 **Acceptance criteria**:
 - [x] `pirates-roster` exercises all six patterns; build emits zero spurious unused-import warnings.
   - Evidence: `examples/pirates-roster/entrypoint.ynz` exercises 7 patterns cross-file — options-variant (`ScheduleDay.home` :489), is-narrowing (`is StripeDistrictEvent` :513), dynamic (`runAnnouncement(a: dynamic Announceable)` :535), shape-field-type (`day: ScheduleDay` :543), module-const (`const OPENING_DAY_SLOT: ScheduleDay` :551), generic (`category: StatCategory` in `StatBook<T>` :560), union-alias-RHS (`shape RiverEvent = SouthSideEvent | LocalVenueEvent` :526). CLEAN-REBUILD VERIFIED (coordinator forced `touch main.rs && cargo build`; acceptance-verifier re-ran on the clean binary): `ynz build` emits ZERO unused-import warning for any type-position symbol — only the 4 pre-existing genuine unused-FUNCTION-import warnings + 1 pre-existing dead-code remain. follows/extends are an EVIDENCED same-file-only compile constraint (`shapes.rs:393/406`, `all_names` file-local) covered by unit tests (`follows_contract_does_not_warn_unused_import`, `extends_parent_does_not_warn_unused_import`) — demo + unit tests together cover every enumerated pattern.

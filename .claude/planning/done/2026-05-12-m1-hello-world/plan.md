@@ -47,7 +47,7 @@ End-to-end walking skeleton. `function entrypoint() -> nothing { print("hello, y
 
 **Toolchain decisions locked:**
 - Rust 1.95.0 stable, LLVM 18.1.8, inkwell 0.9.0 (`llvm18-1-prefer-dynamic` — Ubuntu packages don't ship static Polly), salsa 0.26.2, ariadne 0.6.0, clap 4.6.1, insta 1.47.2
-- `LLVM_SYS_181_PREFIX=/usr/lib/llvm-18` in `.cargo/config.toml` for Linux; macOS needs `brew --prefix llvm@18`
+- `LLVM_SYS_181_PREFIX=/usr/lib/llvm-18` in [`.cargo/config.toml`](../../../../.cargo/config.toml) for Linux; macOS needs `brew --prefix llvm@18`
 - `llvm18-1-prefer-dynamic` feature (not `llvm18-1`) — critical for Ubuntu where libLLVMPolly.a is not shipped
 
 **Crate layout:**
@@ -80,7 +80,7 @@ End-to-end walking skeleton. `function entrypoint() -> nothing { print("hello, y
 - `Config::with_color(bool)` exists; `ReportKind::Custom` still embeds color that bypasses config — use `Color::Primary` for colorless custom kinds
 
 ### Project structure question answered (this session)
-Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the root. No `mod` declarations, no explicit file graph. Single-segment imports = stdlib, multi-segment = project files. Already fully specced in `spec/modules.md` and `design/modules.md`.
+Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the root. No `mod` declarations, no explicit file graph. Single-segment imports = stdlib, multi-segment = project files. Already fully specced in [`docs/reference/REF-modules.md`](../../../../docs/reference/REF-modules.md) and [`docs/internal/implementation/IMP-modules.md`](../../../../docs/internal/implementation/IMP-modules.md).
 
 ---
 
@@ -109,21 +109,21 @@ Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the
 **Objective**: Empty workspace builds clean; `ynz --version` returns a string; CI passes on a no-op PR.
 **Why this phase exists**: Lock in workspace structure and version pins BEFORE any compiler code lands. Avoids the "we'll restructure later" trap.
 **Files (expected scope)**:
-- `Cargo.toml` (workspace root)
-- `rust-toolchain.toml` (pin stable channel + LLVM-compatible toolchain)
-- `crates/ynz-driver/Cargo.toml` + `crates/ynz-driver/src/main.rs` (entry point, `ynz --version`)
-- `crates/ynz-diagnostics/Cargo.toml` + `crates/ynz-diagnostics/src/lib.rs` (empty)
-- `crates/ynz-ast/Cargo.toml` + `crates/ynz-ast/src/lib.rs` (empty)
-- `crates/ynz-parser/Cargo.toml` + `crates/ynz-parser/src/lib.rs` (empty)
-- `crates/ynz-typeck/Cargo.toml` + `crates/ynz-typeck/src/lib.rs` (empty)
-- `crates/ynz-codegen/Cargo.toml` + `crates/ynz-codegen/src/lib.rs` (empty)
+- [`Cargo.toml`](../../../../Cargo.toml) (workspace root)
+- [`rust-toolchain.toml`](../../../../rust-toolchain.toml) (pin stable channel + LLVM-compatible toolchain)
+- [`crates/ynz-driver/Cargo.toml`](../../../../crates/ynz-driver/Cargo.toml) + `crates/ynz-driver/src/main.rs` (entry point, `ynz --version`)
+- [`crates/ynz-diagnostics/Cargo.toml`](../../../../crates/ynz-diagnostics/Cargo.toml) + `crates/ynz-diagnostics/src/lib.rs` (empty)
+- [`crates/ynz-ast/Cargo.toml`](../../../../crates/ynz-ast/Cargo.toml) + `crates/ynz-ast/src/lib.rs` (empty)
+- [`crates/ynz-parser/Cargo.toml`](../../../../crates/ynz-parser/Cargo.toml) + `crates/ynz-parser/src/lib.rs` (empty)
+- [`crates/ynz-typeck/Cargo.toml`](../../../../crates/ynz-typeck/Cargo.toml) + `crates/ynz-typeck/src/lib.rs` (empty)
+- [`crates/ynz-codegen/Cargo.toml`](../../../../crates/ynz-codegen/Cargo.toml) + `crates/ynz-codegen/src/lib.rs` (empty)
 - `.github/workflows/ci.yml` (build, test, clippy, fmt)
 - `.gitignore` (`target/`, `*.ll`, `*.o`)
-- `README.md` (brief — link to `spec/overview.md`)
+- [`README.md`](../../../../README.md) (brief — link to [`docs/reference/REF-language-overview.md`](../../../../docs/reference/REF-language-overview.md))
 **Steps**:
-1. Initialise `Cargo.toml` workspace with the seven crates above.
+1. Initialise [`Cargo.toml`](../../../../Cargo.toml) workspace with the seven crates above.
 2. Add direct deps: `salsa = "<latest stable>"`, `inkwell = { version = "<llvm-18-compatible>", features = ["llvm18-0"] }`, `ariadne = "<latest>"`, `unicode-segmentation = "<latest>"` (pin exact versions; lockfile committed).
-3. `rust-toolchain.toml` pins `channel = "stable"` and lists components `clippy`, `rustfmt`.
+3. [`rust-toolchain.toml`](../../../../rust-toolchain.toml) pins `channel = "stable"` and lists components `clippy`, `rustfmt`.
 4. `ynz-driver` `main.rs`: parse `--version` and print a literal version string. Exit 0. No other behaviour.
 5. CI workflow runs `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, `cargo build --workspace --release` against Ubuntu and macOS runners with LLVM 18 installed.
 6. README contains a one-paragraph project description + LLVM-18 install instructions for Linux + macOS.
@@ -142,14 +142,14 @@ Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the
 **Branch**: `feat/diagnostics`
 **Est. lines**: ~500
 **Objective**: A consumer crate can build a `Diagnostic` with a span and three-part message, push it to a `DiagnosticBucket`, and render the bucket as a string identical to a committed snapshot. The bucket enforces a 50-error cap with a standard "... and N more errors hidden" footer. An automated workspace-wide grep test fails CI if any banned-jargon word appears in diagnostic-construction call sites.
-**Why this phase exists**: Golden Rule 11 (compiler is a teacher) is load-bearing. Shipping the parser before diagnostics infrastructure invites "we'll polish the errors later" which is exactly the duct-tape framing `~/.claude/rules/no-duct-tape.md` prohibits. Build the teaching layer first, then make the rest of the compiler use it. Per `design/compiler-errors.md`, the 50-error cap is a spec requirement — enforcing it from P2 means every later phase inherits the behaviour for free.
+**Why this phase exists**: Golden Rule 11 (compiler is a teacher) is load-bearing. Shipping the parser before diagnostics infrastructure invites "we'll polish the errors later" which is exactly the duct-tape framing `~/.claude/rules/no-duct-tape.md` prohibits. Build the teaching layer first, then make the rest of the compiler use it. Per [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md), the 50-error cap is a spec requirement — enforcing it from P2 means every later phase inherits the behaviour for free.
 **Files (expected scope)**:
 - `crates/ynz-diagnostics/src/lib.rs`
 - `crates/ynz-diagnostics/src/diagnostic.rs` (the `Diagnostic` struct: severity, span, three fields `what` / `what_instead` / `why`)
 - `crates/ynz-diagnostics/src/bucket.rs` (multi-error accumulator with 50-error cap)
 - `crates/ynz-diagnostics/src/render.rs` (`ariadne` integration, "and N more hidden" footer)
 - `crates/ynz-diagnostics/src/span.rs` (`SourceSpan` — file id + byte range)
-- `crates/ynz-diagnostics/src/banned_jargon.rs` (const array of banned words extracted from `design/compiler-errors.md`)
+- `crates/ynz-diagnostics/src/banned_jargon.rs` (const array of banned words extracted from [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md))
 - `crates/ynz-diagnostics/tests/snapshots.rs` + `crates/ynz-diagnostics/tests/__snapshots__/` (uses `insta` for snapshot testing)
 - `crates/ynz-diagnostics/tests/jargon_audit.rs` (workspace-wide grep test — fails if any banned word appears in a diagnostic-construction context)
 **Acceptance criteria**:
@@ -158,7 +158,7 @@ Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the
 - [x] `DiagnosticBucket` caps at 50 errors; the 51st error increments `hidden_count` and the rendered output ends with `... and N more errors hidden`.
 - [x] Snapshot tests exist for the five cases listed above and match committed golden files.
 - [x] `tests/jargon_audit.rs` passes on the empty workspace and is wired to run on every `cargo test --workspace`.
-- [x] `BANNED_JARGON` constant stays in sync with `design/compiler-errors.md` via a snapshot-style sync test.
+- [x] `BANNED_JARGON` constant stays in sync with [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) via a snapshot-style sync test.
 - [x] Public API exposes `Diagnostic`, `DiagnosticBucket`, `Severity`, `SourceSpan`, `render` — and nothing else.
 
 ---
@@ -216,7 +216,7 @@ Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the
 
 **Spec decisions locked in this phase:**
 - **`print` semantics**: `print(s)` writes `s` to stdout followed by a single `\n` newline. This is the println-style behaviour, locked because the M1 codegen relies on libc `puts` (which appends `\n`).
-- **Parse-error gate**: per `design/compiler-errors.md`, typeck does NOT run on functions whose body had parse errors — cascade errors mask the original bug.
+- **Parse-error gate**: per [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md), typeck does NOT run on functions whose body had parse errors — cascade errors mask the original bug.
 
 **Files (expected scope)**:
 - `crates/ynz-typeck/src/types.rs` (`Type::Nothing`, `Type::String`, `Type::Error`)

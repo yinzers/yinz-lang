@@ -27,12 +27,12 @@ legacy:
     - tests/**
     - examples/pirates-roster/entrypoint.ynz
     - examples/primantis-orders/m5_errors.ynz
-    - design/generics.md
-    - design/maybe.md
-    - design/collections.md
-    - spec/generics.md
-    - spec/maybe.md
-    - spec/collections.md
+    - docs/internal/implementation/IMP-generics.md
+    - docs/internal/implementation/IMP-maybe.md
+    - docs/internal/implementation/IMP-collections.md
+    - docs/reference/REF-generics.md
+    - docs/reference/REF-maybe.md
+    - docs/reference/REF-collections.md
     - .claude/plans/active/v0-1-compiler.md
   created: 2026-05-17
   last_updated: 2026-05-17-r4
@@ -49,7 +49,7 @@ Status: approved (Patrick OK 2026-05-17) — Phase 0 SHIPPED (commit `524ca2e`, 
 
 | Phase | Status | Commit / Branch | Notes |
 |---|---|---|---|
-| P0 — Doc lockdown | SHIPPED on main | `524ca2e` + `b2c528e` + `cf53ad5` merged 2026-05-17 | master plan M5/M6/M7 paragraphs updated to `<>`; `design/maybe.md` created with locked tables; `spec/maybe.md` syntax-updated; `design/generics.md` cross-ref; M5 plan landed |
+| P0 — Doc lockdown | SHIPPED on main | `524ca2e` + `b2c528e` + `cf53ad5` merged 2026-05-17 | master plan M5/M6/M7 paragraphs updated to `<>`; [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) created with locked tables; [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md) syntax-updated; [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) cross-ref; M5 plan landed |
 | P1 — Lexer + AST scaffolding | SHIPPED on main | `49940c9` + `3c18a62` merged 2026-05-17 | Tok::None + lexer keyword `none`; 3 Type variants (TypeParam, Generic, Maybe); 2 Expr variants (NoneLit, IndexAccess); 1 Stmt variant (IndexAssign); GenericParam struct; FunctionDecl/ShapeDecl `generics` field; CallExpr.type_args field; 4 m5_*_variant_count_locked tests + m5_none_keyword_lexes; stale M3/M4 doc comments collateral-fixed; typeck + codegen + return_paths stub match arms; 4 snapshot files additively updated. 401 tests green. |
 | P2 — Parser | SHIPPED on main | `faaf13e`, branch `feat/m5-parser`, PR #18 | parse_generic_params (decl `<T>`, `<T follows C>`, `<T,U>`); parse_type_with_depth (maybe<T>, Generic, depth cap 16); Token::None → NoneLit; `[` postfix → IndexAccess; IndexAssign; try_parse_type_args (speculative `<`, 32-token budget, backtrack); 34 new parse tests; 438 tests green. |
 | P3a — Typeck generics engine | SHIPPED on main | `a4bffb1`, branch `feat/m5-typeck-generics`, PR #19 | generics.rs (Substitution, unify_param, apply_substitution, MonomorphizationTable, GenericFnTable, GenericShapeTable); Type::TypeParam + Type::Generic; collect_generic_shapes + collect_generic_signatures; check_generic_function_body + check_generic_fn_call (inference + constraint + ownership + mono recording); field access through Type::Generic. 27 new tests. 465 tests green. |
@@ -66,17 +66,17 @@ Status: approved (Patrick OK 2026-05-17) — Phase 0 SHIPPED (commit `524ca2e`, 
 
 **Why now.** M4 shipped (`tag v0.1.0-m4`, 316 tests, `shapes + UFCS + ownership`). Without M5, every milestone after M4 is paralyzed — M6 narrowing on union types needs the generics engine to express `maybe T`, M7 strings need `array<byte>` semantics for byte slicing, every stdlib module needs `array<T>`/`map<K,V>` to express its surface. Continuing without M5 means stdlib design drift: design docs reference `array<T>` semantics that the compiler can't yet validate.
 
-**Background.** M1–M4 built the type system without parameterization — every type is concrete. M5 adds the type-parameter dimension. The work touches every crate: lexer (no new tokens but `<` / `>` get new contextual roles in type position), parser (type-param syntax in decls, generic instantiations in type position, bracket-index in expression position, contextual disambiguation of `<` at call sites), typeck (the generics engine: type variables, substitution, monomorph queue, constraint checking against `follows`), codegen (a specialized LLVM function/type per concrete instantiation), runtime (array/fixed allocation/growth/drop; map runtime with Swiss Tables + SipHash). The full v0.1 design lives across `design/generics.md` and `design/collections.md`.
+**Background.** M1–M4 built the type system without parameterization — every type is concrete. M5 adds the type-parameter dimension. The work touches every crate: lexer (no new tokens but `<` / `>` get new contextual roles in type position), parser (type-param syntax in decls, generic instantiations in type position, bracket-index in expression position, contextual disambiguation of `<` at call sites), typeck (the generics engine: type variables, substitution, monomorph queue, constraint checking against `follows`), codegen (a specialized LLVM function/type per concrete instantiation), runtime (array/fixed allocation/growth/drop; map runtime with Swiss Tables + SipHash). The full v0.1 design lives across [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) and [`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md).
 
 **Constraints.**
 - Rust stable toolchain. LLVM 18 via inkwell. Salsa from day 1.
 - All M5 diagnostics follow WHAT/WHAT-INSTEAD/WHY three-part format.
-- Banned-jargon list (`design/compiler-errors.md` + `crates/ynz-diagnostics/src/banned_jargon.rs`) — in particular `monomorphize`, `polymorphic`, `covariant`, `contravariant` MUST NOT appear in user-facing diagnostics.
-- Generic syntax is `<>` (NOT `[]`) per `design/generics.md` locked design. The master plan v0-1-compiler.md uses `[T]` in M5's one-paragraph entry — that paragraph is OUT OF DATE; P0 below updates it.
+- Banned-jargon list ([`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) + `crates/ynz-diagnostics/src/banned_jargon.rs`) — in particular `monomorphize`, `polymorphic`, `covariant`, `contravariant` MUST NOT appear in user-facing diagnostics.
+- Generic syntax is `<>` (NOT `[]`) per [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) locked design. The master plan v0-1-compiler.md uses `[T]` in M5's one-paragraph entry — that paragraph is OUT OF DATE; P0 below updates it.
 - The `maybe T` primitive moves from M6 to M5 (locked in this plan's first-question answer). M6 still ships options/unions/`if (x is Type)` narrowing — but `maybe T` lands here so `.get()` on collections returns `maybe T` from day 1.
-- Map default tier is **Swiss Tables + SipHash-2-4** with **perfect-hash codegen for all-static-key literals**. The xxhash3 fast opt-in and identity-hash for int keys are deferred to a later milestone (surface syntax for the fast opt-in remains unlocked, per `design/collections.md` "Surface syntax is deliberately NOT locked here").
+- Map default tier is **Swiss Tables + SipHash-2-4** with **perfect-hash codegen for all-static-key literals**. The xxhash3 fast opt-in and identity-hash for int keys are deferred to a later milestone (surface syntax for the fast opt-in remains unlocked, per [`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md) "Surface syntax is deliberately NOT locked here").
 - `for (x in collection)` for built-in `array<T>` / `fixed<T>` / `map<K,V>` is a typeck + codegen special-case in M5, marked with `REPLACE-AT M7` comments. M7's `Iterable<T>` protocol replaces the special-case. Mirrors the M3 range() pattern.
-- `array<T>` → `fixed<T>` auto-promotion ships its **codegen surface** in M5 (silent perf win). The **Tier 3 lint surface** (`prefer-fixed-when-immutable`) waits for v0.4 (lint tier). The **muted IDE hint** waits for v0.2 (LSP). The split is per `.claude/rules/auto-promotion.md` "Two Surfaces for the Same Decision."
+- `array<T>` → `fixed<T>` auto-promotion ships its **codegen surface** in M5 (silent perf win). The **Tier 3 lint surface** (`prefer-fixed-when-immutable`) waits for v0.4 (lint tier). The **muted IDE hint** waits for v0.2 (LSP). The split is per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md) "Two Surfaces for the Same Decision."
 
 **Success criteria for M5 (this milestone's contract):**
 
@@ -172,7 +172,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 ### Syntax decisions (locked r1)
 
 - **Type-parameter syntax = `<T>` everywhere.** `function foo<T>(...)`, `shape Pair<A, B> { ... }`, `array<int>`, `Pair<int, int>`, `maybe<Player>`. NEVER `[T]`. The master plan v0-1-compiler.md M5 paragraph uses `[T]` — P0 below corrects it.
-- **Constraints are inline:** `function sort<T follows Comparable>(...)` — NOT separate `where` clauses. Locked in `design/generics.md`.
+- **Constraints are inline:** `function sort<T follows Comparable>(...)` — NOT separate `where` clauses. Locked in [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md).
 - **Generic call-site disambiguation:** TypeScript-style. At call sites, the parser sees `foo<T>(args)` and tries to parse `<T>` as a type-parameter list FIRST; if that fails, it backtracks to comparison. The disambiguation rule: a `<` after an identifier at expression-call position, where the contents up to `>` parse as a comma-separated TYPE list and `>` is immediately followed by `(`, is a generic call. Otherwise it's the `<` comparison operator. No turbofish (`foo::<T>(x)`) syntax.
 - **Bracket-index expression = parser-level new `Expr::IndexAccess { receiver, index, span }`.** Desugar to `.get(index)` in typeck. Index-assign `arr[i] = v` desugars to `arr.set(i, v)`.
 - **`none` is a reserved keyword.** Lexer adds `Tok::None`. Parser produces `Expr::NoneLit { span }`. Typeck assigns it type `maybe<T>` where T is inferred from context.
@@ -196,7 +196,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
   | `maybe<maybe<T>>` (nested) | **REJECTED at typeck — compile error** | — | Nested maybe is almost always a code smell (caller likely meant to flatten); the rare legitimate case is rejected for v0.1 with a three-part error pointing to `maybe<T>` |
   | All other generic-shape instantiations | Tagged union | `struct { i1 has_value, ShapeT value }` | Default — safe but slightly more memory than null-pointer encoding when applicable |
 
-  The table is consulted for every load/store of `maybe<T>` at the LLVM level. IR-snapshot tests in P4a assert each row of the table produces the expected LLVM type. **Why no per-binding override:** the encoding is implementation-detail; users see only `maybe<T>` and `none`. Adding a `dense<T>` / `pointer-niche<T>` opt-in surface is duct tape; the compiler picks the right one automatically. **Why reject `maybe<maybe<T>>`:** allowing it forces a 2-bit tag (some-some / some-none / none) and that distinction is almost never what the user meant. M5 ships the compile error; if a real use case emerges, design/maybe.md gets a section in v0.2+.
+  The table is consulted for every load/store of `maybe<T>` at the LLVM level. IR-snapshot tests in P4a assert each row of the table produces the expected LLVM type. **Why no per-binding override:** the encoding is implementation-detail; users see only `maybe<T>` and `none`. Adding a `dense<T>` / `pointer-niche<T>` opt-in surface is duct tape; the compiler picks the right one automatically. **Why reject `maybe<maybe<T>>`:** allowing it forces a 2-bit tag (some-some / some-none / none) and that distinction is almost never what the user meant. M5 ships the compile error; if a real use case emerges, docs/internal/implementation/IMP-maybe.md gets a section in v0.2+.
 - **`array<T>` runtime:** heap-allocated header `{ i64 len, i64 cap, T* data }` allocated via `ynz_alloc`; growth at 1.5×; bounds check on `.set(i, v)` emits `ynz_panic` with descriptive message; drop emits per-element drop loop + `ynz_free`.
 - **`fixed<T>` runtime:** stack-allocated `[N x T]` via alloca; size known at compile time; bounds check on `.set(i, v)` for non-literal index emits `ynz_panic`; literal-index out-of-bounds = compile error.
 - **`map<K, V>` runtime:** Swiss Tables (open-addressing + SIMD metadata scan). SipHash-2-4 with per-process random key (initialized at program startup from OS entropy via a `ynz_siphash_init` runtime hook). Insertion-order tracked via parallel index array. All map operations go through a `ynz_map_*` runtime symbol set.
@@ -212,9 +212,9 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 - **Map "trusted-keys" syntax** → future milestone, locks alongside xxhash3.
 - **`for (x in custom_iterable)` (user-defined `follows Iterable<T>`)** → M7. M5 only handles built-in collections.
 - **IDE muted hints for auto-promotion, hash tier, generic instantiation** → v0.2 LSP. M5 produces the data; LSP wraps it.
-- **Generic method dispatch with N-deep `follows` constraints** → M5 ships `T follows Comparable` (single constraint OR comma-list of constraints). Higher-kinded types, lifetime params, associated types are explicitly NOT in v0.1 (per `design/generics.md` "What's NOT in v0.1").
+- **Generic method dispatch with N-deep `follows` constraints** → M5 ships `T follows Comparable` (single constraint OR comma-list of constraints). Higher-kinded types, lifetime params, associated types are explicitly NOT in v0.1 (per [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) "What's NOT in v0.1").
 - **`.update({...})` map bulk-update syntax** → DEFERRED past M5. The object-literal-as-update-payload syntax requires desugar rules that aren't load-bearing for v0.1. M5 ships `.set(key, value)` one at a time; v0.2+ revisits when there's a real workload that hits the verbosity cost. Removes Required Fix #10's "at-code-time decision" smell.
-- **Generic shape cycle creation through `maybe<Self>` field mutation** → permitted at runtime, with documented memory leak. Per `design/ownership.md`, cycle detection is a borrow-checker concern; the v0.1 borrow checker doesn't detect cycles. M5 ships `shape Node<T> { value: T, next: maybe<Node<T>> }` workably, but a user-created cycle (`n1.next = some(n2); n2.next = some(n1)`) leaks both nodes on scope exit. Documented in `design/maybe.md` (P0 creates it); negative fixture `m5_cycle_leak.ynz` includes a comment explaining the leak. This is the v0.1 design choice (not duct tape) — cycle-collection or borrow-checker cycle-detection waits for v0.2+ when the LSP enables interactive cycle visualization. Stated as a Quality Gate "documented leak (intentional v0.1 limitation), not silent."
+- **Generic shape cycle creation through `maybe<Self>` field mutation** → permitted at runtime, with documented memory leak. Per [`docs/internal/implementation/IMP-ownership.md`](../../../../docs/internal/implementation/IMP-ownership.md), cycle detection is a borrow-checker concern; the v0.1 borrow checker doesn't detect cycles. M5 ships `shape Node<T> { value: T, next: maybe<Node<T>> }` workably, but a user-created cycle (`n1.next = some(n2); n2.next = some(n1)`) leaks both nodes on scope exit. Documented in [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) (P0 creates it); negative fixture `m5_cycle_leak.ynz` includes a comment explaining the leak. This is the v0.1 design choice (not duct tape) — cycle-collection or borrow-checker cycle-detection waits for v0.2+ when the LSP enables interactive cycle visualization. Stated as a Quality Gate "documented leak (intentional v0.1 limitation), not silent."
 - **Module-level / top-level `let` bindings of map type** → REJECTED at typeck in M5 with a teaching error pointing to M8 (modules). The `ynz_siphash_init` runtime hook is called from `main`'s prologue ONLY; module-level map literals would need pre-main initialization order which isn't designed in M5. M8's module work decides whether top-level maps get a pre-`main` static init or a lazy init or stay rejected. Negative fixture `m5_top_level_map_rejected.ynz` covers this. (Note: top-level `let` bindings exist as M2 surface — but M2 binds them to compile-time-evaluable values; map literals require runtime allocation + SipHash key, which the current driver doesn't initialize until `main`. Hence the rejection.)
 - **Perfect-hash CHM92 retry exhaustion fallback** → silent fallback to Swiss Tables + SipHash codegen with a one-line debug log (gated behind `--debug-codegen` flag for v0.2+; M5 logs to stderr only when `YINZ_DEBUG_PERFECT_HASH=1` env var is set). CHM92 is tried with 16 different random seeds; if all 16 fail to find a perfect hash function for the literal's keys, codegen emits the Swiss Tables path. Observable behavior is identical (correct map operations); only the IR differs. IR-snapshot test `m5_perfect_hash_fallback.ll` documents the fallback path for a known-pathological key set (constructed via published CHM92 worst-case inputs).
 
@@ -222,12 +222,12 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 
 ## Research Findings
 
-- `design/generics.md` locks the full v0.1 generics scope. `<>` syntax everywhere, inline `follows` constraints, call-site type inference, no higher-kinded types, no lifetime params. M5 implements this design verbatim.
-- `design/collections.md` locks the full v0.1 collections scope: `fixed<T>` stack, `array<T>` heap with 1.5× growth, `map<K, V>` = Swiss Tables + four-tier hashing (M5 ships 2/4 tiers — see locked decisions), bracket sugar desugaring to `.get()`/`.set()`, insertion-order map iteration, compiler-auto-reorder of shape fields (already shipped M4).
-- `spec/maybe.md` documents the user-facing `maybe T` surface — `.exists()`, `.value`, `.or(default)`, `none` literal. Already written; M5 implements this surface.
-- `spec/generics.md` documents user-facing generics — `<T>` syntax, type inference, `follows` constraints, multiple type parameters. Already written; M5 implements this surface.
-- `spec/collections.md` documents user-facing collections — three collection types, bracket sugar, dot methods, nested-collection idioms. Already written; M5 implements this surface.
-- `design/maybe.md` does NOT exist. P0 creates it with the design rationale for moving `maybe T` from M6 → M5 + the LLVM lowering decisions.
+- [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) locks the full v0.1 generics scope. `<>` syntax everywhere, inline `follows` constraints, call-site type inference, no higher-kinded types, no lifetime params. M5 implements this design verbatim.
+- [`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md) locks the full v0.1 collections scope: `fixed<T>` stack, `array<T>` heap with 1.5× growth, `map<K, V>` = Swiss Tables + four-tier hashing (M5 ships 2/4 tiers — see locked decisions), bracket sugar desugaring to `.get()`/`.set()`, insertion-order map iteration, compiler-auto-reorder of shape fields (already shipped M4).
+- [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md) documents the user-facing `maybe T` surface — `.exists()`, `.value`, `.or(default)`, `none` literal. Already written; M5 implements this surface.
+- [`docs/reference/REF-generics.md`](../../../../docs/reference/REF-generics.md) documents user-facing generics — `<T>` syntax, type inference, `follows` constraints, multiple type parameters. Already written; M5 implements this surface.
+- [`docs/reference/REF-collections.md`](../../../../docs/reference/REF-collections.md) documents user-facing collections — three collection types, bracket sugar, dot methods, nested-collection idioms. Already written; M5 implements this surface.
+- [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) does NOT exist. P0 creates it with the design rationale for moving `maybe T` from M6 → M5 + the LLVM lowering decisions.
 - `crates/ynz-ast/src/nodes.rs` current state: `Type` enum has 8 variants (Nothing, Named, Error, Int, Float, Number, Bool, Range, Dynamic, SelfType — wait, that's 10 including comments; check the variant-count test for actual count). The variant-count tests are pinned; adding variants requires `// test-ratchet: <reason>` markers.
 - `crates/ynz-diagnostics/src/banned_jargon.rs` already bans `monomorphize` / `monomorphic` / `polymorphic` / `covariant` / `contravariant` / `infer` / `inference`. M5 user-facing diagnostics must work around these. Suggested wording: instead of "monomorphizes for each type", say "specialized for each type used"; instead of "polymorphic", say "works with any type that follows the contract."
 - Hand-written parser disambiguation of `<` at call sites: speculative parse with backtracking. Cost is O(n) in the type-list length; bounded by a 32-token lookahead cap to prevent pathological inputs. Same technique TypeScript's parser uses.
@@ -251,7 +251,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 | Bracket sugar `.set()` lowering allows literal-OOB on `fixed<T>` to slip past typeck | Medium | Runtime panic where a compile error should fire | Typeck checks `fixed<T, N>` writes with literal int index against N at typeck time. Negative fixture `m5_fixed_literal_oob.ynz` asserts compile error with the bound + the offending index. Non-literal indices defer to runtime panic. |
 | Auto-promotion `array<T>` → `fixed<T>` emits wrong codegen when binding crosses function call | Medium | Silent perf regression OR wrong codegen | Typeck's def-use analysis treats ANY pass to a function parameter declared `lend array<T>` as "could be grown" and refuses promotion. Only `share array<T>` parameters are safe (read-only). Positive + negative fixtures cover both paths. |
 | Map perfect-hash codegen for literals with duplicate static keys | Low | Compile-time panic OR wrong hash table | Typeck detects duplicate literal keys at struct-literal time and emits a three-part diagnostic naming both spans. Positive test asserts `{ "a": 1, "a": 2 }` is a compile error. |
-| Generic constraint check failure produces banned-jargon ("does not satisfy contract Comparable") | Medium | Jargon audit fails CI; teaching mission violated | Diagnostic wording explicitly says "Type Player does not follow contract Comparable" (matches `design/generics.md` example). Jargon-audit test (workspace-wide grep) catches any "satisfies", "monomorph", "polymorphic" etc. |
+| Generic constraint check failure produces banned-jargon ("does not satisfy contract Comparable") | Medium | Jargon audit fails CI; teaching mission violated | Diagnostic wording explicitly says "Type Player does not follow contract Comparable" (matches [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) example). Jargon-audit test (workspace-wide grep) catches any "satisfies", "monomorph", "polymorphic" etc. |
 | `for (x in collection)` typeck special-case becomes load-bearing, hard to unwind at M7 | Medium | M7 ends up rewriting more than expected | Every special-case site carries a `REPLACE-AT M7` comment AND an entry in the M7 catch-up obligations section of the master plan. M7's plan reviews this list and unwinds in the same PR that introduces `Iterable<T>`. |
 | Salsa query invalidation explodes when typeck recomputes the monomorph table | Medium | Sub-second incremental compile target missed | The monomorph table is keyed by `(decl_id, type_args)`; only the affected entries invalidate on edit. Salsa's per-key invalidation handles this. Benchmark before merge: 1000-function module, 1-character edit, sub-second incremental compile confirmed. |
 | Map iteration order regression (random instead of insertion) | Low | Test failures across the codebase; spec violation | Iteration goes through the parallel insertion-order index array, NOT the Swiss Table bucket array. Iteration-order property test confirms insert-then-iterate produces the original order. |
@@ -278,7 +278,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 | Modifies existing data | No | Greenfield additions; no schema changes. M4 invariants carry forward. |
 | Third-party integration | Yes | inkwell (LLVM), salsa, ariadne, optional `hashbrown` (internal use), system linker. No new system-level deps in produced binaries beyond libc (and the `ynz_*` runtime library M4 already established). |
 | Changes existing endpoints | No | — |
-| Wrong foundational choice cascades | Yes | The generics engine is load-bearing for every milestone v0.5+. Wrong-shape decisions made here propagate into the stdlib design. Monomorphization vs runtime dispatch is the biggest "cannot undo" choice — locked to monomorph (per `design/generics.md`). |
+| Wrong foundational choice cascades | Yes | The generics engine is load-bearing for every milestone v0.5+. Wrong-shape decisions made here propagate into the stdlib design. Monomorphization vs runtime dispatch is the biggest "cannot undo" choice — locked to monomorph (per [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md)). |
 
 **Mitigations applied:**
 - Plan-reviewer pass before any phase begins (Step 7 of /plan).
@@ -328,7 +328,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 - Tier 3 lint suggestions (`prefer-fixed-when-immutable`, etc.) — v0.4
 - xxhash3 fast opt-in for maps + surface syntax — future (unbounded)
 - Identity-hash for `map<int, V>` — future (unbounded)
-- Higher-kinded types, lifetime parameters, associated types, general const generics — NEVER in v0.1 per `design/generics.md`
+- Higher-kinded types, lifetime parameters, associated types, general const generics — NEVER in v0.1 per [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md)
 
 **If a phase below feels like it's drifting into any of the above, STOP and re-plan.**
 
@@ -340,45 +340,45 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 
 ---
 
-### Phase 0: Doc lockdown (master plan + design/maybe.md + master-plan M5 paragraph)
+### Phase 0: Doc lockdown (master plan + docs/internal/implementation/IMP-maybe.md + master-plan M5 paragraph)
 
-**PR scope**: Update the master plan's M5 paragraph (currently uses `[T]` syntax + lists `maybe` in M6); create `design/maybe.md`; add a one-line cross-reference in `design/generics.md` for `maybe<T>` as the canonical generic example; update todos.md to remove the "use `<>` not `[]`" idea-bin entry (resolved by this plan).
+**PR scope**: Update the master plan's M5 paragraph (currently uses `[T]` syntax + lists `maybe` in M6); create [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md); add a one-line cross-reference in [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) for `maybe<T>` as the canonical generic example; update todos.md to remove the "use `<>` not `[]`" idea-bin entry (resolved by this plan).
 **Branch**: `chore/m5-doc-lockdown`
 **Flag**: N/A
 **Est. lines**: ~300 (docs only)
 **Ships via**: `/pr`
-**Objective**: Lock the M5 design surface before any code lands. Future contributors reading the master plan see the correct M5 scope; future contributors reading `design/maybe.md` see the rationale for moving it from M6 to M5.
+**Objective**: Lock the M5 design surface before any code lands. Future contributors reading the master plan see the correct M5 scope; future contributors reading [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) see the rationale for moving it from M6 to M5.
 **Why this phase exists**: per `no-duct-tape.md` — the master plan currently lists M5 as `array[T]` / `fixed[T]` / `map[K,V]` and says `maybe T` is in M6. Both are wrong. Shipping M5 P1-P7 without fixing the master plan first means every future plan-reading session sees stale info and may make decisions on it. Fix the source of truth first.
 **Current-state anchors**:
 - `.claude/plans/active/v0-1-compiler.md:184` — M5 milestone paragraph (uses `[T]` syntax, lists `Iterable[T]` reservation but no `maybe<T>` mention)
 - `.claude/plans/active/v0-1-compiler.md:190` — M6 milestone paragraph (lists `maybe T` — needs removal)
 - `.claude/todos.md:20` — `<>` generics syntax idea-bin entry (resolved here)
-- `design/generics.md` — already correct (uses `<>`); add a cross-reference to design/maybe.md
-- `spec/maybe.md` — currently uses `maybe string` (no angle brackets). M5 syntax is `maybe<string>`. P0 updates spec/maybe.md to use `<>` throughout for consistency with `array<T>` / `fixed<T>` / `map<K,V>`.
+- [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) — already correct (uses `<>`); add a cross-reference to docs/internal/implementation/IMP-maybe.md
+- [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md) — currently uses `maybe string` (no angle brackets). M5 syntax is `maybe<string>`. P0 updates docs/reference/REF-maybe.md to use `<>` throughout for consistency with `array<T>` / `fixed<T>` / `map<K,V>`.
 **Files (expected scope)**:
 - `.claude/plans/active/v0-1-compiler.md` — update M5 and M6 milestone paragraphs
-- `.claude/todos.md` — remove resolved entry
-- `design/maybe.md` — CREATE (new file). MUST include the maybe<T> LLVM lowering decision table, the none type inference rules, the flow-sensitive .value enforcement rules, and the cycle-leak documented limitation (all four are locked in this plan's FINAL LOCKED DECISIONS section; design/maybe.md is the durable home for them).
-- `design/generics.md` — add 1-2 line cross-reference to design/maybe.md
-- `spec/maybe.md` — update syntax `maybe T` → `maybe<T>` throughout (with diff-only changes; preserve structure + examples)
+- [`.claude/todos.md`](../../../todos.md) — remove resolved entry
+- [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) — CREATE (new file). MUST include the maybe<T> LLVM lowering decision table, the none type inference rules, the flow-sensitive .value enforcement rules, and the cycle-leak documented limitation (all four are locked in this plan's FINAL LOCKED DECISIONS section; docs/internal/implementation/IMP-maybe.md is the durable home for them).
+- [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) — add 1-2 line cross-reference to docs/internal/implementation/IMP-maybe.md
+- [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md) — update syntax `maybe T` → `maybe<T>` throughout (with diff-only changes; preserve structure + examples)
 **Deviation rule**: NO code changes in this PR. If you find yourself touching `crates/**`, STOP — that's P1+.
 **Steps**:
 1. Open `.claude/plans/active/v0-1-compiler.md` at line ~184. Rewrite the M5 paragraph to: `array<T>` / `fixed<T>` / `map<K, V>` (use `<>`); add `maybe<T>` to M5 scope; remove `maybe<T>` from M6's paragraph.
-2. Open `.claude/todos.md` at line ~20. Remove the "`<>` generics syntax — compiler" idea-bin entry (mark resolved by this plan).
-3. Create `design/maybe.md` with sections: "User Spec" (one-line link to spec/maybe.md), "Why maybe<T> ships in M5 instead of M6" (cite this plan), "LLVM Lowering Decision Table" (copy the table from this plan's FINAL LOCKED DECISIONS section verbatim — it lives durably in design/maybe.md, and the plan becomes archival once M5 ships), "`none` type inference rules" (copy from FINAL LOCKED DECISIONS), "Flow-sensitive .value enforcement rules" (copy from FINAL LOCKED DECISIONS), "Documented v0.1 limitation: cycle leak through `maybe<Self>` mutation" (the locked decision), "Why maybe<T> is built-in, not a stdlib generic" (it's a primitive of the type system, used in every collection's `.get()` signature).
-4. Update `spec/maybe.md`: rewrite `maybe string` → `maybe<string>`, `maybe number` → `maybe<number>`, etc. throughout. Preserve structure + examples; only syntax changes.
-5. Add to `design/generics.md` (near "What's NOT in v0.1"): "See `design/maybe.md` for `maybe<T>` — the first built-in generic primitive shipped via M5's generics engine."
+2. Open [`.claude/todos.md`](../../../todos.md) at line ~20. Remove the "`<>` generics syntax — compiler" idea-bin entry (mark resolved by this plan).
+3. Create [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) with sections: "User Spec" (one-line link to docs/reference/REF-maybe.md), "Why maybe<T> ships in M5 instead of M6" (cite this plan), "LLVM Lowering Decision Table" (copy the table from this plan's FINAL LOCKED DECISIONS section verbatim — it lives durably in docs/internal/implementation/IMP-maybe.md, and the plan becomes archival once M5 ships), "`none` type inference rules" (copy from FINAL LOCKED DECISIONS), "Flow-sensitive .value enforcement rules" (copy from FINAL LOCKED DECISIONS), "Documented v0.1 limitation: cycle leak through `maybe<Self>` mutation" (the locked decision), "Why maybe<T> is built-in, not a stdlib generic" (it's a primitive of the type system, used in every collection's `.get()` signature).
+4. Update [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md): rewrite `maybe string` → `maybe<string>`, `maybe number` → `maybe<number>`, etc. throughout. Preserve structure + examples; only syntax changes.
+5. Add to [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) (near "What's NOT in v0.1"): "See [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) for `maybe<T>` — the first built-in generic primitive shipped via M5's generics engine."
 **Acceptance criteria**:
 - [ ] Master plan's M5 paragraph uses `<>` syntax and lists `maybe<T>` in M5 scope
 - [ ] Master plan's M6 paragraph does NOT list `maybe<T>` (moves to M5)
-- [ ] `design/maybe.md` exists with the LLVM-lowering decision table, none-inference rules, flow-sensitive `.value` rules, and cycle-leak documented limitation
-- [ ] `design/generics.md` cross-references `design/maybe.md`
-- [ ] `spec/maybe.md` uses `maybe<T>` syntax throughout (no bare `maybe string` remnants)
-- [ ] `.claude/todos.md` no longer has the `<>` generics idea-bin entry
+- [ ] [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) exists with the LLVM-lowering decision table, none-inference rules, flow-sensitive `.value` rules, and cycle-leak documented limitation
+- [ ] [`docs/internal/implementation/IMP-generics.md`](../../../../docs/internal/implementation/IMP-generics.md) cross-references [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md)
+- [ ] [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md) uses `maybe<T>` syntax throughout (no bare `maybe string` remnants)
+- [ ] [`.claude/todos.md`](../../../todos.md) no longer has the `<>` generics idea-bin entry
 - [ ] Jargon audit passes (`cargo test -p ynz-diagnostics --test jargon_audit`) — no jargon snuck into the new design doc
 **Quality gate**:
-- [ ] No "monomorphize" / "polymorphic" / banned-jargon words in design/maybe.md
-- [ ] design/maybe.md uses Yinz vocab: "shape" not "type", "follows" not "implements", "none" not "null"
+- [ ] No "monomorphize" / "polymorphic" / banned-jargon words in docs/internal/implementation/IMP-maybe.md
+- [ ] docs/internal/implementation/IMP-maybe.md uses Yinz vocab: "shape" not "type", "follows" not "implements", "none" not "null"
 **Verification**: `git diff --name-only main..` lists exactly the 4 files; `cargo test --workspace` still passes (no code changed); `cargo test -p ynz-diagnostics --test jargon_audit` passes.
 
 ---
@@ -569,9 +569,9 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 - `crates/ynz-typeck/tests/builtins.rs` (NEW)
 **Deviation rule**: NO `map<K, V>` here (P3c). NO codegen (P4-P5). The actual auto-promotion CODEGEN ships in P4a; this phase just records the analysis.
 **Steps**:
-1. Register `array<T>` in the type-name resolver. Define its method table: `.add(lend self, value: T) -> nothing`, `.remove(lend self, index: int) -> nothing`, `.get(share self, index: int) -> maybe<T>`, `.set(lend self, index: int, value: T) -> nothing`, `.count(share self) -> int`, `.first(share self) -> maybe<T>`, `.last(share self) -> maybe<T>`, plus `.filter`/`.map`/`.find`/`.contains`/`.unique`/`.limit`/`.concat`/`.append`/`.prepend`/`.sort` per spec/collections.md.
+1. Register `array<T>` in the type-name resolver. Define its method table: `.add(lend self, value: T) -> nothing`, `.remove(lend self, index: int) -> nothing`, `.get(share self, index: int) -> maybe<T>`, `.set(lend self, index: int, value: T) -> nothing`, `.count(share self) -> int`, `.first(share self) -> maybe<T>`, `.last(share self) -> maybe<T>`, plus `.filter`/`.map`/`.find`/`.contains`/`.unique`/`.limit`/`.concat`/`.append`/`.prepend`/`.sort` per docs/reference/REF-collections.md.
 2. Register `fixed<T>` in the type-name resolver. Method table is a subset of `array<T>`'s (no `.add`/`.remove`/`.removeFirst`/`.removeLast`; `.set` valid; `.append`/`.prepend` return new collections). Track size `N` at the type level for literal-OOB compile errors.
-3. Register `maybe<T>` in the type-name resolver. **The shape has BOTH a virtual-field table AND a method table** (per `.claude/rules/dot-postfix.md` — `.value` is access without parens, `.exists()` and `.or()` are actions with parens):
+3. Register `maybe<T>` in the type-name resolver. **The shape has BOTH a virtual-field table AND a method table** (per [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md) — `.value` is access without parens, `.exists()` and `.or()` are actions with parens):
    - **Virtual field**: `.value: T` — typeck-validated, requires flow-sensitive proof per the locked rules above. NOT a method. The compiler treats `m.value` as a field-access expression; codegen extracts the value-slot from the maybe's LLVM lowering.
    - **Method table**: `.exists(share self) -> bool`, `.or(share self, default: T) -> T`.
    - This makes `maybe<T>` the FIRST built-in type with both virtual-fields and methods. Future built-ins (none planned in v0.1) follow this pattern.
@@ -794,7 +794,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 **Flag**: N/A
 **Est. lines**: ~800 (mostly .ynz files + integration test wiring)
 **Ships via**: `/pr`
-**Objective**: After P5, `cargo test --workspace` runs every M5 fixture through the full compile + run pipeline. `examples/pirates-roster/entrypoint.ynz` demonstrates every v0.1 feature through M5 in one growing program. `examples/primantis-orders/m5_errors.ynz` triggers every M5-class diagnostic in one file. Both files are reviewed by Patrick (hands-on UX validation per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`).
+**Objective**: After P5, `cargo test --workspace` runs every M5 fixture through the full compile + run pipeline. `examples/pirates-roster/entrypoint.ynz` demonstrates every v0.1 feature through M5 in one growing program. `examples/primantis-orders/m5_errors.ynz` triggers every M5-class diagnostic in one file. Both files are reviewed by Patrick (hands-on UX validation per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Demo & Error Gallery`).
 **Why this phase exists**: Per `### Demo & Error Gallery` invariant — every M5+ phase that adds executable surface MUST extend these two files. This phase consolidates all of M5's contributions and the success-criteria program in one verifiable bundle.
 **Current-state anchors**:
 - `crates/ynz-driver/tests/fixtures/m4_*.ynz` — existing M4 fixture pattern
@@ -850,7 +850,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 
 ### Phase 6: Verification sweep + tag `v0.1.0-m5`
 
-**PR scope**: Run the full Step 10 verification sweep (TODO sweep, todos.md cross-check, shortcut detection, quality-checklist verification). Confirm every M5 invariant. Bump `Cargo.toml` workspace version to `0.1.0-m5`. Generate CHANGELOG section. Tag `v0.1.0-m5`.
+**PR scope**: Run the full Step 10 verification sweep (TODO sweep, todos.md cross-check, shortcut detection, quality-checklist verification). Confirm every M5 invariant. Bump [`Cargo.toml`](../../../../Cargo.toml) workspace version to `0.1.0-m5`. Generate CHANGELOG section. Tag `v0.1.0-m5`.
 **Branch**: `chore/m5-verification`
 **Flag**: N/A
 **Est. lines**: ~150 (CHANGELOG entry + Cargo.toml bumps)
@@ -858,20 +858,20 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 **Objective**: M5 is shipped, tagged, and the master plan's M6 milestone paragraph is ready for `/plan M6`.
 **Why this phase exists**: Verification is the final ratchet — without it, M5 can ship with orphaned TODO comments, stale todos.md items, or quality-checklist gaps. Same pattern M1-M4 used.
 **Current-state anchors**:
-- `Cargo.toml` workspace `version = "0.1.0-m4"` (after M4 ship)
+- [`Cargo.toml`](../../../../Cargo.toml) workspace `version = "0.1.0-m4"` (after M4 ship)
 - `.claude/plans/active/v0-1-compiler.md` `M5 Status: in planning` (this plan exists)
 **Files (expected scope)**:
-- `Cargo.toml` (workspace + per-crate versions)
-- `CHANGELOG.md` (M5 section)
+- [`Cargo.toml`](../../../../Cargo.toml) (workspace + per-crate versions)
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) (M5 section)
 - `.claude/plans/active/v0-1-compiler.md` (update M5 milestone status → COMPLETE)
-- `.claude/state.md` (M5 active decisions, tag)
-- `.claude/todos.md` (remove M5-completed items; surface M6 catch-up obligations)
+- [`.claude/state.md`](../../../state.md) (M5 active decisions, tag)
+- [`.claude/todos.md`](../../../todos.md) (remove M5-completed items; surface M6 catch-up obligations)
 - `.claude/plans/done/m5-generics.md` (this plan, moved from active)
 **Deviation rule**: NO new compiler logic. If a verification check fails, fix the underlying issue in a separate PR back to the owning phase.
 **Steps**:
-1. **TODO sweep**: `grep -rn "TODO\|FIXME\|HACK\|XXX\|TEMP\|PLACEHOLDER" crates/ examples/` — confirm no orphaned items. Any found get either resolved or moved to `.claude/todos.md`.
+1. **TODO sweep**: `grep -rn "TODO\|FIXME\|HACK\|XXX\|TEMP\|PLACEHOLDER" crates/ examples/` — confirm no orphaned items. Any found get either resolved or moved to [`.claude/todos.md`](../../../todos.md).
 2. **REPLACE-AT M7 sweep**: confirm every `for (x in collection)` special-case site in typeck and codegen has a `REPLACE-AT M7` comment; confirm the M7 catch-up obligations section of the master plan lists this work.
-3. **Auto-promotion analysis verification** (per `.claude/rules/plan-invariants.md` `### Performance`): confirm M5 covers every auto-promotion candidate; document each in the invariants section (already done in this plan's Invariants section — verify).
+3. **Auto-promotion analysis verification** (per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Performance`): confirm M5 covers every auto-promotion candidate; document each in the invariants section (already done in this plan's Invariants section — verify).
 4. **Jargon audit**: `cargo test -p ynz-diagnostics --test jargon_audit` green; no banned word in any user-facing diagnostic.
 5. **Quality checklist run**: every item below verified with evidence (file path, test name, output).
 6. **Bump versions**: workspace + per-crate to `0.1.0-m5`.
@@ -923,7 +923,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 
 ## Invariants This Milestone Must Preserve
 
-> Required by `.claude/rules/plan-invariants.md`. Each subsection lists testable assertions, not vague aspirations.
+> Required by [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md). Each subsection lists testable assertions, not vague aspirations.
 
 ### Safety
 
@@ -941,7 +941,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 - **`maybe<maybe<T>>` is rejected at typeck** — nested maybe is a code smell (almost always means "flatten me"); compile error with three-part diagnostic suggesting `maybe<T>` directly. M5 P3b enforces; negative fixture `m5_nested_maybe_rejected.ynz`.
 - **Top-level `let` bindings of map type are rejected at typeck** — `ynz_siphash_init` runs from `main`'s prologue only; top-level map literals would need pre-main init that M5 doesn't ship. M5 P3c enforces; negative fixture `m5_top_level_map_rejected.ynz` with three-part error pointing to M8.
 - **Map iteration produces share-borrowed `MapEntry<K, V>` values** — `.key`/`.value` are share-borrowed from map storage; `.lend`/`.give` on them produces a compile error per M4 ownership rules. Positive + negative fixtures cover this.
-- **Cycle creation through `maybe<Self>` mutation is a documented v0.1 limitation** — `shape Node<T> { value: T, next: maybe<Node<T>> }` allows cycle creation at runtime; the v0.1 borrow checker does NOT detect cycles, so a user-created cycle leaks both nodes. Documented in design/maybe.md; intentional v0.1 behavior, NOT a bug. Borrow-checker cycle-detection is v0.2+ work. The leak is documented in fixture `m5_cycle_leak.ynz`.
+- **Cycle creation through `maybe<Self>` mutation is a documented v0.1 limitation** — `shape Node<T> { value: T, next: maybe<Node<T>> }` allows cycle creation at runtime; the v0.1 borrow checker does NOT detect cycles, so a user-created cycle leaks both nodes. Documented in docs/internal/implementation/IMP-maybe.md; intentional v0.1 behavior, NOT a bug. Borrow-checker cycle-detection is v0.2+ work. The leak is documented in fixture `m5_cycle_leak.ynz`.
 
 ### Performance
 
@@ -959,15 +959,15 @@ The codegen contract:
 - **Map iteration overhead = one pointer per entry for insertion-order tracking** — documented in the runtime, asserted by allocation-tracking test.
 - **Drop emission for `array<T>`** — IR-snapshot confirms per-element drop loop followed by `ynz_free`. valgrind clean on map+array-heavy fixtures.
 
-**Auto-promotion analysis** (mandatory per `.claude/rules/auto-promotion.md`):
+**Auto-promotion analysis** (mandatory per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)):
 
-- **`array<T>` → `fixed<T>` promotion** (canonical example from `design/collections.md`):
+- **`array<T>` → `fixed<T>` promotion** (canonical example from [`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md)):
   - **Codegen auto-promotion**: M5 P4a emits the `fixed<T, N>` codegen for proven-never-grown bindings. Always-on. Tested in `m5_auto_promotion.ynz`.
-  - **Muted IDE hint**: NOT in M5 — IDE surfaces land in v0.2 LSP per `design/ide-hints.md`. M5 produces the data (PromotionReport salsa query); LSP wraps it later.
-  - **Tier 3 lint suggestion (`prefer-fixed-when-immutable`)**: NOT in M5 — lint tier lands in v0.4 per `design/linting.md`. M5 records what the lint would have said in a side-table for v0.4 to pick up.
-  - Why split: per `.claude/rules/auto-promotion.md` "Two Surfaces for the Same Decision" — codegen surface is unblocked now; the teaching surfaces wait for their infrastructure. This is NOT a duct-tape deferral; it's the documented split per `inference.md`.
+  - **Muted IDE hint**: NOT in M5 — IDE surfaces land in v0.2 LSP per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md). M5 produces the data (PromotionReport salsa query); LSP wraps it later.
+  - **Tier 3 lint suggestion (`prefer-fixed-when-immutable`)**: NOT in M5 — lint tier lands in v0.4 per [`docs/internal/implementation/IMP-linting.md`](../../../../docs/internal/implementation/IMP-linting.md). M5 records what the lint would have said in a side-table for v0.4 to pick up.
+  - Why split: per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md) "Two Surfaces for the Same Decision" — codegen surface is unblocked now; the teaching surfaces wait for their infrastructure. This is NOT a duct-tape deferral; it's the documented split per `inference.md`.
 - **`let` → `const` promotion**: NOT in M5 (carried by v0.4 lint and the M4 P4 `readonly`-from-const-binding codegen which already ships).
-- **Sort stability auto-pick by element type**: NOT in M5 — `.sort()` ships in M5 with a stable-only implementation; the type-based auto-pick (`design/collections.md` Sort section) is deferred until the stability is observable enough to care.
+- **Sort stability auto-pick by element type**: NOT in M5 — `.sort()` ships in M5 with a stable-only implementation; the type-based auto-pick ([`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md) Sort section) is deferred until the stability is observable enough to care.
 - **Map literal pre-size at compile time**: M5 P3c records the entry count; M5 P4b emits Swiss Tables with `ceil(count / load_factor)` initial buckets. Codegen auto-promotion only (no source-level form). IR-snapshot confirms.
 - **Field auto-reorder for shape layout**: ALREADY shipped in M4 P4. M5 carries forward unchanged.
 - **No new auto-promotion candidates introduced by M5's other features** (`maybe<T>` lowering choices, generic instantiation dedup, monomorphization). Each was evaluated; none has a stricter-form-the-compiler-could-have-picked the user could express differently.
@@ -989,7 +989,7 @@ M5 adds approximately 35-40 new diagnostic classes. Each invariant below is test
 - **Generic-call-vs-comparison parse error is teaching** — `foo<x>(y)` where x isn't a type produces a three-part error explaining the ambiguity and suggesting both forms.
 - **Generic-type-nesting-depth-exceeded error suggests breaking the cycle with `maybe<T>` or `array<T>`** — pathological input produces a teaching error pointing at the cyclic shape declaration.
 - **For-loop-over-shape error points to M7** — `for (x in player)` where player is a shape produces "Iteration over user-defined types arrives in M7 with the `Iterable<T>` protocol. For now, you can iterate built-in `array<T>`, `fixed<T>`, and `map<K, V>`."
-- **IDE muted-hint surfaces (auto-promotion, hash tier, generic instantiation)** — M5 does NOT ship; v0.2 LSP does (per `design/ide-hints.md`). Cross-reference recorded.
+- **IDE muted-hint surfaces (auto-promotion, hash tier, generic instantiation)** — M5 does NOT ship; v0.2 LSP does (per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md)). Cross-reference recorded.
 
 ### Runtime Dependencies
 
@@ -1033,7 +1033,7 @@ For each M5 runtime dependency above, the `--kernel` mode (v0.3+) behavior is lo
 ### Demo & Error Gallery
 
 - **`examples/pirates-roster/entrypoint.ynz` MUST be extended in P5** to demonstrate every M5 feature in context. Each feature should appear in a small but realistic snippet (not `print(identity(5))` alone — show a generic function used in actual computation; show a map carrying real data; show a for-loop doing real work).
-- **`examples/primantis-orders/m5_errors.ynz` MUST be created in P5** with intentional triggers for every M5 compile-error class. Each trigger has a `// WHY:` comment naming the diagnostic class. One file produces ALL the M5 diagnostics in a single compile (per `design/compiler-errors.md` 50-error cap, well within bound).
+- **`examples/primantis-orders/m5_errors.ynz` MUST be created in P5** with intentional triggers for every M5 compile-error class. Each trigger has a `// WHY:` comment naming the diagnostic class. One file produces ALL the M5 diagnostics in a single compile (per [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) 50-error cap, well within bound).
 - **Both files get insta stdout/stderr snapshots** committed to the repo. Updating these snapshots requires a `// test-ratchet: <reason>` marker.
 - **Patrick must read and sign off on both files before P5 merges** — this is the hands-on UX validation that automated tests can't replace.
 
@@ -1083,7 +1083,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 - **M7 catch-up cross-reference** (plan-reviewer Round 2 concern #3): when M7 is planned, its plan file MUST explicitly reference this milestone's REPLACE-AT M7 sites in its scope section — six sites total (three in typeck + three in codegen for the array/fixed/map for-loop special-cases) PLUS the M3 `range()` special-case PLUS the `MapEntry<K,V>` synthesis revisit. M7 unifies all of them under `Iterable<T>` in one PR. Without this cross-reference, the markers rot and become silent technical debt. Recorded as a pre-condition for M7 plan acceptance.
 - **xxhash3 fast opt-in for `map<K, V>`**: surface syntax deliberately deferred. Picks up when a real workload demands it. Recorded.
 - **Identity-hash for `map<int, V>`**: same as above. Recorded.
-- **Sort element-type auto-pick**: M5 ships stable-only `.sort()`; the type-based auto-pick (per `design/collections.md` Sort section) waits until a real perf-sensitive workload demands it. Recorded.
+- **Sort element-type auto-pick**: M5 ships stable-only `.sort()`; the type-based auto-pick (per [`docs/internal/implementation/IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md) Sort section) waits until a real perf-sensitive workload demands it. Recorded.
 - **`.update({...})` on maps with object-literal**: M5 ships a partial form (or defers entirely if the design is fragile). If deferred, recorded here.
 - **Plug-in allocator API for `--kernel` mode for `array<T>` and `map<K, V>`**: v0.3+ per `design/future/no-runtime-mode.md`. M5's `ynz_alloc`/`ynz_free` + `ynz_map_*` are libc-wrappers; v0.3 swaps in the plug-in surface. Recorded.
 

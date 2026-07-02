@@ -24,12 +24,12 @@ legacy:
     - crates/ynz-driver/tests/fixtures/**
     - examples/pirates-roster/entrypoint.ynz
     - examples/primantis-orders/m6_errors.ynz
-    - design/options.md
-    - design/unions.md
-    - design/narrowing.md
-    - spec/options.md
-    - spec/unions.md
-    - spec/maybe.md
+    - docs/internal/implementation/IMP-options.md
+    - docs/internal/implementation/IMP-unions.md
+    - docs/internal/implementation/IMP-narrowing.md
+    - docs/reference/REF-options.md
+    - docs/reference/REF-unions.md
+    - docs/reference/REF-maybe.md
     - .claude/state.md
     - .claude/todos.md
     - .claude/plans/active/v0-1-compiler.md
@@ -51,15 +51,15 @@ Status: approved 2026-05-18 (r2 after plan-reviewer round 1 PASS)
 
 **Why now.** M5 just shipped (`tag v0.1.0-m5`, 574 tests). The remaining v0.1 surface is options/unions/narrowing (M6), strings/errors/iterables (M7), and modules/polish (M8). M6 is the structural prerequisite for M7's `errors` keyword (which is a flow-sensitive narrowing analysis on a union with a designated "error" arm) and unblocks every stdlib module that needs `options` for configuration types or unions for variant returns.
 
-**Background.** M3 reserved the `is Type =>` and `variant =>` multi-case arm forms with stand-in `String` payloads and a parser-level deferral diagnostic pointing to M6 (`MatchPatternKind::IsType(String)`, `MatchPatternKind::Variant(String)`). M5 shipped the narrow positive/negative/AND form of `.exists()` narrowing for `maybe<T>` but explicitly left early-return narrowing and `||` propagation to M6 (per `design/maybe.md` flow-sensitive rules table). M2 reserved fallible numeric conversions to land "when `maybe<T>` exists, which is M5+M6 work" (per the M2 catch-up list).
+**Background.** M3 reserved the `is Type =>` and `variant =>` multi-case arm forms with stand-in `String` payloads and a parser-level deferral diagnostic pointing to M6 (`MatchPatternKind::IsType(String)`, `MatchPatternKind::Variant(String)`). M5 shipped the narrow positive/negative/AND form of `.exists()` narrowing for `maybe<T>` but explicitly left early-return narrowing and `||` propagation to M6 (per [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) flow-sensitive rules table). M2 reserved fallible numeric conversions to land "when `maybe<T>` exists, which is M5+M6 work" (per the M2 catch-up list).
 
 **Constraints.**
 - Compiler implementation language: Rust stable.
 - LLVM 18 via inkwell; no changes to runtime ABI of M5-shipped types.
-- Diagnostics follow WHAT/WHAT-INSTEAD/WHY per `design/compiler-errors.md`.
+- Diagnostics follow WHAT/WHAT-INSTEAD/WHY per [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md).
 - Internal Rust AST naming stays `MatchPattern` / `MatchPatternKind` / `MatchArm` (Patrick: "if it is internal it is fine as long as it's consistent"). The TWO existing stub variants get widened in place: `IsType(String) → Is(TypePath)` and `Variant(String) → OptionName(String)`. No surrounding rename.
 - All new user-facing diagnostics audited against `crates/ynz-diagnostics/src/banned_jargon.rs`.
-- Union LLVM layout follows a mechanical decision table (mirrors `design/maybe.md`).
+- Union LLVM layout follows a mechanical decision table (mirrors [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md)).
 
 **Success criteria for M6:**
 - `examples/pirates-roster/entrypoint.ynz` extended with an M6 section showing: an `options` declaration + value use; a union type + `is` narrowing in a multi-case `if`; an options multi-case; fallible conversion (`"42".toInt()` → handled `maybe int`); early-return narrowing on `.exists()`. The whole file still runs end-to-end.
@@ -67,7 +67,7 @@ Status: approved 2026-05-18 (r2 after plan-reviewer round 1 PASS)
 - `m3_is_type_deferral.ynz` updated: deferral diagnostic gone; the fixture is now a runnable union example with stdout snapshot.
 - `m2_*_parse_deferred.ynz` fixtures updated: deferral diagnostic gone; runnable `.toInt()` example with stdout snapshot.
 - All M5 tests still green (574+ from M5 baseline, plus M6 additions).
-- `Cargo.toml` bumped to `0.1.0-m6` and `v0.1.0-m6` tag created at end of M6.
+- [`Cargo.toml`](../../../../Cargo.toml) bumped to `0.1.0-m6` and `v0.1.0-m6` tag created at end of M6.
 
 ---
 
@@ -79,7 +79,7 @@ Status: approved 2026-05-18 (r2 after plan-reviewer round 1 PASS)
 > `options Status { ... }` declarations, union types `A | B`, `if (x is Type)` pattern narrowing as a flow-sensitive analysis. (`maybe<T>` moved to M5 — see master plan note above.) Early-return narrowing for `.value` on `maybe<T>` (deferred from M5) lands here too.
 > Depends on: M5
 
-**M5's explicit deferral to M6** (from `design/maybe.md:87`):
+**M5's explicit deferral to M6** (from `docs/internal/implementation/IMP-maybe.md:87`):
 
 > `if (m.exists()) { return ... } m.value` | NO — early-return narrowing is M6 | Teaching error points to M6.
 
@@ -108,17 +108,17 @@ Variant(String),
 
 **Existing token set**: 57 tokens shipped through M4, plus M5's additions. M6 adds 2 new tokens (`Options`, `Is`). The `|` is already lexed; union-type usage is a parser-context distinction.
 
-**Vocabulary rule audit** (from `.claude/rules/vocabulary.md`): user-facing diagnostics use "options" / "variant" / "union" / "narrows to / narrowed". Banned in error text: `enum`, `match`, `switch`, `tag`, `discriminant`, `tagged union`. Internal AST naming exempt.
+**Vocabulary rule audit** (from [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md)): user-facing diagnostics use "options" / "variant" / "union" / "narrows to / narrowed". Banned in error text: `enum`, `match`, `switch`, `tag`, `discriminant`, `tagged union`. Internal AST naming exempt.
 
-**Auto-promotion analysis** (per `.claude/rules/auto-promotion.md`, mandatory):
+**Auto-promotion analysis** (per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md), mandatory):
 
-1. **Union layout — pointer-niche vs tagged struct**: YES, auto-promote. Compiler picks per concrete variant set: if all variants are heap-allocated shapes (no value-type variants, no `none` variant in the form `T | none` which is just `maybe<T>`), use pointer-niche on the data slot (mirrors `design/maybe.md` rule for heap shapes). Otherwise tagged struct `{ i8 tag, [maxSize x i8] payload }`. **Codegen surface only in M6** (no user-typeable opt-in — layout is non-observable, like SSO threshold). No muted hint, no Tier 3 lint. Documented in `design/unions.md` as the locked decision table.
+1. **Union layout — pointer-niche vs tagged struct**: YES, auto-promote. Compiler picks per concrete variant set: if all variants are heap-allocated shapes (no value-type variants, no `none` variant in the form `T | none` which is just `maybe<T>`), use pointer-niche on the data slot (mirrors [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) rule for heap shapes). Otherwise tagged struct `{ i8 tag, [maxSize x i8] payload }`. **Codegen surface only in M6** (no user-typeable opt-in — layout is non-observable, like SSO threshold). No muted hint, no Tier 3 lint. Documented in [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md) as the locked decision table.
 2. **Options as i8 tag**: trivial — every options type ≤256 variants gets `i8`. No auto-promotion opportunity beyond the obvious. >256 variants → typeck compile error suggesting "split into multiple options or model as int"; >256 is almost certainly a code smell.
 3. **`is`-narrowing on union with single concrete type**: if a `maybe<Shape>` is narrowed by `if (m.exists()) { ... }` and `Shape` is a concrete (non-union) type, no codegen difference vs the M5 `.value` path. No auto-promotion opportunity.
-4. **Exhaustive multi-case → jump table**: per `design/control-flow.md:68`, the compiler already lowers multi-case `if` over `int` to LLVM `switch`. M6 extends this for: options (tag is i8, switch is dense — natural jump table); unions (tag is i8, payload-extract per arm). No auto-promotion to flag — the optimal codegen IS the only codegen.
+4. **Exhaustive multi-case → jump table**: per `docs/internal/implementation/IMP-control-flow.md:68`, the compiler already lowers multi-case `if` over `int` to LLVM `switch`. M6 extends this for: options (tag is i8, switch is dense — natural jump table); unions (tag is i8, payload-extract per arm). No auto-promotion to flag — the optimal codegen IS the only codegen.
 5. **Narrowing reach**: positive `is`, negative `is`, early-return narrowing, `&&` propagation, `||` partial-propagation, reassignment-invalidation. These are correctness, not auto-promotion. The teaching surface is the diagnostic when narrowing fails: every failure points to the specific rule that wasn't met. No lint needed in M6.
 
-**Override-direction analysis for union layout**: no user-typeable override syntax. Pointer-niche vs tagged struct is implementation-detail; users see only `A | B | C`. Adding `dense<A | B>` / `tagged<A | B>` opt-in surface would be duct tape. Deliberate no-override, documented in `design/unions.md`.
+**Override-direction analysis for union layout**: no user-typeable override syntax. Pointer-niche vs tagged struct is implementation-detail; users see only `A | B | C`. Adding `dense<A | B>` / `tagged<A | B>` opt-in surface would be duct tape. Deliberate no-override, documented in [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md).
 
 ---
 
@@ -127,19 +127,19 @@ Variant(String),
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | `|` operator overload (bitwise-OR vs union-type) creates parser ambiguity | Medium | Wrong AST for user code; subtle bug class | Parser context: `|` is union-type ONLY in Type position (after `=` in `shape Name = ...` and in type annotations). In expression position, `|` stays bitwise-OR. Adversarial fixture: `let x: int = a | b` (bitwise) vs `shape S = A | B` (union) vs `function f(x: A | B) -> int { return x as_int }` (param-type union). |
-| Narrowing flag carries across `||` incorrectly when only ONE branch proves the condition | High | `.value` allowed where it could be `none` → runtime crash | Locked semantics table in `design/narrowing.md`: `||` propagates the flag ONLY when BOTH operands prove the same narrowing (rare in practice). Adversarial fixture asserts `(m.exists() || other)` does NOT narrow `m`; only `(m.exists() && other)` does. |
+| Narrowing flag carries across `||` incorrectly when only ONE branch proves the condition | High | `.value` allowed where it could be `none` → runtime crash | Locked semantics table in [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md): `||` propagates the flag ONLY when BOTH operands prove the same narrowing (rare in practice). Adversarial fixture asserts `(m.exists() || other)` does NOT narrow `m`; only `(m.exists() && other)` does. |
 | Early-return narrowing miscomputes the "rest of the block" scope | High | False positive (rejects valid code) OR false negative (allows `none` access) | Implementation walks the AST AFTER the early-return statement within the SAME scope; narrowing flag invalidated by ANY reassignment, function call that takes `lend self`, or scope exit. Fixtures cover: simple early-return, nested-if early-return, loop with early-return, return-from-multi-case-arm. |
-| Exhaustiveness check on union with `extends` chain (e.g., `Admin extends User` in `Admin \| User`) misclassifies | Medium | Wrong "case not handled" or wrong "unreachable arm" diagnostic | Per `spec/unions.md:39-55`: in unions, `is` is exact-type match (no subtype). Exhaustiveness checks each declared variant by name (not by subtype). Fixture: `shape AnyUser = Admin \| Guest \| User` with all three `is` arms is exhaustive; missing one is an error; `Admin extends User` does NOT make `is User` cover `Admin`. |
+| Exhaustiveness check on union with `extends` chain (e.g., `Admin extends User` in `Admin \| User`) misclassifies | Medium | Wrong "case not handled" or wrong "unreachable arm" diagnostic | Per `docs/reference/REF-unions.md:39-55`: in unions, `is` is exact-type match (no subtype). Exhaustiveness checks each declared variant by name (not by subtype). Fixture: `shape AnyUser = Admin \| Guest \| User` with all three `is` arms is exhaustive; missing one is an error; `Admin extends User` does NOT make `is User` cover `Admin`. |
 | `OptionName(String)` AST variant resolved against wrong options type when scrutinee type is union of two options types | Low | Confused diagnostic; wrong arm picked | Typeck rule: `OptionName` arms allowed ONLY when scrutinee is a single options type. If scrutinee is `OptionsA \| OptionsB`, user must use the fully-qualified `OptionsA.foo =>` form (an `Is` arm with the variant path), OR refactor to two nested multi-cases. Diagnostic explains both paths. |
 | Shorthand options resolution (`desc` → `SortOrder.desc`) collides when two visible options types both define `desc` | Medium | "Ambiguous" diagnostic better than wrong silent pick | Typeck rejects with three-part error citing both candidate types and requiring qualification. Fixture: declare two options types with the same variant name in scope; assert the diagnostic. |
 | Tagged-struct payload alignment wrong on heterogeneous variants | High | UB, crashes on certain variant sequences | Layout rule: payload size = max(sizeof variant) rounded up to alignof(largest variant). Alignment = max(alignof variant). LLVM struct emitted with explicit padding. IR-snapshot test for `Circle \| Triangle` where `Triangle { base: number, height: number }` is larger and 16-byte aligned. |
 | Pointer-niche layout broken when one variant could legitimately be a null pointer (e.g., `Shape \| none` where Shape is a heap shape) | High | "None" interpreted as a valid Shape pointer → segfault | The pointer-niche encoding for unions is ONLY used when no variant is `none` itself; `T \| none` is exactly `maybe<T>` (already handled by M5's lowering table). Compiler refuses to apply niche when any variant is `none`. Snapshot test asserts. |
 | M5's `m5_maybe.ynz` test using `.value` inside positive `if (m.exists())` blocks regresses when early-return narrowing lands | Medium | Existing fixtures fail | Run full test suite after each P3/P4 phase; M5 fixtures must stay green; new fixtures added for the additional narrowing forms M6 enables. |
-| Fallible `.toInt()` semantics on float/number out-of-range, NaN, or fractional input | High | Silent-wrong-output: codegen using `fptosi.sat` returns `some(i64::MAX)` for `1e30` (spec: `none`) and `some(0)` for NaN (spec: `none`) | LOCKED RULE (P0 doc — `design/numeric-types.md` extension): `(float).toInt() -> maybe<int>` returns `none` for NaN, ±Inf, or magnitude > `i64::MAX` as a real; otherwise returns the truncated-toward-zero integer. `(number).toInt() -> maybe<int>` same rule against decimal128 → i64. `.toInt()` does NOT truncate the fractional part silently on string input but DOES on float/number input (spec asymmetry, lock with rationale: float/number values are already-numeric so truncation is intuitive; string `"42.5".toInt()` is a parse failure because the user wrote a non-integer literal — see string row below). MANDATORY codegen sequence (P4 must emit verbatim, asserted via IR snapshot): (1) `is_nan = fcmp uno x, x` → if true, return `{has_value: 0}`; (2) compare `x` to `i64::MAX_AS_F64` (= 9.223372036854776e18) and `i64::MIN_AS_F64` (= -9.223372036854776e18) → if out of range, return `{has_value: 0}`; (3) `result = fptosi x to i64` (RAW, NOT `fptosi.sat`, because we already proved in-range); (4) return `{has_value: 1, value: result}`. Test vectors: `(2.5).toInt() == some(2)`, `(-2.5).toInt() == some(-2)`, `(0.5).toInt() == some(0)`, `(-0.5).toInt() == some(0)`, `(1e30).toInt() == none`, `(-1e30).toInt() == none`, `(NaN).toInt() == none`, `(+Inf).toInt() == none`, `(-Inf).toInt() == none`. |
-| String → numeric conversion semantics under-specified and contradicting Rust's `str::parse` | High | `"  +42  ".toInt()` rejected by `str::parse::<i64>` but spec wants `some(42)` → silent disagreement between two parts of the plan | LOCKED RULE (P0 doc — `design/numeric-types.md` extension, "String-to-numeric parsing"): runtime functions explicitly implement the steps (NOT `str::parse` blindly): (a) strip ONLY ASCII whitespace characters [0x20 space, 0x09 tab, 0x0A LF, 0x0D CR] from both ends of the byte slice (NOT Unicode whitespace — keeps behavior platform-independent and predictable); (b) accept optional leading `+` or `-` (single character, no other prefix); (c) reject empty string after whitespace strip; reject lone sign with no digits; (d) `.toInt()` requires the remainder be `[0-9]+` ONLY — no `0x`, `0o`, `0b` prefix; no decimal point; no scientific notation; out-of-range → `none`; (e) `.toFloat()` and `.toNumber()` additionally accept `[+-]?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?` — decimal point + scientific notation OK; `0x`/`0o`/`0b` still rejected; (f) any input failing the above → `none`. Implementation in `ynz-runtime` does this step-by-step (not via `str::parse`), and tests assert against a fixed test-vector table. Test vectors: `"42".toInt() == some(42)`, `"  +42  ".toInt() == some(42)`, `"-42".toInt() == some(-42)`, `"".toInt() == none`, `"  ".toInt() == none`, `"+".toInt() == none`, `"-".toInt() == none`, `"0x1A".toInt() == none`, `"42 hello".toInt() == none`, `"42.5".toInt() == none`, `"1e3".toInt() == none`, `"99999999999999999999".toInt() == none` (out-of-range), `"\u{00A0}42".toInt() == none` (non-breaking space is multi-byte UTF-8; NOT in the ASCII-whitespace strip set; correctly rejected), `"\t42\n".toInt() == some(42)` (tab + LF ARE in the ASCII-whitespace strip set). For `.toFloat()`: `"1.5e2".toFloat() == some(150.0)`, `"  -1.5  ".toFloat() == some(-1.5)`, `"abc".toFloat() == none`, `"1.5.5".toFloat() == none`. |
+| Fallible `.toInt()` semantics on float/number out-of-range, NaN, or fractional input | High | Silent-wrong-output: codegen using `fptosi.sat` returns `some(i64::MAX)` for `1e30` (spec: `none`) and `some(0)` for NaN (spec: `none`) | LOCKED RULE (P0 doc — [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md) extension): `(float).toInt() -> maybe<int>` returns `none` for NaN, ±Inf, or magnitude > `i64::MAX` as a real; otherwise returns the truncated-toward-zero integer. `(number).toInt() -> maybe<int>` same rule against decimal128 → i64. `.toInt()` does NOT truncate the fractional part silently on string input but DOES on float/number input (spec asymmetry, lock with rationale: float/number values are already-numeric so truncation is intuitive; string `"42.5".toInt()` is a parse failure because the user wrote a non-integer literal — see string row below). MANDATORY codegen sequence (P4 must emit verbatim, asserted via IR snapshot): (1) `is_nan = fcmp uno x, x` → if true, return `{has_value: 0}`; (2) compare `x` to `i64::MAX_AS_F64` (= 9.223372036854776e18) and `i64::MIN_AS_F64` (= -9.223372036854776e18) → if out of range, return `{has_value: 0}`; (3) `result = fptosi x to i64` (RAW, NOT `fptosi.sat`, because we already proved in-range); (4) return `{has_value: 1, value: result}`. Test vectors: `(2.5).toInt() == some(2)`, `(-2.5).toInt() == some(-2)`, `(0.5).toInt() == some(0)`, `(-0.5).toInt() == some(0)`, `(1e30).toInt() == none`, `(-1e30).toInt() == none`, `(NaN).toInt() == none`, `(+Inf).toInt() == none`, `(-Inf).toInt() == none`. |
+| String → numeric conversion semantics under-specified and contradicting Rust's `str::parse` | High | `"  +42  ".toInt()` rejected by `str::parse::<i64>` but spec wants `some(42)` → silent disagreement between two parts of the plan | LOCKED RULE (P0 doc — [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md) extension, "String-to-numeric parsing"): runtime functions explicitly implement the steps (NOT `str::parse` blindly): (a) strip ONLY ASCII whitespace characters [0x20 space, 0x09 tab, 0x0A LF, 0x0D CR] from both ends of the byte slice (NOT Unicode whitespace — keeps behavior platform-independent and predictable); (b) accept optional leading `+` or `-` (single character, no other prefix); (c) reject empty string after whitespace strip; reject lone sign with no digits; (d) `.toInt()` requires the remainder be `[0-9]+` ONLY — no `0x`, `0o`, `0b` prefix; no decimal point; no scientific notation; out-of-range → `none`; (e) `.toFloat()` and `.toNumber()` additionally accept `[+-]?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?` — decimal point + scientific notation OK; `0x`/`0o`/`0b` still rejected; (f) any input failing the above → `none`. Implementation in `ynz-runtime` does this step-by-step (not via `str::parse`), and tests assert against a fixed test-vector table. Test vectors: `"42".toInt() == some(42)`, `"  +42  ".toInt() == some(42)`, `"-42".toInt() == some(-42)`, `"".toInt() == none`, `"  ".toInt() == none`, `"+".toInt() == none`, `"-".toInt() == none`, `"0x1A".toInt() == none`, `"42 hello".toInt() == none`, `"42.5".toInt() == none`, `"1e3".toInt() == none`, `"99999999999999999999".toInt() == none` (out-of-range), `"\u{00A0}42".toInt() == none` (non-breaking space is multi-byte UTF-8; NOT in the ASCII-whitespace strip set; correctly rejected), `"\t42\n".toInt() == some(42)` (tab + LF ARE in the ASCII-whitespace strip set). For `.toFloat()`: `"1.5e2".toFloat() == some(150.0)`, `"  -1.5  ".toFloat() == some(-1.5)`, `"abc".toFloat() == none`, `"1.5.5".toFloat() == none`. |
 | Adding two new tokens (`Options`, `Is`) breaks user identifiers `options` / `is` if they appeared in any test fixture or example | Low | Compile error in unrelated test | Pre-check: grep all `.ynz` files for identifiers named `options` or `is`; rename if found before P1 lands. |
 | `Token::Is` collides with the `In` keyword in lexer-time longest-match (both 2-char) | Low | Lexer ambiguity | Both are exact-match keywords keyed on the full identifier string; no longest-match conflict (`is` and `in` differ at position 1). No mitigation needed. |
-| Designing `design/options.md`, `design/unions.md`, `design/narrowing.md` opens debates that drag P0 longer than the codegen work | Medium | Schedule risk; design churn during implementation | P0 ships ONLY the locked decisions from this plan (LLVM layouts, narrowing rules table, exhaustiveness rules, fallible-conversion semantics). Anything that needs new debate is a future-doc TODO, not a P0 blocker. |
+| Designing [`docs/internal/implementation/IMP-options.md`](../../../../docs/internal/implementation/IMP-options.md), [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md), [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) opens debates that drag P0 longer than the codegen work | Medium | Schedule risk; design churn during implementation | P0 ships ONLY the locked decisions from this plan (LLVM layouts, narrowing rules table, exhaustiveness rules, fallible-conversion semantics). Anything that needs new debate is a future-doc TODO, not a P0 blocker. |
 
 ---
 
@@ -165,7 +165,7 @@ Variant(String),
 **Mitigations applied:**
 - Comprehensive fixture coverage (positive + negative + adversarial) for each new feature; adversarial set explicitly enumerated in `### Adversarial Test Cases` below.
 - IR-snapshot tests for union layout (tagged-struct + pointer-niche cases), exhaustiveness lowering, AND the exact codegen sequence for `.toInt()` (range-check + NaN-check + `fptosi` raw — see P4 step 9).
-- Test vectors for numeric/string conversion locked in `design/numeric-types.md` extension at P0 and tested both via `cargo test` (Rust-level) and via runnable fixtures (end-to-end).
+- Test vectors for numeric/string conversion locked in [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md) extension at P0 and tested both via `cargo test` (Rust-level) and via runnable fixtures (end-to-end).
 - Existing M1–M5 test suites stay green throughout (run full suite after each phase).
 - Three-part teaching diagnostics for every new compile-error class; exact diagnostic text for the most counter-intuitive rules (`||` non-propagation, ambiguous-shorthand) locked in P0.
 
@@ -217,15 +217,15 @@ Fixtures must cover each — P3 + P4 own these per the per-phase Demo & Error Ga
 | `string.toInt()` / `.toNumber()` / `.toFloat()` → `maybe<T>` | M2 plan §62 | P3 adds to intrinsics; P4 implements `ynz_string_to_int/number/float` in `ynz-runtime` per the locked parsing rule; P5 ships fixtures with the locked test-vector table |
 | `is Type =>` in multi-case `if` (close M3 deferral fixture) | M3 plan §523, REPLACE-AT M6 marker | P2 widens AST; P3b implements typeck; P5 refreshes `m3_is_type_deferral.ynz` to a runnable fixture |
 | Options-variant form (`active =>`) in multi-case `if` | M3 plan §523, REPLACE-AT M6 marker | P2 widens AST; P3a implements typeck for options-arm form |
-| Exhaustiveness for options/unions in multi-case | M3 plan §38, design/control-flow.md§58 | P3a (options) + P3b (unions) |
-| Early-return narrowing for `.value` on `maybe<T>` | M5 design/maybe.md§87 | P3b implements analysis; P5 ships fixture |
+| Exhaustiveness for options/unions in multi-case | M3 plan §38, docs/internal/implementation/IMP-control-flow.md§58 | P3a (options) + P3b (unions) |
+| Early-return narrowing for `.value` on `maybe<T>` | M5 docs/internal/implementation/IMP-maybe.md§87 | P3b implements analysis; P5 ships fixture |
 | `\|\|` propagation rule for narrowing (M5 deferred for being M6 work) | M5 plan §1051 | P3b implements; P5 ships negative fixture |
 
 ---
 
 ## Invariants This Milestone Must Preserve
 
-Per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertions.
+Per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md). Each subsection lists testable assertions.
 
 ### Safety
 
@@ -233,12 +233,12 @@ Per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertion
 - A union value cannot be accessed as a specific variant without flow-sensitive proof from `is`. The compiler rejects `(x: A | B).foo` outside an `if (x is A)` block.
 - Exhaustiveness on options/unions in multi-case `if` is required: missing a variant is a compile error citing the missing variant by name AND offering to add the `else =>` catch-all.
 - Narrowing flag invalidated by: reassignment to the binding, scope exit (then-block end), function call that takes `lend self` on the binding, or any path that mutates a field of the binding.
-- **Recognized-exit set for early-return narrowing** (LOCKED in `design/narrowing.md`): only `return <expr>`, `return` (in `nothing`-returning function), `panic(msg)`, and `loop { /* no break */ }` (infinite loop — purely forward-defensive; loops are M3-shipped but `break`/`continue` are deferred per M3 plan §117). Any other statement (including `print()`, `someFn()` returning `nothing`, or a call to a `nothing`-returning user function) does NOT count as a recognized exit even if the user "knows" the function diverges — the typeck can't prove it. Diagnostic when user expects narrowing from a non-exit: WHAT/WHAT-INSTEAD/WHY pointing to the recognized-exit list and suggesting the workaround (`if (m.exists()) { use(m.value) } else { /* recognized exit */ }`).
+- **Recognized-exit set for early-return narrowing** (LOCKED in [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md)): only `return <expr>`, `return` (in `nothing`-returning function), `panic(msg)`, and `loop { /* no break */ }` (infinite loop — purely forward-defensive; loops are M3-shipped but `break`/`continue` are deferred per M3 plan §117). Any other statement (including `print()`, `someFn()` returning `nothing`, or a call to a `nothing`-returning user function) does NOT count as a recognized exit even if the user "knows" the function diverges — the typeck can't prove it. Diagnostic when user expects narrowing from a non-exit: WHAT/WHAT-INSTEAD/WHY pointing to the recognized-exit list and suggesting the workaround (`if (m.exists()) { use(m.value) } else { /* recognized exit */ }`).
 - `.value` on a `maybe<T>` still rejects when narrowing not proven — M5's compile-error rule survives untouched; M6 only ADDs proven paths.
 - `OptionName` arm names resolve only against the scrutinee's declared options type; ambiguous shorthand (two visible options types defining the same variant name) is a compile error.
-- **Single-variant options is REJECTED** (parallel to single-variant union rejection): `options Foo { only_one }` produces a compile error suggesting either adding a second variant OR using a `const FOO: int = 0` if the user genuinely wants a single named constant. Symmetry with `shape S = A` (single-variant union also rejected) is the rationale — both forms are degenerate and almost always indicate the wrong tool. Locked in `design/options.md`.
+- **Single-variant options is REJECTED** (parallel to single-variant union rejection): `options Foo { only_one }` produces a compile error suggesting either adding a second variant OR using a `const FOO: int = 0` if the user genuinely wants a single named constant. Symmetry with `shape S = A` (single-variant union also rejected) is the rationale — both forms are degenerate and almost always indicate the wrong tool. Locked in [`docs/internal/implementation/IMP-options.md`](../../../../docs/internal/implementation/IMP-options.md).
 - **`is X` namespace resolution**: `is X` looks up `X` in the types-only namespace. A same-name binding in the values namespace (e.g., `let Circle = 5`) does NOT shadow the type lookup. The same-name binding remains usable in expression position; the `is` arm sees only the type.
-- **Function vs options-shorthand priority**: when a bare identifier could resolve to either an in-scope function OR an options variant via context-driven shorthand, the function wins. Locked in `design/options.md`.
+- **Function vs options-shorthand priority**: when a bare identifier could resolve to either an in-scope function OR an options variant via context-driven shorthand, the function wins. Locked in [`docs/internal/implementation/IMP-options.md`](../../../../docs/internal/implementation/IMP-options.md).
 
 ### Performance
 
@@ -260,14 +260,14 @@ Per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertion
 - `is Type` check on a union lowers to: load tag byte → compare to expected tag constant. ~2 instructions. No method dispatch.
 - Narrowed `.foo` access on a union variant inside a proven `is` block lowers to: extract payload at known offset, cast to variant type, field-access. Inline-able; LLVM will fold consecutive narrowed accesses.
 
-#### Auto-Promotion Analysis (mandatory subsection per `.claude/rules/auto-promotion.md`)
+#### Auto-Promotion Analysis (mandatory subsection per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md))
 
 1. **Union layout — pointer-niche vs tagged struct**
    - Stricter form fits when: all variants are heap shapes AND no `none` variant.
    - Codegen-promote? YES — when proven, use pointer-niche (1 byte tag + 1 pointer = 16 bytes on 64-bit, vs N-byte tagged struct).
    - Muted hint? NO — layout is implementation-detail (no user-typeable opt-in; same precedent as SSO threshold, auto-SoA).
    - Tier 3 lint? NO — same rationale.
-   - Documented in `design/unions.md` as deliberate no-user-override.
+   - Documented in [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md) as deliberate no-user-override.
 
 2. **Options tag size — `i8` vs `i16`**
    - Stricter form: `i8` when variants ≤ 256.
@@ -283,7 +283,7 @@ Per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertion
 4. **Narrowing reach (`is`, early-return, `&&`, `||`)**
    - Not an auto-promotion; it's correctness analysis. Teaching diagnostic on failure (already part of the compiler-is-teacher mission).
 
-5. **Override-direction analysis (per `.claude/rules/auto-promotion.md` "Override Patterns — Consider Both Directions")**
+5. **Override-direction analysis (per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md) "Override Patterns — Consider Both Directions")**
    - Force pointer-niche when not provable: NO — would unsafely reinterpret payload. Deliberate omission.
    - Force tagged-struct when niche would work: NO — would waste memory for no benefit. Deliberate omission.
    - Force smaller/larger options tag: NO — no use case; ABI-stable but not user-observable.
@@ -305,7 +305,7 @@ Per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertion
   - Early-return narrowing where the "return" is not in the recognized-exit set: explains which constructs ARE recognized (`return`, `panic`, infinite `loop`) and which the user's code uses instead.
   - `.toInt()` / `.toNumber()` / `.toFloat()` runtime parse-failure cases (empty string, out-of-range, non-numeric): all return `none` at runtime, not a compile error; the compile error is using `.value` on the result without checking.
   - `.toInt()` on `bool`: compile error (no fallible conversion from bool); suggests `if (b) { 1 } else { 0 }`.
-  - **`is Foo` on a binding whose static type is already `Foo`**: INFO-level diagnostic (non-blocking; precursor to v0.4 Tier 3 lint per `design/linting.md`). WHAT: "this `is Foo` check is always true; `x`'s type is already `Foo`." WHAT-INSTEAD: "remove the `is` check OR remove the surrounding `if` if the body would always run." WHY: "the check adds runtime cost without narrowing; the compiler proves it's redundant." Diagnostic deferred re-categorization to v0.4 lint tier.
+  - **`is Foo` on a binding whose static type is already `Foo`**: INFO-level diagnostic (non-blocking; precursor to v0.4 Tier 3 lint per [`docs/internal/implementation/IMP-linting.md`](../../../../docs/internal/implementation/IMP-linting.md)). WHAT: "this `is Foo` check is always true; `x`'s type is already `Foo`." WHAT-INSTEAD: "remove the `is` check OR remove the surrounding `if` if the body would always run." WHY: "the check adds runtime cost without narrowing; the compiler proves it's redundant." Diagnostic deferred re-categorization to v0.4 lint tier.
 
 - **`||` non-propagation diagnostic text** (LOCKED — exact wording required for P3b implementation):
 
@@ -330,10 +330,10 @@ Per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertion
 
 - M3's `m3_is_type_deferral.ynz` deferral diagnostic GONE; the fixture compiles and runs (deferral text replaced with stdout snapshot).
 - M2's string-parse "catch-up" fixtures are CREATED IN P5 (not renamed — they don't exist today; see Catch-Up Obligations table). After P5 ships: `m2_string_to_int_basic.ynz`, `m2_string_to_int_vectors.ynz` etc. exist as runnable demonstrations.
-- IDE muted hints for narrowing (categorization per `.claude/rules/inference.md`):
+- IDE muted hints for narrowing (categorization per [`.claude/rules/inference.md`](../../../rules/inference.md)):
   - Inside `if (x is Foo) { ... }`, hover on `x` shows `narrowed to Foo (because of is-check on line N)` — INFORMATIONAL category (no typeable equivalent; comment-style annotation; deferred to v0.2 LSP work).
   - Inside `if (m.exists()) { return ... } m.value`, hover on the auto-propagated narrowing shows `narrowed via early-return on line N` — INFORMATIONAL.
-  - No new muted hints ship in M6 (LSP work is v0.2); only the typeck infrastructure that v0.2 will surface. P0 documents the v0.2 surface obligation in `design/narrowing.md`.
+  - No new muted hints ship in M6 (LSP work is v0.2); only the typeck infrastructure that v0.2 will surface. P0 documents the v0.2 surface obligation in [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md).
 
 ### Runtime Dependencies
 
@@ -344,7 +344,7 @@ Per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertion
   - `(int).toInt()` → identity; NONE.
   - `(float).toInt()` → uses LLVM `fptosi.sat` with overflow check; NONE additional.
   - `(number).toInt()` → uses ynz-numerics decimal128 → i64 conversion (already shipped in M2); NONE additional.
-  - `(string).toInt() / .toNumber() / .toFloat()` → requires runtime string-parsing functions: `ynz_string_to_int`, `ynz_string_to_number`, `ynz_string_to_float`. These compile into `ynz-runtime` as `extern "C"` functions called via codegen. Each returns a `{ has_value: i1, value: T }` struct (matches `maybe<T>` lowering for primitives per `design/maybe.md`). Implementation in safe Rust using `str::parse::<i64>` / `parse::<f64>` and a decimal128 parser from `ynz-numerics`. No new dependencies beyond what M2 + M5 already pulled in.
+  - `(string).toInt() / .toNumber() / .toFloat()` → requires runtime string-parsing functions: `ynz_string_to_int`, `ynz_string_to_number`, `ynz_string_to_float`. These compile into `ynz-runtime` as `extern "C"` functions called via codegen. Each returns a `{ has_value: i1, value: T }` struct (matches `maybe<T>` lowering for primitives per [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md)). Implementation in safe Rust using `str::parse::<i64>` / `parse::<f64>` and a decimal128 parser from `ynz-numerics`. No new dependencies beyond what M2 + M5 already pulled in.
 
 ### Kernel-Mode Behavior
 
@@ -360,7 +360,7 @@ Per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertion
 
 ### Demo & Error Gallery
 
-Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` requirement.
+Per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Demo & Error Gallery` requirement.
 
 **examples/pirates-roster/entrypoint.ynz** — extended progressively across P3a, P3b, P4, P6 (per the per-phase obligation). Final M6 section covers:
 - Declare a small `options Status { pending, active, banned }` and use `Status.active` as a value.
@@ -404,12 +404,12 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 
 **Per-phase shipping action** (detected per `/plan` Step 4a): project-local `/pr` skill exists at `.claude/skills/pr/` (Yinz-specific). All phases ship via `/pr` (drafts a milestone-aware PR).
 
-**Per-milestone shipping action**: project-local `/release` skill exists at `.claude/skills/release/`. Milestone wrap-up uses `/release` to bump `Cargo.toml`, generate CHANGELOG section, commit, tag, push.
+**Per-milestone shipping action**: project-local `/release` skill exists at `.claude/skills/release/`. Milestone wrap-up uses `/release` to bump [`Cargo.toml`](../../../../Cargo.toml), generate CHANGELOG section, commit, tag, push.
 
 ---
 
 ### Phase 0: Doc Lockdown
-**PR scope**: New `design/options.md`, `design/unions.md`, `design/narrowing.md` capturing the locked decisions from this plan (LLVM layouts, narrowing rules table, exhaustiveness rules, fallible-conversion semantics). Update `spec/options.md`, `spec/unions.md`, `spec/maybe.md` to match new surface; update master plan's M6 paragraph to mark "in progress." Update `todos.md` per state shifts.
+**PR scope**: New [`docs/internal/implementation/IMP-options.md`](../../../../docs/internal/implementation/IMP-options.md), [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md), [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) capturing the locked decisions from this plan (LLVM layouts, narrowing rules table, exhaustiveness rules, fallible-conversion semantics). Update [`docs/reference/REF-options.md`](../../../../docs/reference/REF-options.md), [`docs/reference/REF-unions.md`](../../../../docs/reference/REF-unions.md), [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md) to match new surface; update master plan's M6 paragraph to mark "in progress." Update `todos.md` per state shifts.
 **Branch**: `chore/m6-doc-lockdown`
 **Flag**: N/A
 **Est. lines**: ~600 (mostly new design doc text + small spec edits)
@@ -417,48 +417,48 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 **Objective**: Lock M6 design surface before any code lands. Future contributors reading any design doc see the correct M6 scope; the implementation phases reference these locked decisions instead of re-debating them.
 **Why this phase exists**: per `no-duct-tape.md` — implementing first and writing design docs second is how design drift creeps in. Lock decisions in design docs first; implementation phases cite them.
 **Current-state anchors**:
-- `design/maybe.md` — exemplar for the "decision-table-first" design style; M6 design docs mirror this format
-- `design/type-system.md:273-321` — currently the ONLY home for union/options/maybe brief notes; M6 splits to dedicated files
+- [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md) — exemplar for the "decision-table-first" design style; M6 design docs mirror this format
+- `docs/internal/implementation/IMP-type-system.md:273-321` — currently the ONLY home for union/options/maybe brief notes; M6 splits to dedicated files
 - `.claude/plans/active/v0-1-compiler.md:190-194` — M6 master-plan paragraph
-- `spec/options.md`, `spec/unions.md`, `spec/maybe.md` — user-spec entry points
-- `design/control-flow.md:58-65` — exhaustiveness rule lives here; M6 expands and cross-refs
+- [`docs/reference/REF-options.md`](../../../../docs/reference/REF-options.md), [`docs/reference/REF-unions.md`](../../../../docs/reference/REF-unions.md), [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md) — user-spec entry points
+- `docs/internal/implementation/IMP-control-flow.md:58-65` — exhaustiveness rule lives here; M6 expands and cross-refs
 **Files (expected scope)**:
-- NEW: `design/options.md`
-- NEW: `design/unions.md`
-- NEW: `design/narrowing.md`
-- EDIT: `spec/options.md` (clarify exhaustiveness, ambiguous-shorthand rule)
-- EDIT: `spec/unions.md` (clarify exhaustiveness, exact-type-in-union rule with example)
-- EDIT: `spec/maybe.md` (note M6 expands `.value` narrowing to early-return + `&&` + `||`)
-- EDIT: `design/control-flow.md` (cross-ref `design/narrowing.md` for the narrowing analysis)
-- EDIT: `design/decisions.md` (add row for M6 design files)
+- NEW: [`docs/internal/implementation/IMP-options.md`](../../../../docs/internal/implementation/IMP-options.md)
+- NEW: [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md)
+- NEW: [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md)
+- EDIT: [`docs/reference/REF-options.md`](../../../../docs/reference/REF-options.md) (clarify exhaustiveness, ambiguous-shorthand rule)
+- EDIT: [`docs/reference/REF-unions.md`](../../../../docs/reference/REF-unions.md) (clarify exhaustiveness, exact-type-in-union rule with example)
+- EDIT: [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md) (note M6 expands `.value` narrowing to early-return + `&&` + `||`)
+- EDIT: [`docs/internal/implementation/IMP-control-flow.md`](../../../../docs/internal/implementation/IMP-control-flow.md) (cross-ref [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) for the narrowing analysis)
+- EDIT: [`docs/README.md`](../../../../docs/README.md) (add row for M6 design files)
 - EDIT: `.claude/plans/active/v0-1-compiler.md` (M6 status → in progress)
-- EDIT: `.claude/todos.md` (move M6 catch-up items to "active")
+- EDIT: [`.claude/todos.md`](../../../todos.md) (move M6 catch-up items to "active")
 **Deviation rule**: Executor MAY touch other design files for cross-refs; document each deviation in PR description. If a deviation reveals a wider design question (e.g., a spec example uses `match` instead of multi-case `if`), STOP and revise this plan.
 **Steps**:
-1. Create `design/options.md` with sections: User Spec link; LLVM lowering (i8 tag); Built-in options (`SortOrder`, `Comparison`); Exhaustiveness rule; Ambiguous shorthand rule; `.toString()` for options values (variant name as string); cross-refs.
-2. Create `design/unions.md` with sections: User Spec link; LLVM Lowering Decision Table (verbatim from this plan's `### Performance`); `is`-exact-type rule with extends example; Exhaustiveness rule; Single-variant rejection; Cross-refs; "No user-override on layout" deliberate-omission rationale.
-3. Create `design/narrowing.md` with sections: User Spec link to relevant pieces of spec/maybe.md and spec/unions.md; Complete flow-sensitive `.value` and `.is Type` rules table (10+ rows: positive `is`, negative `is`, early-return positive, early-return negative, `&&` propagation, `||` non-propagation, reassignment-invalidation, function-call-with-lend invalidation, closure-non-propagation forward-defensive, etc.); LSP muted-hint obligation for v0.2 (informational category).
-4. Edit `spec/options.md`: add example of options multi-case; cite the ambiguous-shorthand rule with example.
-5. Edit `spec/unions.md`: add example of multi-case `if (x) { is Foo => ... }`; clarify exact-type rule.
-6. Edit `spec/maybe.md`: note that M6 expands `.value` narrowing per `design/narrowing.md`.
-7. Edit `design/control-flow.md` exhaustiveness section to cross-ref `design/narrowing.md`.
-8. Edit `design/decisions.md` index table: rows for `design/options.md`, `design/unions.md`, `design/narrowing.md`.
+1. Create [`docs/internal/implementation/IMP-options.md`](../../../../docs/internal/implementation/IMP-options.md) with sections: User Spec link; LLVM lowering (i8 tag); Built-in options (`SortOrder`, `Comparison`); Exhaustiveness rule; Ambiguous shorthand rule; `.toString()` for options values (variant name as string); cross-refs.
+2. Create [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md) with sections: User Spec link; LLVM Lowering Decision Table (verbatim from this plan's `### Performance`); `is`-exact-type rule with extends example; Exhaustiveness rule; Single-variant rejection; Cross-refs; "No user-override on layout" deliberate-omission rationale.
+3. Create [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) with sections: User Spec link to relevant pieces of docs/reference/REF-maybe.md and docs/reference/REF-unions.md; Complete flow-sensitive `.value` and `.is Type` rules table (10+ rows: positive `is`, negative `is`, early-return positive, early-return negative, `&&` propagation, `||` non-propagation, reassignment-invalidation, function-call-with-lend invalidation, closure-non-propagation forward-defensive, etc.); LSP muted-hint obligation for v0.2 (informational category).
+4. Edit [`docs/reference/REF-options.md`](../../../../docs/reference/REF-options.md): add example of options multi-case; cite the ambiguous-shorthand rule with example.
+5. Edit [`docs/reference/REF-unions.md`](../../../../docs/reference/REF-unions.md): add example of multi-case `if (x) { is Foo => ... }`; clarify exact-type rule.
+6. Edit [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md): note that M6 expands `.value` narrowing per [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md).
+7. Edit [`docs/internal/implementation/IMP-control-flow.md`](../../../../docs/internal/implementation/IMP-control-flow.md) exhaustiveness section to cross-ref [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md).
+8. Edit [`docs/README.md`](../../../../docs/README.md) index table: rows for [`docs/internal/implementation/IMP-options.md`](../../../../docs/internal/implementation/IMP-options.md), [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md), [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md).
 9. Edit `.claude/plans/active/v0-1-compiler.md` M6 paragraph: status → in progress.
-10. Edit `.claude/todos.md`: surface M6 catch-up items.
+10. Edit [`.claude/todos.md`](../../../todos.md): surface M6 catch-up items.
 **Acceptance criteria**:
-- [x] `design/options.md`, `design/unions.md`, `design/narrowing.md` exist with all sections listed in Steps 1-3.
-- [x] `spec/options.md`, `spec/unions.md`, `spec/maybe.md` updated with M6-relevant clarifications.
-- [x] `design/control-flow.md` cross-refs `design/narrowing.md`.
-- [x] `design/decisions.md` index table has rows for the three new files.
+- [x] [`docs/internal/implementation/IMP-options.md`](../../../../docs/internal/implementation/IMP-options.md), [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md), [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) exist with all sections listed in Steps 1-3.
+- [x] [`docs/reference/REF-options.md`](../../../../docs/reference/REF-options.md), [`docs/reference/REF-unions.md`](../../../../docs/reference/REF-unions.md), [`docs/reference/REF-maybe.md`](../../../../docs/reference/REF-maybe.md) updated with M6-relevant clarifications.
+- [x] [`docs/internal/implementation/IMP-control-flow.md`](../../../../docs/internal/implementation/IMP-control-flow.md) cross-refs [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md).
+- [x] [`docs/README.md`](../../../../docs/README.md) index table has rows for the three new files.
 - [x] Master plan's M6 paragraph shows "in progress" status.
-- [x] `.claude/todos.md` lists M6 catch-up items as active.
+- [x] [`.claude/todos.md`](../../../todos.md) lists M6 catch-up items as active.
 - [x] Jargon audit (manual grep) clean on all new docs.
 - [x] No code touched.
 **Quality gate** (check BEFORE moving to next phase):
 - [x] Every locked decision in this plan has a corresponding section in one of the three new design docs.
 - [x] No "TBD" or "will decide later" markers in P0 docs — every M6 decision is locked here.
-- [x] User-facing terms match `.claude/rules/vocabulary.md` (no `match`, `tagged union`, `discriminant`, `enum`).
-- [x] At least one example per design doc uses real Yinz operations per `.claude/rules/dot-postfix.md` "Examples-must-use-real-operations rule".
+- [x] User-facing terms match [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md) (no `match`, `tagged union`, `discriminant`, `enum`).
+- [x] At least one example per design doc uses real Yinz operations per [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md) "Examples-must-use-real-operations rule".
 **Verification**: `git diff --stat` shows new design files + spec edits only; no `crates/` touched; full test suite (`cargo test --workspace`) still 574 tests green (no behavior change).
 
 **STATUS: P0 COMPLETE** — staged on `chore/m6-doc-lockdown`, awaiting commit + PR. Next: P1 (lexer).
@@ -661,7 +661,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 16. **Extend `examples/pirates-roster/entrypoint.ynz`** with the classify-account union example + early-return narrowing example + `.toInt()` runtime conversion line. The `.toString()` and runtime conversion lines compile but won't run end-to-end until P4 lands codegen; mark them with `// runs after P4 codegen`.
 **Acceptance criteria**:
 - [ ] Union typeck working; positive + negative fixtures per Adversarial Test Cases.
-- [ ] All narrowing rules from `design/narrowing.md` (locked in P0) have positive + negative fixtures.
+- [ ] All narrowing rules from [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md) (locked in P0) have positive + negative fixtures.
 - [ ] `||` non-propagation diagnostic matches the LOCKED text exactly (assertion compares strings).
 - [ ] Early-return narrowing's recognized-exit set is the ONLY set that proves; non-recognized exits emit the locked diagnostic.
 - [ ] Nested-early-return and nested-multi-case adversarial fixtures pass per the locked semantics.
@@ -700,10 +700,10 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - `crates/ynz-codegen/src/options.rs` (NEW) — options-type codegen helpers
 - `crates/ynz-codegen/src/unions.rs` (NEW) — union-type codegen helpers (layout decision, tag load/store, payload extract)
 - `crates/ynz-runtime/src/lib.rs` — new `ynz_string_to_*` functions
-- `crates/ynz-runtime/Cargo.toml` — if any new deps (unlikely; `str::parse` covers most)
+- [`crates/ynz-runtime/Cargo.toml`](../../../../crates/ynz-runtime/Cargo.toml) — if any new deps (unlikely; `str::parse` covers most)
 - `crates/ynz-codegen/tests/snapshots.rs` — IR snapshots for each row of the union-layout decision table
 - `crates/ynz-driver/tests/fixtures/` — runnable fixtures asserting end-to-end behavior
-**Deviation rule**: Codegen choices outside the locked decision table need design-doc updates first. If the executor finds a layout choice the design doc didn't anticipate, STOP and amend `design/unions.md`.
+**Deviation rule**: Codegen choices outside the locked decision table need design-doc updates first. If the executor finds a layout choice the design doc didn't anticipate, STOP and amend [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md).
 **Steps**:
 1. **Options codegen**: each `Item::OptionsDecl` produces a no-op at codegen (compile-time only). Each `OptionsValue` lowers to an `i8` constant (variant index). `==` between options values lowers to `icmp eq i8`.
 2. **`.toString()` on options values**: emit a per-options-type LLVM global `[N x *const u8]` array of variant-name string literals (UTF-8 byte literals followed by null terminator). The `.toString()` method indexes the array by the variant's tag and constructs a Yinz string. NEW runtime function `ynz_string_from_static(ptr: *const u8, len: usize) -> *mut YinzString` added to `ynz-runtime` in this phase (it does NOT exist today — verified via grep over `crates/ynz-runtime/src/lib.rs`); it allocates a heap-owned `YinzString` and copies the bytes (so the returned string follows Yinz's normal ownership semantics, not a borrow into immortal memory). Heap copy chosen over zero-copy because: (a) Yinz strings are always owned (immortal-borrow would create a special-case `YinzStringStatic` type with different drop semantics); (b) the cost is one alloc + memcpy per `.toString()` call, which is negligible for what the call already does (caller will print or compose).
@@ -745,7 +745,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
    - `(number).toInt() -> maybe<int>` — call existing `ynz_numerics_to_i64` (already shipped in M2) wrapped to check its overflow flag; if overflow → `{has_value:0}`, else `{has_value:1, value:N}`. Verify M2's `ynz_numerics_to_i64` returns an overflow flag; if not, P4 extends it (small change to `ynz-numerics`).
 10. **Fallible string conversions** — runtime functions implement the LOCKED parsing rule from the Risk row, NOT `str::parse` directly:
     - Add three new `extern "C"` Rust functions in `ynz-runtime`:
-      - `ynz_string_to_int(s: *const u8, len: usize) -> { has_value: i1, value: i64 }` (struct return matching `maybe<int>` lowering for primitives per `design/maybe.md`)
+      - `ynz_string_to_int(s: *const u8, len: usize) -> { has_value: i1, value: i64 }` (struct return matching `maybe<int>` lowering for primitives per [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md))
       - `ynz_string_to_number(...) -> { has_value: i1, value: Decimal128 }`
       - `ynz_string_to_float(...) -> { has_value: i1, value: f64 }`
     - Implementation in safe Rust:
@@ -798,7 +798,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 ---
 
 ### Phase 5: Catch-Up Fixture Creation + Diagnostic Polish
-**PR scope**: Replace M3's `m3_is_type_deferral.ynz` deferral content with a runnable union example. CREATE (not rename — they don't exist on disk) the M2 string-parse catch-up demonstration fixtures: `m2_string_to_int.ynz`, `m2_string_to_number.ynz`, `m2_string_to_float.ynz` (along with negative variants `_invalid.ynz` for each). Sweep for any M6 diagnostic that doesn't follow WHAT/WHAT-INSTEAD/WHY. Update `.claude/state.md` and `.claude/todos.md` to reflect closed catch-ups.
+**PR scope**: Replace M3's `m3_is_type_deferral.ynz` deferral content with a runnable union example. CREATE (not rename — they don't exist on disk) the M2 string-parse catch-up demonstration fixtures: `m2_string_to_int.ynz`, `m2_string_to_number.ynz`, `m2_string_to_float.ynz` (along with negative variants `_invalid.ynz` for each). Sweep for any M6 diagnostic that doesn't follow WHAT/WHAT-INSTEAD/WHY. Update [`.claude/state.md`](../../../state.md) and [`.claude/todos.md`](../../../todos.md) to reflect closed catch-ups.
 **Branch**: `feat/m6-catchups`
 **Flag**: N/A
 **Est. lines**: ~250 (mostly new + replaced fixture files + state updates)
@@ -824,8 +824,8 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - `crates/ynz-driver/tests/fixtures/m6_narrow_reassign_invalidates.ynz` — NEW
 - `crates/ynz-driver/tests/fixtures/m6_narrow_lend_invalidates.ynz` — NEW
 - `crates/ynz-typeck/src/check.rs` — small diagnostic-text polish if jargon audit flags anything
-- `.claude/state.md` — update catch-up status (mark closed)
-- `.claude/todos.md` — check off completed catch-up items
+- [`.claude/state.md`](../../../state.md) — update catch-up status (mark closed)
+- [`.claude/todos.md`](../../../todos.md) — check off completed catch-up items
 **Deviation rule**: NO new features. Fixture creation + diagnostic polish only. Document any deviation.
 **Steps**:
 1. Rewrite `m3_is_type_deferral.ynz` to a runnable `shape Shape = Circle | Square` with multi-case `is` arm; add stdout snapshot via `insta`; delete stderr snapshot.
@@ -833,15 +833,15 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 3. CREATE `m2_string_to_number.ynz` and `m2_string_to_float.ynz` similarly.
 4. CREATE `m6_narrow_or_no_propagate.ynz`, `m6_narrow_reassign_invalidates.ynz`, `m6_narrow_lend_invalidates.ynz` (P3b's typeck implements; P5 ships the demonstration fixtures). Each asserts the locked diagnostic text via stderr snapshot.
 5. Run jargon audit (re-grep `crates/ynz-diagnostics/` and `crates/ynz-typeck/src/check.rs` for any user-facing text mentioning `match`/`tagged union`/`enum`/`discriminant`). Fix any hits.
-6. Update `.claude/state.md` to mark M6 catch-up obligations as closed.
-7. Update `.claude/todos.md` to check off the M2/M3 catch-up items.
+6. Update [`.claude/state.md`](../../../state.md) to mark M6 catch-up obligations as closed.
+7. Update [`.claude/todos.md`](../../../todos.md) to check off the M2/M3 catch-up items.
 **Acceptance criteria**:
 - [ ] `m3_is_type_deferral.ynz` is now a runnable example with stdout snapshot; old stderr snapshot deleted.
 - [ ] Three M2 string-conversion fixtures created with stdout snapshots covering the full test-vector table.
 - [ ] Three M6 narrowing-edge-case fixtures created with stderr snapshots asserting the locked diagnostic text.
 - [ ] No `// CATCH-UP M6:` comments remain in source.
 - [ ] No `M6 deferral` mentions in any error-message string in M6-touched code.
-- [ ] `.claude/state.md` and `.claude/todos.md` reflect closed catch-ups.
+- [ ] [`.claude/state.md`](../../../state.md) and [`.claude/todos.md`](../../../todos.md) reflect closed catch-ups.
 - [ ] Full `cargo test --workspace` green.
 **Quality gate**:
 - [ ] All M2 + M3 + M5 catch-up obligations explicitly checked off (no items remain in the "still must close" status).
@@ -852,26 +852,26 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 ---
 
 ### Phase 6: Demo + Error Gallery + Verification + Tag
-**PR scope**: Extend `examples/pirates-roster/entrypoint.ynz` with the M6 section per `### Demo & Error Gallery` invariant. Create `examples/primantis-orders/m6_errors.ynz`. Run full verification sweep: TODO sweep, catch-up audit, jargon audit, immutable-test audit, plan-invariant audit. Bump `Cargo.toml` to `0.1.0-m6`. Tag `v0.1.0-m6`. Update master plan to mark M6 SHIPPED.
+**PR scope**: Extend `examples/pirates-roster/entrypoint.ynz` with the M6 section per `### Demo & Error Gallery` invariant. Create `examples/primantis-orders/m6_errors.ynz`. Run full verification sweep: TODO sweep, catch-up audit, jargon audit, immutable-test audit, plan-invariant audit. Bump [`Cargo.toml`](../../../../Cargo.toml) to `0.1.0-m6`. Tag `v0.1.0-m6`. Update master plan to mark M6 SHIPPED.
 **Branch**: `feat/m6-verification`
 **Flag**: N/A
 **Est. lines**: ~400 (demo + error gallery + state/todos + CHANGELOG)
 **Ships via**: `/pr` (then `/release` after merge)
 **Objective**: M6 is shipped, tagged, and the master plan's M7 milestone paragraph is ready for `/plan M7`.
-**Why this phase exists**: per `.claude/rules/plan-invariants.md` and the M5 plan exemplar — every milestone closes with verification + tag.
+**Why this phase exists**: per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) and the M5 plan exemplar — every milestone closes with verification + tag.
 **Current-state anchors**:
 - `examples/pirates-roster/entrypoint.ynz` — current state has M1+M2+M3+M4+M5 sections; M6 appends below
 - `examples/primantis-orders/m5_errors.ynz` — exemplar for the error-gallery format
 - `.claude/plans/done/m5-generics.md` P6 — exemplar for the verification phase
-- `Cargo.toml` — `package.version = "0.1.0-m5"` (M6 bumps to `0.1.0-m6`)
-- `CHANGELOG.md` (if exists; check during phase) — append M6 entry
+- [`Cargo.toml`](../../../../Cargo.toml) — `package.version = "0.1.0-m5"` (M6 bumps to `0.1.0-m6`)
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) (if exists; check during phase) — append M6 entry
 **Files (expected scope)**:
 - `examples/pirates-roster/entrypoint.ynz` — append M6 section
 - `examples/primantis-orders/m6_errors.ynz` — new file
-- `Cargo.toml` (workspace + all member packages) — version bump
-- `CHANGELOG.md` — M6 section
-- `.claude/state.md` — M6 SHIPPED status
-- `.claude/todos.md` — M6 items checked off
+- [`Cargo.toml`](../../../../Cargo.toml) (workspace + all member packages) — version bump
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) — M6 section
+- [`.claude/state.md`](../../../state.md) — M6 SHIPPED status
+- [`.claude/todos.md`](../../../todos.md) — M6 items checked off
 - `.claude/plans/active/v0-1-compiler.md` — M6 status → shipped, M7 ready
 - `.claude/plans/active/m6-options-unions.md` — phase statuses updated; eventually moved to `done/` post-merge
 **Deviation rule**: NO new features. Verification + tag only. Document any deviation.
@@ -880,16 +880,16 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 2. Create `examples/primantis-orders/m6_errors.ynz` per the error gallery content listed in `### Demo & Error Gallery`. Run it; assert every expected error class fires.
 3. Add stdout/stderr snapshots for both files via `insta`.
 4. TODO sweep: grep for `TODO`, `FIXME`, `// REPLACE-AT M6`, `// CATCH-UP M6`, `// will do later`, `// M7+` in source. Resolve or document each.
-5. Catch-up audit: walk `.claude/state.md` "M6 catch-up obligations" — every item must be either closed or have an owner in M7/M8.
+5. Catch-up audit: walk [`.claude/state.md`](../../../state.md) "M6 catch-up obligations" — every item must be either closed or have an owner in M7/M8.
 6. Jargon audit: re-run.
 7. Immutable-test audit: spot-check any test files renamed during phases for the `// test-ratchet:` markers per `~/.claude/CLAUDE.md`.
 8. Plan-invariant audit: confirm the 6 subsections of `### Invariants This Milestone Must Preserve` (this plan's section) have all their testable assertions covered by fixtures.
-9. Bump `Cargo.toml` workspace version + all member packages to `0.1.0-m6`.
+9. Bump [`Cargo.toml`](../../../../Cargo.toml) workspace version + all member packages to `0.1.0-m6`.
 10. Generate CHANGELOG section from `git log` since `v0.1.0-m5` tag.
 11. Run full `cargo test --workspace`. Run `cargo clippy --workspace -- -D warnings`. Run `cargo fmt --all --check`.
 12. Open PR for verification phase via `/pr`.
 13. After merge, run `/release` to tag `v0.1.0-m6` and push.
-14. Update `.claude/state.md` with the M6-shipped entry (tag, test count, brief feature summary).
+14. Update [`.claude/state.md`](../../../state.md) with the M6-shipped entry (tag, test count, brief feature summary).
 15. Move `m6-options-unions.md` plan file to `.claude/plans/done/`.
 16. Update master plan `.claude/plans/active/v0-1-compiler.md`: M6 paragraph status → "shipped"; M7 paragraph cross-refs M6 narrowing infrastructure.
 **Acceptance criteria**:
@@ -897,10 +897,10 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - [x] `examples/primantis-orders/m6_errors.ynz` produces every M6 error class (9 errors fired).
 - [x] All catch-up obligations closed or formally re-owned.
 - [x] Jargon audit clean.
-- [x] `Cargo.toml` at `0.1.0-m6`.
+- [x] [`Cargo.toml`](../../../../Cargo.toml) at `0.1.0-m6`.
 - [ ] `v0.1.0-m6` tag created and pushed (after PR merge via /release).
 - [ ] CHANGELOG section added (via /release).
-- [x] `.claude/state.md` + `.claude/todos.md` updated.
+- [x] [`.claude/state.md`](../../../state.md) + [`.claude/todos.md`](../../../todos.md) updated.
 - [ ] Plan moved to `done/` (after PR merge).
 - [ ] Master plan reflects M6 shipped + M7 ready (after PR merge).
 - [x] Full `cargo test --workspace` green: 631 tests (above the ≥640 target was overestimated; 631 is correct given the scope).
@@ -908,7 +908,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 **STATUS: P6 COMPLETE** — feat/m6 branch ready for PR. Tag + archive after merge.
 **Quality gate**:
 - [ ] No outstanding M6 work items in any persistence file.
-- [ ] Every M6 design doc (`design/options.md`, `design/unions.md`, `design/narrowing.md`) cross-references at least one fixture that demonstrates its locked decisions.
+- [ ] Every M6 design doc ([`docs/internal/implementation/IMP-options.md`](../../../../docs/internal/implementation/IMP-options.md), [`docs/internal/implementation/IMP-unions.md`](../../../../docs/internal/implementation/IMP-unions.md), [`docs/internal/implementation/IMP-narrowing.md`](../../../../docs/internal/implementation/IMP-narrowing.md)) cross-references at least one fixture that demonstrates its locked decisions.
 - [ ] CHANGELOG entry reads like a user-facing release note, not an internal log.
 **Verification**: `./target/debug/ynz run examples/pirates-roster/entrypoint.ynz` produces expected stdout; `git tag --list 'v0.1.0-m6'` shows the tag; `cargo test --workspace` total ≥ 640 (per the relaxed acceptance criterion above).
 
@@ -923,8 +923,8 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - [ ] `examples/pirates-roster/entrypoint.ynz` demonstrates each M6 feature in a realistic context.
 - [ ] `examples/primantis-orders/m6_errors.ynz` triggers every M6 error class with `// WHY:` comments.
 - [ ] No `TODO`/`FIXME`/`REPLACE-AT M6`/`CATCH-UP M6`/`will do later` in source.
-- [ ] `Cargo.toml` bumped, tag `v0.1.0-m6` created, CHANGELOG section written.
-- [ ] `.claude/state.md`, `.claude/todos.md`, master plan all reflect M6 SHIPPED.
+- [ ] [`Cargo.toml`](../../../../Cargo.toml) bumped, tag `v0.1.0-m6` created, CHANGELOG section written.
+- [ ] [`.claude/state.md`](../../../state.md), [`.claude/todos.md`](../../../todos.md), master plan all reflect M6 SHIPPED.
 - [ ] Plan file moved to `.claude/plans/done/`.
 
 ---

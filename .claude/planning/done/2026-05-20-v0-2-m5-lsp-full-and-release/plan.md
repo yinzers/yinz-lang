@@ -25,10 +25,10 @@ legacy:
     - crates/ynz-driver/src/**
     - crates/ynz-codegen/src/**
     - tooling/vscode-ynz/**
-    - design/lsp.md
-    - design/ide-hints.md
-    - design/mvp-scope.md
-    - design/compiler-language.md
+    - docs/internal/implementation/IMP-lsp.md
+    - docs/reference/REF-ide-hints.md
+    - docs/reference/REF-mvp-scope.md
+    - docs/internal/decisions/ADR-compiler-language.md
     - .claude/plans/roadmaps/v0-2-dev-loop-tooling.md
     - .claude/todos.md
     - examples/pirates-roster/**
@@ -50,7 +50,7 @@ Status: pending_approval
 
 **Why now**:
 - v0.2-M1 shipped the SSOT registry (tag `v0.2.0-m1`); v0.2-M2 shipped the LSP thin slice + VSCode extension (tag `v0.2.0-m2`); v0.2-M3 shipped `ynz fmt` library + CLI (tag `v0.2.0-m3`); v0.2-M4 watch is shipped (`v0.2.0-m4`) with a small post-ship bug-fix tail still active. The roadmap (`v0-2-dev-loop-tooling`) puts M5 as the closer that converts the thin slice into the full editor experience AND cuts the v0.2.0 series tag.
-- v0.2.0 tag is **not a public ship** — same flow as every other intermediate tag (`v0.1.0-m4`, `v0.2.0-m1` etc): git tag + CHANGELOG section + `.vsix` upload via `/release` skill. Public ship is v1.0 per `design/mvp-scope.md`.
+- v0.2.0 tag is **not a public ship** — same flow as every other intermediate tag (`v0.1.0-m4`, `v0.2.0-m1` etc): git tag + CHANGELOG section + `.vsix` upload via `/release` skill. Public ship is v1.0 per [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md).
 - M5 can plan + start in parallel with M4 watch bug-fixing (no architectural overlap — M4 is `crates/ynz-watch/`, M5 is `crates/ynz-lsp/` + `crates/ynz-typeck/` helpers). Patrick confirmed this session.
 - The compiler now has cross-file resolution shipped (`crates/ynz-typeck/src/exports.rs::collect_exports` + `crates/ynz-typeck/src/resolve_import.rs::resolve_imports` + `ResolvedImport`) — the foundation go-to-def / find-refs / rename ride on. Without M5, this resolution exists but no editor surfaces it.
 
@@ -69,13 +69,13 @@ Status: pending_approval
 - **All 9 inlay-hint registry domains get protocol handlers; 5 wire data today** (variable_type, ownership_call_site, copy_points, array_to_fixed_promotion, let_to_const_promotion); 4 are protocol-only (function_param_type, wait_points, lifetimes, allocators) because their underlying analysis doesn't exist in Yinz v0.1 (no lambdas, no I/O suspension analysis, no explicit lifetimes, no arenas). The 4 deferred domains land hints automatically when v0.3+ adds the data — no further LSP code change needed. Each gets a tracking entry in `todos.md` "Later" with a trigger.
 - **Pull-diagnostics deferred to v0.3+.** Push diagnostics work fine; pull is a v0.2-M5 candidate per M2 plan but adds API surface without user-visible value when push already works. Defer with trigger entry in todos.md.
 - **Cross-file go-to-def: full scope.** Lean on `exports.rs` + `resolve_import.rs` already shipped. Click on an imported `foo` → jumps to the declaration in the source file. Same for shapes, options, constants.
-- **v0.2.0 tag bundled in final phase.** Last phase bumps `Cargo.toml`, runs `/release`, ships `yinz-0.2.0.vsix` + `yinz-latest.vsix`. M4 watch MUST be fully merged AND on a stable tag (`v0.2.0-m4`) before this phase runs — phase has an explicit gate.
+- **v0.2.0 tag bundled in final phase.** Last phase bumps [`Cargo.toml`](../../../../Cargo.toml), runs `/release`, ships `yinz-0.2.0.vsix` + `yinz-latest.vsix`. M4 watch MUST be fully merged AND on a stable tag (`v0.2.0-m4`) before this phase runs — phase has an explicit gate.
 - **Cargo.toml workspace package version stays in lockstep across all crates.** No per-crate divergence. The bump goes in the workspace `[workspace.package].version` field.
 - **All compile errors continue WHAT/WHAT-INSTEAD/WHY format.** LSP renders the same diagnostics the CLI does; code actions surface the WHAT-INSTEAD content as the quick-fix label.
 - **Compiler binary's behavior on a `.ynz` file is byte-identical EXCEPT for the 3 scoped bug-fixes.** The bug-fixes are CORRECTNESS improvements: hidden-field default eval changes silently-wrong-zero-init to correct values for non-zero-default fields; dynamic-dispatch call-site coercion adds a previously-missing implicit conversion; UFCS const-lend check adds a previously-missing error for a code path that already errored via the function-call form. Each is fixture-tested + snapshot-stable.
 - **No GC, no per-instance method storage, none of v0.1's locked properties weaken.** Tooling only (plus the scoped bug-fixes that preserve existing semantics).
 - **Existing 1143+ tests (M3) / ~1200+ (M4) must still pass.** New tests added; no existing tests weakened.
-- **All milestone plan invariants per `.claude/rules/plan-invariants.md` apply** — 7-subsection Invariants block including the M9+ Feature Registry Entries subsection.
+- **All milestone plan invariants per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) apply** — 7-subsection Invariants block including the M9+ Feature Registry Entries subsection.
 
 **Success criteria**:
 - `ynz-lsp` advertises all 8 new capabilities (definition / references / rename / formatting / rangeFormatting / inlayHint / codeAction / semanticTokens) on `initialize`.
@@ -101,7 +101,7 @@ Status: pending_approval
 - `ShapeDef.defined_at: SourceSpan`, `FunctionSig.decl_span: SourceSpan` — declaration sites are tracked.
 - What's MISSING: AST-node-at-byte-offset lookup. Currently no `node_at_offset(db, source, offset) -> Option<NodeRef>` query. Phase 1 adds it.
 
-**Inlay-hint registry (verified against `registry/features.toml`)**:
+**Inlay-hint registry (verified against [`registry/features.toml`](../../../../registry/features.toml))**:
 - 9 `[[muted_hint_domain]]` entries in registry; each has `domain`, `placement_category` (`"Addition"` / `"Replacement"` / `"Informational"`), `description`, `example_source`, `example_hint_rendered`.
 - Adapters `muted_hint_domains() -> Iterator<&'static MutedHintDomainEntry>` + `muted_hint_domain_lookup(domain) -> Option<...>` already exist (`crates/ynz-registry/src/lib.rs`).
 - M5 adds: per-domain detection passes in `ynz-typeck` (5 of them) + LSP handler that calls each pass and emits LSP `InlayHint` objects.
@@ -165,7 +165,7 @@ Status: pending_approval
 | Phase 11 bug sweep reveals deeper compiler bugs beyond the 3 todos | Medium | Medium | Scope each Soon item to <100 lines net change. If a fix grows, split to follow-up (add to `todos.md` "Soon" with concrete trigger); don't expand M5 scope. Each fix has a fixture-test that fails on `v0.2.0-m4` baseline and passes on the fix branch — test isolation prevents accidental coupling. |
 | Format-on-save creates infinite `didChange` loop with formatter | Low | Medium | M3 already enforces `fmt(fmt(x)) == fmt(x)` via proptest. LSP doesn't auto-save; client controls (VSCode applies `TextEdit` then fires `didChange` ONCE — formatter returns `Vec<TextEdit>` empty if no change needed, breaking any potential loop). Standard pattern. |
 | Doc-comment AST attachment (Phase 10) requires parser change; risk of breaking existing parse tests | Medium | Medium | Parser change is ADDITIVE at the SERDE layer AND at the struct-construction layer: existing `Stmt::DocComment` variant stays; new field is **`leading_docs: Option<Vec<String>>`** (NOT bare `Vec<String>`) so every existing struct-literal construction site stays valid by populating `leading_docs: None` (or via `..Default::default()` if the struct derives `Default`). `#[serde(default)]` covers the serde-deserialize path. Phase 10 step explicitly enumerates affected construction sites (`grep -rn "FunctionDecl {" crates/ \| wc -l`, same for ShapeDecl/OptionsDecl/ConstDecl) and confirms each adds `leading_docs: None` (or relies on `..Default::default()`). Phase 10 integration test compares AST output on every existing fixture: shape stable except for the new field populated as `None` (or `Some(vec![...])` when doc-comments present). |
-| VSCode 0.2 upgrade breaks `v0.2.0-m2` installed users (manual .vsix install) | Low | Low | `tooling/vscode-ynz/README.md` documents upgrade path: download new `.vsix` from GitHub release, install via "Install from VSIX." Stable URL `yinz-latest.vsix` doesn't change. No user data lost. |
+| VSCode 0.2 upgrade breaks `v0.2.0-m2` installed users (manual .vsix install) | Low | Low | [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) documents upgrade path: download new `.vsix` from GitHub release, install via "Install from VSIX." Stable URL `yinz-latest.vsix` doesn't change. No user data lost. |
 | `ynz build --json` (Phase 9) drifts from CLI ariadne output | Low | Low | `--json` suppresses ariadne entirely; existing CLI path runs the SAME `DiagnosticBucket` collection then takes the JSON-serialize branch vs the ariadne-render branch. Phase 9 integration test asserts both branches produce equivalent error/warning/suggestion counts on every fixture in `examples/primantis-orders/`. |
 | Bumping Cargo.toml to `0.2.0` while M4 watch bugs still landing causes intermediate broken state | Medium | Low | Phase 12 final phase has an explicit gate-check: M4 watch plan in `done/` status; tag `v0.2.0-m4` exists on main; `cargo test --workspace` passes on the M5 head. If any check fails, plan pauses; phase doesn't proceed to `/release`. |
 | Symbol-lookup helper API (Phase 1) gets re-shaped after Phase 2 uses it, requiring Phase 3/4 rework | Medium | Medium | Phase 1 designs API by enumerating Phases 2-4 use cases upfront in the design comment block. Includes: `def_site_for_offset(db, source, byte_offset) -> Option<(SourceFile, SourceSpan)>` (Phase 2), `references_for_offset(db, source, byte_offset, include_decl: bool) -> Vec<(SourceFile, SourceSpan)>` (Phase 3), `rename_locations(db, source, byte_offset, new_name: &str) -> Result<Vec<(SourceFile, SourceSpan)>, RenameError>` (Phase 4). All three share a `resolve_symbol_at(db, source, byte_offset) -> Option<ResolvedSymbol>` helper that does the AST-walk + import-following. Each higher-level function is a thin wrapper. |
@@ -215,7 +215,7 @@ Cross-file go-to-def: full scope (uses existing `exports.rs` + `resolve_import.r
 **Rollout plan** (Yinz convention: trunk-based, no production rollout; "rollout" = milestone tag):
 1. Each phase: branch from `main`, PR via `/pr`, code-reviewer agent at phase boundary, merge to `main` on PASS.
 2. Phase 12 (final verification + release): gate-check (M4 merged + tag `v0.2.0-m4` exists + tests green on M5 head) → bump Cargo.toml → run `/release` → cut `v0.2.0` tag → ship `.vsix` to GitHub release.
-3. v0.2.0 final tag is **internal** (rollback hygiene only; no public ship per `design/mvp-scope.md` v1.0 = first public release).
+3. v0.2.0 final tag is **internal** (rollback hygiene only; no public ship per [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v1.0 = first public release).
 
 ## Invariants This Milestone Must Preserve
 
@@ -251,11 +251,11 @@ Cross-file go-to-def: full scope (uses existing `exports.rs` + `resolve_import.r
 - **LSP startup**: <500ms cold (no regression from M2).
 - **LSP incremental keystroke-to-diagnostics**: <100ms p95 on 500-line file (no regression from M2).
 
-**Auto-promotion analysis** (per `.claude/rules/auto-promotion.md`):
+**Auto-promotion analysis** (per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)):
 - **Inlay hints `array<T>` → `fixed<T>` (Phase 6)**: this milestone ships the muted-hint surface for the auto-promotion already locked in M5-generics. Per `state.md` 2026-05-17 "auto-promotion ships codegen-only in M5 (Tier 3 lint defers to v0.4, muted hint defers to v0.2)" — v0.2 IS this milestone. Detection: AST walk for `.add()` / index-assignment / passed-as-lend. If none found, hint fires. Click-to-make-explicit: rewrites `array<int>` → `fixed<int, N>` in source.
 - **Inlay hints `let` → `const` (Phase 6)**: same pattern. Detection: AST walk for reassignment / mutation / `.lend` passing. If none found, hint fires. Click-to-make-explicit: rewrites `let` → `const`.
 - **No NEW codegen auto-promotion this milestone.** The M5-generics codegen-only promotion already ships; this milestone surfaces the muted hint that goes WITH it.
-- **No new muted-hint domain registry entries this milestone.** All 9 domains already in `registry/features.toml` (M2). M5 wires data to 5 of them; 4 stay protocol-only awaiting v0.3+ data.
+- **No new muted-hint domain registry entries this milestone.** All 9 domains already in [`registry/features.toml`](../../../../registry/features.toml) (M2). M5 wires data to 5 of them; 4 stay protocol-only awaiting v0.3+ data.
 - **No Tier 3 lint suggestions this milestone.** Lint tier ships v0.4.
 - **OVERRIDE-DIRECTION analysis**:
   - Force-the-auto-pick (force the hint to be EXPLICIT): user clicks the muted hint, source becomes the strict form (`fixed<int, N>` or `const`). The "explicit form" IS the click-to-make-explicit destination — typeable Yinz.
@@ -264,11 +264,11 @@ Cross-file go-to-def: full scope (uses existing `exports.rs` + `resolve_import.r
 ### Teaching
 - LSP renders diagnostics with the SAME WHAT/WHAT-INSTEAD/WHY content the CLI produces — verified by Phase 9 integration test that compares LSP `Diagnostic.message` strings to CLI-rendered output across all `examples/primantis-orders/` fixtures (modulo ariadne ASCII art that doesn't transfer to LSP).
 - Phase 7 code-action labels surface the WHAT-INSTEAD content as the quick-fix label (e.g., diagnostic "use `shape` not `class`" → code-action label "Replace `class` with `shape`"). Action edits use the registered token from the registry.
-- Phase 6 inlay-hint hover text follows the three-part WHAT/WHAT-INSTEAD/WHY format per `design/ide-hints.md` "Hover tooltip format" section. Hover content sourced from `MutedHintDomainEntry.description` (WHAT) + `example_hint_rendered` (rendered context) + computed WHY at the call site.
+- Phase 6 inlay-hint hover text follows the three-part WHAT/WHAT-INSTEAD/WHY format per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md) "Hover tooltip format" section. Hover content sourced from `MutedHintDomainEntry.description` (WHAT) + `example_hint_rendered` (rendered context) + computed WHY at the call site.
 - Phase 10 doc-comment hover shows the leading `///` content with markdown formatting. Falls back to registry hover if no doc-comments present.
 - No new banned-jargon words slip into LSP-rendered text. `tests/jargon_audit.rs` (extended in Phase 12) covers: code-action labels, rename error messages, inlay-hint hover markdown, completion documentation, `--json` output strings.
-- **UPDATE** `design/lsp.md` — expand each existing section with M5 additions: "Capabilities Added in M5" subsection enumerating all 8 new providers with one-paragraph rationale each; expand "Concurrency model" with notes on rename atomicity and progress notifications; add new "Inlay Hints" section covering the 9 domains (5 firing + 4 protocol-only) and the cross-reference to `design/ide-hints.md`.
-- **UPDATE** `design/ide-hints.md` — add "v0.2-M5 implementation status" subsection enumerating which domains fire today vs which are protocol-only; cross-link to the deferred items in `todos.md` "Later."
+- **UPDATE** [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) — expand each existing section with M5 additions: "Capabilities Added in M5" subsection enumerating all 8 new providers with one-paragraph rationale each; expand "Concurrency model" with notes on rename atomicity and progress notifications; add new "Inlay Hints" section covering the 9 domains (5 firing + 4 protocol-only) and the cross-reference to [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md).
+- **UPDATE** [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md) — add "v0.2-M5 implementation status" subsection enumerating which domains fire today vs which are protocol-only; cross-link to the deferred items in `todos.md` "Later."
 - NO new `.claude/rules/` files in this milestone — no new project-rule surface beyond what M1's `feature-registry.md` + M2's existing rules established.
 - NEW shared explanation text: code-action label format ("Replace `<token>` with `<replacement>`") and rename-error format ("Cannot rename `<name>`: <reason>") get one canonical wording each, defined in `crates/ynz-lsp/src/<feature>.rs` constants and exercised by both runtime + tests.
 
@@ -316,7 +316,7 @@ Cross-file go-to-def: full scope (uses existing `exports.rs` + `resolve_import.r
   - `code-action.png` — quick-fix dropdown
   - `semantic-tokens.png` — same file with vs without semantic-tokens (color differentiation)
   - `doc-hover.png` — hover over a function showing leading `///` content
-  Linked from `tooling/vscode-ynz/README.md` v0.2 section. Closes `vscode-extension-screenshots` in todos.md.
+  Linked from [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) v0.2 section. Closes `vscode-extension-screenshots` in todos.md.
 
 ### Feature Registry Entries
 - **New entries**: NONE. This milestone is registry-CONSUMER work. M5 wires data to the 9 existing `[[muted_hint_domain]]` entries; no new domains added; no new keywords / banned-jargon / primitive-intrinsics / type-attached-constants / deferred-features / diagnostic-templates.
@@ -327,8 +327,8 @@ Cross-file go-to-def: full scope (uses existing `exports.rs` + `resolve_import.r
   - These adapters DO NOT add new registry data; they project existing data into LSP-shaped output. Single-source-of-truth rule preserved.
 - **New deferred-tooling entries possibly added in Phase 0** (if any M5 work itself defers a tooling feature):
   - `lsp-pull-diagnostics`: Pull-diagnostics model (LSP 3.17 `textDocument/diagnostic`) deferred to v0.3+; push diagnostics work. Trigger: client-side need that push can't satisfy. Substitute: current `publishDiagnostics` push.
-  - `lsp-inlay-hint-wait-points` / `lsp-inlay-hint-allocators` / `lsp-inlay-hint-lifetimes` / `lsp-inlay-hint-function-param-type`: each domain protocol-only awaiting v0.3+ data. Triggers: arena scopes ship (`design/future/arena.md`), I/O suspension analysis ships, explicit lifetime UI ships, first-class lambdas ship.
-  - All deferred-tooling entries go in `registry/features.toml` `[[deferred_tooling_feature]]` table in Phase 0.
+  - `lsp-inlay-hint-wait-points` / `lsp-inlay-hint-allocators` / `lsp-inlay-hint-lifetimes` / `lsp-inlay-hint-function-param-type`: each domain protocol-only awaiting v0.3+ data. Triggers: arena scopes ship ([`docs/internal/scratchpad/SCRATCH-future-arena.md`](../../../../docs/internal/scratchpad/SCRATCH-future-arena.md)), I/O suspension analysis ships, explicit lifetime UI ships, first-class lambdas ship.
+  - All deferred-tooling entries go in [`registry/features.toml`](../../../../registry/features.toml) `[[deferred_tooling_feature]]` table in Phase 0.
 
 ## Phase Execution Protocol
 
@@ -352,7 +352,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 ### Phase 0: Doc lockdown + deferral tracking
 
-**PR scope**: Update `design/lsp.md` with M5 capability sections; update `design/ide-hints.md` with v0.2-M5 implementation-status subsection; update `design/mvp-scope.md` v0.2-M5 entry; update roadmap M5 milestone entry; add the 5 deferred-tooling registry entries to `registry/features.toml`; add deferral entries to `todos.md` "Later" for each protocol-only inlay-hint domain; update `CLAUDE.md` Project Layout if any new crate dirs introduced.
+**PR scope**: Update [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) with M5 capability sections; update [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md) with v0.2-M5 implementation-status subsection; update [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M5 entry; update roadmap M5 milestone entry; add the 5 deferred-tooling registry entries to [`registry/features.toml`](../../../../registry/features.toml); add deferral entries to `todos.md` "Later" for each protocol-only inlay-hint domain; update [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout if any new crate dirs introduced.
 **Branch**: `chore/v0-2-m5-doc-lockdown`
 **Flag**: N/A
 **Est. lines**: ~400 (docs ~280; registry entries ~50; todos.md ~30; CLAUDE.md ~10; mvp-scope.md ~30)
@@ -363,45 +363,45 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Why this phase exists**: prevents the "deferrals lost when plan moves to done/" failure mode per the deferrals-must-be-tracked feedback. Also prevents Phase 1+ from re-litigating decisions Patrick already made.
 
 **Current-state anchors**:
-- `design/lsp.md` from M2 (224 lines today; needs M5 capability subsections added)
-- `design/ide-hints.md` (151 lines; needs M5 status subsection)
-- `design/mvp-scope.md` v0.2-M5 entry (current entry only one line)
+- [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) from M2 (224 lines today; needs M5 capability subsections added)
+- [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md) (151 lines; needs M5 status subsection)
+- [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M5 entry (current entry only one line)
 - `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` Milestone v0.2-M5 (currently lines ~163-176)
-- `registry/features.toml` (current `[[deferred_tooling_feature]]` count: 5 — verified `grep -c '^\[\[deferred_tooling_feature\]\]' registry/features.toml`)
-- `.claude/todos.md` "Later" bin
-- `CLAUDE.md` Project Layout table
+- [`registry/features.toml`](../../../../registry/features.toml) (current `[[deferred_tooling_feature]]` count: 5 — verified `grep -c '^\[\[deferred_tooling_feature\]\]' registry/features.toml`)
+- [`.claude/todos.md`](../../../todos.md) "Later" bin
+- [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout table
 
 **Files (expected scope)**:
-- EDIT: `design/lsp.md` — add "Capabilities Added in M5" subsection (8 new providers, one-paragraph rationale each); add "Inlay Hints" section (cross-link to `design/ide-hints.md`); add "Concurrency: rename + progress notifications" subsection
-- EDIT: `design/ide-hints.md` — add "v0.2-M5 implementation status" subsection
-- EDIT: `design/mvp-scope.md` — expand v0.2-M5 entry to enumerate the 8 LSP capabilities + 3 bug-fixes + tag
+- EDIT: [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) — add "Capabilities Added in M5" subsection (8 new providers, one-paragraph rationale each); add "Inlay Hints" section (cross-link to [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md)); add "Concurrency: rename + progress notifications" subsection
+- EDIT: [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md) — add "v0.2-M5 implementation status" subsection
+- EDIT: [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) — expand v0.2-M5 entry to enumerate the 8 LSP capabilities + 3 bug-fixes + tag
 - EDIT: `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` — UPDATE the v0.2-M5 milestone "Rough scope" to reflect what THIS plan ships (vs the original roadmap-time scope); bump `last_updated:`
-- EDIT: `registry/features.toml` — add 6 `[[deferred_tooling_feature]]` entries (lsp-pull-diagnostics, lsp-inlay-hint-wait-points, lsp-inlay-hint-allocators, lsp-inlay-hint-lifetimes, lsp-inlay-hint-function-param-type, **lsp-rename-aliased-re-export**), each with `name`, `kind`, `description`, `why_deferred`, `substitute`, `ships_in`, `design_doc`. The 6th (`lsp-rename-aliased-re-export`) is the Round-3-added deferral pushed back from Phase 4 (aliased re-export rename rejected in v0.2-M5; deferred to v0.3+ when typeck owns local-aliased-binding metadata for re-exports).
-- EDIT: `.claude/todos.md` — GRADUATE 6 pre-staged entries (all 6 deferred-tooling concepts were pre-staged in todos.md during planning per Patrick's deferrals-durability check — see todos.md "Later" bin). Phase 0 replaces each staged `[ ]` bullet with `[x] graduated to registry/features.toml in <PR-link>` so the durable home moves from todos.md to the canonical registry.
-- EDIT: `CLAUDE.md` — Project Layout table: no new rows (no new crates this milestone — Phase 1 adds typeck helpers in-place)
+- EDIT: [`registry/features.toml`](../../../../registry/features.toml) — add 6 `[[deferred_tooling_feature]]` entries (lsp-pull-diagnostics, lsp-inlay-hint-wait-points, lsp-inlay-hint-allocators, lsp-inlay-hint-lifetimes, lsp-inlay-hint-function-param-type, **lsp-rename-aliased-re-export**), each with `name`, `kind`, `description`, `why_deferred`, `substitute`, `ships_in`, `design_doc`. The 6th (`lsp-rename-aliased-re-export`) is the Round-3-added deferral pushed back from Phase 4 (aliased re-export rename rejected in v0.2-M5; deferred to v0.3+ when typeck owns local-aliased-binding metadata for re-exports).
+- EDIT: [`.claude/todos.md`](../../../todos.md) — GRADUATE 6 pre-staged entries (all 6 deferred-tooling concepts were pre-staged in todos.md during planning per Patrick's deferrals-durability check — see todos.md "Later" bin). Phase 0 replaces each staged `[ ]` bullet with `[x] graduated to registry/features.toml in <PR-link>` so the durable home moves from todos.md to the canonical registry.
+- EDIT: [`CLAUDE.md`](../../../../CLAUDE.md) — Project Layout table: no new rows (no new crates this milestone — Phase 1 adds typeck helpers in-place)
 
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work (lint fix in adjacent code, blocking bug, missing dependency). Document each deviation in the PR description with a one-line reason.
 
 **Steps**:
-1. Write `design/lsp.md` "Capabilities Added in M5" subsection: 8 paragraphs (one per provider) covering: what the LSP method does, what salsa queries it consults, what the user-visible behavior is, what's deferred (e.g., "rename does NOT cover field renames within a shape — that's v0.3 with the symbol-graph upgrade").
-2. Write `design/lsp.md` "Inlay Hints" section: list all 9 domains; for each, state placement category + firing status (5 fire today, 4 protocol-only); cross-link to `design/ide-hints.md` for the protocol spec.
-3. Write `design/lsp.md` "Concurrency: rename + progress" subsection: note that rename uses `WorkspaceEdit` atomically; `references` and `rename` emit `$/progress` notifications for long scans.
-4. Update `design/ide-hints.md` "v0.2-M5 implementation status" subsection: table mapping each of 9 domains to status (firing / protocol-only) with link to the v0.3+ feature that adds the missing data.
-5. Update `design/mvp-scope.md` v0.2-M5 entry: enumerate the 8 capabilities + 3 bug-fixes + tag.
+1. Write [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) "Capabilities Added in M5" subsection: 8 paragraphs (one per provider) covering: what the LSP method does, what salsa queries it consults, what the user-visible behavior is, what's deferred (e.g., "rename does NOT cover field renames within a shape — that's v0.3 with the symbol-graph upgrade").
+2. Write [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) "Inlay Hints" section: list all 9 domains; for each, state placement category + firing status (5 fire today, 4 protocol-only); cross-link to [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md) for the protocol spec.
+3. Write [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) "Concurrency: rename + progress" subsection: note that rename uses `WorkspaceEdit` atomically; `references` and `rename` emit `$/progress` notifications for long scans.
+4. Update [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md) "v0.2-M5 implementation status" subsection: table mapping each of 9 domains to status (firing / protocol-only) with link to the v0.3+ feature that adds the missing data.
+5. Update [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M5 entry: enumerate the 8 capabilities + 3 bug-fixes + tag.
 6. Update roadmap M5 milestone entry: rewrite "Rough scope" paragraph to match THIS plan; bump `last_updated:` to today.
-7. Add 6 `[[deferred_tooling_feature]]` entries to `registry/features.toml` with all required fields (kind, why_deferred, substitute, ships_in, design_doc): lsp-pull-diagnostics, lsp-inlay-hint-wait-points, lsp-inlay-hint-allocators, lsp-inlay-hint-lifetimes, lsp-inlay-hint-function-param-type, lsp-rename-aliased-re-export. **Source the field values from the matching staged entries already in `.claude/todos.md` "Later"** (all 6 were pre-staged during planning so the deferrals had a durable home even if M5 stalled before Phase 0 ran).
+7. Add 6 `[[deferred_tooling_feature]]` entries to [`registry/features.toml`](../../../../registry/features.toml) with all required fields (kind, why_deferred, substitute, ships_in, design_doc): lsp-pull-diagnostics, lsp-inlay-hint-wait-points, lsp-inlay-hint-allocators, lsp-inlay-hint-lifetimes, lsp-inlay-hint-function-param-type, lsp-rename-aliased-re-export. **Source the field values from the matching staged entries already in [`.claude/todos.md`](../../../todos.md) "Later"** (all 6 were pre-staged during planning so the deferrals had a durable home even if M5 stalled before Phase 0 ran).
 8. **Graduate the 6 staged `todos.md` entries**: for each, replace the bullet with `[x] **<name>** — graduated to registry/features.toml in <this-PR-link>` (so todos.md retains the audit trail but no longer duplicates the canonical registry data).
 9. Run `cargo build --workspace` — confirms registry-schema parse succeeds with new entries.
 10. Run `cargo test -p ynz-registry` — confirms consistency tests pass with new deferred-tooling entries.
 
 **Acceptance criteria** (observable conditions that define DONE):
-- [x] `design/lsp.md` has "Capabilities Planned for M5" subsection with 8 paragraphs (verified via `grep -A 3 "Capabilities Planned for M5" design/lsp.md`)
-- [x] `design/lsp.md` has new "Inlay Hints" section with 9-domain table
-- [x] `design/lsp.md` has "Concurrency: Rename + Progress Notifications (Design for M5)" subsection
-- [x] `design/ide-hints.md` has new "v0.2-M5 Implementation Plan" subsection with all 9 domains
-- [x] `design/mvp-scope.md` v0.2-M5 entry enumerates 8 capabilities + 3 bug-fixes
+- [x] [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) has "Capabilities Planned for M5" subsection with 8 paragraphs (verified via `grep -A 3 "Capabilities Planned for M5" docs/internal/implementation/IMP-lsp.md`)
+- [x] [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) has new "Inlay Hints" section with 9-domain table
+- [x] [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) has "Concurrency: Rename + Progress Notifications (Design for M5)" subsection
+- [x] [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md) has new "v0.2-M5 Implementation Plan" subsection with all 9 domains
+- [x] [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M5 entry enumerates 8 capabilities + 3 bug-fixes
 - [x] Roadmap v0.2-M5 entry updated; `last_updated:` bumped
-- [x] `registry/features.toml` has 6 new `[[deferred_tooling_feature]]` entries (verified: count = 11)
+- [x] [`registry/features.toml`](../../../../registry/features.toml) has 6 new `[[deferred_tooling_feature]]` entries (verified: count = 11)
 - [x] `todos.md` "Later" has 6 pre-staged entries graduated to `[x]`
 - [x] `cargo build --workspace` succeeds
 - [x] `cargo test -p ynz-registry` passes (26 tests green)
@@ -413,19 +413,19 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] No new banned-jargon in design docs
 - [x] No `as any` / `#[allow(...)]` swallows
 - [ ] `cargo clippy --workspace -- -D warnings` passes — 3 pre-existing failures in ynz-fmt + ynz-watch (redundant_closure, if_same_then_else, too_many_arguments); NOT introduced by Phase 0; tracked in todos.md "Soon" as `clippy-cleanup-ynz-fmt-ynz-watch`
-- [x] design/lsp.md cross-references `design/compiler-language.md`, `design/feature-registry.md`, `design/teaching-mission.md`, `.claude/rules/inference.md`, `design/ide-hints.md`
+- [x] docs/internal/implementation/IMP-lsp.md cross-references [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](../../../../docs/internal/implementation/IMP-feature-registry.md), [`docs/reference/REF-teaching-mission.md`](../../../../docs/reference/REF-teaching-mission.md), [`.claude/rules/inference.md`](../../../rules/inference.md), [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md)
 - [x] No commented-out code; no orphan files
 
 **Phase 0 deviations** (documented per Deviation rule):
 - `.claude/plans/active/v0-2-m4-watch.md` moved to `done/`: pre-existing user change on `main` set `status: done`; Phase 0 completed the move to `done/` for radar/hook coherence. M4 work is complete (all post-ship bugs fixed on main).
-- `.claude/todos.md` "Later": two new entries added (`lsp-references-circular-import-termination`, `lsp-rename-call-site-shadowing-detection`) as Round 3 adversarial case follow-ups per the plan Reviewer History section. Not in Phase 0 Files scope but serve M5 durability.
+- [`.claude/todos.md`](../../../todos.md) "Later": two new entries added (`lsp-references-circular-import-termination`, `lsp-rename-call-site-shadowing-detection`) as Round 3 adversarial case follow-ups per the plan Reviewer History section. Not in Phase 0 Files scope but serve M5 durability.
 
 **Verification**:
 - `cargo build --workspace 2>&1 | tail -5` — clean build
 - `cargo test --workspace 2>&1 | grep 'test result'` — all tests pass
 - `grep -c '^\[\[deferred_tooling_feature\]\]' registry/features.toml` — 11 (5 pre-M5 + 6 added by this phase)
-- `grep -A 3 "Capabilities Planned for M5" design/lsp.md | wc -l` — substantive content
-- `wc -l design/lsp.md` — grew by ~200 lines
+- `grep -A 3 "Capabilities Planned for M5" docs/internal/implementation/IMP-lsp.md | wc -l` — substantive content
+- `wc -l docs/internal/implementation/IMP-lsp.md` — grew by ~200 lines
 
 **Exit Sequence — RUN THESE STEPS:**
 
@@ -829,8 +829,8 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - EDIT: `crates/ynz-lsp/src/server.rs` — `Formatting` + `RangeFormatting` dispatch
 - EDIT: `crates/ynz-lsp/src/capabilities.rs` — `document_formatting_provider: Some(OneOf::Left(true))` + `document_range_formatting_provider: Some(OneOf::Left(true))`
 - NEW: `crates/ynz-lsp/tests/formatting.rs` — integration tests
-- EDIT: `crates/ynz-fmt/Cargo.toml` if any new dep needed (likely none)
-- EDIT: `.claude/todos.md` — close `lsp-range-formatting` entry
+- EDIT: [`crates/ynz-fmt/Cargo.toml`](../../../../crates/ynz-fmt/Cargo.toml) if any new dep needed (likely none)
+- EDIT: [`.claude/todos.md`](../../../todos.md) — close `lsp-range-formatting` entry
 
 **Steps**:
 1. Add `format_range` to `ynz-fmt`: re-uses existing AST + emitter, but only walks the subtree within `range`. If `range` spans multiple top-level items, formats each independently and joins. If `range` is in the middle of an item, fall back to formatting the whole containing item.
@@ -889,15 +889,15 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Objective**: User sees teaching annotations rendered inline as muted text: type annotations, ownership modifiers, copy markers, auto-promotion markers. Hover any hint to see WHAT/WHAT-INSTEAD/WHY content from the registry.
 
-**Why this phase exists**: The teaching mission centerpiece. Per `design/teaching-mission.md`, muted hints are the primary proactive-teaching surface. Without them, only reactive (error-time) teaching exists.
+**Why this phase exists**: The teaching mission centerpiece. Per [`docs/reference/REF-teaching-mission.md`](../../../../docs/reference/REF-teaching-mission.md), muted hints are the primary proactive-teaching surface. Without them, only reactive (error-time) teaching exists.
 
 **Current-state anchors**:
-- `registry/features.toml` 9 `[[muted_hint_domain]]` entries (M1)
+- [`registry/features.toml`](../../../../registry/features.toml) 9 `[[muted_hint_domain]]` entries (M1)
 - `crates/ynz-registry/src/lib.rs::muted_hint_domains` + `muted_hint_domain_lookup` (M1)
 - `crates/ynz-typeck/src/check.rs` — current typeck pass; has ownership analysis (M4)
 - `crates/ynz-typeck/src/types.rs::Type` — type system; has trivially-copyable detection (M4)
-- `design/ide-hints.md` — protocol spec (M2)
-- `.claude/rules/inference.md` — three placement categories
+- [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md) — protocol spec (M2)
+- [`.claude/rules/inference.md`](../../../rules/inference.md) — three placement categories
 
 **Files (expected scope)**:
 - NEW: `crates/ynz-typeck/src/inlay_hint_passes.rs` — per-domain detection:
@@ -924,7 +924,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 7. For `variable_type`: at each `let x = expr` without annotation, run typeck to determine `expr`'s type; emit hint at name-end with `": <type>"`.
 8. For `copy_point`: at each `Call` arg where (a) the type is trivially-copyable AND (b) the binding is used after the call (i.e. NOT consumed). Emit hint at the argument's end with `.copy (N bytes, trivially copyable)` text.
 9. Implement `inlay_hint_response`: call each firing pass; concatenate; filter to viewport range; convert to `InlayHint` wire format. **Viewport filter semantic LOCKED**: position-only — a hint is INCLUDED if its `position` byte-offset falls within the requested `range`, even if its anchor expression starts before the range. Matches rust-analyzer's behavior. Per plan-reviewer Round 2 Adversarial #2. Add a test fixture with a hint at column 15 of line 5 whose anchor spans columns 10-20 and request range columns 12-18: assert the hint is included. For each hint, build hover markdown via `lsp_inlay_hint_hover_for`.
-10. Register 4 protocol-only handlers: trivial `Vec<InlayHint>::new()` returns. Reason: per `design/ide-hints.md`, the protocol must handle all 9 domains even if some emit nothing. This shape future-proofs adding data without changing the wire protocol.
+10. Register 4 protocol-only handlers: trivial `Vec<InlayHint>::new()` returns. Reason: per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md), the protocol must handle all 9 domains even if some emit nothing. This shape future-proofs adding data without changing the wire protocol.
 11. Tests:
     - One per firing domain: assert the hint appears at the expected position
     - Viewport filter: pass range covering only line 3; assert only hints on line 3 returned
@@ -981,7 +981,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Files (expected scope)**:
 - NEW: `crates/ynz-lsp/src/code_action.rs` — `pub fn code_action_response(state, params) -> Vec<CodeAction>`
-- EDIT: `crates/ynz-registry/src/lib.rs` — add `pub fn lsp_code_action_label_for(diagnostic_kind: &str) -> Option<String>` + `pub fn lsp_code_action_replacement_for(diagnostic_kind: &str, diagnostic_data: &CodeActionData) -> Option<String>` adapters. **MUST include explicit `// CARVE-OUT: <reason>` comment per `.claude/rules/feature-registry.md` carve-out policy** because the label-TEMPLATE format (`"Replace \`X\` with \`Y\`"`) is a presentation-layer formatter, not registry data per se — the registry-data is the X/Y values (already in `banned_jargon` / `banned_declaration_keyword` entries); the LABEL is a SHARED rendering across many diagnostic kinds. The carve-out comment names this rationale explicitly. Alternative considered: add `code_action_label_template` field to every relevant registry entry (10+ entries × duplicate identical template = 10+ duplications). Rejected: violates DRY without benefit (every label uses the same template; only X and Y differ).
+- EDIT: `crates/ynz-registry/src/lib.rs` — add `pub fn lsp_code_action_label_for(diagnostic_kind: &str) -> Option<String>` + `pub fn lsp_code_action_replacement_for(diagnostic_kind: &str, diagnostic_data: &CodeActionData) -> Option<String>` adapters. **MUST include explicit `// CARVE-OUT: <reason>` comment per [`.claude/rules/feature-registry.md`](../../../rules/feature-registry.md) carve-out policy** because the label-TEMPLATE format (`"Replace \`X\` with \`Y\`"`) is a presentation-layer formatter, not registry data per se — the registry-data is the X/Y values (already in `banned_jargon` / `banned_declaration_keyword` entries); the LABEL is a SHARED rendering across many diagnostic kinds. The carve-out comment names this rationale explicitly. Alternative considered: add `code_action_label_template` field to every relevant registry entry (10+ entries × duplicate identical template = 10+ duplications). Rejected: violates DRY without benefit (every label uses the same template; only X and Y differ).
 - EDIT: `crates/ynz-lsp/src/lib.rs`
 - EDIT: `crates/ynz-lsp/src/server.rs`
 - EDIT: `crates/ynz-lsp/src/capabilities.rs` — `code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions { code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]), ... }))`
@@ -1116,7 +1116,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - EDIT: `crates/ynz-driver/src/main.rs` — pass `--json` flag through
 - EDIT: `crates/ynz-lsp/tests/regression_lsp_vs_cli_divergence.rs` (M2) — tighten to count-level + per-kind agreement via `--json` output
 - NEW: `crates/ynz-lsp/tests/diagnostic_structured_fields.rs` — assert code / codeDescription / data populated on every diagnostic
-- EDIT: `.claude/todos.md` — close `lsp-vs-cli-exact-divergence`
+- EDIT: [`.claude/todos.md`](../../../todos.md) — close `lsp-vs-cli-exact-divergence`
 
 **Steps**:
 1. Add `docs_url_for_kind(kind: &str) -> Option<String>` — for now returns `None` for everything (until docs site lands in v0.3+; placeholder reserves the API). Cite the deferral in the inline rustdoc.
@@ -1141,7 +1141,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Quality gate**:
 - [x] No `unwrap()` outside tests
 - [x] Tier 2 rustdoc explains: `code` is the DiagnosticKind name; `codeDescription` is reserved for docs-site URL (currently `None`); `data` is the structured WHAT/WHAT-INSTEAD/WHY
-- [x] `--json` output schema documented in `design/lsp.md` (added in this phase) — schema documented in json_diagnostic.rs rustdoc; design/lsp.md update deferred to Phase 12 where it belongs with all M5 capability docs
+- [x] `--json` output schema documented in [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) (added in this phase) — schema documented in json_diagnostic.rs rustdoc; docs/internal/implementation/IMP-lsp.md update deferred to Phase 12 where it belongs with all M5 capability docs
 - [x] No commented-out code
 
 **Verification**: `cargo test -p ynz-lsp diagnostic_structured_fields` + `cargo test -p ynz-driver build_json` + `cargo run -p ynz-driver -- build --json examples/primantis-orders/m1_errors.ynz | head -3` shows NDJSON.
@@ -1183,7 +1183,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - EDIT: `crates/ynz-parser/tests/parse_doc_comment_attach.rs` (new fixture tests)
 - EDIT: `crates/ynz-lsp/tests/hover.rs` — add doc-comment-attached cases
 - EDIT: `crates/ynz-lsp/tests/completion.rs` — add receiver-narrowed cases
-- EDIT: `.claude/todos.md` — close `lsp-completion-typeck-receiver-narrowing`
+- EDIT: [`.claude/todos.md`](../../../todos.md) — close `lsp-completion-typeck-receiver-narrowing`
 
 **Steps**:
 1. Add `leading_docs: Option<Vec<String>>` to AST decl nodes (`FunctionDecl`, `ShapeDecl`, `OptionsDecl`, `ConstDecl`). Run `grep -rn 'FunctionDecl {' crates/ | wc -l` (and same for the other 3 decl types) to enumerate construction sites; add `leading_docs: None` to each. If any decl struct already derives `Default`, prefer `..Default::default()` at construction sites — confirms zero extra fields slip through unnoticed.
@@ -1251,7 +1251,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - NEW: `crates/ynz-driver/tests/fixtures/m5_hidden_default_int.ynz` (adversarial: `hidden count: int = 42` — non-zero int default ensures fix isn't string-specific)
 - NEW: `tests/snapshots/m5_hidden_default_string.snap` + 2 sibling snapshot files (insta)
 - EDIT: `crates/ynz-codegen/tests/*.rs` — focused unit test per default-type (string / int / nested struct)
-- EDIT: `.claude/todos.md` — close the hidden-field-default-eval "Soon" entry
+- EDIT: [`.claude/todos.md`](../../../todos.md) — close the hidden-field-default-eval "Soon" entry
 
 **Steps**:
 1. **AUDIT** (per plan-reviewer Required Fix #2 — silent-wrong-output class requires explicit audit, not hand-waved "mitigation").
@@ -1320,7 +1320,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - NEW: `crates/ynz-driver/tests/fixtures/m5_dyn_dispatch_coerce_chained.ynz` (adversarial: pass through two function calls each accepting `dynamic Foo`; both fat-pointer correctly)
 - NEW: snapshot files for each
 - EDIT: `crates/ynz-typeck/tests/*.rs` + `crates/ynz-codegen/tests/*.rs` — unit tests
-- EDIT: `.claude/todos.md` — close dyn-dispatch entry
+- EDIT: [`.claude/todos.md`](../../../todos.md) — close dyn-dispatch entry
 
 **Steps**:
 1. Add baseline test: `m5_dyn_dispatch_coerce_happy.ynz` fixture. On `v0.2.0-m4` baseline: typeck error. On this branch: PASSES + vtable call works.
@@ -1370,9 +1370,9 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Est. lines**: ~220 (fix ~40; baseline-fail test + adversarial cases ~120; fixtures + error gallery + snapshots ~60)
 **Ships via**: `/pr`
 
-**Objective**: UFCS dot-call enforces the same ownership rules as the function-call form. Same WHAT/WHAT-INSTEAD/WHY diagnostic (canonical shared wording per `design/ide-hints.md`).
+**Objective**: UFCS dot-call enforces the same ownership rules as the function-call form. Same WHAT/WHAT-INSTEAD/WHY diagnostic (canonical shared wording per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md)).
 
-**Why this phase exists**: One of three `todos.md` "Soon" deferrals. The error-message shared-wording rule (`design/ide-hints.md`) requires the dot-call and function-call forms produce IDENTICAL error text. Currently dot-call produces no error at all.
+**Why this phase exists**: One of three `todos.md` "Soon" deferrals. The error-message shared-wording rule ([`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md)) requires the dot-call and function-call forms produce IDENTICAL error text. Currently dot-call produces no error at all.
 
 **Current-state anchors**:
 - `crates/ynz-typeck/src/check.rs` line ~936 — "UFCS receiver ownership not checked" comment
@@ -1387,13 +1387,13 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - EDIT: `examples/primantis-orders/v0_2_m5_errors.ynz` — add UFCS const-lend trigger
 - NEW: snapshot files
 - EDIT: `crates/ynz-typeck/tests/*.rs` — unit tests
-- EDIT: `.claude/todos.md` — close UFCS const-lend entry
+- EDIT: [`.claude/todos.md`](../../../todos.md) — close UFCS const-lend entry
 
 **Steps**:
 1. Add baseline test: `m5_ufcs_const_lend_error.ynz`. On `v0.2.0-m4`: silently accepts. On this branch: errors with same diagnostic the function-call form produces.
 2. Adversarial 1 — share method on const: `m5_ufcs_const_share_ok.ynz`. Verify the check doesn't over-reject `share self` methods. Required by Required Fix #10.
 3. Adversarial 2 — mixed calls: `m5_ufcs_mixed_calls.ynz`. Verify check granularity (one call errors; one doesn't).
-4. Refactor: extract `check_arg_ownership` from the function-call handler; call from BOTH dot-call (UFCS) and function-call paths. Verify the diagnostic text is BYTE-IDENTICAL between the two paths (canonical shared wording per `design/ide-hints.md`).
+4. Refactor: extract `check_arg_ownership` from the function-call handler; call from BOTH dot-call (UFCS) and function-call paths. Verify the diagnostic text is BYTE-IDENTICAL between the two paths (canonical shared wording per [`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md)).
 5. Add UFCS const-lend trigger to `examples/primantis-orders/v0_2_m5_errors.ynz`.
 6. All 3 fixtures + snapshots pass. CLI rendering of `m5_ufcs_const_lend_error.ynz` produces the SAME diagnostic text as if user wrote `heal(p, 20)`.
 7. Close todos.md entry.
@@ -1444,16 +1444,16 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [ ] `tests/jargon_audit.rs` passes including M5 LSP surfaces
 
 **Files (expected scope)**:
-- EDIT: `Cargo.toml` — workspace `[workspace.package].version` `"0.2.0-m4"` → `"0.2.0"`
-- EDIT: `CHANGELOG.md` — new `## v0.2.0` section (auto-generated by `/release` from merged PRs since `v0.2.0-m4`); manual review pass
+- EDIT: [`Cargo.toml`](../../../../Cargo.toml) — workspace `[workspace.package].version` `"0.2.0-m4"` → `"0.2.0"`
+- EDIT: [`CHANGELOG.md`](../../../../CHANGELOG.md) — new `## v0.2.0` section (auto-generated by `/release` from merged PRs since `v0.2.0-m4`); manual review pass
 - EDIT: `examples/pirates-roster/entrypoint.ynz` — add M5 LSP feature demonstration comments
 - NEW: `examples/primantis-orders/v0_2_m5_errors.ynz` — bug-fix triggers + code-action UX commentary
 - EDIT: `tooling/vscode-ynz/package.json` — bump extension version `"0.2.0-m2"` → `"0.2.0"`
-- EDIT: `tooling/vscode-ynz/README.md` — v0.2.0 section: new features (Cmd+click goto-def, F2 rename, format-on-save, inlay hints, semantic tokens, code actions, doc-comment hover, structured diagnostics)
+- EDIT: [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) — v0.2.0 section: new features (Cmd+click goto-def, F2 rename, format-on-save, inlay hints, semantic tokens, code actions, doc-comment hover, structured diagnostics)
 - NEW: `tooling/vscode-ynz/screenshots/{goto-def,find-refs,rename,format-on-save,inlay-hints,code-action,semantic-tokens,doc-hover}.png` (8 screenshots; capture from Patrick's installed instance)
 - EDIT: `tooling/vscode-ynz/src/extension.ts` — handle `\n\n` separator UX in diagnostic message (closes `vscode-extension-visual-polish` item)
 - EDIT: `crates/ynz-lsp/tests/jargon_audit.rs` — extend to cover code-action labels, rename errors, inlay-hint hover, completion docs, --json output strings
-- EDIT: `.claude/todos.md` — close `vscode-extension-screenshots`, `vscode-extension-visual-polish`, `watch-json-schema-stabilize` (drop -unstable suffix from schema_version field — this gates on v0.2.0 release)
+- EDIT: [`.claude/todos.md`](../../../todos.md) — close `vscode-extension-screenshots`, `vscode-extension-visual-polish`, `watch-json-schema-stabilize` (drop -unstable suffix from schema_version field — this gates on v0.2.0 release)
 - EDIT: `.claude/plans/active/v0-2-m5-lsp-full-and-release.md` — flip `status: active` → `status: done` AFTER reviewer PASS
 
 **Steps**:
@@ -1479,7 +1479,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Acceptance criteria**:
 - [x] All gate-checks passed: v0.2.0-m4 tag exists; M4 watch plan in done/; cargo test green; clippy clean
-- [x] `Cargo.toml` `[workspace.package].version` = `"0.2.0"`
+- [x] [`Cargo.toml`](../../../../Cargo.toml) `[workspace.package].version` = `"0.2.0"`
 - [x] `tooling/vscode-ynz/package.json` version = `"0.2.0"`
 - [ ] `git tag` includes `v0.2.0` — REQUIRES: Patrick runs `/release` after branch merges to main
 - [ ] GitHub release `v0.2.0` exists with `yinz-0.2.0.vsix` + `yinz-latest.vsix` attached — REQUIRES: `/release`
@@ -1565,12 +1565,12 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 5. Phase 9 `--json` schema locked: span shape (`file: path`, `start_byte: u32`, `end_byte: u32`, half-open UTF-8 byte offsets), severity (lowercase string literals), null handling (`skip_serializing_if = "Option::is_none"`, never emit `null`/`NaN`/`Infinity`), encoding (UTF-8 stdout, LF line terminators).
 6. Phase 5 format-on-save silent-empty-edits replaced with `window/showMessage` info-level notification on parse-error path; quality gate updated.
 7. Phase 10 `leading_docs` field changed from bare `Vec<String>` to `Option<Vec<String>>`; construction-site enumeration added to Step 1 (grep affected sites; add `leading_docs: None` to each).
-8. Phase 7 `lsp_code_action_label_for` adapter: added explicit `// CARVE-OUT: <reason>` comment requirement per `.claude/rules/feature-registry.md` carve-out policy; rationale documented.
+8. Phase 7 `lsp_code_action_label_for` adapter: added explicit `// CARVE-OUT: <reason>` comment requirement per [`.claude/rules/feature-registry.md`](../../../rules/feature-registry.md) carve-out policy; rationale documented.
 9. Phase 3 progress-emission threshold locked: `state.open_documents.len() > 10` OR new helper `cross_file_reference_count_estimate > 5`; no hand-waved "estimate from file count" framing.
 10. Phase 11 adversarial cases added across all three sub-phases: nested struct default; ConcreteFoo-NOT-follows-Foo over-acceptance regression; share-on-const non-over-reject.
 
 **All 5 Concerns addressed:**
-- Concern 1 (salsa cancellation): `lsp-salsa-cancellation` todo added to `.claude/todos.md` "Later" with trigger.
+- Concern 1 (salsa cancellation): `lsp-salsa-cancellation` todo added to [`.claude/todos.md`](../../../todos.md) "Later" with trigger.
 - Concern 2 (semantic-tokens TM comparison mechanism): Phase 8 test step adds explicit TM-keyword-rule matcher comparison; identifier-type disagreement explicitly EXCLUDED from the test (it's expected).
 - Concern 3 (LspRenameError codes): explicit code-to-variant table added in Phase 4 Quality Gate using LSP-reserved `-32001` to `-32006` range.
 - Concern 4 (CRLF line endings): Phase 5 line-ending policy section locked (Yinz files LF-only; `ynz-fmt::format` normalizes CRLF→LF).
@@ -1611,7 +1611,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **All 3 Required Fixes addressed (no disputes — all were round-by-round patching artifacts):**
 1. Phase 1 Verification block (lines 536-537) said `>= 4 pub fn` / `>= 4 #[salsa::tracked]` while Acceptance Criteria (lines 511, 520) said `>= 5` after the Round 2 estimator addition → updated Verification to `>= 5` for both.
 2. Phase 3 Step 2 still called `cross_file_reference_count_estimate` "a new lightweight helper" even though Round 2 moved its ownership to Phase 1 → rephrased to "the Phase-1-owned helper (see Phase 1 Files-expected-scope)... Phase 3 CONSUMES this helper; it does NOT add it."
-3. Round 3's new deferred-tooling concept (`lsp-rename-aliased-re-export`) was added to `.claude/todos.md` but not to Phase 0's registry-entry list per `.claude/rules/feature-registry.md` Required Entry Types Checklist → added as 6th `[[deferred_tooling_feature]]` in Phase 0; grep-count verification bumped from 10 → 11; acceptance criterion updated.
+3. Round 3's new deferred-tooling concept (`lsp-rename-aliased-re-export`) was added to [`.claude/todos.md`](../../../todos.md) but not to Phase 0's registry-entry list per [`.claude/rules/feature-registry.md`](../../../rules/feature-registry.md) Required Entry Types Checklist → added as 6th `[[deferred_tooling_feature]]` in Phase 0; grep-count verification bumped from 10 → 11; acceptance criterion updated.
 
 **3 Concerns acknowledged (non-blocking per reviewer):**
 - Concern 1 (Phase 0 entry-count brittle invariant): noted; future plan-revisions to Phase 0 entry list will need to keep step-list, Files-expected-scope, acceptance criterion, and verification grep-count all in sync.
@@ -1619,8 +1619,8 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - Concern 3 (aliased-re-export "codebase pattern emerges" trigger is vague): noted; the user-requests trigger is the primary trigger and is concrete.
 
 **Round 3 suggested Adversarial cases — punted to follow-up todos rather than scope-creeping the plan:**
-- Phase 1 `references_for_offset` on circular import → adding to `.claude/todos.md` "Later" as `lsp-references-circular-import-termination` with trigger = first user report of editor freeze on cyclic imports OR pre-emptively when Yinz's import-cycle detection ships in v0.3.
-- Phase 4 rename with shadowing-at-call-site → adding to `.claude/todos.md` "Later" as `lsp-rename-call-site-shadowing-detection`; the `ConflictsWithExistingName` check today covers same-file conflicts but not per-call-site scope-shadowing; trigger = user report or v0.3 typeck adds per-call-site scope-walk API.
+- Phase 1 `references_for_offset` on circular import → adding to [`.claude/todos.md`](../../../todos.md) "Later" as `lsp-references-circular-import-termination` with trigger = first user report of editor freeze on cyclic imports OR pre-emptively when Yinz's import-cycle detection ships in v0.3.
+- Phase 4 rename with shadowing-at-call-site → adding to [`.claude/todos.md`](../../../todos.md) "Later" as `lsp-rename-call-site-shadowing-detection`; the `ConflictsWithExistingName` check today covers same-file conflicts but not per-call-site scope-shadowing; trigger = user report or v0.3 typeck adds per-call-site scope-walk API.
 - Phase 9 `--json` output on zero-diagnostics → folded into Phase 9 Step 7 inline: add explicit "zero diagnostics" fixture asserting output = just the `summary` line with all counts = 0.
 
 **Net result**: 3 BLOCK fixes were mechanical drift-defect repairs; plan grew ~20 lines. Phase count unchanged at 15. Hit the Round-3 cap — awaiting Patrick arbitration on whether to invoke Round 4 (reviewer is likely to PASS given the trivial nature of remaining drift) or ship.
@@ -1647,6 +1647,6 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Two new Adversarial cases the reviewer flagged as future-pass material (not blockers)**:
 - Phase 4 prepareRename-vs-rename agreement contract test (low-risk; clients conform; pin for future regression prevention).
 - Phase 6 inlay-hint emission inside comment regions assertion (structurally impossible today; lock prevents future parser changes from breaking it).
-- Both folded into a future v0.2-M5 polish or v0.3 hardening pass via `.claude/todos.md` "Later" if/when they bite — NOT scope-crept into this milestone.
+- Both folded into a future v0.2-M5 polish or v0.3 hardening pass via [`.claude/todos.md`](../../../todos.md) "Later" if/when they bite — NOT scope-crept into this milestone.
 
 **Net result across 4 rounds**: 13 Phases → 15 Phases (P11 split into 11a/b/c). Plan grew from ~1140 lines → ~1600 lines. Every drift defect and silent-failure trigger explicitly locked. Tier A correctness gates intact. **PASS — plan ready for execution.**

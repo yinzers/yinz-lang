@@ -26,7 +26,7 @@ legacy:
     - crates/ynz-driver/tests/integration.rs
     - examples/pirates-roster/entrypoint.ynz
     - examples/pirates-roster/expected_stdout.txt
-    - design/concurrency.md
+    - docs/internal/implementation/IMP-concurrency.md
     - .claude/todos.md
     - .claude/plans/roadmaps/v0-3-concurrency-perf.md
 ---
@@ -70,7 +70,7 @@ Ships via: `/pr` per phase; `/release` for standalone `v0.3.0-m6` tag at milesto
 1. Bug-1 repro prints `24.50` / `31.75` in BOTH modes; N live bindings of the same wide-EC callee are all distinct; alloc == free.
 2. Bug-2 repro prints `42` in BOTH modes; `default == --no-auto-parallel` restored across the full trigger matrix and the existing suite.
 3. No regression: `cargo test --workspace` green; cross-impl consistency holds on every fixture; jargon/clippy/fmt clean.
-4. The design-doc claim Bug 1 contradicted (`design/concurrency.md` ECWrapperResultCollection — "the inline-poll path is correct and complete") is corrected.
+4. The design-doc claim Bug 1 contradicted ([`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) ECWrapperResultCollection — "the inline-poll path is correct and complete") is corrected.
 
 ## Research Findings
 
@@ -99,7 +99,7 @@ All findings are from **live repro against `./target/debug/ynz` on `d24a5f4`** (
 - `emit.rs:5122-5198` `bind_sm_result_and_flush` — the **crossing** EC arm (5154-5190) ALREADY extracts both `{i64,i64}` fields and stores copies into per-binding companion storage. **This is the fix template** — the non-crossing path must do the same copy-out for wide-value ok-words.
 - `emit.rs:12723-12737` `lower_errors_capable_call_result` (non-SM inline-poll path) — also just stores the struct (dangling ok-ptr); must also copy-on-bind for wide-EC.
 - `state_machine.rs:387-418` `load_return_value_errors` — returns the ok_i64 that, for `number errors`, is the staging-slot pointer.
-- `registry/features.toml` `ec-wrapper-collect-on-completion` + `design/concurrency.md:450-464` `ECWrapperResultCollection` — the SAME staging-slot-dangling class but for the `background` wrapper path (gated on background-handle collection, still vacuous in M3b). Bug 1 is the **inline-poll / sequential same-callee** sibling, which is reachable today. The doc's claim "the inline-poll path ... is correct and complete" (concurrency.md:458) is **false** in the same-callee-reuse case and must be corrected.
+- [`registry/features.toml`](../../../../registry/features.toml) `ec-wrapper-collect-on-completion` + `docs/internal/implementation/IMP-concurrency.md:450-464` `ECWrapperResultCollection` — the SAME staging-slot-dangling class but for the `background` wrapper path (gated on background-handle collection, still vacuous in M3b). Bug 1 is the **inline-poll / sequential same-callee** sibling, which is reachable today. The doc's claim "the inline-poll path ... is correct and complete" (concurrency.md:458) is **false** in the same-callee-reuse case and must be corrected.
 
 **Deferred (out of M3f, confirmed)**: aliased shape + `lend`-across-`wait` write-back (todos.md:170) — `let b = a` shape alias, both mutated via lend across a wait → prints `n:10` not `n:110`. Verified BOTH modes identical (`10`) → base shallow-shape-alias write-back, a **different root cause** (m3c-array-by-value family), NOT the crossing-local/parallel-group family. Patrick decision 2026-06-09: defer to `v0-3-m3c-array-by-value`. Stays open in todos.md.
 
@@ -146,7 +146,7 @@ No open questions remain.
 
 ## Design Divergences
 
-_(No divergence from any `[locked]` design doc. Both fixes RESTORE documented invariants. Bug 1's fix CORRECTS a now-false claim in `design/concurrency.md` (ECWrapperResultCollection:458) — that is a doc update, recorded as a Documentation Deliverable, not a divergence.)_
+_(No divergence from any `[locked]` design doc. Both fixes RESTORE documented invariants. Bug 1's fix CORRECTS a now-false claim in [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) (ECWrapperResultCollection:458) — that is a doc update, recorded as a Documentation Deliverable, not a divergence.)_
 
 | Doc | What it says | What we do instead | Approved rationale (named cost + reversal path) |
 |-----|-------------|-------------------|------------------------------------------------|
@@ -156,8 +156,8 @@ _(No divergence from any `[locked]` design doc. Both fixes RESTORE documented in
 
 | Deliverable | Phase | Notes |
 |---|---|---|
-| `design/concurrency.md` ECWrapperResultCollection (≈line 458) claim "the inline-poll path … is correct and complete" corrected to note the same-callee wide-EC reuse hole + its M3f fix | Phase 4 | Cross-cutting: the claim is wrong because of Bug 1; the correction belongs to the whole-milestone narrative, not a single fix phase. |
-| `.claude/todos.md` entries :178 + :180 closed (ticked + dated); roadmap M3f "Tracked bugs" marked shipped; aliased-shape :170 left open (deferred to m3c) | Phase 4 | Deferrals-must-be-tracked: the closed bugs leave the live list; the deferred one stays with its trigger. |
+| [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) ECWrapperResultCollection (≈line 458) claim "the inline-poll path … is correct and complete" corrected to note the same-callee wide-EC reuse hole + its M3f fix | Phase 4 | Cross-cutting: the claim is wrong because of Bug 1; the correction belongs to the whole-milestone narrative, not a single fix phase. |
+| [`.claude/todos.md`](../../../todos.md) entries :178 + :180 closed (ticked + dated); roadmap M3f "Tracked bugs" marked shipped; aliased-shape :170 left open (deferred to m3c) | Phase 4 | Deferrals-must-be-tracked: the closed bugs leave the live list; the deferred one stays with its trigger. |
 
 _(Per-phase doc-ACs: none beyond the above — the fixes touch no other documented subsystem. The gallery obligation does NOT produce a doc/error-gallery entry because M3f introduces no new compile-error class — see `### Demo & Error Gallery` Invariant below for the explicit rationale.)_
 
@@ -172,8 +172,8 @@ _(Declared so the orchestrator green-lights these at the Phase-1 boundary per `n
 
 ## Design-Doc Alignment
 
-**Governing docs** (all `[locked]` in `.claude/design-sources.md`):
-- `design/concurrency.md` — "Suspension vs. Ordering" (suspension preserves values; independent ops auto-parallelize; `default == --no-auto-parallel` is the cross-impl invariant); `ECWrapperResultCollection` (the staging-slot ok-pointer class).
+**Governing docs** (all `[locked]` in [`.claude/design-sources.md`](../../../design-sources.md)):
+- [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) — "Suspension vs. Ordering" (suspension preserves values; independent ops auto-parallelize; `default == --no-auto-parallel` is the cross-impl invariant); `ECWrapperResultCollection` (the staging-slot ok-pointer class).
 - `design/future/concurrency.md` — no-coloring model, inline poll-and-yield.
 
 **Conformance**: both fixes make the code MATCH these docs.
@@ -197,7 +197,7 @@ _(Declared so the orchestrator green-lights these at the Phase-1 boundary per `n
 
 ### Teaching
 - M3f introduces NO new diagnostic, muted-hint domain, or lint (both bugs are silent miscompiles being made correct, not new compile errors). No WHAT/WHAT-INSTEAD/WHY text to add.
-- `design/concurrency.md` ECWrapperResultCollection corrected so the design narrative stops claiming a path is complete when it had a hole (teaching-by-honest-docs).
+- [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) ECWrapperResultCollection corrected so the design narrative stops claiming a path is complete when it had a hole (teaching-by-honest-docs).
 
 ### Runtime Dependencies
 - Bug 1 fix: copy-on-bind uses the existing frame/stack allocation already present for EC bindings (the crossing path's companion storage is the template) — no new runtime symbol; reuses `ynz_alloc`/`ynz_free` only if the wide-EC buffer is heap-backed (decide in Phase 2; stack alloca preferred where lifetime permits). No new C-ABI surface.
@@ -433,15 +433,15 @@ _(D_count = 0 — executor touched only emit.rs (matches plan); the 2 documented
 - `crates/ynz-driver/tests/fixtures/` + `integration.rs` — fixture home + cross-impl harness.
 - `examples/pirates-roster/entrypoint.ynz` (879 lines, single-entry) + `expected_stdout.txt` + `expected_stdout.txt.regenerate.sh` + `services/` — the canonical demo.
 - `examples/primantis-orders/` — error gallery (NO new file — M3f adds no compile-error class).
-- `design/concurrency.md:450-464` ECWrapperResultCollection — the claim to correct.
+- `docs/internal/implementation/IMP-concurrency.md:450-464` ECWrapperResultCollection — the claim to correct.
 - `.claude/todos.md:178` (Bug 2) + `:180` (Bug 1) + `:170` (aliased-shape, stays open); `.claude/plans/roadmaps/v0-3-concurrency-perf.md` M3f section.
-**Files (expected scope)**: fixtures + `integration.rs`; `examples/pirates-roster/entrypoint.ynz` + `expected_stdout.txt`; `design/concurrency.md`; `.claude/todos.md`; roadmap file.
+**Files (expected scope)**: fixtures + `integration.rs`; `examples/pirates-roster/entrypoint.ynz` + `expected_stdout.txt`; [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md); [`.claude/todos.md`](../../../todos.md); roadmap file.
 **Deviation rule**: standard; document deviations.
 **Steps**:
 1. Promote the Phase-3 trigger matrix into permanent fixtures (`v0_3_m3f_parallel_group_*` for int+int, int+bool top/nested, bool-first-then-int, bool+bool, 3-member, and a concrete `-> number errors` 2-slot result paired with the bool 1-slot crossing the same wait) with insta stdout snapshots + cross-impl assertions. Add `v0_3_m3f_ec_*` fixtures for Bug 1: the multi-binding ok-path variant AND the failed-branch-interleave variant (one binding errors, a later same-callee call succeeds).
 2. Extend `examples/pirates-roster/entrypoint.ynz` with a section demonstrating BOTH fixed patterns in realistic context (two same-callee wide-EC price lookups returning distinct decimal128 values; a parallel group pairing an int with a bool flag, both crossing a `wait`, used after). Regenerate `expected_stdout.txt` via the regenerate script; verify the runtime output matches.
 3. Gallery: add NO new `primantis-orders` file — record in the PR description + a one-line note in the gallery README why (M3f introduces no new compile-error class; both bugs are silent miscompiles made correct).
-4. Correct `design/concurrency.md` ECWrapperResultCollection (≈line 458): amend "the inline-poll path … is correct and complete" to note the same-callee wide-EC reuse hole existed and was fixed in M3f (cross-ref the copy-on-bind fix); keep the `background`-wrapper deferral text (still gated on background-handle collection).
+4. Correct [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) ECWrapperResultCollection (≈line 458): amend "the inline-poll path … is correct and complete" to note the same-callee wide-EC reuse hole existed and was fixed in M3f (cross-ref the copy-on-bind fix); keep the `background`-wrapper deferral text (still gated on background-handle collection).
 5. Close `.claude/todos.md:178` + `:180` (tick + date + "shipped M3f"); mark roadmap M3f "Tracked bugs" 1 & 2 shipped; leave `:170` (aliased-shape) open with its m3c deferral. **When closing :178, state the reframe explicitly** so nobody reconciling the roadmap thinks a crash was fixed: ":178 described an LLVM 'does not dominate all uses' compile crash; that symptom no longer reproduces on `main` (the crossing-local read-scan already recurses — incidentally closed by earlier M3 work). What M3f actually fixed in this area is the live mode-divergent silent miscompile (parallel-group bool sibling reads 0; default ≠ --no-auto-parallel) that the same root area surfaced. Closing :178 as the area's tracked bug, fixed via the Bug-2 reframe."
 6. Cumulative cross-impl sweep: assert `default == YNZ_NO_AUTO_PARALLEL=1` across ALL fixtures + the existing suite; `cargo clippy --workspace -- -D warnings`; `cargo fmt --all --check`; jargon audit.
 **Acceptance criteria**:
@@ -449,8 +449,8 @@ _(D_count = 0 — executor touched only emit.rs (matches plan); the 2 documented
   - Evidence: 12 `v0_3_m3f_*.ynz` fixtures + 12 integration tests; `cargo test -p ynz-driver --test integration v0_3_m3f` → **12 passed, 0 failed**; every test calls `build_to_tmpdir_and_run` for both modes + asserts `assert_eq!(par, seq, ...)` cross-impl (integration.rs:6580-6877). Includes the EC<Number>(3-slot)+bool(1-slot) interleave `v0_3_m3f_parallel_group_ec_number_and_bool` (`24.50\ntrue` PAR==SEQ), the 3-binding `v0_3_m3f_ec_three_bindings` (`24.50\n31.75\n24.50`), and the failed-branch `v0_3_m3f_ec_failed_then_ok` (`true\n0.0\n99.9`). (acceptance-verifier cumulative, live)
 - [x] `pirates-roster/entrypoint.ynz` demonstrates both fixed patterns; `expected_stdout.txt` regenerated and matches the live run
   - Evidence: demo M3f section (`m3f_demo()`, entrypoint.ynz:930-956) — two same-callee EC `fetchScoutRating(0/1)` + an int/bool parallel group crossing `wait sleep(1)`. LIVE-run M3f lines (`87.50`/`92.25`/`draft slot available: 14`) byte-identical to `expected_stdout.txt` and deterministic across 3 runs (same md5); `expected_stdout.txt` regenerated via the script (not hand-edited). (The only diff vs live is the pre-existing M3b `background` print-ordering non-determinism — todos:176 — NOT the M3f lines.) (acceptance-verifier cumulative, live)
-- [x] `design/concurrency.md` ECWrapperResultCollection claim corrected (inline-poll path hole + M3f fix noted)
-  - Evidence: `design/concurrency.md:458` false "the inline path is correct and complete" removed; durable Note at :460 documents the same-callee staging-slot hole + M3f copy-on-bind fix, preserving the distinct `background`-wrapper deferral. States current reality, not changelog. (acceptance-verifier + design-compliance + rules-compliance, cumulative)
+- [x] [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) ECWrapperResultCollection claim corrected (inline-poll path hole + M3f fix noted)
+  - Evidence: `docs/internal/implementation/IMP-concurrency.md:458` false "the inline path is correct and complete" removed; durable Note at :460 documents the same-callee staging-slot hole + M3f copy-on-bind fix, preserving the distinct `background`-wrapper deferral. States current reality, not changelog. (acceptance-verifier + design-compliance + rules-compliance, cumulative)
 - [x] todos.md :178 + :180 closed; roadmap M3f bugs 1&2 marked shipped; :170 left open with m3c deferral
   - Evidence: todos.md :178 → `- [x]` with explicit REFRAME text + commit `05262d3`; :180 → `- [x]` CLOSED via copy-on-bind + commit `9e7ee78`; roadmap bugs 1&2 struck-through + "SHIPPED v0.3-M3f"; :170 aliased-shape still `- [ ]` open with intact m3c deferral trigger. (acceptance-verifier + plan-adherence, cumulative)
 - [x] Cumulative `default == --no-auto-parallel` holds on every fixture; `cargo test --workspace` green; clippy/fmt/jargon clean
@@ -495,7 +495,7 @@ _(D_count = 0 — executor touched only emit.rs (matches plan); the 2 documented
 - [x] Existing tests still pass (`cargo test --workspace`); golden IR byte-identical for unaffected fns
 - [x] clippy `-D warnings` + `cargo fmt --check` + jargon audit clean
 - [x] Demo (`pirates-roster`) extended + expected_stdout regenerated; no new error-gallery entry (documented why)
-- [x] `design/concurrency.md` ECWrapperResultCollection corrected; todos :178/:180 closed; :170 left open (m3c)
+- [x] [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) ECWrapperResultCollection corrected; todos :178/:180 closed; :170 left open (m3c)
 - [x] Every phase received all-reviewer + all-judge PASS before committing (Step 9a) — Phase 1 (2 rounds), Phase 2 (3 rounds), Phase 3 (1 round), Phase 4 cumulative
 - [x] Final cumulative opus reviewer sweep passed (Step 10f) — all 5 reviewers + cross-phase judge PASS
 - [x] Plan-file AC checkboxes accurate across all phases (Step 9b)

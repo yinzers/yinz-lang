@@ -20,7 +20,7 @@
 # (Already covered by the design/**/*.md glob above — listed here so the design-compliance
 #  reviewer gets the "this is load-bearing / caused a HALT" context, per the format spec's
 #  domain-note guidance. No tier override: everything is locked.)
-- [locked] design/concurrency.md             — (internal) auto-parallelization design + suspension semantics + wait-ordering model (LOCKED 2026-06-05)
-- [locked] design/no-function-coloring.md      — (internal) no-coloring async model + channel/scheduler primitives. The v0.3-M2 HALT was caused by a plan contradicting THIS doc without ever diffing against it. (Was design/future/concurrency.md until 2026-06-13 — moved out of future/ because v0.3 is implementing it now.)
-- [locked] design/no-runtime-mode.md  — (internal) kernel-mode plug-in allocator API; plan-invariants.md treats `--kernel` behavior as a hard per-milestone contract, so this doc is load-bearing now
-- [locked] design/ide-hints.md               — (internal) muted-hint placement categories + hover format; governs wait_points + background_routing hint implementation
+- [locked] docs/internal/implementation/IMP-concurrency.md             — (internal) auto-parallelization design + suspension semantics + wait-ordering model (LOCKED 2026-06-05)
+- [locked] docs/internal/implementation/IMP-no-function-coloring.md      — (internal) no-coloring async model + channel/scheduler primitives. The v0.3-M2 HALT was caused by a plan contradicting THIS doc without ever diffing against it. (Was design/future/concurrency.md until 2026-06-13 — moved out of future/ because v0.3 is implementing it now.)
+- [locked] docs/internal/implementation/IMP-no-runtime-mode.md  — (internal) kernel-mode plug-in allocator API; plan-invariants.md treats `--kernel` behavior as a hard per-milestone contract, so this doc is load-bearing now
+- [locked] docs/reference/REF-ide-hints.md               — (internal) muted-hint placement categories + hover format; governs wait_points + background_routing hint implementation

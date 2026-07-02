@@ -88,14 +88,14 @@ still overlap.
   path for `-> T errors` works today.
 - **Read-only-heap overlap forfeited** — the conservative floor sequentializes mutable-heap
   arguments even when the callee only reads them. Reversal path: a type+alias-aware ownership
-  analysis. Documented in `design/concurrency.md`.
+  analysis. Documented in [`docs/internal/implementation/IMP-concurrency.md`](docs/internal/implementation/IMP-concurrency.md).
 
 #### Pre-existing bugs surfaced (not introduced by this release)
 
 Two silent-wrong-output bugs were found during M3b adversarial review and confirmed to
 pre-date auto-parallelization (identical wrong output with and without `--no-auto-parallel`).
 Tracked on the roadmap as milestone M3f (blocks the `v0.3.0` final release) and in
-`.claude/todos.md`: (1) same-callee wide-`errors` (`-> number errors`) result slot reuse;
+[`.claude/todos.md`](.claude/todos.md): (1) same-callee wide-`errors` (`-> number errors`) result slot reuse;
 (2) a crossing local inside control flow after a `wait`. Neither is a regression.
 
 ### Tests
@@ -117,7 +117,7 @@ This is v0.3-M3a — the first half of the original M3 plan, split out as its ow
 #### Features
 
 - **Frame-backed crossing locals** — a `let` local declared before a `wait` and used after now compiles correctly. The compiler flushes the local's value into the task frame before suspension and reloads it on resume. Every Yinz type is handled: `int`, `bool` (i1 zero-extended), `float` (bitcast), `number` (decimal128, 2 i64 slots), `string` (pointer via `ptr_to_int`), `Shape` (direct struct), `array<T>` (heap pointer), `map<K,V>` (heap pointer), and `options` (int-encoded). ONE `ynz_alloc` per task tree even for local-heavy functions — no per-crossing-local allocation.
-- **`wait` inside `while` loops** — the loop counter and any loop-carried locals are frame-backed; each `wait` suspension preserves them. Resume re-enters the loop body for the current iteration. Iterations run **sequentially** (design/concurrency.md "Loop Iterations — Sequential by Default") — NOT parallelized. M3b handles auto-parallelization of independent statements.
+- **`wait` inside `while` loops** — the loop counter and any loop-carried locals are frame-backed; each `wait` suspension preserves them. Resume re-enters the loop body for the current iteration. Iterations run **sequentially** (docs/internal/implementation/IMP-concurrency.md "Loop Iterations — Sequential by Default") — NOT parallelized. M3b handles auto-parallelization of independent statements.
 - **`wait` inside `for` loops** — `for (x in array<T>)` and `for (entry in map<K,V>)` loops with `wait` in the body. The array index and heap pointer are frame-backed; resume re-enters for the current index. Iteration order is preserved; output matches the hand-unrolled sequential form.
 - **`wait` inside `match` arms** — a `wait` in any `match` arm resumes into the correct arm. Any bindings live across the suspension are frame-backed via the P1 mechanism.
 - **`sleepAsync`→`sleep` / `sleepMs`→`sleepBlocking` rename** (P0) — the two sleep intrinsics now have their final names. `sleep(ms)` is the yielding form (suspends the function, OS thread freed). `sleepBlocking(ms)` blocks the OS thread (use only where thread-blocking is correct, e.g., background analytics). `wait sleepBlocking(...)` still emits the "`wait` has no effect" warning — intentional.
@@ -139,7 +139,7 @@ New P3 deferral diagnostics (clean compile errors, never silent wrong output):
 
 #### Known limitations (seven P3 deferrals — compile errors, not silent wrong output)
 
-All seven are loud compile errors with WHAT/WHAT-INSTEAD/WHY diagnostics pointing to `design/concurrency.md` sections and named future milestones. None produce silent wrong output or crashes:
+All seven are loud compile errors with WHAT/WHAT-INSTEAD/WHY diagnostics pointing to [`docs/internal/implementation/IMP-concurrency.md`](docs/internal/implementation/IMP-concurrency.md) sections and named future milestones. None produce silent wrong output or crashes:
 
 1. `fixed<T>` as for-iterator with a wait — stack pointer dangles; use `array<T>`
 2. Stored range local then iterated with a wait — inline the range
@@ -184,9 +184,9 @@ The inference model: the compiler analyzes the full call graph of each compilati
 
 #### Improvements
 
-- **Composed frames = one allocation per task tree** — the whole SM call tree (entrypoint → middle → inner → sleepAsync) is ONE composed struct and ONE `ynz_alloc`, not one allocation per call. Matches `design/no-function-coloring.md`'s "low memory, fast spawn — like Rust's async."
+- **Composed frames = one allocation per task tree** — the whole SM call tree (entrypoint → middle → inner → sleepAsync) is ONE composed struct and ONE `ynz_alloc`, not one allocation per call. Matches [`docs/internal/implementation/IMP-no-function-coloring.md`](docs/internal/implementation/IMP-no-function-coloring.md)'s "low memory, fast spawn — like Rust's async."
 - **Errors cascade correctly** — errors produced after a `wait` suspension are propagated through the SM return slot to callers. The error frame pointer (`{i64,i64}` ABI field0) survives the `Poll<T>` boundary.
-- **No OS bridge** — the `ynz_rt_call_state_machine_sync` sync bridge shipped in earlier drafts was fully removed (Phase 8). Every suspending call uses inline poll-and-yield. Only `RUNTIME.block_on(entrypoint)` at program entry is the top-level driver. This matches `design/no-function-coloring.md`'s no-bridge model.
+- **No OS bridge** — the `ynz_rt_call_state_machine_sync` sync bridge shipped in earlier drafts was fully removed (Phase 8). Every suspending call uses inline poll-and-yield. Only `RUNTIME.block_on(entrypoint)` at program entry is the top-level driver. This matches [`docs/internal/implementation/IMP-no-function-coloring.md`](docs/internal/implementation/IMP-no-function-coloring.md)'s no-bridge model.
 - **Concurrency proof** — 8 background tasks each calling `wait sleepAsync(100)` complete in ~100ms total (not 800ms), proving they share OS threads via state-machine suspension.
 
 #### New diagnostics (WHAT/WHAT-INSTEAD/WHY format)
@@ -263,7 +263,7 @@ v0.3.0-m2 fixes every bug found by the four-agent teaching-surface audit — 14 
 
 - ~60 new regression tests across 10 files (`ynz-typeck`, `ynz-lsp`, `ynz-diagnostics`, `ynz-driver`), each fail-before / pass-after. The `examples/pirates-roster/` demo gained a "Three Rivers schedule" section exercising 7 import patterns with a zero-spurious-warning snapshot guard.
 
-#### Known follow-ups (deferred, tracked in `.claude/todos.md`)
+#### Known follow-ups (deferred, tracked in [`.claude/todos.md`](.claude/todos.md))
 
 - Inlay-hint walker completeness: ownership/copy hints don't yet cover every statement form / container expression / UFCS-copy (missed hints, not lies). Cross-file `follows`/`extends` remains a same-file-only compile constraint pending the M8 cross-file-resolution work.
 
@@ -388,7 +388,7 @@ After v0.2-M4: `ynz watch` ships — a long-running terminal command that recomp
 
 ### Deferred to follow-up
 
-- `YNZ_WATCH_LRU_*` runtime env-var LRU tuning: documented in `design/watch.md`, not yet wired to `set_lru_capacity` — tracked in `todos.md` as `watch-lru-runtime-tuning`
+- `YNZ_WATCH_LRU_*` runtime env-var LRU tuning: documented in [`docs/internal/implementation/IMP-watch.md`](docs/internal/implementation/IMP-watch.md), not yet wired to `set_lru_capacity` — tracked in `todos.md` as `watch-lru-runtime-tuning`
 - Interactive watch commands (`r` to rebuild, `q` to quit) — tracked as `watch-interactive-commands`
 - `yinz.toml` hot-reload during watch — deferred to v0.5 package-manager milestone
 - Windows full validation pass — tracked as `watch-windows-validation`
@@ -435,7 +435,7 @@ PRs: #47 (P0), #54 (P1–P6), #55 (P7), #56 (P8), #57 (P9)
 
 Before v0.2-M2: Yinz had a compiler but no editor story. Every feature in the SSOT registry (built in M1) had teaching content — `why` fields, `substitute` recommendations, `ships_in` metadata — but none of it was visible in an editor.
 
-After v0.2-M2: `.ynz` files in VSCode (or Cursor) get inline red squiggles with the full WHAT/WHAT-INSTEAD/WHY teaching content, autocomplete of every keyword and primitive method, and hover docs sourced directly from the SSOT registry. Adding a keyword or deferred feature to `registry/features.toml` in any future version makes it appear in the editor automatically — no manual LSP changes needed.
+After v0.2-M2: `.ynz` files in VSCode (or Cursor) get inline red squiggles with the full WHAT/WHAT-INSTEAD/WHY teaching content, autocomplete of every keyword and primitive method, and hover docs sourced directly from the SSOT registry. Adding a keyword or deferred feature to [`registry/features.toml`](registry/features.toml) in any future version makes it appear in the editor automatically — no manual LSP changes needed.
 
 **New crate: `ynz-lsp`** — JSON-RPC-over-stdio Language Server backed by the existing salsa queries:
 - `textDocument/didOpen` / `didChange` / `didClose` — updates the live salsa DB, triggers incremental re-check
@@ -485,11 +485,11 @@ PRs: #37 (P0), #38 (P1), #39 (P2), #40 (P3), #41 (P4), #42 (P5a), #43 (P5b), #44
 
 Before v0.2-M1: feature inventories lived in 7+ scattered locations — `banned_jargon.rs`, `intrinsics.rs`, `check.rs`, `lexer.rs`, `builtins.rs`, `emit.rs`, and a design-doc-only muted-hint catalog. Adding `int.max` in M4 P5 touched five of them. No tool enforced sync.
 
-After v0.2-M1: one file (`registry/features.toml`) is the canonical source for all of those. Every consumer derives from it via `crates/ynz-registry/`'s `build.rs`-driven code generation.
+After v0.2-M1: one file ([`registry/features.toml`](registry/features.toml)) is the canonical source for all of those. Every consumer derives from it via `crates/ynz-registry/`'s `build.rs`-driven code generation.
 
-**New crate: `ynz-registry`** — parses `registry/features.toml` at compile time, emits typed static arrays, exposes adapter functions per `*Table` convention.
+**New crate: `ynz-registry`** — parses [`registry/features.toml`](registry/features.toml) at compile time, emits typed static arrays, exposes adapter functions per `*Table` convention.
 
-**`registry/features.toml`** — 158+ entries across 9 entry kinds:
+**[`registry/features.toml`](registry/features.toml)** — 158+ entries across 9 entry kinds:
 - `[[keyword]]` — 29 valid Yinz keywords with token variant and milestone tag
 - `[[banned_declaration_keyword]]` — 17 OOP/concurrency/visibility keywords rejected at lex time with teaching errors
 - `[[banned_jargon]]` — 55 words banned from user-facing diagnostic prose (with replacements and reasons)
@@ -498,7 +498,7 @@ After v0.2-M1: one file (`registry/features.toml`) is the canonical source for a
 - `[[deferred_language_feature]]` — 18 reserved language features with substitute/why/ships_in/design_doc (sized numerics, test, scratch, foreign, gpu, self-referential shapes)
 - `[[deferred_tooling_feature]]` — 3 reserved tooling features (`--kernel`, `--release`, package binary format)
 - `[[diagnostic_template]]` — 10 canonical WHAT/WHAT-INSTEAD/WHY templates for all DiagnosticKind variants
-- `[[muted_hint_domain]]` — 9 IDE inference domains from `.claude/rules/inference.md` (v0.2-M2 LSP wires consumers)
+- `[[muted_hint_domain]]` — 9 IDE inference domains from [`.claude/rules/inference.md`](.claude/rules/inference.md) (v0.2-M2 LSP wires consumers)
 
 **Migrated consumers** (data removed from Rust, reads from registry):
 - `crates/ynz-diagnostics/src/banned_jargon.rs` — thin adapter (5 lines)
@@ -708,7 +708,7 @@ checking and flow-sensitive narrowing.
 
 M6 also closes the fallible-conversion catch-up from M2: `(float).toInt()`,
 `(number).toInt()`, `string.toInt()`, `string.toFloat()`, and `string.toNumber()`
-all return `maybe<T>` and follow locked parsing rules documented in `design/narrowing.md`.
+all return `maybe<T>` and follow locked parsing rules documented in [`docs/internal/implementation/IMP-narrowing.md`](docs/internal/implementation/IMP-narrowing.md).
 
 - **`options` types**: `options Status { active, inactive, banned }` declares a finite
   set of named values. Values are `Status.active` etc.; multi-case `if` is exhaustive
@@ -738,9 +738,9 @@ all return `maybe<T>` and follow locked parsing rules documented in `design/narr
 ### Design decisions locked
 
 Three new design files document every M6 decision before any code landed:
-`design/options.md` (LLVM i8 lowering, exhaustiveness, ambiguous-shorthand resolution),
-`design/unions.md` (tagged-struct layout, `is`-exact-type rule, single-variant rejection),
-`design/narrowing.md` (18-row flow-sensitive rules table, recognized-exit set, locked
+[`docs/internal/implementation/IMP-options.md`](docs/internal/implementation/IMP-options.md) (LLVM i8 lowering, exhaustiveness, ambiguous-shorthand resolution),
+[`docs/internal/implementation/IMP-unions.md`](docs/internal/implementation/IMP-unions.md) (tagged-struct layout, `is`-exact-type rule, single-variant rejection),
+[`docs/internal/implementation/IMP-narrowing.md`](docs/internal/implementation/IMP-narrowing.md) (18-row flow-sensitive rules table, recognized-exit set, locked
 `||` non-propagation diagnostic text).
 
 ### Compiler features
@@ -867,7 +867,7 @@ None — all M3 programs compile unchanged under M4.
 
 ### Compiler internals
 
-- Pratt precedence climber (12-level table, mechanically verified against `spec/operators.md`)
+- Pratt precedence climber (12-level table, mechanically verified against [`docs/reference/REF-operators.md`](docs/reference/REF-operators.md))
 - `PrimitiveIntrinsicTable` replaces M1's `BuiltinTable`; single source of truth for all built-in method dispatch
 - Block-scoped variable environment with `is_const` tracking
 - LLVM codegen for all M2 constructs: int overflow via `llvm.sadd/ssub/smul.with.overflow.i64`, decimal128 via `ynz-runtime` C ABI, short-circuit `&&`/`||` with phi nodes
@@ -876,9 +876,9 @@ None — all M3 programs compile unchanged under M4.
 
 ### Spec
 
-- `spec/operators.md`: added `%` to operator lists and precedence table (level 3)
-- `spec/variables.md`: corrected `// compiler knows: number` → `// compiler knows: int`
-- `spec/numeric-types.md`: replaced wrong "promotes to most capable" claim with compile-error behavior + example
+- [`docs/reference/REF-operators.md`](docs/reference/REF-operators.md): added `%` to operator lists and precedence table (level 3)
+- [`docs/reference/REF-variables.md`](docs/reference/REF-variables.md): corrected `// compiler knows: number` → `// compiler knows: int`
+- [`docs/reference/REF-numeric-types.md`](docs/reference/REF-numeric-types.md): replaced wrong "promotes to most capable" claim with compile-error behavior + example
 
 ### Deferred (tracked as catch-up entries)
 

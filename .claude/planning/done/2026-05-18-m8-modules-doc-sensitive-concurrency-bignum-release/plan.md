@@ -22,16 +22,16 @@ legacy:
     - examples/pirates-roster/**
     - examples/primantis-orders/m8_errors.ynz
     - examples/multi-file/**
-    - design/modules.md
-    - design/doc-comments.md
-    - design/sensitive.md
-    - design/concurrency.md
-    - design/numeric-types.md
-    - spec/modules.md
-    - spec/doc-comments.md
-    - spec/sensitive.md
-    - spec/concurrency.md
-    - spec/numeric-types.md
+    - docs/internal/implementation/IMP-modules.md
+    - docs/internal/implementation/IMP-doc-comments.md
+    - docs/internal/implementation/IMP-sensitive.md
+    - docs/internal/implementation/IMP-concurrency.md
+    - docs/internal/implementation/IMP-numeric-types.md
+    - docs/reference/REF-modules.md
+    - docs/reference/REF-doc-comments.md
+    - docs/reference/REF-sensitive.md
+    - docs/reference/REF-concurrency.md
+    - docs/reference/REF-numeric-types.md
     - CHANGELOG.md
     - Cargo.toml
     - .claude/plans/active/v0-1-compiler.md
@@ -60,7 +60,7 @@ Five feature areas remain before v0.1 can ship:
 1. **Modules** — currently the driver compiles ONE `.ynz` file. Real projects need `import`/`export` across files. Single-file is the duct-tape-est thing in the compiler today.
 2. **Doc comments** — `///` is currently silently treated as `//` by the lexer. The spec says doc strings attach to exported items and survive through the AST for the future `ynz doc` tool (v1.1).
 3. **`sensitive` modifier** — type-system surface so secret values auto-redact in `print()` + interpolation. The env-based source (`env.get()` returns `sensitive string`) ships v0.7; M8 ships the type machinery + the manual `sensitive(literal)` constructor.
-4. **Concurrency keywords** — `wait` and `background` must PARSE and TYPE-CHECK so code can be written today; real auto-parallelization arrives v0.3. M8 = parse + typeck + sequential lowering (`wait foo()` = `foo()`; `background foo()` = `foo()` with return discarded; background ownership rules per design/concurrency.md enforced).
+4. **Concurrency keywords** — `wait` and `background` must PARSE and TYPE-CHECK so code can be written today; real auto-parallelization arrives v0.3. M8 = parse + typeck + sequential lowering (`wait foo()` = `foo()`; `background foo()` = `foo()` with return discarded; background ownership rules per docs/internal/implementation/IMP-concurrency.md enforced).
 5. **Bignum `number<N>` for N > 34** — the M2 load-bearing carry-over. Multi-u128 coefficient + bignum add/sub/mul/div + mixed-precision promotion + narrowing-warning rounding. This is the v0.1 "exact decimal at any reasonable precision" promise; if M8 drops anything, it isn't this.
 
 Plus the syntax migration `number[N]` → `number<N>` (parser is out of sync with design/spec; M5 locked `<>` for generics in 2026-05-17), banned-jargon additions for concurrency + visibility vocabulary, the demo extension (`examples/pirates-roster/` becomes a multi-file project), the error gallery (`examples/primantis-orders/m8_errors.ynz`), an audit sweep, and the **v0.1.0** tag.
@@ -82,7 +82,7 @@ M7 shipped 2026-05-18; this is the next milestone on the v0-1-compiler roadmap. 
 - All 782 M7 tests still pass; M8 adds an additional ~120-200 tests.
 - `m2_bignum_deferral` fixture either deleted or updated (the catch-up marker M2 left).
 - `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --check` all green.
-- `Cargo.toml` at `0.1.0`. `v0.1.0` tag pushed. CHANGELOG entries for M1–M8.
+- [`Cargo.toml`](../../../../Cargo.toml) at `0.1.0`. `v0.1.0` tag pushed. CHANGELOG entries for M1–M8.
 - `/audit` sweep run on the integrated v0.1 surface; all CRITICAL findings fixed.
 
 ---
@@ -122,14 +122,14 @@ M7 shipped 2026-05-18; this is the next milestone on the v0-1-compiler roadmap. 
 
 ### Cross-references
 
-- `design/modules.md` (109 lines) — module rules locked
-- `design/doc-comments.md` (29 lines) — `///` only, exported items only, fields supported
-- `design/sensitive.md` (61 lines) — type modifier, auto-redact, `.reveal()`
-- `design/concurrency.md` (239 lines) — auto-parallelization via dep graph; M8 parses keywords, runs sequentially
-- `design/numeric-types.md` lines 41–80 — `number<N>` parameterized precision; 34 hardware-fast; N > 34 bignum
-- `design/main-entry.md` — `entrypoint()` is the entry function; file name flexible via yinz.toml
-- `.claude/rules/non-oop.md` — module functions are still standalone functions; `import { foo }` brings function-call form; no methods-on-instances
-- `.claude/rules/auto-promotion.md` — does NOT apply to most M8 features (modules, doc comments, sensitive, concurrency keywords are all source-level features without a stricter codegen form); bignum analysis required per "Auto-Promotion Analysis" subsection (see `### Performance` invariant below).
+- [`docs/internal/implementation/IMP-modules.md`](../../../../docs/internal/implementation/IMP-modules.md) (109 lines) — module rules locked
+- [`docs/internal/implementation/IMP-doc-comments.md`](../../../../docs/internal/implementation/IMP-doc-comments.md) (29 lines) — `///` only, exported items only, fields supported
+- [`docs/internal/implementation/IMP-sensitive.md`](../../../../docs/internal/implementation/IMP-sensitive.md) (61 lines) — type modifier, auto-redact, `.reveal()`
+- [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) (239 lines) — auto-parallelization via dep graph; M8 parses keywords, runs sequentially
+- [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md) lines 41–80 — `number<N>` parameterized precision; 34 hardware-fast; N > 34 bignum
+- [`docs/internal/implementation/IMP-main-entry.md`](../../../../docs/internal/implementation/IMP-main-entry.md) — `entrypoint()` is the entry function; file name flexible via yinz.toml
+- [`.claude/rules/non-oop.md`](../../../rules/non-oop.md) — module functions are still standalone functions; `import { foo }` brings function-call form; no methods-on-instances
+- [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md) — does NOT apply to most M8 features (modules, doc comments, sensitive, concurrency keywords are all source-level features without a stricter codegen form); bignum analysis required per "Auto-Promotion Analysis" subsection (see `### Performance` invariant below).
 - `.claude/plans/done/m7-strings-errors-iterables.md` — most recent shipped milestone; 11-phase template inspires M8's shape
 
 ---
@@ -141,14 +141,14 @@ M7 shipped 2026-05-18; this is the next milestone on the v0-1-compiler roadmap. 
 | Multi-file driver work expands beyond P2 scope | Medium | P2 PR blows the soft size limit; M8 stalls | Pre-write the salsa-inputs-as-Vec architecture in P0 doc-lockdown commit notes. If P2 hits 600+ lines, split into P2a (driver + project loader) and P2b (typeck cross-file resolution). |
 | Bignum arithmetic correctness | High | Silent rounding errors in user code | Validate every op against IEEE 754-2008 test vectors AND differential test against Python `decimal` (10k random tuples per op). Property tests: commutativity, associativity (where applicable), round-trip identity. Treat any test failure as a hard ship-blocker. |
 | Bignum performance regressions | Medium | `number<34>` users slow down even though hardware path should still apply | Branch on `precision <= 34` at op entry: hardware path unchanged. Add a `cargo bench` check that 34-digit ops stay within 5% of M7 baseline. |
-| Sensitive propagation gaps | Medium | A string op produces a non-sensitive string from sensitive input → secret leak | Audit every string method (`.contains`, `.indexOf`, `.startsWith`, etc.) for propagation rules per `design/sensitive.md`. The propagation table is normative; tests assert every method preserves sensitivity. `.length` returns plain `int` per design (length isn't secret). |
+| Sensitive propagation gaps | Medium | A string op produces a non-sensitive string from sensitive input → secret leak | Audit every string method (`.contains`, `.indexOf`, `.startsWith`, etc.) for propagation rules per [`docs/internal/implementation/IMP-sensitive.md`](../../../../docs/internal/implementation/IMP-sensitive.md). The propagation table is normative; tests assert every method preserves sensitivity. `.length` returns plain `int` per design (length isn't secret). |
 | Background-task ownership rule (`.share` rejection) | Low | Compiler accepts dangling-borrow patterns | M4 already has ownership analysis (`is_consumed`, etc.). Reuse the infrastructure: when `background foo(arg)` is type-checked, if `foo`'s signature is `share`, reject. The compiler already knows ownership modifiers. |
 | Doc-comment lexer regression | Low | `//` comments accidentally tokenize as `///` | Lexer test: explicit fixtures for `///`, `////` (treated as `///` content), `// regular`, `// ///` (regular comment containing slashes), `///\n///\n///` (multi-line attach). |
 | Module circular-import detection | Medium | Compiler hangs or stack-overflows on a graph with no cycle, OR misses a real cycle and produces incoherent typeck output | Multi-pass design eliminates the hang risk (no recursive resolution). Add an explicit cycle test: `a.ynz import b; b.ynz import a` — compiles cleanly. Also test: file imports itself (`a.ynz import a`) — should be a compile error (self-import is nonsense, even though circular through B is fine). |
 | yinz.toml schema bikeshed creep | Low | P2 derails on "what fields ship now" debate | Locked above: `entry`, `name`, `version` ONLY. Unknown fields warn. Defer everything else to v0.22/v1.x. |
 | Number syntax migration breaks user code | Low | M2-era fixtures use `number[N]` syntax | Grep fixture corpus: only `m2_bignum_deferral.ynz` uses `number[100]`. Update one fixture + the snapshot. No user code exists outside the test corpus. |
 | Release audit surfaces critical bugs | Medium | P8 release tag delayed by emergency fix-up cycle | This is the POINT of the audit. Treat P8 as variable-length: 1-2 days if clean, 3-5 if findings need fixing. Per CLAUDE.md rule 11 (no priority deflection), every confirmed audit finding gets fixed before tag. |
-| Banned-jargon false positives | Low | Diagnostic tests fail on legitimate prose using `async` in a non-Yinz-jargon way | The list governs USER-FACING diagnostic strings only (`crates/ynz-diagnostics/src/banned_jargon.rs`). Spec/design prose is exempt (per dual-audience rule in `.claude/rules/inference.md`). |
+| Banned-jargon false positives | Low | Diagnostic tests fail on legitimate prose using `async` in a non-Yinz-jargon way | The list governs USER-FACING diagnostic strings only (`crates/ynz-diagnostics/src/banned_jargon.rs`). Spec/design prose is exempt (per dual-audience rule in [`.claude/rules/inference.md`](../../../rules/inference.md)). |
 | `cc -no-pie` linker hack accumulates over M8 surface | Low | Multi-file linking may surface new relocation issues | Existing build.rs comment says PIC codegen deferred to v0.2. Multi-file produces multiple .o files but linked the same way. Monitor; if it breaks, add to v0.2 deferred list, don't fix in M8. |
 
 ---
@@ -195,41 +195,41 @@ M7 shipped 2026-05-18; this is the next milestone on the v0-1-compiler roadmap. 
 - **Module visibility**: a non-`export`'d item is invisible to importers. Type-check rejects `import { internalFn }` when `internalFn` lacks `export`.
 - **Duplicate-import detection**: two imports bringing the same name (or namespace) into the same file is a compile error with the three-part teaching diagnostic.
 - **Bignum precision boundary**: `number<N>` for `N > 4096` is a compile error (parser already enforces 1..=4096; M8 lifts the M2-era `N != 34 → Type::Error` clamp at typeck).
-- **Doc comments on private items are silent** (per `design/doc-comments.md` "Exported Items Only" — has no effect, not a warning in M8; lint-tier warning is v0.4).
+- **Doc comments on private items are silent** (per [`docs/internal/implementation/IMP-doc-comments.md`](../../../../docs/internal/implementation/IMP-doc-comments.md) "Exported Items Only" — has no effect, not a warning in M8; lint-tier warning is v0.4).
 
 ### Performance
 - **LLVM `readonly` + `noalias` on share/lend params (M4 invariant — preserved)**: function parameters declared `share` continue to emit `readonly`; `lend` emits `noalias` + writable. M8 surfaces (sensitive, bignum, modules) must preserve this contract end-to-end.
 - **Bignum hot-path branch**: at every bignum arithmetic op, branch on `precision <= 34`; if true, use the existing decimal128 hardware path unchanged. `cargo bench` target: 34-digit ops stay within 5% of M7 baseline. **Baseline reference**: tag `v0.1.0-m7` (commit `b24a1b0`); the P0 phase captures `cargo bench --bench decimal128_hot_path -- --save-baseline m7_baseline` so P6's comparison is against an explicit named baseline, not a moving target.
-- **`number<N>` storage**: u128 for N ≤ 34 (hardware-fast); for N > 34, a fixed-size array of u128 chunks (size = ⌈N/34⌉). Memory bounded at ~1.7 KB per value at N=4096 (per design/numeric-types.md "Why 4096").
+- **`number<N>` storage**: u128 for N ≤ 34 (hardware-fast); for N > 34, a fixed-size array of u128 chunks (size = ⌈N/34⌉). Memory bounded at ~1.7 KB per value at N=4096 (per docs/internal/implementation/IMP-numeric-types.md "Why 4096").
 - **Multi-file salsa caching**: each `SourceFile` is its own salsa input. Editing one file invalidates downstream queries for that file but not others — incremental rebuild stays per-file granular.
 - **Codegen tree-shaking**: unused functions (not transitively called from `entrypoint`) are stripped from the final binary. Existing M1 behavior preserved; M8 adds cross-module reachability.
 - **Sensitive auto-redaction = single runtime branch**: `ynz_print_sensitive` checks a one-byte tag and emits `[REDACTED]` if set; non-sensitive print path unchanged. Zero overhead for non-sensitive values.
 
-**Auto-Promotion Analysis** (per `.claude/rules/auto-promotion.md`):
+**Auto-Promotion Analysis** (per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)):
 
 | Feature | Stricter form? | Codegen auto-promote | Muted hint | Tier 3 lint | Rationale |
 |---|---|---|---|---|---|
 | `number<N>` for N ≤ 34 | n/a | already on hardware path | n/a | n/a | Compiler proves at parse time |
-| `number<N>` for N > 34 in arithmetic with smaller `<M>` | Promote result to wider precision (N) automatically | YES | YES (locked: `number<N>` muted hint at the assignment site) | YES (`prefer-explicit-precision-when-mixing`) | Per design/numeric-types.md "Mixed-precision arithmetic" — binary ops promote; assignment to narrower precision warns. Hint shows the inferred precision; lint suggests explicit annotation. Both surfaces apply (typeable form exists: explicit `number<N>` annotation). |
-| `import` with all-unused names | n/a | n/a | n/a | YES — `unused-import` warning (per design/modules.md "Unused Imports Are Warnings") | The "stricter form" is removing the import. Pure source-level concern; no codegen change. |
+| `number<N>` for N > 34 in arithmetic with smaller `<M>` | Promote result to wider precision (N) automatically | YES | YES (locked: `number<N>` muted hint at the assignment site) | YES (`prefer-explicit-precision-when-mixing`) | Per docs/internal/implementation/IMP-numeric-types.md "Mixed-precision arithmetic" — binary ops promote; assignment to narrower precision warns. Hint shows the inferred precision; lint suggests explicit annotation. Both surfaces apply (typeable form exists: explicit `number<N>` annotation). |
+| `import` with all-unused names | n/a | n/a | n/a | YES — `unused-import` warning (per docs/internal/implementation/IMP-modules.md "Unused Imports Are Warnings") | The "stricter form" is removing the import. Pure source-level concern; no codegen change. |
 | `wait foo()` where `foo` has no side effects | Drop the `wait` (already sequential) | NO | NO | YES (`unnecessary-wait`) — v0.4 lint | M8 ships keyword + sequential semantics; the lint surface is v0.4 territory. Note the deferral in milestone-plan checklist. |
 | `background foo()` for trivially-cheap fns | Drop the `background` (already runs immediately) | NO | NO | YES (`unnecessary-background`) — v0.4 lint | Same rationale — defer Tier 3 lints to v0.4. |
 | Doc comments on private items | Drop the doc (no effect per spec) | NO | NO | YES (`doc-on-private-item`) — v0.4 lint | Same — defer to v0.4. |
 
-For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 LSP work (`design/ide-hints.md`). M8 codegen + typeck simply implement the locked semantics; the teaching surfaces ride v0.2/v0.4.
+For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 LSP work ([`docs/reference/REF-ide-hints.md`](../../../../docs/reference/REF-ide-hints.md)). M8 codegen + typeck simply implement the locked semantics; the teaching surfaces ride v0.2/v0.4.
 
 ### Teaching
-- All new diagnostics follow the WHAT / WHAT-INSTEAD / WHY three-part format per `design/teaching-mission.md`.
+- All new diagnostics follow the WHAT / WHAT-INSTEAD / WHY three-part format per [`docs/reference/REF-teaching-mission.md`](../../../../docs/reference/REF-teaching-mission.md).
 - **New banned-jargon entries**: `async`, `await`, `promise`, `future`, `goroutine` (concurrency) + `pub`, `private`, `protected`, `public` (visibility). Diagnostic test (`tests/jargon_audit.rs` style) asserts no diagnostic string contains any banned word.
 - **Diagnostic teaching pairs added**:
   - User writes `pub function foo()` → `pub` is banned, suggest `export function foo()`. Why: "Yinz has two visibility states — exported (`export`) or private (default). No `pub`, no `protected`, no modifiers."
   - User writes `async function foo()` → `async` is banned, suggest `wait` at call site instead. Why: "Yinz auto-parallelizes reads via the dependency graph. Functions don't need `async`; callers use `wait` only when explicit ordering matters."
-  - User writes `background processData(data)` where `processData` is `share data: Data` → "Cannot share with a background task. Background tasks may outlive the current function; a shared borrow would dangle. Use `give` or `.copy()`." (Exact wording from `spec/concurrency.md`.)
+  - User writes `background processData(data)` where `processData` is `share data: Data` → "Cannot share with a background task. Background tasks may outlive the current function; a shared borrow would dangle. Use `give` or `.copy()`." (Exact wording from [`docs/reference/REF-concurrency.md`](../../../../docs/reference/REF-concurrency.md).)
   - User writes `import { foo } from "./services"` → relative path rejected, suggest `"services/users"` (project-root). Why: "Yinz uses project-root paths so moving a file never breaks imports."
   - User writes `import * as users from "..."` → wildcard rejected, suggest `import users from "..."` (namespace import). Why: "Module namespace imports are explicit and tree-shake the same way."
   - User writes `number[100]` (M2 syntax) → migrate diagnostic: `Use number<100> — angle brackets for type parameters. M5 unified all generic syntax (array<T>, map<K,V>, number<N>) on <>.`
   - User writes `let huge: number<5000> = ...` → compile error with the v2+ deferral pointer (existing message stays).
-  - User assigns `number<100>` value to `number<34>` binding → narrowing warning per design/numeric-types.md.
+  - User assigns `number<100>` value to `number<34>` binding → narrowing warning per docs/internal/implementation/IMP-numeric-types.md.
 - **Sensitive-leak warning**: when `.reveal()` is called in an output context (print/log/interpolation), IDE Tier 3 warning per spec; M8 emits a Tier 3 lint suggestion (visible at compile, hint surface defers to v0.2 LSP).
 - **Doc comment on private item**: M8 ships silent per spec (no warning until v0.4 lint tier).
 
@@ -249,7 +249,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 
 ### Demo & Error Gallery
 - **`examples/pirates-roster/`** becomes a multi-file project after P2:
-  - `examples/pirates-roster/yinz.toml` (entry = `src/entrypoint.ynz`, name = `basics`, version = `0.1.0`)
+  - [`examples/pirates-roster/yinz.toml`](../../../../examples/pirates-roster/yinz.toml) (entry = `src/entrypoint.ynz`, name = `basics`, version = `0.1.0`)
   - `examples/pirates-roster/entrypoint.ynz` (top-level — imports + glue + runs all sections)
   - `examples/pirates-roster/src/services/players.ynz` (exported shapes, exported functions — demonstrates `import { ... }` form)
   - `examples/pirates-roster/src/services/inventory.ynz` (exported namespace — demonstrates `import inventory from "..."` form)
@@ -284,14 +284,14 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 - `crates/ynz-driver/tests/integration.rs:222–234` — `m2_bignum_deferral_produces_diagnostic`; the diagnostic message changes from "v0.7" / "M8" to "available starting at `number<35>`" once bignum lands (Phase 6). In P0 the syntax migration is the only change.
 - `crates/ynz-driver/tests/fixtures/m2_bignum_deferral.ynz` — update from `number[100]` to `number<100>`.
 - `.claude/plans/active/v0-1-compiler.md:206-211` — M8 milestone block; flip status `planned` → `active`.
-- `CHANGELOG.md` — seed `[Unreleased]` section with M8 header.
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) — seed `[Unreleased]` section with M8 header.
 **Files (expected scope)**:
 - `crates/ynz-parser/src/parser.rs` (migrate `parse_number_type` from `[` to `<`)
 - `crates/ynz-parser/tests/parse.rs` (add `number<N>` accept + `number[N]` redirect tests)
 - `crates/ynz-driver/tests/fixtures/m2_bignum_deferral.ynz`
 - `crates/ynz-driver/tests/snapshots/integration__m2_bignum_deferral_stderr.snap`
 - `.claude/plans/active/v0-1-compiler.md` (status update + last_updated bump)
-- `CHANGELOG.md` (M8 `[Unreleased]` section)
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) (M8 `[Unreleased]` section)
 - Spec/design verification grep across `/spec/` and `/design/` — fix any `number[N]` mentions (should be zero per pre-survey).
 **Deviation rule**: P0 must NOT touch the typeck precision clamp (that's P6). The parser accepts `number<N>` for N ∈ 1..=4096 BUT typeck still rejects N != 34 with the existing diagnostic. The integration test's snapshot is updated to reflect the new syntax, not new semantics.
 **Steps**:
@@ -301,7 +301,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 4. Update the M2 fixture and snapshot. Old snap content `number[100]` → `number<100>`; M8 message stays "available starting at `number<35>`" (still N != 34 message, since bignum hasn't shipped yet in P0).
 5. Update `examples/pirates-roster/entrypoint.ynz` if it shows `number[34]` anywhere (it doesn't per grep — number type usage is plain `number`).
 6. Update v0-1-compiler.md M8 status to `active`, bump `last_updated`.
-7. Seed `CHANGELOG.md` `[Unreleased]` section with `## M8 — Modules, Doc Comments, Sensitive, Concurrency Keywords, Bignum`.
+7. Seed [`CHANGELOG.md`](../../../../CHANGELOG.md) `[Unreleased]` section with `## M8 — Modules, Doc Comments, Sensitive, Concurrency Keywords, Bignum`.
 8. **Capture M7 bench baseline** (the named reference P6 will compare against): `cargo bench --bench decimal128_hot_path -- --save-baseline m7_baseline`. Commit the baseline file path (or proof of its capture) into the PR description so P6 can reproduce. If no decimal128 bench exists yet, ADD one in P0 measuring the four ops at N=34 with a fixed test corpus (10 randomly-but-seeded operand pairs); the m7_baseline value is what those benches produce on commit `b24a1b0`.
 9. Run plan-radar rebuild (handled automatically by Stop hook).
 **Acceptance criteria**:
@@ -411,7 +411,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 - `crates/ynz-typeck/src/check.rs` (cross-file symbol resolution, duplicate-name detection, unused-import warning)
 - `crates/ynz-typeck/src/scope.rs` (module-level symbol table)
 - `crates/ynz-codegen/src/emit.rs` (mangled symbol names by module path; tree-shaking remains in place)
-- `examples/pirates-roster/yinz.toml` (NEW)
+- [`examples/pirates-roster/yinz.toml`](../../../../examples/pirates-roster/yinz.toml) (NEW)
 - `examples/pirates-roster/entrypoint.ynz` (top-level imports + glue)
 - `examples/pirates-roster/src/services/players.ynz` (NEW)
 - `examples/pirates-roster/src/services/inventory.ynz` (NEW)
@@ -443,7 +443,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 6. **Typeck cross-file resolution**:
    - Pass-0: enumerate every file's parsed AST, collect `(file, exported_name) -> ItemRef` into a global ExportTable.
    - Pass-1 per file: build local SymbolTable; resolve `import` statements against ExportTable; reject missing exports with three-part diagnostic naming the file + closest match suggestion.
-   - Duplicate-name detection per spec: if file has two imports producing the same local name, three-part error per `design/modules.md`.
+   - Duplicate-name detection per spec: if file has two imports producing the same local name, three-part error per [`docs/internal/implementation/IMP-modules.md`](../../../../docs/internal/implementation/IMP-modules.md).
    - Unused-import warning: after typeck, walk the AST; any imported name with zero usages → warning (not error).
    - Circular imports: zero special handling needed — Pass-0 sees all files, Pass-1 sees all signatures, resolution is whole-graph.
    - Self-import (`a.ynz` imports `a`): compile error — "A file cannot import from itself."
@@ -527,7 +527,7 @@ cargo test --workspace
 **Est. lines**: ~600 (AST/parser ~100, typeck ~200, codegen + runtime ~200, tests ~100)
 **Ships via**: `/pr`
 **Objective**: Type-system surface for sensitive values is complete. Manual sources work today; env-based sources defer to v0.7.
-**Why this phase exists**: Security primitive. The accidental-secret-leak pattern is the #1 secret exposure category (per `design/sensitive.md` rationale). Auto-redaction by default closes the gap.
+**Why this phase exists**: Security primitive. The accidental-secret-leak pattern is the #1 secret exposure category (per [`docs/internal/implementation/IMP-sensitive.md`](../../../../docs/internal/implementation/IMP-sensitive.md) rationale). Auto-redaction by default closes the gap.
 **Current-state anchors**:
 - `crates/ynz-typeck/src/types.rs` — Type enum (20 variants); M8 adds `Sensitive(Box<Type>)`. New count 21.
 - Existing string-op typeck table (`.toUpperCase`, `.toLowerCase`, `.trim`, `.contains`, `.split`, `.replace`, etc.) — each annotated for sensitivity propagation.
@@ -577,7 +577,7 @@ cargo test --workspace
    | Mixed sensitive + non-sensitive `` `${plain}=${secret}` `` | YES — whole result sensitive | Once any interpoland is sensitive, the result string is sensitive (containing the redaction marker in a sensitive container); print shows `plain=[REDACTED]`; the plain prefix bytes are not redacted but the whole RESULT cannot be passed to a non-sensitive sink |
 
    **Future M7 methods not yet shipped** (e.g., `.padStart`, `.padEnd` if added): default rule is **preserve sensitivity** unless a future M-plan explicitly overrides. Add a test (`crates/ynz-typeck/tests/sensitive_propagation_completeness.rs`) that iterates every method registered in the M7 intrinsic table for `string` and asserts each one has a propagation rule entry — fails compile if a new method is added without a propagation decision.
-5. `.reveal()` method on `sensitive T` returns `T` (strips the modifier). Typeck implements as a special-case body operation per `.claude/rules/dot-postfix.md` (parens for actions).
+5. `.reveal()` method on `sensitive T` returns `T` (strips the modifier). Typeck implements as a special-case body operation per [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md) (parens for actions).
 6. Codegen: sensitive string = `{ bytes_ptr, len, capacity, is_sensitive_tag: u8 }` (extend existing string struct OR wrap in a new struct — TBD at implementation; prefer extending if SSO byte budget allows).
 7. Print path: `print(sensitive_string)` lowers to `ynz_print_sensitive`. `ynz_print_sensitive` checks the tag and emits `[REDACTED]` or the underlying bytes per `--reveal-sensitive` runtime flag.
 8. `--reveal-sensitive` CLI flag on `ynz run`. NOT on `ynz build --release` (per spec — flag stripped from release binaries; but in v0.1 we don't HAVE release builds yet, so the flag works on debug runs only — defer the "stripped from release" check to v0.4 release-mode work, document in `### Forward-Compatibility Constraints` of this plan).
@@ -616,7 +616,7 @@ cargo test --workspace
 **Files (expected scope)**:
 - `crates/ynz-ast/src/nodes.rs` (Expr::Wait, Expr::Background; update variant-count tests)
 - `crates/ynz-parser/src/parser.rs` (parse `wait expr` and `background expr` as prefix-keyword expressions)
-- `crates/ynz-typeck/src/check.rs` (typeck Wait/Background; background-share rejection per design/concurrency.md ownership rules; background ownership inference: if return value used after, infer `.copy()`; if not, infer `.give()`)
+- `crates/ynz-typeck/src/check.rs` (typeck Wait/Background; background-share rejection per docs/internal/implementation/IMP-concurrency.md ownership rules; background ownership inference: if return value used after, infer `.copy()`; if not, infer `.give()`)
 - `crates/ynz-codegen/src/emit.rs` (Wait = direct call; Background = direct call + return discard for statement form)
 - `crates/ynz-driver/tests/fixtures/m8_concurrency_*.ynz` (~6 fixtures: wait on stdlib-like call, background fire-and-forget, background with give-inferred, background with copy-inferred, background-share rejected, background on share function rejected)
 - `examples/pirates-roster/entrypoint.ynz` (concurrency section)
@@ -630,24 +630,24 @@ cargo test --workspace
 5. Background ownership rule (LOCKED via the type-contract, NOT runtime lifetime analysis): the `background` keyword places the called function under the v0.3 contract "may outlive the caller's frame," even though M8's sequential lowering runs it in-place. The compiler enforces the CONTRACT, not the M8-specific lowering. This is the same principle as M5's first-class `range` — the SOURCE semantics is locked even when v0.1 codegen happens to be simpler.
 
    For each parameter:
-   - **If sig is `share`**: REJECT regardless of argument shape. Compile error with three-part diagnostic byte-identical to `spec/concurrency.md` line 167-175. WHY: "Background tasks may outlive the current function. A shared borrow would dangle when the owner's scope ends. Use a function with `give` (move) or pass `value.copy()` to a `give`-signature function." This applies even if the user passes `x.copy()` to a share-sig function — the SIGNATURE forbids share-with-background, regardless of the call-site expression.
+   - **If sig is `share`**: REJECT regardless of argument shape. Compile error with three-part diagnostic byte-identical to [`docs/reference/REF-concurrency.md`](../../../../docs/reference/REF-concurrency.md) line 167-175. WHY: "Background tasks may outlive the current function. A shared borrow would dangle when the owner's scope ends. Use a function with `give` (move) or pass `value.copy()` to a `give`-signature function." This applies even if the user passes `x.copy()` to a share-sig function — the SIGNATURE forbids share-with-background, regardless of the call-site expression.
    - **If sig is `lend`**: REJECT. Same dangling-borrow concern; lend is the mutable form of share. Three-part diagnostic mirrors share's. (Spec/design don't explicitly enumerate this case — locking it here per "the type-contract owns the rule" rationale; lend is conceptually share-with-write.)
-   - **If sig is `give`**: ACCEPT. The compiler INFERS the call-site form (see Step 6 below for the inference rule, aligned with `.claude/rules/inference.md`).
+   - **If sig is `give`**: ACCEPT. The compiler INFERS the call-site form (see Step 6 below for the inference rule, aligned with [`.claude/rules/inference.md`](../../../rules/inference.md)).
 
    **Paper-Trace examples** locked in `crates/ynz-typeck/tests/background_ownership.rs`:
 
    - **Accepted**: `function processEvent(give event: WebhookEvent) -> nothing { ... }; function handler(event: WebhookEvent) -> nothing { background processEvent(event); /* event NOT used after */ }`. Compiler infers `.give()` (move). No diagnostic. M4 `is_consumed` tracking marks `event` as consumed; any subsequent use is a use-after-give error.
    - **Rejected missing-copy (use-after-without-explicit-copy)**: `function processEvent(give event: WebhookEvent) -> nothing { ... }; function handler(event: WebhookEvent) -> Response errors { background processEvent(event); log(\`Queued: ${event.id}\`); /* event used after */ return Response.ok }`. REJECT with the missing-`.copy()` teaching diagnostic from Step 6 below. Reason: `event` is `WebhookEvent` (heap-owning shape, not trivially-copyable); the post-use forces a copy, but the cost must be visible at the call site.
-   - **Accepted with explicit copy**: same handler rewritten with `background processEvent(event.copy())` — typechecks. The `.copy()` materializes an independent owned value passed to `processEvent`; `event` remains owned by `handler` and usable on the next line. This is the canonical spec form per `spec/concurrency.md` line 194-199.
+   - **Accepted with explicit copy**: same handler rewritten with `background processEvent(event.copy())` — typechecks. The `.copy()` materializes an independent owned value passed to `processEvent`; `event` remains owned by `handler` and usable on the next line. This is the canonical spec form per [`docs/reference/REF-concurrency.md`](../../../../docs/reference/REF-concurrency.md) line 194-199.
    - **Accepted (trivially-copyable, no explicit copy needed)**: `function processCount(give count: int) -> nothing { ... }; function handler() -> nothing { let n: int = 5; background processCount(n); print(n); /* n used after */ }`. `int` is trivially-copyable per M4; compiler auto-copies; no diagnostic. Muted hint: `.copy (trivially-copyable, 8 bytes, zero cost)`.
    - **Rejected**: `function readData(share data: Data) -> nothing { ... }; function handler(data: Data) { background readData(data) }`. REJECT with the three-part diagnostic. Reason: signature is `share`; the v0.3 contract forbids share-with-background.
    - **Still rejected (sig is what matters, not call-site form)**: `function readData(share data: Data) -> nothing { ... }; function handler(data: Data) { background readData(data.copy()) }`. REJECT — even though `.copy()` would create an independent owned value, the SIGNATURE `share data` is the rule's gate, not the argument expression.
-6. **Background call-site ownership inference** (aligned with `.claude/rules/inference.md` to AVOID re-introducing Graveyard Entry 2 — "Requiring Explicit Ownership Annotation at Call Sites"):
+6. **Background call-site ownership inference** (aligned with [`.claude/rules/inference.md`](../../../rules/inference.md) to AVOID re-introducing Graveyard Entry 2 — "Requiring Explicit Ownership Annotation at Call Sites"):
 
    The compiler INFERS the call-site form per the existing rule (signature drives + body usage refines). It does NOT REQUIRE the user to type `.copy()` or `.give()` explicitly. The IDE muted hint surfaces the inferred form:
 
    - When the signature is `give` and the argument is **NOT used after** the `background` call site → compiler infers `.give()` (move). IDE muted hint at the call site renders as informational text: `.give (moved — not used after)`. **Click jumps to function signature** (per inference.md, ownership-at-call-sites is the "informational category" — no typeable body syntax, so click-to-make-explicit isn't applicable; click jumps to where the modifier IS visible, the signature).
-   - When the signature is `give` and the argument **IS used after** the `background` call → **REQUIRE explicit `.copy()` at the call site, with a three-part teaching diagnostic** if it's missing. This preserves the M4 contract (auto-copy ONLY for trivially-copyable scalars; heap values require explicit `.copy()` to make the cost visible) AND matches `spec/concurrency.md` line 194-199 which shows `background processEvent(event.copy())` as the canonical usage pattern. **Diagnostic format** if user wrote `background processEvent(event)` and `event` is read after the call: WHAT "`event` is used after this `background` call, but `processEvent`'s `give` signature would move it away." WHAT-INSTEAD "Call `.copy()` explicitly: `background processEvent(event.copy())`. This creates an independent copy for the background task while keeping the original usable." WHY "Background tasks may outlive the current function. Auto-copying heap values silently would hide the cost from readers — Yinz makes the copy visible at the call site so reviewers can see the allocation. Trivially-copyable scalars (int, float, bool) auto-copy because there's no observable cost; owned heap values do not." NOTE: this is NOT Graveyard Entry 2 ("Requiring Explicit Ownership Annotation at Call Sites") because the rule is type-driven (post-use of a `give`-sig arg requires the cost-visible form), not a blanket "annotate every call site." Graveyard Entry 2 forbids requiring `.share`/`.lend`/`.give` modifiers on EVERY call site; this rule requires `.copy()` only when the type-flow proves a copy is needed AND the cost is non-trivial (heap allocation). The compiler still INFERS ownership for trivially-copyable types without diagnostic.
+   - When the signature is `give` and the argument **IS used after** the `background` call → **REQUIRE explicit `.copy()` at the call site, with a three-part teaching diagnostic** if it's missing. This preserves the M4 contract (auto-copy ONLY for trivially-copyable scalars; heap values require explicit `.copy()` to make the cost visible) AND matches [`docs/reference/REF-concurrency.md`](../../../../docs/reference/REF-concurrency.md) line 194-199 which shows `background processEvent(event.copy())` as the canonical usage pattern. **Diagnostic format** if user wrote `background processEvent(event)` and `event` is read after the call: WHAT "`event` is used after this `background` call, but `processEvent`'s `give` signature would move it away." WHAT-INSTEAD "Call `.copy()` explicitly: `background processEvent(event.copy())`. This creates an independent copy for the background task while keeping the original usable." WHY "Background tasks may outlive the current function. Auto-copying heap values silently would hide the cost from readers — Yinz makes the copy visible at the call site so reviewers can see the allocation. Trivially-copyable scalars (int, float, bool) auto-copy because there's no observable cost; owned heap values do not." NOTE: this is NOT Graveyard Entry 2 ("Requiring Explicit Ownership Annotation at Call Sites") because the rule is type-driven (post-use of a `give`-sig arg requires the cost-visible form), not a blanket "annotate every call site." Graveyard Entry 2 forbids requiring `.share`/`.lend`/`.give` modifiers on EVERY call site; this rule requires `.copy()` only when the type-flow proves a copy is needed AND the cost is non-trivial (heap allocation). The compiler still INFERS ownership for trivially-copyable types without diagnostic.
    - **Auto-copy for trivially-copyable types preserved**: when the argument's type is M4-classifiable as trivially-copyable (int, float, bool, fixed-size value types with no heap-owning fields), the compiler auto-copies and the muted hint renders `.copy (trivially-copyable, 8 bytes, zero cost)`. No diagnostic, no explicit `.copy()` required. This matches the spec's "small value (string, int)" auto-copy case in the ownership table.
    - **Tier 3 lint `unnecessary-background-copy`** (DEFERRED to v0.4 lint surface): when the user writes `value.copy()` in a position where the compiler can prove `value` isn't used after, suggest dropping the `.copy()` to enable the move. M8 ships the typeck-level rule (require `.copy()` when used after); the lint suggestion that goes the OTHER direction (drop `.copy()` when not needed) defers to v0.4.
 
@@ -665,7 +665,7 @@ cargo test --workspace
 - [ ] M4 ownership invariants preserved: `const` arg passed to `background give-fn` is rejected (can't give a const).
 **Quality gate**:
 - [ ] No scheduler dependency added — `wait`/`background` lower to direct calls.
-- [ ] Background-share rejection diagnostic text byte-identical to `spec/concurrency.md` line 167-175.
+- [ ] Background-share rejection diagnostic text byte-identical to [`docs/reference/REF-concurrency.md`](../../../../docs/reference/REF-concurrency.md) line 167-175.
 - [ ] M8 errors gallery triggers the background-share rejection.
 **Verification**: `cargo test -p ynz-driver m8_concurrency`.
 
@@ -683,7 +683,7 @@ cargo test --workspace
 - `crates/ynz-numerics/src/decimal128/` — 34-digit hardware path. Files: bits.rs, format.rs, ops.rs, parse.rs, wide.rs.
 - `crates/ynz-typeck/src/types.rs:24` — Type::Number rejects N != 34 as Type::Error. Lift in P6.
 - `crates/ynz-codegen/src/emit.rs` — Type::Number lowers to {i64, i64} ABI (decimal128 high/low). Extend to bignum ABI for N > 34.
-- `design/numeric-types.md` lines 41-80 — precision rules + mixed-precision semantics.
+- [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md) lines 41-80 — precision rules + mixed-precision semantics.
 **Files (expected scope)**:
 - `crates/ynz-numerics/src/decimal_n/` (NEW submodule)
   - `mod.rs`
@@ -707,7 +707,7 @@ cargo test --workspace
 **Steps**:
 1. **Storage model (LOCKED)**: **heap-allocated, single-owner, value-semantics**. `decimal_n::BigNum { precision: u16, chunks: *mut u128 /* heap-allocated array of ⌈N/34⌉ u128s */, sign: bool, exponent: i32 }`. The codegen passes bignum values as a 16-byte struct `{ precision: u16, sign: bool, exponent: i32, pad, chunks: *mut u128 }` with the chunks array on the heap. Total in-place footprint = 16 bytes (the struct). Heap footprint per binding = ⌈N/34⌉ * 16 bytes. At N=4096, 120 chunks * 16 = 1920 bytes; that's slightly above the design doc's "~1.7 KB" rough estimate but within the predictable-performance bound (the design doc estimates the COEFFICIENT bytes only; the bookkeeping overhead is fine).
 
-   **Why heap (not stack-inline or hybrid)**: stack-inline would require const-generic storage (`[u128; N_CHUNKS]` where `N_CHUNKS` is type-level), which Yinz does not support in v0.1 (const generics are a v2+ feature per design/mvp-scope.md). Hybrid (small-bignum-on-stack, large-bignum-on-heap) doubles codegen complexity for marginal benefit since most bignum users are at N=70..200 (the cited use cases — physics, finance) where heap allocation is dwarfed by op cost. Heap-only is the locked choice.
+   **Why heap (not stack-inline or hybrid)**: stack-inline would require const-generic storage (`[u128; N_CHUNKS]` where `N_CHUNKS` is type-level), which Yinz does not support in v0.1 (const generics are a v2+ feature per docs/reference/REF-mvp-scope.md). Hybrid (small-bignum-on-stack, large-bignum-on-heap) doubles codegen complexity for marginal benefit since most bignum users are at N=70..200 (the cited use cases — physics, finance) where heap allocation is dwarfed by op cost. Heap-only is the locked choice.
 
    **Kernel-mode compatibility**: per `### Kernel-Mode Behavior` invariant above, `number<N>` for N > 34 is a compile error in `--kernel` mode unless the user provides a custom allocator via the v0.3+ plug-in API (`design/future/no-runtime-mode.md`). The hardware path (N ≤ 34) works in `--kernel` because it's stack-only.
 
@@ -749,7 +749,7 @@ cargo test --workspace
 
      **Worked Paper-Trace for row 1 (canonical example)**: Inputs `a = Decimal('0.1')` stored as coefficient `1`, exponent `-1`; `b = Decimal('0.2')` stored as coefficient `2`, exponent `-1`. Expected: align exponents (both at `-1`), sum coefficients (`1 + 2 = 3`), result `coefficient=3, exponent=-1` = `0.3`. Compare bit-patterns of stored decimal128 representation. Python: `Decimal('0.1') + Decimal('0.2')` returns `Decimal('0.3')` (exact, not `Decimal('0.300...4')` as binary float would).
 
-   **Round-trip equality NOT guaranteed for arithmetic**: per Python `decimal` behavior, `(x / y) * y` does NOT generally equal `x` due to rounding at the precision boundary. Yinz's `number<N>` follows this same semantic — intermediate operations round to N digits half-even, and round-trip identity holds only for `parse(format(x)) == x` (lossless string round-trip), NOT for arithmetic round-trips. Document this in `spec/numeric-types.md` as part of the M8 spec update.
+   **Round-trip equality NOT guaranteed for arithmetic**: per Python `decimal` behavior, `(x / y) * y` does NOT generally equal `x` due to rounding at the precision boundary. Yinz's `number<N>` follows this same semantic — intermediate operations round to N digits half-even, and round-trip identity holds only for `parse(format(x)) == x` (lossless string round-trip), NOT for arithmetic round-trips. Document this in [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md) as part of the M8 spec update.
 11. **Integration test flip**: `m2_bignum_deferral_produces_diagnostic` now ASSERTS the program runs and prints the correct high-precision value, not the deferral diagnostic. Snapshot updated. The `CATCH-UP M8` comment in integration.rs is removed (the catch-up has happened).
 12. **Demo + error gallery** extensions per spec.
 **Acceptance criteria**:
@@ -783,16 +783,16 @@ cargo test --workspace
 - `crates/ynz-driver/tests/fixtures/m8_*.ynz` (any missing fixtures filled in)
 - `examples/pirates-roster/entrypoint.ynz` (final pass — every section flows, M8 features integrated with M1–M7)
 - `examples/pirates-roster/src/services/*.ynz` (polish — comments cleaned, doc comments on every export, sensitive used in a realistic API-key pattern, concurrency in a realistic checkout flow, bignum in a realistic high-precision calc)
-- `examples/pirates-roster/README.md` (UPDATE the milestone table to mark M8 as shipped)
+- [`examples/pirates-roster/README.md`](../../../../examples/pirates-roster/README.md) (UPDATE the milestone table to mark M8 as shipped)
 - `examples/primantis-orders/m8_errors.ynz` (every M8 compile-error class triggered; one comment per trigger explaining what it tests)
-- `examples/primantis-orders/README.md` (UPDATE)
+- [`examples/primantis-orders/README.md`](../../../../examples/primantis-orders/README.md) (UPDATE)
 - `crates/ynz-driver/tests/integration.rs` (final integration tests for full-pipeline M8)
 **Deviation rule**: P7 must NOT introduce new language features. Anything found in P7 that requires new feature work goes BACK to P1–P6 as a fix — P7 is consolidation only.
 **Steps**:
 1. Run `examples/pirates-roster/entrypoint.ynz` end-to-end. Capture stdout. Compare to expected golden output for each M-section.
 2. Run `examples/primantis-orders/m8_errors.ynz` in report-only mode (Yinz multi-errors). Capture stderr. Compare to expected golden diagnostic stream.
 3. Identify gaps — any M8 feature without a basics-demo section? Any compile-error class without a gallery trigger? Fill them.
-4. Polish: rewrite any awkward demo prose; ensure every section uses real Yinz operations from the current scope (per `.claude/rules/dot-postfix.md` examples rule).
+4. Polish: rewrite any awkward demo prose; ensure every section uses real Yinz operations from the current scope (per [`.claude/rules/dot-postfix.md`](../../../rules/dot-postfix.md) examples rule).
 5. README updates: milestone table marked, deferred-features list refreshed (anything M8 newly closed gets removed; v0.2/v0.3 entries verified accurate).
 6. Final integration test: a single `examples_basics_runs_end_to_end` test that builds + runs + asserts stdout matches the golden file. **Golden file location**: `examples/pirates-roster/expected_stdout.txt` (committed to the repo; regenerated only when patrick approves a demo behavior change). P7 also commits `examples/pirates-roster/expected_stdout.txt.regenerate.sh` — a script that runs the demo and writes the captured stdout to the golden file. Reviewer protocol: if `examples_basics_runs_end_to_end` fails, EITHER the demo regressed (fix the regression) OR the demo intentionally changed (run the regenerate script + commit the new golden + explain the change in PR description). Never blind-update the golden.
 7. **Combined-feature integration fixtures** (NEW per Required Fix #10 from plan-review — catches combinatorial bugs that per-feature fixtures miss). Add at minimum these three fixture projects:
@@ -804,7 +804,7 @@ cargo test --workspace
 **Acceptance criteria**:
 - [ ] `./target/debug/ynz run examples/pirates-roster/` runs successfully and produces the golden output (`examples/pirates-roster/expected_stdout.txt`).
 - [ ] `examples/primantis-orders/m8_errors.ynz` triggers EVERY M8 compile-error class (count: ~20 distinct triggers).
-- [ ] `examples/pirates-roster/README.md` accurately reflects M8 status.
+- [ ] [`examples/pirates-roster/README.md`](../../../../examples/pirates-roster/README.md) accurately reflects M8 status.
 - [ ] No feature added in P1-P6 lacks a basics-demo section.
 - [ ] No compile-error class added in P1-P6 lacks an m8_errors gallery trigger.
 - [ ] All three combined-feature integration tests pass (`m8_combo_modules_sensitive_concurrency`, `m8_combo_modules_bignum_interpolation`, `m8_combo_doc_sensitive_bignum`).
@@ -818,7 +818,7 @@ cargo test --workspace
 ---
 
 ### Phase 8: v0.1.0 audit sweep + version bump + tag + release
-**PR scope**: `/audit` across the integrated v0.1 surface; fix CRITICAL findings; bump `Cargo.toml` to `0.1.0`; CHANGELOG entries for M1–M8 generated from PR merge history; tag `v0.1.0` with patrick's approval; flip v0-1-compiler.md M8 status `active`→`done`.
+**PR scope**: `/audit` across the integrated v0.1 surface; fix CRITICAL findings; bump [`Cargo.toml`](../../../../Cargo.toml) to `0.1.0`; CHANGELOG entries for M1–M8 generated from PR merge history; tag `v0.1.0` with patrick's approval; flip v0-1-compiler.md M8 status `active`→`done`.
 **Branch**: `release/v0.1.0`
 **Flag**: N/A
 **Est. lines**: variable (audit findings drive scope; could be small if clean, larger if multiple issues surface)
@@ -826,13 +826,13 @@ cargo test --workspace
 **Objective**: v0.1.0 tag pushed. No public launch (per locked scope) — internal milestone only.
 **Why this phase exists**: M7 was a per-milestone release tag. v0.1.0 is the cap on v0.1 development. /release skill is the canonical path; /audit gates the tag.
 **Current-state anchors**:
-- `Cargo.toml` workspace.package.version (currently `0.1.0-m7`; bumps to `0.1.0`).
-- `CHANGELOG.md` per existing format.
+- [`Cargo.toml`](../../../../Cargo.toml) workspace.package.version (currently `0.1.0-m7`; bumps to `0.1.0`).
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) per existing format.
 - `.claude/plans/active/v0-1-compiler.md` M8 status block.
 **Files (expected scope)**:
-- `Cargo.toml` (version `0.1.0-m7` → `0.1.0`)
+- [`Cargo.toml`](../../../../Cargo.toml) (version `0.1.0-m7` → `0.1.0`)
 - `Cargo.lock` (regenerated)
-- `CHANGELOG.md` (full M1-M8 cumulative entries; if existing per-milestone tags are recorded, link to them)
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) (full M1-M8 cumulative entries; if existing per-milestone tags are recorded, link to them)
 - `.claude/plans/active/v0-1-compiler.md` (status `active` → `done`; bump last_updated)
 - Any files needing fix-up from audit findings (TBD by audit results)
 - `.analysis/*.md` (audit output; not committed to main — staged under `.analysis/` per CLAUDE.md rule)
@@ -853,7 +853,7 @@ cargo test --workspace
 - [ ] Every CRITICAL finding has a fix landed (either in P8 inline or routed to a P1-P6 follow-up PR).
 - [ ] `cargo test --workspace` green at workspace version `0.1.0`.
 - [ ] `cargo clippy --workspace -- -D warnings` green.
-- [ ] `Cargo.toml` at `0.1.0`. `Cargo.lock` regenerated.
+- [ ] [`Cargo.toml`](../../../../Cargo.toml) at `0.1.0`. `Cargo.lock` regenerated.
 - [ ] CHANGELOG has a `## [0.1.0] - 2026-XX-XX` section with all M1-M8 highlights.
 - [ ] `git tag v0.1.0` pushed (with patrick approval — explicit YES).
 - [ ] v0-1-compiler.md radar shows M8 as `done`.
@@ -878,7 +878,7 @@ cargo test --workspace
 - [ ] Types are complete (no `any` — Rust workspace; no `unwrap()` in pipeline-critical code without test-ratchet rationale)
 - [ ] Follows existing codebase conventions (M3-M7 patterns mirrored in each phase)
 - [ ] Bouncer 6-subsection Invariants block present (see above)
-- [ ] Banned-jargon sync test green (`crates/ynz-diagnostics/src/banned_jargon.rs` matches design/compiler-errors.md)
+- [ ] Banned-jargon sync test green (`crates/ynz-diagnostics/src/banned_jargon.rs` matches docs/reference/REF-compiler-errors.md)
 - [ ] Examples basics demo runs end-to-end and prints golden output
 - [ ] Examples errors gallery triggers every M8 compile-error class
 - [ ] `cargo bench --bench decimal128_hot_path` within 5% of M7 baseline
@@ -942,7 +942,7 @@ All 5 non-blocking concerns addressed pre-implementation:
 
 1. **Row 11 in determinism table** → Replaced the self-flagged "revise at impl time" row with a concrete locked case: `Decimal('1E+34') + Decimal('1')` at prec=68 = `10000000000000000000000000000000001` (35-digit integer). This tests the hardware-coefficient overflow boundary AT the exact MAX_COEFFICIENT cited in `crates/ynz-numerics/src/decimal128/bits.rs:32`. Locks Python-derivable expected.
 
-2. **P5 Step 6 auto-copy-for-heap sneak-in** → Reframed to MATCH the M4 contract: auto-copy preserved ONLY for trivially-copyable scalars (int, float, bool); heap-owning values (shapes, arrays, maps, strings) REQUIRE explicit `.copy()` at the call site when used after `background`, enforced via three-part teaching diagnostic. The post-use-without-copy case is now a REJECT, not a silent auto-copy. Matches `spec/concurrency.md` line 194-199 exactly. Explicitly documented why this is NOT Graveyard Entry 2 (the rule is type-flow-driven for non-trivial cost cases, not a blanket call-site annotation requirement).
+2. **P5 Step 6 auto-copy-for-heap sneak-in** → Reframed to MATCH the M4 contract: auto-copy preserved ONLY for trivially-copyable scalars (int, float, bool); heap-owning values (shapes, arrays, maps, strings) REQUIRE explicit `.copy()` at the call site when used after `background`, enforced via three-part teaching diagnostic. The post-use-without-copy case is now a REJECT, not a silent auto-copy. Matches [`docs/reference/REF-concurrency.md`](../../../../docs/reference/REF-concurrency.md) line 194-199 exactly. Explicitly documented why this is NOT Graveyard Entry 2 (the rule is type-flow-driven for non-trivial cost cases, not a blanket call-site annotation requirement).
 
 3. **P2 Item AST shape duct-tape** → Locked: 6 final Item variants — Function, Shape, Options, ImportDecl, ConstDecl, ReExport. `is_exported: bool` on Function/Shape/Options/ConstDecl. No code-time TBD. P2 research step verifies whether `Item::ConstDecl` already exists; if not, P2 adds it.
 
@@ -965,8 +965,8 @@ These four suggestions are filed as "P-phase fixture corpus expansion" — they 
 ### Out-of-scope for M8 (CURRENT — do NOT slip these in)
 
 - **Auto-parallelization** (`wait`/`background` runtime dependency graph + thread pool) — v0.3 per mvp-scope.md
-- **Background handle communication** (`.send()`/`.receive()`) — v0.3 per design/concurrency.md
-- **Database operations under concurrency** (`db.insert()` sequencing) — MVP2 per design/concurrency.md
+- **Background handle communication** (`.send()`/`.receive()`) — v0.3 per docs/internal/implementation/IMP-concurrency.md
+- **Database operations under concurrency** (`db.insert()` sequencing) — MVP2 per docs/internal/implementation/IMP-concurrency.md
 - **`env.get()` returning `sensitive string` by default** — v0.7 per mvp-scope.md
 - **`ynz doc` static API documentation generator** — v1.1 per mvp-scope.md
 - **LSP / muted-hint IDE surfaces** — v0.2 per mvp-scope.md
@@ -980,14 +980,14 @@ These four suggestions are filed as "P-phase fixture corpus expansion" — they 
 - **Arbitrary-precision decimal beyond `number<4096>`** — v2+ per mvp-scope.md
 - **FFI** (`foreign` keyword) — v2+ per mvp-scope.md
 - **GPU dispatch** — v2+ per mvp-scope.md
-- **Arena allocators in user code** (`arena scratch { ... }` blocks) — v0.2 per design/future/arena.md
-- **Arena allocators in compiler internals** (compile-speed optimization) — M8 polish per design/decisions.md; deferred as a v0.2 follow-up since it's a perf optimization, not a user-facing v0.1 feature. Documented in `.claude/todos.md` after this plan lands.
+- **Arena allocators in user code** (`arena scratch { ... }` blocks) — v0.2 per docs/internal/scratchpad/SCRATCH-future-arena.md
+- **Arena allocators in compiler internals** (compile-speed optimization) — M8 polish per docs/README.md; deferred as a v0.2 follow-up since it's a perf optimization, not a user-facing v0.1 feature. Documented in [`.claude/todos.md`](../../../todos.md) after this plan lands.
 - **Sensitive `--reveal-sensitive` flag stripped from `ynz build --release`** — v0.4 release-mode work (no release-mode in v0.1)
 - **Verified `{ }` blocks (unsafe escape hatch)** — v0.3+ per vocabulary.md
-- **Self-references** — v0.3+ per design/future/self-references.md
+- **Self-references** — v0.3+ per docs/internal/scratchpad/SCRATCH-future-self-references.md
 - **Kernel-mode** (`--kernel` flag + plug-in allocator API) — v0.3+ per design/future/no-runtime-mode.md
-- **Public registry, package install, lock file** — v0.22 per design/packages.md
-- **Lint customization config** (`[lint]` in yinz.toml) — v1.x per design/linting.md
+- **Public registry, package install, lock file** — v0.22 per docs/internal/implementation/IMP-packages.md
+- **Lint customization config** (`[lint]` in yinz.toml) — v1.x per docs/internal/implementation/IMP-linting.md
 
 ---
 
@@ -1012,9 +1012,9 @@ Constraints M8 must preserve so v0.2+ can land cleanly:
 - Most recent shipped milestone: `.claude/plans/done/m7-strings-errors-iterables.md` (shape inspiration for M8)
 - M4 ownership infrastructure (reused by P5 background analysis): `.claude/plans/done/m4-shapes-functions-ownership.md`
 - M5 generics syntax migration (informs P0 `number[N]` → `number<N>` migration): `.claude/plans/done/m5-generics.md`
-- Design docs: `design/modules.md`, `design/doc-comments.md`, `design/sensitive.md`, `design/concurrency.md`, `design/numeric-types.md`, `design/main-entry.md`
-- Spec docs: `spec/modules.md`, `spec/doc-comments.md`, `spec/sensitive.md`, `spec/concurrency.md`, `spec/numeric-types.md`, `spec/main.md`
-- Rules: `.claude/rules/non-oop.md`, `.claude/rules/plan-invariants.md`, `.claude/rules/auto-promotion.md`, `.claude/rules/stdlib-design.md`, `.claude/rules/vocabulary.md`, `.claude/rules/inference.md`
+- Design docs: [`docs/internal/implementation/IMP-modules.md`](../../../../docs/internal/implementation/IMP-modules.md), [`docs/internal/implementation/IMP-doc-comments.md`](../../../../docs/internal/implementation/IMP-doc-comments.md), [`docs/internal/implementation/IMP-sensitive.md`](../../../../docs/internal/implementation/IMP-sensitive.md), [`docs/internal/implementation/IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md), [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md), [`docs/internal/implementation/IMP-main-entry.md`](../../../../docs/internal/implementation/IMP-main-entry.md)
+- Spec docs: [`docs/reference/REF-modules.md`](../../../../docs/reference/REF-modules.md), [`docs/reference/REF-doc-comments.md`](../../../../docs/reference/REF-doc-comments.md), [`docs/reference/REF-sensitive.md`](../../../../docs/reference/REF-sensitive.md), [`docs/reference/REF-concurrency.md`](../../../../docs/reference/REF-concurrency.md), [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md), [`docs/reference/REF-main.md`](../../../../docs/reference/REF-main.md)
+- Rules: [`.claude/rules/non-oop.md`](../../../rules/non-oop.md), [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md), [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md), [`.claude/rules/stdlib-design.md`](../../../rules/stdlib-design.md), [`.claude/rules/vocabulary.md`](../../../rules/vocabulary.md), [`.claude/rules/inference.md`](../../../rules/inference.md)
 - Skills: `<project>/.claude/skills/pr/SKILL.md`, `<project>/.claude/skills/release/SKILL.md`
-- Graveyard: `.claude/graveyard.md` (Const Deep-Immutability Invariant, Requiring Explicit Ownership Annotation at Call Sites)
-- Mvp-scope: `design/mvp-scope.md` (v0.1 / v0.2 / v0.3 / v1.0 / v2+ split — every "out of scope" claim above cites a specific section)
+- Graveyard: [`.claude/graveyard.md`](../../../graveyard.md) (Const Deep-Immutability Invariant, Requiring Explicit Ownership Annotation at Call Sites)
+- Mvp-scope: [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) (v0.1 / v0.2 / v0.3 / v1.0 / v2+ split — every "out of scope" claim above cites a specific section)

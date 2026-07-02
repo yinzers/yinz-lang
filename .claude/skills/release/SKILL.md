@@ -32,8 +32,8 @@ Only proceed past Step 0 once the user confirms or the signals are clean.
 ## Yinz release conventions
 
 - Tags: `v{MAJOR}.{MINOR}.{PATCH}-m{N}` for pre-1.0 milestones (e.g. `v0.1.0-m2`). For v0.1 final, drop the `-m{N}` suffix (`v0.1.0`).
-- Version in `Cargo.toml` (`[workspace.package].version`) = `{MAJOR}.{MINOR}.{PATCH}-m{N}` (no `v` prefix in TOML, `v` prefix on git tags only)
-- CHANGELOG section template lives in `CHANGELOG.md` — match the existing milestone-section format
+- Version in [`Cargo.toml`](../../../Cargo.toml) (`[workspace.package].version`) = `{MAJOR}.{MINOR}.{PATCH}-m{N}` (no `v` prefix in TOML, `v` prefix on git tags only)
+- CHANGELOG section template lives in [`CHANGELOG.md`](../../../CHANGELOG.md) — match the existing milestone-section format
 - One release commit + one tag, both on main
 
 ---
@@ -78,7 +78,7 @@ If no merges exist between last tag and HEAD, **stop and tell the user** — the
 
 ## STEP 4 — Generate CHANGELOG section
 
-Match the existing `CHANGELOG.md` format. The template:
+Match the existing [`CHANGELOG.md`](../../../CHANGELOG.md) format. The template:
 
 ```markdown
 ## v{X.Y.Z}-m{N} — {milestone name} (M{N} milestone)
@@ -109,7 +109,7 @@ Suggested process:
 1. Group merged PRs by crate (parse `crates/X` from PR titles or PR descriptions)
 2. Pull the "What" / "Why" lines from each PR body
 3. Write a coherent narrative, not a flat bullet dump — milestones are stories
-4. Run a `grep` of the draft against the banned-jargon list in `design/compiler-errors.md` (propagate, narrow, infer, polymorphic, etc.) — these belong in `design/`, never in user-facing release notes
+4. Run a `grep` of the draft against the banned-jargon list in [`docs/reference/REF-compiler-errors.md`](../../../docs/reference/REF-compiler-errors.md) (propagate, narrow, infer, polymorphic, etc.) — these belong in `design/`, never in user-facing release notes
 
 ---
 
@@ -117,8 +117,8 @@ Suggested process:
 
 After user approves the CHANGELOG draft:
 
-1. Update `Cargo.toml` — bump `[workspace.package].version` to `{X.Y.Z}-m{N}`
-2. Update `CHANGELOG.md` — prepend the new section (newest at top, after the `# Changelog` header)
+1. Update [`Cargo.toml`](../../../Cargo.toml) — bump `[workspace.package].version` to `{X.Y.Z}-m{N}`
+2. Update [`CHANGELOG.md`](../../../CHANGELOG.md) — prepend the new section (newest at top, after the `# Changelog` header)
 3. Run `cargo build --workspace` to refresh `Cargo.lock` with the new version
 4. `cargo test --workspace` — confirm green locally before tagging
 5. If tests fail → STOP, surface the failure, do not tag
@@ -148,7 +148,7 @@ Only push after explicit go-ahead. Never push autonomously.
 After successful push:
 1. Print the tag URL: `https://github.com/{org}/{repo}/releases/tag/v{X.Y.Z}-m{N}`
 2. Suggest the user create a GitHub release from the tag (manual, via UI or `gh release create`) if they want release notes visible on GitHub
-3. Update `.claude/state.md` — add a one-line decision entry: `[YYYY-MM-DD] **M{N} compiler released as v{X.Y.Z}-m{N}**: {summary}`
+3. Update [`.claude/state.md`](../../state.md) — add a one-line decision entry: `[YYYY-MM-DD] **M{N} compiler released as v{X.Y.Z}-m{N}**: {summary}`
 
 ---
 

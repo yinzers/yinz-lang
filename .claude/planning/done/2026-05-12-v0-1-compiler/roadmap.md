@@ -42,23 +42,23 @@ Status: m2_planning
 
 ## Context & Why
 
-**Goal.** Build the Yinz v0.1 compiler — the first runnable slice of the Yinz language. v0.1's scope is "core language only, no stdlib" per `design/mvp-scope.md`. Output: an `ynz` CLI that can `build` and `run` programs written against the v0.1 language surface (variables, functions, types, ownership, generics, collections, options/unions/maybe, control flow, strings, errors, modules, concurrency keywords parsing sequentially, decimal128 numerics, doc comments, sensitive modifier).
+**Goal.** Build the Yinz v0.1 compiler — the first runnable slice of the Yinz language. v0.1's scope is "core language only, no stdlib" per [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md). Output: an `ynz` CLI that can `build` and `run` programs written against the v0.1 language surface (variables, functions, types, ownership, generics, collections, options/unions/maybe, control flow, strings, errors, modules, concurrency keywords parsing sequentially, decimal128 numerics, doc comments, sensitive modifier).
 
 **Why now.** All design work is done (~30 spec files, ~30 design files, decisions log, golden rules). Implementation has not started — zero Rust files exist. Continuing to design without building risks paper-spec drift: a feature that reads great in markdown but doesn't survive contact with the type checker. v0.1 is the first time the design gets verified against working code.
 
-**Background.** Yinz is a compiled systems language (LLVM-targeting, no GC, ownership-based). The compiler is written in Rust (decision: `design/compiler-language.md`) with `inkwell` for LLVM, `salsa` for incremental computation (also serves the v0.2 LSP), `ariadne` for diagnostics, and a hand-written recursive-descent parser (so error messages can carry position-specific suggestions per Golden Rule 11 — the compiler is a teacher).
+**Background.** Yinz is a compiled systems language (LLVM-targeting, no GC, ownership-based). The compiler is written in Rust (decision: [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md)) with `inkwell` for LLVM, `salsa` for incremental computation (also serves the v0.2 LSP), `ariadne` for diagnostics, and a hand-written recursive-descent parser (so error messages can carry position-specific suggestions per Golden Rule 11 — the compiler is a teacher).
 
 **Constraints.**
 - Rust stable toolchain.
 - LLVM via `inkwell` — LLVM version is pinned (target LLVM 18; revisit if inkwell stable lags).
-- Salsa from day 1 (non-negotiable per `design/compiler-language.md` — retrofit cost would be a 6-month side-quest before v0.2 LSP).
+- Salsa from day 1 (non-negotiable per [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md) — retrofit cost would be a 6-month side-quest before v0.2 LSP).
 - No external runtime dependencies in produced binaries except libc (for `puts`/`printf`/`malloc`/`free`) until decimal128 lands and we pull in a decimal library.
-- Compiler-error format must follow the WHAT/WHAT-INSTEAD/WHY three-part shape from `design/compiler-errors.md` from day 1.
+- Compiler-error format must follow the WHAT/WHAT-INSTEAD/WHY three-part shape from [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) from day 1.
 
 **Success criteria for the full v0.1 release (not M1):**
 - `ynz run hello.ynz` works for every program covered by `spec/**/*.md` examples that don't import stdlib.
-- All compiler errors follow the three-part format and pass an audit against `design/compiler-errors.md`'s banned-jargon list.
-- Incremental rebuilds hit the sub-second target from `design/compiler.md` (single-file change, warm cache, typical project).
+- All compiler errors follow the three-part format and pass an audit against [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md)'s banned-jargon list.
+- Incremental rebuilds hit the sub-second target from [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md) (single-file change, warm cache, typical project).
 - The compiler is structured as queries (salsa) so v0.2 LSP can wrap them without restructuring.
 
 **Success criteria for M1 (this milestone's contract):**
@@ -76,7 +76,7 @@ Status: m2_planning
 
 **Toolchain decisions locked:**
 - Rust 1.95.0 stable, LLVM 18.1.8, inkwell 0.9.0 (`llvm18-1-prefer-dynamic` — Ubuntu packages don't ship static Polly), salsa 0.26.2, ariadne 0.6.0, clap 4.6.1, insta 1.47.2
-- `LLVM_SYS_181_PREFIX=/usr/lib/llvm-18` in `.cargo/config.toml` for Linux; macOS needs `brew --prefix llvm@18`
+- `LLVM_SYS_181_PREFIX=/usr/lib/llvm-18` in [`.cargo/config.toml`](../../../../.cargo/config.toml) for Linux; macOS needs `brew --prefix llvm@18`
 - `llvm18-1-prefer-dynamic` feature (not `llvm18-1`) — critical for Ubuntu where libLLVMPolly.a is not shipped
 
 **Crate layout:**
@@ -109,17 +109,17 @@ Status: m2_planning
 - `Config::with_color(bool)` exists; `ReportKind::Custom` still embeds color that bypasses config — use `Color::Primary` for colorless custom kinds
 
 ### Project structure question answered (this session)
-Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the root. No `mod` declarations, no explicit file graph. Single-segment imports = stdlib, multi-segment = project files. Already fully specced in `spec/modules.md` and `design/modules.md`.
+Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the root. No `mod` declarations, no explicit file graph. Single-segment imports = stdlib, multi-segment = project files. Already fully specced in [`docs/reference/REF-modules.md`](../../../../docs/reference/REF-modules.md) and [`docs/internal/implementation/IMP-modules.md`](../../../../docs/internal/implementation/IMP-modules.md).
 
 ---
 
 ## Research Findings
 
-- `design/mvp-scope.md` defines v0.1 exhaustively — no design open questions remain for v0.1's surface.
-- `design/compiler.md` defines architecture goals: Rust-like full-build cost is acceptable; Go-like incremental cost is the target; sub-second single-file incremental in typical projects.
-- `design/compiler-language.md` locks the stack: cargo workspace, hand-written parser, `ariadne`, `salsa`, `inkwell`, optional `cranelift` later for fast debug builds.
-- `design/compiler-errors.md` is the style spec for all diagnostics: required three-part WHAT/WHAT-INSTEAD/WHY format, banned-jargon list, multi-error strategy.
-- `design/teaching-mission.md` codifies Golden Rule 11: every diagnostic teaches.
+- [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) defines v0.1 exhaustively — no design open questions remain for v0.1's surface.
+- [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md) defines architecture goals: Rust-like full-build cost is acceptable; Go-like incremental cost is the target; sub-second single-file incremental in typical projects.
+- [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md) locks the stack: cargo workspace, hand-written parser, `ariadne`, `salsa`, `inkwell`, optional `cranelift` later for fast debug builds.
+- [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) is the style spec for all diagnostics: required three-part WHAT/WHAT-INSTEAD/WHY format, banned-jargon list, multi-error strategy.
+- [`docs/reference/REF-teaching-mission.md`](../../../../docs/reference/REF-teaching-mission.md) codifies Golden Rule 11: every diagnostic teaches.
 - `inkwell` releases track LLVM major versions. As of plan-write: latest stable inkwell supports LLVM 4–18 via feature flags. **Action in P1**: pin to LLVM 18 + matching `inkwell` feature flag.
 - `salsa` 0.x is unstable (the `salsa-2022` rewrite consolidated under the `salsa` crate). **Action in P1**: pick the current stable salsa release and pin it; document in the plan that salsa version bumps are intentional changes, not casual upgrades.
 - `decimal128` has no off-the-shelf fully-spec-compliant Rust crate. Candidates: Intel's `libdfp` via C bindings; `bigdecimal` (not IEEE 754 decimal128); roll our own minimal subset. **Decision deferred** — M1 doesn't need numerics. Decimal128 lands in M2 (literals) or M8 (deferred numerics polish).
@@ -132,15 +132,15 @@ Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| LLVM/inkwell version mismatch on contributor machines | High | Blocks builds | Document required LLVM version in README + `rust-toolchain.toml`. CI pins exact LLVM version. Optionally vendor a `flake.nix` / devcontainer later. |
-| Salsa API churn between minor versions breaks the build | Medium | Forced rewrites | Pin exact salsa version in workspace `Cargo.toml`. Treat salsa upgrade as its own PR with its own plan. |
+| LLVM/inkwell version mismatch on contributor machines | High | Blocks builds | Document required LLVM version in README + [`rust-toolchain.toml`](../../../../rust-toolchain.toml). CI pins exact LLVM version. Optionally vendor a `flake.nix` / devcontainer later. |
+| Salsa API churn between minor versions breaks the build | Medium | Forced rewrites | Pin exact salsa version in workspace [`Cargo.toml`](../../../../Cargo.toml). Treat salsa upgrade as its own PR with its own plan. |
 | Hand-written parser produces poor error messages despite goal | High | Violates Golden Rule 11; eats away at the "teaching" mission | Phase 2 ships diagnostics infrastructure BEFORE the parser. Phase 4 requires snapshot tests for malformed-input errors, not just well-formed AST. Every parser PR after M1 gets a "bad input" test added in the same PR. |
 | Walking-skeleton scope creep (just one more feature in M1) | High | M1 takes 3 weeks instead of one session, defeats the milestone principle | Explicit "out of scope for M1" list below. Mechanical enforcement gate in P3/P4: a `Token` enum variant-count test and AST `Stmt`/`Expr` variant-count test — adding a variant requires an inline `// test-ratchet: <reason>` marker AND a plan update. Reviewer vigilance alone is not enough. |
 | Windows-platform support deferred without trigger date | Low (M1) → Medium (long-term) | Compiler refuses to run on contributor's platform | Re-evaluate at M8 verification sweep regardless of contributor mix; do not let "later" remain unbounded. M1+M2+...+M7 may pass on Linux/macOS only. |
 | `cc` vs `clang` linker-flag differences across distros | Medium | M1 passes in CI, fails on a dev's Arch box | P7 driver invokes the system `cc` and documents the macOS-uses-clang/Linux-uses-distro-default reality. Failure mode is loud (linker stderr) not silent. Re-evaluate if a distro-specific bug actually bites. |
 | LLVM IR non-determinism (module IDs, metadata numbering, ConstantStruct ordering drift between runs) | Medium | P6 reproducibility test passes locally, flakes in CI; "just update the snapshot" pattern erodes the contract | Lock the reproducibility contract to **object-file SHA-256 identity** with an explicit module identifier set on the `inkwell::Module`. IR text snapshot is informational only — failure of the SHA-256 check is the gate, not the IR-text diff. |
 | Non-ASCII bytes in M1 string literals: undefined codegen behaviour | Medium | Silent wrong output; `print("café")` codegen path not specified | M1 lexer accepts UTF-8 source bytes inside string literals and passes them through codegen as raw bytes to `puts`. This is a one-line spec decision documented in P3 and P5. NOT a multi-byte-char rendering decision (that's M7 strings work) — purely "what bytes go into the global constant." |
-| `>50 errors` cap from `design/compiler-errors.md` slips to a later milestone and becomes a surprise | Medium | A user with a broken file gets 800 diagnostics flooding stderr | P2 `DiagnosticBucket` enforces the 50-error cap with the standard "... and N more errors hidden" footer from day 1. Tested via snapshot of an artificially-generated 60-error bucket. |
+| `>50 errors` cap from [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) slips to a later milestone and becomes a surprise | Medium | A user with a broken file gets 800 diagnostics flooding stderr | P2 `DiagnosticBucket` enforces the 50-error cap with the standard "... and N more errors hidden" footer from day 1. Tested via snapshot of an artificially-generated 60-error bucket. |
 | Decimal128 design rabbit hole | Medium | Could swallow weeks if attempted early | Out of scope for M1. Re-plan decimal strategy when M2 (literals) starts. |
 | Snapshot tests rot — golden files updated reflexively when output changes | High | Defeats the test's purpose; matches the test-weakening graveyard corpse pattern | Snapshot file updates require an inline `// test-ratchet: <reason>` marker (project convention from global rules) AND a WHY-comment style note in the test explaining what invariant the snapshot protects. |
 | Pipeline as straight function calls "for speed", retrofit salsa later | Medium | Same retrofit cost we're trying to avoid | Phase 3 onward expose work as salsa queries from day 1, even when the query has a single caller. The discipline matters more than the optimization. |
@@ -205,7 +205,7 @@ End-to-end walking skeleton. `function entrypoint() -> nothing { print("hello, y
 **Depends on**: M3
 
 ### Milestone 5 (M5): Generics + collections + maybe — multi-session
-Function generics `function foo<T>(...)` and type generics `array<T>` / `fixed<T>` / `map<K, V>`. Monomorphization. Bracket sugar (`arr[i]`, `m[k]`) desugars to `.get()` / `.set()`. **`maybe<T>` primitive moved from M6 to M5** — `none` literal, `.exists()`, `.value` (flow-sensitive), `.or(default)`. Map ships Swiss Tables + SipHash-2-4 + perfect-hash for static-key literals (xxhash3 fast opt-in and identity-hash deferred). For-loop over built-in collections is a typeck+codegen special-case (REPLACE-AT M7 markers). Auto-promotion `array<T>` → `fixed<T>` codegen surface (Tier 3 lint defers to v0.4; muted IDE hint defers to v0.2 LSP). `Iterable<T>` contract reserved for M7. Syntax = `<>` everywhere (NOT `[]`). See `.claude/plans/active/m5-generics.md` and `design/maybe.md`.
+Function generics `function foo<T>(...)` and type generics `array<T>` / `fixed<T>` / `map<K, V>`. Monomorphization. Bracket sugar (`arr[i]`, `m[k]`) desugars to `.get()` / `.set()`. **`maybe<T>` primitive moved from M6 to M5** — `none` literal, `.exists()`, `.value` (flow-sensitive), `.or(default)`. Map ships Swiss Tables + SipHash-2-4 + perfect-hash for static-key literals (xxhash3 fast opt-in and identity-hash deferred). For-loop over built-in collections is a typeck+codegen special-case (REPLACE-AT M7 markers). Auto-promotion `array<T>` → `fixed<T>` codegen surface (Tier 3 lint defers to v0.4; muted IDE hint defers to v0.2 LSP). `Iterable<T>` contract reserved for M7. Syntax = `<>` everywhere (NOT `[]`). See `.claude/plans/active/m5-generics.md` and [`docs/internal/implementation/IMP-maybe.md`](../../../../docs/internal/implementation/IMP-maybe.md).
 **Flag**: N/A
 **Status**: approved 2026-05-17, Phase 0 in progress
 **Depends on**: M4
@@ -227,7 +227,7 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 **Depends on**: M6
 
 ### Milestone 8 (M8): Modules + remaining + v0.1 tag — multi-session
-`import` / `export`, root-relative paths, aliases with `as`, duplicate-name compile error. Doc comments (`///`) parsed and preserved on signatures. Sensitive type modifier (auto-redact in print output). Concurrency keywords (`wait`, `background`) parse and type-check, run sequentially. **Bignum `number<N>` for N ∈ (34, 4096]** — multi-u128 coefficient path with mixed-precision promotion + narrowing-warning rounding (per `design/numeric-types.md` lines 65–78). Polish + audit + v0.1.0 tag.
+`import` / `export`, root-relative paths, aliases with `as`, duplicate-name compile error. Doc comments (`///`) parsed and preserved on signatures. Sensitive type modifier (auto-redact in print output). Concurrency keywords (`wait`, `background`) parse and type-check, run sequentially. **Bignum `number<N>` for N ∈ (34, 4096]** — multi-u128 coefficient path with mixed-precision promotion + narrowing-warning rounding (per [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md) lines 65–78). Polish + audit + v0.1.0 tag.
 **Flag**: N/A
 **Status**: active
 **Depends on**: M7
@@ -268,22 +268,22 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 **Why this phase exists**: Lock in workspace structure and version pins BEFORE any compiler code lands. Avoids the "we'll restructure later" trap.
 **Current-state anchors**: greenfield — no Rust files exist yet.
 **Files (expected scope)**:
-- `Cargo.toml` (workspace root)
-- `rust-toolchain.toml` (pin stable channel + LLVM-compatible toolchain)
-- `crates/ynz-driver/Cargo.toml` + `crates/ynz-driver/src/main.rs` (entry point, `ynz --version`)
-- `crates/ynz-diagnostics/Cargo.toml` + `crates/ynz-diagnostics/src/lib.rs` (empty)
-- `crates/ynz-ast/Cargo.toml` + `crates/ynz-ast/src/lib.rs` (empty)
-- `crates/ynz-parser/Cargo.toml` + `crates/ynz-parser/src/lib.rs` (empty)
-- `crates/ynz-typeck/Cargo.toml` + `crates/ynz-typeck/src/lib.rs` (empty)
-- `crates/ynz-codegen/Cargo.toml` + `crates/ynz-codegen/src/lib.rs` (empty)
+- [`Cargo.toml`](../../../../Cargo.toml) (workspace root)
+- [`rust-toolchain.toml`](../../../../rust-toolchain.toml) (pin stable channel + LLVM-compatible toolchain)
+- [`crates/ynz-driver/Cargo.toml`](../../../../crates/ynz-driver/Cargo.toml) + `crates/ynz-driver/src/main.rs` (entry point, `ynz --version`)
+- [`crates/ynz-diagnostics/Cargo.toml`](../../../../crates/ynz-diagnostics/Cargo.toml) + `crates/ynz-diagnostics/src/lib.rs` (empty)
+- [`crates/ynz-ast/Cargo.toml`](../../../../crates/ynz-ast/Cargo.toml) + `crates/ynz-ast/src/lib.rs` (empty)
+- [`crates/ynz-parser/Cargo.toml`](../../../../crates/ynz-parser/Cargo.toml) + `crates/ynz-parser/src/lib.rs` (empty)
+- [`crates/ynz-typeck/Cargo.toml`](../../../../crates/ynz-typeck/Cargo.toml) + `crates/ynz-typeck/src/lib.rs` (empty)
+- [`crates/ynz-codegen/Cargo.toml`](../../../../crates/ynz-codegen/Cargo.toml) + `crates/ynz-codegen/src/lib.rs` (empty)
 - `.github/workflows/ci.yml` (build, test, clippy, fmt)
 - `.gitignore` (`target/`, `*.ll`, `*.o`)
-- `README.md` (brief — link to `spec/overview.md`)
+- [`README.md`](../../../../README.md) (brief — link to [`docs/reference/REF-language-overview.md`](../../../../docs/reference/REF-language-overview.md))
 **Deviation rule**: Any new crate / file beyond this list requires updating the plan first.
 **Steps**:
-1. Initialise `Cargo.toml` workspace with the seven crates above.
+1. Initialise [`Cargo.toml`](../../../../Cargo.toml) workspace with the seven crates above.
 2. Add direct deps: `salsa = "<latest stable>"`, `inkwell = { version = "<llvm-18-compatible>", features = ["llvm18-0"] }`, `ariadne = "<latest>"`, `unicode-segmentation = "<latest>"` (pin exact versions; lockfile committed).
-3. `rust-toolchain.toml` pins `channel = "stable"` and lists components `clippy`, `rustfmt`.
+3. [`rust-toolchain.toml`](../../../../rust-toolchain.toml) pins `channel = "stable"` and lists components `clippy`, `rustfmt`.
 4. `ynz-driver` `main.rs`: parse `--version` and print a literal version string. Exit 0. No other behaviour.
 5. CI workflow runs `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, `cargo build --workspace --release` against Ubuntu and macOS runners with LLVM 18 installed.
 6. README contains a one-paragraph project description + LLVM-18 install instructions for Linux + macOS.
@@ -308,17 +308,17 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 **Flag**: N/A
 **Est. lines**: ~500
 **Objective**: A consumer crate can build a `Diagnostic` with a span and three-part message, push it to a `DiagnosticBucket`, and render the bucket as a string identical to a committed snapshot. The bucket enforces a 50-error cap with a standard "... and N more errors hidden" footer. An automated workspace-wide grep test fails CI if any banned-jargon word appears in diagnostic-construction call sites.
-**Why this phase exists**: Golden Rule 11 (compiler is a teacher) is load-bearing. Shipping the parser before diagnostics infrastructure invites "we'll polish the errors later" which is exactly the duct-tape framing `~/.claude/rules/no-duct-tape.md` prohibits. Build the teaching layer first, then make the rest of the compiler use it. Per `design/compiler-errors.md`, the 50-error cap is a spec requirement — enforcing it from P2 means every later phase inherits the behaviour for free.
+**Why this phase exists**: Golden Rule 11 (compiler is a teacher) is load-bearing. Shipping the parser before diagnostics infrastructure invites "we'll polish the errors later" which is exactly the duct-tape framing `~/.claude/rules/no-duct-tape.md` prohibits. Build the teaching layer first, then make the rest of the compiler use it. Per [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md), the 50-error cap is a spec requirement — enforcing it from P2 means every later phase inherits the behaviour for free.
 **Current-state anchors**:
-- `design/compiler-errors.md` — the style spec the type must encode (three-part format, banned jargon, severity tiers, 50-error cap).
-- `design/teaching-mission.md` — the rationale.
+- [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) — the style spec the type must encode (three-part format, banned jargon, severity tiers, 50-error cap).
+- [`docs/reference/REF-teaching-mission.md`](../../../../docs/reference/REF-teaching-mission.md) — the rationale.
 **Files (expected scope)**:
 - `crates/ynz-diagnostics/src/lib.rs`
 - `crates/ynz-diagnostics/src/diagnostic.rs` (the `Diagnostic` struct: severity, span, three fields `what` / `what_instead` / `why`)
 - `crates/ynz-diagnostics/src/bucket.rs` (multi-error accumulator with 50-error cap)
 - `crates/ynz-diagnostics/src/render.rs` (`ariadne` integration, "and N more hidden" footer)
 - `crates/ynz-diagnostics/src/span.rs` (`SourceSpan` — file id + byte range)
-- `crates/ynz-diagnostics/src/banned_jargon.rs` (const array of banned words extracted from `design/compiler-errors.md`)
+- `crates/ynz-diagnostics/src/banned_jargon.rs` (const array of banned words extracted from [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md))
 - `crates/ynz-diagnostics/tests/snapshots.rs` + `crates/ynz-diagnostics/tests/__snapshots__/` (uses `insta` for snapshot testing)
 - `crates/ynz-diagnostics/tests/jargon_audit.rs` (workspace-wide grep test — fails if any banned word appears in a diagnostic-construction context)
 **Deviation rule**: Severity tiers, three-part field shape, span representation, 50-error cap value, and banned-jargon list are all load-bearing for every downstream crate. Any change to these requires re-planning.
@@ -326,7 +326,7 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 1. Define `Severity { Error, Warning, Suggestion }` as a Rust enum (no `as_const` here — this is Rust, idiomatic enums are correct).
 2. Define `Diagnostic { severity, span, what: String, what_instead: String, why: String, related: Vec<RelatedSpan> }`. `what_instead` and `why` are required (not `Option`). Constructor panics with a clear message if any of the three is empty — encoding Golden Rule 11 in the type system prevents "I'll add WHY later."
 3. Define `DiagnosticBucket` that owns a `Vec<Diagnostic>` plus a `hidden_count: usize`. `push` accepts diagnostics up to a cap of 50 errors (warnings + suggestions not counted against the cap); pushes beyond the cap increment `hidden_count`. Exposes `iter`, `has_errors`, `into_iter`, `hidden_count`.
-4. Define `BANNED_JARGON: &[&str]` constant extracted verbatim from the table in `design/compiler-errors.md`. Test ensures the constant stays in sync (snapshot of sorted constant vs sorted parse of the markdown table — drift between the two fails the test).
+4. Define `BANNED_JARGON: &[&str]` constant extracted verbatim from the table in [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md). Test ensures the constant stays in sync (snapshot of sorted constant vs sorted parse of the markdown table — drift between the two fails the test).
 5. Implement `render(bucket, source_map) -> String` using `ariadne`. Render order: all errors first by source position, then warnings, then suggestions. If `hidden_count > 0`, append `... and {N} more errors hidden` footer.
 6. Automated banned-jargon audit test (`tests/jargon_audit.rs`): walk every `.rs` file in `crates/`, parse string literals passed to `Diagnostic::new` / `Diagnostic::error` / `Diagnostic::warning` / `Diagnostic::suggestion` construction calls (cheap regex over call sites, no full AST parse needed for v0.1), assert none contain any banned word. Test runs on `cargo test --workspace`. Fails CI on first banned word.
 7. Add `insta` snapshot tests for: (a) single error with span, (b) two errors in the same file at different spans, (c) one error + one warning, (d) suggestion-only diagnostic (proves the tier renders even though M1 won't emit one), (e) 60-error bucket — confirms the cap at 50 + "...and 10 more errors hidden" footer.
@@ -337,7 +337,7 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 - [ ] `DiagnosticBucket` caps at 50 errors; the 51st error increments `hidden_count` and the rendered output ends with `... and N more errors hidden`.
 - [ ] Snapshot tests exist for the five cases listed above and match committed golden files.
 - [ ] `tests/jargon_audit.rs` passes on the empty workspace (no diagnostic call sites yet — passes trivially) and is wired to run on every `cargo test --workspace`.
-- [ ] `BANNED_JARGON` constant stays in sync with `design/compiler-errors.md` via a snapshot-style sync test.
+- [ ] `BANNED_JARGON` constant stays in sync with [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) via a snapshot-style sync test.
 - [ ] Public API exposes `Diagnostic`, `DiagnosticBucket`, `Severity`, `SourceSpan`, `render` — and nothing else (no escape hatch for two-part diagnostics).
 **Quality gate**:
 - [ ] No `unwrap()` outside test code.
@@ -355,8 +355,8 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 **Objective**: Lexing the M1 source `function entrypoint() -> nothing { print("hello, yinz") }` produces the expected token stream (asserted against a snapshot) and produces zero diagnostics.
 **Why this phase exists**: Lexing is the first salsa input → output query. Establishes the salsa pattern that every later compiler stage will follow.
 **Current-state anchors**:
-- `spec/variables.md`, `spec/functions.md`, `spec/strings.md` — for token shapes (identifiers, keywords, string literals).
-- `design/compiler-language.md` — confirms hand-written, not generator.
+- [`docs/reference/REF-variables.md`](../../../../docs/reference/REF-variables.md), [`docs/reference/REF-functions.md`](../../../../docs/reference/REF-functions.md), [`docs/reference/REF-strings.md`](../../../../docs/reference/REF-strings.md) — for token shapes (identifiers, keywords, string literals).
+- [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md) — confirms hand-written, not generator.
 **Files (expected scope)**:
 - `crates/ynz-parser/src/token.rs` (`Token` enum: `Function`, `Nothing`, `Identifier(String)`, `StringLit(String)`, `LParen`, `RParen`, `LBrace`, `RBrace`, `Arrow`, `Eof`)
 - `crates/ynz-parser/src/lexer.rs` (the lexing logic, hand-written)
@@ -404,9 +404,9 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 **Objective**: Parsing the M1 source produces an AST matching the committed snapshot, with zero diagnostics. Malformed input (missing return type, missing body, missing closing brace) produces ariadne-rendered three-part errors per snapshot.
 **Why this phase exists**: First time the parser hand-rolled approach is tested. Error-recovery patterns established here will be copied by every later parser PR.
 **Current-state anchors**:
-- `spec/functions.md` — function decl syntax.
-- `spec/main.md` — entry-point shape.
-- `design/compiler-language.md` — hand-written justification.
+- [`docs/reference/REF-functions.md`](../../../../docs/reference/REF-functions.md) — function decl syntax.
+- [`docs/reference/REF-main.md`](../../../../docs/reference/REF-main.md) — entry-point shape.
+- [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md) — hand-written justification.
 **Files (expected scope)**:
 - `crates/ynz-ast/src/lib.rs` (re-exports)
 - `crates/ynz-ast/src/nodes.rs` (`Module`, `FunctionDecl`, `Block`, `Stmt::ExprStmt`, `Expr::Call`, `Expr::Ident`, `Expr::StringLit`, `Type::Nothing`, `Type::Named`)
@@ -454,13 +454,13 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 
 **Spec decisions locked in this phase:**
 - **`print` semantics**: `print(s)` writes `s` to stdout followed by a single `\n` newline. This is the println-style behaviour, locked because the M1 codegen relies on libc `puts` (which appends `\n`). Decision documented in `crates/ynz-typeck/src/builtins.rs` doc comment so it's findable from the codebase, not just the plan.
-- **Parse-error gate**: per `design/compiler-errors.md`, typeck does NOT run on functions whose body had parse errors — cascade errors mask the original bug. The `check` query inspects the AST for `Type::Error` / `Expr::Error` placeholder nodes inserted by the parser recovery path. If a function body contains any error placeholder, typeck skips that function and emits no diagnostics for it. Top-level diagnostics (missing `main`) still run.
+- **Parse-error gate**: per [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md), typeck does NOT run on functions whose body had parse errors — cascade errors mask the original bug. The `check` query inspects the AST for `Type::Error` / `Expr::Error` placeholder nodes inserted by the parser recovery path. If a function body contains any error placeholder, typeck skips that function and emits no diagnostics for it. Top-level diagnostics (missing `main`) still run.
 
 **Current-state anchors**:
-- `spec/main.md` — `main` shape (`() -> nothing`).
-- `spec/types.md` — for `nothing` as a type.
-- `spec/strings.md` — for the string-literal type.
-- `design/compiler-errors.md` — the "type-check only runs if parse has no errors in the relevant scope" rule.
+- [`docs/reference/REF-main.md`](../../../../docs/reference/REF-main.md) — `main` shape (`() -> nothing`).
+- [`docs/reference/REF-types.md`](../../../../docs/reference/REF-types.md) — for `nothing` as a type.
+- [`docs/reference/REF-strings.md`](../../../../docs/reference/REF-strings.md) — for the string-literal type.
+- [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) — the "type-check only runs if parse has no errors in the relevant scope" rule.
 **Files (expected scope)**:
 - `crates/ynz-typeck/src/types.rs` (`Type::Nothing`, `Type::String`, `Type::Error`)
 - `crates/ynz-typeck/src/builtins.rs` (production table: `print` → `(string) -> nothing`; test-only additions via `#[cfg(test)]` helper for M1's type-mismatch testability)
@@ -480,7 +480,7 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
    - **Undefined identifier**: `print(unknownIdent)` → three-part diagnostic about the unresolved name.
    - **Type mismatch (the real test)**: a fixture using the test-only `_test_takes_nothing` builtin called with a string literal (`_test_takes_nothing("hi")`) → three-part diagnostic about expected `nothing`, got `string`. THIS is the test that covers the load-bearing type-mismatch path. Built with the `#[cfg(test)]` builtin helper so M1 doesn't ship with integer literals just to enable the test.
    - **Parse-error gate**: a fixture whose body had a parser-recovery error (mimicked by hand-constructing an AST with an `Expr::Error` node) → typeck emits ZERO diagnostics about that body; only top-level diagnostics fire. Asserts no cascade noise.
-5. WHY-comments — "WHY: signature mismatch must produce three-part diagnostic. Catches regression where typeck silently degrades to one-line errors." "WHY: parse-error gate prevents cascade-noise. Per design/compiler-errors.md, typeck on broken parses doubles user-facing error count for the same underlying bug."
+5. WHY-comments — "WHY: signature mismatch must produce three-part diagnostic. Catches regression where typeck silently degrades to one-line errors." "WHY: parse-error gate prevents cascade-noise. Per docs/reference/REF-compiler-errors.md, typeck on broken parses doubles user-facing error count for the same underlying bug."
 **Acceptance criteria**:
 - [ ] M1 source type-checks clean (zero diagnostics).
 - [ ] Empty source / missing `main` → three-part diagnostic.
@@ -524,8 +524,8 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
   5. If the LLVM version on the runner doesn't match the pinned LLVM 18 version exactly, the SHA-256 will differ. Acceptance criterion below requires LLVM version to be asserted at codegen-test setup time.
 
 **Current-state anchors**:
-- `design/compiler.md` — confirms LLVM via inkwell.
-- `design/compiler-language.md` — inkwell decision rationale.
+- [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md) — confirms LLVM via inkwell.
+- [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md) — inkwell decision rationale.
 **Files (expected scope)**:
 - `crates/ynz-codegen/src/lib.rs`
 - `crates/ynz-codegen/src/artifact.rs` (`CompiledArtifact` struct + SHA-256 helper)
@@ -570,8 +570,8 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 **Objective**: `ynz run hello.ynz` (containing the M1 source) prints `hello, yinz\n` and exits 0. Captured in an integration test that runs the actual binary on the actual host.
 **Why this phase exists**: First and most important end-to-end test. The walking skeleton is incomplete until a binary runs.
 **Current-state anchors**:
-- `design/compiler.md` — debug-build is the default for `ynz build`.
-- `spec/tooling.md` — `ynz build` / `ynz run` user-facing behaviour.
+- [`docs/internal/implementation/IMP-compiler.md`](../../../../docs/internal/implementation/IMP-compiler.md) — debug-build is the default for `ynz build`.
+- [`docs/reference/REF-tooling.md`](../../../../docs/reference/REF-tooling.md) — `ynz build` / `ynz run` user-facing behaviour.
 **Files (expected scope)**:
 - `crates/ynz-driver/src/main.rs` (CLI parsing — manual or via `clap`; pick clap)
 - `crates/ynz-driver/src/build.rs` (orchestration: read file → drive queries → emit object → link)
@@ -630,17 +630,17 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 **Why this phase exists**: Per Step 10 of `/plan` skill, every plan needs a verification sweep. The discipline matters more than the line count.
 **Current-state anchors**: whatever the repo looks like after Phase 7.
 **Files (expected scope)**:
-- `CHANGELOG.md` (create — first M1 entry)
-- Any code-comment TODOs migrated to `.claude/plans/active/v0_1-compiler.md` "Soon" list or to `.claude/todos.md` if cross-milestone.
+- [`CHANGELOG.md`](../../../../CHANGELOG.md) (create — first M1 entry)
+- Any code-comment TODOs migrated to `.claude/plans/active/v0_1-compiler.md` "Soon" list or to [`.claude/todos.md`](../../../todos.md) if cross-milestone.
 **Deviation rule**: No new features. Cleanups only. Anything that requires non-trivial code = its own future PR.
 **Steps**:
 1. **Broad TODO sweep** (per `~/.claude/CLAUDE.md` Rule 6 + `no-duct-tape.md` Phrases-That-Trigger-Review):
    `rg -i 'TODO|FIXME|HACK|XXX|TEMP|PLACEHOLDER|acceptable for now|works in current state|fine until|we.?ll revisit|for now|good enough for the MVP|executor will figure' crates/`
-   Migrate findings to the plan file (if M1+ work) or `.claude/todos.md` (if cross-milestone). Delete code comments. Zero results required to proceed.
+   Migrate findings to the plan file (if M1+ work) or [`.claude/todos.md`](../../../todos.md) (if cross-milestone). Delete code comments. Zero results required to proceed.
 2. Cross-check the M1 "explicitly NOT" list against actual code — confirm nothing slipped in (e.g., no `Let` token in the lexer, no `BinOp` node in the AST). The variant-count tests from P3/P4/P5 mechanically enforce this; this step is a sanity audit on top.
 3. Re-evaluate Windows-platform support (per Risk table trigger) — even if no Windows contributor has appeared. Document the M8 status in the plan.
 4. Run the full quality checklist below and check each item with evidence (file path, test name, or grep command + result).
-5. Add `CHANGELOG.md` entry for M1.
+5. Add [`CHANGELOG.md`](../../../../CHANGELOG.md) entry for M1.
 6. Tag `v0.1.0-m1` after merge.
 **Acceptance criteria**:
 - [ ] Broad TODO sweep returns zero matches.
@@ -684,8 +684,8 @@ This file compiles, runs, and prints exactly `0.3\n1763\ntrue\n` on both Linux a
 - **User-defined functions beyond `main`** — M3.
 - **`maybe`, `options`, unions, narrowing** — M6.
 - **Strings beyond ASCII byte arrays** — full Unicode + interpolation lands in M7. M2 strings stay as M1 did: UTF-8 byte sequences passed to `puts`. `string.toString()` is identity; no interpolation, no concat.
-- **Compound assignment / increment** — explicitly banned by `spec/operators.md`. Plan keeps it banned. Parser-level test asserts that `x += 1` produces a three-part diagnostic suggesting `x = x + 1`.
-- **Ternary `?:`** — explicitly banned by `design/type-conversion.md`. Same shape of three-part error.
+- **Compound assignment / increment** — explicitly banned by [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md). Plan keeps it banned. Parser-level test asserts that `x += 1` produces a three-part diagnostic suggesting `x = x + 1`.
+- **Ternary `?:`** — explicitly banned by [`docs/internal/implementation/IMP-type-conversion.md`](../../../../docs/internal/implementation/IMP-type-conversion.md). Same shape of three-part error.
 
 **Catch-Up list for downstream milestones** (recorded here so they aren't lost when M2 ships):
 - **M4 must catch up**: overflow escape methods on `int`; `int.max` / `int.min` constants; `number.max` / `number.epsilon`; rewire M2's intrinsic-table dispatch to general method dispatch.
@@ -700,8 +700,8 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 
 | Inconsistency | Canonical decision | Fix in phase |
 |---|---|---|
-| `spec/variables.md:48` says `let x = 42 // compiler knows: number`; `spec/numeric-types.md:206` says `let x = 42 // inferred as int`. | **`let x = 42` infers as `int`** per `spec/numeric-types.md` and Golden Rule 10 ("efficiency first, dynamic after — default = most performant"). `spec/variables.md` is wrong. | P4 (typeck) — typeck implementation enforces int; same PR edits `spec/variables.md:48` to read `// compiler knows: int`. |
-| `spec/numeric-types.md:211` says "Mixed-type expressions promote to the most capable type in the expression." | **Mixed-type expressions are a compile error** with a three-part diagnostic pointing at the relevant `.toX()` method. No implicit numeric coercion, per `design/type-conversion.md` and patrick's M2-planning decision. | P4 (typeck) — same PR edits `spec/numeric-types.md:211` to describe the compile-error behavior, including the example three-part diagnostic. |
+| `docs/reference/REF-variables.md:48` says `let x = 42 // compiler knows: number`; `docs/reference/REF-numeric-types.md:206` says `let x = 42 // inferred as int`. | **`let x = 42` infers as `int`** per [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md) and Golden Rule 10 ("efficiency first, dynamic after — default = most performant"). [`docs/reference/REF-variables.md`](../../../../docs/reference/REF-variables.md) is wrong. | P4 (typeck) — typeck implementation enforces int; same PR edits `docs/reference/REF-variables.md:48` to read `// compiler knows: int`. |
+| `docs/reference/REF-numeric-types.md:211` says "Mixed-type expressions promote to the most capable type in the expression." | **Mixed-type expressions are a compile error** with a three-part diagnostic pointing at the relevant `.toX()` method. No implicit numeric coercion, per [`docs/internal/implementation/IMP-type-conversion.md`](../../../../docs/internal/implementation/IMP-type-conversion.md) and patrick's M2-planning decision. | P4 (typeck) — same PR edits `docs/reference/REF-numeric-types.md:211` to describe the compile-error behavior, including the example three-part diagnostic. |
 
 ### Pre-Phase-1 decisions locked (Sonnet review 2026-05-12)
 
@@ -717,7 +717,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 - **Codegen calls into runtime via plain C-ABI extern fns.** `extern "C" ynz_decimal_add(*const Decimal128Bits, *const Decimal128Bits, *mut Decimal128Bits)` — pass-by-pointer to avoid LLVM struct-ABI traps. `Decimal128Bits` is `[u8; 16]` (16 bytes = 128 bits) at the ABI boundary; Rust side decodes to its internal representation. This matches the IEEE 754 decimal128 storage format (BID — binary integer significand) so the bits CAN round-trip through the runtime without conversion.
 - **Integer overflow check codegen = LLVM checked-arithmetic intrinsics.** `llvm.sadd.with.overflow.i64`, `llvm.ssub.with.overflow.i64`, `llvm.smul.with.overflow.i64`. Each op produces `{i64, i1}`; the `i1` flag branches to a runtime panic stub on true. No escape valve in M2 (per the deferral above) — every `int` arithmetic op gets the check. Performance hit on the overflow check path is acceptable for v0.1; LLVM's instcombine collapses the check on constant operands.
 - **Decimal-by-zero, int-by-zero**: runtime panic (three-part, source-spanned, "use `if (denom != 0)` to guard division" suggestion). **Float-by-zero**: returns IEEE infinity per binary64 spec (no panic — this is correct IEEE behavior and `float` users opt into it).
-- **Operator `%` (modulo)**: M2 ships `%` for `int` (LLVM `srem`) and `float` (LLVM `frem`, returns NaN on zero divisor per IEEE). `number % number` is a compile error pointing at v0.6 `math` module. **Spec update required**: add `%` to `spec/operators.md` arithmetic list — currently missing.
+- **Operator `%` (modulo)**: M2 ships `%` for `int` (LLVM `srem`) and `float` (LLVM `frem`, returns NaN on zero divisor per IEEE). `number % number` is a compile error pointing at v0.6 `math` module. **Spec update required**: add `%` to [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) arithmetic list — currently missing.
 - **Number literal forms**: M2 lexer accepts decimal (`42`, `3.14`, `1e5`, `2.5e-3`), hex integer (`0x2A`), binary integer (`0b1010`), and underscores for readability (`1_000_000`, `0xDEAD_BEEF`). **No** octal — too rarely useful, the form is a footgun (leading-zero ambiguity). Fractional hex/binary not supported.
 - **Integer division**: truncates toward zero (matches LLVM `sdiv`, Rust, C, Go). `5 / 2 == 2`, `-5 / 2 == -2`. No surprise.
 - **Mixed-precision `number[N]` arithmetic in M2**: not yet applicable since N is locked to 34. The promotion/narrowing logic is M8's problem. M2's typeck rejects `number[N]` for `N != 34` at parse-binding time with the deferral diagnostic.
@@ -749,12 +749,12 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 **Why this phase exists**: Decimal128 correctness is the load-bearing v0.1 promise. Shipping it as a standalone, separately-testable crate with a conformance gate eliminates the "we'll validate it once it's wired up" duct-tape pattern. If `ynz-numerics` doesn't pass IEEE 754 conformance, nothing downstream matters.
 
 **Current-state anchors**:
-- `design/numeric-types.md` (Implementation: Handwritten, Not Crates section).
+- [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md) (Implementation: Handwritten, Not Crates section).
 - IEEE 754-2008 spec, section 5 (decimal arithmetic) — primary reference.
 - Intel BID reference implementation (informational, NOT a dependency) — useful for cross-checking edge cases.
 
 **Files (expected scope)**:
-- `crates/ynz-numerics/Cargo.toml` + `crates/ynz-numerics/src/lib.rs`
+- [`crates/ynz-numerics/Cargo.toml`](../../../../crates/ynz-numerics/Cargo.toml) + `crates/ynz-numerics/src/lib.rs`
 - `crates/ynz-numerics/src/decimal128/bits.rs` (BID encoding: sign, combination field, exponent, coefficient — bit layout per IEEE 754)
 - `crates/ynz-numerics/src/decimal128/ops.rs` (add, sub, mul, div, neg, abs, compare; rounding helpers; subnormal/special-value handling for ±0, ±Infinity, NaN, sNaN)
 - `crates/ynz-numerics/src/decimal128/parse.rs` (string → decimal128, exact)
@@ -762,7 +762,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 - `crates/ynz-numerics/tests/conformance/` (IEEE 754-2008 test vector loader + assertions)
 - `crates/ynz-numerics/tests/differential.rs` (`proptest` against Python `decimal` via subprocess — 10k random tuples per CI run)
 - `crates/ynz-numerics/tests/properties.rs` (commutativity, associativity-where-applicable, distributivity, round-trip identity)
-- `crates/ynz-runtime/Cargo.toml` (`crate-type = ["staticlib"]`, depends on `ynz-numerics`)
+- [`crates/ynz-runtime/Cargo.toml`](../../../../crates/ynz-runtime/Cargo.toml) (`crate-type = ["staticlib"]`, depends on `ynz-numerics`)
 - `crates/ynz-runtime/src/lib.rs` (`#[no_mangle] extern "C"` shims; `ynz_panic_overflow`, `ynz_panic_div_by_zero` stubs that write a three-part message to stderr and `abort(3)`)
 - `crates/ynz-runtime/src/decimal_shims.rs` (`ynz_decimal_add(*const, *const, *mut)`, etc.)
 - `crates/ynz-runtime/src/format_shims.rs` (the three caller-buffer to-string shims: `ynz_int_to_string`, `ynz_float_to_string`, `ynz_decimal_to_string` — signatures per the buffer-ABI decision above)
@@ -791,7 +791,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 - Distributivity is NOT a strict property in IEEE 754 decimal arithmetic (rounding intervenes); the test asserts the weaker "close to within one ULP" form and is documented as such.
 
 **Steps**:
-1. Scaffold the two crates per the files list. Add them to the workspace `Cargo.toml`. CI builds them as part of `cargo build --workspace`.
+1. Scaffold the two crates per the files list. Add them to the workspace [`Cargo.toml`](../../../../Cargo.toml). CI builds them as part of `cargo build --workspace`.
 2. Implement `Decimal128 { bits: u128 }` with BID encoding helpers in `bits.rs`. Includes packed-decimal coefficient decode (per IEEE 754 §3.5.2). Test via known-value snapshots: `0.0`, `1.0`, `0.1`, `-1.5`, `Infinity`, `NaN`.
 3. Implement `add`/`sub` first (sub = add with sign flip). Run conformance corpus subset for `dqAdd`/`dqSubtract` continuously while developing.
 4. Implement `mul`/`div`. Division is the hardest — Newton-Raphson on the reciprocal vs. long-division loop is the strategy choice. Pick long-division (simpler, easier to validate) and revisit if performance is a problem at v0.4 lint pass.
@@ -833,20 +833,20 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 **Branch**: `feat/m2-lexer`
 **Flag**: N/A
 **Est. lines**: ~400
-**Status**: COMPLETE (2026-05-12) — commit a8c3efe on `feat/m2-lexer`. 39 lex tests green, full workspace 0 failures. Token count locked at 42 (10 M1 + 32 M2). Key implementation decisions: `//` comments stripped in `skip_whitespace_and_comments` before `lex_one`; dot-method-call disambiguation (`.` only consumed as decimal point when followed by a digit so `42.toString()` works); `validate_underscores` checks each digit segment independently; 4 plumbing tokens (Dot, LBracket, RBracket, Comma) added ahead of schedule for Phase 3; `spec/operators.md` updated to include `%`.
+**Status**: COMPLETE (2026-05-12) — commit a8c3efe on `feat/m2-lexer`. 39 lex tests green, full workspace 0 failures. Token count locked at 42 (10 M1 + 32 M2). Key implementation decisions: `//` comments stripped in `skip_whitespace_and_comments` before `lex_one`; dot-method-call disambiguation (`.` only consumed as decimal point when followed by a digit so `42.toString()` works); `validate_underscores` checks each digit segment independently; 4 plumbing tokens (Dot, LBracket, RBracket, Comma) added ahead of schedule for Phase 3; [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) updated to include `%`.
 **Objective**: Lexing a representative M2 source produces the expected token stream (snapshot-asserted). Malformed literals (`1.2.3`, `0xZZ`, `0b22`, `1__000` with adjacent underscores) produce three-part diagnostics; lexer continues.
 
-**Spec correction landing in this phase**: add `%` to the arithmetic operator list in `spec/operators.md` (currently missing). Same PR.
+**Spec correction landing in this phase**: add `%` to the arithmetic operator list in [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) (currently missing). Same PR.
 
 **Current-state anchors**:
-- `spec/variables.md`, `spec/numeric-types.md`, `spec/operators.md` (with the `%` addition above).
+- [`docs/reference/REF-variables.md`](../../../../docs/reference/REF-variables.md), [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md), [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) (with the `%` addition above).
 - M1 P3 lexer code — the byte-iterator pattern, span tracking, salsa query plumbing all extend, not get rewritten.
 
 **Files (expected scope)**:
 - `crates/ynz-parser/src/token.rs` (extend `Token` enum)
 - `crates/ynz-parser/src/lexer.rs` (extend lexer logic)
 - `crates/ynz-parser/tests/lex.rs` + snapshots
-- `spec/operators.md` (add `%` to arithmetic list)
+- [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) (add `%` to arithmetic list)
 
 **New `Token` variants (M2)**:
 - Keywords: `Let`, `Const`, `True`, `False`
@@ -860,7 +860,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 - A numeric literal containing `.` or `e`/`E` is a **number** literal → `NumberLit(String)`.
 - A numeric literal with no `.` and no exponent is an **int** literal → `IntLit(i64)`. Overflow at parse time = three-part diagnostic ("literal does not fit in int / use number for values beyond ±9.2e18").
 - A hex / binary literal is **always int** → `IntLit(i64)`. No `0x1.fp3` style hex floats (deferred indefinitely; spec doesn't promise them).
-- `42.0` is a **number** literal, not an int — the `.0` distinguishes intent. **There is no `float` literal form.** `float` values come from explicit annotation (`let x: float = 1.0`) — the lexer produces `NumberLit("1.0")` and typeck retypes it under the annotation. Documented in `spec/numeric-types.md` Type inference section; same PR adds the explanation.
+- `42.0` is a **number** literal, not an int — the `.0` distinguishes intent. **There is no `float` literal form.** `float` values come from explicit annotation (`let x: float = 1.0`) — the lexer produces `NumberLit("1.0")` and typeck retypes it under the annotation. Documented in [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md) Type inference section; same PR adds the explanation.
 
 **Steps**:
 1. Extend `Token` enum with the variants above. Update the variant-count test from M1's count → M2's count; add the `// test-ratchet:` marker per the rule.
@@ -869,7 +869,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 4. Reject `1.2.3` (two dots), `1__0` (adjacent underscores), `_1` (leading underscore), `1_` (trailing underscore), `0xZZ` (non-hex char in hex literal), `0b22` (non-binary char in binary literal). Each emits a three-part diagnostic; lexer recovers to next whitespace.
 5. Recovery from compound-assignment / increment attempts: when lexer sees `+=`, `++`, `-=`, `--`, `*=`, `/=`, `%=` — emit a three-part diagnostic ("compound assignment / increment is not supported in Yinz / use `x = x + n`") and continue past the `=` or second char. **The diagnostic message is the user-facing surface for the banned feature — it must teach.**
 6. Update snapshot tests: add M2 source token-stream snapshots. Add negative snapshots for the malformed literals + banned-operator cases. Each test gets a `// WHY:` comment.
-7. Same PR: `spec/operators.md` — add `%` to the arithmetic list (line ~9). One-line spec edit, no rationale needed (modulo is universal in arithmetic).
+7. Same PR: [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) — add `%` to the arithmetic list (line ~9). One-line spec edit, no rationale needed (modulo is universal in arithmetic).
 
 **Acceptance criteria**:
 - [ ] M2 source token-stream snapshot matches.
@@ -877,7 +877,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 - [ ] All seven banned-operator cases (`+=`, `-=`, `*=`, `/=`, `%=`, `++`, `--`) produce three-part teaching diagnostics.
 - [ ] Hex / binary / scientific / underscore-separator forms all lex to `IntLit` / `NumberLit` as the rule specifies.
 - [ ] `m2_token_variant_count_locked` test pins the new count with the `// test-ratchet:` marker.
-- [ ] `spec/operators.md` mentions `%`.
+- [ ] [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) mentions `%`.
 
 **Quality gate**:
 - [ ] No `unwrap()` in lexer changes.
@@ -889,17 +889,17 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 ---
 
 ### Phase 3: AST + parser extension (M2 surface)
-**PR scope**: Extend `ynz-ast::nodes` with `Stmt::Let { mutability, name, ty, value }`, `Stmt::Assign { target, value }`, `Expr::IntLit(i64)`, `Expr::FloatLit(f64)`, `Expr::NumberLit(String)`, `Expr::BoolLit(bool)`, `Expr::BinOp { op, lhs, rhs }`, `Expr::UnaryOp { op, expr }`, `Expr::MethodCall { receiver, method, args }`. Add `Type::Int`, `Type::Float`, `Type::Number { precision: u32 }`, `Type::Bool` to the type-position parser. Implement Pratt-style precedence climbing for binary operators per `spec/operators.md` precedence table.
+**PR scope**: Extend `ynz-ast::nodes` with `Stmt::Let { mutability, name, ty, value }`, `Stmt::Assign { target, value }`, `Expr::IntLit(i64)`, `Expr::FloatLit(f64)`, `Expr::NumberLit(String)`, `Expr::BoolLit(bool)`, `Expr::BinOp { op, lhs, rhs }`, `Expr::UnaryOp { op, expr }`, `Expr::MethodCall { receiver, method, args }`. Add `Type::Int`, `Type::Float`, `Type::Number { precision: u32 }`, `Type::Bool` to the type-position parser. Implement Pratt-style precedence climbing for binary operators per [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) precedence table.
 **Branch**: `feat/m2-parser`
 **Flag**: N/A
 **Est. lines**: ~700
-**Status**: COMPLETE (2026-05-12) — commit 6cee795 on main. 30 parse tests green, full workspace 0 failures. Key decisions: Pratt BP table encoded as infix_bp() (pub for spec-parity test); `is_stmt_boundary()` recovery avoids consuming `}` / keywords as atoms; `parse_call` updated for comma-separated multi-arg; `parse_method_call` handles receiver.method(args); `number[N]` deferral diagnostic for N != 34 points at v0.7; `spec/operators.md` precedence table updated to include `%` at level 3; `parser_precedence_table_matches_spec` test reads spec at runtime and asserts BP/level alignment; typeck gets minimal stubs (M2 Expr/Stmt/Type arms → Type::Error) so M1 tests stay green.
+**Status**: COMPLETE (2026-05-12) — commit 6cee795 on main. 30 parse tests green, full workspace 0 failures. Key decisions: Pratt BP table encoded as infix_bp() (pub for spec-parity test); `is_stmt_boundary()` recovery avoids consuming `}` / keywords as atoms; `parse_call` updated for comma-separated multi-arg; `parse_method_call` handles receiver.method(args); `number[N]` deferral diagnostic for N != 34 points at v0.7; [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) precedence table updated to include `%` at level 3; `parser_precedence_table_matches_spec` test reads spec at runtime and asserts BP/level alignment; typeck gets minimal stubs (M2 Expr/Stmt/Type arms → Type::Error) so M1 tests stay green.
 **Objective**: M2 source parses to the snapshot AST with zero diagnostics. Malformed expressions (`let x = 1 +`, `let : int = 5`, `let x: int = 1.5`, `let x = }`, `print(1, 2, 3)`) produce three-part diagnostics; parser recovers per the strategy from M1 P4.
 
 **Current-state anchors**:
 - M1's parser style: recursive descent with explicit recovery to next `}` or EOF.
-- `spec/operators.md` (with the `%` addition from P2) — precedence table is canonical.
-- `spec/variables.md` — `let` / `const` shape.
+- [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) (with the `%` addition from P2) — precedence table is canonical.
+- [`docs/reference/REF-variables.md`](../../../../docs/reference/REF-variables.md) — `let` / `const` shape.
 
 **Files (expected scope)**:
 - `crates/ynz-ast/src/nodes.rs` (extend `Stmt`, `Expr`, `Type`)
@@ -919,7 +919,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 
 **Precedence-climbing strategy (locked here)**:
 - Pratt-style precedence climber. Each token has a left binding power; the parser recursively gathers operands as long as the next operator's left BP exceeds the current minimum.
-- Precedence table is hardcoded against `spec/operators.md` precedence list (PEMDAS extended). Test-ratchet: a dedicated `parser_precedence_table_matches_spec` test parses the spec table at runtime (markdown table → array of (op, level)) and asserts it matches the hardcoded table. Drift between code and spec fails the test.
+- Precedence table is hardcoded against [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) precedence list (PEMDAS extended). Test-ratchet: a dedicated `parser_precedence_table_matches_spec` test parses the spec table at runtime (markdown table → array of (op, level)) and asserts it matches the hardcoded table. Drift between code and spec fails the test.
 - Unary operators (`-`, `!`, `~`) are right-associative prefix; binding power is `12` (higher than any binary op, lower than method-call dot).
 - Method-call `.` and call-parens `(...)` are left-associative postfix at binding power `13`.
 
@@ -962,18 +962,18 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 **Branch**: `feat/m2-typeck`
 **Flag**: N/A
 **Est. lines**: ~900
-**Status**: COMPLETE (2026-05-12) — on `feat/m2-typeck`, awaiting user review before commit. 38 typeck tests green, full workspace 0 failures. Key decisions: `builtins.rs` git-mv'd to `intrinsics.rs` (clean blame); `BuiltinTable` → `PrimitiveIntrinsicTable` (polymorphic print + 8 conversion methods, single source of truth); `scope.rs` (new) with Levenshtein-distance suggestion for undefined vars; literal inference with annotation hint (`IntLit` → number/float when annotated); mixed-type-arithmetic suggestion picks `.toNumber()` / `.toFloat()` per direction, lists both for number+float tradeoff; `spec/variables.md:48` corrected (int not number); `spec/numeric-types.md:211` corrected (compile-error behavior with example). `m1_source_type_checks_clean` Bouncer-fixed: restored `expr_types` string-type assertion after test-weakening detection.
+**Status**: COMPLETE (2026-05-12) — on `feat/m2-typeck`, awaiting user review before commit. 38 typeck tests green, full workspace 0 failures. Key decisions: `builtins.rs` git-mv'd to `intrinsics.rs` (clean blame); `BuiltinTable` → `PrimitiveIntrinsicTable` (polymorphic print + 8 conversion methods, single source of truth); `scope.rs` (new) with Levenshtein-distance suggestion for undefined vars; literal inference with annotation hint (`IntLit` → number/float when annotated); mixed-type-arithmetic suggestion picks `.toNumber()` / `.toFloat()` per direction, lists both for number+float tradeoff; `docs/reference/REF-variables.md:48` corrected (int not number); `docs/reference/REF-numeric-types.md:211` corrected (compile-error behavior with example). `m1_source_type_checks_clean` Bouncer-fixed: restored `expr_types` string-type assertion after test-weakening detection.
 **Objective**: M2 source type-checks clean. The full matrix of typeck failures (mismatched types, const reassignment, undefined variable, wrong arity on `print`, `number[N]` for N != 34, etc.) produces three-part diagnostics with actionable suggestions.
 
 **Spec corrections landing in this phase** (same PR as the implementation):
-- `spec/variables.md:48` → change `// compiler knows: number` to `// compiler knows: int`.
-- `spec/numeric-types.md:211` → rewrite "Mixed-type expressions promote to the most capable type in the expression." to describe the compile-error behavior with an example three-part diagnostic.
+- `docs/reference/REF-variables.md:48` → change `// compiler knows: number` to `// compiler knows: int`.
+- `docs/reference/REF-numeric-types.md:211` → rewrite "Mixed-type expressions promote to the most capable type in the expression." to describe the compile-error behavior with an example three-part diagnostic.
 
 **Current-state anchors**:
 - M1's `check.rs` shape: walks AST, emits diagnostics, gates on parse-error placeholders.
-- `spec/numeric-types.md` (with the correction above) — the canonical truth for literal-typing and mixed-type rules.
-- `design/numeric-types.md` — overflow semantics, mixed-precision rules (latter not yet exercised in M2 since N=34 only).
-- `design/compiler-errors.md` — three-part format, banned jargon.
+- [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md) (with the correction above) — the canonical truth for literal-typing and mixed-type rules.
+- [`docs/internal/implementation/IMP-numeric-types.md`](../../../../docs/internal/implementation/IMP-numeric-types.md) — overflow semantics, mixed-precision rules (latter not yet exercised in M2 since N=34 only).
+- [`docs/reference/REF-compiler-errors.md`](../../../../docs/reference/REF-compiler-errors.md) — three-part format, banned jargon.
 
 **Files (expected scope)**:
 - `crates/ynz-typeck/src/types.rs` (extend `Type` enum)
@@ -981,7 +981,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 - `crates/ynz-typeck/src/check.rs` (extend the check pass; replace `BuiltinTable` references with `PrimitiveIntrinsicTable`)
 - `crates/ynz-typeck/src/scope.rs` (new — block-scoped variable environment with `is_const` tracking)
 - `crates/ynz-typeck/tests/check.rs` + snapshots (M1's tests that referenced `BuiltinTable` get renamed in the same PR; behavior unchanged)
-- `spec/variables.md` and `spec/numeric-types.md` (corrections)
+- [`docs/reference/REF-variables.md`](../../../../docs/reference/REF-variables.md) and [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md) (corrections)
 
 **BuiltinTable→PrimitiveIntrinsicTable migration mechanics (locked)**:
 - The rename is `git mv crates/ynz-typeck/src/builtins.rs crates/ynz-typeck/src/intrinsics.rs` + symbol rename throughout the workspace. Done in a single commit so blame stays clean.
@@ -1005,7 +1005,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 | `&& \|\|` | `bool, bool` | `bool` | short-circuit (codegen) |
 | `!` | `bool` | `bool` | |
 | `& \| ^` | `int, int` | `int` | |
-| `<< >>` | `int, int` | `int` | `>>` is arithmetic (sign-extending); per spec/operators.md |
+| `<< >>` | `int, int` | `int` | `>>` is arithmetic (sign-extending); per docs/reference/REF-operators.md |
 | `~` | `int` | `int` | |
 | `-` (unary) | `int` / `float` / `number` | same | |
 | Any binary | mismatched types | **compile error** | three-part: WHAT (types differ) / WHAT-INSTEAD (call `.toX()` on one side) / WHY (no implicit numeric coercion in Yinz) |
@@ -1048,7 +1048,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 6. Implement the `PrimitiveIntrinsicTable` as a const lookup table — `&[(Type, &str, fn(args: &[Type]) -> Result<Type, Diagnostic>)]`. `print` is the polymorphic entry; conversion methods are the rest.
 7. Wire `number[N != 34]` diagnostic: when parser produces `Type::Number { precision }` with precision != 34, typeck emits the deferral diagnostic at the binding site.
 8. Mixed-type-arithmetic diagnostic: when operands of a binary op have different numeric types, emit the three-part error with the specific `.toX()` suggestion. The suggestion picks the WIDER of the two types: `int + number` → suggest `lhs.toNumber()` (widen int, lose nothing); `int + float` → suggest `lhs.toFloat()`; `number + float` → suggest `rhs.toNumber()` OR `lhs.toFloat()` (both lose precision in different ways; the diagnostic lists BOTH and explains the tradeoff — this is a teaching opportunity).
-9. Spec corrections (`spec/variables.md:48`, `spec/numeric-types.md:211`) — same PR.
+9. Spec corrections (`docs/reference/REF-variables.md:48`, `docs/reference/REF-numeric-types.md:211`) — same PR.
 10. Tests (matrix coverage):
     - Happy path: M2 representative source type-checks clean.
     - Mismatched types: every cell of the mismatch matrix above produces a three-part diagnostic. Specifically test:
@@ -1058,7 +1058,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
     - Const reassignment: `const x = 1; x = 2` — error.
     - Undefined variable: `let y = x` (x not in scope) — error with Levenshtein suggestion if similar name exists.
     - `number[5]` annotation → bignum-deferral error.
-    - `number[5000]` annotation → above-4096 cap error (per `spec/numeric-types.md`).
+    - `number[5000]` annotation → above-4096 cap error (per [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md)).
     - `1.unknownMethod()` → error listing valid intrinsics.
     - `print(1, 2)` → arity error (print is single-arg in M2).
     - `1 < 2 < 3` → second comparison is `bool < int` — error.
@@ -1070,7 +1070,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 - [ ] All mismatch-matrix cells covered by negative tests producing three-part diagnostics.
 - [ ] Each diagnostic suggests the correct `.toX()` method per the rules above.
 - [ ] Const-reassignment, undefined-variable, arity, and deferral errors all produce three-part diagnostics.
-- [ ] `spec/variables.md` and `spec/numeric-types.md` corrections committed in the same PR.
+- [ ] [`docs/reference/REF-variables.md`](../../../../docs/reference/REF-variables.md) and [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md) corrections committed in the same PR.
 - [ ] Variant-count test for `Type` pins M2 count.
 - [ ] M1's typeck tests still pass.
 - [ ] `tests/jargon_audit.rs` green on all new diagnostic strings.
@@ -1081,7 +1081,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 - [ ] Operator type-rule table is a single source of truth — no scattered hardcoded operator-result-type matches.
 - [ ] The bignum-deferral diagnostic body is committed as a constant string, not synthesized at error time (makes it easy to grep and update when M8 removes the deferral).
 
-**Verification**: `cargo test -p ynz-typeck` passes. `rg "promote to the most capable" spec/` returns empty (confirms the spec correction). `rg "compiler knows: number" spec/variables.md` returns empty (confirms the variables.md correction).
+**Verification**: `cargo test -p ynz-typeck` passes. `rg "promote to the most capable" spec/` returns empty (confirms the spec correction). `rg "compiler knows: number" docs/reference/REF-variables.md` returns empty (confirms the variables.md correction).
 
 ---
 
@@ -1254,7 +1254,7 @@ declare void @ynz_panic_div_by_zero(ptr)
 **Steps**:
 1. **Broad TODO sweep** (same grep as M1):
    `rg -i 'TODO|FIXME|HACK|XXX|TEMP|PLACEHOLDER|acceptable for now|works in current state|fine until|we.?ll revisit|for now|good enough for the MVP|executor will figure' crates/`
-   Migrate findings to the plan file (M3+ work), or `.claude/todos.md` (cross-milestone), or delete (no-longer-relevant comments). Zero results required to proceed.
+   Migrate findings to the plan file (M3+ work), or [`.claude/todos.md`](../../../todos.md) (cross-milestone), or delete (no-longer-relevant comments). Zero results required to proceed.
 2. **Comment rules sweep** (`~/.claude/rules/comments.md` Hard Rules):
    - `rg '// ──|// ───|// ════' crates/` — find section banners (Hard Rule 6: banned). Remove every `// ── X ───` divider. If a function needs visual structure, split it instead.
    - `rg '// [A-Z][A-Za-z]+ part|// [A-Z]+ [a-z]' crates/src` — spot-check for "what" comments that describe the obvious (e.g. `// Integer literals`, `// M1 expressions`). Delete them.
@@ -1265,10 +1265,10 @@ declare void @ynz_panic_div_by_zero(ptr)
    - For every entry in the M2 catch-up list, verify (a) a fixture exists that exercises the current deferral, (b) a stderr snapshot exists capturing the deferral diagnostic, (c) the owning milestone (M4 / M6 / M8) is unambiguously named in the diagnostic body AND in this plan file.
    - Tabulate the catch-up entries in this plan file (already done above in the "Catch-Up list for downstream milestones" section — verify the table is in sync with the fixtures).
 3. **M2 explicitly-NOT list audit**: confirm nothing slipped in. Variant-count tests for `Token`, `Stmt`, `Expr`, `Type` confirm mechanically; this step is a sanity audit.
-4. **Spec-correction verification**: `rg "promote to the most capable" spec/` returns empty; `rg "compiler knows: number" spec/variables.md` returns empty.
+4. **Spec-correction verification**: `rg "promote to the most capable" spec/` returns empty; `rg "compiler knows: number" docs/reference/REF-variables.md` returns empty.
 5. **`number[N]` deferral verification**: the deferral compile error mentions "M8" and the M8 roadmap entry mentions the catch-up obligation.
 6. Run the full quality checklist below (M2-extended).
-7. Add `CHANGELOG.md` entry for M2.
+7. Add [`CHANGELOG.md`](../../../../CHANGELOG.md) entry for M2.
 8. Tag `v0.1.0-m2` after merge.
 
 **Acceptance criteria**:
@@ -1321,8 +1321,8 @@ M2 inherits every item above. Additional M2-specific items:
 - [ ] M2 div-by-zero runtime tests (int + number) panic; float div-by-zero produces `inf` and exits 0
 - [ ] Mixed-type arithmetic compile errors point at the correct `.toX()` method per the type-rule matrix
 - [ ] `number[N]` for N != 34 produces the M8-deferral compile error (verified per the catch-up fixture)
-- [ ] Spec corrections committed: `spec/variables.md` says `int` for `let x = 42`; `spec/numeric-types.md` describes mixed-type as a compile error (not promotion)
-- [ ] `spec/operators.md` lists `%` in the arithmetic section
+- [ ] Spec corrections committed: [`docs/reference/REF-variables.md`](../../../../docs/reference/REF-variables.md) says `int` for `let x = 42`; [`docs/reference/REF-numeric-types.md`](../../../../docs/reference/REF-numeric-types.md) describes mixed-type as a compile error (not promotion)
+- [ ] [`docs/reference/REF-operators.md`](../../../../docs/reference/REF-operators.md) lists `%` in the arithmetic section
 - [ ] Catch-up fixtures committed with current-state stderr snapshots; each names its owning milestone (M4 / M6 / M8) in the diagnostic body
 - [ ] M2-extended variant-count tests (`Token`, `Stmt`, `Expr`, `Type`) pin their new counts with `// test-ratchet:` markers
 - [ ] Object-file SHA-256 reproducibility contract still holds (per M1 P6 — M2 fixtures get their own golden hashes)
@@ -1403,13 +1403,13 @@ decisions made under time pressure from compounding into retroactive rewrites.
    result (`mayBlock` flag — not `inferred*`, which collides with banned jargon),
    ownership signature digest, kernel-mode compatibility flag. Even if unused in
    v0.1, the section header must exist so v0.2+ can populate it without breaking
-   existing binaries. See `design/future/packages.md` for the locked binary format
+   existing binaries. See [`docs/internal/scratchpad/SCRATCH-future-packages.md`](../../../../docs/internal/scratchpad/SCRATCH-future-packages.md) for the locked binary format
    design.
 
 2. **Every feature from M3 onward must declare its runtime dependencies and
    kernel-mode behavior in its milestone plan.** The declaration goes in the
    `## Invariants This Milestone Must Preserve` section's `### Runtime Dependencies`
-   and `### Kernel-Mode Behavior` subsections. See `.claude/rules/plan-invariants.md`
+   and `### Kernel-Mode Behavior` subsections. See [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md)
    for the required format. Kernel-mode (v0.3+) must be able to disable features
    that require the allocator, scheduler, or OS I/O at compile time without
    rewriting those features.
@@ -1420,7 +1420,7 @@ decisions made under time pressure from compounding into retroactive rewrites.
    attribute; `lend` parameters must emit `noalias` + writable. The invariant chain
    (no reassignment, no `.lend`, no `.give`, no field mutation) must be stated in
    `### Safety`. The LLVM attribute contract must be stated in `### Performance`.
-   See `.claude/graveyard.md` Entry 1 (const deep-immutability) for the Bouncer
+   See [`.claude/graveyard.md`](../../../graveyard.md) Entry 1 (const deep-immutability) for the Bouncer
    checks that enforce this.
 
 4. **`shape` is the reserved keyword for M4 type declarations, not `type`.** The
@@ -1430,7 +1430,7 @@ decisions made under time pressure from compounding into retroactive rewrites.
    `type` lands in M4 P1 alongside the lexer change.
 
 5. **Every milestone from M4 onward grows `examples/pirates-roster/entrypoint.ynz` and
-   `examples/primantis-orders/m{N}_errors.ynz`.** Per `.claude/rules/plan-invariants.md`
+   `examples/primantis-orders/m{N}_errors.ynz`.** Per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md)
    `### Demo & Error Gallery` subsection (added 2026-05-16): each phase that
    adds executable surface MUST extend the basics demo (showing the new feature
    in context) AND the error gallery (intentional triggers for every new
@@ -1439,8 +1439,8 @@ decisions made under time pressure from compounding into retroactive rewrites.
    `m2_errors.ynz`, `m3_errors.ynz` — M5/M6/M7/M8 plans must continue the
    incremental additions. The basics project covers EVERY v0.1 language feature
    (M1–M8) in one growing demo; stdlib modules (v0.5+) get their own per-module
-   example projects. Cross-references: project `CLAUDE.md` "When Working on This
-   Project" + `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`.
+   example projects. Cross-references: project [`CLAUDE.md`](../../../../CLAUDE.md) "When Working on This
+   Project" + [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Demo & Error Gallery`.
 
 ## Capability Ledger
 

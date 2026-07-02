@@ -6,7 +6,7 @@ Rules for making and reviewing language design decisions.
 
 ## Before Adding Anything New
 
-Check every proposed feature against all 12 golden rules (in `CLAUDE.md`). If it violates any rule, don't add it. If there's tension between two rules, the lower-numbered rule wins.
+Check every proposed feature against all 12 golden rules (in [`CLAUDE.md`](../../CLAUDE.md)). If it violates any rule, don't add it. If there's tension between two rules, the lower-numbered rule wins.
 
 ---
 
@@ -44,10 +44,10 @@ If yes → reconsider. Yinz is data shapes + standalone functions + UFCS dot-cal
 - **`override` keyword** — does not exist; use function overloading by argument type (`function greet(share self: Entity)` + `function greet(share self: Warrior)` — compiler picks the most specific overload at the call site)
 - **`extends` for behavior reuse** — `extends` is DATA-only inheritance; child gets parent's fields; behavior comes from standalone functions
 - **Storing function-typed values as fields to simulate methods** — refactor to standalone functions + UFCS unless the use case genuinely needs per-instance callback semantics (rare)
-- **Spec/design language that frames Yinz as "object-oriented" or describes patterns in OOP terms** — use the non-OOP framing per `.claude/rules/non-oop.md`
+- **Spec/design language that frames Yinz as "object-oriented" or describes patterns in OOP terms** — use the non-OOP framing per [`.claude/rules/non-oop.md`](non-oop.md)
 - **Reaching for `class`, `instance`, `new`, `this`, `instanceof`** — none of these exist in Yinz; their presence in your design signals OOP drift
 
-See `.claude/rules/non-oop.md` for the full model + the dual-style diagnostic format for UFCS errors. Locked r10–r13.
+See [`.claude/rules/non-oop.md`](non-oop.md) for the full model + the dual-style diagnostic format for UFCS errors. Locked r10–r13.
 
 ---
 
@@ -61,13 +61,13 @@ Every feature, rule, error message, and example should INFORM the developer abou
 
 **Features that FAIL this test:** implicit conversions with no diagnostic, automatic behaviors that happen invisibly, abstractions that hide what the machine is doing, "magic" that works without explanation.
 
-See `design/teaching-mission.md` for the full mission and the required three-part diagnostic format. This is a load-bearing criterion — Yinz's positioning as a teaching language depends on it.
+See [`docs/reference/REF-teaching-mission.md`](../../docs/reference/REF-teaching-mission.md) for the full mission and the required three-part diagnostic format. This is a load-bearing criterion — Yinz's positioning as a teaching language depends on it.
 
 ---
 
 ## Documenting Decisions
 
-Every decision goes in `/design/decisions.md` with:
+Every decision goes in `/docs/README.md` with:
 1. What was decided
 2. Alternatives that were considered
 3. Which golden rule(s) drove the decision and why
@@ -78,7 +78,7 @@ If a decision can't be explained by any golden rule, either a new golden rule is
 
 ## Open Questions
 
-Unresolved design questions go in `/design/open-questions.md`. Don't leave them as vague language in spec files — make it explicit that they're open.
+Unresolved design questions go in `/docs/internal/scratchpad/SCRATCH-open-questions.md`. Don't leave them as vague language in spec files — make it explicit that they're open.
 
 ---
 

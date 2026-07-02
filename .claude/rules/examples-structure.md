@@ -4,7 +4,7 @@ How `examples/` is organized and how new demos get added. This rule is **load-be
 
 **Load when**: adding any new example directory, renaming an existing one, writing a milestone plan that ships a new demo, or reviewing a PR that touches `examples/**`. Also applies when designing a new stdlib module — its per-module example project goes under `examples/<themed-name>/`.
 
-**SSOT**: `examples/README.md` is the user-facing index. This rule file is the contributor-facing discipline behind it.
+**SSOT**: [`examples/README.md`](../../examples/README.md) is the user-facing index. This rule file is the contributor-facing discipline behind it.
 
 ---
 
@@ -29,7 +29,7 @@ Demonstrate a Yinz project layout. Each project picks ONE layout:
 - **Single-entry** — one `yinz.toml` with `entry = "..."`, code in plain subfolders. The canonical shape for ~95% of Yinz projects. **Current canonical example: `pirates-roster/`.**
 - **Multi-entry** — one `yinz.toml` with `[entries]` table, ships under `ships/`. v0.22 feature. **Current canonical example: `stadium-fleet/`.**
 
-Both project examples MUST have a `README.md` at the project root explaining what layout they're demonstrating and what theme dresses the content.
+Both project examples MUST have a [`README.md`](../../README.md) at the project root explaining what layout they're demonstrating and what theme dresses the content.
 
 ### Galleries (no `yinz.toml`)
 
@@ -39,7 +39,7 @@ Loose `.ynz` files exercising specific compiler/tool behavior. Not Yinz projects
 - **`burgh-poem/`** — formatter input demo (`messy.ynz`).
 - **`incline-watcher/`** — `ynz watch` file-watcher demonstration (v0.2-M4). Themed as the Duquesne Incline tracking its elevation.
 
-Galleries SHOULD have a `README.md` explaining what's exercised and why.
+Galleries SHOULD have a [`README.md`](../../README.md) explaining what's exercised and why.
 
 ---
 
@@ -72,14 +72,14 @@ If you genuinely can't find a fitting Pittsburgh term, escalate to Patrick. Don'
 - [ ] **Single-entry or multi-entry?** (Projects only.) Default to single-entry unless the demo SPECIFICALLY exists to demonstrate multi-entry.
 - [ ] **Top-level only?** No nesting under `examples/projects/` or similar. Each demo is its own top-level folder.
 - [ ] **README.md present?** Every example has a README explaining its purpose + theme.
-- [ ] **Updated `examples/README.md` index?** Listed under the right category (Projects vs Galleries) with a one-line description.
-- [ ] **Updated `.claude/rules/plan-invariants.md`?** If the new example is part of the canonical growth path for milestones, the rule reflects that.
+- [ ] **Updated [`examples/README.md`](../../examples/README.md) index?** Listed under the right category (Projects vs Galleries) with a one-line description.
+- [ ] **Updated [`.claude/rules/plan-invariants.md`](plan-invariants.md)?** If the new example is part of the canonical growth path for milestones, the rule reflects that.
 
 ---
 
 ## Adding to an Existing Example
 
-Most milestone work doesn't create a new top-level demo — it extends `pirates-roster/` or `primantis-orders/`. Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`:
+Most milestone work doesn't create a new top-level demo — it extends `pirates-roster/` or `primantis-orders/`. Per [`.claude/rules/plan-invariants.md`](plan-invariants.md) `### Demo & Error Gallery`:
 
 - **New language feature in M1–M8** → extend `pirates-roster/entrypoint.ynz` with a new section. Don't make a new top-level demo for individual language features.
 - **New compile-error class** → add an intentional trigger to the matching milestone file in `primantis-orders/` with a `// WHY:` comment naming the diagnostic class.
@@ -110,7 +110,7 @@ This rule is **load-bearing**, not advisory. Violations should be caught at plan
 
 ## Cross-References
 
-- `examples/README.md` — user-facing index (SSOT for what each example demonstrates)
-- `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` — milestone-phase obligation to extend `pirates-roster/entrypoint.ynz` + the milestone's `primantis-orders/m{N}_errors.ynz`
-- `design/open-questions.md` "Workspace / Multi-Package Projects" — why `examples/` isn't a workspace
-- `design/mvp-scope.md` v0.22 — multi-entry layout source-of-truth
+- [`examples/README.md`](../../examples/README.md) — user-facing index (SSOT for what each example demonstrates)
+- [`.claude/rules/plan-invariants.md`](plan-invariants.md) `### Demo & Error Gallery` — milestone-phase obligation to extend `pirates-roster/entrypoint.ynz` + the milestone's `primantis-orders/m{N}_errors.ynz`
+- [`docs/internal/scratchpad/SCRATCH-open-questions.md`](../../docs/internal/scratchpad/SCRATCH-open-questions.md) "Workspace / Multi-Package Projects" — why `examples/` isn't a workspace
+- [`docs/reference/REF-mvp-scope.md`](../../docs/reference/REF-mvp-scope.md) v0.22 — multi-entry layout source-of-truth

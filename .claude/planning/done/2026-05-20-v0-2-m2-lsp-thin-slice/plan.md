@@ -22,9 +22,9 @@ legacy:
     - crates/ynz-lsp/**
     - crates/ynz-registry/src/lib.rs
     - tooling/vscode-ynz/**
-    - design/lsp.md
-    - design/mvp-scope.md
-    - design/compiler-language.md
+    - docs/internal/implementation/IMP-lsp.md
+    - docs/reference/REF-mvp-scope.md
+    - docs/internal/decisions/ADR-compiler-language.md
     - CLAUDE.md
     - examples/pirates-roster/entrypoint.ynz
     - examples/primantis-orders/v0_2_m2_errors.ynz
@@ -42,7 +42,7 @@ Status: done — v0.2.0-m2 tagged and shipped 2026-05-20.
 **Goal**: Ship a JSON-RPC-over-stdio Language Server (`ynz-lsp`) backed by the existing salsa-tracked compiler queries, plus a VSCode extension that spawns it. Editor users get autocomplete, inline diagnostics, and basic hover for `.ynz` files. Every editor feature reads from the SSOT registry built in v0.2-M1, so adding a keyword/intrinsic/deferred-feature in any future version updates the editor automatically.
 
 **Why now**:
-- v0.1.0 shipped with the compiler structured around `salsa` queries from day 1 (per `design/compiler-language.md` "Why Salsa") specifically to make this milestone a wrapper job rather than a rewrite. Verified: `crates/ynz-parser/src/db.rs` exposes `CompilerDb`, `SourceFile (#[salsa::input])`, and `SourceFileRegistry` (db supertrait). Tracked queries already exist: `parse_query`, `module_signatures_query`, `check_query`, `codegen_query`.
+- v0.1.0 shipped with the compiler structured around `salsa` queries from day 1 (per [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md) "Why Salsa") specifically to make this milestone a wrapper job rather than a rewrite. Verified: `crates/ynz-parser/src/db.rs` exposes `CompilerDb`, `SourceFile (#[salsa::input])`, and `SourceFileRegistry` (db supertrait). Tracked queries already exist: `parse_query`, `module_signatures_query`, `check_query`, `codegen_query`.
 - v0.2-M1 shipped the SSOT registry (`crates/ynz-registry/src/lib.rs`) with 189 entries across 9 entry kinds plus typed adapter functions. Every editor feature this milestone ships is a direct consumer of that registry — no hardcoded keyword/intrinsic/deferred-feature lists land in this milestone.
 - The roadmap (`v0-2-dev-loop-tooling`) puts the thin LSP early specifically so Patrick can eyes-on test it while v0.2-M3 (fmt) and v0.2-M4 (watch) are being built in parallel. Without M2 shipping early, all of v0.2 is invisible until the very end.
 
@@ -53,7 +53,7 @@ Status: done — v0.2.0-m2 tagged and shipped 2026-05-20.
 - No external editor distribution exists today. No VSCode publisher account exists today.
 
 **Constraints (locked from roadmap + this session's research)**:
-- **Yinz is NOT object-oriented** (`.claude/rules/non-oop.md`). LSP autocomplete after `.` lists STANDALONE functions whose first parameter type matches the receiver (UFCS), not "methods bound to the type." Primitive intrinsics are the special case (they ARE keyed by `receiver_type` in the registry); user-defined methods come from typeck's existing signature lookup.
+- **Yinz is NOT object-oriented** ([`.claude/rules/non-oop.md`](../../../rules/non-oop.md)). LSP autocomplete after `.` lists STANDALONE functions whose first parameter type matches the receiver (UFCS), not "methods bound to the type." Primitive intrinsics are the special case (they ARE keyed by `receiver_type` in the registry); user-defined methods come from typeck's existing signature lookup.
 - **LSP framework: research phase locks the choice (Phase 1)**. Patrick chose research-first over pre-decide. Locked choice carries through to v0.2-M5 (no re-decision).
 - **VSCode extension home: in-repo subdir `tooling/vscode-ynz/`** (per Patrick decision this session). Atomic version bumps; single source of truth.
 - **Marketplace publish: in-M2 as "preview", with .vsix fallback if publisher verification stalls**. Patrick's caveat: "as long as it's not a huge headache" — Phase 7 has an explicit fallback branch.
@@ -77,7 +77,7 @@ Status: done — v0.2.0-m2 tagged and shipped 2026-05-20.
 **Success criteria**:
 - `ynz-lsp` binary builds and runs as a stdio JSON-RPC server.
 - A VSCode user installs the Yinz extension (marketplace preview or `.vsix`), opens a `.ynz` file, and sees: inline red squiggles with WHAT/WHAT-INSTEAD/WHY content; autocomplete of keywords, types, primitive methods (filtered by receiver), and deferred features marked deprecated; hover popups showing the registry's WHY content for any registered item.
-- Adding a new keyword/intrinsic/deferred-feature entry to `registry/features.toml` and rebuilding makes it available in the IDE on next server restart — no manual code edit anywhere in `ynz-lsp` or `tooling/vscode-ynz/`.
+- Adding a new keyword/intrinsic/deferred-feature entry to [`registry/features.toml`](../../../../registry/features.toml) and rebuilding makes it available in the IDE on next server restart — no manual code edit anywhere in `ynz-lsp` or `tooling/vscode-ynz/`.
 - TextMate grammar regenerates automatically; CI fails if the committed grammar drifts from registry.
 - All 830+ existing tests pass. New `ynz-lsp/tests/*` integration tests cover lifecycle + each LSP request type.
 - Tag cut: `v0.2.0-m2` (intermediate; v0.2.0 final ships at v0.2-M5).
@@ -117,19 +117,19 @@ Status: done — v0.2.0-m2 tagged and shipped 2026-05-20.
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| LSP framework choice (tower-lsp vs lsp-server) turns out to be wrong mid-M2, requires migration | Medium | Medium | Phase 1 spike builds both, measures plumbing footprint + test ergonomics, locks BEFORE the real scaffolding starts. Lock decision committed to `design/lsp.md` so v0.2-M5 doesn't re-litigate. |
+| LSP framework choice (tower-lsp vs lsp-server) turns out to be wrong mid-M2, requires migration | Medium | Medium | Phase 1 spike builds both, measures plumbing footprint + test ergonomics, locks BEFORE the real scaffolding starts. Lock decision committed to [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) so v0.2-M5 doesn't re-litigate. |
 | Salsa DB threading model fights LSP's async request model (DB inputs require `&mut`; salsa is `Send` but not `Sync`) | Medium | High | Single-threaded dispatch in Phase 2 — JSON-RPC requests serialized through one task that owns the DB. Concurrent requests queue. For thin slice this matches throughput needs (one Patrick, one editor); v0.2-M5 may revisit with salsa snapshots when go-to-def scales horizontally. |
 | Byte-offset → LSP Position conversion off-by-one bugs (LF vs CRLF, multi-byte characters) | Medium | Medium | Position conversion has unit tests covering: LF-only files, CRLF files, mixed line endings, BOM, 4-byte UTF-8 (emoji), surrogate-pair UTF-16. Property test: round-trip `byte → Position → byte == original`. UTF-8 path is the default; UTF-16 path tested independently. |
 | Diagnostic transform loses WHAT/WHAT-INSTEAD/WHY structure when packed into LSP `Diagnostic.message` (plaintext field) | Medium | Low | Concatenate as `"<WHAT>\n\nWHAT-INSTEAD: <wi>\n\nWHY: <why>"`. Verified against VSCode renderer behavior: plaintext newlines render as soft breaks in hover squiggles. Test asserts the exact format; UI verification is part of Phase 8. Future enhancement: structured `data` field for custom client rendering — out of M2 scope. |
 | Autocomplete context-detection is too naive — fires the wrong suggestions in real code | High | Low | Thin-slice context detection: look at the previous non-whitespace char. `.` → primitive methods on inferred receiver type + UFCS candidates from typeck signatures. Whitespace/start-of-line → keywords + visible identifiers (functions, shapes, top-level consts/lets). Disambiguate `x.` from numeric literal `5.0`: walk left from the `.` skipping whitespace; if the previous non-whitespace char is an ASCII digit (`0`-`9`) AND not preceded by an identifier-character, treat as numeric-literal-with-decimal-point and return NO completion (LSP `null` response) rather than incorrect method suggestions. Test covers `let x = 5.<cursor>` → empty completion vs `let x = score.<cursor>` → int method completion. |
 | Hover token detection requires re-lexing around byte offset; performance hit at every cursor move | Medium | Low | Lex-on-demand for hover is bounded by file size; for typical .ynz files (<50KB) the relex is <1ms. Salsa caches the parse so re-lexing the WHOLE file isn't actually needed — we just locate the AST node containing the offset, then read its span. Falls back to local re-lex if AST resolution misses. |
 | Marketplace publisher verification delays block Phase 7 indefinitely | Low | Medium | Phase 7's first sub-step is "register publisher + run `vsce publish --pre-release` dry-run." If verification takes >24h, fork to the `.vsix` fallback: `vsce package` produces a `.vsix`, attach to a GitHub release, Phase 9 README points users at it. Patrick's "as long as it's not a huge headache" caveat is the explicit trigger for this branch. |
-| New `vsce` / `node` / `npm` toolchain in `tooling/vscode-ynz/` causes CI breakage if CI doesn't have Node | Medium | Low | `tooling/vscode-ynz/` build is OPT-IN — not wired to `cargo build --workspace`. CI runs Rust workspace tests only; extension build is a separate `npm run build` invoked manually OR by a Phase 7 GitHub Actions job that runs only on `tooling/**` PRs. Documented in `tooling/vscode-ynz/README.md`. |
+| New `vsce` / `node` / `npm` toolchain in `tooling/vscode-ynz/` causes CI breakage if CI doesn't have Node | Medium | Low | `tooling/vscode-ynz/` build is OPT-IN — not wired to `cargo build --workspace`. CI runs Rust workspace tests only; extension build is a separate `npm run build` invoked manually OR by a Phase 7 GitHub Actions job that runs only on `tooling/**` PRs. Documented in [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md). |
 | TextMate grammar generator falls out of sync with VSCode-flavored TM grammar dialect (Oniguruma regex quirks) | Low | Low | Phase 5's generator emits a minimal grammar (keyword tokenization only — no semantic highlighting). Oniguruma regex used = simple word-boundary `\b(keyword)\b` patterns; no lookbehind / nested captures / other Oniguruma-specific quirks. Snapshot test against a hand-validated reference grammar locks the format. |
-| LSP exposes existing compiler bugs that CLI users hadn't hit (LSP runs check on every keystroke; bugs surface that batch builds skipped) | High | Low | Acknowledged risk per roadmap. Bugs surfaced get triaged: if M2 phase work can fix in <50 lines, fix in M2; otherwise add to `.claude/todos.md` "Soon" section. Roadmap budgets M5 for this. |
+| LSP exposes existing compiler bugs that CLI users hadn't hit (LSP runs check on every keystroke; bugs surface that batch builds skipped) | High | Low | Acknowledged risk per roadmap. Bugs surfaced get triaged: if M2 phase work can fix in <50 lines, fix in M2; otherwise add to [`.claude/todos.md`](../../../todos.md) "Soon" section. Roadmap budgets M5 for this. |
 | Integration tests for LSP require spawning subprocesses; flaky on CI under load | Medium | Low | Two-tier test harness: pure-Rust in-process tests against the LSP service struct directly (fast, no fork) AND a smaller end-to-end stdio test that proves wire format works (one test per major request type, marked `#[ignore]`-able if CI gets flaky). Phase 8 covers the harness design. |
 | Cargo.toml workspace bump to `0.2.0-m2` collides with mid-flight uncommitted work in other branches | Low | Low | Phase 9 (verification + tag) is intentionally the LAST phase; the bump happens after all other phases merge to main. No parallel work expected during M2 — Patrick is solo dev. |
-| Self-hosting transition (v2+) — `ynz-lsp` and `tooling/vscode-ynz` would need re-implementation in Yinz | Low (timing) | Low | Same status as `ynz-registry` build.rs: documented in `design/lsp.md` "Self-hosting migration plan" subsection. TOML parsing already required for `yinz.toml` (per `design/packages.md`); JSON-RPC parsing is a stdlib `v0.8 json` module concern. No M2 work needed. |
+| Self-hosting transition (v2+) — `ynz-lsp` and `tooling/vscode-ynz` would need re-implementation in Yinz | Low (timing) | Low | Same status as `ynz-registry` build.rs: documented in [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) "Self-hosting migration plan" subsection. TOML parsing already required for `yinz.toml` (per [`docs/internal/implementation/IMP-packages.md`](../../../../docs/internal/implementation/IMP-packages.md)); JSON-RPC parsing is a stdlib `v0.8 json` module concern. No M2 work needed. |
 | Patrick burns out on marketplace publishing dance and stalls the milestone | Low | Medium | Explicit Phase 7 fork: if marketplace setup blocks for >30min of cumulative friction, abort to `.vsix` fallback. Marketplace publish becomes a follow-up issue, NOT a v0.2-M2 gate. Acceptance criterion for Phase 7 PASSES on `.vsix` ship; marketplace publish is a stretch goal. |
 
 ## Questions
@@ -188,7 +188,7 @@ None outstanding. Four answered this session before plan draft:
 - Compiler binary cold-build time: within ±10% of pre-M2 baseline (new `ynz-lsp` crate adds a dep but is independent; `cargo build -p ynz-driver` should be unchanged because driver doesn't depend on ynz-lsp)
 - TextMate grammar generation: <100ms (one-shot binary; offline build step)
 
-**Auto-promotion analysis** (per `.claude/rules/auto-promotion.md`):
+**Auto-promotion analysis** (per [`.claude/rules/auto-promotion.md`](../../../rules/auto-promotion.md)):
 - This milestone does NOT introduce any new language feature, stdlib type, or compiler codegen optimization. There is no stricter/faster form the compiler could prove fits.
 - LSP responses are reads against registry data + salsa-cached queries — no codegen, no allocator decisions.
 - No codegen auto-promotion. No muted-hint surface added (muted-hint *consumption* is v0.2-M5; this milestone populates zero new muted-hint domains beyond what M1 already shipped).
@@ -201,7 +201,7 @@ None outstanding. Four answered this session before plan draft:
 - Autocomplete `documentation` field carries the WHY for any item that has one
 - Deferred features (sized ints, `gpu`, `foreign`, `test`, etc.) show as `CompletionItemTag::Deprecated` in autocomplete with `documentation` = "ships in vX.Y; use <substitute>; <why>"
 - No new banned-jargon words slip into LSP-rendered text (re-uses `crates/ynz-diagnostics` rendering layer; `tests/jargon_audit.rs` already audits user-facing diagnostic output and will be extended in Phase 3 to also audit LSP-transformed messages)
-- NEW design doc: `design/lsp.md` — architectural reference: salsa wiring, JSON-RPC dispatch model, capability negotiation, position-encoding strategy, framework choice rationale (the Phase 1 spike output), self-hosting migration plan
+- NEW design doc: [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) — architectural reference: salsa wiring, JSON-RPC dispatch model, capability negotiation, position-encoding strategy, framework choice rationale (the Phase 1 spike output), self-hosting migration plan
 - NO new `.claude/rules/` files in this milestone (no new project-rule surface needed beyond what M1's `feature-registry.md` already established)
 
 ### Runtime Dependencies
@@ -265,7 +265,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 ### Phase 0: Doc lockdown + crate scaffolding (no behavior change)
 
-**PR scope**: Land the design doc, update `design/mvp-scope.md` v0.2-M2 entry to reflect the locked decisions, scaffold empty `crates/ynz-lsp/` with `lib.rs` + `main.rs` stubs + Cargo.toml entry, and add `tooling/` as a top-level directory with a `tooling/README.md` describing what lives there. No LSP behavior. No VSCode extension yet.
+**PR scope**: Land the design doc, update [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M2 entry to reflect the locked decisions, scaffold empty `crates/ynz-lsp/` with `lib.rs` + `main.rs` stubs + Cargo.toml entry, and add `tooling/` as a top-level directory with a [`tooling/README.md`](../../../../tooling/README.md) describing what lives there. No LSP behavior. No VSCode extension yet.
 **Branch**: `chore/v0-2-m2-doc-lockdown` (per branching.md §Branch Prefixes — chore for docs/scaffolding)
 **Flag**: N/A
 **Est. lines**: ~400 (design doc ~250, cargo updates ~30, scaffolding stubs ~50, docs ~70)
@@ -276,35 +276,35 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Why this phase exists**: prevents Phase 1's research spike from getting confused with permanent code. A spike that lives in a clean `crates/ynz-lsp/_spike/tower_lsp/` and `crates/ynz-lsp/_spike/lsp_server/` directory is easy to delete after the decision is made; without the scaffolding-first phase, the spike risks tangling with real code.
 
 **Current-state anchors**:
-- `design/mvp-scope.md` — has a v0.2 entry; needs M2-specific lockdown additions per the Architectural Decisions Made in the roadmap
+- [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) — has a v0.2 entry; needs M2-specific lockdown additions per the Architectural Decisions Made in the roadmap
 - `crates/` — currently 9 workspace members; M2 adds `ynz-lsp` (and Phase 5 adds `ynz-tmgrammar`)
-- `Cargo.toml` workspace member list (`/workspaces/ynz/Cargo.toml:3-13`)
+- [`Cargo.toml`](../../../../Cargo.toml) workspace member list (`/workspaces/ynz/Cargo.toml:3-13`)
 - No `tooling/` directory exists yet
 
 **Files (expected scope)**:
-- NEW: `design/lsp.md` — architectural reference doc
-- EDIT: `design/mvp-scope.md` — v0.2-M2 entry: name "LSP Thin Slice + VSCode Plugin", deliverables, locked decisions
-- EDIT: `design/compiler-language.md` — paragraph on "Both LSP and CLI also share the SSOT registry" (per roadmap "Architectural Decisions Made")
+- NEW: [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) — architectural reference doc
+- EDIT: [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) — v0.2-M2 entry: name "LSP Thin Slice + VSCode Plugin", deliverables, locked decisions
+- EDIT: [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md) — paragraph on "Both LSP and CLI also share the SSOT registry" (per roadmap "Architectural Decisions Made")
 - EDIT: `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` — UPDATE the v0.2-M5 milestone entry to explicitly enumerate every M2-deferral listed in this plan's Deferrals table (see Step 9). Without this, deferrals claim to be "tracked in M5 roadmap" but aren't actually there — Patrick's deferrals-must-be-tracked feedback rule.
-- EDIT: `.claude/todos.md` — ADD "Later" bin entry for `vscode-extension-ci-workflow` (the GitHub Actions for `tooling/vscode-ynz/` deferral that has no other durable home).
-- EDIT: `CLAUDE.md` — Project Layout section: add `crates/ynz-lsp/` and `tooling/vscode-ynz/` row entries
-- NEW: `crates/ynz-lsp/Cargo.toml` (empty deps; framework decision happens Phase 1)
+- EDIT: [`.claude/todos.md`](../../../todos.md) — ADD "Later" bin entry for `vscode-extension-ci-workflow` (the GitHub Actions for `tooling/vscode-ynz/` deferral that has no other durable home).
+- EDIT: [`CLAUDE.md`](../../../../CLAUDE.md) — Project Layout section: add `crates/ynz-lsp/` and `tooling/vscode-ynz/` row entries
+- NEW: [`crates/ynz-lsp/Cargo.toml`](../../../../crates/ynz-lsp/Cargo.toml) (empty deps; framework decision happens Phase 1)
 - NEW: `crates/ynz-lsp/src/main.rs` (stub: `fn main() { println!("ynz-lsp v0.2.0-m2 (not yet implemented)"); std::process::exit(0); }`)
 - NEW: `crates/ynz-lsp/src/lib.rs` (empty)
-- NEW: `tooling/README.md` — describes the tooling/ subtree, naming convention, what's in scope (vscode-ynz so far), build-vs-Cargo separation
-- EDIT: `Cargo.toml` — add `crates/ynz-lsp` to workspace members
+- NEW: [`tooling/README.md`](../../../../tooling/README.md) — describes the tooling/ subtree, naming convention, what's in scope (vscode-ynz so far), build-vs-Cargo separation
+- EDIT: [`Cargo.toml`](../../../../Cargo.toml) — add `crates/ynz-lsp` to workspace members
 - NEW: `crates/ynz-lsp/_spike/.gitkeep` — placeholder so the Phase 1 spike has a home
 
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work (lint fix in adjacent code, blocking bug, missing dependency). Document each deviation in the PR description with a one-line reason. If a deviation is its own concern, STOP — split into a separate PR.
 
 **Steps**:
-1. Write `design/lsp.md` covering: salsa wiring overview (single CompilerDb owned by server, didChange→input.set→salsa invalidates), JSON-RPC dispatch model (single-threaded for thin slice), capability negotiation (positionEncodings utf-8/utf-16, completionProvider triggerChars `[".", " "]`, hoverProvider true, NO definitionProvider/referencesProvider/renameProvider/formattingProvider yet), framework choice rationale (deferred to Phase 1 spike — explicit placeholder section), the byte-offset → Position conversion strategy, self-hosting migration plan (mirrors `design/feature-registry.md` self-hosting section)
-2. Update `design/mvp-scope.md` v0.2 entry: replace the existing single-M2 line with a v0.2-M2 expanded entry listing: in-scope deliverables (LSP thin slice + VSCode extension), out-of-scope deferred-to-M5 features (definition / references / rename / formatting / inlay hints / code lenses), the in-repo `tooling/vscode-ynz/` location, the marketplace-preview-with-vsix-fallback decision, the registry-derived-TM-grammar decision
-3. Update `design/compiler-language.md`: insert a paragraph at the end of the "Why Salsa" section noting "The LSP shares the salsa DB instance with no parallel pipelines, and consults `ynz-registry` for all keyword/type/intrinsic/deferred-feature metadata — same SSOT as the CLI."
-4. Update `CLAUDE.md` Project Layout table: add `crates/ynz-lsp/` (purpose: "LSP server — wraps existing salsa queries in JSON-RPC, consumes `ynz-registry` for IDE features"), add `tooling/vscode-ynz/` (purpose: "VSCode extension — spawns `ynz-lsp`, ships syntax highlighting and language association")
+1. Write [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) covering: salsa wiring overview (single CompilerDb owned by server, didChange→input.set→salsa invalidates), JSON-RPC dispatch model (single-threaded for thin slice), capability negotiation (positionEncodings utf-8/utf-16, completionProvider triggerChars `[".", " "]`, hoverProvider true, NO definitionProvider/referencesProvider/renameProvider/formattingProvider yet), framework choice rationale (deferred to Phase 1 spike — explicit placeholder section), the byte-offset → Position conversion strategy, self-hosting migration plan (mirrors [`docs/internal/implementation/IMP-feature-registry.md`](../../../../docs/internal/implementation/IMP-feature-registry.md) self-hosting section)
+2. Update [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2 entry: replace the existing single-M2 line with a v0.2-M2 expanded entry listing: in-scope deliverables (LSP thin slice + VSCode extension), out-of-scope deferred-to-M5 features (definition / references / rename / formatting / inlay hints / code lenses), the in-repo `tooling/vscode-ynz/` location, the marketplace-preview-with-vsix-fallback decision, the registry-derived-TM-grammar decision
+3. Update [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md): insert a paragraph at the end of the "Why Salsa" section noting "The LSP shares the salsa DB instance with no parallel pipelines, and consults `ynz-registry` for all keyword/type/intrinsic/deferred-feature metadata — same SSOT as the CLI."
+4. Update [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout table: add `crates/ynz-lsp/` (purpose: "LSP server — wraps existing salsa queries in JSON-RPC, consumes `ynz-registry` for IDE features"), add `tooling/vscode-ynz/` (purpose: "VSCode extension — spawns `ynz-lsp`, ships syntax highlighting and language association")
 5. Scaffold `crates/ynz-lsp/`: Cargo.toml with workspace=true edition/version/authors/license, src/lib.rs (empty), src/main.rs (the stub above), _spike/.gitkeep
-6. Add `crates/ynz-lsp` to workspace members in root `Cargo.toml`
-7. Create `tooling/README.md`: explains tooling/ is for build outputs and editor distributions, NOT part of `cargo build --workspace`, opt-in builds only; current subdir = vscode-ynz (Phase 6+)
+6. Add `crates/ynz-lsp` to workspace members in root [`Cargo.toml`](../../../../Cargo.toml)
+7. Create [`tooling/README.md`](../../../../tooling/README.md): explains tooling/ is for build outputs and editor distributions, NOT part of `cargo build --workspace`, opt-in builds only; current subdir = vscode-ynz (Phase 6+)
 8. **Enumerate M2 deferrals in the roadmap's M5 milestone entry** (the durable home — this plan file moves to `done/` after the tag and disappears from the radar). Open `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md`, find the `### Milestone v0.2-M5` block (currently lines ~163-167), and EXPAND its scope list so every deferral from this plan's Deferrals table is named explicitly. The Round-1 reviewer was satisfied with the Deferrals table, but the table's "Where tracked" cells need to be TRUE — most currently point to M5 roadmap entries that don't yet enumerate the item. Specifically, the M5 milestone entry must explicitly list:
    - `textDocument/inlayHint` (the LSP method specifically; current text says "muted-hint surfaces" without naming the method)
    - `textDocument/codeAction` (currently only `codeLens` is mentioned)
@@ -314,34 +314,34 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - `Diagnostic.code` + `Diagnostic.codeDescription` fields (NOT in roadmap M5 today; might become DiagnosticKind name)
    - Structured `Diagnostic.data` field for client-side rendering of WHAT/WHAT-INSTEAD/WHY (NOT in roadmap M5 today)
    - Edit the roadmap's `last_updated:` to today
-9. **Add untracked M2 deferral to `.claude/todos.md`** (the GitHub Actions for `tooling/vscode-ynz/` build/publish — this is infrastructure work that doesn't belong in M5 scope but has no other durable home, and the plan file moves to `done/` after the tag). Add to the "Later" bin: `- [ ] **vscode-extension-ci-workflow** — GitHub Actions to build + publish tooling/vscode-ynz/ on release tags (currently manual). Deferred from v0.2-M2 Phase 7; M2 ships extension via local cargo+npm or marketplace publish, no CI yet. Pick up whenever marketplace publishing automation is wanted OR when a non-Patrick contributor needs to repro the build.`
+9. **Add untracked M2 deferral to [`.claude/todos.md`](../../../todos.md)** (the GitHub Actions for `tooling/vscode-ynz/` build/publish — this is infrastructure work that doesn't belong in M5 scope but has no other durable home, and the plan file moves to `done/` after the tag). Add to the "Later" bin: `- [ ] **vscode-extension-ci-workflow** — GitHub Actions to build + publish tooling/vscode-ynz/ on release tags (currently manual). Deferred from v0.2-M2 Phase 7; M2 ships extension via local cargo+npm or marketplace publish, no CI yet. Pick up whenever marketplace publishing automation is wanted OR when a non-Patrick contributor needs to repro the build.`
 10. Run `cargo build --workspace` — confirms the empty crate compiles and doesn't break the workspace
 
 **Acceptance criteria** (observable conditions that define DONE):
-- [x] `design/lsp.md` exists and includes the seven content sections enumerated in Step 1
-- [x] `design/mvp-scope.md` v0.2-M2 entry mentions all four locked decisions (framework=research-phase, extension=in-repo, marketplace=preview-with-fallback, grammar=registry-derived)
-- [x] `design/compiler-language.md` mentions LSP shares salsa + registry
+- [x] [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) exists and includes the seven content sections enumerated in Step 1
+- [x] [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) v0.2-M2 entry mentions all four locked decisions (framework=research-phase, extension=in-repo, marketplace=preview-with-fallback, grammar=registry-derived)
+- [x] [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md) mentions LSP shares salsa + registry
 - [x] `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` v0.2-M5 milestone entry now explicitly lists ALL 7 M2-deferrals enumerated in Step 8 (inlay hints, code actions, semantic tokens, doc-comment hover integration, pull diagnostics, diagnostic code/codeDescription fields, structured data field). Verified by `grep` of the M5 section for each item name.
-- [x] `.claude/todos.md` "Later" bin has the `vscode-extension-ci-workflow` entry from Step 9
-- [x] `CLAUDE.md` Project Layout table has rows for `crates/ynz-lsp/` and `tooling/vscode-ynz/`
+- [x] [`.claude/todos.md`](../../../todos.md) "Later" bin has the `vscode-extension-ci-workflow` entry from Step 9
+- [x] [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout table has rows for `crates/ynz-lsp/` and `tooling/vscode-ynz/`
 - [x] `cargo build --workspace` succeeds with the new empty crate
 - [x] `cargo test --workspace` still passes (830+ tests)
 - [x] `./target/debug/ynz-lsp` prints the placeholder string and exits 0
 - [x] No existing test fixture's output changes (compiler behavior unchanged)
-- [x] `tooling/` exists as a top-level directory with `tooling/README.md`
+- [x] `tooling/` exists as a top-level directory with [`tooling/README.md`](../../../../tooling/README.md)
 
 **Quality gate** (observable facts to confirm — check BEFORE moving to next phase):
 - [x] No `// TODO` / `// FIXME` / `// HACK` left in any new file
-- [x] No new banned-jargon in user-facing prose (design/lsp.md is for engineers — "infer" is OK there per `.claude/rules/inference.md` dual-audience disclaimer; never in user-rendered text)
+- [x] No new banned-jargon in user-facing prose (docs/internal/implementation/IMP-lsp.md is for engineers — "infer" is OK there per [`.claude/rules/inference.md`](../../../rules/inference.md) dual-audience disclaimer; never in user-rendered text)
 - [x] No `as any` / `#[allow(...)]` swallows
-- [x] design/lsp.md cross-references `design/compiler-language.md`, `design/feature-registry.md`, `design/teaching-mission.md`, `.claude/rules/inference.md`, `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md`
+- [x] docs/internal/implementation/IMP-lsp.md cross-references [`docs/internal/decisions/ADR-compiler-language.md`](../../../../docs/internal/decisions/ADR-compiler-language.md), [`docs/internal/implementation/IMP-feature-registry.md`](../../../../docs/internal/implementation/IMP-feature-registry.md), [`docs/reference/REF-teaching-mission.md`](../../../../docs/reference/REF-teaching-mission.md), [`.claude/rules/inference.md`](../../../rules/inference.md), `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md`
 - [x] No commented-out code; no orphan files
 
 **Verification**:
 - `cargo build --workspace 2>&1 | tail -5` — clean build, no warnings on `ynz-lsp`
 - `cargo test --workspace 2>&1 | grep 'test result'` — all 830+ tests pass
 - `./target/debug/ynz run crates/ynz-driver/tests/fixtures/m3_fib.ynz` — outputs `55` (regression check)
-- `cat design/lsp.md | wc -l` — design doc is substantive (>200 lines)
+- `cat docs/internal/implementation/IMP-lsp.md | wc -l` — design doc is substantive (>200 lines)
 
 **Exit Sequence — RUN THESE STEPS:**
 
@@ -355,50 +355,50 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 ### Phase 1: LSP framework research spike + decision lock
 
-**PR scope**: Build minimal "hello LSP" against BOTH `tower-lsp` and `lsp-server` in `crates/ynz-lsp/_spike/<framework>/`. Each spike implements: `initialize` lifecycle, single hardcoded diagnostic on `didOpen`, `shutdown`. Measure plumbing footprint, ergonomics with salsa's `&mut db` requirement, and integration-test setup. Lock the choice; commit decision write-up to `design/lsp.md`. DELETE the losing spike (keep history in git; remove from tree for clarity).
+**PR scope**: Build minimal "hello LSP" against BOTH `tower-lsp` and `lsp-server` in `crates/ynz-lsp/_spike/<framework>/`. Each spike implements: `initialize` lifecycle, single hardcoded diagnostic on `didOpen`, `shutdown`. Measure plumbing footprint, ergonomics with salsa's `&mut db` requirement, and integration-test setup. Lock the choice; commit decision write-up to [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md). DELETE the losing spike (keep history in git; remove from tree for clarity).
 **Branch**: `chore/v0-2-m2-lsp-framework-spike` (chore — research, doc lockdown)
 **Flag**: N/A
 **Est. lines**: ~600 — two ~150-line spikes + ~150 line shared scaffold + decision write-up + deletion of the loser nets to ~300 retained. Cargo.toml deps additions.
 **Ships via**: `/pr`
 
-**Objective**: Resolve the LSP framework open question with empirical evidence, not preference. Lock the decision in `design/lsp.md` so v0.2-M5 doesn't re-litigate when scaling to the full LSP.
+**Objective**: Resolve the LSP framework open question with empirical evidence, not preference. Lock the decision in [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) so v0.2-M5 doesn't re-litigate when scaling to the full LSP.
 
 **Why this phase exists**: Roadmap Risk #2 ("LSP framework choice turns out to be wrong mid-M2") is mitigated by a spike-first pattern. Without the spike, Phase 2's scaffolding bakes in a framework decision made on theoretical grounds; the spike costs ~300 lines of throwaway code now to save ~1500 lines of migration in v0.2-M3+ if the choice is wrong.
 
 **Current-state anchors**:
 - `crates/ynz-lsp/_spike/.gitkeep` from Phase 0
-- `crates/ynz-lsp/Cargo.toml` (currently empty deps from Phase 0)
+- [`crates/ynz-lsp/Cargo.toml`](../../../../crates/ynz-lsp/Cargo.toml) (currently empty deps from Phase 0)
 - `crates/ynz-parser/src/db.rs:1-67` — `CompilerDb` definition; spike code instantiates one of these
 - `crates/ynz-typeck/src/queries.rs:49-100` — `module_signatures_query` + `check_query`; spike's "hello LSP" publishes a diagnostic from a real query
 
 **Files (expected scope)**:
 - NEW: `crates/ynz-lsp/_spike/tower_lsp/Cargo.toml` + `src/main.rs` (~150 lines)
-- NEW: `crates/ynz-lsp/_spike/lsp_server/Cargo.toml` + `src/main.rs` (~150 lines)
-- NEW: `crates/ynz-lsp/_spike/README.md` — what each spike measures, how to run each
-- NEW: `crates/ynz-lsp/_spike/MEASUREMENTS.md` — lines of plumbing, async/sync ergonomics, integration-test boilerplate, decision rationale
-- EDIT: `design/lsp.md` — replace the "framework choice deferred to Phase 1 spike" placeholder section with the locked decision + rationale
-- EDIT: `crates/ynz-lsp/Cargo.toml` — add the chosen framework's deps under the main `[dependencies]` (NOT a spike anymore)
+- NEW: [`crates/ynz-lsp/_spike/lsp_server/Cargo.toml`](../../../../crates/ynz-lsp/_spike/lsp_server/Cargo.toml) + `src/main.rs` (~150 lines)
+- NEW: [`crates/ynz-lsp/_spike/README.md`](../../../../crates/ynz-lsp/_spike/README.md) — what each spike measures, how to run each
+- NEW: [`crates/ynz-lsp/_spike/MEASUREMENTS.md`](../../../../crates/ynz-lsp/_spike/MEASUREMENTS.md) — lines of plumbing, async/sync ergonomics, integration-test boilerplate, decision rationale
+- EDIT: [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) — replace the "framework choice deferred to Phase 1 spike" placeholder section with the locked decision + rationale
+- EDIT: [`crates/ynz-lsp/Cargo.toml`](../../../../crates/ynz-lsp/Cargo.toml) — add the chosen framework's deps under the main `[dependencies]` (NOT a spike anymore)
 - DELETE (at phase end): `crates/ynz-lsp/_spike/<loser>/` — keep only the winning spike's structure or fold lessons into the real crate; the loser is preserved in git history
-- KEPT (after phase): `crates/ynz-lsp/_spike/MEASUREMENTS.md` + winning spike for reference until Phase 2 supersedes
+- KEPT (after phase): [`crates/ynz-lsp/_spike/MEASUREMENTS.md`](../../../../crates/ynz-lsp/_spike/MEASUREMENTS.md) + winning spike for reference until Phase 2 supersedes
 
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work. Document each deviation in the PR description.
 
 **Steps**:
 1. Implement the `tower-lsp` spike: `crates/ynz-lsp/_spike/tower_lsp/Cargo.toml` adds `tower-lsp = "...latest..."`, `lsp-types`, `tokio = { version = "1", features = ["full"] }`, `serde_json`. `src/main.rs` implements `LanguageServer` trait with `async fn initialize/initialized/shutdown` and `async fn did_open` that creates a `CompilerDb`, registers the file as a `SourceFile`, runs `check_query`, transforms one diagnostic to LSP `Diagnostic`, calls `client.publish_diagnostics(...)`. Connect via `Server::new(tokio::io::stdin(), tokio::io::stdout(), socket)` for stdio.
-2. Implement the `lsp-server` spike: `crates/ynz-lsp/_spike/lsp_server/Cargo.toml` adds `lsp-server = "0.7"`, `lsp-types`, `crossbeam-channel`, `serde_json`. `src/main.rs` opens stdio Connection, drives the request loop manually, handles `initialize`/`shutdown`/`didOpen` with the same CompilerDb-query-publish flow.
+2. Implement the `lsp-server` spike: [`crates/ynz-lsp/_spike/lsp_server/Cargo.toml`](../../../../crates/ynz-lsp/_spike/lsp_server/Cargo.toml) adds `lsp-server = "0.7"`, `lsp-types`, `crossbeam-channel`, `serde_json`. `src/main.rs` opens stdio Connection, drives the request loop manually, handles `initialize`/`shutdown`/`didOpen` with the same CompilerDb-query-publish flow.
 3. Both spikes use the same `examples/pirates-roster/entrypoint.ynz` as the test input.
 4. Run both: `cd crates/ynz-lsp/_spike/tower_lsp && cargo run -- <stdio harness>` and equivalent. Use a simple test harness (could be a hand-written shell script that pipes JSON-RPC messages and asserts the diagnostic shows up).
 5. Measure each across: total lines of plumbing (excluding query/registry logic which is shared), required Cargo deps, async/sync handler ergonomics with salsa's DB ownership, integration-test setup cost, observed memory at idle, observed time-to-first-diagnostic.
 6. Write `MEASUREMENTS.md` with the table. Apply the locked decision criterion from the Research Findings section: smaller plumbing+test footprint without forcing async semantics over salsa DB. Default to `tower-lsp` if both pass.
-7. Update `design/lsp.md` framework section: state the choice, name the measurements that drove it, lock the choice for v0.2-M5.
-8. Move the winning spike's deps into `crates/ynz-lsp/Cargo.toml` `[dependencies]` (the real crate, not the spike subdir). Delete the loser's `_spike/<loser>/` directory.
+7. Update [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) framework section: state the choice, name the measurements that drove it, lock the choice for v0.2-M5.
+8. Move the winning spike's deps into [`crates/ynz-lsp/Cargo.toml`](../../../../crates/ynz-lsp/Cargo.toml) `[dependencies]` (the real crate, not the spike subdir). Delete the loser's `_spike/<loser>/` directory.
 
 **Acceptance criteria** (observable conditions that define DONE):
 - [x] Both spikes built, ran, and published at least one LSP diagnostic visible via the test harness
 - [x] `MEASUREMENTS.md` documents the measurement methodology AND the recorded values for both frameworks (lines of plumbing, deps, async/sync notes)
 - [x] `MEASUREMENTS.md` records each candidate's **last-commit date and open-issue count as of spike day** (tower-lsp's original repo reportedly went unmaintained late 2025; the maintained fork story must be locked here, not assumed). If the winning candidate's last meaningful commit is >6 months stale OR open-issue count >50 OR a critical-bug issue is open and unaddressed, document the migration cost-estimate inline (estimated effort to swap to the alternative if needed mid-M2 or in M5).
-- [x] `design/lsp.md` framework section contains a locked decision with explicit rationale tied to the recorded measurements (not vibes)
-- [x] `crates/ynz-lsp/Cargo.toml` `[dependencies]` lists ONLY the winning framework's deps, with EXACT version pinned (no `*`, no caret range alone — pin minor for risk control given the maintenance-status concern)
+- [x] [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) framework section contains a locked decision with explicit rationale tied to the recorded measurements (not vibes)
+- [x] [`crates/ynz-lsp/Cargo.toml`](../../../../crates/ynz-lsp/Cargo.toml) `[dependencies]` lists ONLY the winning framework's deps, with EXACT version pinned (no `*`, no caret range alone — pin minor for risk control given the maintenance-status concern)
 - [x] Loser spike directory removed from tree (preserved in git history)
 - [x] `cargo build --workspace` succeeds
 - [x] `cargo test --workspace` still passes (no behavior change to compiler)
@@ -406,15 +406,15 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Quality gate**:
 - [x] No `// TODO` / `// FIXME` / `// HACK` left in any retained file
 - [x] MEASUREMENTS.md cites specific file:line counts and benchmark values; no hand-wavy "tower-lsp felt cleaner"
-- [x] design/lsp.md framework section has the same one-line-decision-plus-WHY format as decisions in `state.md`
-- [x] No new banned-jargon in design/lsp.md
+- [x] docs/internal/implementation/IMP-lsp.md framework section has the same one-line-decision-plus-WHY format as decisions in `state.md`
+- [x] No new banned-jargon in docs/internal/implementation/IMP-lsp.md
 - [x] `cargo clippy --workspace -- -D warnings` passes
 - [x] No commented-out code
 
 **Verification**:
 - `cargo build --workspace 2>&1 | grep 'warning\|error'` — clean
 - `cat crates/ynz-lsp/_spike/MEASUREMENTS.md | grep -E "^(tower-lsp|lsp-server)"` — both frameworks have measurement rows
-- `grep -A 10 "## Framework choice" design/lsp.md` — locked decision visible
+- `grep -A 10 "## Framework choice" docs/internal/implementation/IMP-lsp.md` — locked decision visible
 
 **Exit Sequence — RUN THESE STEPS:**
 
@@ -443,7 +443,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - `crates/ynz-parser/src/queries.rs:25-52` — `parse_query`
 - `crates/ynz-typeck/src/queries.rs:49-100` — `module_signatures_query` + `check_query`
 - `crates/ynz-diagnostics/src/span.rs:5-30` — `SourceSpan` byte-offset definition
-- `crates/ynz-lsp/Cargo.toml` from Phase 1 (framework deps locked)
+- [`crates/ynz-lsp/Cargo.toml`](../../../../crates/ynz-lsp/Cargo.toml) from Phase 1 (framework deps locked)
 - `crates/ynz-lsp/src/main.rs` from Phase 0 (stub) — replaced this phase
 
 **Files (expected scope)**:
@@ -468,7 +468,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - In-flight queries from a prior notification COMPLETE before the next mutation. salsa's tracked queries are not cancellable mid-execution in the thin slice.
    - If a `didChange` arrives while a previous request's response is still being computed: the worker drains pending mutations BEFORE replying. The in-flight response will reflect SOME state between (n-1) and (n) but is sent to the client unmodified; the client's NEXT request will see post-mutation state.
    - For request types that the LSP spec marks as cancellable (`completion`, `hover`, `definition`): the client may send `$/cancelRequest`. In the thin slice, cancellation is BEST-EFFORT — if the query hasn't started yet (still in the channel), it's dropped and the response is `lsp_types::error::RESPONSE_ERROR_REQUEST_CANCELLED`. If the query is already running, it completes; the client receives the late response (LSP spec permits this).
-   - This model is sufficient for one Patrick + one editor; v0.2-M5 may revisit if multi-window editing or background analysis raises throughput needs (documented in `design/lsp.md` under "Concurrency model — thin slice").
+   - This model is sufficient for one Patrick + one editor; v0.2-M5 may revisit if multi-window editing or background analysis raises throughput needs (documented in [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) under "Concurrency model — thin slice").
 2. Implement `initialize`: validate client `general.positionEncodings` capability, pick `utf-8` if present else `utf-16`, store the negotiated encoding in `ServerState`. Reply with `server_capabilities()` + the chosen encoding.
 3. Implement `initialized`, `shutdown`, `exit` (boilerplate per LSP spec). `shutdown` flips a flag; `exit` calls `std::process::exit(0)` if shutdown was first; else exits with code 1.
 4. Implement `textDocument/didOpen`: create a salsa `SourceFile` input with the document's URI-as-path and full text; register it in `CompilerDb`; store text in `open_documents`. Run `module_signatures_query` once to warm the cache (the result is dropped; diagnostics in Phase 3).
@@ -563,7 +563,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - `data`: NONE in thin slice. **Future-proofing decision**: if v0.2-M5 wants structured client-side rendering (separate UI for WHY vs WHAT-INSTEAD vs related spans), it adds a `data` field carrying the original three components as a JSON object. The plaintext `message` stays as the canonical fallback for clients that don't know about the `data` extension. This deferral is RECORDED in the Deferrals table.
 
    **Silent-wrong-output mitigation** (delimiter collision): the format above uses literal substrings `"\n\nWHAT INSTEAD: "` and `"\n\nWHY: "` as separators. If a registry diagnostic template body (`diagnostic_template_lookup(...).what` / `.what_instead_template` / `.why_template`) contains either substring, downstream parsing would mis-split. Mitigation has TWO layers:
-   - **Audit assertion at registry-build time**: extend `crates/ynz-registry/tests/consistency.rs` with a test that walks every `DiagnosticTemplateEntry`'s three template fields AND every `BannedJargonEntry.reason`, `DeferredLanguageFeatureEntry.why` / `.substitute`, `BannedDeclarationKeywordEntry.what_instead` / `.why` (i.e., every field that can render into `d.what` / `d.what_instead` / `d.why`) and asserts NONE contains the literal substring `"WHAT INSTEAD:"` or the substring `"\n\nWHY:"` (case-insensitive). Fails CI if any does. (Today, none do — verified by inspection of `registry/features.toml`.)
+   - **Audit assertion at registry-build time**: extend `crates/ynz-registry/tests/consistency.rs` with a test that walks every `DiagnosticTemplateEntry`'s three template fields AND every `BannedJargonEntry.reason`, `DeferredLanguageFeatureEntry.why` / `.substitute`, `BannedDeclarationKeywordEntry.what_instead` / `.why` (i.e., every field that can render into `d.what` / `d.what_instead` / `d.why`) and asserts NONE contains the literal substring `"WHAT INSTEAD:"` or the substring `"\n\nWHY:"` (case-insensitive). Fails CI if any does. (Today, none do — verified by inspection of [`registry/features.toml`](../../../../registry/features.toml).)
    - **Runtime check in `to_lsp_diagnostic`**: `debug_assert!(!d.what.contains("\n\nWHAT INSTEAD:") && !d.what_instead.contains("\n\nWHY:"))` — catches dynamic-construction collisions that the static audit can't see. Debug-mode only; release builds skip the check for perf.
 2. On `didOpen`/`didChange`, after the salsa input is updated, run `check_query` for the file's source; collect diagnostics from `CheckOutput.diagnostics`; transform each; call `publish_diagnostics(uri, transformed, version)`. Store the published list in `ServerState.last_published_diagnostics` to support empty-push clear-on-fix.
 3. Cross-file diagnostics: `check_query` may produce diagnostics whose `SourceSpan.file` differs from the file that triggered the query (imported modules). Publish diagnostics PER FILE: group transformed diagnostics by their span's file, push to each file's URL.
@@ -624,7 +624,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Files (expected scope)**:
 - EDIT: `crates/ynz-registry/src/lib.rs` — add `CompletionContext` enum, `lsp_completion_items(context)` adapter; expose `CompletionItemKind`/`CompletionItemTag` as re-exports OR mirror types if the registry shouldn't depend on `lsp-types` (decision below)
-- EDIT: `crates/ynz-registry/Cargo.toml` — IF the registry adapter returns `lsp_types::CompletionItem` directly, add `lsp-types` as a dep; OTHERWISE (preferred) the registry returns a small registry-owned struct (`RegistryCompletionItem`) and the LSP translates to `lsp_types::CompletionItem`. Decision: keep `ynz-registry` lsp-types-free; LSP translates. Justification: the registry is a foundational crate; depending on lsp-types ties ALL consumers (CLI, future watch, future fmt) to LSP types they don't need.
+- EDIT: [`crates/ynz-registry/Cargo.toml`](../../../../crates/ynz-registry/Cargo.toml) — IF the registry adapter returns `lsp_types::CompletionItem` directly, add `lsp-types` as a dep; OTHERWISE (preferred) the registry returns a small registry-owned struct (`RegistryCompletionItem`) and the LSP translates to `lsp_types::CompletionItem`. Decision: keep `ynz-registry` lsp-types-free; LSP translates. Justification: the registry is a foundational crate; depending on lsp-types ties ALL consumers (CLI, future watch, future fmt) to LSP types they don't need.
 - NEW: `crates/ynz-registry/src/lsp_adapter.rs` — `RegistryCompletionItem` + `CompletionContext` + `lsp_completion_items`
 - NEW: `crates/ynz-lsp/src/completion.rs` — context detection + LSP translation + user-symbol merge
 - EDIT: `crates/ynz-lsp/src/server.rs` — wire `textDocument/completion` handler
@@ -678,7 +678,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] LSP `completionProvider.triggerCharacters` is `[".", " "]` in capabilities
 - [x] Registry adapter does NOT depend on `lsp-types` (verified by `cargo tree -p ynz-registry`)
 - [x] All existing tests pass; new tests added (≥4 registry-level, ≥3 LSP-level)
-- [x] Patrick can add a new entry to `registry/features.toml`, rebuild ynz-lsp, restart server, and the new entry appears in completion — manually verified or covered by a registry-rebuild integration test
+- [x] Patrick can add a new entry to [`registry/features.toml`](../../../../registry/features.toml), rebuild ynz-lsp, restart server, and the new entry appears in completion — manually verified or covered by a registry-rebuild integration test
 
 **Quality gate**:
 - [x] No `// TODO` / `// FIXME` / `// HACK`
@@ -744,7 +744,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - If token resolved → call `lsp_hover_for_token(token_name)` → if `Some(content)` return LSP `Hover { contents: HoverContents::Markup(MarkupContent { kind: Markdown, value: content.markdown_body }), range: Some(token_span_as_lsp_range) }`
    - If registry lookup misses → ask typeck for user-defined symbol info (function signature with WHY from doc comment, shape definition, variable type) — render as markdown
    - If both miss → return `None` (LSP spec: no hover for this position)
-4. Doc-comment integration (light): if the user-defined symbol has a leading doc comment (M8 P3 work — verify it's accessible via the AST/typeck output), include it in the markdown body. If doc comments are NOT accessible yet from the AST/typeck output, skip the integration AND add an entry to `.claude/todos.md` "Soon" section BEFORE the Phase 5 PR merges (entry: `lsp-hover-doc-comments: wire doc-comment body from AST/typeck into ynz-lsp hover markdown body; deferred from v0.2-M2 Phase 5 because <name the accessibility gap that blocked>`). This guarantees the deferral is tracked at the moment it's made, not later — per the Patrick-universal "deferrals-must-be-tracked" feedback rule.
+4. Doc-comment integration (light): if the user-defined symbol has a leading doc comment (M8 P3 work — verify it's accessible via the AST/typeck output), include it in the markdown body. If doc comments are NOT accessible yet from the AST/typeck output, skip the integration AND add an entry to [`.claude/todos.md`](../../../todos.md) "Soon" section BEFORE the Phase 5 PR merges (entry: `lsp-hover-doc-comments: wire doc-comment body from AST/typeck into ynz-lsp hover markdown body; deferred from v0.2-M2 Phase 5 because <name the accessibility gap that blocked>`). This guarantees the deferral is tracked at the moment it's made, not later — per the Patrick-universal "deferrals-must-be-tracked" feedback rule.
 5. Integration tests `tests/hover.rs`:
    - Position over `function` keyword → hover shows "Keyword: function"
    - Position over `int.max` → hover shows "int.max ... Value: 9223372036854775807"
@@ -794,11 +794,11 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Current-state anchors**:
 - `crates/ynz-registry/src/lib.rs` `keywords()` adapter
-- No `tooling/vscode-ynz/` yet (Phase 0 created `tooling/` and `tooling/README.md`)
+- No `tooling/vscode-ynz/` yet (Phase 0 created `tooling/` and [`tooling/README.md`](../../../../tooling/README.md))
 - VSCode extension standard files: `package.json` (extension manifest), `extension.ts` (activate hook), `language-configuration.json` (brackets, comments, indentation), `syntaxes/*.tmLanguage.json` (TextMate grammar)
 
 **Files (expected scope)**:
-- NEW: `crates/ynz-tmgrammar/Cargo.toml` — adds `ynz-registry`, `serde`, `serde_json` deps
+- NEW: [`crates/ynz-tmgrammar/Cargo.toml`](../../../../crates/ynz-tmgrammar/Cargo.toml) — adds `ynz-registry`, `serde`, `serde_json` deps
 - NEW: `crates/ynz-tmgrammar/src/main.rs` — binary: reads registry, writes `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json`
 - NEW: `crates/ynz-tmgrammar/src/grammar.rs` — `build_grammar() -> serde_json::Value` (returns the grammar; main binary writes to file)
 - NEW: `crates/ynz-tmgrammar/tests/grammar_snapshot.rs` — re-runs `build_grammar()`, compares to checked-in `ynz.tmLanguage.json` byte-for-byte, fails if drift
@@ -807,11 +807,11 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - NEW: `tooling/vscode-ynz/tsconfig.json`
 - NEW: `tooling/vscode-ynz/language-configuration.json` — brackets, comments (`//`, `/* */`), auto-closing pairs
 - NEW: `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` — generated, committed
-- NEW: `tooling/vscode-ynz/README.md` — install instructions (build LSP, package extension, install via `code --install-extension`)
+- NEW: [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) — install instructions (build LSP, package extension, install via `code --install-extension`)
 - NEW: `tooling/vscode-ynz/.vscodeignore` — exclude tsconfig, src/, etc. from packaged extension
 - NEW: `tooling/vscode-ynz/screenshots/.gitkeep` (placeholder; Phase 7 adds real screenshots)
-- EDIT: root `Cargo.toml` — add `crates/ynz-tmgrammar` to workspace
-- EDIT: `tooling/README.md` (from Phase 0) — describe the now-populated vscode-ynz subdir + the build flow
+- EDIT: root [`Cargo.toml`](../../../../Cargo.toml) — add `crates/ynz-tmgrammar` to workspace
+- EDIT: [`tooling/README.md`](../../../../tooling/README.md) (from Phase 0) — describe the now-populated vscode-ynz subdir + the build flow
 - EDIT: `.gitignore` — `tooling/vscode-ynz/node_modules/`, `tooling/vscode-ynz/out/`, `tooling/vscode-ynz/*.vsix`
 
 **Deviation rule**: Standard.
@@ -828,7 +828,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - Re-runs `build_grammar()` → produces a `serde_json::Value`
    - Reads `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` from disk → parses to `serde_json::Value`
    - **Canonicalizes both** before compare: sort object keys recursively, use the SAME serializer in both paths. This avoids flake from `serde_json::to_string_pretty` formatting differences across versions. Compare `Value` equality, NOT byte-for-byte string equality.
-   - Pin `serde_json` to an exact version in `crates/ynz-tmgrammar/Cargo.toml` (or use workspace `serde_json = { workspace = true }` with the workspace version pinned) — defense in depth against version drift.
+   - Pin `serde_json` to an exact version in [`crates/ynz-tmgrammar/Cargo.toml`](../../../../crates/ynz-tmgrammar/Cargo.toml) (or use workspace `serde_json = { workspace = true }` with the workspace version pinned) — defense in depth against version drift.
    - Fails with: "ynz.tmLanguage.json drifted from registry. Re-run `cargo run -p ynz-tmgrammar` and commit the updated file."
 3. Scaffold `tooling/vscode-ynz/`:
    - `package.json`:
@@ -845,7 +845,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
      - `deactivate()`: stop the language client
    - `language-configuration.json`: brackets `()`, `[]`, `{}`; line-comment `//`; block-comment `/* */`; auto-closing brackets and quotes
    - `tsconfig.json`: target ES2020, module Node16, strict, declaration: false, outDir: "./out"
-   - `README.md`: explains install flow (build `ynz-lsp` via `cargo build -p ynz-lsp`, copy/symlink to PATH or set `yinz.server.path`, package extension via `npm install && npx vsce package`, install via `code --install-extension yinz-0.2.0-m2.vsix`)
+   - [`README.md`](../../../../README.md): explains install flow (build `ynz-lsp` via `cargo build -p ynz-lsp`, copy/symlink to PATH or set `yinz.server.path`, package extension via `npm install && npx vsce package`, install via `code --install-extension yinz-0.2.0-m2.vsix`)
 4. Regenerate grammar: `cargo run -p ynz-tmgrammar`. Commit the output.
 5. End-to-end manual verification: install the extension locally, open `examples/pirates-roster/entrypoint.ynz` in VSCode, see syntax highlighting + LSP-driven diagnostics + autocomplete + hover.
 6. Document the manual verification in PR description (since CI can't run VSCode UI tests).
@@ -857,7 +857,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] `npm install && npx vsce package` in `tooling/vscode-ynz/` produces a valid `.vsix`
 - [x] Manually installed extension: opens `.ynz` files, highlights keywords, deprecated visual on banned-declaration-keywords, illegal visual on deferred-features
 - [x] Extension launches LSP and shows diagnostics/autocomplete/hover from Phases 3-5
-- [x] `tooling/vscode-ynz/README.md` install instructions work end-to-end (followed manually in PR review)
+- [x] [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) install instructions work end-to-end (followed manually in PR review)
 - [x] No grammar drift introduced manually — file is generator output only
 
 **Quality gate**:
@@ -881,7 +881,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 ### Phase 7: VSCode marketplace publish (preview) OR .vsix fallback
 
-**PR scope**: Patrick registers the VSCode publisher account, configures `package.json` publisher field, runs `vsce publish --pre-release`. If marketplace verification stalls or proves friction-heavy (>30 min cumulative), abort to `.vsix` fallback: tag a GitHub Release named `ynz-vscode-v0.2.0-m2` with the `.vsix` attached, document install in `tooling/vscode-ynz/README.md`. Marketplace publish becomes a follow-up; .vsix ship is the M2 commit. Either path produces user-visible distribution.
+**PR scope**: Patrick registers the VSCode publisher account, configures `package.json` publisher field, runs `vsce publish --pre-release`. If marketplace verification stalls or proves friction-heavy (>30 min cumulative), abort to `.vsix` fallback: tag a GitHub Release named `ynz-vscode-v0.2.0-m2` with the `.vsix` attached, document install in [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md). Marketplace publish becomes a follow-up; .vsix ship is the M2 commit. Either path produces user-visible distribution.
 **Branch**: `chore/v0-2-m2-vscode-publish`
 **Flag**: N/A
 **Est. lines**: ~150 (publisher manifest updates, README install-from-marketplace section, screenshots dir population)
@@ -893,14 +893,14 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Current-state anchors**:
 - `tooling/vscode-ynz/package.json` from Phase 6 (publisher = placeholder)
-- `tooling/vscode-ynz/README.md` from Phase 6 (local-install only)
+- [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) from Phase 6 (local-install only)
 
 **Files (expected scope)**:
 - EDIT: `tooling/vscode-ynz/package.json` — set publisher = "<patrick-or-yinz-publisher-id>", confirm version/preview flags
-- EDIT: `tooling/vscode-ynz/README.md` — add marketplace-install section (or `.vsix`-install section if fallback path)
+- EDIT: [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) — add marketplace-install section (or `.vsix`-install section if fallback path)
 - NEW: `tooling/vscode-ynz/screenshots/hover.png`, `autocomplete.png`, `diagnostic.png` (3 minimal screenshots)
 - EDIT: `tooling/vscode-ynz/screenshots/.gitkeep` (delete; replaced by real screenshots)
-- NEW (if marketplace path): `tooling/vscode-ynz/CHANGELOG.md` — marketplace requires; starts at v0.2.0-m2
+- NEW (if marketplace path): [`tooling/vscode-ynz/CHANGELOG.md`](../../../../tooling/vscode-ynz/CHANGELOG.md) — marketplace requires; starts at v0.2.0-m2
 - NEW (if fallback path): `.github/workflows/vscode-vsix-release.yml` — optional GitHub Actions job that builds and uploads .vsix on release tag (defer if friction)
 
 **Deviation rule**: Standard.
@@ -923,20 +923,20 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
    - Run `vsce package` to build the `.vsix` locally
    - Create a GitHub Release on the ynz repo named `ynz-vscode-v0.2.0-m2`
    - Attach the `.vsix` as a release asset
-   - Update `tooling/vscode-ynz/README.md` install section: "Download the latest .vsix from <release URL>, then run `code --install-extension yinz-0.2.0-m2.vsix`"
-   - Add an entry to `.claude/todos.md` "Soon" section: `marketplace-publish-followup: register VSCode publisher and run vsce publish --pre-release; objectively-triggered fallback fired during v0.2-M2 Phase 7; original blocker: <name the trigger>`
-6. Either path: update `tooling/vscode-ynz/README.md` so install instructions match the chosen path. Remove the local-install-only language from Phase 6; the marketplace-or-vsix is the primary path.
-7. Update root `README.md` (if it exists, else `CLAUDE.md` Project Layout) with a one-liner pointing at "Yinz VSCode extension: <marketplace URL or release URL>".
+   - Update [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) install section: "Download the latest .vsix from <release URL>, then run `code --install-extension yinz-0.2.0-m2.vsix`"
+   - Add an entry to [`.claude/todos.md`](../../../todos.md) "Soon" section: `marketplace-publish-followup: register VSCode publisher and run vsce publish --pre-release; objectively-triggered fallback fired during v0.2-M2 Phase 7; original blocker: <name the trigger>`
+6. Either path: update [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) so install instructions match the chosen path. Remove the local-install-only language from Phase 6; the marketplace-or-vsix is the primary path.
+7. Update root [`README.md`](../../../../README.md) (if it exists, else [`CLAUDE.md`](../../../../CLAUDE.md) Project Layout) with a one-liner pointing at "Yinz VSCode extension: <marketplace URL or release URL>".
 8. **Token-leak audit (mandatory regardless of path)**: run `git log -p <plan-base-commit>..HEAD | grep -E '([a-zA-Z0-9]{52}|[a-zA-Z0-9]{84}|ghp_[a-zA-Z0-9]{36}|pat_[a-zA-Z0-9]+)'` — Azure DevOps PATs are 52 chars, GitHub classic tokens are 40 chars (`ghp_` prefix), GitHub fine-grained tokens are 84 chars (`pat_` prefix). Empty result = no token leaked across the milestone. Document this audit run in the PR description with the exact command + the empty result. If non-empty result, STOP — rotate the leaked token, force-rewrite history (consult Patrick), do NOT merge.
 
 **Acceptance criteria**:
 - [x] Either: extension installable via `code --install-extension yinz` (marketplace path), OR extension installable via downloaded `.vsix` from a GitHub release — .vsix at https://github.com/yinzers/yinz-lang/releases/tag/ynz-vscode-v0.2.0-m2
-- [x] Install instructions in `tooling/vscode-ynz/README.md` work end-to-end — README updated to GitHub release download path; manual install verification pending Patrick
+- [x] Install instructions in [`tooling/vscode-ynz/README.md`](../../../../tooling/vscode-ynz/README.md) work end-to-end — README updated to GitHub release download path; manual install verification pending Patrick
 - [ ] Three screenshots committed in `tooling/vscode-ynz/screenshots/` — DEFERRED: tracked in todos.md `vscode-extension-screenshots` entry; screenshots require working local install, which was blocked by publisher registration failure
 - [x] `package.json` has a real publisher value (not placeholder) — set to `yinz-lang`
 - [x] CHANGELOG.md exists with v0.2.0-m2 entry (if marketplace path)
 - [ ] Patrick can install on a fresh VSCode and open `examples/pirates-roster/entrypoint.ynz`, see LSP features working — pending Patrick manual verification
-- [x] If fallback path: `.claude/todos.md` updated with `marketplace-publish-followup` + `vscode-extension-screenshots` entries; trigger #3 fired ("Marketplace requires account setup Patrick cannot single-handedly resolve in one session" — Azure DevOps org provisioning page non-functional, PAT could not be generated)
+- [x] If fallback path: [`.claude/todos.md`](../../../todos.md) updated with `marketplace-publish-followup` + `vscode-extension-screenshots` entries; trigger #3 fired ("Marketplace requires account setup Patrick cannot single-handedly resolve in one session" — Azure DevOps org provisioning page non-functional, PAT could not be generated)
 - [x] **Token-leak audit (Step 8)**: audit ran (`git log -p HEAD | grep -E '([a-zA-Z0-9]{52}|...|ghp_...|pat_...)'`); only Cargo.lock checksums matched — no PATs/tokens committed
 
 **Quality gate**:
@@ -1022,7 +1022,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 
 ### Phase 9: Verification, demo, error gallery, tag v0.2.0-m2
 
-**PR scope**: Final sweep. Run TODO scan across the milestone diff (lift any orphaned items into `.claude/todos.md`). Run jargon audit + clippy. Update `examples/pirates-roster/entrypoint.ynz` with the "open in VSCode to see X" comment block. Write `examples/primantis-orders/v0_2_m2_errors.ynz`. Final cumulative code-reviewer sweep. Bump `Cargo.toml` workspace version to `0.2.0-m2`. Cut tag. Update root README + state.md.
+**PR scope**: Final sweep. Run TODO scan across the milestone diff (lift any orphaned items into [`.claude/todos.md`](../../../todos.md)). Run jargon audit + clippy. Update `examples/pirates-roster/entrypoint.ynz` with the "open in VSCode to see X" comment block. Write `examples/primantis-orders/v0_2_m2_errors.ynz`. Final cumulative code-reviewer sweep. Bump [`Cargo.toml`](../../../../Cargo.toml) workspace version to `0.2.0-m2`. Cut tag. Update root README + state.md.
 **Branch**: `chore/v0-2-m2-release`
 **Flag**: N/A
 **Est. lines**: ~250 (entrypoint.ynz comment + v0_2_m2_errors.ynz + Cargo.toml bump + state.md + README ~250)
@@ -1035,31 +1035,31 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 **Current-state anchors**:
 - `examples/pirates-roster/entrypoint.ynz` — v0.1 demo with comments per milestone
 - `examples/primantis-orders/` — per-milestone gallery; `v0_2_m1_errors.ynz` from previous milestone
-- `Cargo.toml` workspace.package.version = `0.2.0-m1`
-- `.claude/state.md` Active Decisions section
+- [`Cargo.toml`](../../../../Cargo.toml) workspace.package.version = `0.2.0-m1`
+- [`.claude/state.md`](../../../state.md) Active Decisions section
 
 **Files (expected scope)**:
 - EDIT: `examples/pirates-roster/entrypoint.ynz` — add top-of-file comment block documenting the v0.2-M2 LSP UX (see Demo & Error Gallery invariant)
 - NEW: `examples/primantis-orders/v0_2_m2_errors.ynz` — error-gallery file for M2-introduced error/UX surfaces (commentary-driven UX-demo per the invariant)
-- EDIT: `Cargo.toml` — `workspace.package.version = "0.2.0-m2"`
-- EDIT: `.claude/state.md` — append v0.2-M2 SHIPPED entry to Active Decisions
-- EDIT: `CLAUDE.md` (if has a "What's new" section) — note the LSP + VSCode extension
-- EDIT: root `README.md` (if exists) — add a "Editors" section pointing at the VSCode extension
+- EDIT: [`Cargo.toml`](../../../../Cargo.toml) — `workspace.package.version = "0.2.0-m2"`
+- EDIT: [`.claude/state.md`](../../../state.md) — append v0.2-M2 SHIPPED entry to Active Decisions
+- EDIT: [`CLAUDE.md`](../../../../CLAUDE.md) (if has a "What's new" section) — note the LSP + VSCode extension
+- EDIT: root [`README.md`](../../../../README.md) (if exists) — add a "Editors" section pointing at the VSCode extension
 - EDIT: this plan file front-matter — flip `status: done` → `status: done` after final reviewer PASS
 
 **Deviation rule**: Standard.
 
 **Steps**:
-1. TODO sweep: `grep -rn "TODO\|FIXME\|HACK\|XXX\|PLACEHOLDER" crates/ynz-lsp crates/ynz-tmgrammar tooling/ design/lsp.md` — for any hits, move to `.claude/todos.md` and remove the inline comment
+1. TODO sweep: `grep -rn "TODO\|FIXME\|HACK\|XXX\|PLACEHOLDER" crates/ynz-lsp crates/ynz-tmgrammar tooling/ docs/internal/implementation/IMP-lsp.md` — for any hits, move to [`.claude/todos.md`](../../../todos.md) and remove the inline comment
 2. Quality Checklist verification (the "Quality Checklist" block below): tick each box with evidence
 3. Update `examples/pirates-roster/entrypoint.ynz`: top-of-file comment block per the Demo & Error Gallery invariant ("open this file in VSCode with the Yinz extension installed to see hover docs on every keyword, autocomplete after typing `int.`, inline diagnostics for intentional errors at `examples/primantis-orders/v0_2_m2_errors.ynz`"). No new Yinz CODE — only the comment.
 4. Write `examples/primantis-orders/v0_2_m2_errors.ynz`: a UX-demo file with intentional errors plus commentary documenting expected LSP behavior. Each section has a `// WHY:` heading. Sections: hover-over-deferred-feature (e.g. `let x: f32 = 1.0` triggers the f32-deferred-feature error AND demonstrates hover content); autocomplete-after-dot demo (cursor positions noted in comments); banned-declaration-keyword demo (`type Foo = ...` triggers ban + the LSP hover shows what-instead).
 5. Run the FULL test suite: `cargo test --workspace --release` — must be green
 6. Run `cargo clippy --workspace -- -D warnings`
 7. Run `cargo fmt --all --check` — must be clean
-8. Bump `Cargo.toml` workspace version to `0.2.0-m2`
+8. Bump [`Cargo.toml`](../../../../Cargo.toml) workspace version to `0.2.0-m2`
 9. Run cumulative code-reviewer (Step 10f) on `git diff <plan-base-commit>..HEAD`
-10. Update `.claude/state.md` Active Decisions: append `- [<date>] **v0.2-M2 SHIPPED (tag v0.2.0-m2, NNN tests)**: ynz-lsp crate, VSCode extension (in-repo tooling/vscode-ynz, marketplace preview OR vsix), registry-derived TM grammar. LSP wraps salsa queries for diagnostics/autocomplete/hover. Plan: ` (link to done/ path)
+10. Update [`.claude/state.md`](../../../state.md) Active Decisions: append `- [<date>] **v0.2-M2 SHIPPED (tag v0.2.0-m2, NNN tests)**: ynz-lsp crate, VSCode extension (in-repo tooling/vscode-ynz, marketplace preview OR vsix), registry-derived TM grammar. LSP wraps salsa queries for diagnostics/autocomplete/hover. Plan: ` (link to done/ path)
 11. Run `/release` skill — bumps Cargo.toml, generates CHANGELOG section, commits, tags `v0.2.0-m2`, pushes (with Patrick's approval per the skill's confirmation step)
 12. Flip plan front-matter: `status: done` → `status: done`. Radar moves the file to `plans/done/` on next rebuild.
 
@@ -1071,9 +1071,9 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 - [x] `cargo test --workspace --release` passes — 1028/0
 - [ ] `cargo clippy --workspace -- -D warnings` passes
 - [x] `cargo fmt --all --check` clean
-- [x] `Cargo.toml` workspace version = `0.2.0-m2`
+- [x] [`Cargo.toml`](../../../../Cargo.toml) workspace version = `0.2.0-m2`
 - [ ] Cumulative code-reviewer verdict: PASS
-- [ ] `.claude/state.md` updated with shipped entry — written post-tag
+- [ ] [`.claude/state.md`](../../../state.md) updated with shipped entry — written post-tag
 - [ ] `v0.2.0-m2` git tag exists locally and remotely
 - [ ] This plan file has `status: done`
 
@@ -1082,7 +1082,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 **Verification**:
 - `git tag -l 'v0.2.0-m2'` — tag exists
 - `cargo test --workspace 2>&1 | grep 'test result'` — green
-- `grep -rn "TODO\|FIXME\|HACK" crates/ynz-lsp crates/ynz-tmgrammar tooling/ design/lsp.md` — empty
+- `grep -rn "TODO\|FIXME\|HACK" crates/ynz-lsp crates/ynz-tmgrammar tooling/ docs/internal/implementation/IMP-lsp.md` — empty
 - `cat .claude/state.md | grep 'v0.2-M2 SHIPPED'` — entry present
 
 **Exit Sequence — RUN THESE STEPS:**
@@ -1129,13 +1129,13 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 | `textDocument/inlayHint` (the LSP method specifically) | M5 scope (muted-hint surfaces) | Roadmap M5 entry — **enumerated by name** in Phase 0 Step 8 |
 | `textDocument/codeAction` | M5 scope | Roadmap M5 entry — **enumerated by name** in Phase 0 Step 8 |
 | `textDocument/semanticTokens` (richer highlighting beyond TextMate) | M5 scope | Roadmap M5 entry — **enumerated by name** in Phase 0 Step 8 |
-| Doc-comment integration in hover (rich body from `///` comments) | Touched in Phase 5 best-effort; full support in M5 | Roadmap M5 entry **enumerated** + (if Phase 5 skips it) `.claude/todos.md` "Soon" entry added by Phase 5 Step 4 |
+| Doc-comment integration in hover (rich body from `///` comments) | Touched in Phase 5 best-effort; full support in M5 | Roadmap M5 entry **enumerated** + (if Phase 5 skips it) [`.claude/todos.md`](../../../todos.md) "Soon" entry added by Phase 5 Step 4 |
 | Pull diagnostics (LSP 3.17 `textDocument/diagnostic` pull model) | Push-via-publishDiagnostics sufficient for thin slice | Roadmap M5 entry — **enumerated by name** in Phase 0 Step 8 |
 | `Diagnostic.code` / `Diagnostic.codeDescription` fields | Could become DiagnosticKind name in M5 | Roadmap M5 entry — **enumerated by name** in Phase 0 Step 8 |
 | Structured `Diagnostic.data` field (for client-side WHAT/WHAT-INSTEAD/WHY rendering) | Plaintext message sufficient for thin slice; structured data is an M5 enhancement | Roadmap M5 entry — **enumerated by name** in Phase 0 Step 8 |
-| GitHub Actions CI for `tooling/vscode-ynz/` build/publish | Infrastructure work, not M5 scope; manual build OK for now | `.claude/todos.md` "Later" bin entry `vscode-extension-ci-workflow` added by Phase 0 Step 9 |
-| Marketplace publish IF Phase 7 fallback triggers | Friction-driven fallback to .vsix release | Conditional — Phase 7 Step 5 adds the `.claude/todos.md` "Soon" entry IFF an objective trigger fires |
-| Self-hosting (rewrite `ynz-lsp` in Yinz) | v2+ per `design/mvp-scope.md` | `design/lsp.md` "Self-hosting migration plan" section (created in Phase 0 Step 1) |
+| GitHub Actions CI for `tooling/vscode-ynz/` build/publish | Infrastructure work, not M5 scope; manual build OK for now | [`.claude/todos.md`](../../../todos.md) "Later" bin entry `vscode-extension-ci-workflow` added by Phase 0 Step 9 |
+| Marketplace publish IF Phase 7 fallback triggers | Friction-driven fallback to .vsix release | Conditional — Phase 7 Step 5 adds the [`.claude/todos.md`](../../../todos.md) "Soon" entry IFF an objective trigger fires |
+| Self-hosting (rewrite `ynz-lsp` in Yinz) | v2+ per [`docs/reference/REF-mvp-scope.md`](../../../../docs/reference/REF-mvp-scope.md) | [`docs/internal/implementation/IMP-lsp.md`](../../../../docs/internal/implementation/IMP-lsp.md) "Self-hosting migration plan" section (created in Phase 0 Step 1) |
 
 ---
 
@@ -1146,7 +1146,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 - **Building the engine before shipping value**: Phase 2 (lifecycle) is the only "engine" phase that doesn't ship user-visible value. Phases 3 (diagnostics), 4 (completion), 5 (hover), 6 (grammar + extension scaffold), 7 (distribute) each ship something Patrick can SEE in VSCode. Three of those land before Phase 7's marketplace decision so even if Phase 7 falls to .vsix, the LSP value still shipped.
 - **Hotfix that isn't**: No "hotfix" pattern in this plan — it's a feature milestone. If a Phase N CI break needs a fix, it's a fix commit on the Phase N branch, not a parallel hotfix branch.
 - **Abandoned branches**: Each phase's branch closes via merge OR explicit abandonment with a `todos.md` entry. The Phase 1 spike's loser branch is folded back into the winning branch and the loser's spike dir deleted in the same PR.
-- **Flag graveyards**: No feature flags in this milestone. The LSP/extension is either installed (then it works) or not (then it doesn't affect anything). No `Cargo.toml` cfg gates either — the `ynz-lsp` crate is a separate binary that doesn't link into `ynz-driver`.
+- **Flag graveyards**: No feature flags in this milestone. The LSP/extension is either installed (then it works) or not (then it doesn't affect anything). No [`Cargo.toml`](../../../../Cargo.toml) cfg gates either — the `ynz-lsp` crate is a separate binary that doesn't link into `ynz-driver`.
 
 ---
 

@@ -40,7 +40,7 @@ D_count: 17
 
 - **Scope Deviation #2** (file: `crates/ynz-codegen/src/runtime_decls.rs`; 13 insta golden snapshot files under `crates/ynz-codegen/tests/snapshots/golden__*.snap`): touched outside declared scope (`runtime_decls.rs` is Phase 1's declared scope). Rationale: `ynz_rt_spawn_blocking_joinable`, `ynz_rt_join_poll`, and `ynz_rt_join_handle_free` are declared in `runtime_decls.rs` (the compile-time ABI declaration table); without entries there the codegen's `extern` declarations are missing and the spike cannot link. Declarations are unconditional (declaring conditionally on an env var would put env-dependent content in every golden snapshot); they are body-less zero-cost `declare` lines, never called in default-gated code. The 13 snapshot updates are the deterministic cascade — the insta golden-snapshot suite snapshots all declared externs in the IR output and fails if any snapshot is stale. P1 owns hardening these declarations as its own declared scope. Diff hunks: `crates/ynz-codegen/src/runtime_decls.rs, crates/ynz-codegen/tests/snapshots/`.
 
-- **Scope Deviation #3** (file: `.claude/state.md`): touched outside declared scope (`Files (expected scope)` lists only compiler source crates). Rationale: the build-env discovery (LLVM 18 + glibc 2.39 exist ONLY in the devcontainer; the WSL host with LLVM 15 cannot build `ynz-codegen`/`ynz-driver`) was operationally critical context that would block any future executor working on this branch. Per `CLAUDE.md` Rule 6, state.md captures environment facts that must survive compaction. Omitting this would cause the next session to rediscover the devcontainer requirement by failing builds. Diff hunks: `.claude/state.md:41-43`.
+- **Scope Deviation #3** (file: [`.claude/state.md`](../../../state.md)): touched outside declared scope (`Files (expected scope)` lists only compiler source crates). Rationale: the build-env discovery (LLVM 18 + glibc 2.39 exist ONLY in the devcontainer; the WSL host with LLVM 15 cannot build `ynz-codegen`/`ynz-driver`) was operationally critical context that would block any future executor working on this branch. Per [`CLAUDE.md`](../../../../CLAUDE.md) Rule 6, state.md captures environment facts that must survive compaction. Omitting this would cause the next session to rediscover the devcontainer requirement by failing builds. Diff hunks: `.claude/state.md:41-43`.
 
 ## Approach Deviations (verbatim from executor report)
 
@@ -90,7 +90,7 @@ D_count: 17
 
 ### Deviation #3 (scope)
 - **type**: scope
-- **rationale**: the build-env discovery (LLVM 18 + glibc 2.39 exist ONLY in the devcontainer; the WSL host with LLVM 15 cannot build `ynz-codegen`/`ynz-driver`) was operationally critical context that would block any future executor working on this branch. Per `CLAUDE.md` Rule 6, state.md captures environment facts that must survive compaction. Omitting this would cause the next session to rediscover the devcontainer requirement by failing builds.
+- **rationale**: the build-env discovery (LLVM 18 + glibc 2.39 exist ONLY in the devcontainer; the WSL host with LLVM 15 cannot build `ynz-codegen`/`ynz-driver`) was operationally critical context that would block any future executor working on this branch. Per [`CLAUDE.md`](../../../../CLAUDE.md) Rule 6, state.md captures environment facts that must survive compaction. Omitting this would cause the next session to rediscover the devcontainer requirement by failing builds.
 - **diff hunks**: .claude/state.md:41-43
 - **judge identity hash**: 6c867c757443ae70c67be6a2e2cb542367fcb4e2
 
@@ -255,7 +255,7 @@ D_count: 2
 
 ## Scope Deviations (verbatim from executor report)
 
-None — stayed within declared scope. (All code changes in `crates/ynz-typeck/src/**` + `crates/ynz-codegen/src/**` + `crates/ynz-driver/tests/**` + `.claude/todos.md`, all in the plan front-matter `files:`. `.claude/state.md` shows a 1-line hook-generated radar delta — not touched by the executor.)
+None — stayed within declared scope. (All code changes in `crates/ynz-typeck/src/**` + `crates/ynz-codegen/src/**` + `crates/ynz-driver/tests/**` + [`.claude/todos.md`](../../../todos.md), all in the plan front-matter `files:`. [`.claude/state.md`](../../../state.md) shows a 1-line hook-generated radar delta — not touched by the executor.)
 
 ## Approach Deviations (verbatim from executor report)
 
@@ -344,7 +344,7 @@ D_count: 2
 
 ## Scope Deviations (verbatim from executor report)
 
-None — stayed within declared scope. (emit.rs/typeck/runtime touched during the verify-first attempt and fully reverted; final diff touches only the declared fixture/test/todos files. `.claude/state.md` is a radar auto-refresh, not executor-touched.)
+None — stayed within declared scope. (emit.rs/typeck/runtime touched during the verify-first attempt and fully reverted; final diff touches only the declared fixture/test/todos files. [`.claude/state.md`](../../../state.md) is a radar auto-refresh, not executor-touched.)
 
 ## Approach Deviations (verbatim from executor report)
 
