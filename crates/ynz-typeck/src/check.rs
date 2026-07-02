@@ -198,6 +198,38 @@ pub fn check_with_kernel_mode(
     (typed, checker.mono_table, checker.diags)
 }
 
+/// Build the `wait_on_non_may_block` warning (registry `[[diagnostic_template]]` kind_name =
+/// `"WaitOnNonMayBlockWarning"`) — explicit `wait` on a callee that never suspends.
+///
+/// Single-sourced here (v0.3-M3g Phase 1) because the two call sites that need it — the
+/// CPU-only-intrinsic arm and the transitive-user-fn arm in `check_call` — previously each
+/// hand-wrote their own WHAT/WHY text, and the two had drifted to three-way-different wording
+/// (this exact hand-duplication pattern caused a v0.3-M3d gate block; the fix here prevents it
+/// recurring now that `wait` legality on a CPU-group host is about to change in Phase 2/3).
+/// `what_instead_call` is the callee-invocation text each call site renders for its own reason
+/// (an intrinsic call site has no accessible argument list at this point, so it renders a plain
+/// `...`; the user-fn call site renders the callee's formal parameter names) — kept as a
+/// parameter rather than folded into this function so unifying WHAT/WHY does not also force an
+/// unrelated behavior change in WHAT-INSTEAD's rendering.
+fn wait_on_non_may_block_warning(
+    span: SourceSpan,
+    callee_name: &str,
+    what_instead_call: &str,
+) -> Diagnostic {
+    Diagnostic::warning(
+        span,
+        "`wait` on a function that does not suspend — the `wait` has no effect.",
+        format!("Remove the `wait` keyword — call `{what_instead_call}` directly."),
+        format!(
+            "`wait` only has effect when the awaited expression can suspend (calls a may-block \
+             intrinsic or another function whose body contains `wait`). Calling a purely \
+             CPU-bound callee with explicit `wait` is an ordering barrier — it ends any parallel \
+             group that `{callee_name}` could have joined — so removing `wait` lets the compiler \
+             overlap this call with adjacent independent calls when that is safe."
+        ),
+    )
+}
+
 struct Checker<'b> {
     // ── Borrowed look-up tables (module-wide, read-only during check) ─────────
     //
@@ -2401,18 +2433,10 @@ impl<'b> Checker<'b> {
                 "print" | "range" | "sleepBlocking" | "sensitive"
             )
         {
-            self.diags.push(Diagnostic::warning(
+            self.diags.push(wait_on_non_may_block_warning(
                 call.span.clone(),
-                "`wait` on a function that does not suspend — the `wait` has no effect.",
-                format!("Remove the `wait` keyword — call `{callee_name}(...)` directly."),
-                format!(
-                    "`wait` only has effect when the awaited expression can suspend \
-                     (calls a may-block intrinsic or another function whose body contains \
-                     `wait`). Calling a purely CPU-bound callee with explicit `wait` is an \
-                     ordering barrier — it ends any parallel group that `{callee_name}` could \
-                     have joined — so removing `wait` lets the compiler overlap this call with \
-                     adjacent independent calls when that is safe."
-                ),
+                &callee_name,
+                &format!("{callee_name}(...)"),
             ));
         }
 
@@ -2570,23 +2594,15 @@ impl<'b> Checker<'b> {
                         && !callee_suspends
                         && !M2_MAY_BLOCK_INTRINSICS.contains(&name)
                     {
-                        self.diags.push(Diagnostic::warning(
+                        let what_instead_args = params
+                            .iter()
+                            .map(|(n, _)| n.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        self.diags.push(wait_on_non_may_block_warning(
                             call.span.clone(),
-                            format!(
-                                "`{name}` never suspends — this explicit `wait` has no effect."
-                            ),
-                            format!(
-                                "Remove the `wait` keyword — call `{name}({})` directly.",
-                                params
-                                    .iter()
-                                    .map(|(n, _)| n.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ),
-                            format!(
-                                "Suspension is determined from the call graph: `{name}` reaches \
-                                 no may-block call, so `wait` here changes nothing."
-                            ),
+                            name,
+                            &format!("{name}({what_instead_args})"),
                         ));
                     }
 

@@ -255,7 +255,7 @@ pub fn frame_layouts_query(
             continue;
         }
         let total_size =
-            callee_size_resolver(local_name.as_str()).unwrap_or(state_machine::FRAME_HEADER_SIZE);
+            callee_size_resolver(local_name.as_str()).unwrap_or(ynz_abi::FRAME_HEADER_SIZE);
         layouts.insert(
             local_name.clone(),
             FrameLayout {

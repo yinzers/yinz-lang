@@ -38,26 +38,28 @@ use tokio::time::Sleep;
 // SAFETY: `Mutex<Option<Runtime>>` is `Send + Sync`.
 static RUNTIME: OnceLock<Mutex<Option<tokio::runtime::Runtime>>> = OnceLock::new();
 
-/// Byte offset of the `sleep_handle` pointer in a codegen-emitted state-machine frame.
-///
-/// Frame layout (mirrors `crates/ynz-codegen/src/state_machine.rs`):
-///   bytes 0–3   : resume_point (i32)
-///   bytes 4–7   : padding (zero for normal SM frames; spike discriminator for spike frames)
-///   bytes 8–15  : sleep_handle (*mut Pin<Box<Sleep>>, or null)
-///   bytes 16+   : local-variable slots (i64 each)
-///
-/// This constant is the authoritative offset used by `SpawnStateFnFuture::drop` to
-/// read the `sleep_handle` slot and free any in-flight `Sleep` box on task cancellation.
-/// It MUST stay in sync with `FRAME_OFFSET_SLEEP_HANDLE` in state_machine.rs — both are
-/// `8` and derive from the same frame layout decision.
-const FRAME_SLEEP_HANDLE_OFFSET: usize = 8;
-
-// Spike-frame layout contract. These live in `ynz-abi` (a dependency-free crate) so codegen
-// and the runtime read the identical values without codegen depending on the runtime's tokio
-// tree. `SPIKE_FRAME_TAG` is the high-16-bit frame tag; `SPIKE_FRAME_DISCRIMINATOR_OFFSET` is
+// General SM frame-header offsets (`FRAME_OFFSET_SLEEP_HANDLE`, `FRAME_OFFSET_RETURN_SLOT`) and
+// the spike-frame layout contract all live in `ynz-abi` (a dependency-free crate) so codegen and
+// the runtime read the identical values without codegen depending on the runtime's tokio tree.
+//
+// Frame layout (mirrors `crates/ynz-codegen/src/state_machine.rs`):
+//   bytes 0–3   : resume_point (i32)
+//   bytes 4–7   : padding (zero for normal SM frames; spike discriminator for spike frames)
+//   bytes 8–15  : sleep_handle (*mut Pin<Box<Sleep>>, or null)
+//   bytes 16–31 : return_slot (16 bytes, typed return value on terminal transition)
+//   bytes 32+   : local-variable slots (i64 each)
+//
+// `FRAME_OFFSET_SLEEP_HANDLE` is the authoritative offset used by `SpawnStateFnFuture::drop` to
+// read the `sleep_handle` slot and free any in-flight `Sleep` box on task cancellation.
+// `FRAME_OFFSET_RETURN_SLOT` is read by `SyncStateFnFuture::poll` to recover the typed return
+// value. Both were moved into `ynz-abi` (v0.3-M3g Phase 1) alongside the spike-frame constants
+// below — previously each had a same-valued shadow definition in `state_machine.rs`, held in
+// sync only by a prose "must stay in sync" comment with no compile-time binding.
+//
+// `SPIKE_FRAME_TAG` is the high-16-bit frame tag; `SPIKE_FRAME_DISCRIMINATOR_OFFSET` is
 // the byte offset of the discriminator word codegen writes and the runtime reads;
-// `SPIKE_HANDLE_BASE_OFFSET` is where the contiguous CPU-handle region begins (== codegen's
-// FRAME_HEADER_SIZE, bound by a const-assert in emit.rs); `SPIKE_HANDLE_SLOT_BYTES` is the
+// `SPIKE_HANDLE_BASE_OFFSET` is where the contiguous CPU-handle region begins (==
+// `FRAME_HEADER_SIZE`, bound by a const-assert in emit.rs); `SPIKE_HANDLE_SLOT_BYTES` is the
 // per-slot stride.
 //
 // The discriminator is a single u32 that BOTH tags the frame as a spike frame AND carries the
@@ -70,8 +72,8 @@ const FRAME_SLEEP_HANDLE_OFFSET: usize = 8;
 // the count and frees exactly that many slots. Normal (non-spike) SM frames leave bytes 4-7 as
 // zero (ynz_alloc_zeroed guarantee), so the high-bits tag never false-matches.
 use ynz_abi::{
-    SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET,
-    SPIKE_HANDLE_SLOT_BYTES,
+    FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE, SPIKE_FRAME_DISCRIMINATOR_OFFSET,
+    SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET, SPIKE_HANDLE_SLOT_BYTES,
 };
 
 /// Extract the spike tag (high 16 bits) and handle count (low 16 bits) from a
@@ -392,7 +394,7 @@ pub extern "C" fn ynz_thread_sleep_ms(ms: i64) {
 ///
 /// The resume_fn ABI: `(frame_ptr, waker_ctx) -> i32` where 0 = Ready and 1 = Pending.
 /// When Ready, the wrapper reads the typed return value directly from the frame at
-/// offset 16 (the typed return slot — see `FRAME_OFFSET_RETURN_SLOT` in `state_machine.rs`).
+/// offset 16 (the typed return slot — see `ynz_abi::FRAME_OFFSET_RETURN_SLOT`).
 /// The i32 returned here is a truncated legacy artifact; the wrapper ignores it and
 /// reads the full typed value from the frame instead.
 ///
@@ -433,7 +435,8 @@ impl Future for SyncStateFnFuture {
                 // We truncate to i32 here for the legacy SyncStateFnFuture::Output type;
                 // the wrapper reads the full typed value directly from the frame for non-main fns.
                 let value = unsafe {
-                    let ret_slot_ptr = self.frame_ptr.add(16) as *const i64;
+                    let ret_slot_ptr =
+                        self.frame_ptr.add(FRAME_OFFSET_RETURN_SLOT as usize) as *const i64;
                     *ret_slot_ptr as i32
                 };
                 Poll::Ready(value)
@@ -591,8 +594,9 @@ impl Drop for SpawnStateFnFuture {
         }
         unsafe {
             // 1. Free the sleep handle in the root frame (if a sleep is live mid-wait).
-            // SAFETY: FRAME_SLEEP_HANDLE_OFFSET=8 is within every valid frame header (32 bytes).
-            let handle_slot = self.frame_ptr.add(FRAME_SLEEP_HANDLE_OFFSET) as *const *mut u8;
+            // SAFETY: FRAME_OFFSET_SLEEP_HANDLE=8 is within every valid frame header (32 bytes).
+            let handle_slot =
+                self.frame_ptr.add(FRAME_OFFSET_SLEEP_HANDLE as usize) as *const *mut u8;
             let handle_ptr = *handle_slot;
             if !handle_ptr.is_null() {
                 drop(Box::from_raw(handle_ptr as *mut Pin<Box<Sleep>>));
@@ -653,7 +657,7 @@ impl Drop for SpawnStateFnFuture {
                 while !child_ptr.is_null() {
                     // Free the child's sleep handle before freeing its frame.
                     let child_handle_slot =
-                        child_ptr.add(FRAME_SLEEP_HANDLE_OFFSET) as *const *mut u8;
+                        child_ptr.add(FRAME_OFFSET_SLEEP_HANDLE as usize) as *const *mut u8;
                     let child_handle = *child_handle_slot;
                     if !child_handle.is_null() {
                         drop(Box::from_raw(child_handle as *mut Pin<Box<Sleep>>));

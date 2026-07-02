@@ -3593,9 +3593,12 @@ fn kernel_mode_rejects_cross_module_suspending_method_call() {
 // propagation breaks and the analysis reverts to the old local-only predicate.
 //
 // POSITIVE assertion: if the fixpoint is dead or returns empty, `foo.suspends=false`,
-// `wait foo()` fires "never suspends" warning → test FAILS on `stale_warnings`.
-// The suspends-set check directly verifies the fixpoint produced the right result —
-// a no-op fixpoint leaves the set empty and fails both assertions.
+// `wait foo()` fires the wait_on_non_may_block warning ("...has no effect", built by
+// `wait_on_non_may_block_warning()` in check.rs — single-sourced for both the
+// CPU-intrinsic and transitive-user-fn call sites as of v0.3-M3g Phase 1) →
+// test FAILS on `stale_warnings`. The suspends-set check directly verifies the
+// fixpoint produced the right result — a no-op fixpoint leaves the set empty and
+// fails both assertions.
 #[test]
 fn transitive_no_wait_compiles_clean_under_inference() {
     // test-ratchet: Phase 6 transitive analysis makes bar.suspends=true and foo.suspends=true; wait foo() is valid; old M2-local-predicate checkpoint superseded
@@ -3631,15 +3634,19 @@ function entrypoint() -> nothing {
             "fixpoint must mark foo as suspends (transitive via bar); set={suspends:?}"
         );
     }
-    // POSITIVE assertion 2: no "never suspends" warning for `wait foo()`.
-    // If the fixpoint is broken and foo.suspends==false, `wait foo()` fires this warning.
+    // POSITIVE assertion 2: no wait_on_non_may_block warning ("...has no effect") for
+    // `wait foo()`. If the fixpoint is broken and foo.suspends==false, the transitive-user-fn
+    // arm in `check_call` (check.rs) fires `wait_on_non_may_block_warning()` for `foo`, whose
+    // WHAT text contains "no effect" regardless of which call site built it (unified in
+    // v0.3-M3g Phase 1 — previously the transitive-callee arm had distinct wording containing
+    // "never suspends"; both arms now share one WHAT string, so "no effect" is the substring
+    // that still discriminates fired-vs-not for this diagnostic).
     let stale_warnings: Vec<_> = out
         .diagnostics
         .iter()
         .filter(|d| {
             matches!(d.severity, ynz_diagnostics::Severity::Warning)
-                && (d.what.contains("discards it without waiting")
-                    || d.what.contains("never suspends"))
+                && (d.what.contains("discards it without waiting") || d.what.contains("no effect"))
         })
         .collect();
     assert!(

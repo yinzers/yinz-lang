@@ -56,22 +56,19 @@ use inkwell::{
 
 use crate::runtime_decls::RuntimeDecls;
 
-/// Byte offset of the `resume_point` i32 field within each (sub-)frame.
-pub const FRAME_OFFSET_RESUME_POINT: u64 = 0;
-/// Byte offset of the `sleep_handle` pointer field within each (sub-)frame.
-/// Present regardless of whether the fn directly calls `sleep`; zeroed when unused.
-pub const FRAME_OFFSET_SLEEP_HANDLE: u64 = 8;
-/// Byte offset of the 16-byte return slot within each (sub-)frame.
-///
-/// The typed return value is stored here on terminal transition. Reading the value
-/// here avoids the i32-truncation defect of the old frame[0] repurposing scheme.
-pub const FRAME_OFFSET_RETURN_SLOT: u64 = 16;
+// The general SM frame-header offsets (resume_point@0, sleep_handle@8, return_slot@16) and
+// FRAME_HEADER_SIZE moved to `ynz-abi` (v0.3-M3g Phase 1) — the single home also consumed by
+// `ynz-runtime`'s `SpawnStateFnFuture::drop`. Callers outside this module now reference
+// `ynz_abi::FRAME_HEADER_SIZE` / `ynz_abi::FRAME_OFFSET_RETURN_SLOT` directly rather than
+// `state_machine::`-qualified paths, so there is exactly one importable path to each constant
+// (no re-export facade here). `FRAME_OFFSET_RESUME_POINT` has no consumer in this file (offset
+// 0 needs no GEP arithmetic) and so is not imported below.
+use ynz_abi::{FRAME_HEADER_SIZE, FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE};
+
 /// Byte offset of the first local-variable slot within each (sub-)frame.
 pub const FRAME_OFFSET_LOCALS_START: u64 = 32;
 /// Size of each local-variable slot (i64 = 8 bytes).
 pub const FRAME_LOCAL_SLOT_SIZE: u64 = 8;
-/// Fixed per-frame header size: resume_point(4) + padding(4) + sleep_handle(8) + return_slot(16) = 32 bytes.
-pub const FRAME_HEADER_SIZE: u64 = 32;
 
 /// Compute the own-locals section size for a frame with `n_locals` local slots.
 ///

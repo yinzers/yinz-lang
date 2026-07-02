@@ -266,7 +266,7 @@ pub fn build_frame_layouts_with_resolver(
     for name in suspend_set.iter() {
         if !local_fn_names.contains(name.as_str()) {
             let resolved =
-                callee_size_resolver(name.as_str()).unwrap_or(state_machine::FRAME_HEADER_SIZE);
+                callee_size_resolver(name.as_str()).unwrap_or(ynz_abi::FRAME_HEADER_SIZE);
             sizes.insert(name.clone(), resolved);
         }
     }
@@ -333,9 +333,8 @@ pub fn build_frame_layouts_with_resolver(
             let n_locals = f.params.len() + crossing_slots;
             // own_base (start of own-local slots) is pushed past the CPU-slot reserve so
             // crossing locals never alias a handle/result slot.
-            let own_base = state_machine::FRAME_HEADER_SIZE
-                + cpu_reserve
-                + state_machine::own_locals_size(n_locals);
+            let own_base =
+                ynz_abi::FRAME_HEADER_SIZE + cpu_reserve + state_machine::own_locals_size(n_locals);
             let children_raw = direct_children.get(&f.name).cloned().unwrap_or_default();
 
             // Reserve a 16-byte staging slot after own-local slots when the function returns
@@ -368,7 +367,7 @@ pub fn build_frame_layouts_with_resolver(
                 } else {
                     let child_size = *sizes
                         .get(callee.as_str())
-                        .unwrap_or(&state_machine::FRAME_HEADER_SIZE);
+                        .unwrap_or(&ynz_abi::FRAME_HEADER_SIZE);
                     children.push((callee.clone(), cursor));
                     cursor += child_size;
                 }
@@ -429,7 +428,7 @@ fn build_cpu_group_slots(member_count: usize) -> Vec<CpuGroupSlot> {
     if member_count == 0 {
         return Vec::new();
     }
-    let handles_base = state_machine::FRAME_HEADER_SIZE;
+    let handles_base = ynz_abi::FRAME_HEADER_SIZE;
     let results_base = handles_base + (member_count as u64) * CPU_HANDLE_SLOT_BYTES;
     (0..member_count)
         .map(|m| CpuGroupSlot {
@@ -451,8 +450,7 @@ fn cpu_reserve_bytes(slots: &[CpuGroupSlot]) -> u64 {
     slots
         .iter()
         .map(|s| {
-            (s.result_offset + CPU_RESULT_SLOT_BYTES)
-                .saturating_sub(state_machine::FRAME_HEADER_SIZE)
+            (s.result_offset + CPU_RESULT_SLOT_BYTES).saturating_sub(ynz_abi::FRAME_HEADER_SIZE)
         })
         .max()
         .unwrap_or(0)
@@ -498,7 +496,7 @@ fn cpu_slot_reserve_slots(layout: &FrameLayout) -> usize {
         .map(|s| s.result_offset + CPU_RESULT_SLOT_BYTES)
         .max();
     match max_end {
-        Some(end) => ((end - state_machine::FRAME_HEADER_SIZE) / CPU_HANDLE_SLOT_BYTES) as usize,
+        Some(end) => ((end - ynz_abi::FRAME_HEADER_SIZE) / CPU_HANDLE_SLOT_BYTES) as usize,
         None => 0,
     }
 }
@@ -729,7 +727,7 @@ fn compute_frame_size(
         .unwrap_or((0, false, 0));
 
     let own_base =
-        state_machine::FRAME_HEADER_SIZE + cpu_reserve + state_machine::own_locals_size(n_locals);
+        ynz_abi::FRAME_HEADER_SIZE + cpu_reserve + state_machine::own_locals_size(n_locals);
     // Include the 16-byte `number errors` staging slot in the own-locals region when needed.
     let staging_size = if needs_number_errors_staging { 16 } else { 0 };
     let mut total = own_base + staging_size;
@@ -2444,10 +2442,10 @@ fn lower_function_with_waits<'ctx, 'g>(
     // n_locals now includes SPIKE_SLOT_RESERVE (see above), giving the correct 80 + param*8 +
     // crossing_bytes total. Non-spike functions continue to use the frame_layout path unchanged.
     let frame_bytes: u64 = if spike_active_here {
-        state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals)
+        ynz_abi::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals)
     } else {
         frame_layout.map(|l| l.total_size).unwrap_or_else(|| {
-            state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals)
+            ynz_abi::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals)
         })
     };
     let number_errors_staging_offset = frame_layout.and_then(|l| l.number_errors_staging_offset);
@@ -6513,16 +6511,19 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
 // Phase-0 two-member group to N-member / multi-group bodies.
 
 /// Cross-crate frame-ABI binding: the runtime's CPU-handle region begins immediately after
-/// the state-machine frame header, so `ynz_abi::SPIKE_HANDLE_BASE_OFFSET` MUST equal codegen's
-/// `FRAME_HEADER_SIZE`. The two are coupled only through the shared `ynz-abi` constant, so a
-/// silent drift (e.g. a header-size change here) would make the runtime read handle slots at
-/// the wrong offset on cancellation — reading live locals as `*mut CpuJoinHandle` and freeing
-/// garbage (heap corruption). This compile-time assertion turns that drift into a build error.
-/// `FRAME_HEADER_SIZE` stays codegen-local (~15 call sites here) and is bound to the shared
-/// offset rather than moved into `ynz-abi`.
+/// the state-machine frame header, so `ynz_abi::SPIKE_HANDLE_BASE_OFFSET` MUST equal
+/// `ynz_abi::FRAME_HEADER_SIZE`. Both constants now live in `ynz-abi` (v0.3-M3g Phase 1 moved
+/// `FRAME_HEADER_SIZE` there alongside the general SM frame-header offsets — the ~15 codegen
+/// call sites that used to read `state_machine::FRAME_HEADER_SIZE` were swept to
+/// `ynz_abi::FRAME_HEADER_SIZE` in the same change), but they stay independently-valued
+/// literals rather than one deriving from the other, so a silent drift (e.g. a header-size
+/// change here without updating the handle-base offset) would make the runtime read handle
+/// slots at the wrong offset on cancellation — reading live locals as `*mut CpuJoinHandle` and
+/// freeing garbage (heap corruption). This compile-time assertion turns that drift into a
+/// build error.
 const _: () = assert!(
-    ynz_abi::SPIKE_HANDLE_BASE_OFFSET as u64 == state_machine::FRAME_HEADER_SIZE,
-    "frame-ABI drift: ynz_abi::SPIKE_HANDLE_BASE_OFFSET must equal codegen FRAME_HEADER_SIZE \
+    ynz_abi::SPIKE_HANDLE_BASE_OFFSET as u64 == ynz_abi::FRAME_HEADER_SIZE,
+    "frame-ABI drift: ynz_abi::SPIKE_HANDLE_BASE_OFFSET must equal ynz_abi::FRAME_HEADER_SIZE \
      (the CPU-handle region begins immediately after the frame header)"
 );
 
@@ -7707,7 +7708,7 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         // classes, and the `{i64,i64}` errors pair. `result_offset` is always ≥ 48 (handle
         // region precedes it), so subtracting the 16-byte return-slot offset stays inside the
         // frame header region and never GEPs below the frame base (negative offset).
-        let synth_offset = result_offsets[idx] - state_machine::FRAME_OFFSET_RETURN_SLOT;
+        let synth_offset = result_offsets[idx] - ynz_abi::FRAME_OFFSET_RETURN_SLOT;
         // Inline GEP (not the `frame_byte_ptr` closure) so no immutable `cg` borrow lingers
         // into the `&mut cg` binder calls below. synth_offset ≥ 32, so it is never 0.
         let synth_frame = unsafe {
@@ -8593,7 +8594,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
         .frame_layouts
         .get(callee_name)
         .map(|l| l.total_size)
-        .unwrap_or(state_machine::FRAME_HEADER_SIZE);
+        .unwrap_or(ynz_abi::FRAME_HEADER_SIZE);
     let child_n_locals = cg
         .frame_layouts
         .get(callee_name)
@@ -12426,9 +12427,7 @@ fn lower_expr_background_state_machine<'ctx>(
         .frame_layouts
         .get(callee_name)
         .map(|l| l.total_size)
-        .unwrap_or_else(|| {
-            state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals)
-        });
+        .unwrap_or_else(|| ynz_abi::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals));
     let frame_ptr = state_machine::alloc_frame(cg.ctx, &cg.builder, cg.rt, total_frame_size)?;
 
     // Step 3: write parameter values to frame local slots (at offset 32+).

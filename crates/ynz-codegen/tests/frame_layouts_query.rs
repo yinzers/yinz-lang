@@ -24,8 +24,9 @@ use std::{
     path::PathBuf,
 };
 
+use ynz_abi::FRAME_HEADER_SIZE;
 use ynz_codegen::emit::{build_frame_layouts_with_resolver, SuspendSet};
-use ynz_codegen::state_machine::{own_locals_size, FRAME_HEADER_SIZE};
+use ynz_codegen::state_machine::own_locals_size;
 use ynz_codegen::{codegen_query, frame_layouts_query};
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, module_signatures_query};

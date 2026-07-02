@@ -40,6 +40,7 @@
 - [v0-3-m3e-cross-module-frame-serialization](done/2026-06-05-v0-3-m3e-cross-module-frame-serialization/plan.md) `done`
 - [v0-3-m3f-codegen-correctness-fixes](done/2026-06-09-v0-3-m3f-codegen-correctness-fixes/plan.md) `done`
 - [v0-3-m3d-cpu-parallelization](done/2026-06-11-v0-3-m3d-cpu-parallelization/plan.md) `done`
+- [v0-3-m3g-mixed-cpu-io-overlap](active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md) `active`
 
 ## Standalone plans
 
