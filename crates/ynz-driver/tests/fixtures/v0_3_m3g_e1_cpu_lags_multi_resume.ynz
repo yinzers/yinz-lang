@@ -1,0 +1,41 @@
+// v0.3-M3g E1 adversarial deadlock gate — the mirror of `v0_3_m3g_e1_io_lags_multi_resume.ynz`:
+// here the CPU member is the slow one (a real, 150-million-iteration loop, ~130-180ms in a debug
+// build) while the I/O member resolves quickly (a short 15ms sleep). This forces the shared poll
+// state to keep re-driving the CPU handle across several resumes AFTER the I/O sub-frame has
+// already gone Ready and sentinel-routed — proving the null-check-skip / sentinel-skip mechanisms
+// do not silently drop the OTHER, still-pending member once one class finishes first (the exact
+// mirror of the io-lags fixture's proof, covering the opposite completion order). Run under the
+// watchdog (E1) — a bug that drops the CPU member from re-polling once I/O is done hangs here.
+//
+// crunchBig(n) does real, 150-million-iteration work — measurably slower than fetchFast's short
+// sleep, so the I/O member reliably completes first and the group must keep polling the still-
+// pending CPU handle across the remaining resumes until it, too, resolves.
+//
+// Arithmetic: loopSum = 0+1+...+149999999 = 11249999925000000.
+//   crunchBig(1) = 11249999925000000 + 1 = 11249999925000001
+//   fetchFast(2) = 2 + 1                  = 3
+//   sum = 11249999925000001 + 3           = 11249999925000004
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   11249999925000004
+
+function crunchBig(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 150000000) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function fetchFast(seed: int) -> int {
+  wait sleep(15)
+  return seed + 1
+}
+
+function entrypoint() -> nothing {
+  let a = crunchBig(1)
+  let b = fetchFast(2)
+  print(a + b)
+}

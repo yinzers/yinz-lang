@@ -4708,6 +4708,65 @@ fn v03_m3a_r7_array_shape_nested_if_rejected() {
     );
 }
 
+// ── v0.3-M3g Phase 3: E1 watchdog — never let a hang wedge the test binary ────
+
+/// Watchdog ceiling for a single compiled-fixture RUN (not the `ynz build`/`ynz run` compiler
+/// invocation itself — the compiler is not what a fused-continuation deadlock hangs). Generous
+/// per Phase 1's CI-contention caveat (A7) — every fixture's real execution is well under a
+/// second; 20s is a hang detector, not a performance budget.
+const RUN_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Spawn `cmd`, poll for exit without draining stdout/stderr until the process exits (safe for
+/// this corpus — every fixture's output is a handful of short lines, far under the OS pipe
+/// buffer), and PANIC (never silently hang) if it doesn't exit within `RUN_WATCHDOG`.
+///
+/// This is the E1 safety net: a genuine 4c-class deadlock in the fused continuation (a spawned
+/// CPU handle or an I/O sub-frame that never gets re-polled) must fail FAST here instead of
+/// wedging this test binary — and by extension CI — indefinitely. NEVER "fix" a watchdog
+/// failure by widening the timeout or weakening the fixture; a watchdog trip is exactly the
+/// deadlock class this milestone's fused-continuation design exists to eliminate, and finding
+/// one here means the design invariant broke, not that the test is too strict.
+///
+/// Used by the shared run-a-compiled-fixture helpers (`build_to_tmpdir_and_run`,
+/// `ynz_run_with_alloc_counter`) that every M3b/M3d/M3g concurrency fixture test routes
+/// through — the highest-leverage single choke point for this protection, since wrapping every
+/// individual test call site individually would be the same mechanism duplicated hundreds of
+/// times for zero additional coverage.
+fn run_with_watchdog(mut cmd: Command) -> Output {
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("watchdog: failed to spawn child process");
+    let start = std::time::Instant::now();
+    loop {
+        match child
+            .try_wait()
+            .expect("watchdog: failed to poll child status")
+        {
+            Some(_status) => {
+                return child
+                    .wait_with_output()
+                    .expect("watchdog: failed to collect child output after exit");
+            }
+            None => {
+                if start.elapsed() >= RUN_WATCHDOG {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!(
+                        "WATCHDOG TRIP: compiled fixture did not exit within {RUN_WATCHDOG:?} — \
+                         treat this as an E1 deadlock (a spawned CPU handle or I/O sub-frame \
+                         that never got re-polled by the shared continuation), never a slow \
+                         test; fix the fused-continuation codegen, never widen this timeout or \
+                         weaken the fixture."
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+    }
+}
+
 // ── v0.3-M3a Phase 4: cross-impl consistency gate ────────────────────────────
 
 /// Build a fixture to a tmpdir binary (default or --no-auto-parallel) and run it.
@@ -4752,10 +4811,9 @@ fn build_to_tmpdir_and_run(src: &Path, no_auto_parallel: bool) -> (String, Strin
     // tmpdir). The tmpdir's Drop cleans up both the source copy and the binary.
     let run_binary = isolated_src.with_extension("");
 
-    let run_out = Command::new(&run_binary)
-        .env("CLICOLOR", "0")
-        .output()
-        .expect("failed to run compiled binary");
+    let mut run_cmd = Command::new(&run_binary);
+    run_cmd.env("CLICOLOR", "0");
+    let run_out = run_with_watchdog(run_cmd);
     let stdout = String::from_utf8_lossy(&run_out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&run_out.stderr).into_owned();
     let code = run_out.status.code().unwrap_or(-1);
@@ -5086,16 +5144,15 @@ fn ynz_run_with_alloc_counter(fixture_name: &str) -> (u64, u64) {
     let fixture_path = fixture(fixture_name);
     let count_file = std::env::temp_dir().join(format!("ynz_audit_alloc_{fixture_name}.txt"));
     let _ = std::fs::remove_file(&count_file);
-    let _ = Command::new(ynz_binary())
-        .args(["run", fixture_path.to_str().expect("valid path")])
+    let mut cmd = Command::new(ynz_binary());
+    cmd.args(["run", fixture_path.to_str().expect("valid path")])
         .env("CLICOLOR", "0")
         .env("YNZ_ALLOC_COUNTER", "1")
         .env(
             "YNZ_ALLOC_COUNTER_OUTPUT",
             count_file.to_str().expect("valid path"),
-        )
-        .output()
-        .expect("ynz binary not found");
+        );
+    let _ = run_with_watchdog(cmd);
     let content =
         std::fs::read_to_string(&count_file).unwrap_or_else(|_| "alloc=0\nfree=0\n".to_string());
     let _ = std::fs::remove_file(&count_file);
@@ -6285,109 +6342,132 @@ fn v03_m3d_nested_group_before_top_declines_byte_identical() {
 
 #[test]
 fn v03_m3d_nested_group_with_outer_wait_declines_byte_identical() {
-    // WHY: a single nested CPU group in a function that ALSO has a separate `wait` is a
-    // mixed CPU+I/O function — it declines the nested spike (0 spawns) and runs fully
-    // sequentially, byte-identical (9907). The nested group's result allocas are pre-allocated
-    // only by the top-level Step-1c scan; a nested pair is invisible to that scan, so firing it
-    // while a second suspension (the `wait`) later reloads spike results crashes the backend
-    // ("no sm_entry alloca"). Declining when any other suspension exists keeps the nested fire
-    // safe. If this shows ANY spawns OR fails to build, the nested-with-outer-suspension decline
-    // regressed — fix the admission gate, not this test. Firing this safely (Step-1c walking
-    // nested blocks) is a mixed CPU+I/O concern tracked in .claude/todos.md.
-    m3d_assert_declines_byte_identical("v0_3_m3d_nested_group_with_outer_wait.ynz", "9907");
+    // WHY (v0.3-M3g Phase 3 FLIP — one of the three non-negotiable acceptance-signal fixtures;
+    // test name retained for `git blame`/history continuity even though the assertion now FIRES):
+    // a single nested CPU group in a function that ALSO has a separate `wait` used to decline
+    // (0 spawns) because the nested group's result allocas were pre-allocated ONLY by the
+    // top-level Step-1c scan — a nested pair was invisible to that scan, so firing it while a
+    // LATER suspension (the `wait`) reloaded spike results crashed the backend ("no sm_entry
+    // alloca"). Root cause fixed directly (not papered over): `spike_cpu_group_result_names`
+    // (Step 1c's pre-alloc scan) now walks nested blocks too, mirroring
+    // `spike_cpu_group_member_count`'s existing depth-aware traversal — so a nested group's
+    // bind names get entry-block allocas regardless of depth, and the later reload succeeds.
+    // The nested-branch admission decline for "co-resident with another suspension" is REMOVED
+    // for this shape (a plain `wait`/ordinary suspending callee) — the state machine's existing
+    // multi-suspension-point dispatch already shares one continuation across every resume_point
+    // value, so the nested join and the wait coexist safely once the alloca gap is closed. This
+    // is the general SM-multi-suspension mechanism, NOT a synchronous bridge: the join and the
+    // wait each yield Pending independently and resume through the ordinary dispatch switch.
+    // Invariant: the group now FIRES (2 spawns) and stays byte-identical to `--no-auto-parallel`
+    // (9907). If this shows 0 spawns, the flip regressed — fix the admission gate, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_group_with_outer_wait.ynz", "9907");
 }
 
 #[test]
 fn v03_m3d_nested_group_with_suspending_callee_no_abort_byte_identical() {
-    // WHY: this is the exact shape that crashed the backend before the nested-with-outer-
-    // suspension decline landed. `combine` owns a nested CPU group AND calls `other` — a function
-    // promoted to run its own pair concurrently, which makes `other` a suspension point inside
-    // `combine`. The nested group's result allocas are pre-allocated only by the top-level
-    // Step-1c scan, so a nested pair has none; resuming after the `other` call reloads spike
-    // results into the (empty) alloca map and aborts machine-code generation ("no sm_entry
-    // alloca for `lo`"). The fix declines `combine`'s nested group while `other`'s OWN top-level
-    // group still fires. The invariant: the build SUCCEEDS, output is byte-identical (19810), and
-    // exactly 2 spawns appear — both from `other`, none from `combine`'s declined nested group.
-    // If the build aborts, the decline regressed; if spawns != 2, `combine`'s nested group either
-    // fired (4 spawns — the corruption door reopened) or `other` stopped firing. Fix the codegen,
-    // not this test.
-    let fixture_name = "v0_3_m3d_nested_group_with_suspending_callee.ynz";
-    let src = fixture(fixture_name);
-
-    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    assert_eq!(
-        par_code, 0,
-        "default build must SUCCEED (no backend abort); stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        par_stdout.trim(),
+    // WHY (v0.3-M3g Phase 3 continuation — FLIPPED; test name retained for `git blame`/history
+    // continuity even though the assertion now FIRES BOTH groups): `combine` owns a nested CPU
+    // group AND ALSO calls `other` — a function promoted to run its OWN pair concurrently, which
+    // makes `other` a suspension point inside `combine`. A prior session HALTed here, attributing
+    // a reproducible hang/crash to "a genuine, pre-existing latent defect in the
+    // `ynz_rt_join_poll`/`CpuJoinHandle` handle-lifecycle machinery." That attribution was WRONG —
+    // re-investigated this session with runtime-level `eprintln!` tracing (added, exercised, fully
+    // reverted): every spawn/poll/free traced correctly; the runtime handle machinery is sound.
+    // The REAL root cause, found by reading the emitted LLVM IR directly: `combine`'s wrapper
+    // function allocated its composed frame using a stale special-case formula
+    // (`crates/ynz-codegen/src/emit.rs`'s `frame_bytes` computation for a spike-active host) that
+    // silently DROPPED the embedded `other` child sub-frame from the size — `ynz_alloc_zeroed(88)`
+    // when the composed frame (with the 80-byte embedded `other` sub-frame) needed 168 bytes. A
+    // genuine heap-buffer-overflow: every write into `other`'s embedded region landed past the end
+    // of the 88-byte allocation, corrupting adjacent heap metadata — the observed crash/hang.
+    // Fixed directly in `emit.rs` (always trust `frame_layout.total_size`, which already includes
+    // both the CPU reserve and every embedded child, instead of the stale own-base-only fallback).
+    // With the real bug fixed, the narrow residual decline this comment used to describe
+    // (`admitted_cpu_group`'s nested-branch `spike_capable_names` check) was verified unnecessary
+    // (20/20 clean runs of the minimized repro, correct output, no crash, no hang) and removed.
+    // Both groups now FIRE: `combine`'s own nested pair (2 spawns) AND `other`'s top-level pair
+    // (2 spawns) = 4 total. See the plan's audit trail for the full repro + fix.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_nested_group_with_suspending_callee.ynz",
         "19810",
-        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+        4,
     );
+}
 
-    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par_stdout, seq_stdout,
-        "default and --no-auto-parallel stdout must be byte-identical"
-    );
-
-    let ir = build_to_tmpdir_emit_ir(&src);
-    assert_eq!(
-        count_spawn_calls(&ir),
-        2,
-        "exactly 2 spawns — both from `other`'s top-level group; `combine`'s nested group must \
-         decline (0 of its own spawns). 4 spawns = the nested group fired into corruption; \
-         0 = `other` stopped firing. IR:\n{ir}"
-    );
-
-    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
-    assert_eq!(
-        alloc, free,
-        "alloc must equal free (no leak on the partial-decline path); alloc={alloc}, free={free}"
-    );
+#[test]
+fn v03_m3d_spike_n_nested_wait_fires_byte_identical_alloc_free() {
+    // WHY: a top-level 2-member CPU group (`fib(10)`/`fib(11)`) followed by a LATER `wait`
+    // NESTED inside an `if` (`if (flag > 0) { wait sleep(0) }`), then reads of both group
+    // members (`print(a)`, `print(b)`) — a PRE-EXISTING corpus fixture (not one of the three
+    // non-negotiable flip fixtures) whose divergence surfaced via `cross_impl_consistency`'s
+    // corpus sweep during v0.3-M3g Phase 3. Root cause: `crate::check::collect_crossings_in_stmts`'s
+    // `this_stmt_suspends` check recognized only a DIRECT top-level `wait`/suspending-call
+    // statement as a suspension point — never a control-flow statement (`if`/`while`/`for`/
+    // `match`) whose BODY suspends — so the group's pending result-binding names (`a`/`b`) were
+    // never flushed into `declared` before the nested `wait`, and the post-if reads were never
+    // marked crossing: codegen emitted an alloca that does not dominate the read (LLVM SSA
+    // verification failure, "Instruction does not dominate all uses"). A prior session found this
+    // and worked around it with an admission-gate residual decline
+    // (`stmt_control_flow_body_suspends`) rather than fixing the deeper analysis gap. Fixed for
+    // real this session: `this_stmt_suspends` now also recognizes a control-flow statement whose
+    // body suspends, flushing pending result-bindings and recursing into the suspending sub-block
+    // exactly like the not-yet-suspended case already did (see `check.rs` for the full fix,
+    // including a self-caught regression on `flag`-in-a-later-if's-condition reads and its
+    // correction). The residual decline is now removed. Invariant: the group FIRES (2 spawns) and
+    // stays byte-identical to `--no-auto-parallel` (`55\n89`). If this shows 0 spawns, the fix
+    // regressed — fix `check.rs`'s crossing analysis, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_spike_n_nested_wait.ynz", "55\n89");
 }
 
 #[test]
 fn v03_m3d_mixed_cpu_io_group_declines_byte_identical() {
-    // WHY: a pure-CPU call (`score`) next to an I/O call (`fetch`, which `wait`s on a timer)
-    // is a mixed CPU+I/O group. The CPU spawn-join path and the I/O inline-poll path use
-    // separate mechanisms with no shared continuation — driving them together deadlocks the
-    // join: the spawned CPU handle is never re-polled from inside the I/O suspension's resume.
-    // The admission gate therefore declines a mixed group to sequential: `score` runs inline,
-    // `fetch` suspends, both in order — 0 spawns, byte-identical to `--no-auto-parallel` (4958).
-    // The 0-spawn assertion is the safety wire: any spawns here mean the mixed-overlap path got
-    // activated while the fused-continuation machinery is absent — fix the codegen, not this test.
-    // Firing this safely (CPU join-poll + I/O inline-poll fused into one continuation) is tracked
-    // in .claude/todos.md.
-    m3d_assert_declines_byte_identical("v0_3_m3d_mixed_cpu_io_group_declines.ynz", "4958");
+    // WHY (v0.3-M3g Phase 3 FLIP — the milestone's core acceptance signal; test name retained
+    // for history continuity even though the assertion now FIRES): a pure-CPU call (`score`)
+    // next to an I/O call (`fetch`, which `wait`s on a timer) is a mixed CPU+I/O group. Before
+    // fusion, the CPU spawn-join path and the I/O inline-poll path used separate mechanisms with
+    // no shared continuation — driving them together would deadlock the join. `emit_fused_group_
+    // spawn_poll` (`ynz_typeck::cpu_admission::admitted_fused_group`'s codegen consumer) now
+    // drives BOTH classes through ONE shared continuation: `score` spawns onto the blocking pool,
+    // `fetch` inline-polls its embedded child sub-frame, and every resume re-drives whichever is
+    // still outstanding — a genuine async yield, never a blocking join (M2-HALT corpse). The
+    // group now FIRES (1 spawn — one CPU member; `fetch` is the Suspending member and has no
+    // separate spawn call), byte-identical output to `--no-auto-parallel` (4958). If this shows
+    // 0 spawns, the fusion regressed — fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_mixed_cpu_io_group_declines.ynz",
+        "4958",
+        1,
+    );
 }
 
-// WHY (group): v0.3-M3g Phase 2 (typeck front half — behavior-neutral) neutrality fixtures.
-// Phase 2 lifts `compute_cpu_promotions`'s `base_suspends` skip so a suspending host can host
-// its own CPU-promotion candidate group, and extends the guard-probe (E6) to `base_suspends`
-// hosts that are themselves direct candidates. Both are TYPECK-side machinery changes; the
-// admission gate (`ynz_typeck::cpu_admission::admitted_cpu_group`) carries a TEMPORARY
-// co-resident-suspension decline on its top-level branch (mirroring the pre-existing nested-
-// branch check) so this phase stays provably behavior-neutral — every fixture below must
-// decline (0 spawns) and stay byte-identical to `--no-auto-parallel`. Phase 3 removes the
-// temporary decline in the same change that builds the real fused CPU+I/O continuation and
-// flips the three M3d DECLINE fixtures above to fire.
+// WHY (group): v0.3-M3g Phase 2 (typeck front half) neutrality fixtures, UPDATED in Phase 3.
+// Phase 2 lifted `compute_cpu_promotions`'s `base_suspends` skip so a suspending host can host
+// its own CPU-promotion candidate group, and extended the guard-probe (E6) to `base_suspends`
+// hosts that are themselves direct candidates — both TYPECK-side machinery changes — while a
+// TEMPORARY admission-gate decline kept the phase provably behavior-neutral (every fixture below
+// declined, 0 spawns). Phase 3 removes that temporary decline in the same change that builds the
+// real fused continuation and flips the three M3d DECLINE fixtures above to fire; per the plan's
+// own ¶3.1 note, the top-level-group-in-suspending-host neutrality fixtures flip WITH it (test
+// names retained for history continuity — see each test's updated WHY below for its exact
+// fire/decline status post-flip). The E6 guard-tripping adversarial fixture is the one PERMANENT
+// exception — it declines at a different layer (typeck promotion, not this admission gate) and
+// is unaffected by the admission-gate flip.
 
 #[test]
 fn v03_m3g_top_level_group_in_suspending_host_declines_byte_identical() {
-    // WHY (Phase 2 neutrality fixture a): `entrypoint` owns a top-level CPU group
-    // (`crunch(3)`, `crunch(4)`) immediately followed by an unrelated `wait sleep(0)` — a
-    // suspending host that also hosts its own CPU-promotion candidate group, for the FIRST time
-    // reachable once Phase 2 lifts the `base_suspends` skip. With no fused continuation yet, the
-    // admission gate's temporary co-resident-suspension decline must keep this sequential: 0
-    // spawns, byte-identical to `--no-auto-parallel` (9907). If this shows ANY spawns, the
-    // Phase-2 temporary decline regressed — fix `admitted_cpu_group`'s top-level branch, not
-    // this test.
-    m3d_assert_declines_byte_identical(
+    // WHY (v0.3-M3g Phase 3 FLIP — the plan's ¶3.1 note explicitly anticipates this: "The Phase 2
+    // neutrality fixtures flip with it: the top-level-group-in-suspending-host shape becomes
+    // fire-asserting"; test name retained for history continuity even though the assertion now
+    // FIRES): `entrypoint` owns a top-level CPU group (`crunch(3)`, `crunch(4)`) immediately
+    // followed by an unrelated `wait sleep(0)`. Phase 2's temporary co-resident-suspension
+    // decline (keyed on `base_suspends.contains(&f.name)`) is REMOVED in Phase 3 — the general
+    // SM multi-suspension-point dispatch already shares one continuation across the group's join
+    // AND the trailing wait, so this shape is safe once admitted (top-level groups never hit the
+    // Step-1c depth-aware-alloca gap the nested case needed — their result names were always
+    // pre-allocated). Invariant: the group now FIRES (2 spawns), byte-identical to
+    // `--no-auto-parallel` (9907). If this shows 0 spawns, the flip regressed — fix the admission
+    // gate, not this test.
+    m3d_assert_fires_byte_identical_alloc_free(
         "v0_3_m3g_top_level_group_in_suspending_host_declines.ynz",
         "9907",
     );
@@ -6395,29 +6475,18 @@ fn v03_m3g_top_level_group_in_suspending_host_declines_byte_identical() {
 
 #[test]
 fn v03_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines_byte_identical() {
-    // WHY (Phase-2-blocker-fix regression fixture, bare-intrinsic twin of fixture (a)):
-    // `entrypoint` owns a top-level CPU group (`crunch(3)`, `crunch(4)`) immediately followed by
-    // a BARE `sleep(0)` call — no explicit `wait` keyword. `may_block::analyze` still seeds
-    // `calls_may_block_intrinsic` for a bare may-block-intrinsic call (`may_block.rs`), so
-    // `entrypoint` is a genuine `base_suspends` host at runtime regardless of `wait` syntax at
-    // the call site.
-    //
-    // Before the blocker fix, `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension
-    // decline re-derived "does this host suspend?" via an AST scan
-    // (`stmt_contains_wait_deep` — literal `wait` node only — OR
-    // `stmt_contains_suspending_call_deep` — which explicitly EXEMPTS may-block intrinsics) that
-    // MISSED this exact shape: no literal `wait`, and `sleep` exempted from the suspending-call
-    // scan. The decline predicate would have stayed false, `admitted_cpu_group` would have
-    // returned `Some`, and the host's CPU group would have FIRED at codegen — breaking Phase 2's
-    // "provably inert / behavior-neutral" promise for a legal Yinz shape. The fix keys the
-    // decline off `base_suspends.contains(&f.name)` — the authoritative pre-promotion suspend
-    // set, which DOES include `entrypoint` here — instead of the AST re-scan.
-    //
-    // 0 spawns, byte-identical to `--no-auto-parallel` (9907). If this shows ANY spawns, the
-    // bare-may-block-intrinsic hole in `admitted_cpu_group`'s Phase-2 temporary decline
-    // reopened — fix `admitted_cpu_group`'s top-level branch (key off `base_suspends`, not a
-    // second AST scan), not this test.
-    m3d_assert_declines_byte_identical(
+    // WHY (v0.3-M3g Phase 3 FLIP, bare-intrinsic twin of the fixture above; test name retained
+    // for history continuity): `entrypoint` owns a top-level CPU group (`crunch(3)`, `crunch(4)`)
+    // immediately followed by a BARE `sleep(0)` call — no explicit `wait` keyword.
+    // `may_block::analyze` still seeds `calls_may_block_intrinsic` for a bare may-block-intrinsic
+    // call, so `entrypoint` is a genuine `base_suspends` host at runtime regardless of `wait`
+    // syntax at the call site. Same flip rationale as the sibling test above: Phase 2's temporary
+    // decline is removed in Phase 3, and the auto-inferred suspension (no explicit `wait` needed
+    // — see `IMP-no-function-coloring.md`) coexists safely with the top-level group's join
+    // through the ordinary multi-suspension-point SM dispatch. Invariant: FIRES (2 spawns),
+    // byte-identical to `--no-auto-parallel` (9907). If this shows 0 spawns, the flip
+    // regressed — fix the admission gate, not this test.
+    m3d_assert_fires_byte_identical_alloc_free(
         "v0_3_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines.ynz",
         "9907",
     );
@@ -6425,17 +6494,19 @@ fn v03_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines_byte_ident
 
 #[test]
 fn v03_m3g_mixed_host_with_promoted_sibling_declines_byte_identical() {
-    // WHY (Phase 2 neutrality fixture b — the A9 gating-asymmetry variant): `pureCpuHost` is an
-    // ordinary, legitimately-promoted CPU host (no suspension) that flips the module-global
-    // `m3d_spike` flag; `mixedHost` is a suspending host that ALSO owns its own top-level CPU
-    // group. `spike_cpu_candidates` -> `admitted_cpu_group` is reached for EVERY suspend_set
-    // function once the module-global flag is true, with no per-function `cpu_promoted.contains`
-    // check at the fire site — so BEFORE any Phase 2 code change, `pureCpuHost`'s legitimate
-    // promotion alone was already enough to make `mixedHost`'s co-resident group admit and fire
-    // (a pre-existing latent misfire, Paper-Traced against the Phase 1 baseline commit `d184934`
-    // and recorded in this phase's FRAGO — see audit.md). The invariant: exactly 2 spawns total
-    // (both `pureCpuHost`'s — its own promotion is untouched) and 0 from `mixedHost`. 4 spawns =
-    // the pre-existing latent misfire reopened; 0 spawns = `pureCpuHost` stopped firing.
+    // WHY (v0.3-M3g Phase 3 FLIP — test name retained for history continuity even though the
+    // assertion now FIRES for BOTH hosts): `pureCpuHost` is an ordinary, legitimately-promoted
+    // CPU host (no suspension); `mixedHost` is a suspending host (`wait sleep(0)`) that ALSO owns
+    // its own top-level CPU group — the SAME "top-level group in a suspending host" shape as
+    // `v03_m3g_top_level_group_in_suspending_host_declines_byte_identical` above, just co-resident
+    // in a module with a second, independently-promoted pure-CPU host. Phase 2's temporary
+    // co-resident-suspension decline (which used to force `mixedHost`'s group to decline while
+    // `pureCpuHost`'s fired normally) is removed in Phase 3: both hosts now admit and fire
+    // independently — `pureCpuHost`'s 2 spawns and `mixedHost`'s 2 spawns, 4 total, exactly as a
+    // module with two independently-promoted CPU-group hosts should behave (no cross-host
+    // interaction; each function has its own composed frame). Invariant: exactly 4 spawns total,
+    // byte-identical to `--no-auto-parallel`. If this shows 2 spawns, `mixedHost`'s flip
+    // regressed (back to Phase-2 behavior); 0 spawns means BOTH stopped firing.
     let fixture_name = "v0_3_m3g_mixed_host_with_promoted_sibling_declines.ynz";
     let src = fixture(fixture_name);
 
@@ -6463,16 +6534,15 @@ fn v03_m3g_mixed_host_with_promoted_sibling_declines_byte_identical() {
     let ir = build_to_tmpdir_emit_ir(&src);
     assert_eq!(
         count_spawn_calls(&ir),
-        2,
-        "exactly 2 spawns — both from pureCpuHost's legitimate promotion; mixedHost's \
-         co-resident group must decline (0 of its own spawns). 4 spawns = the pre-existing \
-         latent misfire reopened; 0 = pureCpuHost stopped firing. IR:\n{ir}"
+        4,
+        "exactly 4 spawns — 2 from pureCpuHost's promotion, 2 from mixedHost's (Phase 3 flip). \
+         2 spawns = mixedHost regressed back to declining; 0 = both stopped firing. IR:\n{ir}"
     );
 
     let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
     assert_eq!(
         alloc, free,
-        "alloc must equal free (no leak on the declined-mixed-host path); alloc={alloc}, free={free}"
+        "alloc must equal free (no leak on the dual-host fired path); alloc={alloc}, free={free}"
     );
 }
 
@@ -6496,6 +6566,223 @@ fn v03_m3g_guard_tripping_crossing_in_suspending_host_declines_byte_identical() 
     m3d_assert_declines_byte_identical(
         "v0_3_m3g_guard_tripping_crossing_in_suspending_host_declines.ynz",
         "14863",
+    );
+}
+
+#[test]
+fn v03_m3g_wide_ec_mixed_group_declines_byte_identical() {
+    // WHY (v0.3-M3g Phase 3 — E7 wide-EC ratchet, fused-group instance): a wide-value-EC
+    // (`number errors`) call (`priceA`) next to an I/O call (`fetch`). `priceA` is excluded from
+    // `cpu_supported_callees` — the SAME shared CPU-ABI-fits predicate both the pure-CPU
+    // (`admitted_cpu_group`) and fused (`admitted_fused_group`) admission gates read (the 24-byte
+    // {error word + i128 value} pair overflows the 16-byte CPU result slot; admitting it would
+    // make the fused join-bind dereference a pointer into the dead worker-thread frame — a
+    // use-after-free). `priceA` is not a suspending call either, so the fused-group classifier
+    // finds it ineligible for EITHER class — no adjacent eligible pair ever forms, so no fused
+    // group is even considered. This proves the pre-existing pure-CPU decline-around
+    // (`v03_m3d_return_class_number_errors_declines_byte_identical`) SURVIVES fusion rather than
+    // being silently reopened by the new admission path: 0 spawns, byte-identical to
+    // `--no-auto-parallel`. If this shows ANY spawns, the wide-EC UAF class has reopened — fix
+    // the shared `cpu_supported_callees`/`ec_inner_fits_cpu_result_abi` predicate, not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3g_wide_ec_mixed_group_declines.ynz", "6.0\nwaited");
+}
+
+// ── v0.3-M3g Phase 3: E1 adversarial multi-resume deadlock gate ──────────────
+//
+// WHY (group): the three non-negotiable flip fixtures above use trivial workloads
+// (`sleep(0)`, a 100-iteration loop) that can resolve within a SINGLE poll pass — they prove
+// the group fires with correct output, but not that the shared continuation survives MANY real
+// resume cycles. These two fixtures force asymmetric completion timing (one member reliably
+// slower than the other, in both directions) so the fused poll state is genuinely re-entered
+// several times, exercising the null-check-skip (CPU) and sentinel-skip (I/O) idempotency paths
+// under real repeated re-polling — the exact 4c failure mode named in the plan's terrain: a
+// member that stops getting re-driven by the shared continuation. Both routed through the
+// watchdog-wrapped shared helpers; a dropped member hangs here.
+
+#[test]
+fn v03_m3g_e1_io_lags_multi_resume_fires_byte_identical() {
+    // WHY: the I/O member (150ms sleep) outlives the CPU member (100-iteration loop) by orders
+    // of magnitude, forcing several real poll passes while the CPU handle is already
+    // Ready/nulled — proves the null-check-skip path doesn't crash or double-free on repeated
+    // re-entry, and the I/O sub-frame keeps getting re-polled until its own sentinel fires.
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_e1_io_lags_multi_resume.ynz", "4954", 1);
+}
+
+#[test]
+fn v03_m3g_e1_cpu_lags_multi_resume_fires_byte_identical() {
+    // WHY: the mirror of the fixture above — the CPU member (150-million-iteration loop) outlives
+    // the I/O member (15ms sleep), forcing several real poll passes while the I/O sub-frame is
+    // already Ready/sentinel-routed — proves the shared poll keeps re-driving the STILL-pending
+    // CPU handle across resumes rather than silently dropping it once the other class finishes.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3g_e1_cpu_lags_multi_resume.ynz",
+        "11249999925000004",
+        1,
+    );
+}
+
+#[test]
+fn v03_m3g_e8_pool_exhaustion_stress_completes_without_deadlock() {
+    // WHY (E8 obligation): drives 20 CUMULATIVE fused CPU+I/O groups via a RECURSION-SPAWNING,
+    // FAN-OUT shape — four independent chains, each with one root worker hosting its OWN
+    // top-level fused group and, once that group resolves, `background`-spawning ALL FOUR of its
+    // remaining chain-mates AT ONCE (not a sequential one-at-a-time chain). This is not literal
+    // blocking-pool exhaustion (Tokio's default cap is 512 threads — see the fixture's own header
+    // note for why literally exhausting it is impractical for a fast CI fixture) but a meaningful
+    // fan-out/recursion stress: the genuine concurrent-pressure ceiling is 4 initial roots, then
+    // up to 16 leaves overlapping shortly after each root resolves (root and leaf phases don't
+    // overlap each other) — a real, honestly-measured improvement over a strictly sequential
+    // chain's ceiling of 4, though NOT 20-way concurrency at any single instant; 20 is the
+    // cumulative total fired across the whole run, not all at once. Routed through the watchdog
+    // (via `build_to_tmpdir_and_run`) — a stuck chain hangs here. Because completions run
+    // genuinely concurrently across independent chains and fanned-out siblings, only the SET of
+    // completion lines (not their interleaving order) is asserted — asserting an exact order
+    // would be a flaky, non-deterministic invariant this fixture's own concurrency makes
+    // meaningless.
+    let src = fixture("v0_3_m3g_e8_pool_exhaustion_stress.ynz");
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+
+    let expected_lines: Vec<String> = ["A", "B", "C", "D"]
+        .iter()
+        .flat_map(|chain| (1..=5).map(move |n| format!("{chain}{n}")))
+        .map(|tag| {
+            // worker seed order: A1..A5=1..5, B1..B5=6..10, C1..C5=11..15, D1..D5=16..20;
+            // worker sum = crunch(seed) + fetchIO(seed) = (124750 + seed) + (seed + 1)
+            //            = 124751 + 2*seed.
+            let seed = match tag.chars().next().unwrap() {
+                'A' => tag[1..].parse::<i64>().unwrap(),
+                'B' => 5 + tag[1..].parse::<i64>().unwrap(),
+                'C' => 10 + tag[1..].parse::<i64>().unwrap(),
+                'D' => 15 + tag[1..].parse::<i64>().unwrap(),
+                other => panic!("unexpected chain tag {other}"),
+            };
+            format!("DONE_{tag} {}", 124751 + 2 * seed)
+        })
+        .collect();
+
+    for (mode_name, stdout) in [
+        ("default", &par_stdout),
+        ("--no-auto-parallel", &seq_stdout),
+    ] {
+        assert!(
+            stdout.contains("MAIN"),
+            "{mode_name} mode must print MAIN; stdout:\n{stdout}"
+        );
+        for expected in &expected_lines {
+            assert!(
+                stdout.contains(expected.as_str()),
+                "{mode_name} mode must contain `{expected}`; stdout:\n{stdout}"
+            );
+        }
+        let done_count = stdout.lines().filter(|l| l.starts_with("DONE_")).count();
+        assert_eq!(
+            done_count, 20,
+            "{mode_name} mode must print exactly 20 DONE_ lines (no duplicate/dropped worker); \
+             stdout:\n{stdout}"
+        );
+    }
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        20,
+        "all 20 workers' fused groups must FIRE (one spawn each); IR:\n{ir}"
+    );
+
+    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m3g_e8_pool_exhaustion_stress.ynz");
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free across all 20 concurrent fused-group task frames \
+         (no leak on the recursion-spawning path); alloc={alloc}, free={free}"
+    );
+}
+
+#[test]
+fn v03_m3g_overlap_proof_cpu_and_io_members_genuinely_run_concurrently() {
+    // WHY: a deterministic, contention-immune ORDERING assertion (Phase 1's confirmed A7
+    // protocol) that the fused group's CPU and I/O members genuinely run AT THE SAME TIME,
+    // rather than the compiler merely producing the same output while secretly still running
+    // them one after another under the hood. `crunch` and `fetchData` each print a START marker
+    // before doing their work and a DONE marker after. In DEFAULT (fused) mode, BOTH starts must
+    // appear before EITHER done — the only ordering possible under genuine concurrency. In
+    // `--no-auto-parallel` (sequential) mode, that same property must NOT hold (crunch fully
+    // finishes — START_CPU, DONE_CPU — before fetchData ever starts) — the contrast is what
+    // proves the ordering property is a real effect of fusion, not a test artifact.
+    let src = fixture("v0_3_m3g_overlap_proof.ynz");
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim().lines().last(),
+        Some("449999985000004"),
+        "default-mode result line must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        seq_stdout.trim().lines().last(),
+        Some("449999985000004"),
+        "--no-auto-parallel result line must equal the SAME oracle (only overlap may differ); \
+         stdout:\n{seq_stdout}"
+    );
+
+    let marker_index = |stdout: &str, marker: &str| -> usize {
+        stdout
+            .lines()
+            .position(|l| l == marker)
+            .unwrap_or_else(|| panic!("expected `{marker}` in stdout:\n{stdout}"))
+    };
+
+    // Default mode: both STARTs before both DONEs — genuine overlap.
+    let par_start_cpu = marker_index(&par_stdout, "START_CPU");
+    let par_start_io = marker_index(&par_stdout, "START_IO");
+    let par_done_cpu = marker_index(&par_stdout, "DONE_CPU");
+    let par_done_io = marker_index(&par_stdout, "DONE_IO");
+    assert!(
+        par_start_cpu.max(par_start_io) < par_done_cpu.min(par_done_io),
+        "default mode must show BOTH starts before EITHER done (genuine overlap); stdout:\n{par_stdout}"
+    );
+
+    // Sequential mode: the SAME property must NOT hold — crunch fully completes before
+    // fetchData starts (DONE_CPU strictly before START_IO).
+    let seq_done_cpu = marker_index(&seq_stdout, "DONE_CPU");
+    let seq_start_io = marker_index(&seq_stdout, "START_IO");
+    assert!(
+        seq_done_cpu < seq_start_io,
+        "sequential mode must run crunch fully to completion before fetchData starts \
+         (proves the default-mode overlap is a real fusion effect, not a test artifact); \
+         stdout:\n{seq_stdout}"
+    );
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        1,
+        "the fused group must FIRE (1 CPU spawn); IR:\n{ir}"
+    );
+
+    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m3g_overlap_proof.ynz");
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free on the fused group's task frame; alloc={alloc}, free={free}"
     );
 }
 
@@ -6618,21 +6905,38 @@ fn v03_m3d_danger_map_match_arm_fires_byte_identical() {
 
 #[test]
 fn v03_m3d_danger_mixed_string_declines_byte_identical() {
-    // WHY: a mixed group with a heap-pointer (`string`) CPU child DECLINES — mixed CPU+I/O
-    // overlap is M3g, not M3d. The heap-pointer pack must not make the mixed group fire here.
-    // 0 spawns + byte-identical locks the decline for the heap-pointer CPU-child case.
-    m3d_assert_declines_byte_identical(
+    // WHY (v0.3-M3g Phase 3 FLIP — a DIRECT, foreseeable consequence of general fusion; test
+    // name retained for history continuity): a mixed group with a heap-pointer (`string`) CPU
+    // child. This fixture's own original WHY documented the decline as scope-bounded ("mixed
+    // CPU+I/O overlap is M3g, not M3d... belongs to a later milestone"), not a genuine safety
+    // concern about heap-pointer CPU children specifically — `build_cpu_trampoline`'s
+    // PointerValue packing arm already handles string/array/map returns for the pure-CPU path
+    // unchanged. `admitted_fused_group` places no return-class restriction narrower than
+    // `cpu_supported_callees` (the same CPU-ABI-fits predicate the pure-CPU gate uses), so this
+    // shape now correctly FIRES (1 spawn) through the general fused mechanism, byte-identical to
+    // `--no-auto-parallel` ("built=3\nwaited"). If this shows 0 spawns, the fusion regressed —
+    // fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
         "v0_3_m3d_danger_mixed_string_declines.ynz",
         "built=3\nwaited",
+        1,
     );
 }
 
 #[test]
 fn v03_m3d_danger_mixed_number_declines_byte_identical() {
-    // WHY: a mixed group with a wide-value (`number`) CPU child DECLINES — mixed CPU+I/O overlap
-    // is M3g, not M3d. The decline keeps the program clean (no number leak here, since the group
-    // never fires). 0 spawns + byte-identical locks the wide-value mixed-child decline.
-    m3d_assert_declines_byte_identical("v0_3_m3d_danger_mixed_number_declines.ynz", "6.0\n2.5");
+    // WHY (v0.3-M3g Phase 3 FLIP — same reasoning as the string sibling above; test name
+    // retained for history continuity): a mixed group with a wide-value (`number`) CPU child.
+    // The original decline was scope-bounded ("mixed CPU+I/O overlap is M3g, not M3d"), not a
+    // safety concern about decimal128 CPU children — `build_cpu_trampoline`'s i128 packing arm
+    // already handles `number` returns for the pure-CPU path unchanged. FIRES (1 spawn),
+    // byte-identical to `--no-auto-parallel` ("6.0\n2.5"). If this shows 0 spawns, the fusion
+    // regressed — fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_danger_mixed_number_declines.ynz",
+        "6.0\n2.5",
+        1,
+    );
 }
 
 #[test]
@@ -6709,12 +7013,20 @@ fn v03_m3d_hostile_self_recursive_group_declines_byte_identical() {
 
 #[test]
 fn v03_m3d_hostile_mixed_reverse_completion_declines_byte_identical() {
-    // WHY: a mixed group (CPU child + I/O child) where the CPU child would complete BEFORE the
-    // I/O child suspends — the highest-risk completion ordering for a shared continuation across
-    // two child classes. Mixed CPU+I/O is M3g, so this DECLINES: 0 spawns + byte-identical.
-    m3d_assert_declines_byte_identical(
+    // WHY (v0.3-M3g Phase 3 FLIP — a DIRECT, foreseeable consequence of general fusion; test
+    // name retained for history continuity): a mixed group (CPU child + I/O child) where the CPU
+    // child would complete BEFORE the I/O child suspends — the highest-risk completion ordering
+    // for a shared continuation across two member classes. `emit_fused_group_spawn_poll`'s poll
+    // state is ORDER-INDEPENDENT by construction: every poll pass drives every member (CPU via
+    // null-check-skip idempotent `ynz_rt_join_poll`, I/O via sentinel-skip idempotent resume-fn
+    // call) and accumulates "any pending" across BOTH classes regardless of which finishes
+    // first — completion order was never load-bearing for correctness. FIRES (1 spawn),
+    // byte-identical to `--no-auto-parallel` (4958). If this shows 0 spawns, the fusion
+    // regressed — fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
         "v0_3_m3d_hostile_mixed_reverse_completion_declines.ynz",
         "4958",
+        1,
     );
 }
 

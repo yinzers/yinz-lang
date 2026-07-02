@@ -1,0 +1,172 @@
+// v0.3-M3g E8 obligation — blocking-pool exhaustion stress. Tokio's blocking pool
+// (`ynz_rt_spawn_blocking_joinable`'s substrate) is FINITE, per IMP-concurrency's "Cancellation
+// Detach Constraint" and this crate's `Builder::new_multi_thread()` runtime init (no
+// `.max_blocking_threads()` override, so the pool defaults to Tokio's built-in 512-thread cap).
+// Literally exhausting 512 real OS threads in a fast CI fixture is impractical (and would not
+// exercise anything qualitatively different from a smaller fan-out) — this fixture instead drives
+// MANY concurrent mixed CPU+I/O groups via a RECURSION-SPAWNING, FAN-OUT shape: four independent
+// chains, each with one root worker hosting its OWN top-level fused CPU+I/O group and, once that
+// group resolves, `background`-spawning ALL FOUR of its remaining chain-mates AT ONCE (not one
+// sequential successor). That is 20 fused groups total (20 CPU spawns onto the blocking pool + 20
+// concurrent I/O sleeps): 4 fired directly from `entrypoint` (the four chain roots, genuinely
+// concurrent with each other) and, once each root resolves, up to 16 more fired recursively and
+// near-simultaneously from already-spawned background tasks (the four roots do comparable work —
+// same `crunch` loop bound, same-order `fetchIO` sleep — so their fan-outs cluster in time rather
+// than trickling one at a time). Genuine concurrent-pressure ceiling: 4 initial roots, then up to
+// 16 leaves overlapping shortly after (root and leaf phases don't overlap each other — a root's
+// own fused group has already resolved by the time it fans out) — NOT 20-way concurrency at any
+// single instant, but a substantial, honestly-measured improvement over a strictly sequential
+// chain (whose ceiling would be only 4). 20 is the CUMULATIVE total across the whole run. Must
+// complete without deadlock (watchdog-wrapped by the shared test helpers) and print every
+// worker's completion marker exactly once.
+//
+// crunch(n) does small real (loop) work; fetchIO(n) suspends briefly. Every worker's fused group
+// output is deterministic (seed-dependent); only the INTERLEAVING across workers/chains is
+// concurrent, so the test asserts the *set* of completion lines, not their order.
+//
+// Arithmetic per worker (seed s): crunch(s) = 0+1+...+499 + s = 124750 + s; fetchIO(s) = s + 1.
+//   worker sum = 124750 + s + s + 1 = 124751 + 2s.
+
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 500) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function fetchIO(n: int) -> int {
+  wait sleep(15)
+  return n + 1
+}
+
+function workerA1() -> nothing {
+  let a = crunch(1)
+  let b = fetchIO(1)
+  print(`DONE_A1 ${a + b}`)
+  background workerA2()
+  background workerA3()
+  background workerA4()
+  background workerA5()
+}
+function workerA2() -> nothing {
+  let a = crunch(2)
+  let b = fetchIO(2)
+  print(`DONE_A2 ${a + b}`)
+}
+function workerA3() -> nothing {
+  let a = crunch(3)
+  let b = fetchIO(3)
+  print(`DONE_A3 ${a + b}`)
+}
+function workerA4() -> nothing {
+  let a = crunch(4)
+  let b = fetchIO(4)
+  print(`DONE_A4 ${a + b}`)
+}
+function workerA5() -> nothing {
+  let a = crunch(5)
+  let b = fetchIO(5)
+  print(`DONE_A5 ${a + b}`)
+}
+
+function workerB1() -> nothing {
+  let a = crunch(6)
+  let b = fetchIO(6)
+  print(`DONE_B1 ${a + b}`)
+  background workerB2()
+  background workerB3()
+  background workerB4()
+  background workerB5()
+}
+function workerB2() -> nothing {
+  let a = crunch(7)
+  let b = fetchIO(7)
+  print(`DONE_B2 ${a + b}`)
+}
+function workerB3() -> nothing {
+  let a = crunch(8)
+  let b = fetchIO(8)
+  print(`DONE_B3 ${a + b}`)
+}
+function workerB4() -> nothing {
+  let a = crunch(9)
+  let b = fetchIO(9)
+  print(`DONE_B4 ${a + b}`)
+}
+function workerB5() -> nothing {
+  let a = crunch(10)
+  let b = fetchIO(10)
+  print(`DONE_B5 ${a + b}`)
+}
+
+function workerC1() -> nothing {
+  let a = crunch(11)
+  let b = fetchIO(11)
+  print(`DONE_C1 ${a + b}`)
+  background workerC2()
+  background workerC3()
+  background workerC4()
+  background workerC5()
+}
+function workerC2() -> nothing {
+  let a = crunch(12)
+  let b = fetchIO(12)
+  print(`DONE_C2 ${a + b}`)
+}
+function workerC3() -> nothing {
+  let a = crunch(13)
+  let b = fetchIO(13)
+  print(`DONE_C3 ${a + b}`)
+}
+function workerC4() -> nothing {
+  let a = crunch(14)
+  let b = fetchIO(14)
+  print(`DONE_C4 ${a + b}`)
+}
+function workerC5() -> nothing {
+  let a = crunch(15)
+  let b = fetchIO(15)
+  print(`DONE_C5 ${a + b}`)
+}
+
+function workerD1() -> nothing {
+  let a = crunch(16)
+  let b = fetchIO(16)
+  print(`DONE_D1 ${a + b}`)
+  background workerD2()
+  background workerD3()
+  background workerD4()
+  background workerD5()
+}
+function workerD2() -> nothing {
+  let a = crunch(17)
+  let b = fetchIO(17)
+  print(`DONE_D2 ${a + b}`)
+}
+function workerD3() -> nothing {
+  let a = crunch(18)
+  let b = fetchIO(18)
+  print(`DONE_D3 ${a + b}`)
+}
+function workerD4() -> nothing {
+  let a = crunch(19)
+  let b = fetchIO(19)
+  print(`DONE_D4 ${a + b}`)
+}
+function workerD5() -> nothing {
+  let a = crunch(20)
+  let b = fetchIO(20)
+  print(`DONE_D5 ${a + b}`)
+}
+
+function entrypoint() -> nothing {
+  background workerA1()
+  background workerB1()
+  background workerC1()
+  background workerD1()
+  print(`MAIN`)
+  sleepBlocking(1500)
+}

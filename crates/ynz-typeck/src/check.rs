@@ -7346,6 +7346,22 @@ fn collect_crossings_in_stmts(
             // We check for a NEW suspension first; if this statement IS a suspension,
             // flush before scanning so the binding isn't falsely flagged for being
             // read by its own producing step.
+            //
+            // ROOT-CAUSE FIX (v0.3-M3g): a control-flow statement (`if`/`while`/`for`/`match`)
+            // whose BODY suspends is ITSELF a reachable suspension point for THIS statement
+            // sequence — exactly like a direct top-level `wait`/suspending-call statement. The
+            // three extra arms below were MISSING, so a group's pending result-binding names
+            // (or any earlier-suspension's) never flushed into `declared` before such a nested
+            // suspension, and a read after it (e.g. `print(a)` following
+            // `if (flag > 0) { wait sleep(0) }`) was silently never marked crossing — codegen
+            // then emitted an alloca that does not dominate the read (LLVM SSA verification
+            // failure, "Instruction does not dominate all uses"). Reproduced and root-caused via
+            // a minimized fixture (a top-level 2-member CPU group followed by
+            // `if (flag > 0) { wait sleep(0) }` then reads of both group members) and the
+            // pre-existing corpus fixture `v0_3_m3d_spike_n_nested_wait.ynz`. `admitted_cpu_group`
+            // used to carry a narrow residual decline for this shape
+            // (`stmt_control_flow_body_suspends`); that decline is removed now that the real
+            // crossing-analysis gap is fixed here directly.
             let this_stmt_suspends = match stmt {
                 Stmt::Expr(Expr::Wait(_, _)) => true,
                 Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => true,
@@ -7357,6 +7373,24 @@ fn collect_crossings_in_stmts(
                     value: Expr::Call(c),
                     ..
                 } if is_suspending_call(c, suspending) => true,
+                Stmt::If { body, .. } if block_suspends_m3d(body, suspending, cpu_supported) => {
+                    true
+                }
+                Stmt::While { body, .. } | Stmt::For { body, .. }
+                    if block_suspends_m3d(body, suspending, cpu_supported) =>
+                {
+                    true
+                }
+                Stmt::Match { arms, else_arm, .. }
+                    if arms
+                        .iter()
+                        .any(|a| block_suspends_m3d(&a.body, suspending, cpu_supported))
+                        || else_arm.as_ref().is_some_and(|eb| {
+                            block_suspends_m3d(eb, suspending, cpu_supported)
+                        }) =>
+                {
+                    true
+                }
                 _ => false,
             };
             if this_stmt_suspends {
@@ -7367,8 +7401,8 @@ fn collect_crossings_in_stmts(
                         declared.push(name);
                     }
                 }
-                // Collect the new result-binding (if any) into pending.
                 match stmt {
+                    // Collect the new result-binding (if any) into pending.
                     Stmt::Let {
                         name,
                         value: Expr::Wait(_, _),
@@ -7383,31 +7417,27 @@ fn collect_crossings_in_stmts(
                     {
                         pending_result_bindings.push(name.clone());
                     }
-                    _ => {}
-                }
-            } else {
-                // Non-suspension statement after a prior suspension: scan for references to
-                // already-declared (pre-suspension) locals. Pending result-bindings are NOT
-                // yet in `declared`, so reads of the just-produced binding are not flagged.
-                collect_ident_refs_in_stmt(stmt, declared, out);
-                // A new `let` binding introduced BETWEEN two suspension points is itself
-                // a crossing candidate for any suspension that follows it. Add it to
-                // `declared` so the next suspension will catch any reads after it.
-                if let Stmt::Let { name, .. } = stmt {
-                    if !declared.contains(name) && !param_names.contains(&name.as_str()) {
-                        declared.push(name.clone());
-                    }
-                }
-                // If this nested control-flow block contains its OWN suspension, recurse into
-                // it to detect crossing locals DECLARED INSIDE that block (e.g., a `let x`
-                // inside an `if` arm that also contains a `wait`). Without recursion, those
-                // inner-declared crossing locals never enter `declared`, so no sm_entry alloca
-                // is created, and the alloca lands in a non-dominating state block → LLVM SSA
-                // dominance failure ("Instruction does not dominate all uses").
-                match stmt {
-                    Stmt::If { body, .. }
-                        if block_suspends_m3d(body, suspending, cpu_supported) =>
-                    {
+                    // A control-flow statement whose body suspends: scan the condition for
+                    // references to already-`declared` (pre-suspension) locals FIRST — unlike
+                    // the not-yet-suspended top-level `Stmt::If` handling below (which
+                    // deliberately skips this scan because NOTHING has suspended yet at that
+                    // point, so no read there could possibly be crossing), we are HERE only
+                    // because an EARLIER suspension already happened in this sequence, so the
+                    // condition genuinely runs strictly after that prior suspension and a read
+                    // of a pre-suspension local in it IS a real crossing (caught by a real
+                    // regression this session: `v0_3_m3a_p1_disjoint_sibling_scope_shadow.ynz`'s
+                    // second `if (flag2)`, where `flag2` is declared before the FIRST if's wait
+                    // and read only in the SECOND if's condition — the codegen-emitted alloca
+                    // for `flag2` correctly disappeared from the frame and the second if-arm's
+                    // print silently never ran until this scan was added back). Mirrors the
+                    // pre-existing "else" (not-yet-suspended) branch, which unconditionally
+                    // called `collect_ident_refs_in_stmt` on every statement type BEFORE the
+                    // now-removed dead-code nested-suspension recursion. Then recurse into the
+                    // suspending sub-block with the now-FLUSHED `declared` (sub-case (b) — a
+                    // local declared INSIDE the branch, before the branch's OWN inner
+                    // suspension, still needs its own crossing detection).
+                    Stmt::If { body, .. } => {
+                        collect_ident_refs_in_stmt(stmt, declared, out);
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
@@ -7418,9 +7448,8 @@ fn collect_crossings_in_stmts(
                             out,
                         );
                     }
-                    Stmt::While { body, .. } | Stmt::For { body, .. }
-                        if block_suspends_m3d(body, suspending, cpu_supported) =>
-                    {
+                    Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                        collect_ident_refs_in_stmt(stmt, declared, out);
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
@@ -7432,6 +7461,7 @@ fn collect_crossings_in_stmts(
                         );
                     }
                     Stmt::Match { arms, else_arm, .. } => {
+                        collect_ident_refs_in_stmt(stmt, declared, out);
                         for arm in arms {
                             if block_suspends_m3d(&arm.body, suspending, cpu_supported) {
                                 let mut branch_declared = declared.clone();
@@ -7461,6 +7491,24 @@ fn collect_crossings_in_stmts(
                     }
                     _ => {}
                 }
+            } else {
+                // Non-suspension statement after a prior suspension: scan for references to
+                // already-declared (pre-suspension) locals. Pending result-bindings are NOT
+                // yet in `declared`, so reads of the just-produced binding are not flagged.
+                collect_ident_refs_in_stmt(stmt, declared, out);
+                // A new `let` binding introduced BETWEEN two suspension points is itself
+                // a crossing candidate for any suspension that follows it. Add it to
+                // `declared` so the next suspension will catch any reads after it.
+                if let Stmt::Let { name, .. } = stmt {
+                    if !declared.contains(name) && !param_names.contains(&name.as_str()) {
+                        declared.push(name.clone());
+                    }
+                }
+                // NOTE: a control-flow statement (`if`/`while`/`for`/`match`) only reaches
+                // this branch when its body does NOT suspend (`block_suspends_m3d` is false)
+                // — every suspending-body case is now caught by `this_stmt_suspends` above,
+                // so no nested-suspension recursion is needed here (see that arm's doc
+                // comment for the root-cause history).
             }
         } else {
             match stmt {

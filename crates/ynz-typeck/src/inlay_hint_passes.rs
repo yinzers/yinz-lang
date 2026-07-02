@@ -1929,6 +1929,17 @@ pub fn parallel_group_hints(
     let source_text = source.text(db);
     let mut hints: Vec<ParallelGroupHint> = Vec::new();
 
+    // Module-wide, computed once (does not depend on the function being examined below) — see
+    // `admitted_cpu_group`'s doc comment for why the nested-branch decline needs it.
+    let spike_capable = crate::cpu_admission::spike_capable_function_names(
+        parse.module.items.iter().filter_map(|item| match item {
+            Item::Function(g) => Some(g),
+            _ => None,
+        }),
+        &effective_suspends,
+        &supported_callees,
+    );
+
     for item in &parse.module.items {
         let Item::Function(f) = item else { continue };
 
@@ -1959,6 +1970,7 @@ pub fn parallel_group_hints(
             &effective_suspends,
             &effective_suspends,
             &supported_callees,
+            &spike_capable,
         ) else {
             continue;
         };

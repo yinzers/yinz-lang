@@ -185,6 +185,22 @@ fn corpus_produces_deterministic_output_across_runs() {
                     // identical in both modes. The decline is asserted via IR, not by running
                     // the binary, so this fixture's runtime output is irrelevant to its purpose.
                     || n == "v0_3_m3d_return_class_maybe.ynz"
+                    // v0.3-M3g E8 stress: 20 fused CPU+I/O groups fired via a recursion-spawning
+                    // tree of `background` tasks — its print INTERLEAVING is scheduler-dependent
+                    // by design (same reason as the "background"/"concurrent" substring rule
+                    // above; this fixture just doesn't happen to contain either substring). The
+                    // dedicated integration test
+                    // (v03_m3g_e8_pool_exhaustion_stress_completes_without_deadlock) asserts the
+                    // SET of completion lines, which is the invariant that actually matters here.
+                    || n == "v0_3_m3g_e8_pool_exhaustion_stress.ynz"
+                    // v0.3-M3g overlap proof: a timing-margin fixture (a CPU loop vs. a sleep,
+                    // per Phase 1's A7 protocol) whose print INTERLEAVING is, by construction,
+                    // scheduler-timing-dependent — the same class of exclusion as "timing" above,
+                    // it just doesn't happen to contain that substring. Its own dedicated test
+                    // (v03_m3g_overlap_proof_cpu_and_io_members_genuinely_run_concurrently)
+                    // asserts the ordering invariant directly, with the same generous margins
+                    // this corpus sweep's blanket byte-comparison cannot express.
+                    || n == "v0_3_m3g_overlap_proof.ynz"
             })
             .unwrap_or(false);
 
@@ -248,6 +264,17 @@ fn corpus_byte_identical_across_auto_parallel_modes() {
             // is specific to I/O-side-effect ordering and does not weaken the CPU-parallel
             // invariant the sweep protects.
             || name == "v0_3_m3b_p4_model_a_intended_reorder.ynz"
+            // v0.3-M3g E8 stress: see the matching exclusion + WHY in
+            // corpus_produces_deterministic_output_across_runs above — a recursion-spawning tree
+            // of `background` tasks, print interleaving scheduler-dependent by design.
+            || name == "v0_3_m3g_e8_pool_exhaustion_stress.ynz"
+            // v0.3-M3g overlap proof: the ENTIRE point of this fixture is that default mode's
+            // START/DONE interleaving DIFFERS from `--no-auto-parallel`'s (that difference IS
+            // the overlap proof) — a mode-divergent byte comparison here would fail a fixture
+            // that is working exactly as designed, not flag a codegen bug. Its own dedicated
+            // test asserts both modes' orderings explicitly (and that the final RESULT value is
+            // identical either way, preserving the real invariant this sweep protects).
+            || name == "v0_3_m3g_overlap_proof.ynz"
             || (name == "entrypoint.ynz"
                 && path
                     .parent()

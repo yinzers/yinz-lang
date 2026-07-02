@@ -1,0 +1,49 @@
+// v0.3-M3g overlap proof — a deterministic, contention-immune ORDERING assertion (per Phase 1's
+// confirmed A7 protocol) that the fused group's CPU member and I/O member genuinely run AT THE
+// SAME TIME, rather than the compiler merely producing the same OUTPUT while still secretly
+// running them one after another. Both `crunch` and `fetchData` print a START marker before doing
+// their work and a DONE marker after. The test asserts: in DEFAULT (fused) mode, BOTH start
+// markers appear before EITHER done marker — the only ordering possible if the two members are
+// genuinely running concurrently. In `--no-auto-parallel` (sequential) mode the SAME assertion
+// must FAIL — proving the ordering-overlap property is a real effect of fusion, not an artifact
+// of how the test reads output (a sequential run always fully finishes `crunch` — START_CPU,
+// DONE_CPU — before `fetchData` ever starts).
+//
+// crunch(n) does ~20-30ms of real compute (a 30-million-iteration loop) — comfortably longer than
+// the microseconds it takes the main thread to reach fetchData's own START print in the SAME
+// initial invocation, so START_IO reliably precedes DONE_CPU. fetchData(n) suspends for 80ms —
+// comfortably longer than CPU-thread spawn latency, so START_CPU reliably precedes DONE_IO.
+//
+// Arithmetic: loopSum = 0+1+...+29999999 = 449999985000000.
+//   crunch(1) = 449999985000000 + 1 = 449999985000001
+//   fetchData(2) = 2 + 1              = 3
+//   sum = 449999985000001 + 3         = 449999985000004
+//
+// Expected output (both modes — default and --no-auto-parallel; ONLY the interleaving of the
+// START/DONE lines differs between modes, per this fixture's own test):
+//   449999985000004
+
+function crunch(seed: int) -> int {
+  print(`START_CPU`)
+  let total = 0
+  let i = 0
+  while (i < 30000000) {
+    total = total + i
+    i = i + 1
+  }
+  print(`DONE_CPU`)
+  return total + seed
+}
+
+function fetchData(seed: int) -> int {
+  print(`START_IO`)
+  wait sleep(80)
+  print(`DONE_IO`)
+  return seed + 1
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(1)
+  let b = fetchData(2)
+  print(a + b)
+}

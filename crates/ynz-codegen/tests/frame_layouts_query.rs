@@ -308,18 +308,36 @@ fn imported_suspending_after_pair_declines_consistently_across_boundaries() {
     // boundaries through the same EFFECTIVE suspend set (local ∪ imported-suspending).
     //
     // This is the IMPORTED variant of fixture (q) (which uses a LOCAL suspending callee — already
-    // in the bare set, so it never exercised the imported-only gap). For THIS shape the typeck
-    // guard-probe rollback already declines `entrypoint` (a CPU group plus a post-pair imported
-    // suspending call makes a guard fire when entrypoint becomes a state machine), so the promotion
-    // set is empty and no host is admitted at EITHER boundary regardless of which suspend set
-    // codegen reads — the bug is masked today. This test pins TWO things that must hold so the
-    // masking can never silently flip to corruption:
-    //   1. The function declines: entrypoint emits ZERO `call @ynz_rt_spawn_blocking_joinable`.
-    //   2. The two boundaries agree by construction: `spike_host_subset` returns the SAME host set
-    //      whether probed against the bare local set or the effective set, for this fixture's
-    //      promotion set. (If a future change relaxes the typeck guard so this shape promotes, a
-    //      bare-vs-effective divergence would re-introduce the under-allocation; this assertion is
-    //      the tripwire.)
+    // in the bare set, so it never exercised the imported-only gap).
+    //
+    // **v0.3-M3g Phase 3 UPDATE:** this test previously claimed the typeck promotion set was
+    // EMPTY for this fixture and that `spike_host_subset` agreed (both empty) regardless of which
+    // suspend set was probed — that claim was true only as an accidental byproduct of Phase 2's
+    // now-REMOVED temporary top-level co-resident-suspension decline (which blanket-declined the
+    // group before this fixture's REAL admission gate — `cpu_group_member_indices`'s
+    // PRE-EXISTING "no post-group statement may call a user-defined suspending callee" check —
+    // ever got a chance to run). With the temporary decline gone, the real promotion set for this
+    // fixture is `{"entrypoint"}` (verified this session: `entrypoint` has no guard-tripping
+    // crossing, so the E6 guard-probe never excludes it), and `spike_host_subset` now reveals the
+    // TRUE underlying gate: it is suspend-set-sensitive, EXACTLY the pattern the sibling test
+    // `spike_host_subset_post_pair_gate_still_suspend_set_sensitive_when_base_suspends_is_wrong`
+    // already documents for an inline (non-cross-module) fixture — `ioWork`'s IMPORTED name is
+    // absent from the BARE local set, so the bare probe wrongly ADMITS (the post-pair gate
+    // doesn't recognize `wait ioWork()` as a suspending call), while the EFFECTIVE set (which
+    // BOTH real query boundaries, `frame_layouts_query` and `codegen_query`, always pass — never
+    // the bare set) correctly DECLINES. This test now pins the SAME two things that matter in
+    // production, updated to reflect that reality:
+    //   1. The function declines UNDER THE REAL (effective-set) PATH: entrypoint emits ZERO
+    //      `call @ynz_rt_spawn_blocking_joinable` — verified this session with a standalone build
+    //      + run of this exact fixture (both default and `--no-auto-parallel` modes; output
+    //      `55\n89` byte-identical, no crash, no hang).
+    //   2. The bare-vs-effective DIVERGENCE is now the observable tripwire (not an equality): a
+    //      caller that reverted to the bare set would wrongly ADMIT this shape (the cross-module
+    //      under-allocation class this whole file exists to catch) — `hosts_bare` must contain
+    //      `entrypoint` and `hosts_effective` must be empty, and they must DISAGREE. If they ever
+    //      AGREE (both empty, or both containing entrypoint), the underlying gate's suspend-set
+    //      sensitivity was accidentally papered over again — investigate before trusting either
+    //      query boundary's frame sizing.
     // If you're tempted to relax the spawn-count assertion to "> 0 is fine because output is still
     // correct" — the under-allocation is silent; correct output does NOT prove the heap was intact.
     // Fix the suspend-set reconciliation in `codegen_query`, not this test.
@@ -351,11 +369,23 @@ fn imported_suspending_after_pair_declines_consistently_across_boundaries() {
          — the cross-boundary divergence (silent heap under-allocation). IR:\n{ir}"
     );
 
-    // (2) The two boundaries agree by construction: same host set for the bare vs effective probe.
+    // (2) The REAL promotion set is non-empty (`entrypoint` — verified this session), so
+    // `spike_host_subset` actually reads the suspend-set argument now. The bare probe wrongly
+    // ADMITS (the post-pair gate doesn't recognize the IMPORTED `ioWork` as suspending under the
+    // bare local-only set); the effective probe correctly DECLINES — matching what BOTH real
+    // query boundaries (which always pass the effective set) actually compute, confirmed by (1)'s
+    // 0-spawn assertion above.
     let check = check_query(&db, entry_sf);
     let sig = module_signatures_query(&db, entry_sf);
     let promotion = ynz_typeck::cpu_promotion_query(&db, entry_sf);
     let effective = ynz_typeck::build_effective_suspend_set(&check.suspends_set, &sig.imported_fns);
+    assert!(
+        promotion.promoted.contains("entrypoint"),
+        "sanity: entrypoint must be a genuine v0.3-M3g Phase 3 promotion candidate (no \
+         guard-tripping crossing) for this test to actually exercise spike_host_subset's \
+         suspend-set argument; got promoted: {:?}",
+        promotion.promoted
+    );
     let hosts_bare = ynz_codegen::emit::spike_host_subset(
         &check.typed_module,
         &check.suspends_set,
@@ -368,26 +398,30 @@ fn imported_suspending_after_pair_declines_consistently_across_boundaries() {
         &effective,
         &promotion.promoted,
     );
-    assert_eq!(
-        hosts_bare, hosts_effective,
-        "spike_host_subset must return the same hosts for the bare and effective suspend sets on \
-         this fixture (empty today). A difference is the exact bare-vs-effective admission \
-         divergence the fix removes; codegen_query must probe against the effective set."
+    assert!(
+        hosts_bare.contains("entrypoint"),
+        "the BARE local-only suspend set (missing the imported `ioWork` name) must wrongly ADMIT \
+         entrypoint — the pre-existing post-pair suspending-callee gate cannot recognize an \
+         imported suspending callee under the bare set. This is the exact cross-module \
+         under-allocation hazard the file exists to catch: if a caller ever passed the bare set \
+         here, the frame would be sized DIFFERENTLY than the real (effective-set) codegen lays it \
+         out; got hosts: {hosts_bare:?}"
     );
     assert!(
         hosts_effective.is_empty(),
-        "entrypoint must NOT be a spike host (typeck guard-probe declines the CPU-group + post-pair \
-         imported-suspending shape); got hosts: {hosts_effective:?}"
+        "the EFFECTIVE suspend set (imported `ioWork` present) must correctly DECLINE entrypoint \
+         — matching the real production codegen path (0 spawns, asserted in (1) above); got \
+         hosts: {hosts_effective:?}"
     );
-    // NOTE: on THIS fixture the promotion set is empty (typeck guard-probe declines
-    // entrypoint), so `spike_host_subset` short-circuits on `promoted.contains(&f.name)`
-    // and never reads the suspend-set argument — the bare-vs-effective comparison above is
-    // structurally indistinguishable and cannot, on its own, catch a caller reverted to the
-    // bare set. This test is the masked END-TO-END guard (it proves the real fixture
-    // compiles, declines, and the two boundaries agree as wired today). The NON-tautological
-    // probe of the divergence — bare set ADMITS, effective set DECLINES — lives in
-    // `spike_host_subset_bare_admits_effective_declines_on_imported_post_pair` below, which
-    // forces a NON-EMPTY promotion set so the suspend-set argument is actually read.
+    assert_ne!(
+        hosts_bare, hosts_effective,
+        "bare and effective probes MUST disagree on this fixture — an agreement here (either both \
+         admit or both decline) means the underlying post-pair suspending-callee gate stopped \
+         being suspend-set-sensitive, and this test has lost its diagnostic value as the tripwire \
+         for a caller that reverts to the wrong (bare) set. Both REAL query boundaries always pass \
+         the effective set (never the bare set), so production stays safe regardless — but this \
+         disagreement is what proves the effective-set discipline is load-bearing, not incidental."
+    );
 }
 
 // CONSTRUCTION NOTE (shared by the two tests below, v0.3-M3g Phase-2-blocker-fix): this fixture
@@ -420,29 +454,21 @@ function entrypoint() -> nothing {
 
 #[test]
 fn spike_host_subset_base_suspends_decline_masks_bare_vs_effective_divergence() {
-    // WHY (v0.3-M3g Phase-2-blocker-fix): this test replaces
-    // `spike_host_subset_bare_admits_effective_declines_on_imported_post_pair`, which asserted
-    // the OPPOSITE of what is now true. Before the fix, `admitted_cpu_group`'s Phase-2 temporary
-    // co-resident-suspension decline re-derived "does this host suspend?" via a per-statement AST
-    // scan of `suspend_set` — a SECOND, narrower notion of "suspends" that could diverge from the
-    // authoritative one (see `cpu_admission.rs`'s blocker fix and its doc comment). That scan let
-    // a bare/effective split in the `suspend_set` ARGUMENT change entrypoint's admission outcome,
-    // because entrypoint's own suspending-ness was re-derived from whatever set happened to be
-    // passed in.
-    //
-    // The fix keys the decline off `base_suspends.contains(&f.name)` instead — the SAME
-    // authoritative pre-promotion suspend set BOTH real query boundaries compute identically via
-    // `build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns)`. `entrypoint`
-    // calls `ioWork` (a genuinely suspending function) SOMEWHERE in its body, so `entrypoint`
-    // itself is ALREADY a member of that authoritative set — independent of whether `ioWork`'s
-    // own name happens to be present in the (unrelated) `suspend_set` argument used for the
-    // finer-grained CPU-group-member-eligibility scan. So as long as `base_suspends` is computed
-    // correctly (which every real caller does, from the SAME `check_query`/
-    // `module_signatures_query` outputs), `spike_host_subset` now declines `entrypoint`
-    // regardless of what `suspend_set` says — the bare-vs-effective divergence this file used to
-    // police is now STRUCTURALLY unreachable for any function that is itself transitively
-    // suspending, not merely masked by convention. See the isolation test below for what happens
-    // when `base_suspends` itself is wrong (the one input that still matters).
+    // WHY (v0.3-M3g Phase 3 UPDATE — test name retained for history continuity even though its
+    // assertion now proves the OPPOSITE of its Phase-2-blocker-fix predecessor): that predecessor
+    // proved `admitted_cpu_group`'s (now-REMOVED) Phase-2 temporary co-resident-suspension decline
+    // — keyed on `base_suspends.contains(&f.name)` — made the admission outcome INSENSITIVE to
+    // the (unrelated) `suspend_set` argument whenever `base_suspends` was correct. Phase 3 removes
+    // that decline entirely (see `cpu_admission.rs`'s `admitted_cpu_group` doc comment) — the
+    // `base_suspends` parameter is now UNUSED by `admitted_cpu_group` (kept only for call-surface
+    // stability, prefixed `_base_suspends`). This test now proves exactly that non-consultation:
+    // the result is IDENTICAL whether `base_suspends` is CORRECT (the real, authoritative set) or
+    // deliberately WRONG (empty) — a regression where a future change re-adds `base_suspends`
+    // consultation to `admitted_cpu_group` without updating this test would make these two probes
+    // DIVERGE, failing this assertion. (The suspend_set-sensitivity this test used to attribute to
+    // "base_suspends being wrong" is now attributable ENTIRELY to the pre-existing, unrelated
+    // post-pair suspending-callee gate in `cpu_group_member_indices` — see the sibling test below,
+    // which already documents that gate's own bare-vs-effective sensitivity directly.)
     let mut db = CompilerDb::default();
     let entry_sf = register_inline(&mut db, "entrypoint.ynz", IO_WORK_POST_PAIR_SRC);
 
@@ -460,9 +486,7 @@ fn spike_host_subset_base_suspends_decline_masks_bare_vs_effective_divergence() 
     assert!(
         check.suspends_set.contains("entrypoint"),
         "sanity: entrypoint calls ioWork (a suspending function), so entrypoint is ALSO \
-         transitively suspending under Yinz's no-function-coloring model — this is the fact the \
-         fix leverages (entrypoint is a `base_suspends` host regardless of literal `wait` \
-         syntax at the call site); got: {:?}",
+         transitively suspending under Yinz's no-function-coloring model; got: {:?}",
         check.suspends_set
     );
 
@@ -470,43 +494,39 @@ fn spike_host_subset_base_suspends_decline_masks_bare_vs_effective_divergence() 
     // (bypassing the typeck guard-probe that empties it on this shape today).
     let promoted: HashSet<String> = [String::from("entrypoint")].into_iter().collect();
 
-    // `base_suspends` is CORRECT (the real check.suspends_set, containing "entrypoint") in BOTH
-    // probes below — only the (now-irrelevant-to-this-decline) `suspend_set` argument varies
-    // bare vs effective, mirroring what a real caller reversion would look like.
-    let mut bare_suspend_set: SuspendSet = check.suspends_set.clone();
-    bare_suspend_set.remove("ioWork");
+    // `suspend_set` (the eligibility-scan argument) is held CONSTANT — the effective set, matching
+    // what a real caller always passes — while `base_suspends` varies CORRECT vs WRONG (empty).
     let effective_suspend_set: SuspendSet = check.suspends_set.clone();
+    let correct_base_suspends: SuspendSet = check.suspends_set.clone();
+    let wrong_base_suspends: SuspendSet = SuspendSet::new();
 
-    let hosts_bare = ynz_codegen::emit::spike_host_subset(
-        &check.typed_module,
-        &bare_suspend_set,
-        &check.suspends_set,
-        &promoted,
-    );
-    let hosts_effective = ynz_codegen::emit::spike_host_subset(
+    let hosts_correct_base = ynz_codegen::emit::spike_host_subset(
         &check.typed_module,
         &effective_suspend_set,
-        &check.suspends_set,
+        &correct_base_suspends,
+        &promoted,
+    );
+    let hosts_wrong_base = ynz_codegen::emit::spike_host_subset(
+        &check.typed_module,
+        &effective_suspend_set,
+        &wrong_base_suspends,
         &promoted,
     );
 
-    assert!(
-        hosts_bare.is_empty(),
-        "with a CORRECT base_suspends, spike_host_subset must decline entrypoint even when \
-         `suspend_set` is reverted to bare (missing 'ioWork') — the Phase-2 co-resident-\
-         suspension decline no longer depends on which suspend_set variant is passed for \
-         eligibility scanning; got hosts: {hosts_bare:?}"
-    );
-    assert!(
-        hosts_effective.is_empty(),
-        "entrypoint must decline under the effective suspend_set too; got hosts: \
-         {hosts_effective:?}"
-    );
     assert_eq!(
-        hosts_bare, hosts_effective,
-        "bare and effective probes must now AGREE (both decline) once base_suspends is correct \
-         — a disagreement here means the Phase-2 decline regressed back to reading the eligibility \
-         suspend_set instead of the authoritative base_suspends set"
+        hosts_correct_base, hosts_wrong_base,
+        "spike_host_subset must return the IDENTICAL host set regardless of whether base_suspends \
+         is correct or (deliberately, for this test) wrong — proving admitted_cpu_group no longer \
+         consults base_suspends at all post-Phase-3. A divergence here means base_suspends \
+         consultation was silently re-added without updating this test; got correct={hosts_correct_base:?} \
+         wrong={hosts_wrong_base:?}"
+    );
+    assert!(
+        hosts_correct_base.is_empty(),
+        "entrypoint must decline under the effective suspend_set (the pre-existing post-pair \
+         suspending-callee gate, unrelated to base_suspends, still catches this shape — see \
+         imported_suspending_after_pair_declines_consistently_across_boundaries for the \
+         production-path proof); got hosts: {hosts_correct_base:?}"
     );
 }
 

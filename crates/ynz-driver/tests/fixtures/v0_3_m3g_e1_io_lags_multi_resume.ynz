@@ -1,0 +1,46 @@
+// v0.3-M3g E1 adversarial deadlock gate — genuinely distinct from the three non-negotiable flip
+// fixtures. Those three use trivial workloads (`sleep(0)`, a 100-iteration loop) that can resolve
+// within a SINGLE poll pass, so they mostly prove "the group fires with correct output," not "the
+// shared continuation survives many real resume cycles." This fixture forces MULTIPLE genuine
+// poll/resume cycles by giving the I/O member a real (150ms) sleep while the CPU member finishes
+// almost immediately — exercising the exact 4c failure mode named in the plan's terrain: "a
+// nested CPU spawn yields Pending into a continuation the outer suspension's resume never
+// re-drives, so the spawned handle is never re-polled." Here it is the MIRROR risk — the shared
+// poll must correctly SKIP the already-Ready, nulled-out CPU handle on every one of the several
+// re-entries the I/O member's longer sleep forces, without crashing or double-freeing it, and
+// keep re-polling the I/O sub-frame until its OWN sentinel fires. Run under the watchdog (E1) —
+// a bug that drops a member from re-polling hangs here.
+//
+// crunch(n) does trivial (100-iteration) real work — finishes in microseconds. fetchSlow(n)
+// suspends for 150ms, which on a Tokio timer wheel resolves over more than one wake, forcing the
+// group's shared poll state to be re-entered multiple times while crunch's handle is long since
+// freed and nulled.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   crunch(1) = 4950 + 1  = 4951
+//   fetchSlow(2) = 2 + 1  = 3
+//   sum = 4951 + 3        = 4954
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   4954
+
+function crunch(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function fetchSlow(seed: int) -> int {
+  wait sleep(150)
+  return seed + 1
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(1)
+  let b = fetchSlow(2)
+  print(a + b)
+}

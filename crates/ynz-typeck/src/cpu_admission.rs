@@ -63,7 +63,8 @@ pub struct BlockStep {
 /// sequentially (byte-identical to `--no-auto-parallel`).
 ///
 /// Mirrors the codegen admission decision exactly: single-group constraint, no post-join param
-/// read, no nested group sharing the host with another suspension, no nested param-host.
+/// read, no nested group sharing the host with a call to another CPU-group-capable function,
+/// no nested param-host.
 ///
 /// **TEMPORARY (v0.3-M3g Phase 2):** a top-level group ALSO declines when the host `f` is ITSELF
 /// a member of `base_suspends` (co-resident-suspension decline) — the mirror of the nested
@@ -86,12 +87,52 @@ pub struct BlockStep {
 /// `may_block::analyze` seeds `calls_may_block_intrinsic` independent of `wait` syntax) and never
 /// declines a host whose only suspension is its own CPU join.
 ///
+/// **v0.3-M3g Phase 3 — RESOLVED (the residual decline this doc comment used to describe is
+/// REMOVED; kept for history + the next session's cross-check):** a previous session's HALT
+/// left a NESTED-branch residual decline for a nested group co-resident with a call to another
+/// spike-capable host (`spike_capable_names`), attributing the crash it guarded against to a
+/// "genuine, pre-existing runtime defect in the `ynz_rt_join_poll`/`CpuJoinHandle` handle
+/// lifecycle." That attribution was **wrong** — re-investigated this session with runtime-level
+/// `eprintln!` tracing (added, exercised, fully reverted) of every spawn/poll/free on the exact
+/// repro (`v0_3_m3d_nested_group_with_suspending_callee.ynz`, the shape this decline used to
+/// guard): every handle spawn/poll/free traced CORRECTLY — Ready polls freed cleanly, address
+/// reuse between a freed handle and a later spawn is ordinary, safe allocator behavior (the freed
+/// handle was fully consumed and nulled in its frame slot before the reused address was handed to
+/// a new spawn). The runtime handle machinery is sound. The REAL root cause, found by reading the
+/// emitted LLVM IR directly: `crates/ynz-codegen/src/emit.rs`'s `frame_bytes` computation for a
+/// spike-active host used a stale special-case formula (`FRAME_HEADER_SIZE +
+/// own_locals_size(n_locals)`) that silently DROPPED every embedded child sub-frame — a genuine
+/// heap-buffer-overflow bug (the `combine` host's wrapper allocated only 88 bytes when the
+/// composed frame, including the embedded 80-byte `other` child sub-frame, needed 168). Fixed
+/// directly in `emit.rs` (see that fix's doc comment) by always trusting `frame_layout.total_size`
+/// (which already correctly includes both the CPU reserve and every embedded child), the same way
+/// the non-spike branch already did. With the real bug fixed, the decline this doc comment used to
+/// describe was verified (20/20 clean runs, correct oracle output, no crash, no hang) to be
+/// unnecessary and has been removed — a nested group co-resident with a call into ANOTHER
+/// promoted CPU-group host is ADMITTED, exactly like the plain-`wait`/ordinary-suspending-callee
+/// case the note below already covers. See the plan's audit trail for the full repro + fix.
+///
 /// Time: O(1) amortized (`HashSet::contains`) plus the O(N) AST work shared with the other gates.
 pub fn admitted_cpu_group(
     f: &FunctionDecl,
     suspend_set: &SuspendSet,
-    base_suspends: &SuspendSet,
+    // Unused as of the v0.3-M3g Phase 3 admission flip (the Phase-2 temporary co-resident-
+    // suspension decline that consulted this set is removed — see the doc comment above and the
+    // in-body notes). Kept as a parameter (not removed) so the call surface across
+    // `ynz-codegen`/`ynz-typeck` and their test suites — which threads `base_suspends` as a
+    // genuinely separate value from `suspend_set` at every call site down to here (see the
+    // `admitted_cpu_group`/`spike_cpu_candidates` doc history) — does not need a second wide
+    // signature-churn pass in the same phase that also builds the fused-group admission path.
+    _base_suspends: &SuspendSet,
     supported_callees: &HashSet<String>,
+    // Unused as of this session's root-cause fix (the doc comment above explains why the
+    // NESTED-branch decline this set used to gate is gone — the crash it guarded against was a
+    // frame-size bug, fixed directly in `emit.rs`, not a soundness gap this set needed to police).
+    // Kept as a parameter for the same reason `_base_suspends` above is kept: every caller across
+    // `ynz-codegen`/`ynz-typeck` and their test suites already threads a `spike_capable_names`
+    // value down to this call, and a second wide signature-churn pass is not worth it purely to
+    // delete a now-inert parameter.
+    _spike_capable_names: &HashSet<String>,
 ) -> Option<AdmittedCpuGroup> {
     // Single-group constraint: a function spike-hosts IFF it has EXACTLY ONE CPU group across all
     // depths. Two-or-more groups would alias the single group-0 slot region — a silent wrong
@@ -104,60 +145,60 @@ pub fn admitted_cpu_group(
     // post-join statement — the wrapper writes param slot 0 at the byte the first CPU handle
     // occupies, so a post-join reload returns the handle pointer's bytes instead of the value.
     // A param used only in spawn args round-trips safely (the load precedes the handle store).
+    //
+    // **v0.3-M3g Phase 3 admission flip**: the Phase-2 TEMPORARY co-resident-suspension decline
+    // (keyed on `base_suspends.contains(&f.name)`) that lived here is REMOVED in this phase. A
+    // host that also suspends elsewhere (an explicit `wait`, a suspending callee, or a bare
+    // may-block-intrinsic call) is now admitted: the state machine's ordinary multi-suspension-
+    // point dispatch already shares ONE continuation across every suspension state in the
+    // function (the CPU join's poll state is just one more `resume_point` value alongside any
+    // `wait`-derived state), so a group co-resident with another suspension is safe once its
+    // result names are correctly frame-backed — which `spike_cpu_group_result_names`'s
+    // depth-aware pre-allocation (Step 1c) now guarantees for both top-level and nested groups.
     if let Some(members) = cpu_group_member_indices(&f.body.stmts, suspend_set, supported_callees) {
-        // TEMPORARY (v0.3-M3g Phase 2, removed by Phase 3's admission flip): decline a
-        // top-level group when the host `f` is ITSELF a `base_suspends` host (an explicit
-        // `wait`, a suspending callee, or a bare may-block-intrinsic call — anywhere in `f`'s
-        // body, not just co-resident with the group), mirroring the nested branch's
-        // co-resident-suspension check below. Phase 2 lifts `compute_cpu_promotions`'s
-        // `base_suspends` skip (`queries.rs:761`), so a host that already suspends (e.g.
-        // `crunch(x); crunch(y); wait sleep(5)`) becomes a promotion candidate for the first
-        // time — but the fused continuation that would let the CPU join and the OTHER
-        // suspension share one continuation doesn't exist until Phase 3. Without this decline,
-        // such a host would admit here today (this is the ONLY per-function binary-side gate —
-        // the module-global `m3d_spike` flag plus `spike_cpu_candidates` reach
-        // `admitted_cpu_group` for EVERY suspend_set function once ANY function in the module
-        // promotes, with no per-function promoted-set check at the codegen fire site — see plan
-        // `v0-3-m3g-mixed-cpu-io-overlap` ¶1 A9) and the mixed group would fire, deadlocking or
-        // racing against the fused continuation this milestone hasn't built yet. Phase 3 removes
-        // this decline in the SAME change that removes the nested branch's `:102-108` decline
-        // and wires the real fused poll, so hint==binary parity never has a window where it lies.
-        //
-        // Keyed off `base_suspends` membership (the AUTHORITATIVE pre-promotion signal), NOT a
-        // second re-derived AST scan of `f`'s own statements: a re-derived scan that exempts
-        // may-block intrinsics (as `stmt_contains_suspending_call_deep` correctly does for OTHER
-        // purposes — an intrinsic wait has no embedded child sub-frame to alias) MISSES a bare
-        // `sleep(0)` call with no `wait` wrapper, which still makes `f` suspend at runtime
-        // (`may_block.rs` sets `calls_may_block_intrinsic` independent of `wait` syntax) — a real
-        // co-resident-suspension host the old scan let straight through to codegen. Reading
-        // `base_suspends` instead closes that hole and any future may-block-intrinsic or
-        // bare-suspension shape without a second detector to keep in sync.
-        if base_suspends.contains(&f.name) {
-            return None;
-        }
         let last_idx = *members.last().expect("group has ≥2 members");
         let post_stmts = &f.body.stmts[(last_idx + 1)..];
         if param_read_after_join(f, post_stmts) {
             return None;
         }
+        // **RESOLVED (was: a HALT-and-surface residual decline for a POST-GROUP control-flow
+        // statement whose body suspends):** a prior session root-caused but did not fix the real
+        // bug — `crate::check`'s crossing-local analysis (`collect_crossings_in_stmts`) flushed a
+        // CPU group's pending result-binding names into `declared` only when it recognized the
+        // FOLLOWING statement as itself suspending, and its `this_stmt_suspends` check matched
+        // only a DIRECT top-level `wait`/suspending-call statement, never a control-flow statement
+        // whose BODY suspends. Fixed directly in `check.rs` this session: `this_stmt_suspends` now
+        // also recognizes an `if`/`while`/`for`/`match` whose body suspends as a suspension point
+        // for the surrounding statement sequence, flushing pending result-bindings and recursing
+        // into the suspending sub-block exactly like the not-yet-suspended case already did. With
+        // the real crossing-analysis gap fixed, this decline is unnecessary and removed — a
+        // POST-GROUP control-flow statement whose body suspends no longer needs special handling
+        // here.
         return Some(AdmittedCpuGroup {
             block_path: Vec::new(),
             member_indices: members,
         });
     }
 
-    // The sole group is one level inside a branch arm. It declines when the host also contains any
-    // OTHER suspension point (an explicit `wait` or a suspending callee): a second suspension
-    // resumes through the reload path, which looks up the nested group's bind names in the
-    // (empty, because Step 1c scans only the top level) alloca map and aborts. Pure-CPU IFF the
-    // only suspension is the nested join itself.
-    if f.body
-        .stmts
-        .iter()
-        .any(|s| stmt_contains_wait_deep(s) || stmt_contains_suspending_call_deep(s, suspend_set))
-    {
-        return None;
-    }
+    // The sole group is one level inside a branch arm.
+    //
+    // **v0.3-M3g Phase 3 admission flip**: this used to decline whenever the host ALSO contained
+    // any OTHER suspension point (an explicit `wait` or a suspending callee) — because a second
+    // suspension resumed through the reload path, which looked up the nested group's bind names
+    // in an (empty, pre-Phase-3) alloca map and aborted ("no sm_entry alloca for `<name>`"; see
+    // the M3d DECLINE fixtures this un-declines, `integration.rs`). `spike_cpu_group_result_names`
+    // now walks nested blocks (mirroring `spike_cpu_group_member_count`'s traversal), so Step 1c
+    // pre-allocates the nested group's result names regardless of depth, and the reload succeeds.
+    // A nested group co-resident with another suspension is therefore admitted here too — the
+    // decline that used to guard this exact crash is gone because its root cause is fixed, not
+    // papered over.
+    //
+    // **RESOLVED (was: "the one case that STAYS declined" — a call anywhere in `f`'s body to a
+    // function that is ITSELF spike-capable):** this residual decline is REMOVED. See the doc
+    // comment above `admitted_cpu_group` for the full root-cause correction — the crash it used
+    // to guard against was a frame-size under-allocation bug (fixed in `emit.rs`), not a runtime
+    // handle-lifecycle defect. A nested group co-resident with a call into another spike-capable
+    // host is admitted here too, exactly like any other co-resident suspension.
 
     // A nested group in a function that takes ANY parameter declines: the post-join frontier
     // crosses the branch boundary, which needs param-slot reservation the spike path does not yet
@@ -167,6 +208,263 @@ pub fn admitted_cpu_group(
     }
 
     nested_group_member_path(&f.body.stmts, suspend_set, supported_callees)
+}
+
+/// Function names whose OWN body contains at least one adjacent CPU-eligible pair at any depth —
+/// a conservative, syntactic proxy for "this function could itself become a promoted CPU-group
+/// host," used ONLY to keep [`admitted_cpu_group`]'s nested-branch HALT-and-surface decline
+/// narrow (see that function's doc comment). Deliberately does NOT require the callee to be
+/// actually ADMITTED (that would need the full recursive decision this module computes
+/// per-function, and — for THIS conservative-decline purpose — a syntactic over-approximation is
+/// safe: declining a few more shapes than strictly necessary is always correct, per this whole
+/// module's "sequential fallback is always correct" discipline).
+///
+/// Time: O(F · N) where F = functions in the module, N = AST nodes per function.
+/// Space: O(F).
+pub fn spike_capable_function_names<'a>(
+    functions: impl Iterator<Item = &'a FunctionDecl>,
+    suspend_set: &SuspendSet,
+    supported_callees: &HashSet<String>,
+) -> HashSet<String> {
+    functions
+        .filter(|f| count_cpu_groups_all_depths(&f.body.stmts, suspend_set, supported_callees) > 0)
+        .map(|f| f.name.clone())
+        .collect()
+}
+
+// ── Fused (mixed CPU+I/O) top-level group — v0.3-M3g Phase 3 ───────────────────────────────
+
+/// The execution class of one member of an [`AdmittedFusedGroup`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FusedMemberClass {
+    /// A pure-CPU call spawned onto the blocking pool (same eligibility as
+    /// [`cpu_group_member_indices`]'s per-member checks).
+    Cpu,
+    /// A suspending (I/O) call inline-polled via its embedded child sub-frame.
+    Suspending,
+}
+
+/// The admitted FUSED group for one function: a maximal adjacent run, at the TOP LEVEL of the
+/// function body ONLY, mixing at least one [`FusedMemberClass::Cpu`] member and at least one
+/// [`FusedMemberClass::Suspending`] member. `(stmt_index, class)` pairs, in source order.
+///
+/// **Scope (deliberate, recorded per the plan's disciplined-initiative rule 4 — "edge shapes
+/// beyond the three non-negotiable flip fixtures MAY decline safely"):** top-level only (a NESTED
+/// mixed group declines to sequential — the existing pure-CPU nested machinery's frame-slot
+/// reasoning does not extend to a nested FUSED group without further work); every member's call
+/// takes exactly one `IntLit`/`Ident` argument (mirrors [`cpu_group_member_indices`]'s existing
+/// CPU-member restriction — the 8-byte spawn ctx cannot carry more, and restricting BOTH classes
+/// to this shape sidesteps re-deriving the write-effect/alias soundness floor
+/// `crate::independence`'s full analysis provides: a scalar-only argument set has no possible
+/// aliased-write hazard between members, so independence holds by construction regardless of what
+/// each callee does internally). A group with only ONE class present is NOT fused — the existing,
+/// separately-tested pure-CPU (`cpu_group_member_indices`) or pure-I/O
+/// (`crate::independence::partition_independent_groups`) paths already handle it and are left
+/// untouched by this function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmittedFusedGroup {
+    pub members: Vec<(usize, FusedMemberClass)>,
+}
+
+/// Extract `(callee_name, args)` from a direct ident call statement (`let x = f(a)` or `f(a)`),
+/// or `None` for anything else (method calls, non-ident callees, non-call statements).
+///
+/// Time: O(1).
+fn stmt_direct_call(stmt: &Stmt) -> Option<(&str, &[Expr])> {
+    let c = match stmt {
+        Stmt::Let {
+            value: Expr::Call(c),
+            ..
+        }
+        | Stmt::Expr(Expr::Call(c)) => c,
+        _ => return None,
+    };
+    match &c.callee {
+        Expr::Ident(name, _) => Some((name.as_str(), c.args.as_slice())),
+        _ => None,
+    }
+}
+
+/// True when `args` is exactly one `IntLit`/`Ident` argument — the shape both
+/// [`cpu_group_member_indices`] (CPU members) and [`admitted_fused_group`] (both classes) require.
+///
+/// Time: O(1).
+fn single_scalar_arg(args: &[Expr]) -> bool {
+    args.len() == 1 && matches!(args[0], Expr::IntLit(_, _) | Expr::Ident(_, _))
+}
+
+/// Return the single admitted FUSED (mixed CPU+I/O) group for `f`'s TOP-LEVEL body, or `None`.
+///
+/// Sequential fallback is always correct — a `None` here means the normal, unchanged pure-CPU
+/// (`admitted_cpu_group`) and pure-I/O (`partition_independent_groups`-driven) paths handle the
+/// function exactly as before this function existed.
+///
+/// Admission gates (all must hold):
+/// - a maximal adjacent run (length ≥ 2) of eligible members, where a member is eligible when it
+///   is a direct ident call with exactly one `IntLit`/`Ident` argument AND the callee is either
+///   pure-CPU-eligible (not in `suspend_set`, in `supported_callees`, not self-recursive) or
+///   suspending-eligible (in `suspend_set`),
+/// - the run contains AT LEAST ONE member of EACH class (else it is not fused — see the doc
+///   comment above),
+/// - no member's argument references an EARLIER member's bind name (independence — mirrors
+///   [`cpu_group_member_indices`]'s existing dependency check),
+/// - no two Suspending members share the same callee name (mirrors the pre-existing M3b
+///   same-callee-suspending restriction — one embedded child sub-frame per unique callee name;
+///   out of this dispatch's scope to lift),
+/// - no pre-group statement suspends,
+/// - no post-group statement assigns a member's bind name or calls a user-defined suspending
+///   callee (mirrors [`cpu_group_member_indices`]'s existing post-group gates).
+///
+/// Time: O(n) where n = stmts length  Space: O(m) where m = group members.
+pub fn admitted_fused_group(
+    f: &FunctionDecl,
+    suspend_set: &SuspendSet,
+    supported_callees: &HashSet<String>,
+) -> Option<AdmittedFusedGroup> {
+    // A host with ANY parameter declines. Params and the fused group's CPU handle/result
+    // reserve share the SAME byte-32-relative slot addressing (`admitted_cpu_group`'s top-level
+    // branch tolerates this ONLY behind `param_read_after_join`'s narrower "no post-join READ"
+    // gate — see that function's doc comment for the exact overlap mechanism). A fused group
+    // ALSO embeds I/O child sub-frames whose own byte layout depends on the same `own_base`
+    // computation the reserve pushes past, so the safer, more conservative bar for this first
+    // fused-group codegen consumer is "no params at all" — narrowing later to mirror
+    // `param_read_after_join`'s precision is legitimate follow-on work (Future Requirements),
+    // never a correctness requirement for this always-safe-to-decline gate.
+    if !f.params.is_empty() {
+        return None;
+    }
+
+    let stmts = &f.body.stmts;
+
+    // Classify every top-level statement (eligible Cpu / eligible Suspending / ineligible).
+    let classify = |i: usize| -> Option<FusedMemberClass> {
+        let stmt = &stmts[i];
+        if stmt_has_explicit_wait_stmt(stmt) {
+            return None; // an explicit `wait` is an ordering barrier, never a group member.
+        }
+        let (callee, args) = stmt_direct_call(stmt)?;
+        if !single_scalar_arg(args) {
+            return None;
+        }
+        if suspend_set.contains(callee) {
+            Some(FusedMemberClass::Suspending)
+        } else if supported_callees.contains(callee) && callee != f.name {
+            Some(FusedMemberClass::Cpu)
+        } else {
+            None
+        }
+    };
+
+    let eligible: Vec<(usize, FusedMemberClass)> = (0..stmts.len())
+        .filter_map(|i| classify(i).map(|c| (i, c)))
+        .collect();
+
+    // Anchor on the first adjacent pair (any class combination), then extend forward over every
+    // further adjacent eligible statement — mirrors `cpu_group_member_indices`'s anchoring.
+    let first_idx = eligible
+        .windows(2)
+        .find(|w| w[1].0 == w[0].0 + 1)
+        .map(|w| w[0].0)?;
+    let mut last_idx = first_idx + 1;
+    while eligible.iter().any(|&(i, _)| i == last_idx + 1) {
+        last_idx += 1;
+    }
+    let members: Vec<(usize, FusedMemberClass)> = eligible
+        .into_iter()
+        .filter(|&(i, _)| i >= first_idx && i <= last_idx)
+        .collect();
+
+    // Must be genuinely MIXED — at least one member of each class.
+    let has_cpu = members.iter().any(|&(_, c)| c == FusedMemberClass::Cpu);
+    let has_suspending = members
+        .iter()
+        .any(|&(_, c)| c == FusedMemberClass::Suspending);
+    if !has_cpu || !has_suspending {
+        return None;
+    }
+
+    // Same-callee restriction for Suspending members only (mirrors M3b).
+    let mut seen_suspending_callees: HashSet<&str> = HashSet::new();
+    for &(i, class) in &members {
+        if class == FusedMemberClass::Suspending {
+            let (callee, _) = stmt_direct_call(&stmts[i]).expect("classified as a direct call");
+            if !seen_suspending_callees.insert(callee) {
+                return None;
+            }
+        }
+    }
+
+    // Independence: no member's argument references an EARLIER member's bind name.
+    let bind_name = |i: usize| -> Option<&str> {
+        match &stmts[i] {
+            Stmt::Let { name, .. } => Some(name.as_str()),
+            _ => None,
+        }
+    };
+    let arg_ident = |i: usize| -> Option<&str> {
+        let (_, args) = stmt_direct_call(&stmts[i])?;
+        match args.first() {
+            Some(Expr::Ident(n, _)) => Some(n.as_str()),
+            _ => None,
+        }
+    };
+    let earlier_bind_names: Vec<&str> = members.iter().filter_map(|&(i, _)| bind_name(i)).collect();
+    for (pos, &(i, _)) in members.iter().enumerate() {
+        let prior = &earlier_bind_names[..pos.min(earlier_bind_names.len())];
+        if let Some(a) = arg_ident(i) {
+            if prior.contains(&a) {
+                return None;
+            }
+        }
+    }
+
+    // No pre-group statement may suspend.
+    if stmts[..first_idx]
+        .iter()
+        .any(|s| stmt_contains_wait_deep(s) || stmt_contains_suspending_call_deep(s, suspend_set))
+    {
+        return None;
+    }
+
+    // No post-group statement may assign a member's bind name or call a user-defined suspending
+    // callee (mirrors `cpu_group_member_indices`'s existing post-group gates).
+    let bind_names: Vec<&str> = members.iter().filter_map(|&(i, _)| bind_name(i)).collect();
+    let post_stmts = &stmts[(last_idx + 1)..];
+    for bn in &bind_names {
+        if post_stmts.iter().any(|s| stmt_assigns_name(s, bn)) {
+            return None;
+        }
+    }
+    if post_stmts
+        .iter()
+        .any(|s| stmt_contains_suspending_call_deep(s, suspend_set))
+    {
+        return None;
+    }
+    // RESOLVED — see `admitted_cpu_group`'s top-level branch doc comment for the root-cause fix
+    // (the `crate::check` crossing-analysis gap this decline used to guard against is fixed
+    // directly in `check.rs`; this fused-group mirror decline is removed for the same reason).
+
+    Some(AdmittedFusedGroup { members })
+}
+
+/// True when `stmt` is (or wraps, per the existing `wait`-expr shapes) an explicit `wait`. A
+/// narrower helper than [`stmt_contains_wait_deep`] — this checks only the STATEMENT's own
+/// top-level expression, matching `crate::independence::stmt_has_explicit_wait`'s contract
+/// (an explicit `wait` resets grouping; only the wait-bearing statement itself is excluded, not
+/// its descendants — this function never has descendants to check since a fused-group candidate
+/// is a plain call statement).
+///
+/// Time: O(1).
+fn stmt_has_explicit_wait_stmt(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::Expr(Expr::Wait(..))
+            | Stmt::Let {
+                value: Expr::Wait(..),
+                ..
+            }
+    )
 }
 
 /// The member statement indices of the single admissible CPU group in one straight-line block, or

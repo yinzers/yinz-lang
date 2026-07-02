@@ -42,6 +42,110 @@ the current-truth plan.md slice).
   untouched. Session-id chain unchanged (this session is already its tail entry; a consecutive
   duplicate would add no information — recorded decision).
 
+- ee4baaa2-24e0-4064-966f-f9ad907f8751 — 2026-07-02 — Phase 3 should-fix closeout (a
+  reviewer-fleet pass — code-reviewer, 2 adversarial deviation-judges, acceptance-verifier,
+  rules-compliance — found 0 blockers but several real should-fix items). Recorded as a
+  session-log entry, not a new FRAGO, per the same Phase 1/2 cheap-gate-fix pattern: honest
+  correction of the record + a real refactor, not a mid-execution plan-vs-reality reversal
+  requiring fresh sign-off.
+  - **Reuse/drift risk (code-reviewer) — FIXED.** `crates/ynz-codegen/src/emit.rs`'s fused CPU
+    spawn/poll loops and I/O init/poll loops were copy-pasted from `emit_cpu_group_spawn_join` /
+    `emit_independent_group_poll` (the safety-critical null-check-skip / sentinel-skip
+    idempotency logic duplicated four ways). Extracted 4 shared helpers —
+    `emit_cpu_member_spawn`, `emit_cpu_member_poll`, `emit_io_member_init`,
+    `emit_io_member_poll` — now called by BOTH the fused path and the original pure-CPU/pure-I/O
+    paths, mirroring the pre-existing `build_cpu_trampoline` extraction. Every LLVM
+    block/value-name literal passed at each call site is a byte-for-byte reproduction of that
+    call site's PRE-extraction name (verified, not assumed — see below), so the two
+    already-shipped paths emit unchanged IR. `emit_independent_group_poll`'s Child struct still
+    carries `child_frame` (used by the untouched first-poll pass); `ptr_ty`/the local
+    `frame_byte_ptr` closures that became dead after extraction were removed from both callers
+    (`cargo clippy --workspace -- -D warnings` clean, confirming no unused-var/dead-closure
+    residue).
+    **Verification:** reconstructed the pre-refactor `emit.rs` by mechanically reverse-applying
+    every edit (confirmed via `diff` that the reconstruction touches ONLY the 8 edited regions,
+    nothing else) and built both versions of the `ynz` binary. Emitted `--emit-ir` output for 11
+    representative fixtures — 5 pure-CPU M3d spike fixtures (`v0_3_m3d_spike_r_nested_groups`,
+    `_spike_a_distinct`, `_return_class_string`, `_same_callee_int`,
+    `_param_host_n3_spawn_args_only`), 3 pure-I/O M3b fixtures
+    (`v0_3_m3b_p4_two_independent_parallel`, `_nested_composed_frames`,
+    `_middle_resolves_first`), and 3 M3g fused fixtures
+    (`v0_3_m3g_e1_cpu_lags_multi_resume`, `_overlap_proof`, `_e8_pool_exhaustion_stress`) — and
+    diffed before-vs-after with only the tmpdir-embedded source path normalized (the same 3-line
+    `ModuleID`/`source_filename`/`@.source.file` noise every isolated-tmpdir build produces):
+    **byte-identical for all 11 fixtures.** Full test suite re-run after landing the refactor:
+    `cargo test -p ynz-driver --test integration` filtered to `m3d` (72/72 green), `m3b` (87/87
+    green), `m3g` (9/9 green) — zero regressions. `cargo build --workspace` and
+    `cargo clippy --workspace -- -D warnings` both clean.
+  - **Missing Future Requirements rows (rules-compliance + deviation-judge #1) — FIXED.** Added
+    two rows to `## Future Requirements / Revisit`: the block-walker wholesale swap to
+    `partition_groups_classified` (documented in prose across FRAGO 005/the closing STATUS block
+    but never given a table row) and the `admitted_fused_group` `!f.params.is_empty()`
+    restriction being coarser than `param_read_after_join`'s precision (documented in the same
+    STATUS block prose, same gap). Both rows carry concrete WHAT/WHY/COST/TRIGGER fields per the
+    table's existing convention.
+  - **E8 fixture overstates concurrent pressure (deviation-judge #2) — FIXED (option b:
+    widened the fixture, not just the prose).** The original fixture ran 4 chains of 5 workers
+    STRICTLY SEQUENTIALLY (worker N+1 spawned only after worker N's group fully resolved) — true
+    concurrent-pressure ceiling was 4 simultaneous fused groups, not the 20 the WHY comment and
+    `integration.rs`'s test-level WHY implied. Restructured: each chain's ROOT worker now
+    `background`-spawns ALL FOUR of its remaining chain-mates AT ONCE (not one sequential
+    successor) once its own fused group resolves — genuine concurrent-pressure ceiling is now 4
+    initial roots, then up to 16 leaves overlapping near-simultaneously shortly after (the 4
+    roots do comparable-duration work, so their fan-outs cluster in time). 20 remains the
+    CUMULATIVE total, now stated honestly as such in both the fixture's header comment and the
+    test's WHY comment (`crates/ynz-driver/tests/fixtures/v0_3_m3g_e8_pool_exhaustion_stress.ynz`,
+    `crates/ynz-driver/tests/integration.rs:v03_m3g_e8_pool_exhaustion_stress_completes_without_
+    deadlock`). Re-verified: same seeds, same worker functions, same expected DONE_* value set
+    (20 lines) and same 20-spawn IR-count assertion — only the spawn TOPOLOGY changed. Test green,
+    re-run 4 consecutive times for stability under the new higher-concurrency shape (no flake, no
+    deadlock).
+  - **Stale Demo & Error Gallery invariant text (rules-compliance) — FIXED.** The plan's
+    `### Demo & Error Gallery` invariant subsection still literally said "Both files get insta
+    snapshots," contradicting the already-honestly-recorded deviation above (this same audit
+    file, the "Recorded deviation — no dedicated NEW insta snapshot" entry) and the actual,
+    well-justified, precedent-matching implementation (the pre-existing byte-exact
+    `expected_stdout.txt` comparison, matching every prior M3-series phase). Reconciled the
+    invariant subsection's text to describe the actual mechanism, cross-referencing this
+    session's fix so a future reader isn't confused by plan text contradicting the real
+    implementation it sits above.
+  - **Self-recursion guard asymmetry (deviation-judge #2, minor) — CONFIRMED SAFE, no code
+    change.** `admitted_fused_group`'s classifier (`crates/ynz-typeck/src/cpu_admission.rs:349-
+    355`) applies `callee != f.name` to the Cpu branch only, not explicitly to the Suspending
+    branch. Traced the consequence directly: `crates/ynz-codegen/src/emit.rs`'s
+    `build_frame_layouts` (~line 377-395) excludes ANY child whose name equals the current
+    function (recursion-edge detection) from `layout.children` unconditionally — this is a
+    global mechanism, not specific to the ordinary suspending-call path
+    (`emit_suspending_call_inline_poll`'s separate heap-boxed recursion path, confirmed at
+    `emit.rs:9225`, post-refactor line number). So a self-recursive Suspending fused-group member
+    would find NO entry in
+    `layout.children` at codegen time; `emit_io_member_init`/`emit_io_member_poll`'s
+    `.ok_or_else(...)` fires a `Result::Err` (a compiler-internal error, propagated via `?` up to
+    a clean build failure), never a UAF or silent miscompile. Not exploitable as a safety gap —
+    at worst a poor-quality internal-error message on an exceedingly narrow, currently-
+    unreached-by-any-fixture shape (a function whose body both calls itself as a Suspending
+    fused-group member AND has a CPU-eligible sibling in the same group). Per the dispatch's
+    explicit instruction ("only fix if you find it's actually exploitable"), left as-is; the
+    narrower `!f.params.is_empty()`-style explicit guard would be a nice-to-have for error
+    quality, not a correctness requirement — noted here rather than silently fixed without a
+    confirmed need.
+  - **Missing safety comment (code-reviewer, minor) — FIXED.** `crates/ynz-codegen/src/emit.rs`'s
+    fused `any_pending` alloca (in the shared poll state, a non-entry block) lacked the
+    dominance-safety rationale comment its pure-CPU twin (`spike_any_pending`) already carries.
+    Added the identical rationale (alloca-in-non-entry-block is safe because each resume_fn
+    invocation gets a fresh stack frame, poll_state is only entered via the SM dispatch switch,
+    and `OptimizationLevel::None` means mem2reg never promotes it to an SSA value requiring
+    entry-block placement) — mirrors the pure-CPU path's comment verbatim in substance.
+  - **Files touched this session:** `crates/ynz-codegen/src/emit.rs` (the 4-helper extraction +
+    the safety comment), `crates/ynz-driver/tests/fixtures/v0_3_m3g_e8_pool_exhaustion_stress.ynz`
+    (fan-out restructure + WHY comment), `crates/ynz-driver/tests/integration.rs` (WHY comment
+    reconciliation only — no assertion changes), `.claude/planning/active/2026-07-01-v0-3-m3g-
+    mixed-cpu-io-overlap/plan.md` (2 new Future Requirements rows + Demo & Error Gallery
+    subsection reconciled + session-id appended), this audit.md entry.
+  - **Full verification this session:** `cargo build --workspace` clean; `cargo clippy
+    --workspace -- -D warnings` clean; the full `cargo test --workspace --no-fail-fast` run
+    (below) shows zero new regressions vs the established baseline.
+
 ## FRAGO log
 (FRAGO delta records append here — see the FRAGO template in REF-plan-format.)
 
@@ -361,3 +465,773 @@ Override:  N/A — no risk residual rose to HIGH; E6's mitigation step (guard-pr
   Requirements.
   Override: N/A — no risk residual rose to HIGH; this is a same-phase correction to Phase 2's own
   landed work, not a new design decision.
+
+## FRAGO 003 — 2026-07-02 — session-id: (Phase 3 executor session, dispatched by orchestrator)
+Base:      2026-07-01-v0-3-m3g-mixed-cpu-io-overlap @ Phase 3 (Fusion core)
+Trigger:   Phase 3 dispatch. Per the dispatch's own explicit instructions ("if you find yourself
+           genuinely blocked... STOP and report" / "a honest HALT is much better than a fusion that
+           secretly bridges or secretly still declines"), this FRAGO records TWO deliberate HALTs
+           plus TWO genuine pre-existing runtime/compiler bugs found and root-caused while lifting
+           the Phase 2 temporary admission-gate decline — not a self-decided scope change, a
+           dispatch-sanctioned surface of real findings.
+Changes:
+  - **Root cause #1 fixed (Step-1c depth-aware pre-allocation):**
+    `crates/ynz-codegen/src/emit.rs` `spike_cpu_group_result_names` now recursively scans nested
+    blocks (`if`/`match` arms, mirroring `spike_cpu_group_member_count`'s existing traversal) for
+    the admitted CPU group's bind names, not just the top-level body. Previously a NESTED group's
+    result names never got a Step-1c entry-block alloca, so any LATER suspension in the same
+    function reloading them via `spike_reload_cpu_results_from_frame` crashed with "no sm_entry
+    alloca for `<name>`" — the documented root cause of the (until now) permanent nested-group
+    co-resident-suspension decline. This fix is a genuine root-cause fix, not a workaround.
+  - **Admission flip (partial, with two recorded residual declines):**
+    `crates/ynz-typeck/src/cpu_admission.rs` `admitted_cpu_group`:
+    - REMOVED the Phase-2 temporary top-level co-resident-suspension decline
+      (`base_suspends.contains(&f.name)`) — the parameter is renamed `_base_suspends` (kept, now
+      unused, to avoid a wide call-surface churn across `ynz-codegen`/tests in the same phase that
+      also builds the new fused-group admission path).
+    - REMOVED the nested-branch's blanket "any other suspension point" decline (which existed
+      SPECIFICALLY because of root cause #1, now fixed).
+    - ADDED a narrow, root-caused residual decline on the NESTED branch: a nested group co-resident
+      with a call to a `spike_capable_names` member (a function whose OWN body could itself host a
+      CPU group) stays declined — see root cause #2 below.
+    - ADDED a narrow, root-caused residual decline on the TOP-LEVEL branch: a post-group statement
+      that is a control-flow statement (`if`/`while`/`for`/`match`) whose body suspends stays
+      declined — see root cause #3 below. New helper `stmt_control_flow_body_suspends`.
+    - New `spike_capable_function_names` (module-wide, syntactic over-approximation) threaded as a
+      new 5th parameter to `admitted_cpu_group`, computed by callers: `crates/ynz-codegen/src/
+      emit.rs` (`spike_cpu_candidates` → new `module_spike_capable_names` helper) and
+      `crates/ynz-typeck/src/inlay_hint_passes.rs` (`parallel_group_hints`, computed once per
+      module before its function loop — keeps hint==binary parity, since both now read the
+      IDENTICAL 5-argument `admitted_cpu_group` call). Three test call sites updated
+      (`crates/ynz-typeck/tests/parallel_group_hint_parity.rs` — empty set, behaviorally correct
+      since none of those 3 tests exercise a cross-function call; `crates/ynz-codegen/tests/
+      golden.rs`'s `admitted_group_for` helper — computed properly).
+  - **Root cause #2 found, root-caused, NOT fixed (HALT, recorded as follow-on work) — the
+    `v03_m3d_nested_group_with_suspending_callee_no_abort_byte_identical` fixture:** minimized to a
+    standalone repro (`/tmp/repro2.ynz` during this session, not checked in): a function with a
+    NESTED CPU group that ALSO calls a SEPARATE, independently-promoted CPU-group host (embedded as
+    a suspending child call), driven via the program's outermost `ynz_rt_run_entrypoint` block_on
+    bridge (i.e. called from `entrypoint`/`main`, not from another suspending caller — confirmed via
+    a THIRD repro that routing the SAME shape through an intermediate suspending wrapper function,
+    avoiding the direct block_on drive, does NOT hang). Empirically reproduced via direct binary
+    execution under `timeout` (hangs, `RUN_EXIT=124`) and, with temporary diagnostic `eprintln!`
+    instrumentation added to `crates/ynz-runtime/src/runtime.rs`'s `SyncStateFnFuture::poll` and
+    `ynz_rt_join_poll` (added, exercised, then FULLY REVERTED — `git diff --stat` on that file is
+    empty), observed as a crash ("Illegal instruction (core dumped)") with 4 `ynz_rt_join_poll`
+    calls in a single poll pass touching what appear to be TWO DISTINCT `CpuJoinHandle` allocations
+    that share a heap address (consistent with the first host's freed handle slot address being
+    reused by the second host's fresh spawn within the same poll pass) — a genuine, reproducible,
+    PRE-EXISTING (pre-M3g; the shape was previously unreachable ONLY because of the now-removed
+    blanket decline) defect in the `ynz_rt_join_poll`/`CpuJoinHandle` handle-lifecycle machinery,
+    not a synchronous-bridge design flaw in this milestone's own work (`ynz_rt_run_entrypoint` is
+    the pre-existing, approved, single outermost driver per
+    [IMP-no-function-coloring](../../../../docs/internal/implementation/IMP-no-function-coloring.md)).
+    Fixing the handle-lifecycle bug itself was judged out of this dispatch's safely-verifiable
+    scope (a runtime-crate concurrency bug, not an admission-gate or codegen change) — kept
+    declined via the `spike_capable_names` residual decline above, verified via the SAME repro to
+    no longer hang/crash once declined.
+  - **Root cause #3 found AND fixed via a residual decline (not the deeper typeck fix) — pre-existing
+    corpus fixture `v0_3_m3d_spike_n_nested_wait.ynz` surfaced this DURING this session's
+    verification sweep** (`cargo test -p ynz-driver --test cross_impl_consistency`, NOT a fixture I
+    wrote): a top-level CPU group followed by a LATER `wait`/suspending-call NESTED inside a
+    subsequent `if`/`while`/`for`/`match` (not a direct top-level wait) crashed the LLVM backend
+    with "Instruction does not dominate all uses" on the group's OWN bind-name allocas. Paper-Trace
+    — Observed: `timeout 15 ./target/debug/ynz build --emit-ir v0_3_m3d_spike_n_nested_wait.ynz`
+    fails with the LLVM module-verify error (reproduced directly, this session, on the unmodified
+    fixture, after the admission flip above landed). Expected: build succeeds, output `55\n89`.
+    Hypothesis: `crates/ynz-typeck/src/check.rs`'s `collect_crossings_in_stmts`'s `this_stmt_
+    suspends` match only recognizes a DIRECT top-level `wait`/suspending-call statement as
+    "suspending" for the purpose of flushing `pending_result_bindings` into `declared` — it has no
+    arm for a control-flow statement (`Stmt::If`/`While`/`For`/`Match`) whose BODY suspends, so the
+    group's bind names are never flushed before the code recurses into that nested block, and the
+    later read (`print(a)` after the if) is never recognized as crossing a suspension. Evidence
+    path: `crates/ynz-typeck/src/check.rs:7395-7420` (the `this_stmt_suspends`-gated flush, and the
+    unconditional recursion into a `Stmt::If` whose body suspends, immediately below it, with NO
+    flush call on that path). Verdict: real, reproducible, confirmed via direct build (not
+    self-graded). Fix: a SECOND narrow residual decline in `admitted_cpu_group` (both branches) via
+    `stmt_control_flow_body_suspends` — declines a group whose post-group statements include a
+    control-flow statement with a suspending body, WITHOUT touching the deeper `check.rs` crossing-
+    analysis root cause (same time/risk-budget reasoning as root cause #2 — a typeck crossing-
+    analysis fix under this dispatch's remaining budget was judged too risky to attempt
+    unverified). Verified fixed via direct rebuild + run of the SAME fixture after the decline
+    landed (build succeeds, `55\n89`, matches oracle).
+  - **New typeck groundwork, built and verified-compiling, deliberately left UNCONSUMED (mirrors
+    the project's own "computed but unconsumed" precedent from Phase 2's `does_real_work_set`):**
+    `crates/ynz-typeck/src/cpu_admission.rs` gains `FusedMemberClass`, `AdmittedFusedGroup`,
+    `admitted_fused_group` (a TOP-LEVEL-only detector for a maximal adjacent run mixing ≥1 CPU
+    member and ≥1 Suspending member, both restricted to a single `IntLit`/`Ident` argument — the
+    same restriction `cpu_group_member_indices` already imposes on CPU members, extended to BOTH
+    classes here specifically to sidestep re-deriving `crate::independence`'s write-effect/alias
+    soundness analysis: a scalar-only argument set has no possible aliased-write hazard between
+    members by construction). This is the admission-side detection for the milestone's actual core
+    novel work (fixture `v03_m3d_mixed_cpu_io_group_declines_byte_identical`) — **NOT wired into
+    codegen**; no fused emission function exists; `emit_cpu_group_spawn_join` and
+    `emit_independent_group_poll` remain untouched, separate, unfused mechanisms. Verified:
+    `cargo build -p ynz-typeck` clean, `cargo clippy -p ynz-typeck -p ynz-codegen -- -D warnings`
+    clean (no dead-code warnings — all new items are `pub` or called from a `pub` fn).
+  - `crates/ynz-driver/tests/integration.rs`: flipped
+    `v03_m3d_nested_group_with_outer_wait_declines_byte_identical` (test name retained; assertion
+    now fire-asserting via `m3d_assert_fires_byte_identical_alloc_free`, 2 spawns, oracle 9907) and
+    the 3 Phase-2-neutrality-fixture tests that flip WITH it per the plan's own anticipation
+    (`v03_m3g_top_level_group_in_suspending_host_declines_byte_identical` → 2 spawns;
+    `v03_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines_byte_identical` → 2 spawns;
+    `v03_m3g_mixed_host_with_promoted_sibling_declines_byte_identical` → 4 spawns total, both hosts
+    fire independently). `v03_m3d_nested_group_with_suspending_callee_no_abort_byte_identical`'s
+    assertion is UNCHANGED (still declines) — its WHY comment rewritten to document the HALT and
+    root cause. `v03_m3g_guard_tripping_crossing_in_suspending_host_declines_byte_identical`
+    (PERMANENT decline, unaffected — declines at the typeck promotion/guard-probe layer, not this
+    admission gate) unchanged. Group-level WHY comment above the Phase-2 fixtures updated to
+    reflect the Phase 3 flip.
+  - `crates/ynz-codegen/tests/frame_layouts_query.rs`: two tests broke as a DIRECT, foreseeable
+    consequence of the admission flip (same class of consequence Phase 2's own FRAGOs already hit
+    twice) and were fixed by updating their assertions to the NEW correct reality (not weakened —
+    strengthened, in both cases, to assert the ACTUAL production-relevant invariant):
+    `imported_suspending_after_pair_declines_consistently_across_boundaries` (the cross-module
+    fixture now genuinely admits under the WRONG/bare suspend set but correctly declines under the
+    REAL/effective set — verified against a real standalone build+run of the exact fixture, both
+    default and `--no-auto-parallel` modes, output `55\n89` byte-identical, no crash — the test now
+    asserts the bare-vs-effective DIVERGENCE as the tripwire instead of a stale "always empty"
+    equality); `spike_host_subset_base_suspends_decline_masks_bare_vs_effective_divergence`
+    (rewritten to prove `base_suspends` is now UNUSED by `admitted_cpu_group` — correct vs.
+    deliberately-wrong `base_suspends` now produce IDENTICAL results — replacing its Phase-2-era
+    claim that a correct `base_suspends` masked the suspend_set argument, which was specific to the
+    now-removed temporary decline).
+Unchanged: ¶1, ¶2, ¶3.1, ¶3.2, Phase 1/2 (already closed), Phases 4-5, ¶4, ¶5, the Invariants
+  section, Design-Doc Alignment, Future Requirements — no demo/gallery work, no E1/E7/E8/overlap-
+  proof work landed this session (all remain for the next dispatch).
+Verification (this session, full sweep): `cargo build --workspace` clean; `cargo clippy --workspace
+  -- -D warnings` clean; `cargo fmt --all -- --check` clean; `cargo test --workspace --no-fail-fast`
+  — same 5 pre-existing, unrelated failures as the FRAGO 001 baseline (byte-identical failure set:
+  `no_banned_jargon_in_deferred_feature_user_facing_fields`, `parser_precedence_table_matches_spec`,
+  `every_future_doc_has_a_registry_entry_or_is_skipped`, `deferred_language_feature_lookup`,
+  `deferred_tooling_feature_lookup` — all stale docs-migration paths + one unrelated jargon-wording
+  gap), zero new failures; `cross_impl_consistency`'s corpus-wide byte-identity oracle green (both
+  `corpus_byte_identical_across_auto_parallel_modes` and
+  `corpus_produces_deterministic_output_across_runs`, 332 compared files); all 75 `v03_m3d`/`v03_m3g`
+  driver integration tests green.
+Override:  N/A — no risk residual rose to HIGH. Two HALTs recorded per this phase's own dispatch
+  instructions (a confirmed-unsafe finding on `v03_m3d_nested_group_with_suspending_callee_no_
+  abort_byte_identical`; a scope/time-budget HALT on the mixed-group fusion emission itself) — both
+  are the orchestrator's/deviation-judge's to adjudicate (FRAGO for the next phase dispatch or a
+  re-scoped Phase 3 continuation), not self-decided here.
+
+## FRAGO 004 — 2026-07-02 — session-id: (Phase 3 continuation executor session, dispatched by
+orchestrator for the two follow-on bugs FRAGO 003 recorded)
+Base:      2026-07-01-v0-3-m3g-mixed-cpu-io-overlap @ Phase 3 (Fusion core, continuation)
+Trigger:   Dispatch's explicit priority order — "fix the exposed bugs first... a 'keep declining
+           forever' outcome is not acceptable for pre-existing bugs blocking the milestone's own
+           non-negotiable fixtures" — targeting the two bugs FRAGO 003 recorded as follow-on work
+           (the `ynz_rt_join_poll`/`CpuJoinHandle` "handle-lifecycle defect" and the
+           `collect_crossings_in_stmts` control-flow-nested-suspension gap), then attempting the
+           fused CPU+I/O emission if budget allowed.
+Changes:
+  - **Bug #1 RE-INVESTIGATED and RE-DIAGNOSED (the prior session's root-cause attribution was
+    WRONG):** re-ran the exact minimized repro from FRAGO 003
+    (`v0_3_m3d_nested_group_with_suspending_callee.ynz`, with the residual decline temporarily
+    bypassed to reach the crash) under `timeout` — reproduced the crash within 1-2 runs (SIGILL,
+    "dumped core"). Added temporary `eprintln!` instrumentation to
+    `crates/ynz-runtime/src/runtime.rs`'s `ynz_rt_spawn_blocking_joinable` and `ynz_rt_join_poll`
+    (handle pointer + thread id on every spawn/poll/free), captured a full trace of the crash run.
+    **Observed** — every spawn/poll/free traced CORRECTLY in sequence: `combine`'s own nested pair
+    spawns handles A/B, both poll Pending then Ready and are freed+nulled cleanly; THEN `other`'s
+    pair spawns two NEW handles that happen to reuse A's and B's just-freed addresses (ordinary,
+    safe Rust-allocator behavior — the old handles were fully consumed and nulled before reuse);
+    both poll Ready and free cleanly. The crash occurs AFTER all 4 spawn/poll/free events complete
+    successfully — i.e., strictly AFTER the runtime handle machinery had already finished its job
+    correctly. **Expected** (per the prior session's attribution) — a corrupted/aliased handle
+    address mid-poll. **Residual** — the crash's actual timing (after, not during, handle
+    lifecycle) contradicts the "handle-lifecycle defect" hypothesis. **Hypothesis** — the bug is
+    downstream of the handle machinery, in frame sizing. **Evidence path** — read the emitted LLVM
+    IR for `combine()`'s standalone entry wrapper directly
+    (`crates/ynz-driver/tests/fixtures/v0_3_m3d_nested_group_with_suspending_callee.ll`):
+    `@combine()` allocates `ynz_alloc_zeroed(i64 88)`, and `@ynz_sm_combine_resume`'s `sm_if_merge`
+    block computes the embedded child sub-frame for `other()` at byte offset 88
+    (`%cf_other = getelementptr i8, ptr %0, i64 88`) — i.e. the embedded `other` sub-frame (needing
+    80 bytes for its own header + CPU reserve, per its own standalone wrapper's
+    `ynz_alloc_zeroed(i64 80)`) starts EXACTLY at the end of the 88-byte allocation, with ZERO
+    bytes of headroom for it. Traced the size computation to
+    `crates/ynz-codegen/src/emit.rs`'s `frame_bytes` local (in the wrapper-generation function):
+    ```
+    let frame_bytes: u64 = if spike_active_here {
+        ynz_abi::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals)
+    } else {
+        frame_layout.map(|l| l.total_size).unwrap_or_else(|| { ... })
+    };
+    ```
+    — a spike-active host (like `combine`) computed its OWN own-base size only, completely
+    IGNORING `frame_layout.total_size` (which, per `build_frame_layouts_with_resolver`, already
+    correctly folds in BOTH the CPU-handle/result reserve AND every embedded child sub-frame's
+    size — confirmed by direct reading of that function's `own_base`/`children`/`total_size`
+    computation, `crates/ynz-codegen/src/emit.rs:351-429`). The stale in-line comment justifying
+    the special case ("`build_frame_layouts` (invoked before spike detection) does not know about
+    the 48-byte handle/result region") no longer matches the current code — a later refactor
+    (`cpu_group_slots_and_reserve`, cited by that very function's own doc comment) already made
+    `build_frame_layouts_with_resolver`'s `own_base` fold the reserve in, but this ONE call site
+    was never updated to trust it again. **Verdict** — real, reproducible, root-caused: a genuine
+    heap-buffer-overflow (a classic under-allocation bug), NOT a runtime handle-lifecycle defect.
+    **Fixed**: `crates/ynz-codegen/src/emit.rs` — `frame_bytes` now always prefers
+    `frame_layout.map(|l| l.total_size)`, falling back to the own-base-only formula only when no
+    layout entry exists (mirroring the non-spike branch's own pre-existing, correct pattern).
+    Reverted the temporary `eprintln!` instrumentation immediately after confirming (`git diff` on
+    `crates/ynz-runtime/src/runtime.rs` is empty in the final state).
+    Verified (Paper-Trace closed, empirical not prose-only): with the fix applied and the residual
+    decline still temporarily bypassed, ran the exact repro binary 20 times consecutively under
+    `timeout` — 20/20 clean exits, correct output `19810` every time, zero crashes, zero hangs
+    (versus the pre-fix baseline, which reliably crashed/hung within the first 1-2 runs).
+  - **`admitted_cpu_group`'s NESTED-branch `spike_capable_names` residual decline REMOVED** (not
+    bypassed — genuinely deleted): `crates/ynz-typeck/src/cpu_admission.rs` — the decline body,
+    its doc comment, and the now-fully-unused helper it fed
+    (`spike_capable_function_names`... — actually kept, see below) were updated. The
+    `spike_capable_names: &HashSet<String>` PARAMETER is kept (renamed `_spike_capable_names`,
+    matching the file's own pre-existing convention for `_base_suspends`) rather than removed
+    outright, to avoid a second wide call-surface churn pass across `ynz-codegen`/`ynz-typeck` and
+    their test suites purely to delete a now-inert parameter — every caller already threads a
+    `spike_capable_names` value down to this call site (computed via
+    `spike_capable_function_names`/`module_spike_capable_names`, both left intact and still
+    computed by their callers, just no longer consumed here).
+  - **Bug #2 CONFIRMED (the prior session's root cause WAS correct) and FIXED FOR REAL this
+    session** (the prior session had only worked around it with `stmt_control_flow_body_suspends`,
+    an admission-gate residual decline — not a fix to the underlying analysis gap):
+    `crates/ynz-typeck/src/check.rs`'s `collect_crossings_in_stmts` — `this_stmt_suspends` (the
+    predicate that decides whether pending CPU-group result-binding names get flushed into
+    `declared` before the CURRENT statement) now also recognizes an `if`/`while`/`for`/`match`
+    statement whose BODY suspends (via the pre-existing `block_suspends_m3d` helper) as a
+    suspension point for the surrounding sequence — previously it matched ONLY a direct top-level
+    `wait`/suspending-call statement. The `if this_stmt_suspends { ... }` true-branch now also
+    handles the three control-flow statement kinds: flush pending result-bindings (shared with the
+    existing wait/call case), then recurse into each suspending sub-block with the now-flushed
+    `declared` snapshot (sub-case (b) — a local declared INSIDE the branch, before the branch's OWN
+    inner suspension, still needs its own crossing detection) — this recursion is a straight move
+    of the dead-code duplicate that used to live in the `else` (`this_stmt_suspends==false`) branch
+    (now genuinely unreachable for a suspending-body control-flow statement, since
+    `this_stmt_suspends` catches it earlier; the dead arms were deleted, not left as unreachable
+    cruft).
+    **Self-caught regression (found and fixed in the SAME session, not left for a later reviewer):**
+    the FIRST version of this fix broke `v03_m3a_p1_disjoint_sibling_scope_shadow_compiles` — a
+    genuinely unrelated, pre-existing, non-spike fixture (two sibling `if`-blocks, each with its
+    own inner-only `let x` crossing an inner `wait`; no CPU group anywhere). **Observed** (full
+    `cargo test --workspace` run, not just the targeted fixtures — the verification discipline
+    that caught this): `v03_m3a_p1_disjoint_sibling_scope_shadow_compiles` FAILED, 5/5 reproducible
+    in isolation, `left: "42" right: "42\n99"` (only the first if-arm's print ran). **Expected**:
+    both arms print (`42` then `99`). **Hypothesis**: the fix's `Stmt::If` arm (inside
+    `this_stmt_suspends==true`) skipped the `collect_ident_refs_in_stmt(stmt, declared, out)`
+    condition-scan that the sibling `While`/`For`/`Match` arms DO call — a mis-transplanted
+    precedent from the NOT-yet-suspended top-level `Stmt::If` handling (which correctly skips that
+    scan, but ONLY because at that point in the scan NOTHING has suspended yet, so no read there
+    could possibly be crossing). Inside the ALREADY-past-a-suspension branch this fix lives in, an
+    `if`'s condition genuinely runs strictly after the prior suspension, so a read of a
+    pre-suspension local IN THE CONDITION (not just the body) is a real crossing that needs the
+    scan. In the fixture: `flag2` is declared before the FIRST if's `wait` and read ONLY in the
+    SECOND if's condition (`if (flag2)`) — exactly the shape the missing scan silently dropped.
+    **Evidence path**: `crates/ynz-typeck/src/check.rs` (the `Stmt::If` arm inside
+    `this_stmt_suspends==true`) — confirmed via a direct LLVM IR diff against a known-correct
+    baseline (temporarily reverted `check.rs` to the committed baseline, rebuilt, re-emitted IR for
+    the fixture, `diff`'d against the broken version): the baseline reserves a frame slot for
+    `flag2` (`%flag2_slot = getelementptr i8, ptr %0, i64 32`, `ynz_alloc_zeroed(i64 48)`); the
+    broken version demotes `flag2` to a plain SSA-local alloca with no frame flush/reload at all
+    (`ynz_alloc_zeroed(i64 40)` — 8 bytes short, `flag2`'s crossing slot silently disappeared).
+    **Verdict**: real, reproducible, confirmed via direct IR inspection, not self-graded. **Fixed**:
+    added the missing `collect_ident_refs_in_stmt(stmt, declared, out)` call to the `Stmt::If` arm,
+    matching the sibling arms. Re-emitted IR for the fixture post-fix: byte-identical (`diff`
+    exit 0) to the known-correct baseline. Re-ran the previously-failing test: green, 1/1.
+    `admitted_cpu_group`'s POST-GROUP `stmt_control_flow_body_suspends` residual decline (both the
+    top-level-branch and the fused-group-mirror copies) REMOVED (not bypassed) —
+    `crates/ynz-typeck/src/cpu_admission.rs` — now that the real crossing-analysis gap is fixed
+    directly. The now-fully-unused `stmt_control_flow_body_suspends` helper function itself was
+    deleted (zero remaining call sites; would have been a clippy dead-code warning otherwise).
+    Verified against the fixture that originally surfaced the bug
+    (`v0_3_m3d_spike_n_nested_wait.ynz`, a PRE-EXISTING corpus fixture that had NO dedicated
+    integration test before this session — only the `cross_impl_consistency` corpus sweep touched
+    it): 20/20 clean runs, correct output (`55`/`89`) every time. Added a dedicated fire-asserting
+    integration test for it,
+    `v03_m3d_spike_n_nested_wait_fires_byte_identical_alloc_free` (2 spawns, alloc==free, byte-
+    identical to `--no-auto-parallel`) — closing the "no dedicated test" gap per the testing
+    discipline (a fixture proven by a corpus-wide sweep alone is weaker evidence than a dedicated,
+    named assertion of the specific invariant it demonstrates).
+  - **FLIP**: `v03_m3d_nested_group_with_suspending_callee_no_abort_byte_identical`
+    (`crates/ynz-driver/tests/integration.rs`) — the SECOND of the three non-negotiable flip
+    fixtures now fires (the first, `..._outer_wait_declines_byte_identical`, was flipped by FRAGO
+    003 and is unaffected by this session). Rewritten to call
+    `m3d_assert_fires_n_byte_identical_alloc_free(..., 4)` (both `combine`'s own nested pair AND
+    `other`'s top-level pair now fire — 4 spawns total, byte-identical, oracle `19810`) — replacing
+    the prior session's custom-assertion HALT body (which asserted exactly 2 spawns / decline).
+  - **NOT attempted this session (scope/time-budget HALT, same reasoning as FRAGO 003 for the same
+    item):** the third non-negotiable fixture,
+    `v03_m3d_mixed_cpu_io_group_declines_byte_identical` (the genuinely-mixed top-level CPU+I/O
+    fusion — the milestone's actual core novel work). `ynz_typeck::cpu_admission::
+    admitted_fused_group`/`FusedMemberClass`/`AdmittedFusedGroup` (built by FRAGO 003) remain
+    unconsumed by codegen. This session's budget went to re-investigating and correctly fixing the
+    two "blocking" bugs (discovering one was misdiagnosed) rather than starting the fusion
+    mechanism — no dual-kind frame layout, no block-walker routing, no fused poll, no admission
+    flip for mixed groups, no E1/E7/E8 gates, no overlap proof, no demo/gallery work landed.
+  - `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md`: Phase 3's STATUS
+    block rewritten in place (current-truth body, not appended) to reflect this session's findings
+    — no plan-text change beyond the STATUS block; no phase checkboxes ticked (the fusion-core
+    steps genuinely remain unstarted).
+Unchanged: ¶1, ¶2, ¶3.1, ¶3.2, Phase 1/2 (already closed), Phases 4-5, ¶4, ¶5, the Invariants
+  section, Design-Doc Alignment, Future Requirements — no demo/gallery work, no E1/E7/E8/overlap-
+  proof work, no dual-kind frame/fused-poll/block-walker-routing/admission-flip-for-mixed-groups
+  work landed this session (all remain for the next dispatch); `crates/ynz-runtime/src/runtime.rs`
+  unchanged in the final state (temporary instrumentation added and fully reverted).
+Verification (this session, full sweep, run three times across the session as fixes landed):
+  `cargo build --workspace` clean; `cargo clippy --workspace -- -D warnings` clean (zero warnings,
+  including no dead-code warning for the deleted `stmt_control_flow_body_suspends` helper or the
+  now-unused `_spike_capable_names` parameter); `cargo fmt --all -- --check` clean. Full
+  `cargo test --workspace --no-fail-fast`, three full runs: the SAME 4 pre-existing, unrelated
+  failures in EVERY run (`no_banned_jargon_in_deferred_feature_user_facing_fields`,
+  `parser_precedence_table_matches_spec`, `every_future_doc_has_a_registry_entry_or_is_skipped`,
+  `deferred_language_feature_lookup`, `deferred_tooling_feature_lookup` — note the last two are
+  both `schema_smoke`, matching FRAGO 001's "4 pre-existing" count of distinct root causes = stale
+  docs-migration paths ×3 targets + one unrelated jargon-wording gap), zero new deterministic
+  failures — plus exactly one CI-contention flake per run, identity varying
+  (`ynz-runtime::spike::spawn_panic_ctx_no_leak` once, 5/5 green in isolation, zero diff in that
+  crate; `v03_m3e_alias_local_name_collision_runs_correctly` once, the project's own documented
+  flake precedent, 1/1 green in isolation) — consistent with genuine full-`--workspace` parallel
+  load contention, not a deterministic regression. `cross_impl_consistency`'s corpus-wide
+  byte-identity oracle green (both `corpus_byte_identical_across_auto_parallel_modes` and
+  `corpus_produces_deterministic_output_across_runs`). All 414 `ynz-driver` integration tests
+  green (including the new `v03_m3d_spike_n_nested_wait_fires_byte_identical_alloc_free`); all 34
+  `ynz-codegen` golden-IR tests green, zero `.snap.new` anywhere in the tree; all `ynz-typeck`
+  tests green, including all 5 `parallel_group_hint_parity` tests (hint==binary parity holds
+  through the admission-gate simplification).
+Override:  N/A — no risk residual rose to HIGH. This session closes both follow-on bugs FRAGO 003
+  recorded (one was a misdiagnosis, corrected; the other was confirmed and fixed for real) and
+  flips a second non-negotiable fixture. One HALT remains, unchanged in kind from FRAGO 003 (a
+  scope/time-budget HALT on the mixed-group fusion emission itself, the milestone's actual
+  remaining core work) — the orchestrator's/deviation-judge's to adjudicate, not self-decided
+  here.
+
+## FRAGO 005 — 2026-07-02 — session-id: (Phase 3 continuation executor session, dispatched to
+consume `admitted_fused_group` and build the fused CPU+I/O emission)
+Base:      2026-07-01-v0-3-m3g-mixed-cpu-io-overlap @ Phase 3 (Fusion core, continuation)
+Trigger:   Phase 3 dispatch's explicit mandate: "consume it [`admitted_fused_group`] and build the
+           actual fused emission" — the milestone's core novel work, HALTed twice by prior sessions
+           for well-justified scope/time-budget reasons (FRAGO 003, FRAGO 004).
+Changes:
+  - **The milestone's acceptance signal is MET: all three non-negotiable flip fixtures fire.**
+    New `emit_fused_group_spawn_poll` (`crates/ynz-codegen/src/emit.rs`) consumes
+    `ynz_typeck::cpu_admission::admitted_fused_group` (built, verified, left unconsumed by FRAGO
+    003). One shared continuation drives a CPU member (spawned onto the blocking pool via
+    `ynz_rt_spawn_blocking_joinable`/`ynz_rt_join_poll`, mirroring `emit_cpu_group_spawn_join`)
+    AND an I/O member (inline-polled via its embedded child sub-frame, mirroring
+    `emit_independent_group_poll`) through ONE spawn/init state that branches unconditionally to
+    ONE shared poll state — every resume re-drives every live CPU handle (null-check-skip
+    idempotency) AND every pending I/O sub-frame (sentinel-skip idempotency, `0x7FFF_FFFF`) in a
+    single pass, accumulating one order-independent "any pending" flag across BOTH classes.
+    NEVER a blocking join anywhere — the only two exits from the poll state are "yield Pending to
+    `pending_block`" and "fall through to `all_done_bb`"; no `block_on`-shaped construct was
+    written, considered, or came close to being written (the M2-HALT corpse was never at risk).
+    `v03_m3d_mixed_cpu_io_group_declines_byte_identical` — the genuinely-mixed top-level CPU+I/O
+    pair, the milestone's actual core novel work, and the one fixture two prior sessions
+    correctly declined to force — flips from `m3d_assert_declines_byte_identical` to
+    `m3d_assert_fires_n_byte_identical_alloc_free(..., 1)` (1 spawn — the CPU member; the
+    Suspending member has no separate spawn call), output "4958" byte-identical to
+    `--no-auto-parallel`, alloc==free.
+  - **Design reasoning, worked BEFORE writing emission code (not discovered by trial and
+    error) — three separate correctness arguments, each independently verified against the
+    emitted IR after the fact:**
+    1. *Frame layout needs no new I/O mechanism.* `cpu_group_slots_and_reserve` (`emit.rs`)
+       gained an `else if fused_admitted_group(...).is_some()` branch (probed ONLY when the
+       pure-CPU gate `spike_cpu_candidates` already declined — mutual exclusivity by
+       construction, the same convention used at every other call site: `lower_function_with_
+       waits`, the new `Cg::fused_group` field computation) that sizes the CPU handle/result
+       reserve to the fused group's CPU-class member count via `build_cpu_group_slots` (the
+       SAME builder the pure-CPU path uses). I/O sub-frames need NO new mechanism at all — the
+       pre-existing, completely UNMODIFIED `collect_suspending_callees` child-embedding
+       computation (used by `build_frame_layouts_with_resolver` since M3b) already walks EVERY
+       suspending call in a function's body unconditionally, regardless of CPU-group
+       involvement — a fused group's Suspending-class member is simply an ordinary suspending
+       call from that computation's perspective. The "dual-kind frame" the plan's step text
+       calls for already existed structurally in the SAME `FrameLayout` struct (`cpu_group_
+       slots: Vec<CpuGroupSlot>` + `children: Vec<(String, u64)>` coexist unconditionally); only
+       the CPU-side reserve activation condition needed extending.
+    2. *No Step-1c-style pre-allocation needed for fused CPU members* (unlike the pure-CPU spike
+       path, which needs `cpu_supported_refs` augmentation of `crossing_local_names_with_cpu_
+       spike` specifically because a PURE-CPU-only function might have NO other suspension point
+       anywhere for typeck's ordinary crossing analysis to recognize). A fused group ALWAYS
+       contains ≥1 genuinely-suspending member BY DEFINITION (`admitted_fused_group` requires at
+       least one of each class) — so typeck's UNMODIFIED crossing-local analysis (`check.rs`,
+       already fixed for control-flow-nested suspension by FRAGO 004) already recognizes a real
+       suspension point within the group and correctly frame-backs any name declared before it
+       and read after it, via the STANDARD mechanism, with zero fused-specific typeck changes.
+       `cpu_supported_refs` is deliberately left gated on `spike_candidates.is_some()` only
+       (unchanged) — extending it for fused hosts was considered and rejected as unnecessary.
+    3. *A fused-group CPU member's own bound name never needs to survive the group's OWN
+       internal poll cycle* — it does not exist (is not bound) until `all_done_bb`, reached
+       exactly once (the invocation where the group finally resolves), regardless of how many
+       prior invocations were spent polling. Only the HANDLE (frame-backed, `cpu_group_slots`)
+       and the CHILD FRAME state (frame-backed, embedded sub-frame) need to survive intermediate
+       invocations, and both already live in the parent's persistent heap frame by construction.
+    All three arguments were verified against the ACTUAL emitted IR for the target fixture
+    (`entrypoint`'s `ynz_sm_entrypoint_resume`): frame size 104 = header(32) + CPU reserve(24,
+    one handle @32 + one 16-byte result @40) + own-locals(8, `a`'s crossing slot @56) + embedded
+    `fetch` sub-frame(40, starting @64) — hand-cross-checked against every emitted GEP offset;
+    `a_alloca` sits in `sm_entry` (dominates every state block, confirming it IS a recognized
+    crossing local via the standard, unmodified mechanism); `b_alloca` is a fresh, non-entry-
+    block alloca in `fused_all_done` (confirming it is correctly NOT treated as crossing, since
+    nothing suspends after the group in this fixture) — exactly the predicted, reasoned-through
+    shape, not a surprise discovered by IR archaeology after something broke.
+  - **Reused code, not duplicated:** the CPU trampoline packing logic (the `ptr → {i64,i64}`
+    return-class dispatch: i64/i128/f64/ptr/`{i64,i64}` errors) was extracted from
+    `emit_cpu_group_spawn_join`'s inline loop into a new shared `build_cpu_trampoline` helper,
+    consumed by BOTH `emit_cpu_group_spawn_join` (unchanged call site, identical trampoline
+    naming `__ynz_spike_trampoline_{fn}_{callee}_{idx}` — verified byte-identical emitted IR for
+    the pure-CPU path via the full golden-IR corpus + all 72 `v03_m3d` driver tests, zero
+    `.snap.new`) and the new `emit_fused_group_spawn_poll` (distinct naming
+    `__ynz_fused_trampoline_{fn}_{callee}_{idx}` to avoid any future name collision). Per the
+    reusability rule (grep-before-you-write): the SAME plumbing, extracted once.
+  - **Recorded decision — typeck-side param restriction added to `admitted_fused_group`**
+    (`crates/ynz-typeck/src/cpu_admission.rs`): `!f.params.is_empty()` declines. A genuine
+    safety gap found in the prior sessions' built-but-never-consumed admission gate: params and
+    the CPU handle/result reserve share the SAME byte-32-relative addressing the pure-CPU
+    top-level branch only tolerates behind `param_read_after_join`'s narrower "no post-join
+    READ" gate (not a blanket "no params" bar). A fused group additionally embeds I/O
+    sub-frames whose own layout depends on the same `own_base` computation the reserve pushes
+    past, so — for this FIRST fused-group codegen consumer, under this session's time budget —
+    the conservative "no params at all" bar was chosen over re-deriving `param_read_after_join`'s
+    full precision for the fused case. No existing test exercised `admitted_fused_group` with
+    params before this change (confirmed via grep — zero consumers existed anywhere in
+    `ynz-codegen`/`ynz-driver` before this session), so this is a pure tightening with zero
+    behavior change to any prior session's work. Narrowing later to mirror `param_read_after_
+    join`'s precision is legitimate follow-on work (Future Requirements), not a correctness gap
+    in what shipped — the target non-negotiable fixture (`entrypoint`) has zero params, unaffected.
+  - **Deviation surfaced (dispatch-sanctioned, not self-decided in isolation): the block walker
+    was NOT routed through `partition_groups_classified`/`ClassifiedGroup`, contrary to the
+    plan's Phase 3 step-text ("Route the block walker off the classified partition... replace
+    the `partition_independent_groups` + separate-`m3d_spike`-trigger seam... retire the forked
+    routing for fused groups").** The Phase-3 continuation dispatch's own instructions explicitly
+    authorized the narrower alternative a prior session had already chosen to protect the
+    byte-identity floor ("You do NOT need to do a wholesale swap of the block walker's routing
+    algorithm... keep it that way unless you find a concrete reason the narrow approach can't
+    work, in which case surface that as a deviation"). Implemented instead: `lower_sm_block`
+    gained a THIRD gate (new `Cg::fused_group: Option<AdmittedFusedGroup>` field, computed once
+    in `lower_function_with_waits` via new helper `fused_admitted_group`, checked at
+    `sm_scope_depth == 0` — top-level only, matching `admitted_fused_group`'s own scope),
+    alongside the existing pure-CPU spike gate and the unmodified `partition_independent_groups`
+    fallback. `ClassifiedGroup`/`partition_groups_classified`/`Cg::does_real_work` remain
+    UNCONSUMED — the SAME "computed but unconsumed" status Phase 2 left them in; this session
+    consumed `admitted_fused_group` directly instead (itself ALSO built and verified by a prior
+    session specifically as this codegen consumer's intended input — see FRAGO 003). No concrete
+    reason surfaced that the narrow approach genuinely can't work — it does, end-to-end,
+    corpus-wide. The wholesale swap to the classified partition remains legitimate follow-on
+    scope (would generalize the mechanism, e.g. to non-adjacent-pair groupings the classified
+    partition might recognize that the narrow AST-scan-based `admitted_fused_group` does not),
+    not a blocker for this dispatch's mandate.
+  - **E2 (byte-identity oracle) — MET, corpus-wide, run twice for reproducibility.**
+    `cross_impl_consistency::corpus_byte_identical_across_auto_parallel_modes` and
+    `corpus_produces_deterministic_output_across_runs` both green over the WHOLE fixture corpus
+    (332+ files). Two full `cargo test --workspace --no-fail-fast` runs (before and after the E1
+    watchdog addition): IDENTICAL 4-target failure set both times, matching every prior phase's
+    established baseline exactly (`ynz-diagnostics::jargon_audit::no_banned_jargon_in_deferred_
+    feature_user_facing_fields`, `ynz-parser::parse::parser_precedence_table_matches_spec`,
+    `ynz-registry::design_future_sync::every_future_doc_has_a_registry_entry_or_is_skipped`,
+    `ynz-registry::schema_smoke::{deferred_language_feature_lookup,deferred_tooling_feature_
+    lookup}` — all pre-existing, unrelated, confirmed by every prior session's own bisection),
+    ZERO new failures either run. `cargo clippy --workspace -- -D warnings` and `cargo fmt --all
+    -- --check` both clean.
+  - **E7 (wide-EC ratchet) — MET by construction; proof-fixture added.**
+    `admitted_fused_group`'s CPU classification reads the SAME `cpu_supported_callees(typed)`
+    set the pure-CPU gate uses (via new helper `fused_admitted_group`'s single call site), and
+    that set already excludes wide-EC returns (`ec_inner_fits_cpu_result_abi` rejects `Number` —
+    pre-existing, unmodified, verified by direct code read). No new codegen was needed for this
+    ratchet — a wide-EC callee is simply ineligible for EITHER fused-group class (not
+    suspending, not CPU-supported), so no adjacent eligible pair ever forms and no fused group is
+    even considered. New fixture `v0_3_m3g_wide_ec_mixed_group_declines.ynz` (a `-> number
+    errors` CPU-shaped call next to an I/O call) + new test
+    `v03_m3g_wide_ec_mixed_group_declines_byte_identical` lock this decline-around survives
+    fusion: 0 spawns, byte-identical, output "6.0\nwaited" — green.
+  - **E1 — PARTIAL: watchdog DONE and fault-injection-verified non-vacuous; RED-first
+    adversarial-fixture artifact NOT separately authored this session.** New `run_with_watchdog`
+    helper (`crates/ynz-driver/tests/integration.rs`) spawns the compiled fixture with piped
+    stdout/stderr, polls `try_wait()` every 20ms against a 20-second ceiling (generous per Phase
+    1's confirmed CI-contention caveat, A7), and — on timeout — kills the child and PANICS with a
+    "WATCHDOG TRIP" diagnostic naming the E1 deadlock class, rather than silently hanging.
+    Wired into `build_to_tmpdir_and_run` (the direct compiled-binary run EVERY `m3d_assert_
+    fires_*`/`m3d_assert_declines_*` helper routes through — covering all 72 `v03_m3d` + 5 (now
+    6) `v03_m3g` driver tests) and `ynz_run_with_alloc_counter` (the `ynz run` combined
+    build+run path every alloc==free check uses). Deliberately NOT wired into every individual
+    call site across the ~500-test file (`ynz_run_stdout`/`run_ynz`, used broadly by
+    non-concurrency parser/diagnostic/etc. tests with zero deadlock risk, left untouched) — a
+    scoped decision under time pressure to cover the actual concurrency-relevant surface at its
+    two highest-leverage choke points rather than a literal, mechanical sweep of every call site
+    naming "concurrency" nowhere in its own test. **Verified NON-VACUOUS by fault injection, not
+    prose-only:** a temporary scratch fixture (`sleepBlocking(5000)`, never printing) run through
+    `build_to_tmpdir_and_run` with `RUN_WATCHDOG` temporarily shortened to 2 seconds tripped and
+    panicked with the expected "WATCHDOG TRIP" message at ~2.26s (not the full 5s blocking sleep,
+    not a hang) — proof the mechanism actually detects and kills a hang rather than passing
+    vacuously. Both the temporary 2s override and the scratch fixture were reverted immediately
+    after confirming (RUN_WATCHDOG restored to 20s; `git status` confirms the scratch fixture
+    file does not exist in the working tree). The RED-first half of E1's obligation (fixtures
+    reproducing the three 4c shapes RED on the branch, then green via the fusion, as a
+    same-session same-branch sequence) was NOT separately authored — the three non-negotiable
+    flip fixtures ARE those exact three shapes (mixed adjacent pair; nested CPU group + outer
+    `wait`; CPU group + suspending callee), and their individual fire/decline history across
+    FRAGO 003 → FRAGO 004 → this session already demonstrates each one's red→green transition,
+    but not as a single dedicated RED-first artifact per the step's literal ask. Left as a
+    genuine gap, not silently claimed complete.
+  - **E8 (blocking-pool exhaustion stress), the overlap-ratio proof (ordering-based per Phase
+    1's A7 protocol), and the demo/error-gallery extension are NOT done this session** — budget;
+    genuinely unstarted, left for the next dispatch. Stated explicitly, not silently skipped.
+  - **Three PRE-EXISTING M3d-era decline fixtures ALSO flip, as a direct, foreseeable, and
+    CORRECT consequence of the general fusion mechanism built this session — surfaced here for
+    review, not self-decided in isolation from the plan's own scope ruling:**
+    `crates/ynz-driver/tests/fixtures/v0_3_m3d_danger_mixed_string_declines.ynz`,
+    `v0_3_m3d_danger_mixed_number_declines.ynz`, and
+    `v0_3_m3d_hostile_mixed_reverse_completion_declines.ynz` — each is the SAME adjacent-
+    CPU-then-Suspending-member shape as the non-negotiable fixture (a heap-pointer/`string`
+    CPU-return variant, a wide-value/`number` CPU-return variant, and an explicitly-labeled
+    "hardest completion ordering" variant), and — critically — each fixture's OWN original WHY
+    comment already documented its decline as SCOPE-BOUNDED, not a genuine safety concern: "mixed
+    CPU+I/O overlap is M3g, not M3d... [it] belongs to a later milestone." Paper-Trace for each
+    (run this session, both modes, 3+ repetitions): all three now FIRE (1 spawn each, matching
+    `admitted_fused_group`'s general single-scalar-arg CPU-ABI-fits classification — no
+    hardcoded string/number special-casing anywhere in the fused emission), stable correct output
+    across repeated runs ("built=3\nwaited"; "6.0\n2.5"; "4958"), byte-identical to
+    `--no-auto-parallel`. This is the plan's OWN "general fusion within one group... Model A has
+    no count cap" SCOPE ruling (¶ Design-Doc Alignment, #5) operating exactly as designed — a
+    narrowly-scoped fixture set written when M3g didn't exist yet, correctly outgrown by building
+    M3g generally rather than fixture-by-fixture. All three tests updated (`m3d_assert_declines_
+    byte_identical` → `m3d_assert_fires_n_byte_identical_alloc_free(..., 1)`), WHY comments
+    rewritten to document the FLIP + the reasoning above, test names retained for history
+    continuity (mirrors the retained-name convention FRAGO 003/004 already established for the
+    three non-negotiable fixtures).
+  - `crates/ynz-typeck/src/cpu_admission.rs`: the `admitted_fused_group` param-restriction (see
+    above); no other typeck changes this session.
+  - `crates/ynz-codegen/src/emit.rs`: `Cg::fused_group`/`Cg::fused_group_fired` fields (+ all 3
+    `Cg{}` construction sites); `fused_admitted_group` helper; `cpu_group_slots_and_reserve`'s
+    fused branch; `lower_function_with_waits`'s `fused_candidates` computation +
+    `spike_active_here`/`spike_extra_states` extension (reserve-slot sizing and state-count
+    provisioning only — `cpu_supported_refs`/crossing-set computation deliberately untouched, see
+    reasoning above); `lower_sm_block`'s new fused-group gate; new `build_cpu_trampoline` (shared
+    helper, extracted from `emit_cpu_group_spawn_join` with zero IR change — verified); new
+    `emit_fused_group_spawn_poll`.
+  - `crates/ynz-driver/tests/integration.rs`: the flip of the third non-negotiable fixture; the
+    three additional M3d-era fixture flips (above); the new E7 wide-EC fixture + test; the new
+    `run_with_watchdog` helper + its two wiring sites.
+  - `crates/ynz-driver/tests/fixtures/v0_3_m3g_wide_ec_mixed_group_declines.ynz`: new fixture.
+  - `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md`: Phase 3's step
+    checkboxes updated to reflect actual completion (5 of 9 ticked: dual-kind frame layout,
+    fused poll, admission flip [already done by FRAGO 003/004, checkbox was simply never ticked],
+    fixture flip, E2, E7; 4 remain open: the block-walker-routing deviation, E1 partial, E8,
+    overlap proof, demo/gallery — see the plan body for the exact per-step status); STATUS block
+    rewritten in place (current-truth body, not appended) to reflect this session's findings.
+Unchanged: ¶1, ¶2, ¶3.1, ¶3.2, Phase 1/2 (already closed), Phases 4-5, ¶4, ¶5, the Invariants
+  section, Design-Doc Alignment, Future Requirements — E8/overlap-proof/demo-gallery work and the
+  optional wholesale block-walker swap all remain for the next dispatch.
+Verification (this session, full sweeps): `cargo build --workspace` clean; `cargo clippy
+  --workspace -- -D warnings` clean (zero warnings); `cargo fmt --all -- --check` clean. Two full
+  `cargo test --workspace --no-fail-fast` runs (before and after the E1 watchdog addition):
+  IDENTICAL 4-target pre-existing failure set both times, ZERO new failures either run. All 416
+  `ynz-driver` integration tests green (up from 414 baseline: +1 new E7 fixture test, +1 net from
+  the fixture-name-retained flips). All 34 `ynz-codegen` golden-IR tests green, zero `.snap.new`
+  anywhere in the tree (confirmed via `find -name "*.snap.new"`, empty). All 9
+  `frame_layouts_query.rs` tests green. All 22 `ynz-typeck` `promotion_tests` green. All 5
+  `parallel_group_hint_parity` tests green (hint==binary parity holds — this session touched no
+  hint-pass code, by design). `cross_impl_consistency`'s corpus-wide byte-identity oracle green
+  (both tests). Direct manual verification (outside the test harness, for extra confidence on the
+  target fixture specifically): 5+ consecutive runs of the compiled target fixture binary, both
+  default and `--no-auto-parallel` modes, stable correct output every time, zero crashes, zero
+  hangs; direct IR inspection cross-checked by hand against the frame-size/offset math.
+Override:  N/A — no risk residual rose to HIGH. The milestone's headline acceptance signal (all
+  three non-negotiable flip fixtures fire) is met. Two genuine gaps remain, both stated
+  explicitly rather than silently claimed complete: E1's RED-first artifact (partial — the
+  watchdog half is done and verified) and E8/overlap-proof/demo-gallery (not started, budget).
+  Both are the orchestrator's/deviation-judge's to schedule for the next dispatch, not
+  self-decided here. The three additional pre-existing-fixture flips (beyond the one
+  non-negotiable fixture this dispatch named) are a foreseeable, correct, in-scope consequence of
+  general fusion, surfaced here for review rather than silently absorbed as "just more of the
+  same change."
+
+## FRAGO 006 — 2026-07-02 — session-id: (Phase 3 closing executor session, dispatched to close the
+remaining exit-criteria gates: E1's adversarial fixture, E8, the overlap proof, the demo/error
+gallery, and a final corpus-wide byte-identity confirmation)
+Base:      2026-07-01-v0-3-m3g-mixed-cpu-io-overlap @ Phase 3 (Fusion core, closing session)
+Trigger:   Explicit ad-hoc task-spec dispatch (not a plan-slice-only dispatch) naming Phase 3's
+           remaining exit-criteria gaps by number, in priority order (E1, E8, overlap proof,
+           byte-identity re-confirmation, demo/gallery) — matching exactly the items FRAGO 005's
+           own "Next session's starting point" note named as remaining.
+Changes:
+  - **E1 obligation — closed.** Reasoned through the literal step text first: a genuinely
+    RED-on-this-branch fixture is no longer producible (the fusion mechanism already landed and
+    is green), so the dispatch instructed evaluating whether the three non-negotiable fixtures +
+    watchdog already cover the deadlock CLASS or whether a genuinely distinct shape could still
+    deadlock. Read `emit_fused_group_spawn_poll` directly (`crates/ynz-codegen/src/emit.rs`):
+    confirmed it polls every CPU member (null-check-skip) AND every I/O member (sentinel-skip)
+    unconditionally on every poll pass, accumulating one order-independent "any pending" flag —
+    no early-return, no short-circuit. But the three non-negotiable fixtures use trivial
+    workloads (`sleep(0)`, a 100-iteration loop) that plausibly resolve within a SINGLE poll pass,
+    so they do not empirically exercise "does the mechanism survive MANY real resume cycles
+    without dropping a member" — the actual mechanism the 4c deadlock class attacks. Verdict:
+    genuinely distinct coverage was warranted, not a redundant box-check. Added two adversarial
+    fixtures forcing asymmetric, multi-poll completion timing in BOTH directions:
+    - `crates/ynz-driver/tests/fixtures/v0_3_m3g_e1_io_lags_multi_resume.ynz` — I/O member sleeps
+      150ms; CPU member is a trivial 100-iteration loop (near-instant). Forces several real poll
+      passes while the CPU handle is already Ready/nulled, proving the null-check-skip path
+      tolerates repeated re-entry without crashing/double-freeing, while the I/O sub-frame keeps
+      being re-polled until its own sentinel fires.
+    - `crates/ynz-driver/tests/fixtures/v0_3_m3g_e1_cpu_lags_multi_resume.ynz` — the mirror: CPU
+      member is a real 150-million-iteration loop (~130-180ms, empirically probed via a
+      throwaway scratch fixture before settling on this iteration count — 30M iterations timed at
+      ~280ms via `ynz run` including compile overhead, later isolated-binary timing showed the
+      real per-iteration cost is much cheaper than that first estimate suggested, so the count was
+      tuned upward to 150M for a reliable margin); I/O member sleeps 15ms. Forces several real
+      poll passes while the I/O sub-frame is already Ready/sentinel-routed, proving the shared
+      poll keeps re-driving the STILL-pending CPU handle across resumes.
+    Both fixtures verified directly (build + run, both modes, IR spawn-count check) before being
+    wired into dedicated tests: `v03_m3g_e1_io_lags_multi_resume_fires_byte_identical` and
+    `v03_m3g_e1_cpu_lags_multi_resume_fires_byte_identical`
+    (`crates/ynz-driver/tests/integration.rs`), both via
+    `m3d_assert_fires_n_byte_identical_alloc_free(..., 1)` — 1 spawn, byte-identical to
+    `--no-auto-parallel`, alloc==free, watchdog-wrapped (routed through the existing
+    `build_to_tmpdir_and_run`). Both green, re-run 3+ times under `--test-threads=8` for
+    reproducibility, no flakiness observed.
+  - **E8 obligation — closed.** Read `crates/ynz-runtime/src/runtime.rs`'s `ynz_rt_init` directly:
+    `tokio::runtime::Builder::new_multi_thread()` with `.worker_threads(num_cpus::get())` but NO
+    `.max_blocking_threads()` override, confirming the blocking pool defaults to Tokio's built-in
+    512-thread cap. Recorded decision: literally exhausting 512 real OS threads in a fast CI
+    fixture is impractical (hundreds of real thread spawns, multi-second runtime) and would not
+    exercise anything qualitatively different from a smaller fan-out — so the fixture instead
+    proves MEANINGFUL concurrent + recursive stress, matching the Future Requirements table's own
+    framing of E8's residual ("the stress fixture bounds it," not eliminates the pool-exhaustion
+    class). New fixture `crates/ynz-driver/tests/fixtures/v0_3_m3g_e8_pool_exhaustion_stress.ynz`:
+    four independent chains (A/B/C/D) of five worker functions each (20 total workers); every
+    worker hosts its OWN top-level fused CPU+I/O group (`crunch`/`fetchIO`, distinct int-literal
+    seeds 1-20) and, once that group resolves, `background`-spawns the NEXT worker in its chain —
+    a genuine recursion-spawning shape (mixed-group hosts spawning further mixed-group hosts, not
+    a flat fan-out from `entrypoint` alone), satisfying the dispatch's explicit ask for "a
+    recursion-spawning shape (a function that spawns mixed groups that themselves spawn mixed
+    groups)". Verified via direct repeated binary execution (3+ runs, both modes): exit 0, all 20
+    `DONE_<tag> <value>` lines present with correct arithmetic (`124751 + 2*seed`), 20 spawn calls
+    in the IR. New test
+    `v03_m3g_e8_pool_exhaustion_stress_completes_without_deadlock`
+    (`crates/ynz-driver/tests/integration.rs`) asserts: both modes exit 0; both contain `MAIN`;
+    both contain the full expected set of 20 `DONE_*` lines (by VALUE, computed from each worker's
+    seed — not by exact interleaving order, since 4 independent concurrent chains have no
+    guaranteed cross-chain print order by design); exactly 20 spawn calls in the default-mode IR;
+    alloc==free. Routed through the watchdog via `build_to_tmpdir_and_run`.
+  - **Overlap proof — closed.** Built per ¶1 A7's OWN already-recorded refinement (a deterministic
+    ORDERING assertion as the primary proof, not a wall-clock ratio — Phase 1 had already
+    concluded this was the correct protocol; this session executed it for the fused-group case,
+    which had not yet been built when A7 was recorded). New fixture
+    `crates/ynz-driver/tests/fixtures/v0_3_m3g_overlap_proof.ynz`: `crunch` prints `START_CPU`
+    then does a real ~20-30ms, 30-million-iteration loop, then prints `DONE_CPU`; `fetchData`
+    prints `START_IO`, waits 80ms, prints `DONE_IO`. Empirically confirmed (3+ direct runs, both
+    modes, before wiring the dedicated test) that default mode reliably produces
+    `START_IO, START_CPU, DONE_CPU, DONE_IO` (both starts precede both dones — genuine overlap)
+    while `--no-auto-parallel` mode reliably produces `START_CPU, DONE_CPU, START_IO, DONE_IO`
+    (fully sequential — `DONE_CPU` strictly precedes `START_IO`). New test
+    `v03_m3g_overlap_proof_cpu_and_io_members_genuinely_run_concurrently`
+    (`crates/ynz-driver/tests/integration.rs`) asserts both orderings directly (not merely
+    presence of the markers) PLUS that the final printed result (`449999985000004`) is identical
+    in both modes — the CONTRAST between the two modes' orderings is what proves the default-mode
+    property is a genuine fusion effect rather than a test artifact that would pass regardless.
+    1 spawn in the IR, alloc==free. Re-run 3+ times for reproducibility, stable both directions
+    every time (the generous margins — 30M-iteration loop vs. 80ms sleep — make this reliable
+    under the same CI-contention caveat A7 already names).
+  - **Byte-identity oracle — corpus-wide sweep initially broken by the two new deliberately-
+    non-deterministic/mode-divergent fixtures above, fixed via a recorded exclusion, not a
+    behavior change.** Running `cross_impl_consistency`'s two corpus-wide tests after adding the
+    E8 stress and overlap-proof fixtures surfaced exactly the expected failures: both tests flag
+    `v0_3_m3g_e8_pool_exhaustion_stress.ynz` (print-interleaving non-determinism across
+    independent concurrent chains — a `background`-scheduling property the file's own name
+    doesn't happen to spell as "background"/"concurrent"/"timing," the substrings the sweep's
+    EXISTING blanket exclusion already matches for the exact same reason) and
+    `v0_3_m3g_overlap_proof.ynz` (mode-DIVERGENT ordering BY DESIGN — that divergence IS the
+    fixture's entire proof). Neither is a bug; both are the fixtures working exactly as designed.
+    Fixed by adding two named, exact-filename exclusions (mirroring the file's own pre-existing
+    precedent for `v0_3_m3d_return_class_maybe.ynz` and
+    `v0_3_m3b_p4_model_a_intended_reorder.ynz` — an exact-name exception with a WHY comment citing
+    the dedicated per-fixture test that asserts the real invariant, NOT a broadened substring
+    rule that could silently swallow future unrelated fixtures) to BOTH
+    `corpus_produces_deterministic_output_across_runs` and
+    `corpus_byte_identical_across_auto_parallel_modes`
+    (`crates/ynz-driver/tests/cross_impl_consistency.rs`). Verified: both corpus-wide sweeps green
+    after the fix, run twice, full corpus (332+ files each run, ~175s/run).
+  - **Demo & error gallery — closed.** `examples/pirates-roster/entrypoint.ynz`: added
+    `crunchSeasonTotal`/`fetchLatestScoutingReport`/`m3g_demo()` (a season crunch overlapping a
+    scouting-report fetch, in realistic roster context — not `print(feature())`), called as
+    `wait m3g_demo()` on `entrypoint()`'s final line (after `m3d_demo()`; `wait` because
+    `m3g_demo` itself suspends, keeping the demo's narrative ordering deterministic per the
+    file's own established convention for every other suspending demo section).
+    `expected_stdout.txt` regenerated via the project's own
+    `expected_stdout.txt.regenerate.sh`; confirmed the new section's output is FULLY
+    deterministic (both prints read already-bound results, mirroring `m3d_demo`'s established
+    pattern — no concurrent print race), so it is covered by `examples_basics_runs_end_to_end`'s
+    EXISTING byte-exact tail comparison (everything after "all 8 pirates done" must byte-match) —
+    confirmed green, no new test needed.
+    `examples/primantis-orders/v0_3_m3g_errors.ynz` **created** (per the plan's own Demo & Error
+    Gallery invariant subsection — the file did not exist before this session): M3g ships ZERO
+    new compile-error classes (every admission-gate decline is silent, falling back to the same
+    sequential lowering `--no-auto-parallel` already produces) — confirmed by grep across this
+    session's + all prior sessions' typeck/codegen diffs for any new `Diagnostic::error`/
+    `Diagnostic::warning` call site; none exists. The file mirrors
+    `examples/primantis-orders/v0_3_m3d_errors.ynz`'s own established precedent EXACTLY (a
+    header-note-only gallery for a zero-new-error-class milestone): explains the zero-new-classes
+    fact, then a prose worked example (no executable Yinz trigger, matching the M3d file's own
+    style) of `WaitOnNonMayBlockWarning` (Phase-1-single-sourced)'s scope WIDENED by this
+    milestone — an explicit `wait` on a CPU-bound callee is now ALSO an ordering barrier against a
+    MIXED CPU+I/O group, not only a pure-CPU one, since the diagnostic's WHY-text already
+    generically says "ends any parallel group that `{callee}` could have joined" (verified by
+    reading `wait_on_non_may_block_warning()` in `crates/ynz-typeck/src/check.rs` directly — no
+    wording change needed, the existing text already covers mixed groups).
+  - **Recorded deviation — no dedicated NEW insta snapshot added for either demo/gallery file,**
+    despite the plan's Demo & Error Gallery invariant subsection's literal "Both files get insta
+    snapshots" text. Checked the established precedent first (per no-duct-tape's
+    verify-before-you-fix discipline applied to a documentation claim): `pirates-roster`'s own P7
+    test (`examples_basics_runs_end_to_end`) already performs a byte-exact comparison against
+    `expected_stdout.txt` — functionally the SAME guarantee an insta snapshot would provide, and
+    the mechanism EVERY prior M3-series phase's demo extension has used (none of M3a-M3f added a
+    parallel insta snapshot alongside it). `v0_3_m3d_errors.ynz` (comment-only, zero new error
+    classes — the exact precedent this session's gallery file follows) has ZERO test coverage of
+    any kind, confirmed by grep across all `crates/*/tests/*.rs` — no insta snapshot, no ad-hoc
+    test, nothing. Adding a NEW insta mechanism for M3g alone, when M3b/M3d/M3e/M3f never used one
+    for their own gallery/demo extensions, would be new infra beyond this milestone's mandate and
+    inconsistent with the actual established pattern this repo has followed for every prior phase
+    under the SAME invariant subsection wording. Surfaced here as a recorded, reasoned deviation
+    (plan-said-insta-snapshot / reality-is-established-precedent-uses-byte-exact-comparison-and-
+    zero-test-for-zero-new-classes) rather than silently fabricated new test infrastructure to
+    match the letter of the invariant text against the grain of every prior phase's own practice.
+  - `crates/ynz-driver/tests/fixtures/v0_3_m3g_e1_io_lags_multi_resume.ynz`,
+    `v0_3_m3g_e1_cpu_lags_multi_resume.ynz`, `v0_3_m3g_e8_pool_exhaustion_stress.ynz`,
+    `v0_3_m3g_overlap_proof.ynz`: new fixtures (this session).
+  - `crates/ynz-driver/tests/integration.rs`: 4 new tests (above) + 2 alloc==free assertions added
+    to the E8/overlap-proof tests after their initial landing (a same-session strengthening, not a
+    fix — the tests were already correct, alloc==free was simply not yet checked). Reformatted by
+    `cargo fmt --all` (3 call-site wrapping changes, no logic change).
+  - `crates/ynz-driver/tests/cross_impl_consistency.rs`: the two new named exclusions (above).
+  - `examples/pirates-roster/entrypoint.ynz`, `examples/pirates-roster/expected_stdout.txt`: the
+    M3g demo section + regenerated golden.
+  - `examples/primantis-orders/v0_3_m3g_errors.ynz`: new gallery file.
+  - `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md`: all 4 remaining
+    Phase 3 step checkboxes ticked `[x]` with DONE detail replacing their prior PARTIAL/NOT-DONE
+    notes; a new closing STATUS block appended; the phase's Exit criteria block updated with
+    STATUS: ALL MET and a per-criterion proof list; frontmatter `updated_at` bumped to
+    `2026-07-02`.
+Unchanged: ¶1, ¶2, ¶3.1, ¶3.2, Phase 1/2 (already closed), Phases 4-5, ¶4, ¶5, the Invariants
+  section, Design-Doc Alignment, Future Requirements — no Phase 4/5 scope (N+M matrix,
+  cross-module, panic re-raise, teaching-surface docs, registry, release) touched this session.
+  The block-walker-to-`partition_groups_classified` wholesale swap remains the one deliberately
+  open, dispatch-sanctioned deviation (FRAGO 005) — legitimate follow-on scope, not a blocker.
+Verification (this session, full sweeps): `cargo build --workspace` clean; `cargo clippy
+  --workspace -- -D warnings` clean (zero warnings); `cargo fmt --all -- --check` clean (after one
+  `cargo fmt --all` pass on the newly-added test code — 3 files reformatted, no logic change,
+  re-verified green after). Full `cargo test --workspace --no-fail-fast`: 5 failing targets,
+  ALL matching the established baseline exactly —
+  `ynz-diagnostics::jargon_audit::no_banned_jargon_in_deferred_feature_user_facing_fields`,
+  `ynz-driver::integration::v03_m3e_alias_local_name_collision_runs_correctly` (confirmed 1/1
+  green in isolation immediately after — the documented CI-contention flake, unchanged in kind),
+  `ynz-parser::parse::parser_precedence_table_matches_spec`,
+  `ynz-registry::design_future_sync::every_future_doc_has_a_registry_entry_or_is_skipped`,
+  `ynz-registry::schema_smoke::{deferred_language_feature_lookup,deferred_tooling_feature_lookup}`
+  — ZERO new failures. `find . -name '*.snap.new'` empty (both host-side and container-side).
+  `cross_impl_consistency`'s two corpus-wide sweeps green (run twice, full corpus). All 293
+  `v03_m3*`-prefixed `ynz-driver` integration tests green, re-run twice under
+  `--test-threads=8` for reproducibility (including all 9 `v03_m3g_*` tests: the 5 pre-existing
+  + the 4 new this session). `error_galleries` (8/8), `ynz-lsp`'s `integration_sweep`
+  (`sweep_error_fixtures_have_diagnostics`) and `regression`, and `ynz-parser`'s `error_recovery`
+  all green — the new gallery file does not regress any gallery-wide sweep.
+Override:  N/A — no risk residual rose to HIGH. This session closes every gap FRAGO 005 named as
+  remaining for Phase 3. **Phase 3's exit criteria are now ALL MET** — this is a status change
+  the orchestrator/deviation-judge should ratify (whether Phase 3 is ready to merge and Phase 4
+  can begin), not a self-declared merge; the plan's own conjunctive exit-criteria list and this
+  FRAGO's line-by-line proof are the record for that review.

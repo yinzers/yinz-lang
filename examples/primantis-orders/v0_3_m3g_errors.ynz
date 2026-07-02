@@ -1,0 +1,43 @@
+// M3g — Mixed CPU+I/O Overlap (poll-path fusion)
+//
+// M3g ships no new compile-error classes. Fusing an independent CPU call with an
+// independent I/O call into one shared continuation is fully automatic, exactly
+// like M3b (I/O+I/O overlap) and M3d (CPU+CPU overlap): the compiler decides what
+// fuses and what runs sequentially. There is no opt-in syntax a user can write
+// incorrectly, and every shape the fusion cannot safely admit (a nested mixed
+// group, a param-taking host, a wide-value-`errors` CPU-shaped call, a
+// guard-tripping crossing, ...) declines SILENTLY to the same sequential lowering
+// `--no-auto-parallel` already produces — no diagnostic fires, because nothing
+// is wrong; the program is still correct, just not fused.
+//
+// The one existing diagnostic that IS relevant here, unchanged in mechanism but
+// widened in scope by this milestone: `wait` on a purely CPU-bound callee (the
+// WaitOnNonMayBlockWarning introduced in M2, already updated for M3d's CPU+CPU
+// groups) is ALSO an ordering barrier against a mixed CPU+I/O group. A function
+// like
+//
+//   function crunch(n: int) -> int { ... loop, no suspension ... }
+//   function fetchReport() -> string { wait sleep(60); return `...` }
+//   function example() -> nothing {
+//     let a = wait crunch(3)   // <- WARNING: wait has no effect here
+//     let b = fetchReport()
+//     print(a)
+//     print(b)
+//   }
+//
+// silently defeats the mixed-group fusion this milestone adds: `crunch` never
+// suspends, so `wait crunch(3)` triggers WaitOnNonMayBlockWarning (its WHY-text
+// already generically names "ends any parallel group that `crunch` could have
+// joined" — mixed groups included, not just pure-CPU ones) AND the explicit
+// `wait` statement itself is what the fused-group classifier treats as an
+// ordering barrier (`admitted_fused_group` never admits a member with an
+// explicit `wait` at its own call site) — removing the `wait` is both the fix
+// for the warning and what lets the compiler consider fusing `crunch` with an
+// adjacent independent I/O call. This is the same diagnostic, the same fix, and
+// the same underlying mechanism M3d's gallery documents for pure-CPU groups —
+// no new template, no new wording, only a wider set of shapes it now teaches
+// against.
+//
+// See docs/internal/implementation/IMP-concurrency.md "CPU Statement
+// Parallelization (M3d)" and its M3g mixed-group amendments for the full
+// promotion/decline rules.

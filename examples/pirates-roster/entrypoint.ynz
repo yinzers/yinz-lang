@@ -258,6 +258,9 @@ function entrypoint() -> nothing {
   // No `wait`: m3d_demo is pure-CPU (it never suspends), so there is nothing to order against.
   // The three crunches inside it run at the same time on separate cores.
   m3d_demo()
+  // v0.3-M3g: mixed CPU+I/O overlap — a heavy crunch overlaps a suspending fetch.
+  // m3g_demo suspends (its scouting-report fetch waits), so `wait` orders it after m3d_demo.
+  wait m3g_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -998,5 +1001,50 @@ function m3d_demo() -> nothing {
   print(`season hits: ${hits.toString()}`)
   print(`season walks: ${walks.toString()}`)
   print(`season steals: ${steals.toString()}`)
+}
+
+// v0.3-M3g: mixed CPU+I/O overlap — the compiler fuses independent CPU work and I/O work into
+// ONE shared continuation, the same way M3b fused I/O+I/O and M3d fused CPU+CPU. A heavy season
+// crunch (real, loop-driven CPU work) runs on a separate blocking-pool thread WHILE a scouting
+// report fetch (a suspending I/O wait) is in flight — genuinely at the same time, not one after
+// another. No special syntax: adjacency + independence is enough, exactly like M3b and M3d.
+//
+// crunchSeasonTotal rolls up a season's worth of per-game production for a player — real,
+// measurable CPU work. fetchLatestScoutingReport simulates a slow scouting-database round-trip.
+
+function crunchSeasonTotal(perGame: int) -> int {
+  let total = 0
+  let game = 0
+  while (game < 162) {
+    total = total + perGame
+    game = game + 1
+  }
+  return total
+}
+
+function fetchLatestScoutingReport() -> string {
+  // IDE shows: wait (fetchLatestScoutingReport may suspend on I/O)
+  wait sleep(60)
+  return `grade: A-`
+}
+
+// m3g_demo — one crunch, one fetch, no statement between them. That adjacency plus the lack
+// of any data dependency between the two calls is what lets the compiler fuse them into a
+// single shared continuation: the crunch runs on a separate thread while the report fetch
+// suspends, at the same time. `--no-auto-parallel` turns the fusion off; the output is
+// byte-identical either way (only the overlap — not the printed result — differs).
+function m3g_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3g — mixed CPU+I/O: a season crunch overlaps a scouting report fetch:`)
+
+  // crunchSeasonTotal is pure CPU work; fetchLatestScoutingReport suspends on I/O. No statement
+  // sits between them — that adjacency is what lets the compiler fuse the two work-classes.
+  let seasonHits = crunchSeasonTotal(3)
+  let report = fetchLatestScoutingReport()
+  // Both prints READ the results, so they stay after both the crunch and the fetch finish, in
+  // this exact order. The overlap is in the suspension/compute, not the print order — so the
+  // output is deterministic and byte-identical with --no-auto-parallel.
+  print(`season hits (crunched): ${seasonHits.toString()}`)
+  print(`latest report: ${report}`)
 }
 

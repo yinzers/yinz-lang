@@ -86,12 +86,12 @@ main done with v0.3-M1
 
 v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):
 scheduling 8 pirates...
-Stargell: done
+Mazeroski: done
 Beaumont: done
 McCutchen: done
-Mazeroski: done
-Bonds: done
 Clemente: done
+Bonds: done
+Stargell: done
 Kiner: done
 Wagner: done
 all 8 pirates done
@@ -142,3 +142,7 @@ v0.3-M3d — pure-CPU: three independent season crunches run at the same time:
 season hits: 324
 season walks: 162
 season steals: 162
+
+v0.3-M3g — mixed CPU+I/O: a season crunch overlaps a scouting report fetch:
+season hits (crunched): 486
+latest report: grade: A-
