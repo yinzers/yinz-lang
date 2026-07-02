@@ -3,7 +3,7 @@ name: "v0-3-m4-channels-arc-release"
 plan-id: "2026-07-02-v0-3-m4-channels-arc-release"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2"]
+session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3"]
 created_at: "2026-07-02"
 updated_at: "2026-07-02"
 metadata:
@@ -625,15 +625,52 @@ Handoff = checkbox state + session-id chain.
 - **Reviewer fan-out.** code-reviewer + adversarial-tester (deadlock-safety gate, MANDATORY) +
   per-phase opus adversarial gate.
 - **Model tag.** `(concurrency-codegen-runtime, maximum-adversarial, large)`.
-- **🔶 P1 STATUS — PARTIAL / IN PROGRESS (executor-2026-07-02-m4-p1 → continued
-  executor-2026-07-02-m4-p1-r2, 2026-07-02). The R1 deadlock-safety RUNTIME SUBSTRATE is landed and
+- **🔶 P1 STATUS — PARTIAL / IN PROGRESS (executor-2026-07-02-m4-p1 → executor-2026-07-02-m4-p1-r2 →
+  executor-2026-07-02-m4-p1-r3, 2026-07-02). The R1 deadlock-safety RUNTIME SUBSTRATE is landed and
   verified GREEN, now hardened by the three reviewer-fleet minor fixes (r2); the FRAGO seam for both
   surfaced deviations is APPLIED (FRAGO 002 re-scopes Step 6's hostile-fixture gate; FRAGO 003
   resolves the cross-suspension persistence question via the existing crossing-local mechanism). The
   typeck / codegen / kernel-gate / muted-hint / registry / hostile-fixture / demo-gallery layers above
-  the substrate are STILL NOT built — deliberately NOT half-wired (see the r2 note below). NO STOP
-  condition fired (no synchronous blocking call, no deadlock — the substrate is proven
-  suspends-not-blocks); NO dormant override armed.**
+  the substrate are STILL NOT built. NO STOP condition fired; NO dormant override armed.**
+  - **r3 round (executor-2026-07-02-m4-p1-r3) — deep codegen recon + execution-ready blueprint; NO
+    source built this pass, tree deliberately left at the verified-good substrate state (audit.md has
+    the full blueprint).** The r3 executor ground the ENTIRE remaining typeck→codegen chain against the
+    live codebase (every file:line site enumerated in `audit.md`), confirmed the load-bearing design
+    facts, and made ONE durable, evidence-backed decision — then declined to ship a partial because the
+    build is genuinely **all-or-nothing** and the codegen half is the maximum-adversarial R1/R5/R6
+    surface (details below). Concretely established this round:
+    - **Method-name lock CONFIRMED: the bare `channel<T>` value's operations are `.send(value)` and
+      `.receive()`** (NOT `.recv()`). Evidence, three independent sources agreeing: the plan's own
+      remaining-work map #2 (this Phase's text), `docs/internal/implementation/IMP-concurrency.md:174-178`
+      (`monitor.send(...)` / `monitor.receive()`), `docs/internal/implementation/IMP-no-function-coloring.md:258`
+      (`.send()`/`.receive()` are regular method calls detected by may-block analysis, not a type-level
+      marker), and the persisted P0 seed `p0-spike/composed-scenario.ynz:28,32,44,46`
+      (`out.send(10)` / `ch.receive()`). The dispatcher's `.recv()` uncertainty is resolved: `.receive()`.
+    - **The all-or-nothing constraint is REAL and forbids a foundation-only partial.** `llvm_type_for_ctx`
+      (`emit.rs:1360`) returns `Option`/`None` for an unhandled type, so the instant typeck resolves
+      `channel<int>()` to a `Type::BuiltinChannel`, any program using it reaches codegen and either
+      crashes or miscompiles. A typeck-only foundation is strictly WORSE than today (it replaces the
+      clean "`channel` is not a known type" diagnostic with a codegen crash) — a no-duct-tape regression.
+      Therefore the r3 executor built the `Type::BuiltinChannel` variant + `type_name` arm to prove the
+      approach compiles, then REVERTED it (`git checkout`) so the tree stays at the verified-good
+      substrate-only state rather than leaving a half-wired broken surface. Net source change this
+      round: zero (by design).
+    - **The codegen suspension-on-a-channel-method is a genuinely NEW lowering shape, not a mirror.**
+      `emit_wait_point` (`emit.rs:9731`) is hardcoded to `Expr::Wait` wrapping a `sleep(ms)` CREATE call;
+      the statement dispatch `lower_sm_stmt_with_wait` (`emit.rs:4571`) keys exclusively on
+      `is_sleep_call` / `is_direct_suspending_call` over `Expr::Call` IDENT callees. A channel
+      `ch.send(v)` / `let x = ch.receive()` is an `Expr::MethodCall` that matches NONE of those arms, so
+      it needs a purpose-built `emit_channel_suspend_point` (no create call — the channel handle is
+      already a live local; call `ynz_channel_send_poll(chan, value, waker)` / `ynz_channel_recv_poll(chan,
+      out, waker)`; three-way Ready/Pending/Closed branch; Closed→typed `errors`). AND the suspension
+      counting `count_suspension_expr` (`emit.rs:3410`, returns 0 for `MethodCall`) plus the may-block
+      seeding must become channel-aware — both are currently name-keyed with NO expr-type access, so
+      classifying a channel method requires threading `expr_types` (available via `cg.expr_type`,
+      `emit.rs:1860`) through the type-free counting/dispatch machinery, and seeding channel-containing
+      functions into the may-block fixpoint via the existing `suspends_with_extra_seeds` extra-seeds path
+      (`may_block.rs:163`). This is the exact silent-miscompile-across-a-suspension domain P0 spent a HARD
+      GATE de-risking; it warrants its own focused, end-to-end-`ynz-run`-verified execution (deadlock-safe
+      + alloc=free + grep-audit gates), NOT a rushed one-pass build that would reintroduce R1/R5/R6.
   - **r2 continuation (executor-2026-07-02-m4-p1-r2) — what landed:** (1) Applied the two
     human-approved, deviation-judge-classified FRAGOs to the plan seam — FRAGO 002 (descope Step 6's
     two-task `ynz run` backpressure fixture; the R1 send-on-full-suspends proof is now the

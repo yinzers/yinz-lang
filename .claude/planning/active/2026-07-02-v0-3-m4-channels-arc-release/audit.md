@@ -265,6 +265,125 @@ current-truth plan.md slice).
   this entry). NO STOP condition fired; NO dormant override armed. Session-id appended; status remains
   active.
 
+- executor-2026-07-02-m4-p1-r3 — 2026-07-02 — P1 CONTINUATION (dispatched to build the typeck→codegen
+  chain the two prior rounds deliberately deferred). Producer does NOT self-grade — honest record,
+  pending reviewer fan-out. Grounded in the P1 slice (post-FRAGO-002/003) + P0 STATUS locks (esp. Lock
+  8/9/11) + FRAGO 003 + IMP-concurrency + IMP-no-function-coloring + authoritative-derivation.md +
+  no-duct-tape + the committed substrate (`channel.rs` @ `a4f10c0`) + the persisted P0 spike.
+  **Outcome: deep, complete codegen recon + an execution-ready implementation blueprint (below); ZERO
+  source built (by design — see the all-or-nothing finding); ONE durable decision locked. Tree left at
+  the verified-good substrate-only state.** NO STOP condition fired; NO dormant override armed.
+  **Why no source shipped (honest, evidence-backed — not the prior "mixed-with-trivial-work" reason).**
+  The remaining chain is genuinely **all-or-nothing**: `llvm_type_for_ctx` (`emit.rs:1360`) returns
+  `None` for an unhandled type, so the moment typeck resolves `channel<int>()` to `Type::BuiltinChannel`,
+  any user program reaches codegen and crashes/miscompiles — strictly WORSE than today's clean "`channel`
+  is not a known type" diagnostic (a no-duct-tape regression). The r3 executor DID build the
+  `Type::BuiltinChannel` variant + `type_name` arm to verify the approach compiles (not inspection-only,
+  per verification.md), then `git checkout`-reverted it so the tree stays clean rather than half-wired.
+  The codegen half is the maximum-adversarial silent-miscompile-across-a-suspension surface P0 burned a
+  HARD GATE on; completing AND verifying it (deadlock-safe `ynz run` + alloc=free + grep-audit + demo +
+  gallery + cross-impl) to that bar is a dedicated focused build, not a responsible one-pass job —
+  rushing it reintroduces R1/R5/R6. Per the plan's own priority (honest PARTIAL + no-R-regression >
+  completion), surfaced with a full blueprint instead of a rushed/half COMPLETE.
+  **DURABLE DECISION (made without a human, reason on record): bare-channel methods are `.send(value)`
+  and `.receive()`** — NOT `.recv()` (the dispatcher's flagged uncertainty). Three agreeing sources:
+  remaining-work map #2 (Phase-1 text), IMP-concurrency:174-178, IMP-no-function-coloring:258, and the
+  P0 seed `composed-scenario.ynz:28,32,44,46`. This is NOT a plan divergence (the plan already says
+  `.receive()`); it is a confirmation, so no FRAGO.
+  **EXECUTION-READY BLUEPRINT for the next P1 executor (every site verified against the live tree this
+  round):**
+  1. **Type foundation** — add `Type::BuiltinChannel { elem: Box<Type> }` to `ynz-typeck/src/types.rs`
+     (mirror `BuiltinMap`, `types.rs:92`); add arms to `type_name` (`types.rs`, `channel<{elem}>`);
+     `is_trivially_copyable` needs NO edit (it's `matches!`, defaults false — correct, channel is a heap
+     ref). Update the doc `Current count: 20 → 21`. Variant-count tests: `tests/check.rs:56`
+     (`m4_type_variant_count_locked`) checks only the first 10 M1–M4 variants — NO edit; `tests/maps.rs:652`
+     (`m5p3c_type_variant_count_locked`, `all.len()`) — CHECK whether it enumerates all variants and bump
+     if so; `tests/errors_typeck.rs:78/132` — same check.
+  2. **Type resolution — THREE sites, all need a `"channel"` arm:** `check.rs::ast_type_to_type`
+     Generic arm (`check.rs:3827`, next to `array`/`fixed`/`map`); `shapes.rs::resolve_ast_type` Generic
+     arm (`shapes.rs:146`); AND `signatures.rs` — note `resolve_sig_type_with_params` (`signatures.rs:422`)
+     currently produces `Type::Generic{name,args}` for ALL generics (verify how `array`/`map` in
+     signatures normalize — the primary `sig_ast_type_to_type` at `signatures.rs:235` is the one to add
+     the arm to). Also add `"channel"` to the bare-name-without-args error arm (`check.rs:3742-3752`).
+  3. **Construction typeck** — `channel<T>()` (default capacity 64) / `channel<T>(N)`. This parses as an
+     `Expr::Call` with `type_args: Some([T])` (parser `try_parse_type_args`, `parser.rs:3001`; call
+     construction `parse_call`, `parser.rs:2813`). Add the construction arm alongside the `map<K,V>()`
+     construction typeck (near `check.rs:3853`/`4566`, the `BuiltinMap` construction/empty-collection
+     sites): reject a non-positive literal capacity ("no unbounded constructor" — stdlib Rule 4, capacity
+     must be a positive int); default 64 when no arg. Add a KERNEL-MODE gate here mirroring the
+     `background` gate (`check.rs:2226-2236`): channel construction → COMPILE ERROR under `--kernel`,
+     WHAT/WHAT-INSTEAD/WHY.
+  4. **Method typeck** — `.send(value)` and `.receive()`. The method-call typeck dispatch is at
+     `check.rs:3433` (`if let Type::BuiltinMap ... receiver_ty`) — add a `Type::BuiltinChannel` block
+     next to it. `.send(value: T) -> nothing errors` (typecheck the arg against `elem`; `errors` per
+     Lock 8 — closed channel yields a typed Yinz channel-closed error, never raw Tokio `SendError`;
+     wrap the return as `Type::ErrorsCapable { inner: Box::new(Type::Nothing) }`). `.receive() -> T`
+     (returns `elem`). Reject any other method with the "`channel<{}>` does not have a method" shape
+     (mirror `check.rs:3451`). These are UFCS over standalone ops, NOT OOP methods (non-oop.md). Add the
+     kernel gate here too.
+  5. **R6 classifier sibling arm** — add `pub fn channel_method_suspends(receiver: &Type, method: &str)
+     -> bool` (true iff `receiver` is `Type::BuiltinChannel` and method ∈ {`send`,`receive`}) to
+     `ynz-typeck/src/suspension_source.rs` — the module doc `suspension_source.rs:32-38` ALREADY earmarks
+     this exact arm. Thread it (NEVER a second list) into: (a) may-block seeding, (b) cpu_admission
+     decline, (c) codegen counting, (d) codegen lowering.
+  6. **May-block seeding (typeck)** — `may_block::analyze` (`may_block.rs:96`) is purely AST-name-keyed
+     with NO type access (`collect_calls_in_expr`'s `MethodCall` arm just recurses, `may_block.rs:981`).
+     Do NOT thread types into may_block.rs. Instead, in `check.rs` (where `expr_types` IS available),
+     compute the set of functions whose body contains a channel `.send()`/`.receive()` MethodCall (using
+     `channel_method_suspends` + `expr_types`), and pass that set as `extra_seeds` to the existing
+     `suspends_with_extra_seeds` (`may_block.rs:163`) — the CPU-promotion pass already uses this exact
+     extra-seeds path, so a channel-using function becomes a state machine identically to a `wait` caller.
+     Find where check.rs currently calls `may_block::analyze` and augment the seed set there.
+  7. **CPU admission decline** — `cpu_admission.rs:806` already consumes the authoritative classifier;
+     confirm a channel-using closure is declined for free once #6 marks it suspending (write the decline
+     fixture the plan Step 2 requires). This should fall out of #6 with little/no new code.
+  8. **Codegen — extern decls:** declare the 4 channel C-ABI fns in the runtime-fn table (next to
+     `ynz_rt_async_sleep_create`/`_poll` — search `cg.rt.ynz_rt_async_sleep_create`, the `Rt` struct that
+     holds `FunctionValue`s): `ynz_channel_create(i64)->ptr`, `ynz_channel_send_poll(ptr,i64,ptr)->i32`,
+     `ynz_channel_recv_poll(ptr,ptr,ptr)->i32`, `ynz_channel_free(ptr)`. Signatures confirmed against
+     `crates/ynz-runtime/src/channel.rs:104,148,231,274`.
+  9. **Codegen — construction + type lowering:** `llvm_type_for_ctx` (`emit.rs:1360`) → channel is an
+     opaque `ptr` (like `BuiltinArray`/`BuiltinMap` at `emit.rs:1885-1889`); `mangle_type`
+     (`emit.rs:1313`) + `to_i64_bits`/`resolve_type` (`emit.rs:1845`) arms; lower `channel<T>()`
+     construction to a `ynz_channel_create(capacity)` call returning the ptr.
+  10. **Codegen — the NEW suspension lowering (the load-bearing, maximum-adversarial piece):**
+      - `count_suspension_expr` (`emit.rs:3410`) currently returns 0 for `Expr::MethodCall` — it must
+        count a channel `.send()`/`.receive()` as 1 suspension point. It's a type-FREE free fn, so thread
+        `expr_types` (or a `&dyn Fn(&Expr)->Type` closure) through `count_suspension_points` /
+        `count_suspension_stmt` / `count_suspension_expr` so it can call `channel_method_suspends`. This
+        pre-count MUST match the lowering's actual suspension-point emission exactly (mismatch = state
+        block over/under-allocation = the M3e-class detonation).
+      - `lower_sm_stmt_with_wait` (`emit.rs:4571`) + `stmt_contains_wait`/`stmt_contains_suspending_call`
+        gating (`emit.rs:3458`): add arms for `Stmt::Expr(MethodCall channel.send/.receive)` and
+        `Stmt::Let { value: MethodCall channel.receive }`, routing to a NEW
+        `emit_channel_suspend_point(cg, receiver, method, arg_opt, ...)` that MIRRORS `emit_wait_point`'s
+        (`emit.rs:9731`) frame-slot/resume-point/`sm_post_wait`/`sm_suspend` machinery but: (i) NO create
+        call — lower the receiver expr to the channel ptr; (ii) call `ynz_channel_send_poll(chan, value,
+        waker_ctx)` (send: lower the arg to i64 bits) or `ynz_channel_recv_poll(chan, out_alloca,
+        waker_ctx)` (recv: read `*out` on Ready, bind to the `let` name); (iii) THREE-way branch on the
+        i32: `0`=Ready→post-wait, `1`=Pending→persist + `store_resume_point` + branch `pending_block`,
+        `2`=Closed→construct the typed channel-closed `errors` value (Lock 8) / propagate. The channel
+        HANDLE local persists across the Pending suspension via the EXISTING crossing-local frame-slot
+        mechanism (`sm_crossing_names` / `FRAME_OFFSET_LOCALS_START`) per FRAGO 003 — no new frame-header
+        slot, and the runtime object already owns the in-flight `pending_send` future so re-polling the
+        same ptr resumes correctly.
+      - GREP-AUDIT the NEW codegen path emits ONLY the poll calls above — no `block_on`/synchronous wait
+        (R1). This is where a blocking call could sneak in; it is the single most important verification.
+  11. **Muted hint + registry** — add the `channel_capacity` `[[muted_hint_domain]]` (placement_category
+      = "Addition") to `registry/features.toml` (mirror an existing entry, `features.toml:2053-2145`);
+      wire the typeck hint-pass + `crates/ynz-lsp/src/inlay_hint.rs` to render `⟨64⟩` inside the empty
+      `channel<T>()` parens with a WHAT/WHAT-INSTEAD/WHY hover stating capacity + default-vs-user-set.
+  12. **Fixtures + demo + gallery** — SINGLE-TASK hostile `.ynz` fixtures through `./target/debug/ynz run`
+      (closed-channel send/recv, never-drained, capacity clamp / no-unbounded — FRAGO 002 rescoped the
+      two-task composed fixture to Phase 2); alloc=free via `YNZ_ALLOC_COUNTER_OUTPUT`; `--no-auto-parallel`
+      byte-identical. Extend `examples/pirates-roster/entrypoint.ynz` with real channel usage (regen
+      `expected_stdout.txt` via its script) + create `examples/primantis-orders/v0_3_m4_errors.ynz` with
+      kernel-gate-on-channel-op + closed-channel triggers, each with a `// WHY:` comment.
+  **Files touched this round:** `plan.md` (Phase 1 STATUS banner r3 bullet + frontmatter session-id),
+  `audit.md` (this entry). NO `.rs`/`registry/*.toml`/example source touched (the `Type::BuiltinChannel`
+  probe was reverted). No cargo build/test re-run needed (no code-level change persisted). Session-id
+  appended; status remains active.
+
 ## FRAGO log
 (r3/r4 were pre-execution plan corrections, logged as session entries per the r2 precedent;
 FRAGOs record execution-time divergences against a running phase — FRAGO 001 is the first.)
