@@ -4,7 +4,7 @@ description: "Full design document. Companion to docs/reference/REF-concurrency.
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-02"
 status: "active"
 author: "patrick"
 metadata:
@@ -676,7 +676,11 @@ hold:
 1. **The enclosing function is pure-CPU** — its call graph contains no may-block intrinsics
    and no suspending helpers.  If the function is already a state machine (has `wait` inside
    it or calls a suspending function), its statements are scheduled by the M3b I/O-overlap
-   path, not M3d.
+   path, not this pure-CPU path — **unless** the state machine's top-level body itself admits
+   a *mixed* CPU+I/O group, in which case M3g's fusion (below) spawns the CPU members and
+   inline-polls the I/O members through one shared continuation.  A suspending host with no
+   qualifying top-level mixed group still runs its statements sequentially through the
+   ordinary M3b I/O-overlap path, exactly as before M3g.
 
 2. **Two or more independent groups exist** — the independence analysis (same analysis M3b
    uses) finds a partition where at least one group holds ≥2 statements that share no data
@@ -695,7 +699,9 @@ hold:
 
 The compiler declines to promote when ANY of the following hold:
 
-- **The function calls a suspending helper** — it will be a state machine; M3b handles it.
+- **The function calls a suspending helper** — it will be a state machine; M3b handles it,
+  unless the state machine's top level admits a mixed CPU+I/O group, in which case M3g fuses
+  it (see below) — this pure-CPU path itself still never fires on a suspending host either way.
 - **All groups are singletons** — nothing to parallelize in parallel with.
 - **No member does real work** — per rule 3 above, cheap helpers are not worth spawning.
 - **Auto-parallelization is disabled** — the `--no-auto-parallel` build flag (and `kernel` mode,
@@ -757,6 +763,96 @@ unique callee).  See the divergence entry below for the I/O cost and reversal pa
 
 ---
 
+## Mixed CPU+I/O Overlap — Poll-Path Fusion (M3g)
+
+### What This Is
+
+M3b overlaps independent I/O (suspending) calls; M3d overlaps independent pure-CPU calls — but
+through v0.3-M3f, the two never mixed: a function containing BOTH one CPU-heavy call and one
+suspending call ran them in sequence, one after the other, even though nothing depended on the
+other's result. This was a real gap against Model A ("independent operations run concurrently —
+this is the default and the maximal-performance choice," see "Suspension vs. Ordering" above),
+not a deliberate design boundary — Model A has no member-count or work-class cap, and the typeck
+partition machinery (`partition_groups_classified` / `MemberClass::{Suspending, Cpu}`) was
+authored from the start to describe both classes sharing one continuation.
+
+M3g closes the gap: a single top-level group can now mix CPU members (spawned onto the blocking
+pool, joined via `ynz_rt_join_poll`) and I/O members (inline-polled via an embedded child
+sub-frame) under ONE shared continuation. Every resume of that continuation re-drives every live
+CPU handle AND every pending I/O sub-frame in one pass — never a blocking join anywhere (the
+M2-HALT `block_on`-bridge corpse stays dead; see
+[`docs/internal/implementation/IMP-no-function-coloring.md`](IMP-no-function-coloring.md)).
+
+```ynz
+function analyzeGame(game: Game) -> Stats {
+    let hits    = crunchStat(game.hits)     // CPU-heavy — spawned onto a separate core
+    let history = fetchHistory(game.id)     // suspending — inline-polled on the event loop
+    return combineStats(hits, history)
+}
+```
+
+`hits` and `history` share no data dependency, so they overlap: `crunchStat` runs on a separate
+core while `fetchHistory` waits on I/O, and `analyzeGame` resumes once both are ready — elapsed
+time is `max(cost)`, not `sum(cost)`. The user writes nothing different from the pre-M3g form.
+
+### Admission Rules (what gets fused — ALL must hold)
+
+A top-level group is admitted for fusion (`admitted_fused_group`) when:
+
+1. **A maximal adjacent run, at the TOP LEVEL of the function body only** — a nested (inside an
+   `if`/`while`/`for`/`match`) mixed group declines; see Decline Rules below.
+2. **Every member is a direct call taking exactly one `IntLit`/`Ident` argument** — mirrors the
+   pure-CPU path's existing member restriction (the 8-byte spawn ctx cannot carry more). Applying
+   the SAME scalar-only restriction to the I/O members too sidesteps re-deriving the full
+   write-effect/alias soundness floor `crate::independence` provides for the general case: a
+   scalar-only argument set has no possible aliased-write hazard between members, so independence
+   holds by construction regardless of what each callee does internally.
+3. **The run contains AT LEAST ONE `Cpu` member and AT LEAST ONE `Suspending` member** — a
+   single-class run is not "fused"; it is handled entirely by the existing, separately-tested
+   pure-CPU (M3d) or pure-I/O (M3b) path, unchanged.
+4. **No two `Suspending` members share the same callee name** — the pre-existing M3b
+   same-callee-I/O restriction (above) still applies within a fused group; `Cpu` members are
+   unaffected (the Same-Callee Amendment already lifted it for them).
+5. **No member's argument references an earlier member's bind name** — the same independence
+   check `cpu_group_member_indices` already applies.
+6. **No pre-group or post-group statement suspends, and no post-group statement assigns a
+   member's bind name** — mirrors the pure-CPU path's existing post-group gates. In practice this
+   means a fused-admitted function contains NO suspending call anywhere outside the fused range
+   (the pre-/post-group scan is deep, not just top-level), so a fused-admitted function's own
+   nested blocks are always suspension-free.
+7. **The host takes no parameters** — a conservative bar for this first fused-group codegen
+   consumer (the fused group's CPU handle/result reserve and its embedded I/O sub-frames both
+   depend on the same `own_base` byte computation a parameter would push past). Narrowing this to
+   mirror the pure-CPU path's more precise `param_read_after_join` gate is legitimate follow-on
+   work, not a correctness requirement — see Future Requirements in the milestone plan.
+
+Sequential fallback is always correct: a function that fails any rule above lowers exactly as it
+did before M3g existed (unchanged pure-CPU or pure-I/O path, or fully sequential).
+
+### Decline Rules (what stays sequential)
+
+- **A NESTED mixed group** (inside `if`/`while`/`for`/`match`) — the existing pure-CPU nested
+  machinery's frame-slot reasoning does not yet extend to a nested fused group.
+- **A parameter-bearing host** — rule 7 above.
+- **Two members of the same suspending callee** — rule 4 above (the pre-existing M3b
+  same-callee-I/O restriction, unchanged by M3g).
+- **A loop-body group, or a function with a second (multi-group ≥2) parallelizable run** — the
+  same M3d decline shapes, unchanged; a mixed group is not a new escape hatch for either.
+- **A wide-EC-return member** (`Shape errors` / `number errors` / any return class the
+  `YnzCpuResult` ABI cannot carry) — never admitted as a CPU member of a fused group, same as the
+  pure-CPU path's own `cpu_result_abi_supports` gate.
+- **A non-scalar argument** (anything other than a bare `IntLit`/`Ident`) — rule 2 above.
+
+Each of these is a scoped, permanent-for-now decline with its own trigger and cost, tracked in
+the M3g plan's Future Requirements table (multi-group ≥2, loop-body groups, and same-callee I/O
+overlap are the same pre-existing M3d/M3b entries this section already cross-references above;
+the fused-specific narrowing items — nested fused groups, the parameter-bearing bar — are new
+entries added by that plan). None of these is a regression: every one of these shapes declined to
+fully sequential before M3g existed too — M3g only ever ADDS a fused path for shapes that were
+never fusable before; it never narrows what already fired.
+
+---
+
 ## Design Divergences (v0.3-M3b Auto-Parallelization Pass)
 
 The following divergences from the full design doc are documented per `no-duct-tape.md` — each names the concrete cost and the reversal path.
@@ -771,7 +867,7 @@ The following divergences from the full design doc are documented per `no-duct-t
 
 **Named cost**: the I/O sub-frame allocates one slot per unique suspending callee name. Two concurrent invocations of the same *suspending* callee would require two slots with a disambiguation scheme — a separate concern in `build_frame_layouts`. Calling the same suspending helper twice in a row doesn't parallelize in v0.3; it runs sequentially, which is always correct.  CPU members pay no such cost.
 
-**Reversal path**: extend `build_frame_layouts` to allocate N sub-frame slots per suspending callee name when a suspending function is called more than once in a straight-line block, keyed on (callee_name, invocation_index) — mirroring the (group, member-index) keying the CPU path already uses. The independence analysis and join codegen are already class-agnostic; only the I/O frame-layout phase needs the extension. Tracked in `design/future/` for a future phase.
+**Reversal path**: extend `build_frame_layouts` to allocate N sub-frame slots per suspending callee name when a suspending function is called more than once in a straight-line block, keyed on (callee_name, invocation_index) — mirroring the (group, member-index) keying the CPU path already uses. The independence analysis and join codegen are already class-agnostic; only the I/O frame-layout phase needs the extension.
 
 ### Write-effect uses a TYPE-BASED conservative floor — mutable-heap arguments never parallelize
 

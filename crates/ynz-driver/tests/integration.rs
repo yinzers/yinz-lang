@@ -6743,6 +6743,26 @@ fn v03_m3g_guard_tripping_crossing_in_suspending_host_declines_byte_identical() 
 }
 
 #[test]
+fn v03_m3g_nested_mixed_group_declines_byte_identical() {
+    // WHY (Phase 5 cheap-gate follow-up, deviation-judge minor finding): the plan's Future
+    // Requirements table names "A NESTED mixed (fused CPU+I/O) group stays declined to
+    // sequential" as a scoped, permanent-for-now decline — `admitted_fused_group` is TOP-LEVEL
+    // ONLY by construction (its own doc comment). That row had prose (WHAT/WHY/COST/TRIGGER) but
+    // no locked decline-test proving the shape actually declines rather than crashing, silently
+    // misfiring, or diverging between modes. `crunch(1)` (CPU-eligible) and `fetchA(2)`
+    // (suspending) sit adjacent inside an `if` body — the EXACT shape that would fuse if it were
+    // top-level. Because it is nested, `admitted_fused_group` never scans it; the pure-CPU
+    // nested-group path also declines (only ONE CPU-eligible member exists there — `fetchA` is
+    // excluded from CPU eligibility since it suspends — so no adjacent CPU-eligible PAIR exists
+    // to admit). 0 spawns, byte-identical to `--no-auto-parallel`. If this ever shows a nonzero
+    // spawn count, the nested-fused-group scope narrowing this fixture locks has been silently
+    // lifted without the Future-Requirements-row's own re-derivation work (frame-layout
+    // extension to a dual-kind reserve at depth > 0) — fix the admission gate's scope, not this
+    // test, unless that re-derivation genuinely landed.
+    m3d_assert_declines_byte_identical("v0_3_m3g_nested_mixed_group_declines.ynz", "448");
+}
+
+#[test]
 fn v03_m3g_wide_ec_mixed_group_declines_byte_identical() {
     // WHY (v0.3-M3g Phase 3 — E7 wide-EC ratchet, fused-group instance): a wide-value-EC
     // (`number errors`) call (`priceA`) next to an I/O call (`fetch`). `priceA` is excluded from

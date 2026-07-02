@@ -2095,15 +2095,21 @@ active_since = "v0.3-M3b"
 # alongside. CPU members note the separate-core routing; I/O members note the overlap
 # without the core detail (the I/O event loop handles them in one cooperative pass).
 # Reads the same partition query codegen reads, so the hint and the binary always agree.
+#
+# v0.3-M3g: a single group can now MIX both kinds of member — a compute-heavy call spawned
+# onto a separate core alongside a waiting call inline-polled on the event loop, both driven
+# by one shared continuation (`admitted_fused_group`/`emit_fused_group_spawn_poll`). Each
+# member's hint is tagged per its OWN kind (only the CPU member says "separate core"), never
+# a single label for the whole mixed group.
 [[muted_hint_domain]]
 domain = "parallel_groups"
 placement_category = "Informational"
-description = "Shows which other statement this one runs at the same time as. CPU-bound calls run on a separate computing unit; I/O-bound calls overlap cooperatively. Both are compiler decisions driven by the independence analysis — the same analysis that controls the actual parallel execution in the binary."
+description = "Shows which other statement this one runs at the same time as. CPU-bound calls run on a separate computing unit; I/O-bound calls overlap cooperatively — and a single group can mix both kinds of call, each tagged with its own kind of overlap. All are compiler decisions driven by the independence analysis — the same analysis that controls the actual parallel execution in the binary."
 example_source = "let hits = crunchStat(2)"
 example_hint_rendered = "// runs at the same time as line 12 — separate core"
-hover_what = "These statements overlap because no data flows between them — neither one reads what the other writes, so the compiler runs them at the same time instead of one after the other."
+hover_what = "These statements overlap because no data flows between them — neither one reads what the other writes, so the compiler runs them at the same time instead of one after the other. A group can mix a compute-heavy call (tagged \"separate core\") with a waiting call (no core tag) — they still overlap together, just through two different mechanisms under the hood."
 hover_what_instead = "Write `wait` before the second call to force them to run in order — that resets the group, so the second statement waits for the first to finish."
-hover_why = "The compiler matched these statements into one parallel group: the listed lines have no shared reads or writes, so running them together is safe and faster. Adding a `wait` (or any statement that depends on an earlier value) splits the group back into sequential order."
+hover_why = "The compiler matched these statements into one parallel group: the listed lines have no shared reads or writes, so running them together is safe and faster — that holds even when one statement is compute-heavy and another is waiting on something, since each runs through whichever mechanism fits it while still sharing the same group. Adding a `wait` (or any statement that depends on an earlier value) splits the group back into sequential order."
 active_since = "v0.3-M3d"
 
 [[muted_hint_domain]]

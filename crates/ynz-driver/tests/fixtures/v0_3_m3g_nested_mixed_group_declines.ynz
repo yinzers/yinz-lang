@@ -1,0 +1,41 @@
+// v0.3-M3g Phase 5 cheap-gate follow-up (deviation-judge minor finding) — a NESTED mixed
+// CPU+I/O group (inside an `if` body) is a scoped, permanent-for-now decline
+// (`admitted_fused_group` is TOP-LEVEL ONLY by construction — see its own doc comment and the
+// plan's Future Requirements table row "A NESTED mixed (fused CPU+I/O) group stays declined to
+// sequential"). This fixture locks that decline with a real test, not just prose: `crunch(1)`
+// (CPU-eligible) and `fetchA(2)` (suspending) sit adjacent inside an `if` body — the shape that
+// WOULD fuse if it were top-level. Because it is nested, `admitted_fused_group` never sees it
+// (top-level-only scan); the pure-CPU nested-group path also declines it (only ONE CPU-eligible
+// member exists there — `fetchA` is excluded from CPU eligibility since it suspends — so no
+// adjacent CPU-eligible PAIR exists to admit). Both calls run fully sequentially, inline-polled
+// like any ordinary suspending call, exactly as they did before M3g existed.
+//
+// Arithmetic: crunch(seed) = 0+1+...+29 + seed = 435 + seed.
+//   crunch(1) = 436
+//   fetchA(2) = 2 + 10 = 12
+//   result    = 436 + 12 = 448
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   448
+function crunch(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 30) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function fetchA(n: int) -> int {
+  wait sleep(0)
+  return n + 10
+}
+
+function entrypoint() -> nothing {
+  if (true) {
+    let a = crunch(1)
+    let b = fetchA(2)
+    print(a + b)
+  }
+}

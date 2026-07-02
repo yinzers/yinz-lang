@@ -1760,38 +1760,27 @@ fn stmt_end_byte(stmt: &Stmt) -> Option<usize> {
     }
 }
 
-/// Emit one hint per member of a single concurrent group, naming the OTHER members' source lines.
-///
-/// `members` are the group's statements (≥2). CPU members append "— separate core"; I/O members
-/// omit it. The label carries NO leading spaces — the LSP layer owns hint spacing.
+/// Shared core: emit one hint per member, given each member's end-byte position, display line,
+/// and class already resolved. Used by both [`emit_group_member_hints`] (all members share one
+/// uniform class — a pure-CPU or pure-I/O group) and [`emit_fused_group_member_hints`] (each
+/// member carries its OWN class — a mixed CPU+I/O group, v0.3-M3g Phase 5). CPU members append
+/// "— separate core"; I/O members omit it. The label carries NO leading spaces — the LSP layer
+/// owns hint spacing.
 ///
 /// Time: O(m²) where m = members (each member lists every other member's line)  Space: O(m) lines.
-fn emit_group_member_hints(
-    members: &[&Stmt],
-    class: GroupClass,
-    source_text: &str,
+fn emit_member_hints_from_info(
+    member_info: &[(usize, usize, GroupClass)],
     out: &mut Vec<ParallelGroupHint>,
 ) {
-    if members.len() < 2 {
+    if member_info.len() < 2 {
         return;
     }
-    // End-byte + line for every member, so each member's hint can name the others' lines.
-    let member_info: Vec<(usize, usize)> = members
-        .iter()
-        .map(|s| {
-            let end = stmt_end_byte(s).unwrap_or(0);
-            // end - 1 lands on the statement's last character, not the terminating newline.
-            let line = byte_offset_to_line(source_text, end.saturating_sub(1));
-            (end, line)
-        })
-        .collect();
-
-    for (idx, (end_byte, _self_line)) in member_info.iter().enumerate() {
+    for (idx, &(end_byte, _self_line, class)) in member_info.iter().enumerate() {
         let other_lines: Vec<String> = member_info
             .iter()
             .enumerate()
             .filter(|(i, _)| *i != idx)
-            .map(|(_, (_, line))| format!("line {line}"))
+            .map(|(_, &(_, line, _))| format!("line {line}"))
             .collect();
         if other_lines.is_empty() {
             continue;
@@ -1804,10 +1793,73 @@ fn emit_group_member_hints(
             GroupClass::Io => format!("// runs at the same time as {other_text}"),
         };
         out.push(ParallelGroupHint {
-            position: *end_byte,
+            position: end_byte,
             label,
         });
     }
+}
+
+/// Emit one hint per member of a single concurrent group, naming the OTHER members' source lines.
+///
+/// `members` are the group's statements (≥2), all sharing the same [`GroupClass`] — a pure-CPU
+/// group (every member spawned onto a separate core) or a pure-I/O group (every member inline-
+/// polled). For a MIXED group (v0.3-M3g fused CPU+I/O), see [`emit_fused_group_member_hints`].
+///
+/// Time: O(m²) — delegates to [`emit_member_hints_from_info`].
+fn emit_group_member_hints(
+    members: &[&Stmt],
+    class: GroupClass,
+    source_text: &str,
+    out: &mut Vec<ParallelGroupHint>,
+) {
+    // End-byte + line for every member, so each member's hint can name the others' lines.
+    let member_info: Vec<(usize, usize, GroupClass)> = members
+        .iter()
+        .map(|s| {
+            let end = stmt_end_byte(s).unwrap_or(0);
+            // end - 1 lands on the statement's last character, not the terminating newline.
+            let line = byte_offset_to_line(source_text, end.saturating_sub(1));
+            (end, line, class)
+        })
+        .collect();
+    emit_member_hints_from_info(&member_info, out);
+}
+
+/// Emit one hint per member of an admitted FUSED (mixed CPU+I/O) top-level group
+/// (`ynz_typeck::cpu_admission::admitted_fused_group`), tagging each member per its OWN
+/// [`crate::cpu_admission::FusedMemberClass`] rather than one uniform class for the whole group —
+/// a `Cpu` member is spawned onto the blocking pool (gets "— separate core"); a `Suspending`
+/// member is inline-polled via its embedded child sub-frame (no "separate core").
+///
+/// v0.3-M3g Phase 5 fix: before this, `admitted_fused_group` was invisible to this hint pass
+/// entirely (it read only `admitted_cpu_group`) — a function whose mixed group codegen actually
+/// fuses rendered NO hint at all, which is worse than a stale hint: the teaching surface went
+/// silent exactly where the milestone's new behavior fires. `stmts` is the function's top-level
+/// body (`admitted_fused_group` is TOP-LEVEL ONLY, so `fused.members` indices are always direct
+/// indices into `stmts`, no nested-block resolution needed — contrast [`resolve_block_path`],
+/// which nested pure-CPU groups DO need).
+///
+/// Time: O(m²) — delegates to [`emit_member_hints_from_info`].
+fn emit_fused_group_member_hints(
+    stmts: &[Stmt],
+    fused: &crate::cpu_admission::AdmittedFusedGroup,
+    source_text: &str,
+    out: &mut Vec<ParallelGroupHint>,
+) {
+    let member_info: Vec<(usize, usize, GroupClass)> = fused
+        .members
+        .iter()
+        .map(|&(i, class)| {
+            let end = stmt_end_byte(&stmts[i]).unwrap_or(0);
+            let line = byte_offset_to_line(source_text, end.saturating_sub(1));
+            let group_class = match class {
+                crate::cpu_admission::FusedMemberClass::Cpu => GroupClass::Cpu,
+                crate::cpu_admission::FusedMemberClass::Suspending => GroupClass::Io,
+            };
+            (end, line, group_class)
+        })
+        .collect();
+    emit_member_hints_from_info(&member_info, out);
 }
 
 /// Resolve a nested-block descent path to the statement slice it selects.
@@ -1827,6 +1879,48 @@ fn resolve_block_path<'a>(
         block = nested.get(step.block_index).copied()?;
     }
     Some(block)
+}
+
+/// Descend into `stmts`' nested control-flow blocks (`if`/`while`/`for`/`match` bodies) and run
+/// [`collect_io_overlap_hints`] on each. Does NOT examine `stmts` itself for a top-level group —
+/// callers that already handled (or deliberately skipped, e.g. a fused top-level group per
+/// [`emit_fused_group_member_hints`]) the top-level grouping call this directly instead of
+/// [`collect_io_overlap_hints`], so the same statements are never grouped twice.
+///
+/// Time: O(N · S²) where N = AST nodes (recursive descent) and S = statements per block
+/// (`partition_independent_groups` is O(S²))  Space: O(D) recursion depth + O(hints).
+fn collect_io_overlap_hints_in_nested_blocks(
+    stmts: &[Stmt],
+    suspend_set: &HashSet<String>,
+    sig_table: &SignatureTable,
+    imported_fns: &HashMap<String, FunctionSig>,
+    source_text: &str,
+    out: &mut Vec<ParallelGroupHint>,
+) {
+    for stmt in stmts {
+        let nested: Vec<&[Stmt]> = match stmt {
+            Stmt::If { body, .. } => vec![body.stmts.as_slice()],
+            Stmt::While { body, .. } | Stmt::For { body, .. } => vec![body.stmts.as_slice()],
+            Stmt::Match { arms, else_arm, .. } => {
+                let mut v: Vec<&[Stmt]> = arms.iter().map(|a| a.body.stmts.as_slice()).collect();
+                if let Some(eb) = else_arm {
+                    v.push(eb.stmts.as_slice());
+                }
+                v
+            }
+            _ => vec![],
+        };
+        for block in nested {
+            collect_io_overlap_hints(
+                block,
+                suspend_set,
+                sig_table,
+                imported_fns,
+                source_text,
+                out,
+            );
+        }
+    }
 }
 
 /// Emit I/O-overlap hints for every suspending-overlap group reachable from `stmts`, descending
@@ -1855,30 +1949,14 @@ fn collect_io_overlap_hints(
         }
     }
 
-    for stmt in stmts {
-        let nested: Vec<&[Stmt]> = match stmt {
-            Stmt::If { body, .. } => vec![body.stmts.as_slice()],
-            Stmt::While { body, .. } | Stmt::For { body, .. } => vec![body.stmts.as_slice()],
-            Stmt::Match { arms, else_arm, .. } => {
-                let mut v: Vec<&[Stmt]> = arms.iter().map(|a| a.body.stmts.as_slice()).collect();
-                if let Some(eb) = else_arm {
-                    v.push(eb.stmts.as_slice());
-                }
-                v
-            }
-            _ => vec![],
-        };
-        for block in nested {
-            collect_io_overlap_hints(
-                block,
-                suspend_set,
-                sig_table,
-                imported_fns,
-                source_text,
-                out,
-            );
-        }
-    }
+    collect_io_overlap_hints_in_nested_blocks(
+        stmts,
+        suspend_set,
+        sig_table,
+        imported_fns,
+        source_text,
+        out,
+    );
 }
 
 /// Compute `parallel_groups` inlay hints for every group the compiler actually runs concurrently.
@@ -1889,18 +1967,44 @@ fn collect_io_overlap_hints(
 ///   - CPU groups come from [`crate::cpu_admission::admitted_cpu_group`] — the exact group codegen
 ///     spawns. A function that owns a parallelizable group the admission gate DECLINES (two
 ///     groups, a post-join param read, etc.) yields no hint, because codegen emits no spawn.
-///   - I/O-overlap groups come from `partition_independent_groups` for SUSPENDING functions only.
-///     A suspending function never spawns onto a separate core, so its hints omit "separate core".
+///   - A suspending function's TOP-LEVEL group is checked against
+///     [`crate::cpu_admission::admitted_fused_group`] FIRST (v0.3-M3g Phase 5) — the mixed
+///     CPU+I/O group `emit_fused_group_spawn_poll` spawns/inline-polls through one shared
+///     continuation. A member's hint carries "separate core" or not per its OWN
+///     [`crate::cpu_admission::FusedMemberClass`] (see [`emit_fused_group_member_hints`]) — a
+///     mixed group is never uniformly tagged.
+///   - Absent a fused group, a suspending function's overlap groups come from
+///     `partition_independent_groups` — every member is [`GroupClass::Io`] (no separate core),
+///     since none of those members were admitted as a CPU-spawning member of a fused group.
 ///
-/// A function is either promoted (CPU host, non-suspending) or suspending (I/O) — never both
-/// (`compute_cpu_promotions` only promotes non-suspending functions), so the two paths never
-/// double-emit on the same function.
+/// A function is either promoted (pure-CPU host, non-suspending), suspending-with-a-fused-group,
+/// or plain-suspending — never more than one of the three (`compute_cpu_promotions` only promotes
+/// non-suspending functions, and `admitted_fused_group`/`admitted_cpu_group`'s own gates are
+/// mutually exclusive by construction — see `emit.rs`'s `fused_candidates` computation), so these
+/// paths never double-emit on the same statement.
 ///
 /// Per `.claude/rules/inference.md` this is an Informational-category hint: no typeable Yinz form
 /// exists for "run at the same time as"; the hint is a muted comment showing the scheduling
 /// decision without requiring a source change.
 ///
-/// Time: O(F · N · S²) where F = functions, N = AST nodes, S = statements per block
+/// **Suspend-set parity with codegen (v0.3-M3g Phase 5 should-fix).** Every classification call
+/// below reads `suspends_with_promotions` — the SAME union codegen's real call sites read
+/// (`base_suspend_set ∪ spike_hosts`, `queries.rs`'s `codegen_query`/`frame_layouts_query`), not
+/// the narrower `effective_suspends`. Before this fix, this pass classified group members against
+/// `effective_suspends` alone: a member call to a function that is ITSELF a promoted CPU-group
+/// host elsewhere in the module resolves to `Suspending` under codegen's real (unioned) set but
+/// `Cpu` under the narrower one — the hint could claim a top-level group is mixed and admitted
+/// (2 hints, one "separate core") when codegen's real classification declines fusion entirely
+/// (e.g. both members resolve `Suspending` — not mixed), or the inverse (a silent hint gap where
+/// codegen genuinely overlaps a member the narrower set never recognized as suspending at all).
+/// `spike_hosts` cannot be read from `ynz_codegen::emit::spike_host_subset` directly (crate
+/// direction is codegen → typeck — see `cpu_admission.rs`'s module doc), so it is RE-DERIVED here
+/// via the SAME shared authority (`admitted_cpu_group`) `spike_host_subset` itself composes —
+/// not a second decision, a second call to the one query, exactly the same shape codegen's own
+/// helper uses (see the inline computation below).
+///
+/// Time: O(F · N · S²) where F = functions, N = AST nodes, S = statements per block, plus O(P · N)
+/// for the `spike_hosts` re-derivation (P = promotion candidates).
 /// Space: O(hints) + O(D) recursion depth.
 #[salsa::tracked]
 pub fn parallel_group_hints(
@@ -1940,34 +2044,127 @@ pub fn parallel_group_hints(
         &supported_callees,
     );
 
+    // `spike_hosts`: every CPU-promotion candidate whose OWN top-level/nested group is genuinely
+    // admitted under `effective_suspends` — the SAME set `ynz_codegen::emit::spike_host_subset`
+    // computes (its call site passes `base_suspend_set` for BOTH the `suspend_set` and
+    // `base_suspends` arguments of `admitted_cpu_group`, exactly mirrored here). Re-derived
+    // rather than called directly: `ynz-typeck` cannot depend on `ynz-codegen` (crate direction
+    // is codegen → typeck — see `cpu_admission.rs`'s module doc), so the only way to read
+    // codegen's real suspend set from this crate is to recompute it from the SAME shared
+    // authority (`admitted_cpu_group`) codegen's helper itself composes — a re-derivation, not a
+    // second decision.
+    let promotion = crate::queries::cpu_promotion_query(db, source);
+    let spike_hosts: HashSet<String> = parse
+        .module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(g) if promotion.promoted.contains(&g.name) => Some(g),
+            _ => None,
+        })
+        .filter(|g| {
+            crate::cpu_admission::admitted_cpu_group(
+                g,
+                &effective_suspends,
+                &effective_suspends,
+                &supported_callees,
+                &spike_capable,
+            )
+            .is_some()
+        })
+        .map(|g| g.name.clone())
+        .collect();
+    // The suspend set codegen's REAL call sites read for group-member classification
+    // (`base_suspend_set ∪ spike_hosts`, `queries.rs`'s `codegen_query`/`frame_layouts_query`) —
+    // used below everywhere codegen classifies a member callee as Cpu vs Suspending, so this pass
+    // and the binary can never disagree on a promoted-CPU-host member (the E5 divergence this fix
+    // closes; see this function's doc comment).
+    let mut suspends_with_promotions = effective_suspends.clone();
+    suspends_with_promotions.extend(spike_hosts);
+
     for item in &parse.module.items {
         let Item::Function(f) = item else { continue };
 
         if effective_suspends.contains(&f.name) {
-            // Suspending function: I/O-overlap groups, no separate core.
-            collect_io_overlap_hints(
-                &f.body.stmts,
-                &effective_suspends,
-                &sig_output.sig_table,
-                &sig_output.imported_fns,
-                &source_text,
-                &mut hints,
-            );
+            // v0.3-M3g Phase 5: a suspending function may ALSO host a top-level FUSED (mixed
+            // CPU+I/O) group — `admitted_fused_group` is the exact query
+            // `emit_fused_group_spawn_poll` reads at codegen (see that function's doc comment).
+            // Before this fix, this branch never consulted it at all: a fused-admitted function
+            // fell straight into `collect_io_overlap_hints`, whose `partition_independent_groups`
+            // does not recognize a CPU-eligible callee as a group candidate (only `suspend_set`
+            // membership counts there) — so the fused pair broke into two ungrouped singletons
+            // and the hint pass rendered NOTHING for a group the binary genuinely spawns/polls
+            // concurrently. `admitted_fused_group` is checked FIRST and, when it fires, taken
+            // instead of (never in addition to) the plain I/O partition on the SAME top-level
+            // statements — the two must never both claim the same range (E5: hint == binary).
+            //
+            // `suspend_set` here is `suspends_with_promotions` — codegen's real unioned set (see
+            // this function's doc comment for the should-fix this closes).
+            if let Some(fused) = crate::cpu_admission::admitted_fused_group(
+                f,
+                &suspends_with_promotions,
+                &supported_callees,
+            ) {
+                emit_fused_group_member_hints(&f.body.stmts, &fused, &source_text, &mut hints);
+                // Nested `if`/`while`/`for`/`match` bodies still get their own overlap detection
+                // alongside a top-level fused group — `emit_fused_group_member_hints` covers ONLY
+                // the top-level fused range (`admitted_fused_group` is top-level-only), unlike the
+                // `else` arm below, which routes through `collect_io_overlap_hints` and so already
+                // gets nested coverage as part of THAT call. `admitted_fused_group`'s own
+                // pre-/post-group gates already deep-scan for ANY suspending call outside the fused
+                // range and decline fusion entirely if one exists (so today no nested block can
+                // hold a suspending group in a function that ALSO fires a fused group — this call is
+                // presently a defensive no-op there). It is real, reachable coverage for every OTHER
+                // suspending function once a nested group can coexist with a fused one, and keeps
+                // this pass correct-by-construction rather than correct-by-coincidence if
+                // `admitted_fused_group`'s gates are ever loosened without a matching hint-pass
+                // update (exactly the class of drift E5 exists to catch).
+                collect_io_overlap_hints_in_nested_blocks(
+                    &f.body.stmts,
+                    &suspends_with_promotions,
+                    &sig_output.sig_table,
+                    &sig_output.imported_fns,
+                    &source_text,
+                    &mut hints,
+                );
+            } else {
+                // No fused group: ordinary I/O-overlap groups, no separate core. Reads
+                // `suspends_with_promotions` (not the narrower `effective_suspends`) for the same
+                // reason as the fused branch above — a declined-fused member that is itself a
+                // promoted CPU host still overlaps at codegen (inline-polled, via the ordinary
+                // `partition_independent_groups` path codegen's block walker ALSO reads against
+                // the unioned set), and the hint must recognize that or go silent where the
+                // binary genuinely overlaps.
+                //
+                // `collect_io_overlap_hints` ALREADY descends into nested `if`/`while`/`for`/
+                // `match` bodies internally (it calls `collect_io_overlap_hints_in_nested_blocks`
+                // itself) — calling that helper again here would double-emit every nested group's
+                // hints (one hint pair per member, twice), breaking the E5 "hint set == codegen
+                // spawn set" promise. Do NOT add a second nested-blocks call in this arm.
+                collect_io_overlap_hints(
+                    &f.body.stmts,
+                    &suspends_with_promotions,
+                    &sig_output.sig_table,
+                    &sig_output.imported_fns,
+                    &source_text,
+                    &mut hints,
+                );
+            }
             continue;
         }
 
         // Non-suspending function: emit a hint ONLY for the single CPU group codegen admits.
         //
-        // `base_suspends` == `suspend_set` here (both `&effective_suspends`): this hint pass
-        // never unions in the CPU-promotion set the way codegen's `suspend_set` does at the
-        // emission boundary, so the plain effective suspend set IS the authoritative
-        // pre-promotion signal `admitted_cpu_group`'s Phase-2 temporary decline reads. (In
-        // practice this call is only reached when `f` is NOT in `effective_suspends` — see the
-        // guard above — so the decline never fires here; passing the true value keeps this call
-        // consistent with the authority's contract rather than relying on the caller-side skip.)
+        // `suspend_set` = `suspends_with_promotions` (codegen's real unioned set — see this
+        // function's doc comment); `base_suspends` = `effective_suspends`, mirroring codegen's
+        // real call site (`spike_cpu_candidates`, which is always invoked with the unmutated
+        // `base_suspend_set` for this second argument). `admitted_cpu_group`'s current
+        // implementation does not read `base_suspends` (kept only for call-surface parity — see
+        // its own doc comment), so this argument is inert either way; passing the authoritative
+        // value keeps the call honest about which set plays which role.
         let Some(group) = crate::cpu_admission::admitted_cpu_group(
             f,
-            &effective_suspends,
+            &suspends_with_promotions,
             &effective_suspends,
             &supported_callees,
             &spike_capable,

@@ -146,6 +146,244 @@ the current-truth plan.md slice).
     --workspace -- -D warnings` clean; the full `cargo test --workspace --no-fail-fast` run
     (below) shows zero new regressions vs the established baseline.
 
+- 21509b0d-6bd4-43d6-b66a-34a7551619c6 — 2026-07-02 — Phase 5 (Teaching surfaces, docs, registry)
+  executed. Engineering steps 1–5 done, tested, documented; the `/pr`/merge/`/release` step
+  deliberately NOT attempted per this dispatch's explicit scope note (human-gated remote-push +
+  public-release action, out of executor scope). Not a FRAGO — this is ordinary phase execution
+  against the plan's own already-written step text, no plan-vs-reality divergence.
+  - **Step 1 (`parallel_groups` hint truth for mixed groups) — FIXED, a real gap, not a wording
+    tweak.** `crates/ynz-typeck/src/inlay_hint_passes.rs`'s `parallel_group_hints` had ZERO
+    awareness of `ynz_typeck::cpu_admission::admitted_fused_group` — confirmed by grep
+    (`grep -c fused crates/ynz-typeck/src/inlay_hint_passes.rs` → 0, before this session). A
+    suspending host whose top-level group genuinely fuses at codegen
+    (`emit_fused_group_spawn_poll`) fell into the OLD `partition_independent_groups` I/O-only
+    path, which does not recognize a CPU-eligible callee as a group candidate — the fused pair
+    broke into two ungrouped singletons and the hint pass rendered NOTHING, silently, exactly
+    where the milestone's new behavior fires. Fixed: the suspending-function branch now probes
+    `admitted_fused_group` FIRST; a new `emit_fused_group_member_hints` tags each member per its
+    OWN `FusedMemberClass` (Cpu → "— separate core"; Suspending → no core tag), sharing a new
+    `emit_member_hints_from_info` core with the pre-existing uniform-class
+    `emit_group_member_hints` (DRY — no near-duplicate hint-emission logic written). A new
+    `collect_io_overlap_hints_in_nested_blocks` helper (pure extraction from
+    `collect_io_overlap_hints`'s own pre-existing nested-descent half) keeps nested
+    `if`/`while`/`for`/`match` overlap detection working regardless of a top-level fused group —
+    verified, by direct trace of `admitted_fused_group`'s own pre-/post-group deep-suspend-scan
+    gates, that this is presently a defensive no-op (no nested block can hold a suspending call in
+    a function that ALSO admits a fused group, by construction of those same gates) rather than
+    dead weight papering over an untested path — kept anyway so the hint pass stays
+    correct-by-construction if those gates are ever loosened without a matching hint-pass update
+    (the exact class of drift E5 exists to catch).
+  - **E5 parity proof (two new tests, `crates/ynz-typeck/tests/parallel_group_hint_parity.rs`):**
+    `mixed_fused_group_hint_tags_cpu_and_io_members_and_matches_admission` (positive — the CPU
+    member's line gets the separate-core hint, the Suspending member's line gets the overlap hint
+    WITHOUT it, and the SAME `admitted_fused_group` call the hint reads returns `Some` with
+    matching members) and `mixed_fused_group_declines_on_non_scalar_arg_emits_no_hint` (negative —
+    a 2-arg member is fused-ineligible; asserts NO hint of either kind, matching codegen's
+    fully-sequential fallback for a declined group). All 7 tests in the suite green (5 pre-existing
+    + 2 new); full `ynz-typeck` crate suite green — the `collect_io_overlap_hints` refactor is
+    behavior-preserving (confirmed: every pre-existing pure-CPU/pure-I/O parity test, including the
+    two DECLINE-emits-no-hint tests, still passes unchanged).
+  - **Deliberate simplification, recorded (not a new divergence — an existing one applied
+    consistently):** `admitted_fused_group`'s `suspend_set` argument at the hint-pass call site is
+    the plain effective suspend set, NOT unioned with `spike_hosts` the way codegen's real call
+    site is (`suspends_with_promotions`, `queries.rs:361-366`). This mirrors the EXISTING,
+    pre-Phase-5 simplification the hint pass already makes for `admitted_cpu_group` (see that call
+    site's own comment, unchanged this session) — applied here for the first time to the newly-
+    consumed fused query rather than widened as a new gap. The narrow theoretical edge case (a
+    fused-group member whose callee is ITSELF a promoted CPU-group host elsewhere in the module)
+    is out of Phase 5's teaching-surface scope; not exercised by any fixture in the corpus. Named
+    here on the record per the decision-philosophy Safe-Default/Opt-Out-on-Record contract, not
+    silently taken.
+  - **Step 2 (feature-registry entries) — DONE.** `registry/features.toml`'s
+    `[[muted_hint_domain]]` `parallel_groups` entry (`description`, `hover_what`, `hover_why`)
+    now states explicitly that a group can mix a CPU-bound member and an I/O-bound member, each
+    tagged per its own kind — `placement_category` unchanged (`Informational`). No new
+    `[[diagnostic_template]]` entries: confirmed (re-verified this session, not merely cited)
+    that Phases 1–4 introduced zero new `Diagnostic::error`/`Diagnostic::warning` call sites (grep
+    swept the full `ynz-typeck`/`ynz-codegen` diff surface — none found beyond the Phase-1
+    single-sourced `wait_on_non_may_block_warning`, which is a rewording of PRE-EXISTING text, not
+    a new class). Explicitly none of `[[keyword]]`/`[[banned_declaration_keyword]]`/
+    `[[banned_jargon]]`/`[[primitive_intrinsic]]`/`[[type_attached_constant]]`/
+    `[[deferred_language_feature]]`/`[[deferred_tooling_feature]]` — M3g adds no new user-typeable
+    surface. Verified: `cargo build -p ynz-registry` clean;
+    `no_banned_jargon_in_muted_hint_domain_descriptions` and
+    `no_banned_jargon_in_lsp_inlay_hint_hover_output` (composes the full WHAT/WHAT-INSTEAD/WHY
+    tooltip from the edited fields) both green.
+  - **Step 3 (amend IMP-concurrency.md) — DONE, with a scope note.** The doc had NO pre-existing
+    "mixed" divergence entry to literally flip (grepped: zero occurrences of "mixed" in the file
+    before this session) — the closest prior statement was the M3d "Decline Rules" bullet "The
+    function calls a suspending helper — it will be a state machine; M3b handles it," which WAS the
+    implicit universal mixed-decline (a suspending host could never host ANY CPU parallelization
+    pre-M3g). Amended that bullet + the matching M3d "Promotion Rules" rule 1 in place with the
+    M3g carve-out; added a full new `## Mixed CPU+I/O Overlap — Poll-Path Fusion (M3g)` section
+    (same shape as the pre-existing `## CPU Statement Parallelization (M3d)` section — What This
+    Is / Admission Rules / Decline Rules) placed immediately after M3d's content, before `##
+    Design Divergences` — the logical home per the documentation-authoring placement procedure
+    (searched for the topic's existing home first; found none; picked the section whose purpose
+    matches, adjacent to its closest sibling). Its Decline Rules subsection re-states every
+    remaining decline with its home: pre-existing M3d/M3b shapes (loop-body, multi-group ≥2,
+    same-callee I/O, wide-EC-return) cross-referenced as unchanged; the two fused-specific
+    narrowings (nested fused group, parameter-bearing host bar) named as the plan's own Future
+    Requirements table entries. **Self-check caught a real gap before this claim shipped**: the
+    parameter-bearing-host narrowing already had a Future Requirements row (added by the Phase 3
+    closeout FRAGO), but the nested-fused-group narrowing did NOT — it lived only in
+    `admitted_fused_group`'s own doc comment and the plan's disciplined-initiative rule 4, findable
+    nowhere a reader scanning the Future Requirements table (the way every OTHER scoped decline in
+    this doc IS findable) would look. Added the missing row this session — WHAT/WHY/COST/TRIGGER,
+    mirroring the param-bearing-host row's format exactly — so the IMP doc's "tracked in the Future
+    Requirements table" claim is true for BOTH fused-specific narrowings it names, not just one.
+    The pre-existing `## Design Divergences` section's three entries (same-callee I/O, the
+    type-based write-effect floor, `share` best-effort enforcement) needed NO edit — each already
+    states its floor "transfers unchanged," which remains true for M3g. `updated_at` frontmatter
+    bumped `2026-07-01` → `2026-07-02`.
+  - **Step 4 (`wait_on_non_may_block` wording sweep) — verified accurate, no change needed.**
+    Read `wait_on_non_may_block_warning()` (`crates/ynz-typeck/src/check.rs`) against the
+    registry's `WaitOnNonMayBlockWarning` template: still byte-identical. Its WHY text already
+    reads generically as "any parallel group" (not "any CPU group"), which already covers a fused
+    group correctly: `admitted_fused_group`'s classifier explicitly excludes an explicit-`wait`-
+    wrapped statement from group membership (`stmt_has_explicit_wait_stmt`), so the existing
+    WHAT-INSTEAD/WHY reasoning applies unchanged. No stale wording found; no edit made — stated
+    explicitly per the plan's own "verify... fix if stale" framing, not silently skipped.
+  - **Step 5 (VSCode/LSP teaching parity) — DONE.** Confirmed by direct read that
+    `crates/ynz-lsp/src/inlay_hint.rs`'s `parallel_groups` rendering forwards
+    `ParallelGroupHint.label` verbatim (no per-domain wording duplicated in the LSP crate) and
+    `lsp_inlay_hint_hover_for` derives hover text purely from the registry entry already updated
+    in step 2 — so no LSP code change was needed for either surface; confirmed no test in
+    `crates/ynz-lsp/tests/` pins the old wording word-for-word. `tooling/vscode-ynz/README.md` DID
+    need updating: its existing v0.3.0-m7 changelog entry claimed "every call in the group shows...
+    separate core," now inaccurate for a mixed group — added a new `## What's new in
+    v0.3.0-m{next}` section (the `{next}` placeholder mirrors this plan's own notation for the
+    not-yet-cut tag; resolving it to the real version number is the `/release` skill's job). No
+    `.vsix` build/attach performed — that belongs to the release step, out of this session's scope.
+  - **Full verification this session:** `cargo build --workspace` clean; `cargo clippy
+    --workspace -- -D warnings` clean; `cargo fmt --all -- --check` clean; `cargo test --workspace
+    --no-fail-fast` — the ONLY failures are the same 5 pre-existing, unrelated failures established
+    at the Phase 1 baseline (A5) and reconfirmed at every subsequent phase
+    (`no_banned_jargon_in_deferred_feature_user_facing_fields`,
+    `parser_precedence_table_matches_spec`,
+    `every_future_doc_has_a_registry_entry_or_is_skipped`, `deferred_language_feature_lookup`,
+    `deferred_tooling_feature_lookup` — stale-`spec`/`design`-path fallout from the 2026-07-01
+    docs-taxonomy migration, tracked at `.claude/todos.md`); the 6th baseline entry (the documented
+    `v03_m3e_alias_local_name_collision` CI-contention flake) passed this run. Zero new failures
+    introduced by this phase's diff.
+  - **Files touched this session:** `crates/ynz-typeck/src/inlay_hint_passes.rs`,
+    `crates/ynz-typeck/tests/parallel_group_hint_parity.rs`, `registry/features.toml`,
+    `docs/internal/implementation/IMP-concurrency.md`, `tooling/vscode-ynz/README.md`,
+    `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md` (Phase 5 checkboxes
+    1–5 ticked with DONE detail, checkbox 6 left unticked with an explicit out-of-scope note,
+    session-id appended), this audit.md entry.
+
+- (Phase 5 executor session, dispatched by orchestrator for reviewer-fleet cheap-gate follow-up) —
+  2026-07-02 — Fix to Phase 5's own record, not a new FRAGO (mirrors the Phase 1/Phase 2
+  cheap-gate-fix correction pattern above: corrections to the phase's own work found by a
+  reviewer-fleet pass — code-reviewer blocker + should-fix, plus three minor findings — not a
+  plan-vs-reality divergence or a new design decision).
+  - **BLOCKER (code-reviewer) — double-emitted nested I/O-overlap hints — FIXED.**
+    `crates/ynz-typeck/src/inlay_hint_passes.rs`'s `parallel_group_hints`: the suspending-function
+    branch's `else` (ordinary, non-fused) arm called `collect_io_overlap_hints` (which ALREADY
+    internally recurses into nested `if`/`while`/`for`/`match` blocks via its own call to
+    `collect_io_overlap_hints_in_nested_blocks`) AND a second, unconditional hoisted call to that
+    same nested-blocks helper landed after the if/else — double-covering nested blocks for the
+    `else` arm specifically (the fused-arm's own need for the hoisted call, since
+    `emit_fused_group_member_hints` covers top-level only, was legitimate; the `else` arm's use of
+    it was the bug). A suspending host with ≥2 independent suspending calls nested inside a
+    branch body got that group's hints emitted TWICE — breaking the E5 "hint set == codegen spawn
+    set" promise. **Fix**: moved the nested-blocks call inside the fused (`if let Some(fused)`)
+    branch only; the `else` arm now relies solely on `collect_io_overlap_hints`'s own internal
+    recursion. **Regression test**: new
+    `nested_suspending_group_in_ordinary_host_emits_hint_exactly_once_per_member`
+    (`crates/ynz-typeck/tests/parallel_group_hint_parity.rs`) — asserts exactly ONE hint per
+    member on a nested (inside `if`) independent-suspend group in a non-fused suspending host.
+    **Paper-Traced**: temporarily reintroduced the duplicate call — the test failed red (2 hints
+    vs. expected 1); reverted — green. Confirmed non-vacuous.
+  - **SHOULD-FIX (code-reviewer) — hint pass read a narrower suspend set than codegen's real call
+    site — CONFIRMED REAL, FIXED (not deferred).** Verified via a throwaway probe test (temporary,
+    reverted) using the real production query pipeline
+    (`check_query`/`module_signatures_query`/`cpu_promotion_query`) that codegen's real call sites
+    (`queries.rs`'s `codegen_query`/`frame_layouts_query`) classify a fused group's members
+    against `suspends_with_promotions` (`base_suspend_set ∪ spike_hosts`), while the hint pass
+    classified against `effective_suspends` alone (no CPU-promotion union). Confirmed a real
+    divergence: a member call to a function that is ITSELF a promoted CPU-group host resolves
+    `Suspending` under codegen's real set but `Cpu` under the hint's narrower set — for a
+    constructed fixture (`pureHelper` — its own `crunch(3)`/`crunch(4)` pair self-admits — called
+    alongside a genuinely-suspending `ioWork` from `entrypoint`), the hint's narrow set wrongly
+    admitted a mixed `[Cpu, Suspending]` group (`admitted_fused_group(..., &effective_suspends,
+    ...)` returned `Some`) while codegen's real unioned set classifies BOTH members `Suspending`
+    (not mixed) and correctly returns `None` (fusion declines). **Real fix landed** (not a
+    deferral): `ynz-typeck` cannot depend on `ynz-codegen` to call
+    `ynz_codegen::emit::spike_host_subset` directly (crate direction is codegen → typeck), but
+    `spike_host_subset`'s only real logic is a thin iteration over the SAME shared authority
+    (`ynz_typeck::cpu_admission::admitted_cpu_group`) already available inside `ynz-typeck` — so
+    `parallel_group_hints` now RE-DERIVES `spike_hosts`/`suspends_with_promotions` itself (a
+    re-derivation via the one shared query, not a second decision) and threads it through every
+    classification call in the suspending-function branch (`admitted_fused_group`,
+    `collect_io_overlap_hints`/`collect_io_overlap_hints_in_nested_blocks`) AND the non-suspending
+    branch's `admitted_cpu_group` call — mirroring codegen's real call sites exactly, closing the
+    divergence uniformly rather than only in the fused branch the finding named. **Regression
+    test**: new `fused_member_that_is_itself_a_promoted_cpu_host_matches_codegen_real_suspend_set`
+    (`crates/ynz-typeck/tests/parallel_group_hint_parity.rs`) — asserts `admitted_fused_group`
+    under the real unioned set returns `None` (matching codegen), the narrow set would have wrongly
+    returned `Some` (documents the divergence), and the ACTUAL hint pass output carries no
+    "separate core" tag on `entrypoint`'s call to `pureHelper`. **Paper-Traced**: temporarily
+    reverted the fused-branch call to the narrow set — the test failed red (line 23,
+    `pureHelper(1)`, wrongly tagged); reverted the revert — green. Confirmed non-vacuous. The
+    stale "tracked... `.claude/todos.md:208`" in-code comment claiming this simplification was
+    tracked (which the reviewer found actually points at an unrelated M3d decline) was replaced —
+    the fix makes the comment moot rather than needing a correction.
+  - **Minor #1 — vscode README unfilled placeholder — FIXED.**
+    `tooling/vscode-ynz/README.md`'s `## What's new in v0.3.0-m{next}` heading (added,
+    uncommitted, by the prior Phase 5 session) resolved to the concrete next version:
+    `v0.3.0-m8` — confirmed via `Cargo.toml` (`version = "0.3.0-m7"`, the current/last-shipped
+    tag) and `git tag` (`v0.3.0-m7` is the most recent milestone tag; tags increment by exactly 1
+    per milestone), matching the heading convention every prior "What's new" section already
+    uses (`v0.3.0-m7`, `v0.3.0-m2`, `v0.3.0-m1`).
+  - **Minor #2 — plan.md ¶4 Sustainment stale "insta snapshots (golden IR + demo stdout/stderr)"
+    text — FIXED.** Reconciled to "insta snapshots (golden IR only); demo stdout/stderr via
+    byte-exact `expected_stdout.txt` comparison" — matching the mechanism already correctly
+    described in the plan's `### Demo & Error Gallery` invariant subsection (reconciled by the
+    Phase 3 closeout session; ¶4 was the one place that reconciliation missed).
+  - **Minor #3 — `IMP-concurrency.md` pre-existing stale `design/future/` bare-text reference —
+    FIXED.** The "Same-callee concurrent calls run sequentially" Design Divergence's "Reversal
+    path" paragraph ended with "Tracked in `design/future/` for a future phase" — a pre-migration
+    path with no current successor for this specific item (confirmed: no `SCRATCH-*.md` or
+    `.claude/todos.md` entry covers this same-callee I/O sub-frame-keying reversal). The other two
+    "Reversal path" paragraphs in the SAME section (write-effect floor, `share`-enforcement
+    completeness) name no external tracking location at all — the deferral is fully self-contained
+    per the section's own four-field (WHAT/WHY/named-cost/reversal-path) shape. Removed the
+    dangling reference to match the sibling entries' established pattern rather than invent a
+    tracking pointer that doesn't exist.
+  - **Minor #4 (optional, deviation-judge) — missing locked decline-test for the nested-fused-group
+    Future Requirements row — ADDED (cheap).** New fixture
+    `crates/ynz-driver/tests/fixtures/v0_3_m3g_nested_mixed_group_declines.ynz` (`crunch(1)`
+    adjacent to `fetchA(2)` inside an `if` body — the exact shape that would fuse if top-level) +
+    `v03_m3g_nested_mixed_group_declines_byte_identical` (`crates/ynz-driver/tests/integration.rs`,
+    via the shared `m3d_assert_declines_byte_identical` helper) — confirmed 0 spawns, byte-identical
+    to `--no-auto-parallel`, oracle `448`. Verified empirically (not asserted) via a throwaway
+    fixture build + IR grep before committing to the permanent test. Plan's Future Requirements
+    table row for "A NESTED mixed (fused CPU+I/O) group stays declined to sequential" amended
+    in-place to cross-reference the new locked test, satisfying the plan's own rule 4 requirement.
+  - **Full verification this session:** `cargo build --workspace` clean; `cargo clippy --workspace
+    -- -D warnings` clean; `cargo fmt --all -- --check` clean (one formatting fix applied via
+    `cargo fmt --all` to the new should-fix regression test, then re-verified clean). Full
+    `cargo test --workspace --no-fail-fast` run TWICE: run 1 — 6 failures, byte-for-byte the same 6
+    pre-existing baseline failures (A5: `no_banned_jargon_in_deferred_feature_user_facing_fields`,
+    `parser_precedence_table_matches_spec`, `every_future_doc_has_a_registry_entry_or_is_skipped`,
+    `deferred_language_feature_lookup`, `deferred_tooling_feature_lookup`, plus the documented
+    `v03_m3e_alias_local_name_collision_runs_correctly` CI-contention flake firing this run); run 2
+    — 5 failures (the same 5 always-failing baseline entries; the flake passed this run, consistent
+    with its documented flaky nature). Zero new failures either run. All new/modified tests
+    (`nested_suspending_group_in_ordinary_host_emits_hint_exactly_once_per_member`,
+    `fused_member_that_is_itself_a_promoted_cpu_host_matches_codegen_real_suspend_set`,
+    `v03_m3g_nested_mixed_group_declines_byte_identical`) green in both runs. Did NOT commit to
+    git (per dispatch scope) and did NOT attempt `/pr`/`/release` (still out of scope).
+  - **Files touched this session:** `crates/ynz-typeck/src/inlay_hint_passes.rs` (blocker fix +
+    should-fix suspend-set-parity fix), `crates/ynz-typeck/tests/parallel_group_hint_parity.rs`
+    (2 new regression tests), `crates/ynz-driver/tests/integration.rs` (1 new test),
+    `crates/ynz-driver/tests/fixtures/v0_3_m3g_nested_mixed_group_declines.ynz` (new fixture),
+    `tooling/vscode-ynz/README.md` (minor #1), `docs/internal/implementation/IMP-concurrency.md`
+    (minor #3), `.claude/planning/active/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md` (minor
+    #2 + Future Requirements row amended for minor #4), this audit.md entry.
+
 ## FRAGO log
 (FRAGO delta records append here — see the FRAGO template in REF-plan-format.)
 

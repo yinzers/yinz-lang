@@ -2,6 +2,16 @@
 
 Syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz` files.
 
+## What's new in v0.3.0-m8
+
+- **Mixed CPU+I/O parallel-group hints** — a group can now MIX a number-crunching call and a
+  waiting (I/O) call side by side; the compiler runs them at the same time through one shared
+  continuation instead of the group declining to plain sequential order. Each member's muted
+  comment is tagged per its OWN kind — only the crunching call says `— separate core`; the
+  waiting call's comment omits it, since it overlaps on the event loop instead of a second core.
+  Hover either one for the updated WHAT/WHAT-INSTEAD/WHY, which now explains that a group can mix
+  both kinds of member and still overlap together.
+
 ## What's new in v0.3.0-m7
 
 - **CPU parallel-group hints** — when the compiler auto-runs independent number-crunching
