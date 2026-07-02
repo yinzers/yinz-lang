@@ -60,6 +60,7 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 | [`.claude/rules/language-design.md`](.claude/rules/language-design.md) | Making or reviewing language design decisions |
 | [`.claude/rules/docs-checklist.md`](.claude/rules/docs-checklist.md) | Adding new `docs/internal/implementation/IMP-*.md` design docs, `docs/internal/scratchpad/SCRATCH-*.md` future-list ideas, or `docs/reference/REF-*.md` spec sections |
 | [`.claude/rules/examples-structure.md`](.claude/rules/examples-structure.md) | Adding, renaming, or restructuring anything under `examples/` — flat layout, Pittsburgh-themed folder names, no nested workspaces |
+| [`.claude/rules/authoritative-derivation.md`](.claude/rules/authoritative-derivation.md) | Designing or reviewing any compiler pass/guard/codegen path that consumes a derived analysis result (crossing/suspend sets, ABI/aliasing predicates, admission gates) — or anywhere two+ code paths must agree on the same computed answer. Thread the one authoritative source; never re-derive an "equivalent" twin. Design-time guard for the twin-computation-drift class that shipped silent miscompiles across M3a/M3d/M3e/M3g. |
 
 ---
 

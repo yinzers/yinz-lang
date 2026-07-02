@@ -523,3 +523,108 @@ YNZ_M3D_SPIKE
 **Severity**: critical — the feature under test silently stops existing while its entire test suite stays green; downstream phases inherit "proven" machinery with zero live coverage. Cost when it fired: rounds 6–8 of an 8-round gate saga (one full extra fix round + re-gate) to discover and undo a narrowing that a plan-time envelope table would have flagged instantly.
 
 **Originating incident**: 2026-06-12, v0.3-M3d Phase 0 round 7. The ISSUE-B fix declined post-pair statements on `stmt_contains_wait || stmt_contains_suspending_call`; the `stmt_contains_wait` clause also caught intrinsic `wait sleep(0)`, flipping fixtures (g)/(h)/(i)/(j)/(n) from FIRE to DECLINE — IR-verified zero `ynz_rt_spawn_blocking_joinable` call sites — making the cross-suspension reload machinery (built and debugged across 5 prior fix rounds, deviations #9/#14) dead code while all 17 fixtures stayed byte-identical green. Caught only because the coordinator primed all four round-7 gate agents on the "does the spike still FIRE, not just match output" question; deviation-judge #15 traced it at IR level and named the one-clause fix (keep only `stmt_contains_suspending_call`, which already excludes sleep via `M2_MAY_BLOCK_INTRINSICS`). Fixed in round 8; FIRES restored 0→2 spawn calls per fixture. See [`.claude/planning/done/2026-06-11-v0-3-m3d-cpu-parallelization/plan.md`](planning/done/2026-06-11-v0-3-m3d-cpu-parallelization/plan.md) Phase 0 Findings Log (R7/R8 entries) — committed dcc1432.
+
+---
+
+## Diagnostic-Text Dedup Silently Blinds a Substring-Filter Test — 2026-07-02
+
+**Scope**: any test asserting on a LITERAL SUBSTRING of compiler stdout/stderr — `.contains("<lit>")`, `.starts_with("<lit>")`, `.lines().filter(|l| l.contains("<lit>"))`, or a `count` of such filtered lines — in `crates/ynz-*/tests/*.rs` (notably `crates/ynz-driver/tests/error_galleries.rs`), when the SAME change reworded, unified, or dedup'd the diagnostic text that literal came from.
+**Exemption**:
+- The reworded diagnostic still contains the asserted literal verbatim (a grep of the current message source / registry confirms the substring survives the rewording).
+- The test filters on a token guaranteed stable across wording changes — an error code, a banned keyword name the diagnostic is ABOUT (`"struct"`, `"class"`), a diagnostic-template id — rather than incidental prose.
+- The assertion is a positive `assert!(x.contains(lit))` that would go RED (not silently green) if the substring vanished — the failure mode here is the vacuous-pass shape: a `filter(...).count()` that drops to 0, or a `!contains` / `is_empty` that becomes trivially true, when the substring disappears.
+**Last verified**: 2026-07-02
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-.*/tests/.*\.rs$
+crates/ynz-diagnostics/src/
+registry/features\.toml$
+\.contains\(
+\.starts_with\(
+\.filter\(
+```
+
+**Cause**: a diagnostic-wording change (rewording a message, unifying two near-identical messages into one, moving text into `registry/features.toml`) removes a substring that a test was filtering on. If the test's assertion is a *count* or a *negative* over the filtered result — `filter(|l| l.contains("<old>")).count() >= 0`, `warnings_only.is_empty()`, `!stderr.contains("<old>")` — the filter now matches nothing and the assertion passes VACUOUSLY. A real regression guard is gutted with zero test failures: the wording change goes green and nothing proves the diagnostic still fires.
+
+**Detection signature**: (1) a diff edits diagnostic/message text in `crates/ynz-diagnostics/`, a `banned_jargon`/registry string, or any user-facing message literal; AND (2) a test elsewhere filters compiler output on a literal that is a fragment of the *old* text, where the surviving assertion is a count/negative/emptiness check rather than a positive presence assertion. The tell: after the diff, grep the test's filter-literal against the CURRENT emitted diagnostic — zero matches means the guard is now vacuous.
+
+**Constraint**: any change that rewords, unifies, or relocates diagnostic text MUST, in the same diff, re-verify every test that filters compiler output on a fragment of that text — either the literal still appears verbatim, or the test is repointed at a wording-stable token (error code / keyword / template id). A substring-filter regression guard must be phrased as a POSITIVE presence assertion that goes red when the substring vanishes, never as a count/emptiness check that passes on zero matches.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] Diff edits a message literal in `crates/ynz-diagnostics/src/` or a diagnostic string in `registry/features.toml`: grep `crates/ynz-*/tests/*.rs` for `.contains(`/`.filter(`/`.starts_with(` calls whose literal is a fragment of the removed/changed text. Any match whose surrounding assertion is a `count`/`is_empty`/`!...contains` (not a positive `assert!(...contains(...))`) → WARNING: substring guard may now pass vacuously.
+- [ ] For each such test: confirm the filter-literal still appears in the current diagnostic output for the fixture. Zero occurrences in current output + test still green → WARNING (dead regression guard).
+
+**Severity**: warning (no runtime miscompile — but a silently-gutted diagnostic regression guard lets a real diagnostic regression ship undetected, which the teaching mission makes load-bearing).
+
+**Originating incident**: 2026-07-02, v0.3-M3g AAR. After a diagnostic-text unification, a test filtering on an old substring began passing unconditionally instead of red — the regression guard was silently gutted. `crates/ynz-driver/tests/error_galleries.rs` already carries the exact hazard shape (`stderr.contains("type")` / `"struct"` / `"class"` key-phrase checks); those survive because they filter on wording-stable keyword names, which is the correct form this corpse mandates.
+
+---
+
+## Refactor-Extracted Helper Double-Invoked on One Branch — 2026-07-02
+
+**Scope**: any Rust source under `crates/**/src/` — a diff that (a) extracts a shared helper out of a function whose body has an `if`/`else` (one or both arms called the now-extracted logic) AND (b) adds a hoisted call to that same helper before or after the `if`/`else`, without checking whether an arm still calls it internally.
+**Exemption**:
+- The hoisted call REPLACES the per-arm calls (the extraction removed them from both arms and centralized the single call) — verified by the diff deleting the in-arm invocations.
+- The helper is genuinely idempotent AND its double-invocation is provably harmless (documented on the call site) — rare; prefer removing the duplicate call.
+**Last verified**: 2026-07-02
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/.*/src/.*\.rs$
+fn [[:alnum:]_]+\(
+if .* \{
+} else \{
+```
+
+**Cause**: extracting shared logic into a helper called from an `if`/`else`, then adding a hoisted call to that same helper before/after the branch, leaves one arm invoking the helper TWICE (once inside the arm, once via the hoisted call). Mechanical extraction bug — the extraction and the hoist are each locally correct; the double-invocation only exists in the composition of the two edits.
+
+**Detection signature**: in one function, after the diff, the same helper name appears BOTH inside an `if`/`else` arm body AND at a hoisted position (before/after the same branch), with no evidence the in-arm call was removed. A branch that entered the arm now runs the helper twice.
+
+**Constraint**: when extracting a helper out of branch arms and hoisting a call to it, the in-arm invocations MUST be removed as part of the same extraction (centralize to exactly one call), OR the hoisted call must be conditioned to fire only on the arm(s) that don't already call it. Never leave the helper reachable twice on any single control-flow path.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] For each function in the diff that gains a new call to a helper `H` at a hoisted position (outside/after an `if`/`else`): grep the same function body for another call to `H` inside an `if`/`else` arm. Both present in one function → WARNING: verify no single path invokes `H` twice.
+- [ ] For a diff that extracts a new `fn H` and adds calls to it: if `H` is called from both a branch arm and a post-branch hoisted position in the same caller, flag for double-invocation review.
+
+**Severity**: warning (usually a wasted/duplicated side effect or double-accumulation; escalates to critical if `H` is non-idempotent and mutates shared/durable state).
+
+**Originating incident**: 2026-07-02, v0.3-M3g AAR. A shared helper extracted out of an `if`/`else` was then hoisted with an added call after the branch, without checking that one arm already invoked it internally — a mechanical, diff-greppable extraction bug caught in review.
+
+---
+
+## Concurrency-Stress Fixture's Claimed Pressure vs Actual Spawn Topology — 2026-07-02
+
+**Scope**: concurrency/stress/exhaustion test fixtures and their harness assertions — `crates/ynz-driver/tests/**`, `crates/ynz-watch/tests/**`, and any `.ynz` fixture whose WHY-comment or test name asserts a concurrency level (e.g. "20 simultaneous", "N concurrent tasks", "saturates the pool").
+**Exemption**:
+- The fixture's real spawn topology is verified to produce the claimed number of TRULY-concurrent tasks (a spawn-count assertion, a fire-counter, or an IR/`background`-site count backs the comment).
+- The comment describes total WORK ITEMS processed over time (not simultaneity) and says so explicitly — a serialized loop of 20 items is honestly "20 items," not "20 simultaneous."
+**Last verified**: 2026-07-02
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-driver/tests/.*
+crates/ynz-watch/tests/.*
+simultaneous
+concurrent
+background
+spawn
+saturate
+```
+
+**Cause**: a stress fixture's WHY-comment or test name asserts a concurrency level ("20 simultaneous") measured by TOTAL worker/work-item count, not by the fixture's real spawn topology. A serialized loop, a bounded pool, or an accidental await-between-spawns can mean the fixture never actually reaches the claimed simultaneity — so the "stress" test exercises far less contention than its name promises, and a regression in the concurrent path slips through green.
+
+**Detection signature**: a fixture/test whose comment or name claims a concurrency count that is NOT backed by a spawn-topology assertion — the number is derived from a total-item count or asserted in prose only, with no check that N tasks are actually in flight at once. Grep the fixture body: does the spawn/`background` topology (and any barrier/await placement) actually admit N concurrent tasks, or does it serialize?
+
+**Constraint**: any fixture claiming a concurrency level MUST verify that claim against its real spawn topology, not its total worker/work-item count — back the claim with a spawn-count assertion, a max-in-flight counter, or an IR/`background`-site count. A concurrency claim in a comment or test name with no topology-level evidence is treated as unproven.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] For a fixture/test in the diff whose comment or name contains a concurrency count (`[0-9]+ (simultaneous|concurrent|parallel|in.?flight)`): verify the harness has a spawn-count / max-in-flight assertion matching that number. Number claimed, no topology assertion → WARNING.
+- [ ] For a fixture claiming N simultaneous but whose body spawns in a serialized loop (spawn followed by an immediate `wait`/join before the next spawn) → WARNING: topology serializes; claimed simultaneity is not reached.
+
+**Severity**: warning (a weaker-than-advertised stress test gives false confidence in the concurrent path; not itself a miscompile).
+
+**Originating incident**: 2026-07-02, v0.3-M3g AAR. A stress fixture's WHY-comment asserted a concurrency level that was verified against its total worker count rather than its real spawn topology — the fixture's actual simultaneity was lower than the comment claimed, caught in review.
