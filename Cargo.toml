@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.0-m6"
+version = "0.3.0-m7"
 edition = "2021"
 rust-version = "1.80"
 authors = ["The Yinz Contributors"]

@@ -471,6 +471,29 @@ So: `array → set` is a real promotion (arrays are heap + variable-size already
 
 ---
 
+## Auto-promotion: `array<T>` → `set<T>` (membership-only usage)
+
+When the compiler proves an `array<T>` is used ONLY for membership — `.contains()` / `.add()` / `.remove()` / `.size`, with NO indexing, NO reliance on element order, and NO reliance on duplicate storage — the array is doing a set's job at an array's O(n²) cost. Promoting it to `set<T>` storage takes membership + uniqueness from O(n²) → O(n). Real perf win.
+
+Surfaces (same hybrid model as `array → fixed`, with one key difference):
+- **Codegen auto-promotion**: when the proof holds, emit `set<T>` storage. Because the proof needs whole-program escape/usage analysis, it's gated to `--release` (like auto-SoA), not every dev build.
+- **Tier 3 lint suggestion (primary surface)**: `prefer-set-for-membership` — recommends declaring `set<T>` explicitly. This is the *main* surface here, because the real fix is "you reached for the wrong type."
+- **Muted IDE hint**: `set<T>` IS typeable, so the protocol applies — click-to-make-explicit rewrites the declaration to `set<T>`.
+
+**Why the proof is stricter than `array → fixed`**: `fixed` supports every `array` operation except growth, so promoting is transparent when growth is absent. `set` drops indexing, positional order, AND duplicate storage — so the compiler must prove NONE of those three are observed before it can swap. When it can't prove it, the lint still fires (teaching) but the codegen swap does not (safety).
+
+### Why `fixed<T>` is NOT blanket-promoted to `set<T>`
+
+The same membership-only *usage* analysis applies to `fixed`, but promoting `fixed → set` is **usually a pessimization**, so the compiler does NOT do it by default. Named cost: `fixed` is small + stack-allocated + cache-hot; a `set` is a heap-allocated hash table. For the small N that `fixed` is built for, a linear scan over a contiguous stack buffer **beats** a hash lookup (no hashing overhead, no pointer chasing, no heap allocation). Per the auto-promotion rule, we only auto-promote when the stricter form is *unambiguously* better — `fixed → set` fails that test (it depends on size).
+
+What the compiler does instead for a membership-checked `fixed`:
+- **Compile-time-constant contents** (`fixed<int> = [1, 5, 10, 42]` used for `.contains()`) → a **perfect-hash or branchless comparison / jump table**, computed at compile time, **zero heap** — strictly better than a runtime `set`. (Ties into the perfect-hash tier of map's four-tier hashing.)
+- **Genuinely large `fixed` + heavy membership** → a `set` *could* win, but that's a size-threshold heuristic, not a clean promotion; flagged as a possible `--release` analysis, not a default.
+
+So: `array → set` is a real promotion (arrays are heap + variable-size already, so set storage is a lateral-or-better move); `fixed → set` is deliberately declined in favor of zero-alloc membership strategies for the small/constant fixeds that are `fixed`'s whole reason to exist.
+
+---
+
 ## String Methods: `.byteAt()`, `.graphemeAt()`
 
 Default indexing on strings (`.get(n)` / `s[n]`) is by **Unicode code point**. Two escape valves exist for explicit access modes:
