@@ -1048,7 +1048,13 @@ fn build_module<'ctx, 'g>(
     };
 
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
-    let shape_types = emit_shape_types(ctx, shape_table);
+    //
+    // The false-sharing padded set is typeck's authoritative derivation
+    // (`TypedModule::cross_thread_padded_shapes`) — threaded here AND into
+    // `frame_layouts_query`'s sizing pass, never re-derived in codegen
+    // (authoritative-derivation.md). Empty under --no-auto-parallel, so the
+    // sequential oracle lowering emits genuinely unpadded layouts.
+    let shape_types = emit_shape_types(ctx, shape_table, &typed.cross_thread_padded_shapes);
 
     // Pass 0.25 — forward-declare imported (cross-module) functions as LLVM external declarations.
     //
@@ -13090,10 +13096,17 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             ) = (&elem_ty2, elem_expr)
                             {
                                 let sname = sname.clone();
+                                // False-sharing-padded shapes skip the const-global fold:
+                                // the fold builds one i64 constant per ELEMENT, and a
+                                // padded element is a `{ T, [pad x i8] }` wrapper an i64
+                                // does not initialize. The normal alloca path below is
+                                // always layout-correct for padded types.
+                                let is_padded =
+                                    cg.typed.cross_thread_padded_shapes.contains(&sname);
                                 let struct_ty_opt = cg.shape_types.get(&sname);
                                 let shape_def_opt = cg.shape_table.get(&sname).cloned();
-                                if let (Some(struct_ty), Some(shape_def)) =
-                                    (struct_ty_opt, shape_def_opt)
+                                if let (false, Some(struct_ty), Some(shape_def)) =
+                                    (is_padded, struct_ty_opt, shape_def_opt)
                                 {
                                     let gname = format!(".arr.shape.{}.{}", elem_idx, sname);
                                     if let Some(g) = try_build_shape_global(
@@ -15810,6 +15823,17 @@ fn lower_struct_lit<'ctx>(
         .builder
         .build_alloca(struct_ty, &shape_name)
         .map_err(|e| format!("alloca {}: {e}", shape_name))?;
+
+    // False-sharing-padded shapes get their stack slot 64-byte aligned so each field's
+    // 64-byte slot coincides exactly with one cache line even while the value lives on
+    // the stack (heap copies get their isolation from ynz_alloc's ≥16-byte alignment +
+    // the ≤16-byte payload argument — see shape_types.rs).
+    if cg.typed.cross_thread_padded_shapes.contains(&shape_name) {
+        if let Some(inst) = slot.as_instruction() {
+            inst.set_alignment(crate::shape_types::CACHE_LINE_BYTES)
+                .map_err(|e| format!("align padded alloca {}: {e}", shape_name))?;
+        }
+    }
 
     // Zero-initialize — covers hidden fields that aren't provided.
     let zero = struct_ty.const_zero();

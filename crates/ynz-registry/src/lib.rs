@@ -100,6 +100,59 @@ pub fn diagnostic_template_lookup(kind_name: &str) -> Option<&'static Diagnostic
         .find(|e| e.kind_name == kind_name)
 }
 
+pub fn lint_rules() -> impl Iterator<Item = &'static LintRuleEntry> {
+    LINT_RULES.iter()
+}
+
+pub fn lint_rule_lookup(name: &str) -> Option<&'static LintRuleEntry> {
+    LINT_RULES.iter().find(|e| e.name == name)
+}
+
+/// Render the three diagnostic parts (WHAT, WHAT-INSTEAD, WHY) for a lint rule, with
+/// `{placeholder}` substitution from `vars`.
+///
+/// This is THE generic firing helper: a compiler pass that detects a lint condition calls
+/// this with the rule's registry name plus its per-site vars and gets the canonical teaching
+/// text back — the text has exactly one home (the `[[lint_rule]]` entry), so adding a new
+/// rule (e.g. M5's `array-using-soa-layout`) is a TOML entry + a firing site, with zero
+/// change to this mechanism.
+///
+/// Returns `None` when no `[[lint_rule]]` entry exists for `rule_name`.
+/// Panics (via [`render_template`]) on an unknown `{placeholder}` key — a template/firing-site
+/// mismatch is a compiler bug, not a user error.
+pub fn lint_rule_diagnostic_parts(
+    rule_name: &str,
+    vars: &std::collections::HashMap<&str, &str>,
+) -> Option<(String, String, String)> {
+    let entry = lint_rule_lookup(rule_name)?;
+    Some((
+        render_template(entry.what_template, vars),
+        render_template(entry.what_instead_template, vars),
+        render_template(entry.why_template, vars),
+    ))
+}
+
+/// Render a WHAT / WHAT-INSTEAD / WHY hover for a lint rule's LSP `Diagnostic.code`.
+///
+/// Mirrors [`lsp_inlay_hint_hover_for`]: markdown suitable for an editor surface keyed by
+/// the diagnostic code (the kebab-case rule name). Templates render with their placeholders
+/// left intact (`{callee}` etc.) — the hover documents the RULE, not one firing site; the
+/// fired diagnostic itself already carries the substituted per-site text.
+///
+/// Returns `None` when the rule is not in the registry.
+pub fn lsp_lint_rule_hover_for(rule_name: &str) -> Option<String> {
+    let entry = lint_rule_lookup(rule_name)?;
+    Some(format!(
+        "**{name}** ({severity}) — {description}\n\n**WHAT**: {what}\n\n**WHAT INSTEAD**: {what_instead}\n\n**WHY**: {why}",
+        name = entry.name,
+        severity = entry.severity,
+        description = entry.description,
+        what = entry.what_template,
+        what_instead = entry.what_instead_template,
+        why = entry.why_template,
+    ))
+}
+
 pub fn muted_hint_domains() -> impl Iterator<Item = &'static MutedHintDomainEntry> {
     MUTED_HINT_DOMAINS.iter()
 }

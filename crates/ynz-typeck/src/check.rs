@@ -68,6 +68,15 @@ pub struct TypedModule {
     /// Used by `ownership_call_site_hints` to emit the inferred modifier as a
     /// muted-text hint at the call site.
     pub background_arg_inferred_ownership: std::collections::HashMap<(usize, usize), BgOwnership>,
+    /// v0.3-M4 Phase 4: shape types the false-sharing transform pads with 64-byte
+    /// cache-line field isolation — the ONE authoritative padded set, derived by
+    /// `false_sharing::finalize_false_sharing` from the `Expr::Background` boundary
+    /// record. Consumed by codegen layout (`emit_shape_types`) AND frame-slot sizing
+    /// (`frame_layouts_query` measures the same padded LLVM types), so every consumer
+    /// threads this set rather than re-deriving cross-thread access. EMPTY under
+    /// `--no-auto-parallel` (the sequential oracle stays genuinely unpadded) and under
+    /// kernel mode (no scheduler — `background` is a compile error there).
+    pub cross_thread_padded_shapes: std::collections::HashSet<String>,
 }
 
 /// Run the M5 type checker over all function bodies.
@@ -133,12 +142,15 @@ pub fn check(
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
+        cross_thread_shapes: HashMap::new(),
+        padded_shapes: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
+        cross_thread_padded_shapes: checker.padded_shapes,
     };
     (
         typed,
@@ -200,12 +212,15 @@ pub fn check_with_kernel_mode(
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
+        cross_thread_shapes: HashMap::new(),
+        padded_shapes: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
+        cross_thread_padded_shapes: checker.padded_shapes,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -380,6 +395,23 @@ struct Checker<'b> {
     /// Local functions whose declared return type is `channel<T>` — the SAME collection
     /// `may_block::build_call_graph` uses, via `may_block::collect_channel_returning_fns`.
     channel_returning_fns: HashSet<String>,
+
+    /// v0.3-M4 Phase 4: shape types whose values cross a `background` spawn boundary,
+    /// mapped to the FIRST spawn-site span that crossed them (the decline lint's anchor).
+    ///
+    /// Recorded exclusively by the `Expr::Background` arm in `infer_expr` — the single
+    /// site BOTH spawn forms route through (bare fire-and-forget AND the handle form via
+    /// `check_background_handle_spawn`'s `infer_expr` call), and the same arm that owns
+    /// the borrow rejects and give/copy/channel-share classification. This is the RAW
+    /// fact record; the padded-vs-declined partition (and the `--no-auto-parallel` /
+    /// kernel gate) is derived ONCE in `false_sharing::finalize_false_sharing` at the
+    /// end of `check_module` — consumers read `TypedModule::cross_thread_padded_shapes`,
+    /// never this field.
+    cross_thread_shapes: HashMap<String, SourceSpan>,
+
+    /// v0.3-M4 Phase 4: the finalized padded-shape set (`finalize_false_sharing` output),
+    /// moved into `TypedModule::cross_thread_padded_shapes` when the pass completes.
+    padded_shapes: HashSet<String>,
 }
 
 impl<'b> Checker<'b> {
@@ -449,6 +481,22 @@ impl<'b> Checker<'b> {
             }
         }
         lint_repeated_inline_shapes(module, &mut self.diags);
+
+        // v0.3-M4 Phase 4: partition the recorded cross-thread shape set into
+        // padded-vs-declined — the ONE derivation every consumer threads (codegen
+        // layout, frame sizing, and the decline lint all read this result). Gated
+        // inside `finalize_false_sharing`: kernel mode and `--no-auto-parallel`
+        // both yield the empty set and no lint.
+        let outcome = crate::false_sharing::finalize_false_sharing(
+            &self.cross_thread_shapes,
+            module,
+            self.shape_table,
+            self.kernel_mode,
+        );
+        self.padded_shapes = outcome.padded;
+        for diag in outcome.lints {
+            self.diags.push(diag);
+        }
     }
 
     fn check_function(&mut self, f: &FunctionDecl) {
@@ -2564,10 +2612,66 @@ impl<'b> Checker<'b> {
                     }
                 }
 
+                // v0.3-M4 Phase 4: record the shape types whose values cross THIS spawn
+                // boundary — the raw facts the false-sharing padding analysis partitions
+                // at end-of-module (`false_sharing::finalize_false_sharing`). This arm is
+                // the ONE recording site: both spawn forms route through it (the handle
+                // form calls `infer_expr` on the full Background expression), so no second
+                // boundary walk exists anywhere (authoritative-derivation.md).
+                //
+                // Collected from the resolved callee signature: every parameter type
+                // (give/copy-crossing args AND `channel<T>` conduit element types — a
+                // conduit's payloads flow between the two tasks) plus the return type
+                // (a handle-collected completion value crosses back parent-ward; the arm
+                // cannot distinguish handle-bound from bare spawns, and over-recording is
+                // the safe memory-for-throughput direction, so every spawn records it).
+                // Fallback when no signature resolves: the argument expression types.
+                {
+                    let mut crossing: HashSet<String> = HashSet::new();
+                    let resolved_sig = callee_name.and_then(|name| {
+                        self.sig_table
+                            .fns
+                            .get(name)
+                            .map(|s| (s.params.clone(), s.ret.clone()))
+                            .or_else(|| {
+                                self.generic_fn_table
+                                    .fns
+                                    .get(name)
+                                    .map(|s| (s.params.clone(), s.ret.clone()))
+                            })
+                    });
+                    if let Some((params, ret)) = resolved_sig {
+                        for (_, ty) in &params {
+                            crate::false_sharing::collect_shape_type_names(ty, &mut crossing);
+                        }
+                        crate::false_sharing::collect_shape_type_names(&ret, &mut crossing);
+                    } else if let Expr::Call(call) = inner.as_ref() {
+                        for arg in &call.args {
+                            let key = (arg.span().start, arg.span().end);
+                            if let Some(ty) = self.expr_types.get(&key) {
+                                let ty = ty.clone();
+                                crate::false_sharing::collect_shape_type_names(&ty, &mut crossing);
+                            }
+                        }
+                    }
+                    for shape_name in crossing {
+                        self.cross_thread_shapes
+                            .entry(shape_name)
+                            .or_insert_with(|| span.clone());
+                    }
+                }
+
                 // Large-copy warning (Tier 3 lint): warn when a `.copy` arg (explicit or
                 // inferred) is a shape with estimated size > 64 bytes.
                 // Size estimate: each field = 8 bytes (all values are i64-sized in the
                 // background ctx ABI). Threshold matches cache-line size.
+                //
+                // Phase 4 note (deliberate): the estimate stays DECLARATION-based — it does
+                // not add the false-sharing padding bytes for padded shapes. The warning
+                // teaches a user-fixable copy (`.copy` vs restructure-for-`.give`); padding
+                // is a compiler-chosen layout trade the user cannot remove at this call
+                // site, so counting it here would fire this warning on every padded
+                // two-field shape and drown the give/copy lesson in layout noise.
                 const BACKGROUND_LARGE_COPY_BYTES: usize = 64;
                 if let Expr::Call(call) = inner.as_ref() {
                     for arg in &call.args {
@@ -3496,6 +3600,33 @@ impl<'b> Checker<'b> {
     }
 
     fn check_sleep_blocking_call(&mut self, call: &CallExpr) -> Type {
+        // v0.3-M4 Phase 4: `prefer-yielding-sleep` Tier 3 lint — a dismissable
+        // SUGGESTION, never an error (rare legitimate blocking-sleep uses exist and
+        // explicit intent is respected, per auto-promotion.md "When NOT to auto-promote").
+        // Fires only in NON-kernel programs: kernel mode has no scheduler to yield to,
+        // so `sleepBlocking` is the RIGHT call there (the doc's kernel row steers the
+        // opposite way — no kernel false positive). Text/severity/code come from the
+        // `[[lint_rule]]` registry entry via the generic firing helper.
+        if !self.kernel_mode {
+            // Contextual WHAT-INSTEAD (Golden Rule 11): echo the user's own literal
+            // milliseconds into `wait sleep({ms})` when the argument is a literal.
+            let ms_text = match call.args.first() {
+                Some(Expr::IntLit(n, _)) => n.to_string(),
+                _ => "ms".to_string(),
+            };
+            let vars: std::collections::HashMap<&str, &str> =
+                std::collections::HashMap::from([("ms", ms_text.as_str())]);
+            let diag =
+                crate::lints::lint_diagnostic("prefer-yielding-sleep", call.span.clone(), &vars)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "[[lint_rule]] `prefer-yielding-sleep` missing from \
+                     registry/features.toml — the firing site and the registry drifted"
+                        )
+                    });
+            self.diags.push(diag);
+        }
+
         if call.args.len() != 1 {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),

@@ -1,0 +1,27 @@
+// v0.3-M4 Phase 4 — false-sharing padding gate fixture.
+//
+// Tally is module-local and not exported, and a Tally value crosses the `background`
+// spawn boundary (give-inferred — `t` is not read after the spawn). Default mode pads
+// Tally to 64-byte cache-line field isolation; under --no-auto-parallel /
+// YNZ_NO_AUTO_PARALLEL=1 the authoritative cross-thread analysis yields no crossing
+// shapes, so the sequential lowering keeps the genuinely unpadded natural layout.
+// Program OUTPUT must be byte-identical in both modes — padding is layout-only.
+//
+// The channel reply keeps the output deterministic: the parent's receive() cannot
+// complete until the child has read both Tally fields and sent the total.
+shape Tally {
+  hits: int
+  outs: int
+}
+
+function report(give t: Tally, lend wire: channel<int>) -> nothing {
+  wire.send(t.hits + t.outs)
+}
+
+function entrypoint() -> nothing {
+  let t: Tally = { hits: 3, outs: 2 }
+  let wire: channel<int> = channel<int>(4)
+  background report(t, wire)
+  let total = wire.receive()
+  print(`tally total: ${total.toString()}`)
+}

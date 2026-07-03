@@ -46,11 +46,18 @@ pub enum DiagnosticKind {
     BannedJargon { term: String },
     /// An imported name is never referenced in the file.
     UnusedImport { name: String },
+    /// A Tier 3 lint rule fired. `rule` is the kebab-case `[[lint_rule]]` registry name
+    /// (`&'static str` because it always comes from the registry's baked constants) —
+    /// it becomes the LSP `Diagnostic.code` so editors can group/dismiss by rule, and
+    /// `ynz_registry::lsp_lint_rule_hover_for(code)` renders the rule's teaching hover.
+    LintRule { rule: &'static str },
 }
 
 impl DiagnosticKind {
-    /// The PascalCase registry name for this variant — used as the LSP `Diagnostic.code` value
-    /// and in `--json` output. Matches `kind_name` in `registry/features.toml`.
+    /// The registry name for this variant — used as the LSP `Diagnostic.code` value
+    /// and in `--json` output. PascalCase for `[[diagnostic_template]]`-class kinds
+    /// (matches `kind_name` in `registry/features.toml`); kebab-case for `LintRule`
+    /// (the `[[lint_rule]]` entry name, e.g. `"prefer-yielding-sleep"`).
     pub fn kind_name(&self) -> &'static str {
         match self {
             DiagnosticKind::TypeMismatch { .. } => "TypeMismatch",
@@ -65,6 +72,7 @@ impl DiagnosticKind {
             DiagnosticKind::BannedKeyword { .. } => "BannedKeyword",
             DiagnosticKind::BannedJargon { .. } => "BannedJargon",
             DiagnosticKind::UnusedImport { .. } => "UnusedImport",
+            DiagnosticKind::LintRule { rule } => rule,
         }
     }
 
@@ -83,6 +91,7 @@ impl DiagnosticKind {
             DiagnosticKind::BannedKeyword { keyword } => format!("`{keyword}` not valid here"),
             DiagnosticKind::BannedJargon { term } => format!("`{term}` is programmer jargon"),
             DiagnosticKind::UnusedImport { name } => format!("`{name}` never used"),
+            DiagnosticKind::LintRule { rule } => format!("lint: {rule}"),
         }
     }
 }

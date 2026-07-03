@@ -3,9 +3,9 @@ name: "v0-3-m4-channels-arc-release"
 plan-id: "2026-07-02-v0-3-m4-channels-arc-release"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2"]
+session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2", "executor-2026-07-02-m4-p4", "executor-2026-07-02-m4-p4-r2"]
 created_at: "2026-07-02"
-updated_at: "2026-07-02"
+updated_at: "2026-07-03"
 metadata:
   type: "plan"
 ---
@@ -1065,9 +1065,16 @@ Handoff = checkbox state + session-id chain.
      `prefer-yielding-sleep` Tier 3 lint on `sleepBlocking(ms)` in non-kernel programs (suggestion,
      dismissable, NOT an error). Both WHAT/WHAT-INSTEAD/WHY.
   4. **Prove the `--no-auto-parallel` gating** (first layout transform this flag ever gates): under
-     sequential lowering the authoritative analysis yields no cross-thread fields → padding
-     self-gates; test asserts byte-identical output in both modes AND unpadded layout in sequential
-     mode. Confirm no conflict with the existing shape-field auto-reorder.
+     the flag the authoritative analysis self-gates off via the SAME `no_auto_parallel_env()`
+     predicate the auto-parallel independence analysis reads → no cross-thread fields recorded, so
+     padding self-gates; test asserts byte-identical output in both modes AND unpadded layout under
+     the flag. Confirm no conflict with the existing shape-field auto-reorder. *(Premise corrected
+     in place by FRAGO 010: the original "under sequential lowering" wording overstated the flag —
+     `--no-auto-parallel` gates ONLY the auto-parallel independence-analysis pass and what reads
+     its predicate; it does NOT force sequential execution of explicit `background` spawns, which
+     run on real threads regardless (the runtime never reads the env var). The byte-identical
+     cross-impl guarantee comes from the language's channel-synchronization semantics, not thread
+     suppression — confirmed end-to-end by this phase's gate test. The exit criterion is unweakened.)*
   5. Extend demo + gallery (padding + both lint surfaces).
 - **Exit criteria.** `[[lint_rule]]` parses to typed constants, LSP-readable, generic (reviewer
   checks: could M5 add a rule with zero mechanism edits?); padded field offsets verified on 64-byte
@@ -1075,6 +1082,159 @@ Handoff = checkbox state + session-id chain.
   conflict.
 - **Reviewer fan-out.** code-reviewer (mechanism generality + design-doc diff).
 - **Model tag.** `(codegen-lint-infrastructure, high, medium)`.
+- **✅ P4 STATUS — COMPLETE + review verdicts APPLIED (executor-2026-07-02-m4-p4 landed the work;
+  executor-2026-07-02-m4-p4-r2 applied the reviewer fleet's verdicts, 2026-07-03). All five steps
+  landed and verified through the real compiler; workspace test suite, clippy `-D warnings`, and
+  `cargo fmt --check` all GREEN (121 suites, 0 failures). The reviewer fan-out (including two
+  deviation-judge rounds) has run and its verdicts are applied: FRAGO 009 (padding ships as a
+  documented forward-looking no-op — four-field note below, REFINING D3/D4), FRAGO 010 (D1's stale
+  `--no-auto-parallel` premise corrected in Step 4 + `main.rs:76`), FRAGO 011 (D3/D4's two named
+  design-doc corrections forward-scheduled to Phase 6 Step 1), plus 3 minor findings routed as
+  durable non-blocking deferrals in the roadmap sidecar
+  (`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md`, Idempotency-Key prefix
+  `2026-07-02-v0-3-m4-channels-arc-release#4:`).**
+  - **Step 1 — `[[lint_rule]]` mechanism (DONE, generic):** new entry-kind end-to-end — schema
+    (`crates/ynz-registry/src/schema.rs:105` `LintRuleEntry`: name/severity/description/3
+    templates/since/design_doc), parser + typed constants (`crates/ynz-registry/build.rs`
+    `emit_lint_rules`, severity `"error"` REJECTED at parse time — a lint is never a gate),
+    accessors + the generic firing renderer + LSP hover
+    (`crates/ynz-registry/src/lib.rs`: `lint_rules`/`lint_rule_lookup`/
+    `lint_rule_diagnostic_parts`/`lsp_lint_rule_hover_for`), LSP `Diagnostic.code` seam
+    (`crates/ynz-diagnostics/src/diagnostic.rs` `DiagnosticKind::LintRule { rule: &'static str }`
+    — kind_name() returns the kebab-case rule id, flowing through the EXISTING
+    `diagnostic_transform.rs:72` code path with zero LSP edits), and the one generic typeck
+    firing helper (`crates/ynz-typeck/src/lints.rs::lint_diagnostic`). M5-generality: adding
+    `array-using-soa-layout` = one TOML entry + one firing site calling `lint_diagnostic` —
+    zero mechanism edits (locked by `schema_smoke.rs` lint_rule tests + the schema doc's own
+    statement, `IMP-feature-registry.md` §`[[lint_rule]]`, added this phase).
+  - **Step 2 — padding transform (DONE):** the ONE derivation lives in typeck —
+    `crates/ynz-typeck/src/false_sharing.rs` (`finalize_false_sharing`) partitions the raw
+    cross-thread record captured at the single `Expr::Background` arm (`check.rs` — the same
+    arm that owns the borrow rejects + give/copy/channel-share classification; BOTH spawn
+    forms route through it) into `TypedModule::cross_thread_padded_shapes`. Consumers THREAD
+    it, never re-derive: codegen layout (`emit.rs:1051→emit_shape_types`) AND frame-slot
+    sizing (`codegen/queries.rs:204` measures the SAME padded LLVM types). Layout: each field
+    element wrapped `{ T, [pad x i8] }` to exactly 64 bytes
+    (`crates/ynz-codegen/src/shape_types.rs::pad_field_to_cache_line`) — logical field index
+    == LLVM element index, so ZERO GEP-site remapping (opaque-pointer equivalence); padded
+    struct-lit allocas forced to 64-byte alignment (`emit.rs lower_struct_lit`); the
+    const-global fold declines padded shapes (`emit.rs` `try_build_shape_global` call site).
+    Offsets PROVEN on the real target data layout: field i at byte 64·i, ABI size 64·n
+    (`crates/ynz-codegen/tests/false_sharing_padding.rs`, both padded + genuinely-unpadded
+    assertions).
+  - **Step 3 — the two lints (DONE, both fire with three-part text):**
+    `cross-thread-fields-not-padded` fires from the SAME partition's decline bucket
+    (`false_sharing.rs`) — v0.3's real unpaddable class is layout-visible-outside-this-file
+    (exported / imported / `__anon__*` structural shapes; each module compiles to its own
+    object file, so padding only the spawning module's view would fork one type's layout —
+    the doc's "FFI-shaped" example cannot occur in v0.3, `foreign` is v2+, see deviations).
+    `prefer-yielding-sleep` fires in `check.rs::check_sleep_blocking_call` for non-kernel
+    programs only, echoing the user's literal ms into WHAT-INSTEAD; Suggestion severity,
+    dismissable, never an error. Both proven live through `ynz run`
+    (`crates/ynz-typeck/tests/false_sharing_lints.rs`, 5 tests, incl. kernel-no-false-positive).
+  - **Step 4 — `--no-auto-parallel` gating PROVEN (first layout transform this flag gates):**
+    the gate lives INSIDE the one derivation (`finalize_false_sharing` reads
+    `no_auto_parallel_env()` — the same single kill-switch predicate `cpu_promotion_query` and
+    codegen read) → empty padded set + silenced lint under the flag. Proven at BOTH levels:
+    analysis (`crates/ynz-typeck/tests/false_sharing_no_auto_parallel_gate.rs` — sole test in
+    its own process, env-var race-free) and end-to-end through the real binary
+    (`crates/ynz-driver/tests/integration.rs::v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output`
+    + fixture `v0_3_m4_p4_padding_gate.ynz`): default IR carries `{ i64, [56 x i8] }` slots,
+    sequential IR is GENUINELY unpadded (`{ i64, i64 }`, zero pad arrays), stdout
+    byte-identical, computed value correct through padded fields. Auto-reorder conflict:
+    verified NONE EXISTS — no shape-field reorder pass is implemented anywhere in codegen
+    (`emit_shape_types` follows declaration order; grep: "reorder" appears only in prose —
+    `check.rs:4591` diagnostic text + docs), so the criterion holds vacuously WITH evidence;
+    composition note for a future reorder pass recorded in `shape_types.rs` docs. See
+    deviation D2.
+  - **Step 5 — demo + gallery (DONE):** `examples/pirates-roster/entrypoint.ynz` gained the
+    live padding demo (`InningTally` given across a spawn, deterministic channel reply;
+    module-local → pads silently) + golden regenerated via the script and stable across
+    repeated runs (the 8-pirates completion-order variance in the regenerated golden is the
+    KNOWN nondeterministic section the golden test already relaxes to presence-checks —
+    verified pre-existing at pristine HEAD, not introduced here);
+    `examples/primantis-orders/v0_3_m4_errors.ynz` gained both lint triggers with `// WHY:`
+    comments (exported `PalletLabel` decline + `sleepBlocking(5)`), asserted by key-phrase in
+    `error_galleries.rs` (error count unchanged — suggestions are not gates).
+  - **Registry entries added:** new KIND `[[lint_rule]]` + entries
+    `cross-thread-fields-not-padded`, `prefer-yielding-sleep` (exactly the plan's
+    §Feature Registry Entries list); schema documented in `IMP-feature-registry.md`
+    (§`[[lint_rule]]` + Consumer API Contract).
+  - **Deviations SURFACED (for deviation-judge — not self-adjudicated):**
+    - **D1 — "sequential lowering" premise vs `background` reality.** Plan text: "under
+      sequential lowering the authoritative analysis yields no cross-thread fields"
+      (implying `background` is sequential under the flag; `main.rs:76`'s doc comment says
+      "Forces sequential execution of all `background` tasks"). Reality: `--no-auto-parallel`
+      gates only the AUTO-parallel machinery — explicit `background` spawns still run on real
+      threads under the flag (`emit.rs lower_expr_background` has no flag branch; the runtime
+      never reads `YNZ_NO_AUTO_PARALLEL`; grep-verified). The letter of the exit criterion is
+      met exactly as written (analysis yields no cross-thread fields under the flag → padding
+      self-gates; sequential-mode layout genuinely unpadded; byte-identical output — all
+      test-locked), and the residual is SAFE (padding is perf-only; an unpadded genuinely-
+      crossing shape under the flag is slower, never incorrect). Surfaced because the plan's
+      PREMISE about the flag's mechanism doesn't match the code's. *(Classified JUSTIFIED,
+      risk-neutral — applied as FRAGO 010: Step 4 premise + `main.rs:76` doc comment corrected.)*
+    - **D2 — "existing shape-field auto-reorder" does not exist in code.** The roadmap/plan
+      treat auto-reorder as an implemented layout transform; it is documented design intent
+      (`auto-promotion.md`, a `check.rs:4591` diagnostic's prose) with NO codegen
+      implementation. "No conflict" is therefore proven as "nothing to conflict with," with
+      the composition obligation recorded where the future pass will land
+      (`shape_types.rs` doc).
+    - **D3 — design-doc detection premise is stale against P3's lock.**
+      IMP-no-function-coloring:201 says padding detection keys on "`.share`/`.lend` across
+      `background` spawn sites" — but `.share`/`.lend`-across-`background` is a HARD ERROR
+      (IMP-concurrency:189, P3-shipped reject). Detection implemented on the values that DO
+      legally cross (give/copy args, `channel<T>` conduit element types, callee return types)
+      — the same doc-intent ("ownership crossing thread boundaries"), realized on the legal
+      modifier set. Doc amendment belongs to P6 step 1's design-doc sweep; flagged here.
+      *(Classified JUSTIFIED — applied as FRAGO 011: the exact correction is named in P6 Step 1
+      and spelled out in the FRAGO record so P6 applies it directly, no re-derivation. FRAGO 009
+      additionally REFINES this deviation: D3 explained WHY the trigger changed but not that the
+      realized trigger currently yields zero benefit — see the FRAGO 009 note below.)*
+    - **D4 — unpaddable class realized as cross-module-visible layout, not "FFI-shaped."**
+      The doc's lint example ("e.g., fields in a `#[repr(C)]`-equivalent FFI shape") cannot
+      occur in v0.3 (`foreign` is a v2+ `[[deferred_language_feature]]`). The real,
+      soundness-forced decline class today is exported/imported/anon-structural shapes
+      (per-module object files). Same lint, same teaching job, honest current trigger.
+      *(Classified JUSTIFIED — applied as FRAGO 011, same forward-scheduling as D3: the
+      `IMP-no-function-coloring.md:205` "FFI-shaped" example correction is named in P6 Step 1.
+      FRAGO 009 refines this deviation too — see the note below.)*
+  - **Recorded durable decisions (reasons on the record, made without a human):** padded
+    fields as `{T, pad}` WRAPPER elements (index-preserving; the insert-padding-fields
+    alternative needs logical→LLVM index remapping at every GEP site — the exact drift class
+    authoritative-derivation bans); cross-thread recording conservative-INCLUSIVE (params +
+    conduit elems + return types at every spawn — over-padding is the safe
+    memory-for-throughput direction; the arm cannot distinguish handle-bound spawns);
+    `estimate_type_size_bytes` (large-copy warning) left declaration-based (padding is a
+    compiler-chosen trade the user cannot remove at the call site — counting it would drown
+    the give/copy lesson; reasoned in the `check.rs` comment); `golden.rs` harness gates on
+    non-Suggestion diagnostics only (suggestions are informational by design — mirrors the
+    pre-existing `assert_clean` ratchet in typeck tests; NOT a test-weakening: the fixtures'
+    deliberate `sleepBlocking` keepalives now correctly draw the new lint).
+  - **FRAGO 009 — padding ships as a documented forward-looking no-op (deviation-judge
+    second-round follow-up, JUSTIFIED, risk-neutral, disposition (a); REFINES — does not
+    overturn — D3/D4 above, which correctly explained WHY the detection trigger had to change
+    but did not record that the realized trigger currently produces zero benefit). Four-field
+    honesty record (no-duct-tape documented-tradeoff shape — deliberately NOT a registry
+    `[[deferred_language_feature]]`: the transform ships as real, working, tested code; what is
+    pending on auto-Arc is its CURRENT USEFULNESS, not the code itself):**
+    - **WHAT:** the false-sharing padding transform and its paired decline-lint
+      (`cross-thread-fields-not-padded`) are both currently inert-with-real-cost — they
+      pad/decline exclusive-ownership give/copy/channel crossings that structurally cannot
+      false-share, delivering zero throughput benefit while imposing real memory bloat
+      (64 bytes/field) on every module-local shape crossing a `background` boundary.
+    - **WHY:** the ONE mechanism that would make this feature meaningful (auto-Arc codegen
+      emission, creating a genuinely-shared concurrent instance) is itself validly deferred to
+      v0.4 by FRAGO 008 in this same plan; the crossing-partition/codegen-layout/lint plumbing
+      built here is exactly what auto-Arc's emission will need to thread into (same
+      authoritative set, extended) rather than re-derive — building it now avoids a second
+      milestone re-doing this plumbing from scratch.
+    - **COST:** bounded — 64 bytes/field, ONLY on non-exported, non-anon `shape` types whose
+      values cross a `background` boundary via give/copy/channel (not a pervasive tax; most
+      shapes never cross a spawn boundary at all).
+    - **TRIGGER:** the moment auto-Arc codegen emission ships (v0.4, registry entry
+      `auto-arc-codegen-emission`'s own TRIGGER) — at that point this deferral note closes and
+      the transform starts protecting real concurrent Arc'd instances.
 
 #### Phase 5 — Teaching surface + user spec + demo/gallery consolidation + cross-impl sweep
 - **Task + purpose.** Consolidate every teaching surface and run the mandatory verification sweeps.
@@ -1108,7 +1268,16 @@ Handoff = checkbox state + session-id chain.
      Channel/False-Sharing/Sleep-lint sections' milestone notes; IMP-concurrency as needed —
      including marking the `ECWrapperResultCollection` §463-479 deferral SHIPPED: the
      copy-before-free fix landed with the handle-form at P2, exactly per that section's own
-     "landing WITH the `background-handle-form` feature" gating).
+     "landing WITH the `background-handle-form` feature" gating). **This sweep MUST also apply
+     the two FRAGO 011 pre-named staleness corrections to `IMP-no-function-coloring.md` (exact
+     replacement text in FRAGO 011, `audit.md` — apply directly, do not re-derive):**
+     (a) **:201** — padding detection does NOT key on "`.share`/`.lend` across `background`"
+     (that is a hard compile error since Phase 3, IMP-concurrency:189); it keys on the LEGAL
+     crossing set: give/copy arguments, `channel<T>` conduit element types, and callee return
+     types at `background` spawn sites. (b) **:205** — the "FFI-shaped" illustrative example for
+     the unpaddable class cannot occur in v0.3 (`foreign` is v2+); the real decline class is
+     cross-module-visible-layout shapes (exported / imported / `__anon__*` structural — each
+     module compiles to its own object file, so padding one module's view would fork the layout).
   2. `Cargo.toml` `0.3.0-m7` → `0.3.0` (`Cargo.toml:21`).
   3. **R4 explicit step:** verify with `git tag` + `git log` that the CHANGELOG generation span is
      `m7..HEAD` — never a naive "since last tag" — and that the output demonstrably includes M3f +
@@ -1395,6 +1564,20 @@ deferrals; each entry: what · why-deferred · cost · trigger.
   `.share`-across-`background` as a hard error); the safe copy-crossing, the R3 boundary matrix,
   the `arc.rs` substrate, and the registered hint domain all ship in THIS plan. See FRAGO 008
   (`audit.md`) and the ⚠ P3 STATUS banner.
+- **False-sharing padding: documented forward-looking no-op until auto-Arc emission ships
+  (FRAGO 009 — deviation-judge classified JUSTIFIED, applied at P4 r2).** What: the padding
+  transform + `cross-thread-fields-not-padded` decline-lint are currently inert-with-real-cost —
+  every crossing v0.3-M4 can produce is an exclusive-ownership handoff (give + use-after-give
+  hard error / `.copy` = separate instance / channel = moved payload), which structurally cannot
+  false-share, so the transform imposes 64 bytes/field on module-local `background`-crossing
+  shapes for zero current throughput benefit. Why-parked: the one mechanism creating genuinely-
+  shared concurrent instances (auto-Arc codegen emission) is itself deferred to v0.4 by FRAGO 008;
+  the plumbing built here is what that emission threads into (same authoritative set, extended).
+  Cost: bounded — 64 bytes/field on the narrow crossing class only. Trigger: auto-Arc codegen
+  emission shipping (v0.4 — shares `auto-arc-codegen-emission`'s TRIGGER), which closes this note
+  and makes the transform protect real concurrent Arc'd instances. The full four-field record
+  lives in the ✅ P4 STATUS banner (deliberately NOT a registry deferred-feature entry — the code
+  ships real, working, tested; only its current usefulness is pending). See FRAGO 009 (`audit.md`).
 - **Runtime deadlock/hang observability (agent-found gap, factor: observability).** What: no
   runtime telemetry exists to diagnose a hang in the field; build-time fixtures are the only
   control. Why-deferred: runtime deadlock detection is real design work (IMP-no-function-coloring

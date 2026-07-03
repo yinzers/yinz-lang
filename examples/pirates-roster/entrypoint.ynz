@@ -1080,6 +1080,31 @@ function gradeProspect(lend requests: channel<int>) -> int errors {
   return jerseyNumber * 2
 }
 
+// InningTally — v0.3-M4 Phase 4: false-sharing auto-padding, live. Values of this shape
+// cross a `background` boundary below, so the compiler emits the shape with 64-byte
+// cache-line field isolation: each field sits on its own cache line. Note what this demo
+// shows and what it doesn't: the crossing below is an exclusive-ownership handoff
+// (`inning` is GIVEN away — using it afterward is a compile error), so only one task ever
+// touches this instance at a time, and there is no concurrent contention for the padding
+// to prevent YET. The demo illustrates the padding MECHANISM — what the padded layout
+// looks like — as forward-looking infrastructure; the live contention win arrives when a
+// genuinely-shared concurrent instance exists (auto-Arc, v0.4). Codegen-only — no source
+// change, no hint (there is no typeable "padded" form) — and it applies BECAUSE
+// InningTally is declared in this file and not exported. An exported shape in the same
+// position gets the `cross-thread-fields-not-padded` teaching lint instead (see
+// examples/primantis-orders/v0_3_m4_errors.ynz). Under --no-auto-parallel the layout stays
+// natural (unpadded) and the output is byte-identical — padding is pure layout.
+shape InningTally {
+  hits: int
+  outs: int
+}
+
+// tallyInning — takes OWNERSHIP of the inning tally (give: the caller doesn't read it
+// after the spawn) and reports the derived total back over the wire.
+function tallyInning(give tally: InningTally, lend wire: channel<int>) -> nothing {
+  wire.send(tally.hits + tally.outs)
+}
+
 function m4_demo() -> nothing {
   print(``)
   print(`v0.3-M4 — channels + the background handle-form:`)
@@ -1103,6 +1128,19 @@ function m4_demo() -> nothing {
   let graded = scout.receive()
   let grade = graded.or(0)
   print(`scout graded jersey 21 at: ${grade.toString()}`)
+
+  // v0.3-M4 Phase 4 — false-sharing auto-padding in context: `inning` crosses the
+  // `background` boundary via `give`, so the compiler pads each field onto its own 64-byte
+  // cache line (see InningTally's declaration above). The give makes the handoff
+  // exclusive — this function can't touch `inning` afterward (use-after-give is a compile
+  // error), so nothing contends over the padded lines yet; the layout change is real and
+  // observable, but it's the mechanism on display here, not a live contention win.
+  // Same values, same output either way.
+  let inning: InningTally = { hits: 4, outs: 3 }
+  let tallyWire: channel<int> = channel<int>(2)
+  background tallyInning(inning, tallyWire)
+  let inningTotal = tallyWire.receive()
+  print(`inning tally (padded across tasks): ${inningTotal.toString()}`)
 
   // v0.3-M4 Phase 3 — auto-Arc across a `background` boundary.
   //

@@ -200,8 +200,16 @@ pub fn frame_layouts_query(
         let dl_str = dl_owned.as_str().to_str().unwrap_or("");
         let target_data = inkwell::targets::TargetData::create(dl_str);
 
-        // Emit LLVM struct types for all shapes in this module so we can measure them.
-        let shape_types = crate::shape_types::emit_shape_types(&ctx, &sig_output.shape_table);
+        // Emit LLVM struct types for all shapes in this module so we can measure them —
+        // with the SAME authoritative false-sharing padded set emit_artifact's layout
+        // uses (typeck's `cross_thread_padded_shapes`), so a padded shape's frame slot
+        // is sized from the padded struct type automatically (one source, both
+        // consumers threaded — authoritative-derivation.md).
+        let shape_types = crate::shape_types::emit_shape_types(
+            &ctx,
+            &sig_output.shape_table,
+            &check.typed_module.cross_thread_padded_shapes,
+        );
         shape_types
             .named
             .iter()

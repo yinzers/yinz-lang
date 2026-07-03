@@ -2268,3 +2268,46 @@ hover_why = "Reference counting is not free — each task that takes or drops a 
 # Cross-module frame serialization shipped in v0.3-M3e.
 # The deferred_language_feature entry has been retired — the feature is live.
 # See docs/internal/scratchpad/SCRATCH-future-cross-module-frame-serialization.md for the full design record.
+
+# ---------------------------------------------------------------------------
+# [[lint_rule]] — Tier 3 lint rules per docs/internal/implementation/IMP-linting.md.
+# Required fields: name, severity, description, what_template,
+#                  what_instead_template, why_template, since, design_doc
+# severity: "suggestion" (Tier 3 default, dismissable) | "warning" — NEVER "error"
+#           (build.rs rejects "error": a lint is a teaching surface, not a gate).
+# Templates support {placeholder} substitution (rendered by the firing site via
+# ynz_registry::lint_rule_diagnostic_parts); {{ and }} are literal braces.
+# The rule name is the LSP Diagnostic.code (kebab-case), so editors can group and
+# dismiss by rule. Adding a rule = one TOML entry + one compiler firing site; the
+# mechanism (schema, parser, typed constants, LSP seam) needs zero changes —
+# v0.3-M5's `array-using-soa-layout` lands as exactly that.
+# ---------------------------------------------------------------------------
+
+# v0.3-M4 Phase 4: fires when the false-sharing auto-padding transform (codegen-only,
+# no muted hint — no typeable form exists) detects cross-task field access on a shape
+# it cannot pad. In v0.3 the unpaddable class is layout-visible-outside-this-file:
+# exported shapes, imported shapes, and structurally-named inline shapes — each file
+# compiles to its own object file, so a shape another file can see must keep one layout.
+[[lint_rule]]
+name = "cross-thread-fields-not-padded"
+severity = "suggestion"
+description = "Fields of this shape are used by different background tasks, but the compiler cannot add cache-line padding because the shape's memory layout is visible outside this file."
+what_template = "Fields of `{shape}` are used by different background tasks, but the compiler could not add cache-line padding to it."
+what_instead_template = "Keep hot cross-task state in a shape declared in this file and not exported — the compiler pads that kind automatically. Or leave `{shape}` as is and accept the slower shared access."
+why_template = "`{shape}`'s memory layout must be identical in every file that uses it ({reason}), and files compile separately — so the compiler cannot re-arrange it here. Without padding, two tasks writing neighboring fields share one 64-byte block of processor memory (a cache line): every write by one task forces the other task's processor core to re-fetch that block, measured around 3x slower on real workloads."
+since = "v0.3-M4"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+
+# v0.3-M4 Phase 4: suggests the yielding sleep in non-kernel programs. Dismissable and
+# NEVER an error — rare legitimate blocking-sleep uses exist and explicit intent is
+# respected (auto-promotion.md "When NOT to auto-promote"). Does not fire in --kernel
+# mode, where there is no scheduler to yield to and sleepBlocking is the RIGHT call.
+[[lint_rule]]
+name = "prefer-yielding-sleep"
+severity = "suggestion"
+description = "Suggests the yielding `wait sleep(ms)` over `sleepBlocking(ms)` in programs that have a scheduler — blocking sleep holds an OS thread idle."
+what_template = "`sleepBlocking` parks the current thread — it sits idle and runs nothing else until the time is up."
+what_instead_template = "Write `wait sleep({ms})` — your function pauses just the same, but the thread stays free to run other tasks. Keep `sleepBlocking` only when you truly need to hold the thread itself."
+why_template = "This program runs on a scheduler that can run other tasks while one waits. `wait sleep` hands the thread back to the scheduler during the pause; `sleepBlocking` keeps the thread parked doing nothing. The blocking form is the right tool only where there is no scheduler to yield to (kernel mode)."
+since = "v0.3-M4"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"

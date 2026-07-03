@@ -8,6 +8,18 @@ use std::path::PathBuf;
 use ynz_codegen::{codegen_query, sha256, CompiledArtifact};
 use ynz_parser::{CompilerDb, SourceFile};
 
+/// Diagnostics that gate a clean compile: everything EXCEPT Suggestion severity.
+/// Tier 3 lint suggestions (v0.3-M4 `[[lint_rule]]`, e.g. `prefer-yielding-sleep` on
+/// the deliberate sleepBlocking keepalives several fixtures here use) are
+/// informational teaching surfaces — they never block compilation and must not fail
+/// a "compiles clean" gate. Mirrors the assert_clean ratchet in ynz-typeck/tests.
+fn gating_diags(bucket: &ynz_diagnostics::DiagnosticBucket) -> Vec<&ynz_diagnostics::Diagnostic> {
+    bucket
+        .iter()
+        .filter(|d| d.severity != ynz_diagnostics::Severity::Suggestion)
+        .collect()
+}
+
 const NON_CROSSING_LOCAL_FILE: &str = "v0_3_m3a_p1_non_crossing_local_not_slotted.ynz";
 
 /// Read the non-crossing-local fixture source from disk.
@@ -78,7 +90,7 @@ fn run_codegen() -> CompiledArtifact {
     let sf = SourceFile::new(&db, FILE.to_string(), M1_SOURCE.to_string());
     let output = codegen_query(&db, sf);
     assert!(
-        output.diagnostics.is_empty(),
+        gating_diags(&output.diagnostics).is_empty(),
         "Codegen must have no diagnostics for valid M1 source: {:#?}",
         output.diagnostics
     );
@@ -248,7 +260,7 @@ fn run_m2_codegen() -> Option<CompiledArtifact> {
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, M2_SMOKE_FILE.to_string(), M2_SMOKE_SOURCE.to_string());
     let output = codegen_query(&db, sf);
-    if !output.diagnostics.is_empty() {
+    if !gating_diags(&output.diagnostics).is_empty() {
         eprintln!("M2 codegen diagnostics: {:#?}", output.diagnostics);
         return None;
     }
@@ -331,7 +343,7 @@ fn m2_decimal_exactness() {
     let sf = SourceFile::new(&db, "decimal_test.ynz".to_string(), source.to_string());
     let output = codegen_query(&db, sf);
     assert!(
-        output.diagnostics.is_empty(),
+        gating_diags(&output.diagnostics).is_empty(),
         "Decimal exactness source must compile without errors: {:#?}",
         output.diagnostics
     );
@@ -357,7 +369,7 @@ fn run_m3_fib_codegen() -> Option<CompiledArtifact> {
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, M3_FIB_FILE.to_string(), M3_FIB_SOURCE.to_string());
     let output = codegen_query(&db, sf);
-    if !output.diagnostics.is_empty() {
+    if !gating_diags(&output.diagnostics).is_empty() {
         eprintln!("M3 fib codegen diagnostics: {:#?}", output.diagnostics);
         return None;
     }
@@ -435,7 +447,7 @@ fn run_m4_player_codegen() -> Option<CompiledArtifact> {
         M4_PLAYER_SOURCE.to_string(),
     );
     let output = codegen_query(&db, sf);
-    if !output.diagnostics.is_empty() {
+    if !gating_diags(&output.diagnostics).is_empty() {
         eprintln!("M4 Player codegen diagnostics: {:#?}", output.diagnostics);
         return None;
     }
@@ -494,7 +506,7 @@ fn m3_codegen_query_returns_no_diagnostics_on_valid_m3_source() {
         let sf = SourceFile::new(&db, file.to_string(), source.to_string());
         let output = codegen_query(&db, sf);
         assert!(
-            output.diagnostics.is_empty(),
+            gating_diags(&output.diagnostics).is_empty(),
             "M3 source `{file}` must compile without diagnostics:\n{:#?}",
             output.diagnostics
         );
@@ -539,7 +551,7 @@ fn v03_m1_background_ir_snapshot() {
     );
     let output = codegen_query(&db, sf);
     assert!(
-        output.diagnostics.is_empty(),
+        gating_diags(&output.diagnostics).is_empty(),
         "v0.3-M1 background source must compile without diagnostics:\n{:#?}",
         output.diagnostics
     );
@@ -559,7 +571,7 @@ fn v03_m1_while_loop_preempt_ir_snapshot() {
     );
     let output = codegen_query(&db, sf);
     assert!(
-        output.diagnostics.is_empty(),
+        gating_diags(&output.diagnostics).is_empty(),
         "v0.3-M1 while-loop source must compile without diagnostics:\n{:#?}",
         output.diagnostics
     );
@@ -582,7 +594,7 @@ fn run_m2_sm_codegen(file: &str, source: &str) -> String {
     let sf = ynz_parser::SourceFile::new(&db, file.to_string(), source.to_string());
     let output = codegen_query(&db, sf);
     assert!(
-        output.diagnostics.is_empty(),
+        gating_diags(&output.diagnostics).is_empty(),
         "v0.3-M2 SM source `{file}` must compile without diagnostics:\n{:#?}",
         output.diagnostics
     );

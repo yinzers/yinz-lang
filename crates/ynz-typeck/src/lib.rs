@@ -44,10 +44,12 @@ pub mod check;
 pub mod cpu_admission;
 pub mod effective_ownership;
 pub mod exports;
+pub mod false_sharing;
 pub mod generics;
 pub mod independence;
 pub mod inlay_hint_passes;
 pub mod intrinsics;
+pub mod lints;
 pub mod may_block;
 pub mod options_table;
 pub mod queries;
@@ -68,6 +70,10 @@ pub use check::{
 };
 pub use effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
 pub use exports::ExportTable;
+pub use false_sharing::{
+    collect_shape_type_names, finalize_false_sharing, FalseSharingOutcome,
+    CROSS_THREAD_FIELDS_NOT_PADDED,
+};
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use inlay_hint_passes::{
     array_to_fixed_promotion_hints, background_routing_hints, copy_point_hints,
@@ -76,6 +82,7 @@ pub use inlay_hint_passes::{
     ParallelGroupHint, PromotionHint, PromotionKind, TypeHint, WaitPointHint,
 };
 pub use intrinsics::PrimitiveIntrinsicTable;
+pub use lints::lint_diagnostic;
 pub use may_block::suspends_set_for_test as may_block_suspends_set;
 pub use queries::{
     check_query, cpu_promotion_query, exports_query, module_signatures_query, no_auto_parallel_env,

@@ -419,4 +419,33 @@ fn v0_3_m4_gallery_fires_expected_diagnostics() {
         stderr.contains("borrows its arguments"),
         "v0_3_m4 gallery must include the auto-Arc boundary (generic share-param) diagnostic; got:\n{stderr}"
     );
+
+    // ── Phase 4: the two [[lint_rule]] Tier 3 lints (SUGGESTION severity — must be
+    //    present in stderr WITHOUT raising the Error count above: a lint is a teaching
+    //    surface, never a gate) ──
+    // False-sharing padding declined on an exported shape — carries the rule code (the
+    // caret tag renders the registry name), the shape name, the decline reason, and the
+    // cache-line teaching text.
+    assert!(
+        stderr.contains("lint: cross-thread-fields-not-padded"),
+        "v0_3_m4 gallery must fire cross-thread-fields-not-padded with its rule code; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("`PalletLabel`") && stderr.contains("it is exported"),
+        "the padding-decline lint must name the shape and the export reason; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cache line"),
+        "the padding-decline lint must teach the cache-line mechanism; got:\n{stderr}"
+    );
+    // Blocking-sleep nudge — carries the rule code and echoes the user's own literal
+    // milliseconds into the WHAT-INSTEAD.
+    assert!(
+        stderr.contains("lint: prefer-yielding-sleep"),
+        "v0_3_m4 gallery must fire prefer-yielding-sleep with its rule code; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("wait sleep(5)"),
+        "prefer-yielding-sleep must echo the literal ms into WHAT-INSTEAD; got:\n{stderr}"
+    );
 }

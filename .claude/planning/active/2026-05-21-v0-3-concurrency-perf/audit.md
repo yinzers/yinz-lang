@@ -75,3 +75,50 @@ Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#3: -claude-planning-act
 - **TRIGGER** — Same as the arc.rs hammer-test deferral above — before or alongside the auto-Arc
   codegen emission work, when genuine shared-refcount racing becomes a live path; or the next
   time any R3/auto-Arc fixture is touched.
+
+## 2026-07-03 — Deferral: prefer-yielding-sleep lint name drops the -when-Y convention clause (non-blocking — deferred by 2026-07-02-v0-3-m4-channels-arc-release#4 at the phase boundary)
+Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#4: registry-features-toml-2306
+
+- **WHAT** — The `prefer-yielding-sleep` lint rule name (`registry/features.toml:2306`) drops the
+  `-when-Y` clause of this project's `prefer-X-when-Y` naming convention (e.g.
+  `prefer-fixed-when-immutable` per `auto-promotion.md`'s stated convention).
+- **WHY** — Purely cosmetic naming drift; the lint's actual behavior and teaching text are
+  correct — renaming it now would be a breaking change to the registry entry name for zero
+  functional benefit mid-milestone (rules-compliance, minor).
+- **COST** — Trivial — a rename (`prefer-yielding-sleep` → e.g.
+  `prefer-yielding-sleep-when-non-kernel` or similar) plus updating every reference (registry
+  entry, `lints.rs` call site, test assertions, gallery key-phrase).
+- **TRIGGER** — The next time this lint rule's registry entry is touched for any other reason, or
+  a broader lint-naming consistency pass.
+
+## 2026-07-03 — Deferral: gate-test comment cross-references a nonexistent test file (non-blocking — deferred by 2026-07-02-v0-3-m4-channels-arc-release#4 at the phase boundary)
+Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#4: crates-ynz-typeck-tests-false-sharing-no-auto-parallel-gate-rs-13
+
+- **WHAT** — A test comment (`crates/ynz-typeck/tests/false_sharing_no_auto_parallel_gate.rs:13`)
+  claims the end-to-end half of the `--no-auto-parallel` gating proof "lives in
+  `crates/ynz-driver/tests/false_sharing_gating.rs`" — that file does not exist
+  (verified against the live tree). The real end-to-end test is
+  `v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output` in
+  `crates/ynz-driver/tests/integration.rs` (verified at :9930).
+- **WHY** — A stale cross-reference comment, zero functional impact — but would send a future
+  reader chasing a nonexistent file (test-quality, minor).
+- **COST** — Trivial — one-line comment correction.
+- **TRIGGER** — The next time this test file is touched for any other reason.
+
+## 2026-07-03 — Deferral: prefer-yielding-sleep lint fires before the sleepBlocking arity guard (non-blocking — deferred by 2026-07-02-v0-3-m4-channels-arc-release#4 at the phase boundary)
+Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#4: crates-ynz-typeck-src-check-rs-3602
+
+- **WHAT** — The `prefer-yielding-sleep` lint fires unconditionally (in non-kernel mode) BEFORE
+  the `call.args.len() != 1` arity guard in `check_sleep_blocking_call`
+  (`crates/ynz-typeck/src/check.rs:3602` — fn verified at that exact line; the lint push at
+  :3610 precedes the arity guard at :3630), so a malformed `sleepBlocking()` or
+  `sleepBlocking(a, b)` call (already a hard error) also emits the lint suggestion alongside the
+  arity error — cosmetic noise on already-erroring code, confirmed non-crashing (falls back to a
+  literal `"ms"` string when no valid arg exists).
+- **WHY** — A write-order oversight, not a forced tradeoff — nothing prevented ordering the
+  checks correctly; purely a low-priority code-quality nit with zero user-facing correctness
+  impact beyond slightly redundant diagnostic output on code that's already an error
+  (deviation-judge, minor).
+- **COST** — Trivial — move the lint-firing block after arity/type validation, or gate it on
+  `call.args.len() == 1`.
+- **TRIGGER** — The next time `check_sleep_blocking_call` is touched for any other reason.

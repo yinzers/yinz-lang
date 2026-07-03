@@ -9921,3 +9921,61 @@ fn v0_3_m4_p3_edge_nonident_callee_errors_loudly() {
         "non-identifier callee",
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M4 Phase 4 — false-sharing auto-padding: the --no-auto-parallel gate
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output() {
+    // WHY: first layout transform `--no-auto-parallel` has EVER gated (plan-flagged as
+    // unproven territory). Three claims, all proven through the real compiler binary:
+    //   (a) default mode emits the PADDED layout for the crossing shape — its int fields
+    //       become `{ i64, [56 x i8] }` 64-byte slots in the IR;
+    //   (b) sequential mode emits the GENUINELY UNPADDED layout — no pad arrays anywhere,
+    //       not merely a different padding that happens not to matter;
+    //   (c) program output is byte-identical in both modes (padding is layout-only; the
+    //       cross-impl determinism contract holds).
+    let src = fixture("v0_3_m4_p4_padding_gate.ynz");
+
+    // (c) both modes run, exit 0, identical stdout.
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default mode must exit 0; stderr:\n{par_stderr}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel mode must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, "tally total: 5\n",
+        "program must compute through the padded fields"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "padded and unpadded lowerings must produce byte-identical output"
+    );
+
+    // (a) default-mode IR carries the padded struct: each i64 field wrapped to a
+    // 64-byte cache-line slot.
+    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
+    assert!(
+        par_ir.contains("{ i64, [56 x i8] }"),
+        "default mode must emit the 64-byte padded field slots for the crossing shape; IR:\n{}",
+        &par_ir[..par_ir.len().min(4000)]
+    );
+
+    // (b) sequential-mode IR is genuinely unpadded: no cache-line pad array exists
+    // anywhere in the module (the shape lowers to its natural { i64, i64 } layout).
+    let seq_ir = build_to_tmpdir_emit_ir_mode(&src, true);
+    assert!(
+        !seq_ir.contains("[56 x i8]"),
+        "--no-auto-parallel must emit the natural, unpadded layout — found a pad array in the IR"
+    );
+    assert!(
+        seq_ir.contains("{ i64, i64 }"),
+        "--no-auto-parallel must still lower the shape (natural two-int layout expected)"
+    );
+}

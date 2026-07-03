@@ -277,6 +277,36 @@ example_source = "let x = 42"
 example_hint_rendered = ": int (from 42)"
 ```
 
+### `[[lint_rule]]`
+
+A Tier 3 lint rule per [`docs/internal/implementation/IMP-linting.md`](IMP-linting.md). Built in v0.3-M4 Phase 4 (first carriers: `cross-thread-fields-not-padded`, `prefer-yielding-sleep`); v0.3-M5's `array-using-soa-layout` reuses this kind unchanged.
+
+The rule's teaching text, severity, and LSP code all have exactly ONE home — the entry. The compiler firing site calls `ynz_registry::lint_rule_diagnostic_parts(name, vars)` (or typeck's `ynz_typeck::lints::lint_diagnostic`, which also builds the `Diagnostic` with the `LintRule` kind) to render the templates with per-site `{placeholder}` vars. The rule `name` becomes the LSP `Diagnostic.code` (via `DiagnosticKind::LintRule`), so editors can group/dismiss by rule; `lsp_lint_rule_hover_for(name)` renders a rule-level hover. **Adding a rule = one TOML entry + one firing site — zero mechanism edits.**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Kebab-case rule id (e.g. `"prefer-yielding-sleep"`) — the LSP `Diagnostic.code` |
+| `severity` | string | yes | `"suggestion"` (Tier 3 default, dismissable) \| `"warning"`. **`"error"` is rejected by `build.rs`** — a lint is a teaching surface, never a gate |
+| `description` | string | yes | One-sentence description (LSP hover/documentation surface) |
+| `what_template` | string | yes | Parameterized WHAT (`{placeholder}` substitution, same grammar as `diagnostic_template`) |
+| `what_instead_template` | string | yes | Parameterized WHAT-INSTEAD |
+| `why_template` | string | yes | Parameterized WHY — contextual, per Golden Rule 11 |
+| `since` | string | yes | Milestone tag (e.g. `"v0.3-M4"`) |
+| `design_doc` | string | yes | Repo-relative path of the design doc that locked the rule |
+
+**Example**:
+```toml
+[[lint_rule]]
+name = "prefer-yielding-sleep"
+severity = "suggestion"
+description = "Suggests the yielding `wait sleep(ms)` over `sleepBlocking(ms)` in programs that have a scheduler — blocking sleep holds an OS thread idle."
+what_template = "`sleepBlocking` parks the current thread — it sits idle and runs nothing else until the time is up."
+what_instead_template = "Write `wait sleep({ms})` — your function pauses just the same, but the thread stays free to run other tasks."
+why_template = "This program runs on a scheduler that can run other tasks while one waits."
+since = "v0.3-M4"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+```
+
 ---
 
 ## Deferred-Feature Catalog — Phase 5b Population Targets
@@ -337,6 +367,14 @@ pub fn deferred_language_features() -> impl Iterator<Item = &'static DeferredLan
 // Muted hint domain lookup
 pub fn muted_hint_domain(domain: &str) -> Option<&'static MutedHintDomainEntry>;
 pub fn muted_hint_domains() -> impl Iterator<Item = &'static MutedHintDomainEntry>;
+
+// Lint rules (v0.3-M4): lookup + iteration, the generic firing-site renderer
+// (WHAT/WHAT-INSTEAD/WHY with {placeholder} vars), and the LSP hover keyed by
+// the rule name (which is the published Diagnostic.code).
+pub fn lint_rule_lookup(name: &str) -> Option<&'static LintRuleEntry>;
+pub fn lint_rules() -> impl Iterator<Item = &'static LintRuleEntry>;
+pub fn lint_rule_diagnostic_parts(rule_name: &str, vars: &HashMap<&str, &str>) -> Option<(String, String, String)>;
+pub fn lsp_lint_rule_hover_for(rule_name: &str) -> Option<String>;
 ```
 
 The generated code (`OUT_DIR/registry.rs`) is `const` arrays with `&'static str` values — zero runtime allocation, O(1) or O(N) linear scan over small constants (same as pre-migration `match` statements).

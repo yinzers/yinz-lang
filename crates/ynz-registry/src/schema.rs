@@ -102,6 +102,38 @@ pub struct DiagnosticTemplateEntry {
     pub why_template: &'static str,
 }
 
+/// A Tier 3 lint rule per `docs/internal/implementation/IMP-linting.md`.
+///
+/// Lint rules are TEACHING surfaces, never errors: `severity` is `"suggestion"`
+/// (dismissable, the Tier 3 default) or `"warning"` — `build.rs` rejects `"error"`
+/// at registry-parse time so a lint can never block a compile.
+///
+/// The three `*_template` fields carry the canonical WHAT / WHAT-INSTEAD / WHY text
+/// (Golden Rule 11) with `{placeholder}` substitution via [`crate::render_template`] —
+/// the firing site in the compiler supplies the per-site vars, so the rule's teaching
+/// text has exactly ONE home. Adding a new lint rule is a TOML entry plus its firing
+/// site; no mechanism change (schema, parser, constants, LSP seam) is required.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LintRuleEntry {
+    /// The kebab-case rule id (e.g. `"prefer-yielding-sleep"`). Used as the LSP
+    /// `Diagnostic.code` so editors can group/dismiss by rule.
+    pub name: &'static str,
+    /// `"suggestion"` (Tier 3 default, dismissable) | `"warning"`. Never `"error"`.
+    pub severity: &'static str,
+    /// One-sentence description of what the rule teaches (LSP hover/documentation).
+    pub description: &'static str,
+    /// WHAT happened — `{placeholder}`-substituted at the firing site.
+    pub what_template: &'static str,
+    /// WHAT to write instead — `{placeholder}`-substituted at the firing site.
+    pub what_instead_template: &'static str,
+    /// WHY — contextual reason, `{placeholder}`-substituted at the firing site.
+    pub why_template: &'static str,
+    pub since: &'static str,
+    /// The design doc that locked this rule (repo-relative path).
+    pub design_doc: &'static str,
+}
+
 /// An IDE inference domain per `.claude/rules/inference.md`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]

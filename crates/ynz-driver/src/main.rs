@@ -71,12 +71,15 @@ enum Command {
         /// See `design/lsp.md` for the full schema.
         #[arg(long)]
         json: bool,
-        /// v0.3.0-m1: reserved for M3 auto-parallelization gate; currently no-op.
+        /// Disables the auto-parallelization independence-analysis pass and everything
+        /// that gates on its predicate (e.g. the v0.3-M4 false-sharing padding
+        /// transform), lowering statements in plain source order as the cross-impl
+        /// consistency oracle.
         ///
-        /// Forces sequential execution of all `background` tasks (disables the
-        /// auto-parallelize pass when it ships in v0.3-M3). In M1 this flag has no
-        /// effect on program behavior. It exists to enable the cross-impl consistency
-        /// harness to compare parallel vs sequential output starting from M1.
+        /// This does NOT suppress explicit, user-written `background` spawns — those
+        /// still run on real threads regardless of the flag (the runtime never reads
+        /// it). Output determinism between the two modes comes from the language's
+        /// channel-synchronization semantics, not from thread suppression.
         #[arg(long, hide = true)]
         no_auto_parallel: bool,
     },

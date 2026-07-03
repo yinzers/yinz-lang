@@ -1099,3 +1099,221 @@ Recorded decision: finding-slug for the plan.md anchor computed by the literal c
 anchor's leading `.` — kept as-is for deterministic re-derivation (the recipe has no trim step).
 The pre-existing dirty `roadmap.md` (unrelated changes) untouched. NO STOP condition fired; NO
 dormant override armed. Session-id appended; status remains active.
+
+## Session log — executor-2026-07-02-m4-p4 — 2026-07-03
+
+Phase 4 executed in full (all five steps), grounded in: the plan slice (¶2 Mission, §3.1
+outcomes 6–7, §3.4, §Invariants Performance/Teaching/Feature-Registry), REF-plan-format,
+REF-decision-philosophy, REF-context-budget, no-duct-tape, verification, auto-promotion.md,
+feature-registry.md, authoritative-derivation.md, plan-invariants §Demo & Error Gallery,
+examples-structure.md, IMP-no-function-coloring (§False Sharing, §Sleep Intrinsics),
+IMP-feature-registry, `suspension_source.rs` + the live crate reality (recon re-read, not
+memory).
+
+**Landed.** (1) `[[lint_rule]]` entry-kind built generically end-to-end: TOML schema +
+build.rs parser (severity "error" rejected at parse time) + `LintRuleEntry` typed constants +
+accessors/`lint_rule_diagnostic_parts`/`lsp_lint_rule_hover_for` in ynz-registry +
+`DiagnosticKind::LintRule` (LSP `Diagnostic.code` = kebab-case rule id, flows through the
+existing diagnostic_transform path unchanged) + the one generic typeck firing helper
+(`lints.rs::lint_diagnostic`); two entries: `cross-thread-fields-not-padded`,
+`prefer-yielding-sleep`; schema documented in IMP-feature-registry.md. (2) False-sharing
+padding: raw cross-thread record captured at the single `Expr::Background` typeck arm (both
+spawn forms route through it); ONE partition (`false_sharing.rs::finalize_false_sharing`) →
+`TypedModule::cross_thread_padded_shapes`, threaded into codegen layout AND frame sizing
+(both `emit_shape_types` call sites); per-field `{T,[pad x i8]}` 64-byte slots (index-
+preserving), 64-byte padded-lit allocas, const-global fold declined for padded shapes.
+(3) Both lints fire live with three-part registry text; sleep lint kernel-gated off.
+(4) `--no-auto-parallel` gate proven at analysis level (own-process env test) AND end-to-end
+(`v0_3_m4_p4_padding_gate.ynz`: padded IR default / genuinely-unpadded IR sequential /
+byte-identical stdout); field offsets proven 64·i with ABI size 64·n on the real target data
+layout (`false_sharing_padding.rs`); auto-reorder conflict: verified NO reorder pass exists in
+codegen (declaration-order layout; "reorder" is prose-only) — criterion holds with evidence.
+(5) pirates-roster padding demo + golden regenerated (stable ×3; the 8-pirates order variance
+is the known relaxed section, verified pre-existing at pristine HEAD); v0_3_m4_errors.ynz
+gained both lint triggers with `// WHY:`; error_galleries assertions extended (error count
+unchanged).
+
+**Verification.** In the dev container: `cargo test --workspace` GREEN (121 suites, 0
+failures — including the previously-failing `design_future_sync`, now passing); `cargo clippy
+--workspace -- -D warnings` GREEN; `cargo fmt --all` applied + `--check` clean; targeted runs
+of every new test file GREEN; both lints observed rendering through the real `ynz run`.
+
+**Deviations SURFACED, not self-adjudicated (full text in the P4 STATUS banner, plan.md):**
+D1 `--no-auto-parallel` premise vs `background`-still-spawns reality (exit criterion met as
+written; residual perf-only-safe); D2 "existing shape-field auto-reorder" is design intent,
+not code; D3 IMP-no-function-coloring:201's share/lend detection premise is stale against
+P3's hard-error lock (P6 design-doc sweep flagged); D4 unpaddable class realized as
+cross-module-visible layout (FFI shapes don't exist in v0.3). For the deviation-judge; no
+FRAGO decided or applied by this producer.
+
+**Recorded decisions (reasons in the P4 banner + code comments):** wrapper-element padding
+(zero index remapping); conservative-inclusive crossing collection; declaration-based
+large-copy estimate; cross-TU-visibility decline class; golden.rs harness gates on
+non-Suggestion diagnostics (mirrors typeck's assert_clean ratchet — suggestions are
+informational by design, not a weakened gate).
+
+Producer does NOT self-grade — reviewer fan-out (code-reviewer: mechanism generality +
+design-doc diff) has NOT run. NO STOP condition fired; NO dormant override armed; the
+pre-existing dirty `roadmap.md` + `cspell.json` untouched. Session-id appended; status
+remains active.
+
+## FRAGO 009 — 2026-07-03 — session-id: executor-2026-07-02-m4-p4-r2 (Phase 4 post-review follow-up; deviation-judge classified JUSTIFIED — this record APPLIES that classification, it does not re-adjudicate)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 4 (false-sharing padding + decline-lint
+           current usefulness)
+Trigger:   deviation-judge second-round follow-up on the P4 diff, REFINING D3/D4 (which correctly
+           explained WHY the detection trigger had to change but did not record that the realized
+           trigger currently produces zero benefit): the padding transform and its paired
+           decline-lint (`cross-thread-fields-not-padded`) are currently inert-with-real-cost —
+           they pad/decline exclusive-ownership give/copy/channel crossings that structurally
+           cannot false-share. False sharing requires two threads concurrently accessing the SAME
+           instance's neighboring fields; every crossing v0.3-M4 can produce today is an
+           exclusive-ownership handoff (`give` + use-after-give hard error; `.copy` = separate
+           instance; channel = moved payload). The ONE mechanism that would create a
+           genuinely-shared concurrent instance — auto-Arc codegen emission — is itself validly
+           deferred to v0.4 by FRAGO 008 (this same plan). So the transform imposes real memory
+           cost (64 bytes/field on module-local shapes crossing a `background` boundary) for zero
+           current throughput benefit, until auto-Arc ships. Classification: JUSTIFIED,
+           risk-neutral; disposition (a) taken — ship as a documented forward-looking no-op with
+           a four-field WHAT/WHY/COST/TRIGGER honesty record.
+Changes:
+  - ¶3.3 Phase 4 STATUS banner: ADDED the four-field FRAGO 009 deferral note (WHAT: transform +
+    decline-lint inert-with-real-cost, zero throughput benefit, 64 bytes/field bloat on
+    module-local `background`-crossing shapes; WHY: auto-Arc emission — the one mechanism that
+    creates genuine sharing — is FRAGO 008-deferred to v0.4, and the plumbing built here is what
+    that emission threads into rather than re-derives; COST: bounded, 64 bytes/field on the
+    narrow crossing class only; TRIGGER: auto-Arc codegen emission shipping — shares registry
+    entry `auto-arc-codegen-emission`'s own TRIGGER), explicitly marked as REFINING (not
+    overturning) D3/D4; D3/D4 entries annotated with their applied classifications; banner
+    headline updated COMPLETE-pending-fan-out → review verdicts APPLIED.
+  - ¶Future Requirements / Revisit: ADDED the matching mirrored entry. Deliberately NOT a
+    registry `[[deferred_language_feature]]`: the padding transform ships as real, working,
+    tested code — this deferral is about its CURRENT USEFULNESS pending auto-Arc, not about
+    deferring the code itself; recorded as a no-duct-tape documented-tradeoff
+    (WHAT/WHY/COST/TRIGGER), the four-field record living in the P4 banner.
+  - `examples/pirates-roster/entrypoint.ynz` (~:1083 InningTally declaration comment,
+    ~:1128 m4_demo call-site comment): CORRECTED per the deviation-judge's bundled honesty
+    requirement — the prior prose claimed padding stops two tasks "fighting over one line",
+    implying concurrent field access; false, since `inning` is GIVEN to `tallyInning`
+    (use-after-give is a hard compile error), so access is strictly sequential/exclusive.
+    Rewritten to state the shape IS padded (real, observable) as forward-looking infrastructure
+    illustrating the MECHANISM, with no live contention prevented YET (arrives with auto-Arc,
+    v0.4). Pure comment change; the demo's printed output untouched; golden verified
+    byte-identical through the real byte-exact golden test post-change.
+  - ¶1 Risk Assessment: NO CHANGE (risk-neutral — no re-scoring of any row).
+Unchanged: everything code-level in the padding transform, both lints, tests, and registry
+  entries (the transform ships exactly as reviewed — real, working, tested); FRAGO 001-008;
+  Phases 0-3 and 5-6 (except the FRAGO 011 P6 bullet, recorded separately); the Invariants
+  section; Design-Doc Alignment.
+Override:  N/A — risk-neutral (a documentation/honesty correction on already-shipped,
+  already-tested, working code — no behavior changes, no re-scoring of any risk row).
+
+## FRAGO 010 — 2026-07-03 — session-id: executor-2026-07-02-m4-p4-r2 (Phase 4 post-review follow-up; deviation-judge classified JUSTIFIED — this record APPLIES that classification, it does not re-adjudicate)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 4 (Step 4 `--no-auto-parallel` premise —
+           deviation D1)
+Trigger:   plan Phase 4 Step 4's premise ("under sequential lowering the authoritative analysis
+           yields no cross-thread fields") and `crates/ynz-driver/src/main.rs:76`'s doc comment
+           ("Forces sequential execution of all `background` tasks") both overstate what
+           `--no-auto-parallel` actually does. Reality (verified independently by deviation-judge
+           and code-reviewer; re-confirmed against disk this dispatch): the flag only gates the
+           AUTO-PARALLEL independence-analysis pass (`emit.rs:3936` dumb-sequential baseline) and
+           whatever reads its predicate (`no_auto_parallel_env()` — including this phase's padding
+           analysis); the runtime never reads the env var; an explicit, user-written `background`
+           spawn still runs on a real thread regardless of the flag. This does NOT weaken the
+           phase's actual exit criterion (padding correctly self-gates off via the SAME flag
+           predicate the padding analysis reads) and does NOT weaken the `--no-auto-parallel`
+           cross-impl byte-identical guarantee (that determinism comes from the language's
+           existing channel-synchronization semantics, not from thread suppression — confirmed
+           end-to-end by the Phase 4 gate test,
+           `integration.rs::v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output`).
+Changes:
+  - `crates/ynz-driver/src/main.rs:76` doc comment: CORRECTED — now states the flag disables the
+    auto-parallelization independence-analysis pass and everything gating on its predicate (e.g.
+    false-sharing padding), does NOT suppress explicit `background` spawns (the runtime never
+    reads it), and that cross-mode determinism comes from channel-synchronization semantics. The
+    old "Forces sequential execution of all `background` tasks" claim was never true post-M1.
+  - ¶3.3 Phase 4 Step 4: premise text AMENDED in place to match reality (self-gating via the
+    shared `no_auto_parallel_env()` predicate), with an inline FRAGO 010 correction note; exit
+    criterion unweakened.
+  - ¶3.3 Phase 4 STATUS banner deviation D1: annotated classified-JUSTIFIED + applied.
+Unchanged: all flag behavior and code paths (zero behavior change — documentation-accuracy only);
+  the Phase 4 gate test and its assertions; the risk table (NO re-scoring); FRAGO 001-009;
+  everything not listed.
+Override:  N/A — risk-neutral, pure documentation-accuracy correction, zero behavior change.
+
+## FRAGO 011 — 2026-07-03 — session-id: executor-2026-07-02-m4-p4-r2 (Phase 4 post-review follow-up; deviation-judge classified JUSTIFIED — this record APPLIES that classification, it does not re-adjudicate; D3+D4 folded together)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 4 (deviations D3+D4 — design-doc
+           staleness, forward-scheduled to Phase 6 Step 1's already-scheduled design-doc sweep)
+Trigger:   two `IMP-no-function-coloring.md` statements are stale against what Phase 3 locked and
+           Phase 4 shipped. (1) `:201` says padding detection keys on "`.share`/`.lend` across
+           `background`" — stale: Phase 3 made `.share`/`.lend` across `background` a HARD compile
+           error (IMP-concurrency:189); detection is correctly implemented on the legal
+           give/copy/channel crossing set instead. (2) `:205`'s "FFI-shaped" illustrative example
+           for the unpaddable class is also stale — FFI (`foreign`) doesn't exist until v2+; the
+           real v0.3 unpaddable class is cross-module-visible-layout shapes
+           (exported/imported/anon-structural). `IMP-no-function-coloring.md` is deliberately NOT
+           edited this round: Phase 6 Step 1 already carries the scheduled design-doc sweep
+           (confirmed against plan.md's Phase 6 text); this FRAGO's job is ensuring P6's executor
+           applies these two named corrections directly instead of re-deriving them.
+Changes:
+  - ¶3.3 Phase 6 Step 1: ADDED an explicit MUST bullet naming both corrections (not a vague
+    "sweep the docs" line). The exact stale lines and their accurate replacements, for P6 to
+    apply verbatim:
+      (a) `IMP-no-function-coloring.md:201` — stale claim: padding detection keys on
+          "`.share`/`.lend` across `background` spawn sites". Accurate replacement: detection
+          keys on the LEGAL crossing set — give/copy arguments, `channel<T>` conduit element
+          types, and callee return types at `background` spawn sites — because `.share`/`.lend`
+          across `background` is a hard compile error as of v0.3-M4 Phase 3
+          (IMP-concurrency:189); the doc's intent ("ownership crossing thread boundaries") is
+          realized on the legal modifier set.
+      (b) `IMP-no-function-coloring.md:205` — stale example: the unpaddable class illustrated as
+          "FFI-shaped" (`#[repr(C)]`-equivalent) fields. Accurate replacement: the v0.3
+          unpaddable (decline-lint) class is cross-module-visible-layout shapes — exported /
+          imported / `__anon__*` structural shapes — because each module compiles to its own
+          object file, so padding only the spawning module's view would fork one type's layout;
+          `foreign`/FFI is a v2+ `[[deferred_language_feature]]` and cannot occur in v0.3.
+  - ¶3.3 Phase 4 STATUS banner deviations D3+D4: annotated classified-JUSTIFIED + applied as
+    this FRAGO (forward-scheduled), with the FRAGO 009 refinement cross-noted.
+  - `IMP-no-function-coloring.md`: NO CHANGE this round (explicitly deferred to Phase 6 Step 1).
+Unchanged: all code and tests (no code change this round — pure forward-scheduling note);
+  the risk table; FRAGO 001-010; everything not listed.
+Override:  N/A — risk-neutral, no code change this round, pure forward-scheduling note.
+
+## Session log — executor-2026-07-02-m4-p4-r2 — 2026-07-03
+
+Narrow post-review bookkeeping dispatch (task-spec from the conductor, routing the reviewer
+fleet's Phase-4 verdicts: two deviation-judge rounds → FRAGO 009/010/011, plus 3 minor
+should-fix findings deferred). Producer does NOT self-grade — every classification applied here
+is the deviation-judge's / reviewers', per the conductor's routing
+(`agent-charter-discipline.md`); nothing re-derived, nothing re-adjudicated. Scoped production
+changes: exactly TWO text-only fixes (zero behavior change) — (a) the
+`examples/pirates-roster/entrypoint.ynz` InningTally comments (~:1083, ~:1128) corrected per
+FRAGO 009's bundled honesty requirement (exclusive-ownership give crossing = no concurrent
+contention yet; padding illustrates the mechanism), and (b) `crates/ynz-driver/src/main.rs:76`'s
+stale flag doc comment corrected per FRAGO 010. Deliverables, all landed this dispatch:
+(1) FRAGO 009 (padding = documented forward-looking no-op; four-field WHAT/WHY/COST/TRIGGER in
+the P4 banner + mirrored Future Requirements entry; NOT a registry deferred-feature — the code
+ships real/working/tested; REFINES D3/D4).
+(2) FRAGO 010 (D1: `--no-auto-parallel` premise corrected in plan Step 4 + `main.rs:76`; exit
+criterion unweakened; every factual claim re-verified against disk before writing — the runtime
+never reads `YNZ_NO_AUTO_PARALLEL`, `emit.rs:3936` is the only gate, grep-confirmed).
+(3) FRAGO 011 (D3+D4: both IMP-no-function-coloring corrections pre-named with exact replacement
+text; P6 Step 1 gained an explicit MUST bullet; the doc itself deliberately untouched — P6 owns
+the sweep).
+(4) Three minor findings routed to the durable per-phase deferral home
+(`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md`, appended — not
+overwritten) with Idempotency-Key sentinels under prefix
+`2026-07-02-v0-3-m4-channels-arc-release#4:`: (a) `prefer-yielding-sleep` drops the `-when-Y`
+naming-convention clause (`registry/features.toml:2306`), (b) stale cross-reference comment
+naming nonexistent `crates/ynz-driver/tests/false_sharing_gating.rs`
+(`false_sharing_no_auto_parallel_gate.rs:13`; real test = `integration.rs`
+`v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output`, verified at
+:9930), (c) lint fires before the arity guard in `check_sleep_blocking_call`
+(`crates/ynz-typeck/src/check.rs:3602`, fn verified at that exact line; lint at :3610 precedes
+the `call.args.len() != 1` guard at :3630 — cosmetic noise on already-erroring code,
+non-crashing). All three anchors grep-verified against the live tree before recording; no
+duplicate Idempotency-Keys existed.
+Verification: `cargo build --workspace` GREEN in the dev container; the pirates-roster
+byte-exact golden test re-run post-comment-change and GREEN (pure comment change — stdout
+verified unchanged, golden NOT regenerated because no output changed).
+The pre-existing dirty `roadmap.md` + `cspell.json` untouched. NO STOP condition fired; NO
+dormant override armed. Session-id appended to plan.md frontmatter; status remains active.

@@ -27,6 +27,15 @@ function describeBatch<T>(share note: BatchNote) -> nothing {
   print(note.label)
 }
 
+// An EXPORTED shape + a worker that takes ownership of it — the padding-decline
+// lint trigger below (Phase 4). Export is what makes it unpaddable.
+export shape PalletLabel { count: int }
+
+function stackPallet(give label: PalletLabel) -> nothing {
+  wait sleep(1)
+  print(label.count.toString())
+}
+
 function entrypoint() -> nothing {
   // WHY: channel-capacity-non-positive — a channel is bounded by construction (stdlib-design
   // Rule 4); a zero-capacity channel could never accept a value, so it is rejected.
@@ -111,6 +120,24 @@ function entrypoint() -> nothing {
   // `share`-param callee — the value must cross via `.give`/`.copy` (or auto-Arc when it lands).
   let note: BatchNote = { label: `tray-7` }
   background describeBatch<BatchNote>(note)
+
+  // ── v0.3-M4 Phase 4: the two Tier 3 lints (SUGGESTION severity — teaching
+  //    surfaces, never gates; neither blocks a compile) ──
+
+  // WHY: cross-thread-fields-not-padded — PalletLabel's fields are used by a different
+  // background task, but PalletLabel is EXPORTED: its memory layout must be identical in
+  // every file that imports it, and files compile separately, so the false-sharing
+  // auto-padding declines here and teaches instead. A module-local, non-exported shape
+  // in the same position pads silently (see examples/pirates-roster).
+  let pallet: PalletLabel = { count: 40 }
+  background stackPallet(pallet)
+
+  // WHY: prefer-yielding-sleep — a blocking sleep in a NON-kernel program holds an OS
+  // thread idle while the scheduler could be running other tasks; `wait sleep(5)` pauses
+  // the function and frees the thread. Dismissable, never an error (rare legitimate
+  // blocking uses exist); kernel-mode programs do not get this lint at all — with no
+  // scheduler to yield to, sleepBlocking is the RIGHT call there.
+  sleepBlocking(5)
 
   print(`unreachable`)
 }

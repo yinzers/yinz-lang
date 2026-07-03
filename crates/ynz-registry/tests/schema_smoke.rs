@@ -319,3 +319,86 @@ fn all_muted_hint_placement_categories_valid() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// 6. Lint-rule sketch (v0.3-M4 Phase 4 — the [[lint_rule]] mechanism)
+//    Given a rule name, the firing site gets severity + rendered three-part text;
+//    the LSP gets a hover keyed by the Diagnostic.code (the rule name).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_rule_lookup_by_name() {
+    let entry = ynz_registry::lint_rule_lookup("prefer-yielding-sleep")
+        .expect("'prefer-yielding-sleep' lint_rule entry not found");
+    assert_eq!(entry.severity, "suggestion");
+    assert_eq!(entry.since, "v0.3-M4");
+    assert!(!entry.description.is_empty());
+    assert!(!entry.design_doc.is_empty());
+}
+
+#[test]
+fn lint_rule_lookup_miss_returns_none() {
+    assert!(ynz_registry::lint_rule_lookup("definitely-not-a-rule").is_none());
+}
+
+#[test]
+fn lint_rule_iteration_finds_m4_rules() {
+    let names: Vec<&str> = ynz_registry::lint_rules().map(|e| e.name).collect();
+    assert!(
+        names.contains(&"cross-thread-fields-not-padded"),
+        "expected 'cross-thread-fields-not-padded' in lint_rule iteration; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"prefer-yielding-sleep"),
+        "expected 'prefer-yielding-sleep' in lint_rule iteration; got: {names:?}"
+    );
+}
+
+#[test]
+fn lint_rule_severity_is_never_error() {
+    // WHY: a lint is a teaching surface, never a gate — build.rs rejects "error"
+    // at parse time; this locks the invariant against a build.rs regression.
+    for entry in ynz_registry::lint_rules() {
+        assert!(
+            matches!(entry.severity, "suggestion" | "warning"),
+            "lint_rule '{}' has severity '{}' — a lint may never be an error",
+            entry.name,
+            entry.severity
+        );
+    }
+}
+
+#[test]
+fn lint_rule_diagnostic_parts_render_placeholders() {
+    // WHY: this is the GENERIC firing-site contract — any rule (including M5's future
+    // `array-using-soa-layout`) fires through exactly this call with its own vars.
+    let vars: HashMap<&str, &str> =
+        HashMap::from([("shape", "Tally"), ("reason", "it is exported")]);
+    let (what, what_instead, why) =
+        ynz_registry::lint_rule_diagnostic_parts("cross-thread-fields-not-padded", &vars)
+            .expect("parts for cross-thread-fields-not-padded");
+    assert!(
+        what.contains("`Tally`"),
+        "WHAT must substitute {{shape}}; got: {what}"
+    );
+    assert!(!what_instead.is_empty());
+    assert!(
+        why.contains("it is exported"),
+        "WHY must substitute {{reason}}; got: {why}"
+    );
+    assert!(
+        why.contains("cache line"),
+        "WHY must teach the cache-line mechanism; got: {why}"
+    );
+}
+
+#[test]
+fn lint_rule_lsp_hover_renders_three_parts() {
+    let hover = ynz_registry::lsp_lint_rule_hover_for("prefer-yielding-sleep")
+        .expect("hover for prefer-yielding-sleep");
+    assert!(hover.contains("**WHAT**"));
+    assert!(hover.contains("**WHAT INSTEAD**"));
+    assert!(hover.contains("**WHY**"));
+    assert!(hover.contains("prefer-yielding-sleep"));
+    assert!(ynz_registry::lsp_lint_rule_hover_for("not-a-rule").is_none());
+}

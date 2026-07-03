@@ -40,6 +40,7 @@ fn main() {
     emit_deferred_tooling_features(table, &mut out);
     emit_diagnostic_templates(table, &mut out);
     emit_muted_hint_domains(table, &mut out);
+    emit_lint_rules(table, &mut out);
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     std::fs::write(out_dir.join("registry.rs"), &out)
@@ -400,6 +401,44 @@ fn emit_diagnostic_templates(table: &TomlTable, out: &mut String) {
         writeln!(
             out,
             "    crate::DiagnosticTemplateEntry {{ kind_name: {kind_name:?}, what_template: {what:?}, what_instead_template: {what_instead:?}, why_template: {why:?} }},",
+        )
+        .unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out).unwrap();
+}
+
+fn emit_lint_rules(table: &TomlTable, out: &mut String) {
+    let kind = "lint_rule";
+    let entries = get_entries(table, kind);
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|e| get_str(e, "name", kind, "<unknown>"))
+        .collect();
+    check_no_duplicates(&names, kind);
+
+    writeln!(out, "pub static LINT_RULES: &[crate::LintRuleEntry] = &[").unwrap();
+    for entry in &entries {
+        let name = get_str(entry, "name", kind, "<unknown>");
+        let severity = get_str(entry, "severity", kind, name);
+        // A lint rule is a teaching surface, never a gate: Tier 3 lints are dismissable
+        // suggestions (IMP-linting.md); "error" would let a lint block a compile.
+        if !matches!(severity, "suggestion" | "warning") {
+            panic!(
+                "registry/features.toml: [[{kind}]] entry '{name}': \
+                 severity must be 'suggestion' or 'warning' (a lint is never an error — \
+                 Tier 3 lints are teaching surfaces per IMP-linting.md) — got '{severity}'"
+            );
+        }
+        let description = get_str(entry, "description", kind, name);
+        let what = get_str(entry, "what_template", kind, name);
+        let what_instead = get_str(entry, "what_instead_template", kind, name);
+        let why = get_str(entry, "why_template", kind, name);
+        let since = get_str(entry, "since", kind, name);
+        let design_doc = get_str(entry, "design_doc", kind, name);
+        writeln!(
+            out,
+            "    crate::LintRuleEntry {{ name: {name:?}, severity: {severity:?}, description: {description:?}, what_template: {what:?}, what_instead_template: {what_instead:?}, why_template: {why:?}, since: {since:?}, design_doc: {design_doc:?} }},",
         )
         .unwrap();
     }

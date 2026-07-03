@@ -86,14 +86,14 @@ main done with v0.3-M1
 
 v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):
 scheduling 8 pirates...
-Stargell: done
-Wagner: done
 McCutchen: done
-Bonds: done
-Mazeroski: done
-Clemente: done
-Kiner: done
 Beaumont: done
+Bonds: done
+Kiner: done
+Mazeroski: done
+Wagner: done
+Clemente: done
+Stargell: done
 all 8 pirates done
 
 v0.3-M2 — inferred wait (no explicit wait written):
@@ -150,3 +150,4 @@ latest report: grade: A-
 v0.3-M4 — channels + the background handle-form:
 runs relayed inning by inning: 10
 scout graded jersey 21 at: 42
+inning tally (padded across tasks): 7
