@@ -1789,3 +1789,26 @@ recorded decision ("Handle-drop semantics", ~plan.md:412) and Design-Doc Alignme
 Bookkeeping: session-id `executor-2026-07-03-m4-gate-fix` appended to plan.md's frontmatter chain;
 no phase heading added; no FRAGO filed (per the routing decision above — plain corrections, no
 justified divergence adjudicated).
+
+## Completion-Gate — CLEARED — 2026-07-03 — session-id: conductor
+
+Fix round (commit `273ea20`, `Completion-Gate: 2026-07-02-v0-3-m4-channels-arc-release#fix`) re-verified
+clean: green-check GREEN (real gitleaks, all 6 gates pass), code-reviewer confirmed the
+`lock_or_recover` dedup is a genuine reuse (real import, no shadow re-declaration, no unused-import
+fallout) with 0 findings, deviation-judge independently re-verified the Task-Cancellation
+reconciliation against the zero-`ynz_handle_free`-call-sites evidence again and confirmed all three
+touched sites (design doc + both plan.md spots) now tell one consistent story with 0 unjustified
+strays. Pushed to `origin/main` (graveyard pre-filter false-positive-cleared per usual — deferral-
+language regex, adjudicated clean, both FRAGO 008/009 confirmed already-tracked prior to this
+round).
+
+**Gate resolution: CLEAN.** 0 blockers across both rounds (initial pass + fix-round re-verify). All
+non-blocking findings from the initial pass (1 code-reviewer minor, 3 acceptance-verifier
+should-fix, 1 deviation-judge should-fix) were fixed directly this session rather than deferred —
+none required a durable §9.0.6 home; none were genuine scope-creep. No cross-phase bug PATTERN (as
+opposed to a specific finding) surfaced worth a standalone AAR lesson beyond what the individual
+findings already are.
+
+All seven phases (0-6) of `2026-07-02-v0-3-m4-channels-arc-release` are sealed, reviewed, and
+released as `v0.3.0` (tagged + published: https://github.com/yinzers/yinz-lang/releases/tag/v0.3.0).
+The cumulative cross-phase completion gate is CLEARED. Proceeding to the AAR.
