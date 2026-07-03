@@ -66,12 +66,11 @@ regardless.
    base bug, in todos.md, NOT this plan's to fix).
 
 ## Where the run stands (see plan.md STATUS blocks for truth)
-- Phases 0, 1: DONE + sealed (8bc7cf7, 74ae0b6). Phase 2: **FOUR fix rounds complete, final
-  reviewer verdict CLASS CLOSED, 0 blockers** — seals as the commit carrying trailer
-  `Plan-Phase: 2026-07-03-v0-3-m5-auto-soa#2` (check `git log`; if the commit is absent but the
-  tree is dirty with Phase-2 work + the final green-check was green, the prior session died in
-  the commit window — the audit's Final-review routing note is the review record; seal on its
-  strength rather than re-running the fleet). Phases 3-8: pending.
+- Phases 0, 1, 2: DONE + SEALED — `8bc7cf7`, `74ae0b6`, **`64bf634`** (Phase 2: 57 files,
+  +4036/-598, trailer `Plan-Phase: 2026-07-03-v0-3-m5-auto-soa#2`, final green-check GREEN on a
+  verified-settled tree, reviewer verdict CLASS CLOSED, 0 blockers). Phases 3-8: pending.
+  **Resume point: dispatch Phase 3** (map by-value cut per plan ¶3.3 — carry the step-0 items
+  below + the FRAGO-amended step 4 parity semantics + the step 5 E8-class list).
 - **Phase 2's war story (context for P3+):** the hard-cut ABI landed clean, but the ownership
   contract took FOUR fix rounds to reach its true boundary — "any consumer persisting the element
   pointer past the staging site's next read": bindings + frame-embed (R1), field-assign + ALL
