@@ -1,0 +1,38 @@
+// M5 P2 fix-loop — tripwire cell (b): shape element saved via indexed
+// `arr.get(i)` inside a loop into an outer variable, printed after the loop.
+//
+// Same shared-out-buffer escape class as the for-loop cell, through the
+// get→maybe→`.value` unwrap path: the unwrapped element pointer aliases the
+// per-site out buffer unless the binding copies the bytes into variable-owned
+// storage. Unfixed code prints the LAST iteration's element (3/30), not the
+// matched one (1/10).
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let found: Part = { qty: 0, price: 0 }
+  let i: int = 0
+  while (i < parts.count()) {
+    let m = parts.get(i)
+    if (m.exists()) {
+      let p: Part = m.value
+      if (p.qty == 1) {
+        found = p
+      }
+    }
+    i = i + 1
+  }
+  print(found.qty)
+  print(found.price)
+}

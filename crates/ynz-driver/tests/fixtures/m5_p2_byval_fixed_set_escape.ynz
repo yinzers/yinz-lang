@@ -1,0 +1,42 @@
+// M5 P2 fix round 4 — tripwire (b): same shape-element persist as tripwire
+// (a) but through the `.set()` lexical path (`lower_fixed_method`'s "set"
+// arm) — a distinct marshalling site that must route through the ONE
+// stable-bits choke point (authoritative-derivation: no re-derived
+// marshalling twins). Unfixed: both slots alias the loop binding's reused
+// storage and read the LAST iteration (2/20 for slot 0); golden asserts
+// 1/10 then 2/20.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 }
+  ]
+  let zero: Part = { qty: 0, price: 0 }
+  let pair: fixed<Part> = [zero, zero]
+  let i: int = 0
+  while (i < 2) {
+    let got = parts[i]
+    if (got.exists()) {
+      let cur: Part = got.value
+      pair.set(i, cur)
+    }
+    i = i + 1
+  }
+  let s0 = pair[0]
+  if (s0.exists()) {
+    print(s0.value.qty)
+    print(s0.value.price)
+  }
+  let s1 = pair[1]
+  if (s1.exists()) {
+    print(s1.value.qty)
+    print(s1.value.price)
+  }
+}

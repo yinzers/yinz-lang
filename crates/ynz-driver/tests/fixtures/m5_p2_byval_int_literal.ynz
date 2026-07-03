@@ -1,0 +1,20 @@
+// M5 P2 step 1 — by-value ABI matrix: int × literal elements × full op set (non-suspending).
+// Ops: ArrayLit construct, add, count, index (in-bounds / post-add / OOB), get, first,
+// last, contains (present / absent), set, IndexAssign.
+function entrypoint() -> nothing {
+  let nums: array<int> = [10, 20, 30]
+  nums.add(40)
+  print(nums.count())
+  print(nums[0].or(-1))
+  print(nums[3].or(-1))
+  print(nums[9].or(-1))
+  print(nums.get(1).or(-1))
+  print(nums.first().or(-1))
+  print(nums.last().or(-1))
+  print(nums.contains(30))
+  print(nums.contains(99))
+  nums.set(1, 25)
+  print(nums[1].or(-1))
+  nums[2] = 35
+  print(nums[2].or(-1))
+}

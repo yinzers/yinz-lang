@@ -1,0 +1,32 @@
+// M5 P2 fix-loop — tripwire cell (a): shape element ESCAPING its for-loop
+// iteration into an outer variable, printed after the loop.
+//
+// Locks the get-side out-buffer OWNERSHIP contract: the per-site entry-block out
+// buffer is reused across iterations, so a binding/assignment that outlives the
+// iteration must COPY the element bytes into variable-owned storage. Without that
+// copy, `found` aliases the shared buffer and silently reads the LAST iteration's
+// bytes (differential repro vs the pre-M5 pointer ABI: prints 3/30 instead of 1/10).
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let found: Part = { qty: 0, price: 0 }
+  for (p in parts) {
+    if (p.qty == 1) {
+      found = p
+    }
+  }
+  print(found.qty)
+  print(found.price)
+}

@@ -734,6 +734,21 @@ pub fn emit_expr(e: &Expr, min_bp: u8) -> String {
 
 // ── Type emission ─────────────────────────────────────────────────────────────
 
+/// Close a generic argument list, inserting the space the LEXER requires
+/// between consecutive `>`s: Yinz reads `>>` as ONE token (no C++11-style
+/// maximal-munch split), so `map<string, maybe<Part>>` is a lex error and the
+/// canonical form of a nested generic in final argument position is
+/// `map<string, maybe<Part> >`. Without this, `format(x)` emits source that
+/// does not re-parse (caught by the idempotency suite on the first fixture
+/// with a nested generic annotation, v0.3-M5 P2).
+fn close_generic(name: &str, args_txt: &str) -> String {
+    if args_txt.ends_with('>') {
+        format!("{name}<{args_txt} >")
+    } else {
+        format!("{name}<{args_txt}>")
+    }
+}
+
 pub fn emit_type(ty: &Type) -> String {
     match ty {
         Type::Nothing => "nothing".into(),
@@ -751,10 +766,10 @@ pub fn emit_type(ty: &Type) -> String {
             }
         }
         Type::Named(n, _) => n.clone(),
-        Type::Maybe { inner, .. } => format!("maybe<{}>", emit_type(inner)),
+        Type::Maybe { inner, .. } => close_generic("maybe", &emit_type(inner)),
         Type::Generic { name, args, .. } => {
             let a = args.iter().map(emit_type).collect::<Vec<_>>().join(", ");
-            format!("{name}<{a}>")
+            close_generic(name, &a)
         }
         Type::Union { variants, .. } => variants
             .iter()
@@ -766,7 +781,7 @@ pub fn emit_type(ty: &Type) -> String {
         Type::ErrorCapable { inner, .. } => format!("{} errors", emit_type(inner)),
         Type::Sensitive(inner) => format!("sensitive {}", emit_type(inner)),
         Type::SelfType { .. } => "Self".into(),
-        Type::Range { element, .. } => format!("range<{}>", emit_type(element)),
+        Type::Range { element, .. } => close_generic("range", &emit_type(element)),
         Type::AnonShape { fields, .. } => {
             let fs = fields
                 .iter()

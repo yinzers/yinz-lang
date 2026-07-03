@@ -1,0 +1,73 @@
+// M5 P2 step 1 — by-value ABI matrix: shape × RUNTIME fields × full op set
+// (non-suspending). All field values derive from variables — the exact element class
+// whose pointer-ABI storage is the stack-dangling miscompile the by-value cut fixes
+// (latent here without suspension; see SCRATCH-future-array-by-value-element-storage.md).
+//
+// CONTRACT CELL (RED until P2 step 3): `contains` on array<Shape> asserts VALUE
+// equality (field-wise) — see m5_p2_byval_shape_literal.ynz for the recorded decision.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let qd: int = seed * 4
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let pd: Part = { qty: qd, price: qd * 10 }
+  parts.add(pd)
+  print(parts.count())
+  let m0 = parts[0]
+  if (m0.exists()) {
+    print(m0.value.qty)
+  }
+  let m3 = parts[3]
+  if (m3.exists()) {
+    print(m3.value.price)
+  }
+  let m9 = parts[9]
+  print(m9.exists())
+  let g = parts.get(1)
+  if (g.exists()) {
+    print(g.value.qty)
+  }
+  let f = parts.first()
+  if (f.exists()) {
+    print(f.value.qty)
+  }
+  let l = parts.last()
+  if (l.exists()) {
+    print(l.value.qty)
+  }
+  let cq: int = seed * 2
+  let needlePresent: Part = { qty: cq, price: cq * 10 }
+  print(parts.contains(needlePresent))
+  let aq: int = seed * 9
+  let needleAbsent: Part = { qty: aq, price: 99 }
+  print(parts.contains(needleAbsent))
+  let sq: int = seed * 5
+  parts[1] = { qty: sq, price: sq * 10 }
+  let s1 = parts[1]
+  if (s1.exists()) {
+    print(s1.value.qty)
+  }
+  let tq: int = seed * 6
+  let pt: Part = { qty: tq, price: tq * 10 }
+  parts.set(2, pt)
+  let s2 = parts[2]
+  if (s2.exists()) {
+    print(s2.value.price)
+  }
+  let total: int = 0
+  for (p in parts) {
+    total = total + p.qty
+  }
+  print(total)
+}

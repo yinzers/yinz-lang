@@ -3,7 +3,7 @@ name: "v0-3-m5-auto-soa"
 plan-id: "2026-07-03-v0-3-m5-auto-soa"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5"]
+session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5"]
 created_at: "2026-07-03"
 updated_at: "2026-07-03"
 metadata:
@@ -256,6 +256,24 @@ Governing docs read at plan time; every divergence enumerated as "doc says A; pl
   binding's excluded-models list (Fable returned). Reviewer fleet stays per the frozen
   model-selection binding. Recorded in ¶4/¶5; Model tags below still carry the honest
   `(task-type, quality-bar, scale)` classification for the record and for fallback.
+- **D12 — `contains` on `array<Shape>` = field-wise VALUE equality** (ratified via FRAGO 008,
+  P2-boundary). By-value storage has no pointer-identity substrate, so the migration FORCED a
+  semantics pick; value equality is the golden-rules-consistent one (GR2 —
+  `roster.contains(pirate)` reads as content membership; matches every primitive cell; matches
+  the non-OOP shapes-are-data model). Implemented as per-field GEP compares (`shape_value_eq`,
+  never a padded-bytes memcmp); locked by the two RED shape contract cells. **Pointer-typed
+  fields (string, nested shape) compare by identity for now — deferred to Phase 3 step 5's
+  E8-class review**, which must either ratify identity or extend to deep value equality.
+- **D13 — Field-assign = COPY-ON-PERSIST snapshot semantics** (ratified via FRAGO 011, P2 fix
+  rounds 2–3). Storing a shape (or maybe) value into a persist surface — shape field, map value,
+  array element, background spawn descriptor — SNAPSHOTS the value's bytes at the assignment
+  (counted heap cell / runtime memcpy), where the pre-M5 pointer representation ALIASED (a later
+  mutation of the source stayed visible through the stored reference). A user-visible semantics
+  call, FORCED by the by-value representation (there is no stable pointer to alias), and
+  consistent with D12's value-semantics direction (shapes are data, not identities). Docs home:
+  Phase 7 step 5 alongside D12 — MUST carry the teaching note that TypeScript developers expect
+  aliasing here (objects are references in TS/JS), so the snapshot-at-assign behavior needs an
+  explicit HS-grad-readable spec callout, not a silent divergence.
 
 ## 2. Mission
 
@@ -414,6 +432,85 @@ phases (P2, P5) checkpoint per the marks below.
 
 #### Phase 2 — By-value element storage: hard-cut ABI + full codegen migration
 
+> **STATUS: COMPLETE (2026-07-03).** Segment 1 (session `phase2-executor-2026-07-03-m5`): step 0
+> (FRAGO 007 plan edit) + step 1 (11-fixture RED matrix, 7 green / 4 RED on the contract cells) —
+> checkpointed PARTIAL at the step-1→step-2 boundary. Segment 2 (session
+> `phase2-executor-2026-07-03-m5-seg2`): steps 2–5 — the atomic cut landed (elem_size-aware
+> `YnzArray`, counted alloc + counted growth per FRAGO 005, hard-cut signatures, the
+> `Cg::array_elem_*` choke-point section reading the ONE `shape_abi_sizes` source,
+> `try_build_shape_global` + the SM shape-embed special-case deleted, shape `contains` =
+> field-wise value equality); matrix 11/11 green (all 4 RED contract cells flipped); workspace +
+> full suite green (481/481 integration); E7 grep gates PASS; `audit-array-callsites.md` 100%
+> ticked with per-line dispositions; snapshot churn verified decl-signature-only; dual-mode
+> oracle clean (340 byte-identical, 0 real divergences — the 2 flagged fixtures are the
+> documented Model-A intended-reorder exclusion class, both array-free). **E8 first-look:** the
+> counter now SEES buffers (P0's alloc=0 blindness → non-zero on every array fixture, +2 counted
+> allocs per array); clone→drop pairs balance exactly; the residual alloc-without-free is the
+> PRE-EXISTING never-drop-local-arrays design made visible — surfaced as a deviation, Phase 3
+> step 4's parity gate owns the verdict (see audit.md + the segment-2 return).
+> **Boundary fix-loop (session `phase2-fixloop-executor-2026-07-03-m5`):** code-reviewer BLOCKER
+> fixed — get-side out-buffer aliasing (escaping elements read the LAST iteration's bytes;
+> RED-proven differentially) via the binding-point ownership funnel (emit.rs `store_binding` +
+> `shape_bytes_to_owned` / `maybe_to_owned` / `shape_bytes_into_embed_slot`; S1 entry-block
+> staging preserved); probing found + fixed a second instance (assign to a frame-embedded
+> crossing shape local clobbered its frame wiring — 0/0 for 2/20). 5 RED→GREEN escape tripwire
+> cells + debug-repr fixture added (suite 481→487); FRAGO 008/009 plan-body edits applied (D12,
+> Phase 7 step 5 docs home, Phase 3 steps 3–5 re-specifications); dual-mode oracle re-run clean
+> post-fix — durable tallies in `p2-dualmode-report.md` (349 identical / 84 skip / 0 real
+> divergences; 2 documented intended-divergence exclusions, both array-free; 2 timing-nondet).
+> **Fix round 2 COMPLETE (sessions `phase2-fixround2-executor-2026-07-03-m5` seg 1 +
+> `…-seg2`):** both code-reviewer BLOCKERS fixed at the PERSIST boundary via counted heap cells —
+> `store_field` Shape/Maybe arms (field-assign + struct-lit fields + hidden defaults) +
+> `map_value_to_stable_bits` choke point at ALL FOUR map insert sites; 8 tripwires RED-proven
+> (3/30 unfixed) → GREEN (suite 487→495, all green); clippy/fmt clean; E7 grep gates re-pass
+> (raw `ynz_array_*` only in the choke-point section; map values marshal ONLY through
+> `map_value_to_stable_bits`; `try_build_shape_global` absent); FRAGO 010 paperwork ×3 landed
+> (P3 step 5 item (d) size-derivation twin; `shape_frame_slots` doc corrected; stale fixture WHY
+> fixed); ownership-contract comment now enumerates the full persist boundary; dual-mode oracle
+> re-run clean post-round-2 (445 fixtures: 357 identical / 84 skip / 0 real divergences — same
+> 2 documented DIFFs + 2 timing-nondet; `p2-dualmode-report.md` updated). Stray out-of-scope fix
+> (cheap-gates tier per the conductor's review-economy note): round-2's nested-generic fixture
+> exposed `ynz-fmt` emitting un-reparseable `maybe<Part>>` (lexer has no `>>` split) — fixed via
+> `close_generic` in `crates/ynz-fmt/src/walker.rs` + locked by
+> `nested_generic_keeps_lexer_required_space`. Deviations D-r2-1/2/3 (segment 1) + D-r2-4 (fmt
+> stray) surfaced for the deviation-judge; snapshot churn expected by the dispatch did NOT
+> materialize (no snapshot-covered fixture exercises the new heap-cell path; exact-count alloc
+> asserts unchanged and green — the assertion family itself is the proof).
+> **Fix round 3 COMPLETE (sessions `phase2-fixround3-executor-2026-07-03-m5` seg 1 +
+> `…-seg2`):** both code-reviewer BLOCKERS fixed — (B1) `array<maybe<T>>` element writes:
+> `map_value_to_stable_bits` GENERALIZED to `value_to_stable_bits` (no per-surface twin) and
+> `array_elem_src_ptr`'s non-shape path routed through it (`zext_bits64` extracted;
+> `array_elem_bits64` re-scoped compare-only); (B2) bg spawn maybe args: `prepare_bg_arg_for_ctx`
+> Maybe arm + `BgArgFreeKind::HeapMaybeEnv` (SM descriptor rides wire kind 0, runtime unchanged).
+> Both RED-proven byte-exact → GREEN (suite 495→497, all green; workspace exit 0; 0 pending
+> snapshots — no churn, round-2 precedent held); clippy `-D warnings` + fmt `--check` clean; grep
+> gates re-pass (raw `ynz_array_{new,push,get,set}` only in the choke-point section; ALL
+> maybe/shape persist marshalling through the ONE `value_to_stable_bits` at array writes + all 4
+> map sites; spawn frames heap-upgraded pre-marshal; `try_build_shape_global` present only in
+> historical comments). Dual-mode oracle post-round-3: 447 fixtures, 359 identical / 84 skip /
+> 2 documented DIFFs / 2 timing NONDETs / 0 anomalies / **0 real divergences**
+> (`p2-dualmode-report.md` regenerated). FRAGO 011 paperwork ×3 landed (P3 step 4 third
+> accounting category; D13 recorded; P7 step 5 docs home extended); ownership-contract comment
+> corrected (array-element writes = persist surface; sync-only aliasing args vs spawn
+> descriptors); round-3 residuals routed to P3 step 5 items (e)/(f)/(g). Should-fix 2 (Union
+> arm) NOT shipped — BLOCKED-class, KNOWN HOLE documented in `value_to_stable_bits`, carried as
+> a deviation. NEW deviation surfaced seg-2: probe-confirmed `fixed<Shape>` element-write
+> aliasing (same escape class, fixed<T> uniform-slot surface — see audit.md seg-2 log).
+> **Fix round 4 COMPLETE (session `phase2-fixround4-executor-2026-07-03-m5`):** the round-3
+> closer's surfaced fixed<T> deviation fixed as the SAME persist class — exhaustive i64-GEP
+> census found exactly THREE fixed-slot write sites (IndexAssign, `.set()`, literal fill; all
+> other fixed GEPs read-side), all three rerouted through the ONE `value_to_stable_bits` choke
+> point (no fixed-specific twin; `fixed<maybe<T>>` admission probe-verified — same three sites,
+> covered). 4 tripwires RED-proven byte-exact (2/20 aliasing, 3/30 maybe, 9/90 literal-fill
+> mutation-bleed) → GREEN; suite 497→501 all green, 0 snapshot churn; clippy/fmt clean; grep
+> gate PASS (zero bare `to_i64_bits` at any fixed-element write site); dual-mode oracle
+> spot-run over the 4 new fixtures byte-identical (full re-run declined on the record — changed
+> arms unreachable from every pre-existing fixture); ownership-contract +
+> `value_to_stable_bits` docs extended with the fixed persist surface. NEW enumeration finding
+> (surfaced, not chased): the union KNOWN HOLE extends to `fixed<UnionAlias>` (admission
+> probe-verified via union-typed binding fill) — KNOWN HOLE doc extended, deviation carried.
+> Fixed-crossing-wait verified typeck-guarded (no live door).
+
 - **Task + purpose:** replace the uniform-8-byte-slot pointer storage with elem_size-aware by-value
   inline storage — the scratch doc's Option A — as ONE atomic ABI cut (E7 mitigation 1: no parallel
   old path may survive).
@@ -477,16 +574,82 @@ phases (P2, P5) checkpoint per the marks below.
      **CHECKPOINT** — guard gone, galleries consistent, tree green.
   3. **Crossing-wait acceptance fixture:** runtime-field `array<Shape>` as crossing local / loop var
      across a `wait` prints correct values (the scratch doc's named acceptance signal; E9's B1
-     proof).
+     proof). **Get-side-escape cells across suspension (P2 fix-loop carry):** the P2 boundary
+     locked the escape-the-iteration ownership contract with `m5_p2_byval_*escape*` cells,
+     including the constructible frame-embed half (`m5_p2_byval_shape_escape_wait`); the
+     `maybe<Shape>`-crossing-`wait` sibling is NOT constructible today — typeck's
+     `UnsupportedCrossingLocalType` rejects ANY maybe crossing a suspension (a broader guard than
+     the array-specific one this step lifts) — so whichever step/milestone lands maybe-crossing
+     frame support MUST add the get-maybe payload-across-resume cell in the same change (the
+     payload's owned region is stack storage that dies at suspension; the frame story must carry
+     the payload bytes, not the pointer) AND the SM-path spawn-arg maybe cell (P2 fix round 3's
+     `HeapMaybeEnv` descriptor arm — see step 5 item (g); non-constructible under today's guard
+     for the same reason).
   4. **Alloc=free parity gate (E8):** **Entry criterion (FRAGO 005):** first verify the counter
      demonstrably observes array/map buffer alloc/free — non-zero alloc counts on the array suite,
      vs the P0 baseline's recorded alloc=0 blindness (`baselines-p0.md`). A counter that cannot
      see buffers means the gate FAILS LOUD here — it never passes vacuously. Only once that
-     visibility is proven, gate on parity: `YNZ_ALLOC_COUNTER_OUTPUT` vs the P0 baseline across
-     the array suite. Parity REDs → execute D6's fallback (loud-reject heap-field shapes +
-     contingent `[[diagnostic_template]]`) via FRAGO, never a silent leak.
+     visibility is proven, gate on parity. **Parity SEMANTICS (re-specified per FRAGO 009):** the
+     gate targets E8's ACTUAL target — **"no NEW leak class vs the pointer representation"**:
+     per-element and per-iteration allocation regressions and clone→drop imbalance must be ZERO
+     (D6's own framing). That is DISTINCT from the PRE-EXISTING never-drop-local-arrays design
+     that FRAGO 005's counted visibility merely made visible (+2 counted allocs per array — header
+     + buffer — held until process exit): literal suite-wide `alloc == free` is impossible without
+     a drop story that does not exist, and this gate does not demand it. **THIRD accounting
+     category (FRAGO 011):** the counted PERSIST cells minted by the P2 fix rounds 2–3
+     (`store_field` shape/maybe cells, `value_to_stable_bits` map-insert + array-maybe-element
+     cells, `prepare_bg_arg_for_ctx` spawn-descriptor cells) are
+     **accounted-and-deferred-to-drop-story** — deliberate alloc-without-free by design (eager
+     free dangles shallow-copy siblings; `ynz_map_drop` never freed value cells pre-M5 either,
+     lib.rs:1086-1092). They are NOT a parity RED under this gate's "no NEW leak class"
+     semantics; the re-set-over-a-key leak (+1 never-freed counted cell per overwrite vs the
+     pointer repr) is ASSIGNED to this step's / step 5's drop-story verdict, and the persist gap
+     is pinned EXACT-COUNT (same mutation-proof-teeth discipline as the interim array-gap helper
+     below) so any drift from the deliberate class fails loud. **The P2 test helper's
+     `alloc == free + 2×arrays` encoding (`m3d_assert_fires_byte_identical_alloc_gap`,
+     integration.rs) is RATIFIED as INTERIM** — pinning the exact gap keeps mutation-proof teeth —
+     pending this step's verdict; the drop-insertion-vs-D6-fallback verdict stays THIS step's to
+     make. Parity (in the re-specified sense) REDs → execute D6's fallback (loud-reject heap-field
+     shapes + contingent `[[diagnostic_template]]`) via FRAGO, never a silent leak.
   5. **Suspension/ownership adversarial sweep:** arrays × `wait` × `background` (give/copy) ×
      `.copy()` on the by-value substrate — the AoS half of E9's matrix — dual-mode byte-identical.
+     **E8-class review items (FRAGO 008 carry + P2 fix-loop observations):** (a) D12's
+     pointer-typed-fields-by-identity question — `shape_value_eq` compares string/nested-shape
+     fields by pointer identity; ratify identity or extend to deep value equality (heap-field
+     shapes are the scratch doc's Risk-3 class this sweep owns); (b) shape values stored into
+     shape FIELDS (`s.part = elem`) still store pointers — the get-side escape-copy discipline
+     (emit.rs `store_binding`) covers variable bindings only *(STATUS, P2 fix round 2: the
+     mechanism half is FIXED — `store_field` now clones shape/maybe bytes into counted heap
+     cells, tripwired `m5_p2_byval_*field*escape`; what remains for this sweep is the ownership
+     half — the deliberate alloc-without-free-per-persist class, incl. re-set-over-a-map-key
+     leaking the old cell — reviewed under step 4's parity semantics, deviation D-r2-2 pending
+     judgment)*; (c) map iteration `MapEntry` bindings
+     alias a per-site entry slot (same reuse class store_binding fixed for arrays) — cover it in
+     step 1's map matrix escape cells; (d) **size-derivation twin (FRAGO 010)** — the SM Let
+     embed memcpy (and the `bind_sm_result_and_flush` flush) size shape copies from
+     `struct_ty.size_of()` (emit.rs, SM shape-embed Let arm) while `shape_frame_slots` and the
+     array/map elem-size choke points read the precomputed `shape_abi_sizes`
+     (`TargetData::get_abi_size`) — two derivations of the same size question with no
+     compile-time link; unify onto `shape_abi_sizes` or add a compile-time parity link per
+     authoritative-derivation §3; (e) **union persist marshalling — the KNOWN HOLE in
+     `value_to_stable_bits` (P2 fix round 3)**: union repr is NON-uniform (a `{i64 tag, i64
+     data}` tagged struct from the annotated-Let ctor, but a NULL pointer for the `T | nothing`
+     none case), so no blind clone is correct — a 16-byte clone segfaults on the null repr and
+     still persists the interior stack payload pointer; unobservable today (no fixture can
+     construct a union persisting through the choke points), documented in the helper's doc —
+     CLOSE it when union narrowing improves enough to construct the case, or gate the type
+     (loud-reject unions at persist surfaces) if this sweep can construct it; (f)
+     **contains-on-maybe raw envelope-pointer compare (pre-existing, NON-persist)**: the
+     contains loop marshals the maybe target's raw envelope bits via the compare-only
+     `array_elem_bits64` — consumed in place, no escape, but bit-identity compare on a maybe
+     envelope was semantically questionable pre-M5 too; ratify or fix alongside item (a)'s
+     equality verdict; (g) **spawn-arg maybe coverage boundary (P2 fix round 3)**: step 3's
+     maybe-crossing tripwire obligation ALSO names the SPAWN-ARG maybe case — the
+     `BgArgFreeKind::HeapMaybeEnv` SM-descriptor arm is protocol-identical to the
+     HeapShape-tested wire kind 0 but has NO direct fixture (a maybe param crossing the callee's
+     own `wait` is rejected by `UnsupportedCrossingLocalType` today; a read-before-wait variant
+     is racy-RED, a weak tripwire); whichever change lands maybe-crossing frame support MUST add
+     the SM-path spawn-arg maybe cell alongside step 3's get-maybe payload-across-resume cell.
 - **Exit criteria:** `map<K,Shape>` fix green with its RED matrix + map grep gate passing (E12);
   guard + registry deferral gone; IMP-concurrency updated; parity green; crossing-wait fixture
   green; sweep green.
@@ -614,6 +777,17 @@ phases (P2, P5) checkpoint per the marks below.
      "Array element storage — by-value inline (v0.3-M5)" and "Auto-SoA layout" sections (decisions,
      rejected alternatives, the E10 serialization forward-compat layout-metadata note); trim both
      SCRATCH docs to pointers per docs-checklist; update `docs/README.md` index rows.
+     **Shape-contains docs home (FRAGO 008) + persist-semantics docs home (FRAGO 011):** the
+     IMP-collections by-value section OWNS decision D12 (`contains` on `array<Shape>` = field-wise
+     value equality) including the rejected alternatives (pointer identity — no by-value analogue;
+     padded memcmp — compares garbage pad bytes), AND decision D13 (field-assign = copy-on-persist
+     snapshot semantics across all persist surfaces: shape fields, map values, array elements,
+     spawn descriptors) including the TS-aliasing teaching note (TS/JS objects are references and
+     alias on assignment; Yinz by-value shapes SNAPSHOT at the assignment — spell this out in
+     HS-grad wording, it is the single most surprising divergence for the target audience).
+     RECONCILE the user-facing REF home: `REF-collections.md:152` documents only the
+     predicate-form `.contains(fn)` — the value-form shape-contains semantics is a pre-existing
+     spec/impl divergence that needs a named REF owner there (HS-grad wording per spec-writing.md).
 - **Exit criteria:** registry round-trips (`schema_smoke`); `jargon_audit.rs` green; VSCode artifact
   builds; docs land per [`docs-checklist.md`](../../../rules/docs-checklist.md).
 - **Reviewer fan-out:** docs-consistency reviewer (hover text vs Golden Rule 11/12 + vocabulary);
@@ -673,8 +847,11 @@ phases (P2, P5) checkpoint per the marks below.
   `audit.md` for the full reasoning.
 - **CCIR — the executor must surface immediately, mid-flight:**
   1. **Recon drift:** any ¶1 file:line cite that no longer matches reality at phase start (recon ran
-     against uncommitted M4 P4; v0.3.0 will have moved lines). Re-verify cites at dispatch; a
-     load-bearing mismatch → surface before building on it.
+     against uncommitted M4 P4; v0.3.0 will have moved lines). Every phase re-verifies its file:line
+     cites against **THE WORKTREE'S OWN state** at dispatch — never main's working tree, which is a
+     different, moving document (FRAGO 007). An anchor that resolves only in main's uncommitted copy
+     is a BLOCKED-class mismatch to surface, never to self-remediate; any other load-bearing mismatch
+     → surface before building on it.
   2. **Any second derivation:** finding yourself re-computing a layout/admission/suspend answer a
      query already owns → STOP, thread the authoritative source or surface the blocker
      ([`authoritative-derivation.md`](../../../rules/authoritative-derivation.md)).

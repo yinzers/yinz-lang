@@ -47,10 +47,19 @@ pub struct RuntimeDecls<'ctx> {
     // Heap deallocator (M4): (ptr: *mut u8, size: usize) → void
     pub ynz_free: FunctionValue<'ctx>,
 
-    // Array runtime (M5 P4a) — all operate on the heap YnzArray header pointer.
+    // Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) — all operate
+    // on the heap YnzArray header pointer. Element loads/stores go through byte
+    // pointers (`*const u8` src / `*mut u8` out) sized by the header's elem_size;
+    // codegen routes EVERY new/push/get/set call through the `Cg::array_elem_*`
+    // choke-point helpers in emit.rs (authoritative-derivation).
+    // ynz_array_new(elem_size: i64) -> ptr
     pub ynz_array_new: FunctionValue<'ctx>,
+    // ynz_array_push(ptr arr, ptr src) -> void — memcpys elem_size bytes from src
     pub ynz_array_push: FunctionValue<'ctx>,
+    // ynz_array_get(ptr arr, i64 idx, ptr out) -> i64 has-flag — memcpys elem_size
+    // bytes into out on hit; zeroes out on OOB
     pub ynz_array_get: FunctionValue<'ctx>,
+    // ynz_array_set(ptr arr, i64 idx, ptr src) -> void — aborts on OOB
     pub ynz_array_set: FunctionValue<'ctx>,
     pub ynz_array_count: FunctionValue<'ctx>,
     pub ynz_array_drop: FunctionValue<'ctx>,
@@ -364,23 +373,25 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 void.fn_type(&[ptr.into(), i64.into()], false),
             ),
 
-            ynz_array_new: declare_fn(module, "ynz_array_new", ptr.fn_type(&[], false)),
+            // ynz_array_new: (i64 elem_size) -> ptr
+            ynz_array_new: declare_fn(module, "ynz_array_new", ptr.fn_type(&[i64.into()], false)),
+            // ynz_array_push: (ptr arr, ptr src) -> void
             ynz_array_push: declare_fn(
                 module,
                 "ynz_array_push",
-                void.fn_type(&[ptr.into(), i64.into()], false),
+                void.fn_type(&[ptr.into(), ptr.into()], false),
             ),
-            // ynz_array_get: (ptr arr, i64 idx, ptr out) -> void
+            // ynz_array_get: (ptr arr, i64 idx, ptr out) -> i64 has-flag
             ynz_array_get: declare_fn(
                 module,
                 "ynz_array_get",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+                i64.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
             ),
-            // ynz_array_set: (ptr arr, i64 idx, i64 value) -> void
+            // ynz_array_set: (ptr arr, i64 idx, ptr src) -> void
             ynz_array_set: declare_fn(
                 module,
                 "ynz_array_set",
-                void.fn_type(&[ptr.into(), i64.into(), i64.into()], false),
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
             ),
             ynz_array_count: declare_fn(
                 module,

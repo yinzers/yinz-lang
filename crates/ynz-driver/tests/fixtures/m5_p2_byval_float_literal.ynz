@@ -1,0 +1,38 @@
+// M5 P2 step 1 — by-value ABI matrix: float × literal-derived elements × full op set
+// (non-suspending). Floats are seeded via .toFloat() from int literals — the direct
+// decimal-literal-to-float coercion (`let x: float = 1.5`) is a known, deferred base
+// miscompile (see spike-notes/s1_verdict.md "Pre-existing base bug"); .toFloat() is the
+// suite's established idiom and keeps the float element round-trip fully exercised.
+function entrypoint() -> nothing {
+  let i10: int = 10
+  let i20: int = 20
+  let i30: int = 30
+  let i40: int = 40
+  let f10: float = i10.toFloat()
+  let f20: float = i20.toFloat()
+  let f30: float = i30.toFloat()
+  let f40: float = i40.toFloat()
+  let vals: array<float> = [f10, f20, f30]
+  vals.add(f40)
+  let iNeg: int = -1
+  let fNeg: float = iNeg.toFloat()
+  print(vals.count())
+  print(vals[0].or(fNeg))
+  print(vals[3].or(fNeg))
+  print(vals[9].or(fNeg))
+  print(vals.get(1).or(fNeg))
+  print(vals.first().or(fNeg))
+  print(vals.last().or(fNeg))
+  print(vals.contains(f30))
+  let i99: int = 99
+  let f99: float = i99.toFloat()
+  print(vals.contains(f99))
+  let i25: int = 25
+  let f25: float = i25.toFloat()
+  vals.set(1, f25)
+  print(vals[1].or(fNeg))
+  let i35: int = 35
+  let f35: float = i35.toFloat()
+  vals[2] = f35
+  print(vals[2].or(fNeg))
+}

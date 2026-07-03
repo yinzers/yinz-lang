@@ -1,0 +1,50 @@
+// M5 P0 S1 spike fixture — by-value element storage for array<Shape>.
+// Shape has {int, float} fields; ALL field values are runtime-computed (derived from
+// variables, never compile-time-constant-foldable struct literals) so the pointer-ABI
+// const-global fold cannot kick in and the by-value prototype path is genuinely
+// exercised end to end:
+//   construct (ArrayLit -> byval new+push), set (IndexAssign -> byval set),
+//   get (for-loop element reads -> byval get into a stack out-buffer).
+// Differential contract: stdout must be byte-identical between the unmodified
+// pointer-ABI compiler and the YNZ_SPIKE_BYVAL=1 spike build.
+//
+// NOTE (pre-existing base bug, surfaced to conductor in the P0 return): float values
+// are seeded via `.toFloat()` — the fixtures' established idiom — because decimal-
+// literal-to-float coercion (`let x: float = 1.5`) is miscompiled on main: typeck
+// types the literal Float (check.rs:2198-2199) but codegen's NumberLit arm always
+// lowers a decimal128 i128 alloca (emit.rs:12370-12402), yielding ~0.0 at runtime.
+// The .toFloat()-seeded floats are real runtime f64 values, so the float-field
+// byval round-trip is still fully proven.
+shape Part {
+  qty: int
+  price: float
+}
+
+function entrypoint() -> nothing {
+  let baseQty: int = 10
+  let qtyA: int = baseQty + 1
+  let qtyB: int = baseQty + 2
+  let qtyC: int = baseQty + 3
+  let priceAInt: int = qtyA * 3
+  let priceBInt: int = qtyB * 3
+  let priceCInt: int = qtyC * 3
+  let priceA: float = priceAInt.toFloat()
+  let priceB: float = priceBInt.toFloat()
+  let priceC: float = priceCInt.toFloat()
+  let parts: array<Part> = [
+    { qty: qtyA, price: priceA },
+    { qty: qtyB, price: priceB },
+    { qty: qtyC, price: priceC }
+  ]
+  let qtyS: int = baseQty * 10
+  let priceSInt: int = qtyS * 7
+  let priceS: float = priceSInt.toFloat()
+  parts[1] = { qty: qtyS, price: priceS }
+  let totalQty: int = 0
+  for (p in parts) {
+    totalQty = totalQty + p.qty
+    print(p.qty.toString())
+    print(p.price.toString())
+  }
+  print(totalQty.toString())
+}

@@ -1,0 +1,39 @@
+// M5 P2 step 1 — by-value ABI matrix: float × runtime-computed elements × full op set
+// (non-suspending). Float values derive from runtime int arithmetic via .toFloat()
+// (decimal-literal float coercion is a known, deferred pre-existing miscompile — s1_verdict.md).
+function entrypoint() -> nothing {
+  let seed: int = 5
+  let ia: int = seed * 2
+  let ib: int = seed * 4
+  let ic: int = seed * 6
+  let id: int = seed * 8
+  let fa: float = ia.toFloat()
+  let fb: float = ib.toFloat()
+  let fc: float = ic.toFloat()
+  let fd: float = id.toFloat()
+  let vals: array<float> = [fa, fb, fc]
+  vals.add(fd)
+  let iNeg: int = 0 - seed
+  let fNeg: float = iNeg.toFloat()
+  print(vals.count())
+  print(vals[0].or(fNeg))
+  print(vals[3].or(fNeg))
+  print(vals[9].or(fNeg))
+  print(vals.get(1).or(fNeg))
+  print(vals.first().or(fNeg))
+  print(vals.last().or(fNeg))
+  let iPresent: int = seed * 6
+  let fPresent: float = iPresent.toFloat()
+  print(vals.contains(fPresent))
+  let iAbsent: int = seed * 99
+  let fAbsent: float = iAbsent.toFloat()
+  print(vals.contains(fAbsent))
+  let iSet: int = seed * 5
+  let fSet: float = iSet.toFloat()
+  vals.set(1, fSet)
+  print(vals[1].or(fNeg))
+  let iSet2: int = seed * 7
+  let fSet2: float = iSet2.toFloat()
+  vals[2] = fSet2
+  print(vals[2].or(fNeg))
+}

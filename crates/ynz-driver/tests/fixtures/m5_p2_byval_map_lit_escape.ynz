@@ -1,0 +1,33 @@
+// M5 P2 fix round 2 — tripwire (c): shape element persisted through a MAP
+// LITERAL entry (backtick-key MapLit path) built inside the loop from the loop
+// variable. The literal marshals the value exactly like `.set()` — unfixed it
+// stores the reused staging pointer and reads last-iteration bytes after the
+// loop.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let zero: Part = { qty: 0, price: 0 }
+  let picks: map<string, Part> = { `pick`: zero }
+  for (p in parts) {
+    if (p.qty == 1) {
+      picks = { `pick`: p }
+    }
+  }
+  let got = picks[`pick`]
+  if (got.exists()) {
+    print(got.value.qty)
+    print(got.value.price)
+  }
+}

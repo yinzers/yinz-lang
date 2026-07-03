@@ -1,0 +1,28 @@
+// M5 P2 step 1 — by-value ABI matrix: int × runtime-computed elements × full op set
+// (non-suspending). Element values derive from variables so no constant fold applies.
+function entrypoint() -> nothing {
+  let seed: int = 10
+  let a: int = seed + 0
+  let b: int = seed * 2
+  let c: int = seed * 3
+  let nums: array<int> = [a, b, c]
+  let d: int = seed * 4
+  nums.add(d)
+  print(nums.count())
+  print(nums[0].or(-1))
+  print(nums[3].or(-1))
+  print(nums[9].or(-1))
+  print(nums.get(1).or(-1))
+  print(nums.first().or(-1))
+  print(nums.last().or(-1))
+  let present: int = seed * 3
+  let absent: int = seed * 99
+  print(nums.contains(present))
+  print(nums.contains(absent))
+  let newVal: int = seed * 2 + 5
+  nums.set(1, newVal)
+  print(nums[1].or(-1))
+  let newVal2: int = seed * 3 + 5
+  nums[2] = newVal2
+  print(nums[2].or(-1))
+}

@@ -1,0 +1,39 @@
+// M5 P2 fix round 2 — tripwire (b3): a maybe<Shape> ENVELOPE persisted as a
+// MAP VALUE (`map<string, maybe<Part> >` — nested generic needs the space).
+// The value bits are ptr_to_int(per-site envelope), reused every iteration —
+// locks the map marshalling choke point's Maybe arm (heap-cloned envelope +
+// payload per insertion).
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let empty: maybe<Part> = parts[9]
+  let picks: map<string, maybe<Part> > = { `pick`: empty }
+  let i: int = 0
+  while (i < 3) {
+    let cur: maybe<Part> = parts[i]
+    if (i == 0) {
+      picks.set(`pick`, cur)
+    }
+    i = i + 1
+  }
+  let entry = picks[`pick`]
+  if (entry.exists()) {
+    let got: maybe<Part> = entry.value
+    if (got.exists()) {
+      print(got.value.qty)
+      print(got.value.price)
+    }
+  }
+}

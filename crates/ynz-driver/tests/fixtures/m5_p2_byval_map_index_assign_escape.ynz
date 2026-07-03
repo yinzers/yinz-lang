@@ -1,0 +1,32 @@
+// M5 P2 fix round 2 — tripwire (b2): same map-value escape through the
+// INDEX-ASSIGN lexical path (`picks[key] = p`) — a distinct marshalling site
+// from `.set()`; both must route through the ONE stable-bits choke point
+// (authoritative-derivation: no re-derived marshalling twins).
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let zero: Part = { qty: 0, price: 0 }
+  let picks: map<string, Part> = { `pick`: zero }
+  for (p in parts) {
+    if (p.qty == 1) {
+      picks[`pick`] = p
+    }
+  }
+  let got = picks[`pick`]
+  if (got.exists()) {
+    print(got.value.qty)
+    print(got.value.price)
+  }
+}

@@ -1,0 +1,40 @@
+// M5 P2 fix-loop — array debug representation fixture (acceptance-verifier
+// should-fix): `print(array)` is legal (typeck lists BuiltinArray as printable)
+// and the repr walker was migrated to the by-value choke points
+// (audit-array-callsites.md "Array debug representation"), but no test exercised
+// it. One print per element type, including a shape array — locks the repr path
+// against the elem_size-aware ABI.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let a: int = seed * 5
+  let b: int = seed * 6
+  let c: int = seed * 7
+  let nums: array<int> = [a, b, c]
+  print(nums)
+  let n: int = 7
+  let t1: boolean = n > 3
+  let f1: boolean = n > 100
+  let flags: array<boolean> = [t1, f1]
+  print(flags)
+  let fa: float = a.toFloat()
+  let fb: float = b.toFloat()
+  let vals: array<float> = [fa, fb]
+  print(vals)
+  let suffix: string = `-x`
+  let sa: string = `alpha${suffix}`
+  let sb: string = `beta${suffix}`
+  let names: array<string> = [sa, sb]
+  print(names)
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 }
+  ]
+  print(parts)
+}

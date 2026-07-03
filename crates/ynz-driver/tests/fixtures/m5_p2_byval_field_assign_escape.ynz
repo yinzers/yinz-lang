@@ -1,0 +1,37 @@
+// M5 P2 fix round 2 — tripwire (a): shape element persisted into a SHAPE FIELD
+// (`holder.best = p` inside the loop), read after the loop.
+//
+// Locks the persist-boundary half of the get-side ownership contract: the field
+// cell is an 8-byte pointer cell, so a plain store persists the per-site staging
+// pointer past the site's next read — the field silently reads the LAST
+// iteration's bytes (unfixed observed 3/30; golden asserts the matched 1/10).
+// Fixed: `store_field` clones the shape bytes into a counted heap cell.
+shape Part {
+  qty: int
+  price: int
+}
+
+shape Holder {
+  best: Part
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let zero: Part = { qty: 0, price: 0 }
+  let holder: Holder = { best: zero }
+  for (p in parts) {
+    if (p.qty == 1) {
+      holder.best = p
+    }
+  }
+  print(holder.best.qty)
+  print(holder.best.price)
+}

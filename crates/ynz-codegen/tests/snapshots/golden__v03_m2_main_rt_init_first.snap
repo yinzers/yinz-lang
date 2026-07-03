@@ -1,6 +1,6 @@
 ---
 source: crates/ynz-codegen/tests/golden.rs
-assertion_line: 859
+assertion_line: 871
 expression: ir
 ---
 ; ModuleID = 'ynz-v03m2_rt_init_first.ynz'
@@ -63,13 +63,13 @@ declare ptr @ynz_alloc_zeroed(i64)
 
 declare void @ynz_free(ptr, i64)
 
-declare ptr @ynz_array_new()
+declare ptr @ynz_array_new(i64)
 
-declare void @ynz_array_push(ptr, i64)
+declare void @ynz_array_push(ptr, ptr)
 
-declare void @ynz_array_get(ptr, i64, ptr)
+declare i64 @ynz_array_get(ptr, i64, ptr)
 
-declare void @ynz_array_set(ptr, i64, i64)
+declare void @ynz_array_set(ptr, i64, ptr)
 
 declare i64 @ynz_array_count(ptr)
 

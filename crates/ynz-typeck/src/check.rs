@@ -8091,13 +8091,16 @@ fn find_let_initializer_in_stmts<'a>(stmts: &'a [Stmt], target: &str) -> Option<
     None
 }
 
-/// Returns `true` if `expr` is a struct-element field value that codegen can fold into
-/// a stable LLVM module-level global via `try_build_shape_global`. Only `IntLit` and
-/// `BoolLit` are handled by that function — all other forms produce a stack alloca that
-/// dangles after suspension.
+/// Returns `true` if `expr` is an `IntLit`/`BoolLit` struct-element field value — the
+/// carve-out class of the interim `ArrayShapeRuntimeFieldWithWait` guard.
 ///
-/// This predicate mirrors `try_build_shape_global`'s match arms exactly so the guard
-/// fires for precisely the cases that would otherwise silently miscompile.
+/// HISTORY: this predicate originally mirrored codegen's `try_build_shape_global`
+/// match arms (the module-global fold for all-literal-field SM array<Shape> elements).
+/// That fold was DELETED by the v0.3-M5 P2 by-value ABI cut — shape element bytes now
+/// live inline in the heap buffer, so runtime-field elements no longer dangle and this
+/// guard's entire rejection class is obsolete. The guard (and this predicate with it)
+/// is scheduled for removal in M5 Phase 3 step 2 ("Lift ArrayShapeRuntimeFieldWithWait");
+/// until then it keeps its pre-M5 behavior so the lift lands as one reviewed change.
 fn expr_is_compile_time_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::IntLit(_, _) | Expr::BoolLit(_, _))
 }

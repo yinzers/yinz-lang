@@ -4617,18 +4617,23 @@ fn v03_m3a_p3_audit_map_nested_wait_field_rejected() {
 #[test]
 fn v03_m3a_p3_audit_array_number_sm_no_leak() {
     // WHY: guards the round-3 decimal128 heap-per-element leak. NumberLit elements in an
-    // SM array<number> now use module-level LLVM globals (eternal, alloc=0 per element).
-    // Before fix: alloc=N+1/free=1 (1 elem→2, 3→4, 5→6). After: alloc=1/free=1 always.
-    // Mutation proof: changing build_decimal_global back to ynz_alloc makes this fail.
+    // SM array<number> use module-level LLVM globals (eternal, alloc=0 per element).
+    // The guarded invariant is ELEMENT-COUNT INDEPENDENCE: total allocs never scale
+    // with N. Since the v0.3-M5 P2 by-value ABI, the array's header+buffer route
+    // through the COUNTED ynz_alloc (FRAGO 005), so the constant is alloc=3
+    // (task frame + array header + element buffer) / free=1 (frame; local arrays are
+    // not yet dropped — Phase 3's E8 parity gate owns the drop story).
+    // Mutation proof: changing build_decimal_global back to ynz_alloc pushes
+    // alloc to 3+N and fails the exact-count assert.
     let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m3a_p3_audit_array_number_no_leak.ynz");
     assert_eq!(
-        alloc, free,
-        "array<number> in SM function must have alloc==free (no decimal128 element leak); \
-         alloc={alloc}, free={free}"
+        alloc, 3,
+        "exactly 3 allocs (task frame + array header + buffer) for array<number> SM \
+         function — any growth with element count = decimal128 element leak; got alloc={alloc}"
     );
     assert_eq!(
-        alloc, 1,
-        "exactly 1 alloc (task frame) for array<number> SM function; got alloc={alloc}"
+        free, 1,
+        "exactly 1 free (task frame) for array<number> SM function; got free={free}"
     );
 }
 
@@ -4639,11 +4644,11 @@ fn v03_m3a_p3_for_shape_loop_var_survives_wait() {
     // WHY: guards the shape-embed loop-var fix (round-5 FIX 2). Before the fix,
     // `flush_for_loop_var` fell to the else-branch and stored the stack-alloca pointer
     // as i64 in the frame slot — every per-run address gave different garbage output
-    // (ASLR-varying: 140733642878985 / 140722360947977). After the fix, struct-literal
-    // elements in SM array<Shape> are emitted as module-level LLVM globals (static
-    // lifetime) so ynz_array_get returns a stable address; the loop-var binding then
-    // memcpies the struct bytes into the pre-wired frame region. Field values survive
-    // any number of resume calls with no per-run variance.
+    // (ASLR-varying: 140733642878985 / 140722360947977). Since the v0.3-M5 P2 by-value
+    // ABI, shape element BYTES live inline in the heap array buffer and ynz_array_get
+    // memcpys them DIRECTLY into the pre-wired frame region (the interim
+    // module-global mechanism this test originally locked was deleted with the cut).
+    // Field values survive any number of resume calls with no per-run variance.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_shape_loop_var.ynz"));
     assert_eq!(
         code, 0,
@@ -4658,19 +4663,22 @@ fn v03_m3a_p3_for_shape_loop_var_survives_wait() {
 
 #[test]
 fn v03_m3a_p3_for_shape_loop_var_alloc_one() {
-    // WHY: GR8 invariant — array<Shape> loop var must use ONE ynz_alloc (the task frame).
-    // Struct-literal elements are module-level LLVM globals (no ynz_alloc calls); the
-    // heap YnzArray uses raw malloc (not counted). alloc=1/free=1 proves zero per-element
-    // or per-iteration extra allocation. Regression: converting globals back to ynz_alloc
-    // would push alloc=3/free=1 (2 struct elements + 1 frame).
+    // WHY: GR8 invariant — an array<Shape> loop var must add ZERO per-element and
+    // per-iteration allocations. Since the v0.3-M5 P2 by-value ABI, shape element
+    // BYTES live inline in the (counted, FRAGO 005) array buffer — no per-element
+    // globals or heap copies — so the constant is alloc=3 (task frame + array
+    // header + element buffer) / free=1 (frame; local arrays are not yet dropped —
+    // Phase 3's E8 parity gate owns the drop story). Regression: a per-element or
+    // per-iteration heap copy pushes alloc past 3 and fails the exact-count assert.
     let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m3a_p3_for_shape_loop_var.ynz");
     assert_eq!(
-        alloc, 1,
-        "array<Shape> loop var must use ONE ynz_alloc (frame only); got alloc={alloc}"
+        alloc, 3,
+        "array<Shape> loop var must use exactly 3 allocs (frame + array header + \
+         buffer, element-count-independent); got alloc={alloc}"
     );
     assert_eq!(
-        free, alloc,
-        "alloc/free must be balanced for array<Shape> loop var; alloc={alloc}, free={free}"
+        free, 1,
+        "exactly 1 free (task frame) for array<Shape> loop var; got free={free}"
     );
 }
 
@@ -5481,6 +5489,63 @@ fn m3d_assert_fires_n_byte_identical_alloc_free(
     );
 }
 
+/// `m3d_assert_fires_byte_identical_alloc_free` for fixtures that construct heap ARRAYS.
+///
+/// Since the v0.3-M5 P2 by-value ABI, array header+buffer allocations route through the
+/// COUNTED `ynz_alloc` (FRAGO 005 — the E8 gate must see element buffers; they were
+/// invisible raw malloc before, `baselines-p0.md` scope fact). Local arrays are not yet
+/// dropped at scope exit (pre-existing design; the drop story is Phase 3's E8 parity
+/// gate), so an array-building fixture legitimately shows `alloc == free + gap` where
+/// `gap` = 2 × (arrays constructed): one header + one buffer each, held until process
+/// exit. Pinning the exact gap keeps the mutation-proof teeth: a per-element or
+/// per-iteration allocation regression (or a new frame leak) changes the gap.
+fn m3d_assert_fires_byte_identical_alloc_gap(
+    fixture_name: &str,
+    expected_stdout: &str,
+    expected_array_alloc_gap: u64,
+) {
+    let src = fixture(fixture_name);
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        expected_stdout,
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        2,
+        "the CPU group must FIRE with 2 spawn calls (one per member; \
+         0 = silently declined to sequential); IR:\n{ir}"
+    );
+
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert_eq!(
+        alloc,
+        free + expected_array_alloc_gap,
+        "alloc must equal free + {expected_array_alloc_gap} (the fixture's array \
+         header+buffer allocs, counted since M5 P2 and held until process exit; any \
+         other gap = a frame/ctx leak or a per-element allocation regression); \
+         alloc={alloc}, free={free}"
+    );
+}
+
 /// Strip the per-build tmpdir source path from a runtime-error line so two builds of the same
 /// fixture (each in its own tmpdir) produce comparable diagnostics. The path appears once, in
 /// the `at <path>:line:col` clause; everything else (the WHAT/WHY body) is path-independent.
@@ -5791,7 +5856,7 @@ fn v03_m3d_return_class_array_fires_byte_identical() {
     // WHY: an `array<int>`-returning CPU pair. Output asserts the element counts
     // (order-independent — no interleaving-dependent assertion). Asserts FIRE +
     // byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_array.ynz", "3\n4");
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_return_class_array.ynz", "3\n4", 4);
 }
 
 #[test]
@@ -6105,7 +6170,7 @@ fn v03_m3d_same_callee_array_distinct_values() {
     // WHY: same callee `buildArr`, args 3 and 4 → element counts 3 and 4 (distinct, order-
     // independent). Proves same-callee members bind separate `array<int>` values. FIRE +
     // byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_array.ynz", "3\n4");
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_array.ynz", "3\n4", 4);
 }
 
 #[test]
@@ -7378,7 +7443,7 @@ fn v03_m3d_danger_array_match_arm_fires_byte_identical() {
     // WHY: a heap-pointer return (`array<int>`) packed inside a `match` arm. Same pointer-slot
     // risk as the string-if-arm cell, but in match-arm frame machinery and with the counts read
     // inside the arm (so the int counts, not the array pointers, cross the arm boundary).
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_array_match_arm.ynz", "3\n5");
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_array_match_arm.ynz", "3\n5", 4);
 }
 
 #[test]
@@ -7440,9 +7505,10 @@ fn v03_m3d_danger_same_callee_array_if_arm_fires_byte_identical() {
     // WHY: same-callee distinctness with a heap-pointer (`array<int>`) return INSIDE an `if` arm.
     // The member-index slot keying must hold for a pointer pack in nested control flow; the two
     // calls give DIFFERENT counts (3, 6).
-    m3d_assert_fires_byte_identical_alloc_free(
+    m3d_assert_fires_byte_identical_alloc_gap(
         "v0_3_m3d_danger_same_callee_array_if_arm.ynz",
         "3\n6",
+        4,
     );
 }
 
@@ -9978,4 +10044,425 @@ fn v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output() {
         seq_ir.contains("{ i64, i64 }"),
         "--no-auto-parallel must still lower the shape (natural two-int layout expected)"
     );
+}
+
+// ── M5 P2 step 1: by-value element-storage RED matrix ────────────────────────
+//
+// Per-type × per-operation acceptance matrix for the elem_size-aware by-value
+// YnzArray ABI (plan 2026-07-03-v0-3-m5-auto-soa, Phase 2). Each fixture
+// exercises the full non-suspending op set: ArrayLit construct, add, count,
+// index (in-bounds / post-add / OOB), get, first, last, contains, set,
+// IndexAssign. Goldens were captured against the pre-migration pointer ABI
+// where its behavior is already correct (behavior-preservation cells) and
+// hand-derived where it is not (contract cells, RED today):
+//
+//   RED-today cells this matrix locks (expected-fail until P2 step 3):
+//   1. boolean arrays MISCOMPILE entirely on the pointer ABI — ArrayLit push /
+//      set / contains emit raw i1 into the i64 ABI slot (LLVM verify failure:
+//      "Call parameter type does not match function signature" on
+//      @ynz_array_push). The by-value choke-point (to_i64_bits staging) fixes
+//      this by construction.
+//   2. `contains` on array<Shape> asserts VALUE equality (field-wise) — the
+//      pointer ABI's element-pointer bit-compare has no by-value analogue, so
+//      the cut must pick a semantics; value equality is the only coherent one
+//      (recorded decision, P2 execution record).
+//
+// The matrix is LIVE: P2 step 3 flipped every cell green and the #[ignore]
+// marks came off with it — all `m5_p2_byval_*` tests below run in the normal
+// suite (the `m5_p2_byval` name prefix remains the grep handle). The P2
+// boundary fix-loop extended the matrix with escape-the-iteration tripwire
+// cells (`m5_p2_byval_*escape*`): get-side results staged in per-site
+// entry-block buffers must be COPIED into variable-owned storage at
+// binding/assignment points (emit.rs `store_binding`), or an element carried
+// out of its loop iteration silently reads the LAST iteration's bytes.
+
+#[test]
+fn m5_p2_byval_int_literal() {
+    // WHY: int × literal elements — behavior-preservation cell (green on the
+    // pointer ABI; must stay byte-identical across the cut).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_int_literal.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "4\n10\n40\n-1\n20\n10\n40\ntrue\nfalse\n25\n35\n");
+}
+
+#[test]
+fn m5_p2_byval_int_runtime() {
+    // WHY: int × runtime-computed elements — behavior-preservation cell.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_int_runtime.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "4\n10\n40\n-1\n20\n10\n40\ntrue\nfalse\n25\n35\n");
+}
+
+#[test]
+fn m5_p2_byval_float_literal() {
+    // WHY: float × literal-derived elements (seeded via .toFloat(); direct
+    // decimal-literal float coercion is a known deferred base miscompile —
+    // spike-notes/s1_verdict.md). Behavior-preservation cell.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_float_literal.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "4\n10\n40\n-1\n20\n10\n40\ntrue\nfalse\n25\n35\n");
+}
+
+#[test]
+fn m5_p2_byval_float_runtime() {
+    // WHY: float × runtime-computed elements — behavior-preservation cell.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_float_runtime.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "4\n10\n40\n-5\n20\n10\n40\ntrue\nfalse\n25\n35\n");
+}
+
+#[test]
+fn m5_p2_byval_bool_literal() {
+    // WHY: boolean × literal elements — RED-today cell #1: the pointer ABI
+    // miscompiles boolean arrays outright (raw i1 passed to the i64 push/set
+    // ABI; LLVM module verify fails). Golden is hand-derived from the fixture;
+    // the by-value cut must make this compile AND produce these values.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_bool_literal.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "4\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\n"
+    );
+}
+
+#[test]
+fn m5_p2_byval_bool_runtime() {
+    // WHY: boolean × runtime-computed elements — RED-today cell #1 (same
+    // miscompile class as the literal variant; golden hand-derived).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_bool_runtime.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "4\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\n"
+    );
+}
+
+#[test]
+fn m5_p2_byval_string_literal() {
+    // WHY: string × literal elements — behavior-preservation cell. Strings
+    // stay 8-byte pointer slots under the by-value ABI (Option A); the golden
+    // pins current behavior INCLUDING the pointer-bit `contains` semantics
+    // (literal interning makes contains(`beta`) true today — preserved as-is).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_string_literal.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "4\nalpha\ndelta\nnone\nbeta\nalpha\ndelta\ntrue\nfalse\nepsilon\nzeta\n"
+    );
+}
+
+#[test]
+fn m5_p2_byval_string_runtime() {
+    // WHY: string × runtime-built elements — behavior-preservation cell
+    // (same-pointer contains(sb) is true today; preserved under the 8-byte
+    // pointer-slot convention).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_string_runtime.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "4\nalpha-x\ndelta-x\nnone\nbeta-x\nalpha-x\ndelta-x\ntrue\nfalse\nepsilon-x\nzeta-x\n"
+    );
+}
+
+#[test]
+fn m5_p2_byval_shape_literal() {
+    // WHY: shape × LITERAL fields (the pointer ABI's const-global-fold path).
+    // RED-today cell #2 lives here: contains(equal-valued Part) must be true
+    // under by-value value-equality semantics (today: pointer compare → false).
+    // Every other op in the fixture already behaves correctly today.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_literal.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "4\n1\n40\nfalse\n2\n1\n4\ntrue\nfalse\n5\n60\n16\n");
+}
+
+#[test]
+fn m5_p2_byval_shape_runtime() {
+    // WHY: shape × RUNTIME fields — the exact element class whose pointer-ABI
+    // storage is the stack-dangling miscompile class the cut permanently fixes
+    // (latent without suspension). Carries RED-today cell #2 (value-equality
+    // contains) like the literal variant.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_runtime.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "4\n1\n40\nfalse\n2\n1\n4\ntrue\nfalse\n5\n60\n16\n");
+}
+
+#[test]
+fn m5_p2_byval_s1_spike() {
+    // WHY: the adopted P0 S1 spike fixture — 3-element array<Part{int,float}>
+    // with ALL-runtime field values: construct, IndexAssign, for-loop element
+    // reads, int+float field stdout. The S1 GREEN verdict proved this exact
+    // program byte-identical across pointer and by-value prototype ABIs
+    // (spike-notes/s1_verdict.md); this test locks that equivalence for the
+    // production cut.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_s1_spike.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "11\n33\n100\n700\n13\n39\n124\n");
+}
+
+// ── M5 P2 fix-loop: escape-the-iteration tripwire cells ─────────────────────
+//
+// The get-side choke points stage element reads in per-site ENTRY-BLOCK
+// buffers reused across iterations (the S1 stack-growth fix). Any element
+// escaping its iteration — saved into an outer variable, printed after the
+// loop — must be COPIED into variable-owned storage at the binding/assignment
+// point (emit.rs `store_binding`); before that fix, every escape aliased the
+// shared buffer and silently read the LAST iteration's bytes. Each cell below
+// was RED-proven on the unfixed tree (observed vs expected recorded per test).
+//
+// Fix round 2 widened the same contract to the PERSIST boundary: bindings are
+// only one of the three places a value can outlive its staging site. The other
+// two — SHAPE FIELD stores (direct assign + struct-lit provided fields +
+// hidden defaults, funneled through emit.rs `store_field`) and MAP VALUE
+// inserts (`.set` / index-assign / MapLit / StructLit-as-map, funneled through
+// emit.rs `map_value_to_stable_bits`) — store an 8-byte POINTER cell, so a
+// plain pointer store persists the reused staging pointer past the site's next
+// write. Both funnels clone shape/maybe bytes into a counted heap cell
+// (`ynz_alloc`) at the persist point. The `m5_p2_byval_*_field_*` and
+// `m5_p2_byval_*map*` cells below lock that boundary, one per lexical path.
+
+#[test]
+fn m5_p2_byval_shape_escape_for() {
+    // WHY: tripwire (a) — shape element saved from a for-loop body into an
+    // outer variable, printed after the loop. Unfixed observed 3/30 (last
+    // element); the golden asserts the MATCHED element (qty == 1).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_escape_for.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_shape_escape_get() {
+    // WHY: tripwire (b) — same escape via indexed `arr.get(i)` + `.value`
+    // unwrap in a while loop. Unfixed observed 3/30; golden asserts 1/10.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_escape_get.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_maybe_escape() {
+    // WHY: tripwire (c) — the maybe ENVELOPE itself escapes (get-maybe path):
+    // per-site envelope reuse + shape-payload bits into the shared out buffer.
+    // Both envelope AND payload must be copied at the binding point. Unfixed
+    // observed 3/30; golden asserts the matched element (qty == 2) → 2/20.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_maybe_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "2\n20\n");
+}
+
+#[test]
+fn m5_p2_byval_int_maybe_escape() {
+    // WHY: tripwire (d) — maybe-envelope escape with a PRIMITIVE element type:
+    // the envelope-reuse half of the class is independent of shape payloads.
+    // Unfixed observed 7 (last element); golden asserts the matched 6.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_int_maybe_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "6\n");
+}
+
+#[test]
+fn m5_p2_byval_shape_escape_wait() {
+    // WHY: tripwire (e) — element assigned to a FRAME-EMBEDDED crossing shape
+    // local (nested-scope assign before a `wait`), read after resume. The old
+    // plain slot store clobbered the pre-wired frame-region pointer, so the
+    // post-resume read saw the stale Let-initializer bytes (unfixed observed
+    // 0/0). Fixed: assignment memcpys INTO the frame region. The
+    // maybe<Shape>-crossing-wait sibling is NOT constructible today
+    // (UnsupportedCrossingLocalType rejects it) — Phase 3's guard-lift matrix
+    // owns that cell.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_escape_wait.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "2\n20\n");
+}
+
+// ── M5 P2 fix round 2: persist-boundary tripwire cells ──────────────────────
+// (store_field Shape/Maybe arms + map_value_to_stable_bits — see the block
+// comment above; all eight RED-proven 3/30 on the unfixed tree, golden 1/10.)
+
+#[test]
+fn m5_p2_byval_field_assign_escape() {
+    // WHY: round-2 tripwire (a) — shape element persisted into a SHAPE FIELD
+    // (`holder.best = p`) inside the loop, read after it. The field cell is a
+    // pointer cell; a plain store aliased the per-site staging buffer (unfixed
+    // observed 3/30). Locks store_field's Shape arm (counted heap-cell clone).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_field_assign_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_struct_lit_field_escape() {
+    // WHY: round-2 tripwire (a2) — same field persist through a STRUCT LITERAL
+    // provided field (`{ best: p }`), a distinct lexical path into the same
+    // store_field funnel. The escape survives the outer binding's shallow byte
+    // copy (store_binding copies the `best` POINTER cell). Unfixed 3/30.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_struct_lit_field_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_maybe_field_escape() {
+    // WHY: round-2 tripwire (a3) — a maybe<Shape> ENVELOPE persisted into a
+    // maybe-typed shape field; the field cell pointed at the per-let-site
+    // envelope reused each iteration (unfixed 3/30). Locks store_field's Maybe
+    // arm (heap-cloned envelope + payload).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_maybe_field_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_map_set_escape() {
+    // WHY: round-2 tripwire (b) — shape element persisted into a MAP via
+    // `.set()` inside the loop. Map value cells are i64 bits; marshalling as
+    // ptr_to_int(staging) persisted the reused staging pointer (unfixed 3/30).
+    // Locks map_value_to_stable_bits at the `.set()` site.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_set_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_map_index_assign_escape() {
+    // WHY: round-2 tripwire (b2) — same map-value escape through the
+    // INDEX-ASSIGN lexical path (`picks[key] = p`); a distinct marshalling
+    // site that must route through the ONE stable-bits choke point
+    // (authoritative-derivation: no re-derived marshalling twins).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_map_index_assign_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_map_lit_escape() {
+    // WHY: round-2 tripwire (c) — map-value escape through a backtick-key MAP
+    // LITERAL built inside the loop from the loop variable (Expr::MapLit's
+    // marshalling site). Unfixed 3/30.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_lit_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_struct_map_lit_escape() {
+    // WHY: round-2 tripwire (c2) — same literal escape through the
+    // IDENTIFIER-KEY path (`{ pick: p }` with a map annotation — the
+    // StructLit-as-map lowering), the fourth and last map marshalling site.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_struct_map_lit_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_map_maybe_value_escape() {
+    // WHY: round-2 tripwire (b3) — a maybe<Shape> ENVELOPE persisted as a MAP
+    // VALUE (`map<string, maybe<Part> >`); the value bits were
+    // ptr_to_int(per-site envelope), reused every iteration. Locks the map
+    // choke point's Maybe arm (heap-cloned envelope + payload per insertion).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_maybe_value_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+// ── M5 P2 fix round 3: maybe-envelope persist tripwires ─────────────────────
+// (array element writes + background spawn args — the two remaining persist
+// surfaces marshalling maybe bits outside the stable-bits choke point; both
+// RED-proven on the unfixed tree per the code-reviewer's probes.)
+
+#[test]
+fn m5_p2_byval_array_maybe_elem_write_escape() {
+    // WHY: round-3 tripwire (B1) — a maybe<Part> envelope persisted as an
+    // ARRAY ELEMENT via `.set()`; the cell held ptr_to_int(per-site envelope),
+    // reused every iteration (unfixed observed 3/30, both admission routes).
+    // Locks array_elem_src_ptr's non-shape marshalling to the ONE stable-bits
+    // choke point (value_to_stable_bits — no per-surface twins).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_array_maybe_elem_write_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n1\n10\n");
+}
+
+#[test]
+fn m5_p2_byval_bg_maybe_arg_escape() {
+    // WHY: round-3 tripwire (B2) — a maybe<int> spawn arg stored as bare
+    // envelope-pointer bits in the bg ctx; the spawn frame outlives every
+    // iteration, and the task (sleepBlocking) reads deterministically after
+    // the loop (unfixed observed 3). Locks prepare_bg_arg_for_ctx's Maybe arm
+    // (maybe_to_heap_cell at the spawn site + HeapMaybeEnv free).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_bg_maybe_arg_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "loop done\n1\n");
+}
+
+#[test]
+fn m5_p2_byval_debug_repr() {
+    // WHY: the audited "Array debug representation" call site
+    // (audit-array-callsites.md; emit.rs BuiltinArray debug-repr walker) had no
+    // test after the by-value migration. `print(array)` is legal (typeck lists
+    // BuiltinArray as printable); this locks the repr walker per element type,
+    // including a shape array, against the elem_size-aware ABI.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_debug_repr.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "[5, 6, 7]\n[true, false]\n[5, 6]\n[alpha-x, beta-x]\n[Part { qty: 1, price: 10 }, Part { qty: 2, price: 20 }]\n"
+    );
+}
+
+// ── M5 P2 fix round 4: fixed-array element persist tripwires ────────────────
+// (the round-3 closer's surfaced deviation: fixed<T>'s uniform [N x i64] stack
+// slots marshalled shape/maybe values as bare ptr_to_int of the per-site-reused
+// binding storage at ALL THREE write sites — index-assign, .set(), literal
+// fill; every slot aliased it. All four RED-proven on the unfixed tree.)
+
+#[test]
+fn m5_p2_byval_fixed_index_assign_escape() {
+    // WHY: round-4 tripwire (a) — the round-3 closer's exact repro. Shape
+    // elements persisted into fixed<Part> via `pair[i] = cur` in a while-loop,
+    // read after: slot 0 read the LAST iteration's bytes (unfixed 2/20).
+    // Locks the fixed index-assign arm to the ONE stable-bits choke point
+    // (value_to_stable_bits — no re-derived marshalling twins).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_fixed_index_assign_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n2\n20\n");
+}
+
+#[test]
+fn m5_p2_byval_fixed_set_escape() {
+    // WHY: round-4 tripwire (b) — same shape-element persist through the
+    // `.set()` lexical path (lower_fixed_method's "set" arm), a distinct
+    // marshalling site that must route through the same choke point
+    // (unfixed 2/20 for slot 0).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_fixed_set_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n2\n20\n");
+}
+
+#[test]
+fn m5_p2_byval_fixed_maybe_elem_escape() {
+    // WHY: round-4 tripwire (c) — a maybe<Part> ENVELOPE persisted as a fixed
+    // element through BOTH write surfaces (.set() slot 0, index-assign slot 1);
+    // the per-site envelope was reused every iteration (unfixed 3/30 on both
+    // slots). Locks the fixed write sites' Maybe arm (heap-cloned envelope +
+    // payload per write). fixed<maybe<Part> > admission probe-verified.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_fixed_maybe_elem_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n2\n20\n");
+}
+
+#[test]
+fn m5_p2_byval_fixed_literal_escape() {
+    // WHY: round-4 tripwire (d) — shape elements persisted through the FIXED
+    // LITERAL FILL site (ArrayLit's BuiltinFixed arm): mutating the source
+    // binding AFTER the fill silently rewrote the stored element (unfixed
+    // 9/90 — the post-mutation bytes). Golden asserts fill-time bytes 1/10,
+    // then the binding's own mutated 9.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_fixed_literal_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n9\n");
 }

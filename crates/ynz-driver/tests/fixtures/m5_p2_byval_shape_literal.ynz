@@ -1,0 +1,66 @@
+// M5 P2 step 1 — by-value ABI matrix: shape × LITERAL fields × full op set
+// (non-suspending). All field values are compile-time literals — on the pointer ABI
+// this is the const-global-fold path (M3a round 5); under by-value the elements are
+// elem_size-byte inline copies in the heap buffer.
+//
+// CONTRACT CELL (RED until P2 step 3): `contains` on array<Shape> asserts VALUE
+// equality (field-wise), the only coherent semantics once elements are stored by
+// value — the pointer-ABI's element-pointer bit-compare has no by-value analogue.
+// Recorded decision in the P2 execution record.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let parts: array<Part> = [
+    { qty: 1, price: 10 },
+    { qty: 2, price: 20 },
+    { qty: 3, price: 30 }
+  ]
+  let p4: Part = { qty: 4, price: 40 }
+  parts.add(p4)
+  print(parts.count())
+  let m0 = parts[0]
+  if (m0.exists()) {
+    print(m0.value.qty)
+  }
+  let m3 = parts[3]
+  if (m3.exists()) {
+    print(m3.value.price)
+  }
+  let m9 = parts[9]
+  print(m9.exists())
+  let g = parts.get(1)
+  if (g.exists()) {
+    print(g.value.qty)
+  }
+  let f = parts.first()
+  if (f.exists()) {
+    print(f.value.qty)
+  }
+  let l = parts.last()
+  if (l.exists()) {
+    print(l.value.qty)
+  }
+  let needlePresent: Part = { qty: 2, price: 20 }
+  print(parts.contains(needlePresent))
+  let needleAbsent: Part = { qty: 9, price: 99 }
+  print(parts.contains(needleAbsent))
+  parts[1] = { qty: 5, price: 50 }
+  let s1 = parts[1]
+  if (s1.exists()) {
+    print(s1.value.qty)
+  }
+  let p6: Part = { qty: 6, price: 60 }
+  parts.set(2, p6)
+  let s2 = parts[2]
+  if (s2.exists()) {
+    print(s2.value.price)
+  }
+  let total: int = 0
+  for (p in parts) {
+    total = total + p.qty
+  }
+  print(total)
+}

@@ -1091,109 +1091,132 @@ pub unsafe extern "C" fn ynz_map_drop(map: *mut YnzMap) {
     free(map as *mut core::ffi::c_void);
 }
 
-// ── Array runtime (M5 P4a) ────────────────────────────────────────────────────
+// ── Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) ──────────
 //
-// array<T> is a heap-allocated growable list. All elements are 8 bytes wide —
-// int/float/bool stored as i64 bits; string/shape/pointer stored as i64-cast ptr.
+// array<T> is a heap-allocated growable list storing elements BY VALUE, inline in
+// one contiguous buffer of `elem_size`-byte cells:
+//   - non-shape elements: elem_size = 8 (int/float/bool as i64 bits by value;
+//     string/number/other pointer types as pointer bits — scratch-doc Option A),
+//   - shape elements: elem_size = the shape's LLVM ABI byte size; the element's
+//     struct bytes live inline in the buffer (the array OWNS them — no dangling
+//     stack/global element pointers, the M3a-guard miscompile class by construction).
 // The header struct lives on the heap; the data buffer is a separate allocation.
+// Both allocations route through `ynz_alloc`/`ynz_free` so the alloc counter
+// (`YNZ_ALLOC_COUNTER_OUTPUT`, E8 leak-parity gate) SEES every array buffer.
+// Growth is alloc-new + copy + free-old — never `realloc`, which is invisible
+// to the counter (no counted realloc exists; FRAGO 005).
 
 #[repr(C)]
 pub struct YnzArray {
     data: *mut u8,
     len: i64,
     cap: i64,
+    elem_size: i64,
 }
 
-/// Allocate a new empty array with an initial capacity of [`INITIAL_ARRAY_CAPACITY`] elements.
+/// Allocate a new empty array of `elem_size`-byte elements with an initial capacity
+/// of [`INITIAL_ARRAY_CAPACITY`] elements.
+///
+/// Aborts on `elem_size <= 0` — the compiler always passes the element type's real
+/// ABI size (≥ 1); anything else is a codegen bug, not a recoverable state.
 ///
 /// # Safety
 /// Returns a heap pointer. Caller must free with `ynz_array_drop`.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_array_new() -> *mut YnzArray {
+pub unsafe extern "C" fn ynz_array_new(elem_size: i64) -> *mut YnzArray {
+    if elem_size <= 0 {
+        eprintln!(
+            "INTERNAL ERROR: array created with a non-positive element size \
+                  ({elem_size}). This is a compiler bug — please file an issue at \
+                  https://github.com/yinz-lang/yinz/issues with the source file attached."
+        );
+        std::process::abort();
+    }
     let cap: i64 = INITIAL_ARRAY_CAPACITY;
-    let data = malloc((cap as usize) * 8) as *mut u8;
-    if data.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while allocating a new array. \
-                  The program tried to create an array but the system couldn't \
-                  allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent state."
-        );
-        std::process::abort();
-    }
-    let hdr = malloc(std::mem::size_of::<YnzArray>()) as *mut YnzArray;
-    if hdr.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while allocating a new array. \
-                  The program tried to create an array but the system couldn't \
-                  allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent state."
-        );
-        std::process::abort();
-    }
-    (*hdr) = YnzArray { data, len: 0, cap };
+    // ynz_alloc aborts on OOM (Yinz programs cannot recover from OOM), so no null
+    // check is needed here; routing through it keeps the buffer visible to the
+    // alloc counter (E8).
+    let data = ynz_alloc((cap * elem_size) as usize);
+    let hdr = ynz_alloc(std::mem::size_of::<YnzArray>()) as *mut YnzArray;
+    (*hdr) = YnzArray {
+        data,
+        len: 0,
+        cap,
+        elem_size,
+    };
     hdr
 }
 
-/// Push an i64-sized element (int, float bits, bool, or pointer cast to i64).
+/// Push one element: copies `elem_size` bytes from `src` into the next inline cell.
+///
+/// The bytes are copied BEFORE this call returns — `src` may point at a stack
+/// staging slot or struct alloca that dies immediately afterwards; the array never
+/// retains the source pointer.
 ///
 /// Doubles the capacity when full (amortized O(1) push).
 ///
 /// # Safety
 /// `arr` must be a non-null pointer returned by `ynz_array_new` and not yet freed.
+/// `src` must be valid for `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_array_push(arr: *mut YnzArray, value: i64) {
+pub unsafe extern "C" fn ynz_array_push(arr: *mut YnzArray, src: *const u8) {
+    let elem_size = (*arr).elem_size;
     if (*arr).len == (*arr).cap {
         let new_cap = (*arr).cap * 2;
-        let new_data = realloc(
-            (*arr).data as *mut core::ffi::c_void,
-            (new_cap as usize) * 8,
-        ) as *mut u8;
-        if new_data.is_null() {
-            eprintln!(
-                "RUNTIME ERROR: Out of memory while growing an array. \
-                      The program tried to push to an array but the system couldn't \
-                      allocate more memory. Yinz aborts rather than continuing with \
-                      an inconsistent state."
-            );
-            std::process::abort();
-        }
+        // Counted growth path: alloc-new + copy + free-old. NOT realloc — the alloc
+        // counter instruments ynz_alloc/ynz_free only, and a raw realloc would make
+        // E8's parity accounting blind to the grown buffer (FRAGO 005).
+        let new_data = ynz_alloc((new_cap * elem_size) as usize);
+        std::ptr::copy_nonoverlapping((*arr).data, new_data, ((*arr).len * elem_size) as usize);
+        ynz_free((*arr).data, ((*arr).cap * elem_size) as usize);
         (*arr).data = new_data;
         (*arr).cap = new_cap;
     }
-    let slot = (*arr).data.add(((*arr).len as usize) * 8) as *mut i64;
-    *slot = value;
+    let slot = (*arr).data.add(((*arr).len * elem_size) as usize);
+    std::ptr::copy_nonoverlapping(src, slot, elem_size as usize);
     (*arr).len += 1;
 }
 
-/// Get element at `idx`. Writes `[1, value]` on success or `[0, 0]` on OOB.
+/// Get element at `idx`: copies `elem_size` bytes into `out` and returns 1 on
+/// success; zeroes `out` and returns 0 on OOB.
 ///
-/// Returns via an out-pointer so codegen can pick apart the result with GEPs
-/// without needing aggregate return ABI conventions.
+/// The has-flag is the RETURN VALUE (not part of an out-struct) because the element
+/// width varies per array — the old fixed `[i64; 2]` envelope cannot carry a
+/// variable-width element. Codegen re-packs `{flag, value}` maybe envelopes at its
+/// choke point. OOB zeroes `out` so an unconditionally-loaded staging value is a
+/// deterministic 0, matching the old `[0, 0]` contract.
 ///
 /// # Safety
-/// `arr` and `out` must be valid non-null pointers.
+/// `arr` and `out` must be valid non-null pointers; `out` must be valid for
+/// `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_array_get(arr: *const YnzArray, idx: i64, out: *mut [i64; 2]) {
+pub unsafe extern "C" fn ynz_array_get(arr: *const YnzArray, idx: i64, out: *mut u8) -> i64 {
+    let elem_size = (*arr).elem_size;
     if idx < 0 || idx >= (*arr).len {
-        (*out) = [0, 0];
+        std::ptr::write_bytes(out, 0, elem_size as usize);
+        0
     } else {
-        let slot = (*arr).data.add((idx as usize) * 8) as *const i64;
-        (*out) = [1, *slot];
+        let slot = (*arr).data.add((idx * elem_size) as usize);
+        std::ptr::copy_nonoverlapping(slot, out, elem_size as usize);
+        1
     }
 }
 
-/// Set element at `idx`. Aborts if out of bounds (contract: typeck rejects literal OOB).
+/// Set element at `idx`: copies `elem_size` bytes from `src` over the inline cell.
+/// Aborts if out of bounds (contract: typeck rejects literal OOB) — parity with the
+/// pre-M5 uniform-slot `ynz_array_set`.
 ///
 /// # Safety
 /// `arr` must be a valid non-null pointer. `idx` must be in [0, len).
+/// `src` must be valid for `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_array_set(arr: *mut YnzArray, idx: i64, value: i64) {
+pub unsafe extern "C" fn ynz_array_set(arr: *mut YnzArray, idx: i64, src: *const u8) {
     if idx < 0 || idx >= (*arr).len {
         std::process::abort();
     }
-    let slot = (*arr).data.add((idx as usize) * 8) as *mut i64;
-    *slot = value;
+    let elem_size = (*arr).elem_size;
+    let slot = (*arr).data.add((idx * elem_size) as usize);
+    std::ptr::copy_nonoverlapping(src, slot, elem_size as usize);
 }
 
 /// Return the number of elements in the array.
@@ -1205,25 +1228,35 @@ pub unsafe extern "C" fn ynz_array_count(arr: *const YnzArray) -> i64 {
     (*arr).len
 }
 
-/// Free the array's data buffer and header. Does not run element destructors.
+/// Free the array's data buffer and header. Does not run element destructors
+/// (element-blind by design — recorded decision D6; the E8 alloc=free parity gate
+/// guards the no-new-leak-class claim).
+///
+/// elem_size-aware: the buffer free passes its true byte size (`cap * elem_size`)
+/// so the sized-dealloc ABI stays honest — the pre-M5 header layout compatibility
+/// was accidental, never a contract.
 ///
 /// # Safety
 /// `arr` must be a valid non-null pointer returned by `ynz_array_new` and not yet freed.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_array_drop(arr: *mut YnzArray) {
     if !(*arr).data.is_null() {
-        free((*arr).data as *mut core::ffi::c_void);
+        ynz_free((*arr).data, ((*arr).cap * (*arr).elem_size) as usize);
         (*arr).data = std::ptr::null_mut();
     }
-    free(arr as *mut core::ffi::c_void);
+    ynz_free(arr as *mut u8, std::mem::size_of::<YnzArray>());
 }
 
-/// Clone an array of primitive elements (int/float/bool — each element is an i64 bit
-/// pattern) into a fresh independent heap allocation.
+/// Clone an array of primitive elements (int/float/bool — each an 8-byte i64 bit
+/// pattern, elem_size = 8) into a fresh independent heap allocation.
 ///
-/// Each element is a raw i64; no element-level indirection. The cloned array has its
-/// own data buffer and its own header — mutating either the original's elements OR
-/// growing/shrinking the original after this call has NO effect on the clone.
+/// No element-level indirection. The cloned array has its own data buffer and its
+/// own header — mutating either the original's elements OR growing/shrinking the
+/// original after this call has NO effect on the clone. elem_size is carried over
+/// from the source header (byte-copy of `len * elem_size` — the routine is in fact
+/// elem_size-generic; the `_primitive` name records its only call-site class).
+/// Both allocations are counted (`ynz_alloc`) so the drop's counted frees stay in
+/// parity (E8).
 ///
 /// Used when a `background` task receives an `array<int>` / `array<float>` / `array<bool>`
 /// argument: the caller's array must remain independent of the task's array so that
@@ -1241,23 +1274,20 @@ pub unsafe extern "C" fn ynz_array_clone_primitive(src: *mut YnzArray) -> *mut Y
         return std::ptr::null_mut();
     }
     let src_ref = &*src;
+    let elem_size = src_ref.elem_size;
     let cap = if src_ref.cap > 0 { src_ref.cap } else { 1 };
-    let new_data = malloc((cap as usize) * 8) as *mut u8;
-    if new_data.is_null() {
-        std::process::abort();
-    }
+    // ynz_alloc aborts on OOM — no null checks needed; counted so the task-exit
+    // ynz_array_drop's counted frees balance (E8).
+    let new_data = ynz_alloc((cap * elem_size) as usize);
     if src_ref.len > 0 && !src_ref.data.is_null() {
-        std::ptr::copy_nonoverlapping(src_ref.data, new_data, (src_ref.len as usize) * 8);
+        std::ptr::copy_nonoverlapping(src_ref.data, new_data, (src_ref.len * elem_size) as usize);
     }
-    let hdr = malloc(std::mem::size_of::<YnzArray>()) as *mut YnzArray;
-    if hdr.is_null() {
-        free(new_data as *mut core::ffi::c_void);
-        std::process::abort();
-    }
+    let hdr = ynz_alloc(std::mem::size_of::<YnzArray>()) as *mut YnzArray;
     (*hdr) = YnzArray {
         data: new_data,
         len: src_ref.len,
         cap,
+        elem_size,
     };
     hdr
 }
@@ -1806,19 +1836,21 @@ pub unsafe extern "C" fn ynz_string_split(s: *const u8, sep: *const u8) -> *mut 
     let sep_str = unsafe { std::ffi::CStr::from_ptr(sep as *const i8) }
         .to_str()
         .unwrap_or("");
-    let arr = ynz_array_new();
+    // String elements are pointer slots: elem_size = 8, cell = the string's heap
+    // pointer as i64 bits (by-value ABI, non-shape convention).
+    let arr = ynz_array_new(8);
     if sep_str.is_empty() {
         // Split into individual code-point strings.
         for ch in s_str.chars() {
             let mut buf = [0u8; 5];
             let enc = ch.encode_utf8(&mut buf[..4]);
-            let ptr = heap_string_from_str(enc);
-            ynz_array_push(arr, ptr as i64);
+            let bits = heap_string_from_str(enc) as i64;
+            ynz_array_push(arr, (&bits as *const i64) as *const u8);
         }
     } else {
         for part in s_str.split(sep_str) {
-            let ptr = heap_string_from_str(part);
-            ynz_array_push(arr, ptr as i64);
+            let bits = heap_string_from_str(part) as i64;
+            ynz_array_push(arr, (&bits as *const i64) as *const u8);
         }
     }
     arr
@@ -2607,10 +2639,12 @@ mod m7_string_runtime {
             let parts = ynz_string_split(c(b"a,b,c\0"), c(b",\0"));
             assert!(!parts.is_null());
             assert_eq!(ynz_array_count(parts), 3);
-            let mut out = [0i64; 2];
-            ynz_array_get(parts, 0, &mut out);
-            assert_eq!(out[0], 1);
-            assert_eq!(str_from_ptr(out[1] as *const u8), "a");
+            // String elements are 8-byte pointer cells (by-value ABI): get copies the
+            // pointer bits into the out buffer and returns the has-flag.
+            let mut bits: i64 = 0;
+            let flag = ynz_array_get(parts, 0, (&mut bits as *mut i64) as *mut u8);
+            assert_eq!(flag, 1);
+            assert_eq!(str_from_ptr(bits as *const u8), "a");
             ynz_array_drop(parts);
         }
     }
@@ -2654,28 +2688,40 @@ mod m7_string_runtime {
 mod array_runtime {
     use super::*;
 
+    /// Push one i64 by value through the byte-pointer ABI.
+    unsafe fn push_i64(arr: *mut YnzArray, v: i64) {
+        ynz_array_push(arr, (&v as *const i64) as *const u8);
+    }
+
+    /// Get one i64 element; returns (has_flag, value).
+    unsafe fn get_i64(arr: *const YnzArray, idx: i64) -> (i64, i64) {
+        let mut out: i64 = 0;
+        let flag = ynz_array_get(arr, idx, (&mut out as *mut i64) as *mut u8);
+        (flag, out)
+    }
+
     #[test]
     fn array_new_push_get_count() {
-        // WHY: guards that ynz_array_new initialises a valid empty array and
-        // that ynz_array_push grows it correctly.  Any regression in the null-
-        // check or capacity arithmetic trips these asserts.
+        // WHY: guards that ynz_array_new initialises a valid empty array and that
+        // ynz_array_push copies elem_size bytes correctly. Any regression in the
+        // elem_size arithmetic or the has-flag return trips these asserts.
         unsafe {
-            let arr = ynz_array_new();
+            let arr = ynz_array_new(8);
             assert!(!arr.is_null(), "ynz_array_new must return non-null");
             assert_eq!(ynz_array_count(arr), 0, "new array must have count 0");
 
-            ynz_array_push(arr, 10);
-            ynz_array_push(arr, 20);
-            ynz_array_push(arr, 30);
+            push_i64(arr, 10);
+            push_i64(arr, 20);
+            push_i64(arr, 30);
             assert_eq!(ynz_array_count(arr), 3, "count must equal number of pushes");
 
-            let mut out = [0i64; 2];
-            ynz_array_get(arr, 0, &mut out);
-            assert_eq!(out, [1, 10], "get(0) must return [1, 10]");
-            ynz_array_get(arr, 2, &mut out);
-            assert_eq!(out, [1, 30], "get(2) must return [1, 30]");
-            ynz_array_get(arr, 3, &mut out);
-            assert_eq!(out, [0, 0], "get(OOB) must return [0, 0]");
+            assert_eq!(get_i64(arr, 0), (1, 10), "get(0) must return (1, 10)");
+            assert_eq!(get_i64(arr, 2), (1, 30), "get(2) must return (1, 30)");
+            assert_eq!(
+                get_i64(arr, 3),
+                (0, 0),
+                "get(OOB) must return flag 0 and zero the out buffer"
+            );
 
             ynz_array_drop(arr);
         }
@@ -2683,21 +2729,64 @@ mod array_runtime {
 
     #[test]
     fn array_push_beyond_initial_capacity_grows() {
-        // WHY: INITIAL_ARRAY_CAPACITY = 8; pushing 16 elements forces one realloc.
-        // Verifies the realloc null-check path doesn't break normal growth.
+        // WHY: INITIAL_ARRAY_CAPACITY = 8; pushing 16 elements forces one growth step
+        // (counted alloc-new + copy + free-old — no realloc). Verifies growth preserves
+        // element bytes.
         unsafe {
-            let arr = ynz_array_new();
+            let arr = ynz_array_new(8);
             for i in 0..16i64 {
-                ynz_array_push(arr, i * 100);
+                push_i64(arr, i * 100);
             }
             assert_eq!(
                 ynz_array_count(arr),
                 16,
                 "must have 16 elements after growth"
             );
+            assert_eq!(
+                get_i64(arr, 15),
+                (1, 1500),
+                "element 15 must be 15*100 = 1500"
+            );
+            ynz_array_drop(arr);
+        }
+    }
+
+    #[test]
+    fn array_multibyte_elements_stored_by_value() {
+        // WHY: the by-value contract itself — a 16-byte element (a two-field shape's
+        // worth of bytes) is COPIED inline at push/set time; mutating or dropping the
+        // source afterwards must not affect the stored element. get/set round-trip
+        // through elem_size-wide memcpy, including across a growth step.
+        unsafe {
+            let arr = ynz_array_new(16);
+            for i in 0..10i64 {
+                let mut elem = [i, i * 10];
+                ynz_array_push(arr, elem.as_ptr() as *const u8);
+                // Clobber the source AFTER the push — the array owns its own copy.
+                elem[0] = -1;
+                elem[1] = -1;
+            }
+            assert_eq!(ynz_array_count(arr), 10);
+
             let mut out = [0i64; 2];
-            ynz_array_get(arr, 15, &mut out);
-            assert_eq!(out, [1, 1500], "element 15 must be 15*100 = 1500");
+            let flag = ynz_array_get(arr, 9, out.as_mut_ptr() as *mut u8);
+            assert_eq!(flag, 1);
+            assert_eq!(
+                out,
+                [9, 90],
+                "element bytes must survive source clobber + growth"
+            );
+
+            let replacement = [7i64, 70];
+            ynz_array_set(arr, 4, replacement.as_ptr() as *const u8);
+            let flag = ynz_array_get(arr, 4, out.as_mut_ptr() as *mut u8);
+            assert_eq!(flag, 1);
+            assert_eq!(out, [7, 70], "set must overwrite the full 16-byte cell");
+
+            let flag = ynz_array_get(arr, 10, out.as_mut_ptr() as *mut u8);
+            assert_eq!(flag, 0);
+            assert_eq!(out, [0, 0], "OOB get must zero all elem_size bytes");
+
             ynz_array_drop(arr);
         }
     }
