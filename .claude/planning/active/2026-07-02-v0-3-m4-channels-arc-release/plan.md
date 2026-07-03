@@ -3,7 +3,7 @@ name: "v0-3-m4-channels-arc-release"
 plan-id: "2026-07-02-v0-3-m4-channels-arc-release"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2", "executor-2026-07-02-m4-p4", "executor-2026-07-02-m4-p4-r2", "executor-2026-07-02-m4-p5", "executor-2026-07-02-m4-p5-r2"]
+session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2", "executor-2026-07-02-m4-p4", "executor-2026-07-02-m4-p4-r2", "executor-2026-07-02-m4-p5", "executor-2026-07-02-m4-p5-r2", "executor-2026-07-02-m4-p6"]
 created_at: "2026-07-02"
 updated_at: "2026-07-03"
 metadata:
@@ -1404,7 +1404,9 @@ Handoff = checkbox state + session-id chain.
     section carries no information; byte-exact test proven against the pristine golden);
     `features.toml` comment corrected as a factual fix (no schema/entry change — build output
     unaffected).
-- **Task + purpose.** Cut the final `v0.3.0` tag folding the un-tagged M3f + M3g work.
+
+#### Phase 6 — v0.3.0 release fold (M3g + M4; M3f already released at `v0.3.0-m6`)
+- **Task + purpose.** Cut the final `v0.3.0` tag folding the un-tagged M3g work. (M3f is NOT un-tagged — it shipped at `v0.3.0-m6`; see FRAGO 017.)
 - **Steps.**
   1. Amend design docs to mark the v0.3 concurrency surface shipped (IMP-no-function-coloring
      Channel/False-Sharing/Sleep-lint sections' milestone notes; IMP-concurrency as needed —
@@ -1424,13 +1426,57 @@ Handoff = checkbox state + session-id chain.
   3. **R4 explicit step:** verify with `git tag` + `git log` that the CHANGELOG generation span is
      `m7..HEAD` — never a naive "since last tag" — and that the output demonstrably includes M3f +
      M3g + M4 before anything is pushed.
-  4. `/release` cuts `v0.3.0` (final, NO `-mN` suffix); VSCode `.vsix` assets per convention
-     (`yinz-{version}.vsix` + `yinz-latest.vsix --clobber`).
-- **Exit criteria.** CHANGELOG demonstrably spans M3f + M3g + M4; `Cargo.toml` = `0.3.0`; tag cut
+  4. `/release` cuts `v0.3.0` (final, NO `-mN` suffix). CHANGELOG generation MUST cover M3g + M4 ONLY — M3f is already covered at `[0.3.0-m6]` and must NOT be re-covered (FRAGO 017/P6-D1); M3d is already covered at `[0.3.0-m7]` despite its commits falling inside the naive `m7..HEAD` span (a commit-range generator would double-cover it — FRAGO 017/P6-D2, exclude already-CHANGELOGed M3d content). VSCode `.vsix` assets per convention (`yinz-{version}.vsix` + `yinz-latest.vsix --clobber`).
+- **Exit criteria.** CHANGELOG demonstrably spans M3g + M4 (M3f already covered at `v0.3.0-m6`, NOT re-covered; M3d already covered at `v0.3.0-m7`, NOT re-covered despite falling inside the naive commit span); `Cargo.toml` = `0.3.0`; tag cut
   with Patrick's explicit approval; `.vsix` assets uploaded.
 - **Reviewer fan-out.** code-reviewer + **Patrick sign-off** (cutting the release is an explicit
   human act — never self-authorized).
 - **Model tag.** `(release-engineering, high, small)`.
+- **⏳ P6 STATUS — STEPS 1–3 COMPLETE (executor-2026-07-02-m4-p6, 2026-07-03); Step 4 (`/release`
+  tag cut + `.vsix` upload) NOT executed — human-gated on Patrick's explicit sign-off per this
+  phase's reviewer fan-out. Nothing tagged, pushed, or published by this dispatch. NO STOP
+  condition fired; NO dormant override armed. Reviewer fan-out has NOT run (producer does not
+  self-grade).**
+  - **Step 1 — design-doc shipped-status sweep (DONE):** `IMP-no-function-coloring.md` — Channel
+    section gained its SHIPPED v0.3-M4 milestone note + the default-capacity constant marked
+    locked-at-P0 (64, `DEFAULT_CHANNEL_CAPACITY`); False-Sharing section: both FRAGO 011
+    pre-named corrections applied per the FRAGO's exact replacement text (`:202` legal
+    give/copy/channel-conduit/return-type crossing set replacing the stale `.share`/`.lend`
+    premise; `:206` cross-module-visible-layout decline class replacing the impossible-in-v0.3
+    FFI example), milestone line marked SHIPPED v0.3-M4 with the FRAGO 009 forward-looking-no-op
+    honesty note; sleep-lint row marked SHIPPED v0.3-M4. `IMP-concurrency.md`
+    `ECWrapperResultCollection` (§463-479) marked SHIPPED v0.3-M4 — landed with
+    `background-handle-form` at P2 exactly per that section's own gating; the "what it costs to
+    lift" prediction rewritten to the shipped compile-time spawn-form-keyed mechanism (NO runtime
+    conditional — the R8 grep-audit invariant); retired registry entry
+    (`ec-wrapper-collect-on-completion`) cross-noted.
+  - **Step 2 — version bump (DONE):** `Cargo.toml:21` `0.3.0-m7` → `0.3.0`; full
+    `cargo build --workspace` GREEN in the dev container (all 14 crates compile at v0.3.0). No
+    other live `0.3.0-m7` reference needed bumping (CHANGELOG/state.md/VSCode-README hits are
+    historical sections; extension already at 0.3.0 per P5).
+  - **Step 3 — R4 span verification (DONE, evidence in the session log + return):**
+    `v0.3.0-m7` confirmed the most recent tag (`git describe --tags --abbrev=0`); span
+    `v0.3.0-m7..HEAD` = 61 commits, demonstrably including M3g (6 commits, e.g. `87a63b7` fused
+    CPU+I/O poll core — M3g has NO CHANGELOG section yet) and all of M4 (`d93f4c8`…`372927f`).
+    Nothing pushed; CHANGELOG generation itself deliberately left to Step 4's `/release`.
+  - **⚠ DEVIATION P6-D1 (classified JUSTIFIED + applied via FRAGO 017 — deviation-judge required a FRAGO because the exit criterion was an affirmatively wrong instruction in the seam Step 4 reads):** the plan's premise "M3f merged
+    un-tagged, no CHANGELOG entries" (¶1 Situation + this phase's task line + R4) is stale for
+    M3f — M3f merged via `51c948b`, which IS an ancestor of tag `v0.3.0-m6` (`git merge-base
+    --is-ancestor`, 2026-06-10), and CHANGELOG `[0.3.0-m6] — M3f: Pre-Existing Codegen
+    Correctness Fixes` already covers it. The span therefore correctly contains ZERO M3f commits,
+    and the v0.3.0 CHANGELOG section must NOT re-cover M3f. M3g's half of the premise is
+    confirmed accurate. For the deviation-judge; Step 3's exit criterion read against reality =
+    "spans M3g + M4; M3f already covered at m6."
+  - **⚠ DEVIATION P6-D2 (classified JUSTIFIED + applied via FRAGO 017 — folded into the same FRAGO per the deviation-judge's recommendation so Step 4's own text carries the M3d exclusion, not only this banner):** the span ALSO contains the entire
+    M3d implementation (phases 0–5, `dcc1432`…`ea5a54a` — NONE are ancestors of the `v0.3.0-m7`
+    tag; the M3d feature branch merged to main only after that tag was cut on main) even though
+    CHANGELOG `[0.3.0-m7]` already describes M3d. A naive commit-list generation over
+    `m7..HEAD` would double-cover M3d — Step 4's human-gated `/release` must exclude
+    already-CHANGELOGed M3d content. Exactly the hazard class R4 exists to catch, caught pre-push.
+  - **Plan-structure repair (P6-D3 — deviation-judge classified JUSTIFIED, NO FRAGO needed: pure mechanical repair, correct as left):** this phase's `#### Phase 6` slice-anchor
+    heading had been accidentally deleted by P5's commit `372927f` (verified via `git log -S`;
+    the P5 banner append consumed it). Restored byte-identical from the pre-deletion revision —
+    structural restoration only, zero content judgment.
 
 ### 3.4 Coordinating Instructions
 

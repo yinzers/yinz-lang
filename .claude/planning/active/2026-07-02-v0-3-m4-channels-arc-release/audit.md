@@ -1565,3 +1565,114 @@ only the domains sentence. Flagged in the P5 banner for the deviation-judge.
 --workspace` result recorded in the executor's return. Roadmap.md's own `⟨64⟩` notation (lines
 325/334) left untouched — file carries pre-existing uncommitted user edits; surfaced in the
 return instead.
+
+## FRAGO 017 — 2026-07-03 — session-id: conductor (Phase 6 post-execution follow-up; deviation-judge
+classified P6-D1 JUSTIFIED with an explicit FRAGO recommendation, and P6-D2 JUSTIFIED folded into the
+same FRAGO per the judge's own recommendation — this record APPLIES both classifications, it does
+not re-adjudicate)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 6 title / Task+purpose / Step 4 / Exit
+           criteria (plan.md:1408-1432)
+Trigger:   The plan's own premise, carried unchanged from the original draft through r2/r3/r4
+           (¶1 Situation Assumption 12, explicitly marked `unverified — verify at P6`), claimed "M3f
+           and M3g are merged to main, un-tagged, no CHANGELOG entries." The Phase-6 executor's R4
+           span verification (Step 3) checked this against reality and found it HALF stale:
+           M3f's merge commit `51c948b` IS an ancestor of tag `v0.3.0-m6` (`git merge-base
+           --is-ancestor`), and `CHANGELOG.md`'s `[0.3.0-m6]` section already covers it — M3f is NOT
+           un-tagged and must NOT be re-covered by the pending `v0.3.0` CHANGELOG section (P6-D1).
+           Separately, the naive `v0.3.0-m7..HEAD` span also contains the entire M3d implementation
+           (which merged to main after the `m7` tag was cut, so its commits are technically inside
+           the span) even though `CHANGELOG.md`'s `[0.3.0-m7]` section already describes M3d — a
+           naive commit-range CHANGELOG generator would double-cover it (P6-D2). Both independently
+           verified by deviation-judge against `CHANGELOG.md`'s actual sections. Deviation-judge
+           classified P6-D1 JUSTIFIED with an explicit FRAGO recommendation (the exit criterion is
+           now an affirmatively wrong instruction sitting in the seam Step 4 will read) and
+           recommended folding P6-D2's caution into the same FRAGO so a fresh `/release` session
+           sees both hazards in Step 4's own text, not only the STATUS banner.
+Changes:
+  - `plan.md:1408` (Phase 6 title): "v0.3.0 release fold (M3f + M3g + M4)" → "v0.3.0 release fold
+    (M3g + M4; M3f already released at `v0.3.0-m6`)".
+  - `plan.md:1409` (Task + purpose): "Cut the final `v0.3.0` tag folding the un-tagged M3f + M3g
+    work." → "Cut the final `v0.3.0` tag folding the un-tagged M3g work. (M3f is NOT un-tagged — it
+    shipped at `v0.3.0-m6`; see FRAGO 017.)"
+  - `plan.md:1429-1430` (Step 4): "`/release` cuts `v0.3.0` (final, NO `-mN` suffix); VSCode `.vsix`
+    assets per convention (`yinz-{version}.vsix` + `yinz-latest.vsix --clobber`)." → "`/release` cuts
+    `v0.3.0` (final, NO `-mN` suffix). CHANGELOG generation MUST cover M3g + M4 ONLY — M3f is already
+    covered at `[0.3.0-m6]` and must NOT be re-covered (FRAGO 017/P6-D1); M3d is already covered at
+    `[0.3.0-m7]` despite its commits falling inside the naive `m7..HEAD` span (a commit-range
+    generator would double-cover it — FRAGO 017/P6-D2, exclude already-CHANGELOGed M3d content).
+    VSCode `.vsix` assets per convention (`yinz-{version}.vsix` + `yinz-latest.vsix --clobber`)."
+  - `plan.md:1431-1432` (Exit criteria): "CHANGELOG demonstrably spans M3f + M3g + M4" →
+    "CHANGELOG demonstrably spans M3g + M4 (M3f already covered at `v0.3.0-m6`, NOT re-covered; M3d
+    already covered at `v0.3.0-m7`, NOT re-covered despite falling inside the naive commit span)".
+  - Phase 6 STATUS banner: P6-D1 and P6-D2 annotated classified-JUSTIFIED + applied via FRAGO 017.
+Unchanged: everything else; FRAGO 001-016; Phases 0-5 (already sealed); the risk table (NO
+  re-scoring — a stale-premise correction to the release-fold's own CHANGELOG scope, not a
+  safety/correctness change to shipped code).
+Override:  N/A — risk-neutral, plan-text corrections reconciling Phase 6's own premise against
+  verified git/CHANGELOG reality; zero code change; deviation-judge pre-classified both JUSTIFIED.
+
+## Session log — executor-2026-07-02-m4-p6 — 2026-07-03
+
+Phase 6 STEPS 1–3 ONLY (dispatch-scoped: Step 4 — `/release` tag cut + `.vsix` upload — is
+explicitly OUT of this dispatch, human-gated on Patrick; nothing tagged, pushed, or published).
+Grounded in: the Phase 6 slice + ¶2/¶3.1 + R4, REF-plan-format, FRAGO 011's exact replacement
+text (applied verbatim, not re-derived), FRAGO 008/009 records, the live design docs +
+crate reality (recon re-read, not memory).
+
+**Landed.** (1) Design-doc shipped-status sweep: `IMP-no-function-coloring.md` — Channel section
+SHIPPED v0.3-M4 milestone note (+ default capacity locked note: 64, `DEFAULT_CHANNEL_CAPACITY`,
+verified live at `crates/ynz-typeck/src/check.rs:37`); FRAGO 011 (a)+(b) applied at the
+False-Sharing section (legal crossing set; cross-module-visible-layout decline class — both
+stale spots verified still-live on disk before editing); False-Sharing milestone line SHIPPED
+v0.3-M4 + FRAGO 009 forward-looking-no-op honesty note; sleep-lint row SHIPPED v0.3-M4.
+`IMP-concurrency.md` `ECWrapperResultCollection` SHIPPED v0.3-M4 (verified against
+`crates/ynz-runtime/src/handle.rs` "R8 — copy-before-free, compile-time spawn-form-keyed" and
+the retired `ec-wrapper-collect-on-completion` note at `registry/features.toml:1164`; the
+section's "conditional on whether the handle is collected" prediction corrected to the shipped
+compile-time spawn-form-keyed mechanism). (2) `Cargo.toml:21` `0.3.0-m7` → `0.3.0`; full
+`cargo build --workspace` GREEN in the dev container (all 14 crates at v0.3.0; no other live
+`-m7` reference — CHANGELOG/state.md/VSCode-README hits are historical sections).
+(3) R4 span verification with real command output: `git describe --tags --abbrev=0` =
+`v0.3.0-m7` (most recent tag); `git log --oneline v0.3.0-m7..HEAD` = 61 commits including all
+of M4 (`d93f4c8`…`372927f`) and M3g (`87a63b7` et al.; M3g absent from CHANGELOG — confirmed by
+grep). CHANGELOG generation itself NOT performed (Step 4 / `/release` owns it).
+
+**Deviations SURFACED, not self-adjudicated (full text in the P6 STATUS banner):**
+P6-D1 — "M3f merged un-tagged, no CHANGELOG entries" is stale: M3f (merge `51c948b`) IS an
+ancestor of tag `v0.3.0-m6` and CHANGELOG `[0.3.0-m6]` already covers it; the m7..HEAD span
+correctly contains zero M3f commits; v0.3.0's CHANGELOG must not re-cover M3f. P6-D2 — the span
+contains the whole M3d implementation by ancestry (M3d branch merged after the m7 tag) though
+`[0.3.0-m7]` already describes M3d; naive commit-list generation would double-cover it. Both
+routed to the deviation-judge + Step 4's human-gated `/release`.
+
+**Plan-structure repair (surfaced + fixed):** the `#### Phase 6 — v0.3.0 release fold
+(M3f + M3g + M4)` slice-anchor heading was accidentally deleted by P5 commit `372927f`
+(verified `git log -S '#### Phase 6'`); restored byte-identical from the pre-deletion revision
+(`d93f4c8:plan.md:734`) so the phase has its anchor and the P6 banner a home. Structural
+restoration of an accidental deletion only — no content judgment; flagged for the
+deviation-judge alongside P6-D1/D2.
+
+Plan↔task sync: no TodoWrite tool in this dispatch's grant — sync is the P6 STATUS banner +
+this entry (the phase's Steps are numbered lines, not checkbox glyphs, per this plan's
+convention). Pre-existing dirty `roadmap.md` + `cspell.json` untouched. NO STOP condition
+fired; NO dormant override armed. Session-id `executor-2026-07-02-m4-p6` appended; status
+remains active (phase open pending Step 4 + reviewer fan-out + Patrick sign-off).
+
+## Session log — executor-2026-07-02-m4-p6 (FRAGO 017 application) — 2026-07-03
+
+Coordinator routed the deviation-judge's verdicts back: P6-D1 JUSTIFIED (explicit FRAGO required —
+the exit criterion was an affirmatively WRONG instruction in the seam Step 4 reads, not a mere
+footnote), P6-D2 JUSTIFIED folded into the same FRAGO, P6-D3 (Phase 6 heading restoration)
+JUSTIFIED with NO FRAGO (pure mechanical repair, correct as left). Applied FRAGO 017's four Changes
+verbatim — NOT re-adjudicated (deviation-judge pre-classified; this dispatch only applies): (1)
+Phase 6 title `plan.md:1408` "(M3f + M3g + M4)" → "(M3g + M4; M3f already released at `v0.3.0-m6`)";
+(2) Task+purpose "un-tagged M3f + M3g" → "un-tagged M3g" + M3f-shipped-at-m6 note; (3) Step 4 text
+gained the M3f-exclusion (already at `[0.3.0-m6]`) AND M3d-exclusion (already at `[0.3.0-m7]`,
+double-cover hazard) instructions directly, so a fresh `/release` session sees both hazards in the
+step itself, not only the banner; (4) Exit criteria "spans M3f + M3g + M4" → "spans M3g + M4 (M3f
+covered at m6, NOT re-covered; M3d covered at m7, NOT re-covered)". P6-D1/D2 banner blocks annotated
+classified-JUSTIFIED + applied via FRAGO 017; P6-D3 annotated JUSTIFIED-no-FRAGO. Pure plan-text,
+zero code change — no rebuild/retest. Session-id `executor-2026-07-02-m4-p6` already current in the
+frontmatter chain (same dispatch). Status remains active (Phase 6 open pending Step 4 + Patrick
+sign-off).

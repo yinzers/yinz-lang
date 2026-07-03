@@ -93,6 +93,8 @@ When a downstream project consumes a compiled Yinz package, the compiler reads t
 
 ## Channel/Queue Primitives — Bounded by Default, Capacity Auto-Inferred
 
+**Implementation milestone**: SHIPPED v0.3-M4 — `channel<T>()` / `channel<T>(N)` construction, bounded-by-construction typeck + codegen, the kernel-mode gate, the muted default-capacity hint, and send/recv suspension (bare-channel and `background` handle-form) are all live. The default capacity is the locked constant `64` (`DEFAULT_CHANNEL_CAPACITY` in `ynz-typeck` — the single authoritative source per [`.claude/rules/authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md)).
+
 `channel<T>()` constructs a bounded channel with a compiler-chosen default capacity. `channel<T>(N)` overrides with an explicit number. There is NO unbounded constructor — to express unbounded, write `channel<T>(int.max)` and a comment explaining why.
 
 This is the auto-promotion pattern (per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)):
@@ -123,7 +125,7 @@ The muted `64` appears in the position where the user would have typed it, not a
 
 ### Default capacity — a constant, not a learned value
 
-The default is a **single constant** (initial proposal: 64; final number TBD via real benchmarking pre-v0.2). Honest reasoning about what the compiler can and can't infer:
+The default is a **single constant** (shipped: 64, locked at v0.3-M4 P0 — `DEFAULT_CHANNEL_CAPACITY` in `ynz-typeck`; revisit only with real benchmark evidence). Honest reasoning about what the compiler can and can't infer:
 
 - **Can pick a safe constant**: 64 is small enough that sustained overproduction surfaces as backpressure within seconds (not hours of memory growth before OOM), large enough to absorb normal consumer jitter without spurious suspension.
 - **Can't pick the truly optimal value statically**: optimal capacity depends on runtime producer/consumer rates and acceptable buffer-time tradeoffs — none knowable at compile time.
@@ -199,13 +201,13 @@ Acquire-release is weaker than sequential consistency. Code that relies on seq-c
 
 ## False Sharing Auto-Padding — Locked Pre-v0.3
 
-When the compiler detects that a `shape` type has fields accessed from different `background` tasks (detectable via ownership crossing thread boundaries — `.share`/`.lend` across `background` spawn sites), it emits the shape with 64-byte cache-line alignment and inserts padding between independently-accessed fields to prevent false sharing.
+When the compiler detects that a `shape` type crosses a thread boundary at a `background` spawn site, it emits the shape with 64-byte cache-line alignment and inserts padding between independently-accessed fields to prevent false sharing. Detection keys on the LEGAL crossing set — `give`/`copy` arguments, `channel<T>` conduit element types, and callee return types at `background` spawn sites — because `.share`/`.lend` across `background` is a hard compile error as of v0.3-M4 (see [`IMP-concurrency.md`](IMP-concurrency.md) "Ownership with Background Tasks — Why `.share` Fails"); the original intent here ("ownership crossing thread boundaries") is realized on the legal modifier set.
 
 **Why**: Two atomic variables placed in the same 64-byte cache line cause writes to either variable to invalidate the entire cache line for all cores — even though no data is actually shared. Production measurements show a 3.1× throughput collapse from false sharing on lock-free queue head/tail pointers (https://alic.dev/blog/false-sharing). The fix (128-byte isolation) recovers the full 3.1×. The compiler has all the information needed to apply this automatically.
 
-**Surface**: Codegen-only. No user syntax. No typeable form exists (there is no `@cacheLineSeparate` annotation in Yinz), so no muted-hint surface (per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md) — muted hints require a typeable explicit form). A Tier 3 lint `cross-thread-fields-not-padded` fires if the compiler detects a shape with cross-thread-accessed fields that it cannot auto-pad (e.g., fields in a `#[repr(C)]`-equivalent FFI shape).
+**Surface**: Codegen-only. No user syntax. No typeable form exists (there is no `@cacheLineSeparate` annotation in Yinz), so no muted-hint surface (per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md) — muted hints require a typeable explicit form). A Tier 3 lint `cross-thread-fields-not-padded` fires if the compiler detects a shape with cross-thread-accessed fields that it cannot auto-pad. The v0.3 unpaddable (decline-lint) class is cross-module-visible-layout shapes — exported / imported / `__anon__*` structural shapes — because each module compiles to its own object file, so padding only the spawning module's view would fork one type's layout (`foreign`/FFI is a v2+ `[[deferred_language_feature]]` and cannot occur in v0.3).
 
-**Implementation milestone**: v0.3 (concurrency + ownership analysis together).
+**Implementation milestone**: SHIPPED v0.3-M4 — the padding transform and the `cross-thread-fields-not-padded` decline lint are live (both gate off under `--no-auto-parallel`, reading the same authoritative analysis predicate). Honesty note (FRAGO 009, v0.3-M4 plan): every crossing v0.3 can produce today is an exclusive-ownership handoff (`give`/`copy`/channel payload), which structurally cannot false-share — the transform ships as real, tested, forward-looking infrastructure whose throughput benefit arrives when auto-Arc codegen emission ships (v0.4+, registry entry `auto-arc-codegen-emission`) and creates genuinely-shared concurrent instances.
 
 ---
 
@@ -307,9 +309,9 @@ There are two sleep intrinsics, distinguished by what they do to the OS thread:
 | Context | Wrong choice | Diagnostic |
 |---|---|---|
 | **`--kernel` mode** | `wait sleep(ms)` (no scheduler to yield to) | **COMPILE ERROR** — `KernelModeRejectsWait`, with WHAT-INSTEAD redirecting to `sleepBlocking(ms)` (pauses without a scheduler). Ships when `--kernel` is wired to emit (post-v0.3; reserved in the registry, 0 code sites today). See [`docs/internal/implementation/IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md). |
-| **Normal mode** | `sleepBlocking(ms)` (holds a thread idle when a scheduler is available) | **Tier 3 lint** `prefer-yielding-sleep` (suggestion, dismissable — NOT an error) → use `wait sleep(ms)`. Ships in **M4** (rides the `[[lint_rule]]` infra built there; M4's `background` handle-form also removes the last legit non-kernel blocking-sleep use — the keepalive pattern — so the lint stops nagging a valid case). Must be a suggestion, not an error: rare legit uses exist + respect explicit intent ([`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)). |
+| **Normal mode** | `sleepBlocking(ms)` (holds a thread idle when a scheduler is available) | **Tier 3 lint** `prefer-yielding-sleep` (suggestion, dismissable — NOT an error) → use `wait sleep(ms)`. **SHIPPED v0.3-M4** (rides the `[[lint_rule]]` infra built there, kernel-gated off; M4's `background` handle-form also removed the last legit non-kernel blocking-sleep use — the keepalive pattern — so the lint stops nagging a valid case). Must be a suggestion, not an error: rare legit uses exist + respect explicit intent ([`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)). |
 
-Tracked for execution in [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md) ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope).
+Execution was tracked in [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md) ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope); the normal-mode lint shipped in v0.3-M4 (the `--kernel` compile-error row above remains reserved, post-v0.3).
 
 ---
 
