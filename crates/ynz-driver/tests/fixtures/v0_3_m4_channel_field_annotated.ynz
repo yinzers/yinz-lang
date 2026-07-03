@@ -1,0 +1,19 @@
+// v0.3-M4 fix-loop (conduit-origin discipline): a channel stored in a shape field is usable
+// for `.receive()` when the extraction binding carries the `channel<T>` annotation — the
+// annotation is the syntactic evidence the may-block resolver derives conduit-ness from.
+// This locks the origin diagnostic's WHAT-INSTEAD suggestion as a real, working escape hatch.
+// Expected output: "7"
+shape Box { wire: channel<int> }
+
+function feed(out: channel<int>) -> nothing {
+  let r = out.send(7)
+}
+
+function entrypoint() -> nothing {
+  let ch = channel<int>(4)
+  background feed(ch)
+  let b: Box = { wire: ch }
+  let c: channel<int> = b.wire
+  let first = c.receive()
+  print(first)
+}

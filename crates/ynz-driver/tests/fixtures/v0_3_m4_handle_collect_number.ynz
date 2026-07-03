@@ -1,0 +1,16 @@
+// R8 matrix — collected x ok-path x WIDE VALUE (-> number errors): the exact
+// IMP-concurrency:465 copy-before-free case. The ok-word points into the frame's 16-byte
+// staging slot; the runtime copies it to the handle-owned buffer BEFORE free_frame. The
+// full-precision value proves byte-correctness (truncation would corrupt it).
+function bigWorker() -> number errors {
+  wait sleep(5)
+  return 9999999999.000000001
+}
+
+function entrypoint() -> nothing {
+  let h = background bigWorker()
+  wait sleep(60)
+  let r = h.receive()
+  let v = r.or(0.0)
+  print(v.toString())
+}

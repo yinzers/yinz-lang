@@ -1160,14 +1160,50 @@ ships_in = "v0.3+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A local binding of type `union`, `maybe<T>`, or `dynamic Contract` that is declared before a `wait` and read after it — any of these triggers the UnsupportedCrossingLocalType compile error."
 
-# --- EC wrapper collect-on-completion (docs/internal/implementation/IMP-concurrency.md M3a Scope Boundaries) ---
+# --- EC wrapper collect-on-completion — SHIPPED in v0.3-M4 Phase 2. ---
+# The deferred_language_feature entry (`ec-wrapper-collect-on-completion`) has been retired —
+# the copy-before-free fix is live: a handle spawn (`let h = background worker()`) extracts the
+# completion value from the frame's return slot BEFORE the frame is freed, copying a wide
+# (`-> number errors`) ok-value to a handle-owned buffer; the bare fire-and-forget spawn path is
+# byte-for-byte unchanged. Spawn-form-keyed at COMPILE time — never a runtime
+# "was receive called" conditional. See docs/internal/implementation/IMP-concurrency.md
+# ("ECWrapperResultCollection") and crates/ynz-runtime/src/handle.rs for the design record.
+
+# --- Handle-drop cancel wiring (docs/internal/implementation/IMP-no-function-coloring.md "Task Cancellation") ---
 [[deferred_language_feature]]
-name = "ec-wrapper-collect-on-completion"
-substitute = "Use the inline-poll path: a suspending function that calls another suspending `-> T errors` function composes the callee inline (the state-machine resume path). Only `background` (fire-and-forget) hits the standalone EC wrapper, and it safely discards the completed value. Reading the completed value of a `background`-spawned `-> T errors` task requires the `background` handle-collection form (`.send`/`.receive`), which itself ships with the `background-handle-form` feature."
-why = "The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reads the `{i64, i64}` EC value from the frame return slot and then frees the frame. For `-> number errors`, the ok-word in that value points into the composed frame's 16-byte staging slot — storage freed at the same time as the frame. The ok-pointer therefore becomes invalid after the wrapper returns. This is safe today because the only reachable caller is `background` (fire-and-forget), which DISCARDS the EC value without dereferencing the ok-pointer. A caller that reads and uses the ok-pointer must copy it BEFORE freeing the frame; implementing that copy requires the scheduler to know whether a spawned task's completed value is read or discarded. That knowledge only exists once the `background` handle-collection form (`.send`/`.receive`, the `background-handle-form` feature) lands — there is no syntax in M3b to collect a `background` task's completed value (`let h = background ecFn()` is rejected by typeck), so this deferral is vacuous until handle-collection ships and must stay gated on it."
-ships_in = "v0.3-M4"
+name = "background-handle-cancel-injection"
+substitute = "In v0.3 a spawned task always runs to completion, even when its handle goes out of scope - it is never silently killed, and every channel/handle reference is refcount-guarded (no dangling reads, no double-free). To stop a long-running task on request, have it read a command channel (`h.send(...)` into the task's `channel<T>` parameter) and return when told."
+why = "The locked cancel-via-drop model delivers a cancellation signal at the task's next suspension point, propagated as a normal `errors` value with every in-scope value cleaned up in order. The RUNTIME half exists and is proven: `ynz_handle_free` stops the child at its next suspension point, and the frame plus the handle-owned value buffer are each freed exactly once (substrate-tested). The LANGUAGE half - calling it automatically when a handle binding's scope ends, and surfacing the cancellation as a typed `errors` value inside the child - needs the language-wide automatic scope-cleanup mechanism, which does not exist in v0.3; wiring a handle-only cleanup pass now would create a second cleanup mechanism the general one would have to unify later. Until then a handle object is small, bounded (one per spawn), and reclaimed when the program ends."
+ships_in = "v0.4+"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+triggers = "The language-wide automatic scope-cleanup mechanism shipping (`ynz_handle_free` is the ready-made runtime hook), OR a real workload needing to cancel a running task before then."
+
+# --- Conduit-op expression position (v0.3-M4 Phase 2 statement discipline) ---
+[[deferred_language_feature]]
+name = "channel-op-expression-position"
+substitute = "Bind the value first: `let value = ch.receive()` as its own statement, then use `value` inside the larger expression. Hold channels and task handles in named `let` bindings (or parameters) before calling `.send()`/`.receive()` on them."
+why = "A channel operation can suspend the function mid-statement. The compiler resumes a suspended function at a statement boundary and saves NAMED bindings across the suspension; an operation nested inside a larger expression would need the surrounding expression's partial values - and an unnamed in-flight receiver - to survive the suspension, which requires expression-level temporaries to persist in the state-machine frame layout. The named-binding + statement-position discipline also keeps the early may-block analysis's syntactic view of channel/handle receivers exactly equivalent to the type-checker's view (the single-classifier discipline), so the two can never disagree about what suspends."
+ships_in = "v0.4+"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+triggers = "`ch.receive() + 1`, `process(ch.receive())`, or `.send()`/`.receive()` on anything other than a plain named binding - each rejected today with a teaching error. Lift when expression-level temporaries can persist across suspension points in the state-machine frames."
+
+# --- Handle form for never-suspending callees (v0.3-M4 Phase 2 restriction) ---
+[[deferred_language_feature]]
+name = "background-handle-nonsuspending-callee"
+substitute = "Use fire-and-forget `background crunch(...)` for a CPU-bound function - it runs on the CPU pool and needs no handle. The handle form (`let h = background worker()`) works with any SUSPENDING function: one that uses `wait`, a channel, or calls a function that does."
+why = "A handled task is an independent joinable task on the scheduler's cooperative pool, driving a suspend/resume state-machine frame - the substrate that `.send()`/`.receive()` and the completion delivery are built on. A function that never suspends has no state-machine frame: it runs to completion on the CPU (blocking) pool, whose join model is a run-once call with no conduit to collect from or send into. Bridging that (delivering a CPU-pool task's completed value through the same `.receive()` surface) is real design work on the CPU-pool join path, not a missing check."
+ships_in = "v0.4+"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+triggers = "`let h = background crunch()` where `crunch` never suspends - rejected today with a teaching error that names this entry. Lift when the CPU-pool join path can deliver its completion through the handle's `.receive()` surface."
+
+# --- Channel element-type restriction: per-type heap-upgrade (v0.3-M4 Phase 2 restriction) ---
+[[deferred_language_feature]]
+name = "channel-element-heap-upgrade"
+substitute = "Use one of the supported element types: int, float, boolean, string, array<T>, map<K, V>. For a `shape`, send its fields as separate values (or pack them into an array or map) and rebuild the shape on the receiving side; the same field-wise pattern covers a `number` value. Alternatively, put the value in a heap-allocated container you manage (an `array<T>` of one element) and send that."
+why = "Channel values travel between tasks as a single 64-bit slot: scalars by value (int, float, boolean) and heap-stable pointers (string, array, map). A `shape` or `number` value is backed by the SENDING task's stack frame, which can be freed while the value still sits in the channel - the receiver would read freed memory. This is the same dangling-pointer class the UnsupportedCrossingLocalType discipline (shipped in M3a) rejects for locals crossing a `wait`. Lifting the restriction needs a per-type heap-upgrade at the send site - copying the shape/number bytes into channel-owned heap storage the receiver frees after reading - which is real ABI + codegen work, not a missing check. Until it ships, these element types are rejected at channel construction with a clean teaching error, never a silent dangling read."
+ships_in = "v0.4+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
-triggers = "Collecting the completed value of a `background`-spawned suspending `-> T errors` function via its handle (`.send`/`.receive`) — gated on the `background-handle-form` feature; until that ships there is no way to reach the standalone-wrapper copy-before-free path."
+triggers = "`channel<Player>()` or `channel<number>()` - any channel construction whose element type is a shape or `number` - rejected today with a teaching error (crates/ynz-typeck/src/check.rs, channel-construction element check). Lift when the per-type heap-upgrade (heap-copying sender-stack-backed values into channel-owned storage at the send site) ships."
 
 # --- Sequential-consistency atomic-ordering opt-in (docs/internal/implementation/IMP-no-function-coloring.md "Atomic Ordering Default") ---
 [[deferred_language_feature]]
@@ -1362,14 +1398,15 @@ ships_in = "v0.3"
 design_doc = "docs/internal/scratchpad/SCRATCH-future-arena.md"
 triggers = "`arena scratch { }` keyword ships in the v0.3 concurrency/memory milestone."
 
-# background handle-form — `let h = background fn()` is rejected by typeck; ships in v0.3-M4.
-[[deferred_tooling_feature]]
-name = "background-handle-form"
-substitute = "Use fire-and-forget `background fn(value.give)` or `background fn(value.copy)` for now. Handles (`let h = background fn()`) and channel-based value passing ship in v0.3-M4."
-why = "The handle form needs channels to pass results back to the caller. Channels ship in v0.3-M4 alongside the handle-form syntax."
-ships_in = "v0.3-M4"
-design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
-triggers = "`let h = background fn()` — already rejected by typeck with a compile error pointing to this deferred feature"
+# background handle-form — SHIPPED in v0.3-M4 Phase 2.
+# The deferred_tooling_feature entry (`background-handle-form`) has been retired — the feature
+# is live: `let h = background worker()` yields a task handle supporting `h.send(v)` (feeds the
+# callee's first `channel<T>` parameter) and repeated `h.receive()` (message replies AND the
+# task's own completion value as its final delivery — one surface). The typeck rejection that
+# pointed at this entry was lifted at check.rs (v0.3-M4 Phase 2). Remaining scoped-out slices
+# have their own entries: `background-handle-nonsuspending-callee`,
+# `background-handle-cancel-injection`, `channel-op-expression-position`.
+# See docs/internal/implementation/IMP-no-function-coloring.md for the design record.
 
 # Rename — aliased re-export deferred to v0.3+.
 [[deferred_tooling_feature]]

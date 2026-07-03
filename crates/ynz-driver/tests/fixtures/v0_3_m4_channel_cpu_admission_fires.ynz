@@ -1,0 +1,32 @@
+// v0.3-M4 — the FIRE twin of v0_3_m4_channel_cpu_admission_declines.ynz: the SAME host
+// shape (two consecutive independent calls, results summed) with a pure-CPU callee instead
+// of a channel-using one. This must be ADMITTED as a CPU pair (exactly 2 blocking-pool
+// spawns) — proving the decline twin's shape is genuinely CPU-admissible and the decline
+// there is attributable ONLY to the channel-suspension classification.
+//
+// pump(seed) loops (real CPU work, the m3d admission shape) and returns loopSum + seed + 1.
+// loopSum = 0+1+...+99 = 4950 → pump(10) = 4961, pump(20) = 4971.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   9932
+function pump(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  let got = total + seed
+  return got + 1
+}
+
+function host() -> int {
+  let a = pump(10)
+  let b = pump(20)
+  return a + b
+}
+
+function entrypoint() -> nothing {
+  let r = host()
+  print(r.toString())
+}

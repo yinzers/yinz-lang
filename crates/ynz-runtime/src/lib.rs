@@ -1,4 +1,5 @@
 pub mod channel;
+pub mod handle;
 pub mod runtime;
 pub use channel::{
     ynz_channel_create, ynz_channel_free, ynz_channel_recv_poll, ynz_channel_send_poll, YnzChannel,

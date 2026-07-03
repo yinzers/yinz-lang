@@ -1,0 +1,15 @@
+// v0.3-M4 fix-loop (conduit-origin discipline): `.receive()` on a channel bound from a
+// CROSS-MODULE channel-returning call, with no annotation. Before the fix this type-checked,
+// missed the suspend set, and ICEd in codegen. Expected: origin teaching error at compile time.
+import { makeChannel } from `chan_ops`
+
+function feed(out: channel<int>) -> nothing {
+  let r = out.send(7)
+}
+
+function entrypoint() -> nothing {
+  let ch = makeChannel()
+  background feed(ch)
+  let first = ch.receive()
+  print(first)
+}

@@ -1,14 +1,24 @@
-// v0.3-M4 compile-error and warning gallery (Phase 1 — channel<T> construction)
+// v0.3-M4 compile-error and warning gallery (Phase 1 construction + Phase 2 send/recv/handle)
 //
-// Every block below intentionally triggers a diagnostic class added in v0.3-M4 Phase 1.
+// Every block below intentionally triggers a diagnostic class added in v0.3-M4.
 // Run `ynz build v0_3_m4_errors.ynz` to see all diagnostics.
 // Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
 //
 // Each block has a // WHY: comment naming the diagnostic class.
-//
-// SCOPE: Phase 1 ships channel CONSTRUCTION only. The suspending `.send()` / `.receive()` method
-// surface — and its diagnostics (closed-channel send, backpressure teaching text) — land in
-// Phase 2 (FRAGO 004) and will be added to this gallery then.
+
+// A suspending worker with NO channel parameter — the h.send()-with-no-inbox trigger below.
+function reheatOven() -> int errors {
+  wait sleep(1)
+  return 350
+}
+
+// A pure-CPU function that never suspends — the handle-form-needs-suspending trigger below.
+function countBuns() -> int {
+  return 12
+}
+
+// A shape holding a channel — the receiver-origin trigger below extracts it unannotated.
+shape PickupWindow { line: channel<int> }
 
 function entrypoint() -> nothing {
   // WHY: channel-capacity-non-positive — a channel is bounded by construction (stdlib-design
@@ -30,18 +40,88 @@ function entrypoint() -> nothing {
   // WHY: channel-too-many-args — a channel takes at most one argument, its capacity.
   let tooMany: channel<int> = channel<int>(8, 16)
 
+  // ── v0.3-M4 Phase 2: the .send()/.receive() method surface ──
+
+  // A well-formed channel the method-surface triggers below use.
+  let orders: channel<int> = channel<int>(2)
+
+  // WHY: channel-unknown-method — channels carry values with send(value)/receive() only;
+  // anything else names the two available methods.
+  orders.push(1)
+
+  // WHY: channel-send-wrong-element-type — the element type is fixed at construction. The
+  // diagnostic's WHY also carries the backpressure teaching text ("a suspended producer is
+  // backpressure working, not a deadlock") so the first send error a user hits teaches the
+  // bounded-channel model.
+  orders.send(`a string, not an int`)
+
+  // WHY: channel-receive-takes-no-arguments — receive() takes the next value out, bare.
+  let takeout = orders.receive(5)
+
+  // WHY: channel-op-must-be-own-statement — a channel operation can suspend, and the compiler
+  // resumes a function at a statement boundary; nesting it inside a larger expression is
+  // rejected (see `channel-op-expression-position` in the feature registry).
+  let doubled = orders.receive() + 1
+
+  // WHY: channel-receiver-must-be-named-binding — an unnamed in-flight channel has nowhere to
+  // live across a suspension; bind it first (`let ch = ...`), then call methods on the binding.
+  channel<int>(2).send(3)
+
+  // WHY: channel-receiver-origin-not-derivable — the compiler decides which functions need
+  // suspend-and-resume support by reading each binding's declared type early, so a channel
+  // arriving through a shape field (or a collection element, loop variable, or another
+  // module's function) must be bound WITH its type: `let line: channel<int> = window.line`.
+  // Unannotated, the origin is invisible and the operation is rejected with a teaching error.
+  let window: PickupWindow = { line: orders }
+  let line = window.line
+  let pickup = line.receive()
+
+  // WHY: channel-element-type-not-supported — a `number` (or `shape`) value lives in the
+  // SENDING task's stack frame, which can be freed while the value still sits in the channel;
+  // the receiver would read freed memory. Rejected until per-type heap-copying ships.
+  let widePipe: channel<number> = channel<number>(2)
+
+  // ── v0.3-M4 Phase 2: the background handle-form ──
+
+  // WHY: background-handle-nonsuspending-callee — the handle form needs a SUSPENDING function
+  // (the handle substrate drives a suspend/resume frame); a pure-CPU function is rejected with
+  // a pointer to the registry entry. Fire-and-forget `background countBuns()` still works.
+  let badHandle = background countBuns()
+
+  // WHY: handle-send-task-takes-no-channel — h.send(v) feeds the spawned function's FIRST
+  // `channel<T>` parameter; a task whose function takes no channel never looks for messages,
+  // so sending to it would silently pile up values nobody reads.
+  let oven = background reheatOven()
+  oven.send(450)
+
   print(`unreachable`)
 }
 
-// -- v0.3-M4 Error Class: kernel-mode rejects channel<T> construction --
+// -- v0.3-M4 Error Class: kernel-mode rejects channel<T> construction AND channel methods --
 //
 // WHY: kernel-channel-rejected — `channel<T>` needs the Tokio scheduler started by ynz_rt_init to
 // suspend a task on send-when-full / receive-when-empty; that scheduler does not run in kernel
-// mode, so channel construction is a compile error under --kernel.
+// mode, so channel construction (Phase 1) AND the `.send()`/`.receive()` method surface (Phase 2)
+// are compile errors under --kernel.
 //
 // Cannot be triggered via the public CLI in v0.3-M4 (the --kernel flag is hidden until it becomes
 // a public build mode). Triggered in-process via check_with_kernel_mode() — see
-// crates/ynz-typeck/tests/check.rs `channel_construction_in_kernel_mode_rejected`. When --kernel
-// is a public flag, this block will be updated with a real trigger:
+// crates/ynz-typeck/tests/check.rs `channel_construction_in_kernel_mode_rejected` and the Phase-2
+// method-gate tests. When --kernel is a public flag, this block will be updated with a real
+// trigger:
 //
 //     let ch: channel<int> = channel<int>()   // ERROR in --kernel mode
+//     ch.send(1)                              // ERROR in --kernel mode too
+
+// -- v0.3-M4 Error Class: sending on a channel whose receiver is gone (RUNTIME typed error) --
+//
+// WHY: channel-closed-send — Lock 8: `.send()` is typed `nothing errors`, so a dropped/closed
+// receiver yields a TYPED Yinz channel-closed error a program can handle with `.or()` /
+// `errors` propagation — never a silent drop, never a raw runtime crash.
+//
+// NOT triggerable from v0.3 source, deliberately: the channel OBJECT holds its own sender and
+// receiver endpoints, and a `channel<T>` binding keeps both alive (refcount-shared across
+// `background` boundaries), so no v0.3 program shape can observe a closed channel. The path is
+// still real — it is emitted in codegen (the 3-way suspend-point's Closed arm) and proven at the
+// runtime substrate (`send_to_closed_returns_closed` in crates/ynz-runtime/src/channel.rs). It
+// becomes source-reachable when channel endpoints get independent lifetimes (a future milestone).

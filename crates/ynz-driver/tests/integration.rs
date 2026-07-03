@@ -6236,6 +6236,11 @@ fn runtime_axis_coverage(variant: &ynz_typeck::types::Type) -> RuntimeAxisCovera
             distinct: &["v0_3_m3d_return_class_int_errors.ynz"],
             same_callee: "v0_3_m3d_same_callee_int_errors.ynz",
         },
+        // v0.3-M4 Phase 2: a background task handle has no typeable return annotation, so
+        // it can never be a CPU-group member's return class — structurally unreachable.
+        Type::BackgroundHandle { .. } => RuntimeAxisCoverage::Declines(
+            "task handles are inferred-only (`let h = background f()`); no return-type syntax exists",
+        ),
         // Declined classes: sequential lowering, no FIRE fixture.
         Type::BuiltinFixed { .. } => RuntimeAxisCoverage::Declines(
             "fixed's non-suspending return is a pre-existing base bug",
@@ -9455,4 +9460,305 @@ fn v0_3_m4_channel_bad_capacity_rejected_at_compile_time() {
         stderr.contains("capacity must be at least 1"),
         "must reject non-positive capacity with a teaching diagnostic; got:\n{stderr}"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M4 Phase 2 — bare-channel send/recv + background handle-form (FRAGO 004)
+//
+// The build-blocking gates for the phase's three named risks:
+//   R5 — composed suspension (child suspends on send-on-full while the parent polls receive)
+//   R8 — EC-wrapper copy-before-free collection matrix (spawn-form-keyed at COMPILE time)
+//   R6/R7 — channel methods classify as suspension sources through the ONE authoritative
+//           classifier, all the way into cpu_admission (decline fixture + FIRE twin)
+//
+// Every fixture below was GREEN via manual `ynz run` when Phase 2 landed; these tests are
+// what makes them regress-proof (a fixture that merely exists on disk gates nothing).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Shared Phase-2 gate: the fixture runs to the expected stdout in default mode, runs
+/// byte-identical under `--no-auto-parallel` (the cross-impl oracle), and — because every
+/// conduit fixture allocates task frames — keeps the counted allocator balanced AND non-zero
+/// (alloc == free == 0 would mean the counter saw nothing, hiding a counter regression).
+fn m4_p2_assert_runs_byte_identical_alloc_free(fixture_name: &str, expected_stdout: &str) {
+    let src = fixture(fixture_name);
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout, expected_stdout,
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free (no frame/arg-copy leak on the conduit path); \
+         alloc={alloc}, free={free}"
+    );
+    assert!(
+        alloc > 0,
+        "the conduit path allocates task frames — a 0==0 balance means the alloc counter \
+         saw nothing (counter regression), not that the program is leak-free"
+    );
+}
+
+// WHY: THE R5 composed-suspension gate (build-blocking, plan §3.3 P2 step 7). A handle-spawned
+// child suspends on `send()`-on-full (capacity-1 channel) WHILE the parent polls `receive()` —
+// the exact scenario that deadlocks on any substrate with a synchronous block or fabricated
+// waker in the conduit path. Both values arriving in order + clean exit is the proof the
+// suspend→persist→resume path composes. A hang here trips the test watchdog.
+#[test]
+fn v0_3_m4_p2_r5_composed_suspension_gate() {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_composed.ynz", "10\n20\ndone\n");
+}
+
+// WHY: the FRAGO 004 relocation proof — the BARE-channel (fire-and-forget spawn, no handle)
+// two-task composed scenario. Proves `emit_channel_suspend_point`'s suspend→persist→resume
+// path end-to-end WITHOUT the handle machinery: the exact path no single-task Phase-1 fixture
+// could exercise, which is WHY the send/recv build moved to Phase 2.
+#[test]
+fn v0_3_m4_p2_bare_channel_composed_suspend_resume() {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_channel_composed_bare.ynz",
+        "6\nbare done\n",
+    );
+}
+
+// WHY: single-task send-then-receive smoke — the minimal bare-channel method surface
+// (typeck Lock 8 + the 3-way emit_channel_suspend_point on its Ready arms).
+#[test]
+fn v0_3_m4_p2_channel_smoke() {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_smoke.ynz", "7\nsmoke done\n");
+}
+
+// WHY: R8 matrix — collected × ok × receive-AFTER-completion. The child finished (and its
+// frame was freed) long before the parent's `.receive()` — a byte-correct 42 proves the
+// completion was extracted BEFORE the frame-freeing drop (copy-before-free), because a
+// read-after-free of the dead frame could not reliably deliver it.
+#[test]
+fn v0_3_m4_p2_r8_collect_ok_receive_after_completion() {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_collect_ok_after.ynz", "42\n");
+}
+
+// WHY: R8 matrix — collected × ok × receive-BEFORE-completion. The parent parks on
+// `.receive()` while the child is still running; the receive endpoint future's forwarded
+// waker must wake the parent when the completion lands (a fabricated waker hangs here).
+#[test]
+fn v0_3_m4_p2_r8_collect_ok_receive_before_completion() {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_collect_ok_before.ynz", "42\n");
+}
+
+// WHY: R8 matrix — collected × ERROR path. The child's typed error is the completion
+// delivery; `.or(99)` takes the fallback. A dangling ok-pointer or double-free on the error
+// arm would corrupt or crash instead of printing 99.
+#[test]
+fn v0_3_m4_p2_r8_collect_error_path() {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_collect_err.ynz", "99\n");
+}
+
+// WHY: R8 matrix — collected × WIDE VALUE (`-> number errors`): the exact
+// IMP-concurrency:465-479 copy-before-free case this feature was gated on. The ok-word
+// points into the frame's 16-byte staging slot; the runtime must copy those bytes to the
+// handle-owned buffer BEFORE free_frame. The full-precision value is the proof — any
+// truncation or stale read corrupts the 9 fractional digits.
+#[test]
+fn v0_3_m4_p2_r8_collect_wide_number_copy_before_free() {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_handle_collect_number.ynz",
+        "9999999999.000000001\n",
+    );
+}
+
+// WHY: R8 matrix — fire-and-forget arm: a BARE spawn of the same `-> T errors` callee keeps
+// today's discard path (no handle, no copy). Output unchanged is the behavioral half; the
+// IR-keying test below is the structural half.
+#[test]
+fn v0_3_m4_p2_r8_fire_and_forget_unchanged() {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_handle_fire_forget_unchanged.ynz",
+        "fire and forget done\n",
+    );
+}
+
+// WHY: THE composed R5×R8 cell (build-blocking, plan r4 addition): a collected
+// `-> number errors` child suspends on a full-channel `send()` MID-execution (R5's
+// scenario), resumes, finishes, and its completion is collected through the
+// copy-before-free path (R8's scenario). Asserts in one program: the frame survives the
+// channel suspension, the collected wide value is byte-correct, and (via the alloc gate)
+// frame + counted buffers are each freed exactly once.
+#[test]
+fn v0_3_m4_p2_r5xr8_suspend_mid_execution_then_collect() {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_r5xr8_suspend_then_collect.ynz",
+        "15\n9999999999.000000001\n",
+    );
+}
+
+// WHY: R2 hostile — never-received handle. One completion parked in the outbox, the handle
+// dropped without a receive: must terminate cleanly and free the frame via the task's own
+// drop ladder (alloc==free is the handle-DROP leak gate) — never a deadlock, never a leak.
+#[test]
+fn v0_3_m4_p2_handle_never_received_bounded_and_freed() {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_handle_never_received.ynz",
+        "never received - still clean\n",
+    );
+}
+
+// WHY: R2 hostile — pool exhaustion: 12 concurrently-suspended handled tasks (more than the
+// worker threads). Cooperative poll-yield suspension means every task completes and every
+// value is collected; a thread-blocking substrate wedges and trips the watchdog.
+#[test]
+fn v0_3_m4_p2_handle_pool_exhaustion_all_collected() {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_pool_exhaustion.ynz", "12\n");
+}
+
+// WHY: R1 hostile — never-drained: a fire-and-forget child suspends on a full channel and
+// nobody ever drains it. The child staying suspended is BACKPRESSURE WORKING (the teaching
+// point), not a deadlock: the parent exits cleanly and shutdown drains the parked task
+// (alloc==free proves the parked frame + channel refs were still freed).
+#[test]
+fn v0_3_m4_p2_channel_never_drained_parent_exits_clean() {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_channel_never_drained.ynz",
+        "parent exits while producer stays backpressured\n",
+    );
+}
+
+// WHY: the full handle round-trip — `h.send(v)` feeds the child's first `channel<T>`
+// parameter, the child computes from the command, and the completion returns via
+// `h.receive()`. One parent→child→parent cycle through both conduit directions.
+#[test]
+fn v0_3_m4_p2_handle_send_receive_roundtrip() {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_send_roundtrip.ynz", "42\n");
+}
+
+// WHY: the R8 no-runtime-conditional grep-audit, made structural and build-blocking: the
+// copy-before-free decision keys on the COMPILE-TIME spawn form, never on runtime
+// "was `.receive()` called" state. Proof at the IR level: a bare fire-and-forget spawn
+// lowers to `ynz_rt_spawn` ONLY (zero handle machinery — byte-for-byte today's discard
+// path), and a `let h = background ...` spawn lowers to `ynz_rt_spawn_handle` ONLY. The
+// behavioral half is the receive-after-completion matrix cells above (the copy demonstrably
+// happened at completion time even though the receive came arbitrarily later).
+#[test]
+fn v0_3_m4_p2_r8_spawn_form_keyed_at_compile_time() {
+    let ff_ir = build_to_tmpdir_emit_ir(&fixture("v0_3_m4_handle_fire_forget_unchanged.ynz"));
+    let ff_handle_spawns = ff_ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_handle"))
+        .count();
+    let ff_bare_spawns = ff_ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn("))
+        .count();
+    assert_eq!(
+        (ff_handle_spawns, ff_bare_spawns),
+        (0, 1),
+        "fire-and-forget must lower to exactly one bare `ynz_rt_spawn` and ZERO \
+         `ynz_rt_spawn_handle` calls (the discard path must carry no handle machinery); IR:\n{ff_ir}"
+    );
+
+    let h_ir = build_to_tmpdir_emit_ir(&fixture("v0_3_m4_handle_collect_ok_after.ynz"));
+    let h_handle_spawns = h_ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_handle"))
+        .count();
+    let h_bare_spawns = h_ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn("))
+        .count();
+    assert_eq!(
+        (h_handle_spawns, h_bare_spawns),
+        (1, 0),
+        "a handle spawn must lower to exactly one `ynz_rt_spawn_handle` and ZERO bare \
+         `ynz_rt_spawn` calls (the collecting path is compile-time keyed); IR:\n{h_ir}"
+    );
+}
+
+// WHY: the R6→cpu_admission decline gate (plan R7 exit criterion): a channel-using callee is
+// classified SUSPENDING through the one authoritative classifier chain (suspension_source →
+// may_block fixpoint → cpu_admission's suspend_set), so a pair of calls to it is DECLINED
+// from CPU-pool admission — 0 blocking-pool spawns. A channel-using closure admitted to the
+// blocking pool would park an OS thread on a suspended send (the M3g deadlock class).
+#[test]
+fn v0_3_m4_p2_channel_using_callee_declines_cpu_admission() {
+    m3d_assert_declines_byte_identical("v0_3_m4_channel_cpu_admission_declines.ynz", "32");
+}
+
+// WHY: the FIRE twin proving the decline above is attributable to the channel classification
+// and not to the fixture shape: the SAME host shape with a pure-CPU callee is admitted and
+// fires 2 blocking-pool spawns. Without this twin, the decline test would pass vacuously on
+// any inadmissible shape (masked-branch discipline).
+#[test]
+fn v0_3_m4_p2_cpu_admission_fire_twin_still_fires() {
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m4_channel_cpu_admission_fires.ynz",
+        "9932",
+        2,
+    );
+}
+
+// ── v0.3-M4 fix-loop: conduit-receiver ORIGIN discipline ─────────────────────────────────
+//
+// WHY (the class): typeck accepted `.send()`/`.receive()` on any plain-ident channel
+// receiver, but the may-block resolver only derives conduit bindings from a fixed syntactic
+// origin set. A channel reaching a binding through a shape field, a maybe-`.value` element,
+// a loop variable, or a CROSS-MODULE channel-returning call type-checked, missed the suspend
+// set, and ICEd in codegen ("unknown method `receive` on BuiltinChannel"). The single-file
+// origins are locked at the typeck level (ynz-typeck/tests/check.rs); the two tests below
+// cover the cross-module origin (unreachable in a single-file typeck test) and the runtime
+// proof that the diagnostic's annotate-the-binding suggestion actually works.
+
+// WHY: cross-module channel-returning call with NO annotation — must be a clean teaching
+// error at compile time, never the codegen ICE it produced before the fix.
+#[test]
+fn v0_3_m4_channel_xmod_return_unannotated_rejected() {
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m4_channel_xmod_return"));
+    assert_eq!(
+        code, 1,
+        "unannotated cross-module channel binding must be rejected at compile time; \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("can't see where `ch` got its channel"),
+        "expected the conduit-origin teaching error; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("compiler bug"),
+        "the origin case must never reach the codegen ICE; stderr:\n{stderr}"
+    );
+}
+
+// WHY: the annotated form of the SAME cross-module case must compile with suspension
+// support and run — locks the origin diagnostic's WHAT-INSTEAD as a real escape hatch.
+#[test]
+fn v0_3_m4_channel_xmod_return_annotated_runs() {
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m4_channel_xmod_return_annotated"));
+    assert_eq!(
+        code, 0,
+        "annotated cross-module channel binding must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "7\n", "expected output mismatch; stderr:\n{stderr}");
+}
+
+// WHY: the annotated shape-field extraction (`let c: channel<int> = b.wire`) must run
+// end-to-end with suspension support — byte-identical across auto-parallel modes and
+// alloc == free on the conduit path. This is the WHAT-INSTEAD escape hatch for the
+// shape-field origin (the code-reviewer's exact repro, annotated).
+#[test]
+fn v0_3_m4_channel_field_annotated_runs() {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_field_annotated.ynz", "7\n");
 }

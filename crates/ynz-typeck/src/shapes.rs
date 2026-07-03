@@ -175,6 +175,15 @@ impl ShapeTable {
                             val: Box::new(val),
                         }
                     }
+                    // v0.3-M4 Phase 2: `channel<T>` in signature/annotation position — required
+                    // so a channel can be handed to a `background` task (the composed R5 shape:
+                    // `function producer(lend out: channel<int>)`).
+                    "channel" => {
+                        let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
+                        Type::BuiltinChannel {
+                            elem: Box::new(elem),
+                        }
+                    }
                     _ => {
                         if self.contains(name) {
                             Type::Generic {

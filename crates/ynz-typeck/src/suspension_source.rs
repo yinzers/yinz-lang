@@ -70,3 +70,46 @@ pub const BASE_SUSPENSION_INTRINSICS: &[&str] = &["sleep", "__testFallibleAsync"
 pub fn is_base_suspension_intrinsic(name: &str) -> bool {
     BASE_SUSPENSION_INTRINSICS.contains(&name)
 }
+
+/// THE authoritative set of method NAMES that are base suspension sources when invoked on a
+/// suspension-capable conduit receiver (`channel<T>` or a background task handle).
+///
+/// This is the v0.3-M4 sibling arm the module doc earmarked: channel operations are method calls
+/// on a VALUE, not named free-function intrinsics, so [`BASE_SUSPENSION_INTRINSICS`] cannot
+/// express them. The method-name list and the classification predicate live HERE — never a
+/// channel-specific list scattered into codegen, admission, or the crossing analysis.
+///
+/// - `send` — suspends when the channel/handle inbox is full (backpressure).
+/// - `receive` — suspends when the channel is empty / the task has not yet delivered.
+pub const CHANNEL_SUSPENDING_METHODS: &[&str] = &["send", "receive"];
+
+/// THE authoritative classifier for conduit-method suspension: does calling the method named
+/// `method` on a receiver introduce a base (leaf) suspension point, GIVEN that the receiver is a
+/// suspension-capable conduit (`channel<T>` or a `background` task handle)?
+///
+/// `receiver_is_conduit` is supplied by the consumer, because receiver-type knowledge lives at
+/// different layers:
+///
+/// - **typeck / codegen** answer it exactly from `expr_types`
+///   (`Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. }`).
+/// - **the may-block fixpoint** (which runs before expression checking, so it has no
+///   `expr_types`) answers it via the syntactic conduit-binding resolver in
+///   [`crate::may_block`]. Typeck keeps the two views equivalent BY CONSTRUCTION: a
+///   channel/handle suspending method is only accepted on a plain-identifier receiver whose
+///   binding typeck itself derived through THE shared origin predicate
+///   (`may_block::let_binds_derivable_conduit` — param annotation, `let` annotation,
+///   `channel<T>()` construction, `let h = background f()` spawn, direct ident alias, or a
+///   local function's declared `channel<T>` return). Both views accumulate their conduit
+///   sets by calling that ONE predicate (never a second hand-synced copy —
+///   authoritative-derivation.md), and every receiver whose origin the predicate does NOT
+///   derive (a shape field, a collection element, a loop variable, a cross-module call —
+///   unless the binding carries a `channel<T>` annotation) is a teaching compile error in
+///   `check_conduit_method_call`, so the fixpoint can never under-approximate what typeck
+///   accepted.
+///
+/// A UFCS user function that happens to be named `send`/`receive` on a NON-conduit receiver is
+/// NOT a suspension source (`receiver_is_conduit == false`).
+#[inline]
+pub fn channel_method_suspends(receiver_is_conduit: bool, method: &str) -> bool {
+    receiver_is_conduit && CHANNEL_SUSPENDING_METHODS.contains(&method)
+}

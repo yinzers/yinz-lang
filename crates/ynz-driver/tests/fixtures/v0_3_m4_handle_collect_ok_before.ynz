@@ -1,0 +1,14 @@
+// R8 matrix — collected x ok-path x receive-BEFORE-completion.
+// The parent suspends on receive() while the child is still sleeping; the completion
+// delivery must wake the parent (forwarded-waker discipline), never a hang.
+function worker() -> int errors {
+  wait sleep(60)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let h = background worker()
+  let r = h.receive()
+  let v = r.or(0)
+  print(v.toString())
+}

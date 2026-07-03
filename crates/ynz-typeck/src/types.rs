@@ -1,7 +1,7 @@
 /// The types known to the M7 type checker.
 ///
 /// Variant count is pinned by `m4_type_variant_count_locked` in tests.
-/// Current count: 21 (v0.3-M4 adds BuiltinChannel; total 21 across M1–v0.3-M4)
+/// Current count: 22 (v0.3-M4 adds BuiltinChannel + BackgroundHandle; total 22 across M1–v0.3-M4)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     /// Functions that don't return a value.
@@ -110,6 +110,25 @@ pub enum Type {
     /// fixture can end-to-end-verify the suspend→resume codegen — FRAGO 004).
     BuiltinChannel { elem: Box<Type> },
 
+    // test-ratchet: v0.3-M4 Phase 2 adds BackgroundHandle for `let h = background fn()`.
+    /// A background task handle: the value of `let h = background fn(...)`.
+    ///
+    /// Inferred-only in v0.3 — there is no typeable source annotation for it (the binding's
+    /// type comes from the spawn expression). An opaque pointer at the ABI (like `channel`).
+    ///
+    /// - `result` is the spawned function's SUCCESS type (the `T` of `-> T errors`, or the
+    ///   plain return type). `h.receive()` returns `T errors` — "the next thing from the
+    ///   task": a message reply from a long-running task, or the task's own completion value
+    ///   as its final delivery (one surface, not two APIs).
+    /// - `msg_elem` is the element type of the spawned function's FIRST `channel<T>`
+    ///   parameter, when it has one — the conduit `h.send(v)` feeds. `None` when the spawned
+    ///   function takes no channel (then `h.send()` is a compile error: the task has no way
+    ///   to receive messages).
+    BackgroundHandle {
+        result: Box<Type>,
+        msg_elem: Option<Box<Type>>,
+    },
+
     // ── M6 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M6 adds Options and Union.
@@ -188,6 +207,11 @@ pub fn type_name(t: &Type) -> String {
         Type::BuiltinMap { key, val } => format!("map<{}, {}>", type_name(key), type_name(val)),
         Type::MapEntry { key, val } => format!("MapEntry<{}, {}>", type_name(key), type_name(val)),
         Type::BuiltinChannel { elem } => format!("channel<{}>", type_name(elem)),
+        // Inferred-only in v0.3 (not typeable source syntax); lowercase per the
+        // built-in-types-are-lowercase convention (`array`, `map`, `channel`).
+        Type::BackgroundHandle { result, .. } => {
+            format!("background handle<{} errors>", type_name(result))
+        }
         Type::Options { name } => name.clone(),
         Type::Union { variants } => variants
             .iter()

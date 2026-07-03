@@ -1,0 +1,36 @@
+// R2 hostile — pool exhaustion: more concurrently-suspended handled tasks than worker
+// threads. Cooperative suspension (poll-yield, never a blocked thread) means every task
+// still completes and every value is collected — a thread-blocking substrate would wedge.
+function worker() -> int errors {
+  wait sleep(30)
+  return 1
+}
+
+function entrypoint() -> nothing {
+  let h1 = background worker()
+  let h2 = background worker()
+  let h3 = background worker()
+  let h4 = background worker()
+  let h5 = background worker()
+  let h6 = background worker()
+  let h7 = background worker()
+  let h8 = background worker()
+  let h9 = background worker()
+  let h10 = background worker()
+  let h11 = background worker()
+  let h12 = background worker()
+  let r1 = h1.receive()
+  let r2 = h2.receive()
+  let r3 = h3.receive()
+  let r4 = h4.receive()
+  let r5 = h5.receive()
+  let r6 = h6.receive()
+  let r7 = h7.receive()
+  let r8 = h8.receive()
+  let r9 = h9.receive()
+  let r10 = h10.receive()
+  let r11 = h11.receive()
+  let r12 = h12.receive()
+  let total = r1.or(0) + r2.or(0) + r3.or(0) + r4.or(0) + r5.or(0) + r6.or(0) + r7.or(0) + r8.or(0) + r9.or(0) + r10.or(0) + r11.or(0) + r12.or(0)
+  print(total.toString())
+}

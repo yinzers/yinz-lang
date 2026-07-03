@@ -477,10 +477,10 @@ pub struct BgArgDropEntry {
 /// Separate from `SyncStateFnFuture` so `ynz_rt_spawn`'s external C-ABI signature
 /// stays `void` (no return channel at the ABI level).
 pub(crate) struct SpawnStateFnFuture {
-    resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
-    frame_ptr: *mut u8,
+    pub(crate) resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
+    pub(crate) frame_ptr: *mut u8,
     /// Byte length of the heap frame, used by `Drop` to free it via `ynz_free`.
-    frame_size: i64,
+    pub(crate) frame_size: i64,
     /// Byte offset of the recursion-slot pointer within the frame (-1 = no recursion slot).
     ///
     /// For recursive SM functions, codegen allocates a heap-boxed child frame for each
@@ -488,16 +488,16 @@ pub(crate) struct SpawnStateFnFuture {
     /// impl walks this pointer chain and frees all live heap-boxed child frames before
     /// freeing the root frame. Without this, a mid-wait cancellation of a deep recursion
     /// leaks all the child frames that were live at abort time.
-    recursion_slot_offset: i64,
+    pub(crate) recursion_slot_offset: i64,
     /// Pointer to a `ynz_alloc`'d array of `BgArgDropEntry` describing heap arg-copies
     /// stored in this frame's local slots. Null when no heap arg-copies exist (e.g., the
     /// callee takes only primitives or strings).
     ///
     /// The array is heap-allocated by codegen at spawn time and freed here in Drop after
     /// all arg-copies have been released — exactly once, on every exit path.
-    arg_drop_ptr: *const BgArgDropEntry,
+    pub(crate) arg_drop_ptr: *const BgArgDropEntry,
     /// Number of entries at `arg_drop_ptr`. 0 when `arg_drop_ptr` is null.
-    arg_drop_count: usize,
+    pub(crate) arg_drop_count: usize,
 }
 
 impl SpawnStateFnFuture {
@@ -633,6 +633,13 @@ impl Drop for SpawnStateFnFuture {
                             // free with ynz_array_drop which handles both the data buffer and the header.
                             crate::ynz_array_drop(heap_ptr as *mut crate::YnzArray);
                         }
+                        2 => {
+                            // v0.3-M4 SharedChannel: the task's refcounted reference to a
+                            // channel it was handed (`ynz_channel_share` at the spawn site).
+                            // Releasing exactly one reference here keeps alloc=free balanced
+                            // on every task exit path, including cancellation.
+                            crate::channel::ynz_channel_free(heap_ptr);
+                        }
                         _ => {
                             // Unknown kind — defensive no-op; avoids a bad free on future kind values.
                         }
@@ -762,18 +769,26 @@ pub unsafe extern "C" fn ynz_rt_spawn(
         arg_drop_ptr,
         arg_drop_count: arg_drop_count as usize,
     };
+    let _ = spawn_on_runtime(future, "ynz_rt_spawn");
+}
 
-    // Prefer spawning via the current Tokio handle (avoids the RUNTIME mutex deadlock
-    // when called from inside a block_on future — block_on holds Handle context so
-    // try_current() succeeds, and we can spawn without the mutex).
+/// Spawn `future` on the global Tokio runtime, returning its `JoinHandle` — the SINGLE
+/// runtime-handle resolution shared by `ynz_rt_spawn` and `ynz_rt_spawn_handle`.
+///
+/// Prefers the current Tokio handle (avoids the RUNTIME mutex deadlock when called from inside
+/// a block_on future — block_on holds Handle context so `try_current()` succeeds, and we can
+/// spawn without the mutex). Falls back to the global RUNTIME; returns `None` (task discarded,
+/// warning logged) when the runtime was never initialized or already shut down.
+pub(crate) fn spawn_on_runtime<F>(future: F, caller: &str) -> Option<tokio::task::JoinHandle<()>>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn(future);
-        }
+        Ok(handle) => Some(handle.spawn(future)),
         Err(_) => {
             let Some(guard) = RUNTIME.get() else {
-                eprintln!("ynz runtime: ynz_rt_spawn called before ynz_rt_init — task discarded");
-                return;
+                eprintln!("ynz runtime: {caller} called before ynz_rt_init — task discarded");
+                return None;
             };
             let handle = {
                 let lock = match guard.lock() {
@@ -783,12 +798,14 @@ pub unsafe extern "C" fn ynz_rt_spawn(
                 match lock.as_ref() {
                     Some(rt) => rt.handle().clone(),
                     None => {
-                        eprintln!("ynz runtime: ynz_rt_spawn called after ynz_rt_shutdown — task discarded");
-                        return;
+                        eprintln!(
+                            "ynz runtime: {caller} called after ynz_rt_shutdown — task discarded"
+                        );
+                        return None;
                     }
                 }
             };
-            handle.spawn(future);
+            Some(handle.spawn(future))
         }
     }
 }

@@ -261,6 +261,9 @@ function entrypoint() -> nothing {
   // v0.3-M3g: mixed CPU+I/O overlap — a heavy crunch overlaps a suspending fetch.
   // m3g_demo suspends (its scouting-report fetch waits), so `wait` orders it after m3d_demo.
   wait m3g_demo()
+  // ────── v0.3-M4: channels + the background handle-form ──────
+  // m4_demo suspends (channel receives), so `wait` orders it after m3g's story finishes.
+  wait m4_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -1049,18 +1052,55 @@ function m3g_demo() -> nothing {
 }
 
 
-// ── v0.3-M4 Phase 1: channel<T> construction ─────────────────────────────────
+// ── v0.3-M4: channels + the background handle-form ───────────────────────────
 //
-// v0.3-M4 Phase 1 ships bounded task-communication channels — CONSTRUCTION only:
+// Bounded task-communication channels, live:
 //
-//     let orders: channel<int> = channel<int>()      // default capacity 64
+//     let orders: channel<int> = channel<int>()      // default capacity 64 (IDE shows ⟨64⟩)
 //     let names:  channel<string> = channel<string>(8)   // explicit capacity
 //
-// Channels are bounded by construction (there is no unbounded channel), and the compiler fills in
-// the default capacity of 64 when you leave the parens empty (the IDE shows a muted ⟨64⟩ hint).
-//
-// The suspending `.send()` / `.receive()` surface — where a producer that outruns a bounded
-// channel WAITS for the consumer instead of the buffer growing forever — lands in Phase 2 with the
-// `background` handle-form (FRAGO 004). A channel you can only construct does nothing observable
-// yet, so it is documented here rather than run: this demo grows a real channel round-trip in
-// Phase 2, in the same place the other concurrency demos live.
+// Channels are bounded by construction (there is no unbounded channel). When a producer outruns
+// the channel, `send()` SUSPENDS the producer until the reader drains a slot — that is
+// backpressure working, not a deadlock: the buffer never grows without limit.
+
+// relayScores — a background task pushing three innings' scores into a capacity-1 channel.
+// The second send finds the channel FULL, so the task suspends (backpressure) and only resumes
+// after m4_demo's receive below frees the slot. Real producer/consumer flow, not a snippet.
+function relayScores(lend wire: channel<int>) -> nothing {
+  wire.send(2)
+  wire.send(5)
+  wire.send(3)
+}
+
+// gradeProspect — a communicating task for the handle form: reads ONE command from its
+// channel parameter (fed by `scout.send(...)` through the handle), evaluates it, and its
+// completion value is delivered back through the SAME handle via `scout.receive()`.
+function gradeProspect(lend requests: channel<int>) -> int errors {
+  let jerseyNumber = requests.receive()
+  return jerseyNumber * 2
+}
+
+function m4_demo() -> nothing {
+  print(``)
+  print(`v0.3-M4 — channels + the background handle-form:`)
+
+  // Bare channel round-trip: a fire-and-forget producer feeds a bounded channel while this
+  // function drains it. Capacity 1 forces genuine backpressure inside relayScores.
+  let wire: channel<int> = channel<int>(1)
+  background relayScores(wire)
+  let first = wire.receive()
+  let second = wire.receive()
+  let third = wire.receive()
+  let runsTotal = first + second + third
+  print(`runs relayed inning by inning: ${runsTotal.toString()}`)
+
+  // Handle form: STORE the spawn to communicate with it (don't store = fire-and-forget —
+  // same keyword, two patterns). `scout.send(21)` feeds gradeProspect's channel parameter;
+  // `scout.receive()` delivers the task's completion value, typed `int errors`.
+  let requests: channel<int> = channel<int>(4)
+  let scout = background gradeProspect(requests)
+  scout.send(21)
+  let graded = scout.receive()
+  let grade = graded.or(0)
+  print(`scout graded jersey 21 at: ${grade.toString()}`)
+}

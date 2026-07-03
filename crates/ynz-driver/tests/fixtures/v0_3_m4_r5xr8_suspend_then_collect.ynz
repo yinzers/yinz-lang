@@ -1,0 +1,24 @@
+// The composed R5xR8 cell (build-blocking): a COLLECTED -> number errors child suspends
+// on a full-channel send() MID-execution (R5's scenario), then finishes, and its completion
+// value is collected via receive() through the copy-before-free path (R8's scenario).
+// Asserts: the frame survives the channel suspension; the collected wide value is
+// byte-correct; frame + buffer each freed exactly once (alloc=free gate in the test).
+function worker(lend out: channel<int>) -> number errors {
+  out.send(7)
+  // Channel is capacity-1 and already full — this send SUSPENDS the child mid-execution.
+  out.send(8)
+  return 9999999999.000000001
+}
+
+function entrypoint() -> nothing {
+  let ch: channel<int> = channel<int>(1)
+  let h = background worker(ch)
+  wait sleep(30)
+  let a = ch.receive()
+  let b = ch.receive()
+  let drained = a + b
+  print(drained.toString())
+  let r = h.receive()
+  let v = r.or(0.0)
+  print(v.toString())
+}

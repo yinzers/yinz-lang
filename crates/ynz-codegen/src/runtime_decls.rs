@@ -84,6 +84,24 @@ pub struct RuntimeDecls<'ctx> {
     // are wired in Phase 2 with the handle-form (FRAGO 004).
     // ynz_channel_create(i64 capacity) -> ptr
     pub ynz_channel_create: FunctionValue<'ctx>,
+    // v0.3-M4 Phase 2 — channel op + task-handle ABI (see ynz-runtime channel.rs / handle.rs):
+    // ynz_channel_share(chan: ptr) -> ptr (refcount bump at each spawn boundary)
+    pub ynz_channel_share: FunctionValue<'ctx>,
+    // ynz_channel_free(chan: ptr) -> void (release one refcounted reference)
+    pub ynz_channel_free: FunctionValue<'ctx>,
+    // ynz_channel_send_poll(chan: ptr, value: i64, waker_ctx: ptr, caller_token: i64) -> i32
+    pub ynz_channel_send_poll: FunctionValue<'ctx>,
+    // ynz_channel_recv_poll(chan: ptr, out: ptr, waker_ctx: ptr) -> i32
+    pub ynz_channel_recv_poll: FunctionValue<'ctx>,
+    // ynz_rt_spawn_handle(resume_fn, frame_ptr, frame_size, rec_slot, arg_drop_ptr,
+    //                     arg_drop_count, ret_kind, msg_chan) -> ptr (the task handle)
+    pub ynz_rt_spawn_handle: FunctionValue<'ctx>,
+    // ynz_handle_recv_poll(handle: ptr, err_out: ptr, ok_out: ptr, waker_ctx: ptr) -> i32
+    pub ynz_handle_recv_poll: FunctionValue<'ctx>,
+    // ynz_handle_send_poll(handle: ptr, value: i64, waker_ctx: ptr) -> i32
+    pub ynz_handle_send_poll: FunctionValue<'ctx>,
+    // ynz_handle_free(handle: ptr) -> void
+    pub ynz_handle_free: FunctionValue<'ctx>,
 
     // M6: string-to-numeric fallible conversions.
     // ABI: (ptr: *const u8, len: i64, out: *mut [i64; 2]) → void
@@ -423,6 +441,58 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_channel_create",
                 ptr.fn_type(&[i64.into()], false),
+            ),
+            ynz_channel_share: declare_fn(
+                module,
+                "ynz_channel_share",
+                ptr.fn_type(&[ptr.into()], false),
+            ),
+            ynz_channel_free: declare_fn(
+                module,
+                "ynz_channel_free",
+                void.fn_type(&[ptr.into()], false),
+            ),
+            ynz_channel_send_poll: declare_fn(
+                module,
+                "ynz_channel_send_poll",
+                i32.fn_type(&[ptr.into(), i64.into(), ptr.into(), i64.into()], false),
+            ),
+            ynz_channel_recv_poll: declare_fn(
+                module,
+                "ynz_channel_recv_poll",
+                i32.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
+            ),
+            ynz_rt_spawn_handle: declare_fn(
+                module,
+                "ynz_rt_spawn_handle",
+                ptr.fn_type(
+                    &[
+                        ptr.into(),
+                        ptr.into(),
+                        i64.into(),
+                        i64.into(),
+                        ptr.into(),
+                        i64.into(),
+                        i64.into(),
+                        ptr.into(),
+                    ],
+                    false,
+                ),
+            ),
+            ynz_handle_recv_poll: declare_fn(
+                module,
+                "ynz_handle_recv_poll",
+                i32.fn_type(&[ptr.into(), ptr.into(), ptr.into(), ptr.into()], false),
+            ),
+            ynz_handle_send_poll: declare_fn(
+                module,
+                "ynz_handle_send_poll",
+                i32.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+            ),
+            ynz_handle_free: declare_fn(
+                module,
+                "ynz_handle_free",
+                void.fn_type(&[ptr.into()], false),
             ),
 
             // M6: string-to-numeric ABI: (ptr, i64 len, ptr out) -> void

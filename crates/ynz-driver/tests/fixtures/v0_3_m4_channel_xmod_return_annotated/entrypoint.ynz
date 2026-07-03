@@ -1,0 +1,16 @@
+// v0.3-M4 fix-loop (conduit-origin discipline): the annotated form of the cross-module case —
+// `let ch: channel<int> = makeChannel()` is derivable via the annotation arm, so the program
+// compiles with suspension support and runs. Locks the origin diagnostic's WHAT-INSTEAD as a
+// real escape hatch for the cross-module origin too. Expected output: "7"
+import { makeChannel } from `chan_ops`
+
+function feed(out: channel<int>) -> nothing {
+  let r = out.send(7)
+}
+
+function entrypoint() -> nothing {
+  let ch: channel<int> = makeChannel()
+  background feed(ch)
+  let first = ch.receive()
+  print(first)
+}

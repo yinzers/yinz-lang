@@ -308,25 +308,30 @@ fn v0_3_m3b_gallery_fires_expected_diagnostics() {
     );
 }
 
-// WHY: the v0.3-M4 Phase-1 error gallery is the hands-on review surface for the channel<T>
-// construction diagnostics (per plan-invariants `### Demo & Error Gallery`). If the error count
-// drops, a construction-diagnostic class regressed; if it rises, a new class was added without a
-// key-phrase check here. Phase 1 covers construction only; the suspending .send()/.receive()
-// diagnostics land in Phase 2 (FRAGO 004) and will grow this test then.
+// WHY: the v0.3-M4 error gallery is the hands-on review surface for the channel<T> diagnostics —
+// Phase 1 construction (5 classes) + Phase 2 send/recv method surface and handle-form (8 classes).
+// If the error count drops, a diagnostic class regressed; if it rises, a new class was added
+// without a key-phrase check here. Closed-channel `send()` is a RUNTIME typed error and is
+// structurally unreachable from v0.3 source (documented in the gallery file, proven at the
+// runtime substrate) — no compile trigger exists for it by design.
 #[test]
 fn v0_3_m4_gallery_fires_expected_diagnostics() {
     let (stderr, code) = compile_gallery(&gallery("v0_3_m4_errors.ynz"));
     assert_ne!(code, 0, "v0_3_m4 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
-    // Expected 5 construction errors: non-positive (0), non-positive (negated -3), wrong capacity
-    // type, missing element type, too-many-args. Range gives headroom for incidental diagnostic
-    // refinements without masking a class regression.
+    // Expected 14: 5 construction (non-positive ×2, wrong capacity type, missing element type,
+    // too-many-args) + 7 method-surface (unknown method, send wrong element type, receive-with-
+    // args, nested-expression position, unnamed receiver, non-derivable receiver origin,
+    // unsupported element type) + 2 handle (non-suspending callee, send-with-no-channel-param).
+    // Small headroom for incidental diagnostic refinements; the key phrases below pin each
+    // class individually.
     assert!(
-        (4..=8).contains(&error_count),
-        "v0_3_m4 gallery must produce 4–8 errors; got {error_count}.\nstderr:\n{stderr}"
+        (13..=16).contains(&error_count),
+        "v0_3_m4 gallery must produce 13–16 errors; got {error_count}.\nstderr:\n{stderr}"
     );
 
+    // ── Phase 1: construction classes ──
     // Non-positive capacity (bounded-by-construction, stdlib-design Rule 4).
     assert!(
         stderr.contains("capacity must be at least 1"),
@@ -346,5 +351,62 @@ fn v0_3_m4_gallery_fires_expected_diagnostics() {
     assert!(
         stderr.contains("takes at most one argument"),
         "v0_3_m4 gallery must include too-many-args diagnostic; got:\n{stderr}"
+    );
+
+    // ── Phase 2: send/recv method-surface classes ──
+    // Unknown conduit method (names the two available methods).
+    assert!(
+        stderr.contains("does not have a method called `push`"),
+        "v0_3_m4 gallery must include unknown-conduit-method diagnostic; got:\n{stderr}"
+    );
+    // Send with the wrong element type — AND the mandated backpressure teaching text
+    // (IMP-no-function-coloring: a suspended producer is backpressure working, not a deadlock).
+    assert!(
+        stderr.contains("carries `int` values, but you're sending `string`"),
+        "v0_3_m4 gallery must include send-wrong-element-type diagnostic; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("backpressure working, not a deadlock"),
+        "v0_3_m4 gallery must carry the backpressure teaching text in the send diagnostic; got:\n{stderr}"
+    );
+    // receive() with arguments.
+    assert!(
+        stderr.contains("`.receive()` takes no arguments"),
+        "v0_3_m4 gallery must include receive-takes-no-arguments diagnostic; got:\n{stderr}"
+    );
+    // Statement-position discipline (channel-op-expression-position registry entry).
+    assert!(
+        stderr.contains("can suspend — it must be its own statement"),
+        "v0_3_m4 gallery must include statement-position diagnostic; got:\n{stderr}"
+    );
+    // Named-binding receiver discipline.
+    assert!(
+        stderr.contains("needs the channel held in a named binding"),
+        "v0_3_m4 gallery must include named-binding-receiver diagnostic; got:\n{stderr}"
+    );
+    // Receiver ORIGIN discipline (fix-loop): a channel from a shape field / collection
+    // element / loop variable / cross-module call must be bound with a `channel<T>`
+    // annotation — unannotated it is invisible to the may-block resolver and rejected
+    // (previously an under-approximation that ICEd in codegen).
+    assert!(
+        stderr.contains("can't see where `line` got its channel"),
+        "v0_3_m4 gallery must include the receiver-origin diagnostic; got:\n{stderr}"
+    );
+    // Unsupported element type (sender-stack dangling class: shape/number).
+    assert!(
+        stderr.contains("cannot cross a task boundary"),
+        "v0_3_m4 gallery must include unsupported-element-type diagnostic; got:\n{stderr}"
+    );
+
+    // ── Phase 2: handle-form classes ──
+    // Non-suspending callee (background-handle-nonsuspending-callee registry entry).
+    assert!(
+        stderr.contains("never suspends — the handle form needs a suspending function"),
+        "v0_3_m4 gallery must include non-suspending-callee handle diagnostic; got:\n{stderr}"
+    );
+    // h.send() on a task whose function takes no channel parameter.
+    assert!(
+        stderr.contains("This task takes no channel"),
+        "v0_3_m4 gallery must include send-with-no-channel-param diagnostic; got:\n{stderr}"
     );
 }

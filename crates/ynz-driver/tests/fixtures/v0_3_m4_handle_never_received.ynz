@@ -1,0 +1,13 @@
+// R2 hostile — never-received handle: spawn a collected-form task and never receive.
+// Must terminate cleanly (bounded: one completion parked in the outbox; frame freed by
+// the task's own drop ladder) — never a deadlock, never a leaked frame.
+function worker() -> int errors {
+  wait sleep(5)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let h = background worker()
+  wait sleep(60)
+  print(`never received - still clean`)
+}

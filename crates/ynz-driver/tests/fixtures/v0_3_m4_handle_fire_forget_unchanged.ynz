@@ -1,0 +1,12 @@
+// R8 matrix — fire-and-forget arm: a bare background spawn of the SAME -> T errors
+// callee keeps today's discard path (no handle, no copy, output unchanged).
+function worker() -> int errors {
+  wait sleep(5)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  background worker()
+  wait sleep(60)
+  print(`fire and forget done`)
+}

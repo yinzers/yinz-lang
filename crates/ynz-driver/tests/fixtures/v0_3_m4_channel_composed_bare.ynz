@@ -1,0 +1,20 @@
+// v0.3-M4 Phase 2 — the BARE-channel composed suspend->resume proof (FRAGO 004):
+// fire-and-forget spawn (no handle) shares the channel; the child suspends on
+// send-on-full while the parent drains. Proves emit_channel_suspend_point's
+// suspend->persist->resume path end-to-end WITHOUT the handle machinery.
+function producer(lend out: channel<int>) -> nothing {
+  out.send(1)
+  out.send(2)
+  out.send(3)
+}
+
+function entrypoint() -> nothing {
+  let ch: channel<int> = channel<int>(1)
+  background producer(ch)
+  let a = ch.receive()
+  let b = ch.receive()
+  let c = ch.receive()
+  let total = a + b + c
+  print(total.toString())
+  print(`bare done`)
+}

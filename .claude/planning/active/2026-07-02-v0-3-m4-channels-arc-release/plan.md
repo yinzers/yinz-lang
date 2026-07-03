@@ -3,7 +3,7 @@ name: "v0-3-m4-channels-arc-release"
 plan-id: "2026-07-02-v0-3-m4-channels-arc-release"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5"]
+session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3"]
 created_at: "2026-07-02"
 updated_at: "2026-07-02"
 metadata:
@@ -777,6 +777,121 @@ Handoff = checkbox state + session-id chain.
   8. Extend demo + gallery (bare-channel send/recv usage — the real round-trip Phase 1 deferred —
      AND the handle-form surface; add the closed-channel-`send()` + backpressure diagnostics to
      `v0_3_m4_errors.ynz`).
+- **Progress (P2 r1 — partial; conductor ordered a wrap-up handoff mid-phase; session
+  `executor-2026-07-02-m4-p2-r1`; full detail in [`audit.md`](audit.md)).** LANDED AND VERIFIED
+  through the real compiler (`cargo build --workspace` clean; full workspace suite 2139 passed /
+  0 failed; every fixture below GREEN via `ynz run`):
+  - **Step 2 (bare-channel send/recv suspension codegen) — COMPLETE.** R6 sibling arm
+    `channel_method_suspends` + `CHANNEL_SUSPENDING_METHODS` live in
+    `crates/ynz-typeck/src/suspension_source.rs` (the ONE home) and threaded into: the may-block
+    fixpoint (syntactic conduit-binding resolver in `may_block.rs` — runs pre-expr-types, kept
+    equivalent by typeck's plain-ident receiver + statement-position discipline), the crossing
+    analysis (`expr_is_conduit_suspend`/`stmt_is_conduit_suspend` + `expr_types` threaded through
+    `locals_crossing_wait`/`collect_crossings_in_stmts`/`block_suspends_m3d`/shadow helpers;
+    conduit-typed locals marked crossing via `collect_conduit_locals` — the recorded sound
+    over-approximation), suspension counting (`count_suspension_points`/`count_suspension_expr` +
+    expr_types), and the SM router (new single `stmt_needs_sm_walker` helper replacing all 7
+    previously-scattered routing disjuncts). `.send(value)` types `nothing errors` (Lock 8),
+    `.receive()` types elem; kernel gate on methods; element types restricted to
+    int/float/boolean/string/array/map (shape/number rejected — sender-stack dangling class);
+    receiver-must-be-named-binding + statement-position teaching errors; backpressure text woven
+    into the send diagnostics. New 3-way `emit_channel_suspend_point`
+    (Ready/Pending→persist+resume/Closed→typed errors; per-frame `caller_token`) in `emit.rs`.
+  - **Step 1 + runtime substrate — COMPLETE.** `channel.rs` refactored to Arc-shared,
+    internally-synchronized (per-caller-token suspended sends — the shared-model silent-wrong
+    hazard eliminated; multi-waiter recv wakeups); `ynz_channel_share`/`_free` refcounting;
+    `handle.rs` NEW: `ynz_rt_spawn_handle` (independent joinable Tokio task wrapping
+    `SpawnStateFnFuture`), `ynz_handle_recv_poll`/`_send_poll`/`_free`; trap doors 1a/1b/1c
+    structurally absent; NO frame-header ripple (crossing-local slots suffice, per the spike
+    verdict). `HANDLE_RET_KIND_*` extraction kinds live in `ynz-abi` (one home for the seam).
+  - **Steps 3+5 (handle-form lift + R8 copy-before-free) — COMPLETE.** `check.rs:1331` rejection
+    lifted → `Type::BackgroundHandle { result, msg_elem }` (inferred-only); non-suspending callee
+    rejected with teaching error (deferral entry still to be added to the registry);
+    `h.send(v)` feeds the callee's FIRST `channel<T>` parameter (recorded durable decision —
+    the only compile-time-safe typing; no child-side implicit inbox exists in any design doc);
+    `h.receive()` = `T errors`, ONE surface. R8: compile-time spawn-form-keyed
+    (`lower_let_background_handle` → `ynz_rt_spawn_handle`; bare spawn byte-for-byte unchanged —
+    IR goldens diff ONLY in new declare lines); completion extracted from the frame return slot
+    in `HandleStateFnFuture::poll` BEFORE the frame-freeing drop; `-> number errors` staging
+    copied to the handle-owned 16-byte buffer, freed exactly once at handle drop.
+  - **Step 7 gates (fixtures GREEN via `ynz run`, not yet wired as build-blocking tests):**
+    `v0_3_m4_channel_smoke` (7), `v0_3_m4_channel_composed` (10/20/done — THE R5 composed
+    fixture, handle spawn + send-on-full child + receiving parent), `v0_3_m4_channel_composed_bare`
+    (fire-and-forget variant, 6/bare done), `v0_3_m4_handle_collect_ok_after`/`_before` (42),
+    `v0_3_m4_handle_collect_err` (99), `v0_3_m4_handle_collect_number` (9999999999.000000001 —
+    the wide-value copy-before-free proof), `v0_3_m4_handle_fire_forget_unchanged`,
+    `v0_3_m4_r5xr8_suspend_then_collect` (15 + 9999999999.000000001 — THE composed R5×R8 cell),
+    `v0_3_m4_handle_never_received` (clean exit), `v0_3_m4_handle_pool_exhaustion` (12 handles,
+    12), `v0_3_m4_channel_never_drained` (parent exits, producer stays backpressured).
+    13 IR goldens re-accepted (declare-lines-only diffs); stale M8 handle-rejection typeck test
+    replaced by the new non-suspending-reject + suspending-clean pair.
+  - **REMAINING for the fresh continuation (CLOSED at r2 — see below):** Step 4 handle-drop
+    deferral RECORDING; Step 6 registry retirements + new deferred entries; Step 7 test-wiring;
+    Step 8 demo + gallery. Scope-note carried forward: closed-channel `send()` typed-error path
+    is runtime-substrate-proven (`send_to_closed_returns_closed`) + codegen-emitted, but is
+    structurally unreachable from v0.3 source (the channel object holds a sender) — surfaced in
+    the gallery as a documented runtime-error class with no compile trigger, by design.
+- **Progress (P2 r2 — steps 4/6/7/8 COMPLETE; phase exit criteria met; session
+  `executor-2026-07-02-m4-p2-r2`; full detail in [`audit.md`](audit.md)).**
+  - **Step 7 (test-wiring, build-blocking) — COMPLETE.** 16 new gates in
+    `crates/ynz-driver/tests/integration.rs` (`v0_3_m4_p2_*`): every r1 fixture wired through a
+    shared helper asserting expected stdout + `--no-auto-parallel` byte-identical + alloc==free
+    AND alloc>0 (a 0==0 balance would hide a counter regression) — R5 composed, FRAGO-004
+    bare-channel composed, smoke, the full R8 matrix (ok before/after × err × wide-number ×
+    fire-and-forget), the composed R5×R8 cell, never-received (handle-drop leak gate),
+    pool-exhaustion (12), never-drained, handle send/recv round-trip. PLUS the R8 structural
+    audit (`v0_3_m4_p2_r8_spawn_form_keyed_at_compile_time`: fire-and-forget IR = 1
+    `ynz_rt_spawn`/0 `ynz_rt_spawn_handle`; handle IR = the inverse). PLUS the
+    `cpu_admission` DECLINE→FIRE pair (new fixtures
+    `v0_3_m4_channel_cpu_admission_declines.ynz` → 0 blocking-pool spawns / `_fires.ynz` twin →
+    2 spawns, proving the decline is attributable to channel classification, not shape). PLUS
+    the R1 grep-audit as a permanent test
+    (`crates/ynz-runtime/tests/no_blocking_in_conduit_path.rs` — zero
+    `block_on`/`blocking_*`/`spawn_blocking`/`thread::sleep`/`park` in channel.rs+handle.rs
+    production code, with a guard-the-guard scannable-lines check). PLUS the R6 tripwire
+    extended to the conduit-method list
+    (`conduit_method_set_has_exactly_one_definition` in
+    `suspension_source_single_definition.rs`) — which flagged and fixed a real latent twin:
+    `check.rs`'s known-method `matches!(method, "send" | "receive")` now threads
+    `channel_method_suspends` (compile-time link, per authoritative-derivation).
+  - **Step 6 (registry) — COMPLETE.** `ec-wrapper-collect-on-completion` +
+    `background-handle-form` RETIRED (entry removed + shipped-comment, the
+    cross-module-frame-serialization precedent). Three new `[[deferred_language_feature]]`
+    entries: `background-handle-cancel-injection`, `channel-op-expression-position`,
+    `background-handle-nonsuspending-callee` (the live teaching error already names it).
+    Registry consistency + jargon-audit suites green.
+  - **Step 4 (handle-drop deferral) — RECORDED.** Four-field deferral in Future
+    Requirements (language-level scope-drop wiring + child-side cancellation-error injection
+    deferred; runtime abort path shipped + proven) + the registry entry above. No new code —
+    the r1 runtime substrate was confirmed as the intended M4 scope per the §3.1 locked
+    decision (safe-drop now, no full `.cancel()` API in the End State).
+  - **Step 8 (demo + gallery) — COMPLETE.** `examples/pirates-roster/entrypoint.ynz` grew
+    `m4_demo()` (real bare-channel producer/consumer round-trip with genuine capacity-1
+    backpressure + the handle-form send/receive cycle; golden regenerated via the script;
+    byte-exact test green). `examples/primantis-orders/v0_3_m4_errors.ynz` grew 8 Phase-2
+    triggers (13 errors total, one per class, no cascades) + the documented
+    closed-channel-send runtime-error block + kernel-method-gate note;
+    `error_galleries.rs` asserts count 12–15 + 9 new key phrases including the mandated
+    backpressure teaching text ("backpressure working, not a deadlock").
+  - **Gate hygiene (found red, fixed):** `cargo clippy --workspace -- -D warnings` was failing
+    on four r1-introduced lints — `handle.rs:115` dead-code on the ownership-only R8 `shared`
+    Arc (kept, `#[expect(dead_code)]` + invariant comment: removing it is a use-after-free on
+    collected wide values), a redundant closure (`check.rs`), an unused `mut` + a
+    `type_complexity` (`emit.rs`). All fixed; gate green. The r1 transient integration flake
+    did NOT recur in this session's runs.
+  - **Design-doc alignment check on r1's `h.send` typing (flagged for review):** CONFIRMED
+    no contradiction — IMP-concurrency:165-183 and REF-concurrency:165-173 define only the
+    parent-side surface (`monitor.send(...)`/`.receive()`); no child-side read mechanism or
+    implicit-inbox concept exists in any design doc (grep: the only "mailbox" hit is the
+    Erlang bounded-channel rationale). First-`channel<T>`-parameter typing is a
+    compile-time-safe realization consistent with bounded-by-default (Rule 4) and the
+    no-magic teaching test.
+  - **Final verification:** the registry retirements changed the tmgrammar deferred-features
+    pattern → committed `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` regenerated via
+    `cargo run -p ynz-tmgrammar` (its snapshot test's own remedy). Full workspace suite:
+    **2158 passed / 0 failed** (r1's 2139 + exactly the 19 new gates); `cargo clippy
+    --workspace -- -D warnings` green; `cargo fmt --all` applied; r1's transient integration
+    flake did not recur across two full runs.
 - **Exit criteria.** The bare-channel `.send()`/`.receive()` method surface typechecks (Lock 8
   typed `errors` on `.send()`) and its suspend→persist→resume codegen runs through the real
   compiler, proven end-to-end by the two-task composed `ynz run` scenario (FRAGO 004 — the proof
@@ -806,6 +921,18 @@ Handoff = checkbox state + session-id chain.
      gap** (`check.rs:2269-2270` — non-ident/unresolvable callees): the auto-Arc boundary must not
      inherit that skip as a silent no-Arc no-reject hole; close it or reject it loudly, decided on
      the record.
+     **FRAGO 006 note — Phase 2 shipped ground truth for this step:** Phase 2's Arc-shared channel
+     refactor already EXEMPTS `channel<T>`-typed parameters from the share/lend-across-`background`
+     rejects — the `borrowed_non_channel` closure at `check.rs:2455-2467` (exemption comment at
+     2455-2459; the share reject now fires at 2468, lend at 2477; a channel is the sanctioned
+     refcount-shared conduit, `ynz_channel_share`, so the borrow-outlives-owner hole the rejects
+     close cannot occur). The R3 matrix's "should-Arc is not falsely rejected" cells on
+     channel-typed values must READ this exemption as already-shipped ground truth — verify it
+     holds, do NOT reimplement or re-derive it (`authoritative-derivation.md`). ALSO NOTE: this
+     step's r2-draft citations above (`2275-2280`/`2287-2292`/`2269-2270`) are STALE — the sites
+     shifted as Phase 1/2 landed (the non-ident/unresolvable-callee silent-skip edge is now
+     `check.rs:2442-2454`); the Phase 3 executor must re-grep for the actual current lines rather
+     than trust the plan's citations.
   3. `auto_arc` muted-hint domain (Informational; cautionary WHAT/WHY hover). Attempt the red-tint
      visual (expect net-new LSP rendering per recon); if it needs a decoration renderer, record
      `[[deferred_tooling_feature]]` `auto-arc-cautionary-tint` with trigger (§3.1 decision).
@@ -852,7 +979,11 @@ Handoff = checkbox state + session-id chain.
      fn → LSP import → registry-sourced hover via `lsp_inlay_hint_hover_for`).
   2. Update `docs/reference/REF-concurrency.md` (user spec) for channels + handle-form + auto-Arc,
      INCLUDING the mandated backpressure teaching text ("a suspended producer is backpressure
-     working correctly, not a deadlock") — HS-grad register per spec-writing rules.
+     working correctly, not a deadlock") — HS-grad register per spec-writing rules — AND explicitly
+     documenting the `h.send(v)` typing convention: a handle send delivers into the callee's FIRST
+     `channel<T>` parameter (FRAGO 005 follow-up — the design docs are currently silent on the
+     child-side read mechanism; this convention must be documented in the user spec, not left
+     implicit in code comments only).
   3. VSCode extension version bump + screenshots (channels, handle-form, auto-Arc hint).
   4. Final `pirates-roster/entrypoint.ynz` consolidation (ALL M4 surfaces in realistic context);
      regenerate `expected_stdout.txt` via the regenerate script; finalize `v0_3_m4_errors.ynz`
@@ -1165,11 +1296,30 @@ deferrals; each entry: what · why-deferred · cost · trigger.
   net-new). Cost: a decoration-based renderer or editor capability. Trigger: hints migrate to a
   decoration renderer, or the editor supports per-hint tinting. `[[deferred_tooling_feature]]`
   `auto-arc-cautionary-tint`.
-- **Handle cancel-injection scope (contingent, resolved at P2).** What: injecting cancellation into
-  a channel-suspended child per the locked cancel-via-drop model. Why-contingent: safe-drop
-  (no leak/no UB) is committed; full injection may be milestone-sized. Cost: estimated at P2 if
-  deferred. Trigger: P2's surfaced verdict; if deferred, a `[[deferred_*]]` entry + the next
-  concurrency milestone.
+- **Handle cancel-injection: language-level scope-drop wiring (RESOLVED at P2 r2 — recorded
+  four-field deferral; registry entry `background-handle-cancel-injection`).**
+  **WHAT** is deferred: the LANGUAGE half of cancel-via-drop — codegen automatically calling
+  `ynz_handle_free` when a handle binding's scope ends (today `ynz_handle_free` is declared in
+  `runtime_decls.rs` but never emitted), plus surfacing the cancellation inside the child as a
+  typed `errors` value, plus any explicit `.cancel()` API. The RUNTIME half is SHIPPED and
+  substrate-proven (`crates/ynz-runtime/src/handle.rs`: `ynz_handle_free` aborts the child at its
+  next suspension point via Tokio abort; frame + arg-copies + shared-channel refs + the R8 buffer
+  each freed exactly once — `free_before_completion_aborts_child` + the alloc=free integration
+  gates). v0.3 semantics: a spawned task always runs to completion (fire-and-forget semantics)
+  when its handle goes out of scope — never silently killed mid-work; all conduit references are
+  refcount-guarded (no dangling read, no double-free, proven by the never-received/never-drained
+  gates); the un-freed handle object is one small Box per spawn, reclaimed at process exit.
+  **WHY** deferred: Yinz has no language-wide scope-drop/cleanup insertion mechanism in v0.3;
+  handles would be the first object whose scope-drop has SEMANTIC effect (aborting a task), and
+  wiring a handle-only drop pass would fork a second cleanup mechanism the eventual general one
+  must unify (authoritative-derivation discipline) — while the cancellation-as-typed-error
+  propagation inside the child is genuinely milestone-sized design work (IMP-no-function-coloring
+  "Task Cancellation" locks the model, not the frame-level mechanics).
+  **COST to lift later:** ~1 focused phase once the general scope-drop mechanism exists —
+  `ynz_handle_free` is the ready-made hook; the new work is the drop-insertion pass + the child-
+  side cancellation-error injection at suspension points.
+  **TRIGGER:** the language-wide scope-drop/destructor mechanism shipping, OR a real workload
+  needing task cancellation — whichever lands first (registry entry carries the same trigger).
 - **Channel default-capacity re-tune.** What: the locked 64 constant. Why-parked: no workload data
   exists; the doc's pre-v0.2 benchmarking never happened. Cost: one-constant change + hover-text
   update. Trigger: real workload evidence that 64 mis-sizes typical backpressure behavior.

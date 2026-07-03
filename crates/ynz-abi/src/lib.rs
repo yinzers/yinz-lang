@@ -63,3 +63,24 @@ pub const SPIKE_HANDLE_BASE_OFFSET: usize = 32;
 /// Bytes per CPU-handle slot (`*mut CpuJoinHandle`). Handle slot `i` lives at
 /// `SPIKE_HANDLE_BASE_OFFSET + i * SPIKE_HANDLE_SLOT_BYTES`.
 pub const SPIKE_HANDLE_SLOT_BYTES: usize = 8;
+
+// ── v0.3-M4 Phase 2: background-handle completion-extraction kinds (R8) ──────
+//
+// `ynz-codegen` emits ONE of these per `let h = background f(...)` spawn site, keyed at
+// COMPILE TIME on the callee's declared return type; `ynz-runtime`'s `HandleStateFnFuture`
+// reads it to extract the completion value from the frame's return slot BEFORE the frame is
+// freed (copy-before-free for frame-interior wide values — IMP-concurrency:475/477). Shared
+// here so neither side defines the values locally and drifts (the R6 discipline applied to
+// this seam).
+
+/// `-> T errors` with a self-contained ok-word (int/bool/float bits or a heap-stable
+/// pointer): read `{err, ok}` from the return slot as-is.
+pub const HANDLE_RET_KIND_EC_WORD: i64 = 0;
+/// `-> number errors`: the ok-word points INTO the frame's 16-byte staging slot — copy the
+/// 16 bytes to the handle-owned buffer before the frame is freed; repoint the ok-word.
+pub const HANDLE_RET_KIND_EC_NUMBER: i64 = 1;
+/// Plain `-> T` (i64-slot value, incl. `nothing`): completion is `{0, slot}`.
+pub const HANDLE_RET_KIND_VALUE_WORD: i64 = 2;
+/// Plain `-> number`: the return slot itself holds the 16-byte decimal — copy it to the
+/// handle-owned buffer; completion is `{0, buf}`.
+pub const HANDLE_RET_KIND_VALUE_NUMBER: i64 = 3;

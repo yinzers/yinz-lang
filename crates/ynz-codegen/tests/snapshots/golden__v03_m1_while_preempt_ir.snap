@@ -1,5 +1,6 @@
 ---
 source: crates/ynz-codegen/tests/golden.rs
+assertion_line: 571
 expression: ir
 ---
 ; ModuleID = 'ynz-v03m1while.ynz'
@@ -99,6 +100,22 @@ declare void @ynz_map_iter_get_str(ptr, i64, ptr)
 declare void @ynz_map_drop(ptr)
 
 declare ptr @ynz_channel_create(i64)
+
+declare ptr @ynz_channel_share(ptr)
+
+declare void @ynz_channel_free(ptr)
+
+declare i32 @ynz_channel_send_poll(ptr, i64, ptr, i64)
+
+declare i32 @ynz_channel_recv_poll(ptr, ptr, ptr)
+
+declare ptr @ynz_rt_spawn_handle(ptr, ptr, i64, i64, ptr, i64, i64, ptr)
+
+declare i32 @ynz_handle_recv_poll(ptr, ptr, ptr, ptr)
+
+declare i32 @ynz_handle_send_poll(ptr, i64, ptr)
+
+declare void @ynz_handle_free(ptr)
 
 declare void @ynz_string_to_int(ptr, i64, ptr)
 

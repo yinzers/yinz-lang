@@ -86,14 +86,14 @@ main done with v0.3-M1
 
 v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):
 scheduling 8 pirates...
-Mazeroski: done
-Beaumont: done
-McCutchen: done
-Clemente: done
-Bonds: done
 Stargell: done
-Kiner: done
 Wagner: done
+McCutchen: done
+Bonds: done
+Mazeroski: done
+Clemente: done
+Kiner: done
+Beaumont: done
 all 8 pirates done
 
 v0.3-M2 — inferred wait (no explicit wait written):
@@ -146,3 +146,7 @@ season steals: 162
 v0.3-M3g — mixed CPU+I/O: a season crunch overlaps a scouting report fetch:
 season hits (crunched): 486
 latest report: grade: A-
+
+v0.3-M4 — channels + the background handle-form:
+runs relayed inning by inning: 10
+scout graded jersey 21 at: 42

@@ -63,6 +63,7 @@ pub mod types;
 
 pub use check::{
     check, check_with_kernel_mode, crossing_local_names, crossing_local_names_with_cpu_spike,
+    expr_is_conduit_suspend, stmt_contains_conduit_suspend, stmt_is_conduit_suspend,
     type_attached_const_type, LocalCrossesWait, TypedModule,
 };
 pub use effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
@@ -82,7 +83,10 @@ pub use queries::{
 };
 pub use shapes::{ShapeDef, ShapeTable};
 pub use signatures::{build_effective_suspend_set, SignatureTable};
-pub use suspension_source::{is_base_suspension_intrinsic, BASE_SUSPENSION_INTRINSICS};
+pub use suspension_source::{
+    channel_method_suspends, is_base_suspension_intrinsic, BASE_SUSPENSION_INTRINSICS,
+    CHANNEL_SUSPENDING_METHODS,
+};
 pub use symbol_lookup::{
     cross_file_reference_count_estimate, def_site_for_offset, references_for_offset,
     rename_locations, resolve_symbol_at, RenameError, ResolvedSymbol, SymbolKind,

@@ -1,0 +1,13 @@
+// R8 matrix — collected x ERROR-path. The child's typed error is delivered as the
+// completion; .or() takes the fallback. No dangling ok-pointer, no double-free.
+function failingWorker() -> int errors {
+  let v = wait __testFallibleAsync(true)
+  return v
+}
+
+function entrypoint() -> nothing {
+  let h = background failingWorker()
+  let r = h.receive()
+  let v = r.or(99)
+  print(v.toString())
+}

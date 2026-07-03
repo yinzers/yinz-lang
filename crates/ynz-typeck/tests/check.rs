@@ -2052,10 +2052,13 @@ fn external_file_construction_cannot_set_hidden_field() {
 }
 
 #[test]
-fn m8_background_let_binding_rejected() {
-    // WHY: M8 locked: `let h = background fn()` must error — background-handle form
-    //      (.send/.receive) ships in v0.3. Without this check, the let-binding silently
-    //      gives `h` type `nothing` and the user has no signal anything is wrong.
+fn m8_background_let_binding_nonsuspending_callee_rejected() {
+    // WHY: v0.3-M4 Phase 2 LIFTS the M8 blanket `let h = background fn()` rejection —
+    //      the handle form now typechecks for SUSPENDING callees. A NON-suspending
+    //      (pure-CPU) callee still rejects with a teaching error: the handle substrate is
+    //      an independent joinable task over a state-machine frame (never a CpuJoinHandle
+    //      — trap door 1a), and CPU-pool collection is a recorded deferral
+    //      (`background-handle-nonsuspending-callee`).
     let output = assert_errors(
         r#"
 function readData() -> nothing { print(`hello`) }
@@ -2065,15 +2068,34 @@ function entrypoint() -> nothing {
 "#,
         1,
     );
-    // test-ratchet: diagnostic wording updated to avoid "result" (banned jargon).
     let has_msg = output
         .diagnostics
         .iter()
-        .any(|d| d.what.contains("Capturing the output of `background`"));
+        .any(|d| d.what.contains("never suspends") && d.what.contains("handle form"));
     assert!(
         has_msg,
-        "Expected handle-form rejection diagnostic, got: {:#?}",
+        "Expected the non-suspending-callee handle rejection, got: {:#?}",
         output.diagnostics
+    );
+}
+
+#[test]
+fn v0_3_m4_background_handle_form_typechecks_for_suspending_callee() {
+    // WHY: the lifted handle-form surface — `let h = background suspendingFn()` binds a
+    //      task handle; `h.receive()` types as `T errors` (EC methods like `.or()` work).
+    assert_clean(
+        r#"
+function worker() -> int errors {
+  wait sleep(1)
+  return 42
+}
+function entrypoint() -> nothing {
+  let h = background worker()
+  let r = h.receive()
+  let v = r.or(0)
+  print(v.toString())
+}
+"#,
     );
 }
 
@@ -2821,6 +2843,145 @@ fn channel_missing_element_type_and_wrong_capacity_type_rejected() {
             .any(|d| d.what.contains("capacity must be an `int`")),
         "a string capacity must be rejected; got: {:?}",
         wrong.diagnostics
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M4 conduit-receiver ORIGIN discipline (fix-loop regression tests)
+//
+// WHY: typeck used to accept `.send()`/`.receive()` on any plain-ident receiver typed
+// `channel<T>`, while the may-block resolver only derives conduit bindings from a fixed set
+// of syntactic origins (annotation, construction, local channel-returning fn, spawn, alias).
+// A channel reaching a binding through a shape field, a maybe-`.value` element, a loop
+// variable, or a cross-module call type-checked but never entered the suspend set — codegen
+// then ICEd with "unknown method `receive` on BuiltinChannel". These tests lock the origin
+// discipline: non-derivable origins are teaching errors; derivable ones stay accepted.
+// Each rejection case reproduced the ICE end-to-end before the fix.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// WHY: the code-reviewer's exact repro — a channel bound from a shape field with no
+// annotation. Before the fix: 0 typeck errors + codegen ICE. After: 1 teaching error.
+#[test]
+fn channel_from_shape_field_unannotated_rejected() {
+    let src = "shape Box { wire: channel<int> }\n\
+               function drain(b: Box) -> nothing {\n\
+                 let c = b.wire\n\
+                 let first = c.receive()\n\
+                 print(first)\n\
+               }\n\
+               function entrypoint() -> nothing { }";
+    let out = assert_errors(src, 1);
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.what.contains("can't see where `c` got its channel")),
+        "shape-field channel origin must get the origin teaching error; got: {:?}",
+        out.diagnostics
+    );
+}
+
+// WHY: same class via a collection element — `chans[0]` is `maybe<channel<int>>`, and the
+// `.value` extraction produces a channel binding the resolver can't derive.
+#[test]
+fn channel_from_maybe_value_unannotated_rejected() {
+    let src = "function drain(chans: array<channel<int>>) -> nothing {\n\
+                 let slot = chans[0]\n\
+                 if (slot.exists()) {\n\
+                   let c = slot.value\n\
+                   let first = c.receive()\n\
+                   print(first)\n\
+                 }\n\
+               }\n\
+               function entrypoint() -> nothing { }";
+    let out = assert_errors(src, 1);
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.what.contains("can't see where `c` got its channel")),
+        "maybe-.value channel origin must get the origin teaching error; got: {:?}",
+        out.diagnostics
+    );
+}
+
+// WHY: same class via a for-loop variable — a fourth origin the resolver never derives
+// (loop vars are not `let` bindings), found while closing the class.
+#[test]
+fn channel_loop_variable_receiver_rejected() {
+    let src = "function drain(chans: array<channel<int>>) -> nothing {\n\
+                 for (c in chans) {\n\
+                   let first = c.receive()\n\
+                   print(first)\n\
+                 }\n\
+               }\n\
+               function entrypoint() -> nothing { }";
+    let out = assert_errors(src, 1);
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.what.contains("can't see where `c` got its channel")),
+        "loop-variable channel receiver must get the origin teaching error; got: {:?}",
+        out.diagnostics
+    );
+}
+
+// WHY: the diagnostic's WHAT-INSTEAD must be honest — the annotated form of the exact same
+// shape-field binding is derivable (annotation arm of the shared predicate) and accepted.
+// The runtime side is locked by the `v0_3_m4_channel_field_annotated.ynz` driver fixture.
+#[test]
+fn channel_from_shape_field_annotated_accepted() {
+    assert_clean(
+        "shape Box { wire: channel<int> }\n\
+         function drain(b: Box) -> nothing {\n\
+           let c: channel<int> = b.wire\n\
+           let first = c.receive()\n\
+           print(first)\n\
+         }\n\
+         function entrypoint() -> nothing { }",
+    );
+}
+
+// WHY: the direct-ident-alias arm of the shared predicate — `let b2 = a` where `a` is a
+// derivable conduit — must stay accepted (it is derivable on both views).
+#[test]
+fn channel_alias_of_derivable_binding_accepted() {
+    assert_clean(
+        "function entrypoint() -> nothing {\n\
+           let a: channel<int> = channel<int>(4)\n\
+           let b2 = a\n\
+           let first = b2.receive()\n\
+           print(first)\n\
+         }",
+    );
+}
+
+// WHY: the handle arm of the origin discipline — a task handle reaching a binding through
+// an array element + `.value` can't be traced to its spawn (handles have no typeable
+// annotation, so the only derivable handle origins are the spawn `let` and direct aliases).
+// Same ICE class as the channel cases before the fix.
+#[test]
+fn handle_from_maybe_value_rejected() {
+    let src = "function worker() -> int {\n\
+                 sleep(10)\n\
+                 return 42\n\
+               }\n\
+               function entrypoint() -> nothing {\n\
+                 let h = background worker()\n\
+                 let hs = [h]\n\
+                 let slot = hs[0]\n\
+                 if (slot.exists()) {\n\
+                   let h2 = slot.value\n\
+                   let v = h2.receive()\n\
+                   let got = v.or(0)\n\
+                   print(got)\n\
+                 }\n\
+               }";
+    let out = assert_errors(src, 1);
+    assert!(
+        out.diagnostics.iter().any(|d| d
+            .what
+            .contains("can't trace `h2` back to a `background` spawn")),
+        "non-spawn-traceable handle receiver must get the origin teaching error; got: {:?}",
+        out.diagnostics
     );
 }
 

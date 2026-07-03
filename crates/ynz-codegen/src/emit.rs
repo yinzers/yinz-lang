@@ -1338,6 +1338,9 @@ fn mangle_type(ty: &Type) -> String {
             format!("mapentry_{}_{}", mangle_type(key), mangle_type(val))
         }
         Type::BuiltinChannel { elem } => format!("channel_{}", mangle_type(elem)),
+        // v0.3-M4: inferred-only task handles never appear as generic type args in valid
+        // programs, but the mangler stays total.
+        Type::BackgroundHandle { result, .. } => format!("bghandle_{}", mangle_type(result)),
         Type::Options { name } => format!("options_{name}"),
         Type::Union { variants } => {
             let parts: Vec<_> = variants.iter().map(mangle_type).collect();
@@ -1890,6 +1893,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::BuiltinMap { .. } => Some(self.ptr().into()),
             // v0.3-M4: a channel value is a heap-owned bounded mpsc channel — an opaque pointer.
             Type::BuiltinChannel { .. } => Some(self.ptr().into()),
+            // v0.3-M4 Phase 2: a background task handle is an opaque heap pointer.
+            Type::BackgroundHandle { .. } => Some(self.ptr().into()),
             // M6: options values are i8 tags; union values are opaque pointers (heap tagged-struct).
             Type::Options { .. } => Some(self.ctx.i8_type().into()),
             Type::Union { .. } => Some(self.ptr().into()),
@@ -1918,8 +1923,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             | Type::Maybe { .. }
             | Type::BuiltinMap { .. }
             | Type::MapEntry { .. }
-            // v0.3-M4: a channel local holds an opaque pointer to the heap-owned mpsc channel.
+            // v0.3-M4: a channel local holds an opaque pointer to the heap-owned mpsc channel;
+            // a background task handle likewise.
             | Type::BuiltinChannel { .. }
+            | Type::BackgroundHandle { .. }
             | Type::Union { .. } => self
                 .builder
                 .build_alloca(self.ptr(), name)
@@ -2089,6 +2096,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             | Type::BuiltinMap { .. }
             | Type::MapEntry { .. }
             | Type::Union { .. }
+            // v0.3-M4: channels and task handles are opaque heap pointers.
+            | Type::BuiltinChannel { .. }
+            | Type::BackgroundHandle { .. }
             | Type::Sensitive { .. } => self
                 .builder
                 .build_int_to_ptr(val, self.ptr(), "i_to_ptr")
@@ -2600,7 +2610,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Pre-create state blocks.
     // Count ALL suspension points: explicit `wait` nodes + calls to suspending callees.
     // Each suspension point needs a poll-loop continuation state.
-    let n_waits_base = count_suspension_points(&f.body, suspend_set);
+    let n_waits_base = count_suspension_points(&f.body, suspend_set, &typed.expr_types);
     // Spike: a CPU-parallel group occupies two states — the spawn state (state 0, which is
     // the initial dispatch state, always present) and the poll state (state 1, the extra one).
     // After emit_cpu_group_spawn_join, *current_state is advanced by 2. Any subsequent
@@ -3355,25 +3365,34 @@ fn lower_function_with_waits<'ctx, 'g>(
 /// Used by `lower_function_with_waits` to pre-allocate state blocks. Every explicit `wait` AND
 /// every call to a suspending callee (regardless of whether `wait` was written) needs one
 /// continuation state for the poll-loop re-entry.
-fn count_suspension_points(block: &ynz_ast::nodes::Block, suspend_set: &SuspendSet) -> usize {
+fn count_suspension_points(
+    block: &ynz_ast::nodes::Block,
+    suspend_set: &SuspendSet,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> usize {
     block
         .stmts
         .iter()
-        .map(|s| count_suspension_stmt(s, suspend_set))
+        .map(|s| count_suspension_stmt(s, suspend_set, expr_types))
         .sum()
 }
 
-fn count_suspension_stmt(stmt: &Stmt, suspend_set: &SuspendSet) -> usize {
+fn count_suspension_stmt(
+    stmt: &Stmt,
+    suspend_set: &SuspendSet,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> usize {
     match stmt {
-        Stmt::Expr(e) => count_suspension_expr(e, suspend_set),
+        Stmt::Expr(e) => count_suspension_expr(e, suspend_set, expr_types),
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
-            count_suspension_expr(value, suspend_set)
+            count_suspension_expr(value, suspend_set, expr_types)
         }
         Stmt::Return { value, .. } => value
             .as_ref()
-            .map_or(0, |e| count_suspension_expr(e, suspend_set)),
+            .map_or(0, |e| count_suspension_expr(e, suspend_set, expr_types)),
         Stmt::FieldAssign { target, value, .. } => {
-            count_suspension_expr(target, suspend_set) + count_suspension_expr(value, suspend_set)
+            count_suspension_expr(target, suspend_set, expr_types)
+                + count_suspension_expr(value, suspend_set, expr_types)
         }
         Stmt::IndexAssign {
             receiver,
@@ -3381,18 +3400,21 @@ fn count_suspension_stmt(stmt: &Stmt, suspend_set: &SuspendSet) -> usize {
             value,
             ..
         } => {
-            count_suspension_expr(receiver, suspend_set)
-                + count_suspension_expr(index, suspend_set)
-                + count_suspension_expr(value, suspend_set)
+            count_suspension_expr(receiver, suspend_set, expr_types)
+                + count_suspension_expr(index, suspend_set, expr_types)
+                + count_suspension_expr(value, suspend_set, expr_types)
         }
         Stmt::If { cond, body, .. } => {
-            count_suspension_expr(cond, suspend_set) + count_suspension_points(body, suspend_set)
+            count_suspension_expr(cond, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types)
         }
         Stmt::While { cond, body, .. } => {
-            count_suspension_expr(cond, suspend_set) + count_suspension_points(body, suspend_set)
+            count_suspension_expr(cond, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types)
         }
         Stmt::For { iter, body, .. } => {
-            count_suspension_expr(iter, suspend_set) + count_suspension_points(body, suspend_set)
+            count_suspension_expr(iter, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types)
         }
         Stmt::Match {
             scrutinee,
@@ -3400,19 +3422,23 @@ fn count_suspension_stmt(stmt: &Stmt, suspend_set: &SuspendSet) -> usize {
             else_arm,
             ..
         } => {
-            count_suspension_expr(scrutinee, suspend_set)
+            count_suspension_expr(scrutinee, suspend_set, expr_types)
                 + arms
                     .iter()
-                    .map(|a| count_suspension_points(&a.body, suspend_set))
+                    .map(|a| count_suspension_points(&a.body, suspend_set, expr_types))
                     .sum::<usize>()
                 + else_arm
                     .as_ref()
-                    .map_or(0, |b| count_suspension_points(b, suspend_set))
+                    .map_or(0, |b| count_suspension_points(b, suspend_set, expr_types))
         }
     }
 }
 
-fn count_suspension_expr(expr: &Expr, suspend_set: &SuspendSet) -> usize {
+fn count_suspension_expr(
+    expr: &Expr,
+    suspend_set: &SuspendSet,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> usize {
     match expr {
         // Explicit `wait` of any kind = 1 suspension point.
         Expr::Wait(..) => 1,
@@ -3426,24 +3452,30 @@ fn count_suspension_expr(expr: &Expr, suspend_set: &SuspendSet) -> usize {
                     return 1 + c
                         .args
                         .iter()
-                        .map(|a| count_suspension_expr(a, suspend_set))
+                        .map(|a| count_suspension_expr(a, suspend_set, expr_types))
                         .sum::<usize>();
                 }
             }
             c.args
                 .iter()
-                .map(|a| count_suspension_expr(a, suspend_set))
+                .map(|a| count_suspension_expr(a, suspend_set, expr_types))
                 .sum()
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            count_suspension_expr(lhs, suspend_set) + count_suspension_expr(rhs, suspend_set)
+            count_suspension_expr(lhs, suspend_set, expr_types)
+                + count_suspension_expr(rhs, suspend_set, expr_types)
         }
-        Expr::UnaryOp { operand, .. } => count_suspension_expr(operand, suspend_set),
+        Expr::UnaryOp { operand, .. } => count_suspension_expr(operand, suspend_set, expr_types),
         Expr::MethodCall { receiver, args, .. } => {
-            count_suspension_expr(receiver, suspend_set)
+            // v0.3-M4: a suspending conduit-method call (`ch.send(v)` / `ch.receive()` /
+            // `h.send(v)` / `h.receive()`) consumes ONE continuation state — classified via
+            // the authoritative `channel_method_suspends` (through the shared typeck
+            // predicate), exactly matching the states `lower_sm_stmt_with_wait` consumes.
+            let own = usize::from(ynz_typeck::expr_is_conduit_suspend(expr, expr_types));
+            own + count_suspension_expr(receiver, suspend_set, expr_types)
                 + args
                     .iter()
-                    .map(|a| count_suspension_expr(a, suspend_set))
+                    .map(|a| count_suspension_expr(a, suspend_set, expr_types))
                     .sum::<usize>()
         }
         Expr::Background(inner, _) => {
@@ -3453,6 +3485,17 @@ fn count_suspension_expr(expr: &Expr, suspend_set: &SuspendSet) -> usize {
         }
         _ => 0,
     }
+}
+
+/// THE SM-walker routing predicate: does this statement contain ANY suspension source —
+/// an explicit `wait`, a suspending call, or (v0.3-M4) a conduit-method suspension
+/// (`ch.send`/`ch.receive`/handle send/receive, classified via the one authoritative
+/// suspension-source arm)? One helper so every routing site stays in lock-step
+/// (authoritative-derivation: never a per-site re-derived disjunct).
+fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
+    stmt_contains_wait(stmt)
+        || stmt_contains_suspending_call(stmt, cg.suspend_set)
+        || ynz_typeck::stmt_contains_conduit_suspend(stmt, &cg.typed.expr_types)
 }
 
 /// True if the statement contains a direct call to a suspending user-defined function.
@@ -3893,7 +3936,7 @@ fn lower_sm_block<'ctx, 'g>(
             if is_block_terminated(cg) {
                 break;
             }
-            if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+            if stmt_needs_sm_walker(cg, stmt) {
                 lower_sm_stmt_with_wait(
                     cg,
                     stmt,
@@ -3940,7 +3983,7 @@ fn lower_sm_block<'ctx, 'g>(
                 if is_block_terminated(cg) {
                     break;
                 }
-                if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                if stmt_needs_sm_walker(cg, stmt) {
                     lower_sm_stmt_with_wait(
                         cg,
                         stmt,
@@ -4000,7 +4043,7 @@ fn lower_sm_block<'ctx, 'g>(
                 if is_block_terminated(cg) {
                     break;
                 }
-                if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                if stmt_needs_sm_walker(cg, stmt) {
                     // lower_sm_stmt_with_wait calls reload_params_from_frame internally after
                     // the suspension. reload_params_from_frame now calls spike_reload for
                     // any remaining pairs in cg.m3d_spike_cpu_result_names — no explicit
@@ -4055,7 +4098,7 @@ fn lower_sm_block<'ctx, 'g>(
                 if is_block_terminated(cg) {
                     break;
                 }
-                if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                if stmt_needs_sm_walker(cg, stmt) {
                     lower_sm_stmt_with_wait(
                         cg,
                         stmt,
@@ -4100,7 +4143,7 @@ fn lower_sm_block<'ctx, 'g>(
                 if is_block_terminated(cg) {
                     break;
                 }
-                if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                if stmt_needs_sm_walker(cg, stmt) {
                     lower_sm_stmt_with_wait(
                         cg,
                         stmt,
@@ -4143,8 +4186,7 @@ fn lower_sm_block<'ctx, 'g>(
                 // not frame-backed across the join. The plain `lower_stmt` path has no spawn-join
                 // lowering, so a CPU-group-bearing control-flow statement must not take it.
                 // `m3d_spike` gates the extra recursion to promoted functions only.
-                let routes_to_sm = stmt_contains_wait(stmt)
-                    || stmt_contains_suspending_call(stmt, cg.suspend_set)
+                let routes_to_sm = stmt_needs_sm_walker(cg, stmt)
                     || (cg.m3d_spike && stmt_contains_cpu_group(stmt, cg.suspend_set, cg.typed));
                 if routes_to_sm {
                     lower_sm_stmt_with_wait(
@@ -4586,6 +4628,26 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
     current_state: &mut usize,
 ) -> Result<(), String> {
     match stmt {
+        // v0.3-M4 Phase 2 — suspending conduit-method statements (`ch.send(v)`,
+        // `let x = ch.receive()`, `h.send(v)`, `let r = h.receive()`), classified via the
+        // ONE authoritative suspension-source arm (`channel_method_suspends` through the
+        // shared typeck predicate). Must be the FIRST arm: the generic `Expr::Wait`
+        // fallback below would otherwise swallow `wait ch.receive()` as a no-op wait.
+        _ if ynz_typeck::stmt_is_conduit_suspend(stmt, &cg.typed.expr_types) => {
+            emit_conduit_stmt(
+                cg,
+                stmt,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+        }
+
         // `wait sleep(ms)` as a bare expression statement.
         Stmt::Expr(Expr::Wait(inner, _)) if is_sleep_call(inner) => {
             emit_wait_point(
@@ -5023,7 +5085,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         }
 
         _ => {
-            if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+            if stmt_needs_sm_walker(cg, stmt) {
                 panic!(
                     "BUG: SM codegen reached a wait-bearing statement with no handler. \
                      This is a compiler bug — all suspendable statement forms should have \
@@ -9713,6 +9775,614 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     Ok(ret_val)
 }
 
+/// v0.3-M4 Phase 2: lower `let h = background fn(...)` — the background handle-form spawn.
+///
+/// Compile-time spawn-form keying (R8): the completion-extraction kind is derived HERE from
+/// the callee's declared return type (never a runtime conditional), and only this let-bound
+/// form calls `ynz_rt_spawn_handle`. Typeck has already verified the callee is a suspending
+/// user function, so the SM spawn path (resume fn + composed frame) is always valid.
+fn lower_let_background_handle<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    name: &str,
+    bg_inner: &Expr,
+) -> Result<(), String> {
+    let call = match bg_inner {
+        Expr::Call(c) => c,
+        other => {
+            // Typeck already emitted the must-wrap-a-call error; keep codegen total.
+            let _ = lower_expr(cg, other)?;
+            return Ok(());
+        }
+    };
+    let callee_name = match &call.callee {
+        Expr::Ident(n, _) => n.clone(),
+        _ => return Err("handle spawn: non-ident callee reached codegen".to_string()),
+    };
+    // Completion-extraction kind from the callee's declared return type (the ynz-abi
+    // HANDLE_RET_KIND_* contract shared with ynz-runtime's HandleStateFnFuture).
+    let sig_ret = cg
+        .sig_table
+        .fns
+        .get(&callee_name)
+        .map(|s| s.ret.clone())
+        .or_else(|| cg.imported_fns.get(&callee_name).map(|s| s.ret.clone()))
+        .ok_or_else(|| format!("handle spawn: signature for `{callee_name}` not found"))?;
+    let ret_kind = match &sig_ret {
+        Type::ErrorsCapable { inner } => match inner.as_ref() {
+            Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_EC_NUMBER,
+            _ => ynz_abi::HANDLE_RET_KIND_EC_WORD,
+        },
+        Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_VALUE_NUMBER,
+        _ => ynz_abi::HANDLE_RET_KIND_VALUE_WORD,
+    } as u64;
+
+    let handle_val = lower_sm_background_spawn(cg, call, &callee_name, Some(ret_kind))?;
+
+    if let Some(frame) = cg.sm_frame_ptr {
+        // SM context: the handle local is a crossing local (typeck marks every conduit-typed
+        // local crossing), so bind-and-flush gives it a frame slot for later suspensions.
+        let alloca = bind_sm_result_and_flush(cg, name, handle_val, frame, &callee_name)?;
+        cg.locals.insert(name.to_string(), alloca);
+    } else {
+        // Non-SM spawner (handle never received in this fn): a plain ptr binding.
+        let alloca = cg
+            .builder
+            .build_alloca(cg.ptr(), name)
+            .map_err(|e| format!("handle bind alloca {name}: {e}"))?;
+        cg.builder
+            .build_store(alloca, handle_val)
+            .map_err(|e| format!("handle bind store {name}: {e}"))?;
+        cg.locals.insert(name.to_string(), alloca);
+    }
+    Ok(())
+}
+
+/// The four suspending conduit operations (receiver kind × method), classified once from
+/// typeck types — the emission below branches on this, never on re-derived name checks.
+#[derive(Clone, PartialEq)]
+enum ConduitOp {
+    /// `ch.send(v)` — `-> nothing errors` (Lock 8: closed receiver = typed error).
+    ChanSend,
+    /// `ch.receive()` — `-> elem`.
+    ChanRecv { elem: Type },
+    /// `h.send(v)` — `-> nothing errors`, feeds the child's first `channel<T>` parameter.
+    HandleSend,
+    /// `h.receive()` — `-> T errors`: the next delivery from the task (completion value in
+    /// v0.3-M4; message replies when the child-side surface ships).
+    HandleRecv,
+}
+
+/// v0.3-M4 Phase 2: lower one suspending conduit-method STATEMENT
+/// (`ch.send(v)` / `let x = ch.receive()` / `h.send(v)` / `let r = h.receive()`).
+///
+/// Dispatches to [`emit_conduit_suspend_point`] and binds the result for the `let` forms
+/// through the standard SM binder (crossing locals flushed to their frame slots; EC results
+/// registered for `.or()`/`.failed()`/auto-propagation exactly like suspending-call results).
+#[allow(clippy::too_many_arguments)]
+fn emit_conduit_stmt<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    stmt: &Stmt,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    let (bind_name, expr) = match stmt {
+        Stmt::Expr(e) => (None, e),
+        Stmt::Let { name, value, .. } => (Some(name.as_str()), value),
+        _ => return Err("emit_conduit_stmt: unexpected statement shape".to_string()),
+    };
+    let inner = match expr {
+        Expr::Wait(i, _) => i.as_ref(),
+        o => o,
+    };
+    let Expr::MethodCall {
+        receiver,
+        method,
+        args,
+        ..
+    } = inner
+    else {
+        return Err("emit_conduit_stmt: not a method call".to_string());
+    };
+
+    let recv_ty = cg.expr_type(receiver);
+    let op = match (&recv_ty, method.as_str()) {
+        (Type::BuiltinChannel { .. }, "send") => ConduitOp::ChanSend,
+        (Type::BuiltinChannel { elem }, "receive") => ConduitOp::ChanRecv {
+            elem: (**elem).clone(),
+        },
+        (Type::BackgroundHandle { .. }, "send") => ConduitOp::HandleSend,
+        (Type::BackgroundHandle { .. }, "receive") => ConduitOp::HandleRecv,
+        _ => {
+            return Err(format!(
+                "emit_conduit_stmt: unclassifiable conduit op `{method}` on {recv_ty:?}"
+            ))
+        }
+    };
+
+    let result = emit_conduit_suspend_point(
+        cg,
+        receiver,
+        &op,
+        args,
+        state_blocks,
+        pending_block,
+        frame_ptr,
+        waker_ctx,
+        param_names,
+        f,
+        shape_table,
+        current_state,
+    )?;
+
+    if let Some(name) = bind_name {
+        let alloca = bind_sm_result_and_flush(cg, name, result, frame_ptr, method)?;
+        cg.locals.insert(name.to_string(), alloca);
+        // EC results (send's `nothing errors`, handle-receive's `T errors`) that cross a
+        // later suspension need the EC-crossing-local registration, mirroring the
+        // let-suspending-call arms.
+        if cg.sm_crossing_errors_capable_set.contains(name) {
+            cg.errors_capable_locals.insert(name.to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Emit the 3-way poll-yield suspension point for a conduit operation (R1/R5: never a
+/// synchronous blocking call — Pending saves the resume point and yields to the executor;
+/// the forwarded `waker_ctx` is registered by the runtime's real endpoint futures).
+///
+/// Layout (mirrors `emit_wait_point`, extended to the 3-way Ready/Pending/Closed contract):
+///
+/// ```text
+/// current:    poll #1 ── 0 ─► ready1 ─────────► post (phi merge)
+///                 │ 2 ──────► closed1 ────────►  ▲
+///                 └ else ───► suspend: store_resume_point(cont); br pending
+/// cont_state: reload params/crossing; poll #2 ── 0 ─► ready2 ─► post
+///                 │ 2 ──────► closed2 ────────► post
+///                 └ else ───► pending (resume_point already = cont)
+/// ```
+///
+/// Result value at `post`:
+/// - send ops → `{i64 err, i64 0}` EC struct (`nothing errors`, Lock 8);
+/// - `ch.receive()` → the elem-typed value (Closed is structurally unreachable in v0.3-M4 —
+///   the channel object holds a sender — and aborts loudly via `ynz_unhandled_error`);
+/// - `h.receive()` → `{i64 err, i64 ok}` EC struct (`T errors`; Closed = the typed
+///   task-already-finished error, never a hang).
+///
+/// A resumed send passes value 0 — the runtime's in-flight per-caller future already owns
+/// the value (`caller_token` = this frame, collision-free: one suspension per frame at a
+/// time).
+#[allow(clippy::too_many_arguments)]
+fn emit_conduit_suspend_point<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    receiver: &Expr,
+    op: &ConduitOp,
+    args: &[Expr],
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let ctx = cg.ctx;
+    let i64t = ctx.i64_type();
+    let is_send = matches!(op, ConduitOp::ChanSend | ConduitOp::HandleSend);
+
+    // Evaluate the send value ONCE (first poll). The resumed poll passes 0 — the runtime's
+    // in-flight future captured the value at suspension time.
+    let value_bits = if is_send {
+        let arg = &args[0];
+        let arg_ty = cg.expr_type(arg);
+        let v = lower_expr(cg, arg)?;
+        cg.to_i64_bits(v, &arg_ty)
+            .map_err(|e| format!("conduit send value bits: {e}"))?
+    } else {
+        i64t.const_int(0, false)
+    };
+
+    // One poll emission (used for both the first poll and the resumed poll). Returns the
+    // i32 code plus the out-allocas the matching ready block must load from.
+    // Out-allocas shape: `None` for send (no out value); `Some((err, Some(ok)))` for the
+    // recv forms; the inner Option covers a future no-ok-slot op.
+    type PollOuts<'c> = Option<(PointerValue<'c>, Option<PointerValue<'c>>)>;
+    let emit_poll = |cg: &mut Cg<'ctx, '_>,
+                     value: inkwell::values::IntValue<'ctx>,
+                     label: &str|
+     -> Result<(inkwell::values::IntValue<'ctx>, PollOuts<'ctx>), String> {
+        let conduit = lower_expr(cg, receiver)?.into_pointer_value();
+        match op {
+            ConduitOp::ChanSend => {
+                // The per-caller suspended-send token: this frame (one suspension at a time
+                // per frame). Recomputed per poll site so the instruction dominates its use
+                // (the resume path is reached from the sm_entry switch, not the first poll).
+                let token = cg
+                    .builder
+                    .build_ptr_to_int(frame_ptr, i64t, "conduit_token")
+                    .map_err(|e| format!("conduit token: {e}"))?;
+                let code = cg
+                    .builder
+                    .build_call(
+                        cg.rt.ynz_channel_send_poll,
+                        &[conduit.into(), value.into(), waker_ctx.into(), token.into()],
+                        &format!("chan_send_{label}"),
+                    )
+                    .map_err(|e| format!("chan send poll {label}: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ynz_channel_send_poll returned void")?
+                    .into_int_value();
+                Ok((code, None))
+            }
+            ConduitOp::ChanRecv { .. } => {
+                let out = cg
+                    .builder
+                    .build_alloca(i64t, &format!("chan_recv_out_{label}"))
+                    .map_err(|e| format!("chan recv out {label}: {e}"))?;
+                let code = cg
+                    .builder
+                    .build_call(
+                        cg.rt.ynz_channel_recv_poll,
+                        &[conduit.into(), out.into(), waker_ctx.into()],
+                        &format!("chan_recv_{label}"),
+                    )
+                    .map_err(|e| format!("chan recv poll {label}: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ynz_channel_recv_poll returned void")?
+                    .into_int_value();
+                Ok((code, Some((out, None))))
+            }
+            ConduitOp::HandleSend => {
+                let code = cg
+                    .builder
+                    .build_call(
+                        cg.rt.ynz_handle_send_poll,
+                        &[conduit.into(), value.into(), waker_ctx.into()],
+                        &format!("handle_send_{label}"),
+                    )
+                    .map_err(|e| format!("handle send poll {label}: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ynz_handle_send_poll returned void")?
+                    .into_int_value();
+                Ok((code, None))
+            }
+            ConduitOp::HandleRecv => {
+                let err_out = cg
+                    .builder
+                    .build_alloca(i64t, &format!("handle_recv_err_{label}"))
+                    .map_err(|e| format!("handle recv err out {label}: {e}"))?;
+                let ok_out = cg
+                    .builder
+                    .build_alloca(i64t, &format!("handle_recv_ok_{label}"))
+                    .map_err(|e| format!("handle recv ok out {label}: {e}"))?;
+                let code = cg
+                    .builder
+                    .build_call(
+                        cg.rt.ynz_handle_recv_poll,
+                        &[
+                            conduit.into(),
+                            err_out.into(),
+                            ok_out.into(),
+                            waker_ctx.into(),
+                        ],
+                        &format!("handle_recv_{label}"),
+                    )
+                    .map_err(|e| format!("handle recv poll {label}: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ynz_handle_recv_poll returned void")?
+                    .into_int_value();
+                Ok((code, Some((err_out, Some(ok_out)))))
+            }
+        }
+    };
+
+    // Closed-path error text per op (WHAT/WHAT-INSTEAD/WHY lives in the typeck teaching
+    // diagnostics; this is the RUNTIME error message the typed `errors` value carries).
+    let closed_msg: &str = match op {
+        ConduitOp::ChanSend | ConduitOp::HandleSend => {
+            "The channel is closed - the receiving side is gone, so this value cannot be delivered. \
+             Handle the error with .failed() or .or(), or keep the receiver alive."
+        }
+        ConduitOp::HandleRecv => {
+            "This task already finished and its value was already received. Store the first \
+             receive() result in a binding if you need it in more than one place."
+        }
+        ConduitOp::ChanRecv { .. } => {
+            "receive() on a closed channel - every sender is gone and the buffer is empty."
+        }
+    };
+
+    // ── first poll ──────────────────────────────────────────────────────────
+    let (code1, outs1) = emit_poll(cg, value_bits, "first")?;
+
+    let continuation_state = *current_state + 1;
+    let cont_state_bb = state_blocks
+        .get(continuation_state)
+        .copied()
+        .ok_or_else(|| format!("conduit continuation state {continuation_state} out of range"))?;
+    let post_bb = ctx.append_basic_block(cg.current_fn, "conduit_post");
+    let suspend_bb = ctx.append_basic_block(cg.current_fn, "conduit_suspend");
+    let ready1_bb = ctx.append_basic_block(cg.current_fn, "conduit_ready1");
+    let closed1_bb = ctx.append_basic_block(cg.current_fn, "conduit_closed1");
+
+    cg.builder
+        .build_switch(
+            code1,
+            suspend_bb,
+            &[
+                (ctx.i32_type().const_int(0, false), ready1_bb),
+                (ctx.i32_type().const_int(2, false), closed1_bb),
+            ],
+        )
+        .map_err(|e| format!("conduit first switch: {e}"))?;
+    *current_state = continuation_state;
+
+    // suspend: save the continuation state, yield Pending (the runtime registered the
+    // forwarded waker; the task is re-driven when the endpoint makes progress).
+    cg.builder.position_at_end(suspend_bb);
+    state_machine::store_resume_point(ctx, &cg.builder, frame_ptr, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("conduit suspend branch: {e}"))?;
+
+    // A closed-path error value builder (shared by both closed blocks).
+    let build_closed_err =
+        |cg: &mut Cg<'ctx, '_>, label: &str| -> Result<inkwell::values::IntValue<'ctx>, String> {
+            let msg_global = build_string_global(cg.ctx, cg.module, closed_msg, ".conduit.closed");
+            let err_ptr = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_error_new,
+                    &[msg_global.as_pointer_value().into()],
+                    &format!("conduit_err_{label}"),
+                )
+                .map_err(|e| format!("conduit err new {label}: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_error_new returned void")?
+                .into_pointer_value();
+            cg.builder
+                .build_ptr_to_int(err_ptr, i64t, &format!("conduit_err_i64_{label}"))
+                .map_err(|e| format!("conduit err ptr_to_int {label}: {e}"))
+        };
+
+    // ready1: load this path's delivered payload (if any).
+    cg.builder.position_at_end(ready1_bb);
+    let payload1: Option<(
+        inkwell::values::IntValue<'ctx>,
+        Option<inkwell::values::IntValue<'ctx>>,
+    )> = match &outs1 {
+        Some((a, b)) => {
+            let va = cg
+                .builder
+                .build_load(i64t, *a, "conduit_pl1_a")
+                .map_err(|e| format!("conduit payload1 a: {e}"))?
+                .into_int_value();
+            let vb = match b {
+                Some(bp) => Some(
+                    cg.builder
+                        .build_load(i64t, *bp, "conduit_pl1_b")
+                        .map_err(|e| format!("conduit payload1 b: {e}"))?
+                        .into_int_value(),
+                ),
+                None => None,
+            };
+            Some((va, vb))
+        }
+        None => None,
+    };
+    cg.builder
+        .build_unconditional_branch(post_bb)
+        .map_err(|e| format!("conduit ready1 branch: {e}"))?;
+
+    // closed1.
+    cg.builder.position_at_end(closed1_bb);
+    let closed1_terminates = matches!(op, ConduitOp::ChanRecv { .. });
+    let err1 = if closed1_terminates {
+        // Structurally unreachable in v0.3-M4 (the channel object holds a sender), kept as
+        // a LOUD abort — never a silent wrong value (verification discipline).
+        let e = build_closed_err(cg, "closed1")?;
+        let e_ptr = cg
+            .builder
+            .build_int_to_ptr(e, ctx.ptr_type(AddressSpace::default()), "conduit_c1_ptr")
+            .map_err(|e| format!("conduit closed1 int_to_ptr: {e}"))?;
+        cg.builder
+            .build_call(
+                cg.rt.ynz_unhandled_error,
+                &[e_ptr.into()],
+                "conduit_c1_abort",
+            )
+            .map_err(|e| format!("conduit closed1 abort: {e}"))?;
+        cg.builder
+            .build_unreachable()
+            .map_err(|e| format!("conduit closed1 unreachable: {e}"))?;
+        None
+    } else {
+        let e = build_closed_err(cg, "closed1")?;
+        cg.builder
+            .build_unconditional_branch(post_bb)
+            .map_err(|e| format!("conduit closed1 branch: {e}"))?;
+        Some(e)
+    };
+
+    // ── continuation state: re-poll after wakeup ────────────────────────────
+    cg.builder.position_at_end(cont_state_bb);
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
+    let (code2, outs2) = emit_poll(cg, i64t.const_int(0, false), "resume")?;
+    let ready2_bb = ctx.append_basic_block(cg.current_fn, "conduit_ready2");
+    let closed2_bb = ctx.append_basic_block(cg.current_fn, "conduit_closed2");
+    cg.builder
+        .build_switch(
+            code2,
+            pending_block,
+            &[
+                (ctx.i32_type().const_int(0, false), ready2_bb),
+                (ctx.i32_type().const_int(2, false), closed2_bb),
+            ],
+        )
+        .map_err(|e| format!("conduit resume switch: {e}"))?;
+
+    cg.builder.position_at_end(ready2_bb);
+    let payload2: Option<(
+        inkwell::values::IntValue<'ctx>,
+        Option<inkwell::values::IntValue<'ctx>>,
+    )> = match &outs2 {
+        Some((a, b)) => {
+            let va = cg
+                .builder
+                .build_load(i64t, *a, "conduit_pl2_a")
+                .map_err(|e| format!("conduit payload2 a: {e}"))?
+                .into_int_value();
+            let vb = match b {
+                Some(bp) => Some(
+                    cg.builder
+                        .build_load(i64t, *bp, "conduit_pl2_b")
+                        .map_err(|e| format!("conduit payload2 b: {e}"))?
+                        .into_int_value(),
+                ),
+                None => None,
+            };
+            Some((va, vb))
+        }
+        None => None,
+    };
+    cg.builder
+        .build_unconditional_branch(post_bb)
+        .map_err(|e| format!("conduit ready2 branch: {e}"))?;
+
+    cg.builder.position_at_end(closed2_bb);
+    let err2 = if closed1_terminates {
+        let e = build_closed_err(cg, "closed2")?;
+        let e_ptr = cg
+            .builder
+            .build_int_to_ptr(e, ctx.ptr_type(AddressSpace::default()), "conduit_c2_ptr")
+            .map_err(|e| format!("conduit closed2 int_to_ptr: {e}"))?;
+        cg.builder
+            .build_call(
+                cg.rt.ynz_unhandled_error,
+                &[e_ptr.into()],
+                "conduit_c2_abort",
+            )
+            .map_err(|e| format!("conduit closed2 abort: {e}"))?;
+        cg.builder
+            .build_unreachable()
+            .map_err(|e| format!("conduit closed2 unreachable: {e}"))?;
+        None
+    } else {
+        let e = build_closed_err(cg, "closed2")?;
+        cg.builder
+            .build_unconditional_branch(post_bb)
+            .map_err(|e| format!("conduit closed2 branch: {e}"))?;
+        Some(e)
+    };
+
+    // ── post: merge the paths ───────────────────────────────────────────────
+    cg.builder.position_at_end(post_bb);
+    match op {
+        ConduitOp::ChanSend | ConduitOp::HandleSend => {
+            // {err, 0} EC struct — err is 0 on the ready paths, the error pointer on closed.
+            let err_phi = cg
+                .builder
+                .build_phi(i64t, "conduit_send_err")
+                .map_err(|e| format!("conduit send err phi: {e}"))?;
+            let zero = i64t.const_int(0, false);
+            err_phi.add_incoming(&[
+                (&zero, ready1_bb),
+                (&err1.expect("send closed1 flows to post"), closed1_bb),
+                (&zero, ready2_bb),
+                (&err2.expect("send closed2 flows to post"), closed2_bb),
+            ]);
+            let st = ctx.struct_type(&[i64t.into(), i64t.into()], false);
+            let mut r = st.const_zero();
+            r = cg
+                .builder
+                .build_insert_value(
+                    r,
+                    err_phi.as_basic_value().into_int_value(),
+                    0,
+                    "send_ec_err",
+                )
+                .map_err(|e| format!("conduit send ec err insert: {e}"))?
+                .into_struct_value();
+            Ok(r.into())
+        }
+        ConduitOp::ChanRecv { elem } => {
+            // The delivered i64 payload from whichever ready path ran (closed paths abort).
+            let val_phi = cg
+                .builder
+                .build_phi(i64t, "conduit_recv_val")
+                .map_err(|e| format!("conduit recv val phi: {e}"))?;
+            let (p1, _) = payload1.expect("recv first-poll payload");
+            let (p2, _) = payload2.expect("recv resume payload");
+            val_phi.add_incoming(&[(&p1, ready1_bb), (&p2, ready2_bb)]);
+            cg.i64_bits_to(val_phi.as_basic_value().into_int_value(), elem)
+        }
+        ConduitOp::HandleRecv => {
+            // {err, ok} EC struct — ready paths deliver the task's (err, ok); closed paths
+            // deliver the typed task-already-finished error.
+            let err_phi = cg
+                .builder
+                .build_phi(i64t, "conduit_hrecv_err")
+                .map_err(|e| format!("conduit hrecv err phi: {e}"))?;
+            let ok_phi = cg
+                .builder
+                .build_phi(i64t, "conduit_hrecv_ok")
+                .map_err(|e| format!("conduit hrecv ok phi: {e}"))?;
+            let (e1, o1) = payload1.expect("hrecv first-poll payload");
+            let (e2, o2) = payload2.expect("hrecv resume payload");
+            let o1 = o1.expect("hrecv ok out 1");
+            let o2 = o2.expect("hrecv ok out 2");
+            let zero = i64t.const_int(0, false);
+            err_phi.add_incoming(&[
+                (&e1, ready1_bb),
+                (&err1.expect("hrecv closed1 flows to post"), closed1_bb),
+                (&e2, ready2_bb),
+                (&err2.expect("hrecv closed2 flows to post"), closed2_bb),
+            ]);
+            ok_phi.add_incoming(&[
+                (&o1, ready1_bb),
+                (&zero, closed1_bb),
+                (&o2, ready2_bb),
+                (&zero, closed2_bb),
+            ]);
+            let st = ctx.struct_type(&[i64t.into(), i64t.into()], false);
+            let mut r = st.const_zero();
+            r = cg
+                .builder
+                .build_insert_value(
+                    r,
+                    err_phi.as_basic_value().into_int_value(),
+                    0,
+                    "hrecv_ec_err",
+                )
+                .map_err(|e| format!("conduit hrecv err insert: {e}"))?
+                .into_struct_value();
+            r = cg
+                .builder
+                .build_insert_value(
+                    r,
+                    ok_phi.as_basic_value().into_int_value(),
+                    1,
+                    "hrecv_ec_ok",
+                )
+                .map_err(|e| format!("conduit hrecv ok insert: {e}"))?
+                .into_struct_value();
+            Ok(r.into())
+        }
+    }
+}
+
 /// Emit the IR for a single `wait sleep(ms)` point within a state-machine body.
 ///
 /// # Flow
@@ -9923,8 +10593,10 @@ fn value_to_i64_bits<'ctx>(
         | Type::BuiltinMap { .. }
         | Type::MapEntry { .. }
         // v0.3-M4: a channel value is a single owning heap pointer — staged as its i64 pointer
-        // bits (e.g. when a channel local crosses a `wait sleep` suspension point).
+        // bits (e.g. when a channel local crosses a `wait sleep` suspension point). A
+        // background task handle is likewise a single opaque heap pointer.
         | Type::BuiltinChannel { .. }
+        | Type::BackgroundHandle { .. }
         | Type::Union { .. }
         | Type::Sensitive { .. } => builder
             .build_ptr_to_int(val.into_pointer_value(), i64_ty, "ptr_to_i")
@@ -10062,6 +10734,13 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             value,
             ..
         } => {
+            // v0.3-M4 Phase 2: `let h = background fn(...)` — the handle-form spawn.
+            // Compile-time spawn-form keying (R8): only THIS let-bound form routes to
+            // `ynz_rt_spawn_handle`; a bare `background fn(...)` statement keeps the
+            // fire-and-forget `ynz_rt_spawn` path byte-for-byte.
+            if let Expr::Background(bg_inner, _) = value {
+                return lower_let_background_handle(cg, name, bg_inner);
+            }
             let val_ty = cg.expr_type(value);
             let val = lower_expr(cg, value)?;
 
@@ -12834,6 +13513,9 @@ enum BgArgFreeKind {
     HeapShape { byte_size: u64 },
     /// Primitive array clone: call `ynz_array_drop(ptr)` after the fn call.
     HeapArrayPrimitive,
+    /// v0.3-M4: a shared channel reference (`ynz_channel_share` at the spawn site) — the
+    /// task releases its reference with `ynz_channel_free` (refcount decrement).
+    SharedChannel,
 }
 
 /// Prepare one `background` argument for storage in the task ctx.
@@ -12883,6 +13565,21 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     //
     // Primitives (Int/Bool/Float) are i64 by-value and need no heap-upgrade.
     // Strings are immutable heap bytes; the pointer itself survives any frame.
+    // v0.3-M4: a channel argument is SHARED with the task — refcounted alias via
+    // ynz_channel_share (both sides must operate on the SAME bounded buffer; neither give
+    // nor copy is correct for a conduit). The task's drop ladder releases the reference
+    // (BgArgDropEntry kind 2 / the closure-body free arm).
+    if matches!(cg.resolve_type(ty), Type::BuiltinChannel { .. }) {
+        let shared = cg
+            .builder
+            .build_call(cg.rt.ynz_channel_share, &[val.into()], "bg_chan_share")
+            .map_err(|e| format!("bg channel share: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "bg channel share: returned void".to_string())?;
+        return Ok((shared, BgArgFreeKind::SharedChannel));
+    }
+
     let is_heap_arg = match arg {
         ynz_ast::nodes::Expr::Ident(_, s) => {
             // Plain ident: any inferred Give or Copy ownership gets the heap fix.
@@ -13065,6 +13762,29 @@ fn emit_bg_arg_frees<'ctx>(
                 cg_builder
                     .build_call(rt.ynz_array_drop, &[heap_ptr.into()], "bg_arr_drop")
                     .map_err(|e| format!("bg arr drop call: {e}"))?;
+            }
+            // v0.3-M4: release the task's shared-channel reference (refcount decrement).
+            BgArgFreeKind::SharedChannel => {
+                let slot = unsafe {
+                    cg_builder
+                        .build_gep(
+                            i64_ty,
+                            ctx_arg,
+                            &[i64_ty.const_int(i as u64, false)],
+                            "free_chan_slot",
+                        )
+                        .map_err(|e| format!("bg chan free gep: {e}"))?
+                };
+                let bits = cg_builder
+                    .build_load(i64_ty, slot, "free_chan_bits")
+                    .map_err(|e| format!("bg chan free load: {e}"))?
+                    .into_int_value();
+                let chan_ptr = cg_builder
+                    .build_int_to_ptr(bits, ptr_ty, "free_chan_ptr")
+                    .map_err(|e| format!("bg chan free inttoptr: {e}"))?;
+                cg_builder
+                    .build_call(rt.ynz_channel_free, &[chan_ptr.into()], "bg_chan_free")
+                    .map_err(|e| format!("bg chan free call: {e}"))?;
             }
         }
     }
@@ -13329,6 +14049,23 @@ fn lower_expr_background_state_machine<'ctx>(
     call: &ynz_ast::nodes::CallExpr,
     callee_name: &str,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
+    lower_sm_background_spawn(cg, call, callee_name, None)
+}
+
+/// Shared SM background-spawn emission for BOTH spawn forms (authoritative-derivation: one
+/// arg-prep/frame/descriptor pipeline, never two).
+///
+/// - `handle_ret_kind = None` → fire-and-forget `ynz_rt_spawn` (byte-for-byte the pre-M4
+///   path — the compile-time spawn-form key R8 requires).
+/// - `handle_ret_kind = Some(k)` → `ynz_rt_spawn_handle` with completion-extraction kind
+///   `k` (`ynz-runtime handle.rs RET_KIND_*`) and the first channel-typed argument wired as
+///   the handle's `.send()` conduit; returns the handle pointer.
+fn lower_sm_background_spawn<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    call: &ynz_ast::nodes::CallExpr,
+    callee_name: &str,
+    handle_ret_kind: Option<u64>,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     // Step 1: evaluate arguments and convert to i64 bits.
     // Heap-upgrade copied args so task pointers survive the spawner's frame return.
     // The resulting heap allocations (Shape via ynz_alloc / array<primitive> via
@@ -13337,10 +14074,18 @@ fn lower_expr_background_state_machine<'ctx>(
     // callee has read them, keeping alloc/free balanced on every task exit path.
     let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
     let mut free_kinds: Vec<BgArgFreeKind> = Vec::new();
+    // v0.3-M4: the FIRST channel-typed argument is the handle's `.send()` conduit
+    // (`ynz_rt_spawn_handle` takes its own refcounted reference to it).
+    let mut first_channel_arg: Option<inkwell::values::PointerValue<'ctx>> = None;
     for arg in &call.args {
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
         let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
+        if first_channel_arg.is_none()
+            && matches!(cg.resolve_type(&ty), Type::BuiltinChannel { .. })
+        {
+            first_channel_arg = Some(val.into_pointer_value());
+        }
         let bits = cg
             .to_i64_bits(val, &ty)
             .map_err(|e| format!("sm bg arg bits: {e}"))?;
@@ -13423,6 +14168,12 @@ fn lower_expr_background_state_machine<'ctx>(
                 // preserved precisely so that re-derivation indexes the original, unfiltered slot.
                 Some((slot_idx, byte_offset, 0_u64))
             }
+            // v0.3-M4: shared-channel reference — freed via ynz_channel_free (kind 2);
+            // size unused (refcount decrement, not a byte free).
+            BgArgFreeKind::SharedChannel => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, 0_u64))
+            }
             BgArgFreeKind::None => None,
         })
         .collect();
@@ -13473,6 +14224,7 @@ fn lower_expr_background_state_machine<'ctx>(
             let kind_val = match &free_kinds[*slot_idx] {
                 BgArgFreeKind::HeapShape { .. } => 0_u64,
                 BgArgFreeKind::HeapArrayPrimitive => 1_u64,
+                BgArgFreeKind::SharedChannel => 2_u64,
                 BgArgFreeKind::None => unreachable!("filtered above"),
             };
             let off1 = unsafe {
@@ -13512,6 +14264,41 @@ fn lower_expr_background_state_machine<'ctx>(
     };
 
     // Step 6: call ynz_rt_spawn with the frame + arg-drop descriptor.
+    if let Some(ret_kind) = handle_ret_kind {
+        // Handle form: independent joinable Tokio task + completion conduit + (optional)
+        // first-channel `.send()` wiring. Returns the opaque handle pointer.
+        let ret_kind_val = cg.ctx.i64_type().const_int(ret_kind, false);
+        let msg_chan_val: inkwell::values::BasicMetadataValueEnum = match first_channel_arg {
+            Some(p) => p.into(),
+            None => cg
+                .ctx
+                .ptr_type(inkwell::AddressSpace::default())
+                .const_null()
+                .into(),
+        };
+        let handle = cg
+            .builder
+            .build_call(
+                cg.rt.ynz_rt_spawn_handle,
+                &[
+                    resume_ptr.into(),
+                    frame_ptr.into(),
+                    frame_size_val.into(),
+                    rec_slot_offset_val.into(),
+                    arg_drop_ptr_val,
+                    arg_drop_count_val.into(),
+                    ret_kind_val.into(),
+                    msg_chan_val,
+                ],
+                "sm_spawn_handle",
+            )
+            .map_err(|e| format!("ynz_rt_spawn_handle: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "ynz_rt_spawn_handle returned void".to_string())?;
+        return Ok(handle);
+    }
+
     cg.builder
         .build_call(
             cg.rt.ynz_rt_spawn,
@@ -17766,6 +18553,12 @@ mod tests {
             // match (so a future variant still forces a decision) but no gate run.
             Resolved::TypeParam { .. } => ParityCase::UnreachableAsReturnInner(
                 "generic-fn return types live in GenericFnTable, never in the CPU-gated SignatureTable.fns",
+            ),
+            // v0.3-M4 Phase 2: a background task handle has NO typeable source annotation —
+            // it can never appear as a declared return type, so it can never reach either
+            // CPU-result gate as a return class.
+            Resolved::BackgroundHandle { .. } => ParityCase::UnreachableAsReturnInner(
+                "task handles are inferred-only (`let h = background f()`); no return-type syntax exists",
             ),
             // The `ErrorsCapable` wrapper itself is never a `-> T` inner of ANOTHER
             // `ErrorsCapable` (no `-> T errors errors` syntax); it is exercised via the

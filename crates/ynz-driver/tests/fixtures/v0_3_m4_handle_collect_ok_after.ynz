@@ -1,0 +1,15 @@
+// R8 matrix — collected x ok-path x receive-AFTER-completion.
+// The child finishes (frame's EC result extracted BEFORE free) while the parent sleeps;
+// the collected value must be byte-correct long after the child's frame was freed.
+function worker() -> int errors {
+  wait sleep(5)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let h = background worker()
+  wait sleep(80)
+  let r = h.receive()
+  let v = r.or(0)
+  print(v.toString())
+}

@@ -1,0 +1,33 @@
+// v0.3-M4 Phase 2 — the R5 composed-suspension hostile fixture (build-blocking).
+// Grown from .claude/planning/active/2026-07-02-v0-3-m4-channels-arc-release/p0-spike/composed-scenario.ynz.
+//
+// THE SCENARIO: a background-spawned CHILD suspends on channel.send()-on-full WHILE the
+// PARENT polls channel.receive(). Capacity-1 channel forces the backpressure. The child's
+// second send can only complete AFTER the parent receives the first value (freeing
+// capacity) — that ordering is the composed-suspension proof. A deadlocked substrate hangs;
+// this must run to completion with the receiver observing BOTH values.
+
+function producer(lend out: channel<int>) -> nothing {
+  // First send fills the capacity-1 channel.
+  out.send(10)
+  // Second send finds the channel FULL — the task SUSPENDS here (backpressure), and stays
+  // suspended until the parent's receive() below frees capacity.
+  out.send(20)
+}
+
+function entrypoint() -> nothing {
+  // Capacity-1 bounded channel — small enough to force the composed backpressure interaction.
+  let ch: channel<int> = channel<int>(1)
+
+  // Spawn the producer as an independent joinable background task, handing it the channel.
+  let worker = background producer(ch)
+
+  // The parent receives both values. The first receive frees capacity, which is what lets
+  // the child's suspended second send() finally complete — the two endpoints wake each other.
+  let first = ch.receive()
+  print(first.toString())
+  let second = ch.receive()
+  print(second.toString())
+
+  print(`done`)
+}

@@ -1,0 +1,14 @@
+// R1 hostile — never-drained: a fire-and-forget child suspends on a full channel and
+// NOBODY ever drains it. The child stays suspended (backpressure working, not a deadlock);
+// the PARENT terminates cleanly and shutdown drains the parked task — never a hang.
+function stubbornProducer(lend out: channel<int>) -> nothing {
+  out.send(1)
+  out.send(2)
+}
+
+function entrypoint() -> nothing {
+  let ch: channel<int> = channel<int>(1)
+  background stubbornProducer(ch)
+  wait sleep(30)
+  print(`parent exits while producer stays backpressured`)
+}

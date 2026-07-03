@@ -560,6 +560,305 @@ fn recursive_members(graph: &CallGraph) -> HashSet<String> {
     members
 }
 
+// ── v0.3-M4: syntactic conduit-binding resolver (R6 sibling-arm consumer) ─────
+//
+// The may-block fixpoint runs BEFORE expression checking, so it has no `expr_types`. Conduit-ness
+// (is this receiver a `channel<T>` or a background task handle?) is resolved here syntactically.
+// The CLASSIFICATION (which method names suspend on a conduit) stays in the one authoritative
+// home, `suspension_source::channel_method_suspends` — this resolver only answers "is this
+// identifier a conduit binding?", which typeck's receiver restriction keeps equivalent to the
+// exact type-keyed view (see suspension_source.rs docs).
+
+/// True when the DECLARED AST type is `channel<T>` (any element type).
+///
+/// Shared with typeck's conduit-receiver origin discipline (`check_conduit_method_call`) so
+/// both views seed channel-typed parameters from the same predicate.
+pub(crate) fn ast_type_is_channel(ast_ty: &ynz_ast::nodes::Type) -> bool {
+    matches!(ast_ty, ynz_ast::nodes::Type::Generic { name, .. } if name == "channel")
+}
+
+/// THE authoritative collection of local functions whose DECLARED return type is `channel<T>`.
+///
+/// Consumed by BOTH the syntactic conduit-binding resolver (via [`build_call_graph`]) and
+/// typeck's conduit-receiver origin discipline — one collection, threaded to both, so the two
+/// views can never disagree about which local calls produce a derivable channel binding
+/// (authoritative-derivation.md).
+pub(crate) fn collect_channel_returning_fns(module: &Module) -> HashSet<String> {
+    module
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let Item::Function(f) = item {
+                if ast_type_is_channel(&f.return_type) {
+                    return Some(f.name.clone());
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// THE authoritative binding-origin predicate: does `let <name>[: ty] = value` create a
+/// syntactically-derivable conduit binding, given the conduit bindings already accumulated
+/// in statement order?
+///
+/// Derivable origins (the complete list — anything else is NOT derivable):
+/// - a `channel<T>` type annotation on the `let` (works for ANY right-hand side — a shape
+///   field, a collection element, a cross-module call — because the annotation itself is the
+///   syntactic evidence);
+/// - `channel<T>(...)` construction;
+/// - a call to a LOCAL function whose declared return type is `channel<T>`;
+/// - `background f(...)` — a background task handle;
+/// - a direct ident alias of an existing conduit binding.
+///
+/// Consumed by BOTH the resolver's `Stmt::Let` arm below and typeck's
+/// `check_conduit_method_call` origin discipline. Typeck accepts a suspending conduit-method
+/// call ONLY on receivers this predicate derived, which is what makes the resolver's view
+/// equivalent-by-construction to typeck's acceptance (see `suspension_source.rs` docs) — a
+/// second, hand-kept-in-sync copy of this match is the banned twin-derivation pattern
+/// (authoritative-derivation.md).
+pub(crate) fn let_binds_derivable_conduit(
+    ty: Option<&ynz_ast::nodes::Type>,
+    value: &Expr,
+    conduits: &HashSet<String>,
+    channel_returning_fns: &HashSet<String>,
+) -> bool {
+    ty.is_some_and(ast_type_is_channel)
+        || match value {
+            // `channel<T>(...)` construction.
+            Expr::Call(c) => match &c.callee {
+                Expr::Ident(n, _) if n == "channel" => true,
+                // Local fn with a declared `channel<T>` return type.
+                Expr::Ident(n, _) => channel_returning_fns.contains(n),
+                _ => false,
+            },
+            // `let h = background f(...)` — a background task handle.
+            Expr::Background(_, _) => true,
+            // Direct ident alias of an existing conduit binding.
+            Expr::Ident(n, _) => conduits.contains(n),
+            _ => false,
+        }
+}
+
+/// True when `f`'s body contains a suspending conduit-method call (`ch.send(v)`,
+/// `ch.receive()`, `h.send(v)`, `h.receive()`) on a syntactically-derivable conduit binding.
+///
+/// Conduit bindings are exactly what [`let_binds_derivable_conduit`] derives (annotation,
+/// construction, local channel-returning fn, `background` spawn, direct ident alias) plus
+/// channel-annotated parameters.
+///
+/// Over-approximation is safe (an extra state machine is correct-but-slower).
+/// Under-approximation is impossible BY CONSTRUCTION: typeck's receiver origin discipline
+/// (`check_conduit_method_call`) accepts a suspending conduit-method call ONLY on a
+/// plain-ident receiver whose binding THIS SAME predicate derived — a channel that reaches a
+/// binding through a shape field, a collection element, a loop variable, or a cross-module
+/// call is a teaching error at typeck unless the binding carries a `channel<T>` annotation
+/// (which makes it derivable here too).
+///
+/// Time: O(N) where N = AST nodes in `f`  Space: O(B) conduit bindings + O(D) recursion depth
+fn fn_contains_conduit_suspension(
+    f: &ynz_ast::nodes::FunctionDecl,
+    channel_returning_fns: &HashSet<String>,
+) -> bool {
+    let mut conduits: HashSet<String> = f
+        .params
+        .iter()
+        .filter(|p| ast_type_is_channel(&p.ty))
+        .map(|p| p.name.clone())
+        .collect();
+    stmts_contain_conduit_suspension(&f.body.stmts, &mut conduits, channel_returning_fns)
+}
+
+/// Recursive kernel for [`fn_contains_conduit_suspension`]: accumulates conduit bindings in
+/// statement order and reports whether any suspending conduit-method call appears.
+fn stmts_contain_conduit_suspension(
+    stmts: &[Stmt],
+    conduits: &mut HashSet<String>,
+    channel_returning_fns: &HashSet<String>,
+) -> bool {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let {
+                name, ty, value, ..
+            } => {
+                if expr_has_conduit_suspension(value, conduits) {
+                    return true;
+                }
+                // THE shared origin predicate — typeck's receiver origin discipline calls the
+                // same function, so the two views accumulate identical conduit sets.
+                let is_conduit = let_binds_derivable_conduit(
+                    ty.as_ref(),
+                    value,
+                    conduits,
+                    channel_returning_fns,
+                );
+                if is_conduit {
+                    conduits.insert(name.clone());
+                }
+            }
+            Stmt::Expr(e) | Stmt::Assign { value: e, .. } => {
+                if expr_has_conduit_suspension(e, conduits) {
+                    return true;
+                }
+            }
+            Stmt::Return { value, .. } => {
+                if let Some(v) = value {
+                    if expr_has_conduit_suspension(v, conduits) {
+                        return true;
+                    }
+                }
+            }
+            Stmt::FieldAssign { target, value, .. } => {
+                if expr_has_conduit_suspension(target, conduits)
+                    || expr_has_conduit_suspension(value, conduits)
+                {
+                    return true;
+                }
+            }
+            Stmt::IndexAssign {
+                receiver,
+                index,
+                value,
+                ..
+            } => {
+                if expr_has_conduit_suspension(receiver, conduits)
+                    || expr_has_conduit_suspension(index, conduits)
+                    || expr_has_conduit_suspension(value, conduits)
+                {
+                    return true;
+                }
+            }
+            Stmt::If { cond, body, .. } => {
+                if expr_has_conduit_suspension(cond, conduits)
+                    || stmts_contain_conduit_suspension(
+                        &body.stmts,
+                        conduits,
+                        channel_returning_fns,
+                    )
+                {
+                    return true;
+                }
+            }
+            Stmt::While { cond, body, .. } => {
+                if expr_has_conduit_suspension(cond, conduits)
+                    || stmts_contain_conduit_suspension(
+                        &body.stmts,
+                        conduits,
+                        channel_returning_fns,
+                    )
+                {
+                    return true;
+                }
+            }
+            Stmt::For { iter, body, .. } => {
+                if expr_has_conduit_suspension(iter, conduits)
+                    || stmts_contain_conduit_suspension(
+                        &body.stmts,
+                        conduits,
+                        channel_returning_fns,
+                    )
+                {
+                    return true;
+                }
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
+                if expr_has_conduit_suspension(scrutinee, conduits) {
+                    return true;
+                }
+                for arm in arms {
+                    if stmts_contain_conduit_suspension(
+                        &arm.body.stmts,
+                        conduits,
+                        channel_returning_fns,
+                    ) {
+                        return true;
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if stmts_contain_conduit_suspension(&eb.stmts, conduits, channel_returning_fns)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// True when `expr` contains a suspending conduit-method call at any depth.
+fn expr_has_conduit_suspension(expr: &Expr, conduits: &HashSet<String>) -> bool {
+    match expr {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            let receiver_is_conduit =
+                matches!(receiver.as_ref(), Expr::Ident(n, _) if conduits.contains(n));
+            if crate::suspension_source::channel_method_suspends(receiver_is_conduit, method) {
+                return true;
+            }
+            expr_has_conduit_suspension(receiver, conduits)
+                || args
+                    .iter()
+                    .any(|a| expr_has_conduit_suspension(a, conduits))
+        }
+        Expr::Wait(inner, _) => expr_has_conduit_suspension(inner, conduits),
+        // `background f(args)`: the callee's body is a graph cut, but the ARGS are evaluated in
+        // the calling context — recurse into them only.
+        Expr::Background(inner, _) => match inner.as_ref() {
+            Expr::Call(c) => c
+                .args
+                .iter()
+                .any(|a| expr_has_conduit_suspension(a, conduits)),
+            other => expr_has_conduit_suspension(other, conduits),
+        },
+        Expr::Call(c) => {
+            expr_has_conduit_suspension(&c.callee, conduits)
+                || c.args
+                    .iter()
+                    .any(|a| expr_has_conduit_suspension(a, conduits))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_has_conduit_suspension(lhs, conduits) || expr_has_conduit_suspension(rhs, conduits)
+        }
+        Expr::UnaryOp { operand, .. } => expr_has_conduit_suspension(operand, conduits),
+        Expr::FieldAccess { receiver, .. } => expr_has_conduit_suspension(receiver, conduits),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
+            expr_has_conduit_suspension(receiver, conduits)
+                || expr_has_conduit_suspension(index, conduits)
+        }
+        Expr::StructLit { fields, .. } => fields
+            .iter()
+            .any(|f| expr_has_conduit_suspension(&f.value, conduits)),
+        Expr::ArrayLit { elements, .. } => elements
+            .iter()
+            .any(|e| expr_has_conduit_suspension(e, conduits)),
+        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| {
+            expr_has_conduit_suspension(k, conduits) || expr_has_conduit_suspension(v, conduits)
+        }),
+        Expr::PostfixOp { receiver, .. } => expr_has_conduit_suspension(receiver, conduits),
+        Expr::Is { expr: inner, .. } => expr_has_conduit_suspension(inner, conduits),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| {
+            if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                expr_has_conduit_suspension(e, conduits)
+            } else {
+                false
+            }
+        }),
+        _ => false,
+    }
+}
+
 // ── Internal call-graph types ─────────────────────────────────────────────────
 
 struct CallGraph {
@@ -604,6 +903,11 @@ fn build_call_graph(
     let mut edges: HashMap<String, FnEdges> = HashMap::new();
     let mut unresolvable: Vec<(String, UnresolvableEdge)> = Vec::new();
 
+    // v0.3-M4 (R6 sibling arm): local functions whose DECLARED return type is `channel<T>`.
+    // Used by the syntactic conduit-binding resolver so `let ch = makeChannel()` marks `ch`
+    // as a channel binding. Shared collection with typeck's origin discipline.
+    let channel_returning_fns = collect_channel_returning_fns(module);
+
     for item in &module.items {
         let Item::Function(f) = item else { continue };
 
@@ -620,6 +924,17 @@ fn build_call_graph(
             &mut fn_edges,
             &mut unresolvable,
         );
+        // v0.3-M4 (R6 sibling arm): a channel/handle suspending method call (`ch.send(v)`,
+        // `ch.receive()`, `h.receive()`, …) is a base suspension source, classified by the ONE
+        // authoritative `suspension_source::channel_method_suspends`. This fixpoint runs before
+        // expression checking (no `expr_types`), so conduit-ness of the receiver is resolved
+        // syntactically here; typeck's receiver restriction (plain-ident, syntactically-derivable
+        // conduit binding) keeps the two views equivalent — see the classifier's module docs.
+        if !fn_edges.calls_may_block_intrinsic
+            && fn_contains_conduit_suspension(f, &channel_returning_fns)
+        {
+            fn_edges.calls_may_block_intrinsic = true;
+        }
         edges.insert(f.name.clone(), fn_edges);
     }
 

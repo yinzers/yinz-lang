@@ -1,0 +1,6 @@
+// A CROSS-MODULE channel-returning function: the importer's may-block resolver only knows
+// LOCAL channel-returning functions, so an unannotated `let ch = makeChannel()` binding in
+// the importing module is not a derivable conduit.
+export function makeChannel() -> channel<int> {
+  return channel<int>(4)
+}

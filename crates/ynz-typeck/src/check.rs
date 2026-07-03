@@ -41,6 +41,11 @@ pub enum BgOwnership {
     /// Copy the value into the background task — the caller reads the binding after
     /// the spawn, so the task needs its own independent copy.
     Copy,
+    /// v0.3-M4: share the underlying channel with the background task (refcounted alias —
+    /// `ynz_channel_share`). Channels are the sanctioned cross-task conduit: BOTH sides must
+    /// operate on the SAME bounded buffer (that is the whole point of a channel), so neither
+    /// `give` (caller loses its end) nor `copy` (two disconnected buffers) is correct.
+    Channel,
 }
 
 /// The type-annotated view of a module.
@@ -125,6 +130,9 @@ pub fn check(
         inside_background: false,
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
+        conduit_root_spans: HashSet::new(),
+        derivable_conduits: HashSet::new(),
+        channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -189,6 +197,9 @@ pub fn check_with_kernel_mode(
         inside_background: false,
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
+        conduit_root_spans: HashSet::new(),
+        derivable_conduits: HashSet::new(),
+        channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -342,6 +353,33 @@ struct Checker<'b> {
     /// Only plain `Expr::Ident` args are recorded — explicit `.give`/`.copy()` postfix
     /// args are handled by the postfix-op path; explicit always wins over inferred.
     bg_inferred: HashMap<(usize, usize), BgOwnership>,
+
+    /// v0.3-M4 Phase 2: spans at which a suspending conduit-method call (`ch.send(v)`,
+    /// `ch.receive()`, `h.send(v)`, `h.receive()`) is allowed to appear — the ROOT of a
+    /// bare expression statement or a `let` binding's value (optionally under an explicit
+    /// `wait`). Set per statement by `check_stmts`/`check_let`; a conduit-method call whose
+    /// span is not in this set is in nested-expression position and gets the bind-it-first
+    /// teaching error (mirrors the existing sub-expression suspending-call discipline).
+    conduit_root_spans: HashSet<(usize, usize)>,
+
+    /// v0.3-M4 conduit-origin discipline: names of bindings in the CURRENT function whose
+    /// conduit-ness (channel / background task handle) is syntactically derivable by the
+    /// may-block resolver. Seeded from channel-typed params by `check_function` /
+    /// `check_generic_function_body`, accumulated in statement order by `check_let` via
+    /// THE shared predicate `may_block::let_binds_derivable_conduit` — never a second,
+    /// hand-kept-in-sync derivation (authoritative-derivation.md).
+    ///
+    /// A flat per-function set (no scope popping), exactly matching the resolver's
+    /// accumulation, so the two views stay equal on every program typeck accepts.
+    /// `check_conduit_method_call` rejects a suspending `.send()`/`.receive()` whose
+    /// receiver is not in this set — that rejection is what makes the resolver's
+    /// "can never under-approximate what typeck accepted" invariant
+    /// (suspension_source.rs) actually hold.
+    derivable_conduits: HashSet<String>,
+
+    /// Local functions whose declared return type is `channel<T>` — the SAME collection
+    /// `may_block::build_call_graph` uses, via `may_block::collect_channel_returning_fns`.
+    channel_returning_fns: HashSet<String>,
 }
 
 impl<'b> Checker<'b> {
@@ -444,6 +482,16 @@ impl<'b> Checker<'b> {
             .unwrap_or(false);
 
         self.scope.push();
+
+        // v0.3-M4 conduit-origin discipline: seed this function's derivable-conduit set from
+        // its channel-typed params — the SAME seeding the may-block resolver performs
+        // (`fn_contains_conduit_suspension`), via the shared `ast_type_is_channel`.
+        self.derivable_conduits.clear();
+        for param in &f.params {
+            if crate::may_block::ast_type_is_channel(&param.ty) {
+                self.derivable_conduits.insert(param.name.clone());
+            }
+        }
 
         // Register parameters. If the first param is named `self` and has a Shape type,
         // record the enclosing shape for hidden-field visibility and Self resolution.
@@ -974,7 +1022,12 @@ impl<'b> Checker<'b> {
             // crossing local, so there is no alloca ambiguity.
             for crossing_name in &crossings {
                 let name_str = crossing_name.as_str();
-                if !outer_is_genuine_crossing_local(&f.body.stmts, name_str, &suspending_fns) {
+                if !outer_is_genuine_crossing_local(
+                    &f.body.stmts,
+                    name_str,
+                    &suspending_fns,
+                    &self.expr_types,
+                ) {
                     // The outer `let target` either doesn't exist, appears after the first
                     // suspension, or has no reads/redeclarations after a top-level suspension
                     // attributable to the outer binding. Shadow detection must not fire — there
@@ -1005,7 +1058,12 @@ impl<'b> Checker<'b> {
                 // at the top level of the function body, after a suspension point. Both the
                 // pre-wait outer binding and the post-wait redeclaration share the same
                 // name-keyed frame slot; the redeclaration clobbers the outer value.
-                if has_top_level_let_after_suspension(&f.body.stmts, name_str, &suspending_fns) {
+                if has_top_level_let_after_suspension(
+                    &f.body.stmts,
+                    name_str,
+                    &suspending_fns,
+                    &self.expr_types,
+                ) {
                     let span = find_crossing_local_span(&f.body.stmts, name_str)
                         .unwrap_or_else(|| f.span.clone());
                     self.diags.push(Diagnostic::error(
@@ -1080,7 +1138,8 @@ impl<'b> Checker<'b> {
                 // clobbers it, regardless of whether any read resolves to the parameter or
                 // the redeclaration. Only applicable when the function has a suspension
                 // (otherwise the parameter is not frame-slotted at all).
-                if first_top_level_suspension_idx(&f.body.stmts, &suspending_fns).is_some()
+                if first_top_level_suspension_idx(&f.body.stmts, &suspending_fns, &self.expr_types)
+                    .is_some()
                     && has_top_level_let_in_stmts(&f.body.stmts, pname)
                 {
                     self.diags.push(Diagnostic::error(
@@ -1152,6 +1211,13 @@ impl<'b> Checker<'b> {
         self.current_shape = None;
 
         self.scope.push();
+        // v0.3-M4 conduit-origin discipline: same per-function seeding as `check_function`.
+        self.derivable_conduits.clear();
+        for param in &f.params {
+            if crate::may_block::ast_type_is_channel(&param.ty) {
+                self.derivable_conduits.insert(param.name.clone());
+            }
+        }
         for param in &f.params {
             let param_ty = self.ast_type_to_type(&param.ty);
             self.scope.insert(
@@ -1191,6 +1257,9 @@ impl<'b> Checker<'b> {
 
             match stmt {
                 Stmt::Expr(expr) => {
+                    // v0.3-M4 Phase 2: record the conduit-method root span for this statement
+                    // (bare `ch.send(v)` / `ch.receive()` statements are the allowed position).
+                    self.record_conduit_root(expr);
                     // Give/copy inference for `background fn(x)` plain-ident arguments.
                     //
                     // Safe direction: if we cannot prove the binding is dead after the spawn,
@@ -1204,6 +1273,17 @@ impl<'b> Checker<'b> {
                             let mut gives: Vec<String> = Vec::new();
                             for arg in &call.args {
                                 if let Expr::Ident(name, span) = arg {
+                                    // v0.3-M4: a channel argument is SHARED with the task
+                                    // (refcounted alias) — both sides must operate on the
+                                    // same bounded buffer; neither give nor copy is correct.
+                                    let is_channel = self.scope.lookup(name).is_some_and(|e| {
+                                        matches!(e.ty, Type::BuiltinChannel { .. })
+                                    });
+                                    if is_channel {
+                                        self.bg_inferred
+                                            .insert((span.start, span.end), BgOwnership::Channel);
+                                        continue;
+                                    }
                                     let used_after = remaining
                                         .iter()
                                         .any(|s| ident_read_in_stmt(s, name.as_str()));
@@ -1330,23 +1410,19 @@ impl<'b> Checker<'b> {
         annotation: Option<&AstType>,
         value: &Expr,
     ) {
-        // M8 P5 locked: `let h = background fn()` must be a compile error. Background
-        // handles (.send/.receive) ship in v0.3. Without this guard, the binding
-        // silently gets type `nothing` and the user has no signal anything went wrong.
-        if let Expr::Background(_, bg_span) = value {
-            self.diags.push(Diagnostic::error(
-                bg_span.clone(),
-                "Capturing the output of `background` is not yet supported.",
-                "Drop the `let` binding — `background fn(...)` is a fire-and-forget statement in v0.1. \
-                 The background-handle form (`.send` / `.receive`) ships in v0.3.",
-                "`background fn(...)` schedules a function to run outside the current scope. \
-                 In v0.1 the output is discarded (no way to wait or send messages). \
-                 Background handles will land in v0.3 per the concurrency roadmap.",
-            ));
+        // v0.3-M4 Phase 2: `let h = background fn(...)` — the background handle-form
+        // (lifting the M8 P5 rejection). The binding gets an inferred-only task-handle type
+        // supporting `.send()` (into the task's first `channel<T>` parameter) and repeated
+        // `.receive()` (message replies + the task's own completion value, typed `T errors`).
+        if let Expr::Background(inner, bg_span) = value {
+            let handle_ty = self.check_background_handle_spawn(inner, bg_span, annotation, value);
+            // v0.3-M4 conduit-origin discipline: a spawn binding is a derivable conduit —
+            // mirrors the resolver's `Expr::Background` arm in `let_binds_derivable_conduit`.
+            self.derivable_conduits.insert(name.to_string());
             self.scope.insert(
                 name.to_string(),
                 ScopeEntry {
-                    ty: Type::Error,
+                    ty: handle_ty,
                     is_const,
                     is_param: false,
                     param_ownership: None,
@@ -1357,6 +1433,10 @@ impl<'b> Checker<'b> {
             );
             return;
         }
+
+        // v0.3-M4 Phase 2: `let x = ch.receive()` / `let r = ch.send(v)` are allowed
+        // root positions for suspending conduit-method calls.
+        self.record_conduit_root(value);
 
         let annotated_ty = annotation.map(|t| self.ast_type_to_type(t));
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
@@ -1395,6 +1475,19 @@ impl<'b> Checker<'b> {
             value_ty
         };
 
+        // v0.3-M4 conduit-origin discipline: accumulate derivable conduit bindings with THE
+        // shared resolver predicate — statement order and set semantics identical to the
+        // may-block resolver's `Stmt::Let` arm, so the two views can never drift
+        // (authoritative-derivation.md).
+        if crate::may_block::let_binds_derivable_conduit(
+            annotation,
+            value,
+            &self.derivable_conduits,
+            &self.channel_returning_fns,
+        ) {
+            self.derivable_conduits.insert(name.to_string());
+        }
+
         self.scope.insert(
             name.to_string(),
             ScopeEntry {
@@ -1407,6 +1500,134 @@ impl<'b> Checker<'b> {
                 defined_at: name_span.clone(),
             },
         );
+    }
+
+    /// v0.3-M4 Phase 2: typecheck `let h = background fn(...)` and compute the handle type.
+    ///
+    /// Runs the standard `Expr::Background` checks (kernel gate, must-wrap-a-call, borrow
+    /// rejects, large-copy warnings) via `infer_expr`, then derives the handle type from
+    /// the spawned callee's signature:
+    /// - `result` = the callee's SUCCESS type (the `T` of `-> T errors`, or the plain
+    ///   return type) — `.receive()` returns `T errors`;
+    /// - `msg_elem` = the element type of the callee's first `channel<T>` parameter
+    ///   (the conduit `h.send(v)` feeds), `None` when it has no channel parameter.
+    ///
+    /// The callee must be a SUSPENDING function: the handle substrate is an independent
+    /// joinable Tokio task driving a state-machine frame (never a `CpuJoinHandle` — trap
+    /// door 1a). A non-suspending (pure-CPU) callee is rejected with a teaching error;
+    /// the registry records the deferral (`background-handle-nonsuspending-callee`).
+    fn check_background_handle_spawn(
+        &mut self,
+        inner: &Expr,
+        bg_span: &SourceSpan,
+        annotation: Option<&AstType>,
+        full_value: &Expr,
+    ) -> Type {
+        if let Some(ann) = annotation {
+            // A task handle has no typeable source annotation in v0.3 — the binding's type
+            // is inferred from the spawn expression.
+            let _ = self.ast_type_to_type(ann);
+            self.diags.push(Diagnostic::error(
+                bg_span.clone(),
+                "A background task handle has no type annotation — drop the annotation.",
+                "Write `let h = background fn(...)` without a type annotation.",
+                "The handle's type is figured out automatically from the spawned function's \
+                 signature; there is no way to write it in source in v0.3.",
+            ));
+        }
+
+        // Pre-record inferred ownership for plain-ident args BEFORE the Background arm's
+        // large-copy warning reads it: channels are SHARED (refcounted alias — both sides
+        // must operate on the same bounded buffer); everything else defaults to Copy (safe
+        // direction — the caller keeps its original).
+        if let Expr::Call(call) = inner {
+            for arg in &call.args {
+                if let Expr::Ident(n, span) = arg {
+                    let is_channel = self
+                        .scope
+                        .lookup(n)
+                        .is_some_and(|e| matches!(e.ty, Type::BuiltinChannel { .. }));
+                    let o = if is_channel {
+                        BgOwnership::Channel
+                    } else {
+                        BgOwnership::Copy
+                    };
+                    self.bg_inferred.insert((span.start, span.end), o);
+                }
+            }
+        }
+
+        // Standard Background checks (kernel gate, call enforcement, borrow rejects,
+        // large-copy warnings). Its Type::Nothing result is replaced below.
+        let _ = self.infer_expr(full_value, None);
+
+        // Resolve the spawned callee's signature for the handle type.
+        let callee_name = match inner {
+            Expr::Call(call) => match &call.callee {
+                Expr::Ident(n, _) => Some(n.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(callee_name) = callee_name else {
+            // Non-call / non-ident callee — already diagnosed by the Background arm.
+            return Type::Error;
+        };
+        let Some((suspends, ret, params)) = self
+            .sig_table
+            .fns
+            .get(&callee_name)
+            .map(|sig| (sig.suspends, sig.ret.clone(), sig.params.clone()))
+        else {
+            self.diags.push(Diagnostic::error(
+                bg_span.clone(),
+                format!(
+                    "`{callee_name}` is not a user-defined function — a task handle needs one."
+                ),
+                "Spawn a function you defined: `let h = background worker(...)`.",
+                "The handle form runs a whole function as an independent task and collects \
+                 its completion value; built-in operations have nothing to collect.",
+            ));
+            return Type::Error;
+        };
+        if !suspends {
+            self.diags.push(Diagnostic::error(
+                bg_span.clone(),
+                format!(
+                    "`{callee_name}` never suspends — the handle form needs a suspending function in v0.3."
+                ),
+                format!(
+                    "Either drop the `let` (fire-and-forget `background {callee_name}(...)` works \
+                     for CPU-bound functions), or make `{callee_name}` suspending (it suspends if \
+                     it uses `wait`, a channel, or calls a function that does)."
+                ),
+                "A handled task runs on the scheduler's cooperative pool, which drives \
+                 functions that can suspend and resume. A function that never suspends runs \
+                 on the CPU pool instead, where there is no handle to collect from yet — \
+                 that support ships in a later milestone \
+                 (`background-handle-nonsuspending-callee` in the feature registry).",
+            ));
+            return Type::Error;
+        }
+
+        let result = match &ret {
+            Type::ErrorsCapable { inner } => inner.clone(),
+            other => Box::new(other.clone()),
+        };
+        let msg_elem = params.iter().find_map(|(_, t)| {
+            if let Type::BuiltinChannel { elem } = t {
+                Some(elem.clone())
+            } else {
+                None
+            }
+        });
+        let handle_ty = Type::BackgroundHandle { result, msg_elem };
+        // Overwrite the Background expression's recorded type (the generic arm stored
+        // `nothing`) so codegen and later reads see the handle type.
+        let vspan = full_value.span();
+        self.expr_types
+            .insert((vspan.start, vspan.end), handle_ty.clone());
+        handle_ty
     }
 
     fn check_assign(&mut self, target: &str, target_span: &SourceSpan, value: &Expr) {
@@ -1953,7 +2174,7 @@ impl<'b> Checker<'b> {
                 method,
                 method_span,
                 args,
-                ..
+                span: method_call_span,
             } => {
                 let receiver_ty = self.infer_expr(receiver, None);
                 // EC-specific methods on a let/const-bound ErrorsCapable value inside an
@@ -1998,6 +2219,23 @@ impl<'b> Checker<'b> {
                 } else {
                     receiver_ty
                 };
+                // v0.3-M4 Phase 2: suspending conduit-method surface — `.send()`/`.receive()`
+                // on a `channel<T>` value or a background task handle. Dispatched BEFORE the
+                // generic method paths so the element-typed argument check and the
+                // receiver/statement-position discipline apply.
+                if matches!(
+                    effective_receiver_ty,
+                    Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. }
+                ) {
+                    self.check_conduit_method_call(
+                        &effective_receiver_ty,
+                        receiver,
+                        method,
+                        method_span,
+                        args,
+                        method_call_span,
+                    )
+                } else
                 // M4 P5: one-arg intrinsic methods (wrapping/saturating arithmetic).
                 // Must NOT use `return` here — the match value feeds expr_types.insert below.
                 if args.len() == 1 {
@@ -2270,10 +2508,20 @@ impl<'b> Checker<'b> {
                 };
                 if let Some(name) = callee_name {
                     if let Some(sig) = self.sig_table.fns.get(name) {
-                        if sig
-                            .param_ownerships
-                            .contains(&Some(OwnershipModifier::Share))
-                        {
+                        // v0.3-M4: `channel<T>` parameters are EXEMPT from the borrow
+                        // rejects. A channel is the sanctioned cross-task conduit: the
+                        // underlying bounded buffer is heap-owned, internally thread-safe,
+                        // and refcount-shared at the spawn (`ynz_channel_share`) — the
+                        // borrow-outlives-owner hole the rejects close cannot occur.
+                        let borrowed_non_channel = |modifier: OwnershipModifier| {
+                            sig.param_ownerships.iter().zip(sig.params.iter()).any(
+                                |(o, (_, ty))| {
+                                    o.as_ref() == Some(&modifier)
+                                        && !matches!(ty, Type::BuiltinChannel { .. })
+                                },
+                            )
+                        };
+                        if borrowed_non_channel(OwnershipModifier::Share) {
                             self.diags.push(Diagnostic::error(
                                 inner.span().clone(),
                                 "Cannot use `background` with a function that borrows its arguments.",
@@ -2282,10 +2530,7 @@ impl<'b> Checker<'b> {
                             ));
                         }
                         // `lend` across a thread boundary is a safety error (same hole as `share`).
-                        if sig
-                            .param_ownerships
-                            .contains(&Some(OwnershipModifier::Lend))
-                        {
+                        if borrowed_non_channel(OwnershipModifier::Lend) {
                             self.diags.push(Diagnostic::error(
                                 inner.span().clone(),
                                 "Cannot use `background` with a function that mutates its arguments via `lend`.",
@@ -2666,6 +2911,321 @@ impl<'b> Checker<'b> {
     ///
     /// Returns `Type::BuiltinChannel { elem }`. The suspending `.send()`/`.receive()` method
     /// surface is Phase 2 (FRAGO 004) — this Phase-1 path is construction only.
+    /// v0.3-M4 Phase 2: mark `expr` (and its direct `wait` inner) as an allowed ROOT
+    /// position for a suspending conduit-method call. Called by `check_stmts`/`check_let`
+    /// for bare-expression statements and `let` values.
+    fn record_conduit_root(&mut self, expr: &Expr) {
+        let span = expr.span();
+        self.conduit_root_spans.insert((span.start, span.end));
+        if let Expr::Wait(inner, _) = expr {
+            let ispan = inner.span();
+            self.conduit_root_spans.insert((ispan.start, ispan.end));
+        }
+    }
+
+    /// v0.3-M4 Phase 2: typecheck a suspending conduit-method call — `.send()`/`.receive()`
+    /// on a `channel<T>` value or a background task handle (Lock 8: `.send()` is
+    /// `-> nothing errors`; a dropped/closed receiver yields a TYPED channel-closed error).
+    ///
+    /// Enforced discipline (keeps the may-block fixpoint's syntactic resolver equivalent to
+    /// this exact type-keyed view, and keeps the suspension codegen surface well-defined):
+    /// - receiver must be a plain identifier (a named `let` binding or parameter);
+    /// - the receiver binding's conduit-ness must be syntactically DERIVABLE — accumulated
+    ///   in `derivable_conduits` via the shared `may_block::let_binds_derivable_conduit`
+    ///   predicate (a channel from a shape field / collection element / loop variable /
+    ///   cross-module call needs a `channel<T>` annotation on its binding);
+    /// - the call must be its own statement (`ch.send(v)`) or a `let` value
+    ///   (`let x = ch.receive()`) — never nested inside a larger expression.
+    fn check_conduit_method_call(
+        &mut self,
+        receiver_ty: &Type,
+        receiver: &Expr,
+        method: &str,
+        method_span: &SourceSpan,
+        args: &[Expr],
+        call_span: &SourceSpan,
+    ) -> Type {
+        let receiver_display = type_name(receiver_ty);
+
+        // Kernel-mode gate (R7): matches the channel-construction gate. Construction is
+        // already rejected under --kernel, but a `channel<T>` PARAMETER type-checks — the
+        // method surface must not slip through.
+        if self.kernel_mode {
+            self.diags.push(Diagnostic::error(
+                call_span.clone(),
+                format!(
+                    "`.{method}()` on a `{receiver_display}` is not available in --kernel mode."
+                ),
+                "Remove the channel operation, or build without `--kernel`.",
+                "Channel operations suspend the calling task, which requires the thread-pool \
+                 runtime started by `ynz_rt_init` — that runtime does not run in kernel mode. \
+                 See `IMP-no-runtime-mode.md` for the kernel-mode contract.",
+            ));
+            return Type::Error;
+        }
+
+        // Method-name check first (unknown methods shouldn't trip the position rules).
+        // The known-method set IS the authoritative suspending-method set (every conduit
+        // method suspends in v0.3) — threaded from `suspension_source`, never a re-derived
+        // local list (authoritative-derivation.md). If a future non-suspending conduit
+        // method ships (e.g. `.tryReceive()`), extend THIS site to union it in explicitly.
+        let known = match receiver_ty {
+            Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. } => {
+                crate::suspension_source::channel_method_suspends(true, method)
+            }
+            _ => false,
+        };
+        if !known {
+            self.diags.push(Diagnostic::error(
+                method_span.clone(),
+                format!("`{receiver_display}` does not have a method called `{method}`."),
+                "Available methods: send(value), receive().",
+                "Channels and task handles carry values between tasks: `send(value)` puts a \
+                 value in (suspending when the buffer is full — backpressure), `receive()` \
+                 takes the next value out (suspending until one arrives).",
+            ));
+            return Type::Error;
+        }
+
+        // Receiver discipline: plain identifier only.
+        let Expr::Ident(receiver_name, _) = receiver else {
+            self.diags.push(Diagnostic::error(
+                call_span.clone(),
+                format!(
+                    "`.{method}()` needs the {} held in a named binding.",
+                    match receiver_ty {
+                        Type::BackgroundHandle { .. } => "task handle",
+                        _ => "channel",
+                    }
+                ),
+                format!(
+                    "Bind it first: `let ch = ...` then `ch.{method}(...)` as its own statement."
+                ),
+                "A channel operation can suspend this function and resume it later. The \
+                 compiler saves named bindings across that suspension; an unnamed in-flight \
+                 value has nowhere to live while the function is suspended.",
+            ));
+            return Type::Error;
+        };
+
+        // Receiver ORIGIN discipline: the binding's conduit-ness must be syntactically
+        // derivable — i.e. present in `derivable_conduits`, which is accumulated with THE
+        // same shared predicate the may-block resolver uses. Without this check, a channel
+        // reaching a binding through a shape field, a collection element, a loop variable,
+        // or a cross-module call type-checks here but never enters the resolver's conduit
+        // set — the function misses the suspend set and codegen ICEs on the conduit call
+        // ("unknown method `receive` on BuiltinChannel"). This rejection is what makes the
+        // "fixpoint can never under-approximate what typeck accepted" invariant
+        // (suspension_source.rs) actually hold.
+        if !self.derivable_conduits.contains(receiver_name.as_str()) {
+            match receiver_ty {
+                Type::BackgroundHandle { .. } => {
+                    self.diags.push(Diagnostic::error(
+                        call_span.clone(),
+                        format!(
+                            "`.{method}()` can't trace `{receiver_name}` back to a `background` spawn."
+                        ),
+                        format!(
+                            "Call `.{method}()` on the binding created at the spawn — \
+                             `let h = background f(...)` — or on a direct alias of it \
+                             (`let h2 = h`)."
+                        ),
+                        "A task-handle operation can suspend this function and resume it \
+                         later. The compiler decides which functions need that \
+                         suspend-and-resume support before the rest of type checking runs, \
+                         by tracing each handle straight back to its `background` spawn — a \
+                         handle that arrives any other way is invisible at that stage.",
+                    ));
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        call_span.clone(),
+                        format!(
+                            "`.{method}()` can't see where `{receiver_name}` got its channel \
+                             — its declaration doesn't show a channel type."
+                        ),
+                        format!(
+                            "Bind it with the type written out — `let ch: channel<T> = ...` \
+                             — then call `ch.{method}(...)`."
+                        ),
+                        "A channel operation can suspend this function and resume it later. \
+                         The compiler decides which functions need that suspend-and-resume \
+                         support by reading each binding's declared type before the rest of \
+                         type checking runs — a channel that arrives through a shape field, \
+                         a collection element, a loop, or another module's function is \
+                         invisible at that stage until the binding names its channel type.",
+                    ));
+                }
+            }
+            return Type::Error;
+        }
+
+        // Statement-position discipline: the call must be a statement root or a `let` value.
+        let at_root = self
+            .conduit_root_spans
+            .contains(&(call_span.start, call_span.end));
+        if !at_root {
+            self.diags.push(Diagnostic::error(
+                call_span.clone(),
+                format!("`.{method}()` can suspend — it must be its own statement."),
+                format!(
+                    "Bind the value first:\n  let value = ch.{method}(...)\nthen use `value` in the larger expression."
+                ),
+                "A channel operation suspends this function when the channel is full (send) \
+                 or empty (receive). The compiler resumes the function at a statement \
+                 boundary, so the operation cannot sit inside a larger expression — the \
+                 surrounding expression's partial results would not survive the suspension.",
+            ));
+            // Fall through to still return the correct type (limits error cascades).
+        }
+
+        match receiver_ty {
+            Type::BuiltinChannel { elem } => match method {
+                "send" => {
+                    if args.len() != 1 {
+                        self.diags.push(Diagnostic::error(
+                            call_span.clone(),
+                            format!(
+                                "`.send()` takes exactly one argument, but got {}.",
+                                args.len()
+                            ),
+                            format!(
+                                "Send one value: `ch.send(value)` where value is `{}`.",
+                                type_name(elem)
+                            ),
+                            "Each `send` puts one value into the channel's bounded buffer.",
+                        ));
+                        for a in args {
+                            self.infer_expr(a, None);
+                        }
+                        return Type::Error;
+                    }
+                    let arg_ty = self.infer_expr(&args[0], Some(elem));
+                    if arg_ty != **elem && arg_ty != Type::Error {
+                        self.diags.push(Diagnostic::error(
+                            args[0].span().clone(),
+                            format!(
+                                "This channel carries `{}` values, but you're sending `{}`.",
+                                type_name(elem),
+                                type_name(&arg_ty)
+                            ),
+                            format!(
+                                "Send a `{}` value, or create a `channel<{}>` for this data.",
+                                type_name(elem),
+                                type_name(&arg_ty)
+                            ),
+                            "A channel's element type is fixed at construction so every \
+                             receiver knows exactly what it gets. When the channel's buffer \
+                             is full, `send` suspends this task until the receiver drains a \
+                             slot — that is backpressure working, not a deadlock.",
+                        ));
+                    }
+                    // Lock 8: `.send()` is `-> nothing errors` — a dropped/closed receiver
+                    // yields a typed channel-closed error, never a silent drop.
+                    Type::ErrorsCapable {
+                        inner: Box::new(Type::Nothing),
+                    }
+                }
+                "receive" => {
+                    if !args.is_empty() {
+                        self.diags.push(Diagnostic::error(
+                            call_span.clone(),
+                            format!("`.receive()` takes no arguments, but got {}.", args.len()),
+                            "Call it bare: `let value = ch.receive()`.",
+                            "`receive()` takes the next value out of the channel, suspending \
+                             until one arrives.",
+                        ));
+                        for a in args {
+                            self.infer_expr(a, None);
+                        }
+                    }
+                    (**elem).clone()
+                }
+                _ => unreachable!("known-method check above"),
+            },
+            Type::BackgroundHandle { result, msg_elem } => match method {
+                "receive" => {
+                    if !args.is_empty() {
+                        self.diags.push(Diagnostic::error(
+                            call_span.clone(),
+                            format!("`.receive()` takes no arguments, but got {}.", args.len()),
+                            "Call it bare: `let value = h.receive()`.",
+                            "`receive()` delivers the next thing from the task — a message \
+                             reply, or the task's own completion value once it finishes.",
+                        ));
+                        for a in args {
+                            self.infer_expr(a, None);
+                        }
+                    }
+                    // ONE `.receive()` surface — typed `T errors`: the ok arm is the next
+                    // delivery (message reply or completion value); the error arm is the
+                    // task's own error, or task-already-finished.
+                    Type::ErrorsCapable {
+                        inner: result.clone(),
+                    }
+                }
+                "send" => {
+                    let Some(elem) = msg_elem else {
+                        self.diags.push(Diagnostic::error(
+                            call_span.clone(),
+                            "This task takes no channel — it has no way to receive messages.",
+                            "Add a `channel<T>` parameter to the task's function and pass a \
+                             channel at the spawn: `let h = background worker(commands)` — \
+                             `h.send(v)` then feeds that channel.",
+                            "`h.send(v)` delivers into the FIRST `channel<T>` parameter of the \
+                             spawned function, so the task can read messages with \
+                             `commands.receive()` inside its own loop. A task whose function \
+                             takes no channel never looks for messages, so sending to it \
+                             would silently pile up values nobody reads.",
+                        ));
+                        for a in args {
+                            self.infer_expr(a, None);
+                        }
+                        return Type::Error;
+                    };
+                    if args.len() != 1 {
+                        self.diags.push(Diagnostic::error(
+                            call_span.clone(),
+                            format!(
+                                "`.send()` takes exactly one argument, but got {}.",
+                                args.len()
+                            ),
+                            format!(
+                                "Send one value: `h.send(value)` where value is `{}`.",
+                                type_name(elem)
+                            ),
+                            "Each `send` puts one value into the task's channel.",
+                        ));
+                        for a in args {
+                            self.infer_expr(a, None);
+                        }
+                        return Type::Error;
+                    }
+                    let arg_ty = self.infer_expr(&args[0], Some(elem));
+                    if arg_ty != **elem && arg_ty != Type::Error {
+                        self.diags.push(Diagnostic::error(
+                            args[0].span().clone(),
+                            format!(
+                                "This task's channel carries `{}` values, but you're sending `{}`.",
+                                type_name(elem),
+                                type_name(&arg_ty)
+                            ),
+                            format!("Send a `{}` value.", type_name(elem)),
+                            "`h.send(v)` feeds the task function's first `channel<T>` \
+                             parameter, so the value's type must match that channel's \
+                             element type.",
+                        ));
+                    }
+                    Type::ErrorsCapable {
+                        inner: Box::new(Type::Nothing),
+                    }
+                }
+                _ => unreachable!("known-method check above"),
+            },
+            _ => unreachable!("caller dispatches only conduit receivers"),
+        }
+    }
+
     fn check_channel_construction(&mut self, call: &CallExpr) -> Type {
         /// P0-locked default channel capacity. Re-tune is a one-constant change parked with a
         /// trigger (real workload evidence) — see the plan's Future Requirements.
@@ -2699,6 +3259,42 @@ impl<'b> Checker<'b> {
                 Type::Error
             }
         };
+
+        // v0.3-M4 Phase 2: the element type must survive crossing a task boundary. Values
+        // travel through the channel as one 64-bit slot: scalars by value (int, float,
+        // boolean) and heap-stable pointers (string, array, map). A `shape` value or a
+        // `number` is backed by SENDER-STACK storage that is gone by the time the receiver
+        // reads it — rejected until per-type heap-upgrade ships (mirrors the
+        // UnsupportedCrossingLocalType discipline: a clean teaching error, never a silent
+        // dangling read).
+        let elem_supported = matches!(
+            elem,
+            Type::Error // already diagnosed upstream — don't cascade
+                | Type::Int
+                | Type::Float
+                | Type::Bool
+                | Type::String
+                | Type::BuiltinArray { .. }
+                | Type::BuiltinMap { .. }
+        );
+        if !elem_supported {
+            self.diags.push(Diagnostic::error(
+                call.span.clone(),
+                format!(
+                    "`channel<{}>` is not supported yet — this element type cannot cross a task boundary.",
+                    type_name(&elem)
+                ),
+                "Use one of: int, float, boolean, string, array<T>, map<K, V>. For a shape, \
+                 send its fields as separate values or as an array, and rebuild the shape on \
+                 the receiving side.",
+                "Channel values travel between tasks as a single 64-bit slot: numbers-by-value \
+                 or a pointer to heap memory that both tasks can safely read. A `shape` or \
+                 `number` value lives in the SENDING task's stack frame, which can be freed \
+                 while the value still sits in the channel — the receiver would read freed \
+                 memory. Per-type heap-copying for these ships in a later milestone.",
+            ));
+            return Type::Error;
+        }
 
         // Kernel-mode gate (R7): no scheduler runtime in --kernel, so channels cannot exist there.
         if self.kernel_mode {
@@ -5842,6 +6438,7 @@ fn expr_contains_wait_anywhere(expr: &Expr) -> bool {
 fn block_contains_inferred_suspension(
     block: &Block,
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
 ) -> bool {
     block.stmts.iter().any(|stmt| match stmt {
         Stmt::Expr(Expr::Call(c)) => is_suspending_call(c, suspending),
@@ -5849,12 +6446,85 @@ fn block_contains_inferred_suspension(
             value: Expr::Call(c),
             ..
         } => is_suspending_call(c, suspending),
+        // v0.3-M4: a suspending conduit-method statement (`ch.send(v)` / `let x = ch.receive()`).
+        Stmt::Expr(e) | Stmt::Let { value: e, .. } if expr_is_conduit_suspend(e, expr_types) => {
+            true
+        }
         // Recurse into nested `if` bodies — a branch inside a branch can suspend.
         Stmt::If { body, .. } => {
-            block_contains_wait(body) || block_contains_inferred_suspension(body, suspending)
+            block_contains_wait(body)
+                || block_contains_inferred_suspension(body, suspending, expr_types)
         }
         _ => false,
     })
+}
+
+/// v0.3-M4 Phase 2: true when `expr` is a suspending conduit-method call at its ROOT —
+/// `ch.send(v)` / `ch.receive()` / `h.send(v)` / `h.receive()` (optionally under an explicit
+/// `wait`) on a plain-ident receiver whose typeck-resolved type is `channel<T>` or a
+/// background task handle.
+///
+/// Receiver-type classification threads the ONE authoritative
+/// [`crate::suspension_source::channel_method_suspends`] — never a second list. Typeck's
+/// receiver/statement-position discipline (see `check_conduit_method_call`) guarantees every
+/// conduit-method suspension in a well-typed program matches this ROOT-shape predicate.
+pub fn expr_is_conduit_suspend(expr: &Expr, expr_types: &HashMap<(usize, usize), Type>) -> bool {
+    let inner = match expr {
+        Expr::Wait(inner, _) => inner.as_ref(),
+        other => other,
+    };
+    let Expr::MethodCall {
+        receiver, method, ..
+    } = inner
+    else {
+        return false;
+    };
+    let Expr::Ident(_, rspan) = receiver.as_ref() else {
+        return false;
+    };
+    let receiver_is_conduit = matches!(
+        expr_types.get(&(rspan.start, rspan.end)),
+        Some(Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. })
+    );
+    crate::suspension_source::channel_method_suspends(receiver_is_conduit, method)
+}
+
+/// v0.3-M4 Phase 2: true when `stmt` is a suspending conduit-method statement — a bare
+/// `ch.send(v)` / `ch.receive()` expression statement or a `let x = ch.receive()` binding.
+pub fn stmt_is_conduit_suspend(stmt: &Stmt, expr_types: &HashMap<(usize, usize), Type>) -> bool {
+    match stmt {
+        Stmt::Expr(e) | Stmt::Let { value: e, .. } => expr_is_conduit_suspend(e, expr_types),
+        _ => false,
+    }
+}
+
+/// v0.3-M4 Phase 2: true when `stmt` CONTAINS a suspending conduit-method statement at any
+/// nesting depth (the statement itself, or inside an `if`/`while`/`for`/`match` body).
+/// The SM-lowering router uses this the same way it uses `stmt_contains_wait` — a statement
+/// containing a conduit suspension must route through the SM walker so the nested suspension
+/// consumes its continuation state.
+pub fn stmt_contains_conduit_suspend(
+    stmt: &Stmt,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> bool {
+    if stmt_is_conduit_suspend(stmt, expr_types) {
+        return true;
+    }
+    let block_contains = |b: &Block| {
+        b.stmts
+            .iter()
+            .any(|s| stmt_contains_conduit_suspend(s, expr_types))
+    };
+    match stmt {
+        Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+            block_contains(body)
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter().any(|a| block_contains(&a.body))
+                || else_arm.as_ref().is_some_and(block_contains)
+        }
+        _ => false,
+    }
 }
 
 /// Look up the typeck-resolved `Type` for a `let` or `const` binding named `target`
@@ -6075,12 +6745,20 @@ fn has_top_level_let_before_suspension(
     stmts: &[Stmt],
     target: &str,
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
 ) -> bool {
     for stmt in stmts {
         match stmt {
             // A suspension point before any top-level `let target` → the target is inner-only.
             Stmt::Expr(Expr::Wait(_, _)) => return false,
             Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => return false,
+            // v0.3-M4: a bare conduit-method suspension (`ch.send(v)` / `ch.receive()`).
+            Stmt::Expr(e) if expr_is_conduit_suspend(e, expr_types) => return false,
+            // v0.3-M4: a conduit-suspend result binding — target's own producing suspension
+            // makes it a top-level crossing candidate; a different binding's is a suspension.
+            Stmt::Let { name, value, .. } if expr_is_conduit_suspend(value, expr_types) => {
+                return name == target;
+            }
             Stmt::Let {
                 name,
                 value: Expr::Wait(_, _),
@@ -6110,7 +6788,7 @@ fn has_top_level_let_before_suspension(
             // An `if` body containing a wait is a suspension point for the outer sequence.
             Stmt::If { body, .. }
                 if block_contains_wait(body)
-                    || block_contains_inferred_suspension(body, suspending) =>
+                    || block_contains_inferred_suspension(body, suspending, expr_types) =>
             {
                 return false;
             }
@@ -6119,7 +6797,7 @@ fn has_top_level_let_before_suspension(
             // appearing AFTER the loop is past a suspension boundary, not before it.
             Stmt::While { body, .. } | Stmt::For { body, .. }
                 if block_contains_wait(body)
-                    || block_contains_inferred_suspension(body, suspending) =>
+                    || block_contains_inferred_suspension(body, suspending, expr_types) =>
             {
                 return false;
             }
@@ -6128,9 +6806,10 @@ fn has_top_level_let_before_suspension(
             Stmt::Match { arms, else_arm, .. }
                 if arms.iter().any(|a| {
                     block_contains_wait(&a.body)
-                        || block_contains_inferred_suspension(&a.body, suspending)
+                        || block_contains_inferred_suspension(&a.body, suspending, expr_types)
                 }) || else_arm.as_ref().is_some_and(|eb| {
-                    block_contains_wait(eb) || block_contains_inferred_suspension(eb, suspending)
+                    block_contains_wait(eb)
+                        || block_contains_inferred_suspension(eb, suspending, expr_types)
                 }) =>
             {
                 return false;
@@ -6250,8 +6929,9 @@ fn has_top_level_let_after_suspension(
     stmts: &[Stmt],
     target: &str,
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
 ) -> bool {
-    let Some(susp_idx) = first_top_level_suspension_idx(stmts, suspending) else {
+    let Some(susp_idx) = first_top_level_suspension_idx(stmts, suspending, expr_types) else {
         return false;
     };
     stmts[susp_idx + 1..]
@@ -6275,11 +6955,14 @@ fn has_top_level_let_after_suspension(
 fn first_top_level_suspension_idx(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
 ) -> Option<usize> {
     for (i, stmt) in stmts.iter().enumerate() {
         match stmt {
             Stmt::Expr(Expr::Wait(_, _)) => return Some(i),
             Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => return Some(i),
+            // v0.3-M4: conduit-method suspension statements (`ch.send(v)` / `let x = ch.receive()`).
+            s if stmt_is_conduit_suspend(s, expr_types) => return Some(i),
             Stmt::Let {
                 value: Expr::Wait(_, _),
                 ..
@@ -6290,7 +6973,7 @@ fn first_top_level_suspension_idx(
             } if is_suspending_call(c, suspending) => return Some(i),
             Stmt::If { body, .. }
                 if block_contains_wait(body)
-                    || block_contains_inferred_suspension(body, suspending) =>
+                    || block_contains_inferred_suspension(body, suspending, expr_types) =>
             {
                 return Some(i);
             }
@@ -6300,7 +6983,7 @@ fn first_top_level_suspension_idx(
             // a suspension boundary.
             Stmt::While { body, .. } | Stmt::For { body, .. }
                 if block_contains_wait(body)
-                    || block_contains_inferred_suspension(body, suspending) =>
+                    || block_contains_inferred_suspension(body, suspending, expr_types) =>
             {
                 return Some(i);
             }
@@ -6309,9 +6992,10 @@ fn first_top_level_suspension_idx(
             Stmt::Match { arms, else_arm, .. }
                 if arms.iter().any(|a| {
                     block_contains_wait(&a.body)
-                        || block_contains_inferred_suspension(&a.body, suspending)
+                        || block_contains_inferred_suspension(&a.body, suspending, expr_types)
                 }) || else_arm.as_ref().is_some_and(|eb| {
-                    block_contains_wait(eb) || block_contains_inferred_suspension(eb, suspending)
+                    block_contains_wait(eb)
+                        || block_contains_inferred_suspension(eb, suspending, expr_types)
                 }) =>
             {
                 return Some(i);
@@ -6351,12 +7035,13 @@ fn outer_is_genuine_crossing_local(
     stmts: &[Stmt],
     target: &str,
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
 ) -> bool {
     // Precondition: outer `let target` must exist before a top-level suspension.
-    if !has_top_level_let_before_suspension(stmts, target, suspending) {
+    if !has_top_level_let_before_suspension(stmts, target, suspending, expr_types) {
         return false;
     }
-    let Some(susp_idx) = first_top_level_suspension_idx(stmts, suspending) else {
+    let Some(susp_idx) = first_top_level_suspension_idx(stmts, suspending, expr_types) else {
         return false;
     };
     let post_wait = &stmts[susp_idx + 1..];
@@ -6713,7 +7398,7 @@ pub fn crossing_local_names_with_cpu_spike(
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
 ) -> Vec<String> {
-    let crossings = locals_crossing_wait(stmts, param_names, suspending, cpu_supported);
+    let crossings = locals_crossing_wait(stmts, param_names, suspending, cpu_supported, expr_types);
     let mut seen = std::collections::HashSet::new();
     let mut names: Vec<String> = crossings
         .into_iter()
@@ -6725,6 +7410,13 @@ pub fn crossing_local_names_with_cpu_spike(
             }
         })
         .collect();
+    // v0.3-M4: every conduit-typed local (`channel<T>` / background task handle) is marked
+    // crossing — a SOUND over-approximation (recorded in the plan). The conduit local IS the
+    // receiver at its own suspension point: when `ch.send(v)` suspends, the resume path
+    // re-polls through `ch`'s frame slot, so the binding must be frame-backed even when no
+    // read appears lexically after the suspension (the natural read-after-suspension scan
+    // above would miss exactly that case).
+    collect_conduit_locals(stmts, param_names, expr_types, &mut seen, &mut names);
     // Collect synthetic frame slots for for-loops whose bodies contain a suspension.
     // For-loop iteration requires an internal index counter that must survive suspension;
     // giving it a named frame slot (prefixed `__ynz_for_idx_`) integrates it with the
@@ -6736,6 +7428,50 @@ pub fn crossing_local_names_with_cpu_spike(
     collect_for_loop_synthetic_crossings(stmts, suspending, &mut seen, &mut names, expr_types);
     names.sort();
     names
+}
+
+/// v0.3-M4: recursively collect every local whose binding type is a conduit
+/// (`channel<T>` or a background task handle) into the crossing-name set.
+///
+/// Detection: the `let` value expression's typeck-resolved type (covers construction,
+/// aliasing, and channel-returning calls) — the same span-keyed `expr_types` the rest of
+/// the crossing analysis uses. Parameters are excluded (they always have frame slots).
+///
+/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth
+fn collect_conduit_locals(
+    stmts: &[Stmt],
+    param_names: &[&str],
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { name, value, .. } => {
+                let vspan = value.span();
+                let is_conduit = matches!(
+                    expr_types.get(&(vspan.start, vspan.end)),
+                    Some(Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. })
+                );
+                if is_conduit && !param_names.contains(&name.as_str()) && seen.insert(name.clone())
+                {
+                    names.push(name.clone());
+                }
+            }
+            Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                collect_conduit_locals(&body.stmts, param_names, expr_types, seen, names);
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    collect_conduit_locals(&arm.body.stmts, param_names, expr_types, seen, names);
+                }
+                if let Some(eb) = else_arm {
+                    collect_conduit_locals(&eb.stmts, param_names, expr_types, seen, names);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Recursively scan `stmts` for `for` loops whose bodies contain a suspension, and
@@ -6778,7 +7514,7 @@ fn collect_for_loop_synthetic_crossings_inner(
                 map_destructure_pattern,
                 ..
             } if block_contains_wait(body)
-                || block_contains_inferred_suspension(body, suspending) =>
+                || block_contains_inferred_suspension(body, suspending, expr_types) =>
             {
                 let syn_name = format!("__ynz_for_idx_{counter}");
                 *counter += 1;
@@ -7326,6 +8062,7 @@ pub fn locals_crossing_wait(
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
 ) -> Vec<LocalCrossesWait> {
     let mut problems = Vec::new();
     collect_crossings_in_stmts(
@@ -7333,6 +8070,7 @@ pub fn locals_crossing_wait(
         param_names,
         suspending,
         cpu_supported,
+        expr_types,
         &mut Vec::new(),
         &mut problems,
     );
@@ -7423,9 +8161,10 @@ fn block_suspends_m3d(
     block: &Block,
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
 ) -> bool {
     block_contains_wait(block)
-        || block_contains_inferred_suspension(block, suspending)
+        || block_contains_inferred_suspension(block, suspending, expr_types)
         || block_contains_cpu_spike_pair(block, suspending, cpu_supported)
 }
 
@@ -7437,11 +8176,13 @@ fn block_suspends_m3d(
 /// for references to those accumulated names.
 ///
 /// Time: O(N) where N = AST nodes scanned  Space: O(D) recursion depth + O(L) declared locals
+#[allow(clippy::too_many_arguments)]
 fn collect_crossings_in_stmts(
     stmts: &[Stmt],
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
     declared: &mut Vec<String>,
     out: &mut Vec<LocalCrossesWait>,
 ) {
@@ -7513,6 +8254,8 @@ fn collect_crossings_in_stmts(
             let this_stmt_suspends = match stmt {
                 Stmt::Expr(Expr::Wait(_, _)) => true,
                 Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => true,
+                // v0.3-M4: conduit-method suspension statements.
+                s if stmt_is_conduit_suspend(s, expr_types) => true,
                 Stmt::Let {
                     value: Expr::Wait(_, _),
                     ..
@@ -7521,21 +8264,22 @@ fn collect_crossings_in_stmts(
                     value: Expr::Call(c),
                     ..
                 } if is_suspending_call(c, suspending) => true,
-                Stmt::If { body, .. } if block_suspends_m3d(body, suspending, cpu_supported) => {
+                Stmt::If { body, .. }
+                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                {
                     true
                 }
                 Stmt::While { body, .. } | Stmt::For { body, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported) =>
+                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
                 {
                     true
                 }
                 Stmt::Match { arms, else_arm, .. }
-                    if arms
-                        .iter()
-                        .any(|a| block_suspends_m3d(&a.body, suspending, cpu_supported))
-                        || else_arm.as_ref().is_some_and(|eb| {
-                            block_suspends_m3d(eb, suspending, cpu_supported)
-                        }) =>
+                    if arms.iter().any(|a| {
+                        block_suspends_m3d(&a.body, suspending, cpu_supported, expr_types)
+                    }) || else_arm.as_ref().is_some_and(|eb| {
+                        block_suspends_m3d(eb, suspending, cpu_supported, expr_types)
+                    }) =>
                 {
                     true
                 }
@@ -7551,6 +8295,9 @@ fn collect_crossings_in_stmts(
                 }
                 match stmt {
                     // Collect the new result-binding (if any) into pending.
+                    // The MethodCall arm covers v0.3-M4 conduit-suspend bindings
+                    // (`let x = ch.receive()`) — reachable here only when
+                    // `this_stmt_suspends` already classified the statement.
                     Stmt::Let {
                         name,
                         value: Expr::Wait(_, _),
@@ -7559,6 +8306,11 @@ fn collect_crossings_in_stmts(
                     | Stmt::Let {
                         name,
                         value: Expr::Call(_),
+                        ..
+                    }
+                    | Stmt::Let {
+                        name,
+                        value: Expr::MethodCall { .. },
                         ..
                     } if !param_names.contains(&name.as_str())
                         && !pending_result_bindings.contains(name) =>
@@ -7592,6 +8344,7 @@ fn collect_crossings_in_stmts(
                             param_names,
                             suspending,
                             cpu_supported,
+                            expr_types,
                             &mut branch_declared,
                             out,
                         );
@@ -7604,6 +8357,7 @@ fn collect_crossings_in_stmts(
                             param_names,
                             suspending,
                             cpu_supported,
+                            expr_types,
                             &mut branch_declared,
                             out,
                         );
@@ -7611,26 +8365,29 @@ fn collect_crossings_in_stmts(
                     Stmt::Match { arms, else_arm, .. } => {
                         collect_ident_refs_in_stmt(stmt, declared, out);
                         for arm in arms {
-                            if block_suspends_m3d(&arm.body, suspending, cpu_supported) {
+                            if block_suspends_m3d(&arm.body, suspending, cpu_supported, expr_types)
+                            {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &arm.body.stmts,
                                     param_names,
                                     suspending,
                                     cpu_supported,
+                                    expr_types,
                                     &mut branch_declared,
                                     out,
                                 );
                             }
                         }
                         if let Some(eb) = else_arm {
-                            if block_suspends_m3d(eb, suspending, cpu_supported) {
+                            if block_suspends_m3d(eb, suspending, cpu_supported, expr_types) {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &eb.stmts,
                                     param_names,
                                     suspending,
                                     cpu_supported,
+                                    expr_types,
                                     &mut branch_declared,
                                     out,
                                 );
@@ -7669,6 +8426,21 @@ fn collect_crossings_in_stmts(
                 // explicit `wait`, so locals declared before it must not be read after.
                 Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => {
                     past_wait = true;
+                }
+                // v0.3-M4: bare conduit-method suspension (`ch.send(v)` / `ch.receive()`).
+                Stmt::Expr(e) if expr_is_conduit_suspend(e, expr_types) => {
+                    past_wait = true;
+                }
+                // v0.3-M4: conduit-suspend result binding (`let x = ch.receive()`) — safe
+                // across its OWN producing suspension; a crossing candidate for later ones.
+                Stmt::Let { name, value, .. } if expr_is_conduit_suspend(value, expr_types) => {
+                    past_wait = true;
+                    if !declared.contains(name)
+                        && !param_names.contains(&name.as_str())
+                        && !pending_result_bindings.contains(name)
+                    {
+                        pending_result_bindings.push(name.clone());
+                    }
                 }
                 // `let name = wait expr` — name is safe across its OWN producing suspension
                 // (the state machine writes it to the frame, resumes with it available), but
@@ -7728,7 +8500,9 @@ fn collect_crossings_in_stmts(
                 //       potential suspension inside the branch.
                 //   (b) Locals declared INSIDE the branch, before the suspension, and
                 //       read after it IN THE SAME BRANCH — handled via recursive call.
-                Stmt::If { body, .. } if block_suspends_m3d(body, suspending, cpu_supported) => {
+                Stmt::If { body, .. }
+                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                {
                     // Sub-case (b): recurse into the branch, seeding with the outer
                     // `declared` set so outer-scope names are also tracked inside.
                     let mut branch_declared = declared.clone();
@@ -7737,6 +8511,7 @@ fn collect_crossings_in_stmts(
                         param_names,
                         suspending,
                         cpu_supported,
+                        expr_types,
                         &mut branch_declared,
                         out,
                     );
@@ -7759,7 +8534,9 @@ fn collect_crossings_in_stmts(
                 // survive each `wait` via the frame slot. A purely forward textual scan
                 // misses this because the write and the condition-read both appear before
                 // the `wait` in textual order, yet execution cycles back through them.
-                Stmt::While { body, .. } if block_suspends_m3d(body, suspending, cpu_supported) => {
+                Stmt::While { body, .. }
+                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                {
                     // Scan the condition and body for reads of outer-declared locals.
                     // This catches the back-edge case: counter/accumulator locals are
                     // read by the condition on each iteration, which comes AFTER the
@@ -7771,6 +8548,7 @@ fn collect_crossings_in_stmts(
                         param_names,
                         suspending,
                         cpu_supported,
+                        expr_types,
                         &mut branch_declared,
                         out,
                     );
@@ -7783,7 +8561,7 @@ fn collect_crossings_in_stmts(
                 // are still crossing locals — a forward scan seeded with the outer `declared`
                 // set catches them. Mark past_wait so post-for statements are scanned.
                 Stmt::For { body, iter, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported) =>
+                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
                 {
                     // Scan the iter expression and body for reads of outer-declared locals.
                     // The iter expression may reference an outer local (e.g., the collection
@@ -7796,6 +8574,7 @@ fn collect_crossings_in_stmts(
                         param_names,
                         suspending,
                         cpu_supported,
+                        expr_types,
                         &mut branch_declared,
                         out,
                     );
@@ -7808,37 +8587,38 @@ fn collect_crossings_in_stmts(
                     else_arm,
                     scrutinee,
                     ..
-                } if arms
-                    .iter()
-                    .any(|a| block_suspends_m3d(&a.body, suspending, cpu_supported))
-                    || else_arm
-                        .as_ref()
-                        .is_some_and(|eb| block_suspends_m3d(eb, suspending, cpu_supported)) =>
+                } if arms.iter().any(|a| {
+                    block_suspends_m3d(&a.body, suspending, cpu_supported, expr_types)
+                }) || else_arm.as_ref().is_some_and(|eb| {
+                    block_suspends_m3d(eb, suspending, cpu_supported, expr_types)
+                }) =>
                 {
                     // Scrutinee may reference outer-declared locals.
                     let _ = scrutinee; // scanned via collect_ident_refs_in_stmt
                     collect_ident_refs_in_stmt(stmt, declared, out);
                     for arm in arms {
-                        if block_suspends_m3d(&arm.body, suspending, cpu_supported) {
+                        if block_suspends_m3d(&arm.body, suspending, cpu_supported, expr_types) {
                             let mut arm_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &arm.body.stmts,
                                 param_names,
                                 suspending,
                                 cpu_supported,
+                                expr_types,
                                 &mut arm_declared,
                                 out,
                             );
                         }
                     }
                     if let Some(eb) = else_arm {
-                        if block_suspends_m3d(eb, suspending, cpu_supported) {
+                        if block_suspends_m3d(eb, suspending, cpu_supported, expr_types) {
                             let mut eb_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &eb.stmts,
                                 param_names,
                                 suspending,
                                 cpu_supported,
+                                expr_types,
                                 &mut eb_declared,
                                 out,
                             );
@@ -8149,7 +8929,12 @@ pub(crate) fn suspension_guards_fire_for_fn(
         }
 
         // ShadowsCrossingLocal: nested or top-level redeclaration of the crossing name.
-        if outer_is_genuine_crossing_local(&f.body.stmts, crossing_name.as_str(), suspending_fns) {
+        if outer_is_genuine_crossing_local(
+            &f.body.stmts,
+            crossing_name.as_str(),
+            suspending_fns,
+            expr_types,
+        ) {
             if find_shadow_in_stmts(&f.body.stmts, crossing_name.as_str()) {
                 return true;
             }
@@ -8157,6 +8942,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
                 &f.body.stmts,
                 crossing_name.as_str(),
                 suspending_fns,
+                expr_types,
             ) {
                 return true;
             }
@@ -8187,7 +8973,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
             return true;
         }
     }
-    if first_top_level_suspension_idx(&f.body.stmts, suspending_fns).is_some() {
+    if first_top_level_suspension_idx(&f.body.stmts, suspending_fns, expr_types).is_some() {
         for p in &f.params {
             if has_top_level_let_in_stmts(&f.body.stmts, p.name.as_str()) {
                 return true;

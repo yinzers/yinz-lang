@@ -1,0 +1,34 @@
+// v0.3-M4 — the R6→cpu_admission decline proof: a channel-using callee must be classified
+// as SUSPENDING through the ONE authoritative classifier chain (suspension_source →
+// may_block fixpoint → cpu_admission's suspend_set), so a pair of calls to it must be
+// DECLINED from CPU-pool admission (0 blocking-pool spawns). A channel-using closure on the
+// blocking pool would be the M3g deadlock class: a suspended send would park a blocking-pool
+// thread instead of yield-suspending.
+//
+// The FIRE twin (v0_3_m4_channel_cpu_admission_fires.ynz) is byte-identical in SHAPE minus
+// the channel ops and FIRES (2 spawns) — together they pin that the decline is attributable
+// to the channel classification, not to the fixture shape being inadmissible anyway.
+//
+// pump(seed): single-task send-then-receive on a private capacity-4 channel — the send never
+// finds the channel full and the receive always finds a value, so the output is fully
+// deterministic. pump(10) = 11, pump(20) = 21.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   32
+function pump(seed: int) -> int {
+  let ch: channel<int> = channel<int>(4)
+  ch.send(seed)
+  let got = ch.receive()
+  return got + 1
+}
+
+function host() -> int {
+  let a = pump(10)
+  let b = pump(20)
+  return a + b
+}
+
+function entrypoint() -> nothing {
+  let r = host()
+  print(r.toString())
+}

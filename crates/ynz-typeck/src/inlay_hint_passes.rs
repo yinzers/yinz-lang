@@ -862,6 +862,9 @@ fn bg_ownership_modifier_str(own: &crate::check::BgOwnership) -> &'static str {
     match own {
         crate::check::BgOwnership::Give => "give",
         crate::check::BgOwnership::Copy => "copy",
+        // v0.3-M4: a channel argument is shared with the task (refcounted alias) — both
+        // sides operate on the same bounded buffer.
+        crate::check::BgOwnership::Channel => "shared channel",
     }
 }
 

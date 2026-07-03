@@ -700,3 +700,235 @@ Override:  N/A — risk-neutral relocation (conductor classification). Patrick d
   safe-default protocol. No coverage is lost: the send/recv suspend→resume proof lands in Phase 2 where the
   two-task composed R5 fixture (already Phase 2's build-blocking gate) can end-to-end-verify it. No signed
   override required.
+
+## Session log — executor-2026-07-02-m4-p2-r1 — 2026-07-02
+
+Phase 2 execution, round 1 (PARTIAL — conductor ordered a wrap-up handoff mid-phase; a fresh
+continuation dispatch picks up the remainder). Landed and verified, all through the real compiler
+inside the dev container:
+
+- R6 sibling arm (`channel_method_suspends` / `CHANNEL_SUSPENDING_METHODS`) in
+  `suspension_source.rs`; threaded into may_block (new syntactic conduit-binding resolver),
+  the crossing analysis (+`expr_types` threading through `locals_crossing_wait` /
+  `collect_crossings_in_stmts` / `block_suspends_m3d` / shadow helpers + conduit-local
+  crossing marking), suspension counting, and ONE new SM-router helper `stmt_needs_sm_walker`
+  (replacing 7 scattered routing disjuncts — one of which, the auto-parallel Singleton arm,
+  was initially missed and root-caused via the smoke fixture).
+- Bare-channel `.send()`/`.receive()` typeck (Lock 8 `nothing errors` on send; elem-restricted;
+  kernel gate; named-receiver + statement-position teaching errors) + the 3-way
+  `emit_channel_suspend_point` codegen (per-frame caller_token; Closed→typed error via
+  `ynz_error_new`; ChanRecv-Closed → loud `ynz_unhandled_error` abort — structurally
+  unreachable in v0.3).
+- Runtime: `channel.rs` refactored to Arc-shared + internally synchronized (per-caller-token
+  pending sends; multi-waiter recv wakeups); `ynz_channel_share`/`_free`; NEW `handle.rs`
+  (`ynz_rt_spawn_handle`, recv/send/free ABI; `HandleStateFnFuture` extracts the completion
+  from the return slot BEFORE the frame-freeing drop — R8 copy-before-free by construction;
+  `HANDLE_RET_KIND_*` seam constants in `ynz-abi`). Trap doors 1a/1b/1c structurally absent;
+  no frame-header ripple (spike verdict honored).
+- Handle-form lift: `Type::BackgroundHandle` (inferred-only), non-suspending callee teaching
+  reject, `h.send` typed against the callee's first `channel<T>` param (recorded decision),
+  `h.receive` = `T errors`; `lower_let_background_handle` → compile-time spawn-form-keyed
+  `ynz_rt_spawn_handle` (bare spawn IR byte-for-byte unchanged — golden diffs are new
+  declare lines only). Channel args to `background` are refcount-SHARED
+  (`BgOwnership::Channel`, `BgArgFreeKind::SharedChannel`, drop-ladder kind 2), with the
+  `lend`/`share` borrow rejects exempting channel-typed params.
+- Fixtures GREEN via `ynz run` (30s guards, none tripped): smoke, composed (R5), composed-bare
+  (FRAGO 004 proof), R8 matrix (ok before/after, err, number wide-value, fire-forget
+  unchanged), composed R5×R8 cell, never-received, pool-exhaustion (12 handles),
+  never-drained. Full workspace suite: 2139 passed / 0 failed (one transient ynz-driver
+  integration flake in one of three runs, not reproduced, not root-caused — continuation
+  should watch it). 13 IR goldens re-accepted (declaration-only diffs). Stale
+  `m8_background_let_binding_rejected` replaced by non-suspending-reject + suspending-clean
+  tests. Jargon audit fixed ("result" → "value" in the nested-position teaching error).
+
+NOT done (remainder for the continuation, per the wrap-up order): Step 4 deferral RECORDING
+(runtime abort path exists + tested; language-wide scope-drop wiring deferral text + registry
+entry pending), Step 6 registry retirements + new deferred entries, Step 7 test-wiring of the
+GREEN fixtures (build-blocking integration tests, alloc=free assertions, --no-auto-parallel
+variants, cpu_admission decline fixture, R1/R6/no-runtime-conditional grep-audits, tripwire
+test extension), Step 8 demo + gallery. Deviations surfaced in the executor's return report
+(handle `.send` typing decision; elem-type restriction; ChanRecv-Closed reachability note;
+non-suspending-callee handle deferral).
+
+## Session log — executor-2026-07-02-m4-p2-r2 — 2026-07-02
+
+Phase 2 execution, round 2 (COMPLETION — closed the r1 wrap-up's remaining steps 4/6/7/8;
+phase exit criteria met; full workspace suite run at close). All verification through the real
+compiler inside the dev container.
+
+- **Design-doc alignment check (r1's flagged `h.send` typing decision): CONFIRMED, no
+  contradiction.** IMP-concurrency:165-183 + REF-concurrency:165-173 define only the
+  parent-side handle surface; no child-side read mechanism or implicit-inbox concept exists in
+  any design doc. The first-`channel<T>`-parameter typing stands (consistent with
+  bounded-by-default and the teaching test). On record ahead of the phase-boundary reviewer
+  fan-out.
+- **Step 7 (build-blocking wiring):** 16 `v0_3_m4_p2_*` gates in `integration.rs` — every r1
+  fixture now asserts expected stdout + `--no-auto-parallel` byte-identical + alloc==free AND
+  alloc>0; R8 spawn-form-keying proven structurally at the IR level (fire-and-forget: 1
+  `ynz_rt_spawn`/0 handle; collected: the inverse); new `cpu_admission` DECLINE→FIRE fixture
+  pair (`v0_3_m4_channel_cpu_admission_declines.ynz` 0 spawns / `_fires.ynz` 2 spawns —
+  decline attributable to channel classification, masked-branch discipline); R1 grep-audit
+  made permanent (`ynz-runtime/tests/no_blocking_in_conduit_path.rs`); R6 tripwire extended
+  to the conduit-method list — which caught a REAL latent twin (`check.rs` known-method
+  `matches!(method, "send" | "receive")`) now threaded through `channel_method_suspends`.
+- **Step 6 (registry):** retired `ec-wrapper-collect-on-completion` +
+  `background-handle-form` (removed + shipped-comments per the cross-module-frame precedent);
+  added `background-handle-cancel-injection`, `channel-op-expression-position`,
+  `background-handle-nonsuspending-callee`. Consistency + jargon suites green.
+- **Step 4 (deferral recording):** four-field deferral in plan.md Future Requirements
+  (language-level scope-drop wiring deferred; runtime abort path shipped + substrate-proven;
+  `ynz_handle_free` declared-but-never-emitted confirmed as the intended v0.3 scope per the
+  §3.1 locked decision). No new code.
+- **Step 8 (demo + gallery):** `pirates-roster` `m4_demo()` — real capacity-1 backpressure
+  round-trip + handle send/receive cycle; golden regenerated (M2 window reorder is inside the
+  test's existing presence-only relaxation; deterministic tail byte-exact). `v0_3_m4_errors.ynz`
+  grew 8 Phase-2 triggers (13 total, one per class) + the documented closed-channel-send
+  runtime-error block; `error_galleries.rs` asserts count 12–15 + 9 new key phrases incl. the
+  backpressure teaching text.
+- **Gate hygiene:** `cargo clippy --workspace -- -D warnings` was RED on four r1 lints —
+  fixed (ownership-only `shared` Arc kept with `#[expect(dead_code)]` + UAF-invariant comment;
+  redundant closure; unused mut; type_complexity alias). `cargo fmt --all` applied. The r1
+  transient integration flake did not recur.
+
+Files touched: `crates/ynz-typeck/src/check.rs` (authoritative-source threading + clippy),
+`crates/ynz-typeck/tests/suspension_source_single_definition.rs` (method-list tripwire),
+`crates/ynz-runtime/tests/no_blocking_in_conduit_path.rs` (NEW), `crates/ynz-runtime/src/handle.rs`
+(expect-attribute + comment), `crates/ynz-codegen/src/emit.rs` (clippy only),
+`crates/ynz-driver/tests/integration.rs` (16 gates), `crates/ynz-driver/tests/error_galleries.rs`,
+`crates/ynz-driver/tests/fixtures/v0_3_m4_channel_cpu_admission_{declines,fires}.ynz` (NEW),
+`registry/features.toml`, `examples/pirates-roster/{entrypoint.ynz,expected_stdout.txt}`,
+`examples/primantis-orders/v0_3_m4_errors.ynz`, `plan.md` (Progress r2 + Future Requirements
+deferral + session chain).
+
+Final close-out (same session): registry retirements rippled into the tmgrammar
+deferred-features pattern — committed `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json`
+regenerated via `cargo run -p ynz-tmgrammar` (the snapshot test's own remedy; 1-line diff).
+Full workspace suite: 2158 passed / 0 failed, exit 0 (r1's 2139 + exactly the 19 new gates:
+16 integration + 2 runtime R1-audit + 1 tripwire). Clippy `-D warnings` green; fmt applied;
+the r1 transient flake did not recur in two full runs. Phase 2 exit criteria all met —
+phase-boundary reviewer fan-out (code-reviewer + adversarial-tester + opus adversarial gate)
+is the conductor's next dispatch, not this executor's.
+
+## FRAGO 005 — 2026-07-02 — session-id: executor-2026-07-02-m4-p2-r3 (Phase 2 post-review follow-up; deviation-judge classified JUSTIFIED — this record APPLIES that classification, it does not re-adjudicate)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 2 (handle-form `.send()` typing surface)
+Trigger:   Deviation surfaced by `executor-2026-07-02-m4-p2-r1` (the "handle `.send` typing
+           decision" in its return report) and design-doc-checked by `-p2-r2`: IMP-concurrency.md
+           (:165-183) and REF-concurrency.md (:165-173) define only the PARENT-side
+           `.send()`/`.receive()` handle surface — NO child-side read mechanism is documented in
+           any design doc. Reality: the compiler types `h.send(v)` against the CALLEE'S FIRST
+           `channel<T>` parameter (the conduit the send feeds) — compile-time-safe, and the only
+           non-contradictory choice for a genuinely underdetermined surface. Live-code citations
+           (grep-verified this round, not carried from prior reports): `check.rs:1375` (handle-form
+           surface doc), `check.rs:1456-1457` (`msg_elem` = the element type of the callee's first
+           `channel<T>` parameter), `check.rs:3059-3066` (task-takes-no-channel teaching error) +
+           `check.rs:3097-3103` (element-type-mismatch teaching error) — both diagnostics name the
+           first-`channel<T>`-parameter convention in their WHY text. deviation-judge
+           classification: JUSTIFIED — the docs are silent and a shipping compiler must pick
+           something; risk-neutral (no re-scoring).
+Changes:
+  - `plan.md` Phase 5 Step 2: appended a clause requiring the `REF-concurrency.md` update (already
+    a planned P5 step) to EXPLICITLY document the h.send-feeds-the-callee's-first-`channel<T>`-
+    parameter convention — the FRAGO's follow-up obligation. The convention must land in the user
+    spec, not remain implicit in code comments only.
+Unchanged: the shipped `h.send` typing itself (landed at P2 r1, design-doc-checked at P2 r2 —
+  this FRAGO records it, nothing code-level moves); all Phase 2 text; Phases 0-4 and 6; the risk
+  table (NO re-scoring — risk-neutral); §3.1 Intent/End-State; the Invariants section; Design-Doc
+  Alignment; Future Requirements; FRAGO 001-004.
+Override:  N/A — risk-neutral record of a deviation-judge-JUSTIFIED classification; no signed
+  override required.
+
+## FRAGO 006 — 2026-07-02 — session-id: executor-2026-07-02-m4-p2-r3 (Phase 2 post-review follow-up; deviation-judge classified JUSTIFIED — this record APPLIES that classification, it does not re-adjudicate)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 2 (channel runtime sharing model) +
+           Phase 3 Step 2 (boundary exactness — the should-fix companion)
+Trigger:   Phase 1's single-owner `&mut` channel model was explicitly scoped OUT of cross-task use
+           (FRAGO 002 / Deviation A, on record above). Phase 2's OWN build-blocking R5 composed
+           fixture — a `background`-shared channel where one task suspends on send-on-full while
+           another drains — is impossible without safe shared access. Reality forced the refactor:
+           `crates/ynz-runtime/src/channel.rs` rewritten Arc-shared + internally synchronized
+           (per-caller-token pending sends, multi-waiter recv wakeups, `ynz_channel_share`/`_free`
+           refcounting — session entry `executor-2026-07-02-m4-p2-r1`). deviation-judge
+           classification: JUSTIFIED — reality forced it, not scope creep; risk-neutral.
+           SHOULD-FIX COMPANION (the reason this FRAGO carries a plan amendment): the refactor
+           produced a concrete EXEMPTION of `channel<T>`-typed parameters from the
+           share/lend-across-`background` rejects — the `borrowed_non_channel` closure at
+           `check.rs:2455-2467` (exemption comment 2455-2459; the share reject now fires at 2468,
+           lend at 2477; grep-verified this round — the r2-draft's `2275-2280`/`2287-2292`
+           citations are stale, and the non-ident/unresolvable-callee silent-skip edge is now
+           `check.rs:2442-2454`). That exemption sits directly inside the code Phase 3's R3
+           boundary matrix is chartered to exhaustively test, so it must be plan-text ground truth
+           for Phase 3's executor — not silently rediscovered or, worse, re-derived as a twin
+           (`authoritative-derivation.md`).
+Changes:
+  - `plan.md` Phase 3 Step 2: inserted a "FRAGO 006 note — Phase 2 shipped ground truth" block —
+    (a) the channel-param exemption with its CURRENT grep-verified citations
+    (`check.rs:2455-2467`, rejects at 2468/2477), to be READ as already-shipped ground truth for
+    the "should-Arc is not falsely rejected" cell on channel-typed values (verify it holds, do NOT
+    reimplement); (b) an explicit staleness flag on the step's r2-draft `check.rs` citations
+    (`2275-2280`/`2287-2292`/`2269-2270` — silent-skip edge now `2442-2454`), directing Phase 3's
+    executor to re-grep for current lines rather than trust the plan's citations.
+Unchanged: the shipped Arc-shared refactor itself (landed at P2 r1, gate-wired at P2 r2 — this
+  FRAGO records it, nothing code-level moves); Phase 3 Steps 1/3/4/5 and its exit criteria (the
+  matrix obligation is unchanged — the note only feeds it ground truth); Phases 0-2 and 4-6; the
+  risk table (NO re-scoring — R3's matrix mitigation stands exactly as designed); §3.1; the
+  Invariants section; Design-Doc Alignment; Future Requirements; FRAGO 001-004.
+Override:  N/A — risk-neutral record of a deviation-judge-JUSTIFIED classification; no signed
+  override required.
+
+## FRAGO 007 — 2026-07-02 — session-id: executor-2026-07-02-m4-p2-r3 (Phase 2 post-review follow-up; deviation-judge classified JUSTIFIED — this record APPLIES that classification, it does not re-adjudicate)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 2 (channel element-type surface)
+Trigger:   Phase 2 shipped a channel element-type restriction the plan never spelled out:
+           `shape`/`number` elements REJECTED at channel construction; only
+           int/float/boolean/string/array<T>/map<K,V> allowed (`check.rs:3151-3185` — the
+           `elem_supported` `matches!` at 3158-3167, the teaching diagnostic at 3168-3185;
+           grep-verified this round). Technically forced, not arbitrary: channels carry values
+           through a single 64-bit slot (scalars by value, heap-stable pointers otherwise); a
+           `shape`/`number` value is backed by SENDER-STACK storage that is gone by the time the
+           receiver reads it — the same dangling-pointer class the pre-existing
+           `UnsupportedCrossingLocalType` safety discipline (M3a) rejects for locals crossing a
+           `wait`. deviation-judge classification: JUSTIFIED; risk-neutral. SHOULD-FIX COMPANION:
+           the code comment's own WHY text (`check.rs:3182`: "Per-type heap-copying for these
+           ships in a later milestone") promises a deferral that never got its
+           `[[deferred_language_feature]]` registry entry — despite the elem-type restriction
+           being surfaced as a deviation in the P2-r1 return report — a feature-registry-rule
+           violation (deferred features are registry SSOT entries, not code-comment promises).
+Changes:
+  - `registry/features.toml`: NEW `[[deferred_language_feature]]` entry
+    `channel-element-heap-upgrade` (inserted with the other Phase-2 channel entries, after
+    `background-handle-nonsuspending-callee`, before `seq-cst-ordering-opt-in`): substitute =
+    send fields separately / pack into array-or-map / heap-allocated container the user manages;
+    why = single-64-bit-slot ABI cannot safely carry sender-stack-backed values across a task
+    boundary (dangling-pointer class, mirrors `UnsupportedCrossingLocalType`), lifting needs a
+    per-type heap-upgrade at the send site; ships_in = "v0.4+" (the code comment promises only
+    "a later milestone" with no version — "v0.4+" is the honest floor: no remaining v0.3-M4 phase
+    plans it and Phase 6 closes v0.3); design_doc = IMP-concurrency.md; triggers = shape/number
+    channel construction (rejected today) → lift when per-type heap-upgrade ships.
+    Validated: `docker compose run --rm dev cargo build -p ynz-registry` GREEN + full
+    `cargo test -p ynz-registry` GREEN (64 tests across 5 binaries incl. the consistency suite,
+    0 failed, exit 0).
+Unchanged: the shipped restriction itself and its teaching diagnostic (correct as-built — this
+  FRAGO records it and back-fills the missing registry seam, nothing code-level moves); all
+  phases' text (no plan.md body change rode on this FRAGO); the risk table (NO re-scoring);
+  §3.1; the Invariants section (the plan's `### Feature Registry Entries` obligation is what this
+  entry satisfies); Design-Doc Alignment; Future Requirements; FRAGO 001-006.
+Override:  N/A — risk-neutral record of a deviation-judge-JUSTIFIED classification; no signed
+  override required.
+
+## Session log — executor-2026-07-02-m4-p2-r3 — 2026-07-02
+
+Narrow post-review follow-up dispatch (task-spec from the conductor, routing deviation-judge's
+Phase-2 verdict: 3 JUSTIFIED FRAGO candidates + 2 should-fix findings). Producer does NOT
+self-grade — recorded, not re-adjudicated; all classifications are deviation-judge's, applied
+per the conductor's routing. Four deliverables, all landed this dispatch:
+(1) FRAGO 005/006/007 recorded above in the canonical Base/Trigger/Changes/Unchanged/Override
+shape — every `check.rs` citation re-grepped against the live tree this round (exemption
+`2455-2467` + rejects `2468`/`2477`; silent-skip edge `2442-2454`; elem-type restriction
+`3151-3185` with the "later milestone" promise at `3182`; h.send first-channel-param typing
+`1375`/`1456-1457`/`3059-3066`/`3097-3103`), never trusted from prior reports.
+(2) `plan.md` Phase 3 Step 2 amended in place (FRAGO 006 note: exemption as ground truth +
+stale-citation flag). (3) `registry/features.toml` `channel-element-heap-upgrade` added
+(FRAGO 007 companion); `ynz-registry` build + full test suite GREEN (64/64, exit 0) in the dev
+container. (4) `plan.md` Phase 5 Step 2 amended in place (FRAGO 005 follow-up: REF-concurrency
+must document the h.send convention explicitly). Frontmatter session-id chain appended.
+Nothing else in Phase 2 or elsewhere touched — no `.rs` source, no examples, no docs. No new
+deviation surfaced; NO STOP condition fired; NO dormant override armed. Session-id appended;
+status remains active.

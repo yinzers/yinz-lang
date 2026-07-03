@@ -1,0 +1,16 @@
+// The handle round-trip: h.send(v) feeds the child's first channel<T> parameter (the
+// channel passed at the spawn); the child reads the command, computes, and its completion
+// value comes back via h.receive() — one full parent->child->parent cycle.
+function doubler(lend commands: channel<int>) -> int errors {
+  let c = commands.receive()
+  return c + c
+}
+
+function entrypoint() -> nothing {
+  let cmds: channel<int> = channel<int>(4)
+  let h = background doubler(cmds)
+  h.send(21)
+  let r = h.receive()
+  let v = r.or(0)
+  print(v.toString())
+}

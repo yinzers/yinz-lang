@@ -121,6 +121,68 @@ fn base_suspension_set_has_exactly_one_definition() {
     );
 }
 
+/// The v0.3-M4 conduit-method drift signature: the two quoted suspending-method names
+/// co-occurring on the SAME line — the membership-list shape, whether written as an array
+/// literal (`&["send", "receive"]`) or a `"send" | "receive"` match/`matches!` pattern.
+///
+/// Same-line-only (no proximity window, unlike the base-intrinsic scan): the legitimate
+/// per-op *dispatch* arms in `emit.rs` (`(Type::BuiltinChannel, "send") => ConduitOp::ChanSend`
+/// / `..., "receive") => ConduitOp::ChanRecv`) sit on ADJACENT lines but each line carries only
+/// ONE of the two quoted names and maps it to a DIFFERENT result — divergent lowering, not a
+/// membership list. A membership re-derivation puts both names in one pattern on one line
+/// (verified false-positive-free against the clean tree; the one prior offender —
+/// `check.rs`'s known-method `matches!` — was fixed to thread the authoritative classifier).
+/// The literals are built from fragments so this test's own source cannot match its own scan.
+/// Returns the 1-based line number of the first co-occurrence.
+fn find_method_twin_definition(contents: &str) -> Option<usize> {
+    let q = '"';
+    let send_lit = format!("{q}send{q}");
+    let recv_lit = format!("{q}receive{q}");
+    contents
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(&send_lit) && l.contains(&recv_lit))
+        .map(|(i, _)| i + 1)
+}
+
+/// v0.3-M4 extension of the R6 tripwire: the conduit suspending-METHOD list
+/// (`CHANNEL_SUSPENDING_METHODS` — the sibling arm to the base-intrinsic list) must also have
+/// exactly ONE authoritative definition. A second `["send", "receive"]`-shaped membership list
+/// (or a `"send" | "receive"` match pattern answering a membership question) anywhere in
+/// `ynz-typeck` or `ynz-codegen` source outside the authoritative home is the same
+/// twin-computation drift class the base scan guards against.
+#[test]
+fn conduit_method_set_has_exactly_one_definition() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let mut offenders: Vec<String> = Vec::new();
+
+    for src_rel in SCANNED_CRATE_SRC {
+        let src_dir = Path::new(manifest_dir).join(src_rel);
+        let mut files = Vec::new();
+        collect_rs_files(&src_dir, &mut files);
+
+        for file in &files {
+            if file.file_name().is_some_and(|n| n == AUTHORITATIVE_HOME) {
+                continue;
+            }
+            let contents = fs::read_to_string(file).unwrap_or_default();
+            if let Some(line) = find_method_twin_definition(&contents) {
+                offenders.push(format!("{} → L{}", file.display(), line));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "R6 tripwire (v0.3-M4 conduit-method arm): a SECOND copy of the conduit \
+         suspending-method list was found outside the authoritative home (`{AUTHORITATIVE_HOME}` \
+         — `ynz_typeck::suspension_source::CHANNEL_SUSPENDING_METHODS`). Thread \
+         `ynz_typeck::channel_method_suspends` (or the exported constant) instead of re-deriving \
+         the membership. See `.claude/rules/authoritative-derivation.md`. Offending site(s):\n{}",
+        offenders.join("\n")
+    );
+}
+
 /// The authoritative home is actually present and non-empty — guards against the scan silently
 /// passing because the source moved and the tripwire now scans nothing.
 #[test]
@@ -133,8 +195,26 @@ fn authoritative_home_exists() {
         contents.contains("BASE_SUSPENSION_INTRINSICS"),
         "authoritative home must define BASE_SUSPENSION_INTRINSICS"
     );
-    // The classifier is reachable through the crate's public API — a compile-time guarantee that
-    // consumers have a single exported home to thread.
+    assert!(
+        contents.contains("CHANNEL_SUSPENDING_METHODS"),
+        "authoritative home must define CHANNEL_SUSPENDING_METHODS (the v0.3-M4 conduit arm)"
+    );
+    // The classifiers are reachable through the crate's public API — a compile-time guarantee
+    // that consumers have a single exported home to thread (base intrinsics AND the M4
+    // conduit-method sibling arm).
     assert!(ynz_typeck::is_base_suspension_intrinsic("sleep"));
     assert!(!ynz_typeck::is_base_suspension_intrinsic("notAnIntrinsic"));
+    assert!(ynz_typeck::suspension_source::channel_method_suspends(
+        true, "send"
+    ));
+    assert!(ynz_typeck::suspension_source::channel_method_suspends(
+        true, "receive"
+    ));
+    // A UFCS user function named `send` on a NON-conduit receiver is not a suspension source.
+    assert!(!ynz_typeck::suspension_source::channel_method_suspends(
+        false, "send"
+    ));
+    assert!(!ynz_typeck::suspension_source::channel_method_suspends(
+        true, "close"
+    ));
 }
