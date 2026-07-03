@@ -1,6 +1,8 @@
+pub mod arc;
 pub mod channel;
 pub mod handle;
 pub mod runtime;
+pub use arc::{ynz_arc_clone, ynz_arc_free, ynz_arc_new};
 pub use channel::{
     ynz_channel_create, ynz_channel_free, ynz_channel_recv_poll, ynz_channel_send_poll, YnzChannel,
 };

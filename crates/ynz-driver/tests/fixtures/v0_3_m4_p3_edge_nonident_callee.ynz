@@ -1,0 +1,10 @@
+// R3 matrix — EDGE cell: a non-identifier callee under `background`. Yinz has no
+// first-class functions, so this cannot resolve to a real spawnable function; it must
+// error loudly (never a silent no-Arc/no-reject hole). Errors at codegen today.
+function pick() -> int {
+  return 4
+}
+
+function entrypoint() -> nothing {
+  background (pick())()
+}

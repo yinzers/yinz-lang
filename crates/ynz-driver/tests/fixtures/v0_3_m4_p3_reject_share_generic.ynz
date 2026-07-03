@@ -1,0 +1,16 @@
+// R3 matrix — REJECT cell (silent-skip gap CLOSED in Phase 3): a `share`-param
+// GENERIC callee lives in the generic table, not sig_table.fns — before Phase 3 it
+// skipped this reject silently. Now it rejects loudly, consistent with concrete callees.
+shape Config {
+  name: string
+  retries: int
+}
+
+function reveal<T>(share cfg: Config) -> nothing {
+  print(cfg.name)
+}
+
+function entrypoint() -> nothing {
+  let cfg: Config = { name: `steel`, retries: 3 }
+  background reveal<Config>(cfg)
+}

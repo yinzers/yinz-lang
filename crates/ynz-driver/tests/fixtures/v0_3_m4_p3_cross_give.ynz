@@ -1,0 +1,17 @@
+// R3 matrix — CROSS-SAFELY cell: a `give`-param callee (ownership transfer). The task
+// owns the value outright; nothing dangles. No false reject.
+shape Report {
+  label: string
+  total: int
+}
+
+function archive(give report: Report) -> nothing {
+  print(report.label)
+}
+
+function entrypoint() -> nothing {
+  let r: Report = { label: `q3`, total: 42 }
+  background archive(r)
+  sleepBlocking(60)
+  print(`cross-give-done`)
+}

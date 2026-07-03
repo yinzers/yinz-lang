@@ -1,0 +1,16 @@
+// R3 matrix — CROSS-SAFELY cell: a `share channel<int>` param is EXEMPT from the borrow
+// reject (Phase 2 ground truth, FRAGO 006). A channel is the sanctioned refcount-shared
+// conduit (`ynz_channel_share`), so the borrow-outlives-owner hole cannot occur. This
+// verifies the exemption HOLDS — it is not reimplemented here.
+function feed(share ch: channel<int>) -> nothing {
+  ch.send(5)
+}
+
+function entrypoint() -> nothing {
+  let ch: channel<int> = channel<int>(4)
+  background feed(ch)
+  sleepBlocking(60)
+  let v = ch.receive()
+  print(v.toString())
+  print(`cross-channel-done`)
+}

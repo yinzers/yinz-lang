@@ -932,3 +932,170 @@ must document the h.send convention explicitly). Frontmatter session-id chain ap
 Nothing else in Phase 2 or elsewhere touched — no `.rs` source, no examples, no docs. No new
 deviation surfaced; NO STOP condition fired; NO dormant override armed. Session-id appended;
 status remains active.
+
+## Session log — executor-2026-07-02-m4-p3 — 2026-07-02
+
+Phase 3 (auto-Arc cross-thread wrapping + boundary exactness). Grounded in: the plan's Phase 3
+slice (§3.3), §2 Mission, §3.1 Intent & End State (outcome 5 + the auto_arc red-tint staging
+decision), §3.4 CCIR (d)/(e), the Invariants Safety/Performance/Teaching auto-Arc bullets, and
+Design-Doc Alignment #2/#4/#8; the design docs IMP-no-function-coloring (§Runtime item 4 auto-Arc,
+"Atomic Ordering Default" acquire-release), IMP-concurrency ("Ownership with Background Tasks — Why
+`.share` Fails", :189/:878), IMP-ownership (cited as the auto-Arc detail home — found NOT to
+actually specify the mechanism); FRAGO 006 (Phase 2 channel exemption ground truth) and FRAGO 007;
+authoritative-derivation.md; no-duct-tape.md; verification.md. Every check.rs citation re-grepped
+against the live tree this session (never trusted from the plan text or FRAGO 006, both of which
+flag their own citations stale) — e.g. `borrowed_non_channel` was at check.rs:2516 at grep time
+(the plan/FRAGO cited 2455-2467/2275-2280); the silent-skip guard at check.rs:2509-2510.
+
+WHAT I BUILT (all verified through the real compiler `./target/debug/ynz run` in the dev
+container, never by assertion):
+
+- **R3 boundary-exactness matrix — the load-bearing build-blocking safety gate (11 GREEN cells).**
+  11 fixtures `crates/ynz-driver/tests/fixtures/v0_3_m4_p3_*.ynz` + 11 tests in
+  `crates/ynz-driver/tests/integration.rs` (`v0_3_m4_p3_*`). Full cross-product both directions:
+  share/lend (concrete + generic + UFCS-method) REJECT loudly; give/copy/channel CROSS SAFELY (no
+  false reject; `cross_copy` keeps the caller's `42`); non-ident + unresolvable callees ERROR
+  loudly (not a silent hole). Cross cells: `--no-auto-parallel` byte-identical + alloc==free +
+  alloc>0; stable across 5 repeated runs. Matrix NOT narrowed to pass (per the disciplined-initiative
+  fallback) — the "should-Arc" cells assert the SAFE crossing (via copy/give), which IS the R3
+  safety property; auto-Arc is the deferred perf-form of that same crossing (see the surfaced
+  deviation).
+
+- **Silent-skip gap CLOSED — recorded decision (Step 2 "reject it loudly").** VERIFIED empirically
+  (probe `background reveal<Config>(cfg)` with a `share` param) that the gap was a
+  teaching-consistency gap, NOT a memory-safety hole — the background ABI heap-copies the arg into
+  the task ctx regardless of the callee's declared borrow, so no live-borrow ever dangled; a
+  generic share-param spawn simply ran by copy. Chose to CLOSE (over merely record) because it is
+  chartered Step-2 work, cheap, makes the boundary exact for the future emission, and removes a
+  latent hole. Closed by EXTENDING the ONE `borrowed_non_channel` predicate to resolve generic
+  callees via `generic_fn_table.fns` as a sibling `.or_else` arm (never a forked second predicate —
+  authoritative-derivation.md), `crates/ynz-typeck/src/check.rs:2509-2560`. Verified no existing
+  fixture spawns a generic function under `background` before changing behavior; typeck suite (93+
+  tests) stayed green.
+
+- **Channel exemption VERIFIED holding (FRAGO 006 ground truth), not reimplemented.**
+  `cross_channel_exempt` proves `background feed(share ch: channel<int>)` is exempt and round-trips.
+  The exemption clause (`!matches!(ty, BuiltinChannel)`) is untouched.
+
+- **Auto-Arc runtime substrate** `crates/ynz-runtime/src/arc.rs` (NEW; exported lib.rs:5):
+  `ynz_arc_new/clone/free`, counted-alloc-backed (so alloc=free proves the control block freed),
+  acquire-release refcount discipline (Relaxed clone / Release-dec + Acquire-fence last-drop — NOT
+  seq-cst, per IMP-no-function-coloring "Atomic Ordering"). 3 unit tests incl. an 8-thread×1000
+  concurrent hammer. This is the sound realization of the design's mandated ordering and the ready
+  hook for the deferred emission.
+
+- **Registry:** `auto_arc` `[[muted_hint_domain]]` (Informational, cautionary WHAT/WHY hover)
+  registered-not-yet-firing (channel_capacity precedent); `auto-arc-cautionary-tint`
+  `[[deferred_tooling_feature]]` (pre-authorized §3.1 — no per-hint tint path in ynz-lsp; teaching
+  text ships, only color stages); `auto-arc-codegen-emission` `[[deferred_language_feature]]` (the
+  SURFACED emission deferral — see below). tmgrammar regenerated + committed. jargon_audit green
+  (reworded one "implementation" occurrence).
+
+- **Demo + gallery:** gallery grew the auto-Arc boundary trigger (generic share-param callee, the
+  closed gap; error_galleries.rs count 14→15, range 14–17, + boundary key-phrase); demo grew a
+  documented auto-Arc placeholder (P1 precedent — emission deferred, comment-only, golden unchanged).
+
+DEVIATION SURFACED (NOT self-decided — for deviation-judge / conductor; no `## FRAGO` block
+self-filed, per the executor charter / agent-charter-discipline.md):
+
+- The plan's Phase 3 exit criteria assume the auto-Arc CODEGEN EMISSION ships this phase (a RUNNING
+  auto-Arc program: "correct under repeated runs", "hint fires", "alloc=free — Arc control blocks
+  freed"). It does NOT. A sound-and-beneficial emission is blocked on a design-underspecified
+  sharing TOPOLOGY (IMP-no-function-coloring:58 → IMP-ownership.md, which does not actually specify
+  it; IMP-concurrency:189 locks `.share`-across-background as an error) — a DESIGN call, not an
+  executor call — and would require reusing `ynz_typeck::effective_ownership` (`Reads`,
+  queries.rs:491) as the read-only oracle, never re-deriving the fragile removed mutation analysis
+  (IMP-concurrency:878, the authoritative-derivation corpse). A minimal single-value emission is a
+  pessimization (Golden Rule 8), so there is no small sound-and-beneficial slice; a speculative one
+  risks R3's false-Arc silent data race (dormant override #3 class). The R3 SAFETY property holds
+  today WITHOUT the emission: the read-only value crosses safely via copy (proven by `cross_copy`).
+  Surfaced in the plan's P3 STATUS banner + the return report; recorded factually as the
+  `auto-arc-codegen-emission` registry deferral (explicitly marked SURFACED-pending-classification).
+  Conductor disposition: (a) accept the deferral, or (b) re-dispatch to implement emission after a
+  topology design decision. I do not decide the FRAGO.
+
+Verification commands (dev container): `cargo test --workspace` → ALL_GREEN; `cargo clippy
+--workspace -- -D warnings` → clean; `cargo fmt --all` applied; `cargo test -p ynz-driver --test
+integration v0_3_m4_p3` → 11 passed; `cargo test -p ynz-driver --test error_galleries v0_3_m4` →
+1 passed; `cargo test -p ynz-runtime --lib arc::` → 3 passed; `cargo test -p ynz-registry` → green;
+`cargo test -p ynz-tmgrammar` → green (after regenerate). NO STOP condition fired; NO dormant
+override armed. Session-id appended; status remains active.
+
+## FRAGO 008 — 2026-07-03 — session-id: executor-2026-07-02-m4-p3-r2 (Phase 3 post-review follow-up; deviation-judge classified JUSTIFIED — this record APPLIES that classification, it does not re-adjudicate)
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 3 (auto-Arc codegen emission scope)
+Trigger:   Deviation surfaced by `executor-2026-07-02-m4-p3` (the ⚠ P3 STATUS banner + return
+           report; recorded factually in `registry/features.toml` as the
+           `auto-arc-codegen-emission` `[[deferred_language_feature]]`, explicitly marked
+           SURFACED-pending-classification — NOT self-decided). deviation-judge classification,
+           applied here verbatim: Phase 3 exit criteria (plan.md §3.3, "auto-Arc programs correct
+           under repeated runs"; "hint fires with correct hover"; "alloc=free — Arc control blocks
+           freed") and §3.1 Key Outcome #5 assume the auto-Arc CODEGEN EMISSION ships this phase;
+           reality is the safety-half (boundary matrix, 11/11 GREEN) + runtime substrate (arc.rs,
+           hammer-tested) + registered-not-firing hint domain ship, emission does NOT — JUSTIFIED:
+           IMP-no-function-coloring:58 points to IMP-ownership.md for the sharing-topology
+           mechanism, but IMP-ownership.md carries zero Arc content (grep-verified), and
+           IMP-concurrency:189 locks `.share`-across-`background` as a hard error, creating a
+           genuine, verified design gap on WHO ends up sharing WHAT allocation — a load-bearing
+           safety decision no executor should freelance, distinct from the r3 corpse (CCIR-h)
+           where the mechanism WAS fully specified and explicitly gated to this milestone.
+           Risk-neutral: R3's scored HIGH-severity residual is earned entirely by the shipped
+           boundary matrix, unaffected by the emission deferral (the pre-existing safe deep-copy
+           crossing is unchanged). Disposition taken: (a) accept the deferral — emission → v0.4+ /
+           a topology-design pass (per the surfaced options; classification auto-applied+logged as
+           risk-neutral, no signature needed).
+Changes:
+  - `plan.md` Phase 3 exit criteria: annotated in place — original text preserved, each sub-claim
+    marked MET (the boundary-safety matrix, GREEN + build-blocking) vs DEFERRED (the codegen
+    emission and everything downstream of it: the hint firing, the alloc=free-for-Arc-control-
+    blocks proof of a running program, the "correct under repeated runs" claim for an actual
+    Arc-wrapped program), so a future reader is not misled about what shipped.
+  - `plan.md` §3.1 Key Outcome #5: split in place per `plan-source-of-truth.md`'s headline-vs-
+    deferrals reconciliation — the boundary-exactness half is marked MET; the "Auto-Arc wraps
+    cross-thread shared state" half is marked DEFERRED to the registry deferral (the headline no
+    longer promises what the plan's own body defers).
+  - `plan.md` Future Requirements / Revisit: ADDED an `auto-arc-codegen-emission` entry pointing
+    at the `registry/features.toml` `[[deferred_language_feature]]` entry as the single source of
+    the four-field WHAT/WHY/COST/TRIGGER record (mirrored, not duplicated).
+  - `plan.md` ⚠ P3 STATUS banner: updated SURFACED-DEFERRED-pending-classification → classified
+    JUSTIFIED + applied as FRAGO 008; the surfaced-deviation block's "conductor disposition
+    options" tail updated to record disposition (a) taken.
+  - `plan.md` frontmatter: session-id `executor-2026-07-02-m4-p3-r2` appended.
+Unchanged: everything code-level (the matrix, arc.rs, check.rs, fixtures, registry — nothing
+  moves; this FRAGO reconciles plan text with already-shipped-and-reviewed reality); Phases 0-2
+  and 4-6; the risk table (NO re-scoring — risk-neutral per the classification above; R3's matrix
+  mitigation stands exactly as shipped); the Invariants section; Design-Doc Alignment; the three
+  reviewer should-fix findings (routed as roadmap-level deferral records in
+  `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md`, not fixed this phase — see
+  this session's log entry); FRAGO 001-007.
+Override:  N/A — risk-neutral, no signed override required (R3's shipped boundary matrix already
+  earns its scored residual; the deferred emission doesn't touch that mitigation).
+
+## Session log — executor-2026-07-02-m4-p3-r2 — 2026-07-03
+
+Narrow post-review bookkeeping dispatch (task-spec from the conductor, routing the reviewer
+fleet's Phase-3 verdicts: 1 deviation-judge-JUSTIFIED FRAGO candidate + 3 should-fix findings).
+Producer does NOT self-grade — every classification applied here is the deviation-judge's /
+reviewers', per the conductor's routing (`agent-charter-discipline.md`). No production or test
+code touched this round. Deliverables, all landed this dispatch:
+(1) FRAGO 008 recorded above (canonical Base/Trigger/Changes/Unchanged/Override shape) applying
+the deviation-judge's JUSTIFIED classification of the auto-Arc emission deferral; risk-neutral,
+auto-apply+log, no signature.
+(2) `plan.md` reconciled in place per FRAGO 008's Changes list: Phase 3 exit criteria split
+MET/DEFERRED; §3.1 Key Outcome #5 split per the headline-vs-deferrals discipline; Future
+Requirements entry added (points at the registry entry as single source); P3 STATUS banner
+updated to classified; frontmatter session-id appended.
+(3) Three should-fix findings routed to their durable per-phase deferral home —
+`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` (NEW file; the roadmap dir
+had no audit sidecar) — as phase-boundary-attributed four-field deferral records with
+Idempotency-Key sentinels: (a) the R3 matrix header's "full cross-product" overclaim
+(`integration.rs:9773`), (b) the arc.rs hammer test never exercising the contended 1→0
+last-release window (`arc.rs:147`), (c) the "stable across 5 repeated runs" claim being an
+ephemeral manual observation, not CI-enforced coverage (`plan.md:963` / `audit.md:959`).
+Grep-verified all three anchors against the live tree before recording. NOT fixed this phase —
+non-blocking, deferred by reviewer disposition; TRIGGERs bind them to the auto-Arc emission
+pickup (FRAGO 008's deferral) or the next touch of the affected surfaces.
+Recorded decision: finding-slug for the plan.md anchor computed by the literal collapse recipe
+(lowercase; each maximal non-[a-z0-9] run → one hyphen), which yields a LEADING hyphen from the
+anchor's leading `.` — kept as-is for deterministic re-derivation (the recipe has no trim step).
+The pre-existing dirty `roadmap.md` (unrelated changes) untouched. NO STOP condition fired; NO
+dormant override armed. Session-id appended; status remains active.

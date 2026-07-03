@@ -2507,19 +2507,42 @@ impl<'b> Checker<'b> {
                     _ => None,
                 };
                 if let Some(name) = callee_name {
-                    if let Some(sig) = self.sig_table.fns.get(name) {
+                    // v0.3-M4 Phase 3 (R3 boundary exactness): resolve the callee from
+                    // EITHER the concrete signature table OR the generic table. A generic
+                    // share/lend-param callee (`background reveal<Config>(cfg)`) lives in
+                    // `generic_fn_table.fns`, NOT `sig_table.fns`, so before this milestone it
+                    // skipped the borrow reject silently — a teaching-consistency gap (the
+                    // background ABI already heap-copies the arg into the task ctx, so it was
+                    // never a live-borrow dangle, but the user was denied the same give/copy
+                    // nudge a non-generic callee gets). Both callee kinds now feed the ONE
+                    // `borrowed_non_channel` predicate below (authoritative-derivation: the
+                    // channel-exemption boundary rule is extended to a second callee kind,
+                    // never forked into a second predicate).
+                    let resolved = self
+                        .sig_table
+                        .fns
+                        .get(name)
+                        .map(|s| (&s.param_ownerships, &s.params))
+                        .or_else(|| {
+                            self.generic_fn_table
+                                .fns
+                                .get(name)
+                                .map(|s| (&s.param_ownerships, &s.params))
+                        });
+                    if let Some((param_ownerships, params)) = resolved {
                         // v0.3-M4: `channel<T>` parameters are EXEMPT from the borrow
                         // rejects. A channel is the sanctioned cross-task conduit: the
                         // underlying bounded buffer is heap-owned, internally thread-safe,
                         // and refcount-shared at the spawn (`ynz_channel_share`) — the
                         // borrow-outlives-owner hole the rejects close cannot occur.
                         let borrowed_non_channel = |modifier: OwnershipModifier| {
-                            sig.param_ownerships.iter().zip(sig.params.iter()).any(
-                                |(o, (_, ty))| {
+                            param_ownerships
+                                .iter()
+                                .zip(params.iter())
+                                .any(|(o, (_, ty))| {
                                     o.as_ref() == Some(&modifier)
                                         && !matches!(ty, Type::BuiltinChannel { .. })
-                                },
-                            )
+                                })
                         };
                         if borrowed_non_channel(OwnershipModifier::Share) {
                             self.diags.push(Diagnostic::error(

@@ -1,0 +1,15 @@
+// R3 matrix — REJECT cell: a `lend`-param concrete callee across `background`.
+// A mutable borrow across a thread boundary is the same dangle hazard as `share`.
+shape Config {
+  name: string
+  retries: int
+}
+
+function bump(lend cfg: Config) -> nothing {
+  cfg.retries = cfg.retries + 1
+}
+
+function entrypoint() -> nothing {
+  let cfg: Config = { name: `steel`, retries: 3 }
+  background bump(cfg)
+}

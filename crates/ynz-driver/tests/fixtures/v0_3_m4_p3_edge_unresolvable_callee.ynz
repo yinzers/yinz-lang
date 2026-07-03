@@ -1,0 +1,5 @@
+// R3 matrix — EDGE cell: an unresolvable callee under `background`. Must error loudly
+// (typeck "not defined"), NEVER silently skip to a no-op spawn.
+function entrypoint() -> nothing {
+  background undefinedWorker(1)
+}

@@ -1,0 +1,17 @@
+// R3 matrix — CROSS-SAFELY cell: a `give`-param GENERIC callee. The closed silent-skip
+// gap must NOT over-reject: a generic `give` (ownership transfer) is safe and stays legal.
+shape Report {
+  label: string
+  total: int
+}
+
+function stash<T>(give item: Report) -> nothing {
+  print(item.label)
+}
+
+function entrypoint() -> nothing {
+  let r: Report = { label: `q3`, total: 42 }
+  background stash<Report>(r)
+  sleepBlocking(60)
+  print(`cross-give-generic-done`)
+}

@@ -1,0 +1,16 @@
+// R3 matrix — REJECT cell: a `share`-param callee reached via UFCS method form
+// (`cfg.inspect()`). The reject resolves the method name into sig_table.fns, so
+// UFCS is covered identically to the free-function form.
+shape Config {
+  name: string
+  retries: int
+}
+
+function inspect(share cfg: Config) -> nothing {
+  print(cfg.name)
+}
+
+function entrypoint() -> nothing {
+  let cfg: Config = { name: `steel`, retries: 3 }
+  background cfg.inspect()
+}

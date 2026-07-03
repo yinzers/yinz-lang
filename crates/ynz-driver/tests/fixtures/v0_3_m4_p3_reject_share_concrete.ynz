@@ -1,0 +1,15 @@
+// R3 matrix — REJECT cell: a `share`-param concrete callee across `background`.
+// A shared borrow may outlive the caller once the task runs on another thread.
+shape Config {
+  name: string
+  retries: int
+}
+
+function inspect(share cfg: Config) -> nothing {
+  print(cfg.name)
+}
+
+function entrypoint() -> nothing {
+  let cfg: Config = { name: `steel`, retries: 3 }
+  background inspect(cfg)
+}

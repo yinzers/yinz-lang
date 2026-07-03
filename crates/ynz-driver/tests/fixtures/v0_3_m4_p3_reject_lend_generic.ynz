@@ -1,0 +1,15 @@
+// R3 matrix — REJECT cell (silent-skip gap CLOSED in Phase 3): a `lend`-param
+// GENERIC callee. Same generic-table gap as the share case; now rejects loudly.
+shape Config {
+  name: string
+  retries: int
+}
+
+function mutate<T>(lend cfg: Config) -> nothing {
+  cfg.retries = cfg.retries + 1
+}
+
+function entrypoint() -> nothing {
+  let cfg: Config = { name: `steel`, retries: 3 }
+  background mutate<Config>(cfg)
+}

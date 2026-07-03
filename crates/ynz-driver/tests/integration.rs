@@ -9762,3 +9762,162 @@ fn v0_3_m4_channel_xmod_return_annotated_runs() {
 fn v0_3_m4_channel_field_annotated_runs() {
     m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_field_annotated.ynz", "7\n");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M4 Phase 3 — R3 auto-Arc boundary-exactness matrix (build-blocking).
+//
+// The R3 risk is boundary exactness at the `background` ownership seam: a value that
+// crosses a thread boundary must either be REJECTED (a borrow that could dangle) or
+// CROSS SAFELY (ownership transfer / independent copy / the sanctioned channel conduit)
+// — never a silent no-reject data-race hole and never a false compile error. This matrix
+// covers the full cross-product {share, lend, give, copy, channel} × {concrete, generic,
+// UFCS-method, non-ident, unresolvable} in BOTH directions, so a regression in the reject
+// or the exemption is caught mechanically rather than by hand-listed example.
+//
+// SAFETY FLOOR (what "should-Arc is not falsely rejected" means here): auto-Arc is the
+// deferred perf-FORM of the read-only cross-thread crossing (registry
+// `auto-arc-codegen-emission`); the SAFE crossing it optimizes already ships via the
+// independent-copy path proven by `cross_copy` below (task reads its own copy, caller
+// keeps `42`). No data race, no false reject — the R3 safety invariant holds today
+// regardless of whether the value crosses as a copy (now) or an Arc (deferred).
+
+/// Assert a fixture is REJECTED at compile time (exit != 0) with `phrase` in the error.
+fn m4_p3_assert_rejects(fixture_name: &str, phrase: &str) {
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_ne!(
+        code, 0,
+        "`{fixture_name}` must be rejected at compile time (exit != 0); stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains(phrase),
+        "`{fixture_name}` must reject with `{phrase}`; stderr:\n{stderr}"
+    );
+}
+
+/// Assert a fixture ERRORS loudly (exit != 0) — an edge callee that is not a silent
+/// no-reject hole. The specific diagnostic text is asserted by the caller.
+fn m4_p3_assert_errors_loudly(fixture_name: &str, phrase: &str) {
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_ne!(
+        code, 0,
+        "`{fixture_name}` must error loudly (exit != 0), never a silent no-op spawn; \
+         stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains(phrase),
+        "`{fixture_name}` must surface `{phrase}`; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_reject_share_concrete() {
+    // WHY: R3 — a `share`-param concrete callee across `background` is a dangling-borrow
+    // hazard and must be rejected. This is the pre-existing floor the matrix pins.
+    m4_p3_assert_rejects(
+        "v0_3_m4_p3_reject_share_concrete.ynz",
+        "borrows its arguments",
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_reject_lend_concrete() {
+    // WHY: R3 — a `lend`-param concrete callee is the same cross-thread mutable-borrow
+    // hazard as `share`; must reject.
+    m4_p3_assert_rejects(
+        "v0_3_m4_p3_reject_lend_concrete.ynz",
+        "mutates its arguments via `lend`",
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_reject_share_generic() {
+    // WHY: R3 silent-skip gap CLOSED — a `share`-param GENERIC callee lives in the
+    // generic table, not `sig_table.fns`, so before Phase 3 it skipped the reject
+    // silently. It must now reject loudly, identically to the concrete callee.
+    m4_p3_assert_rejects(
+        "v0_3_m4_p3_reject_share_generic.ynz",
+        "borrows its arguments",
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_reject_lend_generic() {
+    // WHY: R3 silent-skip gap CLOSED — the `lend` twin of the generic-callee gap.
+    m4_p3_assert_rejects(
+        "v0_3_m4_p3_reject_lend_generic.ynz",
+        "mutates its arguments via `lend`",
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_reject_share_method() {
+    // WHY: R3 — the UFCS method form (`cfg.inspect()`) must reject its `share` param
+    // identically to the free-function form (the reject resolves the method name).
+    m4_p3_assert_rejects(
+        "v0_3_m4_p3_reject_share_method.ynz",
+        "borrows its arguments",
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_cross_copy_safe_and_byte_identical() {
+    // WHY: R3 "should-Arc is not falsely rejected" SAFETY FLOOR — a read-only shape
+    // shared across `background` with the value used after the spawn crosses via a safe
+    // independent COPY: the task reads its own copy, the caller keeps `42`. No false
+    // reject, no data race. alloc==free proves the copy is freed. (Auto-Arc is the
+    // deferred perf-form of this exact crossing — see `auto-arc-codegen-emission`.)
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_p3_cross_copy.ynz",
+        "q3\n42\ncross-copy-done\n",
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_cross_give_safe_and_byte_identical() {
+    // WHY: R3 — a `give`-param callee (ownership transfer) crosses safely; nothing
+    // dangles, no false reject.
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_p3_cross_give.ynz",
+        "q3\ncross-give-done\n",
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_cross_give_generic_not_over_rejected() {
+    // WHY: R3 — the closed silent-skip gap must NOT over-reject: a generic `give`
+    // (ownership transfer) is safe and stays legal. Guards against the generic-callee
+    // reject extension turning into a false-reject of the safe give form.
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_p3_cross_give_generic.ynz",
+        "q3\ncross-give-generic-done\n",
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_cross_channel_exempt_holds() {
+    // WHY: R3 — the Phase 2 `channel<T>`-param exemption (FRAGO 006 ground truth) must
+    // HOLD: a `share channel<int>` param is EXEMPT from the borrow reject because a
+    // channel is the sanctioned refcount-shared conduit. Verified, not reimplemented.
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_p3_cross_channel_exempt.ynz",
+        "5\ncross-channel-done\n",
+    );
+}
+
+#[test]
+fn v0_3_m4_p3_edge_unresolvable_callee_errors_loudly() {
+    // WHY: R3 edge — an unresolvable callee under `background` must error loudly
+    // (typeck "not defined"), never silently skip to a no-op spawn / no-reject hole.
+    m4_p3_assert_errors_loudly("v0_3_m4_p3_edge_unresolvable_callee.ynz", "is not defined");
+}
+
+#[test]
+fn v0_3_m4_p3_edge_nonident_callee_errors_loudly() {
+    // WHY: R3 edge — a non-identifier callee under `background` cannot resolve to a real
+    // spawnable function (Yinz has no first-class functions); it must error loudly, never
+    // a silent no-Arc/no-reject hole. Errors at codegen today.
+    m4_p3_assert_errors_loudly(
+        "v0_3_m4_p3_edge_nonident_callee.ynz",
+        "non-identifier callee",
+    );
+}

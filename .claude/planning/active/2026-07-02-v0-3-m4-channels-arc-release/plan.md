@@ -3,7 +3,7 @@ name: "v0-3-m4-channels-arc-release"
 plan-id: "2026-07-02-v0-3-m4-channels-arc-release"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3"]
+session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2"]
 created_at: "2026-07-02"
 updated_at: "2026-07-02"
 metadata:
@@ -312,9 +312,19 @@ release. Two load-bearing constraints above all others, in priority order:
 4. The may-block set is unified: one authoritative suspension-source classifier consumed by
    `intrinsics.rs`/`emit.rs` consumers alike, with a build-blocking parity/RED tripwire test.
    `emit.rs:819`'s independent copy no longer exists.
-5. Auto-Arc wraps cross-thread shared state (acquire-release); the boundary against the reject at
-   `check.rs:2275-2280`/`2287-2292` is exact BOTH ways, including the unresolvable/non-ident-callee
-   silent-skip cases (`check.rs:2269-2270`) — no silent data race, no false compile error.
+5. *(split by FRAGO 008 — headline reconciled against the plan's own deferral, per
+   `plan-source-of-truth.md`)* **MET — boundary exactness:** the boundary against the
+   share/lend-across-`background` reject is exact BOTH ways, including the unresolvable/
+   non-ident-callee silent-skip cases (closed loudly at P3) — no silent data race, no false
+   compile error. (The draft's `check.rs:2275-2280`/`2287-2292`/`2269-2270` citations were stale;
+   live sites re-grepped at P3 — the one `borrowed_non_channel` predicate, extended for generic
+   callees, `check.rs:2509-2560`.) **DEFERRED — the wrapping itself:** "Auto-Arc wraps
+   cross-thread shared state (acquire-release)" — the codegen EMISSION is deferred to v0.4+
+   pending a sharing-topology design decision (registry `[[deferred_language_feature]]`
+   `auto-arc-codegen-emission`; see Future Requirements + FRAGO 008). The acquire-release runtime
+   substrate (`arc.rs`) ships; the read-only crossing is safe TODAY via the independent-copy path
+   (proven by `cross_copy`) — auto-Arc is the perf-form of that already-safe crossing, not a
+   correctness fix.
 6. Shapes with fields touched by different `background` tasks get 64-byte cache-line auto-padding
    (codegen-only, no muted hint); `cross-thread-fields-not-padded` Tier 3 lint fires when padding
    can't apply; padding consumes the SAME authoritative cross-thread-access analysis the chosen
@@ -940,11 +950,105 @@ Handoff = checkbox state + session-id chain.
      background-boundary × Arc-required, both directions, INCLUDING unresolvable/non-ident-callee
      cases.
   5. Extend demo + gallery (auto-Arc surface).
-- **Exit criteria.** Matrix GREEN both directions incl. edge cases; auto-Arc programs correct under
-  repeated runs (no intermittent race); hint fires with correct hover; `--no-auto-parallel`
-  byte-identical; alloc=free (Arc control blocks freed).
+- **Exit criteria** *(reconciled by FRAGO 008 — deviation-judge JUSTIFIED emission deferral;
+  original criteria text preserved below, each sub-claim marked MET vs DEFERRED so a future
+  reader is not misled)*:
+  - **MET (the boundary-safety half — build-blocking, GREEN):** "Matrix GREEN both directions
+    incl. edge cases" — the 11-cell R3 boundary-exactness matrix; "`--no-auto-parallel`
+    byte-identical" and "alloc=free" hold on every safe-crossing cell (copy/give/channel), and the
+    Arc control block's alloc=free is unit-proven at the substrate level (`arc.rs`, counted-alloc-
+    backed).
+  - **DEFERRED (the codegen emission + everything downstream of it — registry
+    `[[deferred_language_feature]]` `auto-arc-codegen-emission`, ships_in v0.4+):** "auto-Arc
+    programs correct under repeated runs (no intermittent race)" — no emitted auto-Arc program
+    exists to run; "hint fires with correct hover" — the `auto_arc` domain is registered-not-
+    firing (firing needs the emission); "alloc=free (Arc control blocks freed)" as an END-TO-END
+    property of a running auto-Arc program (only the substrate unit proof ships this phase).
 - **Reviewer fan-out.** code-reviewer (design-doc diff) + adversarial-tester (boundary matrix).
 - **Model tag.** `(typeck-ownership-codegen, maximum-adversarial, medium)`.
+- **⚠ P3 STATUS — PARTIAL: boundary/safety + substrate + teaching COMPLETE; auto-Arc CODEGEN
+  EMISSION (and its hint firing + red-tint) DEFERRED — surfaced by executor-2026-07-02-m4-p3
+  (2026-07-02), classified JUSTIFIED by deviation-judge, applied as FRAGO 008 (risk-neutral,
+  auto-apply+log; executor-2026-07-02-m4-p3-r2, 2026-07-03). Exit criteria + §3.1 Key Outcome #5
+  reconciled MET/DEFERRED per FRAGO 008. NO STOP condition fired; NO dormant override armed. The
+  R3 SAFETY invariant holds today WITHOUT the emission (see the classified deviation below).**
+  - **LANDED & build-blocking (the R3 safety half — the load-bearing gate):**
+    - **R3 boundary-exactness matrix (11 build-blocking cells, GREEN):**
+      `crates/ynz-driver/tests/integration.rs` `v0_3_m4_p3_*` (11 tests) over 11 fixtures
+      `crates/ynz-driver/tests/fixtures/v0_3_m4_p3_{reject_share_concrete,reject_lend_concrete,
+      reject_share_generic,reject_lend_generic,reject_share_method,cross_copy,cross_give,
+      cross_give_generic,cross_channel_exempt,edge_unresolvable_callee,edge_nonident_callee}.ynz`.
+      Both directions: share/lend (concrete + generic + UFCS-method) REJECT loudly; give/copy/
+      channel CROSS SAFELY (no false reject, caller value intact — `cross_copy` keeps `42`);
+      non-ident/unresolvable callees ERROR loudly (never a silent no-Arc/no-reject hole). Each
+      cross cell: `--no-auto-parallel` byte-identical + alloc==free + alloc>0. Stable across 5
+      repeated runs (no intermittent race).
+    - **Silent-skip gap CLOSED — decided on the record (Step 2 "reject it loudly" option).** The
+      pre-existing reject fired only when the callee resolved via `sig_table.fns` — a GENERIC
+      callee lives in `generic_fn_table.fns` and skipped the borrow reject silently. VERIFIED
+      empirically it was a teaching gap, NOT a memory-safety hole (the background ABI heap-copies
+      the arg into the task ctx regardless — `background reveal<Config>(cfg)` with a `share` param
+      ran safely by copy, never a live-borrow dangle). Closed by EXTENDING the ONE
+      `borrowed_non_channel` predicate to resolve generic callees too (a sibling `.or_else`
+      arm, NOT a forked second predicate — `authoritative-derivation.md`) at
+      `crates/ynz-typeck/src/check.rs:2509-2560`. UFCS-method callees were already covered
+      (`callee_name` uses the method name). Reason for "close" over "record": chartered Step-2
+      work, cheap, makes the boundary exact for the future emission, and removes a latent hole —
+      verified no existing fixture spawns a generic function under `background`.
+    - **Channel-param exemption (Phase 2 / FRAGO 006 ground truth) VERIFIED holding, not
+      reimplemented:** `v0_3_m4_p3_cross_channel_exempt.ynz` proves `background feed(share ch:
+      channel<int>)` is exempt and round-trips (task sends 5, caller receives 5). The exemption
+      lives untouched at `check.rs:2538-2545` (`borrowed_non_channel`'s `!matches!(ty,
+      BuiltinChannel)` clause).
+    - **Auto-Arc runtime SUBSTRATE (acquire-release refcount discipline the design mandates):**
+      `crates/ynz-runtime/src/arc.rs` (NEW) — `ynz_arc_new`/`ynz_arc_clone`/`ynz_arc_free`
+      (exported `crates/ynz-runtime/src/lib.rs:5`), allocated through the COUNTED
+      `ynz_alloc`/`ynz_free` so alloc=free genuinely proves the Arc control block freed;
+      `Relaxed` clone / `Release` decrement + `Acquire` fence on last-drop (std::sync::Arc
+      protocol, NOT seq-cst — IMP-no-function-coloring "Atomic Ordering"). 3 unit tests incl. an
+      8-thread × 1000 concurrent clone/free hammer proving exact refcount + no premature free.
+    - **`auto_arc` muted-hint domain REGISTERED** (`registry/features.toml`, Informational,
+      cautionary WHAT/WHAT-INSTEAD/WHY hover conveying the reference-counting-has-cost caution) —
+      registered-not-yet-firing (the `channel_capacity` P1 precedent), because firing needs the
+      emission. `auto-arc-cautionary-tint` `[[deferred_tooling_feature]]` recorded per the §3.1
+      pre-authorized decision (no per-hint tint path in ynz-lsp; teaching text ships, only the
+      color stages).
+    - **Demo + gallery:** `examples/primantis-orders/v0_3_m4_errors.ynz` grew the auto-Arc
+      boundary trigger (generic `share`-param callee — the closed gap, `// WHY:
+      background-share-generic-callee`); `error_galleries.rs` count 14→15 (range 14–17) + the
+      "borrows its arguments" boundary key-phrase. `examples/pirates-roster/entrypoint.ynz` grew a
+      documented auto-Arc placeholder (P1 channel-placeholder precedent — emission deferred, so no
+      live hint to demo; golden unchanged, comment-only).
+    - **Suites:** full `cargo test --workspace` GREEN; `cargo clippy --workspace -- -D warnings`
+      GREEN; `cargo fmt --all` applied; `jargon_audit` GREEN; `ynz-tmgrammar` grammar regenerated
+      + committed (`tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` — the new
+      `auto-arc-codegen-emission` deferred name).
+  - **⚠ SURFACED DEVIATION — CLASSIFIED JUSTIFIED by deviation-judge, applied as FRAGO 008
+    (the executor did NOT self-decide; disposition (a) taken — deferral accepted, emission →
+    v0.4+ / a topology-design pass):** the plan's Phase 3 exit criteria ("auto-Arc programs correct under repeated
+    runs"; "hint fires with correct hover"; "alloc=free — Arc control blocks freed" of a RUNNING
+    auto-Arc program) assume the auto-Arc CODEGEN EMISSION ships this phase. It does NOT. Finding:
+    a SOUND-and-BENEFICIAL emission is blocked on (1) a design-underspecified sharing TOPOLOGY —
+    IMP-no-function-coloring:58 points to IMP-ownership.md for the mechanism but that doc does NOT
+    specify it, and IMP-concurrency:189 locks `.share`-across-`background` as a hard error, so the
+    caller/task Arc-sharing topology (repoint-caller-binding vs multi-task-share) is a DESIGN call,
+    not an executor call; and (2) a read-only proof that MUST reuse the authoritative
+    `ynz_typeck::effective_ownership` (`EffectiveOwnership::Reads`, `queries.rs:491`) rather than
+    re-derive the fragile name-based mutation analysis built-and-removed for auto-parallel
+    (IMP-concurrency:878 — the `authoritative-derivation.md` corpse). A MINIMAL single-value
+    emission is a pessimization (an atomic + 8-byte header for zero sharing benefit — Golden Rule
+    8), so there is no small sound-and-beneficial slice; shipping a speculative one risks R3's
+    false-Arc silent data race (dormant override #3 class). The R3 SAFETY property nonetheless
+    HOLDS today: the read-only cross-thread value crosses SAFELY via the independent-copy path
+    (proven by `cross_copy` — no data race, no false reject); auto-Arc is the auto-promotion
+    perf-FORM of that already-safe crossing, not a correctness fix. Recorded as
+    `[[deferred_language_feature]]` `auto-arc-codegen-emission` in `registry/features.toml`
+    (four-field WHAT/WHY/COST/TRIGGER — surfaced pending-classification at P3, now CLASSIFIED
+    JUSTIFIED per FRAGO 008). CCIR items (d) auto-Arc boundary ambiguity + (e) design-doc gap.
+    Conductor disposition TAKEN: (a) accept the deferral (emission → v0.4+ / a topology-design
+    pass); option (b) — re-dispatch to implement the emission on the shipped substrate + the
+    `Reads` oracle — becomes the registry entry's TRIGGER, not this phase's work. The executor
+    surfaced; the deviation-judge classified; this record applies (FRAGO 008, `audit.md`).
 
 #### Phase 4 — `[[lint_rule]]` mechanism + false-sharing auto-padding + the two lints
 - **Task + purpose.** Build the net-new generic lint registry machinery; ship the codegen-only
@@ -1281,6 +1385,16 @@ deferrals; each entry: what · why-deferred · cost · trigger.
 - **R3 residual MEDIUM (recorded).** What: auto-Arc boundary false-Arc/false-reject hazard. Why-
   parked: residual M after the exhaustive matrix. Cost: n/a. Trigger: any new ownership form or
   `background`-boundary shape not covered by the P3 matrix (extend the matrix first).
+- **Auto-Arc codegen emission (FRAGO 008 — deviation-judge classified JUSTIFIED, applied at P3
+  r2).** What: the codegen that EMITS the Arc-wrap at the spawn site, plus everything downstream
+  (the `auto_arc` hint firing, the end-to-end alloc=free proof, the should-Arc-and-emits-Arc
+  matrix cells). The four-field WHAT/WHY/COST/TRIGGER record lives in `registry/features.toml`
+  `[[deferred_language_feature]]` `auto-arc-codegen-emission` (the SINGLE source — mirrored here,
+  not duplicated): deferred to v0.4+ pending a caller/task Arc-sharing topology design decision
+  (IMP-ownership.md carries zero Arc content, grep-verified; IMP-concurrency:189 locks
+  `.share`-across-`background` as a hard error); the safe copy-crossing, the R3 boundary matrix,
+  the `arc.rs` substrate, and the registered hint domain all ship in THIS plan. See FRAGO 008
+  (`audit.md`) and the ⚠ P3 STATUS banner.
 - **Runtime deadlock/hang observability (agent-found gap, factor: observability).** What: no
   runtime telemetry exists to diagnose a hang in the field; build-time fixtures are the only
   control. Why-deferred: runtime deadlock detection is real design work (IMP-no-function-coloring

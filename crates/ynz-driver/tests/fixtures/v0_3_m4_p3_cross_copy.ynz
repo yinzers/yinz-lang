@@ -1,0 +1,21 @@
+// R3 matrix — CROSS-SAFELY cell: the auto-Arc-ELIGIBLE case (read-only shape shared
+// across a `background` boundary, value used after the spawn). Today it crosses via a
+// safe independent COPY — no false reject, no data race: the task reads its own copy,
+// the caller keeps its own value (prints 42). Auto-Arc is the deferred perf-form that
+// would refcount-share this same read-only crossing; the SAFE floor is proven here.
+shape Report {
+  label: string
+  total: int
+}
+
+function summarize(report: Report) -> nothing {
+  print(report.label)
+}
+
+function entrypoint() -> nothing {
+  let r: Report = { label: `q3`, total: 42 }
+  background summarize(r)
+  sleepBlocking(60)
+  print(r.total.toString())
+  print(`cross-copy-done`)
+}

@@ -20,6 +20,13 @@ function countBuns() -> int {
 // A shape holding a channel — the receiver-origin trigger below extracts it unannotated.
 shape PickupWindow { line: channel<int> }
 
+// A plain shape + a GENERIC worker that borrows it — the auto-Arc boundary trigger below.
+shape BatchNote { label: string }
+
+function describeBatch<T>(share note: BatchNote) -> nothing {
+  print(note.label)
+}
+
 function entrypoint() -> nothing {
   // WHY: channel-capacity-non-positive — a channel is bounded by construction (stdlib-design
   // Rule 4); a zero-capacity channel could never accept a value, so it is rejected.
@@ -93,6 +100,17 @@ function entrypoint() -> nothing {
   // so sending to it would silently pile up values nobody reads.
   let oven = background reheatOven()
   oven.send(450)
+
+  // ── v0.3-M4 Phase 3: the auto-Arc boundary (share/lend across `background`) ──
+
+  // WHY: background-share-generic-callee — a GENERIC function that borrows its argument
+  // (`share`) spawned across a `background` boundary. This is the auto-Arc boundary
+  // silent-skip gap Phase 3 CLOSED: a generic callee lives in the generic table, not the
+  // concrete signature table, so before Phase 3 this borrow-across-thread hazard skipped the
+  // reject silently. It now rejects loudly ("borrows its arguments"), identical to a concrete
+  // `share`-param callee — the value must cross via `.give`/`.copy` (or auto-Arc when it lands).
+  let note: BatchNote = { label: `tray-7` }
+  background describeBatch<BatchNote>(note)
 
   print(`unreachable`)
 }

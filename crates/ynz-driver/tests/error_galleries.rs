@@ -320,15 +320,16 @@ fn v0_3_m4_gallery_fires_expected_diagnostics() {
     assert_ne!(code, 0, "v0_3_m4 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
-    // Expected 14: 5 construction (non-positive ×2, wrong capacity type, missing element type,
+    // Expected 15: 5 construction (non-positive ×2, wrong capacity type, missing element type,
     // too-many-args) + 7 method-surface (unknown method, send wrong element type, receive-with-
     // args, nested-expression position, unnamed receiver, non-derivable receiver origin,
-    // unsupported element type) + 2 handle (non-suspending callee, send-with-no-channel-param).
-    // Small headroom for incidental diagnostic refinements; the key phrases below pin each
-    // class individually.
+    // unsupported element type) + 2 handle (non-suspending callee, send-with-no-channel-param)
+    // + 1 Phase-3 auto-Arc boundary (generic share-param callee across `background` — the
+    // closed silent-skip gap). Small headroom for incidental diagnostic refinements; the key
+    // phrases below pin each class individually.
     assert!(
-        (13..=16).contains(&error_count),
-        "v0_3_m4 gallery must produce 13–16 errors; got {error_count}.\nstderr:\n{stderr}"
+        (14..=17).contains(&error_count),
+        "v0_3_m4 gallery must produce 14–17 errors; got {error_count}.\nstderr:\n{stderr}"
     );
 
     // ── Phase 1: construction classes ──
@@ -408,5 +409,14 @@ fn v0_3_m4_gallery_fires_expected_diagnostics() {
     assert!(
         stderr.contains("This task takes no channel"),
         "v0_3_m4 gallery must include send-with-no-channel-param diagnostic; got:\n{stderr}"
+    );
+
+    // ── Phase 3: auto-Arc boundary class ──
+    // Generic share-param callee across `background` — the silent-skip gap Phase 3 closed.
+    // The reject fires with the same "borrows its arguments" phrase as a concrete callee,
+    // proving the generic callee is now covered by the ONE boundary predicate.
+    assert!(
+        stderr.contains("borrows its arguments"),
+        "v0_3_m4 gallery must include the auto-Arc boundary (generic share-param) diagnostic; got:\n{stderr}"
     );
 }

@@ -1103,4 +1103,19 @@ function m4_demo() -> nothing {
   let graded = scout.receive()
   let grade = graded.or(0)
   print(`scout graded jersey 21 at: ${grade.toString()}`)
+
+  // v0.3-M4 Phase 3 — auto-Arc across a `background` boundary.
+  //
+  // When a read-only value is shared across a `background` boundary (used after the spawn),
+  // it crosses SAFELY today via an independent copy — the task reads its own copy, the caller
+  // keeps its own. A borrow across the boundary (`share`/`lend`) is a compile error (the value
+  // could dangle once the task runs); a `channel<T>` is the one exempt conduit. Those boundary
+  // rules ship and are proven in `v0_3_m4_errors.ynz` (the auto-Arc boundary reject) and the
+  // R3 boundary matrix.
+  //
+  // The auto-Arc perf-FORM — refcount-sharing one read-only copy instead of deep-copying it
+  // per task, with a cautionary muted hint — is staged: its codegen emission
+  // (`auto-arc-codegen-emission`) and its LSP hint wiring + red-tint (`auto_arc` domain /
+  // `auto-arc-cautionary-tint`) are recorded deferrals in registry/features.toml. This block
+  // grows into a live auto-Arc demo when the emission lands.
 }
