@@ -42,6 +42,7 @@
 - [v0-3-m3f-codegen-correctness-fixes](done/2026-06-09-v0-3-m3f-codegen-correctness-fixes/plan.md) `done`
 - [v0-3-m3d-cpu-parallelization](done/2026-06-11-v0-3-m3d-cpu-parallelization/plan.md) `done`
 - [v0-3-m3g-mixed-cpu-io-overlap](done/2026-07-01-v0-3-m3g-mixed-cpu-io-overlap/plan.md) `done`
+- [v0-3-m4-channels-arc-release](done/2026-07-02-v0-3-m4-channels-arc-release/plan.md) `done`
 
 ## Standalone plans
 

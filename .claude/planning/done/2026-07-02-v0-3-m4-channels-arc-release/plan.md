@@ -1,9 +1,9 @@
 ---
 name: "v0-3-m4-channels-arc-release"
 plan-id: "2026-07-02-v0-3-m4-channels-arc-release"
-status: "active"
+status: "done"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2", "executor-2026-07-02-m4-p4", "executor-2026-07-02-m4-p4-r2", "executor-2026-07-02-m4-p5", "executor-2026-07-02-m4-p5-r2", "executor-2026-07-02-m4-p6", "executor-2026-07-03-m4-gate-fix"]
+session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2", "executor-2026-07-02-m4-p4", "executor-2026-07-02-m4-p4-r2", "executor-2026-07-02-m4-p5", "executor-2026-07-02-m4-p5-r2", "executor-2026-07-02-m4-p6", "executor-2026-07-03-m4-gate-fix", "conductor-2026-07-03-completion"]
 created_at: "2026-07-02"
 updated_at: "2026-07-03"
 metadata:
