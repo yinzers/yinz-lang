@@ -4,7 +4,7 @@ description: "Future-milestone design notes for auto-transforming array<Shape> f
 tags:
   - "yinz-compiler"
 created_at: "2026-05-15"
-updated_at: "2026-07-01"
+updated_at: "2026-07-03"
 status: "active"
 author: "patrick"
 metadata:
@@ -14,6 +14,13 @@ metadata:
 # Auto-SoA Transformation for Hot Field-Access Loops
 
 **Status**: Locked (commitment), v0.3+ implementation.
+
+> **Owning plan (2026-07-03): `2026-07-03-v0-3-m5-auto-soa`** (v0.3-M5 — split from M4 2026-07-02; the
+> `v0-3-m3c-array-by-value` by-value element storage folded in 2026-07-03, so ONE elem_size-aware array
+> representation carries both by-value AoS and SoA-as-layout-variant). That plan is authoritative where it
+> sharpens or diverges from this doc (its Design-Doc Alignment section enumerates the divergences — e.g.
+> "codegen-only" is corrected: SoA needs the new array representation). Full graduation/trim of this doc
+> into `IMP-collections.md` happens in that plan's Phase 7 step 5 — do NOT trim earlier.
 
 User spec target: none — this is an internal compiler optimization. The user-facing surface stays identical (`array<Player>`, `arr[i].health`); only the memory layout differs.
 

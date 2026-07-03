@@ -3,7 +3,7 @@ name: "v0-3-m5-auto-soa"
 plan-id: "2026-07-03-v0-3-m5-auto-soa"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5"]
+session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5"]
 created_at: "2026-07-03"
 updated_at: "2026-07-03"
 metadata:
@@ -141,7 +141,7 @@ triggers in Future Requirements.
 | **E8 — inline-element leak class** (shape with heap-owned fields stored by value; `ynz_array_drop` is element-blind — scratch doc risk 3) — *Phase 3* | C | III | MEDIUM | alloc=free parity gate via `YNZ_ALLOC_COUNTER_OUTPUT` vs the pre-migration baseline captured in P0, **with the FRAGO 005 counted-entry-point requirement**: P2's new buffer allocations MUST route through counted entry points (Phase 2 step 2) and P3's gate first proves buffer visibility — non-zero allocs vs the P0 baseline's alloc=0 blindness — before gating on parity, so the gate cannot pass vacuously (**B2 engineered guard**, prob −1; proof: committed parity test + baseline file + visibility entry criterion, Phase 3 step 4). Contingent fallback if parity REDs: loud-reject per D6 | **LOW** (D×III, earned per FRAGO 005) | pass |
 | **E9 — SoA array × suspension/background/copy** (layout variant crossing `wait`, `background`, `.copy`) — *Phase 5* | B | II | HIGH | (1) The heap-owned by-value buffer substrate eliminates the stack-dangling class for SoA identically to AoS — SoA rides the same stable storage (**B1 eliminate**, prob −2; proof: Phase 3 crossing-wait fixture green on the shared substrate). (2) SoA×{`wait`, `background`, `.copy`}×dual-mode adversarial fixtures (**B2**, prob −1; proof: Phase 5 step 4 matrix) | **LOW** (E×II) | pass |
 | **E10 — serialization forward-compat gap** (v0.8's compile-time serializer can't reconstruct unified values from SoA layout) — *Phases 4, 7* | C | III | MEDIUM | Layout metadata exposed as a real, tested struct (`LayoutDecision` — consumed by the Tier 3 lint hover, so it exists as exercised code, not prose) + forward-compat design note in IMP-collections (**B2**, prob −1; proof: lint reads the metadata; IMP-collections note, Phase 7 step 5). Reframe per Patrick 2026-07-03: no roundtrip test now — vacuous until v0.8 (A5) | **LOW** (D×III) | pass |
-| **E11 — compile-time cost of the analysis passes >10%** (roadmap standing risk, roadmap.md:160) — *Phase 8* | C | III | MEDIUM | Release-gating profile step: `ynz build --release` wall-clock on pirates-roster vs the P0 baseline, <10% or STOP (**B2 engineered gate**, prob −1; proof: recorded numbers, Phase 8 step 4) | **LOW** (D×III) | pass |
+| **E11 — compile-time cost of the analysis passes >10%** (roadmap standing risk, roadmap.md:160) — *Phase 8* | C | III | MEDIUM | Release-gating profile step: wall-clock of the release-profile compiler binary running `ynz build` on pirates-roster, like-for-like vs the P0 baseline per `baselines-p0.md`'s documented methodology (FRAGO 006 — `ynz build --release` is not a CLI flag, main.rs:94-95), <10% or STOP (**B2 engineered gate**, prob −1; proof: recorded numbers, Phase 8 step 4) | **LOW** (D×III) | pass |
 | **E12 — `map<K,Shape>` symmetric missed-call-site silent-miscompile** (scratch doc risk 4 — pre-existing base bug, miscompiles with OR without suspension; the SAME missed-call-site class as E7 but on `ynz_map_*`, which E7's array-only scope + grep gate do NOT cover) — *Phases 0, 3* | A | II | EX-HIGH | (1) P0 exhaustive `ynz_map_*` call-site audit + hard-cut/single-choke-point ABI same as arrays — old uniform-slot map entry points DELETED, all map element loads/stores route through one choke point; a missed site cannot compile (**B1 eliminate**, prob −2; proof: grep gate — zero old-signature `ynz_map_*` decls, zero raw `ynz_map_*` calls outside the helpers). (2) RED `map<K,Shape>` matrix fixture gating the build (**B2 adversarial/RED test**, prob −1; proof: committed matrix, Phase 3 step 1) | **MEDIUM** (D×II) | recorded |
 
 ## Design-Doc Alignment
@@ -379,6 +379,15 @@ phases (P2, P5) checkpoint per the marks below.
 - **Model tag:** `(coding, high, medium)`
 
 #### Phase 1 — Record the fold (roadmap + scratch cross-references) — E1 proof artifact
+
+> **STATUS: COMPLETE (2026-07-03, session `phase1-executor-2026-07-03-m5`).** All three steps done +
+> the FRAGO 006-addendum straggler (¶1 E11 mitigation cell) applied. **Deviation surfaced (not
+> self-classified):** the worktree's committed roadmap.md predates the sibling M4 session's
+> UNCOMMITTED 2026-07-02 M4/M5-split edits in the main repo — the plan's cited anchors (§Milestone 5
+> at roadmap.md:341-356, ledger rows, :109/:127 bullets) did not exist in this checkout. Resolution:
+> the split-affected regions this phase edits were imported VERBATIM from main's working copy first,
+> then the Phase-1 amendments applied on top; untouched regions stay at the fork-commit base so the
+> later merge auto-resolves them. Full import/amendment inventory in the phase return + audit.md.
 
 - **Task + purpose:** make the fold-in decision durable in the SSOT docs so no future session
   re-derives a standalone `v0-3-m3c-array-by-value` plan or a second representation.

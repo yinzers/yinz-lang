@@ -4,7 +4,7 @@ description: "Future-milestone design notes for storing array<Shape> elements by
 tags:
   - "yinz-compiler"
 created_at: "2026-06-04"
-updated_at: "2026-07-01"
+updated_at: "2026-07-03"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,7 +13,7 @@ metadata:
 
 # Array By-Value Element Storage (m3c-array-by-value) — Future Milestone
 
-**Status**: PLANNED (committed long-term fix, Patrick-approved 2026-06-04). Tracked here as the design source for a dedicated `/plan` (`v0-3-m3c-array-by-value`).
+**Status**: **FOLDED INTO v0.3-M5 (Patrick, 2026-07-03).** No standalone `v0-3-m3c-array-by-value` plan will exist — do NOT re-derive one. This work is owned by plan `2026-07-03-v0-3-m5-auto-soa` (Phases 2–3: the by-value ABI cut + the `map<K,Shape>` symmetric fix + the guard lift), where ONE elem_size-aware representation carries both by-value storage and auto-SoA (SoA is a layout variant of it — plan risk E1). This doc remains the design source until that plan's Phase 7 graduates the content into `IMP-collections.md`. (Original status: PLANNED — committed long-term fix, Patrick-approved 2026-06-04, tracked for a dedicated plan that was never scheduled.)
 
 **Why this exists**: v0.3-M3a Phase 3 surfaced a silent miscompile — `array<Shape>` with **runtime** field values, used as a crossing local / loop var across a `wait`, prints stack garbage. The interim fix (M3a) is a **loud-reject guard** (`ArrayShapeRuntimeFieldWithWait`) that turns the silent miscompile into a clean compile error. The interim guard is **conservative**: it fires on the full crossing-names set, which includes some after-last-wait constructions that the crossing analysis conservatively tracks as in-scope references (e.g. an array declared after a `wait` but used as a for-loop iterator). These cases are safe from the stack-dangling bug but are rejected anyway — loud over silent — because distinguishing them precisely would require a more complex analysis than the interim warrants. This doc captures the **long-term right answer** (by-value element storage) that LIFTS the guard entirely. Patrick: "We need it fixed long term."
 
@@ -63,7 +63,7 @@ This is a **general** array-codegen change (not scopeable to suspension without 
 See the 12-step sketch in the round-6 risk analysis (chat 2026-06-04). Core: add `elem_size` to YnzArray; mutate the four C-ABI fns to byte-pointer/out-buffer convention; update runtime_decls; update every emit.rs call site to pass `elem_size` (via `get_abi_size`) + use the pointer convention; delete `try_build_shape_global` + the SM shape-embed special-case; fix `map<K,Shape>` symmetrically; refresh snapshots; add a runtime-field `array<Shape>` crossing-wait fixture asserting correct output (lifts the M3a `ArrayShapeRuntimeFieldWithWait` guard).
 
 ## Scope verdict
-2-3 sessions minimum. Its own `/plan` (`v0-3-m3c-array-by-value`). On completion, **remove** the M3a `ArrayShapeRuntimeFieldWithWait` loud-reject guard + its registry deferral (the feature now works).
+2-3 sessions minimum. ~~Its own `/plan` (`v0-3-m3c-array-by-value`)~~ — **superseded 2026-07-03: FOLDED INTO plan `2026-07-03-v0-3-m5-auto-soa` (Phases 2–3), per the Status note at the top.** On completion, **remove** the M3a `ArrayShapeRuntimeFieldWithWait` loud-reject guard + its registry deferral (the feature now works) — that lift is the plan's Phase 3 step 2.
 
 ## Cross-references
 - [`.claude/planning/done/2026-06-01-v0-3-m3a-suspension-codegen/plan.md`](../../../.claude/planning/done/2026-06-01-v0-3-m3a-suspension-codegen/plan.md) (where the interim loud-reject ships)
