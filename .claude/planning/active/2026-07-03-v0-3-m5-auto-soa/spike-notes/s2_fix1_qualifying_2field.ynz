@@ -1,0 +1,41 @@
+// M5 P0 S2 fixture 1 — QUALIFYING 2-field hot loop.
+// All field values runtime-computed (no const-foldable literals).
+//
+// PRE-REGISTERED expected analysis (written BEFORE the spike ran):
+//   fn `entrypoint`: array `pts` shape=Point provable_len=Some(4) growth_ops=0
+//     elem_set_writes=0 whole_value_uses=0 escapes=[]
+//   loop-field `x` reads=1 writes=0
+//   loop-field `y` reads=1 writes=0
+//   field-union=2
+//   verdict: CANDIDATE
+// Expected program stdout: 18 then 36 (sumX = 3+4+5+6, sumY = 6+8+10+12).
+shape Point {
+  x: int
+  y: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 2
+  let x0: int = seed + 1
+  let x1: int = seed + 2
+  let x2: int = seed + 3
+  let x3: int = seed + 4
+  let y0: int = x0 * 2
+  let y1: int = x1 * 2
+  let y2: int = x2 * 2
+  let y3: int = x3 * 2
+  let pts: array<Point> = [
+    { x: x0, y: y0 },
+    { x: x1, y: y1 },
+    { x: x2, y: y2 },
+    { x: x3, y: y3 }
+  ]
+  let sumX: int = 0
+  let sumY: int = 0
+  for (p in pts) {
+    sumX = sumX + p.x
+    sumY = sumY + p.y
+  }
+  print(sumX.toString())
+  print(sumY.toString())
+}

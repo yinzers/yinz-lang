@@ -17,6 +17,7 @@ _No member plans yet._
 
 ### [v0-3-concurrency-perf](active/2026-05-21-v0-3-concurrency-perf/roadmap.md) `active`
 - [v0-3-m4-channels-arc-release](active/2026-07-02-v0-3-m4-channels-arc-release/plan.md) `active`
+- [v0-3-m5-auto-soa](active/2026-07-03-v0-3-m5-auto-soa/plan.md) `active`
 
 ## Standalone plans
 

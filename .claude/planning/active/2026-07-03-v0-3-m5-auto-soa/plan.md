@@ -1,0 +1,864 @@
+---
+name: "v0-3-m5-auto-soa"
+plan-id: "2026-07-03-v0-3-m5-auto-soa"
+status: "active"
+roadmap-id: "2026-05-21-v0-3-concurrency-perf"
+session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5"]
+created_at: "2026-07-03"
+updated_at: "2026-07-03"
+metadata:
+  type: "plan"
+---
+
+# PLAN: v0.3-M5 — Auto-SoA (Struct-of-Arrays) + Array-By-Value Element Storage
+
+> **Status note (pre-approval convention).** This is a complete OPORD body under `status: "stub"` —
+> the execution conductor flips `stub → active` at the approval gate (same file, same plan-id).
+> **Execution gate: no phase starts until v0.3.0 ships** (M4 P5/P6 complete, tag cut). Plan now,
+> execute later — recorded in ¶3.4 and Weather.
+>
+> **Fold decision (Patrick, 2026-07-03, at grilling).** The previously-unscheduled
+> `v0-3-m3c-array-by-value` work
+> ([`SCRATCH-future-array-by-value-element-storage.md`](../../../../docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md),
+> Patrick-approved 2026-06-04, never planned) **FOLDS INTO M5**. One representation redesign owns
+> both: by-value inline element storage ships first (Phases 2–3), then SoA rides the new contiguous
+> storage as a layout variant (Phases 4–5). Phase 1 records the fold in the roadmap + scratch docs —
+> that edit is risk E1's mitigation proof artifact.
+
+## 1. Situation
+
+### Terrain (landscape) — recon 2026-07-03, file:line verified against the live working tree
+
+- **`YnzArray` is a uniform-8-byte-slot pointer array** — `{data: *mut u8, len: i64, cap: i64}`
+  (`crates/ynz-runtime/src/lib.rs:1100-1105`, design comment 1094-1098; `ynz_array_get/set/push` at
+  lib.rs:1112-1219). Shape elements are stored as *pointers*: module global via
+  `try_build_shape_global` (`crates/ynz-codegen/src/emit.rs:18126`) for literal-field shapes, or
+  stack-alloca/heap ptr→int for runtime-field shapes. **No contiguous field storage exists** — both
+  SoA and by-value storage need a new representation + ABI (`elem_size` param, ~20+ `emit.rs` call
+  sites per the scratch doc's blast-radius analysis).
+- **`Expr::ArrayLit` lowering:** `emit.rs:13025-13143`; padded shapes already skip the const-global
+  fold at `emit.rs:13104-13107` — existing precedent for layout-transform-aware codegen branches.
+- **Shape field layout:** `crates/ynz-codegen/src/shape_types.rs:57` (`emit_shape_types`), `:90`
+  (`pad_field_to_cache_line`).
+- **M4 P4 substrate (uncommitted at plan time, complete in the working tree):**
+  `crates/ynz-typeck/src/false_sharing.rs` — `finalize_false_sharing` (lines 103-170) partitions
+  padded-vs-declined-with-lint, gated at entry by `kernel_mode || no_auto_parallel_env() || empty`
+  (line 117). This is THE structural template for M5's SoA candidate/declined partition. Consumers
+  thread one result (`TypedModule::cross_thread_padded_shapes` read at `emit.rs:1051` +
+  `codegen/queries.rs:204`) — the
+  [`authoritative-derivation.md`](../../../rules/authoritative-derivation.md) pattern SoA must mirror.
+- **Lint mechanism ready as-is:** `crates/ynz-typeck/src/lints.rs` (`lint_diagnostic`, 47 lines) +
+  [`registry/features.toml`](../../../../registry/features.toml):2272-2313 (`[[lint_rule]]` schema).
+  Adding `array-using-soa-layout` = one TOML entry + one firing site, zero mechanism edits (M4 plan
+  lines 1092-1095 confirm M5-generality was a locked M4 design goal).
+- **`--no-auto-parallel` is a single predicate** — `no_auto_parallel_env()`
+  (`crates/ynz-typeck/src/queries.rs:597-598`, env `YNZ_NO_AUTO_PARALLEL`, set by driver
+  `main.rs:219-225`). It already gates one layout transform (M4 padding). SoA is gate #2, identical
+  idiom — thread the one predicate, never a second derivation.
+- **Salsa query precedents** for the new `soa_candidate_query`: `frame_layouts_query`
+  (`codegen/queries.rs:81`), `codegen_query` (`:299`).
+- **NO per-field access-counting analysis exists.** `independence.rs` (statement-level) and
+  `effective_ownership.rs:111-565` (whole-value Reads/Writes/Unknown) are the nearest analogues;
+  per-field-in-loop-body counting is net-new — the novel core (risk E5, gated by the P0 spike).
+- **`lend self` method discovery:** standalone functions with `lend self: ShapeName` first param
+  (UFCS, [`non-oop.md`](../../../rules/non-oop.md)); scan mirrors `finalize_false_sharing`'s
+  `module.items.iter().find_map` (false_sharing.rs:131-134). Live example:
+  `examples/pirates-roster/entrypoint.ynz:340-342` (`recordHit(lend self: Pirate, ...)`).
+- **NO benchmark harness anywhere** (zero `criterion`/`[[bench]]` in any Cargo.toml). CI = shared GH
+  `ubuntu-latest` (`.github/workflows/ci.yml`, Linux-only, golden snapshots x86_64-linux). Local dev
+  = Docker `dev` service (docker-compose.yml, bind mount, no resource pinning). SIZE_THRESHOLD
+  calibration has NO stable perf environment — the harness must be built and the noise question
+  answered honestly (risk E2).
+- **NO debug-info/DWARF code anywhere** (grep-confirmed) — grounds the DAP deferral (E4).
+- **NO qualifying SoA-candidate fixture exists today:** pirates-roster has no large `array<Shape>`
+  hot loop; the only multi-field shape with a lend-self method is `Pirate`
+  (entrypoint.ynz:331-342). Phase 8 AUTHORS the first SoA-shaped example from scratch, and the
+  suppression-filter enumeration mandate (roadmap risk row, roadmap.md:156) needs Phase 4's authored
+  fixtures before it can be exercised.
+- **FFI absent (v2+, registry entry exists)** — the no-FFI-export suppression criterion is vacuously
+  true today; kept as a documented vacuous check (recorded decision D7).
+- **Interim guard to lift:** `ArrayShapeRuntimeFieldWithWait`
+  ([`IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md):588-598) —
+  the M3a loud-reject that masks the stack-dangling miscompile this plan's by-value phases fix for
+  real.
+
+### Weather (external constraints)
+
+- **Execution gated on the v0.3.0 release** — no phase starts until M4 P5/P6 complete and the
+  `v0.3.0` tag is cut. No other deadline; budget phases against the work, not a date.
+- **Solo project, pre-v1.0** — breaking ABI latitude per ADR-versioning; no external users
+  (civil considerations: N/A — compiler-internal).
+- **Recon-vs-execution drift is a standing hazard:** ¶1 file:line cites were verified against a
+  working tree that includes *uncommitted* M4 P4 code. By execution time v0.3.0 has shipped and
+  lines will have moved. Every phase re-verifies its cites at dispatch (CCIR-1, ¶3.4).
+- **Benchmark environment is uncontrolled shared hardware** (Docker on WSL2 host / shared CI
+  runners). E2's honesty posture: record variance, never claim precision the environment can't
+  support.
+- **Ships as a v0.3.x patch-line tag** post-v0.3.0 (Patrick, per roadmap §M5 "Ships via").
+
+### Friendly forces
+
+- **Higher intent:** roadmap
+  [`2026-05-21-v0-3-concurrency-perf`](../2026-05-21-v0-3-concurrency-perf/roadmap.md) §Milestone 5
+  (roadmap.md:341-356) + the Auto-SoA decision criteria (roadmap.md:109). M5 is the last capability
+  of the original v0.3 vision.
+- **M4 (`2026-07-02-v0-3-m4-channels-arc-release`)** ships the `[[lint_rule]]` mechanism, the
+  false-sharing padding transform (the other layout transform), and the v0.3.0 tag M5 waits on.
+- **M3a's interim guard** (`ArrayShapeRuntimeFieldWithWait`) is the loud-reject this milestone
+  retires; M3d/M3g's adversarial-gate pattern (`*_declines.ynz`, DECLINE→FIRE flips, alloc=free via
+  `YNZ_ALLOC_COUNTER_OUTPUT`) is the testing house style Phases 2–5 reuse.
+
+### Assumptions
+
+| # | Assumption | Status |
+|---|---|---|
+| A1 | M4 P4 substrate (`false_sharing.rs`, `lints.rs`, `[[lint_rule]]` schema) ships in v0.3.0 essentially as recon'd | **unverified** — uncommitted at plan time; re-verify at Phase 4 dispatch (CCIR-1) |
+| A2 | `[[lint_rule]]` mechanism generality: one TOML entry + one firing site, zero mechanism edits | verified (features.toml:2272-2313; M4 plan 1092-1095) |
+| A3 | `no_auto_parallel_env()` is the single sequential-mode predicate | verified (queries.rs:597-598; driver main.rs:219-225) |
+| A4 | Zero DWARF/debug-info substrate exists | verified (grep, 2026-07-03) |
+| A5 | No serializer exists until v0.8 (serialization risk is vacuous today) | verified (recon; stdlib-design Rule 6 is design-time-only) |
+| A6 | Docker `dev` service can build + run compiler output for benchmarking | verified (docker-compose.yml; house workflow) |
+| A7 | v0.3.0 released before any M5 phase executes | **unverified** — future event; enforced as the ¶3.4 execution gate, not assumed |
+
+### Risk Assessment
+
+Scored via the global `REF-risk-engine.md` (the frozen plan-system risk engine; 4×5 fixed lookup;
+default code-domain anchor sheet — no project `risk-anchors.md` override exists).
+Every mitigation names its bucket and proof obligation; no proof → step 0. No Floor B class fires
+(no money/PII/security/irreversible-op — pre-1.0 compiler, everything git-reversible). **No HIGH
+residual remains; no override block is required.** All MEDIUMs are recorded here and parked with
+triggers in Future Requirements.
+
+| Risk | Prob | Sev | Initial | Mitigations (bucket) | Residual | Gate |
+|------|------|-----|---------|----------------------|----------|------|
+| **E1 — twin-substrate collision** (m3c-array-by-value vs M5 building two parallel array representations that drift) — *Phases 1–3* | B | II | HIGH | Fold-in decision: ONE representation owns both; the second substrate cannot exist (**B1 eliminate**, prob −2; proof: §3.1 representation architecture + Phase 1 roadmap/scratch-doc diffs) | **MEDIUM** (D×II) | recorded |
+| **E2 — SIZE_THRESHOLD false confidence** (no reliable bench env; a constant shipped with unearned precision) — *Phases 0, 6* | B | III | MEDIUM | Controlled local-Docker harness + recorded variance + documented revisit trigger (**B2 engineered guard**, prob −1; proof: committed variance/provenance record shipped WITH the constant, Phase 6 step 3) | **MEDIUM** (C×III) | recorded |
+| **E3 — SoA × padding layout collision** (two layout transforms on one shape; the twin-derivation class that shipped silent miscompiles 4× — M3a/M3d/M3e/M3g per [`authoritative-derivation.md`](../../../rules/authoritative-derivation.md)) — *Phases 4–5* | A | II | EX-HIGH | (1) ONE authoritative layout-decision source both transforms read — a single query/struct resolving padding+SoA per shape, consumed by every codegen path, never re-derived (**B1 eliminate**, prob −2; proof: Phase 4 `layout_decisions` artifact + consumer threading, grep gate: no second derivation). (2) RED both-candidate fixture (shape simultaneously cross-thread-padded AND SoA-candidate) with byte-layout assertions gating the build (**B2 adversarial/RED test**, prob −1; proof: committed fixture, Phase 4 step 3) | **MEDIUM** (D×II) | recorded |
+| **E4 — DAP debugger view under SoA layout** — *deferred* | D | IV | LOW | Deferred via `[[deferred_tooling_feature]]` — four-field deferral Patrick-signed 2026-07-03 (zero DWARF substrate exists, A4; a bespoke non-DWARF hack is duct tape). Parked in Future Requirements #1 | **LOW** | pass |
+| **E5 — novel per-field analysis infeasible/mis-scoped** (nothing like it exists in the compiler) — *Phases 0, 4* | B | III | MEDIUM | P0 spike S2 with hard accept/reject exit gate, validated against the REAL compiler on real `.ynz` fixtures — never a hand-written model (the M2-HALT lesson) (**B2 adversarial gate**, prob −1; proof: S2 verdict + persisted spike fixtures) | **MEDIUM** (C×III) | recorded |
+| **E6 — suppression filter wrong** (a `lend self` shape slips through → SoA splits what the method expects contiguous → silent miscompile; roadmap risk row roadmap.md:156) — *Phases 4, 5, 8* | C | II | HIGH | Escape-decline admission (D4) + shape-level lend-self filter + authored adversarial suppression fixtures + dual-mode byte-identical oracle, all build-blocking (**B2 adversarial/RED tests**, prob −1 — one pattern, no self-stacking; proof: Phase 4 fixture set + Phase 8 enumeration record) | **MEDIUM** (D×II) | recorded |
+| **E7 — missed `elem_size` call site → silent miscompile** (the M3a-P1/P3 whack-a-mole class; direct prior evidence) — *Phases 2–3* | A | II | EX-HIGH | (1) Hard-cut ABI: old uniform-slot entry points DELETED, no parallel old path — a missed site cannot compile (Rust signature mismatch / LLVM IR verifier), plus one elem-size choke-point helper pair all sites route through (**B1 eliminate**, prob −2; proof: grep gate — zero old-signature symbols, zero raw `ynz_array_get/set/push` calls outside the helpers). (2) Per-type × per-operation × suspension adversarial fixture matrix gating the build (**B2**, prob −1; proof: committed matrix, Phase 2 step 1 / Phase 3 step 5) | **MEDIUM** (D×II) | recorded |
+| **E8 — inline-element leak class** (shape with heap-owned fields stored by value; `ynz_array_drop` is element-blind — scratch doc risk 3) — *Phase 3* | C | III | MEDIUM | alloc=free parity gate via `YNZ_ALLOC_COUNTER_OUTPUT` vs the pre-migration baseline captured in P0, **with the FRAGO 005 counted-entry-point requirement**: P2's new buffer allocations MUST route through counted entry points (Phase 2 step 2) and P3's gate first proves buffer visibility — non-zero allocs vs the P0 baseline's alloc=0 blindness — before gating on parity, so the gate cannot pass vacuously (**B2 engineered guard**, prob −1; proof: committed parity test + baseline file + visibility entry criterion, Phase 3 step 4). Contingent fallback if parity REDs: loud-reject per D6 | **LOW** (D×III, earned per FRAGO 005) | pass |
+| **E9 — SoA array × suspension/background/copy** (layout variant crossing `wait`, `background`, `.copy`) — *Phase 5* | B | II | HIGH | (1) The heap-owned by-value buffer substrate eliminates the stack-dangling class for SoA identically to AoS — SoA rides the same stable storage (**B1 eliminate**, prob −2; proof: Phase 3 crossing-wait fixture green on the shared substrate). (2) SoA×{`wait`, `background`, `.copy`}×dual-mode adversarial fixtures (**B2**, prob −1; proof: Phase 5 step 4 matrix) | **LOW** (E×II) | pass |
+| **E10 — serialization forward-compat gap** (v0.8's compile-time serializer can't reconstruct unified values from SoA layout) — *Phases 4, 7* | C | III | MEDIUM | Layout metadata exposed as a real, tested struct (`LayoutDecision` — consumed by the Tier 3 lint hover, so it exists as exercised code, not prose) + forward-compat design note in IMP-collections (**B2**, prob −1; proof: lint reads the metadata; IMP-collections note, Phase 7 step 5). Reframe per Patrick 2026-07-03: no roundtrip test now — vacuous until v0.8 (A5) | **LOW** (D×III) | pass |
+| **E11 — compile-time cost of the analysis passes >10%** (roadmap standing risk, roadmap.md:160) — *Phase 8* | C | III | MEDIUM | Release-gating profile step: `ynz build --release` wall-clock on pirates-roster vs the P0 baseline, <10% or STOP (**B2 engineered gate**, prob −1; proof: recorded numbers, Phase 8 step 4) | **LOW** (D×III) | pass |
+| **E12 — `map<K,Shape>` symmetric missed-call-site silent-miscompile** (scratch doc risk 4 — pre-existing base bug, miscompiles with OR without suspension; the SAME missed-call-site class as E7 but on `ynz_map_*`, which E7's array-only scope + grep gate do NOT cover) — *Phases 0, 3* | A | II | EX-HIGH | (1) P0 exhaustive `ynz_map_*` call-site audit + hard-cut/single-choke-point ABI same as arrays — old uniform-slot map entry points DELETED, all map element loads/stores route through one choke point; a missed site cannot compile (**B1 eliminate**, prob −2; proof: grep gate — zero old-signature `ynz_map_*` decls, zero raw `ynz_map_*` calls outside the helpers). (2) RED `map<K,Shape>` matrix fixture gating the build (**B2 adversarial/RED test**, prob −1; proof: committed matrix, Phase 3 step 1) | **MEDIUM** (D×II) | recorded |
+
+## Design-Doc Alignment
+
+Governing docs read at plan time; every divergence enumerated as "doc says A; plan does B because C."
+
+**Cited governing docs:**
+[`SCRATCH-future-auto-soa.md`](../../../../docs/internal/scratchpad/SCRATCH-future-auto-soa.md) ·
+[`SCRATCH-future-array-by-value-element-storage.md`](../../../../docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md) ·
+[`IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md) (auto-promotion + array representation) ·
+[`IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md) (`ArrayShapeRuntimeFieldWithWait` interim guard, :588-598; padding) ·
+[`auto-promotion.md`](../../../rules/auto-promotion.md) ·
+[`authoritative-derivation.md`](../../../rules/authoritative-derivation.md) ·
+[roadmap §M5 + Architectural Decisions](../2026-05-21-v0-3-concurrency-perf/roadmap.md) (lines 109, 127, 341-356).
+
+**Divergences (each Patrick-decided or recorded per decision-philosophy):**
+
+1. **Scratch doc says** array-by-value is "its own `/plan` (`v0-3-m3c-array-by-value`)"; **this plan
+   folds it into M5** — Patrick-approved 2026-07-03. One representation redesign owns both (E1
+   mitigation); Phase 1 updates the scratch doc + roadmap to record the fold.
+2. **Roadmap risk row (roadmap.md:159) says** "Assert: serialize + deserialize a SoA-laid-out
+   `array<Player>` → roundtrip"; **this plan carries a forward-compat design note instead** — Patrick
+   2026-07-03. Recon-verified: no serializer exists until v0.8 (A5); the roundtrip is untestable
+   vacuity today. The SoA representation MUST expose layout metadata sufficient for v0.8's
+   compile-time serializer codegen to reconstruct unified values (E10; Phase 7 step 5).
+3. **Roadmap (roadmap.md:127, :353) says** DAP integration is "best-effort... defer if >3 phases";
+   **this plan defers it outright** via `[[deferred_tooling_feature]]` — Patrick-signed 2026-07-03
+   four-field deferral (Future Requirements #1). Zero DWARF substrate exists (A4); even one phase of
+   DAP would be a bespoke non-DWARF hack (duct tape) or would hold a perf milestone hostage to
+   building DWARF from scratch. Phase 1 updates the stale roadmap text.
+4. **SCRATCH-future-auto-soa says** "codegen-only change" (pre-correction framing); **already
+   corrected** in the roadmap 2026-07-02 — SoA needs the new array representation. This plan builds
+   it (Phases 2–3 first). No new sign-off needed; recorded for completeness.
+5. **[`auto-promotion.md`](../../../rules/auto-promotion.md) locks** SoA as the canonical
+   codegen-only/no-typeable-form example: **Tier 3 lint YES, muted hint NO.** This plan conforms
+   exactly — no muted-hint domain is added, and Phase 7 must NOT over-correct by adding one.
+6. **SCRATCH-future-auto-soa open question "cross-function analysis"** — resolved conservatively for
+   M5: candidate arrays are intra-function only; any escape (argument, return, store into another
+   value, module boundary) DECLINES the array (recorded decision D4). Cross-function propagation is
+   Future Requirements #3.
+7. **Milestone-boundary assumptions:** M5 depends on M4's `[[lint_rule]]` mechanism (roadmap.md:345,
+   confirmed shared infra) and on the v0.3.0 release preceding execution (roadmap §M5 trigger). Both
+   deferrals/dependencies are documented in the roadmap, not invented here. The fold-in *adds* the
+   previously-unscheduled by-value capability to M5 — Phase 1 gives it a Capability Ledger row so
+   the ledger stays the scope-bleed SSOT.
+8. **Behavior claims about untouched adjacent code, recon-cited per plan-invariants §Design-Doc
+   Alignment (4):** padding consumers thread one result (emit.rs:1051, codegen/queries.rs:204);
+   `no_auto_parallel_env()` single predicate (queries.rs:597-598); padded shapes skip the
+   const-global fold (emit.rs:13104-13107); guard text at IMP-concurrency.md:588-598. All carry the
+   A1 re-verify caveat (M4 P4 was uncommitted at recon time).
+
+### Recorded Decisions (durable calls made at plan time, per decision-philosophy — reasons on the record)
+
+- **D1 — Kernel mode: SoA is DISABLED in `--kernel` mode**, mirroring M4 padding's gate idiom
+  (false_sharing.rs:117). Reason: both are layout transforms with the same testing story
+  (`--no-auto-parallel` dual-mode oracle); kernel mode has zero real programs today (the
+  `KernelModeRejectsWait` template is wired in 0 code sites); divergent kernel×layout states would
+  multiply the fixture matrix for no user. Revisit trigger: Future Requirements #7.
+- **D2 — SoA storage = ONE allocation, segmented per field** (per-field segment offsets computed at
+  compile time from cap × field sizes). Reason: Golden Rule 8 / one-allocation-per-buffer (the same
+  GR8 argument that rejected per-element heap in the scratch doc's Option B); N separate field
+  allocations would multiply the alloc=free accounting and fragment cache lines.
+- **D3 — SoA admission requires compile-time-provable length > SIZE_THRESHOLD and NO growth ops**
+  (`.add()`/push anywhere on the binding → decline). Reason: growth under segmented layout forces a
+  per-segment re-layout on every realloc — real cost, zero proven demand; the provable-length rule
+  keeps the "array length > threshold at the analysis-time proof point" criterion (roadmap.md:109)
+  honest instead of guessing runtime sizes. Aligns with the `array<T>`→`fixed<T>` precedent: the
+  proven-never-grown array is exactly the auto-promotion sweet spot. Triggers: Future Requirements
+  #4, #5.
+- **D4 — Escape-decline admission:** an array passed as an argument, returned, stored into another
+  value, or crossing a module boundary is DECLINED (the analysis cannot see all accesses). Reason:
+  M3d's decline-safely-to-baseline discipline; a partial-visibility SoA decision is the silent-wrong
+  class. The shape-level lend-self filter (roadmap mandate) is retained as defense-in-depth on top —
+  it becomes load-bearing when cross-function propagation (FR #3) lands.
+- **D5 — ≤2-fields criterion is the UNION of fields accessed across all loops over the array** in
+  the owning function; ≥3 in the union → decline. Reason: resolves the scratch doc's "mixed-access
+  loops" open question conservatively; per-loop scoring with conflicting layouts is unimplementable
+  (one array has one layout). Revisit: Future Requirements #9.
+- **D6 — Element-drop parity, not element-aware drop:** by-value storage keeps `ynz_array_drop`
+  element-blind, matching today's semantics; the P0-baselined `YNZ_ALLOC_COUNTER_OUTPUT` parity gate
+  (E8) proves no NEW leak class vs the current pointer representation. If parity REDs, fall back to
+  the scratch doc's loud-reject option (`array<Shape-with-heap-fields>` typeck error) via FRAGO.
+  Reason: current drop is already element-blind for pointer elements; by-value is
+  memory-equivalent-or-better, and inventing element-aware drop now is YAGNI until the ownership
+  model's drop story (FR #6) demands it.
+- **D7 — FFI suppression check kept as a documented vacuous check** (one line in the admission
+  criteria naming it vacuously-true, A5-style). Reason: cheaper than deleting + re-inventing at v2+;
+  the criterion is roadmap-mandated (roadmap.md:109 criterion 3).
+- **D8 — Benchmark force-mode is an internal test-only env var** (`YNZ_SOA_FORCE`, harness-only,
+  mirrors the `YNZ_NO_AUTO_PARALLEL` idiom) — never user-facing syntax. Reason: the scratch doc
+  locks "no source-level opt-in/opt-out in v0.3"; the harness needs A/B forcing; an env var is the
+  established non-syntax escape hatch.
+- **D9 — Lint rule name `array-using-soa-layout` is kept as roadmap-locked** (roadmap.md:121)
+  even though "soa" is an acronym of banned jargon — the *identifier* is registry-internal
+  convention; all user-facing hover TEXT must be jargon-free ("stored as separate per-field arrays",
+  never "struct"/"Struct-of-Arrays"). **Behavior claim, UNVERIFIED at plan time:** this decision
+  assumes `jargon_audit.rs` gates user-facing diagnostic/hover TEXT but does NOT reject
+  registry-internal lint-rule identifiers (so the roadmap-locked `array-using-soa-layout` name
+  passes while jargon in hover text is caught). No recon cite exists for that scoping — **Phase 7
+  step 1 MUST re-verify** what `jargon_audit.rs` actually scans before relying on it; if it also
+  audits registry identifiers, surface it (the roadmap-locked name would then need Patrick's call —
+  rename vs. audit carve-out), do not silently work around it.
+- **D11 — Layout precedence: padding wins, SoA declines for cross-thread-padded shapes.** When a
+  shape is simultaneously cross-thread-padded (M4) AND an SoA candidate, the ONE layout authority
+  (Phase 4) resolves it to padding-only; the shape's arrays are never SoA'd. Reason: correctness
+  under false sharing outranks cache-locality perf, and a cross-thread array is outside SoA's
+  provable-single-thread hot-loop model anyway (D4's escape-decline would independently reject it).
+  This is the human-visible resolution of E3's collision; the byte-layout-asserting both-candidate
+  fixture (Phase 4 step 3) proves it. Revisit: FR #11 (any dual-mode divergence re-opens it).
+- **D10 — Executor model dispatch: Fable 5** (`model: fable`) for all phase executors at
+  `/execute-plan` time — Patrick 2026-07-03, an explicit availability-override of the frozen
+  binding's excluded-models list (Fable returned). Reviewer fleet stays per the frozen
+  model-selection binding. Recorded in ¶4/¶5; Model tags below still carry the honest
+  `(task-type, quality-bar, scale)` classification for the record and for fallback.
+
+## 2. Mission
+
+After v0.3.0 ships, the M5 execution delivers **by-value inline element storage for `array<Shape>`
+(new elem_size-aware YnzArray ABI, permanently fixing the array-element stack-dangling miscompile
+class the M3a guard only masks) and, riding that contiguous storage, automatic Struct-of-Arrays
+layout for large `array<Shape>` hot loops** — zero syntax change, byte-identical program output in
+both scheduling modes — **because** Yinz's efficiency-first positioning (Golden Rules 4/8/10)
+promises the 10-40× cache-locality win to naive sequential-looking code, and one representation must
+own both changes so the twin-substrate drift class can never ship.
+
+## 3. Execution
+
+### 3.1 Intent & End State
+
+**Purpose.** Two structurally-coupled outcomes, in dependency order: (1) `array<Shape>` elements
+become **owned, by-value, inline** in the heap buffer — the array survives suspension by
+construction, the `ArrayShapeRuntimeFieldWithWait` guard and `try_build_shape_global` special-cases
+are deleted, and `map<K,Shape>` gets the symmetric fix; (2) on that contiguous storage, the compiler
+**automatically picks SoA layout** for provably-safe large hot-loop arrays, with the full teaching
+surface (Tier 3 lint, registry, hover, VSCode) shipping in the same milestone per roadmap
+constraint 71.
+
+**Representation architecture (the E1 anchor).** There is exactly ONE array representation: the
+elem_size-aware by-value `YnzArray`. SoA is a **layout variant** of that representation — same
+header, same ownership, same drop path, segment addressing computed by codegen from the ONE
+authoritative `layout_decisions` source (E3). No parallel array runtime, no second layout
+derivation, anywhere. An executor who finds itself writing a second representation or re-deriving a
+layout answer must STOP and surface it (CCIR-2).
+
+**Key outcomes (definition of done):**
+
+1. A runtime-field `array<Shape>` crossing a `wait` compiles and prints correct values (the scratch
+   doc's acceptance signal); the interim guard + its registry deferral are gone; old galleries
+   updated.
+2. Every fixture in `examples/` + `crates/ynz-codegen/tests/` + `crates/ynz-driver/tests/` is
+   **byte-identical** across default and `--no-auto-parallel` modes (which disables SoA — gate #2 on
+   the one predicate).
+3. A qualifying large-array hot loop in `pirates-roster` gets SoA automatically, the
+   `array-using-soa-layout` Tier 3 lint fires on its declaration with jargon-free
+   WHAT/WHAT-INSTEAD/WHY hover, and the measured hot-loop improvement is recorded with benchmark
+   evidence.
+4. SIZE_THRESHOLD ships with committed provenance: workload, machine, variance, date, and a revisit
+   trigger — never a bare constant (E2's honesty posture: the hazard is false confidence, not the
+   number).
+5. A shape that is simultaneously cross-thread-padded AND an SoA candidate resolves through the one
+   layout authority (padding wins, SoA declines — recorded decision D11), with a byte-layout-
+   asserting fixture proving it.
+6. The roadmap + scratch docs record the fold (E1 proof); IMP-collections carries the graduated
+   design content including the serialization forward-compat note; a v0.3.x tag ships it.
+
+**Disciplined initiative.** When steps and reality diverge: correctness of program output
+(byte-identical dual-mode) outranks every perf claim; declining an array to AoS is ALWAYS safe —
+when in doubt, decline and record why (the M3d discipline). Never invent a second derivation of any
+layout/analysis answer to unblock yourself — thread the authoritative one or surface the blocker.
+A spike verdict of RED is a full STOP, not a "note and proceed."
+
+### 3.2 Concept
+
+Nine phases, three regimes. **Gate first** (P0 spikes prove the two novel mechanisms + capture
+baselines; P1 records the fold). **By-value substrate** (P2 the hard-cut ABI migration; P3 guard
+lift + symmetric surfaces) — must be fully green before any SoA work. **SoA on top** (P4 analysis +
+the one layout authority; P5 codegen; P6 threshold calibration; P7 teaching/docs; P8
+demo/enumeration/release). Handoffs: each phase ends green-tree with its fixtures committed; fat
+phases (P2, P5) checkpoint per the marks below.
+
+### 3.3 Phases
+
+#### Phase 0 — Feasibility spikes + call-site audit + baselines (HARD GATES)
+
+> **STATUS: COMPLETE (2026-07-03).** S1 **GREEN** (`spike-notes/s1_verdict.md`, segment 1,
+> session `phase0-executor-2026-07-03-m5`) · S2 **GREEN** (`spike-notes/s2_verdict.md` + 4
+> fixtures, segment 2, session `phase0-executor-2026-07-03-m5-seg2`) · S3 variance note
+> `spike-notes/s3_bench_noise.md` (+ rerunnable `s3_bench.rs`) · audits
+> `audit-array-callsites.md` (P2) + `audit-map-callsites.md` (P3/E12) · baselines
+> `baselines-p0.md` (E8 alloc=free — **with a counter-scope caveat P2/P3 must address**;
+> E11 ≈210 ms mean). All spike scaffolding torn down; source tree pristine.
+
+- **Task + purpose:** prove the two net-new load-bearing mechanisms (by-value ABI; per-field
+  analysis) on throwaway spikes with explicit STOP conditions before anything durable is built
+  (E5, E7 de-risking); capture the pre-M5 baselines later phases diff against.
+- **Steps**
+  1. **S1 — by-value ABI spike:** throwaway branch; minimal elem_size-aware `YnzArray`
+     (`new(elem_size)` / `push(*const u8)` / `get(idx, out) -> has-flag` / `set(idx, *const u8)`) +
+     one hand-lowered fixture through the REAL compiler (`docker compose run --rm dev cargo build -p
+     ynz-driver` then `./target/debug/ynz run …`): a 3-element `array<Shape{int,float}>` with
+     **runtime** field values — construct, `set`, `get`/index, correct stdout. Verdict S1
+     GREEN/RED. **STOP: RED → return BLOCKED to the conductor for representation re-design; P2 does
+     not start.**
+
+     **CHECKPOINT** — S1 verdict recorded; scaffolding torn down EXCEPT the fixture `.ynz` + verdict
+     note (persisted into this plan dir — P2 step 1 consumes them; spike-teardown evidence rule).
+  2. **S2 — per-field access analysis spike:** prototype per-field-in-loop-body counting over the
+     typed AST (analogues: `independence.rs`, `effective_ownership.rs:111-565`), run against ≥4
+     real `.ynz` fixtures through the real pipeline — qualifying 2-field hot loop; 3-field loop;
+     escaping array; runtime-length array. Never a hand-written model (M2-HALT lesson). Verdict S2.
+     **STOP: RED → BLOCKED (the milestone's novel core is infeasible as scoped).**
+
+     **CHECKPOINT** — S2 verdict + fixtures persisted (P4 step 1 consumes them).
+  3. **S3 — bench noise probe:** raw Rust microbench (AoS scan vs contiguous scan), ≥10 repetitions
+     inside the Docker `dev` container; record run-to-run variance to a committed note in this plan
+     dir. This sets E2's credibility bar for Phase 6 (a threshold delta smaller than the noise floor
+     is not evidence).
+  4. **Exhaustive call-site audit (E7 + E12 precondition):** enumerate EVERY `ynz_array_*`
+     construction/read/write surface — `emit.rs` (ArrayLit :13025-13143, for-loop SM + non-SM paths,
+     `lower_array_method` get/first/last/contains/add/set, `IndexAccess`), `runtime_decls.rs`,
+     `lib.rs` (`ynz_string_split`) — into a committed checklist P2's exit criteria tick off. **In the
+     SAME pass, enumerate every `ynz_map_*` construction/read/write surface** (map literal lowering,
+     `lower_map_method`, index/get/set/contains, `runtime_decls.rs` map decls) into a SEPARATE
+     committed checklist that **Phase 3 step 1's entry criteria** tick off — E12's audit precondition,
+     symmetric to the array audit but feeding the map fix, not P2.
+  5. **Baselines:** capture + commit (a) `YNZ_ALLOC_COUNTER_OUTPUT` alloc=free numbers for the array
+     fixture suite (E8 baseline), (b) `ynz build --release` wall-clock on pirates-roster (E11
+     baseline). Persist to files, not chat (evidence-durability).
+- **Exit criteria:** S1 + S2 GREEN verdicts recorded; S3 variance note, BOTH audit checklists
+  (`ynz_array_*` for P2, `ynz_map_*` for P3), and both baselines committed. Any RED → plan STOPPED
+  at conductor.
+- **Reviewer fan-out:** adversarial gate-checker on the spike verdicts (are S1/S2 actually proven
+  through the real compiler, not narrated?); design-doc-alignment reviewer on the S1 ABI shape vs
+  the scratch doc's Option A.
+- **Model tag:** `(coding, high, medium)`
+
+#### Phase 1 — Record the fold (roadmap + scratch cross-references) — E1 proof artifact
+
+- **Task + purpose:** make the fold-in decision durable in the SSOT docs so no future session
+  re-derives a standalone `v0-3-m3c-array-by-value` plan or a second representation.
+- **Steps**
+  1. [`roadmap.md`](../2026-05-21-v0-3-concurrency-perf/roadmap.md): §Milestone 5 scope text (fold
+     array-by-value in; serialization reframe per Divergence 2; DAP outright-deferral per
+     Divergence 3 — also fix the stale "best-effort >3 phases" text at roadmap.md:127); the
+     Architectural-Decisions Auto-SoA bullet (roadmap.md:109) gets a pointer to this plan-id;
+     **roadmap.md:121** (the Feature-Registry-Entries mandate) still assigns `array-using-soa-layout`
+     to M4 ("M4 MUST … add Tier 3 lint rules `array-using-soa-layout` and …") — REASSIGN the SoA
+     lint to M5 (features.toml confirms M4 shipped only `cross-thread-fields-not-padded` +
+     `prefer-yielding-sleep`); **BOTH Capability Ledger tables** (roadmap.md:364-377 and :409-421): add a row "Array by-value
+     element storage + `map<K,Shape>` symmetric fix — owning milestone M5" (previously unscheduled)
+     and amend the M5 row's notes with the fold.
+  2. [`SCRATCH-future-array-by-value-element-storage.md`](../../../../docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md):
+     status → "FOLDED INTO v0.3-M5 (Patrick 2026-07-03)", pointer to this plan-id.
+  3. [`SCRATCH-future-auto-soa.md`](../../../../docs/internal/scratchpad/SCRATCH-future-auto-soa.md):
+     owning-plan pointer note (full graduation/trim happens in Phase 7 step 5).
+- **Exit criteria:** greppable cross-refs land; no doc still claims a standalone m3c plan is pending
+  or that DAP is in-milestone; `_index.md` regenerated by the lifecycle hook (never hand-edited).
+- **Reviewer fan-out:** docs-consistency reviewer (diff every edited claim against this plan's
+  Design-Doc Alignment list).
+- **Model tag:** `(general/mechanical, floor, small)`
+
+#### Phase 2 — By-value element storage: hard-cut ABI + full codegen migration
+
+- **Task + purpose:** replace the uniform-8-byte-slot pointer storage with elem_size-aware by-value
+  inline storage — the scratch doc's Option A — as ONE atomic ABI cut (E7 mitigation 1: no parallel
+  old path may survive).
+- **Steps**
+  1. **RED fixtures first:** adopt the S1 spike fixtures; author the per-type × per-operation matrix
+     (int/float/bool/string/shape × literal/runtime fields × get/set/push/index/first/last/contains
+     × non-suspending) with expected-output assertions, marked expected-fail until step 3.
+  2. **The atomic cut** *(heavy)*: `YnzArray` gains `elem_size: i64` (alloc `cap * elem_size`);
+     `ynz_array_new(elem_size)` / `push(*const u8)` (memcpy) / `get(idx, out: *mut u8)` →
+     separate has-flag (the `{i64,i64}` maybe-convention cannot carry variable width) /
+     `set(idx, *const u8)`; `count`/`drop` unchanged (D6). **DELETE the old entry points** — no
+     parallel ABI. **Counted allocation (FRAGO 005):** the new elem_size-aware buffer allocation
+     path MUST route through counted entry points (`ynz_alloc`/`ynz_free`, or an explicit counter
+     extension covering buffer mallocs) — the P0 baseline proved `YNZ_ALLOC_COUNTER_OUTPUT`
+     instruments `ynz_alloc`/`ynz_free` ONLY and cannot see raw-`malloc` buffers (alloc=0 across
+     the array suite, `baselines-p0.md`), so E8's parity accounting must be able to see element
+     buffers or the Phase 3 gate is vacuous. Update `runtime_decls.rs`; update `ynz_string_split`. In `emit.rs`: introduce the
+     single elem-size choke-point helper pair (compute via `TargetData::get_abi_size` in ONE place;
+     all element loads/stores route through it — authoritative-derivation), then migrate every
+     audited call site until the workspace compiles. **DELETE `try_build_shape_global`
+     (emit.rs:18126) and the SM for-loop shape-embed special-case** — the buffer is now the stable
+     owner; both are dead by design.
+  3. Flip the step-1 matrix green; run the alloc-counter against the P0 baseline (E8 first look —
+     full parity gate is Phase 3).
+
+     **CHECKPOINT** — workspace green; matrix green; old symbols gone (grep gate: zero
+     old-signature `ynz_array_*` decls; zero raw runtime-array calls outside the choke-point
+     helpers; `try_build_shape_global` absent).
+  4. Snapshot refresh (mechanical churn: `insta` IR/golden snapshots showing `@ynz_array_*`
+     signatures + object-file SHAs) — review each diff is signature/SHA churn, not semantic drift.
+  5. Tick off the P0 audit checklist line-by-line; run the cross-impl dual-mode oracle over the full
+     fixture suite.
+- **Exit criteria:** workspace + full test suite green; the grep gates above pass; audit checklist
+  100% ticked; dual-mode byte-identical.
+- **Reviewer fan-out:** code-reviewer (the migration diff); adversarial gate-checker (matrix
+  coverage vs the audit checklist — every audited site has a fixture); design-doc-alignment
+  reviewer (GR8: one allocation per buffer, no per-element heap).
+- **Model tag:** `(coding, high, large)` — scale=large; checkpoint marks mandatory.
+
+#### Phase 3 — By-value completion: guard lift + symmetric surfaces
+
+- **Task + purpose:** finish the by-value substrate — lift the interim guard the fix retires, close
+  the symmetric `map<K,Shape>` bug, and prove the leak-parity + suspension story (E7/E8, and E9's
+  B1 precondition).
+- **Steps**
+  1. **`map<K,Shape>` symmetric by-value fix (E12)** *(heavy — pre-existing base bug, miscompiles
+     with OR without suspension per the scratch doc)*. **Entry criterion:** the P0 `ynz_map_*` audit
+     checklist (Phase 0 step 4) is complete — code no map site before it is enumerated. Apply the
+     same hard-cut/single-choke-point discipline as arrays: DELETE the old uniform-slot map entry
+     points, route all map element loads/stores through one elem-size choke point, and author a RED
+     `map<K,Shape>` matrix fixture (literal/runtime shape values × get/set/contains/index ×
+     non-suspending AND crossing-`wait`) that gates the build. **Grep gate:** zero old-signature
+     `ynz_map_*` decls; zero raw `ynz_map_*` calls outside the choke-point helpers; every audited map
+     site ticked.
+  2. **Lift `ArrayShapeRuntimeFieldWithWait`:** remove the typeck guard; retire the registry
+     deferral entry (`array-shape-runtime-field-with-wait`); rewrite
+     [`IMP-concurrency.md`](../../../../docs/internal/implementation/IMP-concurrency.md):588-598
+     from "interim guard" to "fixed by v0.3-M5 by-value storage"; remove/repurpose the old error
+     gallery triggers for this diagnostic + update `error_galleries.rs` counts/phrases.
+
+     **CHECKPOINT** — guard gone, galleries consistent, tree green.
+  3. **Crossing-wait acceptance fixture:** runtime-field `array<Shape>` as crossing local / loop var
+     across a `wait` prints correct values (the scratch doc's named acceptance signal; E9's B1
+     proof).
+  4. **Alloc=free parity gate (E8):** **Entry criterion (FRAGO 005):** first verify the counter
+     demonstrably observes array/map buffer alloc/free — non-zero alloc counts on the array suite,
+     vs the P0 baseline's recorded alloc=0 blindness (`baselines-p0.md`). A counter that cannot
+     see buffers means the gate FAILS LOUD here — it never passes vacuously. Only once that
+     visibility is proven, gate on parity: `YNZ_ALLOC_COUNTER_OUTPUT` vs the P0 baseline across
+     the array suite. Parity REDs → execute D6's fallback (loud-reject heap-field shapes +
+     contingent `[[diagnostic_template]]`) via FRAGO, never a silent leak.
+  5. **Suspension/ownership adversarial sweep:** arrays × `wait` × `background` (give/copy) ×
+     `.copy()` on the by-value substrate — the AoS half of E9's matrix — dual-mode byte-identical.
+- **Exit criteria:** `map<K,Shape>` fix green with its RED matrix + map grep gate passing (E12);
+  guard + registry deferral gone; IMP-concurrency updated; parity green; crossing-wait fixture
+  green; sweep green.
+- **Reviewer fan-out:** code-reviewer; adversarial gate-checker (the map matrix vs the P0 map audit
+  checklist — every audited `ynz_map_*` site has a fixture — plus the sweep + parity evidence).
+- **Model tag:** `(coding, high, large)` — scale=large (map ABI cut + array suspension sweep);
+  checkpoint marks mandatory.
+
+#### Phase 4 — SoA candidate analysis + the ONE authoritative layout-decision source
+
+- **Task + purpose:** productionize the S2 spike into `soa_candidate_query` and build the single
+  layout authority BOTH transforms (padding, SoA) resolve through — E3's B1 mitigation lands HERE,
+  before any SoA codegen exists. Typeck-first with zero codegen consumers (the M4 P4 pattern).
+- **Steps**
+  1. **`soa_candidate_query(db, source) -> Vec<SoaCandidate>`** (salsa precedents:
+     `frame_layouts_query`, `codegen_query`). Admission criteria, each with a decline-reason enum:
+     compile-time-provable length > SIZE_THRESHOLD (const 64, provenance pending Phase 6); ≤2-field
+     union across all loops (D5); no growth ops (D3); no escape (D4); shape-level lend-self filter
+     (mirror `finalize_false_sharing`'s scan, false_sharing.rs:131-134); FFI check documented
+     vacuous (D7). Entry-gated by `kernel_mode || no_auto_parallel_env()` — the SAME predicate,
+     threaded, never re-read via a second path (D1; A3).
+  2. **The layout authority:** one `layout_decisions` artifact (struct/query) resolving padding ×
+     SoA per shape+array. **Precedence per recorded decision D11: padding wins — a
+     cross-thread-padded shape's arrays are NEVER SoA'd** (correctness under false sharing beats
+     cache locality, and a cross-thread array is outside SoA's provable-single-thread hot-loop model
+     anyway). Re-thread
+     M4's existing consumers (`emit.rs:1051`, `codegen/queries.rs:204` — re-verify per A1/CCIR-1) to
+     read THIS source, so exactly one artifact answers every layout question.
+
+     **CHECKPOINT** — authority landed, padding consumers re-threaded, tree green, no behavior
+     change (padding output byte-identical to pre-phase).
+  3. **Both-candidate RED fixture (E3 mitigation 2):** a shape simultaneously cross-thread-padded
+     AND SoA-candidate; byte-layout assertions prove padding intact + SoA declined with the right
+     reason (precedent: `crates/ynz-driver/tests/fixtures/v0_3_m4_p4_padding_gate.ynz`).
+  4. **Suppression/decline fixture set (E6):** qualifying; 3-field union; escaping; growth-op;
+     lend-self shape (a `Pirate.recordHit`-style case); runtime-length; small-N. Each asserts the
+     specific decline reason. These are the enumeration mandate's exercise inputs (Phase 8 step 3).
+  5. Expose the decline-reason + layout metadata (`LayoutDecision` carries field segment info — the
+     E10 forward-compat surface the Phase 7 lint hover consumes).
+- **Exit criteria:** query + authority green with ZERO codegen consumers of SoA decisions yet; all
+  fixtures green at analysis level; grep gate: no second derivation of any admission predicate.
+- **Reviewer fan-out:** code-reviewer; design-doc-alignment reviewer (criteria vs roadmap.md:109 +
+  this plan's D3–D7); adversarial gate-checker (fixture set vs criteria — one fixture per criterion
+  minimum).
+- **Model tag:** `(coding, high, medium)`
+
+#### Phase 5 — SoA codegen on the by-value substrate
+
+- **Task + purpose:** emit the SoA layout variant for admitted arrays — the miscompile-risk core
+  (E3/E6/E9) — consuming ONLY the Phase 4 authority.
+- **Steps**
+  1. **Construction lowering** *(heavy)*: admitted `ArrayLit` constructions allocate ONE segmented
+     buffer (D2: per-field segment offsets from cap × field ABI sizes, computed compile-time);
+     scatter element fields into segments. Same `YnzArray` header, same drop path.
+  2. **Access lowering** *(heavy)*: every same-function access (index/get/set/first/last/contains/
+     count, hot-loop and cold) re-lowered via segment addressing; cold-field fan-out per the scratch
+     doc's model.
+
+     **CHECKPOINT** — construction + access green on the qualifying fixture; release-mode IR
+     inspected: the hot loop's field loads are contiguous (vectorizer-friendly) — evidence persisted
+     for Phase 6/8.
+  3. **Gates:** SoA decisions already cannot exist under `--no-auto-parallel`/kernel (Phase 4 entry
+     gate); add a codegen assert that no `SoaCandidate` arrives when the predicate is set (belt
+     verifying the one gate, not a second derivation). Dual-mode oracle now exercises AoS-vs-SoA
+     divergence detection for real.
+  4. **E9 SoA matrix:** SoA arrays × `wait` × `background` × `.copy()` (deep-copies all segments) ×
+     dual-mode; plus the Phase 4 both-candidate fixture now asserted end-to-end through codegen.
+  5. **Full-suite cross-impl run:** every `examples/` + codegen-tests + driver-tests fixture
+     byte-identical across modes.
+- **Exit criteria:** all matrices green; dual-mode byte-identical suite-wide; grep gate: layout
+  answers read ONLY from `layout_decisions` (no re-derivation in emit paths).
+- **Reviewer fan-out:** code-reviewer; adversarial gate-checker (E9 matrix + both-candidate
+  end-to-end); design-doc-alignment reviewer (zero-cost claims vs GR8; scratch-doc transform model).
+- **Model tag:** `(coding, high, large)` — scale=large; checkpoint marks mandatory.
+
+#### Phase 6 — Benchmark harness + SIZE_THRESHOLD calibration (E2)
+
+- **Task + purpose:** build the repo's first benchmark harness and replace the guessed 64 with an
+  evidenced constant — or honestly re-confirm 64 — with variance recorded and a revisit trigger.
+- **Steps**
+  1. **Harness:** dev-only (`criterion` dev-dependency — MIT/Apache-2.0, never shipped in
+     `libynz_rt.a`) driving compiled `.ynz` workloads: the roadmap-named physics-update loop over
+     `array<Player>` with `x`/`y` access (roadmap.md:109), at N ∈ {8…4096}, SoA forced on/off via
+     `YNZ_SOA_FORCE` (D8, harness-only).
+  2. **Runs:** ≥10 repetitions per point inside the Docker `dev` container, per the S3 protocol.
+
+     **CHECKPOINT** — harness green + raw numbers committed.
+  3. **Calibrate:** find the crossover N; keep 64 if the crossover is within the S3 noise floor of
+     it, else update. Commit the provenance record WITH the constant: workload, machine/container,
+     date, variance, the honesty note that this is uncontrolled shared hardware, and the revisit
+     trigger (Future Requirements #2).
+  4. Wire the final constant into `soa_candidate_query` with a comment citing the provenance file.
+  5. Record the measured hot-loop improvement at demo-scale N for the lint hover + CHANGELOG. **If
+     the measured win is an order of magnitude below the 10-40× claim, STOP and investigate before
+     any user-facing text claims it** (paper-trace the numbers, per verification).
+- **Exit criteria:** constant + provenance + variance committed together; improvement number
+  recorded with its evidence.
+- **Reviewer fan-out:** code-reviewer (harness); adversarial gate-checker (does the provenance
+  actually support the constant, or is it noise-level hand-waving?).
+- **Model tag:** `(coding, standard, medium)`
+
+#### Phase 7 — Teaching surface + registry + docs graduation
+
+- **Task + purpose:** the full same-milestone teaching surface (roadmap constraint 71) + graduating
+  the design content out of the scratchpad.
+- **Steps**
+  1. **Registry:** `[[lint_rule]] array-using-soa-layout` (name roadmap-locked, D9) on M4's
+     mechanism — one TOML entry (A2) with jargon-free WHAT/WHAT-INSTEAD/WHY hover adapted from the
+     scratch doc (lines 155-158): user-facing text says "stored as separate per-field arrays", never
+     "struct"/"Struct-of-Arrays"; the WHY cites the measured Phase 6 number, not a generic claim.
+     **Re-verify `jargon_audit.rs`'s scope first (D9's unverified behavior claim):** confirm it
+     gates diagnostic/hover TEXT and does NOT reject the registry-internal `array-using-soa-layout`
+     identifier; if it also audits identifiers, surface it for Patrick's rename-vs-carve-out call
+     rather than working around it. Plus `[[deferred_tooling_feature]] dap-soa-unified-view` (four
+     fields per Future Requirements #1, Patrick-signed 2026-07-03).
+  2. **Firing site:** one `lint_diagnostic` emission in typeck when a `LayoutDecision` applies SoA —
+     fires on the array declaration.
+  3. **Explicitly NOT added:** no muted-hint domain (Divergence 5 — no typeable form; do not
+     over-correct). One-line note in the registry entry's comment.
+  4. **LSP + VSCode:** verify the lint flows through M4's diagnostics path (A1 re-check); VSCode
+     extension version bump + at least one screenshot of the SoA lint hover (roadmap constraint 71
+     item 5).
+  5. **Docs graduation:**
+     [`IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md) gains
+     "Array element storage — by-value inline (v0.3-M5)" and "Auto-SoA layout" sections (decisions,
+     rejected alternatives, the E10 serialization forward-compat layout-metadata note); trim both
+     SCRATCH docs to pointers per docs-checklist; update `docs/README.md` index rows.
+- **Exit criteria:** registry round-trips (`schema_smoke`); `jargon_audit.rs` green; VSCode artifact
+  builds; docs land per [`docs-checklist.md`](../../../rules/docs-checklist.md).
+- **Reviewer fan-out:** docs-consistency reviewer (hover text vs Golden Rule 11/12 + vocabulary);
+  code-reviewer (registry + firing site).
+- **Model tag:** `(coding, standard, medium)`
+
+#### Phase 8 — Demo, gallery, enumeration mandate, cost profile, release
+
+- **Task + purpose:** the human-eyes-on layer + the release. Authors the FIRST SoA-shaped example in
+  the repo (¶1: none exists).
+- **Steps**
+  1. **Demo:** extend `examples/pirates-roster/entrypoint.ynz` with the first large-array hot-loop
+     section — a Pittsburgh-themed physics-ish workload (e.g. cannonball volley trajectories:
+     `array<Cannonball{x,y,…}>`, N > SIZE_THRESHOLD, hot loop updating `x`/`y`, cold field access
+     after — real work in context, not a print stub), with inline comments pointing at the lint per
+     roadmap constraint 71 item 6. Regenerate `expected_stdout.txt` via its script; byte-exact
+     golden convention (NOT `insta`) per plan-invariants.
+  2. **Error gallery:** `examples/primantis-orders/v0_3_m5_errors.ynz` carrying any new error class
+     this milestone shipped (contingent D6 reject if Phase 3 armed it); verify no stale
+     `ArrayShapeRuntimeFieldWithWait` triggers remain anywhere (Phase 3 step 2 did the lift —
+     re-verify); `error_galleries.rs` counts/phrases updated. If M5 shipped zero new error classes,
+     record that explicitly in the gallery README line instead of a vacuous file.
+  3. **Suppression enumeration mandate (roadmap.md:156):** enumerate ALL shapes across `examples/`
+     + test fixtures; record each array-of-shape site's SoA verdict + decline reason in a committed
+     enumeration report; assert every verdict is correct (the `Pirate` lend-self case must show the
+     filter firing).
+
+     **CHECKPOINT** — demo + gallery + enumeration green and committed.
+  4. **Compile-time cost gate (E11):** wall-clock of the release-profile compiler binary running
+     `ynz build` on pirates-roster, like-for-like vs the P0 baseline's documented methodology
+     (`baselines-p0.md`; `ynz build --release` does not exist as a CLI flag — main.rs:94-95,
+     FRAGO 006); <10% or STOP and optimize before release.
+  5. Full cross-impl dual-mode suite, final run.
+  6. **Release:** version bump to the v0.3.x patch-line slot current at execution time; CHANGELOG
+     from merged PRs since the last tag; `/release` for the tag.
+- **Exit criteria:** every Invariants subsection below verified green; tag cut.
+- **Reviewer fan-out:** code-reviewer; docs-consistency reviewer (demo comments, CHANGELOG);
+  adversarial gate-checker (enumeration report completeness).
+- **Model tag:** `(coding, standard, medium)`
+
+### 3.4 Coordinating Instructions
+
+- **EXECUTION GATE (hard):** no phase dispatches until the `v0.3.0` tag exists (A7). The conductor
+  checks this before Phase 0.
+- **GATE WAIVED for this run (FRAGOs 002–004, 2026-07-03 — see `audit.md` for the full record):**
+  execution proceeds ahead of the v0.3.0 tag under Patrick's recorded live waiver, unattended P0→P8,
+  isolated in git worktree `../ynz-m5-worktree` (branch `feat/v0-3-m5-auto-soa`). The technical
+  dependency A7 protected — M4 Phase 4's `[[lint_rule]]` + false-sharing substrate — is verified
+  present at this branch's fork commit `1ac52fd`. Phase 4 carries a pre-dispatch M4-sync step (poll
+  main every ~10 min for M4-completion signals, merge into this branch, re-verify A1 cites) before it
+  dispatches; FRAGO 004 supersedes the narrower FRAGO 002/003 scoped exceptions below.
+- **Scoped exception — Phase 0 + Phase 1 only (FRAGO 002, 2026-07-03; superseded by FRAGO 004 above):** Phase 0 and Phase 1 were
+  dispatched ahead of the v0.3.0 tag under a conductor-logged, Patrick-authorized exception, isolated
+  in git worktree `../ynz-m5-worktree` — both phases operate exclusively on array/map storage code
+  and SSOT docs and touch none of M4's still-unshipped v0.3.0 substrate (A1/E1 are not exercised).
+  **Phase 2 onward remains fully hard-gated on the real v0.3.0 tag, unchanged.** See FRAGO 002 in
+  `audit.md` for the full reasoning.
+- **CCIR — the executor must surface immediately, mid-flight:**
+  1. **Recon drift:** any ¶1 file:line cite that no longer matches reality at phase start (recon ran
+     against uncommitted M4 P4; v0.3.0 will have moved lines). Re-verify cites at dispatch; a
+     load-bearing mismatch → surface before building on it.
+  2. **Any second derivation:** finding yourself re-computing a layout/admission/suspend answer a
+     query already owns → STOP, thread the authoritative source or surface the blocker
+     ([`authoritative-derivation.md`](../../../rules/authoritative-derivation.md)).
+  3. **Dual-mode divergence:** ANY fixture byte-differing across modes is a build-stopping bug,
+     never a "flaky test."
+  4. **Spike/gate REDs** (P0 S1/S2, Phase 6 step 5 order-of-magnitude check, Phase 8 cost gate):
+     full STOP + surface, never note-and-proceed.
+  5. **Design-doc contradiction:** any "design doc X says A; the plan says B" discovered mid-phase —
+     surface explicitly, the doc wins pending Patrick (project CLAUDE.md standing rule).
+- **Sequencing (load-bearing):** P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8, strictly. By-value
+  (P2/P3) fully green before any SoA phase; the layout authority (P4) before any SoA codegen (P5);
+  calibration (P6) after SoA exists to measure.
+- **Reviewer obligation (plan-invariants Step 7/9a):** every phase reviewer diffs the diff against
+  the CITED DESIGN DOCS, not only the plan's own text — the M2-HALT lesson.
+- **Verify-before-complete:** each phase's exit criteria are checked by running the named commands/
+  tests, not by narration; numeric claims (parity, cost, crossover) get a paper-trace in the phase
+  record.
+
+## Invariants This Milestone Must Preserve
+
+### Safety
+
+- A runtime-field `array<Shape>` crossing a `wait` produces correct output (fixture-asserted) — the
+  stack-dangling class is eliminated by ownership of element bytes, not masked by a guard.
+- `map<K,Shape>` values are stored by value and produce correct output with and without suspension
+  (E12 — the symmetric pre-existing base bug is fixed, not just arrays).
+- No new silent-miscompile class: the array per-type × per-operation × suspension matrix (P2/P3),
+  the `map<K,Shape>` matrix (P3, E12), and the SoA matrix (P5) gate the build; every audited
+  `ynz_array_*` AND `ynz_map_*` call site has a fixture.
+- Ownership semantics unchanged: `share`/`lend`/`give` rules, use-after-give, const rules — zero
+  diffs in ownership diagnostics across the milestone (existing suite green throughout).
+- SoA never changes observable program output: byte-identical stdout/stderr/exit-code across default
+  and `--no-auto-parallel` modes for EVERY fixture (the cross-impl harness).
+- A cross-thread-padded shape is never SoA'd (byte-layout-asserted both-candidate fixture).
+
+### Performance
+
+- Hot-loop improvement on the calibrated workload measured and recorded with provenance (target
+  10-40× per the design doc; the SHIPPED claim is the measured number, Phase 6 step 5).
+- By-value storage: ONE allocation per array buffer (GR8) — no per-element heap; SoA: ONE segmented
+  allocation (D2). Alloc-count fixtures assert both.
+- Compile-time cost of the new analysis passes: <10% wall-clock of the release-profile compiler
+  binary running `ynz build` on pirates-roster, like-for-like vs the P0 baseline per
+  `baselines-p0.md`'s documented methodology (release-gating, E11; FRAGO 006 — `ynz build
+  --release` is not a CLI flag, main.rs:94-95).
+- **Auto-promotion analysis (mandatory per [`auto-promotion.md`](../../../rules/auto-promotion.md)):**
+  auto-SoA IS the auto-promotion — the canonical codegen-only case. Stricter/faster form: SoA
+  layout; compiler proves fit via `soa_candidate_query` (D3–D5, D7). Surfaces: **codegen
+  auto-promotion YES** (measurable runtime benefit); **muted hint NO** (no typeable explicit form —
+  the locked exception, Divergence 5); **Tier 3 lint YES** (`array-using-soa-layout`). Muted-hint
+  inline render: N/A by design. Hover tooltip: WHAT/WHAT-INSTEAD/WHY per Phase 7 step 1 (jargon-free,
+  cites the measured win). Teaching error on failed proof: N/A — there is no user-typeable SoA form
+  to fail; declines are silent-correct AoS (decline reasons are internal/test-visible).
+  **Override-direction analysis:** force-the-auto-pick — no real use case (the pick is invisible;
+  forcing it buys nothing) → deliberate omission; force-the-OTHER-pick (force AoS) — no v0.3 use
+  case (FFI is v2+ and handled at the boundary per the scratch doc; testing uses D8's internal env
+  var) → deliberate omission, revisit at FFI (FR #8). Neither direction gets user syntax; the
+  scratch doc's "compiler picks, lint explains" model is the locked default. The by-value storage
+  change itself has no auto-promotion candidate (it is the one representation, not a stricter
+  variant) — stated so reviewers know it was considered.
+
+### Teaching
+
+- `array-using-soa-layout` hover follows WHAT/WHAT-INSTEAD/WHY; user-facing text is jargon-free
+  (never "struct" / "Struct-of-Arrays" — "separate per-field arrays"; D9), gated by
+  `jargon_audit.rs`.
+- The WHY is contextual (names the hot loop's lines + fields + the measured win), not generic — per
+  Golden Rule 11.
+- The lifted guard's old diagnostic disappears cleanly: no stale gallery triggers, no orphaned
+  registry deferral, IMP-concurrency rewritten (Phase 3 step 2).
+- If D6's contingent reject arms: its diagnostic follows WHAT/WHAT-INSTEAD/WHY with a
+  `[[diagnostic_template]]` entry.
+
+### Runtime Dependencies
+
+- By-value arrays: malloc (one buffer allocation — same dependency as today's `YnzArray`, different
+  layout). No new runtime dependency.
+- SoA arrays: same single malloc (D2 segmented buffer). No scheduler/Tokio dependency — layout is
+  static, decided at compile time.
+- Benchmark harness: `criterion` as a **dev-dependency only** (MIT/Apache-2.0) — never linked into
+  `libynz_rt.a` or shipped binaries.
+
+### Kernel-Mode Behavior
+
+- SoA transform: **disabled in `--kernel` mode** (D1 — analysis entry gate mirrors M4 padding's
+  `kernel_mode` gate; recorded decision with revisit trigger FR #7). No new kernel-mode error: the
+  transform silently doesn't apply, identical to `--no-auto-parallel`.
+- By-value array storage: applies identically in kernel mode — it is the ONE representation, and
+  kernel-mode array allocation already requires the user-provided allocator story
+  ([`IMP-no-runtime-mode.md`](../../../../docs/internal/implementation/IMP-no-runtime-mode.md));
+  the elem_size change alters layout, not the allocator dependency.
+
+### Demo & Error Gallery
+
+- `examples/pirates-roster/entrypoint.ynz`: new large-array hot-loop section (the repo's FIRST
+  SoA-qualifying example — authored from scratch, real work in context), byte-exact against the
+  regenerated `expected_stdout.txt` golden in `crates/ynz-driver/tests/integration.rs` (never
+  `insta` for these two files).
+- `examples/primantis-orders/v0_3_m5_errors.ynz`: triggers for any new compile-error class (D6
+  contingent); explicit recorded note if zero new classes ship. Old galleries scrubbed of the lifted
+  guard's triggers; `error_galleries.rs` counts/phrases updated.
+- The suppression enumeration report (Phase 8 step 3) is committed — Patrick's hands-on review
+  surface for the filter logic.
+
+### Feature Registry Entries
+
+- **New `[[lint_rule]]`:** `array-using-soa-layout` (rides M4's mechanism; name roadmap-locked).
+- **New `[[deferred_tooling_feature]]`:** `dap-soa-unified-view` (four-field, Patrick-signed
+  2026-07-03; trigger: DWARF emission ships or a debugging-tooling milestone is scheduled).
+- **Retired:** the `array-shape-runtime-field-with-wait` interim deferral entry (guard lifted,
+  Phase 3).
+- **Contingent `[[diagnostic_template]]`:** heap-field-shape array reject — ONLY if Phase 3's parity
+  gate REDs and D6's fallback arms (via FRAGO).
+- **Explicitly none:** no new keywords, banned_declaration_keywords, banned_jargon,
+  primitive_intrinsics, type_attached_constants, deferred_language_features, and **no new
+  muted_hint_domain** (SoA has no typeable form — Divergence 5; deliberate, not forgotten).
+
+## Cross-Cutting Factor Sweep (mandatory factors — addressed or N/A with why)
+
+| Factor | Disposition |
+|---|---|
+| Security | N/A — compiler-internal layout transform; no new parse surface for untrusted input; no authn/authz/secrets touched. |
+| Perf / BigO (mem + cpu) | Core of the milestone — addressed in depth (Performance invariants; E2/E11 rows; linear-scaling analysis pass per the design doc, profiled at P8). |
+| Accessibility | N/A — only UI is VSCode hover text, plain text through existing LSP surfaces. |
+| PII / privacy | N/A — no user data anywhere in a compiler milestone. |
+| Compliance | Addressed minimally — new dev-dep `criterion` is MIT/Apache-2.0, dev-only, never shipped (Sustainment); nothing else changes licensing posture. |
+| SEO | N/A — no web surface. |
+| Docs | Addressed — Phase 7 docs graduation (IMP-collections, scratch trims, README index), hover text, CHANGELOG, enumeration report. |
+| Reusability / DRY | Addressed — ONE array representation (E1), ONE layout authority (E3), ONE elem-size choke point (E7), lint mechanism REUSED from M4 (A2), no parallel ABIs. |
+| Type-safety | Addressed — hard-cut ABI makes missed call sites compile errors, not silent drift (E7 B1); typed `SoaCandidate`/`LayoutDecision` artifacts with decline-reason enums. |
+| Idempotency | Addressed lightly — compiler passes are pure functions of source (re-run safe by construction); golden-regen script and release steps are re-runnable; no state mutation surfaces. |
+| Error-handling | Addressed — `ynz_array_get` out-buffer + has-flag convention replaces the maybe-convention it outgrows; contingent D6 reject follows the diagnostic format; gallery coverage. |
+| Observability / logging | Addressed via the teaching surface — the Tier 3 lint IS the observability of the transform decision; decline reasons are test-visible. No runtime telemetry needed: layout is static, nothing to observe at run time. |
+| Race / TOCTOU | Addressed — E9 matrix (SoA × wait/background/copy); padding-wins precedence keeps SoA out of cross-thread shapes entirely; atomic-ordering defaults untouched. |
+| Resource-cleanup | Addressed — E8 alloc=free parity gate vs baseline; D6 drop-parity decision with a loud-reject fallback; one-allocation designs keep the accounting trivial. |
+
+## 4. Sustainment
+
+- **Build/test env:** Docker `dev` service (docker-compose.yml) for ALL cargo work —
+  `docker compose run --rm dev cargo build --workspace` / `cargo test --workspace` /
+  `cargo clippy --workspace -- -D warnings`; compiler runs via
+  `docker compose exec -T dev ./target/debug/ynz run <fixture>`.
+- **Benchmarking:** same container; `criterion` dev-dependency (MIT/Apache-2.0, dev-only); ≥10
+  reps; variance recorded per the S3 protocol; no host-native cargo.
+- **Test utilities:** `YNZ_NO_AUTO_PARALLEL` (existing), `YNZ_ALLOC_COUNTER_OUTPUT` (existing),
+  `YNZ_SOA_FORCE` (new, harness-only, D8).
+- **Fixtures/goldens:** byte-exact demo golden via
+  `examples/pirates-roster/expected_stdout.txt.regenerate.sh`; `insta` for IR snapshots elsewhere.
+- **Executor model (Patrick 2026-07-03, D10):** phase executors dispatch on **Fable 5**
+  (`model: fable`) at `/execute-plan` time — explicit availability-override of the frozen binding.
+  Reviewer fleet per the frozen model-selection binding, unchanged. Phase Model tags remain the
+  classification record/fallback.
+
+## 5. Command & Signal
+
+- **Ownership:** one executor per phase, dispatched by the execution conductor per phase slice;
+  Patrick owns the approval gate (`stub → active` flip), all STOP/BLOCKED resolutions, and the
+  release sign-off.
+- **Succession:** resume from `plan-id: 2026-07-03-v0-3-m5-auto-soa` + the session-id chain +
+  checkbox/step state; fat-phase handoffs (P2, P5) via `handoff-phase-<N>.md` in this directory per
+  the plan-format convention.
+- **Audit trail:** [`audit.md`](./audit.md) (append-only session log + FRAGO log), same directory.
+
+## Future Requirements / Revisit
+
+1. **DAP unified-view over SoA storage** — *what:* debugger shows a unified `Player` view when
+   inspecting SoA-laid-out arrays; *why deferred:* zero debug-info/DWARF substrate exists
+   (grep-confirmed A4); a bespoke non-DWARF hack is duct tape; DWARF-from-scratch would hold a perf
+   milestone hostage to an unrelated subsystem; *cost:* its own multi-session milestone (DWARF
+   emission pass + DAP adapter); *trigger:* DWARF emission ships or a debugging-tooling milestone is
+   scheduled. **Patrick-signed 2026-07-03.** Registry: `[[deferred_tooling_feature]]
+   dap-soa-unified-view` (Phase 7).
+2. **SIZE_THRESHOLD provenance (E2, recorded MEDIUM)** — the constant's evidence comes from
+   uncontrolled shared hardware; *trigger:* a dedicated perf environment becomes available, OR a
+   user-reported perf regression implicates the threshold → re-run the Phase 6 harness and re-derive.
+3. **Cross-function SoA propagation (D4 conservatism)** — arrays passed as `share array<Shape>` args
+   are declined; *cost:* interprocedural field-access summary analysis; *trigger:* a real workload
+   demonstrates the intra-function scope leaves the win on the table.
+4. **SoA for grown/pushed arrays (D3)** — *cost:* per-segment re-layout on realloc; *trigger:*
+   demand + the growth-re-layout design.
+5. **Runtime-length candidates (D3)** — non-provable N declines today; *trigger:* PGO or
+   runtime-adaptive layout ever scheduled (roadmap lists PGO as a possible later addition).
+6. **Element-aware `ynz_array_drop` (D6)** — element-blind parity holds today; *trigger:* the
+   ownership model adds guaranteed heap-owned field freeing (a v0.4+ drop-semantics milestone), OR
+   Phase 3's parity gate REDs (immediate FRAGO path).
+7. **Kernel-mode SoA (D1)** — disabled; *trigger:* `--kernel` emits real programs and a kernel
+   workload wants the layout win.
+8. **FFI suppression check becomes real (D7)** — vacuous today; *trigger:* FFI lands (v2+); also
+   the force-AoS override question re-opens then (Performance invariants, override analysis).
+9. **Mixed-access heuristic (D5)** — ≤2-field union is conservative; *trigger:* workload evidence
+   that 3-field loops or per-loop layouts matter.
+10. **Retro-validate M3d's cost-threshold constant** with the Phase 6 harness (roadmap.md:350
+    suggestion) — *trigger:* post-M5 housekeeping once the harness exists; non-blocking.
+11. **E1/E3/E5/E6/E7 recorded MEDIUMs** — standing residuals carried by this plan's gates; *trigger:*
+    any dual-mode divergence, second-derivation sighting, or guard regression re-opens the row at
+    FRAGO time (re-score per the engine).
