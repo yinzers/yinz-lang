@@ -3,7 +3,7 @@
 //! Each pass is a salsa-tracked function so repeated LSP requests at the same
 //! file version reuse the computed hints.  Cache is invalidated when source changes.
 //!
-//! # Firing domains (7 of 9)
+//! # Firing domains
 //!
 //! - `variable_type_hints`            — `: TypeName` after un-annotated `let` bindings
 //! - `ownership_call_site_hints`      — `share`/`lend`/`give` after call arguments
@@ -12,12 +12,16 @@
 //! - `let_to_const_promotion_hints`   — decoration on never-mutated `let` bindings
 //! - `wait_points_hints`              — muted `wait` before suspending call sites (Addition)
 //! - `background_routing_hints`       — routing comment at `background` spawn sites (Informational)
+//! - `parallel_group_hints`           — overlap comment on auto-parallelized statements (Informational)
+//! - `channel_capacity_hints`         — muted default capacity inside `channel<T>()` empty parens (Addition)
 //!
-//! # Protocol-only domains (2 of 9)
+//! # Registered-but-not-firing domains
 //!
 //! `function_param_type` and `lifetimes` are handled by the LSP layer but return empty
-//! hint lists.  `allocators` is also registered in the registry but not yet firing —
-//! it ships when arena allocation lands (v0.2+).  `lifetimes` remain protocol-only.
+//! hint lists.  `allocators` is registered but fires when arena allocation lands (v0.2+).
+//! `auto_arc` is registered but fires when the auto-Arc codegen emission lands
+//! (`[[deferred_language_feature]]` `auto-arc-codegen-emission`, v0.4+) — there is no
+//! emission yet, so there is no compiler decision to annotate.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -200,6 +204,27 @@ pub struct ParallelGroupHint {
     /// `"// runs at the same time as line 12 — separate core"` (CPU member) or
     /// `"// runs at the same time as line 12"` (I/O member).
     pub label: String,
+}
+
+/// Default-capacity hint at a `channel<T>()` construction with no explicit
+/// capacity argument.
+///
+/// Rendered as the muted default-capacity number (`crate::DEFAULT_CHANNEL_CAPACITY`)
+/// INSIDE the empty parens — plain muted text, matching every other
+/// Addition-category hint (Addition placement per `.claude/rules/inference.md`:
+/// the user could have typed the number at exactly that position).
+/// Click-to-make-explicit inserts the number, producing `channel<T>(64)`-style
+/// source — identical behavior, now visible.
+///
+/// Suppressed when the user wrote an explicit capacity (`channel<T>(8)`) —
+/// there is nothing to add — and when the construction is already a compile
+/// error with its own teaching text (missing element type `channel()`, or a
+/// wrong type-arg count like `channel<A, B>()`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChannelCapacityHint {
+    /// Byte offset of the closing `)` — where the muted default renders and
+    /// where the click-to-make-explicit edit inserts the number.
+    pub position: usize,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1488,6 +1513,183 @@ fn collect_wait_point_hints_expr_no_top(
         // Anything else falls through to the full walker — suppression is only for
         // the directly-waited Call node, not for every sub-expression underneath it.
         _ => collect_wait_point_hints_expr(expr, suspends_set, out),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// channel_capacity pass (Addition placement)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Emit a `ChannelCapacityHint` for every `channel<T>()` construction that
+/// relies on the default capacity (`crate::DEFAULT_CHANNEL_CAPACITY` — the
+/// P0-locked authoritative constant in `check.rs`).
+///
+/// Detection mirrors `check_call`'s dispatch exactly: a `Call` whose callee is
+/// the bare identifier `channel` IS the built-in generic constructor (it is
+/// matched before user-function lookup, so no user function can shadow it).
+/// The hint fires only when the construction carries EXACTLY ONE type argument
+/// (a bare `channel()` and a `channel<A, B>()` are both compile errors with
+/// their own teaching text — the hint never piles onto erroring source) and
+/// ZERO value arguments (an explicit capacity leaves nothing to add).
+///
+/// Time: O(n) AST walk.  Space: O(hints).
+#[salsa::tracked]
+pub fn channel_capacity_hints(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+) -> Vec<ChannelCapacityHint> {
+    let parse = parse_query(db, source);
+
+    let mut hints = Vec::new();
+    for item in &parse.module.items {
+        if let Item::Function(f) = item {
+            collect_channel_capacity_hints_block(&f.body, &mut hints);
+        }
+    }
+    hints
+}
+
+/// Walk a block collecting `ChannelCapacityHint`s for default-capacity
+/// channel constructions.
+fn collect_channel_capacity_hints_block(block: &Block, out: &mut Vec<ChannelCapacityHint>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Expr(e) | Stmt::Let { value: e, .. } => {
+                collect_channel_capacity_hints_expr(e, out);
+            }
+            Stmt::Assign { value, .. } | Stmt::FieldAssign { value, .. } => {
+                collect_channel_capacity_hints_expr(value, out);
+            }
+            Stmt::IndexAssign { index, value, .. } => {
+                collect_channel_capacity_hints_expr(index, out);
+                collect_channel_capacity_hints_expr(value, out);
+            }
+            Stmt::Return { value: Some(e), .. } => {
+                collect_channel_capacity_hints_expr(e, out);
+            }
+            Stmt::If { cond, body, .. } => {
+                collect_channel_capacity_hints_expr(cond, out);
+                collect_channel_capacity_hints_block(body, out);
+            }
+            Stmt::While { cond, body, .. } => {
+                collect_channel_capacity_hints_expr(cond, out);
+                collect_channel_capacity_hints_block(body, out);
+            }
+            Stmt::For { iter, body, .. } => {
+                collect_channel_capacity_hints_expr(iter, out);
+                collect_channel_capacity_hints_block(body, out);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
+                collect_channel_capacity_hints_expr(scrutinee, out);
+                for arm in arms {
+                    collect_channel_capacity_hints_block(&arm.body, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_channel_capacity_hints_block(eb, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collect `ChannelCapacityHint`s for an expression (recursive — a channel
+/// construction can appear as a `let` initializer or nested inside a larger
+/// expression).
+fn collect_channel_capacity_hints_expr(expr: &Expr, out: &mut Vec<ChannelCapacityHint>) {
+    match expr {
+        Expr::Call(c) => {
+            if let Expr::Ident(name, _) = &c.callee {
+                // `channel<T>()` with exactly one type arg and no capacity argument:
+                // the default (`crate::DEFAULT_CHANNEL_CAPACITY`) applies — the exact
+                // case the hint teaches. Any other type-arg count is already a compile
+                // error (`channel()` missing element type, `channel<A, B>()` too many),
+                // so the hint stays silent there — same intent as the sibling
+                // missing-element-type suppression.
+                // `c.span.end` is the byte AFTER the closing `)` (parse_call builds
+                // the span through the RParen token), so `end - 1` is the `)` itself.
+                if name == "channel"
+                    && c.type_args.as_ref().is_some_and(|ta| ta.len() == 1)
+                    && c.args.is_empty()
+                {
+                    out.push(ChannelCapacityHint {
+                        position: c.span.end.saturating_sub(1),
+                    });
+                }
+            }
+            for arg in &c.args {
+                collect_channel_capacity_hints_expr(arg, out);
+            }
+            collect_channel_capacity_hints_expr(&c.callee, out);
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_channel_capacity_hints_expr(receiver, out);
+            for arg in args {
+                collect_channel_capacity_hints_expr(arg, out);
+            }
+        }
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => {
+            collect_channel_capacity_hints_expr(inner, out);
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_channel_capacity_hints_expr(lhs, out);
+            collect_channel_capacity_hints_expr(rhs, out);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            collect_channel_capacity_hints_expr(operand, out);
+        }
+        Expr::FieldAccess { receiver, .. } => {
+            collect_channel_capacity_hints_expr(receiver, out);
+        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
+            collect_channel_capacity_hints_expr(receiver, out);
+            collect_channel_capacity_hints_expr(index, out);
+        }
+        Expr::StructLit { fields, .. } => {
+            for field in fields {
+                collect_channel_capacity_hints_expr(&field.value, out);
+            }
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for elem in elements {
+                collect_channel_capacity_hints_expr(elem, out);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (key_expr, val_expr) in entries {
+                collect_channel_capacity_hints_expr(key_expr, out);
+                collect_channel_capacity_hints_expr(val_expr, out);
+            }
+        }
+        Expr::PostfixOp { receiver, .. } => {
+            collect_channel_capacity_hints_expr(receiver, out);
+        }
+        Expr::Is { expr: inner, .. } => {
+            collect_channel_capacity_hints_expr(inner, out);
+        }
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                    collect_channel_capacity_hints_expr(e, out);
+                }
+            }
+        }
+        // Genuine leaves — no sub-expressions to recurse into.
+        Expr::Ident(..)
+        | Expr::StringLit(..)
+        | Expr::IntLit(..)
+        | Expr::NumberLit(..)
+        | Expr::BoolLit(..)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(..) => {}
     }
 }
 

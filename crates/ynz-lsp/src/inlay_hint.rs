@@ -1,7 +1,7 @@
 //! `textDocument/inlayHint` LSP handler — teaching annotations for the editor.
 //!
-//! Fires 8 of the 10 registry-defined muted-hint domains; the remaining 2 return
-//! empty lists (protocol-only).
+//! Fires 9 of the registry-defined muted-hint domains; the rest return
+//! empty lists (protocol-only or awaiting their underlying analysis).
 //!
 //! # Firing domains
 //!
@@ -15,17 +15,22 @@
 //! | `wait_points` | Addition | muted `wait` before suspending call sites |
 //! | `background_routing` | Informational | I/O-pool vs CPU-pool routing comment |
 //! | `parallel_groups` | Informational | concurrent-statement overlap comment |
+//! | `channel_capacity` | Addition | muted default capacity inside `channel<T>()` empty parens |
 //!
 //! Every firing hint carries a WHAT / WHAT-INSTEAD / WHY hover tooltip sourced
 //! from the registry via `ynz_registry::lsp_inlay_hint_hover_for`.  Per Golden
 //! Rule 11 (compiler is a teacher), muted annotations without a hover tooltip
 //! are teaching surfaces the user cannot learn from.
 //!
-//! # Protocol-only domains (empty list, no error)
+//! # Registered-but-not-firing domains (empty list, no error)
 //!
 //! `function_param_type`, `lifetimes` — handled here but returning `[]` until the
-//! underlying analysis lands.  When future milestones add the analysis, those
-//! branches emit real hints with no further LSP change.
+//! underlying analysis lands.  `allocators` — registered but fires when arena
+//! allocation lands (v0.2+).  `auto_arc` — registered with its full cautionary
+//! WHAT/WHY hover text, but firing requires the auto-Arc codegen emission
+//! (`[[deferred_language_feature]]` `auto-arc-codegen-emission`, v0.4+): with no
+//! emission there is no compiler decision to annotate.  When future milestones add
+//! the analysis, those branches emit real hints with no further LSP change.
 //!
 //! # Viewport filtering
 //!
@@ -39,9 +44,9 @@ use lsp_types::{
 use ynz_diagnostics::{Severity, SourceSpan};
 use ynz_typeck::queries::check_query;
 use ynz_typeck::{
-    array_to_fixed_promotion_hints, background_routing_hints, copy_point_hints,
-    let_to_const_promotion_hints, ownership_call_site_hints, parallel_group_hints,
-    variable_type_hints, wait_points_hints,
+    array_to_fixed_promotion_hints, background_routing_hints, channel_capacity_hints,
+    copy_point_hints, let_to_const_promotion_hints, ownership_call_site_hints,
+    parallel_group_hints, variable_type_hints, wait_points_hints, DEFAULT_CHANNEL_CAPACITY,
 };
 
 use crate::{capabilities::PositionEncoding, position::LineTable, state::ServerState};
@@ -358,8 +363,41 @@ pub fn inlay_hint_response(
         }
     }
 
-    // ── Protocol-only domains (function_param_type, lifetimes) — return empty
-    //    until a future milestone adds the underlying analysis.
+    // ── Domain 10: channel_capacity (Addition) — muted default capacity inside the
+    //    empty parens. Fires on `channel<T>()` constructions that rely on the default.
+    //    Label and click-edit both thread from the ONE authoritative constant
+    //    (`ynz_typeck::DEFAULT_CHANNEL_CAPACITY` — authoritative-derivation.md), and the
+    //    label is the plain insertable text, matching every other Addition-category
+    //    hint (`": int"`, `"wait  "`) per inference.md's one-renderer-per-category goal.
+    //    Click-to-make-explicit inserts the number at the hint position, producing
+    //    `channel<T>(64)`-style source — identical behavior, now visible.
+
+    for h in channel_capacity_hints(&state.db, sf) {
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
+        if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
+            let capacity_text = DEFAULT_CHANNEL_CAPACITY.to_string();
+            let edit = TextEdit {
+                range: lsp_types::Range {
+                    start: pos,
+                    end: pos,
+                },
+                new_text: capacity_text.clone(),
+            };
+            hints.push(make_hint_with_edit(
+                pos,
+                capacity_text,
+                InlayHintKind::PARAMETER,
+                "channel_capacity",
+                Some(vec![edit]),
+            ));
+        }
+    }
+
+    // ── Registered-but-not-firing domains (function_param_type, lifetimes,
+    //    auto_arc) — return empty until a future milestone adds the underlying
+    //    analysis (auto_arc: the auto-Arc codegen emission, v0.4+).
     //    No code needed: no data → no hints appended → Vec unchanged.
 
     hints

@@ -3,7 +3,7 @@ name: "v0-3-m4-channels-arc-release"
 plan-id: "2026-07-02-v0-3-m4-channels-arc-release"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2", "executor-2026-07-02-m4-p4", "executor-2026-07-02-m4-p4-r2"]
+session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2", "executor-2026-07-02-m4-p4", "executor-2026-07-02-m4-p4-r2", "executor-2026-07-02-m4-p5", "executor-2026-07-02-m4-p5-r2"]
 created_at: "2026-07-02"
 updated_at: "2026-07-03"
 metadata:
@@ -332,10 +332,11 @@ release. Two load-bearing constraints above all others, in priority order:
    this flag ever gates — proven at P4, not assumed).
 7. `[[lint_rule]]` registry entry-kind built from scratch (schema + parser + `build.rs` constants +
    LSP seam), generic enough that M5 adds `array-using-soa-layout` with zero rework; carries
-   `cross-thread-fields-not-padded` + `prefer-yielding-sleep`. `channel_capacity` (Addition, `⟨64⟩`
-   + default-vs-user-set in hover) and `auto_arc` (Informational, cautionary) muted-hint domains
-   fire; kernel-mode channel gate + every new diagnostic is WHAT/WHAT-INSTEAD/WHY; VSCode extension
-   bumped with screenshots.
+   `cross-thread-fields-not-padded` + `prefer-yielding-sleep`. `channel_capacity` fires (Addition
+   category, P5); `auto_arc` is registered with its full WHAT/WHY teaching hover but does not yet
+   fire — its wiring is tied to the v0.4+ auto-Arc codegen emission landing (FRAGO 008), not to
+   this milestone's Phase 5. Kernel-mode channel gate + every new diagnostic is
+   WHAT/WHAT-INSTEAD/WHY; VSCode extension bumped (screenshots deferred — FRAGO 012).
 8. `--no-auto-parallel` cross-impl oracle covers every new capability byte-identical, including the
    padding transform and the composed-suspension case.
 9. Demo + gallery: `examples/pirates-roster/entrypoint.ynz` demonstrates channels, handle-form,
@@ -612,7 +613,7 @@ Handoff = checkbox state + session-id chain.
      opaque `ptr` (like `array`/`map`).
   3. **Kernel-mode gate (R7):** channel construction → COMPILE ERROR in `--kernel`, matching the
      `check.rs:2223-2233` pattern, WHAT/WHAT-INSTEAD/WHY.
-  4. `channel_capacity` muted-hint domain (Addition, `⟨64⟩` in the empty parens; hover shows
+  4. `channel_capacity` muted-hint domain (Addition, muted `64` in the empty parens; hover shows
      capacity AND default-vs-user-set) — REGISTERED in `registry/features.toml` this phase (the
      domain is defined; the LSP inlay-firing wiring lands in P5 step 1, mirroring the `allocators`
      registered-not-yet-firing precedent).
@@ -670,7 +671,7 @@ Handoff = checkbox state + session-id chain.
       `false` via their catch-alls; no gate touched — authoritative-derivation.md honored). 13 IR
       golden snapshots updated (each: the one new `declare ptr @ynz_channel_create(i64)` line).
     - **`channel_capacity` muted-hint domain** REGISTERED in `registry/features.toml` (Addition,
-      `⟨64⟩`, with hover WHAT/WHAT-INSTEAD/WHY); LSP inlay-firing wiring is P5 step 1 (the
+      muted `64`, with hover WHAT/WHAT-INSTEAD/WHY); LSP inlay-firing wiring is P5 step 1 (the
       `allocators` registered-not-yet-firing precedent).
     - **Fixtures + demo + gallery:** `v0_3_m4_channel_construct.ynz` (runs GREEN, `channels ready`),
       `v0_3_m4_channel_bad_capacity.ynz` (compile-rejected); integration tests
@@ -1239,29 +1240,170 @@ Handoff = checkbox state + session-id chain.
 #### Phase 5 — Teaching surface + user spec + demo/gallery consolidation + cross-impl sweep
 - **Task + purpose.** Consolidate every teaching surface and run the mandatory verification sweeps.
 - **Steps.**
-  1. Wire `inlay_hint.rs` for `channel_capacity` + `auto_arc` (established pattern: typeck hint-pass
+  1. Wire `inlay_hint.rs` for `channel_capacity` (`auto_arc` wiring deferred to landing WITH the
+     v0.4+ auto-Arc codegen emission per FRAGO 008 — see `registry/features.toml`'s
+     `auto-arc-codegen-emission` TRIGGER text) (established pattern: typeck hint-pass
      fn → LSP import → registry-sourced hover via `lsp_inlay_hint_hover_for`).
-  2. Update `docs/reference/REF-concurrency.md` (user spec) for channels + handle-form + auto-Arc,
+  2. Update `docs/reference/REF-concurrency.md` (user spec) for channels + handle-form (auto-Arc
+     user-facing documentation deferred alongside its codegen emission — FRAGO 008),
      INCLUDING the mandated backpressure teaching text ("a suspended producer is backpressure
      working correctly, not a deadlock") — HS-grad register per spec-writing rules — AND explicitly
      documenting the `h.send(v)` typing convention: a handle send delivers into the callee's FIRST
      `channel<T>` parameter (FRAGO 005 follow-up — the design docs are currently silent on the
      child-side read mechanism; this convention must be documented in the user spec, not left
      implicit in code comments only).
-  3. VSCode extension version bump + screenshots (channels, handle-form, auto-Arc hint).
+  3. VSCode extension version bump. *(Screenshot capture REMOVED from this phase's scope by
+     FRAGO 012 — Patrick's live descope: the extension is not being published for a while, so
+     channels/handle-form/auto-Arc-hint screenshots have no current consumer; see the mirrored
+     four-field note in Future Requirements and FRAGO 012 in [`audit.md`](audit.md).)*
   4. Final `pirates-roster/entrypoint.ynz` consolidation (ALL M4 surfaces in realistic context);
      regenerate `expected_stdout.txt` via the regenerate script; finalize `v0_3_m4_errors.ynz`
      (count + key-phrase assertions in `error_galleries.rs`; byte-exact golden convention, not
      `insta`).
   5. `jargon_audit` clean on every new diagnostic; full `--no-auto-parallel` cross-impl sweep across
      every new fixture (byte-identical), including padding and the composed case.
-- **Exit criteria.** Hints + lints fire in-editor; screenshots attached; REF-concurrency updated;
-  demo golden matches; gallery emits every M4 diagnostic; jargon audit clean; cross-impl oracle
-  GREEN workspace-wide.
+- **Exit criteria** *("screenshots attached" removed by FRAGO 012)*. Hints + lints fire
+  in-editor; REF-concurrency updated; demo golden matches; gallery emits every M4 diagnostic;
+  jargon audit clean; cross-impl oracle GREEN workspace-wide.
 - **Reviewer fan-out.** code-reviewer (jargon + spec-register + oracle completeness).
 - **Model tag.** `(docs-tests-integration, standard, medium)`.
-
-#### Phase 6 — v0.3.0 release fold (M3f + M3g + M4)
+- **✅ P5 STATUS — COMPLETE (executor-2026-07-02-m4-p5, 2026-07-03). Every exit criterion — as
+  narrowed by FRAGO 012 (screenshots descoped) and read through FRAGO 008's applied reconciliation
+  (`auto_arc` registered-not-firing) — met with evidence through the real compiler and the real
+  LSP handler. NO STOP condition fired; NO dormant override armed. Reviewer fan-out has NOT run
+  (producer does not self-grade).**
+  - **Step 1 — `channel_capacity` inlay wiring (DONE, fires):** new typeck hint pass
+    `channel_capacity_hints` + `ChannelCapacityHint` (`crates/ynz-typeck/src/inlay_hint_passes.rs`,
+    salsa-tracked, exhaustive AST walk mirroring the wait-points walker; fires ONLY on
+    `channel<T>()` with type args present + zero value args — explicit capacity and the
+    missing-element-type compile error both suppress); exported via `ynz-typeck/src/lib.rs`; LSP
+    Domain 10 in `crates/ynz-lsp/src/inlay_hint.rs` (plain muted label `64` at the closing-paren
+    byte — re-styled from the original `⟨64⟩` in the post-review fix round per rules-compliance's
+    one-renderer-per-category finding,
+    registry-sourced WHAT/WHAT-INSTEAD/WHY hover via `lsp_inlay_hint_hover_for`, zero-width
+    click-to-make-explicit TextEdit inserting `64`). Proven by 3 new tests in
+    `crates/ynz-lsp/tests/inlay_hint.rs` (fires-with-position+tooltip+edit / suppressed-explicit /
+    suppressed-missing-element) — 22/22 GREEN through the real `inlay_hint_response`.
+    **`auto_arc` deliberately NOT wired** — surfaced as deviation D1 below (FRAGO 008 /
+    registry `auto-arc-codegen-emission` TRIGGER text, `features.toml:1235`, defers the wiring
+    to the emission's landing; no emission → no typeck decision to read). The stale
+    `features.toml` `channel_capacity` comment ("the domain + typeck hint-pass ship in Phase 1" —
+    false: P1 registered the domain only) corrected to match what actually happened.
+  - **Step 2 — REF-concurrency.md (DONE):** new "Channels — sending values between tasks" section
+    (construction + default-64 muted-`64` hint + bounded-by-construction + the MANDATED backpressure
+    teaching text verbatim: "A suspended producer is backpressure working correctly, not a
+    deadlock"; element-type/capacity/statement-position rules with REAL captured compiler error
+    text) + new "Talking to a background task — handles" section EXPLICITLY documenting the
+    FRAGO 005 `h.send(v)` convention ("delivers into the **first `channel<T>` parameter** of the
+    spawned function ... there is no hidden mailbox") + `.receive()` as messages-or-completion
+    (typed `errors`) + the non-suspending-callee rule; the Ownership section gained the
+    channel-exemption paragraph (the doc previously contradicted the new channel examples);
+    intro/closing updated to "Two keywords and one type." HS-grad register; every example
+    verified through `ynz run` (spec_channel_basic → `runs this game: 10`; spec_handle_form →
+    `prospect grade: 42`); every shown error captured from the real compiler. **Auto-Arc NOT
+    documented as live behavior** — deviation D1 (a user spec claiming a FRAGO-008-deferred
+    emission would violate spec-writing's user-facing-truth rule; the doc teaches the real
+    give/copy/channel crossing model).
+  - **Step 3 — VSCode extension version bump (DONE, narrowed by FRAGO 012):** `package.json`
+    `0.3.0-m7` → `0.3.0` (the final release version P6 tags; no parity test binds it to the
+    workspace version — verified); README "What's new in v0.3.0" + CHANGELOG `[0.3.0]` entry
+    covering channels/hint/handle-form/lints with an honest "Not yet firing" note for `auto_arc`;
+    `npm run build` (tsc) clean on host Node v22. Screenshots REMOVED per FRAGO 012 (placeholders
+    created mid-phase were deleted when the FRAGO landed; CHANGELOG carries the deferred note).
+  - **Step 4 — demo + gallery consolidation (DONE):** `pirates-roster/entrypoint.ynz` already
+    carries ALL M4 surfaces in realistic context (P2 bare-channel round-trip w/ capacity-1
+    backpressure + handle-form cycle; P4 padding demo; P3 auto-Arc staged-deferral block) —
+    verified, no growth needed; golden regenerated via the script — diff confined to the KNOWN
+    nondeterministic 8-pirates section (already relaxed to presence-checks), reverted to the
+    pristine golden and the byte-exact `examples_basics_runs_end_to_end` proven GREEN against it.
+    Gallery `v0_3_m4_errors.ynz` finalized as-is: 16 trigger classes + kernel-gate +
+    closed-channel documented blocks; `v0_3_m4_gallery_fires_expected_diagnostics` (count 14–17 +
+    key phrases incl. the backpressure text) GREEN.
+  - **Step 5 — sweeps (DONE, all GREEN):** `jargon_audit` 9/9; `error_galleries` 9/9;
+    `cross_impl_consistency` 2/2 (the full-corpus determinism + `--no-auto-parallel`
+    byte-identical sweeps, ~237s) with ALL 30 M4 `.ynz` fixtures verified IN the swept set
+    (none match the timing/background/concurrent exclusion substrings) — including the composed
+    case (`v0_3_m4_channel_composed*`, `v0_3_m4_r5xr8_suspend_then_collect`) and padding
+    (`v0_3_m4_p4_padding_gate`); FULL workspace suite **2199 passed / 0 failed**;
+    `cargo clippy --workspace -- -D warnings` GREEN; `cargo fmt --all -- --check` clean.
+  - **✔ DEVIATION D1 (P5) — classified JUSTIFIED by the deviation-judge and APPLIED via
+    FRAGO 013 (see `audit.md`): the stale Steps 1–2 + ¶3.1 outcome #7 text has been reconciled
+    in place per FRAGO 013's exact wording (fix-round executor, 2026-07-03).** Original
+    surfacing record: plan Phase 5 Steps 1–2 named `auto_arc` wiring + auto-Arc user-spec
+    content, text written BEFORE FRAGO 008 deferred the auto-Arc codegen emission (and, via the
+    registry entry's own TRIGGER, its hint wiring) to v0.4+ and never reconciled into this
+    phase's steps (the plan-source-of-truth thread-the-policy-into-later-phase-text case).
+    Reality: no emission exists → no hint can fire and no live behavior exists to document.
+    Executed per FRAGO 008's applied record (channel_capacity wired + spec documents the real
+    crossing model); the exit criterion "Hints + lints fire in-editor" holds for every domain
+    with an underlying analysis (channel_capacity LSP-test-proven; both P4 lints live via the
+    Diagnostic.code seam).
+  - **🔧 POST-REVIEW FIX ROUND (executor-2026-07-02-m4-p5-r2, 2026-07-03) — review-fleet
+    findings applied on top of the verified-GREEN phase:**
+    - **BLOCKER fixed — default-channel-capacity twin-derivation** (rules-compliance BLOCKER +
+      code-reviewer should-fix, authoritative-derivation.md; this project's 5th recurrence of
+      the M3a/M3d/M3e/M3g twin-drift class): `DEFAULT_CHANNEL_CAPACITY` promoted to the ONE
+      authoritative module-level `pub const` in `check.rs` (exported via `ynz-typeck/src/lib.rs`)
+      and threaded into EVERY consumer — codegen's construction default (`emit.rs` `channel` arm),
+      all three `check.rs` teaching-error strings quoting the default, and the LSP label +
+      click-edit text. The registry hover prose (TOML data, cannot read a Rust const) is pinned
+      by a new mechanical parity test (the rule's compile-time-link escape hatch). PROVEN by a
+      throwaway const=3 build: producer backpressured after exactly 3 sends (codegen moved) AND
+      the LSP label test failed its `"64"` assert (hint moved) — then reverted to 64.
+    - **MINOR fixed — hint gated on exactly ONE type arg** (was `type_args.is_some()`, so
+      `channel<A, B>()` — already a compile error — got hint noise); new suppression test.
+    - **MINOR fixed — LSP module doc non-firing list** now includes `allocators` (all 4 domains,
+      matching the sibling `inlay_hint_passes.rs` header).
+    - **MINOR fixed — label re-styled `⟨64⟩` → plain muted `64`** (inference.md
+      one-renderer-per-category: every other Addition hint is plain insertable text); tests,
+      registry `example_hint_rendered`, REF-concurrency, IMP-no-function-coloring example,
+      VSCode README/CHANGELOG, and this plan's own label references updated to match.
+    - **DEFERRED (four-field note in the roadmap's `audit.md`, Idempotency-Key
+      `2026-07-02-v0-3-m4-channels-arc-release#5:` prefix) —** all 5 inlay-hint-pass Stmt
+      walkers skip `FieldAssign.target`/`IndexAssign.receiver` recursion (shared pre-existing
+      gap across every hint domain, zero regression from this diff; proper fix is one
+      shared-visitor refactor across all 5 passes).
+  - **✔ DEVIATION D2 (P5 fix round) — classified + APPLIED via FRAGO 014 (see `audit.md`):**
+    ¶3.1 outcome #7's trailing clause "VSCode extension bumped with screenshots." →
+    "VSCode extension bumped (screenshots deferred — FRAGO 012)." Original surfacing record:
+    the clause contradicted FRAGO 012's screenshot descope; FRAGO 013's replacement text covered
+    only the domains-fire sentence, so the clause survived un-reconciled — plan-says-screenshots,
+    reality-is-descoped (FRAGO 012, `audit.md`). Surfaced by the fix-round executor as D2; the
+    conductor classified it directly (a leftover clause contradicting an already-signed descope
+    has no adjudication question left) and applied it via FRAGO 014.
+  - **✔ DEVIATION D3 (P5 fix round) — classified + APPLIED via FRAGO 015 (see `audit.md`):**
+    the SAME screenshots-descope contradiction survived a THIRD time at the Invariants §Teaching
+    line "VSCode extension version-bumped with screenshots of the new surfaces." →
+    "VSCode extension version-bumped (screenshots deferred — FRAGO 012)." Original surfacing
+    record: outside FRAGO 014's named scope (¶3.1 outcome #7's trailing clause only), same class
+    as D2 — plan-says-screenshots, reality-is-descoped (FRAGO 012). Surfaced by the fix-round
+    executor rather than swept in (amending an Invariants assertion the then-current FRAGO did not
+    name is a FRAGO-classified edit, not producer discretion); the conductor classified it directly
+    and applied it via FRAGO 015. A subsequent whole-file `screenshot` sweep (this same fix round)
+    confirmed NO fourth live spot — every remaining hit is either FRAGO history (012/013/014/015)
+    or the Future Requirements deferral note, all of which correctly narrate the descope.
+  - **✔ FRAGO 016 (final review-fleet re-check) — APPLIED, two residual should-fix spots (both
+    the same text-only-sweep-gap class as D2/D3, both pre-classified):** (1) Invariants §Teaching
+    bullet "`channel_capacity` (Addition) + `auto_arc` … fire via `inlay_hint.rs`" reconciled to
+    "`channel_capacity` fires; `auto_arc` is registered … does not yet fire — wiring deferred to
+    v0.4+ per FRAGO 008/013" (the last spot still asserting auto_arc fires, contradicting the
+    already-applied FRAGO 008/013 reconciliation); (2) `examples/pirates-roster/entrypoint.ynz:1059`
+    demo comment `⟨64⟩` → `64` (deviation-judge-classified not-a-FRAGO-candidate — just fix it —
+    the last pre-restyle `⟨64⟩` notation anywhere in the tree). Both pure text, zero code/behavior;
+    no rebuild/regen (comment-only, no stdout/golden impact).
+  - **🏁 FIX-LOOP ROUND FULLY CLOSED (executor-2026-07-02-m4-p5-r2, 2026-07-03).** All findings
+    from BOTH review rounds resolved: round 1 (BLOCKER twin-derivation + 3 minors + 1 deferral +
+    FRAGO 013's D1 reconciliation) and round 2 (FRAGO 014/015 screenshots sweep + FRAGO 016's two
+    residual spots). Verification held GREEN throughout: full `cargo test --workspace`
+    **2201 passed / 0 failed**, clippy `-D warnings` clean, fmt clean, ynz-lsp inlay 24/24. The
+    FRAGO 014/015/016 edits are pure plan/doc/comment text — no code touched after the round-1
+    GREEN suite, so that result stands as the round's binding evidence.
+  - **Recorded decisions (reasons on the record):** extension bumped to `0.3.0` exactly (not an
+    `-m8` interim — P5 owns the bump, P6 packages the `.vsix` at that same final version); golden
+    regen noise-diff reverted rather than committed (scheduler-order churn in the one relaxed
+    section carries no information; byte-exact test proven against the pristine golden);
+    `features.toml` comment corrected as a factual fix (no schema/entry change — build output
+    unaffected).
 - **Task + purpose.** Cut the final `v0.3.0` tag folding the un-tagged M3f + M3g work.
 - **Steps.**
   1. Amend design docs to mark the v0.3 concurrency surface shipped (IMP-no-function-coloring
@@ -1388,7 +1530,7 @@ Handoff = checkbox state + session-id chain.
 - No per-send heap allocation beyond the bounded buffer + one Arc per cross-thread value.
 - Analysis passes stay within the roadmap's <10% `--release` wall-clock budget on `pirates-roster`.
 - **Auto-promotion analysis.** `channel<T>()` → default-capacity codegen + always-on
-  `channel_capacity` muted hint (`⟨64⟩`, Addition; click writes `64` into source; hover shows
+  `channel_capacity` muted hint (plain muted `64`, Addition; click writes `64` into source; hover shows
   default-vs-user-set); override is existing syntax `channel<T>(N)` — no new API; no lint (writing
   the default everywhere is noise, matching the `wait`-insertion precedent). False-sharing padding
   is codegen-only (no typeable form → no muted hint), surfaced via the
@@ -1399,9 +1541,11 @@ Handoff = checkbox state + session-id chain.
   (`prefer-yielding-sleep`); `cross-thread-fields-not-padded` is the design doc's locked name.
 
 ### Teaching
-- `channel_capacity` (Addition) + `auto_arc` (Informational, cautionary hover) fire via
-  `inlay_hint.rs`; hover text WHAT/WHAT-INSTEAD/WHY; `auto_arc`'s red-tint visual ships or lands as
-  the recorded `auto-arc-cautionary-tint` deferral — never a silent skip.
+- `channel_capacity` (Addition) fires via `inlay_hint.rs`; `auto_arc` (Informational, cautionary
+  hover) is registered with its full hover text but does not yet fire — wiring deferred to the
+  v0.4+ auto-Arc codegen emission per FRAGO 008/013; hover text WHAT/WHAT-INSTEAD/WHY; `auto_arc`'s
+  red-tint visual ships or lands as the recorded `auto-arc-cautionary-tint` deferral — never a
+  silent skip.
 - Every new compile error/warning (kernel-mode channel gate, closed-channel `send()`,
   channel-full backpressure text, auto-Arc boundary diagnostics, handle-form typeck errors) is
   WHAT/WHAT-INSTEAD/WHY, with WHY contextual to the call site.
@@ -1410,7 +1554,7 @@ Handoff = checkbox state + session-id chain.
 - `docs/reference/REF-concurrency.md` teaches the backpressure model explicitly ("suspended
   producer = backpressure working, not a deadlock" — mandated by IMP-no-function-coloring).
 - No banned jargon in any new diagnostic (`tests/jargon_audit.rs`).
-- VSCode extension version-bumped with screenshots of the new surfaces.
+- VSCode extension version-bumped (screenshots deferred — FRAGO 012).
 
 ### Runtime Dependencies
 - `channel<T>()`: Tokio runtime + `tokio::sync::mpsc` (bundled in `libynz_rt.a`; `sync` feature
@@ -1477,7 +1621,7 @@ plus the roadmap [`../2026-05-21-v0-3-concurrency-perf/roadmap.md`](../2026-05-2
 (the project-scoped design-time guard R6 enforces). Both IMP docs were re-read in full for this
 correction pass — the plan is diffed against the design, not against the prior draft.
 
-1. **Channel/Queue Primitives** (IMP-no-function-coloring) — bounded, default 64, `⟨64⟩` Addition
+1. **Channel/Queue Primitives** (IMP-no-function-coloring) — bounded, default 64, muted-`64` Addition
    hint with default-vs-user-set in hover, click-writes-`64`, no unbounded constructor
    (`channel<T>(int.max)` is the escape), send-on-full suspends with cascading backpressure, docs
    must teach "suspended producer ≠ deadlock." **Match** — all carried in P1/P5 + Invariants. The
@@ -1617,6 +1761,12 @@ deferrals; each entry: what · why-deferred · cost · trigger.
   side cancellation-error injection at suspension points.
   **TRIGGER:** the language-wide scope-drop/destructor mechanism shipping, OR a real workload
   needing task cancellation — whichever lands first (registry entry carries the same trigger).
+- **VSCode extension screenshots (FRAGO 012 — Patrick's direct real-time descope, applied at P5).**
+  What: the channels / handle-form / auto-Arc-hint screenshots Step 3 originally carried. Why-
+  deferred: the extension has no scheduled publish date, so screenshots have no current consumer
+  (Patrick's direct call, real-time, mid-Phase-5). Cost: capturing 3 screenshots against a
+  version-bumped extension — roughly one short session whenever a publish is actually scheduled.
+  Trigger: the VSCode extension publish is actually scheduled.
 - **Channel default-capacity re-tune.** What: the locked 64 constant. Why-parked: no workload data
   exists; the doc's pre-v0.2 benchmarking never happened. Cost: one-constant change + hover-text
   update. Trigger: real workload evidence that 64 mis-sizes typical backpressure behavior.

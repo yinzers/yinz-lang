@@ -2,6 +2,41 @@
 
 All notable changes to the Yinz Language extension are documented here.
 
+## [0.3.0] — 2026-07-03
+
+### Added
+
+- **`channel<T>()` bounded channels** (v0.3-M4) — construction + send/receive diagnostics
+  with WHAT/WHAT-INSTEAD/WHY teaching text:
+  - `channel()` → missing-element-type error: "`channel` needs an element type — write `channel<int>()`."
+  - `channel<int>(0)` → non-positive-capacity error: "A channel's capacity must be at least 1" (bounded by construction — there is deliberately no unbounded channel).
+  - `channel<int>(1.5)` → wrong-capacity-type error.
+  - `wire.send(`text`)` on a `channel<int>` → element-type error carrying the backpressure teaching note ("a suspended producer is backpressure working, not a deadlock").
+  - Channel ops buried in bigger expressions → statement-position error; unnamed receivers → named-binding error.
+- **`channel_capacity` inlay hint** — muted `64` inside the empty parens of a
+  default-capacity `channel<T>()` construction. Hover shows the WHAT/WHAT-INSTEAD/WHY for
+  the locked default of 64; click inserts `64` into source (Addition-category
+  click-to-make-explicit).
+- **Background handle-form** — `let h = background worker(commands)`; `h.send(v)` feeds the
+  spawned function's FIRST `channel<T>` parameter; `h.receive()` delivers the next message
+  or the completion value (typed `errors`). Teaching errors for a task with no channel
+  parameter and for a non-suspending callee.
+- **Two `[[lint_rule]]` Tier 3 lints** — `cross-thread-fields-not-padded` and
+  `prefer-yielding-sleep`, rendered as dismissable suggestions with the rule name as the
+  LSP `Diagnostic.code`; hover the code for the rule-level WHAT/WHAT-INSTEAD/WHY.
+
+### Not yet firing
+
+- The `auto_arc` muted-hint domain is registered with its full cautionary hover text, but
+  fires only when the auto-Arc codegen emission ships (`auto-arc-codegen-emission`,
+  deferred to v0.4+) — with no emission there is no compiler decision to annotate. Its
+  screenshot lands with the emission.
+
+### Screenshots
+
+Deferred — the extension has no scheduled publish date, so screenshot capture is parked
+until a publish is actually scheduled (v0.3-M4 FRAGO 012).
+
 ## [0.3.0-m3] — 2026-06-01
 
 ### Added

@@ -122,3 +122,24 @@ Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#4: crates-ynz-typeck-sr
 - **COST** — Trivial — move the lint-firing block after arity/type validation, or gate it on
   `call.args.len() == 1`.
 - **TRIGGER** — The next time `check_sleep_blocking_call` is touched for any other reason.
+
+## 2026-07-03 — Deferral: all 5 inlay-hint-pass Stmt walkers skip assignment-lvalue recursion (non-blocking — deferred by 2026-07-02-v0-3-m4-channels-arc-release#5 at the post-review fix round)
+Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#5: crates-ynz-typeck-src-inlay-hint-passes-rs-1554
+
+- **WHAT** — All 5 inlay-hint-pass Stmt walkers in
+  `crates/ynz-typeck/src/inlay_hint_passes.rs` (the `channel_capacity` walker at :1554 and its 4
+  siblings) recurse into `FieldAssign.value` / `IndexAssign.index`+`value` but NOT into
+  `FieldAssign.target` / `IndexAssign.receiver` — a hint-relevant construction nested inside an
+  assignment LVALUE is silently missed by EVERY hint domain, not just the new channel_capacity
+  one (code-reviewer, P5 fix round; confirmed against the live tree — the new walker exactly
+  matches all 4 pre-existing siblings, so this diff introduced no regression).
+- **WHY** — Fixing it correctly needs ONE shared-visitor refactor across all 5 passes
+  (reusability.md: same plumbing in 5 places); a partial fix in only the newest walker would
+  fork the walkers' semantics and create exactly the parallel-derivation inconsistency
+  authoritative-derivation.md bans. That refactor is real scope beyond a single phase's fix
+  round, and leaving it matches existing behavior exactly (zero regression).
+- **COST** — One shared-visitor extraction touching 5 walker families in
+  `inlay_hint_passes.rs`, roughly a half-day including tests.
+- **TRIGGER** — A second independent report of a hint failing to fire inside an assignment
+  lvalue, OR whenever the next hint-pass domain is added (the natural refactor point — do the
+  extraction BEFORE adding walker #6).

@@ -106,7 +106,8 @@ let queue: channel<Order> = channel<Order>()
 
 // IDE rendering (muted text appears INSIDE the empty parens — addition placement
 // per .claude/rules/inference.md "Three Placement Categories"):
-let queue: channel<Order> = channel<Order>(⟨64⟩)   // ⟨64⟩ rendered muted
+let queue: channel<Order> = channel<Order>(64)     // `64` rendered muted (plain
+                                                    // text, like every Addition hint)
                                                     // hover tooltip:
                                                     //   WHAT: capacity = 64 (default)
                                                     //   WHAT INSTEAD: write channel<Order>(N) for a different bound

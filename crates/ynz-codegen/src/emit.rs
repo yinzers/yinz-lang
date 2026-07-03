@@ -12646,13 +12646,17 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 }
                 // v0.3-M4 Phase 1: `channel<T>()` / `channel<T>(N)` — bounded channel construction.
                 // Lowers to `ynz_channel_create(capacity)` returning an opaque channel pointer.
-                // Default capacity 64 (P0-locked) when no argument; the typeck path
-                // (`check_channel_construction`) has already rejected a non-positive literal
-                // capacity and gated `--kernel` mode, so codegen only supplies the value. The
-                // suspending `.send()`/`.receive()` surface is Phase 2 (FRAGO 004).
+                // The no-argument default threads from the ONE authoritative constant
+                // (`ynz_typeck::DEFAULT_CHANNEL_CAPACITY`, P0-locked — authoritative-derivation.md);
+                // the typeck path (`check_channel_construction`) has already rejected a
+                // non-positive literal capacity and gated `--kernel` mode, so codegen only
+                // supplies the value. The suspending `.send()`/`.receive()` surface is
+                // Phase 2 (FRAGO 004).
                 "channel" => {
                     let capacity = match call.args.len() {
-                        0 => cg.i64().const_int(64, false),
+                        0 => cg
+                            .i64()
+                            .const_int(ynz_typeck::DEFAULT_CHANNEL_CAPACITY as u64, false),
                         _ => lower_expr(cg, &call.args[0])?.into_int_value(),
                     };
                     let chan = cg

@@ -1317,3 +1317,251 @@ byte-exact golden test re-run post-comment-change and GREEN (pure comment change
 verified unchanged, golden NOT regenerated because no output changed).
 The pre-existing dirty `roadmap.md` + `cspell.json` untouched. NO STOP condition fired; NO
 dormant override armed. Session-id appended to plan.md frontmatter; status remains active.
+
+## FRAGO 012 — 2026-07-03 — session-id: conductor (Patrick's direct real-time scope call during
+Phase 5 execution — not a build-time discovery, not deviation-judge-classified; a live human
+descope, applied + logged per the risk-neutral FRAGO path, no signature required)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 5 Step 3
+Trigger:   Patrick, live, mid-Phase-5: the VSCode extension is not being published for a while, so
+           the screenshot deliverable in Step 3 ("VSCode extension version bump + screenshots
+           (channels, handle-form, auto-Arc hint)") has no consumer right now and is explicitly
+           descoped. This is a direct human scope decision, not a discovered divergence — no
+           deviation-judge adjudication applies; it is applied verbatim and logged for the record
+           per `plan-source-of-truth.md`.
+Changes:
+  - ¶3.3 Phase 5 Step 3: NARROWED to "VSCode extension version bump" only. Screenshot capture
+    REMOVED from this phase's scope (channels/handle-form/auto-Arc hint screenshots are not
+    required — no publish is scheduled).
+  - ¶3.3 Phase 5 Exit criteria: "screenshots attached" REMOVED from the exit-criteria list.
+  - Future Requirements / Revisit: mirrored four-field note — WHAT: VSCode extension screenshots
+    (channels/handle-form/auto-Arc hint) deferred; WHY: extension has no scheduled publish date,
+    so screenshots have no current consumer (Patrick's direct call, real-time); COST: capturing 3
+    screenshots against a version-bumped extension, roughly one short session whenever a publish
+    is actually scheduled; TRIGGER: the VSCode extension publish is actually scheduled.
+Unchanged: everything else in Phase 5 (inlay hint wiring, REF-concurrency.md update including the
+  backpressure teaching text + `h.send(v)` convention, demo/gallery consolidation, jargon audit,
+  cross-impl sweep); the version bump itself still ships; all of Phases 0-4 and Phase 6; the risk
+  table (NO re-scoring — this is a docs/asset deliverable removal, not a safety/correctness
+  change).
+Override:  N/A — risk-neutral (scope reduction on a non-safety, non-correctness deliverable;
+  no re-scoring of any risk row; direct human authorization, applied verbatim).
+
+## FRAGO 013 — 2026-07-03 — session-id: conductor (Phase 5 post-review follow-up; deviation-judge
+classified Deviation D1 JUSTIFIED and surfaced this as a FRAGO candidate — this record APPLIES that
+classification, it does not re-adjudicate)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 5 Steps 1-2 + ¶3.1 outcome #7 (stale text
+           predating FRAGO 008)
+Trigger:   Phase 5's own step text ("wire `inlay_hint.rs` for `channel_capacity` + `auto_arc`";
+           "update REF-concurrency.md ... for channels + handle-form + auto-Arc") and ¶3.1 outcome
+           #7 ("`channel_capacity` ... and `auto_arc` ... muted-hint domains fire") were both written
+           before Phase 3's FRAGO 008 deferred the auto-Arc CODEGEN EMISSION to v0.4+ and were never
+           reconciled afterward — FRAGO 008's own Changes list only touched Phase 3 text. The
+           Phase-5 executor correctly declined to self-fix this (narrow-charter discipline) and
+           surfaced it as Deviation D1; deviation-judge independently verified against the live tree
+           (`registry/features.toml:1229-1235`'s own TRIGGER text ties `auto_arc` hint-wiring to the
+           emission landing, not to P5) and classified JUSTIFIED, risk-neutral, surfacing the text
+           reconciliation as a FRAGO candidate rather than grading it a Phase-5 defect.
+Changes:
+  - ¶3.3 Phase 5 Steps 1-2: AMENDED in place — "wire `inlay_hint.rs` for `channel_capacity` +
+    `auto_arc`" → "wire `inlay_hint.rs` for `channel_capacity` (`auto_arc` wiring deferred to
+    landing WITH the v0.4+ auto-Arc codegen emission per FRAGO 008 — see `registry/features.toml`'s
+    `auto-arc-codegen-emission` TRIGGER text)"; the REF-concurrency.md step's "... + auto-Arc" is
+    corrected to "... (auto-Arc user-facing documentation deferred alongside its codegen emission —
+    FRAGO 008)".
+  - ¶3.1 outcome #7: AMENDED — "`channel_capacity` ... and `auto_arc` ... muted-hint domains fire"
+    → "`channel_capacity` fires (Addition category, P5); `auto_arc` is registered with its full
+    WHAT/WHY teaching hover but does not yet fire — its wiring is tied to the v0.4+ auto-Arc codegen
+    emission landing (FRAGO 008), not to this milestone's Phase 5."
+  - Phase 5 STATUS banner: Deviation D1 annotated classified-JUSTIFIED + applied via this FRAGO.
+Unchanged: all code (zero behavior change this round — text reconciliation only); FRAGO 001-012;
+  Phases 0-4 and Phase 6; the risk table (NO re-scoring — a documentation-accuracy correction on an
+  already-decided, already risk-neutral deferral).
+Override:  N/A — risk-neutral, pure text-reconciliation, zero behavior change, deviation-judge
+  pre-classified JUSTIFIED.
+
+## Session log — executor-2026-07-02-m4-p5 — 2026-07-03
+
+Phase 5 executed in full (all five steps, Step 3 as narrowed by FRAGO 012 mid-phase), grounded
+in: the plan slice (¶2 Mission, §3.1 outcomes 7–9, §3.4, §Invariants Teaching/Demo &
+Error Gallery), REF-plan-format, REF-decision-philosophy, REF-context-budget, no-duct-tape,
+verification, spec-writing.md, docs-checklist.md, inference.md, vocabulary/naming, plan-invariants
+§Demo & Error Gallery, FRAGOs 008/009/010/011 (read from plan.md + this sidecar) and FRAGO 012
+(applied verbatim, live), plus the live crate reality (inlay_hint.rs, inlay_hint_passes.rs,
+check.rs channel arms, cross_impl_consistency.rs, error_galleries.rs — recon re-read, not memory).
+
+**Landed.**
+(1) `channel_capacity` inlay hint end-to-end: NEW typeck pass
+`inlay_hint_passes.rs::channel_capacity_hints` + `ChannelCapacityHint` (salsa-tracked; fires only
+on `channel<T>()` with type args + zero value args; position = the closing-paren byte, proven
+`span.end - 1` against parse_call's span construction) → lib.rs export → LSP Domain 10 in
+`crates/ynz-lsp/src/inlay_hint.rs` (`⟨64⟩` label, registry hover, zero-width TextEdit inserting
+`64`); module docs in both files updated (firing tables + auto_arc registered-not-firing note);
+stale `features.toml` channel_capacity comment corrected (P1 shipped the domain only, not the
+hint pass). `auto_arc` NOT wired — deviation D1, surfaced in the P5 banner, per FRAGO 008 + the
+`auto-arc-codegen-emission` TRIGGER text (features.toml:1235).
+(2) `docs/reference/REF-concurrency.md`: new Channels section (bounded-by-construction, default-64
+hint, backpressure teaching text VERBATIM as mandated, element-type/capacity/statement-position
+rules with real captured error text) + new handle-form section documenting the FRAGO 005
+`h.send(v)` → first-`channel<T>`-parameter convention explicitly ("no hidden mailbox") +
+`.receive()` messages-or-completion (typed errors) + channel exemption woven into the Ownership
+section (was contradicting the new examples); intro/closing → "Two keywords and one type";
+auto-Arc deliberately NOT documented as live (D1).
+(3) VSCode extension: package.json `0.3.0-m7` → `0.3.0`; README What's-new + CHANGELOG `[0.3.0]`
+(honest "Not yet firing" auto_arc note); tsc build clean (host Node v22 — `command -v` probe hit,
+ran natively per the run-in-docker ladder). Screenshots: two placeholders created pre-FRAGO-012
+were DELETED when the FRAGO landed; CHANGELOG carries the deferred note; plan.md Step 3 + exit
+criteria + Future Requirements edited per FRAGO 012's exact wording (the conductor's explicit
+instruction — the one plan-body edit authorized beyond my banner/frontmatter bookkeeping).
+(4) Demo/gallery consolidation: verified entrypoint.ynz already carries all M4 surfaces (P2/P3/P4
+work); golden regenerated via the script — diff confined to the KNOWN relaxed 8-pirates
+nondeterministic section, reverted to pristine, byte-exact test proven GREEN against it; gallery
+verified complete (16 classes + 2 documented runtime/kernel blocks).
+
+**Verification (all in the dev container unless noted).** `cargo build --workspace` GREEN;
+`cargo test -p ynz-lsp --test inlay_hint` 22/22 (3 new channel_capacity tests: fires with
+position+tooltip+zero-width-edit asserted, suppressed-explicit-capacity,
+suppressed-missing-element-type); real error text captured via `ynz run` on scratch fixtures
+(send-wrong-type incl. backpressure note, zero-capacity, handle-no-channel-param); both spec
+examples run (`runs this game: 10`, `prospect grade: 42`);
+`examples_basics_runs_end_to_end` GREEN; `error_galleries` 9/9; `jargon_audit` 9/9;
+`cross_impl_consistency` 2/2 (~237s full corpus, both modes) with all 30 M4 fixtures verified
+inside the swept set (exclusion-substring check run explicitly); FULL workspace suite
+**2199 passed / 0 failed**; `cargo clippy --workspace -- -D warnings` GREEN;
+`cargo fmt --all` applied + `--check` clean (post-fmt LSP inlay tests re-run 22/22).
+
+**Deviations SURFACED, not self-adjudicated:** D1 (P5) — Phase 5 Steps 1–2 name `auto_arc`
+wiring + auto-Arc spec content; text predates FRAGO 008 and was never reconciled into this
+phase's steps. Executed per FRAGO 008's applied record; step text left untouched (no FRAGO
+authorizes rewriting it); full statement in the P5 STATUS banner for the deviation-judge.
+
+**Recorded decisions (reasons in the P5 banner):** extension version `0.3.0` exact (P6 packages
+at the same final version); golden noise-diff reverted (scheduler churn in the one relaxed
+section, byte-exact proof kept against pristine golden); features.toml comment fix (factual,
+no schema change).
+
+Producer does NOT self-grade — reviewer fan-out (code-reviewer: jargon + spec-register + oracle
+completeness) has NOT run. NO STOP condition fired; NO dormant override armed. The pre-existing
+dirty `roadmap.md` + `cspell.json` untouched. Session-id appended to plan.md frontmatter; status
+remains active.
+
+## FRAGO 014 — 2026-07-03 — session-id: conductor (Phase 5 fix-round follow-up; trivial stale-text
+tail the executor surfaced as new Deviation D2, not self-fixed — classified here directly: a leftover
+clause contradicting an already-applied, already-signed descope has no adjudication question left to
+resolve, so this record both classifies and applies rather than routing a one-clause fix through a
+full deviation-judge round-trip)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ ¶3.1 outcome #7 (trailing clause)
+Trigger:   FRAGO 013's outcome #7 rewrite (this same file, above) replaced the domains sentence but
+           did not touch outcome #7's trailing clause, which still reads "...WHAT/WHAT-INSTEAD/WHY;
+           VSCode extension bumped with screenshots." — directly contradicting FRAGO 012 (Patrick's
+           live descope of the screenshot deliverable, applied two rounds earlier). The Phase-5
+           fix-round executor caught this itself and surfaced it as Deviation D2 rather than
+           silently patching text it had just finished editing.
+Changes:
+  - ¶3.1 outcome #7's trailing clause: "VSCode extension bumped with screenshots." →
+    "VSCode extension bumped (screenshots deferred — FRAGO 012)."
+Unchanged: everything else; FRAGO 001-013; the risk table (NO re-scoring — trivial text-consistency
+  fix only).
+Override:  N/A — risk-neutral, one-clause text fix reconciling two already-applied, already-logged
+  decisions (FRAGO 012 + FRAGO 013) against each other. No new judgment made.
+
+## FRAGO 015 — 2026-07-03 — session-id: conductor (D3 follow-up to FRAGO 012/013/014's screenshots
+reconciliation; the executor correctly declined to sweep this in beyond FRAGO 014's named scope and
+surfaced it instead — same trivial reconciling-two-already-logged-decisions shape as FRAGO 014, no
+new adjudication required)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Invariants "### Demo & Error Gallery"/Teaching
+           bullet (plan.md:1536)
+Trigger:   The screenshots-descope contradiction (FRAGO 012) survived a THIRD independent spot the
+           prior two reconciliation FRAGOs (013, 014) didn't name: the Invariants section's own
+           bullet "VSCode extension version-bumped with screenshots of the new surfaces." — still
+           asserting screenshots ship, three FRAGOs after they were descoped.
+Changes:
+  - `plan.md:1536`: "VSCode extension version-bumped with screenshots of the new surfaces." →
+    "VSCode extension version-bumped (screenshots deferred — FRAGO 012)."
+Unchanged: everything else; FRAGO 001-014; the risk table (NO re-scoring).
+Override:  N/A — risk-neutral, one-clause text fix reconciling an already-applied, already-logged
+  decision (FRAGO 012) against a line the two prior sweep FRAGOs missed. No new judgment made.
+
+## FRAGO 016 — 2026-07-03 — session-id: conductor (final review-fleet re-check on Phase 5's fix-loop
+round; two independently-confirmed should-fix findings, both plain missed-spots from the same class
+of sweep gap as D2/D3 — deviation-judge explicitly classified the demo-comment one UNJUSTIFIED/not-
+a-FRAGO-candidate, i.e. just fix it; the Invariants line is the identical "stale text a text-only
+sweep didn't reach" shape, no new adjudication needed for either)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Invariants "### Teaching" (plan.md:1528-1529)
+           and `examples/pirates-roster/entrypoint.ynz:1059`
+Trigger:   Full-fleet re-verification after the P5-r2 fix round found two residual staleness spots
+           neither the blocker fix nor FRAGO 012-015's sweeps reached: (1) acceptance-verifier —
+           Invariants → Teaching still asserts "`auto_arc` ... fire[s] via `inlay_hint.rs`",
+           contradicting the already-applied FRAGO 008/013 reconciliation (auto_arc is registered,
+           does not fire, wiring deferred to v0.4+); (2) rules-compliance + acceptance-verifier +
+           deviation-judge (all three, independently) — the demo file's own inline comment still
+           shows the pre-restyle `⟨64⟩` decorated notation, contradicting the actually-shipped plain
+           `64` rendering everywhere else (REF-concurrency.md, IMP-no-function-coloring.md, the LSP
+           code itself).
+Changes:
+  - `plan.md:1528-1529` (Invariants → Teaching bullet): "`channel_capacity` (Addition) + `auto_arc`
+    (Informational, cautionary hover) fire via `inlay_hint.rs`" → "`channel_capacity` (Addition)
+    fires via `inlay_hint.rs`; `auto_arc` (Informational, cautionary hover) is registered with its
+    full hover text but does not yet fire — wiring deferred to the v0.4+ auto-Arc codegen emission
+    per FRAGO 008/013."
+  - `examples/pirates-roster/entrypoint.ynz:1059`: comment "// default capacity 64 (IDE shows
+    ⟨64⟩)" → "// default capacity 64 (IDE shows 64)" — matching the actually-shipped plain-text
+    label convention (no stdout/golden impact — comment only).
+Unchanged: everything else; FRAGO 001-015; the risk table (NO re-scoring — both are text-only
+  consistency fixes, zero behavior change).
+Override:  N/A — risk-neutral, two one-clause text fixes reconciling already-applied, already-
+  logged decisions (FRAGO 008/013 and the P5-r2 label restyle) against spots earlier sweeps missed.
+  No new judgment made.
+
+## Session log — executor-2026-07-02-m4-p5-r2 — 2026-07-03 (Phase 5 post-review FIX ROUND)
+
+Applied the review fleet's Phase 5 findings on top of the previously-verified-GREEN phase,
+grounded in: the P5 slice + STATUS banner, FRAGO 012/013 (this sidecar), the live tree (check.rs
+channel arms, emit.rs channel lowering, inlay_hint_passes.rs, ynz-lsp inlay_hint.rs + tests,
+registry features.toml — all re-read, not memory), authoritative-derivation.md, inference.md,
+no-duct-tape, verification, REF-plan-format/decision-philosophy/context-budget.
+
+**FRAGO 013 applied VERBATIM** (three edits, exact wording from its Changes list): Phase 5
+Steps 1–2 auto-Arc deferral reconciliation; ¶3.1 outcome #7 channel_capacity-fires /
+auto_arc-registered-not-firing rewrite; P5 banner D1 annotated classified-JUSTIFIED + applied.
+
+**BLOCKER fixed — capacity twin-derivation** (authoritative-derivation.md, 5th recurrence of the
+M3a/M3d/M3e/M3g class): `DEFAULT_CHANNEL_CAPACITY` is now the ONE authoritative
+`pub const` (module-level in `crates/ynz-typeck/src/check.rs`, exported via lib.rs) threaded into:
+codegen's no-arg construction default (`crates/ynz-codegen/src/emit.rs` `channel` arm — literal
+`const_int(64,..)` REMOVED), all three check.rs teaching errors quoting the default (format!-
+threaded), and the LSP label + click-edit (`crates/ynz-lsp/src/inlay_hint.rs` Domain 10). The
+dead `let _ = DEFAULT_CHANNEL_CAPACITY;` anchor removed. Registry hover prose (TOML, cannot read
+a Rust const) pinned by a new mechanical parity test
+(`test_channel_capacity_registry_hover_states_the_authoritative_default`). PROOF (not eyeballed):
+throwaway const=3 build — behavioral fixture backpressured after exactly `sent 3` before
+`draining` (codegen moved) and the LSP fires-test FAILED its `"64"` label assert (hint moved);
+const reverted to 64, fixture deleted.
+
+**Minors fixed:** hint gated on exactly one type arg (`channel<A,B>()` suppression + new test);
+LSP module doc non-firing list now carries all 4 domains incl. `allocators`; label re-styled
+`⟨64⟩` → plain muted `64` per inference.md one-renderer-per-category (tests updated to the plain
+label; registry `example_hint_rendered`, REF-concurrency.md:185, IMP-no-function-coloring.md:109
+example, VSCode README/CHANGELOG, and plan.md's own label references swept for consistency).
+
+**Deferred (NOT fixed — shared pre-existing gap, zero regression):** all-5-walkers
+FieldAssign.target/IndexAssign.receiver recursion gap → four-field WHAT/WHY/COST/TRIGGER note
+appended to the roadmap sidecar
+`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` with
+`Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#5: crates-ynz-typeck-src-inlay-hint-passes-rs-1554`
+(checked unique before writing).
+
+**Deviation SURFACED, not self-fixed:** D2 — ¶3.1 outcome #7's trailing "VSCode extension bumped
+with screenshots" contradicts FRAGO 012's screenshot descope; FRAGO 013's replacement covered
+only the domains sentence. Flagged in the P5 banner for the deviation-judge.
+
+**Verification (dev container):** `cargo build --workspace` GREEN; `cargo clippy --workspace
+-- -D warnings` GREEN; `cargo fmt --all` applied + `--check` clean; `ynz-lsp` inlay_hint suite
+24/24 (22 prior + 2 new: two-type-args suppression, registry parity); full `cargo test
+--workspace` result recorded in the executor's return. Roadmap.md's own `⟨64⟩` notation (lines
+325/334) left untouched — file carries pre-existing uncommitted user edits; surfaced in the
+return instead.

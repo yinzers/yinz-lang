@@ -586,3 +586,135 @@ function entrypoint() -> nothing {
         give_hint
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain 10: channel_capacity — muted `64` inside `channel<T>()` empty parens
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The label asserts the LITERAL "64" on purpose — an independent oracle pinning
+// the shipped default. If `ynz_typeck::DEFAULT_CHANNEL_CAPACITY` is ever re-tuned,
+// these tests break loudly and get updated alongside the registry hover text,
+// instead of drifting silently (authoritative-derivation.md's parity-link escape
+// hatch for values that must also live in data/prose).
+
+#[test]
+fn test_inlay_hint_channel_capacity_fires_for_default_capacity_construction() {
+    // WHY: a `channel<int>()` with no capacity argument uses the locked default
+    // (64). The Addition-category hint must render the plain muted `64` at the
+    // closing paren — same plain-text convention as every other Addition hint
+    // (`": int"`, `"wait  "`), no decorative wrapping — carry a hover tooltip
+    // (Golden Rule 11), and offer a click-to-make-explicit TextEdit that inserts
+    // `64` at exactly that position — producing `channel<int>(64)`, identical
+    // behavior now visible in source.
+    let src = "function entrypoint() -> nothing {\n  let wire: channel<int> = channel<int>()\n}\n";
+    let (state, uri) = state_single("/tmp/ynz_ih_chan_default.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+
+    let cap_hint = hints
+        .iter()
+        .find(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s == "64"))
+        .expect("default-capacity channel construction must emit the plain `64` hint");
+
+    // Position: the closing `)` of the SECOND `channel<int>()` (the constructor
+    // call, not the type annotation) — line 1 (0-based), at the `)` byte.
+    let line1 = src.lines().nth(1).unwrap();
+    let paren_col = line1.rfind(')').unwrap() as u32;
+    assert_eq!(
+        cap_hint.position.line, 1,
+        "hint must sit on the construction line"
+    );
+    assert_eq!(
+        cap_hint.position.character, paren_col,
+        "hint must sit at the closing paren of the constructor call"
+    );
+
+    // Hover tooltip present (Golden Rule 11 — teaching surface).
+    assert!(
+        cap_hint.tooltip.is_some(),
+        "channel_capacity hint must carry a WHAT/WHAT-INSTEAD/WHY hover tooltip"
+    );
+
+    // Click-to-make-explicit: a zero-width insert of `64` at the hint position.
+    let edits = cap_hint
+        .text_edits
+        .as_ref()
+        .expect("channel_capacity hint must carry a click-to-make-explicit edit");
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0].new_text, "64");
+    assert_eq!(edits[0].range.start, cap_hint.position);
+    assert_eq!(
+        edits[0].range.end, cap_hint.position,
+        "insert edit must be zero-width"
+    );
+}
+
+#[test]
+fn test_inlay_hint_channel_capacity_suppressed_for_explicit_capacity() {
+    // WHY: `channel<int>(8)` already states its capacity — there is nothing to
+    // add, so the Addition-category hint must NOT fire (inverse anti-pattern:
+    // annotating what the user already wrote).
+    let src = "function entrypoint() -> nothing {\n  let wire: channel<int> = channel<int>(8)\n}\n";
+    let (state, uri) = state_single("/tmp/ynz_ih_chan_explicit.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+
+    assert!(
+        !hints
+            .iter()
+            .any(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s == "64")),
+        "explicit-capacity construction must not emit the `64` hint"
+    );
+}
+
+#[test]
+fn test_inlay_hint_channel_capacity_suppressed_for_missing_element_type() {
+    // WHY: a bare `channel()` is a missing-element-type COMPILE ERROR with its
+    // own teaching text — piling a capacity hint onto erroring source would be
+    // noise on top of the diagnostic.
+    let src = "function entrypoint() -> nothing {\n  let wire = channel()\n}\n";
+    let (state, uri) = state_single("/tmp/ynz_ih_chan_no_elem.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+
+    assert!(
+        !hints
+            .iter()
+            .any(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s == "64")),
+        "missing-element-type construction must not emit the `64` hint"
+    );
+}
+
+#[test]
+fn test_inlay_hint_channel_capacity_suppressed_for_wrong_type_arg_count() {
+    // WHY: `channel<int, string>()` takes exactly one type argument, so this
+    // construction is ALREADY a compile error with its own teaching text —
+    // piling a capacity hint onto erroring source would be noise on top of the
+    // diagnostic (same intent as the missing-element-type suppression).
+    let src = "function entrypoint() -> nothing {\n  let wire = channel<int, string>()\n}\n";
+    let (state, uri) = state_single("/tmp/ynz_ih_chan_two_args.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+
+    assert!(
+        !hints
+            .iter()
+            .any(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s == "64")),
+        "wrong-type-arg-count construction must not emit the `64` hint"
+    );
+}
+
+#[test]
+fn test_channel_capacity_registry_hover_states_the_authoritative_default() {
+    // WHY: the registry hover text (`registry/features.toml` `channel_capacity`)
+    // is TOML data that cannot read `ynz_typeck::DEFAULT_CHANNEL_CAPACITY`, so
+    // this parity test IS the compile-time link authoritative-derivation.md
+    // requires between two homes that must agree: if the authoritative constant
+    // is re-tuned but the hover prose still teaches the old number, this breaks
+    // loudly instead of the two surfaces drifting silently.
+    let cap = ynz_typeck::DEFAULT_CHANNEL_CAPACITY.to_string();
+    let hover = ynz_registry::lsp_inlay_hint_hover_for("channel_capacity")
+        .expect("channel_capacity domain must have registry hover text");
+
+    assert!(
+        hover.contains(&cap),
+        "registry hover for channel_capacity must state the authoritative default \
+         ({cap}); hover text was: {hover}"
+    );
+}

@@ -2,6 +2,26 @@
 
 Syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz` files.
 
+## What's new in v0.3.0
+
+- **Channels** — `channel<T>()` bounded task communication is live. Construction diagnostics
+  (missing element type, non-positive capacity, wrong capacity type) and the send/receive
+  method surface (wrong element type, statement-position, named-binding receiver) all render
+  inline with WHAT/WHAT-INSTEAD/WHY teaching text.
+- **`64` default-capacity hint** — `channel<int>()` with empty parens shows a muted `64`
+  inside the parens (the locked default capacity). Hover explains the bounded-by-construction
+  model; click writes `64` into your source.
+- **Background handle-form** — `let h = background worker(commands)` yields a handle;
+  `h.send(v)` feeds the spawned function's first `channel<T>` parameter, `h.receive()`
+  delivers messages or the task's completion value (typed `errors`). Misuse (no channel
+  parameter, non-suspending callee) gets teaching errors.
+- **Backpressure teaching** — send-related diagnostics explain that a suspended producer is
+  backpressure working correctly, not a deadlock.
+- **Two new Tier 3 lints** — `cross-thread-fields-not-padded` (a shape crossing a
+  `background` boundary that can't get cache-line padding) and `prefer-yielding-sleep`
+  (`sleepBlocking(ms)` in a non-kernel program). Both dismissable suggestions; hover the
+  squiggle for the rule's WHAT/WHAT-INSTEAD/WHY.
+
 ## What's new in v0.3.0-m8
 
 - **Mixed CPU+I/O parallel-group hints** — a group can now MIX a number-crunching call and a
