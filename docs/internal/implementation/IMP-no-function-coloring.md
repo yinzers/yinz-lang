@@ -280,7 +280,7 @@ The CPU/IO split (already locked above) maps cleanly to work-stealing: I/O tasks
 
 ## Task Cancellation — Locked Pre-v0.2
 
-**Cancel-via-drop at the next `wait` point.** When a task handle is dropped (or `.cancel()` is called on it), the runtime injects a cancellation signal at the task's next suspension point. The task receives it as a cancellation error, which propagates via `errors` through the call stack. Every value in scope is dropped in order — cleanup runs via existing drop semantics.
+**The locked end-state model — cancel-via-drop at the next `wait` point.** When a task handle is dropped (or `.cancel()` is called on it), the runtime injects a cancellation signal at the task's next suspension point. The task receives it as a cancellation error, which propagates via `errors` through the call stack. Every value in scope is dropped in order — cleanup runs via existing drop semantics.
 
 This falls out of what's already locked:
 - The compiler already knows every suspension point (`wait` = may-block analysis)
@@ -289,7 +289,9 @@ This falls out of what's already locked:
 
 **Edge case — CPU-bound tasks (blocking thread pool)**: CPU-bound tasks have no `wait` points, so cancellation cannot be injected mid-computation. Dropping the handle sends the signal; the task either runs to completion first or panics. This is a documented constraint, not a design gap — the same behavior as Rust's `spawn_blocking`.
 
-**User-facing model**: "Dropping a task handle cancels it. Cleanup always runs."
+**User-facing model (end-state)**: "Dropping a task handle cancels it. Cleanup always runs."
+
+**Implementation milestone**: SHIPPED-DEFERRED v0.3-M4 — the RUNTIME half is live and substrate-proven: `ynz_handle_free` (`crates/ynz-runtime/src/handle.rs`) aborts the child at its next suspension point via Tokio abort, and the frame + arg-copies + shared-channel refs + the R8 buffer are each freed exactly once (safe-drop: no use-after-free, no leak, alloc=free-gated). The LANGUAGE half — codegen automatically calling `ynz_handle_free` when a handle binding's scope ends (`ynz_handle_free` is declared in codegen's `runtime_decls.rs` but NEVER emitted — zero call sites), the cancellation surfacing inside the child as a typed `errors` value, and any explicit `.cancel()` API — is NOT implemented. **v0.3 shipped semantics**: a task whose handle goes out of scope runs to completion (fire-and-forget) — it is never silently killed mid-work; the un-freed handle object is one small Box per spawn, reclaimed at process exit. Deferred to the future language-wide scope-drop/destructor mechanism (a handle-only drop pass would fork a second cleanup mechanism the eventual general one must unify, per [`.claude/rules/authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md)); four-field deferral recorded in the [v0.3-M4 plan's Future Requirements](../../../.claude/planning/active/2026-07-02-v0-3-m4-channels-arc-release/plan.md) (registry entry `background-handle-cancel-injection`; trigger: the language-wide scope-drop mechanism shipping, OR a real workload needing task cancellation — whichever lands first).
 
 ---
 

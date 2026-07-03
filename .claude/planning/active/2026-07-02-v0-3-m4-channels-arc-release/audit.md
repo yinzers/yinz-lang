@@ -1676,3 +1676,116 @@ classified-JUSTIFIED + applied via FRAGO 017; P6-D3 annotated JUSTIFIED-no-FRAGO
 zero code change — no rebuild/retest. Session-id `executor-2026-07-02-m4-p6` already current in the
 frontmatter chain (same dispatch). Status remains active (Phase 6 open pending Step 4 + Patrick
 sign-off).
+
+**Phase 6 Step 4 + release, completed 2026-07-03 (conductor-executed, Patrick's explicit go):**
+`/release` cut `v0.3.0` per the corrected FRAGO-017 CHANGELOG scope (M3g + M4 only — M3f/M3d
+correctly excluded). Commits: `f6b8306` (Phase 6 boundary, #6) → `16877d9` (chore: pre-existing
+roadmap M4/M5-split + cspell dictionary sync, committed properly per Patrick's "no duct tape" call
+rather than stashed) → `8f33d29` (CHANGELOG). Tag `v0.3.0` (annotated) pushed; GitHub release
+published at https://github.com/yinzers/yinz-lang/releases/tag/v0.3.0 with notes generated verbatim
+from the CHANGELOG entry; `yinz-0.3.0.vsix` + `yinz-latest.vsix` uploaded per this project's
+VSCode-release convention. Rollout mode: PLAIN (no feature-flag usage in the project source — the
+only hits were `node_modules` third-party noise). Phase 6 exit criteria fully MET. Phase 6 marked
+DONE. All phases 0-6 of this plan are now sealed.
+
+## Completion-Gate coupling decision — 2026-07-03 — session-id: conductor
+
+**Heuristic (§9.0.1): RUN, not skip.** Seven phases (0-6), declared touched-surfaces overlap
+heavily and are NOT pairwise disjoint — `crates/ynz-typeck/src/check.rs`, `crates/ynz-codegen/src/emit.rs`,
+`registry/features.toml`, `docs/internal/implementation/IMP-no-function-coloring.md`, and
+`examples/pirates-roster/entrypoint.ynz` are each touched by 3+ phases (P0/P1/P2/P3/P4 all touch
+`check.rs`; P1/P2/P3/P4 touch `emit.rs`; P1/P3/P4/P5 touch `registry/features.toml`). Fail-safe
+default-to-run (R2) applies regardless — this is not a borderline call.
+
+**Range**: `d81df91..f6b8306` (parent of Phase 0's boundary commit `d93f4c8` → Phase 6's boundary
+commit `f6b8306` — the last phase boundary; no `#fix` commit exists yet, first entry). 9 commits.
+Fanning out the three cross-phase lenses (code-reviewer with the range, acceptance-verifier +
+deviation-judge with the assembled whole-plan scope) now.
+
+**Fan-out results — 0 blockers across all three lenses:**
+- **code-reviewer** (reuse/consolidation-only lens): 1 minor — `crates/ynz-runtime/src/handle.rs`'s
+  `lock_or_recover<T>` is a byte-identical copy of P1's `crates/ynz-runtime/src/channel.rs:97`
+  helper instead of importing it. Everything else cross-phase (suspension classification, conduit-
+  binding origin, `DEFAULT_CHANNEL_CAPACITY`, the padded-shapes set, frame-ABI offsets, the
+  `[[lint_rule]]` mechanism) correctly threads ONE authoritative source across phases — the exact
+  discipline this repo's `authoritative-derivation.md` demands, held.
+- **acceptance-verifier** (§3.1-integrated-whole + campaign-slice, BOTH targets): MET — all ten Key
+  Outcomes + Definition of Done verified against real artifacts; two outcomes (auto-Arc emission,
+  padding's current no-op status) correctly split MET/DEFERRED via FRAGO 008/009, not silent gaps.
+  3 should-fix: (a) the roadmap's own M4 status/ledger rows are stale ("NOT YET PLANNED"/
+  "NEEDS-PLANNED") now that M4 shipped as `v0.3.0` — pre-acknowledged in this plan's own Future
+  Requirements as a deferred roadmap-maintenance item, but live staleness today; (b) the roadmap
+  ledger's plain-reading text overstates auto-Arc/padding as fully-delivered capabilities without
+  pointing at FRAGO 008/009's honest deferral; (c) the tag-push/GitHub-release facts were
+  unverifiable from that dispatch's tool-restricted scope (no Bash/network) — CONDUCTOR CONFIRMS
+  BOTH DIRECTLY: `git push origin v0.3.0` succeeded (`* [new tag] v0.3.0 -> v0.3.0`), the GitHub
+  release was created (`gh release create` returned
+  https://github.com/yinzers/yinz-lang/releases/tag/v0.3.0), and both `.vsix` assets are confirmed
+  attached (`gh release view --json assets`). (c) is closed, no fix needed; (a)/(b) are real and
+  worth closing now rather than leaving parked.
+- **deviation-judge** (cross-phase-interaction only): 1 should-fix, UNJUSTIFIED-as-stray (not a
+  FRAGO candidate — no adjudication needed, just a plain sweep miss) —
+  `docs/internal/implementation/IMP-no-function-coloring.md`'s "Task Cancellation — Locked
+  Pre-v0.2" section still claims the runtime "injects a cancellation signal at the task's next
+  suspension point" on handle drop; P2's own shipped reality (its Future Requirements deferral,
+  code-confirmed — zero `ynz_handle_free` call sites in `emit.rs`) is that NO scope-drop
+  cancellation mechanism exists at all (fire-and-forget-to-completion, by design, until a future
+  language-wide scope-drop mechanism ships). `plan.md`'s own §3.1 recorded decision and Design-Doc
+  Alignment #9 still carry the same narrower, now-stale framing. This is the identical
+  "text-reconciliation sweep gap" class FRAGO 013-016 already fixed elsewhere in this same plan —
+  P6's design-doc sweep touched the sibling Channel/False-Sharing/Sleep sections but missed this
+  one.
+
+**Routing: all four items are cheap, well-diagnosed, direct fixes — fixing now rather than
+deferring** (per this plan's established pattern all session: small, safe, well-understood findings
+get fixed on the spot; only genuine scope-creep gets a durable four-field deferral). None require a
+FRAGO (no justified divergence being adjudicated — these are plain corrections of stale text /
+duplicated code, the same class already fixed directly via FRAGO 014-016's mechanism, or in this
+case simple enough to just fix without even a FRAGO wrapper). Dispatching the fix round now.
+
+## Session log — executor-2026-07-03-m4-gate-fix — 2026-07-03
+
+Completion-gate cumulative fix round (post-completion cleanup, NOT a new phase — no `#### Phase`
+heading added). All four items from the Fan-out results above fixed directly:
+
+**Fix 1 — `lock_or_recover` dedup (code-reviewer minor).** `crates/ynz-runtime/src/channel.rs:98`'s
+helper promoted to `pub(crate)`; `crates/ynz-runtime/src/handle.rs` now imports it via the existing
+`use crate::channel::{...}` line and its byte-identical local copy (old handle.rs:90-93) is deleted
+(the then-unused `MutexGuard` import removed alongside — `-D warnings` would have failed on it).
+ONE definition remains, in the module that originated the discipline (P1). Verified in the dev
+container: `cargo build --workspace` GREEN, `cargo clippy --workspace -- -D warnings` GREEN,
+`cargo test -p ynz-runtime` all suites pass, full `cargo test --workspace` result recorded in the
+executor's return.
+
+**Fix 2 — roadmap M4 staleness (acceptance-verifier a+b).**
+`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`: (1) Milestone 4's
+"Execution plan" status line "NOT YET PLANNED" → DONE/SHIPPED as `v0.3.0` (tagged + published
+2026-07-03) with a link to this plan; (2) both Capability Ledger rows for
+`v0-3-m4-channels-arc-release` ("planned" at the Capability Ledger table; "NEEDS-PLANNED. No child
+plan yet." at the ownership-map table) → **shipped**/**DONE**, each carrying the FRAGO 008/009
+deferral pointer so the ledger's plain reading no longer overstates auto-Arc codegen emission
+(deferred v0.4+, `auto-arc-codegen-emission`) or the padding transform's current throughput benefit
+(forward-looking no-op until auto-Arc emission) as fully live. Incidental factual correction in the
+same rows: "folds M3f + M3g tags" → "folds M3g tag; M3f already shipped at `v0.3.0-m6`", matching
+FRAGO 017's verified reality rather than repeating the stale premise.
+
+**Fix 3 — stale Task Cancellation claim (deviation-judge, plain sweep miss — no adjudication).**
+Premise re-verified before editing (not asserted): `grep -rn ynz_handle_free crates/ynz-codegen/src/`
+→ hits ONLY in `runtime_decls.rs` (:103-104 declaration comment + field, :492-494 declare_fn); ZERO
+call sites in `emit.rs` or anywhere else — codegen never emits the call, so a dropped handle's task
+runs to completion (fire-and-forget), never silently killed.
+`docs/internal/implementation/IMP-no-function-coloring.md` "Task Cancellation — Locked Pre-v0.2":
+model paragraph reframed as "The locked end-state model", user-facing model marked "(end-state)",
+and an **Implementation milestone: SHIPPED-DEFERRED v0.3-M4** status line added mirroring the
+sibling Channel/False-Sharing/Sleep sections' P6 treatment — runtime half live + substrate-proven
+(safe-drop, alloc=free-gated), language half (scope-drop-triggered `ynz_handle_free` emission,
+child-side typed-`errors` cancellation, `.cancel()` API) NOT implemented, deferred per the
+four-field Future Requirements entry (registry `background-handle-cancel-injection`; trigger:
+language-wide scope-drop mechanism OR a real cancellation workload). The two plan.md spots carrying
+the same stale hypothetical framing corrected to state plainly cancel-injection did NOT ship: §3.1
+recorded decision ("Handle-drop semantics", ~plan.md:412) and Design-Doc Alignment #9
+(~plan.md:1700), both now pointing at the Future Requirements deferral.
+
+Bookkeeping: session-id `executor-2026-07-03-m4-gate-fix` appended to plan.md's frontmatter chain;
+no phase heading added; no FRAGO filed (per the routing decision above — plain corrections, no
+justified divergence adjudicated).

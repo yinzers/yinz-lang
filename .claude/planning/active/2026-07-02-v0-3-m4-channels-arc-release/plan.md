@@ -3,7 +3,7 @@ name: "v0-3-m4-channels-arc-release"
 plan-id: "2026-07-02-v0-3-m4-channels-arc-release"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2", "executor-2026-07-02-m4-p4", "executor-2026-07-02-m4-p4-r2", "executor-2026-07-02-m4-p5", "executor-2026-07-02-m4-p5-r2", "executor-2026-07-02-m4-p6"]
+session-id: ["plan-producer-2026-07-02-m4", "plan-producer-2026-07-02-m4-r2", "plan-producer-2026-07-02-m4-r3", "plan-producer-2026-07-02-m4-r4", "executor-2026-07-02-m4-p0", "executor-2026-07-02-m4-p1", "executor-2026-07-02-m4-p1-r2", "executor-2026-07-02-m4-p1-r3", "executor-2026-07-02-m4-p1-r4", "executor-2026-07-02-m4-p1-r5", "executor-2026-07-02-m4-p2-r1", "executor-2026-07-02-m4-p2-r2", "executor-2026-07-02-m4-p2-r3", "executor-2026-07-02-m4-p3", "executor-2026-07-02-m4-p3-r2", "executor-2026-07-02-m4-p4", "executor-2026-07-02-m4-p4-r2", "executor-2026-07-02-m4-p5", "executor-2026-07-02-m4-p5-r2", "executor-2026-07-02-m4-p6", "executor-2026-07-03-m4-gate-fix"]
 created_at: "2026-07-02"
 updated_at: "2026-07-03"
 metadata:
@@ -410,11 +410,14 @@ design doc wins unless Patrick changes it.
   delivery — the doc's canonical example (:174-179) and the completion-collection trigger (:477)
   describe the same surface, not two competing designs.
 - **Handle-drop semantics: safe-drop now, full `.cancel()` API not in M4's End State.** The locked
-  cancel-via-drop model (IMP-no-function-coloring) governs the design; P2 implements drop without
-  leak or type-confused free (alloc=free-gated), with cancellation injection at the child's next
-  suspension point per the locked model. If full cancel-injection for channel-suspended children
-  proves milestone-sized, P2 surfaces it and records a four-field deferral with trigger — never a
-  silent detach-and-leak.
+  cancel-via-drop model (IMP-no-function-coloring) governs the design; P2 shipped the RUNTIME half
+  only — drop without leak or type-confused free (alloc=free-gated), with `ynz_handle_free`
+  aborting the child at its next suspension point WHEN CALLED. Cancel-injection did NOT ship:
+  codegen never emits `ynz_handle_free` (declared in `runtime_decls.rs`, zero call sites), so a
+  dropped handle's task runs to completion (fire-and-forget), never silently killed mid-work. This
+  resolved at P2 r2 as the recorded four-field deferral in §Future Requirements ("Handle
+  cancel-injection: language-level scope-drop wiring"; registry entry
+  `background-handle-cancel-injection`) — a documented deferral, never a silent detach-and-leak.
 - **`auto_arc` cautionary red-tint is STAGED, not skipped.** IMP-no-function-coloring calls for a
   red-tinted muted hint; recon confirms NO tint rendering exists in `ynz-lsp` (hints are
   label+tooltip only) — this is net-new LSP rendering, not a style flag. Ship `auto_arc` now as an
@@ -1697,10 +1700,14 @@ correction pass — the plan is diffed against the design, not against the prior
    `.copy` inference. Auto-Arc extends this boundary; the reject stays where the design puts it.
    **Match**, with the corrected citations (`check.rs:2275-2280`/`2287-2292`; block at 2253;
    inference at 1183-1197) — the roadmap's `check.rs:1216` is stale (behavior real, line drifted).
-9. **Task Cancellation — cancel-via-drop** (IMP-no-function-coloring, "Locked Pre-v0.2") — handle
-   drop cancels at the next suspension point, cleanup always runs. P2 implements safe drop under
-   this model; if full cancel-injection for channel-suspended children is milestone-sized, the
-   deferral is recorded four-field with trigger — **surfaced, not silent** (CCIR g).
+9. **Task Cancellation — cancel-via-drop** (IMP-no-function-coloring, "Locked Pre-v0.2") — the
+   doc's locked END-STATE model. P2 shipped safe drop's RUNTIME half only; cancel-injection did
+   NOT ship (codegen never emits `ynz_handle_free` — declared in `runtime_decls.rs`, zero call
+   sites; a dropped handle's task runs to completion, fire-and-forget). Resolved at P2 r2 as the
+   four-field deferral in §Future Requirements ("Handle cancel-injection: language-level
+   scope-drop wiring"; registry `background-handle-cancel-injection`) — **surfaced, not silent**
+   (CCIR g); IMP-no-function-coloring's Task Cancellation section now carries the matching
+   SHIPPED-DEFERRED status.
 10. **`ECWrapperResultCollection`** (IMP-concurrency §463-479) — the design doc gates the
     copy-before-free fix on the `background-handle-form` feature P2 ships, in its own words: cost
     "landing WITH the `background-handle-form` feature" (:475); trigger "collecting the completed
