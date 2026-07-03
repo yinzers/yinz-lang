@@ -1812,3 +1812,67 @@ findings already are.
 All seven phases (0-6) of `2026-07-02-v0-3-m4-channels-arc-release` are sealed, reviewed, and
 released as `v0.3.0` (tagged + published: https://github.com/yinzers/yinz-lang/releases/tag/v0.3.0).
 The cumulative cross-phase completion gate is CLEARED. Proceeding to the AAR.
+
+## AAR — 2026-07-03 — session-id: aar (dispatched by conductor post-completion-gate)
+
+**Q1 — What was supposed to happen.** Mission (¶2): ship `channel<T>()`, the `background`
+handle-form, cross-thread auto-Arc, and false-sharing auto-padding on the real poll-based
+substrate — may-block unified into ONE authoritative source first, every path deadlock-safe by
+construction — then cut `v0.3.0` folding un-tagged M3f + M3g. Ten testable Key Outcomes (¶3.1);
+seven phases (¶3.3), P0 a HARD GATE.
+
+**Q2 — What actually happened.** All seven phases landed, each with FRAGO-recorded deviations
+(P0: FRAGO 001; P1: FRAGO 002-004 relocated suspension-codegen proof to P2 after 3 build-revert
+rounds; P2: FRAGO 005-007; P3: FRAGO 008 split MET/DEFERRED; P4: FRAGO 009-011; P5: a real BLOCKER
+(fifth `64`-constant twin-derivation, fixed with a throwaway-const proof) + FRAGO 012-016 chasing
+one stale-text contradiction across 5 rounds; P6: FRAGO 017 caught a stale M3f/M3d CHANGELOG-scope
+premise via its own R4 verification step. The cumulative cross-phase gate then ran for the first
+time on genuinely-overlapping surfaces, found 4 more real findings (a duplicated `lock_or_recover`
+helper, 2 roadmap-staleness spots, 1 stale Task-Cancellation doc claim), all fixed directly. Gate
+CLEARED, `v0.3.0` tagged and published.
+
+**Q3 — Root causes of every divergence.**
+- D1 (Phase 1/2 boundary cut wrong — plan-authoring miss, JUSTIFIED via FRAGO 002-004, cost 3
+  build-revert rounds).
+- D2 (twin-derivation recurred 4× WITHIN this one plan despite the rule in-context throughout —
+  **lever failure, not a wording gap**; crosses `corpse-recurrence-escalation.md`'s own floor).
+- D3 (the screenshots/auto_arc-fires stale-text contradiction survived 3 sweep rounds — unjustified
+  process stray: targeted fixes instead of whole-document greps, each time).
+- D4 (design docs cited as a mechanism's specifying home turned out silent on it, 3× — recon-depth
+  miss: citation accepted as topically-relevant without confirming actual specification depth).
+- D5 (Assumption 12 marked `unverified — verify at P6`, went stale, caught exactly as designed —
+  NOT a defect; the verify-then-rely discipline worked).
+- D6 (Patrick's r3 no-duct-tape catch on the EC-wrapper scope-narrowing — genuine plan-authoring
+  defect, caught pre-execution at the cheapest possible stage).
+
+**Q4 — Lessons, classified by home (rule-author disposes, not re-adjudicated here):**
+1. [RULE — sustain] P0-as-HARD-GATE risk-burndown-first phasing paid for itself completely — zero
+   deadlock/trap-door bugs shipped across 6 downstream phases of adversarial suspension codegen.
+2. [ESCALATE — route to rule-author as a `corpse-recurrence-escalation.md` candidate, NOT a rule
+   re-word] Twin-derivation recurred 4× within one plan (`SuspendSet`, a latent `check.rs` twin,
+   `DEFAULT_CHANNEL_CAPACITY`, `lock_or_recover`) despite in-context citation every time — crosses
+   the escalation floor for a mechanical phase-boundary/write-time backstop.
+3. [GRAVEYARD CORPSE candidate] "Partial-reconciliation sweep" — fixing a stale claim's home
+   occurrence without grepping the whole document for every sibling occurrence (FRAGO 012-016's
+   5-round chase). Mechanical, diff-greppable.
+4. [RULE candidate] Before locking suspension/composed-scenario work into a phase, verify that
+   phase's OWN fixture surface can end-to-end prove it standalone — Phase 1 cost 3 rounds
+   discovering it couldn't.
+5. [RULE candidate] A Design-Doc-Alignment citation should be verified for actual specification
+   depth at recon time, not just topical relevance — caught 3× mid-execution instead of at recon.
+6. [RULE — sustain] "Mark unverified, gate a later step on verifying it" worked exactly as designed
+   (Assumption 12 / FRAGO 017) — a strong positive worked example.
+7. [RULE — sustain] Pre-execution human catch of a plan-authoring scope-narrowing (Patrick's r3
+   no-duct-tape call) is the cheapest possible fix point — worked-example candidate for
+   `no-duct-tape.md`'s catalog.
+8. [RULE — sustain] The cumulative cross-phase completion gate validated its own reason for
+   existing on its first genuinely-overlapping-surfaces run — all 4 findings were invisible to any
+   single phase's own reviewers.
+
+**End-State verdict (restating acceptance-verifier's cumulative-gate MET verdict):** MET — all ten
+Key Outcomes + Definition of Done verified through the real compiler; two outcomes correctly split
+MET/DEFERRED (FRAGO 008/009) rather than silently gapped. Plan classification: **success**.
+`v0.3.0` tagged and published: https://github.com/yinzers/yinz-lang/releases/tag/v0.3.0
+
+Handing all 8 lessons to rule-author now for disposal (capture/route — the AAR proposes, rule-author
+decides the durable home for each).
