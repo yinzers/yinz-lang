@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.3.0] — 2026-07-03 — M3g + M4: Mixed CPU+I/O Overlap, Channels, Task Handles, Auto-Arc, False-Sharing Padding
+
+Commit range: v0.3.0-m7..v0.3.0 (M3g + M4 content only — M3f and M3d, though present in this
+git range because they merged after the `v0.3.0-m6`/`v0.3.0-m7` tags were cut, are already
+covered above and are NOT re-described here).
+
+### What ships
+
+This is the final `v0.3.0` release: the milestone where Yinz code genuinely runs
+concurrently, safely, on one unified suspension substrate. It closes the last gap in
+auto-parallelization (mixed CPU+I/O groups), and adds the concurrency-communication
+surface — bounded channels, task handles, safe cross-thread sharing, and false-sharing
+protection — on top of the poll-based substrate M3a/M3b/M3d already proved out. The
+may-block suspension question is answered in exactly one authoritative place, threaded
+into every consumer, closing a class of twin-computation-drift bug that had silently
+miscompiled four prior milestones (M3a/M3d/M3e/M3g).
+
+#### M3g — mixed CPU+I/O overlap
+
+- A function body mixing one heavy CPU call and one I/O (`wait`) call as independent
+  operations now runs them concurrently — CPU on a worker core, I/O suspended — instead
+  of sequentially. This was the last gap in "all independent operations
+  auto-parallelize": M3b covered pure I/O overlap, M3d covered pure-CPU overlap; M3g
+  fuses the two poll paths (one shared continuation re-drives both the CPU join-poll and
+  the I/O inline-poll on every resume) so a *mixed* group overlaps too, without
+  deadlocking — the failure mode a verify-first pass on M3d had proven genuinely
+  milestone-sized, not avoidance.
+- Output remains byte-identical to `--no-auto-parallel` for every fixture; the flag
+  self-gates the fusion exactly as it gates pure-CPU and pure-I/O promotion.
+
+#### M4 — channels, task handles, auto-Arc, false-sharing padding
+
+- **`channel<T>()` bounded channels** — construction, `send()`/`recv()`, default capacity
+  64 (`channel<T>(N)` to override; no unbounded constructor by design). `send()` on a
+  full channel suspends the caller through the same poll-yield substrate as `wait` —
+  "a suspended producer is backpressure working correctly, not a deadlock," documented
+  as such in [`docs/reference/REF-concurrency.md`](docs/reference/REF-concurrency.md).
+  Channel operations join the unified may-block source like any other suspension point.
+- **Background task handles** — `let h = background worker(...)` yields a handle
+  supporting `.send()` into the running task and repeated `.receive()`, covering both
+  message replies from a long-running task and a plain suspending function's own
+  completion value. A collected result's ok-value is copied to a handle-owned buffer
+  before the frame frees (compile-time spawn-form-keyed — no runtime "was this
+  collected?" tracking anywhere); the bare fire-and-forget spawn path is unchanged.
+- **Cross-thread auto-Arc — boundary exactness.** The `share`/`lend`-across-`background`
+  reject is now exact in both directions, including previously-silent unresolvable/
+  non-ident-callee call sites. The acquire-release runtime substrate ships; the codegen
+  EMISSION that would make cross-thread sharing atomic is deferred to v0.4+ (a
+  documented, tracked deferral — today's cross-thread read access is already safe via
+  the existing independent-copy path).
+- **False-sharing auto-padding.** Shapes with fields touched by different `background`
+  tasks get automatic 64-byte cache-line padding — codegen-only, no source change
+  required. The `cross-thread-fields-not-padded` Tier 3 lint fires when the compiler
+  can't safely auto-pad (cross-module-visible layout). This is the first layout
+  transform gated by `--no-auto-parallel`, and the gating is proven, not assumed.
+- **`[[lint_rule]]` registry mechanism** — built from scratch (schema, parser, `build.rs`
+  constants, LSP seam), generic enough for future lint domains (M5's auto-SoA lint
+  reuses it with zero rework). Carries `cross-thread-fields-not-padded` and
+  `prefer-yielding-sleep` (suggests the yielding `wait sleep(ms)` over the
+  thread-parking `sleepBlocking(ms)` in schedulable programs).
+- **Teaching surface** — a `channel_capacity` muted inlay hint (shows the default `64`,
+  click-to-make-explicit); `auto_arc` is registered with its full cautionary hover text
+  (fires once the v0.4+ emission lands); `docs/reference/REF-concurrency.md` gained the
+  full channel/handle-form user spec including the backpressure teaching text; the VSCode
+  extension bumped to `0.3.0`.
+
+### Tests
+
+The R6 may-block unification parity test (build-blocking — the fifth touch of the
+twin-derivation class, now closed with one authoritative source); the R5 composed
+deadlock-safety hostile fixture (child suspends on a full channel while the parent
+polls `.receive()` — proven safe through the real compiler, not asserted); R1/R2
+hostile fixtures (never-received channels, pool exhaustion); the R8 collection matrix
+including the composed R5×R8 cell (a collected background child that both suspends on
+`send()` and is collected at completion); the R3 cross-thread boundary-exactness matrix;
+a full `--no-auto-parallel` cross-impl sweep across every new fixture, including the
+false-sharing padding transform and the composed-suspension case, byte-identical in
+both modes. Full workspace suite, clippy, and fmt green.
+
 ## [0.3.0-m7] — 2026-06-19 — M3d: Pure-CPU Statement Parallelization
 
 Commit range: v0.3.0-m6..v0.3.0-m7
