@@ -1,0 +1,104 @@
+// M5 P4 step 3 — the BOTH-CANDIDATE fixture (E3 mitigation 2, recorded decision D11).
+//
+// Tally is simultaneously (a) cross-thread PADDED — module-local, crosses the
+// `background` spawn boundary (mirrors v0_3_m4_p4_padding_gate.ynz; the channel
+// reply keeps output deterministic) — and (b) the element shape of `season`, a
+// fully-QUALIFYING SoA candidate (66 > 64, 2-field hot-loop union, no
+// escape/growth/lend-self). The candidate walk admits `season`; the ONE layout
+// authority (layout_decisions_query) resolves it to
+// Aos { declined: CrossThreadPadded } — padding wins, the shape's arrays are
+// never SoA'd. Byte-layout half: the integration test asserts default-mode IR
+// still carries the padded `{ i64, [56 x i8] }` slots + exact dual-mode-identical
+// stdout. Analysis half: crates/ynz-typeck/tests/soa_analysis.rs.
+shape Tally {
+  hits: int
+  outs: int
+}
+
+function report(give t: Tally, lend wire: channel<int>) -> nothing {
+  wire.send(t.hits + t.outs)
+}
+
+function entrypoint() -> nothing {
+  let t: Tally = { hits: 3, outs: 2 }
+  let wire: channel<int> = channel<int>(4)
+  background report(t, wire)
+  let total = wire.receive()
+  print(`tally total: ${total.toString()}`)
+  let season: array<Tally> = [
+    { hits: 1, outs: 2 },
+    { hits: 2, outs: 4 },
+    { hits: 3, outs: 6 },
+    { hits: 4, outs: 8 },
+    { hits: 5, outs: 10 },
+    { hits: 6, outs: 12 },
+    { hits: 7, outs: 14 },
+    { hits: 8, outs: 16 },
+    { hits: 9, outs: 18 },
+    { hits: 10, outs: 20 },
+    { hits: 11, outs: 22 },
+    { hits: 12, outs: 24 },
+    { hits: 13, outs: 26 },
+    { hits: 14, outs: 28 },
+    { hits: 15, outs: 30 },
+    { hits: 16, outs: 32 },
+    { hits: 17, outs: 34 },
+    { hits: 18, outs: 36 },
+    { hits: 19, outs: 38 },
+    { hits: 20, outs: 40 },
+    { hits: 21, outs: 42 },
+    { hits: 22, outs: 44 },
+    { hits: 23, outs: 46 },
+    { hits: 24, outs: 48 },
+    { hits: 25, outs: 50 },
+    { hits: 26, outs: 52 },
+    { hits: 27, outs: 54 },
+    { hits: 28, outs: 56 },
+    { hits: 29, outs: 58 },
+    { hits: 30, outs: 60 },
+    { hits: 31, outs: 62 },
+    { hits: 32, outs: 64 },
+    { hits: 33, outs: 66 },
+    { hits: 34, outs: 68 },
+    { hits: 35, outs: 70 },
+    { hits: 36, outs: 72 },
+    { hits: 37, outs: 74 },
+    { hits: 38, outs: 76 },
+    { hits: 39, outs: 78 },
+    { hits: 40, outs: 80 },
+    { hits: 41, outs: 82 },
+    { hits: 42, outs: 84 },
+    { hits: 43, outs: 86 },
+    { hits: 44, outs: 88 },
+    { hits: 45, outs: 90 },
+    { hits: 46, outs: 92 },
+    { hits: 47, outs: 94 },
+    { hits: 48, outs: 96 },
+    { hits: 49, outs: 98 },
+    { hits: 50, outs: 100 },
+    { hits: 51, outs: 102 },
+    { hits: 52, outs: 104 },
+    { hits: 53, outs: 106 },
+    { hits: 54, outs: 108 },
+    { hits: 55, outs: 110 },
+    { hits: 56, outs: 112 },
+    { hits: 57, outs: 114 },
+    { hits: 58, outs: 116 },
+    { hits: 59, outs: 118 },
+    { hits: 60, outs: 120 },
+    { hits: 61, outs: 122 },
+    { hits: 62, outs: 124 },
+    { hits: 63, outs: 126 },
+    { hits: 64, outs: 128 },
+    { hits: 65, outs: 130 },
+    { hits: 66, outs: 132 }
+  ]
+  let sh = 0
+  let so = 0
+  for (g in season) {
+    sh = sh + g.hits
+    so = so + g.outs
+  }
+  print(sh)
+  print(so)
+}

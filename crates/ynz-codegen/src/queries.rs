@@ -5,7 +5,8 @@ use ynz_ast::nodes::{ImportKind, Item};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket};
 use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
 use ynz_typeck::{
-    build_effective_suspend_set, check_query, cpu_promotion_query, module_signatures_query,
+    build_effective_suspend_set, check_query, cpu_promotion_query, layout_decisions_query,
+    module_signatures_query,
 };
 
 use crate::{
@@ -201,14 +202,15 @@ pub fn frame_layouts_query(
         let target_data = inkwell::targets::TargetData::create(dl_str);
 
         // Emit LLVM struct types for all shapes in this module so we can measure them —
-        // with the SAME authoritative false-sharing padded set emit_artifact's layout
-        // uses (typeck's `cross_thread_padded_shapes`), so a padded shape's frame slot
-        // is sized from the padded struct type automatically (one source, both
-        // consumers threaded — authoritative-derivation.md).
+        // with the SAME padded set emit_artifact's layout uses, read from the ONE
+        // layout authority (`layout_decisions_query`, v0.3-M5 P4 / E3 B1), so a padded
+        // shape's frame slot is sized from the padded struct type automatically (one
+        // source, every consumer threaded — authoritative-derivation.md).
+        let layout = layout_decisions_query(db, source);
         let shape_types = crate::shape_types::emit_shape_types(
             &ctx,
             &sig_output.shape_table,
-            &check.typed_module.cross_thread_padded_shapes,
+            &layout.padded_shapes,
         );
         shape_types
             .named
@@ -380,6 +382,11 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
     // LLVM external declarations — without these, calls to imported functions fail with
     // "function not found in module" during codegen (the linker would resolve them, but
     // LLVM's verifier needs them declared before it will emit a reference).
+    // THE one layout authority (v0.3-M5 P4 / E3 B1): emit_artifact reads the padded
+    // set (and, from Phase 5, SoA decisions) from this single source. Salsa memoizes —
+    // already evaluated inside frame_layouts_query above.
+    let layout = layout_decisions_query(db, source);
+
     match emit_artifact(
         source_path.as_str(),
         &check.typed_module,
@@ -394,6 +401,7 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         &sig_output.imported_fns,
         &layouts_arc,
         &spike_hosts,
+        &layout,
     ) {
         Ok(artifact) => Arc::new(CodegenOutput {
             artifact,

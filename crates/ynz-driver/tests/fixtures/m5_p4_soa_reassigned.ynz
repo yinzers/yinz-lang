@@ -1,0 +1,108 @@
+// M5 P4 closing round — SoA decline fixture: REASSIGNED AFTER INITIAL BINDING.
+//
+// `pts` starts as a 72-element literal (> SOA_SIZE_THRESHOLD = 64) whose only loop
+// reads a 2-field union — everything that admitted the QUALIFYING cell — but the
+// binding is REASSIGNED to a different array mid-function. The walk's recorded
+// initializer signals (provable_len = 72) describe the ORIGINAL array only; by the
+// time any consumer reads the name it holds the 4-element replacement, so an
+// Admitted verdict would carry a stale provable_len into Phase 5's buffer sizing
+// (the E3/E7 silent-miscompile class). Asserted verdicts: `pts` declines
+// Escapes { how: "reassigned after initial binding" }; `replacement` declines as
+// the aliasing side of the same statement
+// (Escapes { how: "stored into another binding (aliases the array)" }).
+shape Point {
+  x: int
+  y: int
+}
+
+function entrypoint() -> nothing {
+  let pts: array<Point> = [
+    { x: 1, y: 2 },
+    { x: 2, y: 4 },
+    { x: 3, y: 6 },
+    { x: 4, y: 8 },
+    { x: 5, y: 10 },
+    { x: 6, y: 12 },
+    { x: 7, y: 14 },
+    { x: 8, y: 16 },
+    { x: 9, y: 18 },
+    { x: 10, y: 20 },
+    { x: 11, y: 22 },
+    { x: 12, y: 24 },
+    { x: 13, y: 26 },
+    { x: 14, y: 28 },
+    { x: 15, y: 30 },
+    { x: 16, y: 32 },
+    { x: 17, y: 34 },
+    { x: 18, y: 36 },
+    { x: 19, y: 38 },
+    { x: 20, y: 40 },
+    { x: 21, y: 42 },
+    { x: 22, y: 44 },
+    { x: 23, y: 46 },
+    { x: 24, y: 48 },
+    { x: 25, y: 50 },
+    { x: 26, y: 52 },
+    { x: 27, y: 54 },
+    { x: 28, y: 56 },
+    { x: 29, y: 58 },
+    { x: 30, y: 60 },
+    { x: 31, y: 62 },
+    { x: 32, y: 64 },
+    { x: 33, y: 66 },
+    { x: 34, y: 68 },
+    { x: 35, y: 70 },
+    { x: 36, y: 72 },
+    { x: 37, y: 74 },
+    { x: 38, y: 76 },
+    { x: 39, y: 78 },
+    { x: 40, y: 80 },
+    { x: 41, y: 82 },
+    { x: 42, y: 84 },
+    { x: 43, y: 86 },
+    { x: 44, y: 88 },
+    { x: 45, y: 90 },
+    { x: 46, y: 92 },
+    { x: 47, y: 94 },
+    { x: 48, y: 96 },
+    { x: 49, y: 98 },
+    { x: 50, y: 100 },
+    { x: 51, y: 102 },
+    { x: 52, y: 104 },
+    { x: 53, y: 106 },
+    { x: 54, y: 108 },
+    { x: 55, y: 110 },
+    { x: 56, y: 112 },
+    { x: 57, y: 114 },
+    { x: 58, y: 116 },
+    { x: 59, y: 118 },
+    { x: 60, y: 120 },
+    { x: 61, y: 122 },
+    { x: 62, y: 124 },
+    { x: 63, y: 126 },
+    { x: 64, y: 128 },
+    { x: 65, y: 130 },
+    { x: 66, y: 132 },
+    { x: 67, y: 134 },
+    { x: 68, y: 136 },
+    { x: 69, y: 138 },
+    { x: 70, y: 140 },
+    { x: 71, y: 142 },
+    { x: 72, y: 144 }
+  ]
+  let replacement: array<Point> = [
+    { x: 1, y: 2 },
+    { x: 2, y: 4 },
+    { x: 3, y: 6 },
+    { x: 4, y: 8 }
+  ]
+  pts = replacement
+  let sx = 0
+  let sy = 0
+  for (p in pts) {
+    sx = sx + p.x
+    sy = sy + p.y
+  }
+  print(sx)
+  print(sy)
+}

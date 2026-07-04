@@ -172,6 +172,28 @@ the current-truth plan.md slice).
 - **Verdict:** STATUS: PARTIAL — checkpoint, executor's early-checkpoint call past the
   calibration threshold; green-BUILDING tree (the 5 REDs are the step-1 documented RED lock).
 
+### 2026-07-03 — Phase 4, segment 1 — session-id: phase4-executor-2026-07-03-m5
+
+- **Scope:** Phase 4 dispatch — recon-first pass (plan-mandated) ahead of step 1.
+- **Landed:** zero tree changes (reads only). Full CCIR-1 anchor re-verify against the
+  worktree's own state @ `7d66012` with receipts; implementation-grain design for steps 1–2
+  (soa.rs module shape, decline-reason enum + precedence order, salsa query idiom, layout
+  authority + D11 resolution, the complete 5-point re-threading table) and the steps 3–5
+  fixture/test plan (8 fixtures + analysis-test surface) — all banked in `handoff-phase-4.md`
+  so segment 2 writes with zero recon.
+- **Found:** (a) the plan's two named padding consumers (emit.rs:1051, codegen/queries.rs:204)
+  resolve at drifted lines (1057, 208-212) AND a THIRD consumer exists — emit.rs:16848
+  (`cg.typed.cross_thread_padded_shapes.contains`) — the re-threading must cover all three or
+  the E3 grep gate fails; (b) the conductor-flagged RETIRED cite (emit.rs:13104-13107) confirmed
+  absent — not re-anchored; (c) S2 finding 5's param-array posture decided: recorded
+  `Declined(Escapes)` rows, never silent absence (P8 enumeration needs the rows); (d) typeck-side
+  `FieldSegment` carries order/names only — byte offsets stay codegen-side on `shape_abi_sizes`
+  (no ABI-size twin, CCIR-2).
+- **Verdict:** STATUS: PARTIAL — context-budget nudge fired at ~155k mid-recon, before step 1's
+  first write; starting the multi-file analysis+re-threading cut on a spent window risks the
+  forbidden mid-step strand (the Phase 3 seg-1 precedent). Checkpointed at the step boundary on
+  a clean tree; resume-at `phase-4/step-1` (fresh pointer — first Phase 4 segment, no stall).
+
 ## Context-segment log
 
 ### 2026-07-03 — Phase 0, segment 1
@@ -478,6 +500,61 @@ Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-10
   reconciliation, the frontmatter-chain repair itself, the LLVM literal-merging D12 artifact
   note, the SKIP-semantics correction now recorded in p2-dualmode-report.md). Phase 3 CLOSED --
   next: conductor's cheap gates (Step 4) + reviewer fan-out (Step 5) over the sealed commit.
+
+### 2026-07-03 — Phase 4, segment 1
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4-segment-1
+- segment: 1
+- session-id: phase4-executor-2026-07-03-m5
+- subagent_tokens: 259565
+- checkpoint reason: executor's own early-checkpoint judgment call — context-budget nudge fired
+  (~155k) before step 1's first write; zero source-tree changes this segment (recon-first pass:
+  anchor re-verify, padding-consumer topology census, S2 spike-input consumption, decline-
+  precedence design) checkpointed rather than starting the multi-file re-threading cut on a
+  spent window (the Phase 3 seg-1 mid-step-strand precedent this plan's own audit records)
+- resume-at: phase-4/step-1 (fresh — first Phase 4 segment; no prior pointer to compare)
+- verdict: STATUS: PARTIAL (recon complete, zero code landed; step 1 admission-criteria design +
+  the 3-consumer re-threading table banked in handoff-phase-4.md for segment 2 to implement)
+
+### 2026-07-03 — Phase 4, segment 2
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4-segment-2
+- segment: 2
+- session-id: phase4-executor-2026-07-03-m5-seg2
+- subagent_tokens: 270297
+- checkpoint reason: executor's own early-checkpoint judgment call — context nudge fired (~158k)
+  right as step 1's at-code-time verification completed; stopped at the step-1/step-2 boundary
+  rather than starting step 2's multi-signature re-threading cut (emit_artifact → build_module →
+  3 lowering fns → 3 Cg constructors + full-suite/golden-IR gates) below its realistic token cost
+- resume-at: phase-4/step-2 (advanced from segment 1's phase-4/step-1 — real progress, not a stall)
+- verdict: STATUS: PARTIAL (step 1 DONE + green: soa.rs module, soa_candidate_query,
+  lib.rs wiring — build/clippy/fmt/test all clean; segment also corrected an inherited
+  segment-1 receipt on the record — 3 Cg constructors, not 9; steps 2-5 remain, fully
+  designed in handoff for segment 3)
+
+### 2026-07-03 — Phase 4, segment 3
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4-segment-3
+- segment: 3
+- session-id: phase4-executor-2026-07-03-m5-seg3
+- subagent_tokens: 237951
+- checkpoint reason: the plan's own planner-authored CHECKPOINT mark after step 2, reinforced by
+  the context nudge — stopped at a green-building tree at the step-2/step-3 boundary
+- resume-at: phase-4/step-3 (advanced from segment 2's phase-4/step-2)
+- verdict: STATUS: PARTIAL (step 2 DONE + green: layout authority + all 3 padding consumers
+  re-threaded; full suite 2251/0 failed, zero golden-IR churn — re-threading proven byte-identical;
+  grep gates pass; steps 3-5 remain, fully designed in handoff for segment 4)
+
+### 2026-07-03 — Phase 4, segment 4
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4-segment-4
+- segment: 4
+- session-id: phase4-executor-2026-07-03-m5-seg4
+- subagent_tokens: 224494
+- checkpoint reason: n/a — final segment (steps 3-5 completed; handoff-phase-4.md deleted as the
+  closing act; no further checkpoint taken)
+- resume-at: n/a — phase complete
+- verdict: STATUS: DONE (8 fixtures incl. both-candidate D11 proof, 12-test soa_analysis.rs
+  exit-criterion suite + 1 integration byte-layout test, all green first run; full suite
+  2264/0 = 2251 baseline + exactly 13 new tests; grep gates pass — zero codegen reads of
+  LayoutDecisions::arrays, zero second env-parse, zero second padded-set derivation, zero
+  ABI-size re-derivation on typeck side)
 
 ## FRAGO log
 
@@ -1349,3 +1426,213 @@ Unchanged: D6's contingent loud-reject diagnostic remains UNBUILT, by design —
            row) should union-narrowing ever mature enough that this needs a real diagnostic
            instead of a documented loud ICE.
 Override:  N/A — risk-neutral, no signature required per the risk engine.
+
+## Session log — 2026-07-03 — session-id: phase4-executor-2026-07-03-m5-seg2
+Phase 4, segment 2 — STATUS: PARTIAL, resume-at `phase-4/step-2` (handoff-phase-4.md rewritten
+in place as current truth). Segment landed: **step 1 complete and green** —
+`crates/ynz-typeck/src/soa.rs` (new: SOA_SIZE_THRESHOLD, SoaDeclineReason/SoaVerdict/SoaCandidate,
+pure `analyze()` core with the full two-pass walk per handoff §B: expr_types type oracle,
+loop-context field-union counting, escape/growth/lend-self/param-row classification, banked
+decline precedence), `soa_candidate_query` in queries.rs (cpu_promotion_query idiom: lru=64,
+cycle pair, entry gates no_auto_parallel_env() + kernel_mode=false + has_errors→empty), lib.rs
+module + re-exports. Receipts: docker `cargo build --workspace` green; `cargo clippy -p
+ynz-typeck -- -D warnings` clean; `cargo fmt --all -- --check` clean; `cargo test -p ynz-typeck`
+all 26 result lines `0 failed`. Full-workspace suite deliberately deferred to the step-2
+CHECKPOINT mark (step 1 adds an unconsumed module only — no behavior change surface). Both
+segment-1 ⚠ items resolved and recorded in handoff §A (AST field names: `For.iter`,
+`ArrayLit.elements`; padding_gate assertion style + helper names). Checkpoint reason: context
+nudge fired (~158k) at end of at-code-time verification; landed step 1 to a green-building tree
+and stopped at the step-1/step-2 boundary rather than starting the multi-signature re-threading
+cut below its realistic token cost. No commit (PARTIAL rides uncommitted, FRAGO 004 discipline).
+Deviations: none new (third-padding-consumer finding was segment 1's; its coverage is banked in
+the step-2 design). Checkbox sync: plan uses numbered steps, no `- [ ]` boxes in Phase 4 — the
+session-id chain + this entry are the sync surface.
+
+## Session log — 2026-07-03 — session-id: phase4-executor-2026-07-03-m5-seg3
+Phase 4, segment 3 — STATUS: PARTIAL, resume-at `phase-4/step-3` (checkpointed AT the plan's
+own step-2 CHECKPOINT mark; handoff-phase-4.md rewritten in place as current truth). Segment
+landed: **step 2 complete, all CHECKPOINT gates paid.** The layout authority in soa.rs
+(FieldSegment/LayoutKind/LayoutDecision/LayoutDecisions + resolve_layout — D11 padding-wins:
+Admitted ∧ padded → Aos{CrossThreadPadded}; Admitted survivors → Soa with ALL declared fields,
+declared order; segments carry order+names only, NO ABI-size re-derivation per CCIR-2) +
+`layout_decisions_query` (same salsa idiom; padded set cloned UNCONDITIONALLY so re-threading
+is byte-identical) + lib.rs exports. All THREE padding consumers re-threaded to the authority:
+frame_layouts_query sizing, codegen_query→emit_artifact (new `layout` param), emit.rs Pass 0 +
+deep struct-lit alignment read (`cg.layout.padded_shapes`); `layout` threaded through
+build_module → lower_function → lower_function_with_waits AND lower_generic_function (real
+authority, not an empty stand-in); Cg field set in all 3 constructors; check.rs
+cross_thread_padded_shapes doc rewritten to raw-record status. Receipts (Docker): build green;
+clippy --workspace -D warnings clean; fmt --check clean; **full suite 2251 passed / 0 failed**
+(≥2246/0 P3 baseline; +5 delta NOT from this segment — zero tests added by steps 1–2; flagged
+in handoff for the DONE return); **zero pending snapshots = zero golden-IR churn** (pure
+re-threading proven); dual-mode padding spot-run
+`v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output` ok. Grep gates:
+`cross_thread_padded_shapes` in crates/ynz-codegen → ZERO hits (comments included);
+YNZ_NO_AUTO_PARALLEL env-parse only at queries.rs:598. Checkpoint reason: planner-placed
+CHECKPOINT mark after step 2 + context nudge (~150k+) — green-building tree at the step
+boundary. No commit (PARTIAL rides uncommitted). Deviations surfaced (not self-classified):
+(1) seg-2 handoff receipt had the 1408/3308 Cg-constructor LABELS swapped (count/sites
+correct — corrected in handoff §A, no behavior impact); (2) pre-existing `unused variable:
+stderr` warning at crates/ynz-driver/tests/integration.rs:672 (test target, outside house
+clippy scope, untouched by this diff) — surfaced for the record; (3) suite-count observation
+2251 vs 2246 seal aggregation, noted above. Checkbox sync: plan uses numbered steps, no
+`- [ ]` boxes in Phase 4 — the session-id chain + this entry are the sync surface; steps 3–5
+remain open (open↔open), steps 1–2 done (done↔done via this trail).
+
+## Session log — 2026-07-03 — session-id: phase4-executor-2026-07-03-m5-seg4
+Phase 4, segment 4 — **STATUS: DONE (phase complete, all 5 steps + all exit criteria).**
+Resumed at `phase-4/step-3` per handoff-phase-4.md; inherited the §A/§B/§E receipts (settled
+fixture/test plan, exact assertion strings, db/ENV_LOCK patterns, padding_gate anchors) and
+re-verified only new work. Landed: **step 3** — `m5_p4_soa_both_candidate.ynz` (mirrors
+v0_3_m4_p4_padding_gate.ynz + 66-elem qualifying `array<Tally>` hot loop) + integration test
+`m5_p4_soa_both_candidate_padding_wins_byte_layout` (default-mode IR keeps `{ i64, [56 x i8] }`
+padded slots; stdout exact `tally total: 5\n2211\n4422\n`; dual-mode byte-identical). **Step 4**
+— the 7 remaining decline fixtures (`m5_p4_soa_{qualifying,threefield,escaping,growth,lendself,
+runtime_length,small_n}.ynz`), each tripping exactly ONE precedence cell; all 8 fixtures run
+green through the real binary with exact tabled stdout, first run. **Step 5** —
+`crates/ynz-typeck/tests/soa_analysis.rs` (12 tests, queries.rs:1361 db pattern + file-local
+ENV_LOCK held by every test): exact verdict/reason payloads incl. row-count pins (escaping = 2
+rows: param + call-arg escape with exact `how` strings; runtime_length = 2 rows: returned-escape
++ LengthNotProvable); authority cells — qualifying → `Soa { segments: [x@0, y@1] }` (E10
+surface asserted on real `FieldSegment` values), both-candidate → candidate-walk Admitted{66,
+[hits,outs]} AND authority `Aos { CrossThreadPadded }` + padded set ∋ Tally (D11); entry gates
+— env-flag fresh-db → empty (with sanity ON half), kernel via pure `analyze(_,_,true,false)` →
+empty (with sanity OFF half). Receipts (Docker): soa_analysis 12/12; integration test 1/1;
+**full workspace suite 2264 passed / 0 failed** (= 2251/0 seg-3 baseline + exactly the 13 new
+tests — reconciles with zero unexplained delta); clippy --workspace -D warnings clean; fmt
+--check clean (cargo fmt applied to the new test file first); zero `*.snap.new`. Grep gates
+re-paid at DONE: `\.arrays` in ynz-codegen → sole hit is the emit.rs:854 param doc stating the
+exit criterion (zero code reads); `env::var("YNZ_NO_AUTO_PARALLEL")` parse only queries.rs:598;
+`cross_thread_padded_shapes` in ynz-codegen → zero hits; abi_size/size_of in typeck soa.rs →
+doc-comment-only. Recorded decision (on the record, not a deviation): exact-stdout integration
+tests for the 7 non-both-candidate fixtures NOT added — handoff §E marks them nice-to-have
+only; runtime behavior receipted via direct binary runs this segment, and Phase 5's dual-mode
+oracle sweeps all fixtures. Deviations: NONE new this segment; prior segments' surfaced items
+stand (seg-3 log). Checkbox sync: plan uses numbered steps, no `- [ ]` boxes in Phase 4 — the
+Phase 4 STATUS block (added this session) + session-id chain + this entry are the sync surface;
+all 5 steps done↔done, no steps remain open. handoff-phase-4.md DELETED as the final action of
+this segment (sole-owner completing-executor act). No commit (conductor's call at the boundary).
+
+## FRAGO 013 — 2026-07-03 — session-id: plan-conductor-2026-07-03-m5-fable (deviation-judge classified JUSTIFIED; risk-neutral; auto-apply + log)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 4 sealed (pre-commit — boundary review, this session)
+Trigger:   Phase 4's ¶1 recon + step 2 text (plan.md, citing `emit.rs:1051`/`codegen/queries.rs:204`)
+           names TWO padding consumers M4's false-sharing padding transform reads
+           `TypedModule::cross_thread_padded_shapes` through. Segment 1's CCIR-1 re-verify (mandated
+           by A1 — that recon ran against uncommitted M4 P4 code, explicitly flagged unverified) found
+           a THIRD real consumer at what is now `emit.rs:16848` (a deep `Cg`-level
+           `cross_thread_padded_shapes.contains()` read inside struct-lit alignment codegen). Segments
+           2-3 re-threaded all three sites to read the new `LayoutDecisions` authority; a grep confirms
+           zero remaining direct reads of `cross_thread_padded_shapes` anywhere in `ynz-codegen`.
+           Deviation-judge (boundary review, this session) independently re-verified the grep result
+           on disk and classified JUSTIFIED: the plan's own A1 assumption and Design-Doc-Alignment
+           divergence #8 explicitly flagged this exact citation as unverified and mandated the
+           re-verify that caught it — this is the mechanism working as designed, not a stray.
+Risk:      RISK-NEUTRAL-TO-LOWERING. Missing the third site would have left a live second-derivation
+           path outside the new authority — exactly the E3 twin-derivation class this phase exists to
+           eliminate. Covering it is what makes the grep gate (E3's B1 mitigation) actually hold, not
+           a new exposure. No re-run of the deterministic risk matrix required (no HIGH residual, no
+           signature gate).
+Changes:   plan.md Phase 4 ¶1 recon text + step 2 text corrected (applied by a re-dispatched executor,
+           not the conductor directly — plan-body edit stays out of conductor charter) to name all
+           THREE padding consumers (`emit.rs:1057`, `emit.rs:16848`→16872 post-rethread,
+           `codegen/queries.rs:208-212`) instead of two, and to note the RETIRED
+           `emit.rs:13104-13107` const-global-fold cite (made obsolete by Phases 2-3's by-value cut;
+           already flagged by the conductor's resume brief, formalizing it here).
+Unchanged: The re-threading itself is already complete and grep-gate-verified — this FRAGO is a
+           plan-text citation correction, not a design or scope change.
+Override:  N/A — risk-neutral, no signature required per the risk engine.
+
+## Session log — 2026-07-03 — session-id: plan-fixup-frago013-2026-07-03-m5
+Applied FRAGO 013's plan.md correction: Terrain padding-consumers bullet (plan.md:48-54) now names all THREE consumers with post-rethread lines; Terrain ArrayLit bullet (plan.md:41-42) marks the emit.rs:13104-13107 const-global-fold cite RETIRED; Phase 4 step 2 (plan.md:877-883) citation corrected to the three re-threaded sites; sibling sweep per plan-source-of-truth also corrected Design-Doc Alignment ¶8 (plan.md:196-201), which restated both stale facts. Session-id appended to frontmatter chain in the same action.
+
+## Session log — 2026-07-03 — session-id: phase4-executor-2026-07-03-m5-closing
+POST-BOUNDARY-REVIEW CLOSING ROUND — not a new phase. Phase 4's reviewer fan-out (8 dispatches)
+returned zero blockers + two should-fix findings; both fixed this round. (1) Reassign-staleness
+(code-reviewer, correctness): the walk's `Stmt::Assign` arm only scanned the RHS — a tracked
+binding reassigned mid-function kept its ORIGINAL initializer's provable_len/escape/growth
+signals, so a stale Admitted verdict could reach Phase 5's buffer sizing (E3/E7 class; inert
+today, zero codegen consumers). Fix: Assign with a tracked target now declines it via the
+existing enum — `Escapes { how: "reassigned after initial binding" }` (soa.rs, split
+Let/Assign arms; the shared RHS-alias check consolidated onto `scan_ident_in_value_position`,
+byte-identical message). Fixture `m5_p4_soa_reassigned.ynz` (otherwise-qualifying 72-element
+binding reassigned to a 4-element sibling; asserts BOTH halves — target reassign-decline +
+RHS alias-escape on `replacement`). Note: an Assign-position array-of-shape literal does not
+type (annotation-driven literals need the `let` annotation; verified via real-binary
+diagnostic), hence reassign-from-binding. (2) `NoPerFieldLoopAccess` (adversarial
+gate-checker, completeness): live branch (soa.rs `sig.field_union.is_empty()`) had zero
+fixture/test coverage — plan-table gap, not executor miss. Fixture
+`m5_p4_soa_no_field_access.ynz` (66-element, count-only loop) + exact-reason test.
+Receipts: workspace 2266 passed / 0 failed (= 2264 baseline + exactly the 2 new tests);
+soa_analysis.rs now 14 tests, all 12 pre-existing exact-verdict tests unchanged-green — the 8
+original fixtures' verdicts UNCHANGED by the fix (only reassigned bindings are affected);
+clippy -D warnings clean; fmt --check clean; zero *.snap.new; both fixtures run clean through
+the real binary (stdout `10\n20` and `66`); grep gates re-held (YNZ_NO_AUTO_PARALLEL parse
+only at queries.rs:598; zero cross_thread_padded_shapes reads in ynz-codegen; `.arrays` sole
+codegen hit = emit.rs:854 doc comment; no ABI-size derivation in soa.rs). Plan sync: Phase 4
+STATUS block extended with the closing-round record; session-id appended to frontmatter chain
+in this same action. No handoff file created (single segment). Deviations: NONE. No commit
+(conductor's call).
+
+## Session log — 2026-07-04 — session-id: phase4-executor-2026-07-03-m5-closing2
+SECOND CLOSING ROUND — not a new phase. Code-reviewer's re-check of closing round 1 confirmed the
+Assign fix closed correctly but surfaced ONE sibling gap in the same risk class: Pass 1
+(`collect_bindings_block`) kept the FIRST record on a same-name re-`let` shadow
+(`if !st.bindings.contains_key(name)` skipped the second initializer). Same-scope re-`let`
+shadowing is LEGAL Yinz in non-suspending functions (check_let tail = unconditional
+`scope.insert`, no duplicate diagnostic; proven fixture
+v0_3_m3a_p2_r7_nonasync_local_shadow_compiles.ynz), so a 72-element qualifying binding shadowed by
+a 4-element re-`let` stayed `Admitted { provable_len: 72 }` — a 68-element over-size into Phase 5's
+buffer sizing (E3/E7 stale-signal class, Pass-1 path; the re-`let` sibling of round 1's Assign
+fix). Fix: any `Stmt::Let` whose name is already tracked declines the record via the existing enum
+— `Escapes { how: "rebound by a later let" }` — firing regardless of the shadow's own type (a
+non-array shadow rebinds the name just the same; strictly conservative, no parallel mechanism).
+Pass-1 marking precedes all Pass-2 signals → deterministic first-signal-wins. Fixture
+`m5_p4_soa_let_shadow.ynz` (larger-then-smaller, the actual miscompile-risk direction) +
+exact-reason test `let_shadowed_binding_declines_as_rebound` (the reason string exists ONLY in the
+new arm — the assertion cannot pass without the new path executing).
+EXHAUSTIVE REBINDING SWEEP (recorded so no reviewer re-derives it): (1) Let-first — baseline,
+handled. (2) Let same-name shadow — THIS fix; covers same-scope AND nested-block shadows (the walk
+is flat name-keyed over all nested blocks). (3) Assign — round 1's fix, confirmed closed.
+(4) FieldAssign/IndexAssign — verified against check.rs:5755-5790/5920-5950 + nodes.rs:304-313:
+IndexAssign is `.set(index, value)` sugar (mutation, cannot change length), FieldAssign mutates a
+field through the root binding's existing scope entry; neither rebinds array identity/length → not
+a staleness source. (5) For-loop vars (plain var, destructure_pattern, map_destructure_pattern) —
+scoped per-element bindings that expire with the loop; a loop var shadowing a tracked name over a
+NON-tracked iter yields at worst a conservative spurious escape in Pass 2 (decline direction),
+never a stale Admitted → out of this class. (6) Array-typed params — unconditionally declined rows
+(`Escapes` cross-function, S2 finding 5), never Admitted → no staleness path exists. (7) Other
+constructs in nodes.rs: Match patterns (Value/Is/OptionName — MatchPatternKind, nodes.rs:346-360)
+bind NO names; `Expr::Background` spawn captures args by copy/share without rebinding any name;
+imports bind module names at module level (not function-body array bindings). NO third gap found;
+nothing hypothetical fixed (completeness check, not gold-plating).
+Receipts: workspace **2267 passed / 0 failed** (= 2266 baseline + exactly the 1 new test);
+soa_analysis.rs now 15 tests — all 14 prior exact-verdict tests unchanged-green, so all 10 prior
+fixtures' verdicts UNCHANGED; clippy -D warnings clean; fmt --check clean; zero *.snap.new; grep
+gates re-held (YNZ_NO_AUTO_PARALLEL env::var parse ONLY at queries.rs:598 inside the one
+`no_auto_parallel_env()` predicate; soa.rs's padded set is the threaded parameter only, no second
+derivation; zero ABI-size derivation in soa.rs). Plan sync: Phase 4 STATUS block extended with the
+closing-round-2 record; session-id appended to frontmatter chain in this SAME action. Deviations:
+NONE. No handoff file (single segment). No commit (conductor's call).
+
+## Session log — 2026-07-04 — session-id: phase4-deferral-executor-2026-07-03-m5
+DEFERRAL ROUTING — documentation-only, no code touched, no phase checkboxes affected. The two
+pre-existing, out-of-scope minor findings from Phase 4's boundary review (confirmed inert for
+Phase 4, flagged for Phase 5) were filed as durable four-field NIT-PATH deferrals in the
+ROADMAP's own sidecar (`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md`) —
+NOT this plan's audit.md, because this plan's directory archives at completion while the roadmap
+dir stays active. No Capability Ledger row (code-quality deferrals, not capability discoveries).
+Both idempotency keys were grep-confirmed absent (whole-line fixed-string) before writing:
+- `Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4: crates-ynz-typeck-src-soa-rs-294` — param
+  `arr: array<Shape>` shadowed by a body `let arr` yields TWO `LayoutDecisions.arrays` rows
+  sharing one `array_name` (inert today: codegen consumes only `padded_shapes`; Phase 5's
+  arrays-consumption design owns the keying/dedup resolution).
+- `Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4: crates-ynz-typeck-src-soa-rs-535` — Pass 2's
+  Match-arm scan skips `arm.pattern`'s `Value(Expr)` variant; a tracked array used only inside a
+  match-pattern value expression would miss escape classification (unreachable in any current
+  fixture; trigger includes Phase 8's suppression-enumeration sweep).
+Session-id `phase4-deferral-executor-2026-07-03-m5` was also appended to the ROADMAP's
+`roadmap.md` frontmatter session-id chain in this same action (its audit.md is a deferral
+sidecar with no session-log convention, so each roadmap entry carries a `Filed-by-session:`
+line as corroboration), and to THIS plan's own frontmatter chain — the latter not explicitly
+ordered by the dispatch, decided on the record to keep this plan's established
+one-audit-entry-per-frontmatter-id pairing intact.

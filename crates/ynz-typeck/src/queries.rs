@@ -674,6 +674,129 @@ pub fn cpu_promotion_query(
     Arc::new(PromotionOutput { promoted })
 }
 
+/// Cycle-initial placeholder for `soa_candidate_query` on circular import chains:
+/// the empty candidate list (declining is always safe; the circular-import error is
+/// injected by `module_signatures_cycle_fn` and surfaces through `check_query`).
+fn soa_candidate_cycle_initial(
+    _db: &dyn SourceFileRegistry,
+    _id: salsa::Id,
+    _source: SourceFile,
+) -> Arc<Vec<crate::soa::SoaCandidate>> {
+    Arc::new(Vec::new())
+}
+
+fn soa_candidate_cycle_fn(
+    _db: &dyn SourceFileRegistry,
+    _cycle: &salsa::Cycle,
+    _last_provisional: &Arc<Vec<crate::soa::SoaCandidate>>,
+    value: Arc<Vec<crate::soa::SoaCandidate>>,
+    _source: SourceFile,
+) -> Arc<Vec<crate::soa::SoaCandidate>> {
+    value
+}
+
+/// Compute the SoA candidate list for this module (v0.3-M5 Phase 4 step 1).
+///
+/// Salsa-tracked (incremental-safe; no global mutable state). Depends on
+/// `check_query` (the `expr_types` type oracle + diagnostics) and
+/// `module_signatures_query` (the shape table for param/lend-self resolution).
+///
+/// Gating is at the query entry: `--no-auto-parallel` (read via
+/// [`no_auto_parallel_env`], the SAME predicate codegen reads — D1) and kernel mode
+/// both disable SoA analysis entirely. The pure core [`crate::soa::analyze`] takes
+/// both flags explicitly so unit tests can drive the decline paths deterministically.
+///
+/// Time: O(F · B)  Space: O(bindings) — one body walk per function.
+// lru = 64: same cost class as check_query; both ride the body walk.
+#[salsa::tracked(lru = 64, cycle_fn = soa_candidate_cycle_fn, cycle_initial = soa_candidate_cycle_initial)]
+pub fn soa_candidate_query(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+) -> Arc<Vec<crate::soa::SoaCandidate>> {
+    let no_auto_parallel = no_auto_parallel_env();
+    // The production check path is never kernel mode today (`--kernel` is wired only
+    // through the test-only `check_with_kernel_mode`); when it lands, this reads the
+    // same kernel signal check_query uses. SoA analysis declines under kernel mode.
+    let kernel_mode = false;
+
+    let check_out = check_query(db, source);
+    if check_out.diagnostics.has_errors() {
+        // Codegen is skipped on type errors — no meaningful layout to analyze
+        // (the frame_layouts_query posture).
+        return Arc::new(Vec::new());
+    }
+    let sig_output = module_signatures_query(db, source);
+
+    Arc::new(crate::soa::analyze(
+        &check_out.typed_module,
+        &sig_output.shape_table,
+        kernel_mode,
+        no_auto_parallel,
+    ))
+}
+
+/// Cycle-initial placeholder for `layout_decisions_query` on circular import
+/// chains: an empty authority (no padded shapes, no arrays) — the circular-import
+/// error is injected by `module_signatures_cycle_fn` and surfaces through
+/// `check_query`.
+fn layout_decisions_cycle_initial(
+    _db: &dyn SourceFileRegistry,
+    _id: salsa::Id,
+    _source: SourceFile,
+) -> Arc<crate::soa::LayoutDecisions> {
+    Arc::new(crate::soa::LayoutDecisions {
+        padded_shapes: std::collections::HashSet::new(),
+        arrays: Vec::new(),
+    })
+}
+
+fn layout_decisions_cycle_fn(
+    _db: &dyn SourceFileRegistry,
+    _cycle: &salsa::Cycle,
+    _last_provisional: &Arc<crate::soa::LayoutDecisions>,
+    value: Arc<crate::soa::LayoutDecisions>,
+    _source: SourceFile,
+) -> Arc<crate::soa::LayoutDecisions> {
+    value
+}
+
+/// Resolve THE one authoritative layout-decision source (v0.3-M5 Phase 4 step 2,
+/// E3 B1). Delegates to [`crate::soa::resolve_layout`] — D11 precedence: padding
+/// wins; a cross-thread-padded shape's arrays are never SoA'd.
+///
+/// Every layout consumer — codegen's shape-type emission (Pass 0), the deep
+/// padded-alloca alignment read, and `frame_layouts_query`'s sizing pass — reads
+/// `LayoutDecisions` from THIS query; a direct read of
+/// `TypedModule::cross_thread_padded_shapes` outside this authority is the E3
+/// twin-derivation corpse (authoritative-derivation.md).
+///
+/// `padded_shapes` is cloned UNCONDITIONALLY — even when the module has type
+/// errors — matching the pre-authority consumers' unconditional
+/// `typed.cross_thread_padded_shapes` reads, so the re-threading stays
+/// byte-identical. `arrays` rides `soa_candidate_query` (already empty on
+/// errors and under the kernel / `--no-auto-parallel` gates).
+///
+/// Phase 4 exit criterion: codegen consumes ONLY `padded_shapes`; ZERO codegen
+/// consumers of `arrays` exist until Phase 5's SoA lowering.
+///
+/// Time: O(C · F) resolve on top of its input queries.  Space: O(C · F + P).
+// lru = 64: same cost class as its inputs; one resolve pass per module.
+#[salsa::tracked(lru = 64, cycle_fn = layout_decisions_cycle_fn, cycle_initial = layout_decisions_cycle_initial)]
+pub fn layout_decisions_query(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+) -> Arc<crate::soa::LayoutDecisions> {
+    let check_out = check_query(db, source);
+    let candidates = soa_candidate_query(db, source);
+    let sig_output = module_signatures_query(db, source);
+
+    Arc::new(crate::soa::resolve_layout(
+        &check_out.typed_module.cross_thread_padded_shapes,
+        &candidates,
+        &sig_output.shape_table,
+    ))
+}
+
 /// Pure core of the CPU-promotion analysis (Decision Record item 8b/8c).
 ///
 /// 1. **Candidate identification** (bottom-up, deterministic): a non-cyclic function whose body

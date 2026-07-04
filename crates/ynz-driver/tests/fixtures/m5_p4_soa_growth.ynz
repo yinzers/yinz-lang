@@ -1,0 +1,25 @@
+// M5 P4 step 4 — SoA decline fixture: GROWTH OP (D3).
+//
+// `pts` starts as an empty literal and grows via `.add()` inside a runtime-bounded
+// range loop — growth under segmented layout would force per-segment re-layout on
+// every realloc, so any `.add()` on the binding declines it (the later qualifying
+// x-loop cannot rescue it; growth precedes the union check in the banked decline
+// precedence). Asserted verdict: Grown { op: ".add()" }.
+shape Point {
+  x: int
+  y: int
+}
+
+function entrypoint() -> nothing {
+  let pts: array<Point> = []
+  let n = 3
+  for (i in range(0, n)) {
+    let np: Point = { x: i + 1, y: 0 }
+    pts.add(np)
+  }
+  let total = 0
+  for (p in pts) {
+    total = total + p.x
+  }
+  print(total)
+}

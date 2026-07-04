@@ -79,13 +79,16 @@ pub struct TypedModule {
     /// muted-text hint at the call site.
     pub background_arg_inferred_ownership: std::collections::HashMap<(usize, usize), BgOwnership>,
     /// v0.3-M4 Phase 4: shape types the false-sharing transform pads with 64-byte
-    /// cache-line field isolation — the ONE authoritative padded set, derived by
-    /// `false_sharing::finalize_false_sharing` from the `Expr::Background` boundary
-    /// record. Consumed by codegen layout (`emit_shape_types`) AND frame-slot sizing
-    /// (`frame_layouts_query` measures the same padded LLVM types), so every consumer
-    /// threads this set rather than re-deriving cross-thread access. EMPTY under
-    /// `--no-auto-parallel` (the sequential oracle stays genuinely unpadded) and under
-    /// kernel mode (no scheduler — `background` is a compile error there).
+    /// cache-line field isolation, derived by `false_sharing::finalize_false_sharing`
+    /// from the `Expr::Background` boundary record. EMPTY under `--no-auto-parallel`
+    /// (the sequential oracle stays genuinely unpadded) and under kernel mode (no
+    /// scheduler — `background` is a compile error there).
+    ///
+    /// v0.3-M5 Phase 4: this field is the RAW finalize record. Consumers read the
+    /// resolved `LayoutDecisions` via `layout_decisions_query` (the ONE layout
+    /// authority — codegen layout, padded-alloca alignment, and frame-slot sizing
+    /// all thread its `padded_shapes`); a direct read outside that authority is
+    /// the E3 twin-derivation corpse (authoritative-derivation.md).
     pub cross_thread_padded_shapes: std::collections::HashSet<String>,
 }
 

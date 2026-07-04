@@ -848,6 +848,11 @@ pub fn emit_artifact(
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     frame_layouts: &HashMap<String, FrameLayout>,
     cpu_promoted: &HashSet<String>,
+    // THE one authoritative layout source (v0.3-M5 P4 / E3 B1, typeck's
+    // `layout_decisions_query`). Phase 4 consumes ONLY `layout.padded_shapes`
+    // (shape-type emission + padded-alloca alignment); ZERO consumers of
+    // `layout.arrays` exist until Phase 5's SoA lowering lands.
+    layout: &ynz_typeck::soa::LayoutDecisions,
 ) -> Result<CompiledArtifact, String> {
     let context = Context::create();
     let module_id = module_identifier(source_path);
@@ -935,6 +940,7 @@ pub fn emit_artifact(
         frame_layouts,
         no_auto_parallel,
         m3d_spike,
+        layout,
     )?;
 
     module
@@ -1003,6 +1009,7 @@ fn build_module<'ctx, 'g>(
     frame_layouts_arg: &HashMap<String, FrameLayout>,
     no_auto_parallel: bool,
     m3d_spike: bool,
+    layout: &'g ynz_typeck::soa::LayoutDecisions,
 ) -> Result<(), String> {
     // E5 compile-time-adjacent link (should-fix, cumulative M3g review): cross-check codegen's
     // AST-level CPU-ABI-support gate against typeck's resolved-level gate for every function in
@@ -1049,12 +1056,12 @@ fn build_module<'ctx, 'g>(
 
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
     //
-    // The false-sharing padded set is typeck's authoritative derivation
-    // (`TypedModule::cross_thread_padded_shapes`) — threaded here AND into
-    // `frame_layouts_query`'s sizing pass, never re-derived in codegen
+    // The false-sharing padded set is read from THE one layout authority
+    // (typeck's `layout_decisions_query`, v0.3-M5 P4 / E3 B1) — threaded here
+    // AND into `frame_layouts_query`'s sizing pass, never re-derived in codegen
     // (authoritative-derivation.md). Empty under --no-auto-parallel, so the
     // sequential oracle lowering emits genuinely unpadded layouts.
-    let shape_types = emit_shape_types(ctx, shape_table, &typed.cross_thread_padded_shapes);
+    let shape_types = emit_shape_types(ctx, shape_table, &layout.padded_shapes);
 
     // Pass 0.25 — forward-declare imported (cross-module) functions as LLVM external declarations.
     //
@@ -1244,6 +1251,7 @@ fn build_module<'ctx, 'g>(
                 sig_table,
                 no_auto_parallel,
                 m3d_spike,
+                layout,
             )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -1294,6 +1302,7 @@ fn build_module<'ctx, 'g>(
             mono_sig,
             mono_table,
             &options_table,
+            layout,
         )?;
     }
 
@@ -1401,6 +1410,7 @@ fn lower_generic_function<'ctx>(
     mono_sig: &ynz_typeck::generics::MonoSignature,
     mono_table: &'_ MonomorphizationTable,
     options_table: &'_ ynz_typeck::options_table::OptionsTable,
+    layout: &'_ ynz_typeck::soa::LayoutDecisions,
 ) -> Result<(), String> {
     let ret_ty = mono_sig.ret_type.clone();
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
@@ -1419,6 +1429,9 @@ fn lower_generic_function<'ctx>(
         shape_table,
         shape_types,
         shape_abi_sizes,
+        // The REAL authority, not an empty stand-in: the struct-lit padded-alloca
+        // alignment path runs for generic bodies too.
+        layout,
         type_subst,
         mono_table,
         options_table,
@@ -1651,6 +1664,11 @@ struct Cg<'ctx, 'g> {
     // derives). Consumed ONLY by `array_elem_size`, the single elem-size derivation
     // all by-value array element loads/stores route through (authoritative-derivation).
     shape_abi_sizes: &'g HashMap<String, u64>,
+    // v0.3-M5 P4: THE one authoritative layout source (typeck's
+    // `layout_decisions_query` — E3 B1). Every layout read in lowering goes
+    // through this field (P4: `padded_shapes` only; P5 adds `arrays` for SoA),
+    // never through `typed` directly.
+    layout: &'g ynz_typeck::soa::LayoutDecisions,
     // M5 P4a: type-param substitution for the current monomorphized instance.
     // Empty for non-generic functions.
     type_subst: HashMap<String, Type>,
@@ -3262,6 +3280,7 @@ fn lower_function<'ctx, 'g>(
     sig_table: &'g SignatureTable,
     no_auto_parallel: bool,
     m3d_spike: bool,
+    layout: &'g ynz_typeck::soa::LayoutDecisions,
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
@@ -3288,6 +3307,7 @@ fn lower_function<'ctx, 'g>(
             sig_table,
             no_auto_parallel,
             m3d_spike,
+            layout,
         );
     }
 
@@ -3319,6 +3339,7 @@ fn lower_function<'ctx, 'g>(
         shape_table,
         shape_types,
         shape_abi_sizes,
+        layout,
         type_subst: HashMap::new(),
         mono_table,
         options_table,
@@ -3515,6 +3536,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     sig_table: &'g SignatureTable,
     no_auto_parallel: bool,
     m3d_spike: bool,
+    layout: &'g ynz_typeck::soa::LayoutDecisions,
 ) -> Result<(), String> {
     // Collect the names of parameters. ALL parameters are live across any wait.
     let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
@@ -3808,6 +3830,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         shape_table,
         shape_types,
         shape_abi_sizes,
+        layout,
         type_subst: HashMap::new(),
         mono_table,
         options_table,
@@ -16844,8 +16867,9 @@ fn lower_struct_lit<'ctx>(
     // False-sharing-padded shapes get their stack slot 64-byte aligned so each field's
     // 64-byte slot coincides exactly with one cache line even while the value lives on
     // the stack (heap copies get their isolation from ynz_alloc's ≥16-byte alignment +
-    // the ≤16-byte payload argument — see shape_types.rs).
-    if cg.typed.cross_thread_padded_shapes.contains(&shape_name) {
+    // the ≤16-byte payload argument — see shape_types.rs). The padded set is read
+    // from THE one layout authority (v0.3-M5 P4 / E3 B1), same source as Pass 0.
+    if cg.layout.padded_shapes.contains(&shape_name) {
         if let Some(inst) = slot.as_instruction() {
             inst.set_alignment(crate::shape_types::CACHE_LINE_BYTES)
                 .map_err(|e| format!("align padded alloca {}: {e}", shape_name))?;

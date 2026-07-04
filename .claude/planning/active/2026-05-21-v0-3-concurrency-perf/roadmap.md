@@ -3,9 +3,9 @@ name: "v0-3-concurrency-perf"
 plan-id: "2026-05-21-v0-3-concurrency-perf"
 status: "active"
 roadmap-id: null
-session-id: ["4da497e1-c5bf-4d07-9ffd-a297ade26351"]
+session-id: ["4da497e1-c5bf-4d07-9ffd-a297ade26351", "phase4-deferral-executor-2026-07-03-m5"]
 created_at: "2026-05-21"
-updated_at: "2026-07-03"
+updated_at: "2026-07-04"
 metadata:
   type: "roadmap"
 legacy:

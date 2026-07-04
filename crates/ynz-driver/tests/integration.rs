@@ -10807,3 +10807,54 @@ fn m5_p3_sweep_union_readback_blocked_map() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M5 P4 step 3: SoA × padding both-candidate — the byte-layout half (E3/D11)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn m5_p4_soa_both_candidate_padding_wins_byte_layout() {
+    // WHY: E3's RED-fixture mitigation — a shape simultaneously cross-thread-padded
+    // (M4) AND a qualifying SoA candidate (M5 P4) must resolve through the ONE
+    // layout authority to padding-only (recorded decision D11). Three claims, all
+    // proven through the real compiler binary (padding_gate assertion style):
+    //   (a) default-mode IR still carries the padded `{ i64, [56 x i8] }` 64-byte
+    //       field slots — padding INTACT despite the qualifying hot loop over
+    //       array<Tally> (SoA never fires on a padded shape; and P4 ships zero SoA
+    //       codegen anyway — the analysis-level half lives in
+    //       crates/ynz-typeck/tests/soa_analysis.rs);
+    //   (b) program output is exact — the hot loop computes correctly through
+    //       padded by-value elements;
+    //   (c) dual-mode byte-identical output (layout is layout-only, no behavior
+    //       divergence).
+    let src = fixture("m5_p4_soa_both_candidate.ynz");
+
+    // (b) + (c): both modes run, exit 0, exact and identical stdout.
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default mode must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout, "tally total: 5\n2211\n4422\n",
+        "hot loop must compute exact sums through the padded elements"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel mode must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "both-candidate lowering must produce byte-identical output in both modes"
+    );
+
+    // (a) default-mode IR: the padded struct survives the SoA-candidate collision.
+    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
+    assert!(
+        par_ir.contains("{ i64, [56 x i8] }"),
+        "default mode must KEEP the 64-byte padded field slots for the crossing \
+         shape (padding wins over SoA, D11); IR:\n{}",
+        &par_ir[..par_ir.len().min(4000)]
+    );
+}

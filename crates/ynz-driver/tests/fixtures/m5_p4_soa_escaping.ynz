@@ -1,0 +1,98 @@
+// M5 P4 step 4 — SoA decline fixture: ESCAPING ARRAY (D4).
+//
+// `pts` runs a fully-qualifying hot loop first (66 > 64, 1-field union), then is
+// passed to `sumX()` — the analysis cannot see all accesses, so the binding
+// declines. Asserted verdicts: the entrypoint binding =
+// Escapes { how: "passed to `sumX()` (D4)" }; the `pts` PARAMETER inside sumX is
+// its own declined row — Escapes { how: "function parameter — cross-function by
+// definition (D4)" } (params are recorded, never silently absent).
+shape Point {
+  x: int
+  y: int
+}
+
+function sumX(share pts: array<Point>) -> int {
+  let total = 0
+  for (p in pts) {
+    total = total + p.x
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let pts: array<Point> = [
+    { x: 1, y: 2 },
+    { x: 2, y: 4 },
+    { x: 3, y: 6 },
+    { x: 4, y: 8 },
+    { x: 5, y: 10 },
+    { x: 6, y: 12 },
+    { x: 7, y: 14 },
+    { x: 8, y: 16 },
+    { x: 9, y: 18 },
+    { x: 10, y: 20 },
+    { x: 11, y: 22 },
+    { x: 12, y: 24 },
+    { x: 13, y: 26 },
+    { x: 14, y: 28 },
+    { x: 15, y: 30 },
+    { x: 16, y: 32 },
+    { x: 17, y: 34 },
+    { x: 18, y: 36 },
+    { x: 19, y: 38 },
+    { x: 20, y: 40 },
+    { x: 21, y: 42 },
+    { x: 22, y: 44 },
+    { x: 23, y: 46 },
+    { x: 24, y: 48 },
+    { x: 25, y: 50 },
+    { x: 26, y: 52 },
+    { x: 27, y: 54 },
+    { x: 28, y: 56 },
+    { x: 29, y: 58 },
+    { x: 30, y: 60 },
+    { x: 31, y: 62 },
+    { x: 32, y: 64 },
+    { x: 33, y: 66 },
+    { x: 34, y: 68 },
+    { x: 35, y: 70 },
+    { x: 36, y: 72 },
+    { x: 37, y: 74 },
+    { x: 38, y: 76 },
+    { x: 39, y: 78 },
+    { x: 40, y: 80 },
+    { x: 41, y: 82 },
+    { x: 42, y: 84 },
+    { x: 43, y: 86 },
+    { x: 44, y: 88 },
+    { x: 45, y: 90 },
+    { x: 46, y: 92 },
+    { x: 47, y: 94 },
+    { x: 48, y: 96 },
+    { x: 49, y: 98 },
+    { x: 50, y: 100 },
+    { x: 51, y: 102 },
+    { x: 52, y: 104 },
+    { x: 53, y: 106 },
+    { x: 54, y: 108 },
+    { x: 55, y: 110 },
+    { x: 56, y: 112 },
+    { x: 57, y: 114 },
+    { x: 58, y: 116 },
+    { x: 59, y: 118 },
+    { x: 60, y: 120 },
+    { x: 61, y: 122 },
+    { x: 62, y: 124 },
+    { x: 63, y: 126 },
+    { x: 64, y: 128 },
+    { x: 65, y: 130 },
+    { x: 66, y: 132 }
+  ]
+  let direct = 0
+  for (p in pts) {
+    direct = direct + p.x
+  }
+  print(direct)
+  let viaFn = sumX(pts)
+  print(viaFn)
+}

@@ -193,3 +193,40 @@ Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#5: crates-ynz-typeck-sr
 - **TRIGGER** — A second independent report of a hint failing to fire inside an assignment
   lvalue, OR whenever the next hint-pass domain is added (the natural refactor point — do the
   extraction BEFORE adding walker #6).
+
+## 2026-07-04 — Deferral: param-shadowed-by-let produces two LayoutDecisions.arrays rows sharing one array_name (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#4 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4: crates-ynz-typeck-src-soa-rs-294
+Filed-by-session: phase4-deferral-executor-2026-07-03-m5
+
+- **WHAT** — `crates/ynz-typeck/src/soa.rs:294`: a param `arr: array<Shape>` shadowed by a body
+  `let arr = [...]` produces TWO `LayoutDecisions.arrays` rows sharing the same `array_name` (one
+  param-declined row, one possibly-Admitted let row).
+- **WHY** — Inert for Phase 4 because codegen consumes only `layout.padded_shapes`, never
+  `layout.arrays`, so the duplicate-keyed row has zero observable effect today; fixing it now
+  would be scope creep into Phase 5's own consumption design, which hasn't decided how it
+  keys/dedupes `arrays` rows yet.
+- **COST** — Small, bounded to Phase 5: either dedupe by `(array_name, decl_span)` instead of
+  `array_name` alone, or accept the duplicate and have Phase 5's codegen key its lookup the same
+  way. Roughly a half-day of Phase-5-scoped work once the consumption design exists to react to.
+- **TRIGGER** — Phase 5 (SoA codegen on the by-value substrate) begins consuming
+  `LayoutDecisions.arrays` for real; its own design must decide the keying/dedup story, at which
+  point this pre-existing duplicate-row shape becomes load-bearing and must be resolved.
+
+## 2026-07-04 — Deferral: Pass 2 Match-arm scan skips arm.pattern's Value(Expr) variant (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#4 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4: crates-ynz-typeck-src-soa-rs-535
+Filed-by-session: phase4-deferral-executor-2026-07-03-m5
+
+- **WHAT** — `crates/ynz-typeck/src/soa.rs:535`: Pass 2's `Match` arm scan covers the scrutinee,
+  arm bodies, and the else-arm, but NOT `arm.pattern`'s `Value(Expr)` variant — a tracked array
+  used only inside a match-pattern value expression would miss an escape classification.
+- **WHY** — Contrived and currently unreachable in any of this milestone's fixtures (requires an
+  array both hot-looped elsewhere AND used as a literal match-pattern value, a combination no real
+  Yinz code in this repo exercises); fixing it now with no reproducing fixture would be
+  speculative hardening, not a confirmed bug fix.
+- **COST** — Small — add one more expr-scan call on `arm.pattern`'s `Value` variant inside the
+  existing `Match` handling in `scan_stmt`/`scan_expr`; under an hour once a concrete repro
+  exists.
+- **TRIGGER** — A real fixture (in this milestone's later phases, or any future SoA-adjacent work)
+  is found to construct exactly this shape (a tracked array referenced only via a match-pattern
+  value expression), OR Phase 8's suppression-enumeration mandate sweeping `examples/` + test
+  fixtures surfaces a shape matching this pattern.

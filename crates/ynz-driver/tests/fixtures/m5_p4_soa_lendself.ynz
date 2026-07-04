@@ -1,0 +1,95 @@
+// M5 P4 step 4 — SoA decline fixture: LEND-SELF SHAPE FILTER (E6, roadmap mandate).
+//
+// A standalone `recordHit(lend self: Pirate, ...)` exists (mirrors
+// examples/pirates-roster/entrypoint.ynz), so EVERY array<Pirate> declines at the
+// shape level regardless of call sites — SoA would split storage a lend-self
+// function expects contiguous. The `crew` hot loop otherwise fully qualifies
+// (66 > 64, 1-field union, no escape/growth). Asserted verdict:
+// LendSelfMethod { function: "recordHit" }.
+shape Pirate {
+  hits: int
+  bounty: int
+}
+
+function recordHit(lend self: Pirate, amount: int) -> nothing {
+  self.hits = self.hits + amount
+}
+
+function entrypoint() -> nothing {
+  let crew: array<Pirate> = [
+    { hits: 1, bounty: 10 },
+    { hits: 2, bounty: 20 },
+    { hits: 3, bounty: 30 },
+    { hits: 4, bounty: 40 },
+    { hits: 5, bounty: 50 },
+    { hits: 6, bounty: 60 },
+    { hits: 7, bounty: 70 },
+    { hits: 8, bounty: 80 },
+    { hits: 9, bounty: 90 },
+    { hits: 10, bounty: 100 },
+    { hits: 11, bounty: 110 },
+    { hits: 12, bounty: 120 },
+    { hits: 13, bounty: 130 },
+    { hits: 14, bounty: 140 },
+    { hits: 15, bounty: 150 },
+    { hits: 16, bounty: 160 },
+    { hits: 17, bounty: 170 },
+    { hits: 18, bounty: 180 },
+    { hits: 19, bounty: 190 },
+    { hits: 20, bounty: 200 },
+    { hits: 21, bounty: 210 },
+    { hits: 22, bounty: 220 },
+    { hits: 23, bounty: 230 },
+    { hits: 24, bounty: 240 },
+    { hits: 25, bounty: 250 },
+    { hits: 26, bounty: 260 },
+    { hits: 27, bounty: 270 },
+    { hits: 28, bounty: 280 },
+    { hits: 29, bounty: 290 },
+    { hits: 30, bounty: 300 },
+    { hits: 31, bounty: 310 },
+    { hits: 32, bounty: 320 },
+    { hits: 33, bounty: 330 },
+    { hits: 34, bounty: 340 },
+    { hits: 35, bounty: 350 },
+    { hits: 36, bounty: 360 },
+    { hits: 37, bounty: 370 },
+    { hits: 38, bounty: 380 },
+    { hits: 39, bounty: 390 },
+    { hits: 40, bounty: 400 },
+    { hits: 41, bounty: 410 },
+    { hits: 42, bounty: 420 },
+    { hits: 43, bounty: 430 },
+    { hits: 44, bounty: 440 },
+    { hits: 45, bounty: 450 },
+    { hits: 46, bounty: 460 },
+    { hits: 47, bounty: 470 },
+    { hits: 48, bounty: 480 },
+    { hits: 49, bounty: 490 },
+    { hits: 50, bounty: 500 },
+    { hits: 51, bounty: 510 },
+    { hits: 52, bounty: 520 },
+    { hits: 53, bounty: 530 },
+    { hits: 54, bounty: 540 },
+    { hits: 55, bounty: 550 },
+    { hits: 56, bounty: 560 },
+    { hits: 57, bounty: 570 },
+    { hits: 58, bounty: 580 },
+    { hits: 59, bounty: 590 },
+    { hits: 60, bounty: 600 },
+    { hits: 61, bounty: 610 },
+    { hits: 62, bounty: 620 },
+    { hits: 63, bounty: 630 },
+    { hits: 64, bounty: 640 },
+    { hits: 65, bounty: 650 },
+    { hits: 66, bounty: 660 }
+  ]
+  let totalHits = 0
+  for (p in crew) {
+    totalHits = totalHits + p.hits
+  }
+  print(totalHits)
+  let cap: Pirate = { hits: 5, bounty: 0 }
+  cap.recordHit(3)
+  print(cap.hits)
+}
