@@ -460,7 +460,9 @@ The frame-slot classifier in codegen handles int, bool, float, number, string, a
 
 ---
 
-### `ECWrapperResultCollection` — collecting the result of a `background`-spawned `-> T errors` task (gated on background-handle collection)
+### `ECWrapperResultCollection` — collecting the result of a `background`-spawned `-> T errors` task (SHIPPED v0.3-M4, with `background-handle-form`)
+
+**SHIPPED v0.3-M4 (Phase 2)** — the deferral this section recorded is resolved: the copy-before-free fix landed WITH the `background-handle-form` feature, exactly per this section's own "landing WITH the `background-handle-form` feature" gating below. The paragraphs that follow preserve the M3b-era design record; the shipped mechanism is described under "How it was lifted."
 
 The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reconstructs the `{i64, i64}` EC struct from the frame's return slot and then calls `free_frame`. For `-> number errors`, the ok-word in that struct points into the composed frame's 16-byte staging slot — a region freed by `free_frame`. The returned struct's ok-pointer is therefore invalid after the wrapper returns.
 
@@ -472,11 +474,11 @@ A caller that **collects** the result — reads the ok-word and uses the pointed
 
 Note: the inline-poll path had its own same-callee reuse hole: when two `let` bindings called the same `-> number errors` function, both bindings' ok-words pointed into the same callee staging slot, so the second call clobbered the first binding's value before it was read. This hole is closed (v0.3-M3f) via copy-on-bind — each binding now receives its own per-binding stable storage for the wide ok-value before the next call can reuse the staging slot. The `background` wrapper's staging-slot deferral below is a separate concern: it applies only to the standalone EC wrapper emitted for `background`-spawned callees, not to the inline-poll path.
 
-**What it costs to lift** (~half a session, landing WITH the `background-handle-form` feature): when the scheduler runs the wrapper function to completion, if the spawned task's result handle is collected, read the EC struct before freeing the frame, copy the ok-value to a heap buffer, update the ok-word to point to the heap buffer, then free the frame. The copy is conditional on whether the handle is collected — discarded handles skip it.
+**How it was lifted** (SHIPPED v0.3-M4 Phase 2, landing WITH the `background-handle-form` feature): the completion value is extracted from the frame's return slot inside `HandleStateFnFuture::poll`'s Ready arm — strictly BEFORE the embedded future's `Drop` frees the frame. A frame-interior wide ok-value (the `-> number errors` staging slot) is copied to a handle-owned heap buffer and the ok-word repointed at it; the buffer is freed exactly once, at handle drop. One refinement over the paragraph above's prediction: the collected-vs-discarded distinction is keyed at COMPILE time on the spawn form (a handle spawn always extracts + copies; the bare fire-and-forget spawn path is byte-for-byte untouched) — there is deliberately NO runtime "was `.receive()` called yet" conditional anywhere. See `crates/ynz-runtime/src/handle.rs` ("R8 — copy-before-free, compile-time spawn-form-keyed").
 
-**Trigger**: collecting the completed value of a `background`-spawned suspending `-> T errors` function via its handle (`.send`/`.receive`) — gated on the `background-handle-form` feature.
+**Trigger (satisfied v0.3-M4)**: collecting the completed value of a `background`-spawned suspending `-> T errors` function via its handle — shipped with the `background-handle-form` feature.
 
-This is tracked in [`registry/features.toml`](../../../registry/features.toml) as `ec-wrapper-collect-on-completion`.
+The registry deferral entry (`ec-wrapper-collect-on-completion`) was retired when this shipped — see the retirement note in [`registry/features.toml`](../../../registry/features.toml); the living design record is this section plus `crates/ynz-runtime/src/handle.rs`.
 
 ---
 

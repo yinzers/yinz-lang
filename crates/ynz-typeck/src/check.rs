@@ -26,6 +26,16 @@ use crate::{
     types::{type_name, Type},
 };
 
+/// P0-locked default channel capacity — the ONE authoritative source every consumer
+/// threads from (authoritative-derivation.md): typeck's teaching diagnostics here,
+/// codegen's `ynz_channel_create` default argument (`ynz-codegen/src/emit.rs`), and the
+/// LSP `channel_capacity` inlay label/click-edit (`ynz-lsp/src/inlay_hint.rs`). The
+/// registry hover text (`registry/features.toml` `channel_capacity`) is TOML data that
+/// cannot read this constant, so a parity test in `ynz-lsp/tests/inlay_hint.rs` breaks
+/// loudly if the two drift. Re-tune is a one-constant change parked with a trigger
+/// (real workload evidence) — see the v0.3-M4 plan's Future Requirements.
+pub const DEFAULT_CHANNEL_CAPACITY: i64 = 64;
+
 /// Inferred ownership for a plain-ident argument at a `background` call site.
 ///
 /// `OwnershipModifier` (from ynz-ast) covers `Share / Lend / Give` — the three
@@ -3311,10 +3321,6 @@ impl<'b> Checker<'b> {
     }
 
     fn check_channel_construction(&mut self, call: &CallExpr) -> Type {
-        /// P0-locked default channel capacity. Re-tune is a one-constant change parked with a
-        /// trigger (real workload evidence) — see the plan's Future Requirements.
-        const DEFAULT_CHANNEL_CAPACITY: i64 = 64;
-
         // Resolve the element type from the required single type argument.
         let elem = match &call.type_args {
             Some(args) if args.len() == 1 => self.ast_type_to_type(&args[0]),
@@ -3337,7 +3343,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     call.span.clone(),
                     "`channel` needs an element type — write `channel<int>()`.",
-                    "Add the element type in angle brackets: `channel<int>()` (default capacity 64) or `channel<int>(32)`.",
+                    format!("Add the element type in angle brackets: `channel<int>()` (default capacity {DEFAULT_CHANNEL_CAPACITY}) or `channel<int>(32)`."),
                     "A channel carries values of a single element type `T`; the compiler needs to know `T` to check `send`/`receive` later.",
                 ));
                 Type::Error
@@ -3427,7 +3433,7 @@ impl<'b> Checker<'b> {
                         self.diags.push(Diagnostic::error(
                             span,
                             format!("A channel's capacity must be at least 1, but got {v}."),
-                            "Use a positive capacity: `channel<int>(64)`. For very large buffering, pass a large explicit number — there is deliberately no unbounded channel.",
+                            format!("Use a positive capacity: `channel<int>({DEFAULT_CHANNEL_CAPACITY})`. For very large buffering, pass a large explicit number — there is deliberately no unbounded channel."),
                             "A zero- or negative-capacity channel could never accept a value (or would be unbounded), so it is rejected. Bounded capacity is what makes `send()` apply backpressure instead of growing memory without limit.",
                         ));
                     }
@@ -3437,7 +3443,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     call.span.clone(),
                     format!("`channel<T>(...)` takes at most one argument — the capacity — but got {n}."),
-                    "Write `channel<int>()` for the default capacity (64) or `channel<int>(32)` for an explicit capacity.",
+                    format!("Write `channel<int>()` for the default capacity ({DEFAULT_CHANNEL_CAPACITY}) or `channel<int>(32)` for an explicit capacity."),
                     "A channel is constructed with just its bounded capacity; values are added later with `send()`.",
                 ));
                 for a in &call.args {
@@ -3445,8 +3451,6 @@ impl<'b> Checker<'b> {
                 }
             }
         }
-
-        let _ = DEFAULT_CHANNEL_CAPACITY; // codegen supplies the literal 64 default; kept for docs.
 
         if matches!(elem, Type::Error) {
             Type::Error

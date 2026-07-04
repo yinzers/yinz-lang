@@ -94,7 +94,8 @@ fn panic_payload_msg(e: &Box<dyn Any + Send>) -> String {
 
 /// Poison-tolerant lock: a panic while holding the lock (already caught and reported by the
 /// poll shims' `catch_unwind`) must not wedge every later channel op behind a poisoned mutex.
-fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+/// `pub(crate)` — the handle module shares this exact discipline (one definition, not two).
+pub(crate) fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 

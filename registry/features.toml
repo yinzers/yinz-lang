@@ -2226,16 +2226,21 @@ example_source = "let count = 5"
 example_hint_rendered = "// effectively const — never reassigned"
 
 # v0.3-M4: shows the default capacity the compiler fills in for a `channel<T>()` construction with
-# no explicit capacity argument. Addition category — the ⟨64⟩ renders inside the empty parens; the
-# hover shows the capacity AND whether it is the default (64) or a user-set value. LSP inlay wiring
-# lands in v0.3-M4 Phase 5 (crates/ynz-lsp/src/inlay_hint.rs); the domain + typeck hint-pass ship in
-# Phase 1. Click-to-make-explicit writes `64` into the empty parens.
+# no explicit capacity argument. Addition category — the plain muted `64` renders inside the empty
+# parens (same plain-text convention as every other Addition hint); the hover shows the capacity
+# AND that it is the default (an explicit user-set capacity leaves nothing to add, so no hint
+# fires there). Domain registered in Phase 1; the typeck hint-pass
+# (ynz-typeck/src/inlay_hint_passes.rs channel_capacity_hints) and the LSP inlay wiring
+# (crates/ynz-lsp/src/inlay_hint.rs) landed in Phase 5. Click-to-make-explicit writes `64` into
+# the empty parens. The `64` here is prose data mirroring the ONE authoritative constant
+# (`ynz_typeck::DEFAULT_CHANNEL_CAPACITY`); a parity test in crates/ynz-lsp/tests/inlay_hint.rs
+# breaks loudly if this entry and the constant ever drift.
 [[muted_hint_domain]]
 domain = "channel_capacity"
 placement_category = "Addition"
 description = "Shows the default capacity (64) the compiler fills in for a `channel<T>()` construction with no explicit capacity argument"
 example_source = "let ch: channel<int> = channel<int>()"
-example_hint_rendered = "⟨64⟩"
+example_hint_rendered = "64"
 hover_what = "This channel uses the default capacity of 64 — how many values it can hold before send() makes the producer wait."
 hover_what_instead = "Write the capacity yourself to make it visible: channel<int>(64)."
 hover_why = "64 is the locked default. A channel is always bounded, so send() makes a fast producer wait for a slow consumer instead of letting the buffer grow without limit."

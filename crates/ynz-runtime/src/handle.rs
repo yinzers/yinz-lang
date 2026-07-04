@@ -55,12 +55,12 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use tokio::sync::mpsc;
 
-use crate::channel::{ynz_channel_free, ynz_channel_send_poll, ynz_channel_share};
+use crate::channel::{lock_or_recover, ynz_channel_free, ynz_channel_send_poll, ynz_channel_share};
 use crate::runtime::{spawn_on_runtime, BgArgDropEntry, SpawnStateFnFuture};
 use ynz_abi::FRAME_OFFSET_RETURN_SLOT;
 
@@ -86,11 +86,6 @@ pub use ynz_abi::{
     HANDLE_RET_KIND_VALUE_NUMBER as RET_KIND_VALUE_NUMBER,
     HANDLE_RET_KIND_VALUE_WORD as RET_KIND_VALUE_WORD,
 };
-
-/// Poison-tolerant lock (same discipline as the channel module).
-fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
 
 /// State shared between the handle object (parent side) and the spawned child future:
 /// the R8 handle-owned ok-value buffer.

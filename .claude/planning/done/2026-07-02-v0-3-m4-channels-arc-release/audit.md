@@ -1317,3 +1317,562 @@ byte-exact golden test re-run post-comment-change and GREEN (pure comment change
 verified unchanged, golden NOT regenerated because no output changed).
 The pre-existing dirty `roadmap.md` + `cspell.json` untouched. NO STOP condition fired; NO
 dormant override armed. Session-id appended to plan.md frontmatter; status remains active.
+
+## FRAGO 012 — 2026-07-03 — session-id: conductor (Patrick's direct real-time scope call during
+Phase 5 execution — not a build-time discovery, not deviation-judge-classified; a live human
+descope, applied + logged per the risk-neutral FRAGO path, no signature required)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 5 Step 3
+Trigger:   Patrick, live, mid-Phase-5: the VSCode extension is not being published for a while, so
+           the screenshot deliverable in Step 3 ("VSCode extension version bump + screenshots
+           (channels, handle-form, auto-Arc hint)") has no consumer right now and is explicitly
+           descoped. This is a direct human scope decision, not a discovered divergence — no
+           deviation-judge adjudication applies; it is applied verbatim and logged for the record
+           per `plan-source-of-truth.md`.
+Changes:
+  - ¶3.3 Phase 5 Step 3: NARROWED to "VSCode extension version bump" only. Screenshot capture
+    REMOVED from this phase's scope (channels/handle-form/auto-Arc hint screenshots are not
+    required — no publish is scheduled).
+  - ¶3.3 Phase 5 Exit criteria: "screenshots attached" REMOVED from the exit-criteria list.
+  - Future Requirements / Revisit: mirrored four-field note — WHAT: VSCode extension screenshots
+    (channels/handle-form/auto-Arc hint) deferred; WHY: extension has no scheduled publish date,
+    so screenshots have no current consumer (Patrick's direct call, real-time); COST: capturing 3
+    screenshots against a version-bumped extension, roughly one short session whenever a publish
+    is actually scheduled; TRIGGER: the VSCode extension publish is actually scheduled.
+Unchanged: everything else in Phase 5 (inlay hint wiring, REF-concurrency.md update including the
+  backpressure teaching text + `h.send(v)` convention, demo/gallery consolidation, jargon audit,
+  cross-impl sweep); the version bump itself still ships; all of Phases 0-4 and Phase 6; the risk
+  table (NO re-scoring — this is a docs/asset deliverable removal, not a safety/correctness
+  change).
+Override:  N/A — risk-neutral (scope reduction on a non-safety, non-correctness deliverable;
+  no re-scoring of any risk row; direct human authorization, applied verbatim).
+
+## FRAGO 013 — 2026-07-03 — session-id: conductor (Phase 5 post-review follow-up; deviation-judge
+classified Deviation D1 JUSTIFIED and surfaced this as a FRAGO candidate — this record APPLIES that
+classification, it does not re-adjudicate)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 5 Steps 1-2 + ¶3.1 outcome #7 (stale text
+           predating FRAGO 008)
+Trigger:   Phase 5's own step text ("wire `inlay_hint.rs` for `channel_capacity` + `auto_arc`";
+           "update REF-concurrency.md ... for channels + handle-form + auto-Arc") and ¶3.1 outcome
+           #7 ("`channel_capacity` ... and `auto_arc` ... muted-hint domains fire") were both written
+           before Phase 3's FRAGO 008 deferred the auto-Arc CODEGEN EMISSION to v0.4+ and were never
+           reconciled afterward — FRAGO 008's own Changes list only touched Phase 3 text. The
+           Phase-5 executor correctly declined to self-fix this (narrow-charter discipline) and
+           surfaced it as Deviation D1; deviation-judge independently verified against the live tree
+           (`registry/features.toml:1229-1235`'s own TRIGGER text ties `auto_arc` hint-wiring to the
+           emission landing, not to P5) and classified JUSTIFIED, risk-neutral, surfacing the text
+           reconciliation as a FRAGO candidate rather than grading it a Phase-5 defect.
+Changes:
+  - ¶3.3 Phase 5 Steps 1-2: AMENDED in place — "wire `inlay_hint.rs` for `channel_capacity` +
+    `auto_arc`" → "wire `inlay_hint.rs` for `channel_capacity` (`auto_arc` wiring deferred to
+    landing WITH the v0.4+ auto-Arc codegen emission per FRAGO 008 — see `registry/features.toml`'s
+    `auto-arc-codegen-emission` TRIGGER text)"; the REF-concurrency.md step's "... + auto-Arc" is
+    corrected to "... (auto-Arc user-facing documentation deferred alongside its codegen emission —
+    FRAGO 008)".
+  - ¶3.1 outcome #7: AMENDED — "`channel_capacity` ... and `auto_arc` ... muted-hint domains fire"
+    → "`channel_capacity` fires (Addition category, P5); `auto_arc` is registered with its full
+    WHAT/WHY teaching hover but does not yet fire — its wiring is tied to the v0.4+ auto-Arc codegen
+    emission landing (FRAGO 008), not to this milestone's Phase 5."
+  - Phase 5 STATUS banner: Deviation D1 annotated classified-JUSTIFIED + applied via this FRAGO.
+Unchanged: all code (zero behavior change this round — text reconciliation only); FRAGO 001-012;
+  Phases 0-4 and Phase 6; the risk table (NO re-scoring — a documentation-accuracy correction on an
+  already-decided, already risk-neutral deferral).
+Override:  N/A — risk-neutral, pure text-reconciliation, zero behavior change, deviation-judge
+  pre-classified JUSTIFIED.
+
+## Session log — executor-2026-07-02-m4-p5 — 2026-07-03
+
+Phase 5 executed in full (all five steps, Step 3 as narrowed by FRAGO 012 mid-phase), grounded
+in: the plan slice (¶2 Mission, §3.1 outcomes 7–9, §3.4, §Invariants Teaching/Demo &
+Error Gallery), REF-plan-format, REF-decision-philosophy, REF-context-budget, no-duct-tape,
+verification, spec-writing.md, docs-checklist.md, inference.md, vocabulary/naming, plan-invariants
+§Demo & Error Gallery, FRAGOs 008/009/010/011 (read from plan.md + this sidecar) and FRAGO 012
+(applied verbatim, live), plus the live crate reality (inlay_hint.rs, inlay_hint_passes.rs,
+check.rs channel arms, cross_impl_consistency.rs, error_galleries.rs — recon re-read, not memory).
+
+**Landed.**
+(1) `channel_capacity` inlay hint end-to-end: NEW typeck pass
+`inlay_hint_passes.rs::channel_capacity_hints` + `ChannelCapacityHint` (salsa-tracked; fires only
+on `channel<T>()` with type args + zero value args; position = the closing-paren byte, proven
+`span.end - 1` against parse_call's span construction) → lib.rs export → LSP Domain 10 in
+`crates/ynz-lsp/src/inlay_hint.rs` (`⟨64⟩` label, registry hover, zero-width TextEdit inserting
+`64`); module docs in both files updated (firing tables + auto_arc registered-not-firing note);
+stale `features.toml` channel_capacity comment corrected (P1 shipped the domain only, not the
+hint pass). `auto_arc` NOT wired — deviation D1, surfaced in the P5 banner, per FRAGO 008 + the
+`auto-arc-codegen-emission` TRIGGER text (features.toml:1235).
+(2) `docs/reference/REF-concurrency.md`: new Channels section (bounded-by-construction, default-64
+hint, backpressure teaching text VERBATIM as mandated, element-type/capacity/statement-position
+rules with real captured error text) + new handle-form section documenting the FRAGO 005
+`h.send(v)` → first-`channel<T>`-parameter convention explicitly ("no hidden mailbox") +
+`.receive()` messages-or-completion (typed errors) + channel exemption woven into the Ownership
+section (was contradicting the new examples); intro/closing → "Two keywords and one type";
+auto-Arc deliberately NOT documented as live (D1).
+(3) VSCode extension: package.json `0.3.0-m7` → `0.3.0`; README What's-new + CHANGELOG `[0.3.0]`
+(honest "Not yet firing" auto_arc note); tsc build clean (host Node v22 — `command -v` probe hit,
+ran natively per the run-in-docker ladder). Screenshots: two placeholders created pre-FRAGO-012
+were DELETED when the FRAGO landed; CHANGELOG carries the deferred note; plan.md Step 3 + exit
+criteria + Future Requirements edited per FRAGO 012's exact wording (the conductor's explicit
+instruction — the one plan-body edit authorized beyond my banner/frontmatter bookkeeping).
+(4) Demo/gallery consolidation: verified entrypoint.ynz already carries all M4 surfaces (P2/P3/P4
+work); golden regenerated via the script — diff confined to the KNOWN relaxed 8-pirates
+nondeterministic section, reverted to pristine, byte-exact test proven GREEN against it; gallery
+verified complete (16 classes + 2 documented runtime/kernel blocks).
+
+**Verification (all in the dev container unless noted).** `cargo build --workspace` GREEN;
+`cargo test -p ynz-lsp --test inlay_hint` 22/22 (3 new channel_capacity tests: fires with
+position+tooltip+zero-width-edit asserted, suppressed-explicit-capacity,
+suppressed-missing-element-type); real error text captured via `ynz run` on scratch fixtures
+(send-wrong-type incl. backpressure note, zero-capacity, handle-no-channel-param); both spec
+examples run (`runs this game: 10`, `prospect grade: 42`);
+`examples_basics_runs_end_to_end` GREEN; `error_galleries` 9/9; `jargon_audit` 9/9;
+`cross_impl_consistency` 2/2 (~237s full corpus, both modes) with all 30 M4 fixtures verified
+inside the swept set (exclusion-substring check run explicitly); FULL workspace suite
+**2199 passed / 0 failed**; `cargo clippy --workspace -- -D warnings` GREEN;
+`cargo fmt --all` applied + `--check` clean (post-fmt LSP inlay tests re-run 22/22).
+
+**Deviations SURFACED, not self-adjudicated:** D1 (P5) — Phase 5 Steps 1–2 name `auto_arc`
+wiring + auto-Arc spec content; text predates FRAGO 008 and was never reconciled into this
+phase's steps. Executed per FRAGO 008's applied record; step text left untouched (no FRAGO
+authorizes rewriting it); full statement in the P5 STATUS banner for the deviation-judge.
+
+**Recorded decisions (reasons in the P5 banner):** extension version `0.3.0` exact (P6 packages
+at the same final version); golden noise-diff reverted (scheduler churn in the one relaxed
+section, byte-exact proof kept against pristine golden); features.toml comment fix (factual,
+no schema change).
+
+Producer does NOT self-grade — reviewer fan-out (code-reviewer: jargon + spec-register + oracle
+completeness) has NOT run. NO STOP condition fired; NO dormant override armed. The pre-existing
+dirty `roadmap.md` + `cspell.json` untouched. Session-id appended to plan.md frontmatter; status
+remains active.
+
+## FRAGO 014 — 2026-07-03 — session-id: conductor (Phase 5 fix-round follow-up; trivial stale-text
+tail the executor surfaced as new Deviation D2, not self-fixed — classified here directly: a leftover
+clause contradicting an already-applied, already-signed descope has no adjudication question left to
+resolve, so this record both classifies and applies rather than routing a one-clause fix through a
+full deviation-judge round-trip)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ ¶3.1 outcome #7 (trailing clause)
+Trigger:   FRAGO 013's outcome #7 rewrite (this same file, above) replaced the domains sentence but
+           did not touch outcome #7's trailing clause, which still reads "...WHAT/WHAT-INSTEAD/WHY;
+           VSCode extension bumped with screenshots." — directly contradicting FRAGO 012 (Patrick's
+           live descope of the screenshot deliverable, applied two rounds earlier). The Phase-5
+           fix-round executor caught this itself and surfaced it as Deviation D2 rather than
+           silently patching text it had just finished editing.
+Changes:
+  - ¶3.1 outcome #7's trailing clause: "VSCode extension bumped with screenshots." →
+    "VSCode extension bumped (screenshots deferred — FRAGO 012)."
+Unchanged: everything else; FRAGO 001-013; the risk table (NO re-scoring — trivial text-consistency
+  fix only).
+Override:  N/A — risk-neutral, one-clause text fix reconciling two already-applied, already-logged
+  decisions (FRAGO 012 + FRAGO 013) against each other. No new judgment made.
+
+## FRAGO 015 — 2026-07-03 — session-id: conductor (D3 follow-up to FRAGO 012/013/014's screenshots
+reconciliation; the executor correctly declined to sweep this in beyond FRAGO 014's named scope and
+surfaced it instead — same trivial reconciling-two-already-logged-decisions shape as FRAGO 014, no
+new adjudication required)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Invariants "### Demo & Error Gallery"/Teaching
+           bullet (plan.md:1536)
+Trigger:   The screenshots-descope contradiction (FRAGO 012) survived a THIRD independent spot the
+           prior two reconciliation FRAGOs (013, 014) didn't name: the Invariants section's own
+           bullet "VSCode extension version-bumped with screenshots of the new surfaces." — still
+           asserting screenshots ship, three FRAGOs after they were descoped.
+Changes:
+  - `plan.md:1536`: "VSCode extension version-bumped with screenshots of the new surfaces." →
+    "VSCode extension version-bumped (screenshots deferred — FRAGO 012)."
+Unchanged: everything else; FRAGO 001-014; the risk table (NO re-scoring).
+Override:  N/A — risk-neutral, one-clause text fix reconciling an already-applied, already-logged
+  decision (FRAGO 012) against a line the two prior sweep FRAGOs missed. No new judgment made.
+
+## FRAGO 016 — 2026-07-03 — session-id: conductor (final review-fleet re-check on Phase 5's fix-loop
+round; two independently-confirmed should-fix findings, both plain missed-spots from the same class
+of sweep gap as D2/D3 — deviation-judge explicitly classified the demo-comment one UNJUSTIFIED/not-
+a-FRAGO-candidate, i.e. just fix it; the Invariants line is the identical "stale text a text-only
+sweep didn't reach" shape, no new adjudication needed for either)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Invariants "### Teaching" (plan.md:1528-1529)
+           and `examples/pirates-roster/entrypoint.ynz:1059`
+Trigger:   Full-fleet re-verification after the P5-r2 fix round found two residual staleness spots
+           neither the blocker fix nor FRAGO 012-015's sweeps reached: (1) acceptance-verifier —
+           Invariants → Teaching still asserts "`auto_arc` ... fire[s] via `inlay_hint.rs`",
+           contradicting the already-applied FRAGO 008/013 reconciliation (auto_arc is registered,
+           does not fire, wiring deferred to v0.4+); (2) rules-compliance + acceptance-verifier +
+           deviation-judge (all three, independently) — the demo file's own inline comment still
+           shows the pre-restyle `⟨64⟩` decorated notation, contradicting the actually-shipped plain
+           `64` rendering everywhere else (REF-concurrency.md, IMP-no-function-coloring.md, the LSP
+           code itself).
+Changes:
+  - `plan.md:1528-1529` (Invariants → Teaching bullet): "`channel_capacity` (Addition) + `auto_arc`
+    (Informational, cautionary hover) fire via `inlay_hint.rs`" → "`channel_capacity` (Addition)
+    fires via `inlay_hint.rs`; `auto_arc` (Informational, cautionary hover) is registered with its
+    full hover text but does not yet fire — wiring deferred to the v0.4+ auto-Arc codegen emission
+    per FRAGO 008/013."
+  - `examples/pirates-roster/entrypoint.ynz:1059`: comment "// default capacity 64 (IDE shows
+    ⟨64⟩)" → "// default capacity 64 (IDE shows 64)" — matching the actually-shipped plain-text
+    label convention (no stdout/golden impact — comment only).
+Unchanged: everything else; FRAGO 001-015; the risk table (NO re-scoring — both are text-only
+  consistency fixes, zero behavior change).
+Override:  N/A — risk-neutral, two one-clause text fixes reconciling already-applied, already-
+  logged decisions (FRAGO 008/013 and the P5-r2 label restyle) against spots earlier sweeps missed.
+  No new judgment made.
+
+## Session log — executor-2026-07-02-m4-p5-r2 — 2026-07-03 (Phase 5 post-review FIX ROUND)
+
+Applied the review fleet's Phase 5 findings on top of the previously-verified-GREEN phase,
+grounded in: the P5 slice + STATUS banner, FRAGO 012/013 (this sidecar), the live tree (check.rs
+channel arms, emit.rs channel lowering, inlay_hint_passes.rs, ynz-lsp inlay_hint.rs + tests,
+registry features.toml — all re-read, not memory), authoritative-derivation.md, inference.md,
+no-duct-tape, verification, REF-plan-format/decision-philosophy/context-budget.
+
+**FRAGO 013 applied VERBATIM** (three edits, exact wording from its Changes list): Phase 5
+Steps 1–2 auto-Arc deferral reconciliation; ¶3.1 outcome #7 channel_capacity-fires /
+auto_arc-registered-not-firing rewrite; P5 banner D1 annotated classified-JUSTIFIED + applied.
+
+**BLOCKER fixed — capacity twin-derivation** (authoritative-derivation.md, 5th recurrence of the
+M3a/M3d/M3e/M3g class): `DEFAULT_CHANNEL_CAPACITY` is now the ONE authoritative
+`pub const` (module-level in `crates/ynz-typeck/src/check.rs`, exported via lib.rs) threaded into:
+codegen's no-arg construction default (`crates/ynz-codegen/src/emit.rs` `channel` arm — literal
+`const_int(64,..)` REMOVED), all three check.rs teaching errors quoting the default (format!-
+threaded), and the LSP label + click-edit (`crates/ynz-lsp/src/inlay_hint.rs` Domain 10). The
+dead `let _ = DEFAULT_CHANNEL_CAPACITY;` anchor removed. Registry hover prose (TOML, cannot read
+a Rust const) pinned by a new mechanical parity test
+(`test_channel_capacity_registry_hover_states_the_authoritative_default`). PROOF (not eyeballed):
+throwaway const=3 build — behavioral fixture backpressured after exactly `sent 3` before
+`draining` (codegen moved) and the LSP fires-test FAILED its `"64"` label assert (hint moved);
+const reverted to 64, fixture deleted.
+
+**Minors fixed:** hint gated on exactly one type arg (`channel<A,B>()` suppression + new test);
+LSP module doc non-firing list now carries all 4 domains incl. `allocators`; label re-styled
+`⟨64⟩` → plain muted `64` per inference.md one-renderer-per-category (tests updated to the plain
+label; registry `example_hint_rendered`, REF-concurrency.md:185, IMP-no-function-coloring.md:109
+example, VSCode README/CHANGELOG, and plan.md's own label references swept for consistency).
+
+**Deferred (NOT fixed — shared pre-existing gap, zero regression):** all-5-walkers
+FieldAssign.target/IndexAssign.receiver recursion gap → four-field WHAT/WHY/COST/TRIGGER note
+appended to the roadmap sidecar
+`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` with
+`Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#5: crates-ynz-typeck-src-inlay-hint-passes-rs-1554`
+(checked unique before writing).
+
+**Deviation SURFACED, not self-fixed:** D2 — ¶3.1 outcome #7's trailing "VSCode extension bumped
+with screenshots" contradicts FRAGO 012's screenshot descope; FRAGO 013's replacement covered
+only the domains sentence. Flagged in the P5 banner for the deviation-judge.
+
+**Verification (dev container):** `cargo build --workspace` GREEN; `cargo clippy --workspace
+-- -D warnings` GREEN; `cargo fmt --all` applied + `--check` clean; `ynz-lsp` inlay_hint suite
+24/24 (22 prior + 2 new: two-type-args suppression, registry parity); full `cargo test
+--workspace` result recorded in the executor's return. Roadmap.md's own `⟨64⟩` notation (lines
+325/334) left untouched — file carries pre-existing uncommitted user edits; surfaced in the
+return instead.
+
+## FRAGO 017 — 2026-07-03 — session-id: conductor (Phase 6 post-execution follow-up; deviation-judge
+classified P6-D1 JUSTIFIED with an explicit FRAGO recommendation, and P6-D2 JUSTIFIED folded into the
+same FRAGO per the judge's own recommendation — this record APPLIES both classifications, it does
+not re-adjudicate)
+
+Base:      2026-07-02-v0-3-m4-channels-arc-release @ Phase 6 title / Task+purpose / Step 4 / Exit
+           criteria (plan.md:1408-1432)
+Trigger:   The plan's own premise, carried unchanged from the original draft through r2/r3/r4
+           (¶1 Situation Assumption 12, explicitly marked `unverified — verify at P6`), claimed "M3f
+           and M3g are merged to main, un-tagged, no CHANGELOG entries." The Phase-6 executor's R4
+           span verification (Step 3) checked this against reality and found it HALF stale:
+           M3f's merge commit `51c948b` IS an ancestor of tag `v0.3.0-m6` (`git merge-base
+           --is-ancestor`), and `CHANGELOG.md`'s `[0.3.0-m6]` section already covers it — M3f is NOT
+           un-tagged and must NOT be re-covered by the pending `v0.3.0` CHANGELOG section (P6-D1).
+           Separately, the naive `v0.3.0-m7..HEAD` span also contains the entire M3d implementation
+           (which merged to main after the `m7` tag was cut, so its commits are technically inside
+           the span) even though `CHANGELOG.md`'s `[0.3.0-m7]` section already describes M3d — a
+           naive commit-range CHANGELOG generator would double-cover it (P6-D2). Both independently
+           verified by deviation-judge against `CHANGELOG.md`'s actual sections. Deviation-judge
+           classified P6-D1 JUSTIFIED with an explicit FRAGO recommendation (the exit criterion is
+           now an affirmatively wrong instruction sitting in the seam Step 4 will read) and
+           recommended folding P6-D2's caution into the same FRAGO so a fresh `/release` session
+           sees both hazards in Step 4's own text, not only the STATUS banner.
+Changes:
+  - `plan.md:1408` (Phase 6 title): "v0.3.0 release fold (M3f + M3g + M4)" → "v0.3.0 release fold
+    (M3g + M4; M3f already released at `v0.3.0-m6`)".
+  - `plan.md:1409` (Task + purpose): "Cut the final `v0.3.0` tag folding the un-tagged M3f + M3g
+    work." → "Cut the final `v0.3.0` tag folding the un-tagged M3g work. (M3f is NOT un-tagged — it
+    shipped at `v0.3.0-m6`; see FRAGO 017.)"
+  - `plan.md:1429-1430` (Step 4): "`/release` cuts `v0.3.0` (final, NO `-mN` suffix); VSCode `.vsix`
+    assets per convention (`yinz-{version}.vsix` + `yinz-latest.vsix --clobber`)." → "`/release` cuts
+    `v0.3.0` (final, NO `-mN` suffix). CHANGELOG generation MUST cover M3g + M4 ONLY — M3f is already
+    covered at `[0.3.0-m6]` and must NOT be re-covered (FRAGO 017/P6-D1); M3d is already covered at
+    `[0.3.0-m7]` despite its commits falling inside the naive `m7..HEAD` span (a commit-range
+    generator would double-cover it — FRAGO 017/P6-D2, exclude already-CHANGELOGed M3d content).
+    VSCode `.vsix` assets per convention (`yinz-{version}.vsix` + `yinz-latest.vsix --clobber`)."
+  - `plan.md:1431-1432` (Exit criteria): "CHANGELOG demonstrably spans M3f + M3g + M4" →
+    "CHANGELOG demonstrably spans M3g + M4 (M3f already covered at `v0.3.0-m6`, NOT re-covered; M3d
+    already covered at `v0.3.0-m7`, NOT re-covered despite falling inside the naive commit span)".
+  - Phase 6 STATUS banner: P6-D1 and P6-D2 annotated classified-JUSTIFIED + applied via FRAGO 017.
+Unchanged: everything else; FRAGO 001-016; Phases 0-5 (already sealed); the risk table (NO
+  re-scoring — a stale-premise correction to the release-fold's own CHANGELOG scope, not a
+  safety/correctness change to shipped code).
+Override:  N/A — risk-neutral, plan-text corrections reconciling Phase 6's own premise against
+  verified git/CHANGELOG reality; zero code change; deviation-judge pre-classified both JUSTIFIED.
+
+## Session log — executor-2026-07-02-m4-p6 — 2026-07-03
+
+Phase 6 STEPS 1–3 ONLY (dispatch-scoped: Step 4 — `/release` tag cut + `.vsix` upload — is
+explicitly OUT of this dispatch, human-gated on Patrick; nothing tagged, pushed, or published).
+Grounded in: the Phase 6 slice + ¶2/¶3.1 + R4, REF-plan-format, FRAGO 011's exact replacement
+text (applied verbatim, not re-derived), FRAGO 008/009 records, the live design docs +
+crate reality (recon re-read, not memory).
+
+**Landed.** (1) Design-doc shipped-status sweep: `IMP-no-function-coloring.md` — Channel section
+SHIPPED v0.3-M4 milestone note (+ default capacity locked note: 64, `DEFAULT_CHANNEL_CAPACITY`,
+verified live at `crates/ynz-typeck/src/check.rs:37`); FRAGO 011 (a)+(b) applied at the
+False-Sharing section (legal crossing set; cross-module-visible-layout decline class — both
+stale spots verified still-live on disk before editing); False-Sharing milestone line SHIPPED
+v0.3-M4 + FRAGO 009 forward-looking-no-op honesty note; sleep-lint row SHIPPED v0.3-M4.
+`IMP-concurrency.md` `ECWrapperResultCollection` SHIPPED v0.3-M4 (verified against
+`crates/ynz-runtime/src/handle.rs` "R8 — copy-before-free, compile-time spawn-form-keyed" and
+the retired `ec-wrapper-collect-on-completion` note at `registry/features.toml:1164`; the
+section's "conditional on whether the handle is collected" prediction corrected to the shipped
+compile-time spawn-form-keyed mechanism). (2) `Cargo.toml:21` `0.3.0-m7` → `0.3.0`; full
+`cargo build --workspace` GREEN in the dev container (all 14 crates at v0.3.0; no other live
+`-m7` reference — CHANGELOG/state.md/VSCode-README hits are historical sections).
+(3) R4 span verification with real command output: `git describe --tags --abbrev=0` =
+`v0.3.0-m7` (most recent tag); `git log --oneline v0.3.0-m7..HEAD` = 61 commits including all
+of M4 (`d93f4c8`…`372927f`) and M3g (`87a63b7` et al.; M3g absent from CHANGELOG — confirmed by
+grep). CHANGELOG generation itself NOT performed (Step 4 / `/release` owns it).
+
+**Deviations SURFACED, not self-adjudicated (full text in the P6 STATUS banner):**
+P6-D1 — "M3f merged un-tagged, no CHANGELOG entries" is stale: M3f (merge `51c948b`) IS an
+ancestor of tag `v0.3.0-m6` and CHANGELOG `[0.3.0-m6]` already covers it; the m7..HEAD span
+correctly contains zero M3f commits; v0.3.0's CHANGELOG must not re-cover M3f. P6-D2 — the span
+contains the whole M3d implementation by ancestry (M3d branch merged after the m7 tag) though
+`[0.3.0-m7]` already describes M3d; naive commit-list generation would double-cover it. Both
+routed to the deviation-judge + Step 4's human-gated `/release`.
+
+**Plan-structure repair (surfaced + fixed):** the `#### Phase 6 — v0.3.0 release fold
+(M3f + M3g + M4)` slice-anchor heading was accidentally deleted by P5 commit `372927f`
+(verified `git log -S '#### Phase 6'`); restored byte-identical from the pre-deletion revision
+(`d93f4c8:plan.md:734`) so the phase has its anchor and the P6 banner a home. Structural
+restoration of an accidental deletion only — no content judgment; flagged for the
+deviation-judge alongside P6-D1/D2.
+
+Plan↔task sync: no TodoWrite tool in this dispatch's grant — sync is the P6 STATUS banner +
+this entry (the phase's Steps are numbered lines, not checkbox glyphs, per this plan's
+convention). Pre-existing dirty `roadmap.md` + `cspell.json` untouched. NO STOP condition
+fired; NO dormant override armed. Session-id `executor-2026-07-02-m4-p6` appended; status
+remains active (phase open pending Step 4 + reviewer fan-out + Patrick sign-off).
+
+## Session log — executor-2026-07-02-m4-p6 (FRAGO 017 application) — 2026-07-03
+
+Coordinator routed the deviation-judge's verdicts back: P6-D1 JUSTIFIED (explicit FRAGO required —
+the exit criterion was an affirmatively WRONG instruction in the seam Step 4 reads, not a mere
+footnote), P6-D2 JUSTIFIED folded into the same FRAGO, P6-D3 (Phase 6 heading restoration)
+JUSTIFIED with NO FRAGO (pure mechanical repair, correct as left). Applied FRAGO 017's four Changes
+verbatim — NOT re-adjudicated (deviation-judge pre-classified; this dispatch only applies): (1)
+Phase 6 title `plan.md:1408` "(M3f + M3g + M4)" → "(M3g + M4; M3f already released at `v0.3.0-m6`)";
+(2) Task+purpose "un-tagged M3f + M3g" → "un-tagged M3g" + M3f-shipped-at-m6 note; (3) Step 4 text
+gained the M3f-exclusion (already at `[0.3.0-m6]`) AND M3d-exclusion (already at `[0.3.0-m7]`,
+double-cover hazard) instructions directly, so a fresh `/release` session sees both hazards in the
+step itself, not only the banner; (4) Exit criteria "spans M3f + M3g + M4" → "spans M3g + M4 (M3f
+covered at m6, NOT re-covered; M3d covered at m7, NOT re-covered)". P6-D1/D2 banner blocks annotated
+classified-JUSTIFIED + applied via FRAGO 017; P6-D3 annotated JUSTIFIED-no-FRAGO. Pure plan-text,
+zero code change — no rebuild/retest. Session-id `executor-2026-07-02-m4-p6` already current in the
+frontmatter chain (same dispatch). Status remains active (Phase 6 open pending Step 4 + Patrick
+sign-off).
+
+**Phase 6 Step 4 + release, completed 2026-07-03 (conductor-executed, Patrick's explicit go):**
+`/release` cut `v0.3.0` per the corrected FRAGO-017 CHANGELOG scope (M3g + M4 only — M3f/M3d
+correctly excluded). Commits: `f6b8306` (Phase 6 boundary, #6) → `16877d9` (chore: pre-existing
+roadmap M4/M5-split + cspell dictionary sync, committed properly per Patrick's "no duct tape" call
+rather than stashed) → `8f33d29` (CHANGELOG). Tag `v0.3.0` (annotated) pushed; GitHub release
+published at https://github.com/yinzers/yinz-lang/releases/tag/v0.3.0 with notes generated verbatim
+from the CHANGELOG entry; `yinz-0.3.0.vsix` + `yinz-latest.vsix` uploaded per this project's
+VSCode-release convention. Rollout mode: PLAIN (no feature-flag usage in the project source — the
+only hits were `node_modules` third-party noise). Phase 6 exit criteria fully MET. Phase 6 marked
+DONE. All phases 0-6 of this plan are now sealed.
+
+## Completion-Gate coupling decision — 2026-07-03 — session-id: conductor
+
+**Heuristic (§9.0.1): RUN, not skip.** Seven phases (0-6), declared touched-surfaces overlap
+heavily and are NOT pairwise disjoint — `crates/ynz-typeck/src/check.rs`, `crates/ynz-codegen/src/emit.rs`,
+`registry/features.toml`, `docs/internal/implementation/IMP-no-function-coloring.md`, and
+`examples/pirates-roster/entrypoint.ynz` are each touched by 3+ phases (P0/P1/P2/P3/P4 all touch
+`check.rs`; P1/P2/P3/P4 touch `emit.rs`; P1/P3/P4/P5 touch `registry/features.toml`). Fail-safe
+default-to-run (R2) applies regardless — this is not a borderline call.
+
+**Range**: `d81df91..f6b8306` (parent of Phase 0's boundary commit `d93f4c8` → Phase 6's boundary
+commit `f6b8306` — the last phase boundary; no `#fix` commit exists yet, first entry). 9 commits.
+Fanning out the three cross-phase lenses (code-reviewer with the range, acceptance-verifier +
+deviation-judge with the assembled whole-plan scope) now.
+
+**Fan-out results — 0 blockers across all three lenses:**
+- **code-reviewer** (reuse/consolidation-only lens): 1 minor — `crates/ynz-runtime/src/handle.rs`'s
+  `lock_or_recover<T>` is a byte-identical copy of P1's `crates/ynz-runtime/src/channel.rs:97`
+  helper instead of importing it. Everything else cross-phase (suspension classification, conduit-
+  binding origin, `DEFAULT_CHANNEL_CAPACITY`, the padded-shapes set, frame-ABI offsets, the
+  `[[lint_rule]]` mechanism) correctly threads ONE authoritative source across phases — the exact
+  discipline this repo's `authoritative-derivation.md` demands, held.
+- **acceptance-verifier** (§3.1-integrated-whole + campaign-slice, BOTH targets): MET — all ten Key
+  Outcomes + Definition of Done verified against real artifacts; two outcomes (auto-Arc emission,
+  padding's current no-op status) correctly split MET/DEFERRED via FRAGO 008/009, not silent gaps.
+  3 should-fix: (a) the roadmap's own M4 status/ledger rows are stale ("NOT YET PLANNED"/
+  "NEEDS-PLANNED") now that M4 shipped as `v0.3.0` — pre-acknowledged in this plan's own Future
+  Requirements as a deferred roadmap-maintenance item, but live staleness today; (b) the roadmap
+  ledger's plain-reading text overstates auto-Arc/padding as fully-delivered capabilities without
+  pointing at FRAGO 008/009's honest deferral; (c) the tag-push/GitHub-release facts were
+  unverifiable from that dispatch's tool-restricted scope (no Bash/network) — CONDUCTOR CONFIRMS
+  BOTH DIRECTLY: `git push origin v0.3.0` succeeded (`* [new tag] v0.3.0 -> v0.3.0`), the GitHub
+  release was created (`gh release create` returned
+  https://github.com/yinzers/yinz-lang/releases/tag/v0.3.0), and both `.vsix` assets are confirmed
+  attached (`gh release view --json assets`). (c) is closed, no fix needed; (a)/(b) are real and
+  worth closing now rather than leaving parked.
+- **deviation-judge** (cross-phase-interaction only): 1 should-fix, UNJUSTIFIED-as-stray (not a
+  FRAGO candidate — no adjudication needed, just a plain sweep miss) —
+  `docs/internal/implementation/IMP-no-function-coloring.md`'s "Task Cancellation — Locked
+  Pre-v0.2" section still claims the runtime "injects a cancellation signal at the task's next
+  suspension point" on handle drop; P2's own shipped reality (its Future Requirements deferral,
+  code-confirmed — zero `ynz_handle_free` call sites in `emit.rs`) is that NO scope-drop
+  cancellation mechanism exists at all (fire-and-forget-to-completion, by design, until a future
+  language-wide scope-drop mechanism ships). `plan.md`'s own §3.1 recorded decision and Design-Doc
+  Alignment #9 still carry the same narrower, now-stale framing. This is the identical
+  "text-reconciliation sweep gap" class FRAGO 013-016 already fixed elsewhere in this same plan —
+  P6's design-doc sweep touched the sibling Channel/False-Sharing/Sleep sections but missed this
+  one.
+
+**Routing: all four items are cheap, well-diagnosed, direct fixes — fixing now rather than
+deferring** (per this plan's established pattern all session: small, safe, well-understood findings
+get fixed on the spot; only genuine scope-creep gets a durable four-field deferral). None require a
+FRAGO (no justified divergence being adjudicated — these are plain corrections of stale text /
+duplicated code, the same class already fixed directly via FRAGO 014-016's mechanism, or in this
+case simple enough to just fix without even a FRAGO wrapper). Dispatching the fix round now.
+
+## Session log — executor-2026-07-03-m4-gate-fix — 2026-07-03
+
+Completion-gate cumulative fix round (post-completion cleanup, NOT a new phase — no `#### Phase`
+heading added). All four items from the Fan-out results above fixed directly:
+
+**Fix 1 — `lock_or_recover` dedup (code-reviewer minor).** `crates/ynz-runtime/src/channel.rs:98`'s
+helper promoted to `pub(crate)`; `crates/ynz-runtime/src/handle.rs` now imports it via the existing
+`use crate::channel::{...}` line and its byte-identical local copy (old handle.rs:90-93) is deleted
+(the then-unused `MutexGuard` import removed alongside — `-D warnings` would have failed on it).
+ONE definition remains, in the module that originated the discipline (P1). Verified in the dev
+container: `cargo build --workspace` GREEN, `cargo clippy --workspace -- -D warnings` GREEN,
+`cargo test -p ynz-runtime` all suites pass, full `cargo test --workspace` result recorded in the
+executor's return.
+
+**Fix 2 — roadmap M4 staleness (acceptance-verifier a+b).**
+`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`: (1) Milestone 4's
+"Execution plan" status line "NOT YET PLANNED" → DONE/SHIPPED as `v0.3.0` (tagged + published
+2026-07-03) with a link to this plan; (2) both Capability Ledger rows for
+`v0-3-m4-channels-arc-release` ("planned" at the Capability Ledger table; "NEEDS-PLANNED. No child
+plan yet." at the ownership-map table) → **shipped**/**DONE**, each carrying the FRAGO 008/009
+deferral pointer so the ledger's plain reading no longer overstates auto-Arc codegen emission
+(deferred v0.4+, `auto-arc-codegen-emission`) or the padding transform's current throughput benefit
+(forward-looking no-op until auto-Arc emission) as fully live. Incidental factual correction in the
+same rows: "folds M3f + M3g tags" → "folds M3g tag; M3f already shipped at `v0.3.0-m6`", matching
+FRAGO 017's verified reality rather than repeating the stale premise.
+
+**Fix 3 — stale Task Cancellation claim (deviation-judge, plain sweep miss — no adjudication).**
+Premise re-verified before editing (not asserted): `grep -rn ynz_handle_free crates/ynz-codegen/src/`
+→ hits ONLY in `runtime_decls.rs` (:103-104 declaration comment + field, :492-494 declare_fn); ZERO
+call sites in `emit.rs` or anywhere else — codegen never emits the call, so a dropped handle's task
+runs to completion (fire-and-forget), never silently killed.
+`docs/internal/implementation/IMP-no-function-coloring.md` "Task Cancellation — Locked Pre-v0.2":
+model paragraph reframed as "The locked end-state model", user-facing model marked "(end-state)",
+and an **Implementation milestone: SHIPPED-DEFERRED v0.3-M4** status line added mirroring the
+sibling Channel/False-Sharing/Sleep sections' P6 treatment — runtime half live + substrate-proven
+(safe-drop, alloc=free-gated), language half (scope-drop-triggered `ynz_handle_free` emission,
+child-side typed-`errors` cancellation, `.cancel()` API) NOT implemented, deferred per the
+four-field Future Requirements entry (registry `background-handle-cancel-injection`; trigger:
+language-wide scope-drop mechanism OR a real cancellation workload). The two plan.md spots carrying
+the same stale hypothetical framing corrected to state plainly cancel-injection did NOT ship: §3.1
+recorded decision ("Handle-drop semantics", ~plan.md:412) and Design-Doc Alignment #9
+(~plan.md:1700), both now pointing at the Future Requirements deferral.
+
+Bookkeeping: session-id `executor-2026-07-03-m4-gate-fix` appended to plan.md's frontmatter chain;
+no phase heading added; no FRAGO filed (per the routing decision above — plain corrections, no
+justified divergence adjudicated).
+
+## Completion-Gate — CLEARED — 2026-07-03 — session-id: conductor
+
+Fix round (commit `273ea20`, `Completion-Gate: 2026-07-02-v0-3-m4-channels-arc-release#fix`) re-verified
+clean: green-check GREEN (real gitleaks, all 6 gates pass), code-reviewer confirmed the
+`lock_or_recover` dedup is a genuine reuse (real import, no shadow re-declaration, no unused-import
+fallout) with 0 findings, deviation-judge independently re-verified the Task-Cancellation
+reconciliation against the zero-`ynz_handle_free`-call-sites evidence again and confirmed all three
+touched sites (design doc + both plan.md spots) now tell one consistent story with 0 unjustified
+strays. Pushed to `origin/main` (graveyard pre-filter false-positive-cleared per usual — deferral-
+language regex, adjudicated clean, both FRAGO 008/009 confirmed already-tracked prior to this
+round).
+
+**Gate resolution: CLEAN.** 0 blockers across both rounds (initial pass + fix-round re-verify). All
+non-blocking findings from the initial pass (1 code-reviewer minor, 3 acceptance-verifier
+should-fix, 1 deviation-judge should-fix) were fixed directly this session rather than deferred —
+none required a durable §9.0.6 home; none were genuine scope-creep. No cross-phase bug PATTERN (as
+opposed to a specific finding) surfaced worth a standalone AAR lesson beyond what the individual
+findings already are.
+
+All seven phases (0-6) of `2026-07-02-v0-3-m4-channels-arc-release` are sealed, reviewed, and
+released as `v0.3.0` (tagged + published: https://github.com/yinzers/yinz-lang/releases/tag/v0.3.0).
+The cumulative cross-phase completion gate is CLEARED. Proceeding to the AAR.
+
+## AAR — 2026-07-03 — session-id: aar (dispatched by conductor post-completion-gate)
+
+**Q1 — What was supposed to happen.** Mission (¶2): ship `channel<T>()`, the `background`
+handle-form, cross-thread auto-Arc, and false-sharing auto-padding on the real poll-based
+substrate — may-block unified into ONE authoritative source first, every path deadlock-safe by
+construction — then cut `v0.3.0` folding un-tagged M3f + M3g. Ten testable Key Outcomes (¶3.1);
+seven phases (¶3.3), P0 a HARD GATE.
+
+**Q2 — What actually happened.** All seven phases landed, each with FRAGO-recorded deviations
+(P0: FRAGO 001; P1: FRAGO 002-004 relocated suspension-codegen proof to P2 after 3 build-revert
+rounds; P2: FRAGO 005-007; P3: FRAGO 008 split MET/DEFERRED; P4: FRAGO 009-011; P5: a real BLOCKER
+(fifth `64`-constant twin-derivation, fixed with a throwaway-const proof) + FRAGO 012-016 chasing
+one stale-text contradiction across 5 rounds; P6: FRAGO 017 caught a stale M3f/M3d CHANGELOG-scope
+premise via its own R4 verification step. The cumulative cross-phase gate then ran for the first
+time on genuinely-overlapping surfaces, found 4 more real findings (a duplicated `lock_or_recover`
+helper, 2 roadmap-staleness spots, 1 stale Task-Cancellation doc claim), all fixed directly. Gate
+CLEARED, `v0.3.0` tagged and published.
+
+**Q3 — Root causes of every divergence.**
+- D1 (Phase 1/2 boundary cut wrong — plan-authoring miss, JUSTIFIED via FRAGO 002-004, cost 3
+  build-revert rounds).
+- D2 (twin-derivation recurred 4× WITHIN this one plan despite the rule in-context throughout —
+  **lever failure, not a wording gap**; crosses `corpse-recurrence-escalation.md`'s own floor).
+- D3 (the screenshots/auto_arc-fires stale-text contradiction survived 3 sweep rounds — unjustified
+  process stray: targeted fixes instead of whole-document greps, each time).
+- D4 (design docs cited as a mechanism's specifying home turned out silent on it, 3× — recon-depth
+  miss: citation accepted as topically-relevant without confirming actual specification depth).
+- D5 (Assumption 12 marked `unverified — verify at P6`, went stale, caught exactly as designed —
+  NOT a defect; the verify-then-rely discipline worked).
+- D6 (Patrick's r3 no-duct-tape catch on the EC-wrapper scope-narrowing — genuine plan-authoring
+  defect, caught pre-execution at the cheapest possible stage).
+
+**Q4 — Lessons, classified by home (rule-author disposes, not re-adjudicated here):**
+1. [RULE — sustain] P0-as-HARD-GATE risk-burndown-first phasing paid for itself completely — zero
+   deadlock/trap-door bugs shipped across 6 downstream phases of adversarial suspension codegen.
+2. [ESCALATE — route to rule-author as a `corpse-recurrence-escalation.md` candidate, NOT a rule
+   re-word] Twin-derivation recurred 4× within one plan (`SuspendSet`, a latent `check.rs` twin,
+   `DEFAULT_CHANNEL_CAPACITY`, `lock_or_recover`) despite in-context citation every time — crosses
+   the escalation floor for a mechanical phase-boundary/write-time backstop.
+3. [GRAVEYARD CORPSE candidate] "Partial-reconciliation sweep" — fixing a stale claim's home
+   occurrence without grepping the whole document for every sibling occurrence (FRAGO 012-016's
+   5-round chase). Mechanical, diff-greppable.
+4. [RULE candidate] Before locking suspension/composed-scenario work into a phase, verify that
+   phase's OWN fixture surface can end-to-end prove it standalone — Phase 1 cost 3 rounds
+   discovering it couldn't.
+5. [RULE candidate] A Design-Doc-Alignment citation should be verified for actual specification
+   depth at recon time, not just topical relevance — caught 3× mid-execution instead of at recon.
+6. [RULE — sustain] "Mark unverified, gate a later step on verifying it" worked exactly as designed
+   (Assumption 12 / FRAGO 017) — a strong positive worked example.
+7. [RULE — sustain] Pre-execution human catch of a plan-authoring scope-narrowing (Patrick's r3
+   no-duct-tape call) is the cheapest possible fix point — worked-example candidate for
+   `no-duct-tape.md`'s catalog.
+8. [RULE — sustain] The cumulative cross-phase completion gate validated its own reason for
+   existing on its first genuinely-overlapping-surfaces run — all 4 findings were invisible to any
+   single phase's own reviewers.
+
+**End-State verdict (restating acceptance-verifier's cumulative-gate MET verdict):** MET — all ten
+Key Outcomes + Definition of Done verified through the real compiler; two outcomes correctly split
+MET/DEFERRED (FRAGO 008/009) rather than silently gapped. Plan classification: **success**.
+`v0.3.0` tagged and published: https://github.com/yinzers/yinz-lang/releases/tag/v0.3.0
+
+Handing all 8 lessons to rule-author now for disposal (capture/route — the AAR proposes, rule-author
+decides the durable home for each).

@@ -4,7 +4,7 @@ description: "Yinz runs code concurrently for you. You write normal, sequential-
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-03"
 status: "active"
 author: "patrick"
 metadata:
@@ -15,9 +15,10 @@ metadata:
 
 Yinz runs code concurrently for you. You write normal, sequential-looking code. The compiler analyzes what each operation depends on and runs independent operations at the same time.
 
-Two keywords. That's the entire developer API:
+Two keywords and one type. That's the entire developer API:
 - `wait` — force something to complete before continuing
 - `background` — run something separately, outside this function's lifetime
+- `channel<T>` — send values between tasks safely
 
 ---
 
@@ -164,13 +165,119 @@ The task runs independently. If it fails, it handles the failure internally. The
 
 **Long-running — store the handle to communicate:**
 
-```
-let monitor = background watchHealth()
-monitor.send("get-status")
-let status = monitor.receive()
+```ynz
+let scout = background gradeProspect(requests)
 ```
 
-If you store the result of `background`, you get a handle you can communicate with via `.send()` and `.receive()`. If you don't store it, it's fire-and-forget.
+If you store the result of `background`, you get a handle you can talk to via `.send()` and `.receive()`. If you don't store it, it's fire-and-forget. Same keyword, two patterns. Handles are built on channels, so read the next section first — then see "Talking to a background task" below.
+
+---
+
+## Channels — sending values between tasks
+
+A channel carries values of one type from one task to another. You create one with `channel<T>()`, where `T` is the type of value it carries:
+
+```ynz
+let scores: channel<int> = channel<int>()        // holds up to 64 values (the default)
+let names: channel<string> = channel<string>(8)  // holds up to 8 values
+```
+
+The number is the channel's **capacity** — how many values it can hold at once. Leave the parens empty and you get the default of 64. The IDE shows the default as a muted `64` hint inside the empty parens; click it to write `64` into your source.
+
+One task puts values in with `.send(value)`. Another task takes them out with `.receive()`:
+
+```ynz
+function relayScores(lend wire: channel<int>) -> nothing {
+  wire.send(2)
+  wire.send(5)
+  wire.send(3)
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(1)
+  background relayScores(wire)
+  let first = wire.receive()
+  let second = wire.receive()
+  let third = wire.receive()
+  let total = first + second + third
+  print(`runs this game: ${total.toString()}`)
+}
+```
+
+`relayScores` runs as a background task and pushes three scores into the channel. `entrypoint` pulls them out one at a time. If the channel is empty when you call `.receive()`, your task pauses until a value arrives. You never write any locking or waiting code — the channel handles it.
+
+**A channel is the one value you can hand to a background task and keep using yourself.** Both sides hold the same channel safely — that is the entire point of a channel. (Every other value must be given away or copied — see "Ownership with background tasks" below.)
+
+### Every channel is bounded — and that's a feature
+
+There is no unlimited channel. When a producer fills the channel faster than the receiver drains it, `send()` pauses the producer until a slot frees up.
+
+In the example above the capacity is 1: `relayScores` sends the first score, then pauses on the second send until `entrypoint` receives the first. This is called **backpressure**.
+
+**A suspended producer is backpressure working correctly, not a deadlock.** The producer isn't stuck — it's waiting for the receiver to catch up, and it resumes the moment a slot opens. Without the bound, a fast producer would silently fill up memory until the program dies. The bound is what keeps that from ever happening.
+
+Need more buffering? Pass a bigger number: `channel<int>(10000)`. There is deliberately no "unlimited" option.
+
+### The rules channels follow
+
+**The element type is fixed at construction.** A `channel<int>` carries `int` values only:
+
+```
+wire.send(`three`)
+// COMPILE ERROR: This channel carries `int` values, but you're sending `string`.
+// Send a `int` value, or create a `channel<string>` for this data.
+```
+
+**The capacity must be at least 1:**
+
+```
+let wire: channel<int> = channel<int>(0)
+// COMPILE ERROR: A channel's capacity must be at least 1, but got 0.
+// Use a positive capacity: `channel<int>(64)`. For very large buffering, pass a
+// large explicit number — there is deliberately no unbounded channel.
+```
+
+**A channel operation gets its own line.** `.send()` and `.receive()` can pause your task, so each one must be its own statement — `wire.send(5)` on its own line, or `let value = wire.receive()`. Burying one inside a bigger expression is a compile error that tells you to pull it out into a named variable first.
+
+**Channels carry simple values in v0.3:** `int`, `float`, `boolean`, `string`, `array<T>`, and `map<K, V>`. Sending a `shape` value isn't supported yet — the compile error suggests sending its fields as separate values and rebuilding the shape on the receiving side.
+
+---
+
+## Talking to a background task — handles
+
+Storing the result of `background` gives you a **handle** — a two-way line to the running task:
+
+```ynz
+function gradeProspect(lend requests: channel<int>) -> int errors {
+  let jerseyNumber = requests.receive()
+  return jerseyNumber * 2
+}
+
+function entrypoint() -> nothing {
+  let requests: channel<int> = channel<int>(4)
+  let scout = background gradeProspect(requests)
+  scout.send(21)
+  let graded = scout.receive()
+  let grade = graded.or(0)
+  print(`prospect grade: ${grade.toString()}`)
+}
+```
+
+**Sending TO the task:** `scout.send(21)` delivers into the **first `channel<T>` parameter** of the spawned function. Here that's `requests`, so inside the task, `requests.receive()` reads what you sent. That's the whole convention: the task reads its messages from its first channel parameter — there is no hidden mailbox.
+
+Because of that, the spawned function must take a channel parameter to receive messages:
+
+```
+let counter = background slowCount()
+counter.send(7)
+// COMPILE ERROR: This task takes no channel — it has no way to receive messages.
+// Add a `channel<T>` parameter to the task's function and pass a channel at the
+// spawn: `let h = background worker(commands)` — `h.send(v)` then feeds that channel.
+```
+
+**Receiving FROM the task:** `scout.receive()` gives you the next thing the task delivers. For a function like `gradeProspect` that returns a value, that's its completion value — typed with `errors`, because the task might have failed. Handle it like any other `errors` value (here, `graded.or(0)` falls back to 0).
+
+One more rule: the handle form needs a function that can pause (one that uses `wait`, a channel, or calls something that does). For a pure number-cruncher that never pauses, use fire-and-forget `background crunch()` — handle support for those ships in a later milestone, and the compile error says exactly that.
 
 ---
 
@@ -194,6 +301,8 @@ background processData(data)
 ```
 
 A shared borrow is only valid while its owner exists. A background task might still be running after the current function returns — so sharing would create a dangling reference. The function being called via `background` must take its parameters as `give`, OR the caller passes a `.copy()` (which creates an independent owned value).
+
+**The one exception: `channel<T>` parameters.** A channel is built to be held by two tasks at once — that's its job — so passing a channel to a background task is always allowed, and you keep using your end afterward. Everything you saw in the channels section above relies on this.
 
 **The compiler figures out which one to use** when the function signature is `give`:
 
@@ -300,9 +409,10 @@ decided so you understand what's actually running in parallel.
 ```
 wait           // complete this before continuing
 background     // run this outside this function's lifetime
+channel<T>     // send values between tasks safely
 ```
 
-Two keywords. Everything else is automatic. The compiler builds the dependency graph, runs
-independent operations in parallel on all available cores, sequences writes to the same
-resource, manages core pools, and handles cleanup. You don't see any of it — you just write
-normal code.
+Two keywords and one type. Everything else is automatic. The compiler builds the dependency
+graph, runs independent operations in parallel on all available cores, sequences writes to
+the same resource, manages core pools, applies backpressure when a producer outruns a
+receiver, and handles cleanup. You don't see any of it — you just write normal code.

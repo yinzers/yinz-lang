@@ -1056,7 +1056,7 @@ function m3g_demo() -> nothing {
 //
 // Bounded task-communication channels, live:
 //
-//     let orders: channel<int> = channel<int>()      // default capacity 64 (IDE shows ⟨64⟩)
+//     let orders: channel<int> = channel<int>()      // default capacity 64 (IDE shows 64)
 //     let names:  channel<string> = channel<string>(8)   // explicit capacity
 //
 // Channels are bounded by construction (there is no unbounded channel). When a producer outruns
