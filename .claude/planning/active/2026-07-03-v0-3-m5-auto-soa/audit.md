@@ -452,6 +452,33 @@ Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-9
   step 5 fixtures + full suite + dual-mode oracle + SEAL remain for segment 10, all designs
   finalized in the handoff so segment 10 needs zero probing)
 
+### 2026-07-03 — Phase 3, segment 10 (FINAL — phase sealed)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-10
+- segment: 10
+- session-id: phase3-executor-2026-07-03-m5-seg10
+- subagent_tokens: 192034
+- checkpoint reason: n/a -- final segment, phase completed and sealed
+- resume-at: n/a -- phase complete
+- verdict: STATUS: DONE. PHASE 3 SEALED at commit `e06172f6bb31a63992328a3d87abac9763a69b64`
+  (conductor-verified: trailer `Plan-Phase: 2026-07-03-v0-3-m5-auto-soa#3` present, commit
+  exists, working tree clean post-commit). 49 files, +2663/-1197, covers ALL 10 segments'
+  accumulated uncommitted work in one boundary commit per FRAGO 004. 7 sweep/pin fixtures
+  authored + landed (bg give/copy/wait matrix, MapEntry escape x2, D12 pin, union readback-
+  blocked x2), all green first run. Full workspace suite: 2246/0 failed. Dual-mode oracle
+  regenerated over all 466 fixtures: 379 identical / 83 skip / 2 documented DIFF (pre-existing,
+  unrelated) / 2 timing NONDET / 0 anomalies / 0 real divergences -- step 5's dual-mode promise
+  MET. All 5 phase-exit criteria confirmed on receipts (map fix+matrix+grep gate, guard+
+  deferral gone, IMP-concurrency updated, parity green, crossing-wait green, sweep green).
+  handoff-phase-3.md deleted (segment's last act). Frontmatter session-id chain gap (segs 2-9
+  logged in audit.md but not appended to plan.md frontmatter) self-repaired by this segment.
+  Full carry-forward list for the Phase-3 boundary reviewers recorded in this segment's return
+  (Patrick's 2 footnotes, the union-persist plan-text falsification as a FRAGO candidate, 4
+  FRAGO-candidate classifications for deviation-judge, the M3e load-flake, bare-.copy() note,
+  error_galleries.rs recon drift, step-4 verdict paperwork, 2 pre-existing warnings, suite-count
+  reconciliation, the frontmatter-chain repair itself, the LLVM literal-merging D12 artifact
+  note, the SKIP-semantics correction now recorded in p2-dualmode-report.md). Phase 3 CLOSED --
+  next: conductor's cheap gates (Step 4) + reviewer fan-out (Step 5) over the sealed commit.
+
 ## FRAGO log
 
 ## FRAGO 001 — 2026-07-03 — session-id: plan-producer-2026-07-03-m5
@@ -1247,3 +1274,78 @@ Carry-forwards for the boundary review enumerated in the segment return (Patrick
 footnotes; M3e load-flake; union plan-text falsification FRAGO candidate; bare-.copy() alias
 note; D12/(e)/MapEntry/bg-alias FRAGO-candidate classifications; error_galleries recon drift;
 step-4 verdict paperwork; pre-existing driver-test warnings; suite-count sensitivity).
+
+## Phase 3 boundary review — 2026-07-03 — session-id: plan-conductor-2026-07-03-m5-fable
+Cheap gates (green-check + graveyard-auditor) + full reviewer fan-out (code-reviewer,
+acceptance-verifier, rules-compliance, deviation-judge, test-quality, + a dedicated adversarial
+gate-checker per the plan's declared fan-out) run against the sealed commit `e06172f6bb31a
+63992328a3d87abac9763a69b64`. Summary:
+- green-check: GREEN. 2246 tests / 0 failed, clippy clean, fmt clean, build clean. Secret-scan
+  pass via independently-re-run fallback sweep (not taken on the commit message's word).
+- graveyard-auditor: CLEAN, 6 corpses adjudicated, 0 findings. Independently re-verified the
+  FRAGO-010 size-twin unification claim by grep (confirmed complete, not merely asserted).
+- code-reviewer: CHANGES-REQUESTED, 0 blockers, 2 should-fix — (1) `store_binding` (emit.rs:
+  ~18907) has NO MapEntry deep-copy arm (falls through to raw pointer store) on a THIRD,
+  un-probed surface of the same escape-bug class this phase fixed twice already (a
+  MapEntry-typed return or an escaping `let e2 = entry` binding could carry a dangling
+  pointer); (2) zero golden-IR-snapshot coverage on new map choke-point call sites (= Patrick's
+  footnote 2, independently reconfirmed).
+- acceptance-verifier: MET. All 5 phase exit-criteria clauses independently confirmed against
+  actual fixtures/tests/source (not the executor's own STATUS prose).
+- rules-compliance: CLEAN, 0 findings across 6 rule areas (authoritative-derivation,
+  feature-registry, plan-invariants, vocabulary/naming, docs-checklist, stdlib-design).
+- deviation-judge: ON-PLAN. 5 divergences judged; 4 fine-as-is (D12 ratification, MapEntry
+  fixes, bg-alias fix, error_galleries no-op — all plan-delegated or squarely in the
+  adversarial-sweep step's own named scope); 1 JUSTIFIED FRAGO candidate, risk-neutral:
+  plan.md step 5(e)'s text ("no fixture can construct a union persisting through the choke
+  points") is FALSIFIED by probe evidence — write-side persistence through
+  `map<K,Union>.set`/`array<Union>` literals compiles+runs, read-back ICEs loud (no silent-wrong,
+  zero observable exposure). D6's full loud-reject diagnostic correctly NOT self-built
+  (out-of-scope new user-facing diagnostic + registry/gallery obligations); documented +
+  loud-fail-pinned instead.
+- test-quality: CLEAN, 0 blockers, 1 should-fix (same golden-IR-snapshot gap as above,
+  independently judged low-priority defense-in-depth — runtime-behavior testing is the correct
+  primary verification tool for genuinely NEW logic, which is what caught both real miscompiles
+  this phase).
+- adversarial gate-checker (general-purpose, per the plan's declared fan-out): ALL 5 charged
+  items PASS with independently-reproduced command receipts (P0 map-callsite checklist rows
+  spot-verified against real fixture content; grep gate re-run directly — 10 hits, all confined
+  to the choke-point section; RED matrix 7/7 green re-run; sweep fixtures 7/7 green re-run;
+  parity gate 3/3 green re-run). No fabrication found.
+
+**Routing (0 blockers across all 6 dispatches → no fix loop):**
+1. FRAGO 012 applied below (risk-neutral, auto-apply + log — deviation-judge's classification).
+2. Two should-fix non-blockers routed to the per-phase durable-deferral home (§6.1), NOT fixed
+   this phase: the `store_binding` MapEntry third-surface gap, and the golden-IR-snapshot gap.
+   Neither is a capability discovery (both are in-scope correctness/coverage nits within M5's
+   own by-value-storage domain) — nit-path only, payload to the roadmap's `audit.md`, no
+   Capability Ledger row.
+
+## FRAGO 012 — 2026-07-03 — session-id: plan-conductor-2026-07-03-m5-fable (deviation-judge classified JUSTIFIED; risk-neutral; auto-apply + log)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 3 sealed (commit e06172f6), boundary review
+Trigger:   Phase 3's own adversarial sweep (step 5(e)) built a probe to test the plan's own
+           claim — plan.md's step 5(e) parenthetical states "no fixture can construct a union
+           persisting through the choke points." The probe proved this FALSE:
+           `map<K,Union>.set` and `array<Union>` literals both compile and run on the write
+           side (raw-pointer persist through the marshalling choke points); only the read-back
+           path ICEs (loud, not silent-wrong). Deviation-judge (boundary review, this session)
+           independently confirmed the falsification against actual source and classified it
+           JUSTIFIED — the correct response to a falsified plan assumption mid-sweep is to
+           document the true reachability + lock it with a loud-fail regression pin (both done:
+           `value_to_stable_bits`'s KNOWN-HOLE doc refreshed; `m5_p3_sweep_union_readback_
+           blocked_{array,map}` pin both build modes), NOT to self-author D6's full loud-reject
+           diagnostic mid-sweep (that is out-of-scope new user-facing-diagnostic + registry/
+           gallery work this step was never resourced for).
+Risk:      RISK-NEUTRAL. The scenario was previously believed unreachable (assumed zero
+           surface); it is now proven reachable-but-loud-blocked (an ICE, not a bad output) —
+           no new observable exposure was introduced by leaving D6 unbuilt. No re-run of the
+           deterministic risk matrix required (no HIGH residual, no signature gate).
+Changes:   plan.md Phase 3 step 5(e) text corrected (applied by a re-dispatched executor, not
+           the conductor directly — plan-body edit stays out of conductor charter) to replace
+           the falsified "no fixture can construct..." parenthetical with the probe-verified
+           truth + a forward pointer to the KNOWN-HOLE doc and the two loud-fail pins.
+Unchanged: D6's contingent loud-reject diagnostic remains UNBUILT, by design — parked as a
+           standing follow-up item (not a milestone-owned capability; no new roadmap ledger
+           row) should union-narrowing ever mature enough that this needs a real diagnostic
+           instead of a documented loud ICE.
+Override:  N/A — risk-neutral, no signature required per the risk engine.
