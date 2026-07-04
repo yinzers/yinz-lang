@@ -79,13 +79,16 @@ pub struct TypedModule {
     /// muted-text hint at the call site.
     pub background_arg_inferred_ownership: std::collections::HashMap<(usize, usize), BgOwnership>,
     /// v0.3-M4 Phase 4: shape types the false-sharing transform pads with 64-byte
-    /// cache-line field isolation — the ONE authoritative padded set, derived by
-    /// `false_sharing::finalize_false_sharing` from the `Expr::Background` boundary
-    /// record. Consumed by codegen layout (`emit_shape_types`) AND frame-slot sizing
-    /// (`frame_layouts_query` measures the same padded LLVM types), so every consumer
-    /// threads this set rather than re-deriving cross-thread access. EMPTY under
-    /// `--no-auto-parallel` (the sequential oracle stays genuinely unpadded) and under
-    /// kernel mode (no scheduler — `background` is a compile error there).
+    /// cache-line field isolation, derived by `false_sharing::finalize_false_sharing`
+    /// from the `Expr::Background` boundary record. EMPTY under `--no-auto-parallel`
+    /// (the sequential oracle stays genuinely unpadded) and under kernel mode (no
+    /// scheduler — `background` is a compile error there).
+    ///
+    /// v0.3-M5 Phase 4: this field is the RAW finalize record. Consumers read the
+    /// resolved `LayoutDecisions` via `layout_decisions_query` (the ONE layout
+    /// authority — codegen layout, padded-alloca alignment, and frame-slot sizing
+    /// all thread its `padded_shapes`); a direct read outside that authority is
+    /// the E3 twin-derivation corpse (authoritative-derivation.md).
     pub cross_thread_padded_shapes: std::collections::HashSet<String>,
 }
 
@@ -1004,56 +1007,13 @@ impl<'b> Checker<'b> {
                 ));
             }
 
-            // Check 2d (ArrayShapeRuntimeFieldWithWait): an `array<Shape>` crossing local
-            // whose array literal contains at least one struct element with a runtime-computed
-            // field value (i.e., not a compile-time integer/bool literal).
-            //
-            // `array<Shape>` elements are stored as pointers to the shape's LLVM struct alloca.
-            // For all-literal elements, the codegen emits LLVM module-level globals (eternal
-            // address, stable across suspension). For elements with runtime field values, the
-            // codegen falls back to a stack alloca in the constructing function's resume frame —
-            // which is freed when the function suspends and returns to the scheduler. On the
-            // next resume the element pointers dangle, producing undefined behavior.
-            //
-            // The interim fix is a clean WHAT/WHAT-INSTEAD/WHY compile error.
-            // The permanent fix (by-value element storage) ships in m3c-array-by-value.
-            // See design/concurrency.md 'ArrayShapeRuntimeFieldWithWait' and
-            // design/future/array-by-value-element-storage.md.
-            if let Some((span, crossing_name)) =
-                find_array_shape_runtime_field_crossing(&crossings, &f.body.stmts)
-            {
-                self.diags.push(Diagnostic::error(
-                    span,
-                    format!(
-                        "`{crossing_name}` is an `array<Shape>` whose elements have \
-                         runtime-computed field values and cannot yet cross a `wait`."
-                    ),
-                    "An `array<Shape>` built with computed (non-literal) field values \
-                     cannot be used in a function that contains `wait` yet. Two options \
-                     that work today:\n\
-                     \n\
-                     1. Use only plain literal numbers or true/false as field values:\n\
-                        let items = [{ id: 1, qty: 10 }]   // all literals — works\n\
-                     \n\
-                     2. Move the array and all its uses into a separate helper function \
-                     that does not contain any `wait`:\n\
-                        function buildItems(qty: int) -> array<Item> {\n\
-                          return [{ id: 1, qty: qty }]   // no wait here — works\n\
-                        }\n\
-                     \n\
-                     Full support for computed field values in functions that use `wait` \
-                     ships soon — see design/concurrency.md 'ArrayShapeRuntimeFieldWithWait'.",
-                    "Array elements with computed (non-literal) field values are stored as \
-                     references to temporary memory created while the array is built. When the \
-                     function pauses at a `wait`, that temporary memory is released — so after \
-                     the pause the references point at freed memory and reading them gives wrong \
-                     values. Elements whose fields are all simple literal numbers or true/false \
-                     are stored in permanent memory and work correctly across a `wait`. Full \
-                     support for computed field values across a `wait` ships in a later \
-                     milestone. \
-                     See design/concurrency.md 'ArrayShapeRuntimeFieldWithWait'.",
-                ));
-            }
+            // Check 2d (ArrayShapeRuntimeFieldWithWait) — LIFTED by v0.3-M5 Phase 3.
+            // The interim guard rejected `array<Shape>` crossing locals with runtime-computed
+            // element field values because elements were stored as pointers to stack allocas
+            // that dangled after suspension. The M5 by-value ABI cut stores element bytes
+            // inline in the heap buffer (stable owner across any suspension), so the entire
+            // rejection class is obsolete. Acceptance coverage:
+            // crates/ynz-driver/tests/integration.rs `m5_p3_array_shape_*_runs` tests.
 
             // Check 3 (shadow detection): a `let` that re-declares a crossing-local name
             // is ambiguous — the same name means two different values across a `wait`. Reject
@@ -8009,103 +7969,6 @@ fn body_reads_field_after_wait(stmts: &[Stmt], entry_var: &str) -> bool {
     false
 }
 
-/// Scans `crossing_names` for any local whose initializer is an `array<Shape>` literal
-/// with at least one struct element having a runtime-computed field value (not a
-/// compile-time `IntLit` or `BoolLit`).
-///
-/// Returns the span of the first such crossing local and its name, or `None` if no
-/// dangerous runtime-field `array<Shape>` crossing local is found.
-///
-/// The guard fires on the full `crossing_names` set: any name the crossing-analysis
-/// considers in-scope across a suspension boundary (declared before one AND referenced
-/// after one — including via an iterator expression in a for-loop). This is
-/// intentionally conservative — some after-last-wait constructions also end up in
-/// `crossing_names` because the crossing-analysis tracks them as reachable by the
-/// subsequent for-loop iterator scan. The guard rejects those too, which is the safe
-/// direction (loud over silent). The m3c-array-by-value milestone removes this guard
-/// entirely by making runtime-field elements safe across any suspension.
-///
-/// All-literal struct elements (fields that are all `IntLit` or `BoolLit`) are safe:
-/// codegen emits them as LLVM module-level globals with stable, eternal addresses.
-/// Runtime-computed fields fall back to stack allocas that dangle after suspension.
-fn find_array_shape_runtime_field_crossing(
-    crossing_names: &[String],
-    stmts: &[Stmt],
-) -> Option<(SourceSpan, String)> {
-    for name in crossing_names {
-        // `crossing_names` is the conservative set from crossing_local_names: names
-        // that are declared before a suspension AND referenced afterward (including
-        // via iterator expressions in for-loops). The conservative scope means some
-        // after-last-wait constructions can appear here too (safe direction: loud over
-        // silent). The m3c-array-by-value milestone removes this guard entirely.
-        if let Some(Expr::ArrayLit { elements, .. }) =
-            find_let_initializer_in_stmts(stmts, name.as_str())
-        {
-            for elem in elements {
-                if let Expr::StructLit { fields, .. } = elem {
-                    if fields
-                        .iter()
-                        .any(|f| !expr_is_compile_time_literal(&f.value))
-                    {
-                        let span = find_crossing_local_span(stmts, name.as_str())
-                            .unwrap_or_else(|| SourceSpan::new("", 0, 0));
-                        return Some((span, name.clone()));
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Walk `stmts` to find the initializer expression of the first `let`/`const` binding
-/// named `target`. Returns a reference to the value expression, or `None` if `target`
-/// is not declared as a `let` in `stmts` (e.g., it is a for-loop var or a parameter).
-fn find_let_initializer_in_stmts<'a>(stmts: &'a [Stmt], target: &str) -> Option<&'a Expr> {
-    for stmt in stmts {
-        match stmt {
-            Stmt::Let { name, value, .. } if name == target => {
-                return Some(value);
-            }
-            Stmt::If { body, .. } => {
-                if let Some(e) = find_let_initializer_in_stmts(&body.stmts, target) {
-                    return Some(e);
-                }
-            }
-            Stmt::While { body, .. } | Stmt::For { body, .. } => {
-                if let Some(e) = find_let_initializer_in_stmts(&body.stmts, target) {
-                    return Some(e);
-                }
-            }
-            Stmt::Match { arms, else_arm, .. } => {
-                for arm in arms {
-                    if let Some(e) = find_let_initializer_in_stmts(&arm.body.stmts, target) {
-                        return Some(e);
-                    }
-                }
-                if let Some(eb) = else_arm {
-                    if let Some(e) = find_let_initializer_in_stmts(&eb.stmts, target) {
-                        return Some(e);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Returns `true` if `expr` is a struct-element field value that codegen can fold into
-/// a stable LLVM module-level global via `try_build_shape_global`. Only `IntLit` and
-/// `BoolLit` are handled by that function — all other forms produce a stack alloca that
-/// dangles after suspension.
-///
-/// This predicate mirrors `try_build_shape_global`'s match arms exactly so the guard
-/// fires for precisely the cases that would otherwise silently miscompile.
-fn expr_is_compile_time_literal(expr: &Expr) -> bool {
-    matches!(expr, Expr::IntLit(_, _) | Expr::BoolLit(_, _))
-}
-
 /// Returns `true` if `stmt` (or any sub-expression) reads a field of `target`.
 /// Detects `target.key` and `target.value` — any FieldAccess on an Ident matching
 /// `target`.
@@ -8976,7 +8839,7 @@ pub(crate) fn suspending_calls_in_subexpr_position(
 /// path runs (`suspending_calls_in_subexpr_position`, `crossing_local_names`,
 /// `find_stored_range_wait_in_for`, `find_fixed_array_iter_wait_in_for`,
 /// `find_expr_iter_wait_in_for`, `find_map_entry_field_after_wait`,
-/// `find_array_shape_runtime_field_crossing`, the wide-return classifier, the
+/// the wide-return classifier, the
 /// nested-shape / unsupported-crossing-type / shadow checks). The gating mirrors
 /// `check_function` exactly: the function is treated as `is_suspending_fn = true`,
 /// and `has_explicit_waits` is read from its body. No guard logic is re-derived —
@@ -9112,10 +8975,9 @@ pub(crate) fn suspension_guards_fire_for_fn(
         return true;
     }
 
-    // ArrayShapeRuntimeFieldWithWait.
-    if find_array_shape_runtime_field_crossing(&crossings, &f.body.stmts).is_some() {
-        return true;
-    }
+    // ArrayShapeRuntimeFieldWithWait — LIFTED (v0.3-M5 Phase 3): by-value element
+    // storage made runtime-field array<Shape> crossings safe, `check_function` no
+    // longer rejects them, so the probe no longer declines those hosts.
 
     // Parameter-shadow guard — mirrors `check_function`'s Check 3b EXACTLY (the probe
     // must decline any host the real checker would later reject once it becomes SM).

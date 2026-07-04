@@ -1,0 +1,33 @@
+// M5 P0 S2 fixture 4 — RUNTIME-LENGTH array (grown via .add in a runtime-bounded
+// loop; length not compile-time provable → D3/threshold criteria cannot hold).
+//
+// PRE-REGISTERED expected analysis (written BEFORE the spike ran):
+//   fn `entrypoint`: array `pts` shape=Point provable_len=Some(0) growth_ops=1
+//     elem_set_writes=0 whole_value_uses=0 escapes=[]
+//   loop-field `x` reads=1 writes=0
+//   field-union=1
+//   verdict: DECLINED(runtime-length: grown via .add)
+//   (growth beats the empty-literal Some(0): once .add appears the literal length
+//    is meaningless — the decline keys on growth, the honest runtime-length signal.)
+// Expected program stdout: 6 (n = 3 at runtime; x values 1,2,3).
+shape Point {
+  x: int
+  y: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 2
+  let n: int = seed + 1
+  let pts: array<Point> = []
+  for (i in range(0, n)) {
+    let px: int = i + 1
+    let py: int = px * 2
+    let pt: Point = { x: px, y: py }
+    pts.add(pt)
+  }
+  let sumX: int = 0
+  for (p in pts) {
+    sumX = sumX + p.x
+  }
+  print(sumX.toString())
+}

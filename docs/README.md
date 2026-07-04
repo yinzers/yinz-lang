@@ -4,7 +4,7 @@ description: "Every design topic has its own file. This is the index. One line p
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-04"
 status: "active"
 author: "patrick"
 metadata:
@@ -33,6 +33,8 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Generics | [`docs/internal/implementation/IMP-generics.md`](internal/implementation/IMP-generics.md) | Type generics `<T>`, function generics, `follows` constraints inline, type inference at call sites |
 | Ownership | [`docs/internal/implementation/IMP-ownership.md`](internal/implementation/IMP-ownership.md) | `.share`/`.lend`/`.give`/`.copy`/`.freeze`, no direct array indexing |
 | Collections | [`docs/internal/implementation/IMP-collections.md`](internal/implementation/IMP-collections.md) | `fixed`/`array`/`map`, no chaining, method naming, bracket sugar for `.get()`/`.set()`, string indexing methods |
+| Array element storage (by-value, v0.3-M5) | [`docs/internal/implementation/IMP-collections.md`](internal/implementation/IMP-collections.md#array-element-storage--by-value-inline-v03-m5) | `array<Shape>` elements stored by value inline in the heap buffer (elem_size-aware ABI) — fixes the stack-dangling class the M3a guard masked; one-allocation buffer, copy-on-persist snapshot semantics (with TS-aliasing teaching note), field-wise value `contains`, element-blind drop parity, serialization forward-compat |
+| Auto-SoA layout (v0.3-M5) | [`docs/internal/implementation/IMP-collections.md`](internal/implementation/IMP-collections.md#auto-soa-layout-v03-m5) | Qualifying `array<Shape>` stored as per-field segments in one allocation; admission criteria (provable length > 64, no growth, no escape, ≤2-field union), padding-wins layout authority, kernel-mode gate, Tier 3 lint `array-using-soa-layout`, honest O0/-O2 performance provenance |
 | Maybe / optional values | [`docs/internal/implementation/IMP-maybe.md`](internal/implementation/IMP-maybe.md) | `maybe T` sugar for `T \| none`, LLVM lowering decision table, flow-sensitive `.value` narrowing rules, `none`-inference rules, v0.1 cycle-leak limitation (M5) |
 | Error handling | [`docs/internal/implementation/IMP-errors.md`](internal/implementation/IMP-errors.md) | `errors` keyword, no try/catch, flow-sensitive auto-propagation narrowing |
 | Functions | [`docs/internal/implementation/IMP-functions.md`](internal/implementation/IMP-functions.md) | `function` keyword, `-> nothing`, no tuples, closure syntax |

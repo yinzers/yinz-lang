@@ -558,46 +558,28 @@ This is tracked in [`registry/features.toml`](../../../registry/features.toml) a
 
 ---
 
-### `ArrayShapeRuntimeFieldWithWait` — `array<Shape>` with runtime field values crossing a `wait` (deferred, clean compile error today)
+### `ArrayShapeRuntimeFieldWithWait` — LIFTED (fixed by v0.3-M5 by-value storage)
 
-An `array<Shape>` local declared before a `wait` and read after it is permitted in general — the array's heap buffer survives suspension correctly (the YnzArray pointer is stored via `ptr_to_int` in the frame and reloaded on resume). **However**, if the array literal contains elements whose field values are runtime-computed (e.g. `{ id: 1, qty: a }` where `a` is a variable), those element structs are stored as pointers to stack allocas in the constructing resume function's frame. That stack frame is freed when the function suspends; on the next resume the element pointers are dangling, producing undefined behavior (ASLR-varying stack garbage or a crash).
+**This guard no longer exists.** From v0.3-M3a through v0.3-M4, an `array<Shape>` crossing local whose literal contained a runtime-computed field value (e.g. `{ id: 1, qty: a }` where `a` is a variable) was loud-rejected at compile time: elements were stored as `i64` pointers to stack allocas in the constructing resume function's frame, which was freed on suspension — so after a `wait` the element pointers dangled (ASLR-varying stack garbage or a crash). Only all-literal elements were safe, via a module-global lowering (`try_build_shape_global`).
 
-Elements whose fields are ALL compile-time `IntLit` or `BoolLit` values work correctly — codegen emits LLVM module-level globals for those structs (stable, eternal addresses). The guard fires only when at least one element has a runtime-computed field value.
+v0.3-M5's **by-value inline element storage** removed the root cause: the array heap buffer now stores the shape element bytes directly (variable slot size = element ABI size from `shape_abi_sizes`), with no per-element pointer indirection. The heap buffer is the stable owner of the element bytes and survives suspension like any other crossing pointer local, regardless of whether field values are literals or runtime-computed. The module-global lowering was deleted with the same cut — literal and runtime fields now take the identical path.
 
 ```ynz
-// COMPILE ERROR (ArrayShapeRuntimeFieldWithWait):
+// WORKS since v0.3-M5 (pre-M5: COMPILE ERROR ArrayShapeRuntimeFieldWithWait):
 let a: int = 10
 let items: array<Item> = [{ id: 1, qty: a }]   // runtime field: qty = a
 wait sleep(5)
-for (it in items) { print(it.qty.toString()) }
-
-// WORKS: all-literal fields (module-level globals)
-let items2: array<Item> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
-wait sleep(5)
-for (it in items2) { total = total + it.qty }   // total = 30
-
-// WORKS: move the array into a helper function that does not use wait
-// (no suspension in buildItems — the runtime-field construction is safe there)
-function buildItems(qty: int) -> array<Item> {
-    return [{ id: 1, qty: qty }]
-}
-let a: int = 10
-wait sleep(5)
-let items3: array<Item> = buildItems(a)
-for (it in items3) { print(it.qty.toString()) }
+for (it in items) { print(it.qty.toString()) }  // prints the real value — no dangle
 ```
 
-**Root cause**: `YnzArray` stores each Shape element as an `i64` pointer to the struct's bytes. The codegen path for runtime-field shapes emits a stack alloca in the current resume function — which is freed on suspension. The permanent fix is **by-value inline element storage**: the array heap buffer stores the shape bytes directly (variable slot size = `sizeof(elem)`), so no pointer indirection is needed and suspension is safe regardless of field values.
+**What was removed in the lift** (v0.3-M5 Phase 3, one reviewed change):
 
-**What it costs to lift**: 2–3 sessions — a breaking ABI change to `YnzArray` (add `elem_size`, update `ynz_array_new`/`ynz_array_push`/`ynz_array_get`/`ynz_array_set`, and all codegen call sites). See [`docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md`](../scratchpad/SCRATCH-future-array-by-value-element-storage.md) for the full design.
+- typeck Check 2d (the diagnostic push) and its helpers `find_array_shape_runtime_field_crossing`, `find_let_initializer_in_stmts`, `expr_is_compile_time_literal` in `crates/ynz-typeck/src/check.rs`
+- the matching decline arm in the CPU-promotion probe (`suspension_guards_fire_for_fn`) — hosts with runtime-field `array<Shape>` crossings now promote
+- the `array-shape-runtime-field-with-wait` deferral entry in [`registry/features.toml`](../../../registry/features.toml)
+- the error-gallery trigger in `examples/primantis-orders/v0_3_m3a_errors.ynz`
 
-**Guard scope (conservative)**: the interim guard fires on the full `crossing_names` set from the crossing analysis, which conservatively includes some after-last-wait constructions (e.g. `let items = [...]` declared after a `wait` but iterated by a for-loop, which the crossing analysis tracks as an in-scope reference). The guard intentionally over-rejects these — loud over silent — because distinguishing them precisely would require a more complex pre-suspension-only scan. The `m3c-array-by-value` milestone lifts the guard entirely by making runtime-field elements safe across any suspension.
-
-**Workaround**: use only plain literal field values (`[{ id: 1, qty: 10 }]`), or move the array construction and all its uses into a separate helper function that does not contain any `wait`.
-
-**Trigger**: an `array<Shape>` crossing local whose initializer `ArrayLit` contains at least one `StructLit` element with a non-literal field value. The `ArrayShapeRuntimeFieldWithWait` guard in `crates/ynz-typeck/src/check.rs` (Check 2d) rejects these at compile time.
-
-This is tracked in [`registry/features.toml`](../../../registry/features.toml) as `array-shape-runtime-field-with-wait`.
+**Acceptance coverage**: `crates/ynz-driver/tests/integration.rs` — `m5_p3_array_shape_runtime_field_crossing_runs` (the scratch doc's named acceptance signal), plus the two former guard-hole positions repurposed as acceptance (`m5_p3_array_shape_between_waits_runs`, `m5_p3_array_shape_nested_if_runs`) and the literal-field regression boundary (`v03_m3a_p3_array_shape_literal_crossing_still_works`). Design record: [`docs/internal/implementation/IMP-collections.md` — "Array element storage — by-value inline (v0.3-M5)"](IMP-collections.md#array-element-storage--by-value-inline-v03-m5).
 
 ---
 

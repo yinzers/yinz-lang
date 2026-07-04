@@ -47,10 +47,22 @@ pub struct RuntimeDecls<'ctx> {
     // Heap deallocator (M4): (ptr: *mut u8, size: usize) → void
     pub ynz_free: FunctionValue<'ctx>,
 
-    // Array runtime (M5 P4a) — all operate on the heap YnzArray header pointer.
+    // Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) — all operate
+    // on the heap YnzArray header pointer. Element loads/stores go through byte
+    // pointers (`*const u8` src / `*mut u8` out) sized by the header's elem_size;
+    // codegen routes EVERY new/push/get/set call through the `Cg::array_elem_*`
+    // choke-point helpers in emit.rs (authoritative-derivation).
+    // ynz_array_new(elem_size: i64) -> ptr
     pub ynz_array_new: FunctionValue<'ctx>,
+    // ynz_array_new_sized(elem_size: i64, cap: i64) -> ptr — exact-capacity constructor,
+    // len pre-set to cap; the SoA segmented-buffer allocation path (v0.3-M5 P5 / D2).
+    pub ynz_array_new_sized: FunctionValue<'ctx>,
+    // ynz_array_push(ptr arr, ptr src) -> void — memcpys elem_size bytes from src
     pub ynz_array_push: FunctionValue<'ctx>,
+    // ynz_array_get(ptr arr, i64 idx, ptr out) -> i64 has-flag — memcpys elem_size
+    // bytes into out on hit; zeroes out on OOB
     pub ynz_array_get: FunctionValue<'ctx>,
+    // ynz_array_set(ptr arr, i64 idx, ptr src) -> void — aborts on OOB
     pub ynz_array_set: FunctionValue<'ctx>,
     pub ynz_array_count: FunctionValue<'ctx>,
     pub ynz_array_drop: FunctionValue<'ctx>,
@@ -60,21 +72,29 @@ pub struct RuntimeDecls<'ctx> {
     // so the task's copy survives the spawner's stack frame.
     pub ynz_array_clone_primitive: FunctionValue<'ctx>,
 
-    // Map runtime (M5 P4b) — SipHash-2-4 + Swiss Tables.
+    // Map runtime (M5 P4b; by-value elem_size ABI since v0.3-M5 P3) —
+    // SipHash-2-4 + Swiss Tables. Value cells are elem_size-byte by-value copies
+    // (mirrors the array ABI 1:1); has-flags are RETURN values, never out-struct
+    // fields, because the value width varies per map.
     pub ynz_siphash_init: FunctionValue<'ctx>,
+    // ynz_map_new(i64 elem_size) -> ptr
     pub ynz_map_new: FunctionValue<'ctx>,
-    // ynz_map_get(ptr map, i64 key, ptr out[2]) -> void
+    // ynz_map_get(ptr map, i64 key, ptr out) -> i64 has-flag; copies elem_size
+    // value bytes into out on hit, zeroes out on miss
     pub ynz_map_get: FunctionValue<'ctx>,
-    // ynz_map_get_str(ptr map, ptr key, ptr out[2]) -> void
+    // ynz_map_get_str(ptr map, ptr key, ptr out) -> i64 has-flag; same contract
     pub ynz_map_get_str: FunctionValue<'ctx>,
-    // ynz_map_set(ptr map, i64 key, i64 value) -> void
+    // ynz_map_set(ptr map, i64 key, ptr src) -> void — copies elem_size bytes from src
     pub ynz_map_set: FunctionValue<'ctx>,
-    // ynz_map_set_str(ptr map, ptr key, i64 value) -> void
+    // ynz_map_set_str(ptr map, ptr key, ptr src) -> void — same copy contract
     pub ynz_map_set_str: FunctionValue<'ctx>,
     pub ynz_map_count: FunctionValue<'ctx>,
     pub ynz_map_has: FunctionValue<'ctx>,
-    // ynz_map_iter_get(ptr map, i64 pos, ptr out[3]) -> void
+    // ynz_map_iter_get(ptr map, i64 pos, ptr key_out, ptr val_out) -> i64 has-flag;
+    // writes the key into key_out and elem_size value bytes into val_out
     pub ynz_map_iter_get: FunctionValue<'ctx>,
+    // ynz_map_iter_get_str(ptr map, i64 pos, ptr key_out, ptr val_out) -> i64 has-flag;
+    // key_out receives the stored key POINTER as i64 bits
     pub ynz_map_iter_get_str: FunctionValue<'ctx>,
     pub ynz_map_drop: FunctionValue<'ctx>,
 
@@ -364,23 +384,32 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 void.fn_type(&[ptr.into(), i64.into()], false),
             ),
 
-            ynz_array_new: declare_fn(module, "ynz_array_new", ptr.fn_type(&[], false)),
+            // ynz_array_new: (i64 elem_size) -> ptr
+            ynz_array_new: declare_fn(module, "ynz_array_new", ptr.fn_type(&[i64.into()], false)),
+            // ynz_array_new_sized: (i64 elem_size, i64 cap) -> ptr — exact-capacity
+            // constructor with len pre-set to cap (SoA construction, v0.3-M5 P5 / D2).
+            ynz_array_new_sized: declare_fn(
+                module,
+                "ynz_array_new_sized",
+                ptr.fn_type(&[i64.into(), i64.into()], false),
+            ),
+            // ynz_array_push: (ptr arr, ptr src) -> void
             ynz_array_push: declare_fn(
                 module,
                 "ynz_array_push",
-                void.fn_type(&[ptr.into(), i64.into()], false),
+                void.fn_type(&[ptr.into(), ptr.into()], false),
             ),
-            // ynz_array_get: (ptr arr, i64 idx, ptr out) -> void
+            // ynz_array_get: (ptr arr, i64 idx, ptr out) -> i64 has-flag
             ynz_array_get: declare_fn(
                 module,
                 "ynz_array_get",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+                i64.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
             ),
-            // ynz_array_set: (ptr arr, i64 idx, i64 value) -> void
+            // ynz_array_set: (ptr arr, i64 idx, ptr src) -> void
             ynz_array_set: declare_fn(
                 module,
                 "ynz_array_set",
-                void.fn_type(&[ptr.into(), i64.into(), i64.into()], false),
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
             ),
             ynz_array_count: declare_fn(
                 module,
@@ -399,26 +428,26 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ),
 
             ynz_siphash_init: declare_fn(module, "ynz_siphash_init", void.fn_type(&[], false)),
-            ynz_map_new: declare_fn(module, "ynz_map_new", ptr.fn_type(&[], false)),
+            ynz_map_new: declare_fn(module, "ynz_map_new", ptr.fn_type(&[i64.into()], false)),
             ynz_map_get: declare_fn(
                 module,
                 "ynz_map_get",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+                i64.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
             ),
             ynz_map_get_str: declare_fn(
                 module,
                 "ynz_map_get_str",
-                void.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
+                i64.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
             ),
             ynz_map_set: declare_fn(
                 module,
                 "ynz_map_set",
-                void.fn_type(&[ptr.into(), i64.into(), i64.into()], false),
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
             ),
             ynz_map_set_str: declare_fn(
                 module,
                 "ynz_map_set_str",
-                void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
+                void.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
             ),
             ynz_map_count: declare_fn(module, "ynz_map_count", i64.fn_type(&[ptr.into()], false)),
             ynz_map_has: declare_fn(
@@ -429,12 +458,12 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_map_iter_get: declare_fn(
                 module,
                 "ynz_map_iter_get",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+                i64.fn_type(&[ptr.into(), i64.into(), ptr.into(), ptr.into()], false),
             ),
             ynz_map_iter_get_str: declare_fn(
                 module,
                 "ynz_map_iter_get_str",
-                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+                i64.fn_type(&[ptr.into(), i64.into(), ptr.into(), ptr.into()], false),
             ),
             ynz_map_drop: declare_fn(module, "ynz_map_drop", void.fn_type(&[ptr.into()], false)),
             ynz_channel_create: declare_fn(

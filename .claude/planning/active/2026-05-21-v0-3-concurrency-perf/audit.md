@@ -123,6 +123,56 @@ Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#4: crates-ynz-typeck-sr
   `call.args.len() == 1`.
 - **TRIGGER** — The next time `check_sleep_blocking_call` is touched for any other reason.
 
+## 2026-07-03 — Deferral: store_binding has no MapEntry deep-copy arm (suspected 4th escape surface) (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#3 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3: store-binding-mapentry-escape-gap
+
+- **WHAT** — `store_binding` (`crates/ynz-codegen/src/emit.rs`, ~line 18907) has no `MapEntry`
+  deep-copy arm — it falls through to a raw pointer store for that type. This is the same
+  escape-bug class Phase 3 already fixed twice this phase (a `value_to_stable_bits` MapEntry arm
+  for persist surfaces, and a `prepare_bg_arg_for_ctx` pre-gate for background-arg surfaces) but
+  on a THIRD, un-probed surface: a function declared to return `MapEntry<K,V>`, or a
+  `let e2 = entry` binding that escapes its scope without ever routing through
+  `value_to_stable_bits`, could carry a dangling pointer into freed frame memory.
+- **WHY** — code-reviewer flagged this as should-fix, not blocker, because it could not confirm
+  the exact source-level repro is reachable within its review scope (no `Bash`/build access) —
+  building the fix now, unconfirmed, risks either a wasted fix for an unreachable case or a fix
+  without a locking regression test. Real cost: this is genuinely the 4th instance of the same
+  bug class in this one migration (array-element escape, MapEntry bg-escape, MapEntry
+  array-escape, and now this suspected 4th), so leaving it unconfirmed carries real
+  technical-debt weight, not just theoretical risk.
+- **COST** — 1 focused session — add a `MapEntry` arm to `store_binding` mirroring the
+  `value_to_stable_bits` clone pattern (counted heap-cell clone of the `{i64,i64}` entry struct
+  + deep value-half copy), plus author a repro fixture (a function returning `MapEntry<K,V>`, or
+  a map-loop-var binding escaping via `let e2 = entry` without an intervening choke-point call)
+  and a tripwire test proving the fix closes it.
+- **TRIGGER** — (a) a future milestone's own adversarial sweep independently reproduces this
+  escape class on the suspected third surface, OR (b) Phase 4/5's SoA work touches
+  `store_binding` for an unrelated reason and the reviewer/executor at that point should
+  re-check this gap while already in the function.
+
+## 2026-07-03 — Deferral: no golden-IR-snapshot coverage on the new map choke-point call sites (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#3 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3: map-choke-point-golden-ir-snapshot
+
+- **WHAT** — No golden-IR-snapshot exists asserting the NEW map choke-point call sites'
+  (`map_new`, `map_val_set`, `map_val_get_into`, `map_val_get_maybe`, `map_iter_get_into`,
+  `map_count_val`, `map_has_int` in `crates/ynz-codegen/src/emit.rs`) generated LLVM IR shape in
+  absolute terms — the 13 refreshed golden snapshots this phase cover regression-detection on
+  OLD (pre-cut, non-map) call sites' decl-signature churn only.
+- **WHY** — Two independent reviewers (code-reviewer, test-quality) confirmed this is a real gap
+  but judged it low-priority defense-in-depth, not a current correctness concern —
+  runtime-behavior testing (the `m5_p3_mapshape_*`/`m5_p3_sweep_*` fixture matrix, which caught
+  both real miscompiles this phase found) is the appropriate primary verification tool for
+  genuinely NEW codegen logic; a golden/insta snapshot is a drift-detector against an
+  already-blessed baseline, not a correctness prover for new code. Building the snapshot now,
+  while the map codegen may still shift in Phase 4/5's SoA work, risks freezing a soon-to-be-stale
+  baseline.
+- **COST** — <1 session — author one `map<int,Shape>` build+iterate fixture, generate its golden
+  IR snapshot via the existing `insta` harness, review it by hand once for correctness, commit
+  as the new baseline.
+- **TRIGGER** — Once Phase 5 (SoA codegen) stabilizes the map/array codegen paths for good (SoA
+  rides the same by-value substrate), add this snapshot then — building it before Phase 5 risks
+  needing to regenerate it again once SoA lands.
+
 ## 2026-07-03 — Deferral: all 5 inlay-hint-pass Stmt walkers skip assignment-lvalue recursion (non-blocking — deferred by 2026-07-02-v0-3-m4-channels-arc-release#5 at the post-review fix round)
 Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#5: crates-ynz-typeck-src-inlay-hint-passes-rs-1554
 
@@ -143,3 +193,245 @@ Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#5: crates-ynz-typeck-sr
 - **TRIGGER** — A second independent report of a hint failing to fire inside an assignment
   lvalue, OR whenever the next hint-pass domain is added (the natural refactor point — do the
   extraction BEFORE adding walker #6).
+
+## 2026-07-04 — Deferral: param-shadowed-by-let produces two LayoutDecisions.arrays rows sharing one array_name (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#4 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4: crates-ynz-typeck-src-soa-rs-294
+Filed-by-session: phase4-deferral-executor-2026-07-03-m5
+
+- **WHAT** — `crates/ynz-typeck/src/soa.rs:294`: a param `arr: array<Shape>` shadowed by a body
+  `let arr = [...]` produces TWO `LayoutDecisions.arrays` rows sharing the same `array_name` (one
+  param-declined row, one possibly-Admitted let row).
+- **WHY** — Inert for Phase 4 because codegen consumes only `layout.padded_shapes`, never
+  `layout.arrays`, so the duplicate-keyed row has zero observable effect today; fixing it now
+  would be scope creep into Phase 5's own consumption design, which hasn't decided how it
+  keys/dedupes `arrays` rows yet.
+- **COST** — Small, bounded to Phase 5: either dedupe by `(array_name, decl_span)` instead of
+  `array_name` alone, or accept the duplicate and have Phase 5's codegen key its lookup the same
+  way. Roughly a half-day of Phase-5-scoped work once the consumption design exists to react to.
+- **TRIGGER** — Phase 5 (SoA codegen on the by-value substrate) begins consuming
+  `LayoutDecisions.arrays` for real; its own design must decide the keying/dedup story, at which
+  point this pre-existing duplicate-row shape becomes load-bearing and must be resolved.
+
+## 2026-07-04 — Deferral: Pass 2 Match-arm scan skips arm.pattern's Value(Expr) variant (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#4 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#4: crates-ynz-typeck-src-soa-rs-535
+Filed-by-session: phase4-deferral-executor-2026-07-03-m5
+
+- **WHAT** — `crates/ynz-typeck/src/soa.rs:535`: Pass 2's `Match` arm scan covers the scrutinee,
+  arm bodies, and the else-arm, but NOT `arm.pattern`'s `Value(Expr)` variant — a tracked array
+  used only inside a match-pattern value expression would miss an escape classification.
+- **WHY** — Contrived and currently unreachable in any of this milestone's fixtures (requires an
+  array both hot-looped elsewhere AND used as a literal match-pattern value, a combination no real
+  Yinz code in this repo exercises); fixing it now with no reproducing fixture would be
+  speculative hardening, not a confirmed bug fix.
+- **COST** — Small — add one more expr-scan call on `arm.pattern`'s `Value` variant inside the
+  existing `Match` handling in `scan_stmt`/`scan_expr`; under an hour once a concrete repro
+  exists.
+- **TRIGGER** — A real fixture (in this milestone's later phases, or any future SoA-adjacent work)
+  is found to construct exactly this shape (a tracked array referenced only via a match-pattern
+  value expression), OR Phase 8's suppression-enumeration mandate sweeping `examples/` + test
+  fixtures surfaces a shape matching this pattern.
+
+## 2026-07-04 — Deferral: fixed<T>.copy() remains a pre-existing alias no-op (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#5 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#5: crates-ynz-codegen-src-emit-rs-17743
+Filed-by-session: phase5-executor-2026-07-03-m5-closing
+
+- **WHAT** — `crates/ynz-codegen/src/emit.rs:17743`: `fixed<T>.copy()` still lowers as an alias
+  no-op — the same M4-era `lower_postfix_op` Copy-arm catch-all (`_ => Ok(recv_val)`) that
+  FRAGO 014 fixed for `array<T>` (the new `Type::BuiltinArray` arm at :17705), but `fixed<T>`
+  was explicitly outside that fix's scope, so a fixed-array receiver falls through to the
+  alias-returning catch-all.
+- **WHY** — FRAGO 014 was scoped narrowly to `array<T>` (Phase 5's own SoA/E9 domain);
+  `fixed<T>` was never in Phase 5's scope and fixing it there would have been scope creep into
+  an already-large (scale=large, 5-segment) phase.
+- **COST** — Likely small: Phase 2 already found and rerouted the three `fixed<T>` element
+  write choke points during its ABI migration, so extending `.copy()` there mirrors an
+  already-established pattern — probably a similar shallow one-level-memcpy fix to what
+  FRAGO 014 did for arrays.
+- **TRIGGER** — The next phase/milestone that touches `fixed<T>` semantics, or a user-facing
+  bug report of `fixed<T>.copy()` aliasing unexpectedly.
+
+## 2026-07-04 — Deferral: SoA bounds-check predicate is a second (currently-equivalent) derivation of the runtime's bounds check (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#5 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#5: crates-ynz-codegen-src-emit-rs-2445
+Filed-by-session: phase5-executor-2026-07-03-m5-closing
+
+- **WHAT** — `crates/ynz-codegen/src/emit.rs:2445` (SoA gather, `idx u< cap`) and its sibling
+  at the analogous scatter site (:2525): the SoA gather/scatter bounds predicate is logically
+  equivalent to but textually separate from the runtime's own `idx < 0 || idx >= len` check
+  (`crates/ynz-runtime/src/lib.rs:1239`, `ynz_array_get`) — linked today only by
+  `soa_gather_into`'s doc comment, not a compile-time assertion or shared constant, per this
+  milestone's `authoritative-derivation.md` house rule preferring one authoritative source
+  over a documented-equivalent duplicate.
+- **WHY** — Today the two predicates are provably equivalent (D3's admission invariant
+  guarantees `len == cap` for every SoA-admitted array, and unsigned `u<` vs signed
+  `< 0 || >=` are equivalent under the non-negative-length invariant) — fixing this now would
+  be gold-plating a currently-zero-risk duplicate for a house-style preference, not a
+  correctness necessity.
+- **COST** — Small: a compile-time `debug_assert_eq!`-style link between the two predicates'
+  logic, or extracting a shared helper/constant both codegen and the runtime check can point
+  to.
+- **TRIGGER** — Any future change to `len`/`cap`'s relationship (e.g. a future milestone
+  allowing growable SoA arrays, breaking D3's `len == cap` invariant) — exactly the condition
+  under which this duplicate would silently drift, per this milestone's own
+  authoritative-derivation risk class (E3's whole reason for existing).
+
+## 2026-07-04 — Deferral: construction-cost confound in the SoA calibration harness (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#6 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#6: crates-ynz-driver-benches-soa-calibration-rs-159
+Filed-by-session: phase6-fixround1-executor-2026-07-04-m5
+
+- **WHAT** — the Phase 6 calibration harness
+  (`crates/ynz-driver/benches/soa_calibration.rs`) times the entire process (array
+  construction + hot loop + print) with `TOTAL_VISITS` held fixed across N, so O(N)
+  construction cost is a growing fraction of the measured signal as N increases, and SoA's
+  segmented-scatter construction vs. AoS's contiguous-push construction differ in a way the
+  harness doesn't isolate from the access-pattern delta it claims to measure; the `overhead`
+  baseline (soa_calibration.rs:159, the reps=0 spawn-only group) is measured once at N=8 and
+  subtracted as a flat scalar across all N.
+- **WHY DEFERRED** — fixing this requires a harness redesign (per-N reps=0 baseline, or an
+  isolated construction-only benchmark) — real work, and the current SIZE_THRESHOLD=64 ships
+  unchanged regardless (no precision claim rests on this), so it doesn't block Phase 6's
+  honest "no crossover" conclusion today.
+- **COST** — ~0.5 session (redesign the baseline-subtraction methodology, re-run the sweep).
+- **TRIGGER** — before this harness is used as the authoritative input for a REAL
+  SIZE_THRESHOLD recalibration (FR#2's trigger — a dedicated perf environment becomes
+  available, or a user-reported regression implicates the threshold).
+
+## 2026-07-04 — Deferral: noise-floor regime mismatch + single-sweep-invocation rigor in the SoA calibration evidence (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#6 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#6: crates-ynz-driver-benches-soa-threshold-raw-2026-07-04-md-24
+Filed-by-session: phase6-fixround1-executor-2026-07-04-m5
+
+- **WHAT** — the ~15% noise floor cited as the credibility bar
+  (`crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md:24`) was derived from S3's
+  long-in-process-reps regime, then applied to the calibration sweep's short
+  subprocess-spawn-timed "net" values (where subtracting two noisy quantities compounds
+  variance rather than reducing it); the full 10-point x 2-mode calibration sweep was run
+  exactly once, not repeated as an independent process invocation the way S3's own protocol
+  was (which showed up to 50% cross-invocation drift on this shared host); reported values
+  are bare medians with no confidence intervals.
+- **WHY DEFERRED** — the shipped decision (SIZE_THRESHOLD=64, unchanged) is robust to this
+  gap either way — no new precision was manufactured from the noisy data, and the honest
+  hedge already exists in the plan text. Full statistical validation is a bigger lift than
+  this boundary-review fix-loop should absorb.
+- **COST** — ~0.5-1 session (re-run the full sweep 1-2 more times as independent process
+  invocations, report criterion's confidence intervals, re-derive an in-regime noise floor).
+- **TRIGGER** — before Phase 7/8 user-facing text (lint hover, CHANGELOG) asserts "no
+  detectable benefit... direction uniform" as settled fact rather than a hedged observation —
+  this is ALREADY gated by E14's existing "docs-consistency review before any Phase 7/8
+  user-facing text ships" mitigation; this deferral just makes sure that gate specifically
+  checks this point. Also: if a dedicated perf environment ever becomes available (FR#2's
+  trigger).
+
+## 2026-07-04 — Deferral: pre-existing clippy debt in integration-test binaries, outside CI's own scanned scope (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#7 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#7: crates-ynz-diagnostics-tests-jargon-audit-rs-7
+- **WHAT** — 9 real `cargo clippy --tests -- -D warnings` violations exist across
+  `crates/ynz-diagnostics/tests/jargon_audit.rs` (redundant single-component import; a
+  `map_or(false, ...)` that should be `is_some_and(...)`; a `while let Some(...) = iter.next()`
+  that should be a `for` loop; three implicit-saturating-subtraction sites; three dead/unused
+  assignments to `site_count`), `crates/ynz-registry/tests/consistency.rs` (redundant
+  single-component import), and `crates/ynz-runtime/tests/m2_runtime.rs` +
+  `crates/ynz-runtime/src/lib.rs` (a duplicated `#[repr(C)]` attribute; a dead assignment). Verified
+  via `git stash` against clean `HEAD` (`e94a2a3`, the Phase 6 boundary): the identical 9 warnings
+  reproduce, confirming none of this milestone's Phase 6/7 work introduced them.
+- **WHY DEFERRED** — this repo's own documented CI (`.github/workflows/ci.yml`) runs
+  `cargo clippy --workspace -- -D warnings` with NO `--tests` flag, so it has never scanned these
+  separate integration-test binaries under `tests/*.rs` — this debt sits entirely outside the
+  project's own actual acceptance bar, and cleaning up pre-existing lint debt across three unrelated
+  crates is out of M5's array-storage/SoA charter.
+  discovered incidentally while boundary-reviewing Phase 7 (a broader `--tests`-scope gate run
+  surfaced it), not caused by anything this milestone touched.
+- **COST** — ~0.5 session (mechanical clippy auto-fixes for most of the 9; the two dead-assignment
+  and duplicated-attribute findings need a one-line human judgment call each on intent).
+- **TRIGGER** — the next milestone that touches any of `ynz-diagnostics`, `ynz-registry`, or
+  `ynz-runtime`'s test suites, OR if this repo's CI convention is ever widened to include `--tests`
+  in its clippy invocation (at which point this debt would newly redden CI and must be cleared
+  first).
+
+## 2026-07-04 — Deferral: codegen ICE — bare int literal into ANY `number`-typed slot crashes the compiler (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#7 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#7: crates-ynz-codegen-src-emit-rs-14101
+Filed-by-session: plan-fixup-icedefer-2026-07-04-m5
+
+> **ELEVATED priority.** This is a genuine user-facing compiler CRASH (panic/ICE, not a diagnostic)
+> reachable via what may be the single most common beginner mistake in the language — a bare int
+> literal where a `number`-typed slot is expected (`let x: number = 5`). "Non-blocking" in the
+> heading means non-blocking for M5's phase boundary only; it is NOT routine cleanup debt.
+
+- **WHAT** — Systemic codegen bug, broader than the shape-literal→array path it was first observed
+  on: an int literal assigned into ANY `number`-typed slot panics the compiler. Root cause is a
+  representation mismatch between the literal lowering and the store paths:
+  - `crates/ynz-codegen/src/emit.rs:14101` — `Expr::IntLit` unconditionally lowers to a raw `i64`
+    `IntValue`, with no branch on the expected type. Contrast `Expr::NumberLit` at
+    `emit.rs:14103-14136`, which correctly builds an alloca + stores decimal128 bits, returning a
+    pointer.
+  - `crates/ynz-codegen/src/emit.rs:19674-19679` (`store_field`, fired by ANY struct literal or
+    field assignment) AND the identical pattern in the plain `store()` function at
+    `emit.rs:19552-19557` (fired for `let`/`const` bindings generally) — both unconditionally call
+    `.into_pointer_value()` on the `Type::Number{precision<=34}` arm, assuming the value is always
+    a pointer-to-i128.
+  - `crates/ynz-typeck/src/check.rs:2162-2166` — typeck ADMITS the coercion (retypes `Expr::IntLit`
+    to `Type::Number` at the type level, no AST rewrite), so the program type-checks cleanly and
+    then codegen panics — inkwell's message is exactly "Found IntValue … expected the PointerValue
+    variant".
+  - Blast radius: `let x: number = 5` (no shape, no array) crashes; any struct literal or field
+    assignment with an int literal into a `number` field crashes. Confirmed PRE-EXISTING and
+    orthogonal to M5 (M5 Phase 2 only added Shape/Maybe arms to `store_field`; the `Type::Number`
+    arm is untouched legacy code from before this milestone). Confirmed no existing fixture or
+    example anywhere in the repo exercises a bare int literal into a `number`-typed slot — every
+    existing usage uses a decimal literal (e.g. `1234567.89`) — which is exactly why it went
+    undiscovered until Phase 7's doc-writing incidentally tried it. Independently confirmed at
+    source level by a deviation-judge dispatch (not just executor narration).
+- **WHY** — Out of M5's array-storage/SoA charter: the bug lives in untouched legacy numeric-literal
+  codegen, unrelated to array/SoA representation; fixing a systemic pre-existing literal-lowering
+  bug inside M5's Phase 7 (docs) fix round would be unreviewed scope creep into codegen at the
+  milestone's boundary.
+- **COST** — ~0.5-1 session. The fix is likely either (a) an expected-type-aware `Expr::IntLit`
+  branch mirroring `NumberLit`'s alloca-and-store pattern at `emit.rs:14103-14136`, or (b) coercing
+  the int literal to a number literal at typeck's retype point (`check.rs:2162-2166`) so codegen
+  never sees a raw int for a `number` slot — either approach needs its own small design pass + the
+  same E7-style call-site audit rigor this milestone used for arrays (every consumer of the lowered
+  value must agree on the representation).
+- **TRIGGER** — The next milestone touching numeric-literal codegen, OR **immediately** if a real
+  user hits this crash, OR the next time someone adds a `.ynz` example/fixture using a bare int
+  literal for a `number` field (which will immediately hit it — several pre-existing
+  `REF-collections` examples, e.g. `Position { x: number }` built with `{ x: 0, y: 0 }` int
+  literals, would already ICE if run today).
+
+## 2026-07-04 — Session log: roadmap Capability Ledger fixup — two new unscoped rows + Patrick's triage policy applied to all six (standalone roadmap housekeeping, Patrick-requested)
+Filed-by-session: roadmap-fixup-triage-2026-07-04
+
+Standalone roadmap-only edit, explicitly requested by Patrick — NOT part of any plan's phases (M5
+plan `2026-07-03-v0-3-m5-auto-soa` is complete and awaiting his completion approval; its plan.md /
+audit.md are untouched). Changes, all in `roadmap.md`, applied identically to BOTH Capability
+Ledger tables:
+
+- **Promoted M5 plan Future Requirements #15 to a ledger row** (selective hot-field-only element
+  materialization, FRAGO 020): Phase 5's SoA codegen computes `hot_fields` via `soa_candidate_query`
+  but `soa_gather_into`/`array_elem_get_into` (`crates/ynz-codegen/src/emit.rs`) never consume it —
+  every field gathered unconditionally. FR#15's own text stays in place in the M5 plan (cross-
+  referenced, not deleted); the new row is the roadmap-level anchor. Status: unscoped → needs a
+  milestone.
+- **Added a NEW capability-discovery row: no LLVM optimization pass pipeline exists at all.**
+  Grep-verified this session: `OptimizationLevel::None` is hardcoded at both TargetMachine creation
+  sites (`crates/ynz-codegen/src/emit.rs:879`, `crates/ynz-codegen/src/state_machine.rs:755`) and
+  those are the ONLY optimization-level configuration points in the entire codegen crate — a single,
+  global, compiler-wide setting, NOT array/SoA-specific. Every emitted code path (arrays, shapes,
+  the concurrency state-machine engine in `state_machine.rs`, channels, Arc ops) compiles with zero
+  LLVM passes (no inlining, no DCE, no SROA, no mem2reg). Surfaced via M5 Phase 6's SoA calibration
+  (which measured only the SoA-specific consequence); the finding itself is compiler-wide. Status:
+  unscoped → needs a milestone; flagged HIGH STRATEGIC VALUE per Patrick's flagship-concurrency note.
+- **Recorded Patrick's triage policy (2026-07-04)** as a preface blockquote above BOTH tables — "a
+  REAL BUG/crash/leak/security-risk gets prioritized as the next fix; anything else (missing
+  feature, perf-only gap, process tooling) is fine to defer until after the v1.0 release" — and
+  classified ALL SIX unscoped rows inline in their Notes columns:
+  - Int-literal-into-`number` ICE → BUG (crash on common valid code) → next-fix priority.
+  - O0 stack-exhaustion SIGSEGV ceiling → BUG (crash on any big-enough hot loop, not SoA-specific)
+    → next-fix priority.
+  - Stale-runtime-archive footgun → BUG (silent miscompile in build/release tooling) → next-fix
+    priority, lower urgency (precondition-gated, not everyday code).
+  - Authoritative-derivation write-time hook → NOT a bug (process/tooling) → fine post-v1.0.
+  - FR#15 hot_fields unused → NOT a bug (perf-only gap) → fine post-v1.0.
+  - LLVM optimization pipeline → NOT technically a bug (missing capability, perf-only) → fine
+    post-v1.0 per the rule's letter, BUT flagged in the row's own text as the single most
+    strategically important item on the list (Rust-level-performance positioning, Golden Rules
+    4/8/10, concurrency-as-flagship) — Patrick's call whether to treat it specially.
+
+No code touched. Nothing committed. Session-id `roadmap-fixup-triage-2026-07-04` appended to the
+roadmap's frontmatter chain in the same action as this entry.

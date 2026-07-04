@@ -1,0 +1,26 @@
+// M5 P2 fix-loop — tripwire cell (d): maybe-envelope escape with a PRIMITIVE
+// element type. The shared-envelope reuse class is independent of the shape
+// payload: `nums.get(i)`'s per-site {flag, bits} envelope is overwritten every
+// iteration, so an escaping maybe binding must copy the envelope by value.
+// Unfixed code prints the LAST iteration's element (7), not the matched one (6).
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let a: int = seed * 5
+  let b: int = seed * 6
+  let c: int = seed * 7
+  let nums: array<int> = [a, b, c]
+  let saved = nums.get(0)
+  let i: int = 0
+  while (i < nums.count()) {
+    let m = nums.get(i)
+    if (m.exists()) {
+      if (m.value == 6) {
+        saved = m
+      }
+    }
+    i = i + 1
+  }
+  if (saved.exists()) {
+    print(saved.value)
+  }
+}

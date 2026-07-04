@@ -1,0 +1,52 @@
+// M5 P2 fix round 4 — tripwire (c): a maybe<Part> ENVELOPE persisted as a
+// FIXED array element, through BOTH write surfaces (`.set()` for slot 0,
+// index-assign for slot 1). The maybe bits were bare ptr_to_int(per-site
+// envelope), reused every iteration, so both slots read back the LAST
+// iteration's payload (unfixed 3/30); golden asserts 1/10 then 2/20. Locks
+// the fixed write sites' Maybe arm to the ONE stable-bits choke point
+// (value_to_stable_bits: heap-cloned envelope + shape payload per write).
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let empty: maybe<Part> = parts[9]
+  let cells: fixed<maybe<Part> > = [empty, empty]
+  let i: int = 0
+  while (i < 3) {
+    let cur: maybe<Part> = parts[i]
+    if (i == 0) {
+      cells.set(0, cur)
+    }
+    if (i == 1) {
+      cells[1] = cur
+    }
+    i = i + 1
+  }
+  let e0 = cells[0]
+  if (e0.exists()) {
+    let g0: maybe<Part> = e0.value
+    if (g0.exists()) {
+      print(g0.value.qty)
+      print(g0.value.price)
+    }
+  }
+  let e1 = cells[1]
+  if (e1.exists()) {
+    let g1: maybe<Part> = e1.value
+    if (g1.exists()) {
+      print(g1.value.qty)
+      print(g1.value.price)
+    }
+  }
+}

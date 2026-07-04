@@ -63,6 +63,18 @@ the SECOND, parallel derivation of the same question. Extending the single autho
 (adding a value-type arm inside the one dispatch, a case inside the one analysis) is right; forking a
 second producer is the bug.
 
+## The mirror case — compute the authoritative answer once, then don't ignore it
+
+The disease has a mirror: not a SECOND derivation of the same question, but the authoritative answer
+computed ONCE and then **never consumed** by the pass it was meant to steer — the consumer quietly
+does the coarser unconditional thing instead. Re-derivation drifts *wrong*; underuse forfeits the
+precision *silently* (correct-but-coarse output, so no test fails). Same predicate, both ends:
+when a pass produces a precise authoritative set, the designated downstream consumer must consume it,
+or the coarse-path choice must be a named, recorded decision (a choke-point-contract invariant + a
+tracked deferral). v0.3-M5 shipped this: `soa_candidate_query`'s `hot_fields` was computed by the
+analysis and then ignored by `soa_gather_into`/`array_elem_get_into`, which gather every field
+unconditionally (FRAGO 020 / FR#15). The greppable instance is the graveyard corpse below.
+
 ## Cross-references
 
 - Global parent: `no-duct-tape.md` #7 / `REF-no-duct-tape.md` §5 "The Parallel Implementation" — this
@@ -71,3 +83,4 @@ second producer is the bug.
 - [`.claude/graveyard.md`](../graveyard.md) "Parallel Per-Type Dispatch / Flat-Scan Re-Derivation in Suspension Codegen"
 - [`.claude/graveyard.md`](../graveyard.md) "Injected Resolver Dead via Memo-Cache Ordering"
 - [`.claude/graveyard.md`](../graveyard.md) "Silent Envelope Narrowing"
+- [`.claude/graveyard.md`](../graveyard.md) "Authoritative Analysis Output Computed But Never Consumed Downstream" (the mirror case — underuse rather than re-derivation)

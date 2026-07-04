@@ -46,6 +46,24 @@ fn trailing_newline_added() {
     );
 }
 
+#[test]
+fn nested_generic_keeps_lexer_required_space() {
+    // WHY: the lexer reads `>>` as ONE token (no maximal-munch split), so a
+    // nested generic in final argument position MUST keep the space between
+    // the consecutive `>`s or format's output does not re-parse (RED-proven:
+    // the driver-fixture idempotency sweep failed on the first nested-generic
+    // annotation in the tree, v0.3-M5 P2 fix round 2).
+    let source =
+        "function f() -> nothing {\n  let picks: map<string, maybe<int> > = { `a`: 1 }\n}\n";
+    let got = ynz_fmt::format(source).expect("format failed");
+    assert!(
+        got.contains("map<string, maybe<int> >"),
+        "nested generic must keep the space before the outer `>`; got:\n{got}"
+    );
+    let got2 = ynz_fmt::format(&got).expect("format output must re-parse");
+    assert_eq!(got, got2, "formatter is not idempotent on nested generics");
+}
+
 // ── Per-node-category golden tests ───────────────────────────────────────────
 
 #[test]

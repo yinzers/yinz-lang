@@ -36,6 +36,10 @@ proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 tempfile = "3.14.0"
 assert_cmd = "2"
 predicates = "3"
+# Dev-only bench harness (v0.3-M5 Phase 6 SIZE_THRESHOLD calibration). Feature-trimmed:
+# no plotters (HTML reports unused — medians come from estimates.json), no rayon.
+# MIT OR Apache-2.0; never linked into libynz_rt.a or any shipped binary.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 # Watch daemon deps (locked versions — notify 9.0.0-rc.* rejected, still rc)
 notify              = "8"

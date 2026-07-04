@@ -630,3 +630,39 @@ saturate
 **Severity**: warning (a weaker-than-advertised stress test gives false confidence in the concurrent path; not itself a miscompile).
 
 **Originating incident**: 2026-07-02, v0.3-M3g AAR. A stress fixture's WHY-comment asserted a concurrency level that was verified against its total worker count rather than its real spawn topology — the fixture's actual simultaneity was lower than the comment claimed, caught in review.
+
+---
+
+## Authoritative Analysis Output Computed But Never Consumed Downstream — 2026-07-04
+
+**Scope**: `crates/ynz-codegen/src/emit.rs` (and any codegen/lowering path meant to be steered by an analysis result) + `crates/ynz-typeck/src/` analysis queries that compute a precise per-element / per-field / per-candidate set (`soa_candidate_query`'s `hot_fields`, crossing/suspend sets, layout-decision outputs). The disease: an analysis pass computes a precise authoritative answer, and the designated downstream consumer ignores it — falling back to a coarser unconditional behavior — silently forfeiting the precision (and the perf/correctness benefit) the analysis existed to provide. **Mirror-case sibling** of [`.claude/rules/authoritative-derivation.md`](rules/authoritative-derivation.md): that rule bans RE-DERIVING an already-authoritative answer a second time; this corpse is the same family pointed the other way — computing the authoritative answer ONCE and then never consuming it.
+**Exemption**:
+- The consumer deliberately takes the full/coarse path for a NAMED, recorded reason (a choke-point-contract invariant every consumer must honor — e.g. `.copy()`/`soa_copy_to_aos`/background-arg passing needing full-fidelity elements) AND the deferral of the selective path is filed as a tracked Future Requirement (FRAGO 020's FR#15 is exactly this recorded shape — the gap is a corpse only when it is SILENT).
+- The computed output has an OTHER real consumer (a lint, a hint, a test) even if this particular codegen path doesn't read it — confirm who else reads it before flagging.
+- A pass that computes the set purely to DECIDE admission (a boolean gate), where the set itself was never meant to drive per-element codegen.
+**Last verified**: 2026-07-04
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-codegen/src/emit\.rs
+crates/ynz-typeck/src/.*\.rs$
+hot_fields
+soa_candidate_query
+soa_gather_into
+array_elem_get_into
+```
+
+**Cause**: v0.3-M5 Phase 4's `soa_candidate_query` computed `hot_fields` (exactly which fields a hot loop touches — the whole point of D5's ≤2-field-union admission criterion), but Phase 5's codegen (`soa_gather_into`/`array_elem_get_into` in `emit.rs`) never consumed it — it unconditionally gathers ALL declared fields ("design c: gather full element, let DSE/SROA drop unused fields"). Since the shipped compiler runs no LLVM optimization passes, nothing dropped the unused fields, so the precise `hot_fields` analysis produced no effect and was a plausible independent contributor to Phase 6's measured ~1.0x (no benefit) result.
+
+**Detection signature**: an analysis query populates a precise per-element/per-field/per-candidate output (a struct field, a returned set), and the designated codegen/lowering consumer the analysis exists to steer never references it — instead performing a coarser unconditional behavior (gather-all, widest-layout, no-specialization). Distinct from ordinary dead code: the output is often read by SOME consumer (a test, a lint), so `dead_code` stays quiet, while the ONE consumer whose behavior the analysis was meant to change ignores it. The tell is a computed precision set with no reference in the function whose output it was designed to narrow.
+
+**Constraint**: an analysis output computed to steer a downstream pass MUST be consumed by that pass, OR the coarse-path choice MUST be a named, recorded decision (a choke-point-contract invariant + a tracked Future Requirement naming the deferred selective path — the FRAGO 020 / FR#15 shape). A precise set computed and then silently ignored is the corpse. When you add or edit an analysis query that emits a per-element/per-field set, confirm the designated consumer references it, or record why it does not.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] For a diff adding/editing an analysis query in `crates/ynz-typeck/src/` that populates a per-field/per-element set (e.g. `hot_fields`, a candidate field-set): grep the designated codegen consumer (`soa_gather_into`/`array_elem_get_into` in `emit.rs`, or the named consumer) for a reference to that field/set. Zero references AND no `// CARVE-OUT:`/tracked-FR note → WARNING (computed-but-unconsumed).
+- [ ] For a diff to `emit.rs`'s gather/lower paths that keeps an unconditional gather-all / widest-layout behavior while an analysis set naming the precise subset exists: verify either the set is consumed or a tracked deferral (FR#) names the gap → WARNING if neither.
+
+**Severity**: warning (silent perf forfeiture, not a miscompile — the output is correct, just coarser than the analysis proved necessary; promote to critical if a future consumer relies on the selective path for correctness rather than only perf).
+
+**Originating incident**: 2026-07-04, v0.3-M5 Phase 6 boundary review (FRAGO 020). The performance reviewer found `hot_fields` computed by Phase 4 but ignored by Phase 5's full-element gather; the CODE choice was ruled JUSTIFIED (a true selective gather needs every full-fidelity consumer re-audited against a "cold fields may be garbage" invariant — out of Phase 5's charter), but the Future-Requirements ledger's SILENCE on the narrower fix was the real gap, filed as FR#15. See [`.claude/planning/active/2026-07-03-v0-3-m5-auto-soa/audit.md`](planning/active/2026-07-03-v0-3-m5-auto-soa/audit.md) FRAGO 020.

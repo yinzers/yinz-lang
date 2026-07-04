@@ -1,0 +1,34 @@
+// M5 P2 fix round 2 — tripwire (b): shape element persisted into a MAP via
+// `.set()` inside the loop, read after the loop. Map value cells are i64 bits;
+// a shape value marshalled as ptr_to_int(staging) persists the reused staging
+// pointer unconditionally — the entry silently reads the LAST iteration's bytes
+// (unfixed observed 3/30; golden asserts the matched 1/10). Fixed: map-value
+// marshalling clones the shape bytes into a counted heap cell per insertion.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let zero: Part = { qty: 0, price: 0 }
+  let picks: map<string, Part> = { `pick`: zero }
+  for (p in parts) {
+    if (p.qty == 1) {
+      picks.set(`pick`, p)
+    }
+  }
+  let got = picks[`pick`]
+  if (got.exists()) {
+    print(got.value.qty)
+    print(got.value.price)
+  }
+}

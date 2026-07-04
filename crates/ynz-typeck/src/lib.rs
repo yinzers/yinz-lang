@@ -58,6 +58,7 @@ pub mod return_paths;
 pub mod scope;
 pub mod shapes;
 pub mod signatures;
+pub mod soa;
 pub mod suspension_source;
 pub mod symbol_lookup;
 pub mod type_at_offset;
@@ -86,11 +87,17 @@ pub use intrinsics::PrimitiveIntrinsicTable;
 pub use lints::lint_diagnostic;
 pub use may_block::suspends_set_for_test as may_block_suspends_set;
 pub use queries::{
-    check_query, cpu_promotion_query, exports_query, module_signatures_query, no_auto_parallel_env,
-    CheckOutput, PromotionOutput, SignatureOutput,
+    check_query, cpu_promotion_query, exports_query, layout_decisions_query,
+    module_signatures_query, no_auto_parallel_env, soa_candidate_query, soa_force_env,
+    soa_layout_lints, CheckOutput, PromotionOutput, SignatureOutput,
 };
 pub use shapes::{ShapeDef, ShapeTable};
 pub use signatures::{build_effective_suspend_set, SignatureTable};
+pub use soa::{
+    layout_lints, resolve_layout, FieldSegment, LayoutDecision, LayoutDecisions, LayoutKind,
+    SoaCandidate, SoaDeclineReason, SoaForce, SoaVerdict, ARRAY_USING_SOA_LAYOUT,
+    SOA_SIZE_THRESHOLD,
+};
 pub use suspension_source::{
     channel_method_suspends, is_base_suspension_intrinsic, BASE_SUSPENSION_INTRINSICS,
     CHANNEL_SUSPENDING_METHODS,

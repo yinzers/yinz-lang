@@ -1,0 +1,18 @@
+// M5 P2 step 1 — by-value ABI matrix: boolean × literal elements × full op set
+// (non-suspending).
+function entrypoint() -> nothing {
+  let flags: array<boolean> = [true, false, true]
+  flags.add(false)
+  print(flags.count())
+  print(flags[0].or(false))
+  print(flags[3].or(true))
+  print(flags[9].or(true))
+  print(flags.get(1).or(true))
+  print(flags.first().or(false))
+  print(flags.last().or(true))
+  print(flags.contains(false))
+  flags.set(1, true)
+  print(flags[1].or(false))
+  flags[2] = false
+  print(flags[2].or(true))
+}

@@ -1,0 +1,66 @@
+// M5 P3 step 4 — the E8 alloc=free parity gate fixture (FRAGO 005 entry
+// criterion + FRAGO 009 "no NEW leak class" semantics + FRAGO 011 exact-count
+// persist pinning). Every counted-allocation class appears with a KNOWN count,
+// and the loops are sized so any per-element / per-iteration allocation
+// regression shifts the pinned totals loudly.
+//
+// Accounting (the integration test pins alloc=11 / free=0 exactly):
+//   +2  ONE array<Part>          — header + buffer (never-drop-local design,
+//                                  pre-existing, made visible by FRAGO 005)
+//   +0  40 read iterations       — reads stage through per-site entry-block
+//                                  buffers; escaping bindings copy to STACK
+//   +5  ONE map<int, Part>       — header/ctrl/keys/vals/order buffers
+//   +0  3 map sets (1 overwrite) — shape values store INLINE since the P3
+//                                  elem_size cut (no heap cells; re-set-over-
+//                                  key overwrites in place — the map-side cell
+//                                  leak FRAGO 011 flagged is structurally gone)
+//   +4  shape-field persists     — 1 struct-lit provided field + 3 re-assigns,
+//                                  one counted heap cell each (store_field's
+//                                  Shape arm; accounted-and-deferred-to-drop-
+//                                  story per FRAGO 011, EXACT-COUNT pinned)
+shape Part {
+  qty: int
+  price: int
+}
+
+shape Holder {
+  best: Part
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let pa: Part = { qty: seed, price: seed * 10 }
+  let pb: Part = { qty: seed * 2, price: seed * 20 }
+
+  // ── arrays: exactly one array<Part> (+2 counted; elements inline)
+  let parts: array<Part> = [pa, pb]
+
+  // ── per-iteration regression pin: 40 element reads allocate ZERO
+  let total: int = 0
+  let i: int = 0
+  while (i < 40) {
+    let m = parts.get(0)
+    if (m.exists()) {
+      let p: Part = m.value
+      total = total + p.qty
+    }
+    i = i + 1
+  }
+  print(total)
+
+  // ── maps: exactly one map<int, Part> (+5 counted; shape values inline)
+  let stock: map<int, Part> = {}
+  stock.set(1, pa)
+  stock.set(2, pb)
+  stock.set(1, pb)
+  print(stock.count())
+
+  // ── FRAGO 011 persist cells, exact-count: +1 at construction, +3 in the loop
+  let holder: Holder = { best: pa }
+  let j: int = 0
+  while (j < 3) {
+    holder.best = pb
+    j = j + 1
+  }
+  print(holder.best.qty)
+}

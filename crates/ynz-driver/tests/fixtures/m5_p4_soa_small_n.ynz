@@ -1,0 +1,27 @@
+// M5 P4 step 4 — SoA decline fixture: BELOW SIZE THRESHOLD.
+//
+// A 4-element literal with a fully-qualifying 2-field hot loop — everything admits
+// EXCEPT the provable length (4 <= SOA_SIZE_THRESHOLD = 64, strict >): segmenting a
+// tiny array buys no cache locality. Asserted verdict:
+// BelowSizeThreshold { len: 4 }.
+shape Point {
+  x: int
+  y: int
+}
+
+function entrypoint() -> nothing {
+  let pts: array<Point> = [
+    { x: 3, y: 6 },
+    { x: 4, y: 8 },
+    { x: 5, y: 10 },
+    { x: 6, y: 12 }
+  ]
+  let sx = 0
+  let sy = 0
+  for (p in pts) {
+    sx = sx + p.x
+    sy = sy + p.y
+  }
+  print(sx)
+  print(sy)
+}

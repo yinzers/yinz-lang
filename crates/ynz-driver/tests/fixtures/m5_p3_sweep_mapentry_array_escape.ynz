@@ -1,0 +1,31 @@
+// WHY: v0.3-M5 P3 step-5 item (b) — a MapEntry loop variable persisted as an
+// ARRAY ELEMENT (`saved.add(entry)`) escapes its per-site entry slot. Pre-fix
+// the element cell held ptr_to_int(entry slot), reused every iteration, so both
+// saved rows read the LAST entry's value (RED observed: 20 / 20). The fix is
+// value_to_stable_bits' Type::MapEntry arm: the {i64,i64} entry struct is cloned
+// into a counted 16-byte heap cell (entry_ty.size_of() — the fixed-envelope
+// register, NOT a shape-size twin) with the shape VALUE half deep-copied into
+// its own cell, so each saved entry owns its bytes.
+//
+// Expected output (byte-identical default vs --no-auto-parallel):
+//   10
+//   20
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let pa: Part = { qty: 10, price: 100 }
+  let pb: Part = { qty: 20, price: 200 }
+  let stock: map<int, Part> = {}
+  stock.set(1, pa)
+  stock.set(2, pb)
+  let saved: array<MapEntry<int, Part>> = []
+  for (entry in stock) {
+    saved.add(entry)
+  }
+  for (s in saved) {
+    print(s.value.qty)
+  }
+}

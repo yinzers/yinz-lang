@@ -1,0 +1,27 @@
+// M5 P2 fix round 4 — tripwire (d): shape elements persisted through the
+// FIXED LITERAL FILL site (`Expr::ArrayLit`'s BuiltinFixed arm). The slots
+// held ptr_to_int(binding storage), so mutating the source binding AFTER
+// the literal was built silently rewrote the stored element (unfixed reads
+// 9/90 for slot 0 — the post-mutation bytes); golden asserts the fill-time
+// value 1/10, then the mutated binding's own 9. Same aliasing class as the
+// loop-sourced writes: the slot aliases the binding's reused storage
+// instead of owning the bytes. Fixed: literal fill routes through
+// value_to_stable_bits (shape bytes heap-cloned at fill time).
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let a: Part = { qty: seed, price: seed * 10 }
+  let pair: fixed<Part> = [a, a]
+  a.qty = 9
+  a.price = 90
+  let s0 = pair[0]
+  if (s0.exists()) {
+    print(s0.value.qty)
+    print(s0.value.price)
+  }
+  print(a.qty)
+}

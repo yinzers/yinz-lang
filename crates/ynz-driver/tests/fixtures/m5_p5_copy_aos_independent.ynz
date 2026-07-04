@@ -1,0 +1,49 @@
+// WHY: v0.3-M5 P5 step 4c — the AoS `.copy()` INDEPENDENCE lock (FRAGO 014's
+// silent-miscompile class). Pre-FRAGO-014, array `.copy()` lowered as an ALIAS
+// no-op (`_ => Ok(recv_val)` catch-all), so mutating the ORIGINAL after a copy
+// changed the "copy" too — a fixture that only checks `.copy()` compiles proves
+// nothing. This one proves independence: mutate the original AFTER the copy and
+// assert the copy keeps the PRE-mutation values, for both element classes the
+// clone path handles (inline shape elements + int elements). Both arrays are
+// small (< SOA_SIZE_THRESHOLD = 64) so they are AoS in BOTH modes — this is the
+// pure-AoS cell of the E9 copy matrix (the SoA cell is m5_p5_soa_copy_wait_bg).
+//
+// Expected output (byte-identical default vs --no-auto-parallel):
+//   a: 119
+//   b: 30
+//   nums: 105
+//   copy: 6
+shape Part {
+  id: int
+  qty: int
+}
+
+function entrypoint() -> nothing {
+  let a: array<Part> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+  let b = a.copy()
+  a[0] = { id: 1, qty: 99 }
+  let sa = 0
+  for (p in a) {
+    sa = sa + p.qty
+  }
+  let sb = 0
+  for (p in b) {
+    sb = sb + p.qty
+  }
+  print(`a: ${sa}`)
+  print(`b: ${sb}`)
+
+  let nums: array<int> = [1, 2, 3]
+  let numsCopy = nums.copy()
+  nums[0] = 100
+  let sn = 0
+  for (n in nums) {
+    sn = sn + n
+  }
+  let sc = 0
+  for (n in numsCopy) {
+    sc = sc + n
+  }
+  print(`nums: ${sn}`)
+  print(`copy: ${sc}`)
+}

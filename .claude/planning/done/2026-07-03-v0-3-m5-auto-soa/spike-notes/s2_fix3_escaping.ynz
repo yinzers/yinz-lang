@@ -1,0 +1,47 @@
+// M5 P0 S2 fixture 3 — ESCAPING array (D4 escape-decline criterion).
+// The array HAS a qualifying 1-field hot loop, so the escape is the SOLE
+// decline reason — proving escape detection, not a side effect of another miss.
+//
+// PRE-REGISTERED expected analysis (written BEFORE the spike ran):
+//   fn `entrypoint`: array `pts` shape=Point provable_len=Some(3) growth_ops=0
+//     elem_set_writes=0 whole_value_uses=0 escapes=["passed to `sumX()`"]
+//   loop-field `x` reads=1 writes=0
+//   field-union=1
+//   verdict: DECLINED(escapes: passed to `sumX()`)
+//   (fn `sumX` reports nothing: its array is a PARAM, not a local construction —
+//    param arrays are cross-function by definition; Phase 4 scope, not spike scope.)
+// Expected program stdout: 12 then 12 (local loop sum, then sumX() over 3+4+5).
+shape Point {
+  x: int
+  y: int
+}
+
+function sumX(share pts: array<Point>) -> int {
+  let total: int = 0
+  for (p in pts) {
+    total = total + p.x
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 2
+  let x0: int = seed + 1
+  let x1: int = seed + 2
+  let x2: int = seed + 3
+  let y0: int = x0 * 2
+  let y1: int = x1 * 2
+  let y2: int = x2 * 2
+  let pts: array<Point> = [
+    { x: x0, y: y0 },
+    { x: x1, y: y1 },
+    { x: x2, y: y2 }
+  ]
+  let localSum: int = 0
+  for (p in pts) {
+    localSum = localSum + p.x
+  }
+  print(localSum.toString())
+  let s: int = sumX(pts)
+  print(s.toString())
+}

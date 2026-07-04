@@ -1,8 +1,10 @@
 // WHY: no-over-reject boundary for ArrayShapeRuntimeFieldWithWait — an array<Shape>
-// whose elements have ALL-LITERAL int/bool field values is safe (codegen emits
-// LLVM module-level globals) and must NOT be rejected by the guard. Confirms the
-// round-5 literal-field win is preserved: total must print 30.
-// See design/concurrency.md 'ArrayShapeRuntimeFieldWithWait'.
+// whose elements have ALL-LITERAL int/bool field values is safe and must NOT be
+// rejected by the guard. Since v0.3-M5 P2 the elements live BY VALUE in the heap
+// array buffer (the buffer is the stable owner across the wait; the old
+// module-global lowering, try_build_shape_global, was deleted with the by-value
+// cut). Confirms the literal-field case still crosses: total must print 30.
+// See docs/internal/implementation/IMP-concurrency.md 'ArrayShapeRuntimeFieldWithWait'.
 shape Item {
   id: int
   qty: int

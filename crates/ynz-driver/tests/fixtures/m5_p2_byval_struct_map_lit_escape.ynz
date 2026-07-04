@@ -1,0 +1,32 @@
+// M5 P2 fix round 2 — tripwire (c2): same map-literal escape through the
+// IDENTIFIER-KEY literal path (`{ pick: p }` with a map annotation — the
+// StructLit-as-map lowering), the fourth and last map-value marshalling site.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let zero: Part = { qty: 0, price: 0 }
+  let picks: map<string, Part> = { pick: zero }
+  for (p in parts) {
+    if (p.qty == 1) {
+      let inner: map<string, Part> = { pick: p }
+      picks = inner
+    }
+  }
+  let got = picks[`pick`]
+  if (got.exists()) {
+    print(got.value.qty)
+    print(got.value.price)
+  }
+}

@@ -167,6 +167,12 @@ pub fn collect_diagnostics(
         for d in check.diagnostics.iter() {
             bucket.push(d.clone());
         }
+        // The `array-using-soa-layout` Tier 3 lint lives OUTSIDE check_query (its
+        // inputs depend on check_query — salsa cycle), so the --json path merges it
+        // here; tooling consumers see the same lint stream the stderr path renders.
+        for lint in ynz_typeck::queries::soa_layout_lints(db, sf) {
+            bucket.push(lint);
+        }
     }
     bucket
 }

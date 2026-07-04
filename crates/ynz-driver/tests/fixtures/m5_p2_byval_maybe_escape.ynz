@@ -1,0 +1,40 @@
+// M5 P2 fix-loop — tripwire cell (c): the MAYBE ENVELOPE itself escaping its
+// iteration (the get-maybe path), unwrapped after the loop.
+//
+// `arr.get(i)`'s {flag, bits} envelope is a per-site entry-block alloca reused
+// across iterations, and for shape elements its bits carry a pointer to the
+// shared out buffer. A maybe binding/assignment that outlives the iteration must
+// copy BOTH the envelope AND the shape payload bytes into variable-owned storage.
+// Unfixed code prints the LAST iteration's element (3/30), not the matched
+// one (2/20).
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let saved = parts.get(0)
+  let i: int = 0
+  while (i < parts.count()) {
+    let m = parts.get(i)
+    if (m.exists()) {
+      if (m.value.qty == 2) {
+        saved = m
+      }
+    }
+    i = i + 1
+  }
+  if (saved.exists()) {
+    print(saved.value.qty)
+    print(saved.value.price)
+  }
+}

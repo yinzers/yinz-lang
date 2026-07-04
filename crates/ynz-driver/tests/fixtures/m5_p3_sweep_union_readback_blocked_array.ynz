@@ -1,0 +1,36 @@
+// WHY: v0.3-M5 P3 step-5 item (d) — LOUD-FAIL PIN for the union persist hole
+// in value_to_stable_bits (union repr is NON-uniform: {i64 tag, i64 data}
+// tagged struct vs NULL pointer for the `T | nothing` none case — no blind
+// clone is correct). The WRITE side is constructible today (an array<Figure>
+// literal compiles and runs, silently persisting the raw interior-stack
+// payload pointer), but the READ-BACK path ICEs LOUD — no binary is produced,
+// so no end-to-end silent wrong exists. This pin asserts the build/run FAILS
+// (exit != 0, empty stdout) in BOTH modes. Either today's ICE or a future
+// clean loud-reject diagnostic satisfies the pin; the ONLY failure mode is a
+// SILENT compile-and-run, which would mean union values flow through the
+// persist choke points without the marshalling question being answered —
+// whoever makes this fixture run must consciously solve union marshalling
+// (or land the FRAGO-grade loud-reject gate). See value_to_stable_bits'
+// KNOWN-HOLE doc.
+shape Circle {
+  radius: float
+}
+
+shape Square {
+  side: float
+}
+
+shape Figure = Circle | Square
+
+function entrypoint() -> nothing {
+  let c: Circle = { radius: 3.0 }
+  let fig: Figure = c
+  let figs: array<Figure> = [fig]
+  let g = figs[0]
+  if (g.exists()) {
+    let f2: Figure = g.value
+    if (f2 is Circle) {
+      print(`circle`)
+    }
+  }
+}

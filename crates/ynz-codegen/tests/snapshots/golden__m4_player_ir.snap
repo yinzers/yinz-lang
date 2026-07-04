@@ -1,6 +1,6 @@
 ---
 source: crates/ynz-codegen/tests/golden.rs
-assertion_line: 477
+assertion_line: 489
 expression: artifact.ir_text
 ---
 ; ModuleID = 'ynz-m4_player.ynz'
@@ -64,13 +64,15 @@ declare ptr @ynz_alloc_zeroed(i64)
 
 declare void @ynz_free(ptr, i64)
 
-declare ptr @ynz_array_new()
+declare ptr @ynz_array_new(i64)
 
-declare void @ynz_array_push(ptr, i64)
+declare ptr @ynz_array_new_sized(i64, i64)
 
-declare void @ynz_array_get(ptr, i64, ptr)
+declare void @ynz_array_push(ptr, ptr)
 
-declare void @ynz_array_set(ptr, i64, i64)
+declare i64 @ynz_array_get(ptr, i64, ptr)
+
+declare void @ynz_array_set(ptr, i64, ptr)
 
 declare i64 @ynz_array_count(ptr)
 
@@ -80,23 +82,23 @@ declare ptr @ynz_array_clone_primitive(ptr)
 
 declare void @ynz_siphash_init()
 
-declare ptr @ynz_map_new()
+declare ptr @ynz_map_new(i64)
 
-declare void @ynz_map_get(ptr, i64, ptr)
+declare i64 @ynz_map_get(ptr, i64, ptr)
 
-declare void @ynz_map_get_str(ptr, ptr, ptr)
+declare i64 @ynz_map_get_str(ptr, ptr, ptr)
 
-declare void @ynz_map_set(ptr, i64, i64)
+declare void @ynz_map_set(ptr, i64, ptr)
 
-declare void @ynz_map_set_str(ptr, ptr, i64)
+declare void @ynz_map_set_str(ptr, ptr, ptr)
 
 declare i64 @ynz_map_count(ptr)
 
 declare i64 @ynz_map_has(ptr, i64)
 
-declare void @ynz_map_iter_get(ptr, i64, ptr)
+declare i64 @ynz_map_iter_get(ptr, i64, ptr, ptr)
 
-declare void @ynz_map_iter_get_str(ptr, i64, ptr)
+declare i64 @ynz_map_iter_get_str(ptr, i64, ptr, ptr)
 
 declare void @ynz_map_drop(ptr)
 
@@ -275,7 +277,9 @@ entry:
   %health = getelementptr inbounds { ptr, i64 }, ptr %Player, i32 0, i32 1
   store i64 100, ptr %health, align 8
   %p = alloca ptr, align 8
-  store ptr %Player, ptr %p, align 8
+  %p_own = alloca { ptr, i64 }, align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 1 %p_own, ptr align 1 %Player, i64 16, i1 false)
+  store ptr %p_own, ptr %p, align 8
   %p1 = load ptr, ptr %p, align 8
   call void @greet(ptr %p1)
   %p2 = load ptr, ptr %p, align 8
@@ -291,4 +295,8 @@ entry:
   ret i32 0
 }
 
+; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg) #1
+
 attributes #0 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #1 = { nocallback nofree nounwind willreturn memory(argmem: readwrite) }

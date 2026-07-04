@@ -1,0 +1,24 @@
+// M5 P2 step 1 — by-value ABI matrix: string × literal elements × full op set
+// (non-suspending). Per the Option A design (SCRATCH-future-array-by-value-element-
+// storage.md), string elements STAY 8-byte heap-pointer slots under the by-value ABI —
+// this fixture pins that string behavior is preserved bit-for-bit across the cut.
+// NOTE: `contains` on array<string> compares element POINTER bits (the current lowered
+// semantics), not string content — the goldens pin whatever the current compiler
+// produces so the cut provably does not change it.
+function entrypoint() -> nothing {
+  let names: array<string> = [`alpha`, `beta`, `gamma`]
+  names.add(`delta`)
+  print(names.count())
+  print(names[0].or(`none`))
+  print(names[3].or(`none`))
+  print(names[9].or(`none`))
+  print(names.get(1).or(`none`))
+  print(names.first().or(`none`))
+  print(names.last().or(`none`))
+  print(names.contains(`beta`))
+  print(names.contains(`omega`))
+  names.set(1, `epsilon`)
+  print(names[1].or(`none`))
+  names[2] = `zeta`
+  print(names[2].or(`none`))
+}

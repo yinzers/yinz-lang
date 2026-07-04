@@ -598,6 +598,22 @@ pub fn no_auto_parallel_env() -> bool {
     std::env::var("YNZ_NO_AUTO_PARALLEL").is_ok_and(|v| v == "1")
 }
 
+/// Read the harness-only `YNZ_SOA_FORCE` layout override (recorded decision D8).
+///
+/// `"soa"` / `"aos"` parse to the matching [`crate::soa::SoaForce`]; any other value
+/// (or unset) is ignored. NEVER user-facing — no CLI flag sets it; it exists solely
+/// for the Phase 6 SIZE_THRESHOLD calibration harness to pin each compiled workload
+/// to one layout. Read ONLY at `soa_candidate_query` entry (one read site, same
+/// discipline as [`no_auto_parallel_env`]) and threaded explicitly into the pure
+/// core. Precedence: kernel mode and `YNZ_NO_AUTO_PARALLEL` outrank it.
+pub fn soa_force_env() -> Option<crate::soa::SoaForce> {
+    match std::env::var("YNZ_SOA_FORCE").as_deref() {
+        Ok("soa") => Some(crate::soa::SoaForce::Soa),
+        Ok("aos") => Some(crate::soa::SoaForce::Aos),
+        _ => None,
+    }
+}
+
 /// Compute which functions get CPU-statement promotion for this module.
 ///
 /// Salsa-tracked (incremental-safe; no global mutable state). Depends on
@@ -672,6 +688,158 @@ pub fn cpu_promotion_query(
     );
 
     Arc::new(PromotionOutput { promoted })
+}
+
+/// Cycle-initial placeholder for `soa_candidate_query` on circular import chains:
+/// the empty candidate list (declining is always safe; the circular-import error is
+/// injected by `module_signatures_cycle_fn` and surfaces through `check_query`).
+fn soa_candidate_cycle_initial(
+    _db: &dyn SourceFileRegistry,
+    _id: salsa::Id,
+    _source: SourceFile,
+) -> Arc<Vec<crate::soa::SoaCandidate>> {
+    Arc::new(Vec::new())
+}
+
+fn soa_candidate_cycle_fn(
+    _db: &dyn SourceFileRegistry,
+    _cycle: &salsa::Cycle,
+    _last_provisional: &Arc<Vec<crate::soa::SoaCandidate>>,
+    value: Arc<Vec<crate::soa::SoaCandidate>>,
+    _source: SourceFile,
+) -> Arc<Vec<crate::soa::SoaCandidate>> {
+    value
+}
+
+/// Compute the SoA candidate list for this module (v0.3-M5 Phase 4 step 1).
+///
+/// Salsa-tracked (incremental-safe; no global mutable state). Depends on
+/// `check_query` (the `expr_types` type oracle + diagnostics) and
+/// `module_signatures_query` (the shape table for param/lend-self resolution).
+///
+/// Gating is at the query entry: `--no-auto-parallel` (read via
+/// [`no_auto_parallel_env`], the SAME predicate codegen reads — D1) and kernel mode
+/// both disable SoA analysis entirely; the harness-only `YNZ_SOA_FORCE` override
+/// (read via [`soa_force_env`], D8) is subordinate to both. The pure core
+/// [`crate::soa::analyze`] takes the flags explicitly so unit tests can drive the
+/// decline paths deterministically.
+///
+/// Time: O(F · B)  Space: O(bindings) — one body walk per function.
+// lru = 64: same cost class as check_query; both ride the body walk.
+#[salsa::tracked(lru = 64, cycle_fn = soa_candidate_cycle_fn, cycle_initial = soa_candidate_cycle_initial)]
+pub fn soa_candidate_query(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+) -> Arc<Vec<crate::soa::SoaCandidate>> {
+    let no_auto_parallel = no_auto_parallel_env();
+    // The production check path is never kernel mode today (`--kernel` is wired only
+    // through the test-only `check_with_kernel_mode`); when it lands, this reads the
+    // same kernel signal check_query uses. SoA analysis declines under kernel mode.
+    let kernel_mode = false;
+
+    let check_out = check_query(db, source);
+    if check_out.diagnostics.has_errors() {
+        // Codegen is skipped on type errors — no meaningful layout to analyze
+        // (the frame_layouts_query posture).
+        return Arc::new(Vec::new());
+    }
+    let sig_output = module_signatures_query(db, source);
+
+    Arc::new(crate::soa::analyze(
+        &check_out.typed_module,
+        &sig_output.shape_table,
+        kernel_mode,
+        no_auto_parallel,
+        soa_force_env(),
+    ))
+}
+
+/// Cycle-initial placeholder for `layout_decisions_query` on circular import
+/// chains: an empty authority (no padded shapes, no arrays) — the circular-import
+/// error is injected by `module_signatures_cycle_fn` and surfaces through
+/// `check_query`.
+fn layout_decisions_cycle_initial(
+    _db: &dyn SourceFileRegistry,
+    _id: salsa::Id,
+    _source: SourceFile,
+) -> Arc<crate::soa::LayoutDecisions> {
+    Arc::new(crate::soa::LayoutDecisions {
+        padded_shapes: std::collections::HashSet::new(),
+        arrays: Vec::new(),
+    })
+}
+
+fn layout_decisions_cycle_fn(
+    _db: &dyn SourceFileRegistry,
+    _cycle: &salsa::Cycle,
+    _last_provisional: &Arc<crate::soa::LayoutDecisions>,
+    value: Arc<crate::soa::LayoutDecisions>,
+    _source: SourceFile,
+) -> Arc<crate::soa::LayoutDecisions> {
+    value
+}
+
+/// Resolve THE one authoritative layout-decision source (v0.3-M5 Phase 4 step 2,
+/// E3 B1). Delegates to [`crate::soa::resolve_layout`] — D11 precedence: padding
+/// wins; a cross-thread-padded shape's arrays are never SoA'd.
+///
+/// Every layout consumer — codegen's shape-type emission (Pass 0), the deep
+/// padded-alloca alignment read, and `frame_layouts_query`'s sizing pass — reads
+/// `LayoutDecisions` from THIS query; a direct read of
+/// `TypedModule::cross_thread_padded_shapes` outside this authority is the E3
+/// twin-derivation corpse (authoritative-derivation.md).
+///
+/// `padded_shapes` is cloned UNCONDITIONALLY — even when the module has type
+/// errors — matching the pre-authority consumers' unconditional
+/// `typed.cross_thread_padded_shapes` reads, so the re-threading stays
+/// byte-identical. `arrays` rides `soa_candidate_query` (already empty on
+/// errors and under the kernel / `--no-auto-parallel` gates).
+///
+/// Phase 4 exit criterion: codegen consumes ONLY `padded_shapes`; ZERO codegen
+/// consumers of `arrays` exist until Phase 5's SoA lowering.
+///
+/// Time: O(C · F) resolve on top of its input queries.  Space: O(C · F + P).
+// lru = 64: same cost class as its inputs; one resolve pass per module.
+#[salsa::tracked(lru = 64, cycle_fn = layout_decisions_cycle_fn, cycle_initial = layout_decisions_cycle_initial)]
+pub fn layout_decisions_query(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+) -> Arc<crate::soa::LayoutDecisions> {
+    let check_out = check_query(db, source);
+    let candidates = soa_candidate_query(db, source);
+    let sig_output = module_signatures_query(db, source);
+
+    Arc::new(crate::soa::resolve_layout(
+        &check_out.typed_module.cross_thread_padded_shapes,
+        &candidates,
+        &sig_output.shape_table,
+    ))
+}
+
+/// The `array-using-soa-layout` lint diagnostics for this module (v0.3-M5 Phase 7
+/// step 2) — a thin NON-salsa wrapper over the two memoized inputs.
+///
+/// The lint cannot fire inside `check_query`: `layout_decisions_query` →
+/// `soa_candidate_query` → `check_query`, so pushing it there would close a salsa
+/// cycle — and re-running the SoA analysis inside `check_query` instead would be the
+/// E3 twin-derivation corpse (authoritative-derivation.md). So the three diagnostic
+/// consumers that today read only `check_query` merge THIS wrapper's output on top:
+/// `ynz-codegen::codegen_query` (driver stderr — both `ynz build` paths render its
+/// bucket), the LSP's `run_and_publish_diagnostics`, and the driver's `--json`
+/// `collect_diagnostics`. Both inputs are salsa-memoized and the pairing walk is
+/// trivial, so no tracked query (and no cycle_fn boilerplate) is needed here.
+///
+/// Empty on type errors and under the kernel / `--no-auto-parallel` gates —
+/// `soa_candidate_query` (and therefore `arrays`) is already empty there.
+///
+/// Time: O(A · C) on memoized inputs.  Space: O(A).
+pub fn soa_layout_lints(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+) -> Vec<ynz_diagnostics::Diagnostic> {
+    let decisions = layout_decisions_query(db, source);
+    let candidates = soa_candidate_query(db, source);
+    crate::soa::layout_lints(&decisions, &candidates)
 }
 
 /// Pure core of the CPU-promotion analysis (Decision Record item 8b/8c).
@@ -1599,14 +1767,16 @@ function entrypoint() -> nothing {{
     }
 
     #[test]
-    fn array_shape_runtime_field_crossing_host_declines_and_compiles_clean() {
-        // WHY (ArrayShapeRuntimeFieldWithWait decline): an `array<Shape>` whose elements
-        // have runtime-computed field values, bound to a local that crosses the CPU join,
-        // cannot be frame-embedded yet (the element pointers dangle across a suspension).
-        // Promoting this host would make it SM and `check_function` would reject it. The
-        // probe must see the array as a crossing local over the CPU join (per-candidate
-        // CPU-callee seeding makes the join a suspension point) and decline, keeping the
-        // program compiling clean and sequential.
+    fn array_shape_runtime_field_crossing_host_promotes_and_compiles_clean() {
+        // WHY (ArrayShapeRuntimeFieldWithWait LIFTED, v0.3-M5 Phase 3): an `array<Shape>`
+        // whose elements have runtime-computed field values, bound to a local that crosses
+        // the CPU join, is now SAFE to frame-embed — the by-value ABI cut stores element
+        // bytes inline in the heap buffer (stable owner across any suspension), so
+        // `check_function` no longer rejects the promoted SM host and the probe must no
+        // longer decline it. This is the INVERSE of the pre-M5 decline test: the host
+        // must now PROMOTE, and the program must still compile with no errors. If this
+        // test starts failing with a decline, a rejection path for runtime-field
+        // array<Shape> crossings has been reintroduced — that class was lifted, not moved.
         let src = format!(
             r#"{FIB}
 shape Item {{
@@ -1631,13 +1801,13 @@ function entrypoint() -> nothing {{
         let inputs = build_inputs(&src);
         let promoted = promote(&inputs, false, false);
         assert!(
-            !promoted.contains("entrypoint"),
-            "an array<Shape>-runtime-field crossing-local host must decline promotion; \
-             got: {promoted:?}"
+            promoted.contains("entrypoint"),
+            "an array<Shape>-runtime-field crossing-local host must now PROMOTE (guard \
+             lifted by v0.3-M5 by-value storage); got: {promoted:?}"
         );
         assert!(
             !has_errors(&src),
-            "the array<Shape> decline must keep the program compiling with no new errors"
+            "the promoted array<Shape>-runtime-field host must compile with no errors"
         );
     }
 

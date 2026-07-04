@@ -1,0 +1,40 @@
+// M5 P2 fix round 2 — tripwire (a3): a maybe<Shape> ENVELOPE persisted into a
+// maybe-typed SHAPE FIELD. The field cell stores a pointer to the per-let-site
+// owned envelope (reused every iteration), so after the loop the field reads
+// the LAST iteration's envelope + payload. Locks store_field's Maybe arm
+// (heap-cloned envelope + payload).
+shape Part {
+  qty: int
+  price: int
+}
+
+shape Holder {
+  found: maybe<Part>
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 },
+    { qty: qc, price: qc * 10 }
+  ]
+  let empty: maybe<Part> = parts[9]
+  let holder: Holder = { found: empty }
+  let i: int = 0
+  while (i < 3) {
+    let cur: maybe<Part> = parts[i]
+    if (i == 0) {
+      holder.found = cur
+    }
+    i = i + 1
+  }
+  let got: maybe<Part> = holder.found
+  if (got.exists()) {
+    print(got.value.qty)
+    print(got.value.price)
+  }
+}

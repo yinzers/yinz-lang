@@ -1,0 +1,48 @@
+// M5 P0 S2 fixture 2 — 3-field loop (exceeds the D5 ≤2-field union criterion).
+// Field `a` is read TWICE per iteration to prove the spike COUNTS accesses
+// (a count, not a membership set).
+//
+// PRE-REGISTERED expected analysis (written BEFORE the spike ran):
+//   fn `entrypoint`: array `rs` shape=Reading provable_len=Some(3) growth_ops=0
+//     elem_set_writes=0 whole_value_uses=0 escapes=[]
+//   loop-field `a` reads=2 writes=0
+//   loop-field `b` reads=1 writes=0
+//   loop-field `c` reads=1 writes=0
+//   field-union=3
+//   verdict: DECLINED(field-union 3 > 2)
+// Expected program stdout: 12 then 12 then 18
+//   (a values 1,2,3 -> ta = 2*(1+2+3) = 12; b values 2,4,6 -> tb = 12; c values 3,6,9 -> tc = 18).
+shape Reading {
+  a: int
+  b: int
+  c: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let a0: int = seed
+  let a1: int = seed + 1
+  let a2: int = seed + 2
+  let b0: int = a0 * 2
+  let b1: int = a1 * 2
+  let b2: int = a2 * 2
+  let c0: int = a0 * 3
+  let c1: int = a1 * 3
+  let c2: int = a2 * 3
+  let rs: array<Reading> = [
+    { a: a0, b: b0, c: c0 },
+    { a: a1, b: b1, c: c1 },
+    { a: a2, b: b2, c: c2 }
+  ]
+  let ta: int = 0
+  let tb: int = 0
+  let tc: int = 0
+  for (r in rs) {
+    ta = ta + r.a + r.a
+    tb = tb + r.b
+    tc = tc + r.c
+  }
+  print(ta.toString())
+  print(tb.toString())
+  print(tc.toString())
+}

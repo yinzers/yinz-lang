@@ -704,6 +704,65 @@ fn no_banned_jargon_in_lsp_inlay_hint_hover_output() {
     }
 }
 
+// WHY: `[[lint_rule]]` template/description text renders user-facing on TWO surfaces: the
+//      fired diagnostic (WHAT/WHAT-INSTEAD/WHY via `lint_rule_diagnostic_parts`, shown in
+//      driver stderr and as LSP squiggle text) and the rule-level hover keyed by the LSP
+//      `Diagnostic.code` (`lsp_lint_rule_hover_for`, which also renders `description`).
+//      Both bypass the `Diagnostic::*` constructor scan above (the text lives in
+//      registry/features.toml, not in a Rust string literal at the firing site), so lint
+//      rules need their own registry-level audit — the same per-registry-kind pattern as
+//      the deferred-feature and muted-hint-domain tests. Covers every rule generically
+//      (M4's cross-thread-fields-not-padded / prefer-yielding-sleep and M5's
+//      array-using-soa-layout alike), so a future rule inherits enforcement automatically.
+//      The rule NAME is deliberately NOT audited: it is a registry-internal identifier
+//      convention (e.g. "soa" in `array-using-soa-layout`, plan decision D9), not prose.
+#[test]
+fn no_banned_jargon_in_lint_rule_templates() {
+    let banned: Vec<_> = ynz_registry::banned_jargon().collect();
+    let mut violations: Vec<String> = Vec::new();
+
+    for entry in ynz_registry::lint_rules() {
+        let fields = [
+            ("description", entry.description),
+            ("what_template", entry.what_template),
+            ("what_instead_template", entry.what_instead_template),
+            ("why_template", entry.why_template),
+        ];
+        for (field, text) in &fields {
+            let lower = text.to_lowercase();
+            for b in &banned {
+                let w = b.name.to_lowercase();
+                if contains_whole_word(&lower, &w) {
+                    violations.push(format!(
+                        "[[lint_rule]] '{}' field '{}' contains banned word {:?}: {:?}",
+                        entry.name, field, b.name, text
+                    ));
+                }
+            }
+            // Inflected jargon forms + the known typo that slip past the whole-word
+            // check (same closure as the muted_hint_domain and Diagnostic-site tests).
+            for form in ["infers", "inferred", "inference", "booleanean"] {
+                if lower.contains(form) {
+                    violations.push(format!(
+                        "[[lint_rule]] '{}' field '{}' contains banned form {form:?}: {:?}",
+                        entry.name, field, text
+                    ));
+                }
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Banned jargon found in {} lint-rule template field(s):\n{}\n\n\
+             Edit the [[lint_rule]] entry in registry/features.toml and replace with \
+             plain English per vocabulary.md.",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}
+
 // WHY: `[[muted_hint_domain]]` description fields are surfaced to the user in the WHAT
 //      section of LSP inlay-hint hover tooltips (via `lsp_inlay_hint_hover_for`).
 //      A description containing `infer`/`inferred` or other banned jargon reaches the user

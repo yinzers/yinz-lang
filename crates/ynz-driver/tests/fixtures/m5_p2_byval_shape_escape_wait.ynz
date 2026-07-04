@@ -1,0 +1,35 @@
+// M5 P2 fix-loop — tripwire cell (e): shape element assigned to a FRAME-EMBEDDED
+// crossing local (nested-scope assign before a `wait`), read after resume.
+//
+// The embed local's owned storage IS its frame region (ptr alloca pre-wired at
+// sm_entry). A plain slot store on assignment clobbered that wiring, so
+// post-resume reads saw the stale Let-initializer frame bytes (differential
+// probe: printed 0/0 instead of 2/20). The fix copies the RHS bytes INTO the
+// frame region at the assignment point (shape_bytes_into_embed_slot).
+//
+// (The maybe<Shape>-crossing-wait sibling is NOT constructible today — typeck's
+// UnsupportedCrossingLocalType rejects any maybe crossing a wait — so this cell
+// covers the constructible half of the element-across-suspension story; the
+// maybe half belongs to Phase 3's guard-lift matrix.)
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 }
+  ]
+  let m = parts.get(1)
+  let p: Part = { qty: 0, price: 0 }
+  if (m.exists()) {
+    p = m.value
+  }
+  wait sleep(10)
+  print(p.qty)
+  print(p.price)
+}

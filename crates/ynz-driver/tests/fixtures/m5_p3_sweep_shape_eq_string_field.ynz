@@ -1,0 +1,36 @@
+// WHY: v0.3-M5 P3 step-5 item (a) — D12 RATIFICATION PIN: shape_value_eq
+// compares pointer-typed fields (string / nested shape) by POINTER IDENTITY,
+// ratified as final for M5 (see shape_value_eq's header doc). Three cells:
+//   cell 1 (true):  target's name is read FROM the source binding — same
+//                   pointer bits, identity holds trivially.
+//   cell 2 (true):  a SECOND occurrence of the same literal text. True only
+//                   because LLVM MERGES identical unnamed_addr string globals,
+//                   so same-text literals share one pointer TODAY — an artifact
+//                   of constant merging, NOT a semantic guarantee. If this cell
+//                   flips, constant merging changed, not the D12 semantics.
+//   cell 3 (false): the DISCRIMINATING cell — runtime-built same text via
+//                   backtick interpolation (`${prefix}pha`; string `+` concat
+//                   is a type error in Yinz). Deep VALUE equality would print
+//                   true; pointer identity prints false. This pins D12.
+//
+// Expected output (byte-identical default vs --no-auto-parallel):
+//   true
+//   true
+//   false
+shape Tag {
+  name: string
+  n: int
+}
+
+function entrypoint() -> nothing {
+  let a: Tag = { name: `alpha`, n: 1 }
+  let tags: array<Tag> = [a]
+  let same: Tag = { name: a.name, n: 1 }
+  print(tags.contains(same))
+  let fresh: Tag = { name: `alpha`, n: 1 }
+  print(tags.contains(fresh))
+  let prefix: string = `al`
+  let built: string = `${prefix}pha`
+  let runtimeName: Tag = { name: built, n: 1 }
+  print(tags.contains(runtimeName))
+}

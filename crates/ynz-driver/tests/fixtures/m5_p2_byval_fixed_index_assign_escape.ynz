@@ -1,0 +1,44 @@
+// M5 P2 fix round 4 — tripwire (a): the round-3 closer's exact repro. Shape
+// elements persisted into a FIXED array via index-assign (`pair[i] = cur`)
+// inside a while-loop over an array<Part>, read after the loop. fixed<T>
+// slots are i64 bits; a shape value marshalled as ptr_to_int(binding
+// storage) persists the per-site-reused storage pointer — every slot
+// aliases it, so slot 0 silently reads the LAST iteration's bytes (unfixed
+// observed 2/20 for slot 0; golden asserts 1/10). Fixed: the fixed
+// index-assign arm routes through the ONE stable-bits choke point
+// (value_to_stable_bits: shape bytes heap-cloned per write).
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let parts: array<Part> = [
+    { qty: qa, price: qa * 10 },
+    { qty: qb, price: qb * 10 }
+  ]
+  let zero: Part = { qty: 0, price: 0 }
+  let pair: fixed<Part> = [zero, zero]
+  let i: int = 0
+  while (i < 2) {
+    let got = parts[i]
+    if (got.exists()) {
+      let cur: Part = got.value
+      pair[i] = cur
+    }
+    i = i + 1
+  }
+  let s0 = pair[0]
+  if (s0.exists()) {
+    print(s0.value.qty)
+    print(s0.value.price)
+  }
+  let s1 = pair[1]
+  if (s1.exists()) {
+    print(s1.value.qty)
+    print(s1.value.price)
+  }
+}

@@ -1,0 +1,36 @@
+// M5 P2 fix round 3 — tripwire (B2): a maybe<int> value passed to a
+// fire-and-forget `background` task. The spawn ctx stored bare
+// ptr_to_int(binding envelope) — entry-block storage the loop rewrites every
+// iteration — and the task (sleepBlocking) reads it deterministically AFTER
+// the loop, so the unfixed task printed the LAST iteration's payload (3),
+// not the spawn-time one (1). Locks prepare_bg_arg_for_ctx's Maybe arm
+// (maybe_to_heap_cell: heap-cloned envelope + payload at the spawn site,
+// envelope freed by the closure's BgArgFreeKind ladder after the call).
+//
+// Expected output (in order):
+//   loop done
+//   1
+function report(m: maybe<int>) -> nothing {
+  sleepBlocking(80)
+  if (m.exists()) {
+    print(m.value)
+  }
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let a: int = seed * 1
+  let b: int = seed * 2
+  let c: int = seed * 3
+  let nums: array<int> = [a, b, c]
+  let i: int = 0
+  while (i < 3) {
+    let cur = nums.get(i)
+    if (i == 0) {
+      background report(cur)
+    }
+    i = i + 1
+  }
+  print(`loop done`)
+  sleepBlocking(250)
+}

@@ -1,0 +1,28 @@
+// M5 P2 step 1 — by-value ABI matrix: string × runtime-built elements × full op set
+// (non-suspending). Elements are built by runtime interpolation so no literal global
+// can back them. String elements stay 8-byte pointer slots under the by-value ABI.
+function entrypoint() -> nothing {
+  let suffix: string = `-x`
+  let sa: string = `alpha${suffix}`
+  let sb: string = `beta${suffix}`
+  let sc: string = `gamma${suffix}`
+  let sd: string = `delta${suffix}`
+  let names: array<string> = [sa, sb, sc]
+  names.add(sd)
+  print(names.count())
+  print(names[0].or(`none`))
+  print(names[3].or(`none`))
+  print(names[9].or(`none`))
+  print(names.get(1).or(`none`))
+  print(names.first().or(`none`))
+  print(names.last().or(`none`))
+  print(names.contains(sb))
+  let absent: string = `omega${suffix}`
+  print(names.contains(absent))
+  let se: string = `epsilon${suffix}`
+  names.set(1, se)
+  print(names[1].or(`none`))
+  let sz: string = `zeta${suffix}`
+  names[2] = sz
+  print(names[2].or(`none`))
+}

@@ -1,6 +1,6 @@
 ---
 source: crates/ynz-codegen/tests/golden.rs
-assertion_line: 779
+assertion_line: 791
 expression: ir
 ---
 ; ModuleID = 'ynz-v03m2_bg_spawn_sm.ynz'
@@ -63,13 +63,15 @@ declare ptr @ynz_alloc_zeroed(i64)
 
 declare void @ynz_free(ptr, i64)
 
-declare ptr @ynz_array_new()
+declare ptr @ynz_array_new(i64)
 
-declare void @ynz_array_push(ptr, i64)
+declare ptr @ynz_array_new_sized(i64, i64)
 
-declare void @ynz_array_get(ptr, i64, ptr)
+declare void @ynz_array_push(ptr, ptr)
 
-declare void @ynz_array_set(ptr, i64, i64)
+declare i64 @ynz_array_get(ptr, i64, ptr)
+
+declare void @ynz_array_set(ptr, i64, ptr)
 
 declare i64 @ynz_array_count(ptr)
 
@@ -79,23 +81,23 @@ declare ptr @ynz_array_clone_primitive(ptr)
 
 declare void @ynz_siphash_init()
 
-declare ptr @ynz_map_new()
+declare ptr @ynz_map_new(i64)
 
-declare void @ynz_map_get(ptr, i64, ptr)
+declare i64 @ynz_map_get(ptr, i64, ptr)
 
-declare void @ynz_map_get_str(ptr, ptr, ptr)
+declare i64 @ynz_map_get_str(ptr, ptr, ptr)
 
-declare void @ynz_map_set(ptr, i64, i64)
+declare void @ynz_map_set(ptr, i64, ptr)
 
-declare void @ynz_map_set_str(ptr, ptr, i64)
+declare void @ynz_map_set_str(ptr, ptr, ptr)
 
 declare i64 @ynz_map_count(ptr)
 
 declare i64 @ynz_map_has(ptr, i64)
 
-declare void @ynz_map_iter_get(ptr, i64, ptr)
+declare i64 @ynz_map_iter_get(ptr, i64, ptr, ptr)
 
-declare void @ynz_map_iter_get_str(ptr, i64, ptr)
+declare i64 @ynz_map_iter_get_str(ptr, i64, ptr, ptr)
 
 declare void @ynz_map_drop(ptr)
 

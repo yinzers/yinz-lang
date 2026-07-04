@@ -1,0 +1,22 @@
+// M5 P3 step 1 — map debug-repr walker lock (audit-map-callsites.md site 7,
+// `mdbg_*` emit.rs). `print(map)` is typeck-rejected, so the walker is
+// reachable ONLY via shape-embedded map fields printed through shape repr —
+// this fixture is the first to construct it. Covers BOTH value classes on the
+// cut elem_size ABI: a scalar-valued map (i64 cells) and a shape-valued map
+// (elem_size > 8 — the walker's out-buffer read via array_elem_from_out).
+shape Part {
+  qty: int
+  price: int
+}
+
+shape Depot {
+  label: string
+  stock: map<string, int>
+  parts: map<string, Part>
+}
+
+function entrypoint() -> nothing {
+  let pa: Part = { qty: 1, price: 10 }
+  let d: Depot = { label: `strip`, stock: { `a`: 5, `b`: 6 }, parts: { `pa`: pa } }
+  print(d)
+}
