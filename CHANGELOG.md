@@ -1,5 +1,79 @@
 # Changelog
 
+## [0.3.1] — 2026-07-04 — M5: Array-By-Value Element Storage + Auto-SoA Layout
+
+Commit range: v0.3.0..v0.3.1.
+
+### What ships
+
+`array<Shape>` (and `map<K,Shape>`) elements are now owned, by-value, and inline in the
+heap buffer, instead of stored as pointers. This permanently fixes the array-element
+stack-dangling miscompile class that the M3a `ArrayShapeRuntimeFieldWithWait` guard only
+*masked* by rejecting the pattern outright — a runtime-field `array<Shape>` now correctly
+survives crossing a `wait`, and the guard (plus its registry deferral) is gone.
+
+Riding that new contiguous storage, the compiler can now automatically lay out large,
+provably-safe hot-loop arrays as Struct-of-Arrays (SoA) instead of the default
+Array-of-Structs layout — a pure codegen decision, zero syntax change, byte-identical
+program output in both scheduling modes. The `array-using-soa-layout` Tier 3 lint fires
+on a qualifying array's declaration with jargon-free WHAT/WHAT-INSTEAD/WHY hover text.
+
+**Honest performance note.** The cache-locality win SoA promises is real — confirmed
+~3.3x faster under an optimizing LLVM backend (`opt-18 -O2`) on the calibration
+workload — but it is **not realized in the binaries `ynz build` ships today**, because
+the compiler runs zero LLVM optimization passes by default (measured: net ~1.0x, no
+detectable benefit, sometimes a few percent slower). `SIZE_THRESHOLD` ships as a
+documented, provenance-recorded conservative default (workload, machine, variance, date,
+revisit trigger — never a bare constant), not a crossover-calibrated number, since no
+crossover exists to calibrate against in shipped O0 binaries. The correctness of the new
+representation is unconditional; its measured perf payoff is conditional on future
+compiler work (see Deferred, below).
+
+### Added
+
+- Elem_size-aware `YnzArray`/`YnzMap` ABI — hard-cut, no parallel old-signature entry
+  points; a missed call site is a compile error, not a silent drift.
+- Auto-SoA layout: one authoritative `layout_decisions_query` (shared with M4's
+  false-sharing padding transform — padding always wins over SoA for a cross-thread
+  shape, byte-layout-proven), `array-using-soa-layout` Tier 3 lint + registry entry,
+  LSP/VSCode wiring, docs graduation (`IMP-collections.md`).
+- `contains` on `array<Shape>` is field-wise value equality (number/int/bool fields);
+  string and nested-shape/collection fields compare by identity. Field-assign is
+  copy-on-persist (snapshot at assignment) across shape fields, map values, array
+  elements, and spawn descriptors — a genuine, documented divergence from JS/TS
+  reference semantics, spelled out in `docs/reference/REF-collections.md`.
+- The repo's first SoA-shaped example (`examples/pirates-roster`'s cannonball-volley
+  demo) and a committed suppression-enumeration report covering every `array<Shape>`
+  site in the example/fixture corpus.
+
+### Fixed
+
+- The stack-dangling miscompile class for `array<Shape>`/`map<K,Shape>` elements
+  crossing suspension points — gone by construction, not by rejection.
+- A pre-existing symmetric `map<K,Shape>` miscompile (a loop-arm indirection mismatch),
+  caught by this milestone's own RED-fixture-first discipline.
+- `.copy()` on an array was a pre-existing alias no-op in both layout modes (never a
+  real deep copy) — now a genuine one-level copy in both AoS and SoA.
+
+### Deferred — triaged 2026-07-04, tracked on the roadmap
+
+Next-fix priority (real bugs, pre-existing, not introduced by this milestone):
+- A codegen crash (ICE) on a bare int literal assigned into any `number`-typed slot.
+- A general O0 stack-exhaustion SIGSEGV ceiling on very large hot loops (all layouts).
+- A stale cross-profile `libynz_runtime.a` release archive can silently miscompile by
+  resolving old-ABI symbols instead of failing to link (an operational rebuild-clean
+  guard is in place; the structural ABI-version-check fix is tracked, not yet built).
+
+Fine to defer past v1.0 (perf/process only, not bugs):
+- Phase 5's codegen doesn't yet consume the per-field `hot_fields` set the SoA analysis
+  already computes — a real, cheap, independently-actionable win distinct from needing
+  an optimizer.
+- Adding an actual LLVM optimization pass pipeline to `ynz build` — the single root
+  cause blocking every code path the compiler emits, concurrency included, from
+  approaching the language's Rust-level-performance positioning.
+- A write-time hook to mechanically catch a recurring twin-derivation bug class
+  (unrelated to this milestone; carried from the M4 AAR).
+
 ## [0.3.0] — 2026-07-03 — M3g + M4: Mixed CPU+I/O Overlap, Channels, Task Handles, Auto-Arc, False-Sharing Padding
 
 Commit range: v0.3.0-m7..v0.3.0 (M3g + M4 content only — M3f and M3d, though present in this

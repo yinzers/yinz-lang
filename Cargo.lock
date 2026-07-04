@@ -2397,18 +2397,18 @@ checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "ynz-abi"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "ynz-ast"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ynz-diagnostics",
 ]
 
 [[package]]
 name = "ynz-codegen"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "inkwell",
  "insta",
@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-diagnostics"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ariadne",
  "insta",
@@ -2433,7 +2433,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-driver"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -2454,7 +2454,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-fmt"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "proptest",
  "ynz-ast",
@@ -2465,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-lsp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "crossbeam-channel",
  "lsp-server",
@@ -2484,14 +2484,14 @@ dependencies = [
 
 [[package]]
 name = "ynz-numerics"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "ynz-parser"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "insta",
  "salsa",
@@ -2502,14 +2502,14 @@ dependencies = [
 
 [[package]]
 name = "ynz-registry"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "toml",
 ]
 
 [[package]]
 name = "ynz-runtime"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "memchr",
  "num_cpus",
@@ -2524,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-tmgrammar"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde_json",
  "ynz-registry",
@@ -2532,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-typeck"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "insta",
  "salsa",
@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-watch"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "assert_cmd",
  "chrono",
