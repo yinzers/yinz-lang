@@ -55,6 +55,7 @@ fn layout_for(name: &str) -> LayoutDecisions {
 fn env_guard() -> std::sync::MutexGuard<'static, ()> {
     let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
+    std::env::remove_var("YNZ_SOA_FORCE");
     guard
 }
 
@@ -362,11 +363,10 @@ fn no_auto_parallel_env_empties_the_candidate_list() {
     // WHY: D1/A3 — the query entry-gates on the ONE `no_auto_parallel_env()`
     // predicate; under the flag the qualifying fixture must yield ZERO candidates
     // (a fresh db per half so the salsa cache re-evaluates with the env visible).
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = env_guard();
 
     // Sanity half: without the flag the qualifying fixture admits (a regression
     // here would make the gated half vacuously pass).
-    std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
     let on = candidates_for("m5_p4_soa_qualifying.ynz");
     assert_eq!(
         on.len(),
@@ -401,16 +401,214 @@ fn kernel_mode_pure_core_empties_the_candidate_list() {
     let sig_out = module_signatures_query(&db, sf);
 
     // Sanity half: kernel off admits.
-    let on = soa::analyze(&check_out.typed_module, &sig_out.shape_table, false, false);
+    let on = soa::analyze(
+        &check_out.typed_module,
+        &sig_out.shape_table,
+        false,
+        false,
+        None,
+    );
     assert_eq!(
         on.len(),
         1,
         "sanity: non-kernel must yield the candidate; got: {on:?}"
     );
 
-    let off = soa::analyze(&check_out.typed_module, &sig_out.shape_table, true, false);
+    let off = soa::analyze(
+        &check_out.typed_module,
+        &sig_out.shape_table,
+        true,
+        false,
+        None,
+    );
     assert!(
         off.is_empty(),
         "kernel mode must empty the candidate list; got: {off:?}"
+    );
+}
+
+/// Pure-core `soa::analyze` rows for one fixture with explicit flags. Caller holds
+/// ENV_LOCK (the checker itself never reads the SoA env vars, but sibling tests
+/// mutate process-global env, so the discipline stays uniform).
+fn pure_core_for(
+    name: &str,
+    kernel_mode: bool,
+    no_auto_parallel: bool,
+    force: Option<soa::SoaForce>,
+) -> Vec<SoaCandidate> {
+    let mut db = CompilerDb::default();
+    let sf = SourceFile::new(&db, name.to_string(), fixture_src(name));
+    db.register_source(sf);
+    let check_out = check_query(&db, sf);
+    let sig_out = module_signatures_query(&db, sf);
+    soa::analyze(
+        &check_out.typed_module,
+        &sig_out.shape_table,
+        kernel_mode,
+        no_auto_parallel,
+        force,
+    )
+}
+
+#[test]
+fn force_soa_skips_only_the_threshold_arm() {
+    // WHY: D8 — `SoaForce::Soa` exists so the Phase 6 harness can measure a
+    // below-threshold N under SoA layout. It must skip EXACTLY the
+    // BelowSizeThreshold arm: the 4-element small_n fixture (declined at len 4
+    // by default — the sanity half) admits under force with the same hot-field
+    // union the qualifying analysis would compute.
+    let _guard = env_guard();
+
+    let default_rows = pure_core_for("m5_p4_soa_small_n.ynz", false, false, None);
+    assert_eq!(default_rows.len(), 1, "one binding; got: {default_rows:?}");
+    assert_eq!(
+        default_rows[0].verdict,
+        SoaVerdict::Declined(SoaDeclineReason::BelowSizeThreshold { len: 4 }),
+        "sanity: without force the small-N fixture must decline on the threshold"
+    );
+
+    let forced = pure_core_for(
+        "m5_p4_soa_small_n.ynz",
+        false,
+        false,
+        Some(soa::SoaForce::Soa),
+    );
+    assert_eq!(forced.len(), 1, "one binding; got: {forced:?}");
+    assert_eq!(
+        forced[0].verdict,
+        SoaVerdict::Admitted {
+            provable_len: 4,
+            hot_fields: vec!["x".to_string(), "y".to_string()],
+        },
+        "force-soa must admit the below-threshold candidate"
+    );
+}
+
+#[test]
+fn force_soa_leaves_safety_declines_live() {
+    // WHY: D8's hard boundary — force-soa is a threshold override, never a safety
+    // override. A grown array (`.add`) must still decline under force; admitting
+    // it would let the harness compile a layout codegen cannot prove.
+    let _guard = env_guard();
+    let rows = pure_core_for(
+        "m5_p4_soa_growth.ynz",
+        false,
+        false,
+        Some(soa::SoaForce::Soa),
+    );
+    assert_eq!(rows.len(), 1, "one binding; got: {rows:?}");
+    assert!(
+        matches!(
+            rows[0].verdict,
+            SoaVerdict::Declined(SoaDeclineReason::Grown { .. })
+        ),
+        "force-soa must NOT override the growth safety decline; got: {:?}",
+        rows[0].verdict
+    );
+}
+
+#[test]
+fn force_aos_empties_the_candidate_list() {
+    // WHY: D8 — `SoaForce::Aos` mirrors the no-auto-parallel gate so the harness
+    // can pin the qualifying workload to plain AoS lowering.
+    let _guard = env_guard();
+
+    let on = pure_core_for("m5_p4_soa_qualifying.ynz", false, false, None);
+    assert_eq!(on.len(), 1, "sanity: default must yield the candidate");
+
+    let off = pure_core_for(
+        "m5_p4_soa_qualifying.ynz",
+        false,
+        false,
+        Some(soa::SoaForce::Aos),
+    );
+    assert!(
+        off.is_empty(),
+        "force-aos must empty the candidate list; got: {off:?}"
+    );
+}
+
+#[test]
+fn kernel_and_no_auto_parallel_outrank_force_soa() {
+    // WHY: D8 precedence pin — "no-auto-parallel disables SoA" (D1/A3) stays
+    // absolute; the harness override is subordinate to both hard gates.
+    let _guard = env_guard();
+    let under_nap = pure_core_for(
+        "m5_p4_soa_qualifying.ynz",
+        false,
+        true,
+        Some(soa::SoaForce::Soa),
+    );
+    assert!(
+        under_nap.is_empty(),
+        "no-auto-parallel must outrank force-soa; got: {under_nap:?}"
+    );
+    let under_kernel = pure_core_for(
+        "m5_p4_soa_qualifying.ynz",
+        true,
+        false,
+        Some(soa::SoaForce::Soa),
+    );
+    assert!(
+        under_kernel.is_empty(),
+        "kernel mode must outrank force-soa; got: {under_kernel:?}"
+    );
+}
+
+#[test]
+fn soa_force_env_drives_the_query() {
+    // WHY: D8 — the env var is read ONLY at `soa_candidate_query` entry (the
+    // no_auto_parallel_env discipline). All three values proven through the real
+    // query: "soa" admits the below-threshold fixture, "aos" empties the
+    // qualifying fixture, and an unrecognized value is ignored (default verdicts).
+    let _guard = env_guard();
+
+    std::env::set_var("YNZ_SOA_FORCE", "soa");
+    let forced_small = candidates_for("m5_p4_soa_small_n.ynz");
+    std::env::set_var("YNZ_SOA_FORCE", "aos");
+    let forced_aos = candidates_for("m5_p4_soa_qualifying.ynz");
+    std::env::set_var("YNZ_SOA_FORCE", "SOA");
+    let ignored = candidates_for("m5_p4_soa_small_n.ynz");
+    std::env::remove_var("YNZ_SOA_FORCE");
+
+    assert_eq!(forced_small.len(), 1);
+    assert_eq!(
+        forced_small[0].verdict,
+        SoaVerdict::Admitted {
+            provable_len: 4,
+            hot_fields: vec!["x".to_string(), "y".to_string()],
+        },
+        "YNZ_SOA_FORCE=soa must admit the below-threshold candidate via the query"
+    );
+    assert!(
+        forced_aos.is_empty(),
+        "YNZ_SOA_FORCE=aos must empty the candidate list via the query; got: {forced_aos:?}"
+    );
+    assert_eq!(
+        ignored.len(),
+        1,
+        "unrecognized value must be ignored; got: {ignored:?}"
+    );
+    assert_eq!(
+        ignored[0].verdict,
+        SoaVerdict::Declined(SoaDeclineReason::BelowSizeThreshold { len: 4 }),
+        "unrecognized value must leave the default threshold decline in place"
+    );
+}
+
+#[test]
+fn no_auto_parallel_env_outranks_soa_force_env_at_the_query() {
+    // WHY: D8 precedence pin at the QUERY level — both vars set must yield the
+    // empty set (the pure-core pin above proves the flag order; this proves the
+    // env plumbing preserves it).
+    let _guard = env_guard();
+    std::env::set_var("YNZ_NO_AUTO_PARALLEL", "1");
+    std::env::set_var("YNZ_SOA_FORCE", "soa");
+    let rows = candidates_for("m5_p4_soa_qualifying.ynz");
+    std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
+    std::env::remove_var("YNZ_SOA_FORCE");
+    assert!(
+        rows.is_empty(),
+        "YNZ_NO_AUTO_PARALLEL=1 must outrank YNZ_SOA_FORCE=soa; got: {rows:?}"
     );
 }

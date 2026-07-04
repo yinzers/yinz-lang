@@ -39,6 +39,25 @@ const KNOWN_ARRAY_INTRINSICS: &[&str] = &[
     "get", "set", "add", "count", "first", "last", "contains", "copy",
 ];
 
+/// Harness-only layout override, parsed from `YNZ_SOA_FORCE` (recorded decision D8).
+///
+/// NEVER user-facing: no CLI flag exposes it and no diagnostic mentions it. It exists
+/// solely so the Phase 6 calibration harness can pin each compiled workload to one
+/// layout and measure the two on equal footing. Precedence is absolute: kernel mode
+/// and `YNZ_NO_AUTO_PARALLEL` outrank both values (the "no-auto-parallel disables
+/// SoA" gate stays a hard invariant).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoaForce {
+    /// Skip ONLY the `BelowSizeThreshold` arm of the verdict chain. Every safety
+    /// decline (escape / growth / length-not-provable / lend-self / field-union)
+    /// stays live — forcing SoA onto an unsafe pattern is never possible.
+    Soa,
+    /// Empty the candidate set entirely (mirrors the no-auto-parallel gate);
+    /// codegen then lowers plain AoS — the same lowering as an authority-declined
+    /// row, since the SoA interception keys on `LayoutKind::Soa` only.
+    Aos,
+}
+
 /// Why an `array<Shape>` binding was declined for SoA layout.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SoaDeclineReason {
@@ -221,10 +240,11 @@ struct BindingSignals {
 
 /// Pure core of the SoA candidate analysis.
 ///
-/// Takes both gate flags explicitly (the `compute_cpu_promotions` pattern) so unit
-/// tests can drive the decline paths deterministically; the salsa entry
-/// (`soa_candidate_query`) threads `no_auto_parallel_env()` — the ONE predicate —
-/// and today's always-false production kernel flag (D1).
+/// Takes the gate flags and the harness-only force override explicitly (the
+/// `compute_cpu_promotions` pattern) so unit tests can drive the decline paths
+/// deterministically; the salsa entry (`soa_candidate_query`) threads
+/// `no_auto_parallel_env()` — the ONE predicate — today's always-false production
+/// kernel flag (D1), and `soa_force_env()` (D8).
 ///
 /// FFI check (D7): vacuously true — v0.3 Yinz has no FFI/export ABI surface an
 /// array could be reachable from (FFI is v2+ per A5/D7); when one exists, an
@@ -236,15 +256,21 @@ pub fn analyze(
     shape_table: &ShapeTable,
     kernel_mode: bool,
     no_auto_parallel: bool,
+    force: Option<SoaForce>,
 ) -> Vec<SoaCandidate> {
     // Kernel mode has no scheduler-facing perf model to serve, and
     // --no-auto-parallel selects the sequential oracle posture: both yield the
-    // empty candidate set (mirrors finalize_false_sharing's gate).
+    // empty candidate set (mirrors finalize_false_sharing's gate). Checked BEFORE
+    // the force override — kernel / no-auto-parallel outrank YNZ_SOA_FORCE (D8).
     if kernel_mode || no_auto_parallel {
+        return Vec::new();
+    }
+    if force == Some(SoaForce::Aos) {
         return Vec::new();
     }
 
     let lend_self_shapes = collect_lend_self_shapes(&typed.module.items, shape_table);
+    let force_soa = force == Some(SoaForce::Soa);
 
     let mut out = Vec::new();
     for item in &typed.module.items {
@@ -255,7 +281,14 @@ pub fn analyze(
             if !f.generics.is_empty() {
                 continue;
             }
-            analyze_function(f, typed, shape_table, &lend_self_shapes, &mut out);
+            analyze_function(
+                f,
+                typed,
+                shape_table,
+                &lend_self_shapes,
+                force_soa,
+                &mut out,
+            );
         }
     }
     out
@@ -287,6 +320,7 @@ fn analyze_function(
     typed: &TypedModule,
     shape_table: &ShapeTable,
     lend_self_shapes: &HashMap<String, String>,
+    force_soa: bool,
     out: &mut Vec<SoaCandidate>,
 ) {
     // Params first: an `array<Shape>` param is cross-function by definition (D4) —
@@ -333,7 +367,9 @@ fn analyze_function(
             Some(SoaDeclineReason::Grown { op })
         } else if sig.provable_len.is_none() {
             Some(SoaDeclineReason::LengthNotProvable)
-        } else if sig.provable_len.unwrap_or(0) <= SOA_SIZE_THRESHOLD {
+        } else if !force_soa && sig.provable_len.unwrap_or(0) <= SOA_SIZE_THRESHOLD {
+            // `YNZ_SOA_FORCE=soa` (D8, harness-only) skips ONLY this threshold arm;
+            // every other decline in the chain is a safety filter and stays live.
             Some(SoaDeclineReason::BelowSizeThreshold {
                 len: sig.provable_len.unwrap_or(0),
             })

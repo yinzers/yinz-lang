@@ -88,14 +88,14 @@ pub use lints::lint_diagnostic;
 pub use may_block::suspends_set_for_test as may_block_suspends_set;
 pub use queries::{
     check_query, cpu_promotion_query, exports_query, layout_decisions_query,
-    module_signatures_query, no_auto_parallel_env, soa_candidate_query, CheckOutput,
+    module_signatures_query, no_auto_parallel_env, soa_candidate_query, soa_force_env, CheckOutput,
     PromotionOutput, SignatureOutput,
 };
 pub use shapes::{ShapeDef, ShapeTable};
 pub use signatures::{build_effective_suspend_set, SignatureTable};
 pub use soa::{
     resolve_layout, FieldSegment, LayoutDecision, LayoutDecisions, LayoutKind, SoaCandidate,
-    SoaDeclineReason, SoaVerdict, SOA_SIZE_THRESHOLD,
+    SoaDeclineReason, SoaForce, SoaVerdict, SOA_SIZE_THRESHOLD,
 };
 pub use suspension_source::{
     channel_method_suspends, is_base_suspension_intrinsic, BASE_SUSPENSION_INTRINSICS,

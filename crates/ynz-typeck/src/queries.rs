@@ -598,6 +598,22 @@ pub fn no_auto_parallel_env() -> bool {
     std::env::var("YNZ_NO_AUTO_PARALLEL").is_ok_and(|v| v == "1")
 }
 
+/// Read the harness-only `YNZ_SOA_FORCE` layout override (recorded decision D8).
+///
+/// `"soa"` / `"aos"` parse to the matching [`crate::soa::SoaForce`]; any other value
+/// (or unset) is ignored. NEVER user-facing — no CLI flag sets it; it exists solely
+/// for the Phase 6 SIZE_THRESHOLD calibration harness to pin each compiled workload
+/// to one layout. Read ONLY at `soa_candidate_query` entry (one read site, same
+/// discipline as [`no_auto_parallel_env`]) and threaded explicitly into the pure
+/// core. Precedence: kernel mode and `YNZ_NO_AUTO_PARALLEL` outrank it.
+pub fn soa_force_env() -> Option<crate::soa::SoaForce> {
+    match std::env::var("YNZ_SOA_FORCE").as_deref() {
+        Ok("soa") => Some(crate::soa::SoaForce::Soa),
+        Ok("aos") => Some(crate::soa::SoaForce::Aos),
+        _ => None,
+    }
+}
+
 /// Compute which functions get CPU-statement promotion for this module.
 ///
 /// Salsa-tracked (incremental-safe; no global mutable state). Depends on
@@ -703,8 +719,10 @@ fn soa_candidate_cycle_fn(
 ///
 /// Gating is at the query entry: `--no-auto-parallel` (read via
 /// [`no_auto_parallel_env`], the SAME predicate codegen reads — D1) and kernel mode
-/// both disable SoA analysis entirely. The pure core [`crate::soa::analyze`] takes
-/// both flags explicitly so unit tests can drive the decline paths deterministically.
+/// both disable SoA analysis entirely; the harness-only `YNZ_SOA_FORCE` override
+/// (read via [`soa_force_env`], D8) is subordinate to both. The pure core
+/// [`crate::soa::analyze`] takes the flags explicitly so unit tests can drive the
+/// decline paths deterministically.
 ///
 /// Time: O(F · B)  Space: O(bindings) — one body walk per function.
 // lru = 64: same cost class as check_query; both ride the body walk.
@@ -732,6 +750,7 @@ pub fn soa_candidate_query(
         &sig_output.shape_table,
         kernel_mode,
         no_auto_parallel,
+        soa_force_env(),
     ))
 }
 
