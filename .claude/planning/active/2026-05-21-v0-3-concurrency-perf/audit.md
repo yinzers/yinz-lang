@@ -393,3 +393,45 @@ Filed-by-session: plan-fixup-icedefer-2026-07-04-m5
   literal for a `number` field (which will immediately hit it — several pre-existing
   `REF-collections` examples, e.g. `Position { x: number }` built with `{ x: 0, y: 0 }` int
   literals, would already ICE if run today).
+
+## 2026-07-04 — Session log: roadmap Capability Ledger fixup — two new unscoped rows + Patrick's triage policy applied to all six (standalone roadmap housekeeping, Patrick-requested)
+Filed-by-session: roadmap-fixup-triage-2026-07-04
+
+Standalone roadmap-only edit, explicitly requested by Patrick — NOT part of any plan's phases (M5
+plan `2026-07-03-v0-3-m5-auto-soa` is complete and awaiting his completion approval; its plan.md /
+audit.md are untouched). Changes, all in `roadmap.md`, applied identically to BOTH Capability
+Ledger tables:
+
+- **Promoted M5 plan Future Requirements #15 to a ledger row** (selective hot-field-only element
+  materialization, FRAGO 020): Phase 5's SoA codegen computes `hot_fields` via `soa_candidate_query`
+  but `soa_gather_into`/`array_elem_get_into` (`crates/ynz-codegen/src/emit.rs`) never consume it —
+  every field gathered unconditionally. FR#15's own text stays in place in the M5 plan (cross-
+  referenced, not deleted); the new row is the roadmap-level anchor. Status: unscoped → needs a
+  milestone.
+- **Added a NEW capability-discovery row: no LLVM optimization pass pipeline exists at all.**
+  Grep-verified this session: `OptimizationLevel::None` is hardcoded at both TargetMachine creation
+  sites (`crates/ynz-codegen/src/emit.rs:879`, `crates/ynz-codegen/src/state_machine.rs:755`) and
+  those are the ONLY optimization-level configuration points in the entire codegen crate — a single,
+  global, compiler-wide setting, NOT array/SoA-specific. Every emitted code path (arrays, shapes,
+  the concurrency state-machine engine in `state_machine.rs`, channels, Arc ops) compiles with zero
+  LLVM passes (no inlining, no DCE, no SROA, no mem2reg). Surfaced via M5 Phase 6's SoA calibration
+  (which measured only the SoA-specific consequence); the finding itself is compiler-wide. Status:
+  unscoped → needs a milestone; flagged HIGH STRATEGIC VALUE per Patrick's flagship-concurrency note.
+- **Recorded Patrick's triage policy (2026-07-04)** as a preface blockquote above BOTH tables — "a
+  REAL BUG/crash/leak/security-risk gets prioritized as the next fix; anything else (missing
+  feature, perf-only gap, process tooling) is fine to defer until after the v1.0 release" — and
+  classified ALL SIX unscoped rows inline in their Notes columns:
+  - Int-literal-into-`number` ICE → BUG (crash on common valid code) → next-fix priority.
+  - O0 stack-exhaustion SIGSEGV ceiling → BUG (crash on any big-enough hot loop, not SoA-specific)
+    → next-fix priority.
+  - Stale-runtime-archive footgun → BUG (silent miscompile in build/release tooling) → next-fix
+    priority, lower urgency (precondition-gated, not everyday code).
+  - Authoritative-derivation write-time hook → NOT a bug (process/tooling) → fine post-v1.0.
+  - FR#15 hot_fields unused → NOT a bug (perf-only gap) → fine post-v1.0.
+  - LLVM optimization pipeline → NOT technically a bug (missing capability, perf-only) → fine
+    post-v1.0 per the rule's letter, BUT flagged in the row's own text as the single most
+    strategically important item on the list (Rust-level-performance positioning, Golden Rules
+    4/8/10, concurrency-as-flagship) — Patrick's call whether to treat it specially.
+
+No code touched. Nothing committed. Session-id `roadmap-fixup-triage-2026-07-04` appended to the
+roadmap's frontmatter chain in the same action as this entry.
