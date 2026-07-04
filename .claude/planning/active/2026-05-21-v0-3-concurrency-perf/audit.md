@@ -435,3 +435,26 @@ Ledger tables:
 
 No code touched. Nothing committed. Session-id `roadmap-fixup-triage-2026-07-04` appended to the
 roadmap's frontmatter chain in the same action as this entry.
+
+## 2026-07-04 — Session log: row 441 (int-literal-into-`number` ICE) assigned its own hotfix plan-id (Gate-4 closing action, Patrick-requested)
+Filed-by-session: gate4-signatures-2026-07-04
+
+Standalone roadmap-only edit, one of three closing actions from Patrick's Gate-4 approval of the
+v0.3-M6/M7/M8 sibling concurrency plans — NOT part of any of those three plans' own phases. Changes,
+in `roadmap.md`, applied identically to BOTH Capability Ledger tables (lines ~441 and ~495):
+
+- Row 441's Status cell changed from "unscoped → ELEVATED — needs its own small hotfix slot (Patrick
+  to assign)" to "assigned → plan-id `2026-07-04-v0-3-hotfix-int-literal-number` (NEEDS-EXECUTION/stub
+  status)". Row's Notes column appended with an **ASSIGNED 2026-07-04** clause naming the new plan-id
+  and its stub/independent-sequencing status.
+- Owning-milestone cell left as-is ("unscoped — owning milestone TBD…") — the new plan is a
+  standalone hotfix under this roadmap, not itself a numbered milestone; the Status cell's plan-id is
+  the authoritative assignment pointer, per the plan-format's by-id linking rule (never by path).
+- New plan created at `2026-07-04-v0-3-hotfix-int-literal-number` (WARNO stub, `roadmap-id:
+  "2026-05-21-v0-3-concurrency-perf"`) — see that plan's own `plan.md`/`audit.md` for its Mission,
+  Situation, and open questions, drawn directly from this row's own text and the M5 plan's Future
+  Requirements #7 deferral (also recorded above, "Deferral: codegen ICE — bare int literal into ANY
+  `number`-typed slot crashes the compiler").
+
+No code touched. Nothing committed. Session-id `gate4-signatures-2026-07-04` appended to the
+roadmap's frontmatter chain in the same action as this entry.
