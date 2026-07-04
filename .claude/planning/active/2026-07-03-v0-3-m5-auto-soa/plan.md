@@ -3,7 +3,7 @@ name: "v0-3-m5-auto-soa"
 plan-id: "2026-07-03-v0-3-m5-auto-soa"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5-seg2", "phase3-executor-2026-07-03-m5-seg3", "phase3-executor-2026-07-03-m5-seg4", "phase3-executor-2026-07-03-m5-seg5", "phase3-executor-2026-07-03-m5-seg6", "phase3-executor-2026-07-03-m5-seg7", "phase3-executor-2026-07-03-m5-seg8", "phase3-executor-2026-07-03-m5-seg9", "phase3-executor-2026-07-03-m5-seg10", "phase4-executor-2026-07-03-m5", "phase4-executor-2026-07-03-m5-seg2", "phase4-executor-2026-07-03-m5-seg3", "phase4-executor-2026-07-03-m5-seg4", "plan-fixup-frago013-2026-07-03-m5", "phase4-executor-2026-07-03-m5-closing", "phase4-executor-2026-07-03-m5-closing2", "phase4-deferral-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5-seg2", "phase5-executor-2026-07-03-m5-seg3", "phase5-executor-2026-07-03-m5-seg4", "phase5-executor-2026-07-03-m5-seg5", "phase5-executor-2026-07-03-m5-closing"]
+session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5-seg2", "phase3-executor-2026-07-03-m5-seg3", "phase3-executor-2026-07-03-m5-seg4", "phase3-executor-2026-07-03-m5-seg5", "phase3-executor-2026-07-03-m5-seg6", "phase3-executor-2026-07-03-m5-seg7", "phase3-executor-2026-07-03-m5-seg8", "phase3-executor-2026-07-03-m5-seg9", "phase3-executor-2026-07-03-m5-seg10", "phase4-executor-2026-07-03-m5", "phase4-executor-2026-07-03-m5-seg2", "phase4-executor-2026-07-03-m5-seg3", "phase4-executor-2026-07-03-m5-seg4", "plan-fixup-frago013-2026-07-03-m5", "phase4-executor-2026-07-03-m5-closing", "phase4-executor-2026-07-03-m5-closing2", "phase4-deferral-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5-seg2", "phase5-executor-2026-07-03-m5-seg3", "phase5-executor-2026-07-03-m5-seg4", "phase5-executor-2026-07-03-m5-seg5", "phase5-executor-2026-07-03-m5-closing", "phase6-executor-2026-07-03-m5", "phase6-executor-2026-07-03-m5-seg2", "phase6-executor-2026-07-03-m5-seg3", "phase6-executor-2026-07-03-m5-seg4", "plan-conductor-2026-07-04-m5-fable", "phase6-fixround1-executor-2026-07-04-m5"]
 created_at: "2026-07-03"
 updated_at: "2026-07-03"
 metadata:
@@ -148,6 +148,8 @@ triggers in Future Requirements.
 | **E10 — serialization forward-compat gap** (v0.8's compile-time serializer can't reconstruct unified values from SoA layout) — *Phases 4, 7* | C | III | MEDIUM | Layout metadata exposed as a real, tested struct (`LayoutDecision` — consumed by the Tier 3 lint hover, so it exists as exercised code, not prose) + forward-compat design note in IMP-collections (**B2**, prob −1; proof: lint reads the metadata; IMP-collections note, Phase 7 step 5). Reframe per Patrick 2026-07-03: no roundtrip test now — vacuous until v0.8 (A5) | **LOW** (D×III) | pass |
 | **E11 — compile-time cost of the analysis passes >10%** (roadmap standing risk, roadmap.md:160) — *Phase 8* | C | III | MEDIUM | Release-gating profile step: wall-clock of the release-profile compiler binary running `ynz build` on pirates-roster, like-for-like vs the P0 baseline per `baselines-p0.md`'s documented methodology (FRAGO 006 — `ynz build --release` is not a CLI flag, main.rs:94-95), <10% or STOP (**B2 engineered gate**, prob −1; proof: recorded numbers, Phase 8 step 4) | **LOW** (D×III) | pass |
 | **E12 — `map<K,Shape>` symmetric missed-call-site silent-miscompile** (scratch doc risk 4 — pre-existing base bug, miscompiles with OR without suspension; the SAME missed-call-site class as E7 but on `ynz_map_*`, which E7's array-only scope + grep gate do NOT cover) — *Phases 0, 3* | A | II | EX-HIGH | (1) P0 exhaustive `ynz_map_*` call-site audit + hard-cut/single-choke-point ABI same as arrays — old uniform-slot map entry points DELETED, all map element loads/stores route through one choke point; a missed site cannot compile (**B1 eliminate**, prob −2; proof: grep gate — zero old-signature `ynz_map_*` decls, zero raw `ynz_map_*` calls outside the helpers). (2) RED `map<K,Shape>` matrix fixture gating the build (**B2 adversarial/RED test**, prob −1; proof: committed matrix, Phase 3 step 1) | **MEDIUM** (D×II) | recorded |
+| **E13 — hot-loop O0 stack-exhaustion ceiling (pre-existing, all layouts)** (long-running hot loops SIGSEGV at ~4.19M total loop-visits in BOTH layout modes — per-iteration `alloca` stack-growth theory at OptimizationLevel::None, shipped binaries run zero LLVM pass pipeline; surfaced Phase 6 segment 1, scored via FRAGO 015) — *Phases 6, 8* | C | III | MEDIUM | (1) Phase 6 harness runs under a 262144-visit/process cap with a per-point checksum tripwire (**B2 engineered guard**, prob −1; proof: harness code + committed variance record). (2) Phase 8 step 1 MUST verify the demo's specific (array-size N, outer-repetition-count R) shape against the harness's jointly-proven-safe bracket data (crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md), NOT a single total-visits scalar — segment-2 evidence established the 2-axis principle, and segment-3's clean re-run (healthy toolchain) confirms total-visits-alone is neither necessary nor sufficient (524,288 total visits crashed at N=8/R=65,536; 512,000 total visits passed cleanly at N=512/R=1,000. N=8/R=32,768 (262,144 visits) also passes cleanly on a healthy toolchain — the earlier reading of a crash at that point was a since-fixed stale-release-runtime-archive bug (FRAGO 018), not this stack-growth class). If the demo's (N,R) shape isn't already covered by the harness's bracketed region, bracket it directly with the same checksum-tripwire methodology before the byte-exact-golden gate runs, or confirm the underlying bug is fixed first (per FRAGO 016) | **LOW** (D×III) | recorded |
+| **E14 — shipped O0 SoA benefit is optimization-pipeline-dependent** (Phase 6 measurement: shipped `ynz build` binaries emit at OptimizationLevel::None with zero LLVM pass pipeline — NO SoA crossover at any N in {8..4096}, net SoA/AoS ratios 1.00-1.18; the same IR shows ~3.3x SoA win under `opt-18 -O2`, so the 10-40x-class win is real but pipeline-dependent; scored via FRAGO 017) — *Phases 6, 7, 8* | A | III | HIGH | Honest-reframe of Mission/KO#3/Performance-invariant text, gated by docs-consistency review before any Phase 7/8 user-facing text ships (**B2 engineered guard**, sev −1; proof: corrected text + committed provenance file, reviewed pre-ship) | **MEDIUM** (A×IV) | recorded |
 
 ## Design-Doc Alignment
 
@@ -290,8 +292,15 @@ After v0.3.0 ships, the M5 execution delivers **by-value inline element storage 
 class the M3a guard only masks) and, riding that contiguous storage, automatic Struct-of-Arrays
 layout for large `array<Shape>` hot loops** — zero syntax change, byte-identical program output in
 both scheduling modes — **because** Yinz's efficiency-first positioning (Golden Rules 4/8/10)
-promises the 10-40× cache-locality win to naive sequential-looking code, and one representation must
-own both changes so the twin-substrate drift class can never ship.
+promises the 10-40× cache-locality win to naive sequential-looking code. That win is real and
+IR-confirmed (measured ~3.3x under `opt-18 -O2` at the calibration workload's shape, consistent with
+the theoretical bandwidth edge) but is NOT realized in the binaries `ynz build` ships today, because
+the compiler runs zero LLVM optimization passes (OptimizationLevel::None) — a pre-existing,
+out-of-charter gap this milestone's Phase 6 harness discovered and documents honestly rather than
+silently overclaiming. One representation must own both changes so the twin-substrate drift class can
+never ship; the correctness of that representation is unconditional — its measured performance
+payoff, in the compiler as it ships today, is conditional on a future optimization-pipeline
+milestone.
 
 ## 3. Execution
 
@@ -323,7 +332,12 @@ layout answer must STOP and surface it (CCIR-2).
 3. A qualifying large-array hot loop in `pirates-roster` gets SoA automatically, the
    `array-using-soa-layout` Tier 3 lint fires on its declaration with jargon-free
    WHAT/WHAT-INSTEAD/WHY hover, and the measured hot-loop improvement is recorded with benchmark
-   evidence.
+   evidence, stated honestly: in shipped O0 binaries the measured net effect is ~1.0x (no detectable
+   benefit; 9 of 10 points 4-18% slower, each below the ~15% noise floor, with N=16 at parity —
+   ratio 0.997), while the identical generated
+   IR shows the design doc's 10-40x class of win once run through an LLVM optimization pipeline
+   (`opt-18 -O2` measured ~3.3x at N=4096). The lint hover and CHANGELOG cite the O0 number as what
+   ships today and the -O2 number as the pipeline-dependent upside — never conflated.
 4. SIZE_THRESHOLD ships with committed provenance: workload, machine, variance, date, and a revisit
    trigger — never a bare constant (E2's honesty posture: the hazard is false confidence, not the
    number).
@@ -1134,6 +1148,89 @@ phases (P2, P5) checkpoint per the marks below.
 
 #### Phase 6 — Benchmark harness + SIZE_THRESHOLD calibration (E2)
 
+> **STATUS: COMPLETE (2026-07-04).** All 5 steps done across 4 segments (sessions
+> `phase6-executor-2026-07-03-m5` through `…-seg4`; steps 3-5 executed under FRAGO 017's
+> re-specification after segment 3's step-5 STOP was conductor-routed). The honest summary:
+> the **by-value-storage + SoA correctness win is real and fully verified** — every calibration
+> point ran with exact checksums, byte-identical dual-mode output, and IR-gate confirmation on
+> the one elem_size-aware representation. The **performance claim carries a hard caveat**:
+> shipped O0 binaries (`ynz build` runs zero LLVM optimization passes) show NO SoA crossover at
+> any N in {8..4096} (net SoA/AoS 1.00-1.18, ~1.0x — no detectable benefit), while the identical
+> IR shows a ~3.3x SoA win under `opt-18 -O2` — the 10-40x-class win is real but
+> optimization-pipeline-dependent (risk E14, FRAGO 017's honest reframe of Mission/KO#3/
+> Performance-invariant text). SIZE_THRESHOLD=64 ships as a documented conservative default with
+> honest no-crossover provenance (`crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md`,
+> "Step 3 calibration verdict" — the provenance record), cited by the `SOA_SIZE_THRESHOLD`
+> comment in `crates/ynz-typeck/src/soa.rs`. Exit criteria met: constant + provenance + variance
+> land together (harness + raw data committed at `e989f43`; this segment's provenance/comment/
+> plan edits staged for the conductor's boundary commit gate); improvement number recorded with
+> its evidence, O0 and -O2 never conflated. Two follow-ups filed: **E14** honest-reframe row
+> (residual MEDIUM, recorded) and **FR #14** stale-runtime-archive deferral (FRAGO 018, with the
+> Phase 8 step 4/6 operational guards). soa_analysis 21/21 green; fmt + check clean.
+
+> Segment 1 (session `phase6-executor-2026-07-03-m5`, 2026-07-04) returned PARTIAL at
+> `phase-6/step-1` (context-budget checkpoint at the pre-step-1 seam; tree untouched, clean at
+> `4c5e902`). No steps ticked. Paid the phase's full orientation + settled the step-1 design —
+> receipts and settled design in `handoff-phase-6.md`. TWO deviations surfaced for conductor
+> routing: (1) a pre-existing runtime bug — hot loops SIGSEGV past ~0.5-4M total iterations in
+> BOTH layout modes (per-iteration stack-growth theory; bracketed: 512K visits complete with
+> exact expected checksums, 4.19M crash — evidence in untracked `tmp-p6-probe/`), which caps the
+> harness workload (TOTAL_VISITS ≤ 262144/process) and threatens every large-hot-loop surface
+> incl. Phase 8's demo; (2) pre-registered step-5 risk — shipped binaries are OptimizationLevel::
+> None with NO pass pipeline, and p5-ir-evidence Claim 2's hot-field-only loads exist only under
+> `opt-18 -O2`, so the measured shipped win may be ~0 and the 10-40× order-of-magnitude STOP is
+> likely to fire (theory to verify, not pre-judged). Also settled: `YNZ_SOA_FORCE` (D8) does not
+> exist yet — wiring semantics recorded in the handoff; workload realizes the roadmap physics
+> loop as the S2-qualifying read-accumulate x/y scan (field write-back through the loop var does
+> not exist in the language — probed).
+
+> Segment 2 (session `phase6-executor-2026-07-03-m5-seg2`, 2026-07-04) returned PARTIAL at
+> `phase-6/step-2`. Applied FRAGO 015's plan/roadmap edits first (E13 row, Phase 8 step-1
+> precondition, Future Requirements #13, roadmap ledger rows). **Step 1 DONE:** `YNZ_SOA_FORCE`
+> (D8) wired into `soa::analyze`/`soa_candidate_query` with 6 new tests (soa_analysis 21/21
+> green); criterion harness `crates/ynz-driver/benches/soa_calibration.rs` authored (checksum +
+> dual-mode + IR gates), compiles. **Step 2 partial:** day-of S3 noise re-record done (durable in
+> `crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md`; ~15% floor stands); full bench run
+> pending; commit #1 pending. NEW deviation surfaced for conductor routing: the harness tripwire
+> caught SIGABRT AT the FRAGO 015 262144-visit cap at N=8 — the E13 crash envelope is
+> 2-dimensional (visits AND for-in entries; bracket: 16384 entries OK, 32768 crash), so the
+> visits-only cap phrasing is insufficient at small N. Harness tightened to TOTAL_VISITS=131072
+> (both axes proven-good); plan/FRAGO text NOT self-amended. Resume via `handoff-phase-6.md`.
+
+> Segment 3 (session `phase6-executor-2026-07-03-m5-seg3`, 2026-07-04) returned **BLOCKED at the
+> step-5 STOP condition** (CCIR item 4). Applied FRAGO 016's plan-text corrections first (Step A).
+> **Step 2 DONE** (commit #1 `e989f43`): full calibration bench green end-to-end, all gates
+> passed. En route, root-caused the bench tripwire: NOT E13 — a stale pre-M5
+> `target/release/libynz_runtime.a` was silently embedded by the release driver
+> (`include_bytes!`, `crates/ynz-driver/build.rs`), resolving old-ABI `ynz_array_*` symbols
+> against M5 codegen (garbage reads from rep 1 → overflow SIGABRT) and failing forced-SoA links;
+> rebuilt the release runtime, surfaced the staleness footgun as a deviation (E7/E12's hard-cut
+> doesn't cover cross-profile archive staleness). This FALSIFIES FRAGO 016's specific evidence
+> line (healthy-toolchain n8×r32768 passes exactly) though the 2-axis conclusion survives on new
+> evidence (n8×r65536 at 524K visits SIGSEGVs while n512×r1000 at 512K passes; N=8 boundary is
+> 32768-OK/65536-crash) — surfaced, NOT self-amended. **STOP finding (steps 3-5 halted):** in
+> shipped O0 binaries there is NO SoA crossover at any N in {8..4096} (net SoA/AoS 1.00-1.18,
+> SoA never faster); the same .ll under `opt-18 -O2` shows a ~3.3x SoA win (in line with the 4x
+> theoretical) — the win exists only in a pass pipeline shipped binaries never run. Measured
+> shipped improvement ≈ 1.0x vs the 10-40x claim → order-of-magnitude STOP; crossover-based
+> SIZE_THRESHOLD calibration is undefined on this data. Evidence:
+> `crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md` (committed). Awaiting conductor
+> routing of the honest-performance-claim question; resume state in `handoff-phase-6.md`.
+
+> Segment 4 (session `phase6-executor-2026-07-03-m5-seg4`, 2026-07-04) returned **DONE** —
+> phase closed. Applied conductor-classified FRAGOs 017/018/019 first (honest performance
+> reframe incl. new risk row E14 + step-3 re-specification; FR #14 stale-runtime deferral +
+> roadmap ledger rows + Phase 8 step 4/6 operational guards; E13 evidence-accuracy correction
+> swept at both named sites plus a third sibling in FR #13 per the sweep discipline — recorded
+> in audit.md). Then finished steps 3-5 under the re-specification: SIZE_THRESHOLD=64 unchanged,
+> "Step 3 calibration verdict" provenance section added to the raw file (no separate provenance
+> file — the raw file IS the record), `SOA_SIZE_THRESHOLD` comment rewritten citing it, the
+> ~1.0x-O0 / ~3.3x--O2 improvement number confirmed consistent across Mission/KO#3/Performance-
+> invariant/provenance (step 5's STOP was resolved by the conductor's routing, not re-triggered).
+> Receipts: soa_analysis 21/21, `cargo check -p ynz-typeck` + fmt clean. `handoff-phase-6.md`
+> deleted as the phase-closing act. Nothing committed (conductor's boundary gate owns the
+> commit); `tmp-p6-probe/` receipts left untracked for the boundary review, then deletable.
+
 - **Task + purpose:** build the repo's first benchmark harness and replace the guessed 64 with an
   evidenced constant — or honestly re-confirm 64 — with variance recorded and a revisit trigger.
 - **Steps**
@@ -1144,10 +1241,14 @@ phases (P2, P5) checkpoint per the marks below.
   2. **Runs:** ≥10 repetitions per point inside the Docker `dev` container, per the S3 protocol.
 
      **CHECKPOINT** — harness green + raw numbers committed.
-  3. **Calibrate:** find the crossover N; keep 64 if the crossover is within the S3 noise floor of
-     it, else update. Commit the provenance record WITH the constant: workload, machine/container,
-     date, variance, the honesty note that this is uncontrolled shared hardware, and the revisit
-     trigger (Future Requirements #2).
+  3. **Calibrate (re-specified per FRAGO 017):** calibration is not "find the crossover N" — no
+     crossover exists in shipped O0 binaries. Ship SIZE_THRESHOLD=64 as a documented conservative
+     default (unchanged from its pre-M5 value) with honest provenance stating no O0 crossover exists
+     to calibrate against, rather than deriving a constant from a crossover that isn't there. Commit
+     the provenance record WITH the constant: workload, machine/container, date, variance, the
+     honesty note that this is uncontrolled shared hardware, the measured O0 no-benefit result and
+     the -O2 ~3.3x result (never conflated), and the revisit trigger (Future Requirements #2 + the
+     E14 pipeline trigger).
   4. Wire the final constant into `soa_candidate_query` with a comment citing the provenance file.
   5. Record the measured hot-loop improvement at demo-scale N for the lint hover + CHANGELOG. **If
      the measured win is an order of magnitude below the 10-40× claim, STOP and investigate before
@@ -1211,7 +1312,20 @@ phases (P2, P5) checkpoint per the marks below.
      `array<Cannonball{x,y,…}>`, N > SIZE_THRESHOLD, hot loop updating `x`/`y`, cold field access
      after — real work in context, not a print stub), with inline comments pointing at the lint per
      roadmap constraint 71 item 6. Regenerate `expected_stdout.txt` via its script; byte-exact
-     golden convention (NOT `insta`) per plan-invariants.
+     golden convention (NOT `insta`) per plan-invariants. **E13 precondition (FRAGO 015, amended FRAGO 016, hard):**
+     before authoring the large-array hot-loop demo section, verify the demo's specific
+     (array-size N, outer-repetition-count R) shape against the harness's jointly-proven-safe
+     bracket data (`crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md`), NOT a single
+     total-visits scalar — segment-2 evidence established the 2-axis principle, and segment-3's clean re-run
+     (healthy toolchain) confirms total-visits-alone is neither necessary nor
+     sufficient (524,288 total visits crashed at N=8/R=65,536; 512,000 total visits passed cleanly
+     at N=512/R=1,000. N=8/R=32,768 (262,144 visits) also passes cleanly on a healthy toolchain —
+     the earlier reading of a crash at that point was a since-fixed stale-release-runtime-archive
+     bug (FRAGO 018), not this stack-growth class). If the demo's (N,R) shape isn't already covered by the harness's bracketed
+     region, bracket it directly with the same checksum-tripwire methodology before the
+     byte-exact-golden gate runs, or confirm the underlying stack-growth bug is fixed first. This
+     is a hard precondition on the demo's byte-exact golden acceptance criterion, not a
+     suggestion.
   2. **Error gallery:** `examples/primantis-orders/v0_3_m5_errors.ynz` carrying any new error class
      this milestone shipped (contingent D6 reject if Phase 3 armed it); verify no stale
      `ArrayShapeRuntimeFieldWithWait` triggers remain anywhere (Phase 3 step 2 did the lift —
@@ -1223,12 +1337,20 @@ phases (P2, P5) checkpoint per the marks below.
      filter firing).
 
      **CHECKPOINT** — demo + gallery + enumeration green and committed.
-  4. **Compile-time cost gate (E11):** wall-clock of the release-profile compiler binary running
+  4. **Operational guard (FRAGO 018):** rebuild ynz-runtime's release archive from clean
+     (`cargo clean -p ynz-runtime && cargo build -p ynz-runtime --release`) before this step —
+     Phase 6 segment 3 found a stale release archive silently miscompiles by resolving old-ABI
+     symbols by name (Future Requirements #14 for the durable fix).
+     **Compile-time cost gate (E11):** wall-clock of the release-profile compiler binary running
      `ynz build` on pirates-roster, like-for-like vs the P0 baseline's documented methodology
      (`baselines-p0.md`; `ynz build --release` does not exist as a CLI flag — main.rs:94-95,
      FRAGO 006); <10% or STOP and optimize before release.
   5. Full cross-impl dual-mode suite, final run.
-  6. **Release:** version bump to the v0.3.x patch-line slot current at execution time; CHANGELOG
+  6. **Operational guard (FRAGO 018):** rebuild ynz-runtime's release archive from clean
+     (`cargo clean -p ynz-runtime && cargo build -p ynz-runtime --release`) before this step —
+     Phase 6 segment 3 found a stale release archive silently miscompiles by resolving old-ABI
+     symbols by name (Future Requirements #14 for the durable fix).
+     **Release:** version bump to the v0.3.x patch-line slot current at execution time; CHANGELOG
      from merged PRs since the last tag; `/release` for the tag.
 - **Exit criteria:** every Invariants subsection below verified green; tag cut.
 - **Reviewer fan-out:** code-reviewer; docs-consistency reviewer (demo comments, CHANGELOG);
@@ -1297,7 +1419,11 @@ phases (P2, P5) checkpoint per the marks below.
 ### Performance
 
 - Hot-loop improvement on the calibrated workload measured and recorded with provenance (target
-  10-40× per the design doc; the SHIPPED claim is the measured number, Phase 6 step 5).
+  10-40× per the design doc; the SHIPPED claim is the measured number, Phase 6 step 5). Measured
+  2026-07-04: no detectable benefit in shipped O0 binaries (net ratios 1.00-1.18x across N in
+  {8..4096}); the same IR shows ~3.3x under `opt-18 -O2`. SIZE_THRESHOLD ships as a documented
+  conservative default, not a crossover-calibrated constant — no O0 crossover exists to calibrate
+  against. Revisit trigger: a future LLVM-pass-pipeline milestone.
 - By-value storage: ONE allocation per array buffer (GR8) — no per-element heap; SoA: ONE segmented
   allocation (D2). Alloc-count fixtures assert both.
 - Compile-time cost of the new analysis passes: <10% wall-clock of the release-profile compiler
@@ -1464,3 +1590,41 @@ phases (P2, P5) checkpoint per the marks below.
     *trigger:* a real workload where this shape-level conservatism measurably costs performance — a
     shape with multiple large hot-loop arrays of which only one crosses a `background` boundary
     (Phase 6's benchmark harness may surface this).
+13. **General O0 per-iteration `alloca` stack-growth SIGSEGV ceiling (E13, FRAGO 015, amended
+    FRAGO 016/019)** — *what:* hot loops crash on a joint function of array-size N and
+    outer-repetition/for-in-entry count R — NOT reducible to a total-visits scalar (bracketed
+    crash points range from ~524K total visits at N=8/R=65,536 up to ~4.19M at larger N; 512K
+    total visits is proven safe at N=512/R=1,000, and N=8/R=32,768 at ~262K visits also passes
+    on a healthy toolchain — the earlier ~262K crash reading was the since-fixed
+    stale-release-runtime-archive bug, FRAGO 018) (`state_machine.rs`/`emit.rs`
+    — shipped binaries emit at OptimizationLevel::None with no LLVM pass pipeline); *why deferred:*
+    general codegen issue unrelated to array-element storage, out of M5's charter; *cost:* an
+    investigation into loop-body frame lifetime at optimization level None (possibly gated on
+    whether shipped builds ever run an LLVM pass pipeline at all); *trigger:* the next milestone
+    touching loop/state-machine codegen, OR immediately if Phase 8's demo would exceed the safe
+    bound and the bug isn't otherwise avoidable, OR a real user hot loop crashes in production. Not
+    Patrick-signed individually — covered by FRAGO 004's blanket.
+14. **Stale-runtime-archive silent-miscompile footgun (FRAGO 018)** — *what:* `ynz-driver/build.rs`
+    embeds `target/{profile}/libynz_runtime.a` via `include_bytes!` with no ABI/version check; a
+    stale archive resolves old-signature `ynz_array_*`/`ynz_map_*` symbols by name against new
+    codegen, silently miscompiling instead of failing to link. *WHY deferred:* the real fix (a
+    codegen-emitted ABI-version symbol + a linker/embed-time staleness check) is a cross-cutting
+    build/release-tooling capability, not an array/SoA-representation concern — building it now
+    scope-creeps Phase 8 into compiler build-system work outside this milestone's charter. *COST:*
+    ~0.5-1 session (one versioned symbol emitted by ynz-runtime, checked at embed/link time in
+    build.rs; isolated, low-risk). *TRIGGER:* the next milestone touching ynz-runtime's ABI, OR the
+    point Yinz begins distributing precompiled `ynz` binaries externally (severity escalates then —
+    revisit the score).
+15. **Selective hot-field-only element materialization for admitted SoA arrays (FRAGO 020)** —
+    *WHAT:* selective hot-field-only element materialization for admitted SoA arrays (bypass the
+    current full-element gather in `soa_gather_into`/`array_elem_get_into`, consuming the
+    already-computed `hot_fields` set instead of ignoring it). *WHY DEFERRED:* requires auditing
+    every full-element consumer (`.copy()`/`soa_copy_to_aos`, background/spawn-arg passing, future
+    serialization) to either route them onto an always-full-gather path or prove hot_fields
+    totality across every consumer — a choke-point-contract redesign, not safely batched into a
+    Phase 6 boundary-review fix-loop. *COST:* ~1 dedicated session + E3/E6/E9 re-review (the same
+    adversarial gates Phase 5's codegen already cleared once, must clear again against the new
+    lowering). *TRIGGER:* before or alongside any future optimization-pipeline milestone (FR#2/E14)
+    — the two fixes compound and should be evaluated together, since a selective-gather fix might
+    independently deliver a real (if smaller) win even without an optimizer, making it the cheaper
+    first move.

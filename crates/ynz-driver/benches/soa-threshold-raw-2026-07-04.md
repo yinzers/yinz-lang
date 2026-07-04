@@ -1,9 +1,10 @@
 # SOA_SIZE_THRESHOLD calibration — raw numbers (2026-07-04)
 
-Raw-evidence sibling of `soa-threshold-provenance.md` (written at calibration close, Phase 6
-step 3 of plan `2026-07-03-v0-3-m5-auto-soa`). Environment for everything below: Docker `dev`
-container (compose project `ynz-m5-worktree`) on WSL2 — uncontrolled shared hardware, no CPU
-pinning (the E2 honesty posture).
+Raw evidence AND the SOA_SIZE_THRESHOLD provenance record for Phase 6 step 3 of plan
+`2026-07-03-v0-3-m5-auto-soa` (the "Step 3 calibration verdict" section at the bottom is the
+provenance record, per that plan's FRAGO 017 — no separate provenance file exists). Environment
+for everything below: Docker `dev` container (compose project `ynz-m5-worktree`) on WSL2 —
+uncontrolled shared hardware, no CPU pinning (the E2 honesty posture).
 
 ## Day-of noise re-record (S3 protocol; `s3_bench.rs`, rustc -O, 3 process runs)
 
@@ -108,3 +109,43 @@ order-of-magnitude STOP condition (measured ~1.0x vs the 10-40x claim), pre-regi
 segment 1 and now confirmed by measurement. SIZE_THRESHOLD calibration (step 3) is
 undefined on this data — there is no crossover to calibrate against — so steps 3-5 halt
 pending the conductor-routed decision on the milestone's performance claim.
+
+## Step 3 calibration verdict (2026-07-04, segment 4 — the provenance record)
+
+**SOA_SIZE_THRESHOLD = 64 ships UNCHANGED, as a documented conservative default — NOT a
+crossover-calibrated constant.** Per plan FRAGO 017: crossover-based calibration is undefined on
+the measured data, because **no SoA/AoS crossover exists at any N in {8..4096} in shipped O0
+binaries** (see the full calibration run above — every net ratio is 1.00-1.18, SoA never faster).
+There is no crossover N to compare 64 against, so the honest verdict is "keep the pre-M5 value
+and say exactly why," not a derived number wearing unearned precision (risk E2's exact hazard).
+
+The two measured results, stated separately and never conflated:
+
+- **Shipped O0 binaries (what `ynz build` emits today — OptimizationLevel::None, zero LLVM pass
+  pipeline):** measured net effect ≈ **1.0x** — no detectable SoA benefit; 9 of 10 points trend
+  4-18% slower (N=16 sits at parity, ratio 0.997), each individually below the ~15% noise floor,
+  SoA never faster at any point.
+- **Identical generated IR under `opt-18 -O2` (diagnostic, N=4096):** SoA wins ≈ **3.3x** net of
+  spawn (10.77 ms AoS vs 3.29 ms SoA; ratio 3.29/10.77 ≈ 0.31), consistent with the 4x
+  theoretical bandwidth edge for 2-of-8 hot fields. The win is real and IR-confirmed but lives
+  entirely in an optimization pipeline shipped binaries never run (plan risk E14).
+
+Why keep 64 at all (rather than, say, disabling admission at O0): the SoA representation's
+correctness is unconditional (byte-identical dual-mode output at every measured point, all
+checksum/IR gates green), its measured O0 cost is below the noise floor, and the constant's
+purpose is to bound admission for the day an LLVM pass pipeline makes the win real — a
+conservative threshold with honest provenance beats churning the admission surface on data that
+shows no crossover in either direction.
+
+Provenance fields (E2 posture):
+- **Workload:** 64-byte 8-int-field `Player`, 2-of-8 hot fields (x, y) read-accumulate hot loop
+  (the roadmap physics-loop shape, S2-qualifying); N ∈ {8..4096}, TOTAL_VISITS = 131,072.
+- **Machine:** Docker `dev` container on WSL2 — uncontrolled shared hardware, no CPU pinning.
+  Numbers are medians (criterion, 12 samples/point); treat mean-vs-mean effects below ~15% as
+  "no detectable difference" in this environment (S3 protocol, re-recorded day-of above).
+- **Date:** 2026-07-04 (toolchain-health-gated run, post stale-runtime fix — see the E13 section).
+- **Variance:** S3 noise re-record above (~15% floor; spike-prone shared host).
+- **Revisit triggers:** (1) a dedicated perf environment becomes available OR a user-reported perf
+  regression implicates the threshold (plan Future Requirements #2) → re-run this harness and
+  re-derive; (2) **a future LLVM-pass-pipeline milestone ships** (plan risk E14) → the crossover
+  question becomes well-defined for shipped binaries; re-calibrate against optimized codegen.

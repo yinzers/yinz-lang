@@ -25,9 +25,16 @@ use crate::{check::TypedModule, shapes::ShapeTable, types::Type};
 
 /// Minimum compile-time-provable element count for SoA admission (strict `>`).
 ///
-/// Guessed constant — provenance pending Phase 6 benchmark calibration (plan
-/// `2026-07-03-v0-3-m5-auto-soa` risk E2: the hazard is false confidence, not the
-/// number). Phase 6 replaces or re-confirms this WITH a committed provenance record.
+/// A documented CONSERVATIVE DEFAULT (unchanged pre-M5 value) — NOT a
+/// crossover-calibrated constant. The Phase 6 calibration found NO SoA/AoS
+/// crossover at any N in {8..4096} in shipped O0 binaries (`ynz build` runs zero
+/// LLVM optimization passes; measured net effect ~1.0x, no detectable benefit),
+/// so there is no crossover N to derive this from. The same generated IR shows a
+/// ~3.3x SoA win under `opt-18 -O2` — the win is real but optimization-pipeline-
+/// dependent. Full provenance (workload, machine, variance, both measurements,
+/// revisit triggers): `crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md`,
+/// "Step 3 calibration verdict". Revisit when an LLVM-pass-pipeline milestone
+/// ships (plan `2026-07-03-v0-3-m5-auto-soa` risks E2/E14).
 pub const SOA_SIZE_THRESHOLD: i64 = 64;
 
 /// Array intrinsic methods whose receiver-position use does NOT escape the binding.

@@ -17,20 +17,23 @@
 //      silent-decline tripwire; without it this would measure AoS vs AoS).
 //
 // TOTAL_VISITS is held constant across N so per-point totals compare per-visit
-// cost directly; R = TOTAL_VISITS / N. The 131072 cap is risk E13's mitigation,
-// TIGHTENED 2026-07-04 from FRAGO 015's 262144-visit phrasing after this harness's
-// own tripwire caught a SIGABRT AT 262144 visits at N=8: the crash envelope is
-// 2-dimensional (visits AND for-in loop entries — bracket in
-// soa-threshold-raw-2026-07-04.md). 131072 visits keeps BOTH axes at proven-good
-// points (max entries = 16384, at N=8). Do NOT raise either axis until the
-// underlying stack-growth bug is fixed (plan Future Requirements #13).
+// cost directly; R = TOTAL_VISITS / N. The 131072 cap is risk E13's mitigation:
+// the crash envelope is 2-dimensional (visits AND for-in loop entries), per the
+// corrected segment-3 bracket in soa-threshold-raw-2026-07-04.md — on a healthy
+// toolchain, N=8/R=65536 (524,288 visits) SIGSEGVs while N=512/R=1000 (512,000
+// visits) and N=8/R=32768 (262,144 visits) both pass clean. (The earlier
+// "SIGABRT at 262144 visits at N=8" reading was the stale-runtime-archive bug,
+// FRAGO 018 — not this stack-growth class.) 131072 visits keeps BOTH axes at
+// proven-good points (max entries = 16384, at N=8). Do NOT raise either axis
+// until the underlying stack-growth bug is fixed (plan Future Requirements #13).
 //
 // Each criterion iteration spawns the compiled binary; spawn overhead is identical
 // across modes so it cancels in the crossover comparison, and the `overhead`
 // group point (reps = 0) measures it explicitly for the provenance record.
 //
 // Results land in target/criterion/**/new/estimates.json (medians read by the
-// calibration step); provenance: crates/ynz-driver/benches/soa-threshold-provenance.md.
+// calibration step); provenance: crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md,
+// "Step 3 calibration verdict" section.
 //
 // Time: O(points · sample_size) process spawns.  Space: O(N) generated source.
 

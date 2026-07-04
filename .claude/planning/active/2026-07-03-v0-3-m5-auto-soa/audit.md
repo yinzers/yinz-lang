@@ -658,6 +658,25 @@ Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#5-segment-5
   padding-forfeits-SoA-on-spawn-copy conservatism; TodoWrite/task-store never granted any segment;
   pointer-cell one-level `.copy()` semantics noted as deliberate (D12/D13), not missed.
 
+### 2026-07-04 — Phase 6, segment 1
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#6-segment-1
+- segment: 1
+- session-id: phase6-executor-2026-07-03-m5
+- subagent_tokens: 247577
+- checkpoint reason: executor's own early-checkpoint judgment call — context-budget nudges fired
+  from ~152K before step 1's first write; zero source-tree changes this segment (recon-first pass:
+  anchor re-verify, loop-semantics probes, D8 design, and the SIGSEGV bisection) checkpointed
+  rather than starting the harness-authoring work on a spent window
+- resume-at: phase-6/step-1 (fresh — first Phase 6 segment; no prior pointer to compare)
+- verdict: STATUS: PARTIAL (recon + design complete, zero code landed; step-1 design (YNZ_SOA_FORCE
+  wiring, D8 semantics, the read-accumulate x/y workload choice) banked in handoff-phase-6.md for
+  segment 2 to implement. 2 deviations surfaced: (1) pre-existing O0 stack-growth SIGSEGV past
+  ~4.19M total loop-visits in both layout modes, routed via deviation-judge → FRAGO 015 (E13 risk
+  row + Phase 8 precondition + FR #13 + roadmap ledger row, applied by segment 2); (2) step-5
+  pre-registration that the measured SoA win may be near-zero since shipped builds never run the
+  LLVM -O2 pipeline the IR-evidence claim assumed — recorded as a theory for the harness to verify,
+  not chased further this segment)
+
 ## FRAGO log
 
 ## FRAGO 001 — 2026-07-03 — session-id: plan-producer-2026-07-03-m5
@@ -2043,3 +2062,492 @@ Plan sync: Phase 5 STATUS block extended with the closing-round paragraph; sessi
 roadmap's roadmap.md chain (per the phase4-deferral precedent), all in this same action.
 Deviations: NONE. No handoff file (single segment). Context-segment log untouched
 (conductor-owned). No commit (conductor's call).
+
+## Session log — 2026-07-04 — session-id: phase6-executor-2026-07-03-m5
+
+Phase 6 segment 1 — PARTIAL at `phase-6/step-1` (context-budget checkpoint at the pre-step-1
+seam; zero source edits, tree clean at `4c5e902` — trivially green-building). Paid the phase's
+full orientation and settled the step-1 design; receipts + settled design + resume pointer in
+`handoff-phase-6.md` (created this segment). Highlights:
+
+- **Receipts:** SOA_SIZE_THRESHOLD=64 anchor verified (soa.rs:31, sole consumer :336);
+  YNZ_SOA_FORCE confirmed absent (wiring is step-1 work; D8 semantics + precedence settled);
+  shipped binaries confirmed OptimizationLevel::None with zero LLVM pass pipeline
+  (state_machine.rs:745-760, emit.rs:952); loop-semantics probes — for-in element is a copy
+  (no field write-back), `pts[i].x` is maybe<Point> compile error ⇒ workload = S2-qualifying
+  read-accumulate x/y scan (recorded decision, provenance will note it); N=4096 compile ≈2.1s.
+- **Deviation surfaced (1, runtime bug, pre-existing, NOT SoA):** hot loops SIGSEGV at ~0.5s in
+  BOTH default(SoA) and YNZ_NO_AUTO_PARALLEL=1(AoS) modes once total loop iterations reach
+  ~4.19M (n4096×r1024 / n1024×r4096 / n512×r8192 all crash); 512K visits complete with EXACT
+  expected checksums (n512×r1000 → 393984000 = R·3·N(N+1)/2). Theory: per-iteration alloca
+  stack growth at O0. Evidence: untracked `tmp-p6-probe/` (never commit; delete at phase close).
+  Harness proceeds under a 262144-visit/process cap; bug needs conductor routing (threatens
+  every large-hot-loop surface incl. Phase 8's demo).
+- **Deviation surfaced (2, step-5 pre-registration):** p5-ir-evidence Claim 2's hot-field-only
+  SoA loads exist only under `opt-18 -O2`, which `ynz build` never runs — the shipped-binary
+  SoA win may be ~0 and Phase 6 step 5's order-of-magnitude STOP is likely. Theory to verify by
+  the harness, recorded so it cannot pass quietly.
+- Per the executor charter, the `## Context-segment log` is conductor-owned — entry content for
+  key `2026-07-03-v0-3-m5-auto-soa#6-segment-1` supplied in this segment's return instead.
+
+## FRAGO 015 — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (deviation-judge classified JUSTIFIED; risk-raising vs a new unscored risk; blanket-signed per FRAGO 004)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 6, segment 1 (mid-phase — dispatched before segment
+           2, not a post-diff boundary review)
+Trigger:   Phase 6 step 2 ("≥10 repetitions per point, N ∈ {8...4096}") silently assumed the
+           compiler can run arbitrarily many loop iterations without crashing. Segment 1's
+           executor found this false while designing the harness: hot loops SIGSEGV in BOTH
+           layout modes (SoA and AoS identically — not a dual-mode divergence, a shared ceiling)
+           once total loop-visit count reaches ~4.19M, constant regardless of N; 512K visits
+           complete with exact expected checksums. Theory: per-iteration alloca stack growth at
+           optimization level None (shipped binaries run zero LLVM pass pipeline —
+           state_machine.rs:745-760, emit.rs:952). Pre-existing, general codegen behavior, NOT
+           caused by this milestone's array-by-value or SoA work — out of M5's chartered scope to
+           fix. Deviation-judge verdict (dispatched by the conductor): JUSTIFIED — the executor
+           correctly declined to self-fix an out-of-charter general codegen bug, applied a
+           conservative 262144-visit/process cap (2x margin under the proven-good 512K point, well
+           under the ~4.19M crash point), and surfaced rather than self-classified.
+Risk:      RISK-NEUTRAL against E2 specifically (the cap operates inside E2's honesty-posture
+           mitigation, not outside it — E2 is about variance-recording and unearned precision, not
+           total iteration count; the per-point sanity checksum gate is a live tripwire). But the
+           underlying bug is a genuinely NEW risk the frozen matrix does not cover: it threatens
+           Phase 8's demo (an explicitly-authored large-array hot loop with a byte-exact-golden
+           acceptance gate) with an undiscovered-until-execution SIGSEGV. Scored fresh per
+           REF-risk-engine: Prob C (moderate — a known real bug, but only manifests on very large
+           hot loops, which are rare in the existing suite though Phase 8 explicitly constructs
+           one), Sev III (a build/demo-blocking crash, reversible by bounding iteration count, not
+           a security/data-loss/money issue) → Initial MEDIUM (C×III). Mitigation: B2 engineered
+           gate — an explicit Phase 8 step-1 requirement to verify the demo's total loop-visit
+           count against the proven-safe bound before it ships, plus this FRAGO's own Future
+           Requirements entry — prob −1 step (C→D) → Residual LOW (D×III). No HIGH residual; no
+           live signature required. Patrick's FRAGO 004 blanket pre-sign cited for the
+           risk-raising classification per its recorded scope (a new row entering the matrix is
+           risk-raising by definition even when its residual lands LOW).
+Changes (plan.md/roadmap.md body edits — applied by the Phase 6 segment-2 executor, not the
+           conductor directly; plan-body edits stay out of conductor charter):
+  - ¶1 Risk Assessment: new row **E13 — hot-loop O0 stack-exhaustion ceiling (pre-existing, all
+    layouts)** — *Phases 6, 8* | Prob C | Sev III | Initial MEDIUM | Mitigations: (1) Phase 6
+    harness runs under a 262144-visit/process cap with a per-point checksum tripwire (B2
+    engineered guard, prob −1; proof: harness code + committed variance record). (2) Phase 8 step
+    1 MUST verify the demo's total loop-visit count against the proven-safe bound (≤262144, or the
+    bug is fixed first) before the byte-exact-golden acceptance gate runs. | Residual LOW (D×III)
+    | recorded.
+  - ¶3.3 Phase 8 step 1: ADD an explicit requirement — before authoring the large-array hot-loop
+    demo section, verify its total loop-visit count (N × iterations-per-element-touch) stays at or
+    under the proven-safe 262144-visit bound established by Phase 6's harness (E13), or confirm the
+    underlying stack-growth bug is fixed first. This is a hard precondition on the demo's byte-exact
+    golden acceptance criterion, not a suggestion.
+  - Future Requirements: new entry #13 — *what:* general O0 per-iteration `alloca` stack-growth
+    SIGSEGV ceiling (~4.19M total loop iterations, both layout modes, `state_machine.rs`/`emit.rs`);
+    *why deferred:* general codegen issue unrelated to array-element storage, out of M5's charter;
+    *cost:* an investigation into loop-body frame lifetime at optimization level None (possibly
+    gated on whether shipped builds ever run an LLVM pass pipeline at all); *trigger:* the next
+    milestone touching loop/state-machine codegen, OR immediately if Phase 8's demo would exceed
+    the safe bound and the bug isn't otherwise avoidable, OR a real user hot loop crashes in
+    production. Not Patrick-signed individually — covered by FRAGO 004's blanket.
+  - roadmap.md Capability Ledger: add an "Unscoped Capability" row mirroring the existing
+    Authoritative-Derivation-Guard entry — WHAT: general hot-loop O0 stack-exhaustion ceiling; WHY:
+    out of every currently-scheduled milestone's charter; COST: its own investigation session; owning
+    milestone: none yet (pending Patrick's scheduling call); pointer to this FRAGO for the full
+    4-field deferral text.
+Unchanged: Phase 6 steps 1, 3, 4, 5 unaffected — this FRAGO adds a risk row + a Phase 8 precondition
+           + a Future Requirements entry + a roadmap ledger pointer; it does not change Phase 6's
+           own calibration methodology beyond the already-adopted 262144-visit cap.
+Override:  Patrick, blanket pre-sign, FRAGO 004, 2026-07-03 — cited per its recorded scope (no live
+           signature sought; no HIGH residual in any case).
+
+## Session log — 2026-07-04 — session-id: phase6-executor-2026-07-03-m5-seg2
+
+Phase 6 segment 2. First action: applied FRAGO 015's already-classified plan/roadmap body edits
+(executor applies, conductor never self-edits plan body):
+
+- `plan.md` ¶1 Risk Assessment: new row **E13 — hot-loop O0 stack-exhaustion ceiling
+  (pre-existing, all layouts)** — Phases 6, 8 | C | III | MEDIUM | Phase 6 262144-visit cap +
+  checksum tripwire; Phase 8 step-1 precondition | Residual LOW (D×III) | recorded.
+- `plan.md` Phase 8 step 1: explicit E13 precondition added — demo total loop-visit count must be
+  verified ≤262144 (or the bug fixed first) before the byte-exact-golden gate runs.
+- `plan.md` Future Requirements: entry #13 (WHAT/WHY-DEFERRED/COST/TRIGGER per FRAGO 015's text).
+- `roadmap.md` (2026-05-21-v0-3-concurrency-perf): "General hot-loop O0 stack-exhaustion ceiling
+  fix" unscoped-capability row added to BOTH Capability Ledger tables, mirroring the
+  Authoritative-Derivation-Guard entry (which lives in both), pointing at FRAGO 015 for the
+  4-field text.
+- Session-id `phase6-executor-2026-07-03-m5-seg2` appended to plan.md frontmatter in the same
+  action.
+
+Segment 2 execution record continues below (appended at segment close).
+
+Segment close (same session, `phase6-executor-2026-07-03-m5-seg2`) — PARTIAL at `phase-6/step-2`
+(context-budget checkpoint at the step-1/step-2 seam; tree green-building: fmt applied,
+soa_analysis 21/21, bench compiles; source edits uncommitted pending commit #1 per the FRAGO 004
+commit protocol):
+
+- **Step 1 DONE:** YNZ_SOA_FORCE (D8) — `SoaForce` in soa.rs, `soa_force_env()` in queries.rs
+  (read only at `soa_candidate_query` entry), threaded as explicit param into `soa::analyze`;
+  "soa" skips ONLY the BelowSizeThreshold arm, "aos" empties the set, kernel/no-auto-parallel
+  outrank (precedence pinned pure-core + query-level); 6 new tests, env_guard clears the var.
+  Harness `crates/ynz-driver/benches/soa_calibration.rs` (criterion workspace dev-dep,
+  feature-trimmed) with checksum / dual-mode-stdout / IR admission gates.
+- **Step 2 partial:** day-of S3 noise re-record done (3 process runs; ~15% floor confirmed;
+  durable in `crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md`); spawn-overhead
+  baseline measured (~1.73 ms median); full calibration run pending next segment.
+- **Deviation surfaced (NEW, conductor routes — not self-classified):** the harness's own E13
+  checksum tripwire caught SIGABRT at N=8/R=32768 — 262144 visits, exactly AT FRAGO 015's
+  recorded cap — while 512K visits at N=512/R=1000 passes. Bracket (N=8): 16384 reps OK with the
+  exact checksum, 32768 crash ⇒ the crash envelope is 2-axis (total visits AND for-in loop
+  entries); FRAGO 015's visits-only cap phrasing is insufficient at small N and its
+  E13/Phase-8/FR-13 text may need a follow-up amendment. Evidence: raw file above +
+  `target/p6-soa-calibration/`. Harness self-consistently tightened to TOTAL_VISITS=131072 (both
+  axes at proven-good points) — a harness-internal parameter within the already-adopted cap
+  discipline, not a plan-text edit.
+- Handoff rewritten in place; resume pointer `phase-6/step-2`.
+
+## FRAGO 016 — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (deviation-judge classified JUSTIFIED; risk-raising vs E13's recorded residual; blanket-signed per FRAGO 004)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 6, segment 2 (mid-phase — dispatched before segment
+           3, not a post-diff boundary review)
+Trigger:   FRAGO 015's E13 row / Phase 8 step-1 precondition / FR #13 all asserted a single
+           total-loop-visit-count scalar (≤262144) as the safe/unsafe boundary for the pre-existing
+           O0 stack-growth SIGSEGV. Segment 2's harness tripwire directly falsified this at its OWN
+           cited value: N=8/R=32768 (262144 total visits — exactly the cap) SIGABRTs, while
+           N=512/R=1000 (512,000 total visits — nearly double) passes clean with exact checksums.
+           A scalar total-visits bound is therefore neither necessary nor sufficient — the crash
+           envelope is a joint function of (N, R), not reducible to one number. Deviation-judge
+           verdict: JUSTIFIED (direct, already-collected evidence; the executor correctly did not
+           self-amend plan text, only tightened its own harness-internal TOTAL_VISITS to 131072 at
+           a point proven safe on both axes, and surfaced the finding).
+Risk:      RISK-RAISING relative to E13's recorded LOW residual (D×III) — that residual rested on
+           mitigation (2), Phase 8's total-visits-only gate, being a reliable B2 engineered guard
+           (prob −1 step). The gate is now shown unreliable as literally worded: a demo shape could
+           satisfy "total visits ≤ 262144" and still crash (the false-pass direction — the
+           dangerous one, since it would let a broken demo through the byte-exact-golden gate
+           undetected), or could be needlessly rejected despite being safe (the false-reject
+           direction). This is a material downgrade to an EXISTING mitigation's reliability, not a
+           brand-new unscored risk, but per FRAGO 015's own precedent ("a new row entering the
+           matrix is risk-raising by definition even when residual lands LOW") a downgrade to a
+           mitigation the residual score depends on is risk-raising and goes through the same
+           signature path rather than being silently absorbed. No HIGH residual results — the fix
+           is a text-accuracy correction, not a new gap requiring new engineering — so no live
+           signature is required; Patrick's FRAGO 004 blanket pre-sign is cited per its recorded
+           scope.
+Changes (plan.md text corrections — applied by the Phase 6 segment-3 executor, not the conductor
+           directly; plan-body edits stay out of conductor charter):
+  - ¶1 E13 row, mitigation (2) (plan.md:151): replace the total-visits-scalar phrasing with —
+    "Phase 8 step 1 MUST verify the demo's specific (array-size N, outer-repetition-count R) shape
+    against the harness's jointly-proven-safe bracket data
+    (crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md), NOT a single total-visits scalar —
+    segment-2 evidence proved total-visits-alone is neither necessary nor sufficient (262,144 total
+    visits crashed at N=8/R=32,768; 512,000 total visits passed cleanly at N=512/R=1,000). If the
+    demo's (N,R) shape isn't already covered by the harness's bracketed region, bracket it directly
+    with the same checksum-tripwire methodology before the byte-exact-golden gate runs, or confirm
+    the underlying bug is fixed first."
+  - ¶3.3 Phase 8 step 1 precondition (plan.md:1244-1249): same substitution — strike the
+    "≤262144-visit bound" scalar language, replace with the joint-envelope check above; keep the
+    "hard precondition... not a suggestion" framing.
+  - Future Requirements #13 WHAT clause (plan.md:1502-1510): replace "hot loops crash at ~4.19M
+    total loop iterations, both layout modes" with "hot loops crash on a joint function of
+    array-size N and outer-repetition/for-in-entry count R — NOT reducible to a total-visits scalar
+    (bracketed crash points range from ~262K total visits at N=8/R=32,768 up to ~4.19M at larger N;
+    512K total visits is proven safe at N=512/R=1,000)." COST/TRIGGER fields stand unchanged
+    (root-causing the actual second axis remains correctly out of M5's charter).
+Unchanged: Phase 6's own harness (already self-tightened to TOTAL_VISITS=131072 on both proven-good
+           axes — no further Phase-6 work required by this FRAGO); E13's Prob/Sev/Initial cells;
+           the rest of the plan.
+Override:  Patrick, blanket pre-sign, FRAGO 004, 2026-07-03 — cited per its recorded scope (no live
+           signature sought; no HIGH residual results from this correction).
+
+## Session log — 2026-07-04 — session-id: phase6-executor-2026-07-03-m5-seg3
+Phase 6 segment 3 (resumed from `phase-6/step-2` per `handoff-phase-6.md`). Step A first action:
+applied FRAGO 016's three plan-text corrections exactly as classified (conductor-authored,
+deviation-judge JUSTIFIED, FRAGO 004 blanket-signed) — ¶1 E13 row mitigation (2) replaced with the
+joint-(N,R)-bracket-check phrasing; ¶3.3 Phase 8 step 1 E13 precondition replaced with the same
+joint-envelope check (hard-precondition framing kept); Future Requirements #13 WHAT clause replaced
+with the joint-function framing (COST/TRIGGER unchanged). Session-id appended to plan.md frontmatter
+in this same action. Segment outcome: **BLOCKED at Phase 6 step 5's STOP condition** (order-of-
+magnitude shortfall vs the 10-40x claim; CCIR item 4 full-STOP, pre-registered by segment 1, now
+measurement-confirmed). Step 2 completed and committed (checkpoint commit #1 `e989f43`: harness +
+YNZ_SOA_FORCE wiring + raw evidence file). Root-caused the segment-2 bench tripwire to a stale
+pre-M5 `target/release/libynz_runtime.a` silently embedded by the release driver (garbage old-ABI
+symbol resolution → overflow SIGABRT; forced-SoA link failure) — fixed operationally by rebuilding
+the release runtime; the staleness footgun surfaced as a deviation for routing (candidate durable
+fix: codegen-referenced ABI-version symbol). This falsifies FRAGO 016's specific evidence line
+(healthy n8×r32768 passes) while its 2-axis conclusion survives on new evidence (n8×r65536 SIGSEGV
+at 524K visits vs n512×r1000 pass at 512K; N=8 entries boundary is 32768-OK/65536-crash) —
+surfaced, not self-amended. Calibration result: NO SoA crossover at any N in {8..4096} in shipped
+O0 binaries (net SoA/AoS 1.00-1.18); ~3.3x SoA win under `opt-18 -O2` only. Steps 3-5 halted;
+evidence in `crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md`; resume state in
+`handoff-phase-6.md`. Three NEW deviations surfaced (stale-runtime footgun; FRAGO 016 evidence
+falsification; the STOP itself) — conductor routes all three.
+
+## FRAGO 017 — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (deviation-judge classified JUSTIFIED; risk-raising, new row E14, MEDIUM residual; blanket-signed per FRAGO 004)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 6, segment 3 (mid-phase — dispatched before segment
+           4, not a post-diff boundary review)
+Trigger:   Phase 6 step 5's STOP condition fired for real: across all N in {8...4096}, shipped
+           (default OptimizationLevel::None, zero LLVM pass pipeline) `ynz build` binaries show NO
+           SoA benefit whatsoever — net-of-spawn median ratios 1.00-1.18 (SoA never faster, up to
+           18% slower at some points, uniformly below the ~15% noise floor in the no-benefit
+           direction). Root cause confirmed: the SAME compiled IR run through `opt-18 -O2`
+           externally shows SoA winning ~3.3x at N=4096 (checksums exact — identical logic, only
+           optimized). This directly falsifies ¶2 Mission's "10-40x cache-locality win" framing and
+           Key Outcome #3's implicit assumption of a real measured win, for the compiler as it
+           SHIPS today. Structural cause: `ynz build` never runs an LLVM optimization pass pipeline
+           at all (state_machine.rs:745-760, emit.rs:952) — building one is a separate, large
+           compiler capability, out of this milestone's array-storage charter.
+Risk re-run (frozen matrix, REF-risk-engine.md): Prob A (Frequent — already measured, confirmed,
+           reproduced at every N), Sev III (Marginal — a documentation/teaching-honesty gap, no
+           money/data/prod-state/security/irreversibility dimension fires; reversible by
+           rewriting text) → Initial H. Mitigation: honest-reframe of Mission/KO#3/Performance-
+           invariant text, gated by docs-consistency review before any Phase 7/8 user-facing text
+           ships (B2 engineered guard on the severity axis, −1) → Residual M (A×IV). No Floor B
+           class fires (confirmed true for the whole plan). Per the engine's own gate rule, a
+           properly-mitigated MEDIUM passes with RECORD only — no live signature required. This is
+           independent of whether FRAGO 004's blanket technically reaches the call: the engine's
+           normal outcome for a risk this shape, once honestly documented, is continue-and-record.
+           FRAGO 004's blanket pre-sign is additionally cited per its recorded scope. The completion
+           approval gate (NOT waived by FRAGO 004) remains the correct seam for Patrick's own
+           strategic call on whether/how to ship this milestone's headline claim — this FRAGO does
+           not attempt to make that call, only to stop the plan from silently overclaiming in the
+           interim.
+Changes (plan.md body edits — applied by the Phase 6 segment-4 executor, not the conductor
+           directly; plan-body edits stay out of conductor charter):
+  - ¶2 Mission (plan.md, after "...promises the 10-40x cache-locality win to naive
+    sequential-looking code"): append — "That win is real and IR-confirmed (measured ~3.3x under
+    `opt-18 -O2` at the calibration workload's shape, consistent with the theoretical bandwidth
+    edge) but is NOT realized in the binaries `ynz build` ships today, because the compiler runs
+    zero LLVM optimization passes (OptimizationLevel::None) — a pre-existing, out-of-charter gap
+    this milestone's Phase 6 harness discovered and documents honestly rather than silently
+    overclaiming. One representation must own both changes so the twin-substrate drift class can
+    never ship; the correctness of that representation is unconditional — its measured performance
+    payoff, in the compiler as it ships today, is conditional on a future optimization-pipeline
+    milestone."
+  - ¶3.1 Key Outcome #3: replace the final clause ("...and the measured hot-loop improvement is
+    recorded with benchmark evidence") with — "...and the measured hot-loop improvement is recorded
+    with benchmark evidence, stated honestly: in shipped O0 binaries the measured net effect is
+    ~1.0x (no detectable benefit; each point 4-18% below the noise floor, direction uniform), while
+    the identical generated IR shows the design doc's 10-40x class of win once run through an LLVM
+    optimization pipeline (`opt-18 -O2` measured ~3.3x at N=4096). The lint hover and CHANGELOG cite
+    the O0 number as what ships today and the -O2 number as the pipeline-dependent upside — never
+    conflated."
+  - Invariants → Performance, first bullet: append after "...the SHIPPED claim is the measured
+    number, Phase 6 step 5)." — "Measured 2026-07-04: no detectable benefit in shipped O0 binaries
+    (net ratios 1.00-1.18x across N in {8..4096}); the same IR shows ~3.3x under `opt-18 -O2`.
+    SIZE_THRESHOLD ships as a documented conservative default, not a crossover-calibrated constant —
+    no O0 crossover exists to calibrate against. Revisit trigger: a future LLVM-pass-pipeline
+    milestone."
+  - ¶1 Risk Assessment: new row **E14 — shipped O0 SoA benefit is optimization-pipeline-dependent**
+    — *Phases 6, 7, 8* | Prob A | Sev III | Initial H | Mitigations: honest-reframe of
+    Mission/KO#3/Performance-invariant text, gated by docs-consistency review before any Phase 7/8
+    user-facing text ships (B2 engineered guard, severity −1; proof: corrected text + committed
+    provenance file, reviewed pre-ship) | Residual MEDIUM (A×IV) | recorded.
+  - Phase 6 step 3 is RE-SPECIFIED (this FRAGO): calibration is not "find the crossover N" (none
+    exists in O0 binaries) — ship SIZE_THRESHOLD=64 as a documented conservative default (unchanged
+    from its pre-M5 value) with honest provenance stating no O0 crossover exists to calibrate
+    against, rather than deriving a constant from a crossover that isn't there.
+Unchanged: Phases 0-5; Phase 6 steps 1-2 (already committed, e989f43); the correctness/dual-mode
+           invariants (unaffected — SoA remains byte-identical, this FRAGO is about the PERFORMANCE
+           claim only, never correctness).
+Override:  Patrick, blanket pre-sign, FRAGO 004, 2026-07-03 — cited per its recorded scope. No live
+           signature required per the risk engine's own MEDIUM-residual gate rule (record only).
+
+## FRAGO 018 — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (deviation-judge classified JUSTIFIED; risk-raising, MEDIUM; durable deferral + immediate Phase 8 operational guard; blanket-signed per FRAGO 004)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 6, segment 3
+Trigger:   `ynz-driver/build.rs`'s `include_bytes!` embedding of `target/{profile}/libynz_runtime.a`
+           has no ABI-version check. A stale cross-profile archive (pre-dating M5's ABI changes)
+           resolves old-signature `ynz_array_*`/`ynz_map_*` symbols by NAME against new codegen,
+           silently miscompiling (garbage reads) instead of failing to link. This exact footgun
+           already corrupted one Phase-6 measurement (the segment-3 apparent SIGABRT, since
+           re-attributed away from E13 — see FRAGO 019). Not caused by this milestone's array/SoA
+           work directly, but exposed by it; E7/E12's hard-cut mitigations cover SOURCE call sites,
+           not cross-profile archive staleness, so this is a genuinely uncovered gap.
+Risk:      Prob B (Likely — just fired, zero ABI check exists at all), Sev III (Marginal — no
+           precompiled `ynz` binaries are distributed to external users today; blast radius is a
+           dev/CI workflow getting silently-wrong build/bench/test results, recoverable by rebuild)
+           → Initial MEDIUM (B×III). Passes at record-only under the engine's gate — does not
+           require a Phase-8-blocking gate or a live signature. However Phase 8 step 4 (E11) runs
+           the release-profile compiler binary and step 6 cuts the tag from the same tree — direct,
+           in-scope exposure this milestone, not a hypothetical future problem — so the response is
+           BOTH a durable deferral (the structural fix, out of charter) AND a cheap immediate
+           Phase-8 operational guard (in scope, low cost).
+Changes (plan.md/roadmap.md edits — applied by the Phase 6 segment-4 executor):
+  - Future Requirements: new entry #14 — WHAT: `ynz-driver/build.rs` embeds
+    `target/{profile}/libynz_runtime.a` via `include_bytes!` with no ABI/version check; a stale
+    archive resolves old-signature `ynz_array_*`/`ynz_map_*` symbols by name against new codegen,
+    silently miscompiling instead of failing to link. WHY deferred: the real fix (a codegen-emitted
+    ABI-version symbol + a linker/embed-time staleness check) is a cross-cutting build/release-
+    tooling capability, not an array/SoA-representation concern — building it now scope-creeps
+    Phase 8 into compiler build-system work outside this milestone's charter. COST: ~0.5-1 session
+    (one versioned symbol emitted by ynz-runtime, checked at embed/link time in build.rs; isolated,
+    low-risk). TRIGGER: the next milestone touching ynz-runtime's ABI, OR the point Yinz begins
+    distributing precompiled `ynz` binaries externally (severity escalates then — revisit the
+    score).
+  - roadmap.md Capability Ledger (both tables, per the plan's established both-tables convention):
+    add row "Build/release-tooling: ABI-version-checked runtime archive embedding — owning milestone
+    TBD (discovered v0.3-M5 Phase 6, FRAGO 018)."
+  - Phase 8 step 4 AND step 6 (plan.md): prepend an operational guard before each — "Rebuild
+    ynz-runtime's release archive from clean (`cargo clean -p ynz-runtime && cargo build -p
+    ynz-runtime --release`) before this step — Phase 6 segment 3 found a stale release archive
+    silently miscompiles by resolving old-ABI symbols by name (Future Requirements #14 for the
+    durable fix)."
+Unchanged: E7/E12's existing mitigations (source-call-site scope, correctly untouched); everything
+           else in Phase 8.
+Override:  Patrick, blanket pre-sign, FRAGO 004, 2026-07-03 — cited per its recorded scope. No live
+           signature required (MEDIUM residual, record-only per the engine).
+
+## FRAGO 019 — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (deviation-judge classified JUSTIFIED; risk-neutral evidence-accuracy correction; auto-apply + log)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 6, segment 3
+Trigger:   FRAGO 016's cited crash point ("N=8/R=32,768 crashes, 262,144 total visits") was itself
+           contaminated by FRAGO 018's stale-release-runtime bug, not a real E13 SIGSEGV — on a
+           healthy toolchain N=8/R=32,768 (262,144 visits) PASSES cleanly with the exact checksum.
+           The underlying 2-axis conclusion (a scalar total-visits bound is neither necessary nor
+           sufficient) SURVIVES on new, clean evidence: N=8/R=65,536 (524,288 visits) SIGSEGVs while
+           N=512/R=1,000 (512,000 visits, nearly the same total) passes. The real N=8 boundary sits
+           between R=32,768 (safe) and R=65,536 (crash). Risk-neutral: pure evidence-accuracy
+           correction, same qualitative conclusion, same recommended mitigation (bracket the demo's
+           specific (N,R) shape, never trust a total-visits scalar); E13's existing score (Initial
+           MEDIUM C×III, Residual LOW D×III, recorded) is UNCHANGED.
+Changes (plan.md — applied by the Phase 6 segment-4 executor, swept to BOTH citation sites per
+           plan-source-of-truth's sweep discipline):
+  - ¶1 Risk Assessment, E13 row, mitigation (2): replace "262,144 total visits crashed at
+    N=8/R=32,768; 512,000 total visits passed cleanly at N=512/R=1,000" with — "524,288 total
+    visits crashed at N=8/R=65,536; 512,000 total visits passed cleanly at N=512/R=1,000. N=8/R=32,768
+    (262,144 visits) also passes cleanly on a healthy toolchain — the earlier reading of a crash at
+    that point was a since-fixed stale-release-runtime-archive bug (FRAGO 018), not this
+    stack-growth class."
+  - ¶3.3 Phase 8 step 1's E13 precondition: identical substitution (same sentence, second site).
+Unchanged: E13's Prob/Sev/Initial/Residual cells; the recommended Phase-8 mitigation approach
+           (bracket the demo's (N,R) shape directly); everything else.
+Override:  N/A — risk-neutral.
+
+## Session log — 2026-07-04 — session-id: phase6-executor-2026-07-03-m5-seg4
+Phase 6 segment 4 (resumed from `phase-6/step-3` per `handoff-phase-6.md`, after the conductor
+routed the step-5 STOP via FRAGOs 017-019). Steps A-C first actions — applied all three
+conductor-classified FRAGOs exactly as recorded, in order: **FRAGO 017** (honest performance
+reframe): ¶2 Mission appended sentence (the FRAGO text's closing clause subsumes the original
+"one representation must own both changes" trailing clause — folded, not duplicated); ¶3.1 Key
+Outcome #3 final clause replaced with the honest O0-~1.0x / -O2-~3.3x statement; Invariants →
+Performance first bullet appended; ¶1 Risk Assessment new row E14 (A×III Initial HIGH → Residual
+MEDIUM A×IV, recorded); Phase 6 step 3 re-specified (ship SIZE_THRESHOLD=64 as documented
+conservative default — no O0 crossover exists to calibrate against). **FRAGO 018** (stale-runtime
+footgun): Future Requirements #14 added (4-field deferral); roadmap Capability Ledger row added to
+BOTH tables (both-tables convention, matching the FRAGO 015 row pattern); Phase 8 steps 4 and 6
+each prepended the rebuild-ynz-runtime-clean operational guard. **FRAGO 019** (evidence-accuracy
+correction): the falsified crash-point evidence swapped at both named sites (¶1 E13 mitigation (2);
+¶3.3 Phase 8 step 1 E13 precondition) — plus, per the sweep discipline FRAGO 019 itself invokes
+(plan-source-of-truth: "closing the FRAGO doesn't stop at the trigger's own citation"), the SAME
+falsified fact found and corrected at a third sibling site the FRAGO's Changes did not enumerate:
+Future Requirements #13's bracketed-crash-points parenthetical (identical risk-neutral
+substitution, no new judgment; recorded here explicitly). Historical segment-narrative paragraphs
+(Phase 6 segments 1-2 STATUS notes) deliberately left as-is — they are the audit-style record of
+what each segment reported at the time, and segment 3's paragraph already records the
+falsification in place. Session-id appended to plan.md frontmatter in this same action. Step D:
+Phase 6 steps 3-5 completed per the FRAGO 017 re-specification — provenance verdict section added
+to `crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md` (SIZE_THRESHOLD=64 ships as
+conservative unchanged default; O0 ~1.0x and -O2 ~3.3x recorded, never conflated); soa.rs
+SOA_SIZE_THRESHOLD comment rewritten citing the provenance file; step 5's improvement number
+recorded via FRAGO 017's text + the provenance file (STOP already resolved by conductor routing).
+Phase 6 STATUS: COMPLETE block written; `handoff-phase-6.md` deleted as last act. Nothing
+committed (conductor runs gates + reviewer fan-out + the Step-8 commit gate).
+
+## FRAGO 020 — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (deviation-judge classified JUSTIFIED; risk-neutral record-completeness fix; auto-apply + log)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 6 boundary review (post-diff reviewer fan-out:
+           code-reviewer, acceptance-verifier, rules-compliance, deviation-judge, performance —
+           all returned; performance's finding routed through a dedicated deviation-judge dispatch)
+Trigger:   The performance reviewer found `soa_candidate_query`'s computed `hot_fields` (exactly
+           which fields a hot loop touches — the whole point of D5's ≤2-field-union criterion) is
+           never consumed by Phase 5's codegen (`soa_gather_into`/`array_elem_get_into` in
+           emit.rs unconditionally gather ALL declared fields, per `p5-ir-evidence.md:39`'s
+           documented "design c: gather full element, let DSE/SROA drop unused fields"). This is
+           plausibly a real, independently-actionable contributor to Phase 6's measured ~1.0x (no
+           benefit) result in shipped O0 binaries — distinct from "no LLVM optimization pipeline
+           exists" (FRAGO 017/E14's framing). Deviation-judge verdict: the CODE choice (full-element
+           gather) is JUSTIFIED — a true selective gather would require re-auditing every
+           full-fidelity consumer (`.copy()`/`soa_copy_to_aos`, background/spawn-arg passing, future
+           serialization) against a "cold fields may be garbage" invariant, a choke-point-contract
+           redesign genuinely out of Phase 5's charter and NOT safe to rush mid-review — so
+           reopening Phase 5's already-boundary-committed, already-adversarially-gated (E3/E6/E9)
+           codegen in this fix-loop is explicitly ruled OUT. But the Future Requirements ledger's
+           OMISSION of this narrower, cheaper, distinct fix (as opposed to only naming "wait for an
+           optimizer pipeline") is an UNJUSTIFIED record gap — a plan-source-of-truth
+           headline-vs-deferrals completeness issue, not code drift. Risk-neutral: this FRAGO adds a
+           missing FR entry only; no code changes, no re-scoring of E14 (unchanged).
+Changes (plan.md — applied by the Phase 6 fix-round executor, not the conductor directly):
+  - Future Requirements: new entry #15 — WHAT: selective hot-field-only element materialization for
+    admitted SoA arrays (bypass the current full-element gather in `soa_gather_into`/
+    `array_elem_get_into`, consuming the already-computed `hot_fields` set instead of ignoring it).
+    WHY DEFERRED: requires auditing every full-element consumer (`.copy()`/`soa_copy_to_aos`,
+    background/spawn-arg passing, future serialization) to either route them onto an always-full-
+    gather path or prove hot_fields totality across every consumer — a choke-point-contract redesign,
+    not safely batched into a Phase 6 boundary-review fix-loop. COST: ~1 dedicated session +
+    E3/E6/E9 re-review (the same adversarial gates Phase 5's codegen already cleared once, must
+    clear again against the new lowering). TRIGGER: before or alongside any future
+    optimization-pipeline milestone (FR#2/E14) — the two fixes compound and should be evaluated
+    together, since a selective-gather fix might independently deliver a real (if smaller) win even
+    without an optimizer, making it the cheaper first move.
+Unchanged: E14's score and framing (still correctly names "no LLVM optimization pipeline" as ONE
+           real cause); Phase 5's codegen (NOT reopened — explicitly ruled out this round); FR#2's
+           existing text (a distinct, separate deferral).
+Override:  N/A — risk-neutral, record-completeness only.
+
+## Session log — 2026-07-04 — session-id: phase6-fixround1-executor-2026-07-04-m5
+
+Phase 6 boundary-review fix-round 1 (conductor-dispatched, responding to the reviewer fan-out).
+All changes plan-text/comment/scratch-hygiene — zero behavior change, zero code-token change.
+
+- **FRAGO 020 applied:** Future Requirements #15 added to plan.md exactly per FRAGO 020's Changes
+  text (selective hot-field-only element materialization deferral — WHAT/WHY/COST/TRIGGER).
+- **Session-id catch-up (rules-compliance finding):** `plan-conductor-2026-07-04-m5-fable`
+  (author of FRAGOs 014-020) appended to plan.md's frontmatter session-id chain, followed by this
+  session's own id.
+- **Bench-comment provenance repoint (code-reviewer):** `soa_calibration.rs` header comment now
+  cites `soa-threshold-raw-2026-07-04.md` "Step 3 calibration verdict" (the nonexistent
+  `soa-threshold-provenance.md` reference removed).
+- **Bench-comment E13 causal correction (code-reviewer):** the 131072-cap justification no longer
+  cites the falsified "SIGABRT at 262144 visits" as 2-axis proof; it now cites the corrected
+  segment-3 bracket (N=8/R=65536 = 524,288 visits crashes healthy; N=512/R=1000 = 512,000 visits
+  passes; N=8/R=32768 = 262,144 visits passes clean) and attributes the old reading to FRAGO 018's
+  stale-runtime-archive bug. Cap value unchanged.
+- **Key Outcome #3 aligned (code-reviewer):** "each point 4-18% below the noise floor, direction
+  uniform" → "9 of 10 points 4-18% slower, each below the ~15% noise floor, with N=16 at parity —
+  ratio 0.997" (matches the raw provenance file).
+- **Segment attribution fixed at BOTH sites (deviation-judge):** E13 risk row + Phase 8 step-1
+  precondition now read "segment-2 evidence established the 2-axis principle, and segment-3's
+  clean re-run (healthy toolchain) confirms total-visits-alone is neither necessary nor
+  sufficient" — the bracketing numbers are segment-3's corrected re-run, not segment 2's.
+- **Scratch hygiene (code-reviewer):** untracked 48MB `tmp-p6-probe/` deleted (the phase-close
+  deletion the plan promised).
+- **§6.1 durable deferrals filed (performance reviewer's two statistical-rigor findings):** two
+  four-field WHAT/WHY/COST/TRIGGER deferrals written to the roadmap's audit.md
+  (`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md`) — (A) construction-cost
+  confound in the calibration harness (key `2026-07-03-v0-3-m5-auto-soa#6:
+  crates-ynz-driver-benches-soa-calibration-rs-159`), (B) noise-floor regime mismatch +
+  single-sweep-invocation rigor (key `2026-07-03-v0-3-m5-auto-soa#6:
+  crates-ynz-driver-benches-soa-threshold-raw-2026-07-04-md-24`). Both idempotency-grepped before
+  writing.
+
+Nothing committed (conductor owns the Step-8 commit gate). No new deviations discovered.
+
+## Session log — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (Phase 6 boundary review, closing)
+
+Full re-review round after the fix-round: green-check (green, 6/6 gates, secret-scan pass via
+fallback) + graveyard-auditor (clean, 40 corpses adjudicated, 0 findings) + the full 5-reviewer
+fleet re-run (code-reviewer, acceptance-verifier, rules-compliance, deviation-judge, performance) —
+0 blockers, 0 should-fix, 2 self-graded cosmetic/out-of-lane notes:
+
+1. **code-reviewer (minor):** `soa-threshold-raw-2026-07-04.md:39` still cites the now-deleted
+   `tmp-p6-probe/seg3-bracket/` as an evidence path (the underlying bracket data is transcribed
+   inline in the same file's table, so the conclusion isn't left unsupported — purely a dangling
+   path reference, phase is terminal, no downstream consumer).
+2. **performance (out-of-lane, explicitly not graded):** the headline narrative (Mission ¶2, Phase
+   6 STATUS block, E14 risk row) attributes the O0 no-benefit result solely to "no LLVM
+   optimization pipeline," without also naming FR#15's independently-identified `hot_fields`
+   dead-code contributor. Reviewer agreed the routing (defer FR#15, don't reopen Phase 5 codegen)
+   is correct — this is a documentation-nuance observation only.
+
+**Ceiling call (verification.md's YAGNI ceiling, three-part test, all hold):** (a) both are
+narrowing variants of already-fixed classes (the tmp-p6-probe cleanup already landed; the
+performance-honesty reframe already landed via FRAGO 017/020); (b) both are explicitly self-graded
+non-blocking by their own reviewer ("purely cosmetic," "not a graded finding"); (c) the risk posture
+is floor-pinned — no correctness, security, or user-facing-claim accuracy issue rides on either (the
+dangling path is inert prose; the headline nuance doesn't change what's true, only how completely
+it's explained, and FR#15 already carries the full truth for anyone who reads past the headline).
+Per no-duct-tape's cost-asymmetry logic, spinning a third fix-round + full 5-reviewer re-run to chase
+two reviewer-acknowledged cosmetic items would itself be the over-engineering the ceiling exists to
+stop. **Accepted as a floor-pinned residual, not fixed this round** — named here per "no silent caps"
+rather than silently dropped. Boundary commit proceeds.

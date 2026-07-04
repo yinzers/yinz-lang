@@ -273,3 +273,49 @@ Filed-by-session: phase5-executor-2026-07-03-m5-closing
   allowing growable SoA arrays, breaking D3's `len == cap` invariant) — exactly the condition
   under which this duplicate would silently drift, per this milestone's own
   authoritative-derivation risk class (E3's whole reason for existing).
+
+## 2026-07-04 — Deferral: construction-cost confound in the SoA calibration harness (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#6 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#6: crates-ynz-driver-benches-soa-calibration-rs-159
+Filed-by-session: phase6-fixround1-executor-2026-07-04-m5
+
+- **WHAT** — the Phase 6 calibration harness
+  (`crates/ynz-driver/benches/soa_calibration.rs`) times the entire process (array
+  construction + hot loop + print) with `TOTAL_VISITS` held fixed across N, so O(N)
+  construction cost is a growing fraction of the measured signal as N increases, and SoA's
+  segmented-scatter construction vs. AoS's contiguous-push construction differ in a way the
+  harness doesn't isolate from the access-pattern delta it claims to measure; the `overhead`
+  baseline (soa_calibration.rs:159, the reps=0 spawn-only group) is measured once at N=8 and
+  subtracted as a flat scalar across all N.
+- **WHY DEFERRED** — fixing this requires a harness redesign (per-N reps=0 baseline, or an
+  isolated construction-only benchmark) — real work, and the current SIZE_THRESHOLD=64 ships
+  unchanged regardless (no precision claim rests on this), so it doesn't block Phase 6's
+  honest "no crossover" conclusion today.
+- **COST** — ~0.5 session (redesign the baseline-subtraction methodology, re-run the sweep).
+- **TRIGGER** — before this harness is used as the authoritative input for a REAL
+  SIZE_THRESHOLD recalibration (FR#2's trigger — a dedicated perf environment becomes
+  available, or a user-reported regression implicates the threshold).
+
+## 2026-07-04 — Deferral: noise-floor regime mismatch + single-sweep-invocation rigor in the SoA calibration evidence (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#6 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#6: crates-ynz-driver-benches-soa-threshold-raw-2026-07-04-md-24
+Filed-by-session: phase6-fixround1-executor-2026-07-04-m5
+
+- **WHAT** — the ~15% noise floor cited as the credibility bar
+  (`crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md:24`) was derived from S3's
+  long-in-process-reps regime, then applied to the calibration sweep's short
+  subprocess-spawn-timed "net" values (where subtracting two noisy quantities compounds
+  variance rather than reducing it); the full 10-point x 2-mode calibration sweep was run
+  exactly once, not repeated as an independent process invocation the way S3's own protocol
+  was (which showed up to 50% cross-invocation drift on this shared host); reported values
+  are bare medians with no confidence intervals.
+- **WHY DEFERRED** — the shipped decision (SIZE_THRESHOLD=64, unchanged) is robust to this
+  gap either way — no new precision was manufactured from the noisy data, and the honest
+  hedge already exists in the plan text. Full statistical validation is a bigger lift than
+  this boundary-review fix-loop should absorb.
+- **COST** — ~0.5-1 session (re-run the full sweep 1-2 more times as independent process
+  invocations, report criterion's confidence intervals, re-derive an in-regime noise floor).
+- **TRIGGER** — before Phase 7/8 user-facing text (lint hover, CHANGELOG) asserts "no
+  detectable benefit... direction uniform" as settled fact rather than a hedged observation —
+  this is ALREADY gated by E14's existing "docs-consistency review before any Phase 7/8
+  user-facing text ships" mitigation; this deferral just makes sure that gate specifically
+  checks this point. Also: if a dedicated perf environment ever becomes available (FR#2's
+  trigger).
