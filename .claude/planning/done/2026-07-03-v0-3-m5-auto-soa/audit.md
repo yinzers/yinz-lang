@@ -3104,3 +3104,139 @@ gate. Cleared.
 
 **Gate seal:** `Completion-Gate: 2026-07-03-v0-3-m5-auto-soa#cleared` — the git-legible marker
 Step-0's completion-window reconcile reads. Continuing to Step 9.1 (AAR).
+
+## AAR — 2026-07-04 — dispatched by session-id: plan-conductor-2026-07-04-m5-fable
+
+# AAR — `2026-07-03-v0-3-m5-auto-soa` (Array-By-Value Element Storage + Auto-SoA Layout)
+
+Grounded in `plan.md` (¶1 Risk Assessment, ¶2 Mission, ¶3.1 Intent & End State, ¶3.3 Phases 0–8,
+Future Requirements/Revisit) and `audit.md` (Session log, Context-segment log, FRAGO log 001–023,
+Cumulative cross-phase completion gate at the tail). All 9 phases sealed; diff range
+`1ac52fd..ebca94e`.
+
+## Question 1 — What was supposed to happen
+
+**Mission (¶2):** after v0.3.0 ships, deliver by-value inline element storage for `array<Shape>`
+(new elem_size-aware `YnzArray` ABI, permanently fixing the stack-dangling miscompile class the
+M3a guard only masks) and, riding that storage, automatic Struct-of-Arrays layout for large
+`array<Shape>` hot loops — zero syntax change, byte-identical output in both scheduling modes —
+because Yinz's efficiency-first positioning (Golden Rules 4/8/10) promises a 10–40x cache-locality
+win to naive sequential code.
+
+**Intent & End State (¶3.1):** exactly ONE array representation — SoA is a layout variant of the
+elem_size-aware by-value `YnzArray`, never a second runtime or a second layout derivation. Six Key
+Outcomes define done: (1) runtime-field `array<Shape>` crossing `wait` compiles + prints correctly;
+the interim guard and its registry deferral are gone. (2) Every fixture is byte-identical across
+default and `--no-auto-parallel` modes. (3) A qualifying hot loop gets SoA automatically, the
+`array-using-soa-layout` lint fires with jargon-free hover, and the measured improvement is recorded
+honestly. (4) `SIZE_THRESHOLD` ships with committed provenance, never a bare constant. (5) A shape
+simultaneously cross-thread-padded AND SoA-candidate resolves through one layout authority (padding
+wins, D11), proven byte-layout. (6) Roadmap + scratch docs record the fold; IMP-collections carries
+the graduated design; a v0.3.x tag ships it.
+
+**Phase exit criteria (¶3.3):** Phase 0 hard-gates two novel mechanisms (by-value ABI spike,
+per-field analysis spike) plus baselines; Phase 1 records the fold; Phases 2–3 land the by-value
+substrate (hard-cut ABI, no parallel old path) fully green before any SoA work; Phase 4 builds the
+one layout authority; Phase 5 emits SoA codegen; Phase 6 calibrates `SIZE_THRESHOLD` honestly;
+Phase 7 ships the teaching surface; Phase 8 authors the demo, enumerates suppression, and cuts the
+release tag.
+
+## Question 2 — What actually happened
+
+All 9 phases are marked `STATUS: COMPLETE` in `plan.md` and sealed at boundary commits; the
+cumulative cross-phase completion gate ran a 3-lens fan-out — code-reviewer (reuse/consolidation),
+acceptance-verifier (§3.1 + Key Outcomes), deviation-judge (cross-phase interaction) — returning 0
+blockers, 1 should-fix (fixed pre-seal), 0 unjustified strays.
+
+Phase-by-phase highlights: Phase 0 spikes GREEN, but found the alloc-counter was blind to array/map
+buffer mallocs (E8 baseline blindness → FRAGO 005 made visibility a hard Phase 2/3 requirement).
+Phase 1's fold-recording hit a stale-roadmap deviation (resolved by importing the split verbatim
+first). Phase 2's by-value ABI cut landed across 4 fix rounds, each RED-fixture-first catching a
+real silent-miscompile class (aliasing, frame-embed clobber, persist-boundary gaps — FRAGO 007-011).
+Phase 3's map symmetric fix RED matrix caught a real pre-existing MapEntry indirection miscompile,
+plus two live MapEntry-escape bugs found and fixed. Phase 4's re-verify found a THIRD padding
+consumer the original recon missed (FRAGO 013). Phase 5 discovered `.copy()` was a pre-existing
+alias no-op contradicting the plan's deep-copy assumption (FRAGO 014, fixed both modes), plus a
+bg-arg double-copy leak, plus D11's shape-level-padding-forfeits-SoA interaction (recorded FR#12,
+working-as-designed). Phase 6 is the headline event: shipped O0 binaries show NO SoA benefit (net
+1.00-1.18x), while the same IR shows ~3.3x under `opt-18 -O2` — falsifying the Mission's "10-40x"
+claim (FRAGO 017, honest reframe). Separately found a stale-release-archive silent-miscompile
+footgun (FRAGO 018, durably deferred + immediate operational guard) that had already corrupted one
+measurement (corrected via FRAGO 019). Phase 7/8 found Phase 4's `hot_fields` analysis was never
+consumed by Phase 5's codegen (FRAGO 020, deferred as FR#15), and FRAGO 023 caught the Phase 8
+rebuild-guard's own command string was a no-op (`cargo clean -p X` without `--release`) before the
+tag-cut step could reproduce it silently.
+
+23 FRAGOs total, every one logged with trigger/risk/changes; the cumulative deviation-judge pass
+independently re-verified against live code (not narrative) that no unjustified stray survived.
+
+## Question 3 — Why the gaps (root-cause each divergence)
+
+Full table with citations lives in the AAR agent's own return (referenced here, not re-typed in
+full): E8 counter-blindness and Phase 4's missed 3rd padding consumer were both **plan/recon
+gaps**, caught by the plan's own mandated re-verify steps. Phase 2/3's fix-round bugs and Phase 6's
+falsified perf claim were **unverified assumptions baked into the plan**, caught by RED-fixture
+discipline or honest measurement. Phase 5's D11xpadding interaction (FR#12) was a **genuine
+emergent property** of composing two independently-correct systems, correctly deferred rather than
+redesigned mid-milestone. FRAGO 018's stale-archive footgun was a **pre-existing adjacent bug**,
+exposed not caused, correctly scoped out-of-charter. FRAGO 023 was **an unverified claim in the
+FRAGO-author's own fix-spec**, caught by an executor who ran the recipe and checked file mtimes
+rather than trusting the text. FRAGO 020's `hot_fields` gap was a **cross-phase consolidation
+miss** — Phase 5 never fully consumed what Phase 4's analysis computed, surfaced two phases later
+by a benchmark symptom.
+
+No divergence in this plan's execution was left undetermined — every one traces to a named root
+cause with a citable evidence anchor in the FRAGO log.
+
+## Question 4 — Lessons (surfaced, classified by home; rule-author disposes)
+
+1. **RULE candidate** — honest mid-execution reframe of a falsified headline perf claim, continue
+   rather than bury/halt (FRAGO 017's pattern: re-run the risk engine, rewrite Mission/KO/Invariant
+   text honestly, continue if residual scores MEDIUM-or-below after mitigation). Cross-refs:
+   `REF-decision-philosophy.md`, `plan-source-of-truth.md`'s sibling headline-reconciliation check
+   (this is its mid-execution-discovery cousin, not the same check).
+2. **RULE candidate (no-duct-tape addendum)** — "cheap immediate operational guard now + durable
+   four-field deferral" as an explicit named pattern (FRAGO 018): when a deferred structural fix
+   leaves an immediate, in-scope, low-cost mitigating action available, that action should be a
+   required fifth element of a legitimate deferral, not an optional nicety. No existing graveyard
+   entry names this combination (checked).
+3. **Possible 2nd worked example for `verification.md`** — FRAGO 023 is the same class
+   `verification.md` already documents ("a router's own authored fix-spec is a claim, not ground
+   truth") — a cargo-behavior command string instead of a security-boundary fix. Surfaced for
+   rule-author's judgment on whether it adds distinct enough texture to warrant inclusion.
+4. **GRAVEYARD CORPSE candidate** — "Authoritative Analysis Output Computed But Never Consumed
+   Downstream" (FRAGO 020: Phase 4's `hot_fields` computed, Phase 5's codegen never read it). The
+   mirror failure mode of `authoritative-derivation.md` (which bans re-deriving an already-computed
+   answer) — here the failure is silent underuse instead of re-derivation. Diff-greppable in
+   principle (a struct field populated by one pass, never referenced by its designated consumer).
+5. **RULE candidate (sustain, likely global not project-local)** — FRAGO 004's blanket pre-sign
+   pattern ("waive blocking, never waive the paper trail or the final human gate") ran this entire
+   unattended overnight P0-P8 execution across 23 FRAGOs with zero friction and zero HIGH residual;
+   the one gate never waived (completion approval) held exactly as designed. Likely belongs in
+   `REF-decision-philosophy.md` or `IMP-frago-aar.md` rather than as a Yinz-specific rule.
+6. **Project-memory, already correctly homed** — the stale-runtime-archive footgun (FR#14) and the
+   O0 stack-growth SIGSEGV ceiling (FR#13) are repo-specific facts already durably filed in
+   `plan.md`'s Future Requirements + the roadmap's Capability Ledger. No redirect needed.
+
+## Blocked?
+
+Not blocked — a completed, sealed plan with an extensive audit trail.
+
+## End-State verdict
+
+**Restating acceptance-verifier's cumulative-gate verdict:** MET — all 6 Key Outcomes verified
+against actual produced artifacts, not narration. Key Outcome 6's "a v0.3.x tag ships it"
+sub-clause is an explicit, recorded, deliberate carve-out (Patrick's own withheld release action),
+not a failure.
+
+**AAR-level tag (finer-grained than "met"):** PARTIAL — met, but carrying 23 logged justified
+deviations, several carried-forward Future-Requirements entries (E1/E3/E5/E6/E7 recorded MEDIUMs
+among them, plus FR#13/#14/#15), and one deliberate headline element (the release tag) still
+outstanding by Patrick's own choice.
+
+## Handoff
+
+Lessons 1-6 above handed to rule-author for classification/capture/routing per
+`IMP-frago-aar.md` §3 — the AAR proposes, rule-author disposes. Full lesson detail (evidence
+anchors, cross-reference candidates, the three open routing questions on lessons 3/4/5) is in the
+rule-author dispatch prompt, not re-typed here.

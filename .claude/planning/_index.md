@@ -16,7 +16,7 @@ _No member plans yet._
 _No member plans yet._
 
 ### [v0-3-concurrency-perf](active/2026-05-21-v0-3-concurrency-perf/roadmap.md) `active`
-- [v0-3-m5-auto-soa](active/2026-07-03-v0-3-m5-auto-soa/plan.md) `active`
+_No member plans yet._
 
 ## Standalone plans
 
