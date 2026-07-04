@@ -264,6 +264,10 @@ function entrypoint() -> nothing {
   // ────── v0.3-M4: channels + the background handle-form ──────
   // m4_demo suspends (channel receives), so `wait` orders it after m3g's story finishes.
   wait m4_demo()
+  // ────── v0.3-M5: per-field array layout — cannonball volley ──────
+  // m5_soa_demo is pure CPU (it never suspends); m4_demo above was waited, so
+  // this final section runs strictly after the channel story finishes.
+  m5_soa_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -1156,4 +1160,193 @@ function m4_demo() -> nothing {
   // (`auto-arc-codegen-emission`) and its LSP hint wiring + red-tint (`auto_arc` domain /
   // `auto-arc-cautionary-tint`) are recorded deferrals in registry/features.toml. This block
   // grows into a live auto-Arc demo when the emission lands.
+}
+
+// ────── v0.3-M5: per-field array layout — cannonball volley from Fort Pitt ──────
+//
+// The repo's FIRST layout-qualifying array example. `volley` below is a
+// 128-element literal `array<Cannonball>` whose loops read only `x` and `y`, so
+// the compiler stores it as separate per-field arrays (one block of memory per
+// field) instead of each element's fields sitting side by side. Build this
+// project and the compiler prints the `array-using-soa-layout` SUGGESTION
+// (Tier 3 lint, stderr) anchored on the `volley` declaration below — hover it
+// in VSCode for the full WHAT / WHAT-INSTEAD / WHY.
+//
+// Nothing to change in source: there is no source form for the layout, and the
+// program's output is byte-identical in both layouts (also with
+// `--no-auto-parallel`, which turns the transform off entirely).
+//
+// Honest performance note (v0.3-M5 measured, 2026-07-04): in the binaries
+// `ynz build` produces today (no optimizer pass), the layout measured about the
+// same speed (~1.0x, no detectable difference); the identical generated code run
+// through an optimizer step the compiler does not yet ship measured ~3.3x faster
+// on this loop shape. The correctness is unconditional; the speedup arrives when
+// that optimizer step ships.
+//
+// Loop-shape provenance (plan 2026-07-03-v0-3-m5-auto-soa, E13 precondition):
+// 128 balls x 65 read-sweeps (~8.4K element visits, 66 for-in entries) sits well
+// inside the harness-bracketed safe region (visits <= 131,072 AND for-in entries
+// <= 16,384 — crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md), and the
+// printed sums are pinned byte-exact against closed-form arithmetic via
+// expected_stdout.txt.
+
+shape Cannonball {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  ship: string
+}
+
+function m5_soa_demo() -> nothing {
+  print(``)
+  print(`v0.3-M5 — per-field array layout: 128-cannonball volley, hot loop on x/y:`)
+  // A literal initializer is what makes the length compile-time provable
+  // (128 > the 64-element threshold) — one requirement for the per-field layout.
+  let volley: array<Cannonball> = [
+    { x: 0.0, y: 0.0, vx: 1.0, vy: 10.0, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 1.05, vy: 10.1, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 1.1, vy: 10.2, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 1.15, vy: 10.3, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 1.2, vy: 10.4, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 1.25, vy: 10.5, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 1.3, vy: 10.6, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 1.35, vy: 10.7, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 1.4, vy: 10.8, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 1.45, vy: 10.9, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 1.5, vy: 11.0, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 1.55, vy: 11.1, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 1.6, vy: 11.2, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 1.65, vy: 11.3, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 1.7, vy: 11.4, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 1.75, vy: 11.5, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 1.8, vy: 11.6, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 1.85, vy: 11.7, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 1.9, vy: 11.8, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 1.95, vy: 11.9, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 2.0, vy: 12.0, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 2.05, vy: 12.1, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 2.1, vy: 12.2, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 2.15, vy: 12.3, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 2.2, vy: 12.4, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 2.25, vy: 12.5, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 2.3, vy: 12.6, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 2.35, vy: 12.7, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 2.4, vy: 12.8, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 2.45, vy: 12.9, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 2.5, vy: 13.0, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 2.55, vy: 13.1, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 2.6, vy: 13.2, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 2.65, vy: 13.3, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 2.7, vy: 13.4, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 2.75, vy: 13.5, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 2.8, vy: 13.6, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 2.85, vy: 13.7, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 2.9, vy: 13.8, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 2.95, vy: 13.9, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 3.0, vy: 14.0, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 3.05, vy: 14.1, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 3.1, vy: 14.2, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 3.15, vy: 14.3, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 3.2, vy: 14.4, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 3.25, vy: 14.5, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 3.3, vy: 14.6, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 3.35, vy: 14.7, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 3.4, vy: 14.8, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 3.45, vy: 14.9, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 3.5, vy: 15.0, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 3.55, vy: 15.1, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 3.6, vy: 15.2, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 3.65, vy: 15.3, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 3.7, vy: 15.4, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 3.75, vy: 15.5, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 3.8, vy: 15.6, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 3.85, vy: 15.7, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 3.9, vy: 15.8, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 3.95, vy: 15.9, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 4.0, vy: 16.0, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 4.05, vy: 16.1, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 4.1, vy: 16.2, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 4.15, vy: 16.3, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 4.2, vy: 16.4, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 4.25, vy: 16.5, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 4.3, vy: 16.6, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 4.35, vy: 16.7, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 4.4, vy: 16.8, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 4.45, vy: 16.9, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 4.5, vy: 17.0, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 4.55, vy: 17.1, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 4.6, vy: 17.2, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 4.65, vy: 17.3, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 4.7, vy: 17.4, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 4.75, vy: 17.5, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 4.8, vy: 17.6, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 4.85, vy: 17.7, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 4.9, vy: 17.8, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 4.95, vy: 17.9, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 5.0, vy: 18.0, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 5.05, vy: 18.1, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 5.1, vy: 18.2, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 5.15, vy: 18.3, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 5.2, vy: 18.4, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 5.25, vy: 18.5, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 5.3, vy: 18.6, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 5.35, vy: 18.7, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 5.4, vy: 18.8, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 5.45, vy: 18.9, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 5.5, vy: 19.0, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 5.55, vy: 19.1, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 5.6, vy: 19.2, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 5.65, vy: 19.3, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 5.7, vy: 19.4, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 5.75, vy: 19.5, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 5.8, vy: 19.6, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 5.85, vy: 19.7, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 5.9, vy: 19.8, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 5.95, vy: 19.9, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 6.0, vy: 20.0, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 6.05, vy: 20.1, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 6.1, vy: 20.2, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 6.15, vy: 20.3, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 6.2, vy: 20.4, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 6.25, vy: 20.5, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 6.3, vy: 20.6, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 6.35, vy: 20.7, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 6.4, vy: 20.8, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 6.45, vy: 20.9, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 6.5, vy: 21.0, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 6.55, vy: 21.1, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 6.6, vy: 21.2, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 6.65, vy: 21.3, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 6.7, vy: 21.4, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 6.75, vy: 21.5, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 6.8, vy: 21.6, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 6.85, vy: 21.7, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 6.9, vy: 21.8, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 6.95, vy: 21.9, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 7.0, vy: 22.0, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 7.05, vy: 22.1, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 7.1, vy: 22.2, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 7.15, vy: 22.3, ship: `Mon Wharf` },
+    { x: 0.0, y: 0.0, vx: 7.2, vy: 22.4, ship: `Fort Pitt` }, { x: 0.0, y: 0.0, vx: 7.25, vy: 22.5, ship: `Duquesne` },
+    { x: 0.0, y: 0.0, vx: 7.3, vy: 22.6, ship: `Allegheny Queen` }, { x: 0.0, y: 0.0, vx: 7.35, vy: 22.7, ship: `Mon Wharf` }
+  ]
+  let grounded: Cannonball = { x: 0.0, y: 0.0, vx: 0.0, vy: 0.0, ship: `dry dock` }
+  let gravity: number = 0.25
+  let heightSum: number = 0.0
+  let step: int = 0
+  while (step < 64) {
+    // Physics step: read each ball out by value (`volley[i]` returns
+    // `maybe<Cannonball>`; `.or(grounded)` unwraps it), write the advanced
+    // ball back. Element mutation keeps the per-field layout — only growth
+    // (`.add`) or letting the array escape this function would turn it off.
+    let i: int = 0
+    while (i < 128) {
+      let b = volley[i].or(grounded)
+      volley[i] = { x: b.x + b.vx, y: b.y + b.vy, vx: b.vx, vy: b.vy - gravity, ship: b.ship }
+      i = i + 1
+    }
+    // Hot read-sweep: touches ONLY `y`. With per-field layout this loop loads
+    // just the `y` block instead of every 5-field element.
+    for (ball in volley) {
+      heightSum = heightSum + ball.y
+    }
+    step = step + 1
+  }
+  // Second hot sweep: reads only `x` and `y` — the loops over `volley` touch
+  // at most 2 distinct fields total, which is what qualifies it.
+  let rangeSum: number = 0.0
+  let finalHeightSum: number = 0.0
+  for (ball in volley) {
+    rangeSum = rangeSum + ball.x
+    finalHeightSum = finalHeightSum + ball.y
+  }
+  print(`  height integral over 64 steps:`)
+  print(heightSum)
+  print(`  total range (sum of final x):`)
+  print(rangeSum)
+  print(`  total final height (sum of y):`)
+  print(finalHeightSum)
+  // Cold field read AFTER the loops: `ship` never appears in a loop over
+  // `volley`, so reading it off a copied-out element leaves the hot-field
+  // set at x/y — the layout decision is unaffected.
+  let lead = volley[0].or(grounded)
+  print(`  lead ball fired from: ${lead.ship}`)
+  print(`  lead ball final height:`)
+  print(lead.y)
+
+  // The suppression filter, on display: `recordHit(lend self: Pirate, ...)`
+  // exists in this file (M4 section above), so ANY `array<Pirate>` keeps the
+  // normal side-by-side layout — a lend-self function expects each Pirate's
+  // fields together in memory, and splitting them per-field would break that.
+  // `crew` otherwise fully qualifies (66 > 64, literal, 1-field loop): the
+  // decline below is exactly the lend-self filter firing. No lint prints for
+  // it — declining to the normal layout is always safe and silent.
+  let crew: array<Pirate> = [
+    { name: `Mate 1`, careerHits: 1 }, { name: `Mate 2`, careerHits: 2 }, { name: `Mate 3`, careerHits: 3 },
+    { name: `Mate 4`, careerHits: 4 }, { name: `Mate 5`, careerHits: 5 }, { name: `Mate 6`, careerHits: 6 },
+    { name: `Mate 7`, careerHits: 7 }, { name: `Mate 8`, careerHits: 8 }, { name: `Mate 9`, careerHits: 9 },
+    { name: `Mate 10`, careerHits: 10 }, { name: `Mate 11`, careerHits: 11 }, { name: `Mate 12`, careerHits: 12 },
+    { name: `Mate 13`, careerHits: 13 }, { name: `Mate 14`, careerHits: 14 }, { name: `Mate 15`, careerHits: 15 },
+    { name: `Mate 16`, careerHits: 16 }, { name: `Mate 17`, careerHits: 17 }, { name: `Mate 18`, careerHits: 18 },
+    { name: `Mate 19`, careerHits: 19 }, { name: `Mate 20`, careerHits: 20 }, { name: `Mate 21`, careerHits: 21 },
+    { name: `Mate 22`, careerHits: 22 }, { name: `Mate 23`, careerHits: 23 }, { name: `Mate 24`, careerHits: 24 },
+    { name: `Mate 25`, careerHits: 25 }, { name: `Mate 26`, careerHits: 26 }, { name: `Mate 27`, careerHits: 27 },
+    { name: `Mate 28`, careerHits: 28 }, { name: `Mate 29`, careerHits: 29 }, { name: `Mate 30`, careerHits: 30 },
+    { name: `Mate 31`, careerHits: 31 }, { name: `Mate 32`, careerHits: 32 }, { name: `Mate 33`, careerHits: 33 },
+    { name: `Mate 34`, careerHits: 34 }, { name: `Mate 35`, careerHits: 35 }, { name: `Mate 36`, careerHits: 36 },
+    { name: `Mate 37`, careerHits: 37 }, { name: `Mate 38`, careerHits: 38 }, { name: `Mate 39`, careerHits: 39 },
+    { name: `Mate 40`, careerHits: 40 }, { name: `Mate 41`, careerHits: 41 }, { name: `Mate 42`, careerHits: 42 },
+    { name: `Mate 43`, careerHits: 43 }, { name: `Mate 44`, careerHits: 44 }, { name: `Mate 45`, careerHits: 45 },
+    { name: `Mate 46`, careerHits: 46 }, { name: `Mate 47`, careerHits: 47 }, { name: `Mate 48`, careerHits: 48 },
+    { name: `Mate 49`, careerHits: 49 }, { name: `Mate 50`, careerHits: 50 }, { name: `Mate 51`, careerHits: 51 },
+    { name: `Mate 52`, careerHits: 52 }, { name: `Mate 53`, careerHits: 53 }, { name: `Mate 54`, careerHits: 54 },
+    { name: `Mate 55`, careerHits: 55 }, { name: `Mate 56`, careerHits: 56 }, { name: `Mate 57`, careerHits: 57 },
+    { name: `Mate 58`, careerHits: 58 }, { name: `Mate 59`, careerHits: 59 }, { name: `Mate 60`, careerHits: 60 },
+    { name: `Mate 61`, careerHits: 61 }, { name: `Mate 62`, careerHits: 62 }, { name: `Mate 63`, careerHits: 63 },
+    { name: `Mate 64`, careerHits: 64 }, { name: `Mate 65`, careerHits: 65 }, { name: `Mate 66`, careerHits: 66 }
+  ]
+  let careerTotal: int = 0
+  for (mate in crew) {
+    careerTotal = careerTotal + mate.careerHits
+  }
+  print(`  gun-crew career hits (side-by-side layout by design): ${careerTotal.toString()}`)
 }

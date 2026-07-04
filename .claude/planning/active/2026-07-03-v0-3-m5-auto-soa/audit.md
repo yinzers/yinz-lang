@@ -2869,3 +2869,167 @@ All three are narrowing/cosmetic variants of already-substantively-fixed work, s
 non-blocking by their own reviewers, with zero correctness/security/user-facing-claim-accuracy
 risk riding on any of them. Accepted as floor-pinned residuals per verification.md's YAGNI
 ceiling — named here per "no silent caps," not chased. Boundary commit proceeds.
+
+## Session log — 2026-07-04 — session-id: phase8-executor-2026-07-04-m5
+
+Phase 8 segment 1 (dispatch scope: steps 1-5 full, step 6 partial — CHANGELOG draft only, no
+release action, per Patrick's instruction this session). Returned **PARTIAL at `phase-8/step-2`**
+(context-budget checkpoint at the step-1/step-2 seam; tree green). **Step 1 DONE** — demo + golden:
+
+- `examples/pirates-roster/entrypoint.ynz` v0.3-M5 section (`m5_soa_demo()`, called last):
+  128-element literal `array<Cannonball{x,y,vx,vy: number, ship: string}>`, 64 physics steps
+  (whole-element IndexAssign scatter — probe-verified that for-in loop-var field writes do NOT
+  write back; D13 copy semantics), per-step hot for-in sweep on `y`, final sweep on `x`+`y`
+  (union {x,y}), cold `ship` read, and a 66-element `array<Pirate>` crew tally showing the
+  lend-self filter (declines via `LendSelfMethod{recordHit}`) in the demo itself. Lint
+  `array-using-soa-layout` fires exactly once (volley), inline comments point at it + carry the
+  honest E14 perf note (both measurements, never conflated).
+- **E13 precondition (FRAGO 016/019) receipt:** (N, R) = 128 × 65 for-in sweeps → 8,386 for-in
+  visits, 66 for-in entries — inside the proven-safe joint region (visits ≤ 131,072 AND entries
+  ≤ 16,384, soa-threshold-raw-2026-07-04.md). Checksum tripwire paper-trace (closed forms vs
+  observed, residual 0 on all six):
+  - heightSum: Σ_{t=1..64} [t·Σvy − 16·t(t−1)] with Σvy = 2092.8 → 2092.8·2080 − 16·87360 =
+    4,353,024 − 1,397,760 = **2,955,264** — observed 2955264.00 ✓
+  - sumX: 128·64 + 3.2·8128 = **34,201.6** — observed 34201.60 ✓
+  - sumY: 128·136 + 6.4·8128 = **69,427.2** — observed 69427.20 ✓
+  - lead y₀: 64·10 − 0.25·2016 = **136** — observed 136.00 ✓; lead ship Fort Pitt ✓
+  - crew: Σ 1..66 = **2211** — observed 2211 ✓
+- Golden regenerated via its own script; `examples_basics_runs_end_to_end` byte-exact PASS;
+  fmt `examples_roundtrip` PASS. Demo tail (post "all 8 pirates done") byte-identical across
+  default vs `YNZ_NO_AUTO_PARALLEL=1` (lint stderr absent sequentially — the structural gate).
+- Known pre-existing number-field int-literal ICE (roadmap audit deferral) avoided: decimal
+  literals only into `number` slots. One authoring bug fixed pre-landing: Python Decimal
+  normalize emitted `1E+1.0`/`2E+1.0` literals — corrected to 10.0/20.0.
+- New probe-established substrate facts (first coverage): number(decimal128)+string fields in an
+  SoA-admitted array are correct end-to-end (forced-SoA probe + the real N=128 demo, closed-form
+  checksums exact).
+
+Handoff: `handoff-phase-8.md` (resume-at `phase-8/step-2`, receipts inside — D6 never armed →
+zero new error classes; gallery grep clean; E11 like-for-like caveat re the demo's added source).
+No deviations requiring FRAGO routing surfaced this segment. Scratch: `tmp-p8-probe/` untracked.
+
+## Session log — 2026-07-04 — session-id: phase8-executor-2026-07-04-m5-seg2
+
+Phase 8 segment 2 — steps 2-5 COMPLETE, step 6 PARTIAL by instruction (release withheld,
+Patrick's call). Full record in the Phase 8 STATUS block (plan.md ¶3.3). Highlights + the
+step-6 deliverables that live here:
+
+- **Step 2:** zero-new-error-classes deliberate-omission row added to
+  `examples/primantis-orders/README.md`; stale-trigger grep re-verified clean;
+  `error_galleries.rs` untouched (no v0_3_m5 reference exists).
+- **Step 3:** `soa-enumeration-report.md` committed (sibling file) — 599 files, 57 verdict
+  rows, all absences accounted; durable demo pin added to `crates/ynz-typeck/tests/soa_analysis.rs`
+  (`pirates_roster_demo_volley_admits_and_crew_declines_lend_self`, 22/22 green).
+- **Step 4 (E11) paper-trace:** Observed A=210ms (P0 baseline, old compiler, 1159-line source) /
+  B=170ms (new compiler, SAME source) / C=254ms (new compiler, 1352-line source incl. demo).
+  Expected: B ≤ A×1.10. Residual: B−A = −40ms (−19%) — negative; gate PASSES with margin.
+  Hypothesis for C−B (+41% wall vs +16.6% lines): the demo section (128-element literal +
+  SoA-admitted lowering) is denser compile work per line — new-code cost, not analysis
+  overhead on old code. Evidence path: `baselines-p0.md` (A, methodology);
+  `tmp-p8-probe/entrypoint_1ac52fd` swap runs this session (B, C); entrypoint restored
+  byte-exact (md5 `2a09c608…` before/after).
+- **Step 4 deviation surfaced (NOT self-classified):** FRAGO 018's literal recipe
+  `cargo clean -p ynz-runtime` does NOT remove release-profile artifacts on this cargo
+  version — the post-clean `--release` build finished in 0.05s with the archive mtime
+  unchanged (08:51 vs 14:03 run time). `cargo clean -p ynz-runtime --release` is the
+  effective form (24 files removed, fresh archive + fresh driver verified by mtime).
+  Side effect worth knowing: the profile-less clean removes the DEBUG archive, which broke
+  the test build (`ynz-watch` `include_bytes!(env!("YNZ_RT_LIB_PATH"))`) until
+  `cargo build -p ynz-runtime` restored it. For the deviation-judge: plan text says
+  `cargo clean -p ynz-runtime && cargo build -p ynz-runtime --release`; reality requires
+  `--release` on the clean for the guard to bite.
+- **Step 5:** `cross_impl_consistency` 2/2 (whole corpus dual-mode byte-identical, incl.
+  the demo-bearing tree) + `cargo test --workspace` green (124 test binaries, 0 failures).
+
+### CHANGELOG entry DRAFT (PROPOSAL ONLY — not applied to CHANGELOG.md, no version bump, no tag)
+
+Recommended version: **v0.3.1** (next v0.3.x patch-line slot; Cargo.toml is at 0.3.0 and the
+last CHANGELOG entry is [0.3.0] — 2026-07-03).
+
+```markdown
+## [0.3.1] — 2026-07-XX — M5: Array-By-Value Element Storage + Auto-SoA Layout
+
+### Fixed
+- **Stack-dangling miscompile class eliminated**: `array<Shape>`, `fixed<Shape>`, and
+  `map<K, Shape>` now store elements BY VALUE in the collection's own heap buffer instead of
+  persisting interior stack pointers — the silent read-of-dead-frame class is structurally
+  gone (E8 alloc=free parity held across the migration).
+- The `ArrayShapeRuntimeFieldWithWait` guard is LIFTED: runtime-computed shape fields in
+  arrays crossing `wait` now compile and run correctly (M5 removed an error class; it added
+  none — see `examples/primantis-orders/README.md`).
+
+### Added
+- **Auto-SoA layout infrastructure** (codegen-only auto-promotion, no source syntax):
+  provably-safe large hot-loop `array<Shape>` bindings (> 64 elements, ≤ 2-field loop union,
+  no escape/growth/lend-self/cross-thread-padding) are laid out struct-of-arrays
+  automatically, surfaced via the Tier 3 lint `array-using-soa-layout`. **Honest performance
+  caveat**: calibration found NO O0 crossover on the shipped workloads — the measured win at
+  the locked threshold is cache-locality headroom, not a benchmarked speedup claim; the
+  SIZE_THRESHOLD (64, strict) is calibrated conservative (see
+  `crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md`).
+- Layout authority: one `layout_decisions_query` source of truth (padding-wins precedence —
+  a cross-thread-padded shape is never SoA-split), per authoritative-derivation discipline.
+- Demo: `examples/pirates-roster/entrypoint.ynz` v0.3-M5 section — 128-cannonball volley
+  physics (SoA-admitted, lint fires) + 66-pirate crew tally (declined via the lend-self
+  suppression filter, demonstrated in-demo).
+- Suppression enumeration report: every `array<Shape>` site across examples + fixtures with
+  its machine-recorded verdict (`.claude/planning/active/2026-07-03-v0-3-m5-auto-soa/soa-enumeration-report.md`),
+  plus a durable typeck pin on the demo's two verdicts.
+
+### Deferred (elevated to the roadmap)
+- Stale-runtime-archive footgun: a stale `libynz_runtime.a` release archive silently
+  miscompiles by resolving old-ABI symbols by name; operational clean-rebuild guard in place
+  (note: the clean is per-profile — the profile-less `cargo clean -p ynz-runtime` does not
+  touch release artifacts, so the guard cleans + rebuilds BOTH debug and release), durable
+  fix tracked on the roadmap.
+- Int-literal-into-`number`-field ICE: a bare integer literal assigned to a `number`
+  (decimal128) shape field crashes emit.rs; workaround is decimal literals; fix tracked on
+  the roadmap.
+```
+
+(End DRAFT. Applying it, bumping Cargo.toml, tagging, and `/release` are Patrick's actions.)
+
+## FRAGO 023 — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (deviation-judge classified JUSTIFIED; risk-neutral cargo-behavior correction; auto-apply + log)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 8, segment 2 (mid-phase)
+Trigger:   FRAGO 018's rebuild-from-clean guard (prepended to Phase 8 steps 4 and 6) reads
+           `cargo clean -p ynz-runtime && cargo build -p ynz-runtime --release` — but the
+           segment-2 executor found this recipe is a NO-OP against release-profile artifacts:
+           `cargo clean -p <pkg>` without `--release` targets only the debug profile, so the
+           "rebuild from clean" guard never touched the release archive it exists to defend
+           (verified: post-clean release "rebuild" finished in 0.05s, archive mtime unchanged).
+           The corrected form `cargo clean -p ynz-runtime --release && cargo build -p ynz-runtime
+           --release` DOES clean/rebuild the release archive (verified: 24 files removed, fresh
+           mtime) — but that release-only form has its own side effect: it leaves the DEBUG
+           archive untouched, and Phase 8 step 5's dual-mode suite depends on a working debug
+           archive (`ynz-watch`'s `include_bytes!` broke until a plain `cargo build -p
+           ynz-runtime` (debug) was also re-run). Deviation-judge verdict: JUSTIFIED — a real
+           cargo-behavior fact FRAGO 018's own text got wrong, verified before acting on it, not
+           executor drift.
+Risk:      Risk-neutral cargo-invocation correction — no plan-scope change, no new mitigation
+           bucket, purely fixing a command string so the guard actually does what it always
+           claimed to do. Elevated to should-fix (not minor) because step 6 (the tag cut) has NOT
+           yet executed against this guard — an unfixed plan text at step 6 would silently
+           reproduce the identical no-op at the highest-consequence moment (shipping the tag),
+           with no visible failure signal (a 0.05s "rebuild" looks identical to success).
+Changes (plan.md — applied by a small follow-up executor dispatch, not the conductor directly):
+  - Phase 8 step 4's rebuild-guard text: replace `cargo clean -p ynz-runtime && cargo build -p
+    ynz-runtime --release` with the both-profile form: `cargo clean -p ynz-runtime && cargo build
+    -p ynz-runtime && cargo clean -p ynz-runtime --release && cargo build -p ynz-runtime
+    --release` (clean+rebuild debug, THEN clean+rebuild release — the broader form, since step
+    5's dual-mode suite between steps 4 and 6 needs the debug archive honest too, and the
+    release-only form was empirically shown to leave it stale).
+  - Phase 8 step 6's identical guard text: same correction, same reasoning — this is the
+    higher-urgency site since step 6 is still unexecuted.
+Unchanged: everything else in Phase 8; FRAGO 018's own reasoning/deferral content (untouched —
+           this FRAGO only fixes the literal command string, not the guard's purpose).
+Override:  N/A — risk-neutral, mechanical cargo-invocation fix.
+
+## Session log — 2026-07-04 — session-id: plan-fixup-frago023-2026-07-04-m5
+
+Applied FRAGO 023 (paperwork-only dispatch, no code/build): replaced the FRAGO 018 rebuild-guard
+command string at BOTH plan.md sites (Phase 8 step 4 and step 6) with the both-profile form
+`cargo clean -p ynz-runtime && cargo build -p ynz-runtime && cargo clean -p ynz-runtime --release
+&& cargo build -p ynz-runtime --release`; per the fixed-fact sweep, also aligned the segment-2
+CHANGELOG DRAFT's guard parenthetical (above, this file) to describe the both-profile guard
+(it cited only the release-only clean; cosmetic). FRAGO 018's own record and the Phase 8 STATUS
+discovery narrative left untouched per FRAGO 023's Unchanged clause.

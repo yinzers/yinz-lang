@@ -87,13 +87,13 @@ main done with v0.3-M1
 v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):
 scheduling 8 pirates...
 McCutchen: done
-Beaumont: done
-Bonds: done
-Kiner: done
-Mazeroski: done
-Wagner: done
 Clemente: done
 Stargell: done
+Mazeroski: done
+Bonds: done
+Kiner: done
+Wagner: done
+Beaumont: done
 all 8 pirates done
 
 v0.3-M2 — inferred wait (no explicit wait written):
@@ -151,3 +151,15 @@ v0.3-M4 — channels + the background handle-form:
 runs relayed inning by inning: 10
 scout graded jersey 21 at: 42
 inning tally (padded across tasks): 7
+
+v0.3-M5 — per-field array layout: 128-cannonball volley, hot loop on x/y:
+  height integral over 64 steps:
+2955264.00
+  total range (sum of final x):
+34201.60
+  total final height (sum of y):
+69427.20
+  lead ball fired from: Fort Pitt
+  lead ball final height:
+136.00
+  gun-crew career hits (side-by-side layout by design): 2211

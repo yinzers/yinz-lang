@@ -3,7 +3,7 @@ name: "v0-3-m5-auto-soa"
 plan-id: "2026-07-03-v0-3-m5-auto-soa"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5-seg2", "phase3-executor-2026-07-03-m5-seg3", "phase3-executor-2026-07-03-m5-seg4", "phase3-executor-2026-07-03-m5-seg5", "phase3-executor-2026-07-03-m5-seg6", "phase3-executor-2026-07-03-m5-seg7", "phase3-executor-2026-07-03-m5-seg8", "phase3-executor-2026-07-03-m5-seg9", "phase3-executor-2026-07-03-m5-seg10", "phase4-executor-2026-07-03-m5", "phase4-executor-2026-07-03-m5-seg2", "phase4-executor-2026-07-03-m5-seg3", "phase4-executor-2026-07-03-m5-seg4", "plan-fixup-frago013-2026-07-03-m5", "phase4-executor-2026-07-03-m5-closing", "phase4-executor-2026-07-03-m5-closing2", "phase4-deferral-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5-seg2", "phase5-executor-2026-07-03-m5-seg3", "phase5-executor-2026-07-03-m5-seg4", "phase5-executor-2026-07-03-m5-seg5", "phase5-executor-2026-07-03-m5-closing", "phase6-executor-2026-07-03-m5", "phase6-executor-2026-07-03-m5-seg2", "phase6-executor-2026-07-03-m5-seg3", "phase6-executor-2026-07-03-m5-seg4", "plan-conductor-2026-07-04-m5-fable", "phase6-fixround1-executor-2026-07-04-m5", "phase7-executor-2026-07-04-m5", "phase7-executor-2026-07-04-m5-seg2", "phase7-executor-2026-07-04-m5-seg3", "phase7-executor-2026-07-04-m5-seg4", "phase7-fixround1-executor-2026-07-04-m5", "phase7-fixround2-executor-2026-07-04-m5", "plan-fixup-icedefer-2026-07-04-m5"]
+session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5-seg2", "phase3-executor-2026-07-03-m5-seg3", "phase3-executor-2026-07-03-m5-seg4", "phase3-executor-2026-07-03-m5-seg5", "phase3-executor-2026-07-03-m5-seg6", "phase3-executor-2026-07-03-m5-seg7", "phase3-executor-2026-07-03-m5-seg8", "phase3-executor-2026-07-03-m5-seg9", "phase3-executor-2026-07-03-m5-seg10", "phase4-executor-2026-07-03-m5", "phase4-executor-2026-07-03-m5-seg2", "phase4-executor-2026-07-03-m5-seg3", "phase4-executor-2026-07-03-m5-seg4", "plan-fixup-frago013-2026-07-03-m5", "phase4-executor-2026-07-03-m5-closing", "phase4-executor-2026-07-03-m5-closing2", "phase4-deferral-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5-seg2", "phase5-executor-2026-07-03-m5-seg3", "phase5-executor-2026-07-03-m5-seg4", "phase5-executor-2026-07-03-m5-seg5", "phase5-executor-2026-07-03-m5-closing", "phase6-executor-2026-07-03-m5", "phase6-executor-2026-07-03-m5-seg2", "phase6-executor-2026-07-03-m5-seg3", "phase6-executor-2026-07-03-m5-seg4", "plan-conductor-2026-07-04-m5-fable", "phase6-fixround1-executor-2026-07-04-m5", "phase7-executor-2026-07-04-m5", "phase7-executor-2026-07-04-m5-seg2", "phase7-executor-2026-07-04-m5-seg3", "phase7-executor-2026-07-04-m5-seg4", "phase7-fixround1-executor-2026-07-04-m5", "phase7-fixround2-executor-2026-07-04-m5", "plan-fixup-icedefer-2026-07-04-m5", "phase8-executor-2026-07-04-m5", "phase8-executor-2026-07-04-m5-seg2", "plan-fixup-frago023-2026-07-04-m5"]
 created_at: "2026-07-03"
 updated_at: "2026-07-03"
 metadata:
@@ -1458,7 +1458,7 @@ phases (P2, P5) checkpoint per the marks below.
 
      **CHECKPOINT** — demo + gallery + enumeration green and committed.
   4. **Operational guard (FRAGO 018):** rebuild ynz-runtime's release archive from clean
-     (`cargo clean -p ynz-runtime && cargo build -p ynz-runtime --release`) before this step —
+     (`cargo clean -p ynz-runtime && cargo build -p ynz-runtime && cargo clean -p ynz-runtime --release && cargo build -p ynz-runtime --release`) before this step —
      Phase 6 segment 3 found a stale release archive silently miscompiles by resolving old-ABI
      symbols by name (Future Requirements #14 for the durable fix).
      **Compile-time cost gate (E11):** wall-clock of the release-profile compiler binary running
@@ -1467,7 +1467,7 @@ phases (P2, P5) checkpoint per the marks below.
      FRAGO 006); <10% or STOP and optimize before release.
   5. Full cross-impl dual-mode suite, final run.
   6. **Operational guard (FRAGO 018):** rebuild ynz-runtime's release archive from clean
-     (`cargo clean -p ynz-runtime && cargo build -p ynz-runtime --release`) before this step —
+     (`cargo clean -p ynz-runtime && cargo build -p ynz-runtime && cargo clean -p ynz-runtime --release && cargo build -p ynz-runtime --release`) before this step —
      Phase 6 segment 3 found a stale release archive silently miscompiles by resolving old-ABI
      symbols by name (Future Requirements #14 for the durable fix).
      **Release:** version bump to the v0.3.x patch-line slot current at execution time; CHANGELOG
@@ -1476,6 +1476,80 @@ phases (P2, P5) checkpoint per the marks below.
 - **Reviewer fan-out:** code-reviewer; docs-consistency reviewer (demo comments, CHANGELOG);
   adversarial gate-checker (enumeration report completeness).
 - **Model tag:** `(coding, standard, medium)`
+
+> Segment 1 (session `phase8-executor-2026-07-04-m5`, 2026-07-04) returned PARTIAL at
+> `phase-8/step-2` (context-budget checkpoint at the step-1/step-2 seam; tree green —
+> integration byte-exact golden + fmt examples_roundtrip both pass). **Step 1 DONE:**
+> `examples/pirates-roster/entrypoint.ynz` gained the v0.3-M5 section — `m5_soa_demo()`
+> (called last in entrypoint(), pure-CPU, ordered after the waited m4_demo): a
+> 128-element literal `array<Cannonball{x,y,vx,vy: number, ship: string}>` volley,
+> 64 physics steps (read-out via `volley[i].or(grounded)` + whole-element IndexAssign
+> scatter — for-in loop-var field writes do NOT write back, verified by probe; D13 copy
+> semantics), a per-step hot for-in sweep reading only `y`, a final sweep reading `x`+`y`
+> (union = {x,y}, D5), a cold `ship` read off a copied-out element, PLUS a 66-element
+> `array<Pirate>` gun-crew tally demonstrating the lend-self suppression filter
+> (recordHit) in the demo itself. Lint `array-using-soa-layout` fires exactly once
+> (volley; crew silent). **E13 precondition honored (FRAGO 016/019):** demo shape
+> N=128 × 65 for-in sweeps = ~8.4K visits / 66 entries — inside the bracketed joint
+> region (visits ≤ 131,072 AND entries ≤ 16,384), well clear of the small-N/huge-R zone;
+> plus a direct checksum tripwire: all six printed values match independent closed-form
+> arithmetic exactly (2955264 / 34201.6 / 69427.2 / 136 / Fort Pitt / 2211 — paper-trace
+> in audit.md). Golden regenerated via its script, byte-exact test green; demo tail
+> byte-identical across default and `--no-auto-parallel` (lint absent in sequential mode
+> by the structural gate, as designed). Known number-field ICE avoided per the roadmap
+> deferral (decimal literals only into `number` slots). Steps 2-6 remain — resume via
+> `handoff-phase-8.md`.
+
+> **STATUS: COMPLETE (steps 1-5) / PARTIAL (step 6 — release action deliberately withheld,
+> Patrick's call). 2026-07-04.** Segment 2 (session `phase8-executor-2026-07-04-m5-seg2`)
+> finished steps 2-5 and the non-release half of step 6.
+> **Step 2 (gallery):** M5 shipped ZERO new compile-error classes (D6 never armed — plan.md's
+> own Phase 3 record); recorded as an explicit deliberate-omission row in
+> `examples/primantis-orders/README.md` (v0_3_m3f precedent), no vacuous `v0_3_m5_errors.ynz`
+> created; re-verified no stale `ArrayShapeRuntimeFieldWithWait` triggers (repo grep: only
+> LIFTED-annotation comments at `v0_3_m3a_errors.ynz:23,188` + fixture doc comments);
+> `error_galleries.rs` references no v0_3_m5 file — zero changes needed.
+> **Step 3 (enumeration mandate, roadmap.md:156):** committed report
+> `soa-enumeration-report.md` (sibling to this plan) — 599 files walked through the
+> authoritative `soa_candidate_query`, 0 panics, 57 machine-recorded verdict rows, every
+> textual `array<Shape>` grep hit without a row individually accounted (comments-only /
+> union & generic element types outside the `Type::Shape` admission model by construction /
+> one intentional clean-reject fixture, with the empty-literal blind-spot hypothesis REFUTED
+> by probe: a compiling `array<Point> = []` records `BelowSizeThreshold { len: 0 }`). The
+> demo's two mandated verdicts hold — `volley` = `Admitted { provable_len: 128, hot_fields:
+> [x, y] }`, `crew` = `Declined(LendSelfMethod { recordHit })` — and are durably pinned by
+> `crates/ynz-typeck/tests/soa_analysis.rs::pirates_roster_demo_volley_admits_and_crew_declines_lend_self`
+> (22/22 suite green). Segment-1's UNVERIFIED question answered: single-file registration
+> does NOT type entrypoint.ynz (import resolution needs whole-project registration under
+> absolute canonical paths — the resolver walks the real filesystem for `yinz.toml`).
+> **Step 4 (E11 cost gate): PASS, with paper-trace.** FRAGO 018 guard executed — with a
+> surfaced refinement: `cargo clean -p ynz-runtime` (the plan's literal recipe) does NOT
+> remove release-profile artifacts on this cargo version (post-clean "rebuild" finished in
+> 0.05s with the archive mtime unchanged); `cargo clean -p ynz-runtime --release` does
+> (24 files removed, fresh archive 14:04:28, `ynz-driver --release` rebuilt after, 55MB
+> binary 14:04:55). Measurements (7 reps each, release `ynz build` on pirates-roster, dev
+> container, same methodology as `baselines-p0.md`): **A** (P0 baseline: OLD compiler @
+> fork `1ac52fd`, pre-demo 1159-line entrypoint, 2026-07-03) mean ≈ **210 ms**; **B** (NEW
+> compiler, SAME 1159-line fork-era entrypoint swapped in, restored byte-exact — md5
+> verified) 178/166/167/173/164/166/179 → mean ≈ **170 ms**; **C** (NEW compiler, current
+> 1352-line entrypoint incl. demo) 338/244/233/242/240/238/240 → mean ≈ **254 ms** (≈240 ms
+> excluding the rep-1 warm-up). Residual B−A = **−40 ms (−19%)**: on identical input the M5
+> compiler is FASTER than baseline, so analysis-pass overhead is below measurement noise —
+> the <10% gate passes with margin (same-day old-compiler re-measure unnecessary; the delta
+> is nowhere near the line, and negative). C−B = +70 ms (+41%) against +16.6% lines is the
+> cost of COMPILING THE NEW DEMO (a 128-element literal + SoA-admitted codegen is denser
+> work per line than average), not overhead on pre-existing code — exactly the conflation
+> the segment-1 caveat warned about, now separated by the source swap.
+> **Step 5 (final dual-mode suite):** `cross_impl_consistency` 2/2 green (whole corpus
+> byte-identical across default and `--no-auto-parallel`, 230s) + full `cargo test
+> --workspace` green (124 test binaries, zero failures) — after rebuilding the DEBUG runtime
+> archive the step-4 clean had removed (test builds embed it via `YNZ_RT_LIB_PATH`).
+> **Step 6 (PARTIAL by instruction):** rebuild guard already fresh this session; CHANGELOG
+> entry DRAFT + **v0.3.1** version recommendation recorded in `audit.md` (this session's
+> Session-log entry) — clearly marked DRAFT/PROPOSAL; NO Cargo.toml bump, NO tag, NO
+> `/release`. **Exit criteria:** Invariants verified green (demo + gallery + enumeration +
+> cost gate + dual-mode all green above); "tag cut" deliberately NOT met — the release
+> action is Patrick's call, per the conductor's dispatch instruction.
 
 ### 3.4 Coordinating Instructions
 

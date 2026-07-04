@@ -597,6 +597,81 @@ fn soa_force_env_drives_the_query() {
 }
 
 #[test]
+fn pirates_roster_demo_volley_admits_and_crew_declines_lend_self() {
+    // WHY: the Phase 8 suppression-enumeration mandate (roadmap.md:156) — the
+    // repo's one human-facing SoA demo must keep its two verdicts pinned: the
+    // 128-element `volley` (hot union {x, y}) stays Admitted, and the `crew`
+    // tally stays Declined via the lend-self filter (`recordHit` takes
+    // `lend self: Pirate`), proving the suppression filter fires in the demo
+    // itself, not only in synthetic fixtures. Filtered by binding name so
+    // future milestones can add demo sections (and new candidates) without
+    // breaking this pin. Registration mirrors the driver: EVERY project file,
+    // under absolute canonical paths — the import resolver walks the real
+    // filesystem for `yinz.toml`, so relative registered paths fail resolution.
+    let _guard = env_guard();
+    let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/pirates-roster")
+        .canonicalize()
+        .expect("examples/pirates-roster must exist");
+    fn collect_ynz(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).expect("readable dir").flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect_ynz(&p, out);
+            } else if p.extension().is_some_and(|x| x == "ynz") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    collect_ynz(&project, &mut files);
+    let entry_path = project.join("entrypoint.ynz");
+
+    let mut db = CompilerDb::default();
+    let mut entry_sf = None;
+    for path in files {
+        let sf = SourceFile::new(
+            &db,
+            path.display().to_string(),
+            std::fs::read_to_string(&path).expect("readable source"),
+        );
+        db.register_source(sf);
+        if path == entry_path {
+            entry_sf = Some(sf);
+        }
+    }
+    let entry_sf = entry_sf.expect("entrypoint.ynz must be among the project files");
+    let rows = (*soa_candidate_query(&db, entry_sf)).clone();
+
+    let volley = rows
+        .iter()
+        .find(|r| r.array_name == "volley")
+        .expect("demo `volley` binding must be a recorded candidate");
+    assert_eq!(volley.shape_name, "Cannonball");
+    assert_eq!(
+        volley.verdict,
+        SoaVerdict::Admitted {
+            provable_len: 128,
+            hot_fields: vec!["x".to_string(), "y".to_string()],
+        },
+        "the demo volley must stay SoA-admitted"
+    );
+
+    let crew = rows
+        .iter()
+        .find(|r| r.array_name == "crew")
+        .expect("demo `crew` binding must be a recorded candidate");
+    assert_eq!(crew.shape_name, "Pirate");
+    assert_eq!(
+        crew.verdict,
+        SoaVerdict::Declined(SoaDeclineReason::LendSelfMethod {
+            function: "recordHit".to_string(),
+        }),
+        "the demo crew must stay declined via the lend-self suppression filter"
+    );
+}
+
+#[test]
 fn no_auto_parallel_env_outranks_soa_force_env_at_the_query() {
     // WHY: D8 precedence pin at the QUERY level — both vars set must yield the
     // empty set (the pure-core pin above proves the flag order; this proves the
