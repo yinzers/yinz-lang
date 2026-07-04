@@ -10857,4 +10857,98 @@ fn m5_p4_soa_both_candidate_padding_wins_byte_layout() {
          shape (padding wins over SoA, D11); IR:\n{}",
         &par_ir[..par_ir.len().min(4000)]
     );
+
+    // (d) M5 P5 step 4c — the end-to-end NEGATIVE half: padding wins ⇒ SoA is
+    // genuinely DECLINED through codegen, not just at analysis level (P4 proved
+    // the analysis half in soa_analysis.rs; this became meaningful once P5 gave
+    // codegen the ability to emit SoA). Zero SoA construction instructions.
+    assert!(
+        !par_ir.contains("soa_new") && !par_ir.contains("soa_ctor"),
+        "both-candidate fixture must emit ZERO SoA instructions in default mode \
+         (padding wins over SoA, D11) — a hit means the ONE layout authority \
+         resolved the collision to SoA, or a second derivation crept in"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M5 P5 step 4c: E9 SoA matrix — .copy() independence + SoA × wait × background
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn m5_p5_copy_aos_independent() {
+    // WHY: FRAGO 014 independence lock, AoS cell. Pre-fix, array `.copy()` was
+    // an alias no-op — mutating the original after a copy changed the "copy"
+    // too (silent miscompile class). This asserts the copy keeps PRE-mutation
+    // values for both clone element classes (inline shape cells + int cells),
+    // dual-mode. A regression to the alias catch-all flips b/copy to the
+    // post-mutation sums (119/105) and fails loud.
+    m5_p3_sweep_assert_dual_mode(
+        "m5_p5_copy_aos_independent.ynz",
+        "a: 119\nb: 30\nnums: 105\ncopy: 6\n",
+    );
+}
+
+#[test]
+fn m5_p5_soa_copy_wait_bg_matrix() {
+    // WHY: THE SoA cell of E9's matrix — qualifying SoA array × `wait` (SM
+    // main; pts crosses the suspension) × `.copy()` (soa_copy_to_aos snapshot)
+    // × IndexAssign scatter × `background` coexisting in the same SM main
+    // (spawn-site `.copy()` ownership transfer on the SM-descriptor path, on a
+    // SECOND shape — see the fixture's D11 note: bg-crossing a shape pads it
+    // and padding-wins would force the SoA array AoS) × dual-mode
+    // byte-identity. Behavior:
+    //   - the AoS snapshot taken before the mutation reads 7884 after it;
+    //   - the post-mutation hot loop reads the scatter through segment
+    //     addressing (2727/5454);
+    //   - the bg task sees the pre-mutation Part copy (30), the caller 119.
+    m5_p3_sweep_assert_dual_mode(
+        "m5_p5_soa_copy_wait_bg.ynz",
+        "hotx: 2727\nhoty: 5454\nsnap: 7884\ncaller: 119\nbg: 30\n",
+    );
+
+    // SoA actually FIRED on the SM path (the M3d silent-decline corpse class:
+    // a fixture that "passes" because the array quietly declined to AoS proves
+    // nothing about SoA). `soa_new` = the ynz_array_new_sized construction call
+    // in lower_soa_construction; `soa_ctor` = its per-element scatter prefix.
+    let src = fixture("m5_p5_soa_copy_wait_bg.ynz");
+    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
+    assert!(
+        par_ir.contains("soa_new") && par_ir.contains("soa_ctor"),
+        "default-mode IR must contain SoA construction instructions (soa_new + \
+         soa_ctor) — their absence means the qualifying array silently declined \
+         to AoS (or the SM lowering path lost the Stmt::Let SoA interception) \
+         and this fixture is proving nothing about SoA"
+    );
+
+    // And NEVER fires under --no-auto-parallel (Phase 4 entry gate + the
+    // build_module belt assert): zero soa-named instructions in sequential IR.
+    let seq_ir = build_to_tmpdir_emit_ir_mode(&src, true);
+    assert!(
+        !seq_ir.contains("soa_new") && !seq_ir.contains("soa_ctor"),
+        "--no-auto-parallel IR must contain ZERO SoA instructions — a hit means \
+         a SoA decision leaked past the Phase 4 no-auto-parallel entry gate"
+    );
+}
+
+#[test]
+fn m5_p5_bg_copy_alloc_gap_pin() {
+    // WHY: locks seg-4's bg-arg double-copy fix (step 4b). With FRAGO 014's
+    // deep `.copy()` landed, a spawn-site `.copy()` arg is ALREADY independent;
+    // prepare_bg_arg_for_ctx transfers ownership to the task instead of
+    // re-cloning. Regression signature: the `.copy()` intermediate leaks and
+    // the gap grows to 6 (alloc=11/free=5 observed pre-fix — the E8
+    // clone→drop-imbalance zero-tolerance class). Baseline gap = 4 (2
+    // never-drop local arrays × 2 cells, FRAGO 009 accounting).
+    let (alloc, free) = ynz_run_with_alloc_counter("m5_p3_sweep_bg_array_shape_give_wait.ynz");
+    assert!(
+        alloc > 0,
+        "E8 VISIBILITY FAILURE: alloc=0 — counter blind, pin vacuous (FRAGO 005)"
+    );
+    assert_eq!(
+        alloc - free,
+        4,
+        "bg-arg copy alloc gap drifted: expected alloc-free == 4 (2 never-drop \
+         local arrays × 2 cells); gap 6 = the spawn-path re-clone leak returned \
+         (seg-4 4b regression); alloc={alloc} free={free}"
+    );
 }

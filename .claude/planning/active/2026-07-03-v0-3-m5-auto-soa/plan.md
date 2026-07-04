@@ -3,7 +3,7 @@ name: "v0-3-m5-auto-soa"
 plan-id: "2026-07-03-v0-3-m5-auto-soa"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5-seg2", "phase3-executor-2026-07-03-m5-seg3", "phase3-executor-2026-07-03-m5-seg4", "phase3-executor-2026-07-03-m5-seg5", "phase3-executor-2026-07-03-m5-seg6", "phase3-executor-2026-07-03-m5-seg7", "phase3-executor-2026-07-03-m5-seg8", "phase3-executor-2026-07-03-m5-seg9", "phase3-executor-2026-07-03-m5-seg10", "phase4-executor-2026-07-03-m5", "phase4-executor-2026-07-03-m5-seg2", "phase4-executor-2026-07-03-m5-seg3", "phase4-executor-2026-07-03-m5-seg4", "plan-fixup-frago013-2026-07-03-m5", "phase4-executor-2026-07-03-m5-closing", "phase4-executor-2026-07-03-m5-closing2", "phase4-deferral-executor-2026-07-03-m5"]
+session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5-seg2", "phase3-executor-2026-07-03-m5-seg3", "phase3-executor-2026-07-03-m5-seg4", "phase3-executor-2026-07-03-m5-seg5", "phase3-executor-2026-07-03-m5-seg6", "phase3-executor-2026-07-03-m5-seg7", "phase3-executor-2026-07-03-m5-seg8", "phase3-executor-2026-07-03-m5-seg9", "phase3-executor-2026-07-03-m5-seg10", "phase4-executor-2026-07-03-m5", "phase4-executor-2026-07-03-m5-seg2", "phase4-executor-2026-07-03-m5-seg3", "phase4-executor-2026-07-03-m5-seg4", "plan-fixup-frago013-2026-07-03-m5", "phase4-executor-2026-07-03-m5-closing", "phase4-executor-2026-07-03-m5-closing2", "phase4-deferral-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5-seg2", "phase5-executor-2026-07-03-m5-seg3", "phase5-executor-2026-07-03-m5-seg4", "phase5-executor-2026-07-03-m5-seg5", "phase5-executor-2026-07-03-m5-closing"]
 created_at: "2026-07-03"
 updated_at: "2026-07-03"
 metadata:
@@ -935,6 +935,170 @@ phases (P2, P5) checkpoint per the marks below.
 
 #### Phase 5 — SoA codegen on the by-value substrate
 
+> **STATUS: COMPLETE (2026-07-04).** All 5 steps done across 5 segments (sessions
+> `phase5-executor-2026-07-03-m5` through `…-seg5`; the closing segment-5 paragraph below
+> carries the phase-exit receipts; per-segment detail in the paragraphs below + audit.md).
+>
+> Segment 1 (session
+> `phase5-executor-2026-07-03-m5`) returned PARTIAL at `phase-5/step-1`: full phase
+> orientation + implementation design paid and recorded in `handoff-phase-5.md`
+> (verification receipts, gather/scatter design, consumer-site inventory, E6 total-
+> coverage argument), plus step 1's runtime primitive landed green —
+> `ynz_array_new_sized(elem_size, cap)` in `crates/ynz-runtime/src/lib.rs` (exact-cap,
+> len==cap, counted allocs, same header/drop per D2/D6; unit test
+> `array_new_sized_len_cap_set_drop` PASS) + its declaration in
+> `crates/ynz-codegen/src/runtime_decls.rs`. Receipts: build clean, clippy `-D warnings`
+> clean (ynz-runtime + ynz-codegen), fmt clean. DEVIATION SURFACED (undecided, for
+> deviation-judge): array `.copy()` today lowers as an ALIAS no-op for all arrays
+> (emit.rs `lower_postfix_op` `_ => Ok(recv_val)` catch-all) — the step-4 E9 matrix
+> assumes deep-copy; proposed resolution (not applied) is deep-copy in BOTH modes;
+> steps 1–3 are unaffected. Steps 1 (remainder) through 5 remain open.
+>
+> Segment 2 (session `phase5-executor-2026-07-03-m5-seg2`) returned PARTIAL at
+> `phase-5/step-1` (sub-marker `phase-5/step-1-seg2-frago014-and-belt-gate-landed`):
+> (a) FRAGO 014's ratified plan-text correction APPLIED to step 4 above (`.copy()`
+> deep-copy in both modes, closing the alias-no-op — the segment-1 deviation is now
+> resolved by that FRAGO); (b) step 3's belt assert LANDED green —
+> `crates/ynz-codegen/src/emit.rs` `build_module` now refuses to lower when any
+> `LayoutKind::Soa` decision exists under `no_auto_parallel` (belt on the ONE Phase 4
+> entry gate, threaded predicate, no second derivation). Receipts: build/clippy
+> `-D warnings`/fmt clean; `cargo test -p ynz-driver --test cross_impl_consistency`
+> 2 passed (assert exercised across the whole corpus under `YNZ_NO_AUTO_PARALLEL=1`,
+> never fired). (c) NEW step-4 hazard recorded in `handoff-phase-5.md`: `.copy()` in
+> background-arg position double-copies + leaks the intermediate once FRAGO 014's
+> deep-copy lands (spawn path already clones array args) — E8 parity + golden risk,
+> for the step-4 executor to verify, not self-decided. (d) Implementation design
+> hardened in the handoff (choke-param `Option<&SoaArrayInfo>` threading for
+> compiler-forced E6 totality; loop-var-only masking, verified against soa.rs's
+> nested-shadow decline; `.copy()` lowering plan under FRAGO 014). Steps 1
+> (remainder: construction lowering), 2, 3 (oracle-divergence half), 4, 5 remain
+> open — resume from the handoff's settled design.
+>
+> Segment 3 (session `phase5-executor-2026-07-03-m5-seg3`) returned PARTIAL at
+> `phase-5/step-2-construction-access-green-checkpoint-evidence-persisted`: steps 1, 2
+> AND 3 are now COMPLETE. (a) Step 1 construction lowering LANDED — `Stmt::Let`
+> interception keyed by (array_name, decl_span) against `cg.layout.arrays`
+> (`lower_soa_construction` in emit.rs: ONE `ynz_array_new_sized(elem_size, cap)`
+> buffer, compile-time segment offsets per D2, scatter per element; same header/drop
+> per D6). (b) Step 2 access lowering LANDED — `SoaArrayInfo`/`SoaSegment` + a new
+> `soa: Option<&SoaArrayInfo>` param on ALL FOUR choke helpers (get_into/get_maybe/
+> set/push — compiler-forced E6 totality; push = hard Err on SoA), gather/scatter
+> helpers inside the E7 choke section (gather = full-element into the same out
+> buffer, OOB memset parity; scatter OOB = raw runtime abort parity), `shape_field_abi`
+> threaded from the ONE TargetData pass in build_module, loop-var-only masking in both
+> array for-in lowerings, SM shape-embed gather honors the frame-region out-pointer
+> contract. (c) **Planner CHECKPOINT satisfied**: release-mode (`opt-18 -O2`) IR of
+> `m5_p4_soa_qualifying.ynz` shows SROA eliminated the gather out-buffer and the hot
+> loop's surviving loads are exactly the two used-field segment loads, contiguous
+> (x at `data+8i`, y at constant `+576`, stride 8) — evidence persisted to
+> `p5-ir-evidence.md` (sibling file, committed) for Phase 6/8. (d) Step 3's remaining
+> half CLOSED: with SoA codegen live, `cross_impl_consistency` passed over the whole
+> corpus (2/2) and the qualifying fixture runs byte-identical across modes (cmp clean,
+> both exit 0) — the dual-mode oracle now genuinely exercises AoS-vs-SoA divergence.
+> Receipts: build + clippy `-D warnings` + fmt clean (ynz-codegen); SoA FIRED (438
+> soa-named instructions in the fixture's IR — not a silent decline); E7 grep gate
+> clean (all raw `rt.ynz_array_{new,push,get,set}` refs in-section); E3 grep gate
+> clean (zero `soa_candidate|hot_fields|whole_value_uses` reads in ynz-codegen).
+> Steps 4 (E9 matrix + FRAGO 014 `.copy()` fix + the recorded bg-arg double-copy
+> hazard) and 5 (full-suite cross-impl run) remain open — see `handoff-phase-5.md`.
+>
+> Segment 4 (session `phase5-executor-2026-07-03-m5-seg4`) returned PARTIAL at
+> `phase-5/step-4` (sub-marker `phase-5/step-4-copy-fixed-bgarg-hazard-resolved`):
+> steps 4a + 4b LANDED green. (a) FRAGO 014 `.copy()` fix — `lower_postfix_op`'s
+> Copy arm gained a `Type::BuiltinArray` arm: AoS receiver → `ynz_array_clone_primitive`
+> (elem_size-aware byte deep copy = one-level semantics; pointer cells alias per
+> D12/D13); SoA receiver → new choke-section helper `soa_copy_to_aos` (runtime
+> gather loop into a fresh AoS buffer via `ynz_array_new_sized` + the existing
+> `soa_gather_into`/`array_elem_set(soa=None)` choke points — the copy is AoS
+> because the copy's binding is authority-declined (`provable_len` None), so all
+> its reads lower AoS; a segmented copy would be misread). (b) Bg-arg double-copy
+> hazard RESOLVED at the choke point: `prepare_bg_arg_for_ctx`'s BuiltinArray arm
+> now transfers ownership of an explicit spawn-site `.copy()` arg to the task
+> (`BgArgFreeKind::HeapArrayPrimitive` → task drop ladder frees it) instead of
+> re-cloning. VERDICT: genuine LEAK, not harmless waste — alloc-counter receipts on
+> `m5_p3_sweep_bg_array_shape_give_wait.ynz`: baseline (alias `.copy()`) alloc=9
+> free=5 gap=4 (= 2 never-drop local arrays × 2, FRAGO 009 accounting); with 4a
+> alone alloc=11 free=5 gap=6 (the `.copy()` intermediate leaks — E8 clone→drop
+> imbalance, the zero-tolerance class); with 4a+4b alloc=9 free=5 gap=4 — restored
+> exactly, output `caller: 119 / given: 30 / copied: 30` correct. Receipts: build +
+> clippy `-D warnings` + fmt clean; targeted tests green (m5_p3_sweep_bg_array_shape_*
+> 2/2, m5_p3_e8_* 3/3 incl. the exact-count parity pin, v03_m3b_p2_explicit_copy_honored);
+> E7 gate clean (rt.ynz_array_{new,push,get,set} refs all in-section; the new
+> `ynz_array_new_sized` call sits in-section too); E3 gate 0 hits. Steps 4c (E9
+> SoA×wait×background×.copy()×dual-mode matrix fixtures + AoS `.copy()` independence
+> lock fixture + both-candidate no-SoA-fired IR assert) and 5 (full-suite cross-impl
+> run) remain — see `handoff-phase-5.md` for the settled fixture designs.
+>
+> **Segment 5 — CLOSING (session `phase5-executor-2026-07-03-m5-seg5`, 2026-07-04):
+> steps 4c + 5 COMPLETE; phase closed.**
+> (a) **SM-path open item DEFINITIVELY ANSWERED — shared interception, no gap.** Every
+> route in `lower_sm_block` lowers a non-suspending `Stmt::Let` via `lower_stmt`
+> (emit.rs no-auto-parallel arm :5621, spike pre/post :5673/:5732, fused pre/post
+> :5783/:5828, default-partition Singleton :5873), and `lower_stmt`'s Let arm carries
+> the ONE SoA construction interception (:12408–:12442); the SM-specific `Stmt::Let`
+> arms (:6387/:6416/:6450/:6476) match only wait/suspending-call initializers — an
+> `ArrayLit` can never route there. Proven empirically: a wait-only variant of the
+> qualifying fixture emits 1156 soa-named IR lines (SoA fires in an SM main), and the
+> shipped matrix fixture's IR assert passes.
+> (b) **Step 4c E9 matrix landed** (3 new tests + 1 extension, integration.rs):
+> `m5_p5_copy_aos_independent` (FRAGO 014 independence lock — mutate-after-copy on
+> shape-elem + int-elem AoS arrays, copy keeps pre-mutation sums, dual-mode exact
+> stdout `a: 119/b: 30/nums: 105/copy: 6`); `m5_p5_soa_copy_wait_bg_matrix`
+> (fixture `m5_p5_soa_copy_wait_bg.ynz`: 72-elem SoA Point array × wait-crossing SM
+> main × `.copy()` snapshot (SoA→AoS, pre-mutation 7884) × post-wait IndexAssign
+> scatter read through segments (2727/5454) × `background` with spawn-site `.copy()`
+> on the SM-descriptor path (bg 30 vs caller 119), dual-mode byte-identical + IR
+> asserts: default-mode IR CONTAINS soa_new/soa_ctor, `--no-auto-parallel` IR contains
+> ZERO); `m5_p5_bg_copy_alloc_gap_pin` (alloc−free == 4 on the give_wait fixture —
+> locks the seg-4 4b ownership-transfer fix; gap 6 = the re-clone leak signature);
+> both-candidate test extended with the end-to-end NEGATIVE half (default-mode IR has
+> ZERO soa instructions — padding wins through codegen, not just analysis, D11).
+> **D11 design constraint discovered live** (paper-traced, not a bug): passing any
+> Point value — even a spawn-site `.copy()` — across `background` makes the shape
+> cross-thread PADDED (M4 padding is shape-level) → `Aos { declined:
+> CrossThreadPadded }`; admission stays Admitted{72,[x,y]} but the authority resolves
+> padding-wins. So "SoA × background on the SAME shape" is structurally D11-excluded;
+> the matrix fixture carries the bg cell on a second shape (Part) and documents the
+> constraint in its header (the class is already pinned at analysis level in
+> soa_analysis.rs's both-candidate suite).
+> (c) **Step 5 full-suite receipts:** full `cargo test -p ynz-driver` COMPLETED
+> (exit 0; integration 522/0, m2 SM 31/0, cross_impl_consistency both corpus sweeps
+> green — the whole driver-fixtures + examples-entrypoints corpus byte-identical
+> across default and `--no-auto-parallel` modes, ≥30 files compared; ynz-codegen's
+> tests consume driver fixtures — 3 object-byte SHA goldens — no separate corpus);
+> full workspace `cargo test --workspace --no-fail-fast` **2271 passed / 0 failed**;
+> clippy `--workspace -- -D warnings` clean; `cargo fmt --all -- --check` clean.
+> E3 gate: 0 `soa_candidate|hot_fields|whole_value_uses` hits in ynz-codegen. E7
+> gate: all `rt.ynz_array_{new,push,get,set}` refs at 2544/2692/2752/2782/2872 —
+> inside the choke section (2235–3403); `ynz_array_new_sized` (not a gated symbol)
+> has exactly 2 call sites: soa_copy_to_aos in-section :2587 + the ratified
+> construction interception :12381. **Snapshot churn: 13 pre-existing IR snapshots
+> refreshed, investigated BEFORE accepting** — every delta is exactly the one added
+> `declare ptr @ynz_array_new_sized(i64, i64)` line (seg 1's plan-ratified runtime
+> primitive declares in every module; zero instruction-level changes; object-byte
+> SHA goldens unaffected). Zero `*.snap.new` remaining.
+> handoff-phase-5.md deleted at phase close.
+>
+> **Closing round (session `phase5-executor-2026-07-03-m5-closing`)** — post-boundary-review
+> (7-dispatch fan-out, ZERO blockers): one should-fix landed + two durable deferrals filed +
+> FR #12 recorded. (1) Should-fix (code-reviewer, correctness): `soa_gather_into`'s HIT path
+> stored fields via struct_gep but never zeroed `out` first, leaving inter-field/tail struct
+> padding nondeterministic — AoS `ynz_array_get` copies the FULL `elem_size` bytes (runtime
+> lib.rs:1244), so a raw-byte consumer (memcmp, byte-hash) could see SoA-vs-AoS padding-byte
+> divergence despite identical field values. Fix: `build_memset(out, …, elem_size)` at the top
+> of the hit path (emit.rs :2459-2466, matching the OOB path's existing memset convention) —
+> padding bytes now deterministically zero; doc comment records the WHY. Receipts: build +
+> clippy `-D warnings` + fmt clean; SoA subset green (m5_p5_* 3/3, both-candidate 1/1 — exact
+> pre-fix stdout pins hold = byte-identical behavior); `cross_impl_consistency` 2/2 whole-corpus
+> dual-mode sweep; full workspace suite green (2271-test baseline, zero new tests — padding-only
+> fix); E3 gate 0 hits; E7 gate all gated refs in-section (2556-2884 ∈ 2235-3415, refs shifted
+> +12 by the insert); zero `*.snap.new`. (2) Deferrals filed in the ROADMAP's audit.md (keys
+> grep-confirmed absent first): `…#5: crates-ynz-codegen-src-emit-rs-17743` (`fixed<T>.copy()`
+> alias no-op — outside FRAGO 014's array scope) and `…#5: crates-ynz-codegen-src-emit-rs-2445`
+> (SoA bounds predicate = documented-equivalent second derivation of the runtime check; inert
+> under D3's len==cap). (3) FR #12 added below (shape-level padding granularity forfeits SoA
+> for all of a shape's arrays — the segment-5 D11 live discovery, working-as-designed).
+
 - **Task + purpose:** emit the SoA layout variant for admitted arrays — the miscompile-risk core
   (E3/E6/E9) — consuming ONLY the Phase 4 authority.
 - **Steps**
@@ -952,8 +1116,14 @@ phases (P2, P5) checkpoint per the marks below.
      gate); add a codegen assert that no `SoaCandidate` arrives when the predicate is set (belt
      verifying the one gate, not a second derivation). Dual-mode oracle now exercises AoS-vs-SoA
      divergence detection for real.
-  4. **E9 SoA matrix:** SoA arrays × `wait` × `background` × `.copy()` (deep-copies all segments) ×
-     dual-mode; plus the Phase 4 both-candidate fixture now asserted end-to-end through codegen.
+  4. **E9 SoA matrix:** first, fix array `.copy()` to perform a genuine deep copy — shallow/
+     one-level, mirroring the existing `Type::Shape` arm's already-shallow memcpy semantics (nested
+     pointer fields like string or nested shape still alias, consistent with D12/D13) — in BOTH
+     layout modes (AoS and SoA), closing the pre-existing alias-no-op bug (`emit.rs`
+     `lower_postfix_op` Copy arm's `_ => Ok(recv_val)` catch-all — an M4-era stub, not introduced by
+     Phase 5) rather than mirroring it into the new SoA path (FRAGO 014). Then run the SoA ×
+     `wait` × `background` × `.copy()` × dual-mode matrix against the corrected `.copy()` behavior;
+     plus the Phase 4 both-candidate fixture now asserted end-to-end through codegen.
   5. **Full-suite cross-impl run:** every `examples/` + codegen-tests + driver-tests fixture
      byte-identical across modes.
 - **Exit criteria:** all matrices green; dual-mode byte-identical suite-wide; grep gate: layout
@@ -1285,3 +1455,12 @@ phases (P2, P5) checkpoint per the marks below.
 11. **E1/E3/E5/E6/E7 recorded MEDIUMs** — standing residuals carried by this plan's gates; *trigger:*
     any dual-mode divergence, second-derivation sighting, or guard regression re-opens the row at
     FRAGO time (re-score per the engine).
+12. **Shape-level padding granularity forfeits SoA for ALL of a shape's arrays** — M4's false-sharing
+    padding is shape-level (not binding/array-level), so a single spawn-site `.copy()` on ANY array of
+    a shape pads the shape and — per D11's padding-wins precedence — forfeits SoA for ALL of that
+    shape's arrays (the Phase 5 segment-5 live discovery: even a `.copy()`'d bg-arg pads the
+    ORIGINAL's shape). Working-as-designed today, confirmed by Phase 5's boundary review; *cost:*
+    binding/array-level padding granularity in the M4 padding analysis + the D11 authority resolution;
+    *trigger:* a real workload where this shape-level conservatism measurably costs performance — a
+    shape with multiple large hot-loop arrays of which only one crosses a `background` boundary
+    (Phase 6's benchmark harness may surface this).

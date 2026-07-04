@@ -54,6 +54,9 @@ pub struct RuntimeDecls<'ctx> {
     // choke-point helpers in emit.rs (authoritative-derivation).
     // ynz_array_new(elem_size: i64) -> ptr
     pub ynz_array_new: FunctionValue<'ctx>,
+    // ynz_array_new_sized(elem_size: i64, cap: i64) -> ptr — exact-capacity constructor,
+    // len pre-set to cap; the SoA segmented-buffer allocation path (v0.3-M5 P5 / D2).
+    pub ynz_array_new_sized: FunctionValue<'ctx>,
     // ynz_array_push(ptr arr, ptr src) -> void — memcpys elem_size bytes from src
     pub ynz_array_push: FunctionValue<'ctx>,
     // ynz_array_get(ptr arr, i64 idx, ptr out) -> i64 has-flag — memcpys elem_size
@@ -383,6 +386,13 @@ impl<'ctx> RuntimeDecls<'ctx> {
 
             // ynz_array_new: (i64 elem_size) -> ptr
             ynz_array_new: declare_fn(module, "ynz_array_new", ptr.fn_type(&[i64.into()], false)),
+            // ynz_array_new_sized: (i64 elem_size, i64 cap) -> ptr — exact-capacity
+            // constructor with len pre-set to cap (SoA construction, v0.3-M5 P5 / D2).
+            ynz_array_new_sized: declare_fn(
+                module,
+                "ynz_array_new_sized",
+                ptr.fn_type(&[i64.into(), i64.into()], false),
+            ),
             // ynz_array_push: (ptr arr, ptr src) -> void
             ynz_array_push: declare_fn(
                 module,

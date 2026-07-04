@@ -1150,6 +1150,47 @@ pub unsafe extern "C" fn ynz_array_new(elem_size: i64) -> *mut YnzArray {
     hdr
 }
 
+/// Allocate a new array with an EXACT compile-time capacity, len pre-set to `cap`.
+///
+/// The SoA construction path (v0.3-M5 P5, recorded decision D2) sizes the ONE
+/// segmented buffer as `cap × elem_size` bytes with `cap` = the compile-time
+/// provable element count; codegen scatters every element's fields into the
+/// buffer immediately after this call, so `len` starts at `cap` (admitted arrays
+/// are growth-free — D3 — and constructed full; `len == cap` holds for the
+/// array's whole lifetime). The buffer contents are UNINITIALIZED until the
+/// caller's scatter stores complete. Same `YnzArray` header, same element-blind
+/// `ynz_array_drop` path as every other array (D6) — this is a sized
+/// constructor, not a second representation.
+///
+/// Aborts on `elem_size <= 0` or `cap <= 0` — the compiler always passes real
+/// positive values; anything else is a codegen bug.
+///
+/// # Safety
+/// Returns a heap pointer. Caller must free with `ynz_array_drop`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_new_sized(elem_size: i64, cap: i64) -> *mut YnzArray {
+    if elem_size <= 0 || cap <= 0 {
+        eprintln!(
+            "INTERNAL ERROR: sized array created with a non-positive element size \
+                  or capacity (elem_size {elem_size}, cap {cap}). This is a compiler \
+                  bug — please file an issue at \
+                  https://github.com/yinz-lang/yinz/issues with the source file attached."
+        );
+        std::process::abort();
+    }
+    // ynz_alloc aborts on OOM; routing through it keeps the buffer visible to the
+    // alloc counter (E8), exactly like ynz_array_new.
+    let data = ynz_alloc((cap * elem_size) as usize);
+    let hdr = ynz_alloc(std::mem::size_of::<YnzArray>()) as *mut YnzArray;
+    (*hdr) = YnzArray {
+        data,
+        len: cap,
+        cap,
+        elem_size,
+    };
+    hdr
+}
+
 /// Push one element: copies `elem_size` bytes from `src` into the next inline cell.
 ///
 /// The bytes are copied BEFORE this call returns — `src` may point at a stack
@@ -2701,6 +2742,25 @@ mod array_runtime {
         let mut out: i64 = 0;
         let flag = ynz_array_get(arr, idx, (&mut out as *mut i64) as *mut u8);
         (flag, out)
+    }
+
+    #[test]
+    fn array_new_sized_len_cap_set_drop() {
+        // WHY: guards the SoA sized-constructor contract (v0.3-M5 P5 / D2):
+        // len == cap at birth, header fields honest (count reads cap), cells
+        // writable via ynz_array_set, and the ordinary element-blind drop path
+        // frees the exact cap × elem_size buffer (D6 — same header, same drop).
+        unsafe {
+            let arr = ynz_array_new_sized(8, 5);
+            assert!(!arr.is_null(), "ynz_array_new_sized must return non-null");
+            assert_eq!(ynz_array_count(arr), 5, "len must be pre-set to cap");
+            let v: i64 = 42;
+            ynz_array_set(arr, 4, (&v as *const i64) as *const u8);
+            let (flag, got) = get_i64(arr, 4);
+            assert_eq!(flag, 1, "index 4 must be in range (len == cap == 5)");
+            assert_eq!(got, 42, "set/get roundtrip through the sized buffer");
+            ynz_array_drop(arr);
+        }
     }
 
     #[test]

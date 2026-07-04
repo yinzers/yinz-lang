@@ -1,0 +1,155 @@
+// WHY: v0.3-M5 P5 step 4c — THE SoA cell of E9's matrix: a QUALIFYING (72-element,
+// 2-field Point, hot loop reading x+y) SoA array crossed with `wait` (main becomes
+// a state machine — pts crosses the suspension via the frame story), `.copy()`
+// (SoA receiver → soa_copy_to_aos: the snapshot binding is authority-declined AoS
+// by design), IndexAssign (post-wait scatter through segment addressing),
+// `background` coexisting in the same SM main, and dual-mode byte-identity.
+//
+// D11 DESIGN CONSTRAINT (discovered live, seg 5): the bg task deliberately takes
+// array<Part>, NOT array<Point>. Passing any Point value — even a spawn-site
+// `.copy()` — across the `background` boundary makes Point cross-thread PADDED
+// (M4 padding is shape-level), and D11 padding-wins resolves EVERY Point array to
+// Aos { declined: CrossThreadPadded } (pinned in soa_analysis.rs both-candidate
+// suite). So "SoA × background on the SAME shape" is structurally excluded by
+// design; the honest matrix cell is SoA + background COEXISTING in one SM main,
+// with the bg-copy independence claim carried by a second (AoS) shape.
+//
+//   - `background tally(parts.copy())` — copy taken synchronously at spawn on the
+//     SM-descriptor path; the post-wait mutation of parts[0] must NOT reach the
+//     task (bg: pre-mutation 30) while the caller reads 119.
+//   - `let snap = pts.copy()` BEFORE the mutation, read AFTER — the SoA→AoS
+//     snapshot must keep pre-mutation values (snap: 7884).
+//   - post-mutation hot loop over pts — the scatter of pts[0] = {100, 200} must
+//     be visible through segmented reads (hotx: 2727, hoty: 5454).
+//   - The companion test asserts default-mode IR CONTAINS soa-named instructions
+//     (SoA genuinely fired in an SM function — the M3d silent-decline tripwire)
+//     and --no-auto-parallel IR contains none.
+//   - Task sleepBlocking(60) sequences bg output after the caller's prints (~5ms);
+//     main sleepBlocking(200) keeps the process alive past the task.
+//
+// Expected output (byte-identical default vs --no-auto-parallel):
+//   hotx: 2727
+//   hoty: 5454
+//   snap: 7884
+//   caller: 119
+//   bg: 30
+shape Point {
+  x: int
+  y: int
+}
+
+shape Part {
+  id: int
+  qty: int
+}
+
+function tally(items: array<Part>) -> nothing {
+  sleepBlocking(60)
+  let total: int = 0
+  for (p in items) {
+    total = total + p.qty
+  }
+  print(`bg: ${total}`)
+}
+
+function entrypoint() -> nothing {
+  let parts: array<Part> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+  let pts: array<Point> = [
+    { x: 1, y: 2 },
+    { x: 2, y: 4 },
+    { x: 3, y: 6 },
+    { x: 4, y: 8 },
+    { x: 5, y: 10 },
+    { x: 6, y: 12 },
+    { x: 7, y: 14 },
+    { x: 8, y: 16 },
+    { x: 9, y: 18 },
+    { x: 10, y: 20 },
+    { x: 11, y: 22 },
+    { x: 12, y: 24 },
+    { x: 13, y: 26 },
+    { x: 14, y: 28 },
+    { x: 15, y: 30 },
+    { x: 16, y: 32 },
+    { x: 17, y: 34 },
+    { x: 18, y: 36 },
+    { x: 19, y: 38 },
+    { x: 20, y: 40 },
+    { x: 21, y: 42 },
+    { x: 22, y: 44 },
+    { x: 23, y: 46 },
+    { x: 24, y: 48 },
+    { x: 25, y: 50 },
+    { x: 26, y: 52 },
+    { x: 27, y: 54 },
+    { x: 28, y: 56 },
+    { x: 29, y: 58 },
+    { x: 30, y: 60 },
+    { x: 31, y: 62 },
+    { x: 32, y: 64 },
+    { x: 33, y: 66 },
+    { x: 34, y: 68 },
+    { x: 35, y: 70 },
+    { x: 36, y: 72 },
+    { x: 37, y: 74 },
+    { x: 38, y: 76 },
+    { x: 39, y: 78 },
+    { x: 40, y: 80 },
+    { x: 41, y: 82 },
+    { x: 42, y: 84 },
+    { x: 43, y: 86 },
+    { x: 44, y: 88 },
+    { x: 45, y: 90 },
+    { x: 46, y: 92 },
+    { x: 47, y: 94 },
+    { x: 48, y: 96 },
+    { x: 49, y: 98 },
+    { x: 50, y: 100 },
+    { x: 51, y: 102 },
+    { x: 52, y: 104 },
+    { x: 53, y: 106 },
+    { x: 54, y: 108 },
+    { x: 55, y: 110 },
+    { x: 56, y: 112 },
+    { x: 57, y: 114 },
+    { x: 58, y: 116 },
+    { x: 59, y: 118 },
+    { x: 60, y: 120 },
+    { x: 61, y: 122 },
+    { x: 62, y: 124 },
+    { x: 63, y: 126 },
+    { x: 64, y: 128 },
+    { x: 65, y: 130 },
+    { x: 66, y: 132 },
+    { x: 67, y: 134 },
+    { x: 68, y: 136 },
+    { x: 69, y: 138 },
+    { x: 70, y: 140 },
+    { x: 71, y: 142 },
+    { x: 72, y: 144 }
+  ]
+  background tally(parts.copy())
+  let snap = pts.copy()
+  wait sleep(5)
+  pts[0] = { x: 100, y: 200 }
+  parts[0] = { id: 1, qty: 99 }
+  let sx = 0
+  let sy = 0
+  for (p in pts) {
+    sx = sx + p.x
+    sy = sy + p.y
+  }
+  print(`hotx: ${sx}`)
+  print(`hoty: ${sy}`)
+  let ss = 0
+  for (p in snap) {
+    ss = ss + p.x + p.y
+  }
+  print(`snap: ${ss}`)
+  let ct = 0
+  for (p in parts) {
+    ct = ct + p.qty
+  }
+  print(`caller: ${ct}`)
+  sleepBlocking(200)
+}

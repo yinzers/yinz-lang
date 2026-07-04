@@ -1,5 +1,6 @@
 ---
 source: crates/ynz-codegen/tests/golden.rs
+assertion_line: 817
 expression: ir
 ---
 ; ModuleID = 'ynz-v03m2_bg_regular.ynz'
@@ -63,6 +64,8 @@ declare ptr @ynz_alloc_zeroed(i64)
 declare void @ynz_free(ptr, i64)
 
 declare ptr @ynz_array_new(i64)
+
+declare ptr @ynz_array_new_sized(i64, i64)
 
 declare void @ynz_array_push(ptr, ptr)
 

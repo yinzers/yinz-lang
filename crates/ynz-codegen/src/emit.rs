@@ -1019,6 +1019,27 @@ fn build_module<'ctx, 'g>(
     #[cfg(debug_assertions)]
     debug_assert_cpu_abi_gate_parity(typed, sig_table);
 
+    // v0.3-M5 P5 step 3 — belt-verify the ONE Phase 4 entry gate (never a second
+    // derivation, E3): under `--no-auto-parallel` the analysis core is bypassed
+    // entirely (`layout_decisions_query` reads the same one predicate), so no
+    // `LayoutKind::Soa` decision can exist here. A Soa decision arriving anyway
+    // means the entry gate was breached upstream — refuse to lower rather than
+    // emit an SoA layout the sequential oracle mode must never contain. Kernel
+    // mode has no codegen flag today (the analysis core takes it as a param and
+    // production always passes false), so this belt covers the env predicate only.
+    if no_auto_parallel
+        && layout
+            .arrays
+            .iter()
+            .any(|d| matches!(d.kind, ynz_typeck::soa::LayoutKind::Soa { .. }))
+    {
+        return Err(
+            "internal: SoA layout decision present under --no-auto-parallel — \
+             Phase 4 entry gate breached"
+                .to_string(),
+        );
+    }
+
     let rt = RuntimeDecls::declare(ctx, module);
 
     // M6: collect options table for variant tag lookups during codegen.
@@ -1137,18 +1158,40 @@ fn build_module<'ctx, 'g>(
     // frame-layout fallback to 1 slot per shape, then an out-of-bounds frame write on
     // shapes with 2+ slots (e.g. Point{x,y} = 2 slots = 16 bytes). Fixed by using
     // TargetData::get_abi_size which always returns the real byte count.
-    let shape_abi_sizes: HashMap<String, u64> = {
+    let (shape_abi_sizes, shape_field_abi) = {
         let dl_owned = module.get_data_layout();
         let dl_str = dl_owned.as_str().to_str().unwrap_or("");
         let target_data = inkwell::targets::TargetData::create(dl_str);
-        shape_types
+        let sizes: HashMap<String, u64> = shape_types
             .named
             .iter()
             .map(|(name, &struct_ty)| {
                 let bytes = target_data.get_abi_size(&struct_ty);
                 (name.clone(), bytes)
             })
-            .collect()
+            .collect();
+        // v0.3-M5 P5: per-field (abi_size, abi_align) in DECLARED field order, from
+        // the SAME TargetData as shape_abi_sizes — the one ABI derivation both the
+        // AoS elem-size and the SoA segment offsets read (authoritative-derivation:
+        // a second TargetData elsewhere would be the twin-drift corpse class).
+        let field_abi: HashMap<String, Vec<(u64, u64)>> = shape_types
+            .named
+            .iter()
+            .map(|(name, &struct_ty)| {
+                let per_field = struct_ty
+                    .get_field_types()
+                    .iter()
+                    .map(|ft| {
+                        (
+                            target_data.get_abi_size(ft),
+                            u64::from(target_data.get_abi_alignment(ft)),
+                        )
+                    })
+                    .collect();
+                (name.clone(), per_field)
+            })
+            .collect();
+        (sizes, field_abi)
     };
 
     // WHY: single SSOT for the effective suspend set — local + imported suspending
@@ -1241,6 +1284,7 @@ fn build_module<'ctx, 'g>(
                 shape_table,
                 &shape_types,
                 &shape_abi_sizes,
+                &shape_field_abi,
                 mono_table,
                 &options_table,
                 &wait_cache,
@@ -1297,6 +1341,7 @@ fn build_module<'ctx, 'g>(
             shape_table,
             &shape_types,
             &shape_abi_sizes,
+            &shape_field_abi,
             fn_val,
             type_subst,
             mono_sig,
@@ -1405,6 +1450,7 @@ fn lower_generic_function<'ctx>(
     shape_table: &'_ ShapeTable,
     shape_types: &'_ ShapeLlvmTypes<'ctx>,
     shape_abi_sizes: &'_ HashMap<String, u64>,
+    shape_field_abi: &'_ HashMap<String, Vec<(u64, u64)>>,
     fn_val: FunctionValue<'ctx>,
     type_subst: HashMap<String, Type>,
     mono_sig: &ynz_typeck::generics::MonoSignature,
@@ -1429,6 +1475,8 @@ fn lower_generic_function<'ctx>(
         shape_table,
         shape_types,
         shape_abi_sizes,
+        shape_field_abi,
+        soa_bindings: HashMap::new(),
         // The REAL authority, not an empty stand-in: the struct-lit padded-alloca
         // alignment path runs for generic bodies too.
         layout,
@@ -1643,6 +1691,37 @@ fn is_ptr_param(ty: &ynz_ast::nodes::Type, shape_table: &ShapeTable) -> bool {
     }
 }
 
+/// One SoA field segment: where a field's per-element column lives inside the
+/// single segmented buffer (D2 — one allocation, compile-time offsets).
+#[derive(Clone)]
+struct SoaSegment<'ctx> {
+    /// Field name (belt-checked against the authority's declared-order segments).
+    field: String,
+    /// Byte offset of this field's segment from the buffer base.
+    byte_offset: u64,
+    /// The field's LLVM type (shape struct field order = declared order).
+    llvm_ty: inkwell::types::BasicTypeEnum<'ctx>,
+    /// The field's ABI byte size — the per-element stride within the segment.
+    field_abi_size: u64,
+}
+
+/// Codegen-side layout facts for ONE admitted SoA array binding (design c —
+/// gather/scatter at the choke points; staging semantics identical to AoS).
+///
+/// `cap` is the ArrayLit element count at the `let` — a construction fact, not
+/// a layout re-derivation (the layout ANSWER comes only from
+/// `LayoutDecisions.arrays`, E3). `len == cap` for the array's whole life (D3:
+/// admission declines every growth path). Buffer total = `cap × elem_size`
+/// (the AoS shape ABI size) so `ynz_array_drop`'s element-blind sized free and
+/// the E8 whole-buffer byte totals stay exact (D6).
+#[derive(Clone)]
+struct SoaArrayInfo<'ctx> {
+    shape_name: String,
+    cap: u64,
+    elem_size: u64,
+    segments: Vec<SoaSegment<'ctx>>,
+}
+
 struct Cg<'ctx, 'g> {
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
@@ -1664,6 +1743,16 @@ struct Cg<'ctx, 'g> {
     // derives). Consumed ONLY by `array_elem_size`, the single elem-size derivation
     // all by-value array element loads/stores route through (authoritative-derivation).
     shape_abi_sizes: &'g HashMap<String, u64>,
+    // v0.3-M5 P5: per-field (abi_size, abi_align) in declared field order, from the
+    // SAME TargetData pass as shape_abi_sizes (emit_module) — consumed ONLY by
+    // `build_soa_info`'s segment-offset computation.
+    shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
+    // v0.3-M5 P5: the admitted-SoA bindings live in THIS function (fresh empty per
+    // Cg; keyed by binding name). Registered at the `Stmt::Let` construction
+    // interception; consulted by `soa_expr_info` at every choke-point call site.
+    // For-in loop vars mask an entry for the body's duration (the only shadow case:
+    // admission's shadow-decline covers every same-name `let`).
+    soa_bindings: HashMap<String, SoaArrayInfo<'ctx>>,
     // v0.3-M5 P4: THE one authoritative layout source (typeck's
     // `layout_decisions_query` — E3 B1). Every layout read in lowering goes
     // through this field (P4: `padded_shapes` only; P5 adds `arrays` for SoA),
@@ -2172,6 +2261,407 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    // ── v0.3-M5 P5: SoA gather/scatter (design c) ────────────────────────────
+    //
+    // Admitted arrays keep the SAME `YnzArray` header and the same element-blind
+    // drop (D6); only the data buffer layout differs — one segment per declared
+    // field (D2), offsets computed at COMPILE TIME below. Every read gathers the
+    // FULL element into the same out-buffer the AoS path uses; every write
+    // scatters all fields. Cold-field elision is LLVM's job (DSE/SROA in release
+    // mode), so the surviving hot-loop loads are exactly the used fields'
+    // contiguous segment loads. Layout ANSWERS come only from `cg.layout.arrays`
+    // (E3); `cap` and per-field ABI facts are construction/ABI inputs, not
+    // layout re-derivations.
+
+    /// Resolve one authoritative SoA `LayoutDecision` into codegen segment
+    /// facts. Offsets: running `align_up(off, field_align)` then
+    /// `off += cap × field_size`, fields in DECLARED order (belt-checked
+    /// against the authority's `segment_index` parity). Total must fit inside
+    /// `cap × elem_size` — the buffer is allocated at exactly the AoS byte
+    /// total so drop's sized free and E8 byte-honesty stay exact.
+    ///
+    /// Alignment note: `ynz_array_new_sized` mallocs the buffer (base ≥ 16
+    /// aligned on x86_64/ARM64), so 16-aligned segment OFFSETS suffice even for
+    /// i128 (decimal128) field segments.
+    fn build_soa_info(
+        &self,
+        decision: &ynz_typeck::soa::LayoutDecision,
+        cap: u64,
+    ) -> Result<SoaArrayInfo<'ctx>, String> {
+        let shape_name = &decision.shape_name;
+        let arr_name = &decision.array_name;
+        let ynz_typeck::soa::LayoutKind::Soa { segments } = &decision.kind else {
+            return Err(format!(
+                "internal: build_soa_info on a non-SoA decision for `{arr_name}`"
+            ));
+        };
+        let elem_size = self
+            .shape_abi_sizes
+            .get(shape_name)
+            .copied()
+            .ok_or_else(|| {
+                format!("soa info: shape `{shape_name}` missing from shape_abi_sizes")
+            })?;
+        let struct_ty = self
+            .shape_types
+            .get(shape_name)
+            .ok_or_else(|| format!("soa info: LLVM type for shape `{shape_name}` missing"))?;
+        let field_tys = struct_ty.get_field_types();
+        let field_abi = self.shape_field_abi.get(shape_name).ok_or_else(|| {
+            format!("soa info: shape `{shape_name}` missing from shape_field_abi")
+        })?;
+        if segments.len() != field_tys.len() || field_abi.len() != field_tys.len() {
+            return Err(format!(
+                "internal: SoA segment count mismatch for `{arr_name}` (shape `{shape_name}`): \
+                 authority {} / llvm fields {} / field_abi {}",
+                segments.len(),
+                field_tys.len(),
+                field_abi.len()
+            ));
+        }
+        let mut off = 0u64;
+        let mut segs = Vec::with_capacity(segments.len());
+        for (i, seg) in segments.iter().enumerate() {
+            if seg.segment_index != i {
+                return Err(format!(
+                    "internal: SoA segment_index parity breach for `{arr_name}` field \
+                     `{}` (index {} at position {i})",
+                    seg.field, seg.segment_index
+                ));
+            }
+            let (fsize, falign) = field_abi[i];
+            off = off.div_ceil(falign) * falign;
+            segs.push(SoaSegment {
+                field: seg.field.clone(),
+                byte_offset: off,
+                llvm_ty: field_tys[i],
+                field_abi_size: fsize,
+            });
+            off += cap * fsize;
+        }
+        if off > cap * elem_size {
+            return Err(format!(
+                "internal: SoA segment total {off} exceeds cap × elem_size = {} for \
+                 `{arr_name}` (shape `{shape_name}`)",
+                cap * elem_size
+            ));
+        }
+        Ok(SoaArrayInfo {
+            shape_name: shape_name.clone(),
+            cap,
+            elem_size,
+            segments: segs,
+        })
+    }
+
+    /// The OWNED SoA lookup for a receiver expression at a choke-point call
+    /// site (owned clone — borrow hygiene: call sites fetch AFTER lowering
+    /// receiver/index). Only a bare local binding can be SoA: admission
+    /// declines every escape, so any non-Ident receiver is AoS by construction.
+    fn soa_expr_info(&self, expr: &Expr) -> Option<SoaArrayInfo<'ctx>> {
+        if let Expr::Ident(name, _) = expr {
+            return self.soa_bindings.get(name).cloned();
+        }
+        None
+    }
+
+    /// Load the segmented buffer's base pointer out of the array header.
+    /// ABI COUPLING: `#[repr(C)] YnzArray` puts `data` at field 0 / offset 0
+    /// (crates/ynz-runtime/src/lib.rs), so a pointer load AT the array pointer
+    /// IS the data-field read — no GEP needed.
+    fn soa_data_ptr(
+        &self,
+        arr: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        Ok(self
+            .builder
+            .build_load(self.ptr(), arr, &format!("{site}_soa_data"))
+            .map_err(|e| format!("soa data load: {e}"))?
+            .into_pointer_value())
+    }
+
+    /// Address of element `idx`'s slot inside one field segment:
+    /// `data + seg.byte_offset + idx × seg.field_abi_size` (i8 GEP).
+    fn soa_field_addr(
+        &self,
+        data: PointerValue<'ctx>,
+        seg: &SoaSegment<'ctx>,
+        idx: inkwell::values::IntValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let stride = self.i64().const_int(seg.field_abi_size, false);
+        let scaled = self
+            .builder
+            .build_int_mul(idx, stride, &format!("{site}_soa_scale"))
+            .map_err(|e| format!("soa addr mul: {e}"))?;
+        let off = self
+            .builder
+            .build_int_add(
+                scaled,
+                self.i64().const_int(seg.byte_offset, false),
+                &format!("{site}_soa_off"),
+            )
+            .map_err(|e| format!("soa addr add: {e}"))?;
+        unsafe {
+            self.builder
+                .build_gep(
+                    self.ctx.i8_type(),
+                    data,
+                    &[off],
+                    &format!("{site}_soa_{}_addr", seg.field),
+                )
+                .map_err(|e| format!("soa addr gep: {e}"))
+        }
+    }
+
+    /// Gather the FULL element at `idx` from the field segments into `out`
+    /// (the same shape-struct out buffer the AoS get path fills). Returns the
+    /// i64 has-flag with EXACT `ynz_array_get` OOB parity: flag 0 + `out`
+    /// zeroed (memset) on miss. The HIT path also memset-zeroes `out` before
+    /// the per-field stores so inter-field/tail struct padding bytes are
+    /// deterministically zero (a fresh-buffer byte image, never stale stack
+    /// garbage a raw-byte consumer — memcmp, byte-hash — could observe).
+    /// Bounds: `idx u< cap` — two's-complement
+    /// equivalent of the runtime's `idx < 0 || idx >= len` check (len == cap).
+    fn soa_gather_into(
+        &self,
+        info: &SoaArrayInfo<'ctx>,
+        arr: PointerValue<'ctx>,
+        idx: inkwell::values::IntValue<'ctx>,
+        out: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let struct_ty = self.shape_types.get(&info.shape_name).ok_or_else(|| {
+            format!(
+                "soa gather: LLVM type for shape `{}` missing",
+                info.shape_name
+            )
+        })?;
+        let data = self.soa_data_ptr(arr, site)?;
+        let cap_c = self.i64().const_int(info.cap, false);
+        let in_bounds = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, idx, cap_c, &format!("{site}_soa_ib"))
+            .map_err(|e| format!("soa gather cmp: {e}"))?;
+        let flag = self
+            .builder
+            .build_int_z_extend(in_bounds, self.i64(), &format!("{site}_soa_flag"))
+            .map_err(|e| format!("soa gather flag: {e}"))?;
+        let hit_bb = self.append_block(&format!("{site}_soa_hit"));
+        let oob_bb = self.append_block(&format!("{site}_soa_oob"));
+        let cont_bb = self.append_block(&format!("{site}_soa_cont"));
+        self.builder
+            .build_conditional_branch(in_bounds, hit_bb, oob_bb)
+            .map_err(|e| format!("soa gather br: {e}"))?;
+
+        self.builder.position_at_end(hit_bb);
+        self.builder
+            .build_memset(
+                out,
+                1,
+                self.ctx.i8_type().const_zero(),
+                self.i64().const_int(info.elem_size, false),
+            )
+            .map_err(|e| format!("soa gather hit memset: {e}"))?;
+        for (i, seg) in info.segments.iter().enumerate() {
+            let addr = self.soa_field_addr(data, seg, idx, site)?;
+            let v = self
+                .builder
+                .build_load(seg.llvm_ty, addr, &format!("{site}_soa_f{i}"))
+                .map_err(|e| format!("soa gather load: {e}"))?;
+            let dst = self
+                .builder
+                .build_struct_gep(struct_ty, out, i as u32, &format!("{site}_soa_d{i}"))
+                .map_err(|e| format!("soa gather gep: {e}"))?;
+            self.builder
+                .build_store(dst, v)
+                .map_err(|e| format!("soa gather store: {e}"))?;
+        }
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        self.builder.position_at_end(oob_bb);
+        self.builder
+            .build_memset(
+                out,
+                1,
+                self.ctx.i8_type().const_zero(),
+                self.i64().const_int(info.elem_size, false),
+            )
+            .map_err(|e| format!("soa gather memset: {e}"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        self.builder.position_at_end(cont_bb);
+        Ok(flag)
+    }
+
+    /// Scatter all fields of the shape value at `src` into element `idx`'s
+    /// segment slots. OOB parity: out-of-bounds falls through to a raw
+    /// `ynz_array_set` call with the ORIGINAL idx — the runtime's own abort
+    /// path fires (byte-identical observable behavior to the AoS set; the raw
+    /// call is legal because this helper lives inside the choke section).
+    fn soa_scatter(
+        &self,
+        info: &SoaArrayInfo<'ctx>,
+        arr: PointerValue<'ctx>,
+        idx: inkwell::values::IntValue<'ctx>,
+        src: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<(), String> {
+        let struct_ty = self.shape_types.get(&info.shape_name).ok_or_else(|| {
+            format!(
+                "soa scatter: LLVM type for shape `{}` missing",
+                info.shape_name
+            )
+        })?;
+        let data = self.soa_data_ptr(arr, site)?;
+        let cap_c = self.i64().const_int(info.cap, false);
+        let in_bounds = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, idx, cap_c, &format!("{site}_soa_ib"))
+            .map_err(|e| format!("soa scatter cmp: {e}"))?;
+        let hit_bb = self.append_block(&format!("{site}_soa_w"));
+        let oob_bb = self.append_block(&format!("{site}_soa_woob"));
+        let cont_bb = self.append_block(&format!("{site}_soa_wcont"));
+        self.builder
+            .build_conditional_branch(in_bounds, hit_bb, oob_bb)
+            .map_err(|e| format!("soa scatter br: {e}"))?;
+
+        self.builder.position_at_end(hit_bb);
+        for (i, seg) in info.segments.iter().enumerate() {
+            let sp = self
+                .builder
+                .build_struct_gep(struct_ty, src, i as u32, &format!("{site}_soa_s{i}"))
+                .map_err(|e| format!("soa scatter gep: {e}"))?;
+            let v = self
+                .builder
+                .build_load(seg.llvm_ty, sp, &format!("{site}_soa_v{i}"))
+                .map_err(|e| format!("soa scatter load: {e}"))?;
+            let addr = self.soa_field_addr(data, seg, idx, site)?;
+            self.builder
+                .build_store(addr, v)
+                .map_err(|e| format!("soa scatter store: {e}"))?;
+        }
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        self.builder.position_at_end(oob_bb);
+        self.builder
+            .build_call(
+                self.rt.ynz_array_set,
+                &[arr.into(), idx.into(), src.into()],
+                &format!("{site}_soa_abort"),
+            )
+            .map_err(|e| format!("soa scatter oob set: {e}"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        self.builder.position_at_end(cont_bb);
+        Ok(())
+    }
+
+    /// FRAGO 014 `.copy()` on a SoA receiver: gather every element out of the
+    /// field segments into a FRESH AoS buffer (a runtime loop over `cap`) and
+    /// return the new array pointer.
+    ///
+    /// Why the copy is AoS and not segmented: the copy's own binding is
+    /// authority-declined by construction (`provable_len` is `None` for a
+    /// `.copy()` initializer — soa.rs pass 1 only sets it for `ArrayLit`), so
+    /// every later read of the copy lowers through the AoS path. A segmented
+    /// copy here would be misread by those AoS reads — the AoS result IS the
+    /// correct dual-mode-identical one-level deep copy (shape elements are
+    /// inline bytes; the gather→set loop byte-copies each element exactly as
+    /// `ynz_array_clone_primitive` does for AoS receivers).
+    ///
+    /// Layout answers come only from the threaded `SoaArrayInfo` (E3 — no
+    /// re-derivation); the raw `ynz_array_new_sized` call is legal here
+    /// because this helper lives inside the choke section (E7).
+    fn soa_copy_to_aos(
+        &self,
+        info: &SoaArrayInfo<'ctx>,
+        arr: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let elem_ty = Type::Shape {
+            name: info.shape_name.clone(),
+        };
+        let elem_size_c = self.i64().const_int(info.elem_size, false);
+        let cap_c = self.i64().const_int(info.cap, false);
+        let new_arr = self
+            .builder
+            .build_call(
+                self.rt.ynz_array_new_sized,
+                &[elem_size_c.into(), cap_c.into()],
+                &format!("{site}_copy_new"),
+            )
+            .map_err(|e| format!("soa copy new: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("ynz_array_new_sized returned void")?
+            .into_pointer_value();
+        let out = self.array_elem_out_buffer(&elem_ty, &format!("{site}_copy"))?;
+        let idx_slot = self.alloca_in_entry_llvm(self.i64(), &format!("{site}_copy_i"))?;
+        self.builder
+            .build_store(idx_slot, self.i64().const_zero())
+            .map_err(|e| format!("soa copy idx init: {e}"))?;
+        let head_bb = self.append_block(&format!("{site}_copy_head"));
+        let body_bb = self.append_block(&format!("{site}_copy_body"));
+        let done_bb = self.append_block(&format!("{site}_copy_done"));
+        self.builder
+            .build_unconditional_branch(head_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        self.builder.position_at_end(head_bb);
+        let idx = self
+            .builder
+            .build_load(self.i64(), idx_slot, &format!("{site}_copy_iv"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let in_range = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, idx, cap_c, &format!("{site}_copy_cmp"))
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_conditional_branch(in_range, body_bb, done_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        self.builder.position_at_end(body_bb);
+        // idx < cap by the loop guard, so the gather's has-flag is always 1;
+        // the flag is intentionally unused (same staging semantics as a get).
+        let _flag = self.soa_gather_into(info, arr, idx, out, &format!("{site}_copy"))?;
+        self.array_elem_set(
+            new_arr,
+            idx,
+            out.into(),
+            &elem_ty,
+            &format!("{site}_copy_set"),
+            None,
+        )?;
+        let next = self
+            .builder
+            .build_int_add(
+                idx,
+                self.i64().const_int(1, false),
+                &format!("{site}_copy_next"),
+            )
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_store(idx_slot, next)
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_unconditional_branch(head_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        self.builder.position_at_end(done_bb);
+        Ok(new_arr)
+    }
+
     /// Widen marshalled bits to the full 8-byte cell width (`to_i64_bits`
     /// returns bool as raw `i1` by contract — the frame-slot helpers widen at
     /// their store sites; array cells are ALWAYS 8 bytes, so the widening
@@ -2254,13 +2744,21 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Push one element (the ONLY ynz_array_push call site in codegen).
+    /// `soa` must be None: growth is a Phase 4 admission decline (D3 — `add`
+    /// escapes), so a Some here is an entry-gate breach, not a lowering case.
     fn array_elem_push(
         &self,
         arr: PointerValue<'ctx>,
         val: BasicValueEnum<'ctx>,
         elem_ty: &Type,
         site: &str,
+        soa: Option<&SoaArrayInfo<'ctx>>,
     ) -> Result<(), String> {
+        if soa.is_some() {
+            return Err(format!(
+                "internal: push on a SoA array at `{site}` — Phase 4 admission (growth = decline) breached"
+            ));
+        }
         let src = self.array_elem_src_ptr(val, elem_ty, site)?;
         self.builder
             .build_call(self.rt.ynz_array_push, &[arr.into(), src.into()], site)
@@ -2269,6 +2767,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Set one element (the ONLY ynz_array_set call site in codegen).
+    /// SoA receivers scatter all fields at the segment slots instead (same
+    /// staging semantics: for shape values `array_elem_src_ptr` IS the value
+    /// pointer, and admission guarantees SoA elements are shapes).
     fn array_elem_set(
         &self,
         arr: PointerValue<'ctx>,
@@ -2276,7 +2777,17 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         val: BasicValueEnum<'ctx>,
         elem_ty: &Type,
         site: &str,
+        soa: Option<&SoaArrayInfo<'ctx>>,
     ) -> Result<(), String> {
+        if let Some(info) = soa {
+            if !matches!(self.resolve_type(elem_ty), Type::Shape { .. }) {
+                return Err(format!(
+                    "internal: SoA set with non-shape element type at `{site}` — admission breached"
+                ));
+            }
+            let src = self.array_elem_src_ptr(val, elem_ty, site)?;
+            return self.soa_scatter(info, arr, idx, src, site);
+        }
         let src = self.array_elem_src_ptr(val, elem_ty, site)?;
         self.builder
             .build_call(
@@ -2362,7 +2873,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         idx: inkwell::values::IntValue<'ctx>,
         out: PointerValue<'ctx>,
         site: &str,
+        soa: Option<&SoaArrayInfo<'ctx>>,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        if let Some(info) = soa {
+            return self.soa_gather_into(info, arr, idx, out, site);
+        }
         let flag = self
             .builder
             .build_call(
@@ -2434,9 +2949,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         idx: inkwell::values::IntValue<'ctx>,
         elem_ty: &Type,
         site: &str,
+        soa: Option<&SoaArrayInfo<'ctx>>,
     ) -> Result<PointerValue<'ctx>, String> {
         let out = self.array_elem_out_buffer(elem_ty, site)?;
-        let flag = self.array_elem_get_into(arr, idx, out, site)?;
+        let flag = self.array_elem_get_into(arr, idx, out, site, soa)?;
         let bits = self.array_elem_bits_from_out(out, elem_ty, site)?;
         let maybe_slot = self.alloca_in_entry_llvm(self.maybe_type(), &format!("{site}_maybe"))?;
         let h = self
@@ -3270,6 +3786,7 @@ fn lower_function<'ctx, 'g>(
     shape_table: &'g ShapeTable,
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     shape_abi_sizes: &'g HashMap<String, u64>,
+    shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
     mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
@@ -3297,6 +3814,7 @@ fn lower_function<'ctx, 'g>(
             shape_table,
             shape_types,
             shape_abi_sizes,
+            shape_field_abi,
             mono_table,
             options_table,
             wait_cache,
@@ -3339,6 +3857,8 @@ fn lower_function<'ctx, 'g>(
         shape_table,
         shape_types,
         shape_abi_sizes,
+        shape_field_abi,
+        soa_bindings: HashMap::new(),
         layout,
         type_subst: HashMap::new(),
         mono_table,
@@ -3526,6 +4046,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     shape_table: &'g ShapeTable,
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     shape_abi_sizes: &'g HashMap<String, u64>,
+    shape_field_abi: &'g HashMap<String, Vec<(u64, u64)>>,
     mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
@@ -3830,6 +4351,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         shape_table,
         shape_types,
         shape_abi_sizes,
+        shape_field_abi,
+        soa_bindings: HashMap::new(),
         layout,
         type_subst: HashMap::new(),
         mono_table,
@@ -6442,6 +6965,10 @@ fn lower_sm_for<'ctx, 'g>(
     // The count is stable (arrays don't grow during suspension). No extra frame slots needed.
     if let Type::BuiltinArray { elem } = &iter_ty {
         let elem = elem.as_ref().clone();
+        // v0.3-M5 P5: SoA receiver → gather at the same choke point (an SM
+        // function lowers all body statements in ONE Cg, so a binding
+        // registered at Let time is visible here across state blocks).
+        let soa_info = cg.soa_expr_info(iter);
 
         // Init index to 0 and flush to frame slot.
         let zero = cg.i64().const_zero();
@@ -6511,14 +7038,27 @@ fn lower_sm_for<'ctx, 'g>(
                 )
                 .map_err(|e| format!("sm for array shape frame ptr load {var}: {e}"))?
                 .into_pointer_value();
-            let _flag = cg.array_elem_get_into(arr_cur, idx_cur, dest_ptr, "sm_a_get_call")?;
+            // SoA shape-embed: the gather honors the SAME out-pointer contract —
+            // element bytes land DIRECTLY in the frame region.
+            let _flag = cg.array_elem_get_into(
+                arr_cur,
+                idx_cur,
+                dest_ptr,
+                "sm_a_get_call",
+                soa_info.as_ref(),
+            )?;
         } else {
             let out = cg.array_elem_out_buffer(&elem, "sm_a_get")?;
-            let _flag = cg.array_elem_get_into(arr_cur, idx_cur, out, "sm_a_get_call")?;
+            let _flag =
+                cg.array_elem_get_into(arr_cur, idx_cur, out, "sm_a_get_call", soa_info.as_ref())?;
             let elem_val = cg.array_elem_from_out(out, &elem, "sm_a_get")?;
             store(cg, elem_val, &elem, var_slot)?;
             flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
         }
+
+        // v0.3-M5 P5: loop-var mask (same contract as the non-SM array loop) —
+        // the only shadow case an admitted binding can hit is its own loop var.
+        let soa_masked = cg.soa_bindings.remove(var);
 
         lower_sm_block(
             cg,
@@ -6532,6 +7072,10 @@ fn lower_sm_for<'ctx, 'g>(
             shape_table,
             current_state,
         )?;
+
+        if let Some(m) = soa_masked {
+            cg.soa_bindings.insert(var.to_string(), m);
+        }
 
         if !is_block_terminated(cg) {
             let idx_after = state_machine::load_local_slot(
@@ -11822,6 +12366,51 @@ fn emit_loop_preempt<'ctx>(cg: &mut Cg<'ctx, '_>) -> Result<(), String> {
     Ok(())
 }
 
+/// v0.3-M5 P5: lower an admitted-SoA `let` construction — ONE segmented buffer
+/// (`ynz_array_new_sized(elem_size, cap)`, len == cap for life per D3), then
+/// scatter each literal element's fields into the segments. Registers the
+/// binding in `cg.soa_bindings` so every same-function access lowers via
+/// segment addressing at the established choke points.
+fn lower_soa_construction<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    name: &str,
+    value: &Expr,
+    decision: &ynz_typeck::soa::LayoutDecision,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let Expr::ArrayLit { elements, .. } = value else {
+        return Err(format!(
+            "internal: SoA-admitted `{name}` bound to a non-ArrayLit — Phase 4 \
+             admission (provable-length literal) breached"
+        ));
+    };
+    let cap = elements.len() as u64;
+    let info = cg.build_soa_info(decision, cap)?;
+    let elem_size_c = cg.i64().const_int(info.elem_size, false);
+    let cap_c = cg.i64().const_int(cap, false);
+    let arr = cg
+        .builder
+        .build_call(
+            cg.rt.ynz_array_new_sized,
+            &[elem_size_c.into(), cap_c.into()],
+            "soa_new",
+        )
+        .map_err(|e| format!("soa new: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_array_new_sized returned void")?
+        .into_pointer_value();
+    for (k, elem_expr) in elements.iter().enumerate() {
+        // Admission guarantees shape elements — the lowered value IS a pointer
+        // to the element bytes (same contract as `array_elem_src_ptr`).
+        let ev = lower_expr(cg, elem_expr)?;
+        let src = ev.into_pointer_value();
+        let idx = cg.i64().const_int(k as u64, false);
+        cg.soa_scatter(&info, arr, idx, src, "soa_ctor")?;
+    }
+    cg.soa_bindings.insert(name.to_string(), info);
+    Ok(arr.into())
+}
+
 fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
     match stmt {
         Stmt::Expr(expr) => {
@@ -11832,6 +12421,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             name,
             ty: ann_ty,
             value,
+            span,
             ..
         } => {
             // v0.3-M4 Phase 2: `let h = background fn(...)` — the handle-form spawn.
@@ -11842,7 +12432,26 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 return lower_let_background_handle(cg, name, bg_inner);
             }
             let val_ty = cg.expr_type(value);
-            let val = lower_expr(cg, value)?;
+            // v0.3-M5 P5: SoA construction interception. The authority keys a
+            // decision by (array_name, decl_span) — only THIS binding's literal
+            // constructs segmented; every other path stays AoS byte-for-byte.
+            // The returned arr pointer flows through the arm's existing binding
+            // store unchanged (BuiltinArray = plain pointer store).
+            let soa_decision = cg
+                .layout
+                .arrays
+                .iter()
+                .find(|d| {
+                    d.array_name == *name
+                        && d.decl_span == *span
+                        && matches!(d.kind, ynz_typeck::soa::LayoutKind::Soa { .. })
+                })
+                .cloned();
+            let val = if let Some(decision) = soa_decision {
+                lower_soa_construction(cg, name, value, &decision)?
+            } else {
+                lower_expr(cg, value)?
+            };
 
             // M6: when annotation is a union type and value is a concrete shape variant,
             // construct a tagged-struct { i64 tag, i64 data } on the stack.
@@ -12143,12 +12752,16 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 let idx_val = lower_expr(cg, index)?.into_int_value();
                 match &recv_ty {
                     Type::BuiltinArray { .. } => {
+                        // v0.3-M5 P5: owned SoA lookup AFTER lowering receiver +
+                        // index (borrow hygiene) — SoA receivers scatter.
+                        let soa_info = cg.soa_expr_info(receiver);
                         cg.array_elem_set(
                             recv_val.into_pointer_value(),
                             idx_val,
                             elem_val,
                             &elem_ty,
                             "arr_set",
+                            soa_info.as_ref(),
                         )?;
                     }
                     Type::BuiltinFixed { size, .. } => {
@@ -12643,6 +13256,10 @@ fn lower_stmt_for<'ctx>(
     // Array iteration: `for (x in arr)` where arr: array<T>.
     if let Type::BuiltinArray { elem } = &iter_ty {
         let elem = elem.as_ref().clone();
+        // v0.3-M5 P5: SoA receiver → gather at the same choke point. `.count`
+        // stays the honest header read (len == cap, D3), so only the element
+        // read below changes.
+        let soa_info = cg.soa_expr_info(iter);
         let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
         let cnt = cg
             .builder
@@ -12695,18 +13312,28 @@ fn lower_stmt_for<'ctx>(
         // fixtures m5_p2_byval_*escape*). Non-shape elements are loaded by value
         // from the buffer, so the reuse is invisible to them.
         let out = cg.array_elem_out_buffer(&elem, "for_get")?;
-        let _flag = cg.array_elem_get_into(arr_ptr, i, out, "for_get_call")?;
+        let _flag = cg.array_elem_get_into(arr_ptr, i, out, "for_get_call", soa_info.as_ref())?;
         let elem_val = cg.array_elem_from_out(out, &elem, "for_get")?;
 
         let var_slot = cg.alloca(&elem, var)?;
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
 
+        // v0.3-M5 P5: loop-var mask — `for (pts in pts)` shadows an admitted
+        // binding WITHOUT a `Stmt::Let` (admission's shadow-decline already
+        // covers every same-name `let`, so this is the ONLY shadow case).
+        // Inside the body the name means the by-value element, never the array.
+        let soa_masked = cg.soa_bindings.remove(var);
+
         for stmt in &body.stmts {
             if is_block_terminated(cg) {
                 break;
             }
             lower_stmt(cg, stmt)?;
+        }
+
+        if let Some(m) = soa_masked {
+            cg.soa_bindings.insert(var.to_string(), m);
         }
 
         if !is_block_terminated(cg) {
@@ -13998,7 +14625,17 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 }
                 Type::BuiltinArray { elem } => {
                     let elem = elem.as_ref().clone();
-                    lower_array_method(cg, recv_val.into_pointer_value(), &elem, method, args)
+                    // v0.3-M5 P5: owned SoA lookup at the ONE array-method
+                    // dispatch point — threaded into every method lowering.
+                    let soa_info = cg.soa_expr_info(receiver);
+                    lower_array_method(
+                        cg,
+                        recv_val.into_pointer_value(),
+                        &elem,
+                        method,
+                        args,
+                        soa_info,
+                    )
                 }
                 Type::BuiltinFixed { elem, size } => {
                     let elem = elem.as_ref().clone();
@@ -14185,7 +14822,10 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         } else {
                             lower_expr(cg, elem_expr)?
                         };
-                        cg.array_elem_push(arr_ptr, elem_val, &elem_ty2, "arr_push")?;
+                        // Always AoS: an ADMITTED array's literal is intercepted at
+                        // its `Stmt::Let` (lower_soa_construction) and never
+                        // reaches this arm.
+                        cg.array_elem_push(arr_ptr, elem_val, &elem_ty2, "arr_push", None)?;
                     }
                     Ok(arr_ptr.into())
                 }
@@ -14233,11 +14873,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
 
             match &recv_ty {
                 Type::BuiltinArray { elem } => {
+                    // v0.3-M5 P5: SoA receiver → gather at the same choke point.
+                    let soa_info = cg.soa_expr_info(receiver);
                     let maybe_slot = cg.array_elem_get_maybe(
                         recv_val.into_pointer_value(),
                         idx,
                         elem,
                         "arr_get",
+                        soa_info.as_ref(),
                     )?;
                     Ok(maybe_slot.into())
                 }
@@ -14682,6 +15325,26 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             ))
         }
         Type::BuiltinArray { elem } => {
+            // FRAGO 014 follow-through (P5 step 4b — the bg-arg double-copy
+            // hazard): an explicit spawn-site `.copy()` has ALREADY produced an
+            // independent heap array (both layout modes, every element class —
+            // the alias-no-op is closed). Re-cloning it here would (a) double-
+            // copy and (b) LEAK the intermediate: nothing ever frees the value
+            // `.copy()` allocated (an E8 clone→drop imbalance — the FRAGO 009
+            // zero-tolerance class; measured gap 4→6 on
+            // m5_p3_sweep_bg_array_shape_give_wait pre-fix). Transfer ownership
+            // of the copy to the task instead: its drop ladder frees it
+            // (HeapArrayPrimitive → ynz_array_drop), exactly as it freed the
+            // clone this branch used to mint.
+            if matches!(
+                arg,
+                ynz_ast::nodes::Expr::PostfixOp {
+                    op: ynz_ast::nodes::PostfixOpKind::Copy,
+                    ..
+                }
+            ) {
+                return Ok((val, BgArgFreeKind::HeapArrayPrimitive));
+            }
             // Clone the array so the task gets an independent copy. Primitive
             // elements (i64 cells) and — since the v0.3-M5 P3 by-value cut —
             // SHAPE elements (inline bytes in the heap buffer) both clone
@@ -16387,9 +17050,11 @@ fn to_c_string<'ctx>(
             cg.builder.position_at_end(elem_bb);
 
             // Load the element via the by-value choke point (i < count, so the
-            // has-flag is always 1 here).
+            // has-flag is always 1 here). Always AoS: debug-print/interpolation
+            // of an ADMITTED array is unreachable — any `print(arr)` is a
+            // Phase 4 Escapes decline, so no SoA binding can flow here.
             let out = cg.array_elem_out_buffer(&elem, "arr_dbg")?;
-            let _flag = cg.array_elem_get_into(arr_ptr, i, out, "arr_dbg_get")?;
+            let _flag = cg.array_elem_get_into(arr_ptr, i, out, "arr_dbg_get", None)?;
             let elem_val = cg.array_elem_from_out(out, &elem, "arr_dbg")?;
             let elem_str = to_c_string(cg, elem_val, &elem)?;
 
@@ -17041,6 +17706,39 @@ fn lower_postfix_op<'ctx>(
                         .map_err(|e| format!(".copy store: {e}"))?;
                     Ok(new_slot.into())
                 }
+                // FRAGO 014: array `.copy()` is a genuine ONE-LEVEL deep copy in
+                // BOTH layout modes — closing the M4-era alias-no-op stub (the
+                // old catch-all returned the receiver's own pointer, so
+                // `arr2 = arr1.copy(); arr2.set(...)` also mutated `arr1`).
+                // One-level = the same semantics as the `Type::Shape` arm above:
+                // a fresh buffer, element cells byte-copied; pointer cells
+                // (string/maybe elements) copy as pointers, so nested data still
+                // aliases (consistent with D12/D13's recorded stance).
+                Type::BuiltinArray { .. } => {
+                    let arr = recv_val.into_pointer_value();
+                    if let Some(info) = cg.soa_expr_info(receiver) {
+                        // SoA receiver: gather into a fresh AoS buffer — the
+                        // copy's binding is authority-declined, so its reads
+                        // lower AoS (see soa_copy_to_aos's header).
+                        let copied = cg.soa_copy_to_aos(&info, arr, "arr_copy")?;
+                        Ok(copied.into())
+                    } else {
+                        // AoS receiver: elem_size-aware byte deep copy
+                        // (len × elem_size; clone/drop are E7-exempt like count).
+                        let cloned = cg
+                            .builder
+                            .build_call(
+                                cg.rt.ynz_array_clone_primitive,
+                                &[arr.into()],
+                                "arr_copy_clone",
+                            )
+                            .map_err(|e| format!(".copy array clone: {e}"))?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or_else(|| ".copy array clone: returned void".to_string())?;
+                        Ok(cloned)
+                    }
+                }
                 // For primitives, the value is already by-value — just return it.
                 _ => Ok(recv_val),
             }
@@ -17228,8 +17926,10 @@ fn lower_array_method<'ctx>(
     elem: &Type,
     method: &str,
     args: &[Expr],
+    soa: Option<SoaArrayInfo<'ctx>>,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     match method {
+        // `count` reads the header len — honest for SoA too (len == cap, D3).
         "count" => {
             let n = cg
                 .builder
@@ -17243,17 +17943,17 @@ fn lower_array_method<'ctx>(
         "add" => {
             let val = lower_expr(cg, &args[0])?;
             let elem_ty = cg.expr_type(&args[0]);
-            cg.array_elem_push(arr, val, &elem_ty, "arr_add")?;
+            cg.array_elem_push(arr, val, &elem_ty, "arr_add", soa.as_ref())?;
             Ok(cg.i64().const_zero().into())
         }
         "get" => {
             let idx = lower_expr(cg, &args[0])?.into_int_value();
-            let out = cg.array_elem_get_maybe(arr, idx, elem, "arr_get_m")?;
+            let out = cg.array_elem_get_maybe(arr, idx, elem, "arr_get_m", soa.as_ref())?;
             Ok(out.into())
         }
         "first" => {
             let idx = cg.i64().const_zero();
-            let out = cg.array_elem_get_maybe(arr, idx, elem, "arr_first")?;
+            let out = cg.array_elem_get_maybe(arr, idx, elem, "arr_first", soa.as_ref())?;
             Ok(out.into())
         }
         "last" => {
@@ -17269,14 +17969,14 @@ fn lower_array_method<'ctx>(
                 .builder
                 .build_int_sub(cnt, cg.i64().const_int(1, false), "last_idx")
                 .map_err(|e| format!("{e}"))?;
-            let out = cg.array_elem_get_maybe(arr, idx, elem, "arr_last")?;
+            let out = cg.array_elem_get_maybe(arr, idx, elem, "arr_last", soa.as_ref())?;
             Ok(out.into())
         }
         "set" => {
             let idx = lower_expr(cg, &args[0])?.into_int_value();
             let val = lower_expr(cg, &args[1])?;
             let elem_ty = cg.expr_type(&args[1]);
-            cg.array_elem_set(arr, idx, val, &elem_ty, "arr_set_m")?;
+            cg.array_elem_set(arr, idx, val, &elem_ty, "arr_set_m", soa.as_ref())?;
             Ok(cg.i64().const_zero().into())
         }
         "contains" => {
@@ -17358,7 +18058,7 @@ fn lower_array_method<'ctx>(
 
             cg.builder.position_at_end(body_bb);
             let out = cg.array_elem_out_buffer(elem, "c_get")?;
-            let _flag = cg.array_elem_get_into(arr, i, out, "c_get_call")?;
+            let _flag = cg.array_elem_get_into(arr, i, out, "c_get_call", soa.as_ref())?;
             let eq = if let Some(ref shape_name) = elem_shape_name {
                 // Field-wise value equality between the copied element bytes and
                 // the target shape pointer.

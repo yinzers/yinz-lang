@@ -230,3 +230,46 @@ Filed-by-session: phase4-deferral-executor-2026-07-03-m5
   is found to construct exactly this shape (a tracked array referenced only via a match-pattern
   value expression), OR Phase 8's suppression-enumeration mandate sweeping `examples/` + test
   fixtures surfaces a shape matching this pattern.
+
+## 2026-07-04 — Deferral: fixed<T>.copy() remains a pre-existing alias no-op (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#5 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#5: crates-ynz-codegen-src-emit-rs-17743
+Filed-by-session: phase5-executor-2026-07-03-m5-closing
+
+- **WHAT** — `crates/ynz-codegen/src/emit.rs:17743`: `fixed<T>.copy()` still lowers as an alias
+  no-op — the same M4-era `lower_postfix_op` Copy-arm catch-all (`_ => Ok(recv_val)`) that
+  FRAGO 014 fixed for `array<T>` (the new `Type::BuiltinArray` arm at :17705), but `fixed<T>`
+  was explicitly outside that fix's scope, so a fixed-array receiver falls through to the
+  alias-returning catch-all.
+- **WHY** — FRAGO 014 was scoped narrowly to `array<T>` (Phase 5's own SoA/E9 domain);
+  `fixed<T>` was never in Phase 5's scope and fixing it there would have been scope creep into
+  an already-large (scale=large, 5-segment) phase.
+- **COST** — Likely small: Phase 2 already found and rerouted the three `fixed<T>` element
+  write choke points during its ABI migration, so extending `.copy()` there mirrors an
+  already-established pattern — probably a similar shallow one-level-memcpy fix to what
+  FRAGO 014 did for arrays.
+- **TRIGGER** — The next phase/milestone that touches `fixed<T>` semantics, or a user-facing
+  bug report of `fixed<T>.copy()` aliasing unexpectedly.
+
+## 2026-07-04 — Deferral: SoA bounds-check predicate is a second (currently-equivalent) derivation of the runtime's bounds check (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#5 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#5: crates-ynz-codegen-src-emit-rs-2445
+Filed-by-session: phase5-executor-2026-07-03-m5-closing
+
+- **WHAT** — `crates/ynz-codegen/src/emit.rs:2445` (SoA gather, `idx u< cap`) and its sibling
+  at the analogous scatter site (:2525): the SoA gather/scatter bounds predicate is logically
+  equivalent to but textually separate from the runtime's own `idx < 0 || idx >= len` check
+  (`crates/ynz-runtime/src/lib.rs:1239`, `ynz_array_get`) — linked today only by
+  `soa_gather_into`'s doc comment, not a compile-time assertion or shared constant, per this
+  milestone's `authoritative-derivation.md` house rule preferring one authoritative source
+  over a documented-equivalent duplicate.
+- **WHY** — Today the two predicates are provably equivalent (D3's admission invariant
+  guarantees `len == cap` for every SoA-admitted array, and unsigned `u<` vs signed
+  `< 0 || >=` are equivalent under the non-negative-length invariant) — fixing this now would
+  be gold-plating a currently-zero-risk duplicate for a house-style preference, not a
+  correctness necessity.
+- **COST** — Small: a compile-time `debug_assert_eq!`-style link between the two predicates'
+  logic, or extracting a shared helper/constant both codegen and the runtime check can point
+  to.
+- **TRIGGER** — Any future change to `len`/`cap`'s relationship (e.g. a future milestone
+  allowing growable SoA arrays, breaking D3's `len == cap` invariant) — exactly the condition
+  under which this duplicate would silently drift, per this milestone's own
+  authoritative-derivation risk class (E3's whole reason for existing).
