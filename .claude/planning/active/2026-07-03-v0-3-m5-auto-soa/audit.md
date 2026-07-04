@@ -3033,3 +3033,74 @@ command string at BOTH plan.md sites (Phase 8 step 4 and step 6) with the both-p
 CHANGELOG DRAFT's guard parenthetical (above, this file) to describe the both-profile guard
 (it cited only the release-only clean; cosmetic). FRAGO 018's own record and the Phase 8 STATUS
 discovery narrative left untouched per FRAGO 023's Unchanged clause.
+
+## Session log — 2026-07-04 — session-id: plan-fixup-ledgerstatus-2026-07-04-m5
+
+Roadmap Capability Ledger status sync (paperwork-only dispatch, no code/build/commit — prompted by
+the cumulative cross-phase completion gate's finding that the roadmap's M5 ledger rows were stale:
+still "planned" / "planned + active" after all execution phases 0–8 were sealed, verified, and
+boundary-committed). Edited `roadmap.md` (`2026-05-21-v0-3-concurrency-perf`) at five sites:
+
+1. §Milestone 5 "Execution plan" status line — "planned + active" → "phases 0–8 complete — tag
+   pending Patrick's release action" (+ sealed/boundary-committed 2026-07-04 note).
+2. First Capability Ledger table, Auto-SoA row (M5) — "**planned**" → the same
+   phases-complete/tag-pending status.
+3. First Capability Ledger table, array-by-value + `map<K,Shape>` row (M5, folded-in) — "planned"
+   → same status.
+4. Second Capability Ledger table (merged pre-migration ledger), Auto-SoA row — "planned
+   (plan-id …)" → same status.
+5. Second Capability Ledger table, array-by-value row — "planned" → same status.
+
+Deliberately NOT marked "shipped"/"done": the `v0.3.x` release tag is the one outstanding piece,
+withheld this session per Patrick's instruction — the ledger now says exactly that instead of
+understating (planned) or overstating (shipped). Fixed-fact sweep: grepped the roadmap for every
+other "planned"/"active" occurrence tied to M5/array-by-value — the five sites above are the
+complete set; unrelated rows (M3c/M3d/M3f, unscoped capability-discovery rows) untouched.
+
+Session-id appended to BOTH frontmatter chains in this dispatch: this plan's `plan.md` AND the
+roadmap's own `roadmap.md` (the roadmap chain had previously been missing roadmap-writing sessions
+per an earlier deviation-judge finding — this session records itself there correctly).
+
+## Cumulative cross-phase completion gate — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable
+
+**Coupling decision:** RUN (fail-safe default) — this milestone's 9 phases are heavily coupled by
+design (by-value storage P2/P3 is the substrate P4/P5's SoA rides on; the harness/perf story P6
+feeds directly into P7's teaching text and P8's demo safety bracket; the layout authority P4 builds
+is consumed by every later phase) — no attempt was made to prove pairwise disjointness, since it
+plainly doesn't hold.
+
+**Diff range:** `1ac52fd..ebca94e` (the fork commit through Phase 8's boundary — all 9 phases,
+0 through 8).
+
+**Three-lens fan-out (concurrent):**
+1. **code-reviewer** (reuse/consolidation lens, opus·xhigh) — VERDICT: clean, 0 findings. Confirmed
+   the ¶3.1 "one representation" architecture held across all 9 phases: no second allocation model,
+   no duplicate shape-value-equality/persist-choke implementations, SoA and by-value share one
+   `YnzArray` runtime struct, Phase 7's lint and Phase 8's enumeration both read the same
+   authoritative `layout_decisions_query`/`soa_candidate_query` rather than re-deriving.
+2. **acceptance-verifier** (§3.1 integrated whole + roadmap campaign End State, sonnet) — VERDICT:
+   met. All 6 Key Outcomes verified against actual produced artifacts, not narration (guard lift,
+   dual-mode byte-identical corpus, the honest SoA perf story consistently carried everywhere, the
+   SIZE_THRESHOLD provenance, the D11 padding-wins byte-layout fixture, the docs graduation) — Key
+   Outcome 6's "tag ships it" sub-clause explicitly graded as a recorded, deliberate carve-out
+   (Patrick's own withheld action), not a failure. 1 should-fix: the roadmap's own Capability Ledger
+   status rows were stale ("planned") relative to the plan's actual sealed state — **fixed** in the
+   preceding session-log entry above (`plan-fixup-ledgerstatus-2026-07-04-m5`), before this gate
+   seals.
+3. **deviation-judge** (cross-phase interaction, sonnet) — VERDICT: on-plan, 0 unjustified strays.
+   Independently re-verified against live code (not the plan's narrative) that: D2/GR8's
+   one-allocation guarantee holds under SoA; Phase 3's suspension-survival guarantee is unbroken by
+   Phase 5's segment addressing; the layout authority is the sole source at every downstream
+   consumer (grep-confirmed exactly 3 `padded_shapes` reads, matching FRAGO 013's corrected count);
+   the two elevated roadmap deferrals (stale-runtime footgun, int-literal ICE) stayed correctly
+   out of scope throughout, never partially fixed. Two pre-existing cross-phase frictions (FR#12
+   shape-level-padding-forfeits-SoA; FR#15 hot_fields dead-code) were independently re-confirmed as
+   already correctly discovered, judged, and routed by earlier phases' own boundary reviews — not
+   new findings, no further routing needed.
+
+**Result: 0 blockers, 0 FRAGO candidates, 1 should-fix (fixed before sealing).** No justified
+cross-phase divergence requiring a FRAGO; no risk-raising finding requiring the signed-override
+gate. Cleared.
+
+**Gate seal:** `Completion-Gate: 2026-07-03-v0-3-m5-auto-soa#cleared` — the git-legible marker
+Step-0's completion-window reconcile reads. Continuing to Step 9.1 (AAR).
