@@ -1,0 +1,36 @@
+From: v0.3-M7 Phase-0 spike — O0 -> Default OptimizationLevel flip (reference only, NOT applied to
+main; preserved per plan-spike-discipline Facet 2 as the durable artifact Phase 1 reads instead of
+re-deriving from memory).
+
+Original spike ran in a throwaway worktree (`.claude/worktrees/agent-abba2c8babbd9ea21`) that is
+gitignored, uncommitted, and lived in a separate clone (`/home/patrick/development/ynz/`) whose
+branch has since been reused — that worktree no longer preserves this diff. This checked-in patch
+file is the durable replacement: the exact 2-line change, reconstructed against this repo's current
+`crates/ynz-codegen/src/emit.rs` and `crates/ynz-codegen/src/state_machine.rs`, verified byte-for-byte
+against the tree at amendment time (2026-07-04). The primary durable EVIDENCE of the spike's RED
+verdict (6/470 failures, exact failing-fixture list, direct-repro SIGSEGV) is
+`.claude/audits/2026-07-04-concurrency-release-audit.md` "Phase-0 spike — O0 -> Default optimization"
+section — this patch is the mechanism-reproduction artifact, not the evidence-of-failure record.
+
+--- a/crates/ynz-codegen/src/emit.rs
++++ b/crates/ynz-codegen/src/emit.rs
+@@ -876,7 +876,7 @@
+                     &triple,
+                     "generic",
+                     "",
+-                    OptimizationLevel::None,
++                    OptimizationLevel::Default,
+                     RelocMode::Default,
+                     CodeModel::Default,
+                 )
+--- a/crates/ynz-codegen/src/state_machine.rs
++++ b/crates/ynz-codegen/src/state_machine.rs
+@@ -752,7 +752,7 @@
+             &triple,
+             "generic",
+             "",
+-            OptimizationLevel::None,
++            OptimizationLevel::Default,
+             RelocMode::Default,
+             CodeModel::Default,
+         )
