@@ -1,0 +1,43 @@
+// M5 P3 step 1 — map<K,Shape> RED-matrix cell: the MAP as a crossing local
+// over a `wait` (maps are heap pointers — admitted as crossing locals), then
+// has / set / count / SM-arm iteration all POST-resume. The pre-loop wait
+// makes the whole fn a state machine, so the for-loop exercises the SM map
+// for-loop arm WITHOUT a body wait.
+//
+// COVERAGE BOUNDARY (surfaced seg-4): the handoff's original cell spec wanted
+// a post-resume `.get()` — NOT constructible today. Typeck's crossing
+// over-approximation (check.rs collect_crossings_in_stmts: every post-wait
+// `let` joins `declared`, any later read flags it) marks ANY maybe binding
+// consumed after a `wait` as crossing, and Check 2b rejects maybe crossings
+// (UnsupportedCrossingLocalType). The specific-key read is covered here via
+// iteration (entry.value is Part, kept out of crossing sets by the map-entry
+// contract); the maybe-envelope get path is covered non-suspending
+// (m5_p3_mapshape_literal_str / _runtime_int) and pre-wait
+// (m5_p3_mapshape_wait_get_escape).
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let pa: Part = { qty: 1, price: 10 }
+  let pb: Part = { qty: 2, price: 20 }
+  let stock: map<string, Part> = { `a`: pa, `b`: pb }
+  wait sleep(10)
+  let hasA: boolean = stock.has(`a`)
+  print(hasA)
+  let pc: Part = { qty: 3, price: 30 }
+  stock.set(`c`, pc)
+  let n: int = stock.count()
+  print(n)
+  let qtyA: int = 0
+  let total: int = 0
+  for (entry in stock) {
+    total = total + entry.value.price
+    if (entry.value.qty == 1) {
+      qtyA = entry.value.qty
+    }
+  }
+  print(qtyA)
+  print(total)
+}

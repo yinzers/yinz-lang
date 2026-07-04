@@ -1119,10 +1119,11 @@ fn build_module<'ctx, 'g>(
 
     // Compute ABI byte sizes for shapes using LLVM TargetData (the authoritative layout
     // source). Stored as a plain HashMap<name, bytes> so frame-layout computation (no
-    // LLVM context) and codegen (has LLVM context) share one source of truth. NOTE: the
-    // embed memcpys in lower_function_with_waits still size from `struct_ty.size_of()`
-    // — the unlinked size-derivation twin flagged on `shape_frame_slots` (FRAGO 010;
-    // Phase 3 step 5 owns the unify-or-parity-link fix).
+    // LLVM context) and codegen (has LLVM context) share one source of truth. Every
+    // shape-size consumer (frame layout, choke points, SM embed memcpys, bg heap copy)
+    // reads THIS map — the FRAGO 010 `struct_ty.size_of()` twin was unified away
+    // (P3 step 5(c)); the only remaining `size_of()` calls are the fixed 16-byte
+    // maybe-envelope, which is not a shape-size question.
     //
     // Prior impl used `struct_ty.size_of().get_zero_extended_constant()`, which fails
     // for GEP-based size constants (returns None for non-trivial structs) — causing the
@@ -2124,15 +2125,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
-    // ── v0.3-M5 P2: by-value array element choke points ──────────────────────
+    // ── v0.3-M5 P2/P3: by-value array + map element choke points ─────────────
     //
     // EVERY `ynz_array_new/push/get/set` call in codegen goes through the helpers
     // in this section — never call `self.rt.ynz_array_{new,push,get,set}` anywhere
-    // else (the E7 hard-cut grep gate). elem_size is derived ONLY in
-    // `array_elem_size` (authoritative-derivation.md: one derivation, every
+    // else (the E7 hard-cut grep gate). Likewise EVERY `ynz_map_*` call (including
+    // count/has) goes through the `map_*` helpers below — zero raw
+    // `self.rt.ynz_map_*` refs outside this section (the P3 map grep gate).
+    // elem_size is derived ONLY in `array_elem_size` — shared by array elements
+    // AND map values (authoritative-derivation.md: one derivation, every
     // consumer threaded — the M3a/M3d/M3e/M3g twin-derivation corpse class).
 
-    /// THE one elem-size derivation for by-value element storage.
+    /// THE one elem-size derivation for by-value element storage — array
+    /// ELEMENTS and map VALUES alike (the two ABIs mirror 1:1; a map-side twin
+    /// of this match would be exactly the parallel-derivation corpse class).
     ///
     /// Non-shape elements are 8-byte cells holding the i64-bit convention
     /// (int/float/bool by value; string/number/every other pointer type as pointer
@@ -2486,8 +2492,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// escaping maybe binding therefore needs BOTH copied: the envelope by value,
     /// and (shape payloads only, guarded on the flag — a `none`'s bits may be 0)
     /// the payload bytes into an owned region with bits repointed at the copy.
-    /// Non-shape payloads are self-contained i64 bits (values, or stable heap
-    /// pointers for string/number) — the envelope copy alone owns them.
+    /// Non-shape payloads are self-contained i64 bits (values, or pointers that
+    /// are stable against per-site reuse — heap for string, frame-local STACK
+    /// allocas for number) — the envelope copy alone owns them.
     fn maybe_to_owned(
         &self,
         src_env: PointerValue<'ctx>,
@@ -2713,16 +2720,20 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// staging pointers (struct alloca / `{flag, bits}` envelope) — their raw
     /// pointer bits are overwritten with the site and die with the frame — so
     /// they clone into counted heap cells here; everything else is
-    /// self-contained i64 bits (plain values, or stable heap pointers for
-    /// string/number). The persist surfaces that route through here
+    /// self-contained i64 bits (plain values, or pointers stable against
+    /// per-site reuse — heap for string, frame-local STACK allocas for
+    /// number). The persist surfaces that route through here
     /// (authoritative-derivation: one marshalling answer, no per-surface
     /// twins):
     ///
-    /// - **Map value slots** (uniform i64-slot ABI until Phase 3 step 1's
-    ///   symmetric by-value cut, E12): all FOUR insert sites — `.set()`,
-    ///   index-assign, the backtick MapLit, and the identifier-key
-    ///   StructLit-as-map lowering. Fix round 2; tripwires
-    ///   `m5_p2_byval_map_*escape*`.
+    /// - **Map non-shape value cells** (`map_val_set` → `array_elem_src_ptr`;
+    ///   by-value elem_size ABI since Phase 3 step 1's symmetric cut, E12): all
+    ///   FOUR insert sites — `.set()`, index-assign, the backtick MapLit, and
+    ///   the identifier-key StructLit-as-map lowering. SHAPE map values no
+    ///   longer route here — they memcpy by value inline via
+    ///   `array_elem_src_ptr`'s shape passthrough (which also removed the
+    ///   re-set-over-key heap-cell leak); maybe/non-shape map values still do.
+    ///   Fix round 2; tripwires `m5_p2_byval_map_*escape*`.
     /// - **Array non-shape element cells** (`array_elem_src_ptr` — push/set):
     ///   the 8-byte cell persists inside the buffer. Fix round 3; tripwire
     ///   `m5_p2_byval_array_maybe_elem_write_escape`. (Shape elements never
@@ -2733,6 +2744,14 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///   round-3 closer's surfaced deviation); tripwires
     ///   `m5_p2_byval_fixed_*escape*`. Shape AND maybe elements clone here;
     ///   unlike heap arrays there is no runtime memcpy to save the shape case.
+    /// - **MapEntry escapes** (P3 step 5(b) — the store_binding reuse class on
+    ///   the map-iteration loop var): a MapEntry value is a pointer to the loop
+    ///   arm's per-site `{i64 key_bits, i64 val_bits}` entry struct, rewritten
+    ///   every iteration; any persist of it (array/fixed element, map value,
+    ///   bg spawn arg via `prepare_bg_arg_for_ctx`'s pre-gate) clones the entry
+    ///   struct — and, for shape/maybe-valued entries, the VALUE half — into
+    ///   counted heap cells in the arm below. Tripwires
+    ///   `m5_p3_sweep_mapentry_{bg,array}_escape`.
     ///
     /// Background spawn args reach the same discipline through
     /// `prepare_bg_arg_for_ctx`'s heap-upgrade arms (which need the cell
@@ -2741,18 +2760,28 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// marshals an already-stable heap pointer).
     ///
     /// KNOWN HOLE — Union (documented, no arm; BLOCKED-class, surfaced fix
-    /// round 3): a union value's representation is NOT one derivable layout —
-    /// a `{i64 tag, i64 data}` tagged-struct alloca from the annotated-Let
-    /// ctor (with `data` an interior ptr_to_int of a STACK shape alloca), but
-    /// a NULL pointer for the `T | nothing` none case (the union print path
-    /// `build_is_null`s the value directly). A blind 16-byte clone would
-    /// segfault on the null repr and would still persist the interior stack
-    /// payload pointer one level down. `map<string, UnionAlias>` is admitted
-    /// at annotation, and `fixed<UnionAlias>` is admitted when filled from an
-    /// already-union-typed binding (probe-verified, fix round 4), so union
-    /// bits falling through to `to_i64_bits` remain a persist hole on both
-    /// surfaces — unobservable today for maps (union narrowing through
-    /// map-get is blocked), owned by the fix-round deviation record until the
+    /// round 3; state refreshed P3 step 5(d) sweep): a union value's
+    /// representation is NOT one derivable layout — a `{i64 tag, i64 data}`
+    /// tagged-struct alloca from the annotated-Let ctor (with `data` an
+    /// interior ptr_to_int of a STACK shape alloca), but a NULL pointer for
+    /// the `T | nothing` none case (the union print path `build_is_null`s the
+    /// value directly). A blind 16-byte clone would segfault on the null repr
+    /// and would still persist the interior stack payload pointer one level
+    /// down. CONSTRUCTIBILITY (P3 step-5 probes, superseding the earlier
+    /// "unobservable today for maps" claim): the WRITE side IS constructible —
+    /// `map<int, UnionAlias>.set(...)` and an `array<UnionAlias>` literal both
+    /// compile AND run (the union bits fall through to `to_i64_bits` and the
+    /// raw interior-stack pointer persists silently); a union-typed SHAPE
+    /// FIELD is cleanly typeck-rejected (that surface is closed). READ-BACK
+    /// from either collection (`is`-narrowing after get) fails as a LOUD
+    /// codegen ICE — no binary is produced, so no end-to-end silent wrong is
+    /// observable today. The pins `m5_p3_sweep_union_readback_blocked_{array,
+    /// map}` assert the read-back build keeps failing loud: if it ever starts
+    /// compiling, the marshalling question must be answered consciously here.
+    /// A loud-reject GATE at the persist surfaces is a NEW user-facing
+    /// diagnostic (feature-registry + gallery obligations) — FRAGO-grade plan
+    /// surface, surfaced to the deviation-judge, deliberately NOT built as a
+    /// sweep ride-along. Owned by the fix-round deviation record until the
     /// union ABI gets one authoritative layout.
     fn value_to_stable_bits(
         &self,
@@ -2773,8 +2802,270 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                     .build_ptr_to_int(cell, self.i64(), &format!("{site}_bits"))
                     .map_err(|e| format!("maybe value cell bits {site}: {e}"))
             }
+            Type::MapEntry {
+                val: ref entry_val_ty,
+                ..
+            } => {
+                // P3 step 5(b): a MapEntry value is a pointer to the map loop
+                // arm's PER-SITE {i64 key_bits, i64 val_bits} entry struct —
+                // rewritten every iteration and dead with the frame (probes:
+                // bg arg read the ADVANCED slot; array<MapEntry> cells all
+                // aliased the same slot). Clone the entry struct into a
+                // counted heap cell. Size is the fixed {i64,i64} envelope
+                // register (the `maybe_type().size_of()` convention — NOT a
+                // shape-size derivation; `shape_abi_sizes` stays the one
+                // authoritative shape-size source).
+                let entry_ty = self
+                    .ctx
+                    .struct_type(&[self.i64().into(), self.i64().into()], false);
+                let raw = entry_ty
+                    .size_of()
+                    .ok_or_else(|| format!("{site}: MapEntry struct size_of unavailable"))?;
+                let entry_size = self
+                    .builder
+                    .build_int_z_extend(raw, self.i64(), &format!("{site}_me_sz"))
+                    .map_err(|e| format!("mapentry size zext {site}: {e}"))?;
+                let cell = self.heap_cell(entry_size, &format!("{site}_me"))?;
+                self.builder
+                    .build_memcpy(cell, 1, val.into_pointer_value(), 1, entry_size)
+                    .map_err(|e| format!("mapentry cell memcpy {site}: {e}"))?;
+                // Deep-copy the VALUE half when it is itself per-site staging:
+                // shape-valued entries carry the loop arm's reused iteration
+                // OUT-BUFFER pointer as val_bits (`mf_vv`/`sm_mf_vv`); the
+                // maybe arm keeps the clone total by value semantics (a
+                // maybe-valued entry's bits are a stable heap cell today —
+                // the write-side marshal above minted it — but cloning keeps
+                // this arm correct if that ever changes). The KEY half is
+                // always self-contained (i64 bits or a stable heap string
+                // pointer) — the memcpy above already owns it.
+                let resolved_val_ty = self.resolve_type(entry_val_ty);
+                if matches!(resolved_val_ty, Type::Shape { .. } | Type::Maybe { .. }) {
+                    let vslot = self
+                        .builder
+                        .build_struct_gep(entry_ty, cell, 1, &format!("{site}_me_v"))
+                        .map_err(|e| format!("{e}"))?;
+                    let vbits = self
+                        .builder
+                        .build_load(self.i64(), vslot, &format!("{site}_me_vbits"))
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    let vptr = self
+                        .builder
+                        .build_int_to_ptr(vbits, self.ptr(), &format!("{site}_me_vptr"))
+                        .map_err(|e| format!("{e}"))?;
+                    let vcell = match resolved_val_ty {
+                        Type::Shape { ref name } => {
+                            self.shape_bytes_to_heap_cell(vptr, name, &format!("{site}_me_val"))?
+                        }
+                        Type::Maybe { ref inner } => {
+                            self.maybe_to_heap_cell(vptr, inner, &format!("{site}_me_val"))?
+                        }
+                        _ => unreachable!("guarded by the matches! above"),
+                    };
+                    let new_bits = self
+                        .builder
+                        .build_ptr_to_int(vcell, self.i64(), &format!("{site}_me_vnew"))
+                        .map_err(|e| format!("{e}"))?;
+                    self.builder
+                        .build_store(vslot, new_bits)
+                        .map_err(|e| format!("{e}"))?;
+                }
+                self.builder
+                    .build_ptr_to_int(cell, self.i64(), &format!("{site}_bits"))
+                    .map_err(|e| format!("mapentry cell bits {site}: {e}"))
+            }
             _ => self.to_i64_bits(val, ty),
         }
+    }
+
+    // ── v0.3-M5 P3: by-value map value choke points ──────────────────────────
+    //
+    // The map mirrors of the array helpers above. EVERY `ynz_map_*` runtime call
+    // in codegen lives in this sub-section (including count/has — the grep gate
+    // is `zero raw self.rt.ynz_map_* refs outside these helpers`). The value-cell
+    // marshalling REUSES the array helpers directly (`array_elem_size`,
+    // `array_elem_src_ptr`, `array_elem_out_buffer`, `array_elem_bits_from_out`)
+    // — one derivation for both collection ABIs, never a map-side twin.
+
+    /// Allocate a new heap map for `val_ty` values (the ONLY ynz_map_new call
+    /// site in codegen). elem_size via `array_elem_size` — the shared by-value
+    /// elem-size derivation for array elements AND map values.
+    fn map_new(&self, val_ty: &Type, name: &str) -> Result<PointerValue<'ctx>, String> {
+        let elem_size = self.array_elem_size(val_ty)?;
+        let size_const = self.i64().const_int(elem_size, false);
+        let v = self
+            .builder
+            .build_call(self.rt.ynz_map_new, &[size_const.into()], name)
+            .map_err(|e| format!("map_new: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("ynz_map_new returned void")?;
+        Ok(v.into_pointer_value())
+    }
+
+    /// Insert/overwrite one value (the ONLY ynz_map_set / ynz_map_set_str call
+    /// sites in codegen). `key` is the already-marshalled key operand: i64 bits
+    /// for int-keyed maps (`is_str = false`), a string pointer for str-keyed
+    /// maps (`is_str = true`).
+    ///
+    /// The value src pointer comes from `array_elem_src_ptr` — EXACTLY the map
+    /// marshalling semantics: shape values pass their byte pointer through and
+    /// the runtime memcpys elem_size bytes inline (shapes stop routing through
+    /// counted heap cells, removing the re-set-over-key cell leak);
+    /// maybe/non-shape values marshal through `value_to_stable_bits` into an
+    /// 8-byte staging cell, keeping the stable-bits persist discipline unchanged.
+    fn map_val_set(
+        &self,
+        map: PointerValue<'ctx>,
+        key: inkwell::values::BasicMetadataValueEnum<'ctx>,
+        is_str: bool,
+        val: BasicValueEnum<'ctx>,
+        val_ty: &Type,
+        site: &str,
+    ) -> Result<(), String> {
+        let src = self.array_elem_src_ptr(val, val_ty, site)?;
+        let callee = if is_str {
+            self.rt.ynz_map_set_str
+        } else {
+            self.rt.ynz_map_set
+        };
+        self.builder
+            .build_call(callee, &[map.into(), key, src.into()], site)
+            .map_err(|e| format!("map_val_set: {e}"))?;
+        Ok(())
+    }
+
+    /// Read the value for `key` into `out` (the ONLY ynz_map_get / ynz_map_get_str
+    /// call sites in codegen). Returns the i64 has-flag (1 = hit; 0 = miss with
+    /// `out` zeroed by the runtime). `out` comes from `array_elem_out_buffer`
+    /// (same get-side ownership contract: per-site entry-block storage, reused
+    /// per read — escaping bindings copy at the binding point).
+    fn map_val_get_into(
+        &self,
+        map: PointerValue<'ctx>,
+        key: inkwell::values::BasicMetadataValueEnum<'ctx>,
+        is_str: bool,
+        out: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let callee = if is_str {
+            self.rt.ynz_map_get_str
+        } else {
+            self.rt.ynz_map_get
+        };
+        let flag = self
+            .builder
+            .build_call(callee, &[map.into(), key, out.into()], site)
+            .map_err(|e| format!("map_val_get_into: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("ynz_map_get returned void")?
+            .into_int_value();
+        Ok(flag)
+    }
+
+    /// get + `{i64 flag, i64 bits}` maybe-envelope packing — the shared read path
+    /// for `m[key]` and `.get()`. Mirrors `array_elem_get_maybe` byte-for-byte:
+    /// out buffer + get_into + bits-from-out + envelope re-pack into a per-site
+    /// ENTRY-BLOCK maybe slot (same reuse/ownership contract).
+    fn map_val_get_maybe(
+        &self,
+        map: PointerValue<'ctx>,
+        key: inkwell::values::BasicMetadataValueEnum<'ctx>,
+        is_str: bool,
+        val_ty: &Type,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let out = self.array_elem_out_buffer(val_ty, site)?;
+        let flag = self.map_val_get_into(map, key, is_str, out, site)?;
+        let bits = self.array_elem_bits_from_out(out, val_ty, site)?;
+        let maybe_slot = self.alloca_in_entry_llvm(self.maybe_type(), &format!("{site}_maybe"))?;
+        let h = self
+            .builder
+            .build_struct_gep(self.maybe_type(), maybe_slot, 0, &format!("{site}_has"))
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_store(h, flag)
+            .map_err(|e| format!("{e}"))?;
+        let v = self
+            .builder
+            .build_struct_gep(self.maybe_type(), maybe_slot, 1, &format!("{site}_val"))
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_store(v, bits)
+            .map_err(|e| format!("{e}"))?;
+        Ok(maybe_slot)
+    }
+
+    /// Read the entry at insertion-order `pos` (the ONLY ynz_map_iter_get /
+    /// ynz_map_iter_get_str call sites in codegen). Writes the key into
+    /// `key_out` (an i64 slot; str-keyed maps receive the stored key POINTER as
+    /// i64 bits) and the value bytes into `val_out` (an `array_elem_out_buffer`).
+    /// Returns the i64 has-flag.
+    fn map_iter_get_into(
+        &self,
+        map: PointerValue<'ctx>,
+        pos: inkwell::values::IntValue<'ctx>,
+        is_str: bool,
+        key_out: PointerValue<'ctx>,
+        val_out: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let callee = if is_str {
+            self.rt.ynz_map_iter_get_str
+        } else {
+            self.rt.ynz_map_iter_get
+        };
+        let flag = self
+            .builder
+            .build_call(
+                callee,
+                &[map.into(), pos.into(), key_out.into(), val_out.into()],
+                site,
+            )
+            .map_err(|e| format!("map_iter_get_into: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("ynz_map_iter_get returned void")?
+            .into_int_value();
+        Ok(flag)
+    }
+
+    /// Entry count (the ONLY ynz_map_count call site in codegen).
+    fn map_count_val(
+        &self,
+        map: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let v = self
+            .builder
+            .build_call(self.rt.ynz_map_count, &[map.into()], site)
+            .map_err(|e| format!("map_count_val: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("ynz_map_count returned void")?
+            .into_int_value();
+        Ok(v)
+    }
+
+    /// Int-key membership test (the ONLY ynz_map_has call site in codegen).
+    /// Str-keyed `has` routes through `map_val_get_into`'s flag instead (the
+    /// runtime's has is int-key only).
+    fn map_has_int(
+        &self,
+        map: PointerValue<'ctx>,
+        key_bits: inkwell::values::IntValue<'ctx>,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let v = self
+            .builder
+            .build_call(self.rt.ynz_map_has, &[map.into(), key_bits.into()], site)
+            .map_err(|e| format!("map_has_int: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("ynz_map_has returned void")?
+            .into_int_value();
+        Ok(v)
     }
 
     /// Field-wise VALUE equality between two shape element pointers.
@@ -2789,8 +3080,16 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///
     /// Field payloads compare by BIT equality, matching the non-shape element cells
     /// (float compares as its i64 bit pattern). Pointer-typed fields (string,
-    /// nested shape) compare by pointer identity — heap-field shapes are the
-    /// scratch doc's Risk-3 deferral, gated by E8/Phase 3.
+    /// nested shape) compare by pointer identity — **D12 RATIFIED (P3 step 5(a),
+    /// final for M5)**: the by-value cut FORCED field-wise equality at the
+    /// element grain (pointer identity has no by-value analogue), but
+    /// pointer-typed FIELDS underwent no repr change, so bit-identity is the
+    /// minimal behavior-preserving semantics, consistent with the non-shape
+    /// cells' bit-equality locked by the step-1 matrix goldens. Deep equality
+    /// (recursion, none-handling, cycles) is a semantics EXTENSION beyond the
+    /// migration's scope — YAGNI until a user-facing equality design lands
+    /// (docs home: plan Phase 7 step 5, alongside D12/D13). Pin fixture:
+    /// `m5_p3_sweep_shape_eq_string_field`.
     fn shape_value_eq(
         &self,
         a_ptr: PointerValue<'ctx>,
@@ -6343,7 +6642,7 @@ fn lower_sm_for<'ctx, 'g>(
     // The map pointer comes from a frame-backed crossing local (always fresh on resume).
     if let Type::BuiltinMap { key, val } = &iter_ty {
         let key_ty = key.as_ref().clone();
-        let _val_ty = val.as_ref().clone();
+        let val_ty = val.as_ref().clone();
 
         let zero = cg.i64().const_zero();
         cg.builder
@@ -6367,14 +6666,7 @@ fn lower_sm_for<'ctx, 'g>(
             .map_err(|e| format!("{e}"))?;
         // Re-evaluate map pointer and count at header — reloads from frame-backed local.
         let map_ptr_h = lower_expr(cg, iter)?.into_pointer_value();
-        let cnt_cur = cg
-            .builder
-            .build_call(cg.rt.ynz_map_count, &[map_ptr_h.into()], "sm_mf_cnt")
-            .map_err(|e| format!("{e}"))?
-            .try_as_basic_value()
-            .basic()
-            .ok_or("map_count void")?
-            .into_int_value();
+        let cnt_cur = cg.map_count_val(map_ptr_h, "sm_mf_cnt")?;
         let lt = cg
             .builder
             .build_int_compare(IntPredicate::SLT, idx_cur, cnt_cur, "sm_mf_cond")
@@ -6390,40 +6682,39 @@ fn lower_sm_for<'ctx, 'g>(
             .struct_type(&[cg.i64().into(), cg.i64().into()], false);
         // Entry slot uses alloca_in_entry_llvm since MapEntry has an LLVM struct type.
         let entry_slot = cg.alloca_in_entry_llvm(entry_ty, var)?;
-        cg.locals.insert(var.to_string(), entry_slot);
+        // Locals contract (`load`/`store`/`materialize_param`): a MapEntry LOCAL
+        // SLOT holds a POINTER to the {i64,i64} entry struct — never the struct
+        // alloca itself (same fix as the non-SM `mf_*` arm: registering the
+        // struct alloca made `load` reinterpret key_bits as the struct pointer —
+        // the `entry.value` miscompile). Both allocas are entry-hoisted; the
+        // store re-runs per body-bb entry with the same hoisted pointer
+        // (idempotent). Post-wait entry reads stay typeck-rejected (Check 2c),
+        // so a resume never reads the slot before the next iteration re-stores it.
+        let entry_var_slot = cg.alloca_in_entry_llvm(cg.ptr(), &format!("{var}_slot"))?;
+        cg.builder
+            .build_store(entry_var_slot, entry_slot)
+            .map_err(|e| format!("{e}"))?;
+        cg.locals.insert(var.to_string(), entry_var_slot);
 
-        let triple_ty = cg
-            .ctx
-            .struct_type(&[cg.i64().into(), cg.i64().into(), cg.i64().into()], false);
-        let triple_slot = cg
+        // Per-site ENTRY-BLOCK key slot + value out buffer (elem_size-aware,
+        // shared array/map get-side ownership contract — reused per iteration).
+        let key_slot = cg.alloca_in_entry_llvm(cg.i64(), "sm_mf_key")?;
+        let val_out = cg.array_elem_out_buffer(&val_ty, "sm_mf_val")?;
+        cg.map_iter_get_into(
+            map_cur,
+            idx_cur,
+            key_is_string(&key_ty),
+            key_slot,
+            val_out,
+            "sm_mf_iter",
+        )?;
+        let k_val = cg
             .builder
-            .build_alloca(triple_ty, "sm_mf_triple")
+            .build_load(cg.i64(), key_slot, "sm_mf_kv")
             .map_err(|e| format!("{e}"))?;
-        if key_is_string(&key_ty) {
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_map_iter_get_str,
-                    &[map_cur.into(), idx_cur.into(), triple_slot.into()],
-                    "sm_mf_iter_s",
-                )
-                .map_err(|e| format!("{e}"))?;
-        } else {
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_map_iter_get,
-                    &[map_cur.into(), idx_cur.into(), triple_slot.into()],
-                    "sm_mf_iter",
-                )
-                .map_err(|e| format!("{e}"))?;
-        }
-        let k_src = cg
-            .builder
-            .build_struct_gep(triple_ty, triple_slot, 1, "sm_mf_ks")
-            .map_err(|e| format!("{e}"))?;
-        let v_src = cg
-            .builder
-            .build_struct_gep(triple_ty, triple_slot, 2, "sm_mf_vs")
-            .map_err(|e| format!("{e}"))?;
+        // Entry val bits: shape values carry the out-buffer pointer as i64 bits
+        // (MapEntry fields load i64 bits + i64_bits_to), others the loaded cell.
+        let v_bits = cg.array_elem_bits_from_out(val_out, &val_ty, "sm_mf_vv")?;
         let k_dst = cg
             .builder
             .build_struct_gep(entry_ty, entry_slot, 0, "sm_mf_kd")
@@ -6433,20 +6724,10 @@ fn lower_sm_for<'ctx, 'g>(
             .build_struct_gep(entry_ty, entry_slot, 1, "sm_mf_vd")
             .map_err(|e| format!("{e}"))?;
         cg.builder
-            .build_store(
-                k_dst,
-                cg.builder
-                    .build_load(cg.i64(), k_src, "sm_mf_kv")
-                    .map_err(|e| format!("{e}"))?,
-            )
+            .build_store(k_dst, k_val)
             .map_err(|e| format!("{e}"))?;
         cg.builder
-            .build_store(
-                v_dst,
-                cg.builder
-                    .build_load(cg.i64(), v_src, "sm_mf_vv")
-                    .map_err(|e| format!("{e}"))?,
-            )
+            .build_store(v_dst, v_bits)
             .map_err(|e| format!("{e}"))?;
         // No loop-var flush for map entries: the entry struct has two i64 fields and
         // uses a struct alloca (not a scalar slot). The body must not read the loop variable
@@ -7145,16 +7426,11 @@ fn bind_sm_result_and_flush<'ctx>(
                         format!("bind_sm_result_and_flush: shape name for `{name}` missing")
                     })?
                     .clone();
-                let struct_ty = cg.shape_types.get(&shape_name).ok_or_else(|| {
-                    format!("bind_sm_result_and_flush: LLVM type for `{shape_name}` missing")
-                })?;
-                let size_val = struct_ty.size_of().ok_or_else(|| {
-                    format!("bind_sm_result_and_flush: size_of `{shape_name}` unavailable")
-                })?;
-                let size_i64 = cg
-                    .builder
-                    .build_int_z_extend(size_val, cg.ctx.i64_type(), &format!("{name}_bind_sz"))
-                    .map_err(|e| format!("bind_sm_result shape size extend {name}: {e}"))?;
+                // Copy size from the ONE authoritative shape-size source
+                // (`shape_abi_sizes` via `shape_abi_size_const`) — the FRAGO 010
+                // size-derivation twin (`struct_ty.size_of()` + zext) is unified
+                // away (P3 step 5(c), authoritative-derivation §1).
+                let size_i64 = cg.shape_abi_size_const(&shape_name, "bind_sm_result_and_flush")?;
                 // Reconstruct the pointer from the i64 bits (reverses lower_stmt_return's ptr_to_int).
                 let src_ptr = cg
                     .builder
@@ -7369,12 +7645,9 @@ fn bind_sm_result_and_flush<'ctx>(
 /// Number of i64 frame slots needed to store a shape's bytes inline in the composed frame.
 ///
 /// Reads the pre-computed `shape_abi_sizes` map (`TargetData::get_abi_size`, computed
-/// once in `emit_program`). NOTE: the SM shape-embed memcpys (the Let-embed arm and the
-/// `bind_sm_result_and_flush` flush) size their copies from `struct_ty.size_of()` — a
-/// SECOND derivation of the same size question with NO compile-time link to this map.
-/// The two agree numerically today (same data layout), but they are an unlinked twin:
-/// unify onto `shape_abi_sizes` or add a compile-time parity link per
-/// authoritative-derivation §3 — tracked as a Phase 3 step 5 E8-class item (FRAGO 010).
+/// once in `emit_program`) — the ONE shape-size source. The SM shape-embed memcpys
+/// (the Let-embed arm and the `bind_sm_result_and_flush` flush) and the bg heap copy
+/// read the SAME map via `shape_abi_size_const` (FRAGO 010 twin unified, P3 step 5(c)).
 /// `ceil(byte_size / 8)` rounds up to the next 8-byte slot boundary.
 fn shape_frame_slots(shape_name: &str, shape_abi_sizes: &HashMap<String, u64>) -> usize {
     // Fallback to 1 slot (8 bytes) if the shape is not in the precomputed map. This
@@ -7390,10 +7663,9 @@ fn shape_frame_slots(shape_name: &str, shape_abi_sizes: &HashMap<String, u64>) -
 /// Shape crossing locals are frame-embedded: their bytes occupy `ceil(N/8)` consecutive
 /// slots (no separate heap allocation — avoids the leak + re-promotion bugs).
 ///
-/// Uses LLVM ABI sizes (via `shape_abi_sizes`) for slot counts. NOTE: the embed
-/// memcpys in lower_function_with_waits size from `struct_ty.size_of()` — the
-/// unlinked size-derivation twin flagged on `shape_frame_slots` (FRAGO 010;
-/// Phase 3 step 5 owns the unify-or-parity-link fix).
+/// Uses LLVM ABI sizes (via `shape_abi_sizes`) for slot counts — the same ONE
+/// source the embed memcpys read via `shape_abi_size_const` (FRAGO 010 twin
+/// unified, P3 step 5(c)).
 /// Uses typeck expr_types (from `typed`) to detect decimal128 locals including
 /// inferred ones (no annotation).
 fn crossing_local_total_slots(
@@ -11656,19 +11928,13 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                         Type::Shape { name: sn } => sn.clone(),
                         _ => unreachable!(),
                     };
-                    if let Some(struct_ty) = cg.shape_types.get(&shape_name) {
+                    if cg.shape_types.get(&shape_name).is_some() {
                         let src_ptr = val.into_pointer_value();
-                        let size_val = struct_ty.size_of().ok_or_else(|| {
-                            format!("sm shape let: size_of `{shape_name}` unavailable")
-                        })?;
-                        let size_i64 = cg
-                            .builder
-                            .build_int_z_extend(
-                                size_val,
-                                cg.ctx.i64_type(),
-                                &format!("{name}_let_sz"),
-                            )
-                            .map_err(|e| format!("sm shape let size extend {name}: {e}"))?;
+                        // Copy size from the ONE authoritative shape-size source
+                        // (`shape_abi_sizes` via `shape_abi_size_const`) — the
+                        // FRAGO 010 twin (`struct_ty.size_of()` + zext) unified
+                        // away (P3 step 5(c), authoritative-derivation §1).
+                        let size_i64 = cg.shape_abi_size_const(&shape_name, "sm shape let")?;
                         // Load the frame region ptr from the ptr alloca (pre-wired to frame
                         // in Step 1b). Memcpy from the temp stack alloca into the frame region.
                         let dest_ptr = cg
@@ -11820,33 +12086,35 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             let elem_val = lower_expr(cg, value)?;
             let elem_ty = cg.expr_type(value);
 
-            if let Type::BuiltinMap { key, .. } = &recv_ty {
-                // Maps keep the uniform i64-slot ABI until the Phase 3 symmetric cut
-                // (E12) — do not route map values through the array choke points.
-                // The bits themselves must be STABLE, though: shape/maybe values
-                // clone into counted heap cells via the ONE map-value marshalling
-                // point (`value_to_stable_bits`).
-                let bits = cg.value_to_stable_bits(elem_val, &elem_ty, "mia_val")?;
+            if let Type::BuiltinMap { key, val } = &recv_ty {
+                // By-value map cell ABI (Phase 3 symmetric cut, E12): marshal
+                // through the map choke point. The map's DECLARED value type
+                // drives the cell layout (it fixed elem_size at map_new) —
+                // shape values memcpy inline, maybe/non-shape values keep the
+                // stable-bits discipline inside `array_elem_src_ptr`.
                 let key_ty = key.as_ref().clone();
+                let val_ty = val.as_ref().clone();
                 let key_val = lower_expr(cg, index)?;
                 if key_is_string(&key_ty) {
-                    cg.builder
-                        .build_call(
-                            cg.rt.ynz_map_set_str,
-                            &[recv_val.into(), key_val.into(), bits.into()],
-                            "mia_s",
-                        )
-                        .map_err(|e| format!("{e}"))?;
+                    cg.map_val_set(
+                        recv_val.into_pointer_value(),
+                        key_val.into(),
+                        true,
+                        elem_val,
+                        &val_ty,
+                        "mia_s",
+                    )?;
                 } else {
                     let kt = cg.expr_type(index);
                     let kb = cg.to_i64_bits(key_val, &kt)?;
-                    cg.builder
-                        .build_call(
-                            cg.rt.ynz_map_set,
-                            &[recv_val.into(), kb.into(), bits.into()],
-                            "mia",
-                        )
-                        .map_err(|e| format!("{e}"))?;
+                    cg.map_val_set(
+                        recv_val.into_pointer_value(),
+                        kb.into(),
+                        false,
+                        elem_val,
+                        &val_ty,
+                        "mia",
+                    )?;
                 }
             } else {
                 let idx_val = lower_expr(cg, index)?.into_int_value();
@@ -12524,17 +12792,10 @@ fn lower_stmt_for<'ctx>(
     // Iterates by insertion order; loop var has type MapEntry {key_bits, val_bits}.
     if let Type::BuiltinMap { key, val } = &iter_ty {
         let key_ty = key.as_ref().clone();
-        let _val_ty = val.as_ref().clone();
+        let val_ty = val.as_ref().clone();
         let map_ptr = lower_expr(cg, iter)?.into_pointer_value();
 
-        let cnt = cg
-            .builder
-            .build_call(cg.rt.ynz_map_count, &[map_ptr.into()], "mf_cnt")
-            .map_err(|e| format!("{e}"))?
-            .try_as_basic_value()
-            .basic()
-            .ok_or("map_count void")?
-            .into_int_value();
+        let cnt = cg.map_count_val(map_ptr, "mf_cnt")?;
 
         let i_slot = cg
             .builder
@@ -12552,6 +12813,24 @@ fn lower_stmt_for<'ctx>(
             .builder
             .build_alloca(entry_ty, var)
             .map_err(|e| format!("{e}"))?;
+        // Locals contract (`load`/`store`/`materialize_param`): a MapEntry LOCAL
+        // SLOT holds a POINTER to the {i64,i64} entry struct — never the struct
+        // alloca itself. Registering `entry_slot` directly made `load`'s
+        // `build_load(ptr, slot)` reinterpret key_bits as the struct pointer
+        // (the `entry.value` garbage/SIGSEGV miscompile the m5_p3_mapshape
+        // matrix locked RED). Pointer-indirect slot, stored once pre-loop.
+        let entry_var_slot = cg
+            .builder
+            .build_alloca(cg.ptr(), &format!("{var}_slot"))
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_store(entry_var_slot, entry_slot)
+            .map_err(|e| format!("{e}"))?;
+
+        // Per-site ENTRY-BLOCK key slot + value out buffer (elem_size-aware,
+        // shared array/map get-side ownership contract — reused per iteration).
+        let key_slot = cg.alloca_in_entry_llvm(cg.i64(), "mf_key")?;
+        let val_out = cg.array_elem_out_buffer(&val_ty, "mf_val")?;
 
         let cond_bb = cg.append_block("mfor_cond");
         let body_bb = cg.append_block("mfor_body");
@@ -12576,39 +12855,21 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        let triple_ty = cg
-            .ctx
-            .struct_type(&[cg.i64().into(), cg.i64().into(), cg.i64().into()], false);
-        let triple_slot = cg
+        cg.map_iter_get_into(
+            map_ptr,
+            i,
+            key_is_string(&key_ty),
+            key_slot,
+            val_out,
+            "mf_iter",
+        )?;
+        let k_val = cg
             .builder
-            .build_alloca(triple_ty, "mf_triple")
+            .build_load(cg.i64(), key_slot, "mf_kv")
             .map_err(|e| format!("{e}"))?;
-        if key_is_string(&key_ty) {
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_map_iter_get_str,
-                    &[map_ptr.into(), i.into(), triple_slot.into()],
-                    "mf_iter_s",
-                )
-                .map_err(|e| format!("{e}"))?;
-        } else {
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_map_iter_get,
-                    &[map_ptr.into(), i.into(), triple_slot.into()],
-                    "mf_iter",
-                )
-                .map_err(|e| format!("{e}"))?;
-        }
-        // triple = {has, key, val} — copy key[1] and val[2] into entry_slot
-        let k_src = cg
-            .builder
-            .build_struct_gep(triple_ty, triple_slot, 1, "mf_ks")
-            .map_err(|e| format!("{e}"))?;
-        let v_src = cg
-            .builder
-            .build_struct_gep(triple_ty, triple_slot, 2, "mf_vs")
-            .map_err(|e| format!("{e}"))?;
+        // Entry val bits: shape values carry the out-buffer pointer as i64 bits
+        // (MapEntry fields load i64 bits + i64_bits_to), others the loaded cell.
+        let v_bits = cg.array_elem_bits_from_out(val_out, &val_ty, "mf_vv")?;
         let k_dst = cg
             .builder
             .build_struct_gep(entry_ty, entry_slot, 0, "mf_kd")
@@ -12618,23 +12879,13 @@ fn lower_stmt_for<'ctx>(
             .build_struct_gep(entry_ty, entry_slot, 1, "mf_vd")
             .map_err(|e| format!("{e}"))?;
         cg.builder
-            .build_store(
-                k_dst,
-                cg.builder
-                    .build_load(cg.i64(), k_src, "mf_kv")
-                    .map_err(|e| format!("{e}"))?,
-            )
+            .build_store(k_dst, k_val)
             .map_err(|e| format!("{e}"))?;
         cg.builder
-            .build_store(
-                v_dst,
-                cg.builder
-                    .build_load(cg.i64(), v_src, "mf_vv")
-                    .map_err(|e| format!("{e}"))?,
-            )
+            .build_store(v_dst, v_bits)
             .map_err(|e| format!("{e}"))?;
 
-        cg.locals.insert(var.to_string(), entry_slot);
+        cg.locals.insert(var.to_string(), entry_var_slot);
 
         for s in &body.stmts {
             if is_block_terminated(cg) {
@@ -13811,26 +14062,13 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             // When typeck resolved this to a BuiltinMap, the user wrote `{ key: value }` syntax
             // with a map annotation — lower identifier names as string literal keys.
             if let Type::BuiltinMap { val, .. } = cg.expr_type(expr) {
-                let map_ptr = cg
-                    .builder
-                    .build_call(cg.rt.ynz_map_new, &[], "map_new")
-                    .map_err(|e| format!("{e}"))?
-                    .try_as_basic_value()
-                    .basic()
-                    .ok_or("ynz_map_new returned void")?
-                    .into_pointer_value();
+                let val_ty = val.as_ref().clone();
+                let map_ptr = cg.map_new(&val_ty, "map_new")?;
                 for f in fields {
                     let key_global = build_string_global(cg.ctx, cg.module, &f.name, "imap_key");
                     let key_ptr = key_global.as_pointer_value();
                     let val_val = lower_expr(cg, &f.value)?;
-                    let val_bits = cg.value_to_stable_bits(val_val, &val, "imap_val")?;
-                    cg.builder
-                        .build_call(
-                            cg.rt.ynz_map_set_str,
-                            &[map_ptr.into(), key_ptr.into(), val_bits.into()],
-                            "imap_set",
-                        )
-                        .map_err(|e| format!("{e}"))?;
+                    cg.map_val_set(map_ptr, key_ptr.into(), true, val_val, &val_ty, "imap_set")?;
                 }
                 Ok(map_ptr.into())
             } else {
@@ -13937,71 +14175,29 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             let recv_val = lower_expr(cg, receiver)?;
 
             // Map index access is handled separately — key may be a string (pointer).
-            if let Type::BuiltinMap { key, .. } = &recv_ty {
+            if let Type::BuiltinMap { key, val } = &recv_ty {
                 let key_ty = key.as_ref().clone();
+                let val_ty = val.as_ref().clone();
                 let idx_val = lower_expr(cg, index)?;
-                let pair_ty = cg
-                    .ctx
-                    .struct_type(&[cg.i64().into(), cg.i64().into()], false);
-                let out = cg
-                    .builder
-                    .build_alloca(pair_ty, "mi_out")
-                    .map_err(|e| format!("{e}"))?;
-                if key_is_string(&key_ty) {
-                    cg.builder
-                        .build_call(
-                            cg.rt.ynz_map_get_str,
-                            &[recv_val.into(), idx_val.into(), out.into()],
-                            "mi_gs",
-                        )
-                        .map_err(|e| format!("{e}"))?;
+                let maybe_slot = if key_is_string(&key_ty) {
+                    cg.map_val_get_maybe(
+                        recv_val.into_pointer_value(),
+                        idx_val.into(),
+                        true,
+                        &val_ty,
+                        "mi_gs",
+                    )?
                 } else {
                     let kt = cg.expr_type(index);
                     let key_bits = cg.to_i64_bits(idx_val, &kt)?;
-                    cg.builder
-                        .build_call(
-                            cg.rt.ynz_map_get,
-                            &[recv_val.into(), key_bits.into(), out.into()],
-                            "mi_g",
-                        )
-                        .map_err(|e| format!("{e}"))?;
-                }
-                let maybe_slot = cg
-                    .builder
-                    .build_alloca(cg.maybe_type(), "mi_m")
-                    .map_err(|e| format!("{e}"))?;
-                let h0 = cg
-                    .builder
-                    .build_struct_gep(pair_ty, out, 0, "h0")
-                    .map_err(|e| format!("{e}"))?;
-                let v0 = cg
-                    .builder
-                    .build_struct_gep(pair_ty, out, 1, "v0")
-                    .map_err(|e| format!("{e}"))?;
-                let h1 = cg
-                    .builder
-                    .build_struct_gep(cg.maybe_type(), maybe_slot, 0, "h1")
-                    .map_err(|e| format!("{e}"))?;
-                let v1 = cg
-                    .builder
-                    .build_struct_gep(cg.maybe_type(), maybe_slot, 1, "v1")
-                    .map_err(|e| format!("{e}"))?;
-                cg.builder
-                    .build_store(
-                        h1,
-                        cg.builder
-                            .build_load(cg.i64(), h0, "hv")
-                            .map_err(|e| format!("{e}"))?,
-                    )
-                    .map_err(|e| format!("{e}"))?;
-                cg.builder
-                    .build_store(
-                        v1,
-                        cg.builder
-                            .build_load(cg.i64(), v0, "vv")
-                            .map_err(|e| format!("{e}"))?,
-                    )
-                    .map_err(|e| format!("{e}"))?;
+                    cg.map_val_get_maybe(
+                        recv_val.into_pointer_value(),
+                        key_bits.into(),
+                        false,
+                        &val_ty,
+                        "mi_g",
+                    )?
+                };
                 return Ok(maybe_slot.into());
             }
 
@@ -14109,43 +14305,29 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
 
         Expr::MapLit { entries, .. } => {
             let map_ty = cg.expr_type(expr);
-            let key_ty = match &map_ty {
-                Type::BuiltinMap { key, .. } => key.as_ref().clone(),
+            let (key_ty, val_ty) = match &map_ty {
+                Type::BuiltinMap { key, val } => (key.as_ref().clone(), val.as_ref().clone()),
                 _ => return Err("MapLit with non-BuiltinMap type".to_string()),
             };
 
-            let map_ptr = cg
-                .builder
-                .build_call(cg.rt.ynz_map_new, &[], "map_new")
-                .map_err(|e| format!("{e}"))?
-                .try_as_basic_value()
-                .basic()
-                .ok_or("ynz_map_new returned void")?
-                .into_pointer_value();
+            let map_ptr = cg.map_new(&val_ty, "map_new")?;
 
             for (key_expr, val_expr) in entries {
                 let key_val = lower_expr(cg, key_expr)?;
                 let val_val = lower_expr(cg, val_expr)?;
-                let vt = cg.expr_type(val_expr);
-                let val_bits = cg.value_to_stable_bits(val_val, &vt, "maplit_val")?;
                 if key_is_string(&key_ty) {
-                    cg.builder
-                        .build_call(
-                            cg.rt.ynz_map_set_str,
-                            &[map_ptr.into(), key_val.into(), val_bits.into()],
-                            "map_set_str",
-                        )
-                        .map_err(|e| format!("{e}"))?;
+                    cg.map_val_set(
+                        map_ptr,
+                        key_val.into(),
+                        true,
+                        val_val,
+                        &val_ty,
+                        "map_set_str",
+                    )?;
                 } else {
                     let kt = cg.expr_type(key_expr);
                     let key_bits = cg.to_i64_bits(key_val, &kt)?;
-                    cg.builder
-                        .build_call(
-                            cg.rt.ynz_map_set,
-                            &[map_ptr.into(), key_bits.into(), val_bits.into()],
-                            "map_set",
-                        )
-                        .map_err(|e| format!("{e}"))?;
+                    cg.map_val_set(map_ptr, key_bits.into(), false, val_val, &val_ty, "map_set")?;
                 }
             }
             Ok(map_ptr.into())
@@ -14385,6 +14567,26 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         return Ok((shared, BgArgFreeKind::SharedChannel));
     }
 
+    // v0.3-M5 P3 step 5(b): a MapEntry arg ALWAYS needs stabilization — an
+    // UNCONDITIONAL pre-gate, independent of give/copy inference (the map
+    // loop var may not be in `background_arg_inferred_ownership` at all).
+    // The value is a pointer to the loop arm's per-site entry struct,
+    // rewritten every iteration and dead with the spawner's frame (sweep
+    // probe: the task read the ADVANCED slot — 2/20 vs expected 1/10).
+    // Route through the ONE stable-bits choke point (`value_to_stable_bits`
+    // — no bg-side marshalling twin); the free ladder reuses `HeapShape` for
+    // the 16-byte entry cell (`ynz_free` ignores its size arg today). The
+    // deep-copied VALUE sub-cell is deliberately NOT freed — the FRAGO 011
+    // accounted persist-cell class, deferred to the drop story.
+    if matches!(cg.resolve_type(ty), Type::MapEntry { .. }) {
+        let bits = cg.value_to_stable_bits(val, ty, "bg_mapentry")?;
+        let cell_ptr = cg
+            .builder
+            .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_ptr")
+            .map_err(|e| format!("bg mapentry inttoptr: {e}"))?;
+        return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+    }
+
     let is_heap_arg = match arg {
         ynz_ast::nodes::Expr::Ident(_, s) => {
             // Plain ident: any inferred Give or Copy ownership gets the heap fix.
@@ -14417,14 +14619,14 @@ fn prepare_bg_arg_for_ctx<'ctx>(
                 .shape_types
                 .get(&name)
                 .ok_or_else(|| format!("bg heap copy: LLVM type for `{}` not found", name))?;
-            // Byte size of the struct according to LLVM's target data layout.
-            let byte_size_val = struct_ty
-                .size_of()
-                .ok_or_else(|| format!("bg heap copy: size_of unavailable for `{}`", name))?;
-            let byte_size_i64 = cg
-                .builder
-                .build_int_z_extend(byte_size_val, cg.i64(), "shape_size_i64")
-                .map_err(|e| format!("bg heap copy: size zext: {e}"))?;
+            // Byte size from the ONE authoritative shape-size source
+            // (`shape_abi_sizes` via `shape_abi_size_const`) — the FRAGO 010
+            // twin (`struct_ty.size_of()` + zext, plus this site's documented
+            // free-side fallback-to-0) unified away (P3 step 5(c)).
+            let abi_size = cg.shape_abi_sizes.get(&name).copied().ok_or_else(|| {
+                format!("bg heap copy: shape `{name}` missing from shape_abi_sizes")
+            })?;
+            let byte_size_i64 = cg.i64().const_int(abi_size, false);
             let heap_ptr = cg
                 .builder
                 .build_call(cg.rt.ynz_alloc, &[byte_size_i64.into()], "bg_shape_heap")
@@ -14440,32 +14642,36 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             cg.builder
                 .build_store(heap_ptr, struct_val)
                 .map_err(|e| format!("bg heap copy: store to heap: {e}"))?;
-            // Byte size for the BgArgFreeKind free call. LLVM `size_of()` is a constant
-            // EXPRESSION (`ptrtoint getelementptr`), NOT a literal ConstantInt, so
-            // `get_zero_extended_constant()` returns None here — the fallback is taken in
-            // practice, not as an error path.
-            //
-            // @design-decision Fall back to 0 when the constant can't be extracted.
-            // @rationale `ynz_free` ignores its size argument today (it wraps libc `free`,
-            //   which tracks allocation size internally), so 0 is observably correct now.
-            //   The authoritative size lives in `shape_abi_sizes` (TargetData::get_abi_size)
-            //   but is not threaded into this helper; wiring it for a currently-ignored value
-            //   would be gold-plating (YAGNI).
-            // @follow-up When kernel-mode sized-dealloc lands (a custom allocator whose free
-            //   DOES use the size), thread `shape_abi_sizes` into `prepare_bg_arg_for_ctx` and
-            //   look the size up by shape name instead of this fallback.
-            // @triggers `--kernel` sized-dealloc support (design/no-runtime-mode.md).
-            let byte_size = byte_size_val.get_zero_extended_constant().unwrap_or(0);
-            Ok((heap_ptr.into(), BgArgFreeKind::HeapShape { byte_size }))
+            // Byte size for the BgArgFreeKind free call: the REAL size from
+            // `shape_abi_sizes` (this closed the @follow-up that documented a
+            // fallback-to-0 here — `ynz_free` still ignores its size argument
+            // today, so the change is behavior-neutral now and correct when
+            // kernel-mode sized-dealloc lands; P3 step 5(c), FRAGO 010).
+            Ok((
+                heap_ptr.into(),
+                BgArgFreeKind::HeapShape {
+                    byte_size: abi_size,
+                },
+            ))
         }
         Type::BuiltinArray { elem } => {
-            // Clone a primitive-element array so the task gets an independent copy.
-            // For heap-element arrays (shapes, strings, etc.) we cannot recursively
-            // deep-copy without knowing element copy semantics — that is the m3c array-by-value
-            // ABI work. Those fall through unchanged (same behavior as today's explicit
-            // `.copy()` path).
-            let is_primitive_elem = matches!(elem.as_ref(), Type::Int | Type::Bool | Type::Float);
-            if is_primitive_elem {
+            // Clone the array so the task gets an independent copy. Primitive
+            // elements (i64 cells) and — since the v0.3-M5 P3 by-value cut —
+            // SHAPE elements (inline bytes in the heap buffer) both clone
+            // correctly via `ynz_array_clone_primitive`, which is elem_size-
+            // aware (byte-copies len × elem_size; the `_primitive` name records
+            // its original call-site class). The M5 cut IS the "m3c ABI work"
+            // trigger the old fall-through comment deferred to: pre-fix, an
+            // array<Shape> bg arg ALIASED the caller's buffer (P3 step 5 sweep
+            // probe: task read the caller's post-spawn mutation, 119 vs 30).
+            // Remaining fall-through (alias, unchanged): string/maybe/map/union
+            // element arrays — element cells hold pointers whose deep-copy
+            // semantics are not defined by the by-value cut.
+            let is_inline_elem = matches!(
+                cg.resolve_type(elem.as_ref()),
+                Type::Int | Type::Bool | Type::Float | Type::Shape { .. }
+            );
+            if is_inline_elem {
                 let clone_ptr = cg
                     .builder
                     .build_call(
@@ -14479,10 +14685,10 @@ fn prepare_bg_arg_for_ctx<'ctx>(
                     .ok_or_else(|| "bg arr clone: returned void".to_string())?;
                 Ok((clone_ptr, BgArgFreeKind::HeapArrayPrimitive))
             } else {
-                // array<heap_elem>: recursive deep-copy is m3c ABI work.
-                // Pass as-is — same pointer-alias behavior as today's explicit `.copy()` on
-                // these types. The binding is already consumed (give path) or copied-shallow
-                // (explicit .copy() path); the task should not mutate elements.
+                // array<pointer_elem> (string/maybe/map/union cells): pass as-is —
+                // same pointer-alias behavior as explicit `.copy()` on these types.
+                // Deep-copy semantics for pointer-cell elements are a separate
+                // design question (FR #6-adjacent), not part of the by-value cut.
                 Ok((val, BgArgFreeKind::None))
             }
         }
@@ -16270,14 +16476,7 @@ fn to_c_string<'ctx>(
 
             append_static(cg, builder_val, "{ ")?;
 
-            let count = cg
-                .builder
-                .build_call(cg.rt.ynz_map_count, &[map_ptr.into()], "mdbg_cnt")
-                .map_err(|e| format!("{e}"))?
-                .try_as_basic_value()
-                .basic()
-                .ok_or("map_count void")?
-                .into_int_value();
+            let count = cg.map_count_val(map_ptr, "mdbg_cnt")?;
 
             let i_slot = cg
                 .builder
@@ -16325,28 +16524,15 @@ fn to_c_string<'ctx>(
                 .map_err(|e| format!("{e}"))?;
             cg.builder.position_at_end(entry_bb);
 
-            let triple_ty = cg
-                .ctx
-                .struct_type(&[cg.i64().into(), cg.i64().into(), cg.i64().into()], false);
-            let triple_slot = cg
-                .builder
-                .build_alloca(triple_ty, "mdbg_triple")
-                .map_err(|e| format!("{e}"))?;
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_map_iter_get_str,
-                    &[map_ptr.into(), i.into(), triple_slot.into()],
-                    "",
-                )
-                .map_err(|e| format!("{e}"))?;
+            // Per-site ENTRY-BLOCK key slot + elem_size-aware value out buffer
+            // (shared array/map get-side ownership contract).
+            let key_slot = cg.alloca_in_entry_llvm(cg.i64(), "mdbg_key")?;
+            let val_out = cg.array_elem_out_buffer(&val_ty, "mdbg_val")?;
+            cg.map_iter_get_into(map_ptr, i, true, key_slot, val_out, "mdbg_iter")?;
 
-            let key_gep = cg
-                .builder
-                .build_struct_gep(triple_ty, triple_slot, 1, "mdbg_kgep")
-                .map_err(|e| format!("{e}"))?;
             let key_ptr = cg
                 .builder
-                .build_load(cg.i64(), key_gep, "mdbg_kbits")
+                .build_load(cg.i64(), key_slot, "mdbg_kbits")
                 .map_err(|e| format!("{e}"))?
                 .into_int_value();
             let key_str = cg
@@ -16362,16 +16548,7 @@ fn to_c_string<'ctx>(
                 .map_err(|e| format!("{e}"))?;
             append_static(cg, builder_val, ": ")?;
 
-            let val_gep = cg
-                .builder
-                .build_struct_gep(triple_ty, triple_slot, 2, "mdbg_vgep")
-                .map_err(|e| format!("{e}"))?;
-            let val_bits = cg
-                .builder
-                .build_load(cg.i64(), val_gep, "mdbg_vbits")
-                .map_err(|e| format!("{e}"))?
-                .into_int_value();
-            let val_val = cg.i64_bits_to(val_bits, &val_ty)?;
+            let val_val = cg.array_elem_from_out(val_out, &val_ty, "mdbg_vv")?;
             let val_str = to_c_string(cg, val_val, &val_ty)?;
             cg.builder
                 .build_call(
@@ -17084,6 +17261,13 @@ fn lower_array_method<'ctx>(
             //   - shape elements: field-wise VALUE equality via `shape_value_eq`
             //     (pointer identity has no by-value analogue; locked by the two RED
             //     matrix contract cells).
+            //   - maybe targets (P3 step 5(e), RATIFIED alongside D12): the target
+            //     marshals its raw {flag, bits} envelope bits ONCE via the
+            //     compare-only `array_elem_bits64` — consumed in place, never a
+            //     persist/escape — and compares by BIT identity against stored
+            //     cells. Pre-existing semantics (pre-M5 compared the same raw
+            //     envelope bits); same identity-bits register as D12's
+            //     pointer-typed-field verdict, final for M5.
             let cnt = cg
                 .builder
                 .build_call(cg.rt.ynz_array_count, &[arr.into()], "cnt")
@@ -17759,144 +17943,47 @@ fn lower_map_method<'ctx>(
     let is_str = key_is_string(key_ty);
     match method {
         "count" => {
-            let n = cg
-                .builder
-                .build_call(cg.rt.ynz_map_count, &[map.into()], "mc")
-                .map_err(|e| format!("{e}"))?
-                .try_as_basic_value()
-                .basic()
-                .ok_or("map_count void")?;
-            Ok(n)
+            let n = cg.map_count_val(map, "mc")?;
+            Ok(n.into())
         }
         "has" => {
             let key_val = lower_expr(cg, &args[0])?;
             let n = if is_str {
-                let pair_ty = cg
-                    .ctx
-                    .struct_type(&[cg.i64().into(), cg.i64().into()], false);
-                let out = cg
-                    .builder
-                    .build_alloca(pair_ty, "has_out")
-                    .map_err(|e| format!("{e}"))?;
-                cg.builder
-                    .build_call(
-                        cg.rt.ynz_map_get_str,
-                        &[map.into(), key_val.into(), out.into()],
-                        "hg",
-                    )
-                    .map_err(|e| format!("{e}"))?;
-                let has_gep = cg
-                    .builder
-                    .build_struct_gep(pair_ty, out, 0, "has0")
-                    .map_err(|e| format!("{e}"))?;
-                cg.builder
-                    .build_load(cg.i64(), has_gep, "has_v")
-                    .map_err(|e| format!("{e}"))?
+                // Str-keyed `has` = the get flag (the runtime's has is int-key
+                // only); the out buffer is a discarded elem_size-aware scratch.
+                let out = cg.array_elem_out_buffer(val_ty, "has_out")?;
+                cg.map_val_get_into(map, key_val.into(), true, out, "hg")?
             } else {
                 let kt = cg.expr_type(&args[0]);
                 let key_bits = cg.to_i64_bits(key_val, &kt)?;
-                cg.builder
-                    .build_call(cg.rt.ynz_map_has, &[map.into(), key_bits.into()], "mhas")
-                    .map_err(|e| format!("{e}"))?
-                    .try_as_basic_value()
-                    .basic()
-                    .ok_or("map_has void")?
+                cg.map_has_int(map, key_bits, "mhas")?
             };
             let b = cg
                 .builder
-                .build_int_truncate(n.into_int_value(), cg.bool(), "has_b")
+                .build_int_truncate(n, cg.bool(), "has_b")
                 .map_err(|e| format!("{e}"))?;
             Ok(b.into())
         }
         "get" => {
             let key_val = lower_expr(cg, &args[0])?;
-            let pair_ty = cg
-                .ctx
-                .struct_type(&[cg.i64().into(), cg.i64().into()], false);
-            let out = cg
-                .builder
-                .build_alloca(pair_ty, "mget_out")
-                .map_err(|e| format!("{e}"))?;
-            if is_str {
-                cg.builder
-                    .build_call(
-                        cg.rt.ynz_map_get_str,
-                        &[map.into(), key_val.into(), out.into()],
-                        "mg_s",
-                    )
-                    .map_err(|e| format!("{e}"))?;
+            let maybe_slot = if is_str {
+                cg.map_val_get_maybe(map, key_val.into(), true, val_ty, "mg_s")?
             } else {
                 let kt = cg.expr_type(&args[0]);
                 let key_bits = cg.to_i64_bits(key_val, &kt)?;
-                cg.builder
-                    .build_call(
-                        cg.rt.ynz_map_get,
-                        &[map.into(), key_bits.into(), out.into()],
-                        "mg",
-                    )
-                    .map_err(|e| format!("{e}"))?;
-            }
-            // Copy pair {i64 has, i64 bits} into a maybe<V> slot — identical layout.
-            let maybe_slot = cg
-                .builder
-                .build_alloca(cg.maybe_type(), "mg_maybe")
-                .map_err(|e| format!("{e}"))?;
-            let has_src = cg
-                .builder
-                .build_struct_gep(pair_ty, out, 0, "hs")
-                .map_err(|e| format!("{e}"))?;
-            let val_src = cg
-                .builder
-                .build_struct_gep(pair_ty, out, 1, "vs")
-                .map_err(|e| format!("{e}"))?;
-            let has_v = cg
-                .builder
-                .build_load(cg.i64(), has_src, "hv")
-                .map_err(|e| format!("{e}"))?;
-            let val_v = cg
-                .builder
-                .build_load(cg.i64(), val_src, "vv")
-                .map_err(|e| format!("{e}"))?;
-            let has_dst = cg
-                .builder
-                .build_struct_gep(cg.maybe_type(), maybe_slot, 0, "hd")
-                .map_err(|e| format!("{e}"))?;
-            let val_dst = cg
-                .builder
-                .build_struct_gep(cg.maybe_type(), maybe_slot, 1, "vd")
-                .map_err(|e| format!("{e}"))?;
-            cg.builder
-                .build_store(has_dst, has_v)
-                .map_err(|e| format!("{e}"))?;
-            cg.builder
-                .build_store(val_dst, val_v)
-                .map_err(|e| format!("{e}"))?;
-            let _ = val_ty;
+                cg.map_val_get_maybe(map, key_bits.into(), false, val_ty, "mg")?
+            };
             Ok(maybe_slot.into())
         }
         "set" => {
             let key_val = lower_expr(cg, &args[0])?;
             let val_val = lower_expr(cg, &args[1])?;
-            let vt = cg.expr_type(&args[1]);
-            let val_bits = cg.value_to_stable_bits(val_val, &vt, "ms_val")?;
             if is_str {
-                cg.builder
-                    .build_call(
-                        cg.rt.ynz_map_set_str,
-                        &[map.into(), key_val.into(), val_bits.into()],
-                        "ms_s",
-                    )
-                    .map_err(|e| format!("{e}"))?;
+                cg.map_val_set(map, key_val.into(), true, val_val, val_ty, "ms_s")?;
             } else {
                 let kt = cg.expr_type(&args[0]);
                 let key_bits = cg.to_i64_bits(key_val, &kt)?;
-                cg.builder
-                    .build_call(
-                        cg.rt.ynz_map_set,
-                        &[map.into(), key_bits.into(), val_bits.into()],
-                        "ms",
-                    )
-                    .map_err(|e| format!("{e}"))?;
+                cg.map_val_set(map, key_bits.into(), false, val_val, val_ty, "ms")?;
             }
             Ok(cg.i64().const_zero().into())
         }

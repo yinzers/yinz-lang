@@ -1,0 +1,48 @@
+// M5 P3 step 1 — map<K,Shape> RED-matrix cell: STR keys × LITERAL field values
+// × MapLit / get / index / has(hit+miss) / set-overwrite / index-assign-insert
+// / count / iteration, NON-suspending. Locks the elem_size map ABI end to end:
+// shape values are inline byte cells (memcpy elem_size at set/get), not
+// uniform i64 pointer slots.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let pa: Part = { qty: 1, price: 10 }
+  let pb: Part = { qty: 2, price: 20 }
+  let stock: map<string, Part> = { `a`: pa, `b`: pb }
+  let n1: int = stock.count()
+  print(n1)
+  let ga = stock.get(`a`)
+  if (ga.exists()) {
+    print(ga.value.qty)
+  }
+  let ib = stock[`b`]
+  if (ib.exists()) {
+    print(ib.value.price)
+  }
+  let hasA: boolean = stock.has(`a`)
+  print(hasA)
+  let hasZ: boolean = stock.has(`z`)
+  print(hasZ)
+  let pc: Part = { qty: 3, price: 30 }
+  stock.set(`a`, pc)
+  let ia = stock[`a`]
+  if (ia.exists()) {
+    print(ia.value.qty)
+  }
+  let pd: Part = { qty: 4, price: 40 }
+  stock[`d`] = pd
+  let n2: int = stock.count()
+  print(n2)
+  let gd = stock.get(`d`)
+  if (gd.exists()) {
+    print(gd.value.price)
+  }
+  let total: int = 0
+  for (entry in stock) {
+    total = total + entry.value.qty
+  }
+  print(total)
+}

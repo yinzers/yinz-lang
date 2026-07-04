@@ -1,0 +1,51 @@
+// WHY: v0.3-M5 P3 step-5 ownership sweep — the AoS half of E9's matrix in one
+// state-machine cell: array<Shape> × background (inferred GIVE + explicit
+// spawn-site .copy()) × a `wait` in main (main becomes a state machine → the
+// SM-descriptor spawn path; `parts` crosses the wait via the frame story).
+//   - `given` is unused after its spawn → inferred give; the task owns it.
+//   - `parts.copy()` is the explicit spawn-site copy; the caller then mutates
+//     `parts[0]` AFTER the wait — the copied task must still see 10+20=30.
+//   - Task sleeps (60/120ms) sequence the output deterministically after the
+//     caller's post-wait print (~5ms).
+//
+// Expected output (byte-identical default vs --no-auto-parallel):
+//   caller: 119
+//   given: 30
+//   copied: 30
+shape Part {
+  id: int
+  qty: int
+}
+
+function tallyGiven(items: array<Part>) -> nothing {
+  sleepBlocking(60)
+  let total: int = 0
+  for (p in items) {
+    total = total + p.qty
+  }
+  print(`given: ${total}`)
+}
+
+function tallyCopied(items: array<Part>) -> nothing {
+  sleepBlocking(120)
+  let total: int = 0
+  for (p in items) {
+    total = total + p.qty
+  }
+  print(`copied: ${total}`)
+}
+
+function entrypoint() -> nothing {
+  let given: array<Part> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+  let parts: array<Part> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+  background tallyGiven(given)
+  background tallyCopied(parts.copy())
+  wait sleep(5)
+  parts[0] = { id: 1, qty: 99 }
+  let total: int = 0
+  for (p in parts) {
+    total = total + p.qty
+  }
+  print(`caller: ${total}`)
+  sleepBlocking(200)
+}

@@ -3,7 +3,7 @@ name: "v0-3-m5-auto-soa"
 plan-id: "2026-07-03-v0-3-m5-auto-soa"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5"]
+session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5-seg2", "phase3-executor-2026-07-03-m5-seg3", "phase3-executor-2026-07-03-m5-seg4", "phase3-executor-2026-07-03-m5-seg5", "phase3-executor-2026-07-03-m5-seg6", "phase3-executor-2026-07-03-m5-seg7", "phase3-executor-2026-07-03-m5-seg8", "phase3-executor-2026-07-03-m5-seg9", "phase3-executor-2026-07-03-m5-seg10"]
 created_at: "2026-07-03"
 updated_at: "2026-07-03"
 metadata:
@@ -551,6 +551,170 @@ phases (P2, P5) checkpoint per the marks below.
 - **Model tag:** `(coding, high, large)` — scale=large; checkpoint marks mandatory.
 
 #### Phase 3 — By-value completion: guard lift + symmetric surfaces
+
+> **STATUS: COMPLETE (2026-07-03).** All 5 steps done across 10 segments (sessions
+> `phase3-executor-2026-07-03-m5` … `…-seg10`); sealed at the segment-10 boundary commit
+> (`Plan-Phase: 2026-07-03-v0-3-m5-auto-soa#3`). **Full-phase summary:** Step 1 — the
+> `map<K,Shape>` by-value ABI cut (E12): elem_size-aware `YnzMap` runtime, counted 5-buffer
+> accounting, single elem-size choke point, all 8 audited call-site groups hard-cut, grep gate
+> passing, audit-map-callsites.md fully ticked — and the RED matrix CAUGHT a real loop-arm
+> `entry.value` miscompile (indirection-level mismatch on the MapEntry local-slot contract),
+> fixed via the canonical `materialize_param` pattern in both loop arms; matrix 7/7 incl. the
+> new debug-repr lock. Step 2 — `ArrayShapeRuntimeFieldWithWait` guard LIFTED: typeck Check 2d
+> + helpers deleted, promotion-probe decline arm removed (decline test inverted and passing),
+> registry deferral retired, IMP-concurrency.md rewritten interim-guard→LIFTED, gallery
+> trigger removed. Step 3 — crossing-wait acceptance ×3 GREEN (the 3 former guard-rejection
+> fixtures repurposed as `m5_p3_array_shape_*_runs`, exact stdout 30 — E9's B1 proof). Step 4
+> — E8 parity gate GREEN: FRAGO 005 visibility proven fail-loud (P0-blind fixtures now 2/0 and
+> 5/0), gate fixture pins EXACT alloc=11/free=0 (Paper-Trace predicted before first run);
+> verdict recorded per FRAGO 009/011 — no drop insertion (YAGNI until FR #6), no D6 fallback,
+> `alloc == free + gap` encoding ratified durable; map re-set-over-key leak structurally GONE
+> (values inline). Step 5 — ownership sweep: FRAGO-010 size-derivation twin UNIFIED ×3 sites
+> onto `shape_abi_sizes` (zero shape-size `struct_ty.size_of()` remain); bg×array<Shape>
+> alias bug FIXED (spawn-site inline-elem clone, RED 119 → GREEN 30); TWO MapEntry-escape
+> silent-wrongs found by probes and FIXED at the banked choke points (`value_to_stable_bits`
+> MapEntry arm + `prepare_bg_arg_for_ctx` unconditional pre-gate; RED 2/20 → 1/10 and
+> 20/20 → 10/20); D12 RATIFIED (pointer-identity equality for pointer-typed shape fields,
+> final for M5, pinned by the discriminating runtime-string fixture) + (e) contains-on-maybe
+> ratified alongside; union persist KNOWN-HOLE documented to the probe-verified truth (write
+> side constructible, read-back ICEs loud, plan-text "not constructible" parenthetical
+> falsified and surfaced — the loud-reject gate stays FRAGO-grade, not self-built) + loud-fail
+> pins landed both sides.
+> Segment 10 (session `phase3-executor-2026-07-03-m5-seg10`): the 7 step-5 sweep/pin fixtures
+> + integration tests authored per the seg-9 banked designs (`m5_p3_sweep_*`), all green first
+> run — incl. the SM-main give/copy/wait cell (`caller: 119 / given: 30 / copied: 30`); full
+> workspace suite 2246 passed / 0 failed (reconciles: seg-6's 2236 + 3 step-4 gate tests + 7
+> sweep tests); dual-mode oracle re-run over ALL 466 fixtures per p2-dualmode-report.md
+> methodology — 379 identical / 83 skip / 2 documented DIFFs / 2 timing NONDETs / 0 anomalies
+> / **0 real divergences**, reconciliation vs the post-round-3 run exact (report updated);
+> handoff-phase-3.md deleted; phase sealed.
+> Earlier: segment-9 status preserved below.
+> Segment 9 (session `phase3-executor-2026-07-03-m5-seg9`): **step 5 PARTIAL — ALL remaining
+> CODE + DOC work LANDED; fixtures/tests + seal remain.** MapEntry escape fix landed at both
+> banked choke points: `value_to_stable_bits` `Type::MapEntry` arm (16-byte entry-struct
+> clone into a counted heap cell + deep-copy of the shape/maybe VALUE half; the fixed-envelope
+> size register, NOT a shape-size twin) and `prepare_bg_arg_for_ctx`'s UNCONDITIONAL MapEntry
+> pre-gate (before give/copy inference; `HeapShape{16}` free; value sub-cell deferred per
+> FRAGO 011). Paper-Trace RED→GREEN: bg-arg probe 2/20 → 1/10; array<MapEntry> probe
+> 20/20 → 10/20, zero residual. Doc ratifications landed: D12 on `shape_value_eq`'s header,
+> (e) on the contains arm, union KNOWN-HOLE refreshed to the probe-verified truth (write side
+> constructible, read-back ICEs loud, gate stays FRAGO-grade — surfaced, not built). D12 pin
+> probe observed `true/true/false` (3rd cell: runtime-interpolated same-text string proves
+> pointer identity; 2nd cell true via LLVM literal merging — artifact, noted for the WHY).
+> Build/fmt/clippy green; goldens 34/34 zero refreshes; m5_p* 44/44, v03_m3d 72/72,
+> v03_m3b 87/87. Remaining (seg 10): 7 sweep/pin fixtures + integration tests (designs +
+> observed pins final in the handoff — zero probing left), full suite + dual-mode oracle,
+> then SEAL. Work rides uncommitted (FRAGO 004).
+> Earlier: segment-8 status preserved below.
+> Segment 8 (session `phase3-executor-2026-07-03-m5-seg8`): **step 5 PARTIAL — item (c)
+> and the bg×array<Shape> alias fix LANDED and verified; all sweep probes run; D12
+> ratified on the record.** (c): the FRAGO 010 size-derivation twin is UNIFIED at all
+> three sites (`bind_sm_result_and_flush` shape arm, SM shape-embed Let arm,
+> `prepare_bg_arg_for_ctx` Shape arm — incl. replacing the free-side fallback-to-0 with
+> the real `shape_abi_sizes` size) onto `shape_abi_size_const`; zero shape-size
+> `struct_ty.size_of()` sites remain; stale twin-flag comments rewritten; golden
+> snapshots 34/34 with ZERO refreshes (predicted). bg alias fix: `prepare_bg_arg_for_ctx`
+> now clones Shape-element arrays (inline bytes since the P3 cut) via the elem_size-aware
+> `ynz_array_clone_primitive`; probe Paper-Trace RED 119 → GREEN 30. Probes found TWO
+> live MapEntry-escape silent-wrongs (bg-arg + array<MapEntry>, fix design banked in the
+> handoff) and FALSIFIED the step-5(e) "union persist not constructible" parenthetical
+> (map<int,union> set + array<union> literal compile AND run; read-back ICEs loudly —
+> receipts + FRAGO-candidate routing in the handoff; the loud-reject gate is surfaced,
+> NOT self-built). D12 RATIFIED: pointer-identity for pointer-typed fields, final for M5
+> (reasoning on record — FRAGO-candidate); (e) ratified alongside. NEW note-only finding:
+> plain `.copy()` on arrays aliases (pre-existing P3c deferral, carried to reviewers).
+> Remaining in step 5 (seg 9+): MapEntry escape fix + tripwires, sweep/pin fixtures
+> (designs banked), (a)/(e) doc-comment ratification notes, union KNOWN-HOLE doc refresh
+> + loud-fail pins, then full suite + dual-mode oracle + SEAL. Build/fmt/clippy green;
+> m5_p3 13/13, v03_m3d 72/72, m3b bg 2/2. Work rides uncommitted (FRAGO 004).
+> Earlier: segment-7 status preserved below.
+> Segment 7 (session `phase3-executor-2026-07-03-m5-seg7`): **step 4 COMPLETE — the E8
+> parity gate is GREEN.** FRAGO 005 entry criterion PROVEN, never vacuous: 2 fail-loud
+> visibility tests (`m5_p3_e8_gate_visibility_{arrays,maps}`) pin the exact fixtures the
+> P0 baseline recorded as alloc=0-blind — now alloc=2/free=0 (m5_array.ynz) and
+> alloc=5/free=0 (m5_p3_mapshape_runtime_int.ynz). Gate proper: NEW fixture
+> `m5_p3_e8_parity_gate.ynz` + test pins EXACT alloc=11/free=0 (Paper-Trace predicted
+> BEFORE first run, observed matched with zero residual: 2 array buffers + 5 map buffers
+> + 4 FRAGO-011 persist cells; 40-iteration read loop allocates ZERO — the per-element/
+> per-iteration regression pin). FRAGO 009 semantics honored: parity GREEN ("no NEW leak
+> class"). **Step-4 verdict recorded (FRAGO 009/011 assigned it here): no drop insertion
+> (YAGNI until FR #6), D6 loud-reject fallback NOT taken, the interim `alloc == free +
+> gap` helper encoding RATIFIED as durable accounting until FR #6's drop story** (helper
+> doc updated in integration.rs). Map-side finding: the re-set-over-key cell leak
+> FRAGO 011 assigned to this verdict is structurally GONE — the P3 cut stores map shape
+> values INLINE (0 cells, overwrite-in-place; gate fixture proves 3 sets incl. overwrite
+> = 0 cells); the deliberate accounted class remains only for shape-FIELD re-assign +
+> maybe persists (exact-pinned +4 in the gate). Seg-5 fix verified alloc-pattern-neutral:
+> all 72 v03_m3d tests green incl. the 7 gap-pinned (+4 array / +10 map) — unchanged.
+> Housekeeping: prior segments' tree was NOT rustfmt-clean (emit.rs, integration.rs,
+> lib.rs — pre-existing, none in seg-7's diff regions); `cargo fmt --all` applied
+> (mechanical, no behavior change), fmt --check now exit 0, build + gate tests re-green.
+> Step 5 NOT started. Work rides uncommitted (FRAGO 004).
+> Earlier: segment-6 status preserved below.
+> Segment 6 (session `phase3-executor-2026-07-03-m5-seg6`): **steps 2 AND 3 COMPLETE.**
+> Step 2 (the guard lift, planner's CHECKPOINT mark): typeck Check 2d + its three helpers
+> (`find_array_shape_runtime_field_crossing`, `find_let_initializer_in_stmts` — verified
+> single-consumer before deletion, `expr_is_compile_time_literal`) DELETED from check.rs;
+> promotion-probe decline arm removed (queries.rs decline test INVERTED to
+> `…_host_promotes_and_compiles_clean`, passes — host now genuinely promotes);
+> `array-shape-runtime-field-with-wait` registry deferral RETIRED (+ design_future_sync.rs
+> SKIP entry per the M3e retire precedent; tmLanguage.json regenerated per its own sync
+> test's instruction, 1-line diff); IMP-concurrency.md §ArrayShapeRuntimeFieldWithWait
+> rewritten interim-guard → LIFTED; m3a gallery trigger removed (header notes the lift).
+> Step 3: the 3 old guard-rejection fixtures REPURPOSED (git mv) as the crossing-wait
+> acceptance matrix — `m5_p3_array_shape_{runtime_field,between_waits,nested_if}_runs`,
+> each asserting exact stdout "30" (crossing local + loop var across wait; the scratch
+> doc's named acceptance signal + E9 B1 proof) — ALL GREEN; array constructibility proven
+> empirically (map's maybe-after-wait typeck finding does NOT transfer — these cells never
+> read a maybe). Maybe-crossing obligations (get-maybe payload-across-resume + SM spawn-arg
+> maybe cell) NOTED as note-only per plan text, recorded in handoff §Carry-forwards.
+> Recon drift surfaced: error_galleries.rs has NO v0_3_m3a gallery test to update (only
+> m4-m8/v0_3_m1/m3b/m4 wired) — "update counts/phrases" was a no-op against reality.
+> Full workspace suite 2236 passed / 0 failed. Steps 4-5 not started. Work rides
+> uncommitted (FRAGO 004). Earlier: segment-5 status preserved below.
+> Segment 5 (session `phase3-executor-2026-07-03-m5-seg5`): **step 1 COMPLETE.** The loop-arm
+> `entry.value` miscompile is FIXED — root cause was an indirection-level mismatch on the
+> MapEntry local-slot contract (both loop arms registered the {i64,i64} entry struct alloca
+> directly as the local; `load`/`store`/`materialize_param` all expect the slot to HOLD a
+> POINTER to it, so `load` reinterpreted key_bits as the struct pointer). Fix threads the
+> canonical `materialize_param` pattern in both arms (emit.rs `mf_*` + `sm_mf_*`) — no new
+> derivation, no runtime change. RED matrix released: 6/6 green + a NEW 7th test
+> (`m5_p3_map_embed_repr`) locking the debug-repr walker (audit site 7 — verified reachable
+> via shape-embedded map fields, scalar + shape-valued cells; previously fixture-less). Map
+> grep gate re-verified passing; audit-map-callsites.md fully ticked (all rows). Full
+> workspace suite 2235 passed / 0 failed (integration 508/508); one single-run load-flake in
+> `v03_m3e_alias_local_name_collision` (concurrency-diagnostic, unreachable from the fix,
+> passes isolated + both re-runs) surfaced for the boundary reviewers. Checkpointed EARLY at
+> the step-1→step-2 boundary on a fully green tree (context budget; planner's mark sits after
+> step 2). Steps 2-5 not started. Work rides uncommitted (FRAGO 004).
+> Earlier: segment-4 status preserved below.
+> Segment 4 (session `phase3-executor-2026-07-03-m5-seg4`): §H.5 RED matrix authored + wired
+> (6 fixtures + 6 integration tests) — and it CAUGHT A REAL MISCOMPILE in the landed cut: both
+> map for-loop arms (`mf_*`/`sm_mf_*`) read `entry.value` wrong (uninit-stack garbage for
+> scalar values, SIGSEGV for shapes; every scalar map op — count/get/has/set/index, both key
+> types, D13 snapshot, re-set-over-key — proven correct end-to-end on the cut tree). Matrix
+> state: 1 green / 5 RED — the plan-prescribed RED lock gating the fix (step 1's own "RED
+> matrix that gates the build"); the 501 pre-existing integration tests stay green. §H.6(b)
+> checklist ticked for all scalar rows with fixture cites; the 3 iteration rows deliberately
+> open with the bug dossier (handoff "THE BUG"). Deviations surfaced for the deviation-judge:
+> (a) the spec'd post-resume `.get()` matrix cell is NOT constructible — typeck Check 2b's
+> coarse post-wait crossing over-approximation rejects ANY maybe consumed after a wait
+> (pre-existing, cut-independent; cell restructured with coverage preserved); (b) the driver
+> EMBEDS libynz_runtime.a at driver-build time — a stale .a produces ABI-skew failures that
+> mimic miscompiles (build-order landmine documented in the handoff); (c) pre-cut per-cell
+> record declared unreliable due to (b) — the binding record is the cut-tree one. Earlier
+> segments: 1-2 (sessions `phase3-executor-2026-07-03-m5`, `…-seg2`):
+> recon + implementation-grain cut design, zero tree changes. Segment 3 (session
+> `phase3-executor-2026-07-03-m5-seg3`): **the step-1 map ABI cut LANDED** — runtime rewritten
+> (elem_size-aware `YnzMap`, counted 5-buffer accounting, flag-return get/iter, src-ptr set),
+> runtime_decls retyped, emit.rs map choke-point section added (reuses the array elem-size
+> helpers — no twin), all 8 call-site groups hard-cut migrated, grep gate H.6(a) passing,
+> 13 golden IR snapshots verified as decl-signature churn + refreshed (34/34), 3 M3D map
+> alloc-parity tests re-pinned to the deliberate +10 gap (2 maps × 5 now-counted
+> never-dropped buffers, handoff §H.6(c)) — workspace build + full suite GREEN (501/501
+> integration after re-pin). Remaining in step 1 (seg 5+): fix the loop-arm `entry.value`
+> miscompile → 6/6 matrix green → full suite → tick the 3 iteration checklist rows. Steps 2-5
+> not started. Work rides uncommitted (FRAGO 004 — no commit before full-phase completion).
 
 - **Task + purpose:** finish the by-value substrate — lift the interim guard the fix retires, close
   the symmetric `map<K,Shape>` bug, and prove the leak-parity + suspension story (E7/E8, and E9's

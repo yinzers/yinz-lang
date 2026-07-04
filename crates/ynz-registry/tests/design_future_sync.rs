@@ -75,6 +75,10 @@ const SKIP: &[(&str, &str)] = &[
         "shipped in v0.3-M3e — deferred_language_feature entry retired; file kept as design record",
     ),
     (
+        "SCRATCH-future-array-by-value-element-storage.md",
+        "shipped in v0.3-M5 — deferred_language_feature entry retired (ArrayShapeRuntimeFieldWithWait lifted); file kept as design record",
+    ),
+    (
         "SCRATCH-future-gui-index.md",
         "index file for the GUI design subfolder, not a feature doc (formerly design/future/gui/index.md)",
     ),

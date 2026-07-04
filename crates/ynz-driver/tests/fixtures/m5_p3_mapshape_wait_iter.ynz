@@ -1,0 +1,25 @@
+// M5 P3 step 1 — map<K,Shape> RED-matrix cell: SM map for-loop with a BODY
+// wait. The entry value is read BEFORE the wait in each iteration (Check 2c —
+// MapEntryFieldAfterWait forbids post-wait entry reads; entry bindings are
+// re-created per body-bb entry and never get a frame slot). Iteration order
+// is insertion order.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let pa: Part = { qty: 1, price: 10 }
+  let pb: Part = { qty: 2, price: 20 }
+  let pc: Part = { qty: 3, price: 30 }
+  let stock: map<int, Part> = {}
+  stock.set(1, pa)
+  stock.set(2, pb)
+  stock.set(3, pc)
+  for (entry in stock) {
+    print(entry.value.qty)
+    wait sleep(5)
+  }
+  let n: int = stock.count()
+  print(n)
+}

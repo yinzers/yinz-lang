@@ -1,0 +1,35 @@
+// WHY: v0.3-M5 P3 step-5 item (b) — a MapEntry loop variable passed as a
+// BACKGROUND ARG escapes its per-site entry slot. Pre-fix the spawn path stored
+// the raw entry-slot pointer bits in the bg ctx; the loop advanced the slot
+// before the task (sleepBlocking) read it, so the task printed the LAST entry
+// (RED observed: 2 / 20). The fix is prepare_bg_arg_for_ctx's UNCONDITIONAL
+// MapEntry pre-gate arm routing through value_to_stable_bits (16-byte entry
+// clone + deep-copied shape VALUE half), so the task reads entry 1's own bytes.
+//
+// Expected output (byte-identical default vs --no-auto-parallel):
+//   1
+//   10
+shape Part {
+  qty: int
+  price: int
+}
+
+function readLater(e: MapEntry<int, Part>) -> nothing {
+  sleepBlocking(80)
+  print(e.key)
+  print(e.value.qty)
+}
+
+function entrypoint() -> nothing {
+  let pa: Part = { qty: 10, price: 100 }
+  let pb: Part = { qty: 20, price: 200 }
+  let stock: map<int, Part> = {}
+  stock.set(1, pa)
+  stock.set(2, pb)
+  for (entry in stock) {
+    if (entry.key == 1) {
+      background readLater(entry)
+    }
+  }
+  sleepBlocking(200)
+}

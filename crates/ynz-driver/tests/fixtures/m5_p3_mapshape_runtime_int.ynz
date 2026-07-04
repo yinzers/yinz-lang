@@ -1,0 +1,56 @@
+// M5 P3 step 1 — map<K,Shape> RED-matrix cell: INT keys × RUNTIME
+// (seed-derived) field values × set / get / index / has, NON-suspending.
+// Includes the D13 snapshot cell (mutating the source binding after `.set()`
+// must NOT change the stored value — insertion memcpys the bytes), the
+// re-set-over-key overwrite, and an index-assign insert.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let seed: int = 1
+  let qa: int = seed * 1
+  let qb: int = seed * 2
+  let qc: int = seed * 3
+  let pa: Part = { qty: qa, price: qa * 10 }
+  let pb: Part = { qty: qb, price: qb * 10 }
+  let stock: map<int, Part> = {}
+  stock.set(100, pa)
+  stock.set(200, pb)
+  let n1: int = stock.count()
+  print(n1)
+  let g1 = stock.get(100)
+  if (g1.exists()) {
+    print(g1.value.qty)
+  }
+  let i2 = stock[200]
+  if (i2.exists()) {
+    print(i2.value.price)
+  }
+  let has100: boolean = stock.has(100)
+  print(has100)
+  let has999: boolean = stock.has(999)
+  print(has999)
+  // D13 snapshot cell: mutate the source binding AFTER insertion; the map
+  // must keep the insertion-time bytes (qty 1), not see 99.
+  pa.qty = 99
+  let g2 = stock.get(100)
+  if (g2.exists()) {
+    print(g2.value.qty)
+  }
+  let pc: Part = { qty: qc, price: qc * 10 }
+  stock.set(100, pc)
+  let i1 = stock[100]
+  if (i1.exists()) {
+    print(i1.value.qty)
+  }
+  stock[300] = pc
+  let n2: int = stock.count()
+  print(n2)
+  let total: int = 0
+  for (entry in stock) {
+    total = total + entry.value.qty
+  }
+  print(total)
+}

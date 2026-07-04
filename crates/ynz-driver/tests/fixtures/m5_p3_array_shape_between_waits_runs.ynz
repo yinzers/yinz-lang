@@ -1,0 +1,25 @@
+// WHY: v0.3-M5 P3 crossing-wait acceptance, between-two-waits position — an
+// array<Shape> with runtime-computed fields declared BETWEEN two waits (after the
+// first, crossing the second) must print correct values. This was the M3a-R7
+// under-rejection-hole position (the guard had to fire here pre-M5); with by-value
+// element storage the same position must now RUN correctly — the array's element
+// bytes live in the heap buffer, which survives the second suspension like any
+// other crossing pointer local. Expected: total = 10+20 = 30.
+// See docs/internal/implementation/IMP-concurrency.md 'ArrayShapeRuntimeFieldWithWait — LIFTED'.
+shape Item {
+  id: int
+  qty: int
+}
+
+function entrypoint() -> nothing {
+  let a: int = 10
+  let b: int = 20
+  wait sleep(5)
+  let items: array<Item> = [{ id: 1, qty: a }, { id: 2, qty: b }]
+  let total: int = 0
+  wait sleep(5)
+  for (it in items) {
+    total = total + it.qty
+  }
+  print(total.toString())
+}

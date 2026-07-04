@@ -1288,14 +1288,11 @@ ships_in = "v0.3+"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "A `for (entry in map)` loop whose body contains a `wait` and reads `entry.key` or `entry.value` after the suspension — e.g. `for (entry in m) { wait sleep(1); total = total + entry.value }`"
 
-# --- array<Shape> with runtime field values crossing a wait (docs/internal/implementation/IMP-concurrency.md + docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md) ---
-[[deferred_language_feature]]
-name = "array-shape-runtime-field-with-wait"
-substitute = "Two options work today: (1) Use only plain literal numbers or true/false as field values — `let items = [{ id: 1, qty: 10 }]` works. (2) Move the array and all its uses into a separate helper function that does not contain any `wait` — `function buildItems(qty: int) -> array<Item> { return [{ id: 1, qty: qty }] }` works because there is no suspension in that function. Full support ships in the m3c-array-by-value milestone."
-why = "Each element of an array<Shape> is stored as a reference pointing to memory created while the array is built. When a field value is a simple literal (a plain number or true/false), the compiler places that element in permanent memory that outlives any suspension. When a field value is computed at runtime (a variable, a function call, an expression), the element is placed in temporary memory tied to the current call — that temporary memory is released when the function pauses at a `wait`. On the next resume, the reference points at freed memory, and reading it gives wrong values (stack garbage or a crash). The permanent fix is storing shape bytes directly in the array buffer so no separate reference is needed — this ships in the m3c-array-by-value milestone. See docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md for the full design."
-ships_in = "v0.3+"
-design_doc = "docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md"
-triggers = "An `array<Shape>` local declared before a `wait` and read after it (crossing local), where the array literal contains at least one element whose field values are runtime-computed (not compile-time `IntLit` or `BoolLit`). The `ArrayShapeRuntimeFieldWithWait` guard in typeck/check.rs rejects these at compile time with a WHAT/WHAT-INSTEAD/WHY error. Lifted when the m3c-array-by-value milestone ships by-value element storage and removes this guard."
+# NOTE: the `array-shape-runtime-field-with-wait` deferred_language_feature entry that
+# lived here was RETIRED by v0.3-M5 Phase 3 — by-value inline element storage made
+# runtime-field array<Shape> crossings safe and the ArrayShapeRuntimeFieldWithWait
+# typeck guard was removed. Acceptance coverage:
+# crates/ynz-driver/tests/integration.rs `m5_p3_array_shape_*_runs`.
 
 # --- Self-referential shapes (docs/internal/scratchpad/SCRATCH-future-self-references.md) ---
 [[deferred_language_feature]]

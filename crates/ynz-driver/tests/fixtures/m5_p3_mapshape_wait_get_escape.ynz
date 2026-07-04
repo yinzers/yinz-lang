@@ -1,0 +1,25 @@
+// M5 P3 step 1 — map<K,Shape> RED-matrix cell: a get-RESULT shape binding
+// crossing a `wait`. The maybe envelope itself is consumed BEFORE the wait
+// (maybe crossing a suspension is rejected by UnsupportedCrossingLocalType);
+// only the owned Part binding crosses. Post-resume reads must see the
+// get-time bytes, not stale frame or staging memory.
+shape Part {
+  qty: int
+  price: int
+}
+
+function entrypoint() -> nothing {
+  let pa: Part = { qty: 1, price: 10 }
+  let pb: Part = { qty: 2, price: 20 }
+  let stock: map<int, Part> = {}
+  stock.set(1, pa)
+  stock.set(2, pb)
+  let g = stock.get(1)
+  let picked: Part = { qty: 0, price: 0 }
+  if (g.exists()) {
+    picked = g.value
+  }
+  wait sleep(10)
+  print(picked.qty)
+  print(picked.price)
+}

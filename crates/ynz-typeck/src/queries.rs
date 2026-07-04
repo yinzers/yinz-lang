@@ -1599,14 +1599,16 @@ function entrypoint() -> nothing {{
     }
 
     #[test]
-    fn array_shape_runtime_field_crossing_host_declines_and_compiles_clean() {
-        // WHY (ArrayShapeRuntimeFieldWithWait decline): an `array<Shape>` whose elements
-        // have runtime-computed field values, bound to a local that crosses the CPU join,
-        // cannot be frame-embedded yet (the element pointers dangle across a suspension).
-        // Promoting this host would make it SM and `check_function` would reject it. The
-        // probe must see the array as a crossing local over the CPU join (per-candidate
-        // CPU-callee seeding makes the join a suspension point) and decline, keeping the
-        // program compiling clean and sequential.
+    fn array_shape_runtime_field_crossing_host_promotes_and_compiles_clean() {
+        // WHY (ArrayShapeRuntimeFieldWithWait LIFTED, v0.3-M5 Phase 3): an `array<Shape>`
+        // whose elements have runtime-computed field values, bound to a local that crosses
+        // the CPU join, is now SAFE to frame-embed — the by-value ABI cut stores element
+        // bytes inline in the heap buffer (stable owner across any suspension), so
+        // `check_function` no longer rejects the promoted SM host and the probe must no
+        // longer decline it. This is the INVERSE of the pre-M5 decline test: the host
+        // must now PROMOTE, and the program must still compile with no errors. If this
+        // test starts failing with a decline, a rejection path for runtime-field
+        // array<Shape> crossings has been reintroduced — that class was lifted, not moved.
         let src = format!(
             r#"{FIB}
 shape Item {{
@@ -1631,13 +1633,13 @@ function entrypoint() -> nothing {{
         let inputs = build_inputs(&src);
         let promoted = promote(&inputs, false, false);
         assert!(
-            !promoted.contains("entrypoint"),
-            "an array<Shape>-runtime-field crossing-local host must decline promotion; \
-             got: {promoted:?}"
+            promoted.contains("entrypoint"),
+            "an array<Shape>-runtime-field crossing-local host must now PROMOTE (guard \
+             lifted by v0.3-M5 by-value storage); got: {promoted:?}"
         );
         assert!(
             !has_errors(&src),
-            "the array<Shape> decline must keep the program compiling with no new errors"
+            "the promoted array<Shape>-runtime-field host must compile with no errors"
         );
     }
 

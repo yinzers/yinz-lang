@@ -18,7 +18,11 @@
 //   FixedArrayIterWithWait         — fixed<T> used as for-iterator with a wait in body.
 //   StoredRangeWithWait            — range bound to a local then iterated with a wait.
 //   MapEntryFieldAfterWait         — entry.value read after a wait in for-over-map.
-//   ArrayShapeRuntimeFieldWithWait — array<Shape> with runtime-computed field crosses a wait.
+//
+// Lifted guards (no longer fire; kept out of this gallery):
+//   ArrayShapeRuntimeFieldWithWait — LIFTED by v0.3-M5 by-value element storage
+//                                    (runtime-field array<Shape> now crosses a wait
+//                                    correctly; see integration.rs m5_p3_array_shape_*_runs).
 
 // ── Permanent Guard 1: SubExprSuspendViolation ────────────────────────────────
 //
@@ -181,25 +185,12 @@ function scanMap() -> nothing {
   print(total.toString())
 }
 
-// ── Deferred Guard 8: ArrayShapeRuntimeFieldWithWait ──────────────────────────
+// ── (former Deferred Guard 8: ArrayShapeRuntimeFieldWithWait — LIFTED v0.3-M5) ──
 //
-// WHY: ArrayShapeRuntimeFieldWithWait — `roster` is an `array<Scout>` crossing a
-// `wait`. Its literal has a runtime-computed field (`baseRating + 5`), not a
-// compile-time literal. The conservative guard rejects this to avoid unsafe pointer
-// reuse across suspension. Use all-literal field values, or build and use the array
-// in a separate non-suspending helper. This guard lifts when the m3c-array-by-value
-// milestone ships by-value inline element storage.
-
-shape Scout {
-  name: string
-  rating: int
-}
-
-function processRoster(scoutRating: int) -> nothing {
-  let roster: array<Scout> = [{ name: `clemente`, rating: scoutRating + 5 }]
-  wait sleep(5)                         // WHY: ArrayShapeRuntimeFieldWithWait — runtime field in array<Scout>
-  print(roster.count().toString())
-}
+// The trigger block that lived here was removed when v0.3-M5's by-value element
+// storage lifted the guard: a runtime-computed field in an array<Shape> crossing a
+// `wait` is no longer an error — it compiles and runs correctly. Acceptance lives in
+// crates/ynz-driver/tests/integration.rs (m5_p3_array_shape_*_runs).
 
 function entrypoint() -> nothing {
   processOrder(8, 12)

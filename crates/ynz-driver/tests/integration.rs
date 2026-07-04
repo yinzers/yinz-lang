@@ -4738,41 +4738,48 @@ fn v03_m3a_p3_audit_dynamic_crossing_loud_rejected() {
     );
 }
 
-// ── Round-6: ArrayShapeRuntimeFieldWithWait guard ────────────────────────────
+// ── v0.3-M5 Phase 3: ArrayShapeRuntimeFieldWithWait LIFTED — crossing-wait acceptance ──
+//
+// The M3a interim guard (Round-6/Round-7 tests that used to live here) loud-rejected
+// array<Shape> crossings with runtime-computed element fields because elements were
+// stored as pointers to stack allocas that dangled across suspension. The v0.3-M5
+// by-value ABI cut stores element bytes inline in the heap buffer, so the SAME three
+// fixture programs (runtime-field crossing, between-two-waits, nested-if — the exact
+// positions the guard had to catch) are repurposed as ACCEPTANCE: each must now run
+// and print the CORRECT sum. This is the scratch doc's named acceptance signal
+// (SCRATCH-future-array-by-value-element-storage.md) and E9's B1 proof.
+// A wrong value here is the pre-M5 silent stack-garbage miscompile returning; do NOT
+// weaken these to exit-code-only checks.
 
 #[test]
-fn v03_m3a_p3_array_shape_runtime_field_crossing_rejected() {
-    // WHY: guards the ArrayShapeRuntimeFieldWithWait interim fix. An array<Shape> crossing
-    // a `wait` whose elements have runtime-computed field values (e.g. `qty: a` where `a`
-    // is a variable) previously printed ASLR-varying stack garbage (140737423097900 one run,
-    // 140728717547596 the next) because element pointers point to stack allocas in the
-    // constructing resume frame — freed on suspension. The guard must produce exit 1 with
-    // a diagnostic that names the crossing local and explains the root cause.
-    // Dropping this test and rerunning would reveal the silent miscompile; do NOT weaken.
-    let (_, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p3_array_shape_runtime_field_rejected.ynz",
-    ));
+fn m5_p3_array_shape_runtime_field_crossing_runs() {
+    // WHY: the headline lift — runtime-field array<Shape> as a crossing local + loop
+    // var across a `wait` prints correct values (10+20=30). Pre-M5 this exact program
+    // printed ASLR-varying stack garbage (140737423097900 one run, 140728717547596 the
+    // next) and was loud-rejected by the interim guard.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p3_array_shape_runtime_field_runs.ynz"));
     assert_eq!(
-        code, 1,
-        "array<Shape> with runtime field values crossing a wait must be rejected; stderr:\n{stderr}"
+        code, 0,
+        "runtime-field array<Shape> crossing a wait must compile and run (guard lifted); stderr:\n{stderr}"
     );
-    assert!(
-        stderr.contains("runtime-computed field"),
-        "diagnostic must mention runtime-computed field values; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("items"),
-        "diagnostic must name the crossing local `items`; stderr:\n{stderr}"
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "runtime-field array<Shape> must survive suspension with correct element \
+         values (10+20=30); got:\n{stdout}"
     );
 }
 
 #[test]
 fn v03_m3a_p3_array_shape_literal_crossing_still_works() {
-    // WHY: no-over-reject boundary for ArrayShapeRuntimeFieldWithWait. An array<Shape>
-    // whose elements have ALL-LITERAL int/bool field values ([{id:1,qty:10},{id:2,qty:20}])
-    // crosses a `wait` correctly because codegen emits LLVM module-level globals for those
-    // elements (stable addresses, never dangle). This test must print "30" = 10+20.
-    // If the guard fires here, it is over-rejecting literal-field arrays (regression).
+    // WHY: literal-field regression boundary (pre-M5: the guard's no-over-reject case).
+    // An array<Shape> whose elements have ALL-LITERAL int/bool field values
+    // ([{id:1,qty:10},{id:2,qty:20}]) crosses a `wait` correctly — since the v0.3-M5
+    // by-value cut the element bytes live inline in the heap array buffer (the old
+    // module-global lowering, try_build_shape_global, was deleted with the cut).
+    // This test must print "30" = 10+20; it pins the literal-field case alongside the
+    // m5_p3_array_shape_*_runs runtime-field acceptance tests above/below.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture(
         "v0_3_m3a_p3_array_shape_literal_crossing_still_works.ynz",
     ));
@@ -4787,52 +4794,42 @@ fn v03_m3a_p3_array_shape_literal_crossing_still_works() {
     );
 }
 
-// ── Round-7: adversarial pre-check deletion cases ────────────────────────────
-
 #[test]
-fn v03_m3a_r7_array_shape_between_waits_rejected() {
-    // WHY: catches the under-rejection hole where the old pre-check skipped an
-    // array<Shape> whose `let` is declared BETWEEN two waits (not before the
-    // first wait at the top level). The crossing analysis proves it crosses the
-    // second wait, so the guard must fire. Without this test, deleting the
-    // pre-check could be regressed back in, silently reinstating the miscompile.
-    let (_, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_r7_array_shape_between_waits_rejected.ynz",
-    ));
+fn m5_p3_array_shape_between_waits_runs() {
+    // WHY: the between-two-waits position (M3a-R7's first under-rejection hole) — the
+    // array is declared AFTER the first wait and crosses only the SECOND. The heap
+    // buffer holding the element bytes must survive that suspension like any other
+    // crossing pointer local. Correct sum proves the elements themselves survived.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p3_array_shape_between_waits_runs.ynz"));
     assert_eq!(
-        code, 1,
-        "array<Shape> with runtime field values declared between two waits must be rejected; stderr:\n{stderr}"
+        code, 0,
+        "runtime-field array<Shape> declared between two waits must compile and run; stderr:\n{stderr}"
     );
-    assert!(
-        stderr.contains("runtime-computed field"),
-        "diagnostic must mention runtime-computed field values; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("items"),
-        "diagnostic must name the crossing local `items`; stderr:\n{stderr}"
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "between-waits array<Shape> must survive the second suspension with correct \
+         element values (10+20=30); got:\n{stdout}"
     );
 }
 
 #[test]
-fn v03_m3a_r7_array_shape_nested_if_rejected() {
-    // WHY: catches the under-rejection hole where the old pre-check skipped an
-    // array<Shape> whose `let` is declared inside a nested `if` body. The top-
-    // level scan couldn't find the `let` there and returned false; the crossing
-    // analysis (which examines nested scopes) proves it crosses a wait, so the
-    // guard must fire. Without this test, the nested-if hole goes undetected.
-    let (_, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_r7_array_shape_nested_if_rejected.ynz"));
+fn m5_p3_array_shape_nested_if_runs() {
+    // WHY: the nested-if position (M3a-R7's second under-rejection hole) — the array
+    // is declared inside a nested `if` body and crosses a wait in that same body.
+    // The crossing analysis tracks nested scopes; the frame story must carry the
+    // nested crossing local across the suspension with its element bytes intact.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_array_shape_nested_if_runs.ynz"));
     assert_eq!(
-        code, 1,
-        "array<Shape> with runtime field values nested in an if body crossing a wait must be rejected; stderr:\n{stderr}"
+        code, 0,
+        "runtime-field array<Shape> nested in an if body crossing a wait must compile and run; stderr:\n{stderr}"
     );
-    assert!(
-        stderr.contains("runtime-computed field"),
-        "diagnostic must mention runtime-computed field values; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("items"),
-        "diagnostic must name the crossing local `items`; stderr:\n{stderr}"
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "nested-if array<Shape> must survive suspension with correct element values \
+         (10+20=30); got:\n{stdout}"
     );
 }
 
@@ -5493,12 +5490,18 @@ fn m3d_assert_fires_n_byte_identical_alloc_free(
 ///
 /// Since the v0.3-M5 P2 by-value ABI, array header+buffer allocations route through the
 /// COUNTED `ynz_alloc` (FRAGO 005 — the E8 gate must see element buffers; they were
-/// invisible raw malloc before, `baselines-p0.md` scope fact). Local arrays are not yet
-/// dropped at scope exit (pre-existing design; the drop story is Phase 3's E8 parity
-/// gate), so an array-building fixture legitimately shows `alloc == free + gap` where
-/// `gap` = 2 × (arrays constructed): one header + one buffer each, held until process
-/// exit. Pinning the exact gap keeps the mutation-proof teeth: a per-element or
-/// per-iteration allocation regression (or a new frame leak) changes the gap.
+/// invisible raw malloc before, `baselines-p0.md` scope fact). Local arrays are not
+/// dropped at scope exit (pre-existing design), so an array-building fixture
+/// legitimately shows `alloc == free + gap` where `gap` = 2 × (arrays constructed) +
+/// 5 × (maps constructed): buffers held until process exit. Pinning the exact gap
+/// keeps the mutation-proof teeth: a per-element or per-iteration allocation
+/// regression (or a new frame leak) changes the gap.
+///
+/// P3 step-4 VERDICT (was "INTERIM pending P3", FRAGO 009): this exact-gap encoding
+/// is RATIFIED as the durable accounting until the ownership model's drop story
+/// (plan Future Requirements #6) lands — parity is GREEN in FRAGO 009's "no NEW
+/// leak class" sense, so no drop insertion now and no D6 loud-reject fallback.
+/// See `m5_p3_e8_parity_gate` for the full gate + the FRAGO 011 persist-cell pins.
 fn m3d_assert_fires_byte_identical_alloc_gap(
     fixture_name: &str,
     expected_stdout: &str,
@@ -5862,8 +5865,11 @@ fn v03_m3d_return_class_array_fires_byte_identical() {
 #[test]
 fn v03_m3d_return_class_map_fires_byte_identical() {
     // WHY: a `map<int, int>`-returning CPU pair. Output asserts the entry counts
-    // (order-independent). Asserts FIRE + byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_map.ynz", "3\n5");
+    // (order-independent). Asserts FIRE + byte-identical + alloc==free+10 — since the
+    // v0.3-M5 P3 by-value map ABI, each map's FIVE buffers (header/ctrl/keys/vals/order)
+    // route through the COUNTED ynz_alloc (previously invisible raw malloc); locals are
+    // never dropped (pre-existing design), so 2 maps × 5 buffers = a deliberate gap of 10.
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_return_class_map.ynz", "3\n5", 10);
 }
 
 #[test]
@@ -6177,8 +6183,10 @@ fn v03_m3d_same_callee_array_distinct_values() {
 fn v03_m3d_same_callee_map_distinct_values() {
     // WHY: same callee `buildMap`, args 3 and 5 → entry counts 3 and 5 (distinct, order-
     // independent). Proves same-callee members bind separate `map<int, int>` values. FIRE +
-    // byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_map.ynz", "3\n5");
+    // byte-identical + alloc==free+10 (2 maps × 5 counted, never-dropped buffers — the
+    // v0.3-M5 P3 by-value map ABI made the pre-existing held-until-exit map memory VISIBLE
+    // to the counter; see v03_m3d_return_class_map_fires_byte_identical's WHY).
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_map.ynz", "3\n5", 10);
 }
 
 #[test]
@@ -7531,7 +7539,9 @@ fn v03_m3d_danger_float_if_arm_fires_byte_identical() {
 fn v03_m3d_danger_map_match_arm_fires_byte_identical() {
     // WHY: a heap-pointer return (`map<int, int>`) packed inside a `match` arm. The map's heap
     // pointer travels through the result slot; that pack/bind must survive match-arm machinery.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_map_match_arm.ynz", "3\n5");
+    // alloc==free+10: 2 maps × 5 counted, never-dropped buffers (v0.3-M5 P3 by-value map ABI;
+    // see v03_m3d_return_class_map_fires_byte_identical's WHY).
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_map_match_arm.ynz", "3\n5", 10);
 }
 
 #[test]
@@ -10465,4 +10475,335 @@ fn m5_p2_byval_fixed_literal_escape() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_fixed_literal_escape.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "1\n10\n9\n");
+}
+
+// ── M5 P3 step 1: map<K,Shape> by-value RED matrix ──────────────────────────
+// (handoff-phase-3.md §H.5 — six cells: literal/runtime shape values ×
+// get/set/has/index/contains × non-suspending AND crossing-wait. Authored
+// seg-4 and run against the coherent cut tree: the four iteration-bearing
+// cells are RED — the migrated map for-loop arms (mf_* / sm_mf_*) read
+// `entry.value` garbage (uninit stack for scalars, SIGSEGV for shapes) while
+// every scalar map op (count/get/get_str/has/set/set_str/index) is verified
+// correct end-to-end. These tests are the plan-prescribed RED lock gating
+// the fix; see plan.md Phase 3 STATUS + audit.md session log seg-4.)
+
+#[test]
+fn m5_p3_mapshape_literal_str() {
+    // WHY: cell 1 — str keys × literal fields × MapLit/get/index/has(hit+miss)/
+    // set-overwrite/index-assign-insert/count/iteration, non-suspending. First
+    // 8 prints verified correct on the cut tree; the trailing iteration sum
+    // currently SIGSEGVs (mf_* entry.value bug) — RED lock.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_literal_str.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "2\n1\n20\ntrue\nfalse\n3\n3\n40\n9\n");
+}
+
+#[test]
+fn m5_p3_mapshape_runtime_int() {
+    // WHY: cell 2 — int keys × runtime (seed-derived) fields × set/get/index/
+    // has + the D13 snapshot cell (mutating the source binding after `.set()`
+    // must not change the stored bytes) + re-set-over-key + index-assign
+    // insert + iteration sum. RED on the cut tree (iteration).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_runtime_int.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "2\n1\n20\ntrue\nfalse\n1\n3\n3\n8\n");
+}
+
+#[test]
+fn m5_p3_mapshape_iter_escape() {
+    // WHY: cell 3 + step 5(b) MapEntry-aliasing cell — an entry VALUE escaping
+    // the iteration into an outer binding must keep the matched entry's bytes
+    // (aliasing bug would read the last iteration's 3/30). RED on the cut tree.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_iter_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+#[test]
+fn m5_p3_mapshape_wait_cross() {
+    // WHY: cell 4 — map<string,Part> as a crossing local over a `wait`; has/
+    // set/count post-resume + SM map for-loop arm (pre-loop wait, no body
+    // wait). NOTE the cell's original post-resume `.get()` is NOT
+    // constructible: typeck's crossing over-approximation flags ANY maybe
+    // binding consumed after a wait (Check 2b) — the specific-key read is
+    // covered via iteration instead (see fixture comment). RED on the cut tree.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_wait_cross.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "true\n3\n1\n60\n");
+}
+
+#[test]
+fn m5_p3_mapshape_wait_iter() {
+    // WHY: cell 5 — SM map for-loop with a BODY wait; entry read before the
+    // wait per Check 2c (entry re-created per body-bb entry, no frame slot).
+    // Insertion-order iteration. RED on the cut tree (sm_mf_* arm).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_wait_iter.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n2\n3\n3\n");
+}
+
+#[test]
+fn m5_p3_map_embed_repr() {
+    // WHY: locks the map debug-repr walker (audit site 7, `mdbg_*`) — the ONLY
+    // remaining `map_iter_get_into` consumer with no fixture. print(map) is
+    // typeck-rejected; the walker fires only via shape-embedded map fields.
+    // Covers scalar (i64 cell) AND shape-valued (elem_size>8 out-buffer read
+    // via array_elem_from_out) cells on the cut ABI. Insertion-order repr.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_map_embed_repr.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "Depot { label: strip, stock: { a: 5, b: 6 }, parts: { pa: Part { qty: 1, price: 10 } } }\n"
+    );
+}
+
+#[test]
+fn m5_p3_mapshape_wait_get_escape() {
+    // WHY: cell 6 — a get-result shape binding crossing a `wait` (maybe
+    // consumed BEFORE the wait; only the owned Part crosses via the frame
+    // embed). GREEN on the cut tree — locks the get path × suspension.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_wait_get_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+}
+
+// ── M5 P3 step 4: E8 alloc=free parity gate ─────────────────────────────────
+//
+// FRAGO 005 entry criterion: the counter must DEMONSTRABLY see array/map
+// buffer allocations (the P0 baseline recorded alloc=0 on these very fixture
+// classes because ynz_array_new/ynz_map_new used raw malloc — baselines-p0.md
+// "SCOPE FACT"). The visibility tests below FAIL LOUD if the counter goes
+// blind again; the gate never passes vacuously.
+//
+// FRAGO 009 parity semantics: the gate targets "no NEW leak class vs the
+// pointer representation" — per-element/per-iteration allocation regressions
+// and clone→drop imbalance must be ZERO. It does NOT demand literal
+// alloc==free: (1) the PRE-EXISTING never-drop-local design holds array/map
+// buffers to process exit (+2 per array, +5 per map — visibility, not a
+// leak); (2) the FRAGO 011 counted persist cells (shape-field stores, maybe
+// persists) are accounted-and-deferred-to-drop-story, pinned EXACT-COUNT so
+// drift from the deliberate class fails loud.
+//
+// STEP-4 VERDICT (drop-insertion vs D6-fallback, assigned to this step by
+// FRAGO 009/011): parity is GREEN in the re-specified sense — no new leak
+// class exists, so neither remedy fires. No element-aware drop is inserted
+// now (YAGNI until the ownership model's drop story, plan Future Requirements
+// #6) and D6's loud-reject fallback is NOT taken. The exact-gap encoding
+// (`alloc == free + gap`) is ratified as the DURABLE accounting until FR #6
+// lands a drop story. Note: the map-side re-set-over-key cell leak FRAGO 011
+// assigned to this verdict is structurally GONE — the P3 elem_size cut stores
+// map shape values INLINE (lib.rs map runtime header comment); only shape-
+// FIELD re-assign and maybe-persist overwrites still mint deliberate
+// accounted cells (pinned below).
+
+#[test]
+fn m5_p3_e8_gate_visibility_arrays() {
+    // WHY: FRAGO 005 entry criterion, array side. P0 baseline row for this
+    // EXACT fixture: alloc=0/free=0 (counter blind to buffers). The by-value
+    // ABI routes header+buffer through counted ynz_alloc: 1 array → alloc=2.
+    // alloc=0 here means the counter lost buffer visibility — the gate MUST
+    // fail loud, never pass vacuously (baselines-p0.md scope fact).
+    let (alloc, free) = ynz_run_with_alloc_counter("m5_array.ynz");
+    assert!(
+        alloc > 0,
+        "E8 VISIBILITY FAILURE: alloc=0 on an array-constructing fixture — the \
+         counter cannot see array buffers (P0-baseline blindness regressed); \
+         the parity gate is VACUOUS until this is fixed (FRAGO 005)"
+    );
+    assert_eq!(
+        (alloc, free),
+        (2, 0),
+        "1 array<int> (cap 8, no growth on .add(4)) = header+buffer, held to \
+         process exit; alloc={alloc} free={free}"
+    );
+}
+
+#[test]
+fn m5_p3_e8_gate_visibility_maps() {
+    // WHY: FRAGO 005 entry criterion, map side. Map buffers were equally
+    // invisible pre-cut (raw malloc). 1 map → 5 counted buffers (header/ctrl/
+    // keys/vals/order); shape VALUES store inline (0 cells) — receipt that
+    // seg-5's iteration fix left the alloc pattern unchanged (read-correctness
+    // fix, not an alloc-pattern change).
+    let (alloc, free) = ynz_run_with_alloc_counter("m5_p3_mapshape_runtime_int.ynz");
+    assert!(
+        alloc > 0,
+        "E8 VISIBILITY FAILURE: alloc=0 on a map-constructing fixture — the \
+         counter cannot see map buffers; the parity gate is VACUOUS (FRAGO 005)"
+    );
+    assert_eq!(
+        (alloc, free),
+        (5, 0),
+        "1 map<int,Part> (cap 16, 4 keys, no growth) = 5 buffers, shape values \
+         inline (0 heap cells); alloc={alloc} free={free}"
+    );
+}
+
+#[test]
+fn m5_p3_e8_parity_gate() {
+    // WHY: the E8 gate proper. The fixture exercises every counted class with
+    // a KNOWN count and loop-scales the read path so any per-element /
+    // per-iteration allocation regression shifts the pinned totals loudly.
+    // Paper-Trace (predicted BEFORE first run; observed matched exactly):
+    //   +2  one array<Part> (header+buffer)      — pre-existing never-drop
+    //   +0  40 read iterations                   — entry-block staging only
+    //   +5  one map<int,Part> (5 buffers)        — never-drop
+    //   +0  3 map shape-value sets (1 overwrite) — INLINE since the P3 cut
+    //   +4  shape-field persists (1 lit + 3 assigns) — FRAGO 011 exact-count
+    //   free=0 (nothing balanced fires: no bg, no waits, no growth)
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_e8_parity_gate.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "40\n2\n2\n");
+    let (alloc, free) = ynz_run_with_alloc_counter("m5_p3_e8_parity_gate.ynz");
+    assert!(
+        alloc > 0,
+        "E8 VISIBILITY FAILURE: gate fixture shows alloc=0 — counter blind, \
+         gate vacuous (FRAGO 005)"
+    );
+    assert_eq!(
+        (alloc, free),
+        (11, 0),
+        "E8 parity accounting drifted: expected alloc=11 (2 array + 5 map + 4 \
+         persist cells) / free=0. A higher alloc = a per-element/per-iteration \
+         allocation regression or a NEW persist site; free>0 with equal delta = \
+         a drop story landed (update the accounting + the step-4 verdict); any \
+         other drift = investigate before touching this pin. alloc={alloc} \
+         free={free}"
+    );
+}
+
+// ── M5 P3 step 5: suspension/ownership adversarial sweep ────────────────────
+// (arrays × wait × background (give/copy) × .copy() on the by-value substrate —
+// the AoS half of E9's matrix — plus the sweep's ratification pins: D12
+// pointer-identity equality and the union-persist loud-fail pins. Every
+// executable cell asserts dual-mode byte-identity AND the exact expected
+// stdout; task sleepBlocking calls sequence the bg output deterministically,
+// per the v0_3_m3b_p2_bg_array_real_copy precedent.)
+
+/// Build+run `name` in default AND --no-auto-parallel modes; assert both exit 0,
+/// stdout byte-identical across modes, and equal to `expected`.
+fn m5_p3_sweep_assert_dual_mode(name: &str, expected: &str) {
+    let src = fixture(name);
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "{name}: default-mode build+run must exit 0; stderr:\n{par_stderr}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "{name}: --no-auto-parallel build+run must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "{name}: default and --no-auto-parallel stdout must be byte-identical"
+    );
+    assert_eq!(par_stdout, expected, "{name}: exact expected stdout");
+}
+
+#[test]
+fn m5_p3_sweep_bg_array_shape_copy() {
+    // WHY: sweep cell 1 — a bg task's array<Part> arg must be an INDEPENDENT
+    // copy (prepare_bg_arg_for_ctx clones Shape-element arrays via the
+    // elem_size-aware ynz_array_clone_primitive since the seg-8 fix; RED
+    // observed 119 pre-fix — the task saw the caller's post-spawn mutation).
+    m5_p3_sweep_assert_dual_mode(
+        "m5_p3_sweep_bg_array_shape_copy.ynz",
+        "caller set qty: 99\ntask total: 30\n",
+    );
+}
+
+#[test]
+fn m5_p3_sweep_bg_array_shape_give_wait() {
+    // WHY: sweep cell 2 — the E9 AoS matrix in one SM-main cell: inferred GIVE
+    // spawn + explicit spawn-site .copy() spawn + a `wait` in main (SM
+    // descriptor spawn path; `parts` crosses the wait) + post-wait mutation.
+    // The copied task must still see the pre-mutation 30; the caller 119.
+    m5_p3_sweep_assert_dual_mode(
+        "m5_p3_sweep_bg_array_shape_give_wait.ynz",
+        "caller: 119\ngiven: 30\ncopied: 30\n",
+    );
+}
+
+#[test]
+fn m5_p3_sweep_mapentry_bg_escape() {
+    // WHY: sweep cell 3 — MapEntry as a BACKGROUND ARG (step-5 item (b), seg-9
+    // fix): prepare_bg_arg_for_ctx's unconditional MapEntry pre-gate routes
+    // through value_to_stable_bits, so the task reads entry 1's own cloned
+    // bytes, not the advanced per-site entry slot (RED observed 2/20 pre-fix).
+    m5_p3_sweep_assert_dual_mode("m5_p3_sweep_mapentry_bg_escape.ynz", "1\n10\n");
+}
+
+#[test]
+fn m5_p3_sweep_mapentry_array_escape() {
+    // WHY: sweep cell 4 — MapEntry as an ARRAY ELEMENT (step-5 item (b), seg-9
+    // fix): value_to_stable_bits' Type::MapEntry arm clones the entry struct
+    // into a counted 16-byte cell + deep-copies the shape VALUE half, so each
+    // saved row owns its bytes (RED observed 20/20 pre-fix — both rows read
+    // the last entry).
+    m5_p3_sweep_assert_dual_mode("m5_p3_sweep_mapentry_array_escape.ynz", "10\n20\n");
+}
+
+#[test]
+fn m5_p3_sweep_shape_eq_string_field() {
+    // WHY: sweep cell 5 — the D12 ratification pin: shape_value_eq compares
+    // pointer-typed fields by POINTER IDENTITY (final for M5, reasoning on
+    // shape_value_eq's header). Cell 3 (runtime-interpolated same text →
+    // false) is the discriminator vs deep equality; cell 2 is true only via
+    // LLVM's unnamed_addr literal merging (artifact, documented in the
+    // fixture's WHY — a flip there means constant merging changed, not D12).
+    m5_p3_sweep_assert_dual_mode(
+        "m5_p3_sweep_shape_eq_string_field.ynz",
+        "true\ntrue\nfalse\n",
+    );
+}
+
+#[test]
+fn m5_p3_sweep_union_readback_blocked_array() {
+    // WHY: sweep pin 6 — the union-persist KNOWN HOLE (step-5 item (d)),
+    // array side. Union repr is non-uniform (tagged struct vs NULL for none),
+    // so value_to_stable_bits has no correct blind clone; the write side is
+    // constructible but read-back ICEs LOUD (no binary → no end-to-end silent
+    // wrong). Pin: build/run FAILS (exit != 0, stdout empty) in BOTH modes.
+    // Today's ICE or a future clean loud-reject both satisfy; ONLY a silent
+    // compile-and-run fails this pin, forcing the marshalling question to be
+    // answered consciously (the loud-reject gate itself is FRAGO-grade — see
+    // value_to_stable_bits' KNOWN-HOLE doc).
+    let src = fixture("m5_p3_sweep_union_readback_blocked_array.ynz");
+    for no_auto_parallel in [false, true] {
+        let (stdout, _stderr, code) = build_to_tmpdir_and_run(&src, no_auto_parallel);
+        assert_ne!(
+            code, 0,
+            "union array read-back must FAIL loud (no_auto_parallel={no_auto_parallel}); a \
+             silent compile-and-run means union values now flow through the persist choke \
+             points unmarshalled — solve union marshalling (or land the loud-reject gate) \
+             before making this pass; stdout:\n{stdout}"
+        );
+        assert_eq!(
+            stdout, "",
+            "union array read-back must produce NO output (no_auto_parallel={no_auto_parallel})"
+        );
+    }
+}
+
+#[test]
+fn m5_p3_sweep_union_readback_blocked_map() {
+    // WHY: sweep pin 7 — the union-persist KNOWN HOLE, map-value side (same
+    // rationale as the array sibling above; distinct persist surface —
+    // map.set + get read-back).
+    let src = fixture("m5_p3_sweep_union_readback_blocked_map.ynz");
+    for no_auto_parallel in [false, true] {
+        let (stdout, _stderr, code) = build_to_tmpdir_and_run(&src, no_auto_parallel);
+        assert_ne!(
+            code, 0,
+            "union map read-back must FAIL loud (no_auto_parallel={no_auto_parallel}); a \
+             silent compile-and-run means union values now flow through the persist choke \
+             points unmarshalled — solve union marshalling (or land the loud-reject gate) \
+             before making this pass; stdout:\n{stdout}"
+        );
+        assert_eq!(
+            stdout, "",
+            "union map read-back must produce NO output (no_auto_parallel={no_auto_parallel})"
+        );
+    }
 }

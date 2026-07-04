@@ -155,6 +155,23 @@ the current-truth plan.md slice).
   verified mechanical (%p_own alloca + memcpy binding copy only). Dual-mode oracle re-run
   post-fix; tallies + methodology in `p2-dualmode-report.md` (plan dir). Session-id appended.
 
+### 2026-07-03 — Phase 3, segment 4 — session-id: phase3-executor-2026-07-03-m5-seg4
+
+- **Scope:** step 1 remainder — §H.5 RED matrix + §H.6(b) checklist ticks.
+- **Landed:** 6 matrix fixtures (`m5_p3_mapshape_*.ynz`) + 6 integration tests (RED lock);
+  audit-map-callsites.md scalar rows ticked with fixture cites, 3 iteration rows left open
+  with bug dossier; handoff-phase-3.md rewritten in place (resume-at `phase-3/step-1-mapiter-fix`).
+- **Found:** REAL miscompile in the seg-3 cut — both map for-loop arms read `entry.value`
+  wrong (scalar garbage / shape SIGSEGV); scalar map ops all proven correct. Matrix 1 green /
+  5 RED (plan-prescribed gate); 501 pre-existing tests green; workspace builds.
+- **Deviations surfaced:** (a) spec'd post-resume `.get()` cell not constructible (typeck
+  Check 2b post-wait maybe over-approximation, pre-existing — cell restructured, coverage
+  preserved); (b) driver embeds libynz_runtime.a at build time — stale-.a ABI skew mimics
+  miscompiles (landmine documented in handoff); (c) pre-cut per-cell record unreliable due
+  to (b) — cut-tree record is binding.
+- **Verdict:** STATUS: PARTIAL — checkpoint, executor's early-checkpoint call past the
+  calibration threshold; green-BUILDING tree (the 5 REDs are the step-1 documented RED lock).
+
 ## Context-segment log
 
 ### 2026-07-03 — Phase 0, segment 1
@@ -226,6 +243,214 @@ Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#2-fixround3-segment-1
   BLOCKED-class: non-uniform repr (null-ptr vs tagged-struct), KNOWN HOLE documented, no partial
   arm shipped. Step 2 remains: gates gauntlet, FRAGO 011 paperwork ×3, contract-comment fix,
   dual-mode oracle, STATUS block)
+
+### 2026-07-03 — Phase 3, segment 1
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-1
+- segment: 1
+- session-id: phase3-executor-2026-07-03-m5
+- subagent_tokens: 220641
+- checkpoint reason: executor early-checkpoint judgment call — context budget nudged during recon,
+  before step 1's atomic map ABI cut began; stopped at the step boundary on a green-building tree
+  rather than starting a hard-cut that couldn't finish in-window (early relative to the planner's
+  post-step-2 mark, within the mandatory-checkpoint discretion for a scale=large phase)
+- resume-at: phase-3/step-1
+- verdict: STATUS: PARTIAL (step-0 item 3 done — stack-accurate number-pointer wording, doc-only;
+  full CCIR-1 recon re-verify persisted in handoff-phase-3.md §A-§F — map-cut design pinned to
+  mirror the array ABI 1:1, guard-lift inventory re-anchored to current lines. Steps 1-5 + step-0
+  items 1-2 remain. No commit — PARTIAL rides uncommitted)
+
+### 2026-07-03 — Phase 3, segment 2
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-2
+- segment: 2
+- session-id: phase3-executor-2026-07-03-m5-seg2
+- subagent_tokens: ~168000 (harness estimate at checkpoint)
+- checkpoint reason: context nudge fired at ~153k mid-recon, BEFORE the atomic step-1 map ABI
+  cut began; remaining headroom (~60-70k) is below the cut's realistic cost (runtime rewrite +
+  decls + choke points + 8 site migrations + matrix + Docker build/test iterations) — starting
+  it risked the forbidden mid-step broken-tree strand. Stopped at the same step boundary as
+  segment 1, but the boundary is NOT a stall: segment 2 advanced step 1 from ABI-grain design
+  to IMPLEMENTATION grain (handoff §H — exact runtime signatures, choke-helper API, per-site
+  migration table with confirmed conventions, 6 fixture sources fully specified with expected
+  stdout). Segment 3 can start the cut with zero recon.
+- resume-at: phase-3/step-1
+- verdict: STATUS: PARTIAL (zero tree changes this segment — reads only + handoff/audit
+  bookkeeping; anchors re-verified per FRAGO 007 with receipts in handoff §H.0; no commit —
+  PARTIAL rides uncommitted)
+
+### 2026-07-03 — Phase 3, segment 3
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-3
+- segment: 3
+- session-id: phase3-executor-2026-07-03-m5-seg3
+- subagent_tokens: 243479
+- checkpoint reason: context nudge fired mid-migration (~150k+); executor finished the in-flight
+  migration to a coherent, fully-buildable, suite-green tree rather than stranding mid-cut, then
+  stopped at an honest sub-boundary within step 1
+- resume-at: phase-3/step-1-redmatrix-remaining (ADVANCED from segments 1/2's `phase-3/step-1` —
+  the conductor's stall detector fired on segments 1→2 sharing that identical pointer; Patrick
+  ordered "stop re-verifying, start writing"; this segment's pointer move confirms the stall broke)
+- verdict: STATUS: PARTIAL (map runtime ABI cut landed in lib.rs, choke points wired in emit.rs
+  reusing the array helpers directly (no second derivation), all 8 call-site groups hard-cut
+  migrated, grep gate H.6(a) passing, 13 golden IR snapshots refreshed + verified pure decl-churn,
+  alloc re-pin done with Paper-Trace (10-cell residual = pre-existing 2-map×5-buffer visibility,
+  not a new leak), full workspace suite GREEN (501/501). Remaining: §H.5's 6 RED-matrix fixtures,
+  §H.6(b) checklist ticks, then steps 2-5. No commit — step 1 incomplete, rides uncommitted)
+
+### 2026-07-03 — Phase 3, segment 4
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-4
+- segment: 4
+- session-id: phase3-executor-2026-07-03-m5-seg4
+- subagent_tokens: 232045
+- checkpoint reason: executor early-checkpoint, context past the calibration threshold, at an
+  honest sub-boundary within step 1 (not a repeat of segment 3's pointer)
+- resume-at: phase-3/step-1-mapiter-fix (ADVANCED from segment 3's
+  `phase-3/step-1-redmatrix-remaining` — legible forward progress, no stall)
+- verdict: STATUS: PARTIAL (§H.5's 6 RED-matrix fixtures authored + landed
+  (m5_p3_mapshape_{literal_str,runtime_int,iter_escape,wait_cross,wait_iter,wait_get_escape});
+  integration.rs section appended, 1 passed/5 failed as PLAN-PRESCRIBED RED lock (step 1's own
+  text calls for a RED matrix gating the build); §H.6(b) scalar-row checklist ticks done, 3
+  iteration rows deliberately left open with the bug dossier inline. **Headline finding: the
+  matrix caught a REAL pre-existing miscompile** — both map for-loop arms (emit.rs
+  :12697-12806 non-SM, :6564-6650 SM) read `entry.value` wrong (uninit-stack garbage for
+  scalars, SIGSEGV for shapes) on the verified-coherent cut tree; every scalar non-iteration
+  map op proven correct end-to-end. The pre-existing 501-green suite never asserted iterated
+  map values — a coverage hole the matrix now closes. Diagnosis dossier + eliminated suspects
+  recorded in handoff (build-order landmine flagged: driver embeds libynz_runtime.a at
+  build.rs:27-35, NOT a cargo dep — a stale .a produces ABI-skew segfaults indistinguishable
+  from real miscompiles, cost 2 false leads). Deviations surfaced for deviation-judge: spec'd
+  `wait_cross` cell not constructible (typeck's crossing over-approximation rejects ANY maybe
+  read after a wait, cut or no cut — cell restructured, not a FRAGO); nothing else. No commit —
+  step 1 incomplete, rides uncommitted)
+
+### 2026-07-03 — Phase 3, segment 5
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-5
+- segment: 5
+- session-id: phase3-executor-2026-07-03-m5-seg5
+- subagent_tokens: 187105
+- checkpoint reason: context crossed ~150k exactly at the step-1→step-2 boundary; step 2 is a
+  multi-file typeck/registry/docs/gallery lift that shouldn't start unless it can finish — early
+  seam on a marked phase, step boundary, fully green tree
+- resume-at: phase-3/step-2 (ADVANCED from segment 4's `phase-3/step-1-mapiter-fix` — STEP 1 IS
+  NOW FULLY COMPLETE, no stall)
+- verdict: STATUS: PARTIAL (root cause found + fixed with a Paper-Trace: MapEntry local-slot
+  indirection-level mismatch — `entry_var_slot` registered the struct alloca itself in both loop
+  arms (emit.rs :12779 non-SM, :6586 SM) while every consumer (load/store/i64_bits_to/
+  materialize_param) expected a POINTER to the entry struct; `entry.value` therefore read 8 bytes
+  past the key cstring. Fixed by pointer-indirect slot registration matching the canonical
+  materialize_param pattern in both arms — CCIR-2 clean, threads the existing contract, zero new
+  derivations, zero runtime changes. RED matrix now 7/7 green (6 §H.5 cells + 1 new debug-repr
+  lock, m5_p3_map_embed_repr.ynz, proving the debug-repr walker never shared the bug). Map grep
+  gate re-verified 9/9 confined to the choke-point section. Full workspace suite: 2235/0 failed
+  (integration 508/508). §H.6(b) checklist now FULLY ticked. STEP 1 EXIT CRITERIA MET. Surfaced
+  for boundary reviewers, not chased: a load-flake on an unrelated M3e fixture (fails once under
+  full-suite load, passes isolated + 2 reruns, no maps/for-loops in the fixture — unreachable
+  from this fix); Patrick's two review footnotes reconfirmed still open (leak-parity honesty +
+  zero golden-IR-snapshot coverage — the new debug-repr test is a runtime lock, not the missing
+  golden snapshot). No commit — steps 2-5 remain, rides uncommitted)
+
+### 2026-07-03 — Phase 3, segment 6
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-6
+- segment: 6
+- session-id: phase3-executor-2026-07-03-m5-seg6
+- subagent_tokens: 200984
+- checkpoint reason: context past calibration threshold at a clean step-3-done boundary
+- resume-at: phase-3/step-4 (ADVANCED from segment 5's `phase-3/step-2` — steps 2 AND 3 both
+  closed this segment, no stall)
+- verdict: STATUS: PARTIAL (Step 2 COMPLETE: `ArrayShapeRuntimeFieldWithWait` guard lifted —
+  find_let_initializer_in_stmts had exactly one consumer, deleted with it; check.rs Check-2d
+  diagnostic + finder + promotion-decline arm removed; registry deferral entry retired +
+  design_future_sync SKIP entry added (M3e precedent); VSCode grammar regenerated to match;
+  IMP-concurrency.md rewritten interim-guard -> LIFTED; queries.rs decline test inverted to a
+  promotes-and-compiles-clean test, passes; gallery trigger removed (no v0_3_m3a gallery test
+  exists to update -- recon-drift deviation surfaced, risk-neutral no-op). Step 3 COMPLETE:
+  3 former guard-rejection fixtures repurposed via git mv into crossing-wait acceptance tests,
+  all green with exact stdout; array constructibility independently verified NOT to share
+  segment 4's map maybe-after-wait limitation; maybe-crossing obligations recorded note-only.
+  Full suite: 2236/0 failed (integration 508/508; +1 vs seg-5 is aggregation-method sensitivity,
+  noted for reviewers, not a regression). Housekeeping: stray untracked ELF binary from seg-5's
+  coherence check deleted. Carried forward untouched: Patrick's two footnotes, the M3e
+  load-flake note. No commit -- steps 4-5 remain, rides uncommitted)
+
+### 2026-07-03 — Phase 3, segment 7
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-7
+- segment: 7
+- session-id: phase3-executor-2026-07-03-m5-seg7
+- subagent_tokens: 228432
+- checkpoint reason: context budget at the step-4->step-5 boundary, a legal early seam on this
+  checkpoint-marked phase
+- resume-at: phase-3/step-5 (ADVANCED from segment 6's `phase-3/step-4` -- step 4 fully closed,
+  step 5 not yet started, no stall)
+- verdict: STATUS: PARTIAL (Step 4 E8 parity gate COMPLETE + GREEN: FRAGO-005 visibility
+  criterion pinned with 2 fail-loud tests (arrays 0->2, maps 0->5, vs the P0 alloc=0 baseline);
+  FRAGO-009 semantics gate pinned EXACT (alloc,free)==(11,0) with a pre-written Paper-Trace
+  matching zero residual (+2 array buffers, +5 map buffers, +4 FRAGO-011 persist cells, +0 over
+  a 40-iteration read loop, +0 across 3 map shape-value sets incl. an overwrite). Verified,
+  not assumed: segment 5's map-iteration fix changed zero alloc counts (all 72 v03_m3d tests
+  green); the map ABI cut REMOVED a persist-cell gap rather than adding one (map shape values
+  store inline, lib.rs:585-590 -- the re-set-over-key leak FRAGO 011 flagged for maps is
+  structurally absent). Recorded verdict (for deviation-judge): parity GREEN in the "no NEW
+  leak class" sense -> no drop insertion, no D6 fallback, P2 helper's alloc==free+gap encoding
+  RATIFIED as durable until FR #6's drop story. Housekeeping: `cargo fmt --all` applied
+  (pre-existing non-M5 formatting drift in emit.rs/integration.rs/lib.rs, none in this
+  segment's own diff regions) -- surfaced, not silently absorbed. Step 5 NOT started; recon
+  banked in handoff (twin-site list for item (c) incl. a third same-class site at emit.rs:14519,
+  the bg array<Shape> alias finding, D12/(e) ratification analyses) so segment 8 inherits
+  receipts instead of re-deriving. Carried forward untouched: Patrick's two footnotes, the M3e
+  load-flake, new clippy-warning notes. No commit -- step 5 remains, rides uncommitted)
+
+### 2026-07-03 — Phase 3, segment 8
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-8
+- segment: 8
+- session-id: phase3-executor-2026-07-03-m5-seg8
+- subagent_tokens: 222762
+- checkpoint reason: executor early-checkpoint, context past calibration threshold, at an honest
+  fine-grained sub-boundary within step 5
+- resume-at: phase-3/step-5-item-c-done (ADVANCED from segment 7's `phase-3/step-5` -- real
+  code landed, no stall)
+- verdict: STATUS: PARTIAL (item (c) FRAGO-010 twin UNIFIED across all 3 sites -- bind_sm_
+  result_and_flush shape arm, SM shape-embed Let arm, prepare_bg_arg_for_ctx Shape arm all now
+  read shape_abi_sizes via shape_abi_size_const; zero shape-size struct_ty.size_of() sites
+  remain; 34/34 goldens, zero refreshes, banked prediction held. Real probe-mandated FIX landed:
+  bg x array<Shape> alias bug in prepare_bg_arg_for_ctx (Paper-Trace: observed 119 / expected 30
+  / residual +89 = caller's post-spawn mutation visible through an aliased buffer / fixed via
+  inline-elem clone extension, verified 30 post-fix). D12 RATIFIED as final for M5: pointer-
+  identity for pointer-typed shape fields in shape_value_eq (reasoned: no repr change for
+  fields unlike elements, matches locked non-shape-cell goldens, deep equality is an
+  out-of-scope semantics extension -- YAGNI, docs home Phase 7 step 5); (e) ratified alongside.
+  **PLAN-TEXT FALSIFIED (surfaced, not self-resolved):** step 5(e)'s "no fixture can construct
+  a union persisting through the choke points" claim is FALSE -- probes prove map<int,Union>.set
+  and array<Union> literals compile+run (write-side raw-pointer persist), read-back ICEs loudly
+  for both; D6's conditional loud-reject gate would be a NEW user-facing diagnostic with
+  feature-registry/gallery obligations the plan never enumerated -- FRAGO-grade, flagged with
+  receipts for the deviation-judge, not built. TWO NEW live MapEntry-escape silent-wrongs found
+  by probe (bg-arg reads the advanced slot 2/20; array<MapEntry> escape 20/20) -- one-choke-
+  point fix design banked in handoff, not yet landed. New note-only finding: bare .copy() on
+  any array aliases (pre-existing P3c-era typeck deferral), carried to reviewers. Remaining for
+  segment 9: MapEntry escape fix + tripwires, sweep/pin fixtures (incl. dual-mode give/copy/wait
+  matrix), (a)/(e) doc notes, union KNOWN-HOLE doc refresh + loud-fail pins, full suite + dual-
+  mode oracle, SEAL. No commit -- rides uncommitted)
+
+### 2026-07-03 — Phase 3, segment 9
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3-segment-9
+- segment: 9
+- session-id: phase3-executor-2026-07-03-m5-seg9
+- subagent_tokens: 205080
+- checkpoint reason: code-landed / fixtures-pending seam, context budget, green-building tree
+  verified
+- resume-at: phase-3/step-5-mapentry-fix-landed (ADVANCED from segment 8's
+  `phase-3/step-5-item-c-done` -- real code landed, no stall)
+- verdict: STATUS: PARTIAL (BOTH MapEntry-escape silent-wrongs FIXED per the banked one-choke-
+  point design: Type::MapEntry arm added to value_to_stable_bits (16-byte counted heap-cell
+  clone + deep value-half copy), unconditional MapEntry pre-gate added to prepare_bg_arg_for_ctx
+  (inference-independent, before is_heap_arg). Paper-Trace RED->GREEN: bg-arg probe 2/20 ->
+  1/10; array<MapEntry> escape probe 20/20 -> 10/20, zero residual. Doc notes landed: D12
+  ratification on shape_value_eq header, (e) ratification on the contains arm, union KNOWN-HOLE
+  doc refreshed to the probe-verified truth (write-constructible, read-back ICEs, loud-reject
+  gate stays FRAGO-grade -- not built). D12 pin-probe run recorded (true/true/false; cell 2's
+  true is LLVM literal-merging, named as an artifact for the eventual fixture WHY). Green-tree
+  receipts: build/fmt/clippy clean, goldens 34/34 zero refreshes, m5_p* 44/44, v03_m3d 72/72,
+  v03_m3b 87/87. Full suite + dual-mode oracle DEFERRED to the sealing segment. No commit --
+  step 5 fixtures + full suite + dual-mode oracle + SEAL remain for segment 10, all designs
+  finalized in the handoff so segment 10 needs zero probing)
 
 ## FRAGO log
 
@@ -809,3 +1034,216 @@ fill (shape-valued fills are typeck-rejected); same BLOCKED-class fall-through, 
 extended, carried as a deviation for the judge. Fixed-crossing-wait door verified CLOSED by
 design (typeck UnsupportedCrossingLocalType rejects fixed<T> crossing suspension). Work NOT
 committed.
+
+## Session log — 2026-07-03 — session-id: phase3-executor-2026-07-03-m5
+Phase 3, segment 1 — STATUS: PARTIAL, resume-at `phase-3/step-1` (handoff-phase-3.md written).
+Segment landed: step-0 routed item 3 (stack-accurate number-pointer wording, emit.rs
+`maybe_to_owned` + `value_to_stable_bits` docs — comment-only, build-neutral) + the FULL Phase-3
+recon re-verify (CCIR-1): every audit-map-callsites.md surface confirmed present and re-anchored
+to current lines (checklist lines pre-dated P2 churn — deviation surfaced, not a blocker); map
+cut design fixed to mirror the array ABI 1:1 (elem_size header field, byte-buffer vals, has-flag
+get returns, split key/val iter outs, counted allocations incl. order_push realloc→alloc+copy+free);
+guard-lift reference inventory (typeck Check 2d + probe + queries test, registry :1293, IMP-
+concurrency :559-598, gallery + 3 reject fixtures to repurpose) — all in handoff-phase-3.md §B-§F.
+No behavioral change; no boundary commit (PARTIAL rides uncommitted per dispatch). Checkpoint
+reason: context budget crossed during recon of a scale=large phase; step 1 is an atomic ABI cut
+that must not start unless it can finish — stopped at the step boundary on a green-building tree.
+
+## Session log — 2026-07-03 — session-id: phase3-executor-2026-07-03-m5-seg2
+Phase 3, segment 2 — STATUS: PARTIAL, resume-at `phase-3/step-1` (handoff-phase-3.md §H added).
+Segment landed: FRAGO 007 anchor re-verification against the live worktree (all §A/§C recon
+anchors current within ±2 lines, receipts in handoff §H.0) + the step-1 cut design advanced to
+implementation grain: exact new runtime signatures (H.1), runtime_decls deltas (H.2), the emit.rs
+map choke-point helper API threading array_elem_size / array_elem_src_ptr / array_elem_out_buffer
+/ array_elem_bits_from_out (no second derivation — CCIR-2 clean by construction, H.3), the 8-site
+migration table with confirmed MapEntry bits + Check 2c preservation notes (H.4), and 6 RED-matrix
+fixture sources fully specified with expected stdout incl. the D13 snapshot cell and the step-5(b)
+MapEntry-aliasing cell (H.5), plus post-cut exit obligations (H.6). ZERO tree changes (reads
+only). Checkpoint reason: nudge at ~153k before the atomic cut could begin; starting a hard cut
+below its realistic token cost strands a mid-step broken tree — stopped at the step boundary on a
+green-building tree. No commit (PARTIAL rides uncommitted, FRAGO 004 discipline).
+
+## Session log — 2026-07-03 — session-id: phase3-executor-2026-07-03-m5-seg3
+Phase 3, segment 3 — STATUS: PARTIAL, resume-at `phase-3/step-1-redmatrix-remaining`
+(pointer ADVANCED — the seg-1/seg-2 stall pattern is broken: real code landed this segment).
+Landed the step-1 atomic map ABI cut per handoff §H.1–H.4 + H.6(a): ynz-runtime map region
+rewritten to the elem_size-aware by-value ABI (YnzMap +elem_size, vals *mut u8, one val_slot
+helper, all 5 buffers counted ynz_alloc/ynz_free, flag-return get/iter, src-ptr set, realloc
+extern deleted); runtime_decls.rs retyped; emit.rs gained the map choke-point sub-section
+(map_new/map_val_set/map_val_get_into/map_val_get_maybe/map_iter_get_into/map_count_val/
+map_has_int) reusing array_elem_size/array_elem_src_ptr/array_elem_out_buffer/
+array_elem_bits_from_out directly (CCIR-2 clean); ALL 8 call-site groups migrated hard-cut
+(old pair/triple ABIs deleted — a missed site fails to compile). Grep gate H.6(a) passing.
+13 golden IR snapshots verified as pure decl-signature churn and refreshed (34/34 green).
+Workspace build GREEN. Full workspace test suite re-run launched at segment end (first run
+stopped at the golden churn); result to be confirmed by segment 4 alongside the §H.5 RED
+matrix, §H.6(b) checklist ticks, and §H.6(c) alloc re-pins. Recorded decision: map inserts
+marshal against the map's DECLARED value type (layout-authoritative), not the value expr's
+type. No commit (step 1 incomplete — FRAGO 004: work rides uncommitted). Handoff rewritten
+in place to post-implementation truth.
+ADDENDUM (same session, post-suite): full workspace suite confirmed — only failures were the
+3 M3D map alloc-parity tests (alloc=11 free=1, gap 10 = 2 maps × 5 now-counted never-dropped
+buffers; Paper-Trace in segment return); re-pinned per §H.6(c) to
+m3d_assert_fires_byte_identical_alloc_gap(…, 10) with WHY comments
+(integration.rs v03_m3d_{return_class_map,same_callee_map,danger_map_match_arm}); re-run
+3/3 green → integration 501/501, workspace suite GREEN. Handoff Build+test section and
+plan.md Phase 3 STATUS block updated accordingly.
+
+## Conductor operating note — 2026-07-03 — session-id: plan-conductor-2026-07-03-m5-fable (Patrick's review footnotes on segment 3's map ABI cut, recorded for the Phase-3 boundary gate — not a blocker, not self-graded)
+Patrick reviewed segment 3's map ABI cut output directly (a static read, not a build/run) and
+flagged two honest footnotes to carry into the phase-boundary review. Recording verbatim so
+they aren't lost between now and Step 5's reviewer fan-out; the conductor is NOT ruling on
+either — router-not-inspector holds, these are routed to the fleet, not adjudicated here.
+
+1. **Loosened leak-parity assertions are honest accounting, not a new leak.** The re-pinned
+   `m3d_assert_fires_byte_identical_alloc_gap(…, 10)` cells (segment 3 addendum, above) encode
+   alloc=11/free=1 as the expected gap. Patrick's read: this gap is PRE-EXISTING map-local
+   leakage that was always there, made VISIBLE only because the cut now routes what used to be
+   raw `malloc` calls through the counted `ynz_alloc`/`ynz_free` allocator (segment 3's runtime
+   cut, lib.rs ~:581-1000) — not a regression the cut introduced. This matches the Paper-Trace
+   segment 3 already recorded (10 = 2 maps × 5 now-counted never-dropped buffers) and the E8
+   risk row's own framing (D6: parity gate targets "no NEW leak class vs the pointer repr," not
+   literal alloc==free). Flag for the Phase-3 boundary reviewer: confirm the 10-cell gap is
+   fully attributable to visibility-not-leak, per the parity semantics FRAGO 009 re-specified —
+   do not wave this through on the conductor's or Patrick's say-so; the reviewer fleet verifies
+   it against the actual gap accounting, same as it would any other parity claim.
+2. **Map call-site IR has zero golden-snapshot coverage.** Segment 3 refreshed the 13 EXISTING
+   golden IR snapshots (verified as pure decl-signature churn) but authored no NEW golden
+   snapshot asserting the new map choke-point call sites' actual generated IR shape. This is
+   explicitly test-quality's lane at the Phase-3 boundary gate (test-quality reviewer — is the
+   test suite actually meaningful, not just green) — flagged here so it isn't missed as "already
+   covered" by the refreshed-snapshot work, which covers regression-detection on the OLD sites'
+   IR shape, not confirmation that the NEW choke-point sites' IR is correct in absolute terms.
+3. **Compile/link/runtime correctness is unverifiable from this static read** — that is
+   precisely what green-check (Step 4) and the reviewer fan-out (Step 5) are for. Patrick's
+   footnotes are read-level observations to route to the fleet, not a substitute for the actual
+   phase-boundary gates; segment 4 (or whichever segment closes Phase 3) still runs the full
+   gate + review sequence before any commit lands.
+
+These three items are carried forward as required phase-boundary review inputs — cite this
+note explicitly when dispatching code-reviewer / test-quality at Phase 3's Step-5 fan-out.
+
+## Session log — 2026-07-03 — session-id: phase3-executor-2026-07-03-m5-seg5
+Phase 3, segment 5 — STATUS: PARTIAL, resume-at `phase-3/step-2` (pointer ADVANCED from seg-4's
+`phase-3/step-1-mapiter-fix`; handoff-phase-3.md rewritten in place to post-fix truth).
+**Step 1 COMPLETE.** Fixed the loop-arm `entry.value` miscompile: indirection-level mismatch on
+the MapEntry local-slot contract — both map for-loop arms registered the {i64,i64} entry struct
+alloca directly as the local while `load` (emit.rs:18876) / `store` (:18709) /
+`materialize_param` (:11659-11666) all expect the slot to HOLD a POINTER to the struct; `load`
+therefore reinterpreted key_bits as the struct pointer (scalar garbage / shape SIGSEGV — exactly
+seg-4's dossier symptoms; runtime + choke points confirmed never wrong). Fix: pointer-indirect
+`entry_var_slot` per the canonical materialize_param pattern in both arms (non-SM `mf_*` stored
+once pre-loop; SM `sm_mf_*` entry-hoisted + per-body-bb re-store, Check 2c contract preserved).
+Receipts: m5_p3 matrix 6/6 green; NEW `m5_p3_map_embed_repr` fixture+test locks the previously
+fixture-less debug-repr walker (audit site 7 — verified reachable via shape-embedded map fields,
+scalar + shape-valued elem_size>8 cells); map grep gate re-verified (9/9 raw refs inside
+emit.rs:2794-2971); audit-map-callsites.md fully ticked; full workspace suite 2235 passed /
+0 failed (integration 508/508). Surfaced, not chased: single-run load-flake
+`v03_m3e_alias_local_name_collision_runs_correctly` (concurrency-diagnostic, no maps/loops in
+fixture, passes isolated + both full re-runs) — for the boundary reviewers. Checkpoint reason:
+context budget crossed right at the step-1→step-2 boundary; step 2 is a multi-file
+typeck/registry/docs/gallery lift that must not start unless it can finish — stopped on a fully
+green tree (early seam; planner's mark sits after step 2). No commit (FRAGO 004 — phase
+incomplete, work rides uncommitted).
+
+## Session log — 2026-07-03 — session-id: phase3-executor-2026-07-03-m5-seg6
+Phase 3, segment 6 — STATUS: PARTIAL, resume-at `phase-3/step-4` (pointer ADVANCED from
+seg-5's `phase-3/step-2`; handoff-phase-3.md rewritten in place to post-lift truth).
+**Steps 2 AND 3 COMPLETE.** Step 2: ArrayShapeRuntimeFieldWithWait LIFTED — check.rs
+Check 2d + 3 helpers deleted (find_let_initializer_in_stmts verified single-consumer via
+repo-wide grep BEFORE deletion — seg-5's open item, resolved); promotion-probe decline arm
+removed; queries.rs decline test inverted to host_promotes_and_compiles_clean (PASSES —
+promotion verified empirically, not assumed); registry deferral retired +
+design_future_sync.rs SKIP entry (M3e precedent); tmLanguage.json regenerated (grammar
+embeds deferred-feature data; its sync test caught the retirement — 1-line diff);
+IMP-concurrency.md section rewritten interim-guard→LIFTED; m3a gallery trigger removed.
+Step 3: the 3 former guard-rejection fixtures repurposed (git mv) as crossing-wait
+acceptance — m5_p3_array_shape_{runtime_field,between_waits,nested_if}_runs, each
+asserting exact stdout "30" — ALL GREEN (the scratch doc's acceptance signal, E9 B1);
+array constructibility proven (map's maybe-after-wait finding does not transfer — no
+maybe read in these cells); maybe-crossing obligations recorded note-only in handoff.
+Deviation surfaced for the judge: error_galleries.rs has NO v0_3_m3a gallery test (plan
+said "update counts/phrases"; grep receipt: only m4-m8/v0_3_m1/m3b/m4 galleries wired) —
+no-op, risk-neutral recon drift. Housekeeping: stray untracked ELF
+fixtures/m5_p2_byval_map_set_escape deleted. Receipts: full workspace suite
+2236 passed / 0 failed (--no-fail-fast); build GREEN. Checkpoint at the planner's
+post-step-2 CHECKPOINT mark (context budget; step 3 rode along because its deliverable
+WAS step 2's repurposed fixtures). No commit (FRAGO 004 — phase incomplete).
+
+## Session log — 2026-07-03 — session-id: phase3-executor-2026-07-03-m5-seg7
+Phase 3, segment 7 — STATUS: PARTIAL, resume-at `phase-3/step-5` (pointer ADVANCED from
+seg-6's `phase-3/step-4`; handoff-phase-3.md rewritten in place to post-gate truth).
+**Step 4 COMPLETE — E8 parity gate GREEN.** FRAGO 005 entry criterion proven, fail-loud:
+`m5_p3_e8_gate_visibility_{arrays,maps}` pin the P0-baseline-blind fixtures (m5_array.ynz
+0/0-blind → 2/0; m5_p3_mapshape_runtime_int.ynz → 5/0) with explicit gate-is-VACUOUS
+failure messages. Gate proper: NEW `m5_p3_e8_parity_gate.ynz` + test pins EXACT
+alloc=11/free=0 — Paper-Trace predicted before first run, observed matched, zero residual
+(2 array buffers + 5 map buffers + 4 FRAGO-011 persist cells; 40-iteration read loop = 0
+allocs = the per-iteration regression pin; 3 map shape sets incl. overwrite = 0 cells).
+Step-4 verdict (assigned here by FRAGO 009/011) RECORDED: parity GREEN in the no-NEW-leak-
+class sense → no drop insertion (YAGNI until FR #6), no D6 fallback; interim
+`alloc == free + gap` helper encoding RATIFIED durable (doc updated,
+m3d_assert_fires_byte_identical_alloc_gap). Map-side answer: the cut REMOVED the map
+re-set-over-key cell leak (shape values inline, lib.rs:585-590); deliberate accounted
+cells remain only for shape-field re-assign + maybe persists. Seg-5-fix neutrality
+receipt: 72/72 v03_m3d green incl. all 7 gap-pinned tests. Housekeeping: prior segments'
+tree was not rustfmt-clean (emit.rs/integration.rs/lib.rs, pre-existing regions) —
+`cargo fmt --all` applied (mechanical), fmt --check exit 0, build + gate tests re-green.
+Step-5 recon banked in the handoff (twin-site list verified vs live code incl. a third
+same-class site at emit.rs:14519; bg array<Shape> alias finding; D12/(e) ratification
+analyses). Checkpoint at the step-4→step-5 boundary on a green-building tree (context
+budget). No commit (FRAGO 004 — phase incomplete).
+
+## Session log — 2026-07-03 — session-id: phase3-executor-2026-07-03-m5-seg8
+Phase 3, segment 8 — STATUS: PARTIAL, resume-at `phase-3/step-5-item-c-done` (pointer ADVANCED
+from seg-7's `phase-3/step-5`; handoff-phase-3.md rewritten in place to post-work truth).
+**Step 5 item (c) LANDED:** FRAGO 010 size-derivation twin UNIFIED at all three sites
+(bind_sm_result_and_flush shape arm, SM shape-embed Let arm, prepare_bg_arg_for_ctx Shape arm
+incl. the free-side fallback-to-0) onto shape_abi_size_const/shape_abi_sizes; zero shape-size
+struct_ty.size_of() sites remain; stale twin-flag comments rewritten; golden snapshots 34/34,
+zero refreshes (seg-7 prediction held). **bg×array<Shape> alias FIX LANDED** (probe-mandated,
+D-r2-1 class, surfaced not self-classified): inline-elem clone extension in
+prepare_bg_arg_for_ctx; Paper-Trace RED 119 → GREEN 30. **Sweep probes all run** (receipts in
+handoff): TWO live MapEntry-escape silent-wrongs found (bg-arg read advanced slot 2/20;
+array<MapEntry> escape 20/20) — fix design banked, not yet landed; step-5(e) union
+parenthetical FALSIFIED (write-side persists compile+run; read-back ICEs loudly) — loud-reject
+gate surfaced as FRAGO-grade, NOT self-built; D12 RATIFIED on record (pointer identity, final
+for M5, FRAGO-candidate) + (e) ratified alongside; NEW note-only pre-existing finding: bare
+`.copy()` on arrays aliases (P3c-era deferral). Build/fmt/clippy green; m5_p3 13/13, v03_m3d
+72/72, v03_m3b_p2_bg 2/2. Checkpoint mid-step-5 at an item boundary per the conductor's own
+fine-grained-marker dispatch instruction, on a green-building tree (context budget). No commit
+(FRAGO 004 — phase incomplete, work rides uncommitted).
+
+## Session log — 2026-07-03 — session-id: phase3-executor-2026-07-03-m5-seg10
+Phase 3, segment 10 — STATUS: COMPLETE — THE PHASE IS SEALED. The 7 step-5 sweep/pin fixtures +
+integration tests authored per seg-9's banked designs (zero probing; observed pins used
+verbatim): m5_p3_sweep_bg_array_shape_copy (`caller set qty: 99` / `task total: 30`),
+m5_p3_sweep_bg_array_shape_give_wait (the E9 AoS SM-main cell — inferred give + spawn-site
+.copy() + wait-crossing + post-wait mutation; `caller: 119` / `given: 30` / `copied: 30`),
+m5_p3_sweep_mapentry_bg_escape (1/10), m5_p3_sweep_mapentry_array_escape (10/20),
+m5_p3_sweep_shape_eq_string_field (D12 pin, true/true/false — cell 2's LLVM literal-merge
+artifact documented in the WHY), m5_p3_sweep_union_readback_blocked_{array,map} (loud-fail
+pins: exit != 0 + empty stdout in BOTH modes). Every executable cell asserts dual-mode
+byte-identity + exact stdout via a shared m5_p3_sweep_assert_dual_mode helper. ALL 7 GREEN
+FIRST RUN. Full workspace suite 2246 passed / 0 failed / exit 0 (reconciles: seg-6 2236 + 3
+step-4 gate tests + 7 sweep tests). Dual-mode oracle regenerated per p2-dualmode-report.md
+§Methodology over all 466 fixtures: 379 identical / 83 skip / 2 documented DIFFs
+(model_a_intended_reorder, overlap_proof) / 2 timing NONDETs (concurrent_waits_proof,
+e8_pool_exhaustion_stress) / 0 anomalies / 0 REAL DIVERGENCES — reconciliation vs the
+post-round-3 run exact (+19 fixtures = 4 round-4 + 8 P3 map + 7 sweep; +20 identical incl. the
+3 repurposed guard fixtures ex-SKIP; report updated with the new-run row). Methodology note: a
+first sweep draft mis-bucketed runtime-nonzero-exit fixtures as SKIP (90/372 tallies); caught
+by reconciliation against the prior run's bucket math, corrected to the established
+build-fail-only SKIP semantics, and re-run in full — the corrected tallies above are the run
+of record. fmt --check exit 0; clippy clean on the new test code (pre-existing driver test
+warnings untouched, carried). Plan STATUS ticked COMPLETE with the full 10-segment summary;
+frontmatter session-id chain repaired (segs 2-9 were logged here but never appended to
+plan.md's chain — appended from this file's own trail, plus seg10). Boundary commit staged via
+explicit pathspec from `git status --porcelain` (all 10 segments' work; nothing was previously
+committed per FRAGO 004), trailer `Plan-Phase: 2026-07-03-v0-3-m5-auto-soa#3`, secret-scan
+fallback note in body per the FRAGO 004 waiver convention (fallback grep sweep run over the
+staged diff — receipts in the segment return). handoff-phase-3.md deleted as the final act.
+Carry-forwards for the boundary review enumerated in the segment return (Patrick's two
+footnotes; M3e load-flake; union plan-text falsification FRAGO candidate; bare-.copy() alias
+note; D12/(e)/MapEntry/bg-alias FRAGO-candidate classifications; error_galleries recon drift;
+step-4 verdict paperwork; pre-existing driver-test warnings; suite-count sensitivity).

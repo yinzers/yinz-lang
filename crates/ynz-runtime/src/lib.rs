@@ -286,7 +286,6 @@ unsafe fn cstr_to_str<'a>(p: *const u8) -> &'a str {
 
 extern "C" {
     fn malloc(size: usize) -> *mut core::ffi::c_void;
-    fn realloc(ptr: *mut core::ffi::c_void, new_size: usize) -> *mut core::ffi::c_void;
     fn free(ptr: *mut core::ffi::c_void);
 }
 
@@ -578,14 +577,24 @@ pub unsafe extern "C" fn ynz_siphash_str(ptr: *const u8) -> u64 {
     siphash24(std::slice::from_raw_parts(ptr, len))
 }
 
-// ── Swiss Tables map runtime (M5 P4b) ────────────────────────────────────────
+// ── Swiss Tables map runtime (M5 P4b; by-value elem_size ABI since v0.3-M5 P3) ──
 //
 // Open-addressing hash map. Each slot has:
 //   1 byte control: 0x80 = empty, 0xFE = deleted, low 7 bits of hash = present.
 //   8 bytes key (stored as i64 — int/bool/float by value, string/ptr as i64 cast).
-//   8 bytes value (stored as i64).
+//   `elem_size` bytes value, stored BY VALUE inline in one contiguous `vals`
+//   buffer of `elem_size`-byte cells (mirrors the array ABI 1:1 — no twin):
+//     - non-shape values: elem_size = 8 (i64 bits by value, or stable pointer bits),
+//     - shape values: elem_size = the shape's LLVM ABI byte size; the value's
+//       struct bytes live inline in the buffer (the map OWNS them — no heap-cell
+//       indirection, no re-set-over-key leak, no dangling stack element pointers).
 //
 // Insertion order is tracked in a separate buffer for deterministic for-loop iteration.
+// All five buffers (header/ctrl/keys/vals/order) route through `ynz_alloc`/`ynz_free`
+// so the alloc counter (`YNZ_ALLOC_COUNTER_OUTPUT`, E8 leak-parity gate) SEES every
+// map allocation: +5 counted allocs per live map, balanced in `ynz_map_drop`.
+// Growth is alloc-new + copy + free-old — never `realloc`, which is invisible to
+// the counter (FRAGO 005).
 
 const CTRL_EMPTY: u8 = 0x80;
 const CTRL_DELETED: u8 = 0xFE;
@@ -594,65 +603,31 @@ const CTRL_DELETED: u8 = 0xFE;
 pub struct YnzMap {
     ctrl: *mut u8,
     keys: *mut i64,
-    vals: *mut i64,
+    vals: *mut u8,
     insert_order: *mut i64,
     count: i64,
     capacity: i64,
     order_cap: i64,
+    elem_size: i64,
 }
 
-unsafe fn map_alloc(capacity: i64) -> *mut YnzMap {
-    let hdr = malloc(std::mem::size_of::<YnzMap>()) as *mut YnzMap;
-    if hdr.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while allocating a new map. \
-                  The program tried to create a map but the system couldn't \
-                  allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
-    let ctrl = malloc(capacity as usize) as *mut u8;
-    if ctrl.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while allocating a new map. \
-                  The program tried to create a map but the system couldn't \
-                  allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
-    let keys = malloc((capacity as usize) * 8) as *mut i64;
-    if keys.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while allocating a new map. \
-                  The program tried to create a map but the system couldn't \
-                  allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
-    let vals = malloc((capacity as usize) * 8) as *mut i64;
-    if vals.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while allocating a new map. \
-                  The program tried to create a map but the system couldn't \
-                  allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
+/// THE value-slot address derivation: `vals + idx * elem_size`. Every read and
+/// write of a value cell routes through this one helper (authoritative-derivation
+/// — no second `vals.add(...)` arithmetic anywhere in the map runtime).
+unsafe fn val_slot(map: *const YnzMap, idx: usize) -> *mut u8 {
+    (*map).vals.add(idx * (*map).elem_size as usize)
+}
+
+unsafe fn map_alloc(capacity: i64, elem_size: i64) -> *mut YnzMap {
+    // ynz_alloc aborts on OOM (Yinz programs cannot recover from OOM), so no null
+    // checks are needed; routing through it keeps all five buffers visible to the
+    // alloc counter (E8).
+    let hdr = ynz_alloc(std::mem::size_of::<YnzMap>()) as *mut YnzMap;
+    let ctrl = ynz_alloc(capacity as usize);
+    let keys = ynz_alloc((capacity as usize) * 8) as *mut i64;
+    let vals = ynz_alloc((capacity * elem_size) as usize);
     let order_cap: i64 = INITIAL_ORDER_CAP;
-    let order = malloc((order_cap as usize) * 8) as *mut i64;
-    if order.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while allocating a new map. \
-                  The program tried to create a map but the system couldn't \
-                  allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
+    let order = ynz_alloc((order_cap as usize) * 8) as *mut i64;
     std::ptr::write_bytes(ctrl, CTRL_EMPTY, capacity as usize);
     *hdr = YnzMap {
         ctrl,
@@ -662,17 +637,30 @@ unsafe fn map_alloc(capacity: i64) -> *mut YnzMap {
         count: 0,
         capacity,
         order_cap,
+        elem_size,
     };
     hdr
 }
 
-/// Allocate a new empty map with initial capacity [`INITIAL_MAP_CAPACITY`].
+/// Allocate a new empty map of `elem_size`-byte values with initial capacity
+/// [`INITIAL_MAP_CAPACITY`].
+///
+/// Aborts on `elem_size <= 0` — the compiler always passes the value type's real
+/// ABI size (≥ 1); anything else is a codegen bug, not a recoverable state.
 ///
 /// # Safety
 /// The returned pointer is valid and must be freed with [`ynz_map_drop`].
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_new() -> *mut YnzMap {
-    map_alloc(INITIAL_MAP_CAPACITY)
+pub unsafe extern "C" fn ynz_map_new(elem_size: i64) -> *mut YnzMap {
+    if elem_size <= 0 {
+        eprintln!(
+            "INTERNAL ERROR: map created with a non-positive element size \
+                  ({elem_size}). This is a compiler bug — please file an issue at \
+                  https://github.com/yinz-lang/yinz/issues with the source file attached."
+        );
+        std::process::abort();
+    }
+    map_alloc(INITIAL_MAP_CAPACITY, elem_size)
 }
 
 unsafe fn find_slot(map: *const YnzMap, hash: u64, key: i64) -> Option<usize> {
@@ -721,50 +709,26 @@ unsafe fn find_insert_slot(map: *const YnzMap, hash: u64) -> usize {
 ///
 /// # Side effects
 ///
-/// - Allocates three new arrays (ctrl, keys, vals) of `2 × capacity` slots each.
-/// - Rehashes all live entries into the new arrays.
-/// - Frees the old ctrl, keys, and vals arrays.
+/// - Allocates three new arrays (ctrl, keys, vals) of `2 × capacity` slots each
+///   (vals cells are `elem_size` bytes each), all via counted `ynz_alloc`.
+/// - Rehashes all live entries into the new arrays (value cells memcpy'd whole).
+/// - Frees the old ctrl, keys, and vals arrays via counted `ynz_free` with their
+///   true old byte sizes (ctrl = cap, keys = cap*8, vals = cap*elem_size).
 /// - Updates `map.ctrl`, `map.keys`, `map.vals`, and `map.capacity` in place.
 ///   Any previously obtained raw pointers into these arrays are INVALIDATED.
-///   The `insert_order` / `order_cap` / `count` fields are NOT modified.
-/// - Aborts the process on OOM (Yinz programs cannot recover from out-of-memory).
+///   The `insert_order` / `order_cap` / `count` / `elem_size` fields are NOT modified.
+/// - Aborts the process on OOM inside `ynz_alloc` (Yinz programs cannot recover).
 ///
 /// # Growth trigger
 ///
 /// Called by `ynz_map_set` when `count * 4 >= capacity * 3` (75% load factor).
 unsafe fn map_grow_int(map: *mut YnzMap) {
     let old_cap = (*map).capacity;
+    let elem_size = (*map).elem_size;
     let new_cap = old_cap * 2;
-    let new_ctrl = malloc(new_cap as usize) as *mut u8;
-    if new_ctrl.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while growing a map. \
-                  The program tried to insert into a map but the system couldn't \
-                  allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
-    let new_keys = malloc((new_cap as usize) * 8) as *mut i64;
-    if new_keys.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while growing a map. \
-                  The program tried to insert into a map but the system couldn't \
-                  allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
-    let new_vals = malloc((new_cap as usize) * 8) as *mut i64;
-    if new_vals.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while growing a map. \
-                  The program tried to insert into a map but the system couldn't \
-                  allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
+    let new_ctrl = ynz_alloc(new_cap as usize);
+    let new_keys = ynz_alloc((new_cap as usize) * 8) as *mut i64;
+    let new_vals = ynz_alloc((new_cap * elem_size) as usize);
     std::ptr::write_bytes(new_ctrl, CTRL_EMPTY, new_cap as usize);
 
     for i in 0..old_cap as usize {
@@ -773,7 +737,6 @@ unsafe fn map_grow_int(map: *mut YnzMap) {
             continue;
         }
         let k = *(*map).keys.add(i);
-        let v = *(*map).vals.add(i);
         let hash = ynz_siphash_i64(k);
         let h2 = (hash & 0x7f) as u8;
         let mut idx = (hash >> 7) as usize & (new_cap as usize - 1);
@@ -782,12 +745,16 @@ unsafe fn map_grow_int(map: *mut YnzMap) {
         }
         *new_ctrl.add(idx) = h2;
         *new_keys.add(idx) = k;
-        *new_vals.add(idx) = v;
+        std::ptr::copy_nonoverlapping(
+            val_slot(map, i),
+            new_vals.add(idx * elem_size as usize),
+            elem_size as usize,
+        );
     }
 
-    free((*map).ctrl as *mut core::ffi::c_void);
-    free((*map).keys as *mut core::ffi::c_void);
-    free((*map).vals as *mut core::ffi::c_void);
+    ynz_free((*map).ctrl, old_cap as usize);
+    ynz_free((*map).keys as *mut u8, (old_cap as usize) * 8);
+    ynz_free((*map).vals, (old_cap * elem_size) as usize);
     (*map).ctrl = new_ctrl;
     (*map).keys = new_keys;
     (*map).vals = new_vals;
@@ -801,37 +768,11 @@ unsafe fn map_grow_int(map: *mut YnzMap) {
 /// String key POINTERS are preserved as-is (the map stores pointers, not copies).
 unsafe fn map_grow_str(map: *mut YnzMap) {
     let old_cap = (*map).capacity;
+    let elem_size = (*map).elem_size;
     let new_cap = old_cap * 2;
-    let new_ctrl = malloc(new_cap as usize) as *mut u8;
-    if new_ctrl.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while growing a map. \
-                  The program tried to insert into a map but the system couldn't \
-                  allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
-    let new_keys = malloc((new_cap as usize) * 8) as *mut i64;
-    if new_keys.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while growing a map. \
-                  The program tried to insert into a map but the system couldn't \
-                  allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
-    let new_vals = malloc((new_cap as usize) * 8) as *mut i64;
-    if new_vals.is_null() {
-        eprintln!(
-            "RUNTIME ERROR: Out of memory while growing a map. \
-                  The program tried to insert into a map but the system couldn't \
-                  allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map."
-        );
-        std::process::abort();
-    }
+    let new_ctrl = ynz_alloc(new_cap as usize);
+    let new_keys = ynz_alloc((new_cap as usize) * 8) as *mut i64;
+    let new_vals = ynz_alloc((new_cap * elem_size) as usize);
     std::ptr::write_bytes(new_ctrl, CTRL_EMPTY, new_cap as usize);
 
     for i in 0..old_cap as usize {
@@ -840,7 +781,6 @@ unsafe fn map_grow_str(map: *mut YnzMap) {
             continue;
         }
         let k = *(*map).keys.add(i);
-        let v = *(*map).vals.add(i);
         let hash = ynz_siphash_str(k as *const u8);
         let h2 = (hash & 0x7f) as u8;
         let mut idx = (hash >> 7) as usize & (new_cap as usize - 1);
@@ -849,12 +789,16 @@ unsafe fn map_grow_str(map: *mut YnzMap) {
         }
         *new_ctrl.add(idx) = h2;
         *new_keys.add(idx) = k;
-        *new_vals.add(idx) = v;
+        std::ptr::copy_nonoverlapping(
+            val_slot(map, i),
+            new_vals.add(idx * elem_size as usize),
+            elem_size as usize,
+        );
     }
 
-    free((*map).ctrl as *mut core::ffi::c_void);
-    free((*map).keys as *mut core::ffi::c_void);
-    free((*map).vals as *mut core::ffi::c_void);
+    ynz_free((*map).ctrl, old_cap as usize);
+    ynz_free((*map).keys as *mut u8, (old_cap as usize) * 8);
+    ynz_free((*map).vals, (old_cap * elem_size) as usize);
     (*map).ctrl = new_ctrl;
     (*map).keys = new_keys;
     (*map).vals = new_vals;
@@ -863,20 +807,14 @@ unsafe fn map_grow_str(map: *mut YnzMap) {
 
 unsafe fn order_push(map: *mut YnzMap, key: i64) {
     if (*map).count >= (*map).order_cap {
-        let new_cap = (*map).order_cap * 2;
-        let new_order = realloc(
-            (*map).insert_order as *mut core::ffi::c_void,
-            (new_cap as usize) * 8,
-        ) as *mut i64;
-        if new_order.is_null() {
-            eprintln!(
-                "RUNTIME ERROR: Out of memory while growing a map's insertion-order tracking. \
-                      The program tried to insert into a map but the system couldn't \
-                      allocate more memory. Yinz aborts rather than continuing with \
-                      an inconsistent map."
-            );
-            std::process::abort();
-        }
+        let old_cap = (*map).order_cap;
+        let new_cap = old_cap * 2;
+        // Counted growth path: alloc-new + copy + free-old. NOT realloc — the alloc
+        // counter instruments ynz_alloc/ynz_free only, and a raw realloc would make
+        // E8's parity accounting blind to the grown buffer (FRAGO 005).
+        let new_order = ynz_alloc((new_cap as usize) * 8) as *mut i64;
+        std::ptr::copy_nonoverlapping((*map).insert_order, new_order, (*map).count as usize);
+        ynz_free((*map).insert_order as *mut u8, (old_cap as usize) * 8);
         (*map).insert_order = new_order;
         (*map).order_cap = new_cap;
     }
@@ -898,29 +836,45 @@ unsafe fn cstr_eq_raw(a: *const u8, b: *const u8) -> bool {
     }
 }
 
-/// Get a value by i64 key. Writes `[has_value, value]` into `out`.
+/// Get a value by i64 key: copies `elem_size` bytes into `out` and returns 1 on
+/// hit; zeroes `out` and returns 0 on miss.
+///
+/// The has-flag is the RETURN VALUE (not part of an out-struct) because the value
+/// width varies per map — a fixed `[i64; 2]` envelope cannot carry a variable-width
+/// value. Codegen re-packs `{flag, value}` maybe envelopes at its choke point. A
+/// miss zeroes `out` so an unconditionally-loaded staging value is a deterministic
+/// 0, matching `ynz_array_get`'s contract.
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
-/// - `out` must point to a writable `[i64; 2]` array.
+/// - `out` must be a writable pointer valid for `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_get(map: *const YnzMap, key: i64, out: *mut [i64; 2]) {
+pub unsafe extern "C" fn ynz_map_get(map: *const YnzMap, key: i64, out: *mut u8) -> i64 {
+    let elem_size = (*map).elem_size;
     let hash = ynz_siphash_i64(key);
     match find_slot(map, hash, key) {
-        Some(idx) => *out = [1, *(*map).vals.add(idx)],
-        None => *out = [0, 0],
+        Some(idx) => {
+            std::ptr::copy_nonoverlapping(val_slot(map, idx), out, elem_size as usize);
+            1
+        }
+        None => {
+            std::ptr::write_bytes(out, 0, elem_size as usize);
+            0
+        }
     }
 }
 
-/// Get a value by string key (key is a pointer to null-terminated bytes, passed as i64 cast).
-/// Writes `[has_value, value]` into `out`.
+/// Get a value by string key (pointer to null-terminated bytes): copies `elem_size`
+/// bytes into `out` and returns 1 on hit; zeroes `out` and returns 0 on miss.
+/// Same flag-return contract as [`ynz_map_get`].
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
 /// - `key` must be a non-null pointer to a valid null-terminated byte string.
-/// - `out` must point to a writable `[i64; 2]` array.
+/// - `out` must be a writable pointer valid for `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out: *mut [i64; 2]) {
+pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out: *mut u8) -> i64 {
+    let elem_size = (*map).elem_size;
     let cap = (*map).capacity as usize;
     for i in 0..cap {
         let ctrl = *(*map).ctrl.add(i);
@@ -929,51 +883,63 @@ pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out
         }
         let stored_ptr = *(*map).keys.add(i) as *const u8;
         if cstr_eq_raw(stored_ptr, key) {
-            *out = [1, *(*map).vals.add(i)];
-            return;
+            std::ptr::copy_nonoverlapping(val_slot(map, i), out, elem_size as usize);
+            return 1;
         }
     }
-    *out = [0, 0];
+    std::ptr::write_bytes(out, 0, elem_size as usize);
+    0
 }
 
-/// Set a key-value pair with an i64 key.
+/// Set a key-value pair with an i64 key: copies `elem_size` bytes from `src` into
+/// the value cell (overwrite on hit, insert on miss).
+///
+/// The bytes are copied BEFORE this call returns — `src` may point at a stack
+/// staging slot or struct alloca that dies immediately afterwards; the map never
+/// retains the source pointer.
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
+/// - `src` must be valid for `elem_size` bytes.
 /// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
 ///   obtained slot pointers into the map's internal arrays.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, value: i64) {
+pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, src: *const u8) {
     if (*map).count * 4 >= (*map).capacity * 3 {
         map_grow_int(map);
     }
+    let elem_size = (*map).elem_size;
     let hash = ynz_siphash_i64(key);
     if let Some(idx) = find_slot(map, hash, key) {
-        *(*map).vals.add(idx) = value;
+        std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
         return;
     }
     let h2 = (hash & 0x7f) as u8;
     let idx = find_insert_slot(map, hash);
     *(*map).ctrl.add(idx) = h2;
     *(*map).keys.add(idx) = key;
-    *(*map).vals.add(idx) = value;
+    std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
     order_push(map, key);
     (*map).count += 1;
 }
 
-/// Set a key-value pair with a string key (pointer to null-terminated bytes).
+/// Set a key-value pair with a string key (pointer to null-terminated bytes):
+/// copies `elem_size` bytes from `src` into the value cell (overwrite on hit,
+/// insert on miss). Same copy-before-return contract as [`ynz_map_set`].
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
 /// - `key` must be a non-null pointer to a valid null-terminated byte string that
 ///   remains valid for the lifetime of the map (the map stores the pointer, not a copy).
+/// - `src` must be valid for `elem_size` bytes.
 /// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
 ///   obtained slot pointers into the map's internal arrays.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, value: i64) {
+pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, src: *const u8) {
     if (*map).count * 4 >= (*map).capacity * 3 {
         map_grow_str(map);
     }
+    let elem_size = (*map).elem_size;
     let cap = (*map).capacity as usize;
     for i in 0..cap {
         let ctrl = *(*map).ctrl.add(i);
@@ -982,7 +948,7 @@ pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, value
         }
         let stored = *(*map).keys.add(i) as *const u8;
         if cstr_eq_raw(stored, key) {
-            *(*map).vals.add(i) = value;
+            std::ptr::copy_nonoverlapping(src, val_slot(map, i), elem_size as usize);
             return;
         }
     }
@@ -1004,7 +970,7 @@ pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, value
     }
     *(*map).ctrl.add(idx) = h2;
     *(*map).keys.add(idx) = key as i64;
-    *(*map).vals.add(idx) = value;
+    std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
     order_push(map, key as i64);
     (*map).count += 1;
 }
@@ -1031,36 +997,62 @@ pub unsafe extern "C" fn ynz_map_has(map: *const YnzMap, key: i64) -> i64 {
     }
 }
 
-/// Get the entry at insertion-order position `pos`. Writes `[has, key, value]` into `out`.
+/// Get the entry at insertion-order position `pos`: writes the key into `key_out`,
+/// copies `elem_size` value bytes into `val_out`, and returns the has-flag (1 on
+/// success; 0 on OOB with `*key_out = 0` and `val_out` zeroed).
+///
+/// The value lookup DELEGATES to [`ynz_map_get`] — one slot-scan choke point, no
+/// second derivation of the find logic.
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
-/// - `out` must point to a writable `[i64; 3]` array.
+/// - `key_out` must point to a writable i64; `val_out` must be a writable pointer
+///   valid for `elem_size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_iter_get(map: *const YnzMap, pos: i64, out: *mut [i64; 3]) {
+pub unsafe extern "C" fn ynz_map_iter_get(
+    map: *const YnzMap,
+    pos: i64,
+    key_out: *mut i64,
+    val_out: *mut u8,
+) -> i64 {
     if pos < 0 || pos >= (*map).count {
-        *out = [0, 0, 0];
-        return;
+        *key_out = 0;
+        std::ptr::write_bytes(val_out, 0, (*map).elem_size as usize);
+        return 0;
     }
     let key = *(*map).insert_order.add(pos as usize);
-    let mut pair = [0i64; 2];
-    ynz_map_get(map, key, &mut pair);
-    *out = [1, key, pair[1]];
+    let flag = ynz_map_get(map, key, val_out);
+    *key_out = key;
+    flag
 }
 
-/// Get the entry at insertion-order position `pos` for string-keyed maps.
-/// Writes `[has, key_ptr_as_i64, value]` into `out`.
+/// Get the entry at insertion-order position `pos` for string-keyed maps: writes
+/// the key POINTER (cast to i64) into `key_out`, copies `elem_size` value bytes
+/// into `val_out`, and returns the has-flag.
+///
+/// The slot scan compares stored key bits by pointer IDENTITY (`keys[i] == key_ptr`)
+/// — the insertion-order buffer records the exact pointer stored in the slot, so
+/// identity is sufficient AND cheaper than a content compare. Do NOT switch this
+/// to `cstr_eq_raw`.
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
-/// - `out` must point to a writable `[i64; 3]` array.
-/// - The `key_ptr_as_i64` written into `out[1]` is a pointer cast to i64; callers
-///   must cast it back to `*const u8` before dereferencing.
+/// - `key_out` must point to a writable i64; `val_out` must be a writable pointer
+///   valid for `elem_size` bytes.
+/// - The key written into `*key_out` is a pointer cast to i64; callers must cast
+///   it back to `*const u8` before dereferencing.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_map_iter_get_str(map: *const YnzMap, pos: i64, out: *mut [i64; 3]) {
+pub unsafe extern "C" fn ynz_map_iter_get_str(
+    map: *const YnzMap,
+    pos: i64,
+    key_out: *mut i64,
+    val_out: *mut u8,
+) -> i64 {
+    let elem_size = (*map).elem_size;
     if pos < 0 || pos >= (*map).count {
-        *out = [0, 0, 0];
-        return;
+        *key_out = 0;
+        std::ptr::write_bytes(val_out, 0, elem_size as usize);
+        return 0;
     }
     let key_ptr = *(*map).insert_order.add(pos as usize);
     let cap = (*map).capacity as usize;
@@ -1070,25 +1062,36 @@ pub unsafe extern "C" fn ynz_map_iter_get_str(map: *const YnzMap, pos: i64, out:
             continue;
         }
         if *(*map).keys.add(i) == key_ptr {
-            *out = [1, key_ptr, *(*map).vals.add(i)];
-            return;
+            std::ptr::copy_nonoverlapping(val_slot(map, i), val_out, elem_size as usize);
+            *key_out = key_ptr;
+            return 1;
         }
     }
-    *out = [0, 0, 0];
+    *key_out = 0;
+    std::ptr::write_bytes(val_out, 0, elem_size as usize);
+    0
 }
 
-/// Free all memory associated with the map.
+/// Free all memory associated with the map: five counted `ynz_free` calls with the
+/// buffers' true byte sizes, balancing `map_alloc`'s five counted `ynz_alloc`s (E8).
+/// Element-blind by design (value cells are freed with the buffer, not per-cell —
+/// same D6 contract as `ynz_array_drop`).
 ///
 /// # Safety
 /// `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
 /// After this call, `map` is a dangling pointer and must not be used.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_map_drop(map: *mut YnzMap) {
-    free((*map).ctrl as *mut core::ffi::c_void);
-    free((*map).keys as *mut core::ffi::c_void);
-    free((*map).vals as *mut core::ffi::c_void);
-    free((*map).insert_order as *mut core::ffi::c_void);
-    free(map as *mut core::ffi::c_void);
+    let cap = (*map).capacity;
+    let elem_size = (*map).elem_size;
+    ynz_free((*map).ctrl, cap as usize);
+    ynz_free((*map).keys as *mut u8, (cap as usize) * 8);
+    ynz_free((*map).vals, (cap * elem_size) as usize);
+    ynz_free(
+        (*map).insert_order as *mut u8,
+        ((*map).order_cap as usize) * 8,
+    );
+    ynz_free(map as *mut u8, std::mem::size_of::<YnzMap>());
 }
 
 // ── Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) ──────────
