@@ -1,10 +1,10 @@
 ---
 name: "IMP-collections"
-description: "Design rationale for Yinz's collection types (fixed<T> vs array<T>, map<K,V>), the no-method-chaining rule, and collection method naming conventions."
+description: "Design rationale for Yinz's collection types (fixed<T> vs array<T>, map<K,V>), the no-method-chaining rule, collection method naming conventions, by-value inline array element storage, and the auto-SoA layout transform (both v0.3-M5)."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-04"
 status: "active"
 author: "patrick"
 metadata:
@@ -444,30 +444,230 @@ Why hybrid (not pure-silent or pure-suggestion):
 - **Pure-suggestion** (lint-only, no auto-promotion) makes the user fix every instance manually before getting the perf win — punishes laziness, slow path stays the default until rewrite.
 - **Hybrid** gets all three — perf is automatic, the inference is visible (muted hint), the explicit form is taught (lint suggestion).
 
-For auto-promotions where the explicit form has NO typeable syntax (e.g., auto-SoA, where there's no `soa array<T>` keyword in v0.3), only the lint-suggestion surface applies — the muted-hint protocol requires click-to-make-explicit to produce real Yinz syntax. See [`docs/internal/scratchpad/SCRATCH-future-auto-soa.md`](../scratchpad/SCRATCH-future-auto-soa.md) and [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) "Two Surfaces for the Same Decision" section.
+For auto-promotions where the explicit form has NO typeable syntax (e.g., auto-SoA, where there's no `soa array<T>` keyword in v0.3), only the lint-suggestion surface applies — the muted-hint protocol requires click-to-make-explicit to produce real Yinz syntax. See ["Auto-SoA layout (v0.3-M5)"](#auto-soa-layout-v03-m5) below and [`.claude/rules/inference.md`](../../../.claude/rules/inference.md) "Two Surfaces for the Same Decision" section.
 
 ---
 
-## Auto-promotion: `array<T>` → `set<T>` (membership-only usage)
+## Array element storage — by-value inline (v0.3-M5)
 
-When the compiler proves an `array<T>` is used ONLY for membership — `.contains()` / `.add()` / `.remove()` / `.size`, with NO indexing, NO reliance on element order, and NO reliance on duplicate storage — the array is doing a set's job at an array's O(n²) cost. Promoting it to `set<T>` storage takes membership + uniqueness from O(n²) → O(n). Real perf win.
+`array<Shape>` elements are stored **by value, inline** in the array's heap buffer — variable slot
+width = `sizeof(elem)`, exactly like `array<int>` stores i64 values inline. Shipped in v0.3-M5
+(plan `2026-07-03-v0-3-m5-auto-soa`, Phases 2–3), replacing the original uniform-8-byte-slot
+representation that stored shape elements as pointers. Graduated here from
+`SCRATCH-future-array-by-value-element-storage.md` (now a pointer stub).
 
-Surfaces (same hybrid model as `array → fixed`, with one key difference):
-- **Codegen auto-promotion**: when the proof holds, emit `set<T>` storage. Because the proof needs whole-program escape/usage analysis, it's gated to `--release` (like auto-SoA), not every dev build.
-- **Tier 3 lint suggestion (primary surface)**: `prefer-set-for-membership` — recommends declaring `set<T>` explicitly. This is the *main* surface here, because the real fix is "you reached for the wrong type."
-- **Muted IDE hint**: `set<T>` IS typeable, so the protocol applies — click-to-make-explicit rewrites the declaration to `set<T>`.
+### The forcing bug
 
-**Why the proof is stricter than `array → fixed`**: `fixed` supports every `array` operation except growth, so promoting is transparent when growth is absent. `set` drops indexing, positional order, AND duplicate storage — so the compiler must prove NONE of those three are observed before it can swap. When it can't prove it, the lint still fires (teaching) but the codegen swap does not (safety).
+The old representation stored a shape element as a pointer into the constructing function's stack
+frame. When an `array<Shape>` crossed a `wait`, the suspended state machine freed its stack and the
+element pointers dangled — a silent miscompile printing stack garbage. The v0.3-M3a interim guard
+(`ArrayShapeRuntimeFieldWithWait`) turned the silent miscompile into a loud compile error; the
+by-value representation fixes the root cause, and the guard was **lifted in v0.3-M5 Phase 3** (see
+[`IMP-concurrency.md`](IMP-concurrency.md) for exactly what the lift removed). The array now OWNS
+its element bytes: the heap buffer survives suspension, so the shapes do too, regardless of
+literal-vs-runtime field values. The bug was latent even without suspension — the array never owned
+what it pointed at (a GR3/GR8 violation), it just usually got away with it.
 
-### Why `fixed<T>` is NOT blanket-promoted to `set<T>`
+### One allocation per buffer (D2)
 
-The same membership-only *usage* analysis applies to `fixed`, but promoting `fixed → set` is **usually a pessimization**, so the compiler does NOT do it by default. Named cost: `fixed` is small + stack-allocated + cache-hot; a `set` is a heap-allocated hash table. For the small N that `fixed` is built for, a linear scan over a contiguous stack buffer **beats** a hash lookup (no hashing overhead, no pointer chasing, no heap allocation). Per the auto-promotion rule, we only auto-promote when the stricter form is *unambiguously* better — `fixed → set` fails that test (it depends on size).
+The whole array is a single contiguous allocation of `cap × elem_size` bytes. The SoA layout
+variant (next section) is the SAME single allocation, segmented per field, with segment offsets
+computed at compile time from `cap ×` per-field sizes — a layout variant of one representation,
+never a second substrate (the twin-substrate drift class is eliminated by construction).
 
-What the compiler does instead for a membership-checked `fixed`:
-- **Compile-time-constant contents** (`fixed<int> = [1, 5, 10, 42]` used for `.contains()`) → a **perfect-hash or branchless comparison / jump table**, computed at compile time, **zero heap** — strictly better than a runtime `set`. (Ties into the perfect-hash tier of map's four-tier hashing.)
-- **Genuinely large `fixed` + heavy membership** → a `set` *could* win, but that's a size-threshold heuristic, not a clean promotion; flagged as a possible `--release` analysis, not a default.
+**Rejected alternatives:**
+- **Per-element heap cells** (the scratch analysis's Option B): one allocation per element violates
+  GR8 (zero-cost), fragments cache lines, multiplies alloc=free accounting, and immediately forces
+  `ynz_array_drop` to become element-aware — the exact leak-hazard class an earlier M3a fix round
+  hit.
+- **LLVM module globals**: stable storage for compile-time-literal-field shapes only — the partial
+  fix whose runtime-field hole WAS the forcing bug.
 
-So: `array → set` is a real promotion (arrays are heap + variable-size already, so set storage is a lateral-or-better move); `fixed → set` is deliberately declined in favor of zero-alloc membership strategies for the small/constant fixeds that are `fixed`'s whole reason to exist.
+### Element-blind drop, parity-gated (D6)
+
+`ynz_array_drop` stays element-blind, matching pre-M5 semantics. The migration was gated by an
+alloc=free parity check (`YNZ_ALLOC_COUNTER_OUTPUT`) against the pre-migration baseline, with a
+buffer-visibility entry criterion so the gate could not pass vacuously — it ran green, proving no
+NEW leak class vs the pointer representation. **Rejected:** element-aware drop now — YAGNI until
+the ownership model's drop story adds guaranteed heap-owned-field freeing (plan
+`2026-07-03-v0-3-m5-auto-soa` Future Requirements #6). A contingency loud-reject
+(`array<Shape-with-heap-fields>` typeck error) was armed for a parity RED and was not needed.
+
+### `contains` on `array<Shape>` = field-wise value equality (D12)
+
+By-value storage has no pointer-identity substrate, so the migration forced a semantics pick.
+Value equality is the golden-rules-consistent one: `roster.contains(pirate)` reads as content
+membership (GR2), matches every primitive cell's behavior, and matches the non-OOP
+shapes-are-data model. Implemented as per-field GEP compares (`shape_value_eq`,
+`crates/ynz-codegen/src/emit.rs`).
+
+**Rejected alternatives:**
+- **Pointer identity**: has no by-value analogue — there is no stable element pointer to compare.
+- **Whole-element memcmp**: compares garbage padding bytes — both natural alignment padding and
+  M4's false-sharing cache-line pads. Per-field compares are the only layout-honest form; for
+  padded shapes the wrapper GEP at offset 0 is layout-correct.
+
+**Pointer-typed fields (string, nested shape/collection) compare by identity** — ratified as final
+for M5 after the E8-class review. Deep value equality for those fields is a future extension, not
+an M5 gap-fix.
+
+### Field-assign = copy-on-persist snapshot semantics (D13)
+
+Storing a shape (or `maybe`) value into ANY persist surface — a shape field, a map value, an array
+element, a `background` spawn descriptor — **snapshots the value's bytes at the assignment**
+(counted heap cell / runtime memcpy). The pre-M5 pointer representation ALIASED: a later mutation
+of the source stayed visible through the stored reference. By-value storage has no stable pointer
+to alias, so the snapshot is forced — and it is consistent with D12's value-semantics direction
+(shapes are data, not identities).
+
+**Teaching note (the single most surprising divergence for the target audience):** TypeScript/JS
+developers expect aliasing here — in TS, objects are references, so push-then-mutate changes what
+the array sees. In Yinz, the collection stores a snapshot taken at the assignment:
+
+```ynz
+shape Position {
+  x: number
+  y: number
+}
+
+let path: array<Position> = []
+let p: Position = { x: 1, y: 2 }
+path.add(p)
+p.x = 99
+// The stored element still has x == 1 — .add() snapshotted p's bytes at the call.
+// In TypeScript, path[0] would alias p and show x == 99.
+// To change the stored element, write through the collection: path[0] = { x: 99, y: 2 }
+```
+
+The user spec ([`REF-collections.md`](../../reference/REF-collections.md)) must keep carrying this
+in HS-grad wording — it is a spec callout, never a silent divergence.
+
+### FFI suppression check — documented vacuous check (D7)
+
+The "no FFI export" admission criterion (roadmap-mandated for the SoA variant) is **vacuously true
+today** — FFI is v2+. The check is kept as a named line in the admission criteria rather than
+deleted and re-invented at v2. Same posture as the serialization note below.
+
+### Benchmark force-mode is harness-only (D8)
+
+`YNZ_SOA_FORCE` is an internal, test-only env var (mirrors the `YNZ_NO_AUTO_PARALLEL` idiom) used
+by the calibration harness for A/B layout forcing. It is **never user-facing syntax** — the locked
+design has no source-level opt-in/opt-out for layout in v0.3.
+
+### Serialization forward-compatibility (E10)
+
+Layout metadata is exposed as a real, tested struct — `LayoutDecision`
+(`crates/ynz-typeck/src/soa.rs`), consumed by the Tier 3 lint hover, so it exists as exercised
+code, not prose. v0.8's compile-time serializer codegen (per
+[`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 6) reconstructs
+unified values from either layout by reading it: per-field segment offsets are computable from
+`cap ×` field sizes. **No roundtrip test exists until v0.8** — it is vacuous until a serializer
+exists (recorded plan decision; the roadmap's original roundtrip assertion was reframed).
+
+---
+
+## Auto-SoA layout (v0.3-M5)
+
+When admission criteria hold, the compiler stores a qualifying `array<Shape>` in Struct-of-Arrays
+(SoA) layout — per-field segments instead of whole-element slots — inside the SAME single
+allocation as the by-value representation above (D2). Zero syntax change; byte-identical program
+output in both scheduling modes. Shipped in v0.3-M5 (plan `2026-07-03-v0-3-m5-auto-soa`, Phases
+4–5), riding the by-value substrate. Graduated here from `SCRATCH-future-auto-soa.md` (now a
+pointer stub). *(Terminology: "Struct-of-Arrays"/"SoA" is the engineering term of art and is fine
+in this internal doc; ALL user-facing text says "stored as separate per-field arrays" — see D9
+below.)*
+
+### Admission criteria (D3, D4, D5)
+
+An array is SoA-admitted only when ALL hold; any failure declines safely to the AoS baseline:
+
+1. **Compile-time-provable length > `SOA_SIZE_THRESHOLD` (64) and NO growth ops** (`.add()`/push
+   anywhere on the binding declines) — D3. Growth under segmented layout forces a per-segment
+   re-layout on every realloc: real cost, zero proven demand. The provable-length rule keeps the
+   "length > threshold at the analysis-time proof point" criterion honest instead of guessing
+   runtime sizes. **Rejected:** runtime-length admission (revisit: FR #5, if PGO/adaptive layout
+   ever lands) and grown-array admission (FR #4).
+2. **Escape-decline** — an array passed as an argument, returned, stored into another value, or
+   crossing a module boundary is DECLINED (the analysis cannot see all accesses; a
+   partial-visibility layout decision is the silent-wrong class) — D4. The shape-level `lend self`
+   method filter is retained as defense-in-depth on top; it becomes load-bearing when
+   cross-function propagation lands (FR #3). **Rejected:** cross-function propagation in M5 —
+   interprocedural field-access summaries are their own analysis.
+3. **≤ 2 fields in the UNION of fields accessed across ALL loops over the array** in the owning
+   function; ≥ 3 declines — D5. **Rejected:** per-loop scoring — conflicting per-loop layouts are
+   unimplementable (one array has one layout). Revisit: FR #9.
+4. **No FFI export** — vacuously true today (D7, previous section).
+
+### One layout authority — padding wins (E3, D11)
+
+Both layout transforms (M4 false-sharing padding and SoA) are resolved by ONE authoritative
+source — the layout-decisions query producing `LayoutDecisions`
+(`crates/ynz-typeck/src/soa.rs`) — consumed by every codegen path, never re-derived (per
+[`.claude/rules/authoritative-derivation.md`](../../../.claude/rules/authoritative-derivation.md);
+the twin-derivation class shipped silent miscompiles four milestones running). When a shape is
+simultaneously cross-thread-padded AND an SoA candidate, the authority resolves to
+**padding-only** (D11): correctness under false sharing outranks cache-locality perf, and a
+cross-thread array is outside SoA's provable-single-thread model anyway (D4 would independently
+decline it). A byte-layout-asserting both-candidate fixture locks the precedence.
+
+### Kernel mode: SoA is disabled under `--kernel` (D1)
+
+Mirrors M4 padding's gate idiom (one predicate, same dual-mode testing story). Kernel mode has
+zero real programs today; divergent kernel×layout states would multiply the fixture matrix for no
+user. Revisit: FR #7.
+
+### Teaching surface — Tier 3 lint only, no muted hint (D9)
+
+Auto-SoA is the canonical "no typeable explicit form" auto-promotion
+([`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)): **Tier 3 lint
+YES, muted hint NO** — there is no `soa array<T>` syntax for click-to-make-explicit to produce.
+The lint rule is `array-using-soa-layout` (`registry/features.toml`), firing on the array
+declaration. The *identifier* is roadmap-locked registry-internal convention (the "soa" acronym is
+fine there); ALL user-facing hover text is jargon-free — "stored as separate per-field arrays",
+never "struct"/"Struct-of-Arrays" — and is mechanically gated by
+`no_banned_jargon_in_lint_rule_templates` in `crates/ynz-diagnostics/tests/jargon_audit.rs`, which
+audits every `[[lint_rule]]` entry's template text. The hover's WHY cites both honest measurements
+below, never a generic claim. The DAP debugger unified-view over SoA storage is deferred
+(`[[deferred_tooling_feature]] dap-soa-unified-view` — zero DWARF substrate exists; FR #1).
+
+### Honest performance provenance (E14)
+
+The correctness win is unconditional: byte-identical dual-mode output at every measured point, all
+checksum/IR gates green, on the one elem_size-aware representation. The performance claim carries
+a hard caveat, with both measured results stated separately and **never conflated**
+(provenance: [`soa-threshold-raw-2026-07-04.md`](../../../crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md),
+"Step 3 calibration verdict"):
+
+- **Shipped O0 binaries** (`ynz build` emits at OptimizationLevel::None with zero LLVM pass
+  pipeline): net SoA/AoS ratios **1.00–1.18** at every N in {8..4096} — no crossover anywhere;
+  9 of 10 points trend 4–18% slower with N=16 at parity (0.997), each individually below the ~15%
+  noise floor. Net effect ≈ **1.0x — no detectable benefit**.
+- **Identical generated IR under `opt-18 -O2`** (diagnostic, N=4096): SoA wins ≈ **3.3x** net of
+  spawn (10.77 ms AoS vs 3.29 ms SoA), consistent with the 4x theoretical bandwidth edge for
+  2-of-8 hot fields. The 10-40x-class win is real and IR-confirmed but lives entirely in an
+  optimization pipeline shipped binaries never run.
+
+`SOA_SIZE_THRESHOLD = 64` therefore ships as a **documented conservative default, NOT a
+crossover-calibrated constant** — there is no O0 crossover to calibrate against, and the honest
+verdict beats a derived number wearing unearned precision.
+
+Two identified paths toward realizing the win in shipped binaries, both recorded in plan
+`2026-07-03-v0-3-m5-auto-soa`'s Future Requirements (in prose by FR number — the plan directory
+moves buckets on completion):
+
+- **FR #15 — selective hot-field-only element materialization**: current codegen gathers ALL
+  declared fields per element access, ignoring the analysis's already-computed hot-field set; a
+  selective gather is the directly perf-relevant, independently-actionable-at-O0 fix (requires
+  re-auditing every full-element consumer, so it is its own session, evaluated alongside any
+  optimization-pipeline milestone).
+- **FR #14 — stale-runtime-archive ABI-check footgun**: the driver embeds
+  `target/{profile}/libynz_runtime.a` with no ABI/version check, so a stale archive silently
+  miscompiles by resolving old-signature symbols by name — an operational guard until the
+  versioned-symbol fix lands (it burned a full Phase 6 diagnosis round).
+
+The optimizer-pipeline dependency itself (risk E14 / FR #2's revisit trigger) is the third,
+larger-scope lever: the moment shipped builds run an LLVM pass pipeline, the measured -O2 win
+becomes the shipped win and the threshold gets re-derived from real crossover data.
 
 ---
 

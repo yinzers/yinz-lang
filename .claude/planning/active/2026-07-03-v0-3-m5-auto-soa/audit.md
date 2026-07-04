@@ -2551,3 +2551,321 @@ Per no-duct-tape's cost-asymmetry logic, spinning a third fix-round + full 5-rev
 two reviewer-acknowledged cosmetic items would itself be the over-engineering the ceiling exists to
 stop. **Accepted as a floor-pinned residual, not fixed this round** — named here per "no silent caps"
 rather than silently dropped. Boundary commit proceeds.
+
+## FRAGO 021 — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (deviation-judge classified JUSTIFIED; risk-neutral, mechanical, LOW; auto-apply + log)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 7, segment 1 (mid-phase)
+Trigger:   ¶Invariants → Teaching claimed the SoA lint hover is "gated by jargon_audit.rs" — a
+           claim D9 itself had already flagged as UNVERIFIED at plan time, mandating Phase 7 step 1
+           re-verify it before relying on it. The executor's re-verify found the claim false:
+           `jargon_audit.rs` audits diagnostic-site strings, LSP messages, CLI strings, and
+           deferred-feature/muted-hint-domain fields, but has NEVER audited `[[lint_rule]]`
+           template/description text — a pre-existing gap (M4's two lint rules were never gated
+           either), not introduced by this milestone. Deviation-judge verdict: JUSTIFIED and
+           in-scope for Phase 7 (the Teaching phase) to close now — the fix (a generic
+           `no_banned_jargon_in_lint_rule_templates` test covering ALL `[[lint_rule]]` entries) is
+           the authoritative-derivation-consistent move (one canonical audit, not a twin scoped only
+           to the new rule); deliberately excluding M4's pre-existing rules would itself be the
+           anti-pattern (a parallel/partial audit surface).
+Risk:      LOW, mechanical — test-only addition, zero runtime/codegen behavior change, mirrors
+           jargon_audit.rs's existing per-registry-kind pattern. No Floor-B concern.
+Changes (plan.md — applied by the Phase 7 segment-2 executor, not the conductor directly):
+  - Phase 7 step 1 (plan.md): add a sub-step — extend `jargon_audit.rs` with a
+    `no_banned_jargon_in_lint_rule_templates` test that audits every `[[lint_rule]]` entry's
+    template/description text in `registry/features.toml` (covering M4's `cross-thread-fields-not-
+    padded`/`prefer-yielding-sleep` AND M5's new `array-using-soa-layout`), so the Teaching
+    invariant's "gated by jargon_audit.rs" claim becomes actually true rather than aspirational.
+  - ¶Invariants → Teaching: no wording change needed (the claim was always meant to be true; this
+    FRAGO makes it so rather than rewriting the claim to admit a gap).
+Unchanged: everything else in Phase 7; M4's lint rules' own behavior (only their TEXT gets audited,
+           not modified, unless the new test finds an actual violation — if so, that's a SEPARATE
+           finding to surface, not silently fixed under this FRAGO's cover).
+Override:  N/A — risk-neutral, mechanical.
+
+## FRAGO 022 — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (deviation-judge classified JUSTIFIED; risk-neutral typo correction; auto-apply + log)
+Base:      2026-07-03-v0-3-m5-auto-soa @ Phase 7, segment 1 (mid-phase)
+Trigger:   Phase 7 step 5's docs-graduation text lists the "Auto-SoA layout" IMP-collections
+           section's decisions as "D1/D3/D4/D5/D9/D10/D11" — but D10 (plan.md Recorded Decisions) is
+           the Fable-executor-model-dispatch decision (¶4/¶5 Sustainment), categorically unrelated to
+           SoA/array design. Deviation-judge cross-checked the full D1-D13 ledger against BOTH
+           step-5 docs-graduation lists (by-value: D2/D6/D7/D8/D12/D13; SoA minus D10:
+           D1/D3/D4/D5/D9/D11) and confirmed all 12 real design decisions are already covered
+           exactly once without D10 — it is pure surplus, not a miscite standing in for an omitted
+           decision. The segment-1 executor correctly declined to import D10's content into
+           IMP-collections.md and flagged the typo rather than silently working around it.
+Risk:      N/A — risk-neutral, a one-line text correction.
+Changes (plan.md — applied by the Phase 7 segment-2 executor):
+  - Phase 7 step 5 (plan.md): correct the Auto-SoA section's decision list from
+    "D1/D3/D4/D5/D9/D10/D11" to "D1/D3/D4/D5/D9/D11" (drop D10).
+Unchanged: the by-value section's decision list (D2/D6/D7/D8/D12/D13, already correct); everything
+           else in Phase 7.
+Override:  N/A — risk-neutral.
+
+## Session log — 2026-07-04 — session-id: phase7-executor-2026-07-04-m5-seg2
+Phase 7 segment 2 (resume from segment 1's PARTIAL at `phase-7/step-2`). First actions: applied
+the two conductor-classified, pre-authorized plan-text amendments (executor applies, per charter):
+- **FRAGO 021 applied** — Phase 7 step 1 gains the `no_banned_jargon_in_lint_rule_templates`
+  sub-step (audit EVERY `[[lint_rule]]` entry's description/what/what-instead/why template text;
+  M4's two rules + M5's `array-using-soa-layout`).
+- **FRAGO 022 applied** — Phase 7 step 5's docs-graduation decision lists made explicit with D10
+  dropped from the Auto-SoA set (by-value: D2/D6/D7/D8/D12/D13; Auto-SoA: D1/D3/D4/D5/D9/D11).
+  Application note: the literal erroneous string "D1/D3/D4/D5/D9/D10/D11" named by FRAGO 022 does
+  not appear anywhere in plan.md (verified by grep — plan.md's step 5 carried only the unenumerated
+  word "decisions"; the erroneous list lived in segment 1's handoff/dispatch text). The FRAGO's
+  corrected END-STATE was applied by making the lists explicit in step 5; no other sibling
+  occurrence of the wrong list exists in plan.md (whole-plan grep clean).
+Session-id appended to plan.md frontmatter in this same action. Segment work (step C) follows;
+this entry is extended at segment close.
+Segment close (same session): PARTIAL at `phase-7/step-4` (context-budget checkpoint at the
+step-2/step-4 seam; tree fully green-building — cargo check/clippy/fmt clean, no honored-RED, no
+orthogonal reds). Landed this segment: (1) FRAGO 021's sub-step for real —
+`no_banned_jargon_in_lint_rule_templates` in `crates/ynz-diagnostics/tests/jargon_audit.rs`; M4's
+rules pass clean (no deviation); the test caught "either way" (banned word `Either`) in M5's OWN
+seg-1 template — reworded to "in both layouts" in registry/features.toml (own-milestone text,
+in-scope). (2) Step 2 complete: `soa::layout_lints` pure builder + `ARRAY_USING_SOA_LAYOUT`
+(reads the layout authority + candidates only — no re-derivation), non-salsa wrapper
+`queries::soa_layout_lints`, merged at all three consumer seams (codegen_query, LSP
+run_and_publish_diagnostics, --json collect_diagnostics), new suite
+`crates/ynz-typeck/tests/soa_layout_lints.rs` 4/4. (3) Step 3 confirmed done-in-place.
+Receipts: jargon_audit 10/10, soa_layout_lints 4/4, soa_analysis 21/21, false_sharing_lints 5/5,
+schema_smoke 32/32. Plan sync: Phase 7 segment-2 blockquote added; handoff-phase-7.md rewritten
+in place (resume-at `phase-7/step-4`). Steps 4–5 + close-out remain. Nothing committed.
+
+## Session log — 2026-07-04 — session-id: phase7-executor-2026-07-04-m5-seg3
+
+Phase 7 segment 3 (executor, PARTIAL at `phase-7/step-5` — context-budget checkpoint at the
+step-4/step-5 seam, tree green). (1) Step 4 complete: (a) consumer-seam end-to-end test
+`crates/ynz-codegen/tests/soa_lint_consumer_seam.rs` (1/1) — the `array-using-soa-layout` lint
+verified riding `codegen_query`'s actual diagnostic bucket on `m5_p4_soa_qualifying.ynz` (one
+Suggestion, LintRule code, `pts` named, bucket error-free); A1 now exercised at a real consumer
+seam. (b) VSCode extension 0.3.0 → 0.3.1 (+ lockfile) — recorded decision: M5 ships on the v0.3.x
+patch line (plan ¶1), extension version tracks the release tag. (c) Artifact builds:
+`yinz-0.3.1.vsix` packaged in the dev container (`.vsix` gitignored). (d) Hover screenshot
+impossible headless (no display) — explicit known limitation, queued for the STATUS block.
+Receipts: new test 1/1; `cargo fmt --all -- --check` clean; `cargo clippy -p ynz-codegen --tests`
+clean; seg-2 suite receipts unchanged (no other Rust touched). (2) Step-5 orientation fully
+prepaid and recorded in the rewritten handoff-phase-7.md (decision-text anchors D2/D6/D7/D8/D12/
+D13 + D1/D3/D4/D5/D9/D11 per FRAGO 022, FR #14/#15, paper-traced perf numbers from
+soa-threshold-raw-2026-07-04.md, IMP-collections placement plan + reference-sweep inventory,
+REF-collections value-form-contains verification incl. the string-field identity caveat + pin
+fixture). Two pre-existing divergences observed and queued for the final return (NOT
+self-adjudicated): REF-collections.md's predicate-form `.contains(fn)` has no
+implementation/usage evidence; IMP-collections.md carries a byte-identical duplicated
+`array<T>` → `set<T>` section (lines 451–495). Steps 5 + close-out remain. Nothing committed.
+
+## Session log — 2026-07-04 — session-id: phase7-executor-2026-07-04-m5-seg4
+
+Phase 7 segment 4 (final) — returned **DONE**, phase closed. Step 5 (docs graduation) executed
+per segment 3's prepaid orientation (receipts inherited; tree verified unmoved since seg 3 at
+dispatch — same HEAD `e94a2a3`, same modified/untracked set):
+
+- **IMP-collections.md**: new sections "Array element storage — by-value inline (v0.3-M5)"
+  (D2/D6/D7/D8/D12/D13 + rejected alternatives + D13 TS-aliasing teaching note with before/after
+  example + E10 forward-compat note) and "Auto-SoA layout (v0.3-M5)" (D1/D3/D4/D5/D9/D11 per
+  FRAGO 022 + rejected alternatives + honest E14 provenance: O0 net 1.00-1.18 no-crossover /
+  ~3.3x under opt-18 -O2 (10.77 ms vs 3.29 ms, N=4096), never conflated, bench file linked;
+  FR#14 + FR#15 named in prose by plan-id + FR number). Frontmatter updated_at + description
+  extended; the in-file :447 cite repointed from the scratch doc to the new section anchor.
+- **Scratch trims**: `SCRATCH-future-auto-soa.md` + `SCRATCH-future-array-by-value-element-storage.md`
+  rewritten as pointer stubs at the new sections (files kept — design_future_sync SKIP list +
+  historical links name them).
+- **Reference sweep** (per seg-3's grep-verified inventory): IMP-concurrency.md "Design record:"
+  cite → by-value section; REF-mvp-scope.md:237 "Locked design" → Auto-SoA section (+ frontmatter
+  bump applied); SCRATCH-future-designs-index.md auto-soa row → shipped/graduated;
+  design_future_sync.rs two SKIP rationale strings updated → test re-run **3/3 green**;
+  integration.rs:4750 comment cite left as-is (resolves through the stub).
+- **docs/README.md**: two new topic rows (by-value element storage; Auto-SoA layout) linking the
+  IMP-collections anchors; frontmatter bump.
+- **REF-collections.md**: `.contains(value)` list entry + short HS-grad section (one-line intro,
+  realistic `Position` example with number-only fields — string fields compare by identity per
+  D12, so no string-field behavior is claimed; pointer to `.find(fn)` for condition matching).
+  Frontmatter bump.
+
+**Two conductor-cleared adjacent doc-defect fixes (audit-note only, per the conductor's ruling —
+no FRAGO):**
+
+1. **REF-collections.md:152 stale predicate-form `.contains(fn)` REMOVED**, replaced by the
+   value-form entry only. Verification basis (independently confirmed by the conductor, cited
+   per the ruling): `registry/features.toml`'s three `contains` entries (string:801, array:1867,
+   fixed:2025) are all `kind = "method_1arg"` value-form since M3/M4; zero
+   `[[deferred_language_feature]]` entry exists for a predicate form; `builtins.rs`/`emit.rs`
+   implement only the value form; zero closure-arg `.contains()` usages anywhere in the repo.
+   This closes FRAGO 008's "reconcile the REF home" mandate as a correction, not a silent
+   deletion — the fn-form line was stale/aspirational spec text with no implementation ever.
+2. **IMP-collections.md:451-495 byte-identical duplicated "array<T> → set<T>" section** — second
+   copy deleted, first kept (pure mechanical dedup, diff-verified byte-identical pre-edit; also
+   forced by the step-5 edit anchor, which was non-unique while the duplicate existed).
+
+**Phase close-out:** STATUS: COMPLETE block written (honest E14 perf caveat consistent with
+Phase 6; headless-environment hover-screenshot limitation named explicitly). Exit criteria:
+schema_smoke 32/32 (seg-2 receipt — registry untouched this segment), jargon_audit 10/10 incl.
+`no_banned_jargon_in_lint_rule_templates` (seg-2 receipt — no template text changed this
+segment), VSCode artifact builds (`yinz-0.3.1.vsix`, seg-3 receipt), docs land per
+docs-checklist (this segment). `handoff-phase-7.md` deleted as the last act. Nothing committed
+(conductor owns the boundary gate). No new deviations beyond the two cleared fixes above; the
+predicate-form divergence queued by seg 3 is resolved by ruling #1 rather than left open.
+
+## Session log — 2026-07-04 — session-id: phase7-fixround1-executor-2026-07-04-m5
+
+**Phase 7 fix round 1 (boundary fix, dispatched by the conductor after its cheap-gates pass).**
+One failing test: `cross_impl_consistency.rs::corpus_byte_identical_across_auto_parallel_modes`.
+
+**Paper-Trace (verified before fixing):**
+- Observed: `m5_p4_soa_qualifying.ynz` + `m5_p5_soa_copy_wait_bg.ynz` MODE-DIVERGENT (2 of 433
+  compared corpus files); stdout byte-identical both modes (`2628\n5256\n`; `hotx…bg: 30\n`),
+  exit 0 both. Direct stderr diff: default mode carries the `array-using-soa-layout` Tier 3
+  lint; `YNZ_NO_AUTO_PARALLEL=1` stderr is empty.
+- Root cause: the lint fires only when SoA layout is admitted, and `YNZ_NO_AUTO_PARALLEL`
+  structurally prevents admission (the "no-auto-parallel disables SoA" hard invariant,
+  `crates/ynz-typeck/src/soa.rs` — the same gate #2 the milestone's dual-mode AoS oracle relies
+  on). Intentional, documented-divergence class (same as the M3b intended-reorder exclusion) —
+  not a computation/output regression.
+
+**Fix:** added both fixtures to the test's existing intentional-divergence exclusion list
+(`crates/ynz-driver/tests/cross_impl_consistency.rs`, after the `v0_3_m3g_overlap_proof.ynz`
+entry) with a WHY comment naming the gate-#2 mechanism and the M3b precedent.
+
+**Sibling check:** empirical, not inferred — the pre-fix full-corpus run compared all 433
+non-excluded files across both modes and found exactly these 2 divergent; no other
+`m5_p4_*`/`m5_p5_*` (or any other) fixture diverges (decline-case fixtures never lint; the
+sweep itself proved the rest mode-identical).
+
+**Receipts:** `corpus_byte_identical_across_auto_parallel_modes` re-run post-fix: ok (1 passed,
+208.7s). Full `cargo test --workspace` in the dev container ran to completion through the final
+doc-test targets, all green (cargo default fail-fast exits at the first failing test executable,
+so completion of the last targets certifies every earlier binary). `cargo fmt --all -- --check`
+clean; documented gate `cargo clippy --workspace -- -D warnings` clean. Two PRE-EXISTING
+test-target-only clippy warnings observed (NOT introduced by this fix, both outside this fix's
+diff: collapsible-if at cross_impl_consistency.rs:207 in the determinism test; unused `stderr`
+at integration.rs:672) — outside the project's documented clippy gate (which omits `--tests`);
+surfaced in the executor return for the conductor, not silently fixed (out of this dispatch's
+scope).
+
+**Plan sync:** Phase 7 STATUS block gained the one-sentence boundary-fix note; session-id
+appended to plan.md frontmatter in the same action as this entry. Nothing committed (conductor
+owns the commit gate). No FRAGO filed — no plan-text change beyond the STATUS note; the fix
+implements the conductor's own dispatch spec, verified against ground truth before applying.
+
+## Session log — 2026-07-04 — session-id: phase7-fixround2-executor-2026-07-04-m5
+
+**Phase 7 fix round 2 (dispatched by the conductor after the full reviewer fan-out: 1 blocker +
+2 should-fix).**
+
+**Blocker — REF-collections missing the D13 teaching note:** the plan's Phase 7 step 5 text and
+IMP-collections' own "must keep carrying this in HS-grad wording" assertion both required a
+copy-on-persist snapshot callout in `docs/reference/REF-collections.md`; the artifact carried
+none. Fix: new "Storing a shape makes a copy" section (placed after "Writing by index" — store
+semantics follow read/write access), mirroring IMP-collections' D13 worked example in HS-grad
+wording with the explicit JavaScript-aliasing contrast the plan text mandates (plan line ~284;
+spec-writing.md's "no other-language comparisons" guidance is deliberately overridden here by
+the plan's explicit TS-aliasing-note requirement — recorded decision). Example run-verified in
+the dev container (stored element prints 1.0 after `p.x = 99.0`; write-through prints 99.0).
+
+**Should-fix 1 — `.contains` stated rule overclaimed:** REF-collections said a shape matches
+"when every field matches," contradicting shipped D12 semantics (pointer-typed fields compare
+by identity). Fix: rule restated in HS-grad wording (number/bool fields by value; string /
+nested-shape / collection fields only when both hold "the very same stored value") + a
+surprising-case example. **Verification catch (Paper-Trace):** the reviewer's suggested example
+— two separately-built shapes with equal string LITERALS do not match — is FALSE today:
+observed `true` (pin fixture `m5_p3_sweep_shape_eq_string_field` cell 2; LLVM merges identical
+unnamed_addr string globals, an artifact, not a guarantee). Expected per reviewer: `false`.
+Resolution: the doc example builds the string at RUNTIME (`${prefix}ce` interpolation — the
+pin's discriminating cell 3), which genuinely prints `false`; run-verified. The "very same
+stored value" wording stays honest in BOTH cells (merged literals ARE one stored string). Also
+added the `.find(p => p.name == ...)` text-match escape hatch — string `==` is value equality
+via `ynz_string_eq` (emit.rs:16308, NFC-normalized), verified in codegen; `.find(fn)` lambda
+syntax matches the file's existing spec'd-ahead usage (not yet runnable — no fixture uses
+dot-method lambdas; consistent with the file's pre-existing `.find` examples).
+
+**Should-fix 2 — dual-mode sweep dropped ALL comparison for `m5_p4_soa_qualifying.ynz`:** fix
+round 1's all-or-nothing exclusion silently dropped the fixture's only runtime
+stdout-equivalence oracle. Fix (option (a) — the harness compares three fields inline, so
+per-field granularity is trivial): both M5 SoA fixtures removed from the full-skip list; new
+`stderr_diverges_by_design` narrow-skip covers stderr only, stdout + exit code re-enter the
+sweep (both fixtures narrowed — same gate-#2 divergence class; m5_p5's stdout assertion is now
+redundant with its dedicated matrix test but consistent treatment beats a split exclusion).
+
+**Receipts:** full `cargo test --workspace` in the dev container exit 0 (ran through the final
+doc-test targets; fail-fast semantics certify every earlier binary);
+`cargo test --test cross_impl_consistency` explicitly re-run: 2/2 ok in 230.5s —
+`corpus_byte_identical_across_auto_parallel_modes` green WITH the narrowed exclusion, proving
+m5_p4/m5_p5 stdout + exit code byte-identical across modes. `cargo fmt --all -- --check` clean;
+`cargo clippy --workspace -- -D warnings` clean (CI convention, no `--tests`).
+
+**Deviation surfaced (NOT self-classified, for conductor routing):** pre-existing codegen ICE,
+orthogonal to this fix round — a `number` shape field initialized from an INT literal on the
+shape-literal→array path panics at `crates/ynz-codegen/src/emit.rs:19678` ("Found IntValue …
+expected PointerValue"); decimal literals work. Minimal repro: `shape P { x: number }` +
+`let a: array<P> = []` + `a.add({ x: 1 })`-class program. Consequence: several PRE-EXISTING
+REF-collections examples (e.g. the `Position { x: number }` contains example with `{ x: 0, y: 0 }`
+int literals) would ICE if run today; typeck admits the int→number coercion, codegen doesn't.
+This session's NEW examples were made runnable (decimal literals / `int` health) and
+run-verified. Also observed (pre-existing, not fixed): REF-collections uses double-quoted
+string literals throughout while REF-strings.md rules them a compile error (backticks only) —
+new examples use backticks; the file-wide drift is out of this dispatch's scope.
+
+**Plan sync:** Phase 7 STATUS block gained the fix-round-2 note; session-id appended to
+plan.md frontmatter in the same action as this entry. Nothing committed (conductor owns the
+commit gate). No FRAGO filed — no plan-text change beyond the STATUS note; the two deviations
+above are surfaced for the seam, not self-adjudicated.
+
+## Session log — 2026-07-04 — session-id: plan-fixup-icedefer-2026-07-04-m5
+
+**Standalone Phase 7 fix-round follow-up dispatch: filed the ELEVATED durable deferral for the
+pre-existing int-literal→`number` codegen ICE** surfaced by fix round 2's docs work and
+independently source-confirmed by a deviation-judge dispatch. Record-only dispatch — no Rust
+source touched, no fix attempted (out of M5's array/SoA charter: the bug lives in untouched
+legacy numeric-literal codegen; M5 Phase 2 only added Shape/Maybe arms to `store_field`).
+
+**The bug (broader than the shape-literal→array path first observed):** `Expr::IntLit`
+(`crates/ynz-codegen/src/emit.rs:14101`) unconditionally lowers to a raw `i64` `IntValue`
+(contrast `NumberLit` at `emit.rs:14103-14136`, alloca+store decimal128 → pointer), while BOTH
+`store_field`'s `Type::Number` arm (`emit.rs:19674-19679`) AND the plain `store()` arm
+(`emit.rs:19552-19557`) unconditionally `.into_pointer_value()`. Typeck admits the coercion
+(`crates/ynz-typeck/src/check.rs:2162-2166`, type-level retype, no AST rewrite), so
+`let x: number = 5` — no shape, no array — type-checks then panics ("Found IntValue … expected
+the PointerValue variant"). No fixture/example in the repo exercises the pattern (all existing
+usages are decimal literals), which is why it survived undiscovered until Phase 7.
+
+**Filed (two places, per the roadmap's deferral + capability-ledger convention):**
+1. Roadmap `audit.md` (`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md`) —
+   four-field WHAT/WHY/COST/TRIGGER deferral, Idempotency-Key
+   `2026-07-03-v0-3-m5-auto-soa#7: crates-ynz-codegen-src-emit-rs-14101` (grepped first: no
+   pre-existing key, no duplicate). Marked ELEVATED in the entry body — a real user-facing
+   crash on a common beginner pattern, not routine debt.
+2. Roadmap `roadmap.md` — new "Fix codegen ICE: bare int literal into a `number`-typed slot"
+   unscoped-capability row added to BOTH Capability Ledger tables (mirroring the FRAGO 015/018
+   unscoped-row format), status `unscoped → needs a milestone`, with the ELEVATED framing and
+   full file:line evidence.
+
+**Plan sync:** session-id `plan-fixup-icedefer-2026-07-04-m5` appended to plan.md frontmatter in
+the same action as this entry. No phase checkboxes touched (this dispatch owns no plan step).
+Nothing committed (conductor owns the commit gate). No FRAGO filed — this dispatch changes no
+plan text; it executes the already-routed deferral-filing instruction from the conductor after
+the deviation-judge's independent confirmation of fix round 2's surfaced deviation.
+
+## Session log — 2026-07-04 — session-id: plan-conductor-2026-07-04-m5-fable (Phase 7 boundary review, closing)
+
+Full re-review round after fix round 2: green-check (green vs this repo's actual CI convention —
+no `--tests`; one pre-existing timing-sensitive flake re-verified passing in isolation, unrelated
+to this diff) + graveyard-auditor (clean, 0 findings) + the full 5-reviewer fleet re-run
+(code-reviewer, acceptance-verifier, rules-compliance, deviation-judge, doc-auditor) — 0 blockers,
+0 should-fix, 3 self-graded minor nits accepted as a floor-pinned residual (same YAGNI-ceiling call
+as Phase 6, not chased into a third round):
+
+1. **doc-auditor (minor):** `REF-collections.md:207`'s `.contains` value-vs-identity rule says
+   "number and boolean fields" but the worked example uses an `int` field — `int` is value-compared
+   too, just not named in the enumeration. Cosmetic wording gap, no behavior claim is wrong.
+2. **deviation-judge (minor):** the two pre-existing clippy warnings fix-round-1 surfaced
+   (`cross_impl_consistency.rs:207` collapsible-if; `integration.rs:672` unused `stderr`) were
+   noted in the narrative but never given the same formal 4-field deferral treatment as the
+   sibling 9-violation clippy-debt entry — inconsistent bookkeeping, zero functional risk (outside
+   this repo's own documented, `--tests`-free clippy gate).
+3. **deviation-judge (minor):** the `plan-fixup-icedefer` session wrote to the roadmap's own files
+   but never appended to the *roadmap's* frontmatter session-id chain (only this plan's) — a
+   pre-existing gap pattern (other roadmap-writing sessions have the same omission), not newly
+   introduced here.
+
+All three are narrowing/cosmetic variants of already-substantively-fixed work, self-graded
+non-blocking by their own reviewers, with zero correctness/security/user-facing-claim-accuracy
+risk riding on any of them. Accepted as floor-pinned residuals per verification.md's YAGNI
+ceiling — named here per "no silent caps," not chased. Boundary commit proceeds.

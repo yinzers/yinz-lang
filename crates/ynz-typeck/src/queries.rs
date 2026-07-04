@@ -816,6 +816,32 @@ pub fn layout_decisions_query(
     ))
 }
 
+/// The `array-using-soa-layout` lint diagnostics for this module (v0.3-M5 Phase 7
+/// step 2) — a thin NON-salsa wrapper over the two memoized inputs.
+///
+/// The lint cannot fire inside `check_query`: `layout_decisions_query` →
+/// `soa_candidate_query` → `check_query`, so pushing it there would close a salsa
+/// cycle — and re-running the SoA analysis inside `check_query` instead would be the
+/// E3 twin-derivation corpse (authoritative-derivation.md). So the three diagnostic
+/// consumers that today read only `check_query` merge THIS wrapper's output on top:
+/// `ynz-codegen::codegen_query` (driver stderr — both `ynz build` paths render its
+/// bucket), the LSP's `run_and_publish_diagnostics`, and the driver's `--json`
+/// `collect_diagnostics`. Both inputs are salsa-memoized and the pairing walk is
+/// trivial, so no tracked query (and no cycle_fn boilerplate) is needed here.
+///
+/// Empty on type errors and under the kernel / `--no-auto-parallel` gates —
+/// `soa_candidate_query` (and therefore `arrays`) is already empty there.
+///
+/// Time: O(A · C) on memoized inputs.  Space: O(A).
+pub fn soa_layout_lints(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+) -> Vec<ynz_diagnostics::Diagnostic> {
+    let decisions = layout_decisions_query(db, source);
+    let candidates = soa_candidate_query(db, source);
+    crate::soa::layout_lints(&decisions, &candidates)
+}
+
 /// Pure core of the CPU-promotion analysis (Decision Record item 8b/8c).
 ///
 /// 1. **Candidate identification** (bottom-up, deterministic): a non-cyclic function whose body

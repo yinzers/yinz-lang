@@ -44,7 +44,7 @@ const SKIP: &[(&str, &str)] = &[
     ),
     (
         "SCRATCH-future-auto-soa.md",
-        "codegen-only optimization, no user-facing token",
+        "shipped in v0.3-M5 — graduated to IMP-collections.md; file kept as pointer stub, no user-facing token",
     ),
     (
         "SCRATCH-future-http-framework.md",
@@ -76,7 +76,7 @@ const SKIP: &[(&str, &str)] = &[
     ),
     (
         "SCRATCH-future-array-by-value-element-storage.md",
-        "shipped in v0.3-M5 — deferred_language_feature entry retired (ArrayShapeRuntimeFieldWithWait lifted); file kept as design record",
+        "shipped in v0.3-M5 — deferred_language_feature entry retired (ArrayShapeRuntimeFieldWithWait lifted); graduated to IMP-collections.md, file kept as pointer stub",
     ),
     (
         "SCRATCH-future-gui-index.md",

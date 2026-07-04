@@ -710,11 +710,15 @@ fn run_and_publish_diagnostics(
     };
 
     let check_output = ynz_typeck::queries::check_query(&state.db, sf);
+    // The `array-using-soa-layout` Tier 3 lint lives OUTSIDE check_query (its inputs
+    // depend on check_query — salsa cycle), so the LSP merges it here to reach the
+    // editor squiggle/hover surface. Empty on type errors and under the analysis gates.
+    let soa_lints = ynz_typeck::queries::soa_layout_lints(&state.db, sf);
     let encoding = state.encoding;
 
     // Group diagnostics by their span.file (the file where the error physically lives).
     let mut by_file: HashMap<String, Vec<lsp_types::Diagnostic>> = HashMap::new();
-    for d in check_output.diagnostics.iter() {
+    for d in check_output.diagnostics.iter().chain(soa_lints.iter()) {
         let file_uri = path_to_uri(&d.span.file);
         let file_uri = file_uri.as_ref().unwrap_or(uri); // fall back to editing file
 

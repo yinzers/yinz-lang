@@ -1412,6 +1412,18 @@ ships_in = "v0.3"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "`wait`-auto-insertion analysis ships in the concurrency milestone."
 
+# --- v0.3-M5 auto-SoA: debugger unified view over per-field array storage ---
+# Four-field deferral Patrick-signed 2026-07-03 (plan 2026-07-03-v0-3-m5-auto-soa,
+# Future Requirements #1 / Divergence 3). Cost: its own multi-session milestone
+# (DWARF emission pass + DAP adapter).
+[[deferred_tooling_feature]]
+name = "dap-soa-unified-view"
+substitute = "No debugger support exists yet for any Yinz value — the compiler emits no debug info at all. Program output (`print`) is the inspection surface today, and it shows identical values in both array layouts."
+why = "A debugger should show one unified shape-value view of an array element even when the compiler stores that array as separate per-field blocks. Yinz has zero debug-info/DWARF emission today, so any such view would be a bespoke non-standard hack; building DWARF emission from scratch is its own multi-session milestone and would hold a performance milestone hostage to an unrelated subsystem."
+ships_in = "v0.4+"
+design_doc = "docs/internal/implementation/IMP-collections.md"
+triggers = "DWARF emission ships, or a debugging-tooling milestone is scheduled."
+
 # Inlay hint — lifetimes domain (awaiting explicit lifetime UI, may stay fully implicit).
 [[deferred_tooling_feature]]
 name = "lsp-inlay-hint-lifetimes"
@@ -2313,3 +2325,24 @@ what_instead_template = "Write `wait sleep({ms})` — your function pauses just 
 why_template = "This program runs on a scheduler that can run other tasks while one waits. `wait sleep` hands the thread back to the scheduler during the pause; `sleepBlocking` keeps the thread parked doing nothing. The blocking form is the right tool only where there is no scheduler to yield to (kernel mode)."
 since = "v0.3-M4"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+
+# v0.3-M5 Phase 7: fires when the one layout authority (`layout_decisions_query`)
+# applies the per-field array layout to an admitted `array<Shape>` binding; anchored
+# on the array's declaration. The rule NAME is roadmap-locked (plan decision D9):
+# "soa" is a registry-internal identifier convention, never user-facing text — all
+# hover/template prose below stays jargon-free ("separate per-field arrays").
+# Deliberately NO [[muted_hint_domain]] sibling: this layout has no typeable source
+# form, so per auto-promotion.md / inference.md the muted-hint protocol does not
+# apply (plan Divergence 5 — considered and correctly omitted, not forgotten).
+# The WHY cites the honest Phase 6 measurement (crates/ynz-driver/benches/
+# soa-threshold-raw-2026-07-04.md): ~1.0x in today's shipped binaries, ~3.3x under
+# an LLVM -O2 pass pipeline shipped builds do not yet run — never conflated.
+[[lint_rule]]
+name = "array-using-soa-layout"
+severity = "suggestion"
+description = "A large, never-grown array of shape values whose hot loops read at most two fields is stored as separate per-field arrays (one memory block per field). A compiler layout choice with no typeable source form; program behavior is identical."
+what_template = "`{array}` is stored as separate per-field arrays: one block of memory per `{shape}` field, instead of each element's fields sitting side by side."
+what_instead_template = "Nothing to change — there is no source form for this layout, and the program behaves exactly the same in both layouts. If this array's use changes (it grows, leaves this function, or its loops read more than two fields), the compiler quietly returns to the normal side-by-side layout."
+why_template = "The hot loops over `{array}` ({len} `{shape}` values) read only {fields}, so grouping each field's values together lets those loops load just the bytes they use. Two honest measurements: run through an optimizer step the compiler does not yet run by default, this layout measured about 3.3x faster on a large loop of this shape; in the binaries `ynz build` produces today (no optimizer step), it measured about the same speed — no detectable difference. The layout costs nothing in correctness now, and the speedup arrives when that optimizer step ships."
+since = "v0.3-M5"
+design_doc = "docs/internal/implementation/IMP-collections.md"

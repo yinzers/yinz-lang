@@ -285,11 +285,26 @@ fn corpus_byte_identical_across_auto_parallel_modes() {
             continue;
         }
 
+        // v0.3-M5 SoA-admitted fixtures: the `array-using-soa-layout` Tier 3 lint fires only
+        // when SoA layout is actually admitted, and `--no-auto-parallel` structurally prevents
+        // admission (the "no-auto-parallel disables SoA" hard invariant, gate #2 in
+        // crates/ynz-typeck/src/soa.rs — the same gate the milestone's dual-mode AoS oracle
+        // relies on). So default mode prints the lint on stderr and sequential mode cannot,
+        // by design: a documented gate difference, same class as the M3b intended-reorder
+        // exclusion above, not a codegen bug. But the divergence is STDERR-ONLY — stdout and
+        // exit code MUST stay byte-identical across modes (for m5_p4_soa_qualifying.ynz this
+        // sweep is the only runtime stdout-equivalence oracle; its other tests are typeck-
+        // analysis / lint-firing only) — so these fixtures skip just the stderr comparison
+        // instead of dropping out of the sweep entirely.
+        let stderr_diverges_by_design =
+            name == "m5_p4_soa_qualifying.ynz" || name == "m5_p5_soa_copy_wait_bg.ynz";
+
         let (par_out, par_err, par_code) = run_ynz_mode(path, false);
         let (seq_out, seq_err, seq_code) = run_ynz_mode(path, true);
         compared += 1;
 
-        if par_out != seq_out || par_err != seq_err || par_code != seq_code {
+        let stderr_mismatch = !stderr_diverges_by_design && par_err != seq_err;
+        if par_out != seq_out || stderr_mismatch || par_code != seq_code {
             failures.push(format!(
                 "MODE-DIVERGENT: {:?}\n  default  stdout: {:?} exit {par_code}\n  sequential stdout: {:?} exit {seq_code}",
                 path.file_name().unwrap_or_default(),

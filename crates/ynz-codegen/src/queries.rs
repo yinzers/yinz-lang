@@ -313,6 +313,16 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         });
     }
 
+    // The `array-using-soa-layout` Tier 3 lint (v0.3-M5 Phase 7) merges here, NOT in
+    // check_query — its inputs (`layout_decisions_query` → `soa_candidate_query`)
+    // depend on check_query, so firing it there would close a salsa cycle. Both
+    // driver stderr paths render THIS bucket, so the lint reaches `ynz build` and
+    // `ynz run` alike. Safe after the has_errors return: candidates (and therefore
+    // lints) are empty on type errors.
+    for lint in ynz_typeck::queries::soa_layout_lints(db, source) {
+        diagnostics.push(lint);
+    }
+
     let sig_output = module_signatures_query(db, source);
     let source_path = source.path(db);
     // Pre-compute LLVM-accurate frame layouts via the salsa query so both the emitter

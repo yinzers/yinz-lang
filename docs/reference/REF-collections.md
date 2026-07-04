@@ -4,7 +4,7 @@ description: "Three ways to hold multiple values."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-04"
 status: "active"
 author: "patrick"
 metadata:
@@ -135,6 +135,38 @@ rgb[5] = 100
 
 ---
 
+## Storing a shape makes a copy
+
+When you store a shape value — into an array, a map, or another shape's field — the collection
+keeps a copy of the value as it is at that moment. Changing the original afterward does not
+change the stored copy:
+
+```
+shape Position {
+  x: number
+  y: number
+}
+
+let path: array<Position> = []
+let p: Position = { x: 1.0, y: 2.0 }
+path.add(p)
+p.x = 99.0
+// The element inside path still has x == 1.0 — .add(p) stored a copy of p,
+// not p itself.
+```
+
+If you're coming from JavaScript, watch out: this is the opposite of what you're used to.
+In JavaScript, the array and `p` would share one object, so setting `p.x = 99.0` would change
+what the array sees. In Yinz, the stored copy keeps the values it had when you stored it.
+
+To change a stored element, write through the collection:
+
+```
+path[0] = { x: 99.0, y: 2.0 }
+```
+
+---
+
 ## Dot methods — available on both fixed and array
 
 ```
@@ -149,7 +181,7 @@ rgb[5] = 100
 .count()            // number of items → number
 .unique()           // deduplicated copy
 .limit(n)           // cap to the first N items — returns new collection of at most N
-.contains(fn)       // does any item match? → boolean
+.contains(value)    // is this value in the collection? → boolean
 .concat(other)      // combined copy — does not modify original
 .append(item)       // new collection with item added at the end
 .prepend(item)      // new collection with item added at the front
@@ -158,6 +190,73 @@ rgb[5] = 100
 `.concat()`, `.append()`, and `.prepend()` work on `fixed<T>` because they return new collections. The original stays untouched.
 
 `.set()` works on `fixed<T>` because it replaces an existing element without changing size.
+
+### Checking if a value is in a collection — `.contains(value)`
+
+`.contains(value)` tells you whether a value is in the collection:
+
+```
+let scores: fixed<number> = [70, 85, 92]
+let hasPerfect = scores.contains(100)
+// hasPerfect is false
+```
+
+It works on shape values too. A shape value counts as "in the collection" when every field
+matches — but the two kinds of fields match differently:
+
+- **number and boolean fields** match when their values are equal.
+- **string fields** — and fields holding another shape or a collection — match only when both
+  fields hold the very same stored value, not just one that reads the same.
+
+When every field is a number, it works the way you'd expect:
+
+```
+shape Position {
+  x: number
+  y: number
+}
+
+let path: array<Position> = [
+  { x: 0, y: 0 },
+  { x: 5, y: 3 },
+]
+
+let step: Position = { x: 5, y: 3 }
+let visited = path.contains(step)
+// visited is true — step's fields match the second entry,
+// even though step was built separately
+```
+
+String fields are stricter. A string built at runtime is its own stored value, so it does not
+match — even when the text is identical:
+
+```
+shape Player {
+  name: string
+  health: int
+}
+
+let roster: array<Player> = [
+  { name: `Alice`, health: 100 },
+]
+
+let prefix: string = `Ali`
+let lookalike: Player = { name: `${prefix}ce`, health: 100 }
+let found = roster.contains(lookalike)
+// found is false — lookalike's name was built at runtime, so it is not
+// the same stored string as the roster entry's name, even though both
+// read "Alice"
+```
+
+To match text by what it says, use `.find(fn)` instead — `==` on strings compares the text
+itself:
+
+```
+let alice = roster.find(p => p.name == `Alice`)
+// alice.exists() is true
+```
+
+Want to match on a condition instead of a whole value? Use `.find(fn)` the same way.
 
 ---
 

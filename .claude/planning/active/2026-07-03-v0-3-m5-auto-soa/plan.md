@@ -3,7 +3,7 @@ name: "v0-3-m5-auto-soa"
 plan-id: "2026-07-03-v0-3-m5-auto-soa"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5-seg2", "phase3-executor-2026-07-03-m5-seg3", "phase3-executor-2026-07-03-m5-seg4", "phase3-executor-2026-07-03-m5-seg5", "phase3-executor-2026-07-03-m5-seg6", "phase3-executor-2026-07-03-m5-seg7", "phase3-executor-2026-07-03-m5-seg8", "phase3-executor-2026-07-03-m5-seg9", "phase3-executor-2026-07-03-m5-seg10", "phase4-executor-2026-07-03-m5", "phase4-executor-2026-07-03-m5-seg2", "phase4-executor-2026-07-03-m5-seg3", "phase4-executor-2026-07-03-m5-seg4", "plan-fixup-frago013-2026-07-03-m5", "phase4-executor-2026-07-03-m5-closing", "phase4-executor-2026-07-03-m5-closing2", "phase4-deferral-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5-seg2", "phase5-executor-2026-07-03-m5-seg3", "phase5-executor-2026-07-03-m5-seg4", "phase5-executor-2026-07-03-m5-seg5", "phase5-executor-2026-07-03-m5-closing", "phase6-executor-2026-07-03-m5", "phase6-executor-2026-07-03-m5-seg2", "phase6-executor-2026-07-03-m5-seg3", "phase6-executor-2026-07-03-m5-seg4", "plan-conductor-2026-07-04-m5-fable", "phase6-fixround1-executor-2026-07-04-m5"]
+session-id: ["plan-producer-2026-07-03-m5", "plan-conductor-2026-07-03-m5-approval", "plan-conductor-2026-07-03-m5-p0-gate-exception", "phase0-executor-2026-07-03-m5", "phase0-executor-2026-07-03-m5-seg2", "phase0-fix-executor-2026-07-03-m5", "phase1-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5", "phase2-executor-2026-07-03-m5-seg2", "phase2-fixloop-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5", "phase2-fixround2-executor-2026-07-03-m5-seg2", "phase2-fixround3-executor-2026-07-03-m5", "phase2-fixround3-executor-2026-07-03-m5-seg2", "phase2-fixround4-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5", "phase3-executor-2026-07-03-m5-seg2", "phase3-executor-2026-07-03-m5-seg3", "phase3-executor-2026-07-03-m5-seg4", "phase3-executor-2026-07-03-m5-seg5", "phase3-executor-2026-07-03-m5-seg6", "phase3-executor-2026-07-03-m5-seg7", "phase3-executor-2026-07-03-m5-seg8", "phase3-executor-2026-07-03-m5-seg9", "phase3-executor-2026-07-03-m5-seg10", "phase4-executor-2026-07-03-m5", "phase4-executor-2026-07-03-m5-seg2", "phase4-executor-2026-07-03-m5-seg3", "phase4-executor-2026-07-03-m5-seg4", "plan-fixup-frago013-2026-07-03-m5", "phase4-executor-2026-07-03-m5-closing", "phase4-executor-2026-07-03-m5-closing2", "phase4-deferral-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5-seg2", "phase5-executor-2026-07-03-m5-seg3", "phase5-executor-2026-07-03-m5-seg4", "phase5-executor-2026-07-03-m5-seg5", "phase5-executor-2026-07-03-m5-closing", "phase6-executor-2026-07-03-m5", "phase6-executor-2026-07-03-m5-seg2", "phase6-executor-2026-07-03-m5-seg3", "phase6-executor-2026-07-03-m5-seg4", "plan-conductor-2026-07-04-m5-fable", "phase6-fixround1-executor-2026-07-04-m5", "phase7-executor-2026-07-04-m5", "phase7-executor-2026-07-04-m5-seg2", "phase7-executor-2026-07-04-m5-seg3", "phase7-executor-2026-07-04-m5-seg4", "phase7-fixround1-executor-2026-07-04-m5", "phase7-fixround2-executor-2026-07-04-m5", "plan-fixup-icedefer-2026-07-04-m5"]
 created_at: "2026-07-03"
 updated_at: "2026-07-03"
 metadata:
@@ -1261,6 +1261,116 @@ phases (P2, P5) checkpoint per the marks below.
 
 #### Phase 7 — Teaching surface + registry + docs graduation
 
+> **STATUS: COMPLETE (2026-07-04).** All 5 steps done across 4 segments (sessions
+> `phase7-executor-2026-07-04-m5` through `…-seg4`). Registry: `[[lint_rule]]
+> array-using-soa-layout` (jargon-free templates, WHY cites both honest E14 measurements) +
+> `[[deferred_tooling_feature]] dap-soa-unified-view`; FRAGO 021's
+> `no_banned_jargon_in_lint_rule_templates` gates ALL lint-rule template text (M4's rules pass
+> clean; it caught + fixed one banned word in M5's own template). Firing site reads the layout
+> authority only (no re-derivation), merged at all three consumer seams; A1 exercised end-to-end
+> (`soa_lint_consumer_seam.rs`). No muted-hint domain (Divergence 5). Docs graduated:
+> IMP-collections gains "Array element storage — by-value inline (v0.3-M5)"
+> (D2/D6/D7/D8/D12/D13 + rejected alternatives + D13's TS-aliasing teaching note + E10 note) and
+> "Auto-SoA layout (v0.3-M5)" (D1/D3/D4/D5/D9/D11 per FRAGO 022 + the honest perf provenance
+> naming FR#14/#15); both SCRATCH docs trimmed to pointer stubs (design_future_sync 3/3 green
+> post SKIP-string update); docs/README index rows added; REF-collections gains the D12/D13
+> value-semantics `.contains(value)` section in HS-grad wording (stale predicate-form
+> `.contains(fn)` removed per conductor ruling — audit-note, not FRAGO). **Honest perf caveat
+> (E14, consistent with Phase 6):** all user-facing/doc text states ~1.0x shipped O0 (no
+> detectable benefit, no crossover at any N) and ~3.3x under the unshipped `opt-18 -O2` pipeline,
+> never conflated. **Environment limitation:** the roadmap-constraint-71 hover SCREENSHOT is
+> impossible in this headless environment (no display) — explicitly not produced; the lint's
+> hover CONTENT is mechanically verified (jargon_audit + consumer-seam test) and the artifact is
+> built for hands-on capture at release. Exit criteria: registry round-trips (schema_smoke 32/32,
+> registry untouched by step 5); jargon_audit 10/10 incl. the lint-template test; VSCode artifact
+> builds (`yinz-0.3.1.vsix`, gitignored); docs land per docs-checklist. Two pre-existing adjacent
+> doc defects fixed under the conductor's cleared-to-fix ruling (see audit.md seg-4 entry):
+> REF-collections:152 stale predicate-form contains (verification basis: registry's three
+> value-form `contains` entries, no deferred predicate entry, value-form-only impl, zero
+> closure-arg usages) and IMP-collections' byte-identical duplicated `array<T>` → `set<T>`
+> section (mechanical dedup, first copy kept). **Boundary fix (fix round 1, session
+> `phase7-fixround1-executor-2026-07-04-m5`):** added the 2 new SoA-admitted fixtures
+> (`m5_p4_soa_qualifying.ynz`, `m5_p5_soa_copy_wait_bg.ynz`) to `cross_impl_consistency.rs`'s
+> dual-mode exclusion list for the lint's intentional gate-#2 stderr divergence (the
+> `array-using-soa-layout` lint fires only when SoA is admitted, which `YNZ_NO_AUTO_PARALLEL`
+> structurally prevents — same documented-divergence class as the M3b intended-reorder exclusion;
+> stdout verified byte-identical both modes, and the full-corpus sweep confirmed no other fixture
+> diverges). **Fix round 2 (session `phase7-fixround2-executor-2026-07-04-m5`):** REF-collections
+> gained the missing D13 copy-on-persist teaching note ("Storing a shape makes a copy", with the
+> JS-aliasing contrast, run-verified example) and a corrected `.contains` stated rule matching
+> D12's shipped semantics (number/bool fields by value; string/nested fields by same-stored-value,
+> with a run-verified runtime-built-string example — NOT the reviewer's two-equal-literals example,
+> which is actually `true` today via LLVM constant merging per the pin fixture), and
+> `cross_impl_consistency.rs`'s dual-mode exclusion for the two SoA fixtures was narrowed to
+> stderr-only so stdout + exit code re-entered the sweep.
+
+> Segment 1 (session `phase7-executor-2026-07-04-m5`, 2026-07-04) returned PARTIAL at
+> `phase-7/step-2` (context-budget checkpoint at the step-1/step-2 seam; tree green at
+> `e94a2a3` + registry-only edit). **Step 1 DONE:** D9's unverified behavior claim
+> re-verified GREEN — `jargon_audit.rs` gates diagnostic/hover TEXT + deferred-feature
+> user-facing FIELDS (substitute/why/ships_in) + muted_hint_domain descriptions, and
+> never audits registry `name` identifiers, so the roadmap-locked `array-using-soa-layout`
+> name is safe (no Patrick rename-vs-carve-out call needed). Both registry entries landed
+> in `registry/features.toml`: `[[lint_rule]] array-using-soa-layout` (jargon-free
+> templates; WHY cites the honest Phase 6 numbers — ~1.0x shipped O0 / ~3.3x under the
+> unshipped -O2 pipeline, paper-traced from `soa-threshold-raw-2026-07-04.md`, never
+> conflated; Divergence-5 no-muted-hint note in the entry comment) and
+> `[[deferred_tooling_feature]] dap-soa-unified-view` (FR#1 four-field content).
+> Receipts: schema_smoke 32/32, jargon_audit 9/9. Firing-site design for step 2 settled
+> in `handoff-phase-7.md` (query-graph constraint: lint reads `layout_decisions_query`
+> + `soa_candidate_query`, merges at codegen_query/LSP/--json seams — no re-derivation,
+> no salsa cycle). One gap surfaced for conductor routing: no test audits `lint_rule`
+> TEMPLATE text for jargon, while the Teaching invariant says the hover is "gated by
+> `jargon_audit.rs`" — resume segment adds the missing audit test (details in handoff).
+>
+> Segment 2 (session `phase7-executor-2026-07-04-m5-seg2`, 2026-07-04) returned PARTIAL at
+> `phase-7/step-4` (context-budget checkpoint at the step-2/step-4 seam; tree green).
+> **FRAGOs 021 + 022 applied** (step-1 sub-step added; step-5 decision lists corrected, D10
+> dropped). **Step 1 sub-step DONE:** `no_banned_jargon_in_lint_rule_templates` landed in
+> `jargon_audit.rs` — audits all `[[lint_rule]]` description/what/what-instead/why text; M4's
+> two rules pass CLEAN (no deviation); the test caught one violation in M5's OWN segment-1
+> template ("either way" → banned word `Either`) — reworded in `registry/features.toml` to
+> "in both layouts" (our own milestone text, in-scope fix, not M4's). **Step 2 DONE:** pure
+> builder `soa::layout_lints` + `ARRAY_USING_SOA_LAYOUT` const (reads the layout AUTHORITY +
+> candidate list only, pairing by (array_name, decl_span) to recover hot_fields/provable_len;
+> no re-derivation); thin non-salsa wrapper `queries::soa_layout_lints`; merged at ALL three
+> consumer seams (codegen_query, LSP run_and_publish_diagnostics, --json collect_diagnostics).
+> New suite `crates/ynz-typeck/tests/soa_layout_lints.rs` 4/4 (admitted fires with substituted
+> vars + both honest E14 measurements; threefield-declined silent; D11 padded-both-candidate
+> silent; YNZ_NO_AUTO_PARALLEL silent). **Step 3 CONFIRMED** (registry entry comment carries
+> the no-muted-hint-domain note; nothing further). Receipts: jargon_audit 10/10, soa_layout_lints
+> 4/4, soa_analysis 21/21, false_sharing_lints 5/5, schema_smoke 32/32, `cargo check --workspace`
+> + clippy + fmt clean. Steps 4–5 remain (details in handoff).
+>
+> Segment 3 (session `phase7-executor-2026-07-04-m5-seg3`, 2026-07-04) returned PARTIAL at
+> `phase-7/step-5` (context-budget checkpoint at the step-4/step-5 seam; tree green). **Step 4
+> DONE:** (a) consumer-seam end-to-end test landed —
+> `crates/ynz-codegen/tests/soa_lint_consumer_seam.rs` (1/1) asserts the lint rides
+> `codegen_query`'s actual diagnostic bucket on `m5_p4_soa_qualifying.ynz` (one Suggestion,
+> LintRule code, `pts` named, no errors) — A1 now exercised at a real consumer seam, not just the
+> typeck wrapper; (b) VSCode extension bumped 0.3.0 → **0.3.1** (recorded decision: M5 ships on
+> the v0.3.x patch line per ¶1; extension version tracks the release tag) + lockfile mirror;
+> (c) artifact builds — `yinz-0.3.1.vsix` packaged in the dev container (`.vsix` gitignored);
+> (d) hover screenshot is **impossible in this headless environment (no display)** — explicit
+> known limitation for the STATUS block, not silently skipped. Receipts: new test 1/1,
+> `cargo fmt --check` + clippy clean; seg-2 suite receipts unchanged (no Rust touched beyond the
+> one new self-contained test). Step 5 (docs graduation) + close-out remain — the handoff carries
+> step 5's full prepaid orientation (decision-text anchors, placement plan, reference-sweep
+> inventory, paper-traced perf numbers, and two pre-existing-divergence observations queued for
+> the final return).
+>
+> Segment 4 (session `phase7-executor-2026-07-04-m5-seg4`, 2026-07-04) returned **DONE** — phase
+> closed. Step 5 (docs graduation) complete per segment 3's prepaid orientation, inheriting its
+> receipts (tree unmoved since seg 3 — verified at dispatch): IMP-collections' two new sections +
+> frontmatter/description bump; both SCRATCH docs → pointer stubs; reference sweep
+> (IMP-collections:447 in-file repoint, IMP-concurrency lift-record cite, REF-mvp-scope locked-
+> design cite, designs-index row, design_future_sync SKIP rationale strings — test re-run 3/3
+> green; integration.rs comment cite left as-is, resolves through the stub); docs/README two
+> index rows; REF-collections `.contains(value)` section (number-field-only example — string
+> fields compare by identity per D12, no string-field behavior claimed). The two conductor-cleared
+> adjacent doc defects fixed (details in the STATUS block + audit.md). `handoff-phase-7.md`
+> deleted as the phase-closing act. Nothing committed (conductor owns the boundary gate).
+
 - **Task + purpose:** the full same-milestone teaching surface (roadmap constraint 71) + graduating
   the design content out of the scratchpad.
 - **Steps**
@@ -1273,6 +1383,14 @@ phases (P2, P5) checkpoint per the marks below.
      identifier; if it also audits identifiers, surface it for Patrick's rename-vs-carve-out call
      rather than working around it. Plus `[[deferred_tooling_feature]] dap-soa-unified-view` (four
      fields per Future Requirements #1, Patrick-signed 2026-07-03).
+     **Sub-step (FRAGO 021):** extend `crates/ynz-diagnostics/tests/jargon_audit.rs` with a
+     `no_banned_jargon_in_lint_rule_templates` test that audits EVERY `[[lint_rule]]` entry's
+     template/description text (description, what_template, what_instead_template, why_template)
+     in `registry/features.toml` — covering M4's `cross-thread-fields-not-padded` /
+     `prefer-yielding-sleep` AND M5's new `array-using-soa-layout` — so the Teaching invariant's
+     "gated by `jargon_audit.rs`" claim is mechanically true rather than aspirational. If the new
+     test finds a genuine violation in M4's pre-existing rules, surface it as a separate deviation
+     (not silently fixed under FRAGO 021's cover).
   2. **Firing site:** one `lint_diagnostic` emission in typeck when a `LayoutDecision` applies SoA —
      fires on the array declaration.
   3. **Explicitly NOT added:** no muted-hint domain (Divergence 5 — no typeable form; do not
@@ -1282,8 +1400,10 @@ phases (P2, P5) checkpoint per the marks below.
      item 5).
   5. **Docs graduation:**
      [`IMP-collections.md`](../../../../docs/internal/implementation/IMP-collections.md) gains
-     "Array element storage — by-value inline (v0.3-M5)" and "Auto-SoA layout" sections (decisions,
-     rejected alternatives, the E10 serialization forward-compat layout-metadata note); trim both
+     "Array element storage — by-value inline (v0.3-M5)" (decisions D2/D6/D7/D8/D12/D13) and
+     "Auto-SoA layout" (decisions D1/D3/D4/D5/D9/D11 — D10 is the unrelated executor-model-dispatch
+     decision, excluded per FRAGO 022) sections (each with rejected alternatives; the by-value
+     section carries the E10 serialization forward-compat layout-metadata note); trim both
      SCRATCH docs to pointers per docs-checklist; update `docs/README.md` index rows.
      **Shape-contains docs home (FRAGO 008) + persist-semantics docs home (FRAGO 011):** the
      IMP-collections by-value section OWNS decision D12 (`contains` on `array<Shape>` = field-wise

@@ -579,7 +579,7 @@ for (it in items) { print(it.qty.toString()) }  // prints the real value — no 
 - the `array-shape-runtime-field-with-wait` deferral entry in [`registry/features.toml`](../../../registry/features.toml)
 - the error-gallery trigger in `examples/primantis-orders/v0_3_m3a_errors.ynz`
 
-**Acceptance coverage**: `crates/ynz-driver/tests/integration.rs` — `m5_p3_array_shape_runtime_field_crossing_runs` (the scratch doc's named acceptance signal), plus the two former guard-hole positions repurposed as acceptance (`m5_p3_array_shape_between_waits_runs`, `m5_p3_array_shape_nested_if_runs`) and the literal-field regression boundary (`v03_m3a_p3_array_shape_literal_crossing_still_works`). Design record: [`docs/internal/scratchpad/SCRATCH-future-array-by-value-element-storage.md`](../scratchpad/SCRATCH-future-array-by-value-element-storage.md).
+**Acceptance coverage**: `crates/ynz-driver/tests/integration.rs` — `m5_p3_array_shape_runtime_field_crossing_runs` (the scratch doc's named acceptance signal), plus the two former guard-hole positions repurposed as acceptance (`m5_p3_array_shape_between_waits_runs`, `m5_p3_array_shape_nested_if_runs`) and the literal-field regression boundary (`v03_m3a_p3_array_shape_literal_crossing_still_works`). Design record: [`docs/internal/implementation/IMP-collections.md` — "Array element storage — by-value inline (v0.3-M5)"](IMP-collections.md#array-element-storage--by-value-inline-v03-m5).
 
 ---
 

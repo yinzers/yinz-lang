@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ynz_ast::nodes::{Block, Expr, FunctionDecl, Item, OwnershipModifier, Stmt, StringPart};
-use ynz_diagnostics::SourceSpan;
+use ynz_diagnostics::{Diagnostic, SourceSpan};
 
 use crate::{check::TypedModule, shapes::ShapeTable, types::Type};
 
@@ -209,6 +209,77 @@ pub fn resolve_layout(
         padded_shapes: padded.clone(),
         arrays,
     }
+}
+
+/// The `[[lint_rule]]` name for the SoA-layout teaching surface (roadmap-locked, D9).
+pub const ARRAY_USING_SOA_LAYOUT: &str = "array-using-soa-layout";
+
+/// Build the `array-using-soa-layout` Tier 3 lint diagnostics for every array the
+/// layout AUTHORITY resolved to `Soa` (v0.3-M5 Phase 7 step 2).
+///
+/// Pure builder over the two authoritative inputs — [`LayoutDecisions`] (which arrays
+/// ARE SoA, post-D11 padding precedence) and the candidate list (which carries the
+/// per-site teaching vars `provable_len` + `hot_fields` on `SoaVerdict::Admitted`;
+/// `resolve_layout` drops them, so the pairing here recovers them by
+/// `(array_name, decl_span)`). No re-derivation: a second "is this array SoA?"
+/// computation here would be the E3 twin-derivation corpse
+/// (authoritative-derivation.md) — this function only READS the one authority.
+///
+/// Anchored on the array's declaration span. Deterministic order: `decisions.arrays`
+/// preserves the candidate walk order. Panics if the rule is missing from the
+/// registry (firing-site/registry drift is a compiler bug — the false-sharing
+/// firing-site posture).
+///
+/// Time: O(A · C) pairing scan (both are per-module small).  Space: O(A).
+pub fn layout_lints(decisions: &LayoutDecisions, candidates: &[SoaCandidate]) -> Vec<Diagnostic> {
+    let mut lints = Vec::new();
+    for decision in &decisions.arrays {
+        if !matches!(decision.kind, LayoutKind::Soa { .. }) {
+            continue;
+        }
+        // Recover the admitted candidate's teaching payload. A Soa decision ALWAYS
+        // pairs with an Admitted candidate (resolve_layout maps candidates 1:1);
+        // the defensive skip keeps this total if that invariant ever shifts.
+        let Some((provable_len, hot_fields)) = candidates
+            .iter()
+            .find(|c| c.array_name == decision.array_name && c.decl_span == decision.decl_span)
+            .and_then(|c| match &c.verdict {
+                SoaVerdict::Admitted {
+                    provable_len,
+                    hot_fields,
+                } => Some((*provable_len, hot_fields)),
+                SoaVerdict::Declined(_) => None,
+            })
+        else {
+            continue;
+        };
+
+        let fields_rendered = hot_fields
+            .iter()
+            .map(|f| format!("`{f}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let len_rendered = provable_len.to_string();
+        let vars: HashMap<&str, &str> = HashMap::from([
+            ("array", decision.array_name.as_str()),
+            ("shape", decision.shape_name.as_str()),
+            ("fields", fields_rendered.as_str()),
+            ("len", len_rendered.as_str()),
+        ]);
+        let diag = crate::lints::lint_diagnostic(
+            ARRAY_USING_SOA_LAYOUT,
+            decision.decl_span.clone(),
+            &vars,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "[[lint_rule]] `{ARRAY_USING_SOA_LAYOUT}` missing from \
+                         registry/features.toml — the firing site and the registry drifted"
+            )
+        });
+        lints.push(diag);
+    }
+    lints
 }
 
 /// ALL declared fields, declared order, `segment_index` = declared position (D2).

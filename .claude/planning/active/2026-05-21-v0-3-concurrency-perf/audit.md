@@ -319,3 +319,77 @@ Filed-by-session: phase6-fixround1-executor-2026-07-04-m5
   user-facing text ships" mitigation; this deferral just makes sure that gate specifically
   checks this point. Also: if a dedicated perf environment ever becomes available (FR#2's
   trigger).
+
+## 2026-07-04 — Deferral: pre-existing clippy debt in integration-test binaries, outside CI's own scanned scope (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#7 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#7: crates-ynz-diagnostics-tests-jargon-audit-rs-7
+- **WHAT** — 9 real `cargo clippy --tests -- -D warnings` violations exist across
+  `crates/ynz-diagnostics/tests/jargon_audit.rs` (redundant single-component import; a
+  `map_or(false, ...)` that should be `is_some_and(...)`; a `while let Some(...) = iter.next()`
+  that should be a `for` loop; three implicit-saturating-subtraction sites; three dead/unused
+  assignments to `site_count`), `crates/ynz-registry/tests/consistency.rs` (redundant
+  single-component import), and `crates/ynz-runtime/tests/m2_runtime.rs` +
+  `crates/ynz-runtime/src/lib.rs` (a duplicated `#[repr(C)]` attribute; a dead assignment). Verified
+  via `git stash` against clean `HEAD` (`e94a2a3`, the Phase 6 boundary): the identical 9 warnings
+  reproduce, confirming none of this milestone's Phase 6/7 work introduced them.
+- **WHY DEFERRED** — this repo's own documented CI (`.github/workflows/ci.yml`) runs
+  `cargo clippy --workspace -- -D warnings` with NO `--tests` flag, so it has never scanned these
+  separate integration-test binaries under `tests/*.rs` — this debt sits entirely outside the
+  project's own actual acceptance bar, and cleaning up pre-existing lint debt across three unrelated
+  crates is out of M5's array-storage/SoA charter.
+  discovered incidentally while boundary-reviewing Phase 7 (a broader `--tests`-scope gate run
+  surfaced it), not caused by anything this milestone touched.
+- **COST** — ~0.5 session (mechanical clippy auto-fixes for most of the 9; the two dead-assignment
+  and duplicated-attribute findings need a one-line human judgment call each on intent).
+- **TRIGGER** — the next milestone that touches any of `ynz-diagnostics`, `ynz-registry`, or
+  `ynz-runtime`'s test suites, OR if this repo's CI convention is ever widened to include `--tests`
+  in its clippy invocation (at which point this debt would newly redden CI and must be cleared
+  first).
+
+## 2026-07-04 — Deferral: codegen ICE — bare int literal into ANY `number`-typed slot crashes the compiler (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#7 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#7: crates-ynz-codegen-src-emit-rs-14101
+Filed-by-session: plan-fixup-icedefer-2026-07-04-m5
+
+> **ELEVATED priority.** This is a genuine user-facing compiler CRASH (panic/ICE, not a diagnostic)
+> reachable via what may be the single most common beginner mistake in the language — a bare int
+> literal where a `number`-typed slot is expected (`let x: number = 5`). "Non-blocking" in the
+> heading means non-blocking for M5's phase boundary only; it is NOT routine cleanup debt.
+
+- **WHAT** — Systemic codegen bug, broader than the shape-literal→array path it was first observed
+  on: an int literal assigned into ANY `number`-typed slot panics the compiler. Root cause is a
+  representation mismatch between the literal lowering and the store paths:
+  - `crates/ynz-codegen/src/emit.rs:14101` — `Expr::IntLit` unconditionally lowers to a raw `i64`
+    `IntValue`, with no branch on the expected type. Contrast `Expr::NumberLit` at
+    `emit.rs:14103-14136`, which correctly builds an alloca + stores decimal128 bits, returning a
+    pointer.
+  - `crates/ynz-codegen/src/emit.rs:19674-19679` (`store_field`, fired by ANY struct literal or
+    field assignment) AND the identical pattern in the plain `store()` function at
+    `emit.rs:19552-19557` (fired for `let`/`const` bindings generally) — both unconditionally call
+    `.into_pointer_value()` on the `Type::Number{precision<=34}` arm, assuming the value is always
+    a pointer-to-i128.
+  - `crates/ynz-typeck/src/check.rs:2162-2166` — typeck ADMITS the coercion (retypes `Expr::IntLit`
+    to `Type::Number` at the type level, no AST rewrite), so the program type-checks cleanly and
+    then codegen panics — inkwell's message is exactly "Found IntValue … expected the PointerValue
+    variant".
+  - Blast radius: `let x: number = 5` (no shape, no array) crashes; any struct literal or field
+    assignment with an int literal into a `number` field crashes. Confirmed PRE-EXISTING and
+    orthogonal to M5 (M5 Phase 2 only added Shape/Maybe arms to `store_field`; the `Type::Number`
+    arm is untouched legacy code from before this milestone). Confirmed no existing fixture or
+    example anywhere in the repo exercises a bare int literal into a `number`-typed slot — every
+    existing usage uses a decimal literal (e.g. `1234567.89`) — which is exactly why it went
+    undiscovered until Phase 7's doc-writing incidentally tried it. Independently confirmed at
+    source level by a deviation-judge dispatch (not just executor narration).
+- **WHY** — Out of M5's array-storage/SoA charter: the bug lives in untouched legacy numeric-literal
+  codegen, unrelated to array/SoA representation; fixing a systemic pre-existing literal-lowering
+  bug inside M5's Phase 7 (docs) fix round would be unreviewed scope creep into codegen at the
+  milestone's boundary.
+- **COST** — ~0.5-1 session. The fix is likely either (a) an expected-type-aware `Expr::IntLit`
+  branch mirroring `NumberLit`'s alloca-and-store pattern at `emit.rs:14103-14136`, or (b) coercing
+  the int literal to a number literal at typeck's retype point (`check.rs:2162-2166`) so codegen
+  never sees a raw int for a `number` slot — either approach needs its own small design pass + the
+  same E7-style call-site audit rigor this milestone used for arrays (every consumer of the lowered
+  value must agree on the representation).
+- **TRIGGER** — The next milestone touching numeric-literal codegen, OR **immediately** if a real
+  user hits this crash, OR the next time someone adds a `.ynz` example/fixture using a bare int
+  literal for a `number` field (which will immediately hit it — several pre-existing
+  `REF-collections` examples, e.g. `Position { x: number }` built with `{ x: 0, y: 0 }` int
+  literals, would already ICE if run today).

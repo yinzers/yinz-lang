@@ -4,7 +4,7 @@ description: "Every version of Yinz between v0.1 and v1.0 ships ONE focused thin
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-04"
 status: "active"
 author: "patrick"
 metadata:
@@ -234,7 +234,7 @@ The compiler auto-transforms `array<Shape>` storage from Array-of-Structs to Str
 
 - **Why this version**: SoA analysis is a substantial codegen optimization pass — requires the ownership system to be working (M4, v0.1), the `array<T>` implementation to be stable (v0.1), and an optimization-pass framework that can decide per-array (v0.2 LSP work surfaces some of this). v0.1 ships the basic `shape`/`array` infrastructure; v0.2 ships LSP/watch/fmt; v0.3 is the right slot for ambitious cross-cutting compiler analyses (it's also when auto-parallelization lands).
 - **Substitute used pre-this-version**: Default Array-of-Structs layout. Manual SoA via parallel `array<T>` of each field is possible if a user really needs it pre-v0.3, but no compiler help.
-- **Locked design**: See [`docs/internal/scratchpad/SCRATCH-future-auto-soa.md`](../internal/scratchpad/SCRATCH-future-auto-soa.md)
+- **Locked design**: Shipped in v0.3-M5 — see [`docs/internal/implementation/IMP-collections.md` — "Auto-SoA layout (v0.3-M5)"](../internal/implementation/IMP-collections.md#auto-soa-layout-v03-m5)
 
 > **⚠️ DO NOT FORGET** (checklist at top): new `[[muted_hint_domain]]` registry entries for `background_routing` and `channel_capacity` and `auto_arc`; `wait_points` domain activated (was protocol-only); `wait`/`background` hover docs updated (behavior changes from sequential); new lint rules `array-using-soa-layout` + `cross-thread-fields-not-padded` in registry; WHAT/WHAT-INSTEAD/WHY for all new errors (lend-across-thread, wait-on-non-may-block, channel-closed, large-copy warning); SoA debugger DAP integration; extension bump + screenshots for each new IDE surface; `pirates-roster` demo extended per milestone; per-milestone error gallery files (`v0_3_m{1..4}_errors.ynz`). Roadmap: [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
 
