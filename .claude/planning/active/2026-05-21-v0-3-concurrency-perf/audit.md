@@ -122,3 +122,53 @@ Idempotency-Key: 2026-07-02-v0-3-m4-channels-arc-release#4: crates-ynz-typeck-sr
 - **COST** — Trivial — move the lint-firing block after arity/type validation, or gate it on
   `call.args.len() == 1`.
 - **TRIGGER** — The next time `check_sleep_blocking_call` is touched for any other reason.
+
+## 2026-07-03 — Deferral: store_binding has no MapEntry deep-copy arm (suspected 4th escape surface) (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#3 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3: store-binding-mapentry-escape-gap
+
+- **WHAT** — `store_binding` (`crates/ynz-codegen/src/emit.rs`, ~line 18907) has no `MapEntry`
+  deep-copy arm — it falls through to a raw pointer store for that type. This is the same
+  escape-bug class Phase 3 already fixed twice this phase (a `value_to_stable_bits` MapEntry arm
+  for persist surfaces, and a `prepare_bg_arg_for_ctx` pre-gate for background-arg surfaces) but
+  on a THIRD, un-probed surface: a function declared to return `MapEntry<K,V>`, or a
+  `let e2 = entry` binding that escapes its scope without ever routing through
+  `value_to_stable_bits`, could carry a dangling pointer into freed frame memory.
+- **WHY** — code-reviewer flagged this as should-fix, not blocker, because it could not confirm
+  the exact source-level repro is reachable within its review scope (no `Bash`/build access) —
+  building the fix now, unconfirmed, risks either a wasted fix for an unreachable case or a fix
+  without a locking regression test. Real cost: this is genuinely the 4th instance of the same
+  bug class in this one migration (array-element escape, MapEntry bg-escape, MapEntry
+  array-escape, and now this suspected 4th), so leaving it unconfirmed carries real
+  technical-debt weight, not just theoretical risk.
+- **COST** — 1 focused session — add a `MapEntry` arm to `store_binding` mirroring the
+  `value_to_stable_bits` clone pattern (counted heap-cell clone of the `{i64,i64}` entry struct
+  + deep value-half copy), plus author a repro fixture (a function returning `MapEntry<K,V>`, or
+  a map-loop-var binding escaping via `let e2 = entry` without an intervening choke-point call)
+  and a tripwire test proving the fix closes it.
+- **TRIGGER** — (a) a future milestone's own adversarial sweep independently reproduces this
+  escape class on the suspected third surface, OR (b) Phase 4/5's SoA work touches
+  `store_binding` for an unrelated reason and the reviewer/executor at that point should
+  re-check this gap while already in the function.
+
+## 2026-07-03 — Deferral: no golden-IR-snapshot coverage on the new map choke-point call sites (non-blocking — deferred by 2026-07-03-v0-3-m5-auto-soa#3 at the phase boundary)
+Idempotency-Key: 2026-07-03-v0-3-m5-auto-soa#3: map-choke-point-golden-ir-snapshot
+
+- **WHAT** — No golden-IR-snapshot exists asserting the NEW map choke-point call sites'
+  (`map_new`, `map_val_set`, `map_val_get_into`, `map_val_get_maybe`, `map_iter_get_into`,
+  `map_count_val`, `map_has_int` in `crates/ynz-codegen/src/emit.rs`) generated LLVM IR shape in
+  absolute terms — the 13 refreshed golden snapshots this phase cover regression-detection on
+  OLD (pre-cut, non-map) call sites' decl-signature churn only.
+- **WHY** — Two independent reviewers (code-reviewer, test-quality) confirmed this is a real gap
+  but judged it low-priority defense-in-depth, not a current correctness concern —
+  runtime-behavior testing (the `m5_p3_mapshape_*`/`m5_p3_sweep_*` fixture matrix, which caught
+  both real miscompiles this phase found) is the appropriate primary verification tool for
+  genuinely NEW codegen logic; a golden/insta snapshot is a drift-detector against an
+  already-blessed baseline, not a correctness prover for new code. Building the snapshot now,
+  while the map codegen may still shift in Phase 4/5's SoA work, risks freezing a soon-to-be-stale
+  baseline.
+- **COST** — <1 session — author one `map<int,Shape>` build+iterate fixture, generate its golden
+  IR snapshot via the existing `insta` harness, review it by hand once for correctness, commit
+  as the new baseline.
+- **TRIGGER** — Once Phase 5 (SoA codegen) stabilizes the map/array codegen paths for good (SoA
+  rides the same by-value substrate), add this snapshot then — building it before Phase 5 risks
+  needing to regenerate it again once SoA lands.

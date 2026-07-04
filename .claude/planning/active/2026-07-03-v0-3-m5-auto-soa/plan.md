@@ -799,10 +799,16 @@ phases (P2, P5) checkpoint per the marks below.
      `value_to_stable_bits` (P2 fix round 3)**: union repr is NON-uniform (a `{i64 tag, i64
      data}` tagged struct from the annotated-Let ctor, but a NULL pointer for the `T | nothing`
      none case), so no blind clone is correct — a 16-byte clone segfaults on the null repr and
-     still persists the interior stack payload pointer; unobservable today (no fixture can
-     construct a union persisting through the choke points), documented in the helper's doc —
-     CLOSE it when union narrowing improves enough to construct the case, or gate the type
-     (loud-reject unions at persist surfaces) if this sweep can construct it; (f)
+     still persists the interior stack payload pointer; probe-verified reachable-but-loud-blocked
+     today (write-side persistence through `map<K,Union>.set` and `array<Union>` literals DOES
+     compile and run — raw-pointer persist through the marshalling choke points — and only the
+     read-back path ICEs, loud, not silently wrong; corrected per FRAGO 012), documented in the
+     helper's doc (see `value_to_stable_bits`'s KNOWN-HOLE doc comment in
+     `crates/ynz-codegen/src/emit.rs` and the two loud-fail pins
+     `m5_p3_sweep_union_readback_blocked_array`/`_map` in
+     `crates/ynz-driver/tests/integration.rs`) —
+     CLOSE it when union narrowing improves enough to need a real diagnostic instead of the
+     documented loud ICE (D6's full loud-reject remains unbuilt by design, per FRAGO 012); (f)
      **contains-on-maybe raw envelope-pointer compare (pre-existing, NON-persist)**: the
      contains loop marshals the maybe target's raw envelope bits via the compare-only
      `array_elem_bits64` — consumed in place, no escape, but bit-identity compare on a maybe
