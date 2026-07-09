@@ -3,9 +3,9 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago"]
 created_at: "2026-07-04"
-updated_at: "2026-07-04"
+updated_at: "2026-07-09"
 metadata:
   type: "plan"
 ---
@@ -195,10 +195,10 @@ metadata:
 
 | # | Assumption | Status |
 |---|---|---|
-| A1 | v0.3-M5 auto-SoA is merged to `main` and tagged before any M6 phase executes | **unverified** — future event, enforced as the execution gate (banner above), not assumed true at plan time |
+| A1 | v0.3-M5 auto-SoA is merged to `main` and tagged before any M6 phase executes | **verified 2026-07-09 (Phase 0)** — `97e32f6` is an ancestor of `main`; tag `v0.3.0-m5` → `f5495c9` |
 | A2 | The audit's file:line citations are accurate as of 2026-07-04; they may drift by execution time | **verified as of this session** (direct re-reads above); **re-verify per-phase at dispatch** (CCIR-1, ¶3.4) |
-| A3 | P1-2's twin type-walkers (`emit.rs:8276` unsubstituted vs `emit.rs:8364` generic-substituted) are dormant because both frame-layout call sites filter `generics.is_empty()` | **unverified** — Phase 0 hard gate; confirm `Cg.type_params` cannot be non-empty in SM-resume context |
-| A4 | P2-5's recursion-chain cleanup gap is dormant because a self-recursive SM function cannot admit a CPU-parallel group (mutual exclusion between the recursion gate and spike admission) | **unverified** — Phase 0 hard gate |
+| A3 | P1-2's twin type-walkers (`emit.rs:8276` unsubstituted vs `emit.rs:8364` generic-substituted) are dormant because both frame-layout call sites filter `generics.is_empty()` | **verified 2026-07-09 (Phase 0): DORMANT** — SM classification gated `generics.is_empty()` (`emit.rs:252/308/1228/1277`); `lower_generic_function` uses empty suspend machinery + `sm_frame_ptr: None` (`emit.rs:1490-1496`); generics cannot suspend (`check.rs:4005-4020`). Field is named `Cg.type_subst`, not `type_params` |
+| A4 | P2-5's recursion-chain cleanup gap is dormant because a self-recursive SM function cannot admit a CPU-parallel group (mutual exclusion between the recursion gate and spike admission) | **FALSIFIED 2026-07-09 (Phase 0): LIVE** for a NESTED (branch-arm) group in a zero-param self-recursive host — no gate exists (SCC pass skips self-loops, `queries.rs:900-917`; nested admission gates are block-local, `cpu_admission.rs:157-161/508-534`). Surfaced per CCIR-4 for the deviation-judge → FRAGO seam; **FRAGO 001 routed the fix to Phase 3b**; see audit.md `executor-2026-07-09-m6-phase0` |
 | A5 | No project `risk-anchors.md` override exists | **verified** (glob, this session) |
 | A6 | Docker `dev` service builds + tests the full workspace per project CLAUDE.md's documented commands | **verified** (house convention, unchanged since M5) |
 | A7 | `IMP-concurrency.md`'s "Design Divergences" section (:840+) is the correct home for the new bare-channel entry | **verified** (direct read, this session) |
@@ -313,9 +313,10 @@ routing must state the truth about what exists today versus what is deferred and
    `examples/primantis-orders/m6_errors.ynz` exists with WHY-commented triggers for every new
    compile-time diagnostic this milestone adds; the roadmap + Capability Ledger record M6; the full
    workspace suite is green.
-9. P2-3, P1-2 (if confirmed dormant), P2-5 (if confirmed dormant), and P2-7 (newly surfaced) are
-   recorded as proper four-field deferrals in Future Requirements — never silent, never a loose
-   checkbox.
+9. P2-3, P1-2 (confirmed dormant, Phase 0), P2-7 (newly surfaced), and the dynamic-dispatch ×
+   suspension predicate gap (FRAGO 002 → Future Requirements #10) are recorded as proper four-field
+   deferrals in Future Requirements — never silent, never a loose checkbox. P2-5, confirmed LIVE in
+   Phase 0 (FRAGO 001), is FIXED in Phase 3b rather than deferred.
 10. The `ynz-runtime` crate is Miri-clean and clean under ThreadSanitizer/AddressSanitizer (or every
     finding is triaged on the record) — and a dedicated sanitizer CI job is live in
     `.github/workflows/ci.yml`, proven non-vacuous, so the bug classes this milestone fixes (UAF,
@@ -331,13 +332,16 @@ deferral naming the remaining gap, is not done.
 
 ### 3.2 Concept
 
-Ten phases (0–8, with 6b inserted between 6 and 7 — see the amendment note in Terrain). **Gate first**
+Eleven phases (0–8, with 3b inserted between 3 and 4 per FRAGO 001 and 6b inserted between 6 and 7 —
+see the amendment note in Terrain). **Gate first**
 (P0 verifies the two THEORY findings, the dynamic-dispatch × suspension coverage question, and
 confirms the execution-gate precondition). **The flagship blocker + its escape hatch** (P1 UFCS fix; P2 the block_on-fallback
 guard — sequenced immediately after P1 because P2's correctness assertion depends on P1 actually being
 fixed, a deliberate resequencing of the audit's raw synthesis order, recorded as Decision D1 below).
-**Channel/scheduler correctness** (P3 ABA+orphan; P4 lost-wakeup; P5 buffered-element leak — three
-independent subsystems, sequenced for one conductor's convenience, not a hard dependency chain).
+**Channel/scheduler correctness** (P3 ABA+orphan; P3b recursion-chain spike CPU-handle cleanup leak —
+FRAGO 001, sequenced right after P3 in the same drop-ladder region; P4 lost-wakeup; P5
+buffered-element leak — independent subsystems apart from the P3→P3b adjacency, sequenced for one
+conductor's convenience, not a hard dependency chain).
 **Mechanical + honesty** (P6 two small independent fixes; P6b sanitizer lane — Miri/TSan/ASan on the
 runtime crate, proven non-vacuous and CI-enforced going forward; P7 docs/registry sweep).
 **Close-out** (P8 demo/gallery/roadmap/full-suite/release-handoff). Each phase ends green-tree with its
@@ -387,6 +391,41 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
   proven by reading the real code, not narrated?); design-doc-alignment reviewer (the execution-gate
   precondition itself).
 - **Model tag:** `(coding, standard, small)`
+
+**Phase 0 verdicts (executor `executor-2026-07-09-m6-phase0`, 2026-07-09):**
+
+1. ✅ **Execution gate SATISFIED** — `97e32f6` (M5 merge) is an ancestor of `main`; tag `v0.3.0-m5`
+   → `f5495c9`. Pre-existing `v0.3.0-m6`/`v0.3.0-m7` tags are pre-cut planning-era release-style
+   commits (`f0d4946`/`e7c00a7`), not prior M6/M7 code work — non-blocking, flagged for release
+   hygiene (a real M6 `/release` will collide with the existing `v0.3.0-m6` tag name).
+2. ✅ **Citation re-verify (CCIR-1)**: all substantive citations MATCH the live tree. Trivial
+   drifts: `run.rs:75` → `run.rs:76`; `Cg.type_params` is actually `Cg.type_subst`
+   (`emit.rs:1763-1765`); roadmap's duplicate `## Capability Ledger` sections now at lines
+   **417 and 471** (not 365/417 — Phase 8 must target the new lines); `runtime.rs` no-op stub
+   body at :297-299. Full match list in audit.md.
+3. ✅ **P1-2: DORMANT** — deferral #2 stands (confirmed dormant; SM machinery is
+   `generics.is_empty()`-gated at `emit.rs:252/308/1228/1277`, generic lowering carries empty
+   suspend machinery at `emit.rs:1490-1496`, generics cannot suspend per `check.rs:4005-4020`).
+4. ⚠️ **P2-5: LIVE** (assumption A4 falsified) — a zero-param self-recursive suspending host with
+   a NESTED branch-arm CPU group IS admitted as a spike host (no mutual-exclusion gate: SCC pass
+   emits only `len >= 2` components so self-loops pass, `queries.rs:900-917` +
+   `may_block.rs` Kosaraju `component.len() >= 2`; nested admission gates are block-local,
+   `cpu_admission.rs:157-161/508-534`; M3g Phase 3 removed the co-resident-suspension decline),
+   while the drop ladder cleans spike CPU handles on the ROOT frame only (`runtime.rs:607` vs
+   chain walk `:659-680`) → chain-child `CpuJoinHandle` leak on cancellation. **Surfaced per
+   CCIR-4 for the deviation-judge → FRAGO seam — not fixed, not folded into a phase by this
+   executor.** Full evidence chain in audit.md. **Seam ruled (FRAGO 001, JUSTIFIED/RISK-NEUTRAL):
+   fix routed to the new Phase 3b below.**
+5. ⚠️ **Dynamic-dispatch × suspension: GAP at the predicate layer, UNREACHABLE today** — typeck
+   permits a suspending fn to satisfy a `follows` contract (`check_follows_contracts`,
+   `check.rs:5052-5136`, never reads `suspends`), and all four predicates are MethodCall-blind
+   (same shape as P1-1); but every `dynamic Contract` call site hard-errors in codegen
+   ("dynamic dispatch call sites not yet lowered in M4 P4", `emit.rs:14622-14625`) — a loud
+   compile-time error, never a silent mis-suspension. **Surfaced for the seam to route**:
+   either record-with-trigger (dynamic-dispatch lowering ships) or FRAGO folding predicate
+   coverage into Phase 1's threading. **Seam ruled (FRAGO 002, JUSTIFIED/RISK-NEUTRAL):
+   deferral-with-trigger per the D4/P2-3 precedent — recorded as Future Requirements #10, NOT
+   folded into Phase 1.**
 
 #### Phase 1 — P1-1: UFCS suspension invisibility (BLOCKER fix)
 
@@ -528,6 +567,48 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
   producers, never two ad hoc schemes).
 - **Model tag:** `(coding, high, medium)` — checkpoint marks mandatory (>5 steps).
 
+#### Phase 3b — P2-5: recursion-chain × spike CPU-handle cleanup leak (LIVE — confirmed Phase 0)
+
+- **Task + purpose:** close the confirmed cancellation-cleanup leak (FRAGO 001 — Phase 0 falsified
+  assumption A4) where a recursion-chain child suspended at its CPU join leaks its boxed
+  `CpuJoinHandle`s. Root cause (Phase-0-verified, corroborated by the adversarial gate-checker):
+  `SpawnStateFnFuture::drop` runs `cleanup_spike_cpu_handles` on the ROOT frame only
+  (`runtime.rs:607`), while the recursion-chain walk (`runtime.rs:659-680`) frees each child's
+  sleep handle + frame but never its spike CPU handles. Reachable via a nested branch-arm
+  CPU-parallel group in a zero-param self-recursive suspending host (no mutual-exclusion gate
+  excludes it: SCC self-loops survive `find_mutual_suspension_cycles`' `len() >= 2` filter at
+  `may_block.rs:1617`; nested admission is block-local at `cpu_admission.rs:508-534`; M3g Phase 3
+  removed the co-resident-suspension decline). Assumption A4 falsified.
+- **Steps**
+  1. CCIR-1: re-verify the cited lines against the live tree (`runtime.rs:607`,
+     `runtime.rs:659-680`, `may_block.rs:1617`, `cpu_admission.rs:508-534`, and
+     `queries.rs:900-917` in `ynz-typeck` — note the correct crate is `ynz-typeck/src/queries.rs`,
+     a Phase-0 citation-drift correction).
+  2. Author a RED repro BEFORE the fix (verify-before-you-fix, per
+     [verification.md](../../../rules/verification.md)): a zero-param self-recursive suspending
+     host with a nested branch-arm pure-CPU group, cancelled while a chain child is suspended at
+     its CPU join; assert (via `YNZ_ALLOC_COUNTER_OUTPUT` alloc=free parity or handle-count
+     instrumentation) that the child's `CpuJoinHandle`s are freed on cancellation. Commit RED,
+     gating the build.
+  3. Fix: extend the recursion-chain drop walk (`runtime.rs:659-680`) to call the SAME
+     `cleanup_spike_cpu_handles` on each chain child that the root frame already uses
+     (`runtime.rs:607`) — one authoritative cleanup path threaded to both root and chain children,
+     never a second ad hoc drop path
+     ([authoritative-derivation.md](../../../rules/authoritative-derivation.md)).
+  4. Correct the stale `queries.rs:942-943` comment (in `ynz-typeck`) that still claims structural
+     inertness via the Phase-3-removed co-resident-suspension decline — the docs-honesty sibling
+     of this leak fix, squarely in M6's "docs must not lie" charter.
+  5. Run the full suite + the new RED fixture (now GREEN); confirm no regression in M3g/M4
+     recursion + CPU-group fixtures.
+- **Exit criteria:** leak closed via the one shared cleanup choke point; RED→GREEN repro committed
+  with non-vacuous alloc=free (or handle-count) parity; stale `queries.rs:942-943` comment
+  corrected; full suite green.
+- **Reviewer fan-out:** code-reviewer; adversarial gate-checker (does the repro genuinely exercise
+  the nested-branch-arm self-recursive-host cancellation window, or a broader/different leak?);
+  design-doc-alignment reviewer (authoritative-derivation.md — one cleanup choke point threaded to
+  root + chain children, not a second path).
+- **Model tag:** `(coding, high, medium)`
+
 #### Phase 4 — P3-2: `ynz_channel_recv_poll` lost-wakeup window
 
 - **Task + purpose:** close the register-before-poll race in `channel.rs:311-339` without
@@ -620,7 +701,7 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
   concurrency integration fixtures, under Miri and under ThreadSanitizer/AddressSanitizer — the
   mechanical hunt for exactly the bug classes this milestone fixed by hand (UAF, double-free, data
   races) — and wire a permanent CI job so those classes are hunted on every future push/PR, not just
-  this one hotfix. Sequenced after Phases 1, 3, 4, and 5 (a real dependency, not mere convenience —
+  this one hotfix. Sequenced after Phases 1, 3, 3b, 4, and 5 (a real dependency, not mere convenience —
   see Coordinating Instructions): the sanitizers must scan the FIXED runtime code, or their findings
   would just be re-discoveries of bugs already known and scheduled.
 - **Steps**
@@ -720,8 +801,11 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
   7. Record explicitly that P2-6 (auto-Arc unwired) needs NO action this milestone — already correctly
      deferred to v0.4+ with a self-diagnosing registry entry (confirmed this session) — so a reviewer
      doesn't mistake it for a silent gap.
-  8. Cross-reference this plan's Future Requirements section (below) for the P2-3, P1-2 (post-Phase-0),
-     P2-5 (post-Phase-0), and P2-7 deferrals — confirm each is present with its four fields.
+  8. Cross-reference this plan's Future Requirements section (below) for the P2-3, P1-2
+     (post-Phase-0), P2-7, and #10 dynamic-dispatch × suspension (FRAGO 002) deferrals — confirm
+     each is present with its four fields. P2-5 is NOT a deferral post-Phase-0: it was confirmed
+     LIVE and is fixed in Phase 3b (FRAGO 001) — confirm Future Requirements #3 records that
+     disposition rather than a stale dormancy note.
 - **Exit criteria:** preemption + `background.cpuBound` registry entries live with real four-field
   deferrals; `IMP-concurrency.md` Design Divergences carries the bare-channel entry; FFI +
   `KernelModeRejectsWait` doc text corrected; all Future-Requirements deferrals cross-referenced and
@@ -781,10 +865,14 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
 - **Sequencing**: Phase 0 gates everything. Phase 1 → Phase 2 is a hard dependency (Decision D1) — do
   not start Phase 2 before Phase 1's fixture class is GREEN. Phases 3, 4, 5 are independent of each
   other and of Phases 1–2 (different subsystems); they are sequenced 3→4→5 for one conductor's
-  convenience, not a hard dependency — a FRAGO reordering them is not a plan violation. Phase 6 is
+  convenience, not a hard dependency — a FRAGO reordering them is not a plan violation. **Phase 3b (FRAGO 001)
+  is sequenced immediately after Phase 3** — same `runtime.rs:591-693` drop-ladder region, minimizing
+  merge collision — **and is a hard prerequisite of Phase 6b** (the sanitizer lane must scan the FIXED
+  recursion-chain cleanup path, same rationale as Phases 1/3/4/5). Phase 6 is
   independent of everything. **Phase 6b (sanitizer lane) has a real dependency, not mere convenience:
-  it must run AFTER Phases 1, 3, 4, and 5 land**, because Miri/TSan/ASan need to scan the FIXED runtime
-  code (the UFCS threading, the ABA purge, the lost-wakeup reorder, the drop-glue mechanism) — scanning
+  it must run AFTER Phases 1, 3, 3b, 4, and 5 land**, because Miri/TSan/ASan need to scan the FIXED runtime
+  code (the UFCS threading, the ABA purge, the recursion-chain spike-handle cleanup, the lost-wakeup
+  reorder, the drop-glue mechanism) — scanning
   the pre-fix state would only re-discover bugs already known and scheduled. It is independent of
   Phase 6 itself; sequenced 6→6b for one conductor's convenience. Phase 7 should follow Phase 0's
   dormancy verdicts (so the Future Requirements it cross-references are settled) AND follow Phase 6b
@@ -862,6 +950,10 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
   resurrect a dead task's send under a live task's identity — the generation-salted `caller_token`,
   minted from one shared salting scheme covering both producers, closes the ABA window for both
   (Phase 3).
+- No recursion-chain child's spike `CpuJoinHandle`s survive its cancellation — the recursion-chain
+  drop walk frees each child's spike CPU handles via the same authoritative `cleanup_spike_cpu_handles`
+  choke point the root frame uses, proven by Phase 3b's RED→GREEN alloc=free (or handle-count) parity
+  fixture (Phase 3b).
 - No multi-consumer receive can be lost to the register/poll race window (Phase 4), and P3-4's
   existing "no lock held across a blocking poll" clean bill is re-verified, not merely assumed, after
   the reorder.
@@ -1052,12 +1144,12 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
    unsubstituted generic in SM-resume context, OR the next milestone touching generics+suspension
    together.
 3. **P2-5 — recursion-chain × spike cleanup gap** (`runtime.rs:591-693`, root-frame spike-handle
-   cleanup vs recursion-chain-children sleep-handle-only cleanup). WHY deferred: Phase 0 verifies the
-   mutual-exclusion gate first; if the gate genuinely holds (self-recursive SM fn cannot admit a
-   CPU-parallel group), there is nothing live to fix. COST to fix later: unknown until Phase 0's
-   verdict; likely ~1 session if live (extend cleanup to recursion-chain children). TRIGGER: the
-   mutual-exclusion gate is lifted in a future milestone (self-recursion + CPU-parallel groups become
-   simultaneously admissible).
+   cleanup vs recursion-chain-children sleep-handle-only cleanup). **Confirmed LIVE — fixed in
+   Phase 3b** (Phase 0, 2026-07-09, falsified assumption A4: no mutual-exclusion gate exists for a
+   nested branch-arm CPU group in a zero-param self-recursive suspending host; FRAGO 001 routed the
+   fix to the new Phase 3b, which closes the leak via the shared `cleanup_spike_cpu_handles` choke
+   point). No longer a deferral — this entry is retained so the audit-finding numbering (P2-5)
+   resolves to its actual disposition rather than a stale "verify dormancy first" note.
 4. **Bare-channel end-of-stream / channel-close semantics** (P2-1's underlying design gap — the
    footgun is documented loudly per Phase 7, but the FEATURE is not designed). WHY deferred: this is a
    real design question (what does `.close()` look like; does last-sender-drop auto-close given the
@@ -1099,3 +1191,17 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
    session (expected-type-aware `Expr::IntLit` branch, or typeck-level int→number coercion; its own
    small design + call-site audit). TRIGGER: Gate-4 conversation — Patrick assigns row 441 a home
    (flagged to him explicitly; not auto-claimed by either M6 or M7).
+10. **Dynamic-dispatch × suspension predicate blindness** (`check.rs` `check_follows_contracts`
+    never reads `suspends`; the four suspension predicates — `may_block.rs` call-graph,
+    `cpu_admission.rs`, `emit.rs` `collect_callees_in_expr` + `is_direct_suspending_call` — are all
+    MethodCall-blind for the vtable-resolved `dynamic Contract` form, the same shape as P1-1's UFCS
+    gap). **WHY deferred:** every `dynamic Contract` call site hard-errors at codegen today
+    (`emit.rs:14622-14625`, "not yet lowered in M4 P4") — zero live exposure (a loud compile error,
+    never a silent mis-suspension), so no reachable test can exercise a fix; coding the predicate
+    threading now is speculative work against dead code, the same YAGNI-ceiling shape D4/P2-3
+    already names. **COST to fix later:** small — reuses Phase 1's shared authoritative-resolution
+    threading directly; should land in the SAME future phase that lowers `dynamic Contract`
+    codegen, not as a separate follow-on. **TRIGGER:** `dynamic Contract` call-site codegen
+    lowering ships (the remaining M4 P4 work — owning milestone TBD, flagged to Patrick at Gate-4
+    rather than left "someday"). (FRAGO 002 — deferral-with-trigger per the D4/P2-3 precedent, not
+    a fix phase.)
