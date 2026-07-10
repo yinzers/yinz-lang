@@ -1,0 +1,23 @@
+// v0.3-M6 Phase 1c RED fixture (FRAGOs 006/007 / signed R14): maybe-arg use-after-free.
+// Correct behavior: `m` (maybe<int>, runtime-computed via `42`.toInt() so it cannot be
+// constant-folded) is passed to the suspending callee `pick`, which reads it AFTER its
+// own suspend point — so the staged envelope must survive the parent's suspension.
+// Prints 42, exits 0.
+// Pre-fix failure (the documented UAF, probe-confirmed segment 4): maybe<T> is a pointer
+// to a stack-resident {tag,payload} envelope; the arg-staging arm stages ptr_to_int of
+// that STACK address into the child frame (value_to_i64_bits' by-pointer arm), and
+// Check 2b never fires on arg-escape (maybe is not in the crossing classifier). The
+// parent returns Pending, its stack dies, and the resumed child dereferences the dangling
+// envelope — NONDETERMINISTIC 13-15-digit pointer garbage instead of 42.
+
+function pick(m: maybe<int>) -> int {
+  wait sleep(10)
+  return m.or(0)
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  let m: maybe<int> = `42`.toInt()
+  const v = wait pick(m)
+  print(v.toString())
+}

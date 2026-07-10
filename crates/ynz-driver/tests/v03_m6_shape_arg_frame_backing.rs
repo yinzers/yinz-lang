@@ -1,4 +1,5 @@
-//! v0.3-M6 Phase 1b (FRAGO 004): shape-arg frame-backing use-after-free RED→GREEN class.
+//! v0.3-M6 Phase 1b (FRAGO 004) + Phase 1c (FRAGOs 006/007/013): aggregate-arg
+//! frame-backing use-after-free RED→GREEN class (the signed-R14 surface).
 //!
 //! Authored BEFORE the crossing-classifier fix (RED-repro-before-fix): each test asserts
 //! the CORRECT behavior and fails RED on the pre-fix tree for the documented UAF reason —
@@ -282,13 +283,23 @@ fn v03_m6_number_arg_fused_group_is_deterministic_across_runs() {
 }
 
 #[test]
-fn v03_m6_non_escaping_number_and_fixed_args_are_not_wrongly_affected() {
+fn v03_m6_non_escaping_args_of_every_widened_type_are_not_wrongly_affected() {
     // WHY: the committed FALSE-POSITIVE sweep (previously only run on gitignored probe
-    // files). A NON-escaping `number` arg to a pure callee must not be wrongly
-    // frame-backed (still computes 3.5) and a NON-escaping `fixed<int>` arg to a pure
-    // callee must not be wrongly Check-2b-rejected (compiles, runs, prints 9). The
-    // fixture's layout notes document two TRUE-crossing shapes (declare-after-wait
-    // reads; adjacent CPU-spike pairs) this sweep deliberately avoids.
+    // files; extended by Phase 1c step 5 with the maybe/union/anon halves). A
+    // NON-escaping `number` arg to a pure callee must not be wrongly
+    // frame-backed — the 3.5 value assertion guards observable behavior; the direct
+    // proof of the plain-alloca classification is the Phase 1b IR sweep, not this value
+    // (frame-backing is value-preserving, so 3.5 alone cannot rule it out) — a
+    // NON-escaping `fixed<int>` arg to a pure
+    // callee must not be wrongly Check-2b-rejected (compiles, runs, prints 9), and the
+    // Phase 1c types must be equally untouched: a non-escaping `maybe<int>` /
+    // union / anonymous struct-literal arg to a pure callee is neither rejected
+    // (Check 2 / Check 2b skips key on arg-escape-ONLY names — these never arg-escape)
+    // nor wrongly heap-cell-promoted (promotion keys on the crossing set; the direct
+    // no-promotion proof is the Phase 1c step-5 IR sweep — zero `ynz_alloc` cell sites
+    // for these bindings). The fixture's layout notes document two TRUE-crossing shapes
+    // (declare-after-wait reads; adjacent CPU-spike pairs) this sweep deliberately
+    // avoids.
     let (stdout, stderr, code, timed_out) = ynz_run_with_timeout(
         "v0_3_m6_non_escaping_args_false_positive_sweep.ynz",
         RUN_TIMEOUT,
@@ -299,14 +310,149 @@ fn v03_m6_non_escaping_number_and_fixed_args_are_not_wrongly_affected() {
     );
     assert_eq!(
         code, 0,
-        "non-escaping number/fixed args must compile and run clean (a Check 2b rejection \
-         here is a classifier false positive); stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "3.5\n9\n",
-        "non-escaping args must be untouched: bump(x) == 3.5, headroom(nums) == 9; \
+        "non-escaping number/fixed/maybe/union/anon args must compile and run clean (a \
+         Check 2 / Check 2b rejection here is a classifier false positive); \
          stderr:\n{stderr}"
     );
+    assert_eq!(
+        stdout, "3.5\n9\n40\nsquare\n6\n",
+        "non-escaping args must be untouched: bump(x) == 3.5, headroom(nums) == 9, \
+         firstOr(m) == 40, tagOf(f) == `square`, crewOf({{...}}) == 6; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m6_maybe_arg_pure_call_yields_deterministic_value() {
+    // WHY: `const v = wait pick(m)` with `m: maybe<int>` — the Phase 1c (FRAGOs 006/007,
+    // signed R14) half of the same UAF class. The maybe envelope lives in a parent stack
+    // alloca; arg-staging stages ptr_to_int of that STACK address into the child frame
+    // and Check 2b never fires on arg-escape. Pre-fix signature (Paper-Traced this
+    // phase): NONDETERMINISTIC 15-digit pointer garbage instead of 42. The FRAGO-013 fix
+    // must bind-time-promote the envelope to a counted heap cell via the one classifier.
+    let (stdout, stderr, code, timed_out) =
+        ynz_run_with_timeout("v0_3_m6_maybe_arg_pure_call.ynz", RUN_TIMEOUT);
+    assert!(
+        !timed_out,
+        "maybe-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        code, 0,
+        "maybe-arg fixture must compile and run clean — a Check 2b rejection here \
+         violates the signed R14 'nothing rejected' disposition; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "42\n",
+        "wait pick(m) must yield 42 — pre-fix this reads a dangling stack envelope and \
+         prints nondeterministic pointer garbage (the UAF tell); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m6_maybe_arg_pure_call_is_deterministic_across_runs() {
+    // WHY: the non-vacuous determinism proof for the maybe half (Phase 1c step 4). The
+    // pre-fix UAF signature is DIFFERENT garbage every run; N=10 identical correct
+    // values proves the envelope lives in stable heap memory, not surviving-by-luck
+    // stack.
+    for run in 0..10 {
+        let (stdout, stderr, code, timed_out) =
+            ynz_run_with_timeout("v0_3_m6_maybe_arg_pure_call.ynz", RUN_TIMEOUT);
+        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
+        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
+        assert_eq!(
+            stdout, "42\n",
+            "run {run}: every run must print exactly 42 — any variation is the UAF \
+             signature; stderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn v03_m6_union_arg_pure_call_yields_deterministic_value() {
+    // WHY: `const label = wait describe(fig)` with `fig: Figure = Circle | Square`
+    // holding a Square — the Phase 1c union half. The union's {i64 tag, i64 data}
+    // tagged struct lives in a parent stack alloca; staging stages ptr_to_int of it.
+    // Pre-fix signature (Paper-Traced this phase): deterministically the WRONG variant —
+    // `circle` 3/3 from the dangling tag read. The FRAGO-013 fix must bind-time-promote
+    // the envelope to a counted heap cell (`union_to_heap_cell`, resolving the
+    // value_to_stable_bits known-hole for the crossing path) via the one classifier.
+    let (stdout, stderr, code, timed_out) =
+        ynz_run_with_timeout("v0_3_m6_union_arg_pure_call.ynz", RUN_TIMEOUT);
+    assert!(
+        !timed_out,
+        "union-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        code, 0,
+        "union-arg fixture must compile and run clean — a Check 2b rejection here \
+         violates the signed R14 'nothing rejected' disposition; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "square\n",
+        "wait describe(fig) must yield `square` — pre-fix the dangling tag read prints \
+         the wrong variant `circle` (the UAF tell); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m6_union_arg_pure_call_is_deterministic_across_runs() {
+    // WHY: the non-vacuous determinism proof for the union half (Phase 1c step 4).
+    // Pre-fix the wrong variant happened to be DETERMINISTIC (stale memory decoding as
+    // the Circle tag), so the value assertion alone carries the RED; N=10 additionally
+    // proves the fixed staging is stable heap memory, not surviving-by-luck stack.
+    for run in 0..10 {
+        let (stdout, stderr, code, timed_out) =
+            ynz_run_with_timeout("v0_3_m6_union_arg_pure_call.ynz", RUN_TIMEOUT);
+        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
+        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
+        assert_eq!(
+            stdout, "square\n",
+            "run {run}: every run must print exactly `square` — any variation is the \
+             UAF signature; stderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn v03_m6_anon_struct_arg_pure_call_yields_deterministic_value() {
+    // WHY: `wait crew({ ... })` — the Phase 1c anonymous-aggregate half. The literal has
+    // NO LET name for the crossing classifier to anchor on, so the Phase 1b fix cannot
+    // see it; it is materialized in a dying stack slot and staged by pointer. Pre-fix
+    // signature (Paper-Traced this phase): 4240380 instead of 7, 3/3 runs. The fix must
+    // route StructLit args through value_to_stable_bits inside the ONE
+    // stage_suspending_call_arg_bits helper (covers all three staging loops).
+    let (stdout, stderr, code, timed_out) =
+        ynz_run_with_timeout("v0_3_m6_anon_struct_arg_pure_call.ynz", RUN_TIMEOUT);
+    assert!(
+        !timed_out,
+        "anon-struct-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        code, 0,
+        "anon-struct-arg fixture must compile and run clean; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "7\n",
+        "wait crew({{...}}) must yield the cargo value 7 — pre-fix this reads a dangling \
+         unnamed temporary and prints garbage (the UAF tell); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m6_anon_struct_arg_pure_call_is_deterministic_across_runs() {
+    // WHY: the non-vacuous determinism proof for the anonymous-aggregate half (Phase 1c
+    // step 4). N=10 identical correct values proves the literal is staged from a stable
+    // surviving allocation, not surviving-by-luck stack.
+    for run in 0..10 {
+        let (stdout, stderr, code, timed_out) =
+            ynz_run_with_timeout("v0_3_m6_anon_struct_arg_pure_call.ynz", RUN_TIMEOUT);
+        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
+        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
+        assert_eq!(
+            stdout, "7\n",
+            "run {run}: every run must print exactly 7 — any variation is the UAF \
+             signature; stderr:\n{stderr}"
+        );
+    }
 }
 
 #[test]

@@ -1,0 +1,27 @@
+// v0.3-M6 Phase 1c RED fixture (FRAGOs 006/007 / signed R14): anonymous
+// struct-literal-arg use-after-free.
+// Correct behavior: the anonymous Ship literal `{ name: ..., cargo: 7 }` passed directly
+// to the suspending callee `crew` (no LET binding anywhere) must be staged from a
+// surviving allocation, because `crew` reads `self.cargo` AFTER its own suspend point.
+// Prints 7, exits 0.
+// Pre-fix failure (the documented UAF, probe-confirmed by Phase 1b's residual probes):
+// the literal is materialized in a dying stack slot and staged by pointer into the child
+// frame — there is NO LET name for the crossing classifier to anchor on, so the Phase 1b
+// fix cannot see it. The parent returns Pending, its stack dies, and the resumed child
+// reads a dangling `self` — garbage (observed pre-fix: 4240380 vs 7).
+
+shape Ship {
+  name: string
+  cargo: int
+}
+
+function crew(share self: Ship) -> int {
+  wait sleep(10)
+  return self.cargo
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  const c = wait crew({ name: `Mon`, cargo: 7 })
+  print(c.toString())
+}

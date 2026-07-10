@@ -2,7 +2,7 @@
 name: "v0-3-m6-concurrency-hotfix-audit"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 created_at: "2026-07-09"
-updated_at: "2026-07-09"
+updated_at: "2026-07-10"
 metadata:
   type: "audit"
 ---
@@ -13,6 +13,97 @@ Append-only execution history for the M6 hotfix plan. `plan.md` is current truth
 this file is the session + FRAGO + context-segment log.
 
 ## Session log
+
+- `executor-2026-07-10-m6-phase1c-seg7` — 2026-07-10 — Phase 1c segment 7 — **PHASE 1c
+  DONE** (steps 3d + 4 + 5 + close-out). **Step 3d:** heap-cell LOOP parity verdict
+  RESOLVED (not assumed): **leak-by-shipped-design confirmed** — per-iteration crossing
+  maybe/union bindings orphan their promotion cell(s); probe fixture
+  `v0_3_m6_heap_cell_loop_parity.ynz` (5-iter maybe loop + 3-iter union loop, values
+  200 + square×3 proving genuine per-iteration crossing) shows alloc=12/free=1, gap
+  EXACTLY 11 = 5×1 maybe envelope + 3×2 union envelope+payload (Paper-Trace predicted
+  pre-run, matched, stable 4/4 runs); pinned as
+  `v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak`
+  (integration.rs, next to the M5 E8 parity gate). Disposition SURFACED to the seam
+  with a candidate four-field deferral (drop-story class, Future Requirements #6) —
+  not self-decided. Per-case IR proof: maybe (`m_env_cell` staged via loaded cell ptr
+  + frame-slot flush), union (`fig_env_cell` + tag-switched `fig_pay1_cell` deep-copy,
+  null-preserving phi), anon (`sm_arg_anon_cell` memcpy'd from the dying literal,
+  cell address staged) — no dying stack address reaches any child frame. **Step 5:**
+  false-positive sweep extended in place (ONE fixture, no parallel sweep):
+  non-escaping maybe/union/anon-arg cases added
+  (`v0_3_m6_non_escaping_args_false_positive_sweep.ynz` prints 3.5/9/40/square/6;
+  test renamed `v03_m6_non_escaping_args_of_every_widened_type_are_not_wrongly_affected`
+  with all prior assertions retained); IR-verified ZERO heap-cell promotion sites in
+  the sweep fixture. **Step 4:** full workspace `cargo test --workspace
+  --no-fail-fast` GREEN (exit 0; totals recorded below), M3e determinism held under
+  load (FRAGO 008 fix), N=10 in-test determinism per new repro; `cargo fmt --all
+  --check` clean; house `cargo clippy --workspace -- -D warnings` clean; the two
+  pre-existing ynz-driver test warnings GENUINELY fixed (not `#[allow]`'d):
+  integration.rs:672's dead `stderr` now feeds a strengthened diagnostic assertion
+  (`return` + `nothing` load-bearing terms), cross_impl_consistency.rs:207's nested
+  if collapsed to `&&` — `clippy -p ynz-driver --tests` = 0 warnings. Tracked
+  WHY-comment clarification confirmed already folded (seg 2). Close-out: Phase 1c
+  completion note written to plan.md; `handoff-phase-1c.md` DELETED as the final act.
+  Workspace totals: 2307 passed / 0 failed (2306 + the new parity pin).
+
+- `executor-2026-07-10-m6-phase1c-seg6` — 2026-07-10 — Phase 1c segment 6 (PARTIAL
+  checkpoint at the plan's 3c `**CHECKPOINT**` mark). **Step 3c DONE — codegen union,
+  all union-specific machinery**: (1) `mark_aggregate_arg` widened with `Type::Union`
+  (`check.rs`) TOGETHER WITH the annotation-aware override in emit.rs's classification
+  loop — the Let's Union annotation resolved via the SAME `ast_type_to_typeck_type`
+  the union-ctor arm uses and the SAME `find_let_annotation_type_in_stmts` finder the
+  typeck guards use (made `pub` + exported for exactly this — one finder, one
+  resolver, no twin), so a union-annotated crossing local routes to the pointer-alloca
+  strategy, never `shape_embed_set` (Decision 12); (2) Check 2 union skip
+  (arg-escape-only ∧ annotation resolves Union) AND Check 2b union skip AND the M3d
+  decline-probe mirror of BOTH — Decision 18, both touch points, probe's nested-shape
+  half included; (3) new `union_to_heap_cell` (null→null preserving `is`-none; tag
+  tag-switched payload deep-copy into counted heap cells, sizes from the one
+  `shape_abi_sizes` source; non-shape variant bits copy raw via switch default);
+  (4) union-ctor Let arm crossing branch promotes and stores the cell into the
+  PRE-CREATED sm_entry crossing alloca (never a fresh `outer_slot` — the Decision-14
+  clobber gotcha); (5) `store_binding` Union arm (crossing → `union_to_heap_cell`;
+  non-crossing → plain store, byte-identical); (6) `value_to_stable_bits` KNOWN-HOLE
+  doc refreshed textually — NO Union arm added (Decision 15), persist pins unchanged.
+  Exit verified: **ALL 6 locked repros GREEN** (maybe/union/anon, value + N=10 each;
+  union `square` deterministic); fixed<T> + m3a rejections green; **full workspace
+  2306 passed / 0 failed** (incl. integration 522/522 under load); fmt + clippy
+  (`-p ynz-typeck -p ynz-codegen -- -D warnings`) clean. Steps 3d + 4-5 remain
+  (the two pre-existing ynz-driver test warnings are step 4's job). No new deviation.
+  Resume `phase-1c/step-3d` via handoff.
+- `executor-2026-07-10-m6-phase1c-seg5` — 2026-07-10 — Phase 1c segment 5 (PARTIAL
+  checkpoint at the plan's 3b `**CHECKPOINT**` mark). **Step 3b DONE — codegen maybe +
+  anon, both fixes in `crates/ynz-codegen/src/emit.rs` only**: (1) `store_binding`
+  Maybe arm promotes a CROSSING maybe binding to a counted heap cell via the existing
+  `maybe_to_heap_cell` funnel (crossing membership read from `sm_crossing_names`, the
+  one threaded typeck set — no new per-type set, no second classification path;
+  non-crossing maybes keep `maybe_to_owned` byte-identical); (2)
+  `stage_suspending_call_arg_bits` routes `Expr::StructLit` args through
+  `value_to_stable_bits` (the ONE stable-bits marshalling point; covers all three
+  staging loops by construction; scope-minimal — StructLit only). Exit verified: maybe
+  repro pair (value + N=10) GREEN, anon pair GREEN → 4/6 locked repros GREEN; union
+  pair still RED with the byte-identical pre-fix tell (`circle` vs `square` — the
+  documented 3c handoff, NOT a regression/ICE); fixed<T> + m3a rejections green; full
+  workspace 2304 passed / 2 failed (only the union pair); integration 522/522 under
+  full-workspace load; `cargo fmt --all --check` + `clippy -p ynz-codegen -D warnings`
+  clean. No new deviation. Resume `phase-1c/step-3c` via handoff.
+
+- `executor-2026-07-10-m6-phase1c-seg3` — 2026-07-10 — Phase 1c segment 3 (PARTIAL
+  continuation at `phase-1c/step-3`). Landed NO code edits: the window was consumed by
+  step 3's own mandated pre-work — recipe verification against live code plus the
+  handoff's open constructibility probes (union re-bind from a variant: typeck-rejected;
+  `maybe<int> = 42`: typeck-rejected; union alias + union-to-union assign: constructible,
+  so `store_binding` needs a crossing Union arm; union-with-nothing `= none`:
+  typeck-rejected). Falsified one segment-2 receipt at new-work granularity: a
+  union-ANNOTATED let classifies by RHS type (`Shape{variant}`) in
+  `crossing_local_type_from_body` (emit.rs:8418), so post-widening it would wrongly enter
+  `shape_embed_set` — the fix needs an annotation-aware classification override, and
+  Check 2 (nested-shape) needs the same arg-escape-only skip as Check 2b. All findings
+  relayed via `handoff-phase-1c.md` (replaced in place, Decisions 11–16). Returned
+  **STATUS: BLOCKED** carrying an `**OVER-FAT-STEP PROPOSAL**` for step 3 (4 sub-steps:
+  typeck routing / maybe+anon codegen / union codegen / parity-verdict+IR) — no
+  completed-step boundary behind this segment, so no PARTIAL checkpoint was legal; tree
+  left green-building (documented RED = the 6 locked repros, unchanged).
 
 - `conductor-2026-07-09-m6-exec` — 2026-07-09 — Execution conductor session opened
   (`/execute-plan`). Step-0 cold-resume: plan was active-but-untouched (no prior
@@ -529,6 +620,193 @@ this file is the session + FRAGO + context-segment log.
     hit). Phase 1b checkbox ticked+committed atomic. **Post-seal order:** FRAGO 009 (probe→fix sibling
     UAF class) + FRAGOs 010/011/012 (P2-7, P1-2, durable-home) amendment → probe A/B/C → then Phase 1c.
 
+- `executor-2026-07-10-m6-frago008-012` — 2026-07-10 — **Plan-amendment producer dispatch: applied
+  FRAGOs 008/009/010/011/012 to `plan.md` (transcription only — no re-adjudication, no code, no
+  commit).** Per the Numbering note above the FRAGO log (FRAGO 008 already existed; final numbering
+  009 = sibling decimal128 spawn-boundary UAF, 010 = P2-7, 011 = P1-2, 012 = durable-home lift).
+  Materialized:
+  - **FRAGO 008** — added Phase 1c **step 0** (a new gating step, all subsequent steps unchanged in
+    number, 1-5 stay 1-5 since 0 is new — no renumbering needed): replaces the M3e fixture's
+    fixed-timeout shutdown-race margin (`v03_m3e_alias_local_name_collision_runs_correctly`,
+    `integration.rs:2268-2308`) with a real synchronization primitive per the FRAGO's GUARDRAIL
+    (remove the race, do not widen the sleep); Phase 1c's exit criteria + reviewer fan-out extended
+    to cover it. **Self-correction, this same dispatch:** an earlier pass through this materialization
+    note wrongly asserted the step was already present from a prior amendment; a grep against the
+    live `plan.md` before returning showed it was NOT — corrected in the same dispatch before
+    returning (verify-before-you-fix, applied to my own prior claim).
+  - **FRAGO 009** — new **Phase 1d** inserted between Phase 1c and Phase 2 (the third
+    hard-new-machinery decimal128 phase): closes background-spawn `number`-arg UAF (A) and
+    cpu-member `number`-arg ICE (C); step 1 is written as the phase executor's own DESIGN DECISION
+    (gate-consistent-reject vs. eager i128 heap-copy, both options + the `channel<number>` gate
+    precedent + the Phase-1b `fixed<T>` precedent presented as inputs, NOT pre-decided here); item
+    B (conduit-send number) recorded as new Future-Requirements deferral #12. Reviewer fan-out +
+    Model tag `(coding, high, medium)`; Invariants block (Safety/Performance/Teaching/Runtime
+    Dependencies/Kernel-Mode/Demo & Gallery/Feature Registry) extended with Phase 1d entries.
+  - **FRAGO 010** — new **Phase 4b** inserted immediately after Phase 4: fixes P2-7
+    (`handle_recv_poll` panic-then-pending hang) via the same register-before-poll discipline Phase
+    4 applied; Future Requirements #7 updated from "deferred" to "un-deferred, FIXED"; R11 risk row
+    adjusted in place (was scored as an accepted-LOW deferral; now scored as a mitigated,
+    gate-passing fix). Reviewer fan-out + Model tag `(coding, standard, small)`; Invariants block
+    extended.
+  - **FRAGO 011** — new **Phase 5b** inserted immediately after Phase 5, before Phase 6b: unifies
+    the twin type-walkers (`emit.rs:8276`/`:8364`) behind one authoritative resolution; Future
+    Requirements #2 updated from "deferred, verify dormancy" to "un-deferred, FIXED in Phase 5b."
+    Reviewer fan-out + Model tag `(coding, standard, small)`; Invariants block extended. New risk
+    row R16 added.
+  - **FRAGO 012** — Phase 8 extended with a new REVIEWED deliverable (step 4, renumbering the prior
+    steps 4-5 to 5-6): lift every surviving Future-Requirements deferral (P2-3; channel-close;
+    preemption; `background.cpuBound`; the two orthogonal ICEs [row 441 + `fixed<T>` param-iter];
+    dynamic-dispatch #10; FRAGO-009's conduit-send-number #12) into the roadmap's durable store
+    (`2026-05-21-v0-3-concurrency-perf/`) — four-field payloads → roadmap `audit.md`; pointer rows →
+    roadmap Capability Ledger, owner-tagged. Phase 8's exit criteria + reviewer fan-out extended to
+    require this landed, not merely attempted.
+  - **Whole-plan consistency sweep performed** (per the dispatch brief — every sibling reference
+    swept, not just the trigger citations): §3.2 Concept rewritten (phase count 13→16; full
+    sequencing string `P0 → P1 → P1b → P1c → P1d → P2 → P3 → P3b → P4 → P4b → P5 → P5b → P6 → P6b →
+    P7 → P8` stated explicitly); the stale `P1 → P1b → P1c → P2` fragment inside Phase 1's own task
+    text corrected to include P1d; Phase 6b's own task+purpose sequencing prose AND the
+    Coordinating-Instructions sequencing paragraph both updated (Phases 1d/4b/5b threaded into the
+    Phase-6b hard-prerequisite list); Risk Assessment table (R11 adjusted in place for Phase 4b;
+    R15 added for Phase 1d; R16 added for Phase 5b); Key Outcomes (new "1d." item; item 9 rewritten
+    to drop P1-2/P2-7 from the deferred-list and state their Phase 5b/4b fix disposition; new item
+    "11." for the FRAGO-012 durable-home lift); Future Requirements (#2 and #7 rewritten from
+    "deferred" to "un-deferred, FIXED," retained under their original numbers per the P2-5/#3
+    precedent so the audit-finding numbering still resolves; new #12 for FRAGO-009's item B).
+  - **Also recorded (dispatch brief's two explicit asks):** the test-quality-flagged 1-line
+    comment-clarification for `v03_m6_shape_arg_frame_backing.rs`'s false-positive test's
+    number-half WHY comment is now noted directly in Phase 1c's plan text (fold in next time that
+    phase, or Phase 1d, edits the test file). The "R14 number portion CLOSED" line (Phase 1b's seal
+    note, written pre-fix-loop) is re-affirmed accurate post-fix-loop with an inline note pointing
+    at the fix-loop + Round-2 boundary-review entries that actually re-verified it.
+  - **Session-id appended to `plan.md` frontmatter in this same action.** No code touched; no
+    commit made (rides into Phase 1c's boundary commit per the dispatch brief). Known-not-mine files
+    (`CLAUDE.md`, `crates/ynz-watch/**`) untouched.
+
+### `executor-2026-07-10-m6-phase1c-seg1` — 2026-07-10 — Phase 1c segment 1 (steps 0–1), PARTIAL checkpoint
+
+- **Step 0 (FRAGO 008 gating) DONE — M3e fixture determinism.** Replaced
+  `v0_3_m3e_alias_local_name_collision`'s fixed `sleep(300)` shutdown-race margin with a REAL
+  synchronization primitive: a channel barrier (`channel<int>(3)`; each of the 3 spawned tasks
+  `done.send(1)` after its print; the parent `done.receive()` ×3 BEFORE printing `main-done`).
+  Race REMOVED (no timing margin anywhere), not widened — per the deviation-judge guardrail.
+  Every ingredient verified constructible against `v0_3_m4_channel_composed.ynz` before writing.
+  Local decoy keeps an identical signature (name collision, not arity, stays the dispatch
+  diagnostic) and also sends (wrong dispatch terminates + fails, never hangs). Test assertion
+  STRENGTHENED to exactly-3 IMPORTED-OK (was ≥1 with shutdown-timing tolerance). Verified: 10/10
+  isolated + full `cargo test --workspace` under parallel load GREEN (integration 522/522,
+  `CARGO_EXIT:0` captured inside the container — an earlier pipeline-exit read was rejected as a
+  false-green trap and re-run).
+- **Step 1 (CCIR-1) DONE.** All Phase-1c cited lines re-verified against the live tree
+  (HEAD `47abd29` + step-0 edits); receipts with corrected drifted line numbers recorded in
+  `handoff-phase-1c.md` (notably: `value_to_i64_bits` now `emit.rs:12401`, plan cited :12323).
+- **PARTIAL checkpoint** at the step-1/step-2 boundary (context budget): resume at
+  **`phase-1c/step-2`** (the "Lock the RED repros" step; positional ordinal 3 of 6). Handoff:
+  `handoff-phase-1c.md` (receipts, settled design direction for steps 2–3, open recon items).
+- **Deviations surfaced (for deviation-judge; NOT self-decided):** (1) Phase 1c carries no
+  `**CHECKPOINT**` marks despite tripping REF-plan-format's >5-steps trigger — checkpointed under
+  the conductor dispatch's explicit checkpoint authorization; marks not self-inserted. (2)
+  Mechanism deviation flagged IN ADVANCE for steps 3(b)/(c): union frame-embed is structurally
+  impossible under the current union ABI (none-case = NULL value pointer checked by
+  `build_is_null`; a frame-region pointer is never null → breaks `is`-none semantics) — proposed
+  sound mechanism is bind-time promotion to counted heap cells via the EXISTING
+  `maybe_to_heap_cell` funnel + a new `union_to_heap_cell` (one uniform mechanism, aliasing
+  preserved, default ptr flush/reload + the one staging helper unchanged); evidence in the
+  handoff. Not yet implemented — surfaced for ratification before the next segment builds it.
+
+### `executor-2026-07-10-m6-phase1c-seg2` — 2026-07-10 — Phase 1c segment 2: FRAGO 013 applied to plan.md (first action)
+
+- **FRAGO 013 delta applied to Phase 1c's plan text** (ratified JUSTIFIED/RISK-NEUTRAL, conductor
+  auto-apply, no signature — this plan's FRAGO-005/006/007 executor-applies pattern): (a) step 3
+  rewritten — union/maybe frame-embed mechanism replaced with **bind-time promotion to counted
+  heap cells** (reuse `maybe_to_heap_cell` `emit.rs:3077` + symmetric `union_to_heap_cell`; ONE
+  uniform mechanism; route PAST Check 2b, not into it; default pointer-flush path + the single
+  `stage_suspending_call_arg_bits` helper across all three staging loops UNCHANGED — no second
+  derivation; loop leak-parity recon carried to build time under the phase's own gates, not
+  assumed safe); (b) `**CHECKPOINT**` marks added under steps 1, 2, and 3 of Phase 1c's 6-step
+  list (>5-step REF-plan-format trigger; marks are standalone lines, structurally disjoint from
+  step numbering — segment 1's recorded `phase-1c/step-2` resume pointer unaffected).
+- **Session-id appended to `plan.md` frontmatter in this same action.**
+- **Step 2 (RED repros) DONE.** Three fixtures + six locking tests in
+  `v03_m6_shape_arg_frame_backing.rs`, each confirmed RED pre-fix for the documented UAF reason,
+  Paper-Traced: maybe → nondeterministic 15-digit pointer garbage vs 42 (3 distinct values / 3
+  runs); union → deterministic wrong variant `circle` 3/3 vs `square`; anon → `4240380` 3/3 vs 7
+  (matches the plan's probe value). Suite: 12 pre-existing GREEN / 6 new RED. The tracked
+  Phase-1b test-quality minor (false-positive test's number-half WHY comment) folded in.
+- **PARTIAL checkpoint** at the step-2/step-3 boundary — the planned `**CHECKPOINT**` mark FRAGO
+  013 added (context budget past threshold): resume at **`phase-1c/step-3`** (positional ordinal
+  4 of 6). Handoff `handoff-phase-1c.md` rewritten in place: step-3 build recipe settled from
+  live-code reads (store_binding funnel `emit.rs:19836` = maybe promotion point; union-ctor Let
+  arm :12641-12691 clobbers the sm_entry crossing alloca via a fresh `outer_slot` — the key
+  gotcha; strategy table needs ZERO edits — Maybe/Union already default to the ptr-alloca +
+  default-pointer-flush strategy; heap-cell ownership doc :3243-3246 = never-drop-locals design,
+  loop-leak verdict still to be RECORDED under step 3's parity gate, not assumed). Check 2b
+  provenance design settled (provenance-returning core in the ONE producer; skip Maybe/Union
+  rejection only for arg-escape-only names; fixed<T> + read-after-wait rejections byte-identical).
+  Tree green-building: fmt clean, this phase's files clippy-clean, only documented RED (the 6
+  RED-repro locks).
+
+### `executor-2026-07-10-m6-phase1c-seg4` — 2026-07-10 — Phase 1c segment 4: FRAGO 014 applied to plan.md (first action)
+
+- **FRAGO 014 delta applied to Phase 1c's plan text** (ratified JUSTIFIED; risk-neutral AFTER the
+  deviation-judge's mandated boundary correction — Union deferred entirely to 3c; conductor
+  auto-apply, no signature — same executor-applies pattern as FRAGOs 005/006/007/013): (a) step 3
+  replaced with the CORRECTED 4-part sub-step split — 3a typeck routing Maybe + anon-StructLit
+  ONLY / 3b codegen maybe + anon / 3c codegen union incl. its OWN classifier-widen + the
+  emit.rs:4493 annotation-aware override (via `ast_type_to_typeck_type`, one resolution, no twin)
+  / 3d parity verdict + IR proof — with `**CHECKPOINT**` marks at each sub-step boundary (each
+  boundary green-building by design); (b) ITEM 2: Check 2 (nested-shape, `check.rs:817-870`)
+  named alongside Check 2b throughout step 3's "route past" wording, PLUS the sibling occurrences
+  of the same fact swept per plan-source-of-truth (the task+purpose bold Check-2b obligation and
+  the exit-criteria "routed PAST" line — both now name Check 2 AND Check 2b).
+- **Resume-at pointer repaired to `phase-1c/step-3a`** in `handoff-phase-1c.md` (canonical over
+  the post-FRAGO sub-step list, per REF-plan-format's FRAGO pointer-repair rule).
+- **Session-id appended to `plan.md` frontmatter in this same action.**
+- **Step 3a (typeck routing, Maybe + anon-StructLit ONLY) DONE.** All edits in `ynz-typeck`, zero
+  codegen edits: `mark_aggregate_arg` widened with `Type::Maybe` (NOT Union — deferred to 3c per
+  FRAGO 014, doc comment records why); `crossing_local_names_with_cpu_spike` refactored into a
+  provenance-returning core `crossing_local_names_with_provenance` → `CrossingNames { names,
+  arg_escape_only }` (snapshot window around the arg-escape collector — by-construction split, one
+  producer, no twin scan; `with_cpu_spike` is a thin `.names` wrapper, byte-identical output);
+  Check 2b skips rejection iff arg-escape-only ∧ effective type is Maybe (`check.rs:953`); Check 2
+  needed no 3a edit (Maybe never matches its Shape arm — Union skip lands in 3c per Decision 13);
+  **the M3d decline-to-promote probe (`suspension_guards_fire_for_fn`) mirrored with the same
+  provenance + skip** — without it the probe would decline CPU promotion for hosts the checker now
+  accepts (silent-envelope-narrowing class; recorded as handoff Decision 18 — 3c must mirror its
+  Union skip there too).
+- **3a exit criteria ALL verified:** workspace builds; maybe repro compiles exit-0 + nondeterministic
+  pointer garbage across runs (still UAF-RED, per plan); anon repro unchanged (compiles, `4240380`
+  vs 7; no typeck surface — handoff Decision 17: 3a's "anon" is a scope label, the anon fix is
+  entirely 3b's codegen staging arm); union repro FULLY RED with the byte-identical pre-fix tell
+  (`circle`, NOT misclassified, NOT an ICE); fixed<T> + both m3a read-after-wait rejection tests
+  GREEN; positive widen evidence via IR (`m` frame slot + inttoptr reload in
+  `target/ir-check/v0_3_m6_maybe_arg_pure_call.ll`). Gates: integration **522/522**; ynz-typeck
+  suites green; frame-backing suite 12 GREEN / 6 documented-RED; fmt clean; clippy `-p ynz-typeck
+  -D warnings` clean.
+- **PARTIAL checkpoint** at the plan's 3a `**CHECKPOINT**` mark (context budget past threshold):
+  resume at **`phase-1c/step-3b`**. Handoff `handoff-phase-1c.md` rewritten in place (segment-4
+  anchors, receipts deltas, Decisions 17–18).
+
+### `executor-2026-07-10-m6-frago015` — 2026-07-10 — FRAGO 015 applied to plan.md (tracking/docs reconciliation, no code logic change)
+
+- **FRAGO 015 delta applied to `plan.md`** (ratified JUSTIFIED/RISK-NEUTRAL, conductor auto-apply,
+  no signature — transcribed verbatim from the authoritative delta already recorded at `### FRAGO
+  015` below, not re-adjudicated): (a) added the Phase 1c per-iteration maybe/union heap-cell LOOP
+  leak as new numbered entry **#13** in `## Future Requirements / Revisit`, four fields verbatim
+  from the Phase 1c completion note (WHAT/WHY/COST/TRIGGER, pinned via
+  `v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak`); (b) amended Key Outcome
+  #11 AND Phase 8 step 4's FRAGO-012 durable-home lift-list (both enumeration sites swept per
+  plan-source-of-truth's sibling-sweep discipline) to include deferral #13, owner-tagged
+  `unscoped → needs the drop-story milestone`; (c) comment-accuracy fix in
+  `crates/ynz-typeck/src/check.rs` (~line 826-844, the maybe/union Check-2b arg-escape-only skip
+  comment) crediting `store_field`'s (`emit.rs:20154`, v0.3-M5 P2) per-shape-field heap-celling as
+  the real reason a nested-shape variant payload is safe under the flat one-level ABI-size
+  promotion memcpy — refutes a stale pre-M5 code-review premise (inline stack sub-structs) a
+  Phase 1c verification probe already disproved; comment-only, zero logic change (`cargo check -p
+  ynz-typeck` reconfirmed clean; Phase 1c's own 2307/0 full-workspace green bill is unaffected).
+- **Session-id appended to `plan.md` frontmatter in this same action.**
+- No new deviation surfaced; this dispatch transcribes an already-adjudicated delta per the
+  dispatching brief's explicit instruction, not a fresh classification.
+
 ## FRAGO log
 
 ### FRAGO 001 — 2026-07-09 — session-id: `conductor-2026-07-09-m6-exec`
@@ -952,6 +1230,199 @@ this file is the session + FRAGO + context-segment log.
 - **Authority.** deviation-judge classified RISK-NEUTRAL/LOW/no-signature; conductor + Patrick ratified
   (fold into Phase 1c as its gating step-0). Application to `plan.md` deferred to the next chat (this
   conductor's context is full — see the SESSION-END HANDOFF note in the Session log).
+- **[2026-07-10 materialization note — `conductor-2026-07-10-m6-exec2`]** This conductor IS the next chat.
+  FRAGO 008's plan.md delta (Phase 1c step-0) is applied by the amendment executor bundled with FRAGOs
+  009–012 below (deviation-judge re-confirmed JUSTIFIED/risk-neutral at the Phase-1b fix-loop re-review).
+
+> **Numbering note (`conductor-2026-07-10-m6-exec2`, 2026-07-10):** an earlier Session-log scope-addition
+> entry tentatively labeled the user scope-adds "FRAGO 009 (P2-7) / 010 (P1-2) / 011 (durable-home)."
+> Superseded: FRAGO 008 already existed, and a fresh execution finding (sibling decimal128 UAF class)
+> earns the next number. FINAL: **009 = sibling decimal128 spawn-boundary UAF**, **010 = P2-7**,
+> **011 = P1-2**, **012 = durable-home lift**.
+
+### FRAGO 009 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-exec2`
+
+- **Trigger.** Phase 1b's fix-loop + boundary review surfaced a SIBLING to the arg-UAF class: a `number`
+  (decimal128) value crossing a CONCURRENCY boundary by-pointer without an eager heap-copy. code-reviewer
+  (opus) traced three sites; a fable verification probe (HEAD 47abd29, gitignored scratch) empirically
+  resolved each (Paper-Trace):
+  - **(A-CPU + A-SM) background-spawn decimal128 arg — LIVE runtime UAF.** `prepare_bg_arg_for_ctx`
+    (emit.rs:15386) has no `Number` arm → number falls through as `BgArgFreeKind::None`, staging
+    spawner-stack bits; both spawn arms (`ynz_rt_spawn_blocking` :15840, `ynz_rt_spawn` :16060) print
+    `0.000...` (5/5 deterministic) vs `2.5`; IR-confirmed both arms.
+  - **(C) cpu-member decimal128 arg — LIVE compile-time ICE.** `emit_cpu_member_spawn` (emit.rs:9506-9509)
+    `build_load(i64)` mismatches the pointer-typed number param → LLVM verifier failure surfaced as
+    "compiler bug" on valid code (3/3, fused + pure-CPU); `YNZ_NO_AUTO_PARALLEL=1` baseline is correct.
+    Loud crash, not silent.
+  - **(B) conduit-send decimal128 — VERIFIED-SAFE-BY-GATE (unreachable today).** `channel<number>` is
+    compile-gated by typeck (check.rs:3369-3398) with a teaching error naming this exact UAF class; the
+    emit.rs:11809 Number-send path is unreachable from any current syntax.
+- **Corroboration.** code-reviewer Part 2 (plausibly-live trace) → fable probe empirical confirm; deviation-judge
+  (Phase-1b fix-loop re-review) classified the sibling class JUSTIFIED / risk-neutral.
+- **Classification.** JUSTIFIED / RISK-NEUTRAL. A/C are confirmed-live pre-existing defects in the
+  concurrency/auto-parallel charter (silent garbage + ICE on valid code — the user's "no bugs" bar). B is
+  provably-unreachable dead code (YAGNI ceiling — fixing emit.rs:11809 now = the same "guard for dead
+  code" declined at FRAGO 002). Verify-before-fix honored (probe confirmed each before scoping). No
+  signature.
+- **Delta (to `plan.md`, by re-dispatched executor).** Insert a NEW fix phase after Phase 1c (both
+  hard-new-machinery decimal128 phases) closing A (background-spawn) + C (cpu-member)
+  decimal128-across-task-boundary defects, RED-repro-before-fix (committed repros from the probe shapes).
+  **Fix APPROACH is the phase executor's DESIGN CALL, not conductor-pre-decided** (charter: route-not-design):
+  the live precedent is the EXISTING channel<number> compile-gate (check.rs:3369-3398) — one policy for
+  "aggregate/number crosses a task boundary" — so the executor weighs gate-consistently (reject with the
+  same teaching error; cheap, consistent, matches Phase 1b's fixed<T> precedent) vs eager i128 heap-copy
+  (hard machinery, would also unlock channel<number>), against IMP-concurrency / IMP-no-function-coloring.
+  B → Future-Requirements deferral-with-trigger (verified-safe; revisit when channel<number> heap-copy
+  ships). Update Concept count + sequencing; add risk row; Future-Req entry for B.
+- **Authority.** deviation-judge JUSTIFIED/RISK-NEUTRAL; conductor auto-apply per Step-7 risk-neutral flow
+  (no signature). Probe: fable, HEAD 47abd29.
+
+### FRAGO 010 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-exec2`
+
+- **Trigger.** USER-DIRECTED scope addition (Patrick, this session): un-defer **P2-7**
+  (`handle_recv_poll` panic-then-pending hang, Future-Requirements #7 / R11) and fix it in M6. A real
+  concurrency hang: if the panic path (`handle.rs:297-303`) fires before waker registration, the task may
+  never wake.
+- **Classification.** JUSTIFIED / RISK-NEUTRAL. Un-defers a LOW-scored real bug in the concurrency
+  charter; fix mirrors Phase 4's register-before-poll discipline (~0.5 session). User is the Mission-scope
+  authority; no signature.
+- **Delta (to `plan.md`, by re-dispatched executor).** Insert a new fix phase right after Phase 4 (same
+  register-before-poll region), RED-repro-before-fix (panic-before-registration repro), extend the fix to
+  the handle poll path. Move P2-7 out of Future Requirements #7 (fixed, not deferred); update Concept
+  count + sequencing; adjust R11 (→ fixed).
+- **Authority.** User-directed Mission-scope; risk-neutral; conductor auto-apply + log.
+
+### FRAGO 011 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-exec2`
+
+- **Trigger.** USER-DIRECTED scope addition (Patrick, this session): un-defer **P1-2** (twin type-walker
+  unification, Future-Requirements #2). Confirmed DORMANT (Phase 0), but it is the exact twin-derivation
+  class that shipped silent miscompiles across M3a/M3d/M3e/M3g — unify the two walkers (`emit.rs:8276`
+  typeck vs `:8364` substituted; field `Cg.type_subst`) behind one authoritative resolution.
+- **Classification.** JUSTIFIED / RISK-NEUTRAL. Dormant authoritative-derivation hardening (~0.5 session);
+  aligned with authoritative-derivation.md. User Mission-scope authority; no signature.
+- **Delta (to `plan.md`, by re-dispatched executor).** Insert a new cleanup phase sequenced BEFORE Phase
+  6b (so the sanitizer lane scans the unified walker); fold the two walkers behind one shared resolution;
+  regression-gate the SM-resume + frame-layout suites. Move Future Requirements #2 (→ fixed); update
+  Concept count + sequencing.
+- **Authority.** User-directed Mission-scope; risk-neutral; conductor auto-apply + log.
+
+### FRAGO 012 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-exec2`
+
+- **Trigger.** USER-DIRECTED (Patrick, this session): the LEFT-DEFERRED items currently live ONLY in this
+  plan's `plan.md`/`audit.md` → they vanish when the plan `git mv`s to `done/`. They need a durable home
+  outside the archiving dir.
+- **Classification.** JUSTIFIED / RISK-NEUTRAL (docs/tracking reconciliation). Durable home = the roadmap
+  `2026-05-21-v0-3-concurrency-perf/` (stays `active` until the whole v0.3 campaign finishes): Capability
+  Ledger (roadmap.md:417/471) + roadmap `audit.md`.
+- **Delta (to `plan.md`, by re-dispatched executor).** Extend **Phase 8** (already the roadmap-reconciliation
+  phase) with a REVIEWED deliverable: LIFT every surviving deferral (P2-3; channel-close; preemption;
+  `background.cpuBound`; the two orthogonal ICEs; dynamic-dispatch #10; `fixed<T>` param-iter #11; and
+  FRAGO-009's B conduit-send number) into the roadmap durable store — four-field payloads → roadmap
+  `audit.md`; pointer rows → roadmap Capability Ledger, owner-tagged (preemption→M7; channel-close/P2-3→M8;
+  ICEs + dynamic-dispatch→`unscoped → needs a milestone`, row-441 flagged for Patrick's Gate-4 call).
+  Reviewer fan-out checks it landed.
+- **Authority.** User-directed; risk-neutral; conductor auto-apply + log.
+
+### FRAGO 013 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-exec2`
+
+- **Trigger.** Phase 1c segment 1 found the plan's step-3 prescription (frame-back maybe/union args via
+  the crossing strategy-table arms, paralleling Phase 1b's shape `shape_embed`) is STRUCTURALLY IMPOSSIBLE
+  for union: the `T | nothing` none-case is a NULL value-pointer checked via `build_is_null`
+  (`emit.rs:17509-17539`, doc `:3327-3350`); a frame-region pointer is never null → frame-embed breaks
+  `is`-none semantics.
+- **Corroboration.** deviation-judge independently re-confirmed against live code (`emit.rs:3327-3350` doc
+  + `:17522` `build_is_null` in the union print arm; `maybe_to_heap_cell` funnel live `:3077→3091`).
+  Paper-Trace complete (observed NULL-checked ptr / expected stable non-null frame slot / irreconcilable
+  residual).
+- **Classification.** JUSTIFIED / RISK-NEUTRAL. Verified structural ABI incompatibility, not a shortcut.
+  The alternative PRESERVES the signed R14 intent (behavioral commitment = maybe/union WORK across
+  suspension, not rejected — R14 signed the behavior, not one technique). Stays inside R14's already-signed
+  HIGH residual + its unchanged trigger-to-close; adds one function mirroring a shipped sibling; no new
+  irreversible op. No fresh signature (same shape as FRAGO 001/002/008).
+- **Delta (to `plan.md`, applied by the re-dispatched Phase-1c seg-2 executor as its FIRST action — this
+  plan's established FRAGO-005/006/007 pattern).** (a) Phase 1c step 3: replace the implied union/maybe
+  frame-embed mechanism with **bind-time promotion to counted heap cells** — reuse `maybe_to_heap_cell`
+  (`emit.rs:3077`) + add a symmetric `union_to_heap_cell`; ONE uniform mechanism, route PAST Check 2b (not
+  into it), the default pointer-flush path + the single `stage_suspending_call_arg_bits` staging helper (all
+  three loops) UNCHANGED — no second derivation. Open recon carried to build time under the phase's OWN
+  gates (full-regression + false-positive sweep), NOT assumed safe: heap-cell ownership/free semantics in
+  loops (per-iteration leak?) — handoff item 5(b). (b) Add `**CHECKPOINT**` marks to Phase 1c's 6-step list
+  (>5-step REF-plan-format trigger; plan authoring omission). Both bundled per the FRAGO-008 precedent.
+- **Authority.** deviation-judge JUSTIFIED/RISK-NEUTRAL (both deltas); conductor auto-apply per Step-7
+  risk-neutral flow (no signature). Applied by the re-dispatched executor as its first action.
+
+### FRAGO 014 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-exec2`
+
+- **Trigger.** Phase 1c segment 3 surfaced an OVER-FAT-STEP proposal: step 3 ("The fixes") spans 2 crates +
+  8+ edit sites + 6 RED→GREEN + an alloc-parity probe — genuinely > one window (seg-2 spent a full window
+  on step 2; seg-3 spent its full window on step-3's mandated verify-recipe pre-work landing zero edits, then
+  bounced BLOCKED — no completed-step boundary behind it, PARTIAL illegal). Two coupled findings: (ITEM 2)
+  Check 2 (nested-shape, check.rs:817-870) is a SECOND rejection surface the plan's "route PAST Check 2b"
+  wording doesn't name; (Decision 12) union-annotated lets resolve to `Shape{variant}` via
+  `crossing_local_type_from_body` (emit.rs:8418), NOT the assumed default ptr-alloca.
+- **Corroboration.** deviation-judge classified against live code: split premise JUSTIFIED (matches
+  REF-plan-format's over-fat-step legal floor; BLOCKED-not-PARTIAL correct — no completed-step boundary
+  behind seg-3); ITEM 2 routing-past-both-gates WITHIN R14's already-signed "nothing rejected" scope (Check 2
+  + 2b consume the SAME crossing set, check.rs:811; R14 is class/outcome-scoped → no fresh signature);
+  Decision 12 a legitimate verify-before-fix correction. Confirmed the ONE classifier
+  (`crossing_local_names_with_cpu_spike`) feeds both typeck Check 2/2b AND codegen frame-layout
+  (emit.rs:31/327/774/4136) — no twin.
+- **Classification.** JUSTIFIED. The split AS LITERALLY PROPOSED is RISK-RAISING (deviation-judge should-fix):
+  landing 3a's Union classifier-widen alone would make emit.rs's unmodified loop misclassify the union
+  crossing local into `shape_embed_set` (Decision 12) → the locked union RED fixture fails DIFFERENTLY
+  (misclassification/ICE) at the 3a→3b boundary before 3c's fix exists, violating RED-repro discipline.
+  **Corrected per deviation-judge: DEFER Union entirely (classifier-widen AND codegen) to 3c; 3a widens Maybe
+  + anon-StructLit ONLY.** With that correction every boundary is green-building → RISK-NEUTRAL, auto-apply,
+  NO signature. ITEM 2 risk-neutral/in-scope. No signature gate trips.
+- **Delta (to plan.md, by the re-dispatched seg-4 executor as FIRST action; resume-at repaired to
+  `phase-1c/step-3a`).** Replace Phase 1c step 3 with the CORRECTED 4-part sub-step split:
+  - **3a — typeck routing (Maybe + anon ONLY; Union DEFERRED to 3c):** widen `mark_aggregate_arg`
+    (check.rs:7913-7918) with `Type::Maybe` + anon-`StructLit` (NOT Union); provenance-returning core
+    (`arg_escape_only`); Check 2 (:817-870) AND Check 2b (:898-984) skip rejection iff arg-escape-only AND
+    effective type is Maybe. Exit: builds; maybe+anon repros COMPILE (still UAF-RED); union repro FULLY RED
+    (NOT misclassified); fixed<T> + m3a read-after-wait rejections byte-identical green.
+  - **3b — codegen maybe + anon:** `store_binding` (emit.rs:19836) crossing-maybe → `maybe_to_heap_cell`;
+    `stage_suspending_call_arg_bits` (:11274) routes `Expr::StructLit` args (all three loops). Exit:
+    maybe+anon GREEN (4/6); union RED.
+  - **3c — codegen union (incl. ITS classifier-widen + annotation override):** add Union to the classifier
+    widen WITH the annotation-aware override (via `ast_type_to_typeck_type` — one resolution, no twin) so it
+    does NOT misclassify into shape_embed; add Check 2/2b Union skip; new `union_to_heap_cell` (null→null,
+    tag-switched payload deep-copy); union-ctor Let arm (:12641-12691) crossing branch stores the cell into
+    the pre-created sm_entry alloca (never a fresh `outer_slot`); `store_binding` Union arm; KNOWN-HOLE doc
+    (no `value_to_stable_bits` Union arm). Exit: all 6 GREEN.
+  - **3d — parity verdict + IR proof:** exact-gap alloc=free loop probe (per-iteration crossing maybe
+    binding), verdict RECORDED either way; per-case IR (arg staged from surviving allocation). Then steps 4-5.
+  - Also: name Check 2 alongside Check 2b throughout Phase 1c step 3's "route past" wording (ITEM 2).
+- **Authority.** deviation-judge JUSTIFIED; ITEM 2 within-R14-scope (no fresh signature); the
+  risk-raising-as-proposed neutralized by the mandated boundary correction (Union → 3c) → risk-neutral →
+  conductor auto-apply per Step-7 flow. Applied by re-dispatched executor as first action.
+
+### FRAGO 015 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-exec2`
+
+- **Trigger.** Phase 1c fleet review (deviation-judge + rules-compliance both flagged) — the confirmed
+  per-iteration heap-cell leak deferral (a JUSTIFIED/risk-neutral four-field deferral matching M5's
+  Future-Req #6 never-drop-locals precedent) lives ONLY in the Phase 1c completion note + audit history —
+  it is NOT enumerated in plan.md's `## Future Requirements / Revisit` list AND NOT in FRAGO 012's Phase-8
+  durable-home lift-list → it would be LOST on the plan's `git mv` to `done/` (the exact failure FRAGO 012
+  exists to prevent; the durable-home requirement Patrick explicitly set this session).
+- **Corroboration.** deviation-judge VERDICT (leak deferral JUSTIFIED/risk-neutral, no signature) named the
+  durable-home GAP as "the one actionable gap before Phase 8"; rules-compliance minor independently flagged
+  the same missing FRAGO/Future-Req cross-listing.
+- **Classification.** JUSTIFIED / RISK-NEUTRAL (docs/tracking reconciliation — same shape as FRAGO 012). No
+  signature.
+- **Delta (to plan.md, by re-dispatched executor).** (a) Add the per-iteration maybe/union heap-cell loop
+  leak as a NEW numbered entry in `## Future Requirements / Revisit` (four fields verbatim from the Phase 1c
+  completion note: WHAT per-iter heap-cell leak for crossing maybe/union LOOP bindings held to process exit;
+  WHY needs the ownership drop story, out of charter, same never-drop-locals class as M5 Future-Req #6; COST
+  drop-story milestone 1-2 sessions + update the 2 parity pins; TRIGGER drop story lands OR real unbounded
+  suspension-loop-over-maybe/union workload; pinned loud via `v03_m6_p1c_heap_cell_loop_parity_pins_*`). (b)
+  Amend FRAGO 012's Phase-8 durable-home lift-list (and Phase 8's deliverable text) to INCLUDE this new
+  deferral so the Phase-8 lift carries it to the roadmap durable store. (c) Comment-accuracy fix (Phase 1c
+  fleet nit — code-reviewer's refuted nested-shape finding): update the maybe/union Check-2b skip comment
+  (check.rs ~830) to CREDIT `store_field`'s per-field heap-celling (M5 P2) as the reason nested-shape
+  payloads are safe under one-level promotion — so a future reviewer doesn't re-raise the same
+  probe-refuted false positive. Rides into the Phase 1c boundary commit.
+- **Authority.** deviation-judge + rules-compliance surfaced; risk-neutral; conductor auto-apply + log.
 
 ## Context-segment log
 
@@ -1044,3 +1515,91 @@ Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1b-segment-2
 - **checkpoint reason:** executor's own early-checkpoint judgment call (context budget; step-3/step-4 boundary; green-building tree).
 - **canonical resume-at pointer:** `phase-1b/step-4` (advanced from segment 1's `phase-1b/step-3` — no stall).
 - **segment verdict:** `STATUS: PARTIAL`. **FRAGO 005 applied** (shape→shape_embed; fixed<T>→Check-2b compile error; step-4 false-positive-sweep line; Future-Req #11 fixed<T>-param-iteration ICE; sibling sweep). **Step 3 fix DONE** — extended the ONE classifier `crossing_local_names_with_cpu_spike` with `collect_aggregate_args_to_suspending_calls` (+ `mark_aggregate_arg`, walkers) in `check.rs` (≈7642-7900); LET-bound Shape/BuiltinFixed idents that escape to a suspending callee; params/loop-vars excluded; **ZERO codegen changes** (all consumers delegate through the one classifier — authoritative-derivation verified structurally). **IR before/after PASS**: dying-stack-alloca + `ptrtoint`-into-child pattern GONE for shape args → replaced by `getelementptr` into the surviving heap frame. Locking suite **4/4 GREEN** (was 0/4) incl. N=10 determinism gate + fixed<T>-escape-rejected; Phase 1 fixtures **a/b/c/d all GREEN**. **TWO NEW LIVE deviations surfaced (post-fix residual probes; OUTSIDE R13's signed shape+fixed<T> scope; NOT self-fixed):** (1) **anonymous struct-literal arg** to a suspending callee → garbage (no LET name for the classifier to mark); (2) **`number` arg** → 0.000 vs 2.5, and `maybe`/`union` share the same `value_to_i64_bits` by-pointer staging arm (`emit.rs:12323`, presumed same class). Non-LIVE (correct): indexed arg (typeck-rejected), loop-var shape arg (heap array storage survives). Routed to deviation-judge → Step-7 seam; see FRAGO 006 (pending). Steps 4–5 + close-out still open.
+
+### 2026-07-10 — Phase 1c, segment 1
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1c-segment-1
+
+- **segment number:** 1
+- **session-id:** `executor-2026-07-10-m6-phase1c-seg1`
+- **subagent_tokens actual:** 256275
+- **checkpoint reason:** executor's own early-checkpoint judgment call (context budget; clean step-1/step-2 boundary; full-suite-green base).
+- **canonical resume-at pointer:** `phase-1c/step-2` (first segment of Phase 1c — no prior pointer to stall-compare against).
+- **segment verdict:** `STATUS: PARTIAL`. **Step 0 (FRAGO 008, M3e determinism) DONE + verified** — fixed `sleep(300)` race replaced with a REAL channel-barrier sync primitive (each task `done.send(1)`, parent `receive()`×3 before assert); race REMOVED not widened (guardrail honored); constructibility verified against `v0_3_m4_channel_composed.ynz` first; 10/10 isolated + full `cargo test --workspace` 522/522 GREEN under load (rejected a false-green pipeline-`tail`-exit trap and re-ran). Step 1 (CCIR-1) DONE — drift noted (`value_to_i64_bits` now `emit.rs:12401`). **DEVIATION SURFACED (routed to deviation-judge, NOT self-decided):** union frame-embed is STRUCTURALLY IMPOSSIBLE (none = NULL value-ptr via `build_is_null`, `emit.rs:3327-3350`; a frame-region ptr is never null → embedding breaks `is`-none) — plan step-3's prescribed "frame-backed via strategy-table arms" is falsified for union; proposed sound alternative (bind-time heap-cell promotion via `maybe_to_heap_cell` funnel + new `union_to_heap_cell`, one uniform mechanism, staging helper unchanged) recorded in `handoff-phase-1c.md`, unbuilt, awaiting ratification. Second deviation: Phase 1c has no `**CHECKPOINT**` marks despite the >5-step trigger (plan defect). Resume at `phase-1c/step-2` via handoff.
+
+- **[CONDUCTOR FINDING — `conductor-2026-07-10-m6-exec2`, 2026-07-10] UNSANCTIONED Dockerfile modification —
+  QUARANTINED, flagged for Patrick.** `git status` after Phase 1c seg1 surfaced `Dockerfile` dirty (` M`) —
+  NOT dirty at Step-0 preflight, NOT in any phase's declared surface. Diff adds a `cargo-nextest` prebuilt
+  install (`RUN curl -LsSf https://get.nexte.st/... | tar ...`) with prose referencing a "shared global
+  gate-resolver (lib-gate-resolver.sh)" that prefers nextest over `cargo test` when present. Provenance
+  UNCERTAIN: the Phase 1c seg1 executor's return explicitly listed Dockerfile as "untouched as ordered"
+  (a discrepancy) — likely a global gate-resolver auto-patch or an unreported executor/tooling edit.
+  **Disposition:** (1) Dockerfile ADDED to the known-not-mine never-stage set (alongside CLAUDE.md,
+  ynz-watch/**) — it will NOT ride any boundary commit. (2) NOT reverted (a `git checkout` on Patrick's
+  build infra is his call, not an unattended one). (3) **Verification integrity CONFIRMED UNCONTAMINATED:**
+  every green-check dispatch + the Phase-1c executor ran `cargo test --workspace` explicitly (per their own
+  reports + the dispatch commands), NOT nextest — so no M3e/concurrency verdict this session rode a
+  process-per-test isolation profile that could mask a shared-process concurrency flake. (4) Concern for a
+  CONCURRENCY milestone: nextest's process isolation changes the exact load profile that exposes flakes
+  (the M3e class) — adopting it must be a DELIBERATE sanctioned decision, not a silent mid-flight edit.
+  **FLAGGED FOR PATRICK (morning):** decide keep-nextest-deliberately vs revert. If it re-appears after a
+  future gate run, that confirms an auto-patching infra behavior to address at its source.
+
+### 2026-07-10 — Phase 1c, segment 2
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1c-segment-2
+
+- **segment number:** 2
+- **session-id:** `executor-2026-07-10-m6-phase1c-seg2`
+- **subagent_tokens actual:** 235431
+- **checkpoint reason:** planned `**CHECKPOINT**` mark (step-2/step-3 boundary; green-building tree; context past threshold).
+- **canonical resume-at pointer:** `phase-1c/step-3` (advanced from segment 1's `phase-1c/step-2` — no stall).
+- **segment verdict:** `STATUS: PARTIAL`. **FRAGO 013 applied** as first action (union/maybe → bind-time heap-cell promotion; `**CHECKPOINT**` marks added to Phase 1c). **Step 2 DONE — RED repros locked, Paper-Traced:** `v0_3_m6_maybe_arg_pure_call.ynz` (15-digit nondeterministic garbage vs `42`), `v0_3_m6_union_arg_pure_call.ynz` (`circle` 3/3 vs `square`, deterministic dangling-tag), `v0_3_m6_anon_struct_arg_pure_call.ynz` (`4240380` 3/3 vs `7`); 6 locking tests (value + N=10) RED / 12 pre-existing GREEN; all three constructible, none skipped. Tracked WHY-comment minor folded in. **Step-3 recipe settled (handoff):** `store_binding` (emit.rs:19836) = maybe promotion point; the union-ctor Let arm (emit.rs:12641-12691) mints a fresh `outer_slot` that CLOBBERS the sm_entry crossing alloca (the key gotcha); strategy table needs ZERO edits (Maybe/Union already default to ptr-alloca + default pointer flush); Check-2b provenance via a provenance-returning core in the ONE producer. Heap-cell loop-leak verdict must be RECORDED under step-3 parity gate, NOT assumed (handoff item 5b). Two pre-existing clippy warnings (integration.rs:672, cross_impl_consistency) will hit step-4 `-D warnings` — dispositioned there, not silently ridden. No new deviation. Resume at `phase-1c/step-3` via handoff.
+
+### 2026-07-10 — Phase 1c, segment 3
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1c-segment-3
+
+- **segment number:** 3
+- **session-id:** `executor-2026-07-10-m6-phase1c-seg3`
+- **subagent_tokens actual:** 257955
+- **checkpoint reason:** **over-fat-step proposal** — step 3 ("The fixes") genuinely exceeds one window (2 crates, 8+ edit sites, 6 RED→GREEN, alloc-parity probe); the segment spent its window on step-3's MANDATED verify-recipe pre-work (which falsified a receipt) with no completed-step boundary behind it → BLOCKED bounce, routed to deviation-judge → Step-7 seam per the Step-3a pre-compare check.
+- **canonical resume-at pointer:** `phase-1c/step-3` (UNCHANGED — a bounce; nothing landed. Expected/harmless: the pre-compare check intercepted this return BEFORE the stall compare, so the unchanged pointer never trips a stall; the next post-FRAGO segment advances over the newly-inserted sub-steps).
+- **segment verdict:** **over-fat-step proposal** (carrier `STATUS: BLOCKED`). No code landed (by design of the bounce). Produced: settled step-3 design (handoff Decisions 11-16) + a proposed 4-part sub-step split (3a typeck routing / 3b codegen maybe+anon / 3c codegen union / 3d parity+IR), each boundary green-building on crate/mechanism seams. **Deviations surfaced (routed, not self-applied):** (1) the over-fat split; (2) RECEIPT FALSIFICATION (verify-before-fix) — `crossing_local_type_from_body` (emit.rs:8418) resolves the RHS type, so union-annotated lets classify as `Shape{variant}` (NOT the assumed default ptr-alloca) → folded into sub-step 3c; (3) Check 2 (nested-shape, check.rs:817-870) is a SECOND rejection surface the plan's "route PAST Check 2b" wording doesn't name but R14's "nothing rejected" implies → flagged for deviation-judge scope-reading confirmation. RED repros left intact (planned RED). Resume at `phase-1c/step-3` via handoff pending the FRAGO ratifying the split.
+
+### 2026-07-10 — Phase 1c, segment 4
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1c-segment-4
+
+- **segment number:** 4
+- **session-id:** `executor-2026-07-10-m6-phase1c-seg4`
+- **subagent_tokens actual:** 223844
+- **checkpoint reason:** planned `**CHECKPOINT**` mark (3a boundary; green-building tree).
+- **canonical resume-at pointer:** `phase-1c/step-3b` (advanced from seg-3's `phase-1c/step-3` — no stall).
+- **segment verdict:** `STATUS: PARTIAL`. **FRAGO 014 applied** as first action (corrected 3a-3d split + CHECKPOINT marks + Check-2-named-alongside-2b incl. 2 sibling occurrences). **Step 3a DONE** (typeck only, zero codegen): `mark_aggregate_arg` widened for Maybe + anon (NOT Union — deferred to 3c); `crossing_local_names_with_provenance` core → `CrossingNames{names, arg_escape_only}` (one producer, wrapper byte-identical); Check 2b skip (arg-escape-only ∧ Maybe). **Decision 18 (authoritative-derivation catch):** the M3d decline-probe `suspension_guards_fire_for_fn` (check.rs:9270) RE-SPELLS Check 2b's predicate → mirrored the provenance+skip there too (else silent CPU-admission narrowing, twin-drift class); 3c must mirror its Union skip at BOTH touch points. **Exit verified:** builds; maybe repro compiles + UAF-RED (IR widen evidence); union FULLY RED + NOT misclassified (the corrected-split trap avoided — no ICE); fixed<T>+m3a rejections byte-identical green; integration 522/522, clippy `-p ynz-typeck` clean. Decision 17: no typeck surface for anon StructLit (recorded interpretation, exit holds). No new deviation. Resume `phase-1c/step-3b` via handoff.
+
+### 2026-07-10 — Phase 1c, segment 5
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1c-segment-5
+
+- **segment number:** 5
+- **session-id:** `executor-2026-07-10-m6-phase1c-seg5`
+- **subagent_tokens actual:** 227244
+- **checkpoint reason:** planned `**CHECKPOINT**` mark (3b boundary; green-building tree).
+- **canonical resume-at pointer:** `phase-1c/step-3c` (advanced from seg-4's `phase-1c/step-3b` — no stall).
+- **segment verdict:** `STATUS: PARTIAL`. **Step 3b DONE** (codegen maybe+anon, emit.rs, zero typeck edits): `store_binding` (:19869) promotes a crossing-maybe envelope to a counted heap cell via `maybe_to_heap_cell`, crossing membership from the one threaded `cg.sm_crossing_names` (no second set); `stage_suspending_call_arg_bits` (:11285) routes `Expr::StructLit` args through `value_to_stable_bits` (all three loops by construction). Non-crossing/non-SM paths byte-identical. **Exit verified:** maybe pair + anon pair GREEN → **4/6 locked repros GREEN**; union pair stays RED with the byte-identical pre-fix `circle`-vs-`square` tell (3c's job, NOT a regression/ICE); fixed<T>+m3a rejections green; full workspace 2304 passed / 2 failed (the 2 = exactly the union pair); integration 522/522 under load; clippy `-p ynz-codegen` + fmt clean. No new deviation. Decisions 19-21 recorded (3c Union crossing-check pattern; default flush zero-edit for cell ptrs; StructLit routing safety). Resume `phase-1c/step-3c` via handoff.
+
+### 2026-07-10 — Phase 1c, segment 6
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1c-segment-6
+
+- **segment number:** 6
+- **session-id:** `executor-2026-07-10-m6-phase1c-seg6`
+- **subagent_tokens actual:** 266140
+- **checkpoint reason:** planned `**CHECKPOINT**` mark (3c boundary; green-building tree).
+- **canonical resume-at pointer:** `phase-1c/step-3d` (advanced from seg-5's `phase-1c/step-3c` — no stall).
+- **segment verdict:** `STATUS: PARTIAL`. **Step 3c DONE — the hard union codegen, all 6/6 repros GREEN.** typeck: `mark_aggregate_arg` widened for Union; Check 2 + Check 2b + the M3d decline-probe `suspension_guards_fire_for_fn` ALL mirror the Union skip (Decision 18, both halves — nested-shape + unsupported-type); `find_let_annotation_type_in_stmts` exported (ONE annotation scanner, no twin). codegen: annotation override routes union-annotated crossing local to ptr-alloca not `shape_embed_set` (Decision 12 trap avoided); new `union_to_heap_cell` (null→null phi preserving `is`-none; tag-switched payload deep-copy, sizes from the one `shape_abi_sizes`); union-ctor Let arm stores the cell into the pre-created sm_entry alloca (clobber gotcha avoided); `store_binding` Union arm; KNOWN-HOLE doc refreshed (no `value_to_stable_bits` Union arm, Decision 15). **Exit verified:** 6/6 repros GREEN (union RED→GREEN, deterministic `square`, N=10); frame-backing suite 18/18; **full workspace 2306 passed / 0 failed**; integration 522/522 under load (FRAGO 008 holding); clippy `-p ynz-typeck -p ynz-codegen -D warnings` + fmt clean. `is`-none preserved (Decision 24). No new deviation; no RED repros remain. Remaining: 3d (loop alloc=free parity verdict + IR proof) + steps 4-5 (full gates, genuinely FIX integration.rs:672 unused-stderr + cross_impl_consistency collapsible-if, false-positive sweep, WHY-comment minor) + close-out (delete handoff). Resume `phase-1c/step-3d` via handoff.
+
+### 2026-07-10 — Phase 1c, segment 7 (DONE)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1c-segment-7
+
+- **segment number:** 7
+- **session-id:** `executor-2026-07-10-m6-phase1c-seg7`
+- **subagent_tokens actual:** 244901
+- **checkpoint reason:** phase DONE (steps 3d + 4 + 5 + close-out all complete; handoff deleted as the final act).
+- **canonical resume-at pointer:** n/a — Phase 1c COMPLETE (advanced from seg-6's `phase-1c/step-3d`).
+- **segment verdict:** **DONE.** **Step 3d parity verdict — LEAK-BY-SHIPPED-DESIGN CONFIRMED (Paper-Trace, not assumed):** 5-iter crossing-maybe + 3-iter crossing-union loop probe; predicted gap 11 (5×1 maybe + 3×2 union cells) BEFORE first run; observed alloc=12/free=1, residual 0, stable 4/4. Pinned as `v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak` (integration.rs, M5-E8 exact-gap convention `alloc = free + 11`). Per-case IR proof (maybe/union/anon all staged from a SURVIVING allocation, never a dying stack temp). **Step 5:** false-positive sweep extended to non-escaping maybe/union/anon (renamed test, all prior assertions retained, IR-verified zero promotion sites). **Step 4 gates:** full workspace **2307 passed / 0 failed** (run twice; M3e determinism holding under load both times); fmt + `clippy --workspace -D warnings` clean; the TWO pre-existing warnings GENUINELY fixed (integration.rs unused-`stderr` → strengthened assertion; cross_impl_consistency collapsible-if → `&&`) — no `#[allow]`, no `--no-verify`. WHY-comment minor confirmed already folded (seg-2). **DEVIATION SURFACED (for the seam — NOT self-decided):** the per-iteration heap-cell leak is a REAL finding (exact gap=11), fixing needs the ownership drop story (out of hotfix charter) — proposed four-field deferral: WHAT per-iteration heap-cell leak for crossing maybe/union LOOP bindings (1-2 cells/iter, held to process exit); WHY freeing needs the drop story (same class as M5 FRAGO-009 / Future-Req #6 — maybe/union joining the existing never-drop-locals regime); COST drop-story milestone (1-2 sessions) + update the 2 parity pins; TRIGGER drop story lands OR a real unbounded-suspension-loop-over-maybe/union workload. Exposure pinned LOUD in-suite meanwhile. Disposition = seam's call (fleet deviation-judge). Phase 1c completion note written to plan.md.

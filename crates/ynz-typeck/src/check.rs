@@ -808,13 +808,49 @@ impl<'b> Checker<'b> {
         // Full recursive aggregate frame-embedding ships in a later milestone.
         if !self.kernel_mode && (has_explicit_waits || is_suspending_fn) {
             let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
-            let crossings = crossing_local_names(
+            // Provenance-aware call (v0.3-M6 Phase 1c): Check 2/2b need to know which
+            // crossing names are arg-escape-only (handled by bind-time heap-cell
+            // promotion) vs lexically crossing (read-after-wait — still rejected for
+            // maybe/union). Same ONE producer as codegen's frame layout; only the
+            // provenance is consumed in addition (authoritative-derivation.md).
+            let CrossingNames {
+                names: crossings,
+                arg_escape_only,
+            } = crossing_local_names_with_provenance(
                 &f.body.stmts,
                 &param_names_ref,
                 &suspending_fns,
+                &std::collections::HashSet::new(),
                 &self.expr_types,
             );
             for crossing_name in &crossings {
+                // v0.3-M6 Phase 1c step 3c (FRAGO 014 ITEM 2): a union-ANNOTATED local
+                // whose ONLY crossing provenance is arg-escape is bind-time promoted to
+                // counted heap cells (envelope + tag-resolved payload deep-copy via
+                // `union_to_heap_cell`) — nothing is frame-embedded, so the nested-shape
+                // limitation this check guards cannot apply. Its RHS resolves to the
+                // CONCRETE variant shape (`let fig: Figure = s` types as `Square`),
+                // which is exactly why this check would otherwise fire on it. Lexical
+                // (read-after-wait) union crossings never enter `arg_escape_only` and
+                // stay subject to this check. Mirrored in
+                // `suspension_guards_fire_for_fn` (the M3d decline probe — both touch
+                // points or the verdicts drift).
+                // A nested-shape variant payload is safe under this flat one-level ABI-size
+                // memcpy: since v0.3-M5 P2, `store_field` (emit.rs ~20154) heap-cells EVERY
+                // shape-typed field store, so a nested-shape field is already a pointer to a
+                // counted HEAP cell (not a stack sub-struct) at construction time — there is
+                // no stack sub-struct left for the one-level promotion to miss (v0.3-M6 Phase
+                // 1c verification probe; refutes a stale pre-M5 code-review premise that
+                // assumed inline stack sub-structs).
+                if arg_escape_only.contains(crossing_name.as_str()) {
+                    let ann_is_union =
+                        find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
+                            .and_then(|ast_ty| self.resolve_type_for_guard(&ast_ty))
+                            .is_some_and(|ty| matches!(ty, Type::Union { .. }));
+                    if ann_is_union {
+                        continue;
+                    }
+                }
                 // Look up the typeck-resolved type now that expr_types is populated.
                 // For let-defined crossing locals, find_crossing_local_typeck_type_in_map
                 // returns the RHS expression type. For for-loop vars (no Stmt::Let),
@@ -931,6 +967,24 @@ impl<'b> Checker<'b> {
                         })
                     })
                     .cloned();
+                // v0.3-M6 Phase 1c (FRAGOs 013/014): a `maybe` or `union` local whose
+                // ONLY crossing provenance is the arg-escape collector is legal — codegen
+                // promotes the binding to a counted heap cell at bind time
+                // (`maybe_to_heap_cell` / `union_to_heap_cell`), so the pointer the
+                // callee holds across its own suspension targets surviving heap, not the
+                // dead resume-fn stack. Lexical (read-after-wait) crossings are collected
+                // BEFORE the arg-escape pass and therefore never appear in
+                // `arg_escape_only` — they stay rejected here, because the promotion does
+                // not make the parent's own post-wait reload safe. The union skip keys on
+                // the ANNOTATION resolving to Union (step 3c): the union-ctor arm that
+                // performs the promotion keys on that same annotation, and the RHS types
+                // as the concrete variant shape.
+                if arg_escape_only.contains(crossing_name.as_str())
+                    && (matches!(effective_ty, Some(Type::Maybe { .. }))
+                        || matches!(ann_ty, Some(Type::Union { .. })))
+                {
+                    continue;
+                }
                 if let Some(ty) = effective_ty {
                     let ty_display = type_name(&ty);
                     let (what_instead, why) = match &ty {
@@ -6819,8 +6873,12 @@ pub(crate) fn find_for_loop_var_type_in_stmts(
 /// annotation AST type (the `ty` field), if any.
 ///
 /// Used by Check 2b (UnsupportedCrossingLocalType) to read the annotation type of a
-/// crossing local without going through the mutating `ast_type_to_type` path.
-fn find_let_annotation_type_in_stmts(stmts: &[Stmt], target: &str) -> Option<AstType> {
+/// crossing local without going through the mutating `ast_type_to_type` path, and by
+/// codegen's crossing-local classification loop (v0.3-M6 Phase 1c step 3c) to apply
+/// the union annotation override — the ONE annotation finder for both consumers, so
+/// the guards and the classifier can never scan differently
+/// (authoritative-derivation.md).
+pub fn find_let_annotation_type_in_stmts(stmts: &[Stmt], target: &str) -> Option<AstType> {
     for stmt in stmts {
         match stmt {
             Stmt::Let { name, ty, .. } if name == target => {
@@ -7557,6 +7615,46 @@ pub fn crossing_local_names_with_cpu_spike(
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
 ) -> Vec<String> {
+    crossing_local_names_with_provenance(stmts, param_names, suspending, cpu_supported, expr_types)
+        .names
+}
+
+/// Crossing-local names plus provenance (v0.3-M6 Phase 1c, FRAGOs 013/014).
+///
+/// `arg_escape_only` is the subset of `names` whose SOLE crossing evidence is the
+/// arg-escape collector ([`collect_aggregate_args_to_suspending_calls`]): the value is
+/// passed by pointer as an argument / UFCS receiver to a suspending callee, but is never
+/// read after a suspension lexically, is not a conduit, and is not a for-loop synthetic.
+/// Check 2/2b (and the M3d decline-to-promote probe that mirrors them) consume this to
+/// permit types whose arg-escape crossing is handled by bind-time heap-cell promotion
+/// (`maybe`, and `union` from Phase 1c step 3c) while still rejecting the same types when
+/// they lexically cross a `wait` — a read-after-wait reload the promotion does not cover.
+///
+/// The split is by construction, not by a second scan: a lexically-crossing name enters
+/// the dedupe set BEFORE the arg-escape collector runs (so it can never land in the
+/// arg-escape slice), and for-loop synthetics are appended after the snapshot window
+/// closes. One producer, provenance threaded to every consumer — never a re-derived twin
+/// (authoritative-derivation.md).
+pub struct CrossingNames {
+    /// Sorted, deduplicated crossing-local names — byte-identical to what
+    /// [`crossing_local_names_with_cpu_spike`] returns for the same inputs.
+    pub names: Vec<String>,
+    /// Names whose only crossing provenance is the arg-escape collector.
+    pub arg_escape_only: std::collections::HashSet<String>,
+}
+
+/// Provenance-returning core behind [`crossing_local_names`] /
+/// [`crossing_local_names_with_cpu_spike`] — the ONE producer of the crossing set.
+///
+/// Time: O(N log N) where N = AST nodes (one crossing scan + a final name sort)  Space: O(C)
+/// where C = crossing local names collected
+pub fn crossing_local_names_with_provenance(
+    stmts: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> CrossingNames {
     let crossings = locals_crossing_wait(stmts, param_names, suspending, cpu_supported, expr_types);
     let mut seen = std::collections::HashSet::new();
     let mut names: Vec<String> = crossings
@@ -7576,15 +7674,21 @@ pub fn crossing_local_names_with_cpu_spike(
     // read appears lexically after the suspension (the natural read-after-suspension scan
     // above would miss exactly that case).
     collect_conduit_locals(stmts, param_names, expr_types, &mut seen, &mut names);
-    // v0.3-M6 Phase 1b (FRAGOs 004/005/006/007): a shape / fixed<T> / number value passed
-    // BY POINTER as an argument (or UFCS receiver) to a suspending callee crosses that
-    // callee's suspension even when no read appears lexically after it — the callee holds
-    // the pointer in its own frame and reads it after its own suspend point, while the
-    // parent's resume fn returns Pending and its stack (holding the staged value)
-    // dies. Marking the local crossing routes a shape into the existing frame-embed
-    // machinery, a fixed<T> into the existing Check 2b teaching error, and a number
-    // (decimal128) into the existing 2-slot frame-backing (the arg-staging path then
-    // stages a pointer into that frame region instead of a dying stack temp).
+    // v0.3-M6 Phase 1b/1c (FRAGOs 004/005/006/007/013): a shape / fixed<T> / number /
+    // maybe value passed BY POINTER as an argument (or UFCS receiver) to a suspending
+    // callee crosses that callee's suspension even when no read appears lexically after
+    // it — the callee holds the pointer in its own frame and reads it after its own
+    // suspend point, while the parent's resume fn returns Pending and its stack (holding
+    // the staged value) dies. Marking the local crossing routes a shape into the existing
+    // frame-embed machinery, a fixed<T> into the existing Check 2b teaching error, a
+    // number (decimal128) into the existing 2-slot frame-backing, and a maybe into
+    // bind-time promotion to a counted heap cell (its alloca then holds a stable heap
+    // pointer, so the default pointer flush stays correct across suspension).
+    //
+    // Everything this collector appends is, by construction, crossing ONLY via
+    // arg-escape: lexical crossings are already in `seen` (collected above), so the
+    // snapshot window below IS the provenance split — no second scan.
+    let before_arg_escape = names.len();
     collect_aggregate_args_to_suspending_calls(
         stmts,
         param_names,
@@ -7593,6 +7697,8 @@ pub fn crossing_local_names_with_cpu_spike(
         &mut seen,
         &mut names,
     );
+    let arg_escape_only: std::collections::HashSet<String> =
+        names[before_arg_escape..].iter().cloned().collect();
     // Collect synthetic frame slots for for-loops whose bodies contain a suspension.
     // For-loop iteration requires an internal index counter that must survive suspension;
     // giving it a named frame slot (prefixed `__ynz_for_idx_`) integrates it with the
@@ -7603,7 +7709,10 @@ pub fn crossing_local_names_with_cpu_spike(
     // bodies), so it is never a suspension point and needs no synthetic iteration slot.
     collect_for_loop_synthetic_crossings(stmts, suspending, &mut seen, &mut names, expr_types);
     names.sort();
-    names
+    CrossingNames {
+        names,
+        arg_escape_only,
+    }
 }
 
 /// v0.3-M4: recursively collect every local whose binding type is a conduit
@@ -7889,9 +7998,16 @@ fn collect_aggregate_args_in_expr(
 }
 
 /// Mark `arg` as a crossing local when it is a LET-bound `Ident` of stack-backed type —
-/// `shape` / `fixed<T>` (aggregates staged by pointer) or `number` with precision ≤ 34
+/// `shape` / `fixed<T>` (aggregates staged by pointer), `number` with precision ≤ 34
 /// (decimal128: the arg-staging path copies the i128 bits into a resume-fn stack temp and
-/// stages a pointer to it — the same dying-stack class, FRAGOs 006/007 / signed R14).
+/// stages a pointer to it — the same dying-stack class, FRAGOs 006/007 / signed R14), or
+/// `maybe<T>` (v0.3-M6 Phase 1c / FRAGO 013: the alloca points at a {flag,payload}
+/// envelope on the resume fn's stack; marking it crossing routes the binding into
+/// bind-time promotion to a counted heap cell, giving the default pointer flush a stable
+/// heap pointee), or a `union` (v0.3-M6 Phase 1c step 3c / FRAGO 014: bind-time
+/// promotion via `union_to_heap_cell`; the codegen classification loop overrides the
+/// RHS variant type with the resolved Union ANNOTATION so the binding never lands in
+/// the shape-embed path — this widen and that override are load-bearing coupled).
 /// Bignum (`number` with precision > 34) is deliberately excluded: its slot stores a
 /// pointer to a heap-resident decimal string (stable across suspension).
 /// The candidate filter for [`collect_aggregate_args_to_suspending_calls`].
@@ -7910,12 +8026,18 @@ fn mark_aggregate_arg(
         return;
     }
     let arg_ty = expr_types.get(&(span.start, span.end));
-    let is_stack_backed_aggregate =
-        matches!(arg_ty, Some(Type::Shape { .. } | Type::BuiltinFixed { .. }))
-            || matches!(
-                arg_ty,
-                Some(Type::Number { precision }) if *precision <= 34
-            );
+    let is_stack_backed_aggregate = matches!(
+        arg_ty,
+        Some(
+            Type::Shape { .. }
+                | Type::BuiltinFixed { .. }
+                | Type::Maybe { .. }
+                | Type::Union { .. }
+        )
+    ) || matches!(
+        arg_ty,
+        Some(Type::Number { precision }) if *precision <= 34
+    );
     if is_stack_backed_aggregate
         && find_crossing_local_typeck_type_in_map(stmts_topmost, name, expr_types).is_some()
         && seen.insert(name.clone())
@@ -9228,12 +9350,37 @@ pub(crate) fn suspension_guards_fire_for_fn(
     }
 
     // Crossing-local guards (nested-shape, UnsupportedCrossingLocalType, shadow).
+    // Provenance-aware (v0.3-M6 Phase 1c): the probe must mirror Check 2's
+    // arg-escape-only union skip AND Check 2b's arg-escape-only maybe/union skips
+    // below, or it would decline CPU promotion for hosts the real checker accepts —
+    // the silent-envelope-narrowing drift class. Same ONE producer as
+    // `check_function` (authoritative-derivation.md).
     let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
-    let crossings =
-        crossing_local_names(&f.body.stmts, &param_names_ref, suspending_fns, expr_types);
+    let CrossingNames {
+        names: crossings,
+        arg_escape_only,
+    } = crossing_local_names_with_provenance(
+        &f.body.stmts,
+        &param_names_ref,
+        suspending_fns,
+        &std::collections::HashSet::new(),
+        expr_types,
+    );
 
     for crossing_name in &crossings {
-        // Nested-shape crossing.
+        // Annotation type, resolved through union aliases — computed up front because
+        // BOTH guards below consume it: the nested-shape guard's union skip and the
+        // UnsupportedCrossingLocalType guard's [ann, rhs, for_var] preference order.
+        let ann_ty = find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
+            .and_then(|ast_ty| resolve_type_for_guard_free(&ast_ty, union_aliases));
+        // Arg-escape-only union: bind-time promotion (`union_to_heap_cell`) handles the
+        // crossing — mirrors Check 2's AND Check 2b's union skips exactly (step 3c).
+        let arg_escape_union_ok = arg_escape_only.contains(crossing_name.as_str())
+            && matches!(ann_ty, Some(Type::Union { .. }));
+
+        // Nested-shape crossing (skipped for the arg-escape-only union case, exactly
+        // as Check 2 skips it: nothing is frame-embedded for a promoted union, and the
+        // RHS of a union-annotated let types as the concrete variant shape).
         let resolved_ty = find_crossing_local_typeck_type_in_map(
             &f.body.stmts,
             crossing_name.as_str(),
@@ -9251,7 +9398,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
                         .iter()
                         .any(|field| matches!(&field.ty, Type::Shape { .. }))
                 });
-            if has_nested_shape {
+            if has_nested_shape && !arg_escape_union_ok {
                 return true;
             }
         }
@@ -9262,12 +9409,13 @@ pub(crate) fn suspension_guards_fire_for_fn(
             crossing_name.as_str(),
             expr_types,
         );
-        let ann_ty = find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
-            .and_then(|ast_ty| resolve_type_for_guard_free(&ast_ty, union_aliases));
         let for_var_ty =
             find_for_loop_var_type_in_stmts(&f.body.stmts, crossing_name.as_str(), expr_types);
-        let unsupported = [&ann_ty, &rhs_ty, &for_var_ty].iter().any(|opt| {
-            opt.as_ref().is_some_and(|ty| {
+        // Same first-match preference order ([ann, rhs, for_var]) and the same
+        // arg-escape-only `maybe`/`union` skips as Check 2b — the two verdicts must
+        // agree exactly (see the provenance comment above the crossing collection).
+        let effective_ty = [&ann_ty, &rhs_ty, &for_var_ty].iter().find_map(|opt| {
+            opt.as_ref().filter(|ty| {
                 matches!(
                     ty,
                     Type::Union { .. }
@@ -9278,7 +9426,9 @@ pub(crate) fn suspension_guards_fire_for_fn(
                 )
             })
         });
-        if unsupported {
+        let arg_escape_maybe_ok = arg_escape_only.contains(crossing_name.as_str())
+            && matches!(effective_ty, Some(Type::Maybe { .. }));
+        if effective_ty.is_some() && !arg_escape_maybe_ok && !arg_escape_union_ok {
             return true;
         }
 

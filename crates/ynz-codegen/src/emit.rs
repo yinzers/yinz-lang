@@ -29,6 +29,7 @@ use ynz_ast::nodes::{
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
     build_effective_suspend_set, crossing_local_names_with_cpu_spike,
+    find_let_annotation_type_in_stmts,
     independence::{partition_independent_groups, IndependentGroup},
     is_base_suspension_intrinsic, type_attached_const_type, GenericFnTable, MonomorphizationTable,
     ShapeTable, SignatureTable, Type, TypedModule,
@@ -3201,6 +3202,168 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(owned_env)
     }
 
+    /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
+    /// FRAGOs 006/007/013) — the union sibling of `maybe_to_heap_cell`: clone a
+    /// union value into counted heap cells so a CROSSING binding's pointer
+    /// survives suspension (the resume fn's stack dies on every Pending return).
+    ///
+    /// A union value is an opaque pointer with a NON-uniform repr:
+    ///   - NULL for the `T | nothing` none case (the `is`-none path
+    ///     `build_is_null`s the value directly), or
+    ///   - a pointer to a `{i64 tag, i64 data}` tagged struct whose `data` holds
+    ///     `ptr_to_int` of the payload shape's storage (union-ctor Let arm).
+    ///
+    /// The clone preserves BOTH reprs:
+    ///   - **null → null**: a heap cell pointer is never null, so cloning a none
+    ///     through a cell would flip `is`-none from true to false — the null
+    ///     sentinel IS the none value and must pass through untouched;
+    ///   - **non-null → fresh {tag,data} heap cell**, with the payload
+    ///     deep-copied into its OWN heap cell selected by a tag switch (variant
+    ///     shapes have different ABI sizes, read from the ONE `shape_abi_sizes`
+    ///     source via `shape_abi_size_const`); a non-shape variant's data is
+    ///     self-contained i64 bits (or an already-heap-stable pointer) and
+    ///     copies as-is through the switch default.
+    ///
+    /// BINDING surface only: `value_to_stable_bits` deliberately keeps NO Union
+    /// arm (its KNOWN-HOLE doc — the persist surfaces stay loud-fail-pinned
+    /// until the union ABI gets one authoritative layout), so this helper is
+    /// reachable only from the two binding funnels (`store_binding`'s Union arm
+    /// and the union-ctor Let arm's crossing branch).
+    ///
+    /// Time: O(1) + one memcpy of the selected variant's ABI size  Space: O(1)
+    /// (two heap cells per present value; zero for a none)
+    fn union_to_heap_cell(
+        &self,
+        src: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let union_st = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let pre_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        let copy_bb = self.append_block(&format!("{site}_ucopy"));
+        let cont_bb = self.append_block(&format!("{site}_ucont"));
+        let is_none = self
+            .builder
+            .build_is_null(src, &format!("{site}_is_none"))
+            .map_err(|e| format!("union cell is_null {site}: {e}"))?;
+        self.builder
+            .build_conditional_branch(is_none, cont_bb, copy_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        // Present value: clone the {tag,data} envelope into a counted heap cell.
+        self.builder.position_at_end(copy_bb);
+        let raw = union_st
+            .size_of()
+            .ok_or_else(|| format!("{site}: union envelope size_of unavailable"))?;
+        let env_size = self
+            .builder
+            .build_int_z_extend(raw, self.i64(), &format!("{site}_env_sz"))
+            .map_err(|e| format!("union env size zext {site}: {e}"))?;
+        let cell = self.heap_cell(env_size, &format!("{site}_env"))?;
+        let src_tag_gep = self
+            .builder
+            .build_struct_gep(union_st, src, 0, &format!("{site}_src_tag"))
+            .map_err(|e| format!("{e}"))?;
+        let tag = self
+            .builder
+            .build_load(self.i64(), src_tag_gep, &format!("{site}_tag"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let dst_tag_gep = self
+            .builder
+            .build_struct_gep(union_st, cell, 0, &format!("{site}_dst_tag"))
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_store(dst_tag_gep, tag)
+            .map_err(|e| format!("{e}"))?;
+        let src_data_gep = self
+            .builder
+            .build_struct_gep(union_st, src, 1, &format!("{site}_src_data"))
+            .map_err(|e| format!("{e}"))?;
+        let data = self
+            .builder
+            .build_load(self.i64(), src_data_gep, &format!("{site}_data"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let dst_data_gep = self
+            .builder
+            .build_struct_gep(union_st, cell, 1, &format!("{site}_dst_data"))
+            .map_err(|e| format!("{e}"))?;
+
+        // Tag switch: shape variants deep-copy their payload bytes into an own
+        // heap cell; anything else (default) copies the raw i64 bits.
+        let done_bb = self.append_block(&format!("{site}_udata_done"));
+        let raw_bb = self.append_block(&format!("{site}_udata_raw"));
+        let mut shape_cases: Vec<(u64, String)> = Vec::new();
+        for (i, v) in variants.iter().enumerate() {
+            if let Type::Shape { ref name } = self.resolve_type(v) {
+                shape_cases.push((i as u64, name.clone()));
+            }
+        }
+        let case_blocks: Vec<inkwell::basic_block::BasicBlock<'ctx>> = shape_cases
+            .iter()
+            .map(|(i, _)| self.append_block(&format!("{site}_upay{i}")))
+            .collect();
+        let switch_cases: Vec<(
+            inkwell::values::IntValue<'ctx>,
+            inkwell::basic_block::BasicBlock<'ctx>,
+        )> = shape_cases
+            .iter()
+            .zip(case_blocks.iter())
+            .map(|((i, _), bb)| (self.i64().const_int(*i, false), *bb))
+            .collect();
+        self.builder
+            .build_switch(tag, raw_bb, &switch_cases)
+            .map_err(|e| format!("union cell tag switch {site}: {e}"))?;
+        for ((i, shape_name), case_bb) in shape_cases.iter().zip(case_blocks.iter()) {
+            self.builder.position_at_end(*case_bb);
+            let src_pay = self
+                .builder
+                .build_int_to_ptr(data, self.ptr(), &format!("{site}_src_pay{i}"))
+                .map_err(|e| format!("{e}"))?;
+            let size = self.shape_abi_size_const(shape_name, "union_to_heap_cell")?;
+            let pay_cell = self.heap_cell(size, &format!("{site}_pay{i}"))?;
+            self.builder
+                .build_memcpy(pay_cell, 1, src_pay, 1, size)
+                .map_err(|e| format!("union cell payload memcpy {site}: {e}"))?;
+            let own_bits = self
+                .builder
+                .build_ptr_to_int(pay_cell, self.i64(), &format!("{site}_own_bits{i}"))
+                .map_err(|e| format!("{e}"))?;
+            self.builder
+                .build_store(dst_data_gep, own_bits)
+                .map_err(|e| format!("{e}"))?;
+            self.builder
+                .build_unconditional_branch(done_bb)
+                .map_err(|e| format!("{e}"))?;
+        }
+        self.builder.position_at_end(raw_bb);
+        self.builder
+            .build_store(dst_data_gep, data)
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        // Merge: null flows through unchanged; present values yield the cell.
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(self.ptr(), &format!("{site}_ucell"))
+            .map_err(|e| format!("{e}"))?;
+        phi.add_incoming(&[(&cell, done_bb), (&src, pre_bb)]);
+        Ok(phi.as_basic_value().into_pointer_value())
+    }
+
     /// Get-side ownership (v0.3-M5 P2 fix-loop): copy shape bytes INTO the frame
     /// region a pre-wired embed slot points to (SM crossing shape locals, Step
     /// 1b wiring). The variable's owned storage IS its frame region — a plain
@@ -3347,7 +3510,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// diagnostic (feature-registry + gallery obligations) — FRAGO-grade plan
     /// surface, surfaced to the deviation-judge, deliberately NOT built as a
     /// sweep ride-along. Owned by the fix-round deviation record until the
-    /// union ABI gets one authoritative layout.
+    /// union ABI gets one authoritative layout. NOTE (v0.3-M6 Phase 1c step
+    /// 3c): the BINDING surface now has its own null-preserving heap promotion
+    /// (`union_to_heap_cell`, reachable only from the two binding funnels) —
+    /// that does NOT close this hole and deliberately adds NO Union arm here:
+    /// an arm would silently widen the persist surfaces past the pins above.
     fn value_to_stable_bits(
         &self,
         val: BasicValueEnum<'ctx>,
@@ -4477,6 +4644,10 @@ fn lower_function_with_waits<'ctx, 'g>(
     //                        (frame-embed, not heap-promotion); bytes live directly in
     //                        the frame — no separate allocation needed
     //   string/array/map   → ptr alloca; pointer already lives on the heap (stable)
+    //   maybe/union        → ptr alloca; bind-time promotion to a counted heap cell
+    //                        (v0.3-M6 Phase 1c) makes the pointee heap-stable; a
+    //                        union ANNOTATION overrides the RHS variant type so the
+    //                        binding never lands in shape-embed (Decision 12)
     {
         let mut scalar_set: HashSet<String> = HashSet::new();
         let mut bool_set: HashSet<String> = HashSet::new();
@@ -4501,6 +4672,20 @@ fn lower_function_with_waits<'ctx, 'g>(
                     _ => crossing_ty,
                 }
             };
+            // Union annotation override (v0.3-M6 Phase 1c step 3c, Decision 12): a
+            // union-ANNOTATED crossing local's RHS types as the CONCRETE variant shape
+            // (`let fig: Figure = s` types as `Square`), which would misclassify the
+            // binding into `shape_embed_set` — but its storage is the union {tag,data}
+            // heap cell (bind-time promotion in the union-ctor Let arm), never
+            // embeddable shape bytes. Resolve the Let's annotation through the SAME
+            // finder the typeck guards use and the SAME resolver the union-ctor arm
+            // uses (`ast_type_to_typeck_type` — one source, no twin); a Union
+            // annotation routes the binding to the pointer-alloca strategy (the
+            // default arm below), same as maybe.
+            let crossing_ty = find_let_annotation_type_in_stmts(&f.body.stmts, cname.as_str())
+                .map(|ast_ann| ast_type_to_typeck_type(&ast_ann, cg_resume.shape_table))
+                .filter(|ty| matches!(ty, Type::Union { .. }))
+                .unwrap_or(crossing_ty);
 
             // Classify the crossing local so flush/reload know which strategy to use.
             // Bool is separate from Int: both get 1 frame slot, but Bool's alloca is i1
@@ -4560,6 +4745,8 @@ fn lower_function_with_waits<'ctx, 'g>(
             //                      frame's slot region (see Step 1b below); bytes are
             //                      stored directly in the frame — no separate heap alloc
             //   string/array/map → ptr alloca; pointer already lives on the heap (stable)
+            //   maybe/union      → ptr alloca; bind-time heap-cell promotion makes the
+            //                      pointee stable (v0.3-M6 Phase 1c)
             let llvm_ty: inkwell::types::BasicTypeEnum<'ctx> = match &crossing_ty {
                 Type::Int => cg_resume.i64().into(),
                 // Bool keeps its natural i1 alloca; flush/reload convert at the frame boundary.
@@ -11260,15 +11447,26 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 /// I/O-group path (`emit_io_member_init`, serving both `emit_independent_group_poll`
 /// and `emit_fused_group_spawn_poll`).
 ///
-/// Default: lower the arg and marshal via `to_i64_bits`. Exception — a LET-bound
-/// decimal128 crossing local (member of `sm_crossing_decimal128_set`): lowering it would
-/// copy the i128 bits into a FRESH resume-fn STACK alloca (`load()`'s Number arm) and
-/// stage `ptr_to_int(temp)` into the child frame; the parent returns Pending, its stack
-/// dies, and the resumed child dereferences the dangling temp (the pre-existing v0.3.0
-/// arg UAF — FRAGOs 006/007, signed R14). Instead, stage a GEP into the PARENT frame's
-/// 2-slot decimal128 region for that crossing local: the composed frame is heap-resident
-/// and outlives the suspension, and `flush_crossing_local_if_needed` (which runs after
-/// every non-wait statement) keeps those slots current, so the child reads live bytes.
+/// Default: lower the arg and marshal via `to_i64_bits`. Two exceptions:
+///
+/// 1. A LET-bound decimal128 crossing local (member of `sm_crossing_decimal128_set`):
+///    lowering it would copy the i128 bits into a FRESH resume-fn STACK alloca
+///    (`load()`'s Number arm) and stage `ptr_to_int(temp)` into the child frame; the
+///    parent returns Pending, its stack dies, and the resumed child dereferences the
+///    dangling temp (the pre-existing v0.3.0 arg UAF — FRAGOs 006/007, signed R14).
+///    Instead, stage a GEP into the PARENT frame's 2-slot decimal128 region for that
+///    crossing local: the composed frame is heap-resident and outlives the suspension,
+///    and `flush_crossing_local_if_needed` (which runs after every non-wait statement)
+///    keeps those slots current, so the child reads live bytes.
+/// 2. An ANONYMOUS aggregate literal (`wait crew({ ... })` — v0.3-M6 Phase 1c, same
+///    FRAGO 006/007 class): it has no LET name for the crossing classifier to anchor
+///    on, and its lowered value is a dying stack temp (`lower_struct_lit`), so staging
+///    its raw pointer bits reproduces the UAF for an UNNAMED temporary (fixture
+///    `v0_3_m6_anon_struct_arg_pure_call.ynz`: 4240380 vs 7). Route it through
+///    `value_to_stable_bits` — the ONE stable-bits marshalling point — so the staged
+///    bits point at a counted heap cell that survives the parent's suspension.
+///    Scope-minimal: `StructLit` only; other non-Ident temp forms stay recorded
+///    residuals (Phase 1c plan text).
 ///
 /// Time: O(1) per arg beyond `lower_expr`  Space: O(1)
 fn stage_suspending_call_arg_bits<'ctx>(
@@ -11313,6 +11511,13 @@ fn stage_suspending_call_arg_bits<'ctx>(
                 )
                 .map_err(|e| format!("sm arg staging dec ptr_to_int {name}: {e}"));
         }
+    }
+    if matches!(arg, Expr::StructLit { .. }) {
+        // Exception 2 (doc above): anonymous aggregate — stage from a counted heap
+        // cell via the one stable-bits marshalling point, never the dying stack temp.
+        let arg_val = lower_expr(cg, arg)?;
+        let arg_ty = cg.expr_type(arg);
+        return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
     }
     let arg_val = lower_expr(cg, arg)?;
     let arg_ty = cg.expr_type(arg);
@@ -12679,14 +12884,39 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                                 cg.builder
                                     .build_store(data_gep, ptr_as_i64)
                                     .map_err(|e| format!("{e}"))?;
-                                let outer_slot = cg
-                                    .builder
-                                    .build_alloca(cg.ptr(), name)
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.builder
-                                    .build_store(outer_slot, union_slot)
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.locals.insert(name.clone(), outer_slot);
+                                // v0.3-M6 Phase 1c step 3c (FRAGOs 006/007/013): a
+                                // CROSSING union binding must not keep the STACK tagged
+                                // struct — the resume fn's stack dies on every Pending
+                                // return, so a suspending callee's tag read dangles
+                                // (fixture `v0_3_m6_union_arg_pure_call.ynz`: `circle`
+                                // vs `square`). Promote envelope + payload to counted
+                                // heap cells and store the cell into the PRE-CREATED
+                                // sm_entry crossing alloca — never a fresh `outer_slot`,
+                                // which would orphan the alloca the flush/reload
+                                // machinery reads (and, being created in a state block,
+                                // would violate LLVM SSA dominance across states).
+                                let is_sm_crossing = cg
+                                    .sm_crossing_names
+                                    .as_ref()
+                                    .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
+                                if is_sm_crossing {
+                                    let cell = cg.union_to_heap_cell(union_slot, variants, name)?;
+                                    let slot = *cg.locals.get(name.as_str()).ok_or_else(|| {
+                                        format!("sm crossing alloca for `{name}` missing in entry")
+                                    })?;
+                                    cg.builder
+                                        .build_store(slot, cell)
+                                        .map_err(|e| format!("{e}"))?;
+                                } else {
+                                    let outer_slot = cg
+                                        .builder
+                                        .build_alloca(cg.ptr(), name)
+                                        .map_err(|e| format!("{e}"))?;
+                                    cg.builder
+                                        .build_store(outer_slot, union_slot)
+                                        .map_err(|e| format!("{e}"))?;
+                                    cg.locals.insert(name.clone(), outer_slot);
+                                }
                                 break 'union_ctor true;
                             }
                         }
@@ -19833,27 +20063,73 @@ fn store<'ctx>(
 /// (`store_field`, counted heap cell) and map value inserts
 /// (`value_to_stable_bits`, counted heap cell). See
 /// `array_elem_out_buffer`'s ownership contract for the full boundary.
+///
+/// CROSSING maybe bindings promote to a COUNTED HEAP CELL instead of the
+/// entry-block owned region (v0.3-M6 Phase 1c, FRAGOs 006/007/013): a crossing
+/// local's frame slot persists the envelope POINTER across suspension, but the
+/// resume fn's stack — where `maybe_to_owned`'s entry-block region lives — is
+/// destroyed every time the parent returns Pending, so a suspending callee
+/// reading its maybe arg after its own suspend point dereferenced a dangling
+/// envelope (nondeterministic pointer garbage; fixture
+/// `v0_3_m6_maybe_arg_pure_call.ynz`). The heap cell satisfies the default
+/// flush arm's stable-pointer contract. Crossing membership reads
+/// `sm_crossing_names` — the one authoritative crossing set threaded from
+/// typeck (authoritative-derivation: no second classification path).
+///
+/// `name` is the BINDING name (both callers are the `let` / assign arms) — it
+/// keys the crossing-set lookup and names the emitted LLVM values.
 fn store_binding<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
     slot: PointerValue<'ctx>,
-    site: &str,
+    name: &str,
 ) -> Result<(), String> {
     match cg.resolve_type(ty) {
-        Type::Shape { ref name } => {
-            let owned = cg.shape_bytes_to_owned(val.into_pointer_value(), name, site)?;
+        Type::Shape {
+            name: ref shape_name,
+        } => {
+            let owned = cg.shape_bytes_to_owned(val.into_pointer_value(), shape_name, name)?;
             cg.builder
                 .build_store(slot, owned)
-                .map_err(|e| format!("store_binding shape {site}: {e}"))?;
+                .map_err(|e| format!("store_binding shape {name}: {e}"))?;
             Ok(())
         }
         Type::Maybe { ref inner } => {
-            let owned = cg.maybe_to_owned(val.into_pointer_value(), inner, site)?;
+            let is_crossing = cg
+                .sm_crossing_names
+                .as_deref()
+                .is_some_and(|v| v.iter().any(|n| n == name));
+            let owned = if is_crossing {
+                cg.maybe_to_heap_cell(val.into_pointer_value(), inner, name)?
+            } else {
+                cg.maybe_to_owned(val.into_pointer_value(), inner, name)?
+            };
             cg.builder
                 .build_store(slot, owned)
-                .map_err(|e| format!("store_binding maybe {site}: {e}"))?;
+                .map_err(|e| format!("store_binding maybe {name}: {e}"))?;
             Ok(())
+        }
+        // v0.3-M6 Phase 1c step 3c: a CROSSING union binding promotes to counted
+        // heap cells — same stable-pointer contract as the maybe arm above; see
+        // `union_to_heap_cell` for the null-preserving envelope + payload clone.
+        // A non-crossing union stores its pointer exactly as the default arm
+        // always did (byte-identical outside SM crossing contexts —
+        // `sm_crossing_names` is None there by construction).
+        Type::Union { ref variants } => {
+            let is_crossing = cg
+                .sm_crossing_names
+                .as_deref()
+                .is_some_and(|v| v.iter().any(|n| n == name));
+            if is_crossing {
+                let cell = cg.union_to_heap_cell(val.into_pointer_value(), variants, name)?;
+                cg.builder
+                    .build_store(slot, cell)
+                    .map_err(|e| format!("store_binding union {name}: {e}"))?;
+                Ok(())
+            } else {
+                store(cg, val, ty, slot)
+            }
         }
         _ => store(cg, val, ty, slot),
     }

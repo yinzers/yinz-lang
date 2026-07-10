@@ -1,0 +1,42 @@
+// v0.3-M6 Phase 1c RED fixture (FRAGOs 006/007 / signed R14): union-arg use-after-free.
+// Correct behavior: `fig` (Figure = Circle | Square, holding a Square) is passed to the
+// suspending callee `describe`, which tag-matches it AFTER its own suspend point — so the
+// staged {tag,data} envelope must survive the parent's suspension. Prints `square`,
+// exits 0.
+// Pre-fix failure (the documented UAF, probe-confirmed segment 4): the union's
+// {i64 tag, i64 data} tagged struct lives in a stack alloca; arg-staging stages
+// ptr_to_int of that STACK address into the child frame, and Check 2b never fires on
+// arg-escape (union is not in the crossing classifier). The parent returns Pending, its
+// stack dies, and the resumed child reads a dangling tag — deterministically WRONG
+// variant (`circle` 5/5 pre-fix runs vs the non-suspending control's `square`).
+
+shape Circle {
+  radius: float
+}
+
+shape Square {
+  side: float
+}
+
+shape Figure = Circle | Square
+
+function describe(figure: Figure) -> string {
+  wait sleep(10)
+  if (figure) {
+    is Circle => {
+      return `circle`
+    }
+    is Square => {
+      return `square`
+    }
+  }
+  return `unknown`
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  let s: Square = { side: 2.0 }
+  let fig: Figure = s
+  const label = wait describe(fig)
+  print(label)
+}

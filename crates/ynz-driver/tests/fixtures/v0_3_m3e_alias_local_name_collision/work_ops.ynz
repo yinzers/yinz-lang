@@ -4,12 +4,16 @@
 // the same alias name. Four crossing-locals give a distinctly larger frame (header + 4×8
 // slots = 72+ bytes) vs the local function's header-only frame (32 bytes): if the local's
 // layout wins, the undersized spawn corrupts the heap and the sentinel never prints.
+// The final send on `done` is the synchronization barrier: the parent receives once per
+// spawn BEFORE printing "main-done", so task completion is a real happens-before edge,
+// not a timing margin.
 
-export function compute() -> nothing {
+export function compute(lend done: channel<int>) -> nothing {
   let a: int = 1
   let b: int = 2
   let c: int = 3
   let d: int = 4
   sleep(10)
   print(`IMPORTED-OK`)
+  done.send(1)
 }
