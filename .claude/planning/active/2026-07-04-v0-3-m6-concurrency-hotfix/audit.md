@@ -1130,6 +1130,62 @@ seals the boundary.
     maybe<number> = 5.0` is rejected — `number` is not auto-wrapped into `maybe<number>` — a separate,
     pre-existing maybe-wrapping matter, out of scope, noted only so the probe result isn't misread.)
 
+- `executor-2026-07-10-m6-phase3-seg3` — 2026-07-10 — Phase 3 segment 3 — **PHASE 3
+  DONE** (step 7 full-workspace gates + close-out; steps 1-6 landed segments 1-2, see the
+  Context-segment log Phase 3 entries + FRAGO 021). Receipts inherited from
+  `handoff-phase-3.md`, delta-verified: `git diff 759bd9b..46906d1 -- crates/ynz-runtime/`
+  empty, so segment-1/2 orientation receipts stand unmodified; own new work verified
+  unconditionally via the full gates. **Step 7 gates ALL GREEN:**
+  `cargo nextest run --workspace` (dev container) — **2354 passed / 0 failed / 6 skipped,
+  exit 0** (= 2350 stopgap-fixloop1 baseline + 4 new Phase 3 tests); the 4 new tests
+  (`m6_pending_send_aba::cancelled_frame_sender_…`, `…::freed_handle_sender_…`,
+  `channel::tests::purge_pending_sends_is_idempotent_and_gen0_is_reserved`,
+  `channel::tests::same_token_different_generation_never_collides_and_stale_is_swept`)
+  confirmed in the workspace run set via `nextest list` and GREEN both in the full run and a
+  targeted 4/4 confirmation run; ZERO flakes (known transients `long_session` RSS /
+  `contract_3_wait_inside_if` / `spawn_panic_ctx_no_leak` all passed first attempt — no
+  isolated re-run needed); M4 channel/handle suites regression-free. House
+  `cargo clippy --workspace -- -D warnings` exit 0 (documented gate shape; the 2 pre-existing
+  `--all-targets`-only Phase-1d-era lints at `tests/m2_runtime.rs:275` + `lib.rs:2830`
+  untouched, not `#[allow]`'d). `cargo fmt --all --check` exit 0. No `#[allow]`, no
+  `--no-verify`, no weakened test; nothing touched outside plan/audit this segment (the fix
+  itself is segments 1-2's uncommitted diff in `crates/ynz-runtime/src/{channel.rs,runtime.rs,
+  handle.rs,lib.rs}`). Close-out: Phase 3 completion note written to plan.md (after the
+  phase's Model-tag line, Phase 1c/1d convention); session-id appended to the frontmatter
+  chain in the same action; `handoff-phase-3.md` DELETED as the final act. Did NOT commit/
+  stage — conductor seals. FRAGO 021 pends boundary deviation-judge ratification (recorded,
+  not adjudicated).
+
+- `executor-2026-07-10-m6-phase3-fixloop1` — 2026-07-10 — Phase 3 review fix-loop 1 — **both
+  converged should-fixes CLOSED** (2 reviewers, 0 blockers, 2 should-fixes). **Should-fix 1
+  (gen-0 unprotected class): ELIMINATE path taken** — verify-before-fix Paper-Trace enumerated
+  every generation producer (mint sites `runtime.rs` `ynz_rt_spawn` + test ctor, `handle.rs`
+  child `task_gen` + handle `send_gen` — all NONZERO from the counter starting at 1; gen 0
+  reached the key ONLY via the `ynz_channel_send_poll` thread-local read with no `TaskGenGuard`
+  active, i.e. every `SyncStateFnFuture` drive) and found the premise WIDER than the reviewers
+  stated: not one immortal entrypoint but EVERY sync drive (`main` wrapper + non-entry sync
+  wrappers from non-SM contexts, one shared `ynz_rt_run_entrypoint` driver) shared gen 0.
+  Fix: `SyncStateFnFuture` now carries its own `task_gen` minted at construction and enters
+  `TaskGenGuard` in `poll` — uniform nonzero stamping across all three producers, protection
+  compiled into ALL builds (release trading mount included), zero ABI/codegen delta; gen-0
+  docs/comments in `channel.rs` reconciled (gen 0 = bare unstamped test calls only; purge
+  no-op floor retained). Nothing deferred — no four-field deferral. **Should-fix 2:** new
+  deterministic handle-seam test
+  `handle::tests::handle_send_same_address_different_generation_never_collides` (real
+  `ynz_handle_send_poll` mint, same address, two explicit generations, purge withheld; a broken
+  salt delivers the dead 111 and fails the 222 assertion — non-tautological); `lib.rs` repro
+  fallback note repointed. **Gates:** nextest workspace 2355/0 failed/6 skipped exit 0 (2354
+  baseline + 1 new; 5/5 ABA-suite targeted run green); clippy `-D warnings` exit 0; fmt exit 0.
+  First full run had ONE failure — pre-existing `ynz-typeck::symbol_lookup::
+  test_cross_file_reference_count_estimate_completes_fast` (<5ms wall-clock assert), passed in
+  isolation + full rerun: non-recurring load transient in an untouched crate, surfaced NOT
+  silenced. Design-doc check: IMP-concurrency.md (cancel sections) + IMP-no-function-coloring.md
+  silent on the runtime-internal generation scheme — no contradiction. Touched ONLY
+  `crates/ynz-runtime/src/{runtime,channel,handle,lib}.rs` + plan.md (step-5 + completion-note
+  parentheticals reconciled via sibling sweep; fix-loop paragraph) + this audit.md. FRAGO 022
+  filed this dispatch (same-dispatch seam); pends boundary deviation-judge ratification. Did
+  NOT commit/stage — conductor seals.
+
 ## FRAGO log
 
 ### FRAGO 001 — 2026-07-09 — session-id: `conductor-2026-07-09-m6-exec`
@@ -2378,3 +2434,156 @@ R2 = extend guard to UFCS + generic call forms (one shared helper). R3 = full-sl
   `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`; two new fixtures under
   `crates/ynz-driver/tests/fixtures/`; `plan.md` (M6) + the stub `plan.md` + both `audit.md`. Did NOT
   commit/stage — conductor seals. Session-id appended to `plan.md` frontmatter in this same action.
+
+### 2026-07-10 — Phase 3 — P3-1/P2-2: pending_sends ABA + orphan purge, segment 1 (PARTIAL — conductor-logged)
+
+- **Conductor-written** (not executor): the segment executor (ran under `executor-2026-07-10-m6-phase3`,
+  NOT appended to the frontmatter chain per the no-session-id-on-PARTIAL convention) correctly DECLINED to
+  write this Context-segment log entry, citing its charter (`execute-plan §3a.1` — the Context-segment log is
+  conductor-owned, written after every segment). The dispatch prompt erroneously asked it to; the executor held
+  its charter line rather than overstep. Conductor writes it here; the dispatch template dropped that instruction
+  for the continuation segment.
+- **Resume-at pointer:** `phase-3/step-2`. **Handoff:** `handoff-phase-3.md` (carries the settled steps-2–5
+  design + verification receipts so the continuation implements without re-deriving).
+- **What landed (green-building tree carrying the plan-prescribed, documented RED):**
+  - **Step 1 DONE** — both cancellation paths confirmed purge-free by direct read: drop-ladder kind-2 arm
+    (`crates/ynz-runtime/src/runtime.rs:636-642`) calls only `ynz_channel_free`; `ynz_handle_free`
+    (`crates/ynz-runtime/src/handle.rs:337-351`) frees `msg_chan` but never purges the handle-keyed entry.
+  - **Step 6 RED repros authored early + proven RED** (verify-before-fix; step 6's own text demands RED-before-fix):
+    new `mod m6_pending_send_aba` in `crates/ynz-runtime/src/lib.rs` — frame-path test through the REAL drop
+    ladder with forced frame-address reuse, handle-path test through real `ynz_rt_spawn_handle`/`ynz_handle_free`;
+    behavior-neutral `#[cfg(test)]` `pending_send_count` accessor added to `channel.rs`. GREEN half pends the fix.
+  - **Steps 2–5 design settled in the handoff:** one global generation counter; `(token, gen)` `pending_sends`
+    key; `task_gen` on `SpawnStateFnFuture` published via thread-local guard during poll; `send_gen` on
+    `YnzTaskHandle`; ONE keyed core + ONE purge-by-generation helper.
+- **Paper-Trace (ABA/orphan):** Observed `pending_send_count == 1` after cancel (frame) / free (handle) of a
+  sender suspended on a full capacity-1 channel; Expected 0; Residual 1 orphaned boxed send-future per cancelled
+  suspended sender (the P2-2 leak + the P3-1 ABA precondition). Evidence: `runtime.rs:641`, `handle.rs:346`,
+  `channel.rs:270` (insert site).
+- **Gates (this segment):** RED run `nextest -p ynz-runtime -E 'test(m6_pending_send_aba)'` → 2 run / 0 passed /
+  2 failed (exactly the defect assertions). `cargo fmt -p ynz-runtime --check` clean. Full workspace gates owed at step 7.
+- **Deviations surfaced (for the boundary deviation-judge — the continuation executor files the FRAGO in the same
+  dispatch that hardens the design, per plan-source-of-truth seam-before-hardening):** (1) **citation drift** — the
+  plan's frame-token mint cite `emit.rs:11651-11654` is stale; live site `emit.rs:12205-12208`
+  (`emit_conduit_suspend_point`). (2) **step-5 mechanism refinement** — plan says replace the raw token at BOTH
+  mint sites; reality: the generation half must join RUNTIME-side (the frame header is fully packed — codegen-side
+  gen storage would require frame-layout ABI surgery, and a salted token must be re-poll-stable). The
+  one-counter/one-scheme/both-producers invariant is PRESERVED and coverage extends to embedded-child frame tokens
+  the plan never enumerated.
+- **Touched by executor:** `crates/ynz-runtime/src/{lib.rs,channel.rs}` (RED suite + test accessor). `plan.md`/`audit.md`
+  untouched by executor (this entry is the conductor's). Did NOT commit/stage — conductor seals.
+
+### 2026-07-10 — Phase 3, segment 2 (PARTIAL — conductor-logged)
+
+- **Conductor-written** (executor `executor-2026-07-10-m6-phase3-seg2`, NOT in the frontmatter chain per
+  no-session-id-on-PARTIAL; named in FRAGO 021's heading for attribution). Executor correctly asked the conductor
+  to log the segment — no overstep this time.
+- **Resume-at pointer:** `phase-3/step-7` — full WORKSPACE gates + close-out are the ONLY remaining work; the fix
+  is implemented and locally green. **Handoff:** `handoff-phase-3.md` (rewritten).
+- **What landed (steps 2–6, per the settled handoff design — not re-derived):**
+  - **ONE purge helper** `purge_pending_sends(chan_ptr, generation)` (`crates/ynz-runtime/src/channel.rs`):
+    null-safe, gen-0 no-op (reserved unstamped/immortal class), purge-by-generation `retain`, idempotent by
+    construction. Wired into BOTH cancellation paths — drop-ladder kind-2 arm (`runtime.rs`, BEFORE `ynz_channel_free`)
+    and `ynz_handle_free` (`handle.rs`, BEFORE releasing the conduit ref). Idempotency proven both paths
+    (repeated-cancel repro assertions + a dedicated double-purge / purge-empty / purge-null / gen-0 unit test).
+  - **ONE runtime-side salting scheme, both producers** — `pending_sends` re-keyed `(caller_token, caller_generation)`;
+    one global `next_caller_generation()`; `task_gen` on `SpawnStateFnFuture` (all 3 construction sites) published via
+    a `TaskGenGuard` thread-local RAII around every poll (extern-C send ABI byte-identical — **emit.rs untouched, zero
+    codegen delta**; covers root + embedded-child + chain-child tokens); `send_gen` on `YnzTaskHandle` passed by
+    `ynz_handle_send_poll`; both mints over ONE keyed core `channel_send_poll_guarded`; plus an insert-time
+    same-token/different-generation stale sweep (missed-path leak backstop). BOTH mitigations (purge + salted token), D2.
+- **RED→GREEN Paper-Trace:** pre-fix `pending_send_count == 1` post-cancel (expected 0; residual 1 orphaned boxed
+  send-future); post-fix targeted **4/4** (frame GREEN, handle GREEN, + same-token/different-gen ABA collision proof +
+  idempotency unit test); crate `nextest -p ynz-runtime` **134/134**; `fmt -p ynz-runtime --check` clean; documented
+  clippy shape exit 0.
+- **FRAGO 021 filed** (this dispatch, seam-before-hardening): both seg-1 deviations recorded — citation drift
+  `emit.rs:11651-11654` → `:12205-12208` (**sibling sweep: all 7 plan occurrences fixed, grep 0**) + step-5 runtime-side
+  salt refinement (**plan step-5 text rewritten in place**); one-counter/one-scheme/both-producers invariant preserved.
+  Boundary deviation-judge to ratify.
+- **Remaining (step 7):** full workspace `nextest`/`clippy`/`fmt` + close-out. Observation carried in handoff:
+  `--all-targets` clippy (NOT the documented gate) hits 2 PRE-EXISTING non-Phase-3 lints (`tests/m2_runtime.rs:275`,
+  `lib.rs:2830`) already on record from Phase 1d — untouched, not `#[allow]`ed.
+- **Design-doc alignment:** re-checked — IMP-concurrency cancel-via-drop uncontradicted (purge extends the drop ladder);
+  IMP-no-function-coloring unaffected (sync atomics + thread-local, no bridge). No new deviation.
+- **Touched by executor:** `crates/ynz-runtime/src/{channel.rs,runtime.rs,handle.rs,lib.rs}` + `plan.md` (step-5 text +
+  citation sweep) + `audit.md` (FRAGO 021). Did NOT commit/stage — conductor seals.
+
+### FRAGO 021 — 2026-07-10 — session-id: `executor-2026-07-10-m6-phase3-seg2`
+
+- **Trigger.** The two deviations Phase 3 segment 1 surfaced (recorded in that segment's
+  Context-segment log entry and `handoff-phase-3.md`), filed by the continuation segment in the
+  SAME dispatch that hardens the settled design into code (plan-source-of-truth
+  seam-before-hardening). Surfaced-not-adjudicated: the boundary deviation-judge ratifies; this
+  FRAGO RECORDS. (Session-id named here for attribution; NOT appended to the frontmatter chain —
+  this segment returns PARTIAL, per the no-session-id-on-PARTIAL convention.)
+- **Deviation 1 — citation drift.** The plan's frame-token mint cite `emit.rs:11651-11654` is
+  stale (that range is now unrelated decimal-staging code); the live mint is
+  `emit.rs:12205-12208` in `emit_conduit_suspend_point`
+  (`build_ptr_to_int(frame_ptr, …, "conduit_token")`, recomputed per poll site for dominance).
+  Handle mint confirmed unchanged at `handle.rs:326`. **Delta applied:** whole-plan sibling sweep
+  — all 7 occurrences of the stale cite reconciled (`grep -c 11651` → 0): Situation terrain (×2),
+  risk row R2, Key Outcome 3, Phase 3 task text, Phase 3 step 5, Decision D2.
+- **Deviation 2 — step-5 mechanism refinement (runtime-side generation salt).** Plan step 5 said
+  "replace the raw frame-pointer token (`emit.rs` mint) AND the raw handle-pointer token … at
+  both mint sites"; reality: the generation half CANNOT live codegen-side without frame-layout
+  ABI surgery — the frame header is fully packed (`ynz-abi`: resume_point@0, spike
+  discriminator@4, sleep_handle@8, return_slot@16..32, `FRAME_HEADER_SIZE=32` =
+  `SPIKE_HANDLE_BASE_OFFSET`), and a salted token must be stable across re-polls of the same
+  suspension (the frame is the only codegen-side durable store). The salt therefore joins
+  RUNTIME-side at caller-identity birth: ONE global counter (`channel::next_caller_generation`,
+  gen 0 = reserved unstamped/immortal entrypoint class), `(caller_token, caller_generation)`
+  key, `task_gen` on `SpawnStateFnFuture` published via a thread-local RAII guard around the
+  resume-fn call (extern-C send ABI byte-identical — zero codegen change), `send_gen` on
+  `YnzTaskHandle` passed explicitly by `ynz_handle_send_poll`, both through ONE keyed core
+  (`channel_send_poll_guarded`) + ONE purge-by-generation helper (`purge_pending_sends`). The
+  plan's one-counter/one-scheme/both-producers invariant (D2, authoritative-derivation.md) is
+  PRESERVED, and coverage EXTENDS to embedded-child + chain-child frame tokens the plan text
+  never enumerated (every token a task mints carries its task_gen). **Delta applied:** Phase 3
+  step-5 text rewritten in place to the runtime-side mechanism (cold reader sees current truth).
+- **Classification.** Risk-neutral refinements: deviation 1 is a pure citation fix; deviation 2
+  changes the salt's JOIN POINT, not the mitigation set (both D2 mitigations land, one scheme,
+  both producers, wider token coverage, zero ABI/codegen delta). R2's mitigation shape
+  (RED→GREEN pair + idempotent purge at both paths) is unchanged.
+- **Evidence.** Receipts in `handoff-phase-3.md` (segment 1, tree `46906d1`): packed frame
+  header (receipt 5); live mint site (receipt 3); purge-free cancellation paths (receipts 1-2).
+  Implementation this segment: `channel.rs` (counter, thread-local guard, keyed core, purge
+  helper, insert-time stale sweep), `runtime.rs` (`task_gen` + poll guard + kind-2 purge),
+  `handle.rs` (`send_gen` + explicit-gen send + free-time purge). RED pair flipped GREEN +
+  2 new deterministic unit tests (idempotency; same-token/different-generation collision).
+
+### FRAGO 022 — 2026-07-10 — session-id: `executor-2026-07-10-m6-phase3-fixloop1`
+
+- **Trigger.** Phase 3 review fix-loop: code-reviewer + critical-path-integrity converged (0
+  blockers, 2 should-fixes); the conductor routed both to this fix-loop dispatch. Should-fix 1
+  (gen-0 unprotected class) resolves via the ELIMINATE path, which refines the plan's step-5
+  gen-0 wording — filed in the SAME dispatch that lands the code (plan-source-of-truth
+  seam-before-hardening). Surfaced-not-adjudicated: this FRAGO records; the boundary
+  deviation-judge ratifies.
+- **Deviation — step-5 gen-0-class refinement.** Plan step 5 (and FRAGO 021's deviation-2
+  record) said "generation 0 reserved as the unstamped entrypoint class, never mass-purged" —
+  the entrypoint drive itself rode gen 0, exempt from the purge (gen-0 no-op) and mutually
+  unprotected inside its own class (two gen-0 identities at a reused token address share a key;
+  the insert sweep retains same-gen entries). Its safety was a prose-only invariant. The
+  verify-before-fix Paper-Trace found the class WIDER than the prose: EVERY `SyncStateFnFuture`
+  drive minted gen 0 — the codegen `main` wrapper AND every non-entry sync wrapper called from a
+  non-state-machine context (`ynz_rt_run_entrypoint` is the shared driver) — all sharing ONE
+  unstamped identity. Reality now: the sync driver mints its own NONZERO `task_gen` from the one
+  counter at construction and publishes it via the same `TaskGenGuard` around every poll;
+  generation 0 remains reserved ONLY for bare unstamped ABI calls (substrate tests), and the
+  purge gen-0 no-op is retained as the never-mass-purge floor. **Delta applied:** step-5
+  parenthetical + Phase-3 completion-note parenthetical rewritten in place; whole-plan sibling
+  sweep for `generation 0`/`gen-0`/`unstamped`/`immortal` (5 hits — step 5 + completion note; no
+  risk row or invariant carries the stale wording).
+- **Classification.** Risk-neutral (risk-REDUCING) refinement: the one-counter / one-scheme /
+  one-keyed-core invariant (D2, authoritative-derivation.md) is preserved and now uniform across
+  THREE producers (spawned-task frame tokens, handle tokens, sync-drive frame tokens); zero
+  ABI/codegen delta (extern signatures byte-identical, `emit.rs` untouched); no mitigation
+  removed or weakened. Eliminate chosen over the debug_assert+defer fallback because the change
+  is contained (1 field + 1 mint + 1 guard-enter) and the release binary on the trading mount
+  gets the protection compiled in rather than a compiled-out assert — nothing left to defer, so
+  no four-field deferral exists or is needed.
+- **Evidence.** `runtime.rs` (`SyncStateFnFuture.task_gen`, poll-time `TaskGenGuard`, entrypoint
+  mint), `channel.rs` (module/doc/comment reconciliation of the gen-0 class), `handle.rs` (new
+  deterministic handle-seam ABA test), `lib.rs` (repro fallback note repointed). Gates: nextest
+  workspace 2355 passed / 0 failed / 6 skipped exit 0; targeted ABA suite 5/5; clippy exit 0;
+  fmt exit 0.

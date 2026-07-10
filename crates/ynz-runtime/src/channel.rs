@@ -35,14 +35,33 @@
 //! `blocking_recv` / `spawn_blocking` / `thread::sleep` / `park`), which this module contains
 //! zero of.
 //!
-//! # In-flight sends are keyed PER SUSPENDED CALLER (`caller_token`)
+//! # In-flight sends are keyed PER SUSPENDED CALLER — `(caller_token, caller_generation)`
 //!
 //! With two tasks sharing one channel, a single `pending_send` slot would be a silent-wrong
 //! hazard: task B's re-poll could drive task A's suspended send and drop B's value. Each
 //! suspended `send` is therefore keyed by an opaque `caller_token` (codegen passes the caller's
-//! frame pointer for bare-channel sends; the handle pointer for `h.send()`): one suspended send
-//! per token — a state-machine frame suspends at exactly one point at a time, so the token is
-//! collision-free by construction.
+//! frame pointer for bare-channel sends; the handle pointer for `h.send()`) PLUS a
+//! `caller_generation` salt (v0.3-M6 P3-1). The raw token alone is NOT collision-free across
+//! time: a task/handle cancelled while suspended on `send` leaves its entry behind, and
+//! allocator reuse of the freed address resurrects the dead caller's entry under a new caller's
+//! identity (the ABA class — the new value silently discarded, the dead value delivered).
+//! Two mitigations, both (Decision D2), from ONE shared scheme covering BOTH token producers
+//! (frame-pointer conduit tokens AND handle-pointer tokens — authoritative-derivation.md):
+//!
+//! - **Generation-salted key.** One global monotonic counter ([`next_caller_generation`]) stamps
+//!   every caller identity at birth: a spawned task's `SpawnStateFnFuture` carries `task_gen`
+//!   (published to this module via a thread-local while its `poll` runs, so the extern-C send
+//!   ABI stays unchanged and every token the task mints — root, embedded-child, chain-child —
+//!   carries it), a task handle carries `send_gen` (passed explicitly by
+//!   `ynz_handle_send_poll`), and every entrypoint sync drive (`SyncStateFnFuture`) carries its
+//!   own `task_gen` published the same way — EVERY production caller identity is stamped
+//!   nonzero, uniformly. Generation 0 is reserved for bare unstamped ABI calls (substrate
+//!   tests polling `ynz_channel_send_poll` outside any state-machine drive); no production
+//!   path mints it. A reused address can therefore never match a stale entry — the
+//!   generations differ even inside the purge's race window.
+//! - **Purge on cancellation.** ONE shared idempotent helper ([`purge_pending_sends`]) removes a
+//!   dying identity's entries at BOTH cancellation paths (the drop ladder's kind-2 shared-channel
+//!   arm for frame tokens; `ynz_handle_free` for handle tokens), closing the orphan leak (P2-2).
 //!
 //! # Multi-waiter receive wakeups
 //!
@@ -61,9 +80,11 @@
 //!   value, NEVER the raw Tokio `SendError` — Lock 8); recv: all senders dropped AND drained.
 
 use std::any::Any;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
@@ -79,6 +100,58 @@ pub(crate) const CHANNEL_CLOSED: i32 = 2;
 /// The in-flight `send()` endpoint future: owns a cloned `Sender` + the pending value, resolves
 /// to `Ok(())` when the value is accepted or `Err(())` when the receiver has been dropped.
 type PendingSend = Pin<Box<dyn Future<Output = Result<(), ()>> + Send>>;
+
+/// The ONE global monotonic caller-generation counter (v0.3-M6 P3-1) — the single salting
+/// scheme every caller identity mints from (a spawned task's `task_gen`, a handle's
+/// `send_gen`, a sync entrypoint drive's `task_gen`). Starts at 1: generation 0 is reserved
+/// for bare unstamped ABI calls (substrate tests only — no production path mints it), which
+/// [`purge_pending_sends`] never mass-purges.
+static CALLER_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Mint the next caller generation. Called once per caller-identity birth (task spawn /
+/// handle spawn) — never per send, so a suspended send's key is stable across re-polls.
+pub(crate) fn next_caller_generation() -> u64 {
+    // Relaxed: only uniqueness/monotonicity of the returned value matters; the value is
+    // published to other threads via the spawned future / handle object it is stored in.
+    CALLER_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
+
+thread_local! {
+    /// The generation of the state-machine drive whose `poll` is currently running on THIS
+    /// thread (0 = none — a bare test call outside any drive). Published by
+    /// [`TaskGenGuard`] around every drive's resume-fn call — `SpawnStateFnFuture::poll`
+    /// (spawned tasks) AND `SyncStateFnFuture::poll` (entrypoint / sync-wrapper drives) —
+    /// so the extern-C `ynz_channel_send_poll` signature stays unchanged (no codegen
+    /// change) while every frame token the drive mints — root, embedded-child,
+    /// chain-child — carries the drive's generation.
+    static CURRENT_TASK_GEN: Cell<u64> = const { Cell::new(0) };
+}
+
+/// RAII publisher for [`CURRENT_TASK_GEN`]: saves the previous value on entry, restores it on
+/// drop (panic-safe, nesting-safe). Re-entered from the future's own field at every poll, so
+/// work-stealing across threads is safe by construction.
+pub(crate) struct TaskGenGuard {
+    prev: u64,
+}
+
+impl TaskGenGuard {
+    pub(crate) fn enter(task_generation: u64) -> Self {
+        let prev = CURRENT_TASK_GEN.with(|c| c.replace(task_generation));
+        TaskGenGuard { prev }
+    }
+}
+
+impl Drop for TaskGenGuard {
+    fn drop(&mut self) {
+        let prev = self.prev;
+        CURRENT_TASK_GEN.with(|c| c.set(prev));
+    }
+}
+
+/// The generation of the task currently being polled on this thread (0 = unstamped).
+fn current_task_generation() -> u64 {
+    CURRENT_TASK_GEN.with(|c| c.get())
+}
 
 /// Extract a human-readable message from a caught-panic payload (the same `&str`/`String`
 /// downcast `ynz_rt_async_sleep_poll` performs). Shared by both channel poll shims.
@@ -112,12 +185,14 @@ pub struct YnzChannel {
     sender: Mutex<mpsc::Sender<i64>>,
     /// The single-consumer endpoint. `poll_recv` needs `&mut` — guarded.
     receiver: Mutex<mpsc::Receiver<i64>>,
-    /// In-flight suspended sends, keyed per suspended caller (see module docs).
+    /// In-flight suspended sends, keyed per suspended caller by
+    /// `(caller_token, caller_generation)` (see module docs).
     ///
     /// An entry is created on the first send-on-full suspension of a caller, re-polled with the
-    /// forwarded waker on each resume, and removed when it resolves. A cancelled task's orphaned
-    /// entry (bounded: one boxed future + one value) is dropped with the channel object.
-    pending_sends: Mutex<HashMap<u64, PendingSend>>,
+    /// forwarded waker on each resume, and removed when it resolves. A cancelled caller's entry
+    /// is purged at its cancellation path via [`purge_pending_sends`]; the generation salt keeps
+    /// a reused token address from ever matching a stale entry in the interim.
+    pending_sends: Mutex<HashMap<(u64, u64), PendingSend>>,
     /// Wakers of every task currently suspended on `receive()` (see module docs).
     recv_waiters: Mutex<Vec<Waker>>,
 }
@@ -189,12 +264,42 @@ pub unsafe extern "C" fn ynz_channel_share(chan_ptr: *mut u8) -> *mut u8 {
 
 /// Poll a `send(value)` on the channel `chan_ptr`, forwarding the enclosing task's waker.
 ///
+/// The extern-C thin mint over [`channel_send_poll_guarded`] — the ONE keyed send core.
 /// `caller_token` keys this caller's suspended-send state (see module docs) — codegen passes the
-/// caller's frame pointer (bare-channel send) or the handle pointer (`h.send()`).
+/// caller's frame pointer (bare-channel send). The generation half of the key is read from the
+/// thread-local the enclosing drive's `poll` published (`SpawnStateFnFuture` or the
+/// entrypoint's `SyncStateFnFuture`; 0 = a bare unstamped test call), so this signature is
+/// byte-identical to pre-M6 — no codegen change.
+///
+/// # Safety
+/// - `chan_ptr` must be a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`].
+/// - `waker_ctx` must point to a live `&mut Context<'_>` for the duration of this call (the same
+///   context passed into the enclosing state machine's `Future::poll`).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_channel_send_poll(
+    chan_ptr: *mut u8,
+    value: i64,
+    waker_ctx: *mut u8,
+    caller_token: u64,
+) -> i32 {
+    channel_send_poll_guarded(
+        chan_ptr,
+        value,
+        waker_ctx,
+        caller_token,
+        current_task_generation(),
+    )
+}
+
+/// The ONE keyed send-poll core (authoritative-derivation.md — both producers mint over this,
+/// never two cores): [`ynz_channel_send_poll`] (generation from the poll thread-local) and
+/// `ynz_handle_send_poll` (generation from the handle's own `send_gen` stamp).
 ///
 /// # Flow
 /// 1. If THIS caller has a send in flight (a prior call suspended on a full channel), re-poll
-///    THAT future — `value` is ignored (the in-flight future already captured its value).
+///    THAT future — `value` is ignored (the in-flight future already captured its value). The
+///    key is `(caller_token, caller_generation)`: a reused token address under a NEW generation
+///    can never match a dead caller's stale entry (the P3-1 ABA fix).
 /// 2. Otherwise `try_send(value)`: on success wake receive-waiters and return [`CHANNEL_READY`];
 ///    on `Full` create the boxed endpoint future (`sender.clone().send(value)`), poll it once to
 ///    register the forwarded waker, and suspend; on `Closed` return [`CHANNEL_CLOSED`].
@@ -208,18 +313,17 @@ pub unsafe extern "C" fn ynz_channel_share(chan_ptr: *mut u8) -> *mut u8 {
 ///   ownership; never a silent success.
 ///
 /// # Side effects
-/// Time: O(1) + O(w) receive-waiter wakes  Space: O(1); boxes one future on first suspension.
+/// Time: O(1) + O(w) receive-waiter wakes + O(p) insert-time stale sweep where p = in-flight
+/// suspended sends (typically 0 or 1)  Space: O(1); boxes one future on first suspension.
 ///
 /// # Safety
-/// - `chan_ptr` must be a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`].
-/// - `waker_ctx` must point to a live `&mut Context<'_>` for the duration of this call (the same
-///   context passed into the enclosing state machine's `Future::poll`).
-#[no_mangle]
-pub unsafe extern "C" fn ynz_channel_send_poll(
+/// Same contract as [`ynz_channel_send_poll`].
+pub(crate) unsafe fn channel_send_poll_guarded(
     chan_ptr: *mut u8,
     value: i64,
     waker_ctx: *mut u8,
     caller_token: u64,
+    caller_generation: u64,
 ) -> i32 {
     // Mirror ynz_rt_async_sleep_poll's panic discipline: a panic inside the poll is caught and
     // reported as CHANNEL_PENDING so the enclosing state-machine frame is not corrupted.
@@ -228,21 +332,22 @@ pub unsafe extern "C" fn ynz_channel_send_poll(
         let chan = &*(chan_ptr as *const YnzChannel);
         // SAFETY: waker_ctx was cast from &mut Context<'_> by the enclosing state-machine poll.
         let cx = &mut *(waker_ctx as *mut Context<'_>);
+        let key = (caller_token, caller_generation);
 
-        // Re-poll THIS caller's already-suspended send (never another caller's — the token
-        // keying is what makes the shared-channel model silent-wrong-proof).
+        // Re-poll THIS caller's already-suspended send (never another caller's — the
+        // token+generation keying is what makes the shared-channel model silent-wrong-proof).
         let mut pending = lock_or_recover(&chan.pending_sends);
-        if let Some(fut) = pending.get_mut(&caller_token) {
+        if let Some(fut) = pending.get_mut(&key) {
             return match fut.as_mut().poll(cx) {
                 Poll::Pending => CHANNEL_PENDING,
                 Poll::Ready(Ok(())) => {
-                    pending.remove(&caller_token);
+                    pending.remove(&key);
                     drop(pending);
                     chan.wake_recv_waiters();
                     CHANNEL_READY
                 }
                 Poll::Ready(Err(())) => {
-                    pending.remove(&caller_token);
+                    pending.remove(&key);
                     CHANNEL_CLOSED
                 }
             };
@@ -267,7 +372,13 @@ pub unsafe extern "C" fn ynz_channel_send_poll(
                     Box::pin(async move { fut_sender.send(v).await.map_err(|_| ()) });
                 match fut.as_mut().poll(cx) {
                     Poll::Pending => {
-                        lock_or_recover(&chan.pending_sends).insert(caller_token, fut);
+                        let mut pending = lock_or_recover(&chan.pending_sends);
+                        // Missed-path leak backstop: two LIVE caller identities can never
+                        // share a token address, so any same-token / different-generation
+                        // entry has a DEAD owner — sweep it here. Closes the P2-2 orphan for
+                        // any cancellation path not wired to purge_pending_sends.
+                        pending.retain(|k, _| k.0 != caller_token || k.1 == caller_generation);
+                        pending.insert(key, fut);
                         CHANNEL_PENDING
                     }
                     Poll::Ready(Ok(())) => {
@@ -283,7 +394,7 @@ pub unsafe extern "C" fn ynz_channel_send_poll(
         Ok(v) => v,
         Err(e) => {
             eprintln!(
-                "ynz runtime: ynz_channel_send_poll panicked (returning Pending): {}",
+                "ynz runtime: channel send poll panicked (returning Pending): {}",
                 panic_payload_msg(&e)
             );
             CHANNEL_PENDING
@@ -364,6 +475,47 @@ pub unsafe extern "C" fn ynz_channel_free(chan_ptr: *mut u8) {
     }
     // SAFETY: reconstructing the Arc is the inverse of Arc::into_raw / increment_strong_count.
     drop(Arc::from_raw(chan_ptr as *const YnzChannel));
+}
+
+/// Purge a dying caller identity's suspended sends from the channel (v0.3-M6 P2-2) — the ONE
+/// shared purge helper both cancellation paths call (authoritative-derivation.md): the drop
+/// ladder's kind-2 shared-channel arm (`SpawnStateFnFuture::drop`, frame tokens) and
+/// `ynz_handle_free` (handle tokens). Rust-internal — codegen never calls this.
+///
+/// Purges by GENERATION, not by token: one call sweeps every token the dying identity ever
+/// minted on this channel (root frame, embedded-child, chain-child), and each dropped entry
+/// releases its boxed endpoint future + cloned sender + captured value (the leak fix).
+///
+/// **Idempotent by construction**: no matching entry (double-cancel, already-resolved,
+/// already-purged) is a safe no-op — never a panic or UB. Null `chan_ptr` is a no-op (the
+/// cancellation paths run on null channel slots too). `caller_generation == 0` is a no-op:
+/// generation 0 is the reserved unstamped class (bare substrate-test calls — every
+/// production identity is stamped nonzero at birth), so a 0 reaching here can only be an
+/// unstamped/buggy caller and must never mass-purge the unstamped entries as one identity.
+///
+/// Time: O(p) where p = in-flight suspended sends (typically 0 or 1)  Space: O(1).
+///
+/// # Safety
+/// `chan_ptr` must be null or a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`]
+/// whose reference has not yet been released (call this BEFORE `ynz_channel_free`).
+pub(crate) unsafe fn purge_pending_sends(chan_ptr: *mut u8, caller_generation: u64) {
+    if chan_ptr.is_null() || caller_generation == 0 {
+        return;
+    }
+    // SAFETY: chan_ptr is a live Arc-backed pointer (caller guarantee); shared &.
+    let chan = &*(chan_ptr as *const YnzChannel);
+    lock_or_recover(&chan.pending_sends).retain(|k, _| k.1 != caller_generation);
+}
+
+/// Test-support: number of in-flight suspended sends currently parked on the channel
+/// (any caller). The M6 ABA/orphan repro suite asserts purge-on-cancellation through this.
+///
+/// # Safety
+/// `chan_ptr` must be a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`].
+#[cfg(test)]
+pub(crate) unsafe fn pending_send_count(chan_ptr: *mut u8) -> usize {
+    let chan = &*(chan_ptr as *const YnzChannel);
+    lock_or_recover(&chan.pending_sends).len()
 }
 
 #[cfg(test)]
@@ -565,6 +717,109 @@ mod tests {
                 "recv on a closed + drained channel must return Closed"
             );
             ynz_channel_free(chan_ptr);
+        }
+    }
+
+    /// v0.3-M6 P2-2: the shared purge helper is idempotent by construction — double-purge,
+    /// purge-on-empty, purge-null, and the reserved generation-0 class are all safe no-ops.
+    #[test]
+    fn purge_pending_sends_is_idempotent_and_gen0_is_reserved() {
+        let (_arc, waker) = make_waker();
+        let chan = ynz_channel_create(1);
+        unsafe {
+            // Purge on an EMPTY map: no-op, no panic.
+            purge_pending_sends(chan, 7);
+            // Null channel: no-op, no panic.
+            purge_pending_sends(std::ptr::null_mut(), 7);
+
+            // Park one gen-7 suspended send and one gen-0 (unstamped) suspended send.
+            assert_eq!(send(chan, 1, &waker), CHANNEL_READY); // fill capacity-1
+            let mut cx = Context::from_waker(&waker);
+            let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
+            assert_eq!(
+                channel_send_poll_guarded(chan, 2, cx_ptr, 0xA1, 7),
+                CHANNEL_PENDING
+            );
+            assert_eq!(send_tok(chan, 3, &waker, 0xB2), CHANNEL_PENDING); // gen 0 path
+            assert_eq!(pending_send_count(chan), 2);
+
+            // Generation 0 is the reserved unstamped class — NEVER mass-purged.
+            purge_pending_sends(chan, 0);
+            assert_eq!(
+                pending_send_count(chan),
+                2,
+                "gen-0 purge must be a no-op (the unstamped class is never mass-purged \
+                 as one identity)"
+            );
+
+            // Purge gen 7: exactly the gen-7 entry goes; the gen-0 entry survives.
+            purge_pending_sends(chan, 7);
+            assert_eq!(pending_send_count(chan), 1);
+            // Double-purge (repeated cancel): safe no-op, never a panic.
+            purge_pending_sends(chan, 7);
+            assert_eq!(pending_send_count(chan), 1);
+
+            // The surviving gen-0 send still completes correctly after a drain.
+            assert_eq!(recv(chan, &waker), (CHANNEL_READY, 1));
+            assert_eq!(send_tok(chan, 3, &waker, 0xB2), CHANNEL_READY);
+            assert_eq!(recv(chan, &waker), (CHANNEL_READY, 3));
+            ynz_channel_free(chan);
+        }
+    }
+
+    /// v0.3-M6 P3-1: the deterministic keyed-core ABA collision proof — the same token under
+    /// a NEW generation never matches a dead caller's stale entry (even with NO purge run,
+    /// i.e. inside the purge's own race window), the new caller's value is delivered, the
+    /// stale value never resurfaces, and the stale entry is swept on insert (the missed-path
+    /// leak backstop). This is the deterministic coverage the handle-path repro's best-effort
+    /// address forcing falls back to.
+    #[test]
+    fn same_token_different_generation_never_collides_and_stale_is_swept() {
+        let (_arc, waker) = make_waker();
+        let chan = ynz_channel_create(1);
+        unsafe {
+            assert_eq!(send(chan, 42, &waker), CHANNEL_READY); // fill capacity-1
+            let mut cx = Context::from_waker(&waker);
+            let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
+
+            // Dead caller (gen 5) suspends at token T, then "dies" WITHOUT a purge —
+            // simulating the residual window between cancellation and purge completion.
+            const T: u64 = 0xDEAD;
+            assert_eq!(
+                channel_send_poll_guarded(chan, 111, cx_ptr, T, 5),
+                CHANNEL_PENDING
+            );
+            assert_eq!(pending_send_count(chan), 1);
+
+            // New caller (gen 9) at the SAME (reused) token suspends. Its key differs by
+            // generation, so it must NOT re-poll the stale entry — and the insert-time
+            // sweep removes the dead gen-5 entry (same token, different generation ⇒ dead
+            // owner), so the count stays 1, not 2.
+            assert_eq!(
+                channel_send_poll_guarded(chan, 222, cx_ptr, T, 9),
+                CHANNEL_PENDING
+            );
+            assert_eq!(
+                pending_send_count(chan),
+                1,
+                "the stale same-token entry must be swept on insert (leak backstop)"
+            );
+
+            // Drain; re-poll the new caller: ITS value (222) must deliver — pre-fix the
+            // stale entry delivered the dead caller's 111 and silently discarded 222.
+            assert_eq!(recv(chan, &waker), (CHANNEL_READY, 42));
+            assert_eq!(
+                channel_send_poll_guarded(chan, 222, cx_ptr, T, 9),
+                CHANNEL_READY
+            );
+            assert_eq!(
+                recv(chan, &waker),
+                (CHANNEL_READY, 222),
+                "the NEW generation's value must deliver; the dead generation's stale \
+                 value must never resurface"
+            );
+            assert_eq!(pending_send_count(chan), 0);
+            ynz_channel_free(chan);
         }
     }
 

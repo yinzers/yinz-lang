@@ -4070,3 +4070,316 @@ mod m3d_join_shims {
         );
     }
 }
+
+/// v0.3-M6 Phase 3 — `pending_sends` ABA + orphan-purge repro suite (P3-1 / P2-2), covering
+/// BOTH `caller_token` producers:
+///
+/// - **frame path**: the bare-channel `.send()` token codegen mints from the caller's frame
+///   pointer (`emit_conduit_suspend_point`), purged by the drop ladder's kind-2
+///   `BgArgDropEntry` arm in `SpawnStateFnFuture::drop`;
+/// - **handle path**: the `h.send()` token `ynz_handle_send_poll` mints from the handle
+///   pointer, purged by `ynz_handle_free`.
+///
+/// The ABA attack both tests reproduce: a task/handle cancelled while suspended on `send`
+/// leaves its boxed send-future in `pending_sends`; the allocator reuses the freed address
+/// for a NEW caller; the new caller's send matches the STALE entry — its value is silently
+/// discarded and the DEAD caller's value is delivered under the new caller's identity.
+/// Authored RED (pre-fix: stale count 1, dead value delivered) per verification.md;
+/// GREEN once the purge + generation-salted token land.
+#[cfg(test)]
+mod m6_pending_send_aba {
+    use crate::channel::{
+        pending_send_count, ynz_channel_create, ynz_channel_free, ynz_channel_recv_poll,
+        ynz_channel_send_poll, ynz_channel_share,
+    };
+    use crate::handle::{ynz_handle_free, ynz_handle_send_poll, ynz_rt_spawn_handle};
+    use crate::runtime::{BgArgDropEntry, SpawnStateFnFuture};
+    use crate::{ynz_alloc_zeroed, ynz_free};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct CountingWaker(AtomicUsize);
+    impl Wake for CountingWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    fn make_waker() -> Waker {
+        Waker::from(Arc::new(CountingWaker(AtomicUsize::new(0))))
+    }
+
+    /// Fill the (capacity-1) channel through the real send ABI with a distinct token.
+    unsafe fn prefill(chan: *mut u8, value: i64, waker: &Waker) {
+        let mut cx = Context::from_waker(waker);
+        let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
+        assert_eq!(
+            ynz_channel_send_poll(chan, value, cx_ptr, 0x1),
+            0,
+            "prefill send must be Ready"
+        );
+    }
+
+    unsafe fn recv(chan: *mut u8, waker: &Waker) -> (i32, i64) {
+        let mut out: i64 = 0;
+        let mut cx = Context::from_waker(waker);
+        let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
+        let code = ynz_channel_recv_poll(chan, &mut out, cx_ptr);
+        (code, out)
+    }
+
+    /// Byte offset of the channel-pointer local slot inside the repro frame (first local).
+    const CHAN_SLOT: usize = 32;
+    /// Byte offset of the send-value local slot inside the repro frame (second local).
+    const VALUE_SLOT: usize = 40;
+    const FRAME_SIZE: usize = 64;
+
+    /// Resume fn mirroring codegen's conduit suspend point: read the channel pointer and the
+    /// send value from the frame's local slots, send with `caller_token` = this frame — the
+    /// exact token shape `emit_conduit_suspend_point` mints.
+    unsafe extern "C-unwind" fn send_from_frame_resume(frame: *mut u8, waker_ctx: *mut u8) -> i32 {
+        let chan = *(frame.add(CHAN_SLOT) as *const i64) as *mut u8;
+        let value = *(frame.add(VALUE_SLOT) as *const i64);
+        match ynz_channel_send_poll(chan, value, waker_ctx, frame as u64) {
+            1 => 1, // Pending — suspend (the state machine parks here)
+            _ => 0, // Ready/Closed — done
+        }
+    }
+
+    /// Build a repro task: a frame at a chosen (or fresh) address whose resume fn suspends on
+    /// `send(value)`, with a kind-2 `BgArgDropEntry` so the drop ladder releases (and, post-fix,
+    /// purges) the task's shared-channel reference — the REAL cancellation path end-to-end.
+    unsafe fn build_send_task(chan: *mut u8, value: i64) -> (SpawnStateFnFuture, *mut u8) {
+        let frame = ynz_alloc_zeroed(FRAME_SIZE);
+        assert!(!frame.is_null());
+        // The task's own refcounted channel reference (what codegen's spawn site emits).
+        let chan_ref = ynz_channel_share(chan);
+        *(frame.add(CHAN_SLOT) as *mut i64) = chan_ref as i64;
+        *(frame.add(VALUE_SLOT) as *mut i64) = value;
+        // One kind-2 (SharedChannel) arg-drop descriptor over the CHAN_SLOT.
+        let descs = ynz_alloc_zeroed(std::mem::size_of::<BgArgDropEntry>()) as *mut BgArgDropEntry;
+        (*descs).byte_offset = CHAN_SLOT as u64;
+        (*descs).kind = 2;
+        (*descs).size = 0;
+        let fut = SpawnStateFnFuture::new(
+            send_from_frame_resume,
+            frame,
+            FRAME_SIZE as i64,
+            std::ptr::null_mut::<u8>(),
+            descs,
+            1,
+        );
+        (fut, frame)
+    }
+
+    /// **Frame-path ABA + orphan purge** (P3-1 root finding + P2-2), through the REAL drop
+    /// ladder: cancel a task suspended on `send` under backpressure, force frame-address
+    /// reuse, and assert (a) the cancelled task's `pending_sends` entry is purged (orphan
+    /// half), (b) the new task at the reused address delivers ITS OWN value — the dead
+    /// task's stale value never resurfaces (ABA half).
+    #[test]
+    fn cancelled_frame_sender_is_purged_and_reused_address_cannot_resurrect_it() {
+        let waker = make_waker();
+        unsafe {
+            let chan = ynz_channel_create(1);
+            prefill(chan, 42, &waker); // capacity-1 channel is now FULL — backpressure
+
+            // Task A suspends on send(111).
+            let (mut fut_a, frame_a) = build_send_task(chan, 111);
+            let mut cx = Context::from_waker(&waker);
+            assert_eq!(
+                Pin::new(&mut fut_a).poll(&mut cx),
+                Poll::Pending,
+                "task A must suspend on the full channel"
+            );
+            assert_eq!(pending_send_count(chan), 1, "A's send is in flight");
+
+            // Cancel task A: dropping the future runs the FULL drop ladder (kind-2 arm).
+            let addr_a = frame_a as usize;
+            drop(fut_a);
+
+            // Orphan half (P2-2): the cancelled sender's entry must be purged.
+            assert_eq!(
+                pending_send_count(chan),
+                0,
+                "cancelling a suspended sender must purge its pending_sends entry \
+                 (orphaned entry = P2-2 leak + the P3-1 ABA precondition)"
+            );
+
+            // Force frame-address reuse: same-size allocation right after the free.
+            let mut misses: Vec<*mut u8> = Vec::new();
+            let mut fut_b = None;
+            for _ in 0..64 {
+                let (fut, frame) = build_send_task(chan, 222);
+                if frame as usize == addr_a {
+                    fut_b = Some(fut);
+                    break;
+                }
+                misses.push(frame);
+                // Leak-free discard: dropping the future frees its frame + channel ref,
+                // but that would put the chunk right back on top of the free list and
+                // loop us to the same non-matching address — hold it instead.
+                std::mem::forget(fut);
+            }
+            let mut fut_b = fut_b.expect(
+                "allocator never reused the cancelled task's frame address within 64 \
+                 same-size allocations — reuse forcing failed, repro inconclusive",
+            );
+
+            // Task B (at A's reused address) suspends on send(222).
+            assert_eq!(Pin::new(&mut fut_b).poll(&mut cx), Poll::Pending);
+
+            // Drain the prefill; a slot frees; re-poll B.
+            assert_eq!(recv(chan, &waker), (0, 42));
+            assert_eq!(
+                Pin::new(&mut fut_b).poll(&mut cx),
+                Poll::Ready(()),
+                "task B's send must complete once a slot freed"
+            );
+
+            // ABA half (P3-1): the delivered value must be B's 222 — pre-fix, the stale
+            // entry keyed by the reused address delivers DEAD task A's 111 and silently
+            // discards B's 222 (silent cross-task data corruption).
+            let (code, v) = recv(chan, &waker);
+            assert_eq!(code, 0);
+            assert_eq!(
+                v, 222,
+                "the NEW task's value must be delivered; a DEAD task's stale suspended \
+                 send must never resurface under the new task's identity (caller_token ABA)"
+            );
+
+            drop(fut_b);
+            // Repeated-cancel idempotency: B's entry resolved Ready before its drop, so the
+            // drop-ladder purge finds no matching entry — must be a safe no-op, never a panic.
+            assert_eq!(pending_send_count(chan), 0);
+
+            // Cleanup the held miss-frames (their futures were forgotten deliberately).
+            for frame in misses {
+                let chan_ref = *(frame.add(CHAN_SLOT) as *const i64) as *mut u8;
+                ynz_channel_free(chan_ref);
+                ynz_free(frame, FRAME_SIZE);
+                // The forgotten futures' desc arrays leak in this test-only path; each is
+                // 24 bytes and test-scoped. Frames + channel refs are balanced above.
+            }
+            ynz_channel_free(chan);
+        }
+    }
+
+    /// Resume fn for the handle-path child: parks forever (a child suspended mid-run), so
+    /// the handle can be freed while the PARENT's `h.send()` is suspended.
+    unsafe extern "C-unwind" fn resume_parked(_frame: *mut u8, _waker: *mut u8) -> i32 {
+        1
+    }
+
+    /// Spawn a handle whose msg conduit is `chan` (the handle takes its own channel ref).
+    unsafe fn spawn_test_handle(chan: *mut u8) -> *mut u8 {
+        let frame = ynz_alloc_zeroed(FRAME_SIZE);
+        ynz_rt_spawn_handle(
+            resume_parked,
+            frame,
+            FRAME_SIZE as i64,
+            -1,
+            std::ptr::null(),
+            0,
+            2, // RET_KIND_VALUE_WORD
+            chan,
+        )
+    }
+
+    /// **Handle-path ABA + orphan purge** (P3-1 ADDENDUM — the second token producer):
+    /// `h.send()` suspends under backpressure keyed by the HANDLE pointer; `ynz_handle_free`
+    /// must purge that entry (orphan half); a new handle at the reused address must deliver
+    /// its own value, never the dead handle's (ABA half, best-effort address forcing).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn freed_handle_sender_is_purged_and_reused_address_cannot_resurrect_it() {
+        let waker = make_waker();
+        unsafe {
+            let chan = ynz_channel_create(1);
+            prefill(chan, 42, &waker);
+
+            // Handle A: parent's h.send(111) suspends on the full conduit.
+            let h_a = spawn_test_handle(chan);
+            let mut cx = Context::from_waker(&waker);
+            let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
+            assert_eq!(
+                ynz_handle_send_poll(h_a, 111, cx_ptr),
+                1,
+                "h.send on a full conduit must suspend"
+            );
+            assert_eq!(
+                pending_send_count(chan),
+                1,
+                "A's handle-keyed send is in flight"
+            );
+
+            let addr_a = h_a as usize;
+            ynz_handle_free(h_a);
+            tokio::task::yield_now().await; // let the aborted child retire
+
+            // Orphan half (P2-2, handle producer): freeing the handle must purge its entry.
+            assert_eq!(
+                pending_send_count(chan),
+                0,
+                "ynz_handle_free must purge the handle-keyed pending_sends entry \
+                 (the second-producer orphan Fable's P3-1 ADDENDUM flagged)"
+            );
+
+            // Repeated-cancel idempotency (handle path): a handle freed with NO in-flight
+            // send purges nothing — must be a safe no-op.
+            let h_noop = spawn_test_handle(chan);
+            ynz_handle_free(h_noop);
+            tokio::task::yield_now().await;
+            assert_eq!(pending_send_count(chan), 0);
+
+            // ABA half — best-effort address-reuse forcing (Box reuse is allocator-
+            // dependent; bounded attempts, misses held so the freed chunk isn't recycled
+            // into our own retry loop).
+            let mut misses: Vec<*mut u8> = Vec::new();
+            let mut h_b: Option<*mut u8> = None;
+            for _ in 0..8 {
+                let h = spawn_test_handle(chan);
+                if h as usize == addr_a {
+                    h_b = Some(h);
+                    break;
+                }
+                misses.push(h);
+            }
+            if let Some(h_b) = h_b {
+                assert_eq!(ynz_handle_send_poll(h_b, 222, cx_ptr), 1);
+                assert_eq!(recv(chan, &waker), (0, 42));
+                assert_eq!(ynz_handle_send_poll(h_b, 222, cx_ptr), 0);
+                let (code, v) = recv(chan, &waker);
+                assert_eq!(code, 0);
+                assert_eq!(
+                    v, 222,
+                    "a new handle at a reused address must deliver ITS value; the dead \
+                     handle's stale suspended send must never resurface (handle-token ABA)"
+                );
+                ynz_handle_free(h_b);
+            } else {
+                // Allocator never reused the address within bounds: the ABA half of THIS
+                // producer is covered deterministically at the handle seam
+                // (handle.rs::tests::handle_send_same_address_different_generation_never_collides
+                // — the real ynz_handle_send_poll mint, same token, different generations)
+                // and at the keyed-core seam (channel.rs::tests — same token, different
+                // generations never collide); the purge half above stays fully asserted here.
+                eprintln!(
+                    "m6 handle ABA repro: no address reuse in 8 attempts — ABA half \
+                     covered by the deterministic handle-seam + keyed-core collision tests"
+                );
+                // Drain so held misses' children can be cleaned up below.
+                assert_eq!(recv(chan, &waker), (0, 42));
+            }
+            for h in misses {
+                ynz_handle_free(h);
+            }
+            tokio::task::yield_now().await;
+            ynz_channel_free(chan);
+        }
+    }
+}

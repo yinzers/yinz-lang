@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1"]
 created_at: "2026-07-04"
 updated_at: "2026-07-10"
 metadata:
@@ -55,7 +55,7 @@ metadata:
   call. Its sibling recursive-path HARD-ERRORS at `emit.rs:11162` — this one silently emits instead.
   Directly coupled to P1-1: the UFCS misclassification is exactly what reaches this unguarded branch
   today; fixing P1-1 alone doesn't close the branch, it just stops (most) traffic from finding it.
-- **P3-1/P2-2 — `caller_token` ABA + orphaned `pending_sends`.** `emit.rs:11651-11654` computes the
+- **P3-1/P2-2 — `caller_token` ABA + orphaned `pending_sends`.** `emit.rs:12205-12208` computes the
   token as a raw frame-pointer-to-int (`ptr_to_int`), no generation salt. `channel.rs:120` declares
   `pending_sends`; `channel.rs:270` inserts an entry keyed by that raw token when a sender suspends on
   a full channel. The drop ladder (`runtime.rs:591-693`, kind-2 `BgArgDropEntry`) only calls
@@ -74,7 +74,7 @@ metadata:
   `ynz_channel_free(handle.msg_chan)` but never purges the handle-keyed `pending_sends` entry — a
   recycled handle heap address inherits the dead handle's suspended send, the identical ABA/orphan
   shape as the frame-pointer path. Any P3-1 fix must therefore enumerate BOTH producers (frame-ptr
-  conduit tokens minted at `emit.rs:11651-11654`; handle-ptr tokens minted inside
+  conduit tokens minted at `emit.rs:12205-12208`; handle-ptr tokens minted inside
   `ynz_handle_send_poll` at `handle.rs:326`) and purge at BOTH cancellation paths (the drop ladder's
   kind-2 `BgArgDropEntry` for frame tokens; inside `ynz_handle_free` — which already holds
   `msg_chan` — for handle tokens), per
@@ -225,7 +225,7 @@ MEDIUM-or-below; MEDIUMs are recorded here and parked with triggers in Future Re
 | Risk | Prob | Sev | Initial | Mitigations (bucket) | Residual | Gate |
 |------|------|-----|---------|----------------------|----------|------|
 | **R1 — UFCS-fix regression of existing (Call-based) suspension classification** (threading the authoritative resolution into 4 sites could break an already-working path) — *Phases 1–2* | C | II | H | Adversarial/RED-repro test class authored BEFORE the fix, gating the build — transitive UFCS, explicit `wait` on `MethodCall`, mixed UFCS+`Call`, `background`-spawned UFCS, PLUS full regression run of every pre-existing Call-based suspension fixture (**B2**, prob −1; proof: committed RED→GREEN fixture set, Phase 1 step 2/7) | **M** (D×II) | recorded |
-| **R2 — pending_sends purge / token-salt fix is itself incomplete or racy on EITHER token producer (frame-ptr conduit tokens `emit.rs:11651-11654` OR handle-ptr tokens `handle.rs:326`)** — *Phase 3* | C | II | H | Adversarial/RED cancellation-during-send repro covering BOTH producers (frame-path AND handle-path backpressure + cancel + address-reuse simulation) gating the build, PLUS idempotency requirement on the purge at BOTH cancellation paths — the drop ladder AND `ynz_handle_free` (double-cancel is a safe no-op on either) (**B2**, prob −1; proof: committed RED→GREEN fixture pair, Phase 3 step 6) | **M** (D×II) | recorded |
+| **R2 — pending_sends purge / token-salt fix is itself incomplete or racy on EITHER token producer (frame-ptr conduit tokens `emit.rs:12205-12208` OR handle-ptr tokens `handle.rs:326`)** — *Phase 3* | C | II | H | Adversarial/RED cancellation-during-send repro covering BOTH producers (frame-path AND handle-path backpressure + cancel + address-reuse simulation) gating the build, PLUS idempotency requirement on the purge at BOTH cancellation paths — the drop ladder AND `ynz_handle_free` (double-cancel is a safe no-op on either) (**B2**, prob −1; proof: committed RED→GREEN fixture pair, Phase 3 step 6) | **M** (D×II) | recorded |
 | **R3 — lost-wakeup fix reorder introduces a new lock-ordering issue** — *Phase 4* | D | II | M | Adversarial multi-consumer RED repro gating the build, PLUS re-verification that P3-4's existing "no lock held across a blocking poll" clean bill still holds after the reorder (**B2**, prob −1; proof: committed fixture + re-verified clean-bill note, Phase 4 step 3/4) | **L** (E×II) | pass |
 | **R4 — drop-glue ABI change (channel construction) miswires or under-covers elements** — *Phase 5* | C | II | H | `YNZ_ALLOC_COUNTER_OUTPUT` alloc=free parity gate with NON-VACUOUS coverage (buffered heap-typed elements exercised, per M5's FRAGO-005 lesson against a vacuous zero-alloc pass) gating the build (**B2**, prob −1; proof: committed parity test + baseline, Phase 5 step 4) | **M** (D×II) | recorded |
 | **R5 — shutdown mutex re-scope introduces a new race** — *Phase 6* | D | III | L | Mechanical mirror of the already-correct sibling pattern (`ynz_rt_run_entrypoint:995-1006`); no further mitigation needed | **L** (D×III) | pass |
@@ -385,7 +385,7 @@ routing must state the truth about what exists today versus what is deferred and
    not reachable via the designated synchronous entry point — mirroring `emit.rs:11162`'s sibling.
 3. A cancelled sender's `pending_sends` entry is purged (idempotently) and the `caller_token` is
    generation-salted, across BOTH token-producer sites (the frame-pointer conduit token minted at
-   `emit.rs:11651-11654` AND the handle-pointer task-handle token minted at `handle.rs:326`) — the
+   `emit.rs:12205-12208` AND the handle-pointer task-handle token minted at `handle.rs:326`) — the
    ABA class and the orphan leak are both closed for both producers with committed RED→GREEN repros.
 4. The `ynz_channel_recv_poll` register/poll race is closed (register-before-poll or a single lock
    across both), re-verified against P3-4's existing "no lock across a blocking poll" clean bill.
@@ -1228,7 +1228,7 @@ lowering arm for ANY type.
 
 - **Task + purpose:** eliminate the `caller_token` ABA class and the orphaned `pending_sends` leak
   across BOTH token-producer sites — the frame-pointer conduit token minted in codegen at
-  `emit.rs:11651-11654` (bare-channel `.send()`) AND the handle-pointer token minted inside
+  `emit.rs:12205-12208` (bare-channel `.send()`) AND the handle-pointer token minted inside
   `ynz_handle_send_poll` at `handle.rs:326` (`h.send()`), both landing in the SAME
   `pending_sends` map on the shared `YnzChannel` — via (a) purge-on-cancellation at BOTH
   cancellation paths (the drop ladder's kind-2 `BgArgDropEntry` for frame tokens; inside
@@ -1259,12 +1259,23 @@ lowering arm for ANY type.
      `handle.msg_chan`, so it purges its own handle-keyed entry BEFORE releasing the channel ref via
      `ynz_channel_free`. Confirm this purge is also idempotent (a repeated-cancel unit test on the
      handle path passes).
-  5. Implement the generation-salted `caller_token` covering BOTH producers: replace the raw
-     frame-pointer token (`emit.rs:11651-11654`) AND the raw handle-pointer token (`handle.rs:326`)
-     with a `(ptr, generation_counter)` pair (or equivalent monotonic salt) from ONE shared salting
-     scheme threaded to both mint sites — never two independently-salted token shapes — so a reused
+  5. Implement the generation-salted `caller_token` covering BOTH producers, with the generation
+     half joined RUNTIME-side (FRAGO 021 — the codegen mint sites stay untouched: the frame header
+     is fully packed, so a codegen-side generation store would require frame-layout ABI surgery,
+     and a salted token must be stable across re-polls of the same suspension): key
+     `pending_sends` by `(caller_token, caller_generation)` from ONE global monotonic counter
+     (`channel::next_caller_generation`; generation 0 reserved for bare unstamped ABI calls
+     (substrate tests) and never mass-purged — the entrypoint sync drives are themselves stamped
+     NONZERO per FRAGO 022, review fix-loop 1) minted at caller-identity birth — `task_gen` on
+     `SpawnStateFnFuture`
+     (every construction site), published via a thread-local RAII guard around the resume-fn call
+     so the extern-C send ABI is byte-identical (root + embedded-child + chain-child frame tokens
+     all carry it, a producer variant the original step text never enumerated); `send_gen` on
+     `YnzTaskHandle`, passed explicitly by `ynz_handle_send_poll` — both through ONE keyed core
+     (`channel_send_poll_guarded`), never two independently-salted token shapes — so a reused
      address (frame OR handle) cannot collide with a stale entry even inside the purge's own race
-     window.
+     window; plus an insert-time same-token/different-generation stale sweep as the missed-path
+     leak backstop (two LIVE identities can never share a token address).
 
      **CHECKPOINT** — both purge call sites wired to the one shared helper (idempotent on both
      paths) and the token salted for both producers from one scheme; ready to author the RED repro
@@ -1288,6 +1299,73 @@ lowering arm for ANY type.
   authoritative-derivation.md compliance — one purge helper, one salting scheme, threaded to both
   producers, never two ad hoc schemes).
 - **Model tag:** `(coding, high, medium)` — checkpoint marks mandatory (>5 steps).
+
+**Phase 3 complete (executor `executor-2026-07-10-m6-phase3-seg3`, 2026-07-10; segments 1-3):**
+the P3-1 `caller_token` ABA class and the P2-2 orphaned `pending_sends` leak are CLOSED across
+BOTH token producers via BOTH D2 mitigations, all runtime-side in
+`crates/ynz-runtime/src/{channel.rs,runtime.rs,handle.rs}` (emit.rs untouched — zero codegen
+delta). **(a) Purge:** ONE shared helper `purge_pending_sends(chan_ptr, generation)`
+(null-safe, gen-0 no-op, purge-by-generation `retain`, idempotent by construction) wired into
+BOTH cancellation paths — the drop ladder's kind-2 `BgArgDropEntry` arm (`runtime.rs`, BEFORE
+`ynz_channel_free`) and `ynz_handle_free` (`handle.rs`, BEFORE releasing the conduit ref);
+idempotency proven on both (repeated-cancel assertions + dedicated double-purge/purge-empty/
+purge-null/gen-0 unit test). **(b) Salt:** ONE runtime-side generation scheme (FRAGO 021 —
+runtime-side join, frame header packed): `pending_sends` keyed `(caller_token,
+caller_generation)` from ONE global counter (`channel::next_caller_generation`, gen 0 reserved
+for bare unstamped ABI calls only — FRAGO 022 stamped the entrypoint sync drives nonzero in the
+review fix-loop); `task_gen` on `SpawnStateFnFuture` (all 3 construction sites) published via
+`TaskGenGuard` thread-local RAII around every poll (extern-C send ABI byte-identical; covers
+root + embedded-child + chain-child frame tokens); `send_gen` on `YnzTaskHandle` passed
+explicitly by `ynz_handle_send_poll`; both mints through the ONE keyed core
+`channel_send_poll_guarded` (authoritative-derivation — one scheme, never two); plus the
+insert-time same-token/different-generation stale sweep as missed-path leak backstop.
+**RED→GREEN pair committed to the tree** (`mod m6_pending_send_aba` in `lib.rs`: frame-path
+through the REAL drop ladder with forced address reuse; handle-path through real
+`ynz_rt_spawn_handle`/`ynz_handle_free`) — authored + proven RED segment 1 (Paper-Trace:
+`pending_send_count` observed 1 post-cancel, expected 0), flipped GREEN by the fix segment 2 —
+plus 2 deterministic unit tests (idempotency; same-token/different-generation collision).
+**Step 7 gates (segment 3): full workspace `cargo nextest run --workspace` GREEN — 2354
+passed / 0 failed / 6 skipped, exit 0** (= 2350 stopgap baseline + the 4 new Phase 3 tests, all
+4 confirmed in-set and GREEN in the full run), ZERO flakes this run (the known transients —
+`long_session` RSS, `contract_3_wait_inside_if`, `spawn_panic_ctx_no_leak` — all passed first
+attempt); M4 channel/handle suites regression-free (0 failures workspace-wide); house
+`cargo clippy --workspace -- -D warnings` exit 0; `cargo fmt --all --check` exit 0. No
+`#[allow]`, no `--no-verify`, no weakened test; the 2 pre-existing `--all-targets`-only lints
+(`tests/m2_runtime.rs:275`, `lib.rs:2830`, Phase-1d-era) left untouched per record. Exit
+criteria ALL MET. FRAGO 021 (seg-1 deviations: citation drift + runtime-side salt refinement)
+filed segment 2, pending boundary deviation-judge ratification.
+
+**Phase 3 review fix-loop 1 (executor `executor-2026-07-10-m6-phase3-fixloop1`, 2026-07-10):**
+two converged reviewers (code-reviewer + critical-path-integrity: 0 blockers — ABA closed for all
+gen≠0 paths) returned 2 should-fixes; both CLOSED. **(1) gen-0 unprotected class ELIMINATED**
+(preferred path — not the debug_assert+defer fallback, so nothing is deferred): the sync
+entrypoint driver (`SyncStateFnFuture` / `ynz_rt_run_entrypoint`) now mints its own NONZERO
+`task_gen` from the ONE counter and publishes it via the same `TaskGenGuard` around every poll —
+EVERY production caller identity (spawned task, handle, sync drive) is stamped nonzero, the
+purge/re-poll/sweep logic is uniform, and no unprotected gen-0 class exists in ANY build (the
+release binary on the trading mount gets the protection compiled in). Verify-before-fix
+Paper-Trace confirmed the reviewers' premise and found the class WIDER than stated: gen 0 covered
+every `SyncStateFnFuture` drive (the codegen `main` wrapper AND every non-entry sync wrapper
+called from a non-state-machine context — one shared driver, `runtime.rs`), all sharing ONE
+identity; the eliminate path closes the whole class. Generation 0 remains reserved solely for
+bare unstamped ABI calls (substrate tests); `purge_pending_sends`'s gen-0 no-op stays as the
+never-mass-purge floor. Zero ABI/codegen delta (extern signatures byte-identical; `emit.rs`
+untouched). **(2) deterministic handle-path ABA proof added:**
+`handle::tests::handle_send_same_address_different_generation_never_collides` drives the REAL
+`ynz_handle_send_poll` mint at ONE handle address under two explicit generations with the purge
+withheld (the residual race window), asserting no key collision, the insert-time stale sweep, and
+the new generation's value delivering — a broken salt fails it (the dead generation's 111 would
+deliver instead of the live 222); the `lib.rs` handle repro's best-effort reuse loop is retained
+with its fallback note repointed at the new deterministic test. **Gates ALL GREEN:**
+`cargo nextest run --workspace` **2355 passed / 0 failed / 6 skipped, exit 0** (= 2354 Phase-3
+baseline + the 1 new handle test; all 5 ABA/purge tests additionally confirmed green in a
+targeted run). One unrelated PRE-EXISTING wall-clock perf test outside this phase's scope
+(`ynz-typeck::symbol_lookup::test_cross_file_reference_count_estimate_completes_fast`, asserts
+<5ms) failed once under full parallel load in the first run, passed in isolation (0.006s) and in
+the full rerun — a non-recurring load transient in an untouched crate, surfaced for the record,
+NOT silenced and NOT a runtime regression. `cargo clippy --workspace -- -D warnings` exit 0;
+`cargo fmt --all --check` exit 0. No `#[allow]`, no `--no-verify`, no weakened test. FRAGO 022
+records the step-5 gen-0-class refinement (pending boundary deviation-judge ratification).
 
 #### Phase 3b — P2-5: recursion-chain × spike CPU-handle cleanup leak (LIVE — confirmed Phase 0)
 
@@ -1971,7 +2049,7 @@ lowering arm for ANY type.
   actually being fixed; verifying the guard before P1-1 lands would be verifying an assertion against
   a precondition known to be false.
 - **D2 — both purge-on-cancellation AND generation-salted-token are implemented for the ABA/orphan
-  fix, across BOTH token-producer sites** (frame-ptr conduit tokens `emit.rs:11651-11654` AND
+  fix, across BOTH token-producer sites** (frame-ptr conduit tokens `emit.rs:12205-12208` AND
   handle-ptr tokens `handle.rs:326` — per Fable's personal plan-audit "P3-1 ADDENDUM") (Phase 3), not
   either/or and not first-producer-found-only. Reason: purge closes the steady-state
   leak/resurrection; the salt is defense-in-depth against any residual race window between

@@ -408,6 +408,15 @@ struct SyncStateFnFuture {
     // Suppressed until Phase 2 wires the dealloc path.
     #[allow(dead_code)]
     frame_size: i64,
+    /// This drive's caller-generation stamp (v0.3-M6 P3-1), minted at construction from the
+    /// ONE global counter (`channel::next_caller_generation`) — the same scheme as
+    /// `SpawnStateFnFuture::task_gen` and `YnzTaskHandle::send_gen`, so every production
+    /// caller identity is stamped NONZERO and the `(caller_token, caller_generation)`
+    /// keying is uniform across ALL producers (no unprotected generation-0 class). A sync
+    /// drive is immortal by construction — `block_on` runs it to completion and nothing
+    /// ever cancels it — so no Drop purge exists for this generation; the stamp's job is
+    /// that two sequential sync drives at a reused frame address can never share a key.
+    task_gen: u64,
 }
 
 // SAFETY: SyncStateFnFuture is driven to completion by a single block_on call; ownership
@@ -421,6 +430,13 @@ impl Future for SyncStateFnFuture {
         // Cast Context to *mut u8 — the locked waker_ctx ABI: type-erased pointer to
         // &mut Context<'_>. The resume_fn casts back on the other side.
         let waker_ctx = cx as *mut Context<'_> as *mut u8;
+        // Publish this drive's generation for the duration of the resume-fn call (the same
+        // discipline as SpawnStateFnFuture::poll): any ynz_channel_send_poll the state
+        // machine reaches keys its suspended send by (frame token, THIS generation) — the
+        // P3-1 ABA salt, uniform across every producer. RAII: restores the previous value
+        // even if resume_fn unwinds; nesting-safe for a sync drive re-entered from inside
+        // a Tokio worker/blocking-pool thread.
+        let _task_gen_guard = crate::channel::TaskGenGuard::enter(self.task_gen);
         // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
         // frame_ptr is valid for frame_size bytes (caller guarantee).
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
@@ -498,6 +514,11 @@ pub(crate) struct SpawnStateFnFuture {
     pub(crate) arg_drop_ptr: *const BgArgDropEntry,
     /// Number of entries at `arg_drop_ptr`. 0 when `arg_drop_ptr` is null.
     pub(crate) arg_drop_count: usize,
+    /// This task's caller-generation stamp (v0.3-M6 P3-1), minted once at construction from
+    /// the ONE global counter (`channel::next_caller_generation`). Published to the channel
+    /// module via a thread-local while `poll` runs (so every frame token this task mints
+    /// carries it), and used by `Drop`'s kind-2 arm to purge the task's suspended sends.
+    pub(crate) task_gen: u64,
 }
 
 impl SpawnStateFnFuture {
@@ -522,6 +543,7 @@ impl SpawnStateFnFuture {
             recursion_slot_offset: -1,
             arg_drop_ptr,
             arg_drop_count: arg_drop_count as usize,
+            task_gen: crate::channel::next_caller_generation(),
         }
     }
 }
@@ -636,8 +658,13 @@ impl Drop for SpawnStateFnFuture {
                         2 => {
                             // v0.3-M4 SharedChannel: the task's refcounted reference to a
                             // channel it was handed (`ynz_channel_share` at the spawn site).
-                            // Releasing exactly one reference here keeps alloc=free balanced
-                            // on every task exit path, including cancellation.
+                            // v0.3-M6 P2-2: purge THIS task's suspended sends BEFORE releasing
+                            // the reference — a cancelled sender's orphaned pending_sends
+                            // entry is both a leak and the P3-1 ABA precondition. Idempotent:
+                            // an already-resolved/absent entry is a safe no-op. Then release
+                            // exactly one reference, keeping alloc=free balanced on every
+                            // task exit path, including cancellation.
+                            crate::channel::purge_pending_sends(heap_ptr, self.task_gen);
                             crate::channel::ynz_channel_free(heap_ptr);
                         }
                         _ => {
@@ -699,6 +726,12 @@ impl Future for SpawnStateFnFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let waker_ctx = cx as *mut Context<'_> as *mut u8;
+        // Publish this task's generation for the duration of the resume-fn call: any
+        // ynz_channel_send_poll the state machine reaches keys its suspended send by
+        // (frame token, THIS generation) — the P3-1 ABA salt, with the extern-C send ABI
+        // unchanged. RAII: restores the previous value even if resume_fn unwinds; re-set
+        // from the future's own field at every poll, so work-stealing is safe.
+        let _task_gen_guard = crate::channel::TaskGenGuard::enter(self.task_gen);
         // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
         // frame_ptr is valid for frame_size bytes (caller guarantee).
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
@@ -768,6 +801,7 @@ pub unsafe extern "C" fn ynz_rt_spawn(
         recursion_slot_offset,
         arg_drop_ptr,
         arg_drop_count: arg_drop_count as usize,
+        task_gen: crate::channel::next_caller_generation(),
     };
     let _ = spawn_on_runtime(future, "ynz_rt_spawn");
 }
@@ -973,6 +1007,7 @@ pub unsafe extern "C-unwind" fn ynz_rt_run_entrypoint(
             resume_fn,
             frame_ptr,
             frame_size,
+            task_gen: crate::channel::next_caller_generation(),
         };
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {

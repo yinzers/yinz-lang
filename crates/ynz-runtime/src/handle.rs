@@ -41,8 +41,9 @@
 //! # `.send()` — feeds the child's first `channel<T>` parameter
 //!
 //! `h.send(v)` delegates to the shared channel object the spawn wired into the child's frame
-//! (the first channel-typed argument), with the handle pointer as the per-caller suspended-send
-//! token. Typeck rejects `.send()` on a handle whose callee takes no channel.
+//! (the first channel-typed argument), with the handle pointer + the handle's generation stamp
+//! (`send_gen`, v0.3-M6 P3-1) as the per-caller suspended-send key. Typeck rejects `.send()`
+//! on a handle whose callee takes no channel.
 //!
 //! # Handle drop (`ynz_handle_free`) — cancel-via-drop at the runtime level
 //!
@@ -60,7 +61,10 @@ use std::task::{Context, Poll};
 
 use tokio::sync::mpsc;
 
-use crate::channel::{lock_or_recover, ynz_channel_free, ynz_channel_send_poll, ynz_channel_share};
+use crate::channel::{
+    channel_send_poll_guarded, lock_or_recover, next_caller_generation, purge_pending_sends,
+    ynz_channel_free, ynz_channel_share,
+};
 use crate::runtime::{spawn_on_runtime, BgArgDropEntry, SpawnStateFnFuture};
 use ynz_abi::FRAME_OFFSET_RETURN_SLOT;
 
@@ -106,6 +110,12 @@ pub struct YnzTaskHandle {
     /// The child's Tokio join handle — held ONLY for abort-on-drop. Never polled (trap door
     /// 1b is about join-polling; collection goes through the outbox conduit instead).
     join: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// This handle's caller-generation stamp (v0.3-M6 P3-1), minted at spawn from the ONE
+    /// global counter (`channel::next_caller_generation`) — the generation half of the
+    /// `(handle_ptr, send_gen)` key `h.send()`'s suspended sends are parked under, and the
+    /// generation `ynz_handle_free` purges. A DISTINCT identity from the child task's
+    /// `task_gen`: the handle and the child die at different moments.
+    send_gen: u64,
     /// R8 buffer ownership (shared with the child future, which fills it at completion).
     /// Ownership-only, never read: the child's Arc drops when the task retires (right after
     /// completion), so THIS Arc is what keeps `ok_buf` alive until the parent reads the
@@ -239,6 +249,8 @@ pub unsafe extern "C" fn ynz_rt_spawn_handle(
             recursion_slot_offset,
             arg_drop_ptr,
             arg_drop_count: arg_drop_count as usize,
+            // The CHILD TASK's own caller identity (frame tokens; purged by its drop ladder).
+            task_gen: next_caller_generation(),
         },
         outbox_tx: Some(outbox_tx),
         ret_kind,
@@ -257,6 +269,9 @@ pub unsafe extern "C" fn ynz_rt_spawn_handle(
             ynz_channel_share(msg_chan)
         },
         join: Mutex::new(join),
+        // The HANDLE's own caller identity (h.send() tokens; purged by ynz_handle_free) —
+        // same ONE counter, distinct stamp from the child's task_gen above.
+        send_gen: next_caller_generation(),
         shared,
     });
     Box::into_raw(handle) as *mut u8
@@ -303,11 +318,17 @@ pub unsafe extern "C" fn ynz_handle_recv_poll(
     }
 }
 
-/// Poll `h.send(value)` — delegates to the child's first-channel conduit, with the handle
-/// pointer as the per-caller suspended-send token.
+/// Poll `h.send(value)` — delegates to the child's first-channel conduit, keyed by the handle
+/// pointer + the handle's own generation stamp (`send_gen`), through the ONE keyed send core
+/// (`channel_send_poll_guarded` — never a second core, per authoritative-derivation.md).
+///
+/// The generation is passed EXPLICITLY from the handle — never read from the poll thread-local,
+/// which would be the SENDING task's generation; the ABA key needs the HANDLE's own birth stamp
+/// (the identity `ynz_handle_free` purges).
 ///
 /// # Safety
-/// Same contract as [`ynz_channel_send_poll`]; `handle_ptr` must be a live handle pointer.
+/// Same contract as [`crate::channel::ynz_channel_send_poll`]; `handle_ptr` must be a live
+/// handle pointer.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_handle_send_poll(
     handle_ptr: *mut u8,
@@ -323,7 +344,13 @@ pub unsafe extern "C" fn ynz_handle_send_poll(
     if handle.msg_chan.is_null() {
         return CHANNEL_CLOSED;
     }
-    ynz_channel_send_poll(handle.msg_chan, value, waker_ctx, handle_ptr as u64)
+    channel_send_poll_guarded(
+        handle.msg_chan,
+        value,
+        waker_ctx,
+        handle_ptr as u64,
+        handle.send_gen,
+    )
 }
 
 /// Free the task handle: abort the child (a no-op when already finished — Tokio delivers the
@@ -343,6 +370,11 @@ pub unsafe extern "C" fn ynz_handle_free(handle_ptr: *mut u8) {
     if let Some(join) = lock_or_recover(&handle.join).take() {
         join.abort();
     }
+    // v0.3-M6 P2-2 (second producer): purge this handle's suspended h.send() entries BEFORE
+    // releasing the conduit reference — the handle-keyed orphan is the same leak + ABA
+    // precondition as the frame path, purged through the SAME shared helper. Idempotent:
+    // no in-flight send (or a double-cancel) is a safe no-op.
+    purge_pending_sends(handle.msg_chan, handle.send_gen);
     ynz_channel_free(handle.msg_chan);
     // ok_buf (if any) drops with `handle.shared` unless the child future still holds the
     // other Arc — then it drops when the aborted task retires. Either way exactly once,
@@ -446,6 +478,97 @@ mod tests {
             rt.block_on(async { tokio::task::yield_now().await });
             // Never receive; just free. Frame already freed by the task; buffer path empty.
             ynz_handle_free(h);
+        }
+    }
+
+    /// v0.3-M6 P3-1 (handle producer, DETERMINISTIC ABA proof): the REAL
+    /// `ynz_handle_send_poll` mint — keyed `(handle_ptr, send_gen)` through the one shared
+    /// core — never collides across generations at the SAME handle address. Mirrors
+    /// `channel::tests::same_token_different_generation_never_collides_and_stale_is_swept`
+    /// at the handle seam: the purge is WITHHELD (the residual window between cancellation
+    /// and purge completing), and address reuse is simulated deterministically by
+    /// restamping the handle's `send_gen` in place with a fresh mint from the ONE counter —
+    /// exactly the stamp a NEW handle born at the reused address would carry. A broken salt
+    /// (key ignoring the generation) fails this test: the second send would re-poll the
+    /// dead generation's stale entry and deliver its 111 instead of the live 222.
+    #[test]
+    fn handle_send_same_address_different_generation_never_collides() {
+        /// Resume fn that always returns Pending (a child parked at a suspension point).
+        unsafe extern "C-unwind" fn resume_pending(_frame: *mut u8, _waker: *mut u8) -> i32 {
+            1
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("rt");
+        let _guard = rt.enter();
+        let waker = make_waker();
+        let mut cx = Context::from_waker(&waker);
+        let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
+        unsafe {
+            let chan = crate::channel::ynz_channel_create(1);
+            // Fill the single slot via the bare ABI (Ready path — no pending entry).
+            assert_eq!(
+                crate::channel::ynz_channel_send_poll(chan, 42, cx_ptr, 0xF),
+                CHANNEL_READY
+            );
+
+            // "Handle A": h.send(111) suspends on the full conduit under A's send_gen.
+            let frame = crate::ynz_alloc_zeroed(64);
+            let h = ynz_rt_spawn_handle(
+                resume_pending,
+                frame,
+                64,
+                -1,
+                std::ptr::null(),
+                0,
+                RET_KIND_VALUE_WORD,
+                chan,
+            );
+            assert_eq!(ynz_handle_send_poll(h, 111, cx_ptr), CHANNEL_PENDING);
+            assert_eq!(crate::channel::pending_send_count(chan), 1);
+
+            // Handle A "dies" WITHOUT its purge running (the purge race window), and
+            // "handle B" is born at the SAME reused address: same token, fresh generation
+            // from the one counter — restamped in place to make the reuse deterministic.
+            let gen_a = (*(h as *mut YnzTaskHandle)).send_gen;
+            let gen_b = next_caller_generation();
+            assert_ne!(gen_a, gen_b, "every birth mints a distinct generation");
+            (*(h as *mut YnzTaskHandle)).send_gen = gen_b;
+
+            // B's send must NOT match A's stale entry (key differs by generation); the
+            // insert-time sweep removes the dead same-token/different-generation entry,
+            // so the count stays 1 — the stale 111 future (and its value) is dropped.
+            assert_eq!(ynz_handle_send_poll(h, 222, cx_ptr), CHANNEL_PENDING);
+            assert_eq!(
+                crate::channel::pending_send_count(chan),
+                1,
+                "the dead generation's same-token entry must be swept on insert \
+                 (missed-path leak backstop)"
+            );
+
+            // Drain the prefill; re-poll B: ITS value must deliver — never the dead
+            // generation's stale 111.
+            let mut out = 0i64;
+            assert_eq!(
+                crate::channel::ynz_channel_recv_poll(chan, &mut out, cx_ptr),
+                CHANNEL_READY
+            );
+            assert_eq!(out, 42);
+            assert_eq!(ynz_handle_send_poll(h, 222, cx_ptr), CHANNEL_READY);
+            assert_eq!(
+                crate::channel::ynz_channel_recv_poll(chan, &mut out, cx_ptr),
+                CHANNEL_READY
+            );
+            assert_eq!(
+                out, 222,
+                "the NEW generation's value must deliver through the handle path; the \
+                 dead generation's stale suspended send must never resurface (handle ABA)"
+            );
+            assert_eq!(crate::channel::pending_send_count(chan), 0);
+
+            ynz_handle_free(h); // purges gen_b (already resolved — safe no-op), aborts child
+            rt.block_on(async { tokio::task::yield_now().await }); // retire the aborted child
+            crate::channel::ynz_channel_free(chan);
         }
     }
 
