@@ -633,10 +633,7 @@ fn collect_callees_in_expr(
     match expr {
         Expr::Call(c) => {
             if let Expr::Ident(name, _) = &c.callee {
-                if suspend_set.contains(name.as_str())
-                    && !is_base_suspension_intrinsic(name.as_str())
-                    && seen.insert(name.clone())
-                {
+                if is_suspending_member(suspend_set, name.as_str()) && seen.insert(name.clone()) {
                     out.push(name.clone());
                 }
             }
@@ -1514,6 +1511,13 @@ fn lower_generic_function<'ctx>(
         // Generic functions cannot contain `wait` in M2. Use empty caches.
         wait_cache: empty_wait_cache(),
         suspend_set: empty_suspend_set(),
+        // Generic mono functions cannot suspend yet (v0.4 generic+suspension work), so the
+        // genuine-suspend set is empty here too — the block_on-fallback guard
+        // (`sync_call_fallback_is_codegen_bug`) is vacuously off for generic bodies. Safe today:
+        // no generic function in the current language surface can reach a suspension point through
+        // a type parameter (see `ynz-typeck/src/check.rs:4214`). This empty-set assumption is a
+        // v0.4-revisit site alongside the kernel guard deferral documented there.
+        base_suspends: empty_suspend_set(),
         frame_layouts: empty_frame_layouts(),
         imported_fns: empty_imported_fns(),
         sm_frame_ptr: None,
@@ -1804,7 +1808,16 @@ struct Cg<'ctx, 'g> {
     #[allow(dead_code)]
     wait_cache: &'g WaitCache,
     // v0.3-M2 P7: transitive suspend set — the "is state machine" predicate.
+    // NOTE: in auto-parallel mode this is the WITH-CPU-PROMOTIONS set (genuine may-block ∪
+    // imported-suspending ∪ spike-CPU-host names). For the "is this a genuine async suspension"
+    // question (e.g. the block_on-fallback hard-error guard) use `base_suspends` below, NOT this
+    // set — a CPU-spike host is driven synchronously by the poll-join mechanism, not a block_on.
     suspend_set: &'g SuspendSet,
+    // v0.3-M6 Phase 2 (P4-3): THE authoritative pre-CPU-promotion suspend set (genuine may-block
+    // ∪ imported-suspending, WITHOUT spike-host names). This is the "genuinely async-suspending"
+    // predicate — the one the block_on-fallback hard-error guard keys on, so a CPU-promoted host
+    // driven synchronously at the top level (the designed path) is never mis-flagged.
+    base_suspends: &'g SuspendSet,
     // v0.3-M2 P7: composed-frame layouts for all suspending functions.
     frame_layouts: &'g HashMap<String, FrameLayout>,
     // v0.3-M3b: imported function signatures — needed so helpers that look up
@@ -4093,6 +4106,7 @@ fn lower_function<'ctx, 'g>(
         bg_uid: 0,
         wait_cache,
         suspend_set,
+        base_suspends,
         frame_layouts,
         imported_fns,
         sm_frame_ptr: None,
@@ -4592,6 +4606,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         bg_uid: 0,
         wait_cache,
         suspend_set,
+        base_suspends,
         frame_layouts,
         imported_fns,
         sm_frame_ptr: Some(frame_param),
@@ -5379,9 +5394,7 @@ fn count_suspension_expr(
         // Direct call to a suspending user-defined fn (without explicit `wait`) = 1 suspension point.
         Expr::Call(c) => {
             if let Expr::Ident(name, _) = &c.callee {
-                if suspend_set.contains(name.as_str())
-                    && !is_base_suspension_intrinsic(name.as_str())
-                {
+                if is_suspending_member(suspend_set, name.as_str()) {
                     // This suspending call needs a poll-loop state.
                     return 1 + c
                         .args
@@ -8705,6 +8718,19 @@ fn is_sleep_call(expr: &Expr) -> bool {
     matches!(expr, Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleep"))
 }
 
+/// The ONE authoritative "does this call name genuinely suspend?" formula: a name present in the
+/// provided suspend set that is NOT itself a base suspension intrinsic (those have their own
+/// `lower_expr` arms and are not user state-machine wrappers).
+///
+/// This is the single home of the membership formula so it is never re-derived. Every consumer
+/// keys it on ITS OWN set — the router keys it on the with-promotions `Cg::suspend_set`, the
+/// block_on-fallback guard keys it on the pre-promotion `Cg::base_suspends` — so the SET each
+/// consumer passes stays the intentional difference while the FORMULA stays single-source (per
+/// `.claude/rules/authoritative-derivation.md`: thread the one predicate, never a second twin).
+fn is_suspending_member(set: &SuspendSet, name: &str) -> bool {
+    set.contains(name) && !is_base_suspension_intrinsic(name)
+}
+
 /// True when `expr` is a direct call to a user-defined suspending function (not a may-block intrinsic).
 ///
 /// v0.3-M6 P1-1 (site 4): also recognizes the UFCS twin — `value.method(args)` on a
@@ -8718,12 +8744,37 @@ fn is_direct_suspending_call(
 ) -> bool {
     if let Expr::Call(c) = expr {
         if let Expr::Ident(name, _) = &c.callee {
-            return suspend_set.contains(name.as_str())
-                && !is_base_suspension_intrinsic(name.as_str());
+            return is_suspending_member(suspend_set, name.as_str());
         }
         return false;
     }
     ynz_typeck::expr_is_ufcs_suspending_call(expr, expr_types, &|n| suspend_set.contains(n))
+}
+
+/// True when reaching the SYNCHRONOUS call fallback (the `block_on`-driven wrapper path in
+/// `lower_expr`'s `Expr::Call` arm) with `callee_name` is a codegen bug rather than a legal drive.
+///
+/// The synchronous fallback drives a callee's state machine to completion via `RUNTIME.block_on`
+/// inside the callee's wrapper. That is only sound for a NON-suspending callee: a suspending callee
+/// must instead be driven by inline poll-and-yield (`lower_sm_stmt_with_wait`) so the enclosing
+/// state machine keeps a single runtime, never a nested `block_on` from inside a Tokio worker
+/// thread. Post-v0.3-M6 P1-1 the may-block classification routes every suspending call (plain AND
+/// UFCS) through the inline-poll path, so a suspending callee reaching this fallback means the
+/// caller was silently mis-classified as non-suspending — the exact deadlock/panic
+/// `ynz-runtime`'s entrypoint-driver invariant forbids.
+///
+/// Shares the ONE authoritative membership formula with the call router via `is_suspending_member`
+/// (never a second name-keyed derivation): a name in the GENUINE suspend set that is not itself a
+/// base suspension intrinsic (those have their own `lower_expr` arms and are not user state-machine
+/// wrappers). This guard differs from the router ONLY in the set it passes — the formula is identical
+/// because both call the same helper.
+///
+/// `genuine_suspend_set` MUST be the pre-CPU-promotion set (`Cg::base_suspends`), never the
+/// with-promotions `Cg::suspend_set`: a CPU-spike host is added to the latter in auto-parallel mode
+/// but is driven synchronously by the poll-join mechanism, not a block_on async drive, so it is not
+/// a block_on escape-hatch case.
+fn sync_call_fallback_is_codegen_bug(callee_name: &str, genuine_suspend_set: &SuspendSet) -> bool {
+    is_suspending_member(genuine_suspend_set, callee_name)
 }
 
 // The CPU-parallel join helpers fire for any function the typeck `cpu_promotion_query` promotes
@@ -15064,6 +15115,36 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     lower_errors_capable_call_result(cg, final_result, "__testFallibleAsync")
                 }
                 name => {
+                    // v0.3-M6 Phase 2 (P4-3): hard-error guard closing the block_on escape hatch.
+                    // A suspending callee reaching this SYNCHRONOUS fallback would drive its state
+                    // machine via `RUNTIME.block_on` inside the callee's wrapper. Post-P1-1 the
+                    // may-block classification routes every suspending call through the inline
+                    // poll-and-yield path (`lower_sm_stmt_with_wait`), so a suspending callee here
+                    // means the caller was silently mis-classified as non-suspending — a codegen
+                    // bug that deadlocks or panics per `ynz-runtime`'s entrypoint-driver invariant.
+                    // Keyed on `base_suspends` (the genuine may-block set), NOT `suspend_set`: in
+                    // auto-parallel mode `suspend_set` also carries CPU-spike-host names, and a CPU
+                    // host is driven synchronously by the poll-join mechanism at the top level (the
+                    // designed path), never a block_on async drive — so it must not trip this guard.
+                    // Mirrors the sibling recursive-path hard error in
+                    // `emit_suspending_call_heap_boxed`.
+                    if sync_call_fallback_is_codegen_bug(name, cg.base_suspends) {
+                        return Err(format!(
+                            "codegen bug: suspending callee `{name}` reached the synchronous call \
+                             fallback — a suspending call must be driven by inline poll-and-yield, \
+                             not a block_on wrapper drive. \
+                             WHAT: the caller was not classified as a state machine but reaches a \
+                             suspending call. \
+                             WHAT INSTEAD: wrap the call in a `wait`/`background` context so the \
+                             caller becomes a state machine, or file a compiler bug if the caller \
+                             looks correctly classified. \
+                             WHY: a synchronous block_on drive from inside the async runtime \
+                             deadlocks or panics (ynz-runtime's entrypoint-driver invariant). \
+                             The may-block classification should have routed this through \
+                             lower_sm_stmt_with_wait before codegen."
+                        ));
+                    }
+
                     // Prefer the direct name. If not found, check for an aliased import
                     // (`import { getValue as fetchVal }`) — the LLVM module declares the
                     // function under the original exported name, not the local alias.
@@ -15084,12 +15165,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             .unwrap_or_else(|| name.to_string())
                     };
 
-                    // v0.3-M2 P7: suspending calls inside SM resume bodies are handled by
-                    // lower_sm_stmt_with_wait (inline-poll-and-yield) BEFORE reaching lower_expr.
-                    // If a suspending call reaches here, the caller is a non-SM function calling
-                    // a suspending wrapper — invoke the wrapper fn directly (it drives the SM
-                    // internally via RUNTIME.block_on). This path should only be reached from
-                    // non-SM callers; SM callers route through lower_sm_stmt_with_wait instead.
+                    // The direct wrapper-fn invocation below serves ONLY callees that do not
+                    // genuinely suspend: plain non-suspending functions, and CPU-spike hosts
+                    // (present in `suspend_set` under auto-parallel promotion but driven
+                    // synchronously by the poll-join mechanism, not a block_on async drive). A
+                    // genuinely-suspending callee never reaches this invoke — the
+                    // `sync_call_fallback_is_codegen_bug` guard above errors it out first, because
+                    // a suspending call must be driven by inline poll-and-yield
+                    // (`lower_sm_stmt_with_wait`), never a nested block_on from inside a runtime
+                    // worker thread. Suspending calls inside SM resume bodies are likewise routed
+                    // through `lower_sm_stmt_with_wait` before ever reaching `lower_expr`.
                     //
                     // Per AC 9: no ynz_rt_run_entrypoint inside any ynz_sm_*_resume.
                     // The program-entry driver lives in the WRAPPER function only; this path
@@ -21362,6 +21447,47 @@ mod tests {
         assert!(
             function_contains_wait(&block),
             "block containing an if-nested Expr::Wait must return true"
+        );
+    }
+
+    // v0.3-M6 Phase 2 (P4-3): RED fixture for the block_on-fallback hard-error guard.
+    //
+    // The guarded path (`lower_expr`'s `Expr::Call` synchronous fallback) is UNREACHABLE from real
+    // Yinz source post-Phase-1: the may-block classification routes every suspending call through
+    // the inline poll-and-yield path (`lower_sm_stmt_with_wait`), so no real program reaches the
+    // synchronous `block_on` wrapper drive with a suspending callee. This test therefore constructs
+    // the deliberately-miscategorized condition at the internal level — a caller reaching the
+    // fallback with a callee that IS in the effective suspend set — and asserts the guard's firing
+    // predicate (`sync_call_fallback_is_codegen_bug`, the exact boolean that gates the hard-error
+    // `return Err`) fires, while normal non-suspending call paths and base suspension intrinsics
+    // do NOT trip it (the in-unit false-positive check).
+    #[test]
+    fn suspending_callee_trips_block_on_fallback_guard() {
+        use super::sync_call_fallback_is_codegen_bug;
+
+        // RED: a suspending callee reaching the synchronous block_on fallback is a codegen bug.
+        let mut suspend_set: HashSet<String> = HashSet::new();
+        suspend_set.insert("fetchData".to_string());
+        assert!(
+            sync_call_fallback_is_codegen_bug("fetchData", &suspend_set),
+            "a suspending callee reaching the block_on sync fallback must be flagged a codegen bug"
+        );
+
+        // False-positive guard: a normal non-suspending callee (the `wait fn()` / UFCS path over a
+        // purely CPU-bound helper) must NOT trip the guard.
+        assert!(
+            !sync_call_fallback_is_codegen_bug("cpuHelper", &suspend_set),
+            "a non-suspending callee must not trip the block_on fallback guard"
+        );
+
+        // A base suspension intrinsic (`sleep`) is handled by its own `lower_expr` arm and is not a
+        // user state-machine wrapper — it must be excluded even when name-present, via the shared
+        // `is_suspending_member` helper's `!is_base_suspension_intrinsic` exclusion.
+        let mut with_sleep: HashSet<String> = HashSet::new();
+        with_sleep.insert("sleep".to_string());
+        assert!(
+            !sync_call_fallback_is_codegen_bug("sleep", &with_sleep),
+            "a base suspension intrinsic must be excluded from the block_on fallback guard"
         );
     }
 }

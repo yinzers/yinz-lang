@@ -2134,3 +2134,121 @@ covers a hook-author resolver fix + a rule-author corpse). Until that lands, KEE
 R1 = guard diagnostic reroute (typeck WHAT/WHAT-INSTEAD/WHY) + narrative overclaim corrections.
 R2 = extend guard to UFCS + generic call forms (one shared helper). R3 = full-slot completion sweep
 (in flight). All original 1d exit criteria + defects A/C were verified MET before the fix-loop began.
+
+### 2026-07-10 — Phase 2 — P4-3: block_on-fallback hard-error guard (DONE)
+- **session-id:** `executor-2026-07-10-m6-phase2`
+- **What landed (all in `crates/ynz-codegen/src/emit.rs`):**
+  1. **Pure predicate** `sync_call_fallback_is_codegen_bug(callee_name, genuine_suspend_set)` — co-located
+     with its authoritative sibling `is_direct_suspending_call`. Mirrors that predicate's membership test:
+     `genuine_suspend_set.contains(name) && !is_base_suspension_intrinsic(name)` (the ONE authoritative
+     suspend classifier, threaded — never a second name-keyed derivation, per authoritative-derivation.md).
+  2. **Hard-error guard** at the head of `lower_expr`'s `Expr::Call` `name =>` synchronous-fallback arm
+     (the block_on-driven wrapper path, plan's `emit.rs:15122-15137` region, now shifted post-Phase-1).
+     `return Err(format!("codegen bug: suspending callee ... "))` in WHAT/WHAT-INSTEAD/WHY shape, mirroring
+     the sibling recursive-path hard error in `emit_suspending_call_heap_boxed` EXACTLY (a codegen-internal
+     `Err(String)` invariant assertion — not a user-facing diagnostic emitted through the diagnostics system).
+  3. **New `Cg` field `base_suspends: &'g SuspendSet`** — threaded to all three `Cg` construction sites
+     (lower_function straight-line; `cg_resume` SM path; mono-generic = `empty_suspend_set()`). The guard keys
+     on `base_suspends`, NOT `suspend_set`. See the paper-trace below.
+- **PAPER-TRACE (false positive caught + fixed during the corpus sweep):** first guard draft keyed on
+  `cg.suspend_set`. FULL suite → 2 failures (`corpus_byte_identical_across_auto_parallel_modes` +
+  `v03_m3d_cpu_child_panic_fires_byte_identical`); many `v0_3_m3d_*` fixtures went MODE-DIVERGENT (default/
+  auto-parallel exit 1, sequential exit 0). Direct run of `v0_3_m3d_nested_group_with_suspending_callee.ynz`:
+  guard fired on callee `combine`. Observed = default exit 1 (guard err); Expected = byte-identical to
+  sequential = `19810`; Residual = `combine` is a **CPU-spike-host** (a pure-CPU parallel host, no wait/sleep),
+  promoted into `suspend_set` ONLY in auto-parallel mode (`suspend_set` = `suspends_set_arg` = the
+  WITH-CPU-PROMOTIONS set; `base_suspends` = `base_suspends_arg` = the genuine pre-promotion may-block∪imported
+  set, per emit_artifact lines 918/926). A CPU-spike host is driven **synchronously** by the poll-join
+  mechanism at the top level (the *designed* path — runtime.rs's "non-entry wrapper functions called from
+  non-state-machine contexts"), never a block_on async drive, so it must NOT trip the guard. Root cause:
+  guard keyed on the wrong set. Fix: thread `base_suspends` (genuine async-suspension set) to `Cg` and key on
+  it. Re-verified: `v0_3_m3d_nested_group_with_suspending_callee.ynz` default mode → `19810` (byte-identical).
+- **RED fixture (guard's own regression):** unit test `emit::tests::suspending_callee_trips_block_on_fallback_guard`
+  — constructs the deliberately-miscategorized condition at the internal level (the guarded path is UNREACHABLE
+  from real Yinz source post-Phase-1: the may-block classification routes every genuine suspending call through
+  `lower_sm_stmt_with_wait`, so no real program reaches the synchronous block_on fallback with a genuinely-
+  suspending callee). Asserts the firing predicate fires on a suspending callee AND does NOT fire on a normal
+  non-suspending callee (in-unit false-positive check) NOR on a base suspension intrinsic (`sleep`, mirroring
+  `is_direct_suspending_call`'s `!is_base_suspension_intrinsic` exclusion).
+- **Registry `[[diagnostic_template]]` check (Step 2) — determination recorded:** the plan's sibling site
+  (`emit.rs:11162`, now `emit_suspending_call_heap_boxed`) uses **NO** `diagnostic_template` — it is a
+  codegen-internal `return Err(format!("codegen bug: ..."))` invariant assertion, not a user-facing three-part
+  diagnostic emitted through the diagnostics system. Per `feature-registry.md` carve-out (mirrored by the note
+  at `registry/features.toml` ~L1676-1681 for the can't-infer per-site codegen/check strings), per-site codegen-bug
+  messages stay in code, NOT the registry. **Mirroring the sibling exactly ⇒ NO template.** Reuse: none applicable.
+  Add: none. **No registry change, therefore no FRAGO** (the plan's "recorded via FRAGO if new" is conditional
+  on a NEW template; none was added). This satisfies the Feature Registry Entries note at plan L1898-1900 and the
+  milestone's "no new user-facing language-surface" claim (plan L1905-1906).
+- **Demo & Error Gallery disposition (plan-invariants) — N/A, with reason:** the guard is structurally UNREACHABLE
+  from real Yinz source post-Phase-1 (a codegen-internal invariant assertion the may-block classification prevents
+  from firing on real source). Per plan L1591-1593's explicit allowance, the gallery obligation is N/A; coverage is
+  the internal regression fixture (the unit test above). No `examples/primantis-orders/` change this phase.
+- **GATES (FULL phase-boundary, all GREEN):**
+  - `docker compose run --rm dev cargo nextest run --workspace` → **exit 0 — 2346 passed / 0 failed / 6 skipped**
+    (3 slow: the two `cross_impl_consistency` corpus tests + fmt idempotency). This run IS the corpus-wide
+    **false-positive sweep** (step 4): zero normal `wait x.method()` / `wait fn()` path trips the guard.
+  - `docker compose run --rm dev cargo clippy --workspace -- -D warnings` → **exit 0**, clean.
+  - `docker compose run --rm dev cargo fmt --all --check` → **exit 0**, clean.
+  - No `#[allow]`, no `--no-verify`, no weakened test. No known-flake re-runs needed (none tripped).
+- **Design-doc alignment:** this guard is what keeps `IMP-no-function-coloring.md`'s no-bridge invariant ENFORCED
+  (not merely documented) — a genuinely-suspending callee mis-classified as non-suspending is now a compile-time
+  hard error instead of a silent block_on bridge. No contradiction with the design doc surfaced.
+- **Deviations surfaced:** none. (The `base_suspends`-vs-`suspend_set` keying was an in-phase implementation
+  correctness fix caught by the corpus sweep, not a plan-vs-reality divergence — the plan's escape-hatch target is
+  the genuine block_on async-suspension path, which `base_suspends` is exactly.)
+- **Recorded decisions:** (D-a) guard keyed on `base_suspends` (genuine may-block set), not `suspend_set`
+  (with-CPU-promotions) — reason: CPU-spike hosts are driven synchronously by the poll-join mechanism, not
+  block_on; keying on the promotions set is a false positive proven by the corpus sweep. (D-b) RED fixture is an
+  internal unit test on the firing predicate, not a `.ynz` source fixture — reason: the path is unreachable from
+  real source post-Phase-1 (plan-sanctioned).
+- Did NOT commit/stage — conductor seals the boundary. Session-id appended to `plan.md` frontmatter in the same action.
+
+### 2026-07-10 — Phase 2 fix-up — 3 review cleanups (DONE)
+- **session-id:** `executor-2026-07-10-m6-phase2-fixup`
+- **Scope:** three small review-cleanups on the REVIEWED-CLEAN Phase 2 guard (0 blockers across 3 lenses).
+  Guard logic unchanged — no re-architecture. All in `crates/ynz-codegen/src/emit.rs`.
+- **Item 1 — stale comment fix (code-reviewer minor):** the comment above the direct wrapper-fn invoke
+  (the plan's `emit.rs:15156-15165` region) still said that path "drives the SM internally via
+  RUNTIME.block_on" — untrue post-guard, since a genuinely-suspending callee is errored out by
+  `sync_call_fallback_is_codegen_bug` before reaching it. Rewrote to durable phrasing: the direct invoke
+  now serves ONLY non-suspending callees + CPU-spike hosts (poll-join-driven), with the genuinely-suspending
+  case diverted to the guard above. Describes current-code properties, no changelog phrasing.
+- **Item 2 — formula extraction (authoritative-derivation + reusability):** the membership formula
+  `set.contains(name) && !is_base_suspension_intrinsic(name)` was literally re-spelled at FOUR sites. Extracted
+  to ONE content-neutral helper `fn is_suspending_member(set: &SuspendSet, name: &str) -> bool` (co-located
+  just above `is_direct_suspending_call`). Wired all four consumers to it, each passing its OWN set (the
+  intentional difference that stays): the router `is_direct_suspending_call` (on `suspend_set`), the guard
+  `sync_call_fallback_is_codegen_bug` (on `base_suspends`), plus the two inline copies in
+  `collect_callees_in_expr` and the suspension-point counter (both on `suspend_set`). The formula is now
+  genuinely single-source. Doc comments on both predicates updated to the "one formula, two sets, never a
+  second derivation" story; the guard's own unit-test comment updated to reference the shared helper.
+  **RECORDED DECISION (D-c):** the task scoped item 2 to the two named predicates ("have BOTH predicates call
+  it"), but the stated goal — "genuinely single-source" — and `authoritative-derivation.md` are only satisfied
+  if the helper is the SOLE home of the formula. Leaving the two OTHER inline copies (`collect_callees_in_expr`,
+  the point counter) would recreate the exact twin-derivation the rule kills. Wired all four; behavior-identical
+  and verified by the full suite (below). Reason on record so the slightly-beyond-"BOTH" scope is auditable.
+  **BEHAVIOR-IDENTICAL confirmed:** full nextest → 2346 passed / 0 failed, identical to the pre-fix-up baseline;
+  any count regression would have meant the extraction changed behavior. It did not.
+- **Item 3 — mono-generic v0.4-revisit cross-ref (code-reviewer minor #2):** the mono-generic `Cg` keys the
+  guard OFF via `base_suspends: empty_suspend_set()` (`emit.rs` ~L1519). Vacuously safe today — no generic
+  function in the current surface can reach a suspension point through a type parameter
+  (`ynz-typeck/src/check.rs:4214-4218`, gated on v0.4 generic+suspension). Added a code comment at that
+  `empty_suspend_set()` site noting the guard is vacuously-off for generic bodies and cross-referencing
+  `check.rs:4214`. Per the task's preferred route (code cross-ref + audit note, do NOT touch the check.rs
+  deferral's logic), recorded here rather than editing `check.rs`: **the block_on-fallback guard's mono-generic
+  empty-set assumption is a v0.4-revisit site**, alongside the existing kernel-guard deferral at
+  `check.rs:4220-4229` — when v0.4 threads may-block through generic instantiation (`GenericFnSig.suspends`),
+  the mono-generic `Cg`'s `base_suspends` must be populated from the real instantiated suspend set so this
+  guard fires correctly for suspending generic bodies. `check.rs` deferral logic untouched (comment/note only).
+- **GATES (FULL phase-boundary, all GREEN):**
+  - `docker compose run --rm dev cargo nextest run --workspace` → **exit 0 — 2346 passed / 0 failed / 6 skipped**
+    (3 slow: the two `cross_impl_consistency` corpus tests + fmt idempotency). No count delta from the Phase 2
+    baseline of 2346 → the helper extraction is behavior-identical. No known-flake re-runs needed (none tripped).
+  - `docker compose run --rm dev cargo clippy --workspace -- -D warnings` → **exit 0**, clean.
+  - `docker compose run --rm dev cargo fmt --all --check` → **exit 0**, clean.
+  - No `#[allow]`, no `--no-verify`, no weakened test.
+- **Deviations surfaced:** none. (Item 2's four-site wiring is a recorded scope decision D-c, not a plan-vs-reality
+  divergence — it completes the item's own stated single-source goal.)
+- **Touched:** `crates/ynz-codegen/src/emit.rs` (3 fixes + shared helper) + this `audit.md`. `check.rs` NOT touched
+  (item 3 recorded here per preferred route). Did NOT commit/stage — conductor seals. Session-id appended to
+  `plan.md` frontmatter in the same action.
