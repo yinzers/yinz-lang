@@ -1,0 +1,24 @@
+// v0.3-M6 P1-1 RED fixture (b): explicit `wait` DIRECTLY on a MethodCall node.
+// Correct behavior: `wait ship.crew()` is a suspension point — `entrypoint` inline-polls
+// the callee's state machine, prints 10, exits 0.
+// Pre-fix failure (the documented P1-1 mode): `is_direct_suspending_call` only matches
+// `Expr::Call` + `Ident`, so the `let c = wait ship.crew()` statement falls through to the
+// no-op wait arm and lowers as a synchronous call through the block_on wrapper while the
+// enclosing state machine is being polled on the runtime.
+
+shape Ship {
+  name: string
+  cargo: int
+}
+
+function crew(share self: Ship) -> int {
+  wait sleep(10)
+  return self.cargo
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  const ship: Ship = { name: `Mon`, cargo: 10 }
+  const c = wait ship.crew()
+  print(c.toString())
+}

@@ -250,7 +250,7 @@ pub fn build_frame_layouts_with_resolver(
     for item in &typed.module.items {
         let Item::Function(f) = item else { continue };
         if f.generics.is_empty() && suspend_set.contains(&f.name) {
-            let callees = collect_suspending_callees(&f.body, suspend_set);
+            let callees = collect_suspending_callees(&f.body, suspend_set, &typed.expr_types);
             direct_children.insert(f.name.clone(), callees);
         }
     }
@@ -544,40 +544,43 @@ fn cpu_slot_reserve_slots(layout: &FrameLayout) -> usize {
 fn collect_suspending_callees(
     block: &ynz_ast::nodes::Block,
     suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> Vec<String> {
     let mut callees: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    collect_callees_in_block(block, suspend_set, &mut callees, &mut seen);
+    collect_callees_in_block(block, suspend_set, expr_types, &mut callees, &mut seen);
     callees
 }
 
 fn collect_callees_in_block(
     block: &ynz_ast::nodes::Block,
     suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     out: &mut Vec<String>,
     seen: &mut HashSet<String>,
 ) {
     for stmt in &block.stmts {
-        collect_callees_in_stmt(stmt, suspend_set, out, seen);
+        collect_callees_in_stmt(stmt, suspend_set, expr_types, out, seen);
     }
 }
 
 fn collect_callees_in_stmt(
     stmt: &Stmt,
     suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     out: &mut Vec<String>,
     seen: &mut HashSet<String>,
 ) {
     match stmt {
         Stmt::Expr(e) | Stmt::Return { value: Some(e), .. } => {
-            collect_callees_in_expr(e, suspend_set, out, seen)
+            collect_callees_in_expr(e, suspend_set, expr_types, out, seen)
         }
         Stmt::Let { value: e, .. } | Stmt::Assign { value: e, .. } => {
-            collect_callees_in_expr(e, suspend_set, out, seen)
+            collect_callees_in_expr(e, suspend_set, expr_types, out, seen)
         }
         Stmt::FieldAssign { target, value, .. } => {
-            collect_callees_in_expr(target, suspend_set, out, seen);
-            collect_callees_in_expr(value, suspend_set, out, seen);
+            collect_callees_in_expr(target, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(value, suspend_set, expr_types, out, seen);
         }
         Stmt::IndexAssign {
             receiver,
@@ -585,21 +588,21 @@ fn collect_callees_in_stmt(
             value,
             ..
         } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen);
-            collect_callees_in_expr(index, suspend_set, out, seen);
-            collect_callees_in_expr(value, suspend_set, out, seen);
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(index, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(value, suspend_set, expr_types, out, seen);
         }
         Stmt::If { cond, body, .. } => {
-            collect_callees_in_expr(cond, suspend_set, out, seen);
-            collect_callees_in_block(body, suspend_set, out, seen);
+            collect_callees_in_expr(cond, suspend_set, expr_types, out, seen);
+            collect_callees_in_block(body, suspend_set, expr_types, out, seen);
         }
         Stmt::While { cond, body, .. } => {
-            collect_callees_in_expr(cond, suspend_set, out, seen);
-            collect_callees_in_block(body, suspend_set, out, seen);
+            collect_callees_in_expr(cond, suspend_set, expr_types, out, seen);
+            collect_callees_in_block(body, suspend_set, expr_types, out, seen);
         }
         Stmt::For { iter, body, .. } => {
-            collect_callees_in_expr(iter, suspend_set, out, seen);
-            collect_callees_in_block(body, suspend_set, out, seen);
+            collect_callees_in_expr(iter, suspend_set, expr_types, out, seen);
+            collect_callees_in_block(body, suspend_set, expr_types, out, seen);
         }
         Stmt::Match {
             scrutinee,
@@ -607,12 +610,12 @@ fn collect_callees_in_stmt(
             else_arm,
             ..
         } => {
-            collect_callees_in_expr(scrutinee, suspend_set, out, seen);
+            collect_callees_in_expr(scrutinee, suspend_set, expr_types, out, seen);
             for arm in arms {
-                collect_callees_in_block(&arm.body, suspend_set, out, seen);
+                collect_callees_in_block(&arm.body, suspend_set, expr_types, out, seen);
             }
             if let Some(b) = else_arm {
-                collect_callees_in_block(b, suspend_set, out, seen);
+                collect_callees_in_block(b, suspend_set, expr_types, out, seen);
             }
         }
         Stmt::Return { value: None, .. } => {}
@@ -622,6 +625,7 @@ fn collect_callees_in_stmt(
 fn collect_callees_in_expr(
     expr: &Expr,
     suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     out: &mut Vec<String>,
     seen: &mut HashSet<String>,
 ) {
@@ -637,61 +641,80 @@ fn collect_callees_in_expr(
             }
             // Recurse into args
             for arg in &c.args {
-                collect_callees_in_expr(arg, suspend_set, out, seen);
+                collect_callees_in_expr(arg, suspend_set, expr_types, out, seen);
             }
         }
-        Expr::Wait(inner, _) => collect_callees_in_expr(inner, suspend_set, out, seen),
+        Expr::Wait(inner, _) => collect_callees_in_expr(inner, suspend_set, expr_types, out, seen),
         Expr::Background(inner, _) => {
             // background calls don't embed — they get their own alloc via ynz_rt_spawn.
             let _ = inner;
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            collect_callees_in_expr(lhs, suspend_set, out, seen);
-            collect_callees_in_expr(rhs, suspend_set, out, seen);
+            collect_callees_in_expr(lhs, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(rhs, suspend_set, expr_types, out, seen);
         }
-        Expr::UnaryOp { operand, .. } => collect_callees_in_expr(operand, suspend_set, out, seen),
-        Expr::MethodCall { receiver, args, .. } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen);
+        Expr::UnaryOp { operand, .. } => {
+            collect_callees_in_expr(operand, suspend_set, expr_types, out, seen)
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            // v0.3-M6 P1-1 (site 3): a UFCS suspending call embeds the resolved callee's
+            // sub-frame exactly like its Call-form twin — classified via the ONE
+            // authoritative `ufcs_method_call_suspends` arm through the shared typeck
+            // helper (never a second name-keyed derivation).
+            if ynz_typeck::expr_is_ufcs_suspending_call(expr, expr_types, &|n| {
+                suspend_set.contains(n)
+            }) && seen.insert(method.clone())
+            {
+                out.push(method.clone());
+            }
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen);
             for a in args {
-                collect_callees_in_expr(a, suspend_set, out, seen);
+                collect_callees_in_expr(a, suspend_set, expr_types, out, seen);
             }
         }
         Expr::FieldAccess { receiver, .. } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen)
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen)
         }
         Expr::IndexAccess {
             receiver, index, ..
         } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen);
-            collect_callees_in_expr(index, suspend_set, out, seen);
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(index, suspend_set, expr_types, out, seen);
         }
         Expr::StructLit { fields, .. } => {
             for f in fields {
-                collect_callees_in_expr(&f.value, suspend_set, out, seen);
+                collect_callees_in_expr(&f.value, suspend_set, expr_types, out, seen);
             }
         }
         Expr::ArrayLit { elements, .. } => {
             for e in elements {
-                collect_callees_in_expr(e, suspend_set, out, seen);
+                collect_callees_in_expr(e, suspend_set, expr_types, out, seen);
             }
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                collect_callees_in_expr(k, suspend_set, out, seen);
-                collect_callees_in_expr(v, suspend_set, out, seen);
+                collect_callees_in_expr(k, suspend_set, expr_types, out, seen);
+                collect_callees_in_expr(v, suspend_set, expr_types, out, seen);
             }
         }
         Expr::InterpolatedString(parts, _) => {
             for p in parts {
                 if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
-                    collect_callees_in_expr(e, suspend_set, out, seen);
+                    collect_callees_in_expr(e, suspend_set, expr_types, out, seen);
                 }
             }
         }
         Expr::PostfixOp { receiver, .. } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen)
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen)
         }
-        Expr::Is { expr: inner, .. } => collect_callees_in_expr(inner, suspend_set, out, seen),
+        Expr::Is { expr: inner, .. } => {
+            collect_callees_in_expr(inner, suspend_set, expr_types, out, seen)
+        }
         // Leaf nodes
         _ => {}
     }
@@ -5151,7 +5174,17 @@ fn count_suspension_expr(
             // `h.send(v)` / `h.receive()`) consumes ONE continuation state — classified via
             // the authoritative `channel_method_suspends` (through the shared typeck
             // predicate), exactly matching the states `lower_sm_stmt_with_wait` consumes.
-            let own = usize::from(ynz_typeck::expr_is_conduit_suspend(expr, expr_types));
+            // v0.3-M6 P1-1 (site 5): a UFCS suspending call (`ship.tally()`) consumes ONE
+            // poll-loop state exactly like its Call-form twin — the ONE authoritative
+            // `ufcs_method_call_suspends` arm, through the shared helper. (The Wait arm
+            // above returns 1 without recursing, so `wait x.method()` is never
+            // double-counted.)
+            let own = usize::from(
+                ynz_typeck::expr_is_conduit_suspend(expr, expr_types)
+                    || ynz_typeck::expr_is_ufcs_suspending_call(expr, expr_types, &|n| {
+                        suspend_set.contains(n)
+                    }),
+            );
             own + count_suspension_expr(receiver, suspend_set, expr_types)
                 + args
                     .iter()
@@ -5174,7 +5207,7 @@ fn count_suspension_expr(
 /// (authoritative-derivation: never a per-site re-derived disjunct).
 fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
     stmt_contains_wait(stmt)
-        || stmt_contains_suspending_call(stmt, cg.suspend_set)
+        || stmt_contains_suspending_call(stmt, cg.suspend_set, &cg.typed.expr_types)
         || ynz_typeck::stmt_contains_conduit_suspend(stmt, &cg.typed.expr_types)
 }
 
@@ -5183,10 +5216,14 @@ fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
 /// Used alongside `stmt_contains_wait` to detect suspension points that don't have an
 /// explicit `wait` token (transitive case). Background expressions are excluded because
 /// they spawn independently and don't suspend the current function.
-fn stmt_contains_suspending_call(stmt: &Stmt, suspend_set: &SuspendSet) -> bool {
+fn stmt_contains_suspending_call(
+    stmt: &Stmt,
+    suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
+) -> bool {
     // Delegates to the typeck admission module so codegen's spike gate and the `parallel_groups`
     // inlay-hint pass read one definition of "contains a suspending call".
-    ynz_typeck::cpu_admission::stmt_contains_suspending_call_deep(stmt, suspend_set)
+    ynz_typeck::cpu_admission::stmt_contains_suspending_call_deep(stmt, suspend_set, expr_types)
 }
 
 /// Reload parameters and crossing locals from their frame slots into allocas.
@@ -6345,7 +6382,9 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         }
 
         // `wait suspendingCallee(args)` — explicit wait on a user SM call.
-        Stmt::Expr(Expr::Wait(inner, _)) if is_direct_suspending_call(inner, cg.suspend_set) => {
+        Stmt::Expr(Expr::Wait(inner, _))
+            if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) =>
+        {
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -6363,7 +6402,9 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
 
         // Direct call to suspending callee without explicit `wait` (transitive case).
         // No explicit `wait` token — the inference model drives inline-poll-and-yield.
-        Stmt::Expr(inner) if is_direct_suspending_call(inner, cg.suspend_set) => {
+        Stmt::Expr(inner)
+            if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) =>
+        {
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -6429,7 +6470,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
             name,
             value: Expr::Wait(inner, _),
             ..
-        } if is_direct_suspending_call(inner, cg.suspend_set) => {
+        } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
@@ -6461,7 +6502,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         // `let name = suspendingCallee(args)` — no explicit `wait`, bind the return value.
         Stmt::Let {
             name, value: inner, ..
-        } if is_direct_suspending_call(inner, cg.suspend_set) => {
+        } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
@@ -6537,7 +6578,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         // `return suspendingCallee(args)` from a SM function — inline-poll + store return + Ready.
         Stmt::Return {
             value: Some(inner), ..
-        } if is_direct_suspending_call(inner, cg.suspend_set) => {
+        } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -7478,14 +7519,13 @@ fn lower_sm_match<'ctx, 'g>(
         // fires; the plain `lower_stmt` path below has none. The arm body is itself a
         // straight-line block, so a direct group there is detected with
         // `stmt_block_has_direct_cpu_group`.
-        let arm_routes_to_sm = function_contains_wait(&arm.body)
-            || arm
-                .body
-                .stmts
-                .iter()
-                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set))
-            || (cg.m3d_spike
-                && stmt_block_has_direct_cpu_group(&arm.body.stmts, cg.suspend_set, cg.typed));
+        let arm_routes_to_sm =
+            function_contains_wait(&arm.body)
+                || arm.body.stmts.iter().any(|s| {
+                    stmt_contains_suspending_call(s, cg.suspend_set, &cg.typed.expr_types)
+                })
+                || (cg.m3d_spike
+                    && stmt_block_has_direct_cpu_group(&arm.body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
         cg.sm_scope_depth += 1;
         if arm_routes_to_sm {
@@ -7531,7 +7571,7 @@ fn lower_sm_match<'ctx, 'g>(
             || else_body
                 .stmts
                 .iter()
-                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set))
+                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set, &cg.typed.expr_types))
             || (cg.m3d_spike
                 && stmt_block_has_direct_cpu_group(&else_body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
@@ -7669,12 +7709,17 @@ fn load_sm_return_value_typed<'ctx>(
 /// Used to pass the callee name to `bind_sm_result_and_flush` so it can detect
 /// `-> number errors` wide-EC returns and apply copy-on-bind.
 fn callee_name_from_call_expr(expr: &Expr) -> Option<&str> {
-    if let Expr::Call(c) = expr {
-        if let Expr::Ident(name, _) = &c.callee {
-            return Some(name.as_str());
-        }
+    match expr {
+        Expr::Call(c) => match &c.callee {
+            Expr::Ident(name, _) => Some(name.as_str()),
+            _ => None,
+        },
+        // v0.3-M6 P1-1 (site 7): UFCS identity — the resolved callee of
+        // `value.method(args)` IS the function named `method` (typeck enforces the
+        // first-parameter match), so the same name feeds the EC-return detection.
+        Expr::MethodCall { method, .. } => Some(method.as_str()),
+        _ => None,
     }
-    None
 }
 
 /// Bind a suspending call's return value to a named local alloca.
@@ -8430,14 +8475,24 @@ fn is_sleep_call(expr: &Expr) -> bool {
 }
 
 /// True when `expr` is a direct call to a user-defined suspending function (not a may-block intrinsic).
-fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
+///
+/// v0.3-M6 P1-1 (site 4): also recognizes the UFCS twin — `value.method(args)` on a
+/// shape-typed receiver whose resolved callee suspends — classified via the ONE
+/// authoritative `ufcs_method_call_suspends` arm through the shared typeck helper
+/// (never a second name-keyed derivation).
+fn is_direct_suspending_call(
+    expr: &Expr,
+    suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
+) -> bool {
     if let Expr::Call(c) = expr {
         if let Expr::Ident(name, _) = &c.callee {
             return suspend_set.contains(name.as_str())
                 && !is_base_suspension_intrinsic(name.as_str());
         }
+        return false;
     }
-    false
+    ynz_typeck::expr_is_ufcs_suspending_call(expr, expr_types, &|n| suspend_set.contains(n))
 }
 
 // The CPU-parallel join helpers fire for any function the typeck `cpu_promotion_query` promotes
@@ -8721,8 +8776,13 @@ fn spike_cpu_candidates(
     // When the authority declines (`None`), the whole function lowers sequentially, byte-
     // identical to `--no-auto-parallel`. When it admits, this function maps the admitted group
     // to its representative (first) callee — an EXTRACTION step, not a re-decision.
-    let group = ynz_typeck::cpu_admission::admitted_cpu_group(f, suspend_set, &supported)?;
-    spike_group_representative_callee(f, &group, suspend_set, &supported)
+    let group = ynz_typeck::cpu_admission::admitted_cpu_group(
+        f,
+        suspend_set,
+        &supported,
+        &typed.expr_types,
+    )?;
+    spike_group_representative_callee(f, &group, suspend_set, &supported, &typed.expr_types)
 }
 
 /// The admitted FUSED (mixed CPU+I/O) top-level group for `f`, or `None` — v0.3-M3g Phase 3.
@@ -8741,7 +8801,7 @@ fn fused_admitted_group(
     suspend_set: &SuspendSet,
 ) -> Option<ynz_typeck::cpu_admission::AdmittedFusedGroup> {
     let supported = cpu_supported_callees(typed);
-    ynz_typeck::cpu_admission::admitted_fused_group(f, suspend_set, &supported)
+    ynz_typeck::cpu_admission::admitted_fused_group(f, suspend_set, &supported, &typed.expr_types)
 }
 
 /// Map an admitted CPU group to its representative (first) callee name by navigating the group's
@@ -8756,13 +8816,14 @@ fn spike_group_representative_callee(
     group: &ynz_typeck::cpu_admission::AdmittedCpuGroup,
     suspend_set: &SuspendSet,
     supported: &std::collections::HashSet<String>,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> Option<String> {
     let mut block: &[Stmt] = &f.body.stmts;
     for step in &group.block_path {
         let stmt = block.get(step.stmt_index)?;
         block = *spike_nested_blocks(stmt).get(step.block_index)?;
     }
-    spike_pair_in_block(block, suspend_set, supported)
+    spike_pair_in_block(block, suspend_set, supported, expr_types)
 }
 
 /// Find the first admissible adjacent CPU pair in a single straight-line statement list and
@@ -8778,8 +8839,14 @@ fn spike_pair_in_block(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> Option<String> {
-    ynz_typeck::cpu_admission::pair_representative_callee(stmts, suspend_set, cpu_supported_callees)
+    ynz_typeck::cpu_admission::pair_representative_callee(
+        stmts,
+        suspend_set,
+        cpu_supported_callees,
+        expr_types,
+    )
 }
 
 /// The statement indices of the single admissible CPU group in one straight-line block, or
@@ -8807,8 +8874,14 @@ fn spike_cpu_group_member_indices(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> Option<Vec<usize>> {
-    ynz_typeck::cpu_admission::cpu_group_member_indices(stmts, suspend_set, cpu_supported_callees)
+    ynz_typeck::cpu_admission::cpu_group_member_indices(
+        stmts,
+        suspend_set,
+        cpu_supported_callees,
+        expr_types,
+    )
 }
 
 /// The nested straight-line blocks (`if`/`match` arm bodies) reachable directly inside `stmts`,
@@ -8836,11 +8909,13 @@ fn count_cpu_groups_all_depths(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> usize {
     ynz_typeck::cpu_admission::count_cpu_groups_all_depths(
         stmts,
         suspend_set,
         cpu_supported_callees,
+        expr_types,
     )
 }
 
@@ -8861,20 +8936,23 @@ fn spike_cpu_group_member_count(
         stmts: &[Stmt],
         suspend_set: &SuspendSet,
         supported: &std::collections::HashSet<String>,
+        expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     ) -> Option<usize> {
-        if let Some(members) = spike_cpu_group_member_indices(stmts, suspend_set, supported) {
+        if let Some(members) =
+            spike_cpu_group_member_indices(stmts, suspend_set, supported, expr_types)
+        {
             return Some(members.len());
         }
         for stmt in stmts {
             for block in spike_nested_blocks(stmt) {
-                if let Some(n) = group_size_in_block(block, suspend_set, supported) {
+                if let Some(n) = group_size_in_block(block, suspend_set, supported, expr_types) {
                     return Some(n);
                 }
             }
         }
         None
     }
-    group_size_in_block(&f.body.stmts, suspend_set, &supported).unwrap_or(0)
+    group_size_in_block(&f.body.stmts, suspend_set, &supported, &typed.expr_types).unwrap_or(0)
 }
 
 /// True when a statement (an `if`/`match` arm) directly contains an admissible CPU group at any
@@ -8891,7 +8969,7 @@ fn spike_cpu_group_member_count(
 fn stmt_contains_cpu_group(stmt: &Stmt, suspend_set: &SuspendSet, typed: &TypedModule) -> bool {
     let supported = cpu_supported_callees(typed);
     for block in spike_nested_blocks(stmt) {
-        if count_cpu_groups_all_depths(block, suspend_set, &supported) > 0 {
+        if count_cpu_groups_all_depths(block, suspend_set, &supported, &typed.expr_types) > 0 {
             return true;
         }
     }
@@ -8909,7 +8987,7 @@ fn stmt_block_has_direct_cpu_group(
     typed: &TypedModule,
 ) -> bool {
     let supported = cpu_supported_callees(typed);
-    spike_pair_in_block(stmts, suspend_set, &supported).is_some()
+    spike_pair_in_block(stmts, suspend_set, &supported, &typed.expr_types).is_some()
 }
 
 /// Of the functions typeck promoted, the subset codegen will actually spike-HOST in this
@@ -9026,8 +9104,10 @@ fn spike_cpu_group_result_names(
         stmts: &[Stmt],
         suspend_set: &SuspendSet,
         supported: &std::collections::HashSet<String>,
+        expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     ) -> Vec<String> {
-        if let Some(member_indices) = spike_cpu_group_member_indices(stmts, suspend_set, supported)
+        if let Some(member_indices) =
+            spike_cpu_group_member_indices(stmts, suspend_set, supported, expr_types)
         {
             return member_indices
                 .iter()
@@ -9039,7 +9119,7 @@ fn spike_cpu_group_result_names(
         }
         for stmt in stmts {
             for block in spike_nested_blocks(stmt) {
-                let names = names_in_block(block, suspend_set, supported);
+                let names = names_in_block(block, suspend_set, supported, expr_types);
                 if !names.is_empty() {
                     return names;
                 }
@@ -9047,7 +9127,7 @@ fn spike_cpu_group_result_names(
         }
         Vec::new()
     }
-    names_in_block(stmts, suspend_set, &supported)
+    names_in_block(stmts, suspend_set, &supported, &typed.expr_types)
 }
 
 /// Extract the single CPU group from `stmts`, returning `(pre_stmts, group_stmts, post_stmts)`.
@@ -9071,7 +9151,8 @@ fn spike_extract_cpu_group<'s>(
     // (`count_cpu_groups_all_depths` → `spike_pair_in_block`), the Step-1c pre-alloc set
     // (`spike_cpu_group_result_names`), and this extraction all agree member-for-member.
     let supported = cpu_supported_callees(typed);
-    let member_indices = spike_cpu_group_member_indices(stmts, suspend_set, &supported)?;
+    let member_indices =
+        spike_cpu_group_member_indices(stmts, suspend_set, &supported, &typed.expr_types)?;
     let first_idx = member_indices[0];
     let last_idx = member_indices[member_indices.len() - 1];
 
@@ -10917,14 +10998,31 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     let ctx = cg.ctx;
 
-    // Extract callee name and args from the call expression.
-    let Expr::Call(c) = call_expr else {
-        return Err("emit_suspending_call_inline_poll: not a Call expression".to_string());
-    };
-    let callee_name = if let Expr::Ident(name, _) = &c.callee {
-        name.clone()
-    } else {
-        return Err("emit_suspending_call_inline_poll: callee is not an Ident".to_string());
+    // Extract callee name and args from the call expression. v0.3-M6 P1-1 (site 6):
+    // the UFCS form is handled by the parse-sugar identity — `value.method(args)` IS
+    // `method(value, args)`, so the receiver becomes argument 0 and the resolved callee
+    // is the function named `method` (typeck enforced the first-parameter match).
+    let (callee_name, arg_exprs): (String, Vec<&Expr>) = match call_expr {
+        Expr::Call(c) => {
+            let Expr::Ident(name, _) = &c.callee else {
+                return Err("emit_suspending_call_inline_poll: callee is not an Ident".to_string());
+            };
+            (name.clone(), c.args.iter().collect())
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            let mut v: Vec<&Expr> = Vec::with_capacity(args.len() + 1);
+            v.push(receiver.as_ref());
+            v.extend(args.iter());
+            (method.clone(), v)
+        }
+        _ => {
+            return Err("emit_suspending_call_inline_poll: not a call expression".to_string());
+        }
     };
 
     // Find the child frame offset in the parent's frame layout.
@@ -10947,7 +11045,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         // Heap-box path for recursive/cyclic SM calls.
         return emit_suspending_call_heap_boxed(
             cg,
-            c,
+            &arg_exprs,
             &callee_name,
             state_blocks,
             pending_block,
@@ -11001,8 +11099,8 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     let child_frame_layout = cg.frame_layouts.get(&callee_name);
     let child_n_locals = child_frame_layout
         .map(|l| l.n_locals)
-        .unwrap_or(c.args.len());
-    for (idx, arg) in c.args.iter().enumerate().take(child_n_locals) {
+        .unwrap_or(arg_exprs.len());
+    for (idx, arg) in arg_exprs.iter().copied().enumerate().take(child_n_locals) {
         let arg_val = lower_expr(cg, arg)?;
         let arg_ty = cg.expr_type(arg);
         let bits = cg
@@ -11164,7 +11262,10 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 #[allow(clippy::too_many_arguments)]
 fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
-    c: &ynz_ast::nodes::CallExpr,
+    // The callee's argument expressions in callee-parameter order. For the UFCS form the
+    // caller already prepended the receiver as argument 0 (v0.3-M6 P1-1 site 6), so this
+    // slice view serves both call forms without a second extraction.
+    args: &[&Expr],
     callee_name: &str,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
@@ -11210,7 +11311,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
         .frame_layouts
         .get(callee_name)
         .map(|l| l.n_locals)
-        .unwrap_or(c.args.len());
+        .unwrap_or(args.len());
 
     // Heap-allocate the child frame.
     let child_frame = state_machine::alloc_frame(ctx, &cg.builder, cg.rt, child_frame_size)?;
@@ -11233,7 +11334,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     }
 
     // Write call arguments.
-    for (idx, arg) in c.args.iter().enumerate().take(child_n_locals) {
+    for (idx, arg) in args.iter().copied().enumerate().take(child_n_locals) {
         let arg_val = lower_expr(cg, arg)?;
         let arg_ty = cg.expr_type(arg);
         let bits = cg
@@ -11430,9 +11531,13 @@ fn lower_let_background_handle<'ctx>(
     name: &str,
     bg_inner: &Expr,
 ) -> Result<(), String> {
-    let call = match bg_inner {
-        Expr::Call(c) => c,
-        other => {
+    // Shape-receiver MethodCall spawns normalize to the Call-form twin (UFCS identity,
+    // v0.3-M6 P1-1 site 8) — same normalization as `lower_expr_background`.
+    let synthesized = synthesize_ufcs_call_expr(cg, bg_inner);
+    let call = match (bg_inner, synthesized.as_ref()) {
+        (Expr::Call(c), _) => c,
+        (_, Some(c)) => c,
+        (other, None) => {
             // Typeck already emitted the must-wrap-a-call error; keep codegen total.
             let _ = lower_expr(cg, other)?;
             return Ok(());
@@ -15565,6 +15670,43 @@ fn emit_bg_arg_frees<'ctx>(
 /// `CtxDropGuard`. The `CtxDropGuard` frees the COPY on both normal return and panic path.
 /// The caller-side alloca is reclaimed at function exit — no explicit free needed.
 ///
+/// v0.3-M6 P1-1 (site 8): normalize a SHAPE-receiver UFCS spawn target to its Call-form
+/// twin at the spawn-lowering entry — `background value.method(args)` IS
+/// `background method(value, args)` (parse-sugar identity; typeck enforced the
+/// first-parameter match). Sub-expression spans are preserved verbatim so
+/// `cg.expr_type(arg)` still resolves every argument (including the receiver, now
+/// argument 0). Non-shape receivers (conduit/intrinsic method calls) return `None` and
+/// keep the pre-existing fallback behavior — they are not UFCS function calls.
+fn synthesize_ufcs_call_expr(cg: &Cg<'_, '_>, inner: &Expr) -> Option<ynz_ast::nodes::CallExpr> {
+    let Expr::MethodCall {
+        receiver,
+        method,
+        method_span,
+        args,
+        span,
+    } = inner
+    else {
+        return None;
+    };
+    let rspan = receiver.span();
+    let receiver_is_shape = matches!(
+        cg.typed.expr_types.get(&(rspan.start, rspan.end)),
+        Some(Type::Shape { .. })
+    );
+    if !receiver_is_shape {
+        return None;
+    }
+    let mut call_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);
+    call_args.push((**receiver).clone());
+    call_args.extend(args.iter().cloned());
+    Some(ynz_ast::nodes::CallExpr {
+        callee: Expr::Ident(method.clone(), method_span.clone()),
+        type_args: None,
+        args: call_args,
+        span: span.clone(),
+    })
+}
+
 /// Call-site preempt insertion deferred to M2 per P1 GATE measurement.
 fn lower_expr_background<'ctx>(
     cg: &mut Cg<'ctx, '_>,
@@ -15572,9 +15714,12 @@ fn lower_expr_background<'ctx>(
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     use inkwell::values::BasicMetadataValueEnum;
 
-    // background must wrap a Call — typeck already enforces this.
-    let call = match inner {
-        ynz_ast::nodes::Expr::Call(c) => c,
+    // background must wrap a Call — typeck already enforces this. A shape-receiver
+    // MethodCall is normalized to its Call-form twin first (UFCS identity, site 8).
+    let synthesized = synthesize_ufcs_call_expr(cg, inner);
+    let call = match (inner, synthesized.as_ref()) {
+        (ynz_ast::nodes::Expr::Call(c), _) => c,
+        (_, Some(c)) => c,
         _ => {
             // Typeck already emitted an error. Fall back to sequential execution.
             let _ = lower_expr(cg, inner)?;
@@ -19911,6 +20056,12 @@ mod tests {
         HashSet::new()
     }
 
+    /// Empty expr-types map — these unit fixtures exercise Call-based groups only, so the
+    /// UFCS arm (which needs shape receiver types) never fires and an empty map is exact.
+    fn no_types() -> ynz_typeck::cpu_admission::ExprTypes {
+        std::collections::HashMap::new()
+    }
+
     /// A bare FrameLayout carrying only the CPU slots under test. The other fields are
     /// irrelevant to `cpu_slot_reserve_slots`, which reads `cpu_group_slots` exclusively.
     fn layout_with_cpu_slots(cpu_group_slots: Vec<CpuGroupSlot>) -> FrameLayout {
@@ -20480,12 +20631,12 @@ mod tests {
         // Adjacent pair → admitted (representative = first callee).
         let pair = vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
         assert_eq!(
-            spike_pair_in_block(&pair, &susp, &cpu),
+            spike_pair_in_block(&pair, &susp, &cpu, &no_types()),
             Some("score".to_string())
         );
         // Single call → no pair → declined.
         let single = vec![cpu_call_let("lo", "score")];
-        assert_eq!(spike_pair_in_block(&single, &susp, &cpu), None);
+        assert_eq!(spike_pair_in_block(&single, &susp, &cpu, &no_types()), None);
     }
 
     // WHY: the single-group constraint (admit IFF exactly one group across all depths) is what
@@ -20503,17 +20654,23 @@ mod tests {
 
         // One top-level group.
         let top_only = pair();
-        assert_eq!(count_cpu_groups_all_depths(&top_only, &susp, &cpu), 1);
+        assert_eq!(
+            count_cpu_groups_all_depths(&top_only, &susp, &cpu, &no_types()),
+            1
+        );
 
         // One group nested inside an `if` arm.
         let nested_only = vec![if_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&nested_only, &susp, &cpu), 1);
+        assert_eq!(
+            count_cpu_groups_all_depths(&nested_only, &susp, &cpu, &no_types()),
+            1
+        );
 
         // A top-level group THEN a nested group → 2 (multi-group, declines entirely).
         let mut top_then_nested = pair();
         top_then_nested.push(if_stmt(pair()));
         assert_eq!(
-            count_cpu_groups_all_depths(&top_then_nested, &susp, &cpu),
+            count_cpu_groups_all_depths(&top_then_nested, &susp, &cpu, &no_types()),
             2
         );
 
@@ -20522,17 +20679,23 @@ mod tests {
         let mut nested_then_top = vec![if_stmt(pair())];
         nested_then_top.extend(pair());
         assert_eq!(
-            count_cpu_groups_all_depths(&nested_then_top, &susp, &cpu),
+            count_cpu_groups_all_depths(&nested_then_top, &susp, &cpu, &no_types()),
             2
         );
 
         // Two nested groups (two separate `if` arms) → 2.
         let two_nested = vec![if_stmt(pair()), if_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&two_nested, &susp, &cpu), 2);
+        assert_eq!(
+            count_cpu_groups_all_depths(&two_nested, &susp, &cpu, &no_types()),
+            2
+        );
 
         // Nested inside a matching arm also counts.
         let nested_match = vec![match_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&nested_match, &susp, &cpu), 1);
+        assert_eq!(
+            count_cpu_groups_all_depths(&nested_match, &susp, &cpu, &no_types()),
+            1
+        );
     }
 
     // WHY: neither a `for` nor a `while` body is a spike-hosting site (`spike_nested_blocks`
@@ -20549,9 +20712,15 @@ mod tests {
         let susp = empty_suspend();
         let pair = || vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
         let for_group = vec![for_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&for_group, &susp, &cpu), 0);
+        assert_eq!(
+            count_cpu_groups_all_depths(&for_group, &susp, &cpu, &no_types()),
+            0
+        );
         let while_group = vec![while_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&while_group, &susp, &cpu), 0);
+        assert_eq!(
+            count_cpu_groups_all_depths(&while_group, &susp, &cpu, &no_types()),
+            0
+        );
     }
 
     // WHY: when a group lives one level inside an `if`/`match` arm,
@@ -20568,27 +20737,27 @@ mod tests {
 
         let nested_if = vec![if_stmt(pair())];
         assert_eq!(
-            nested_group_representative_callee(&nested_if, &susp, &cpu),
+            nested_group_representative_callee(&nested_if, &susp, &cpu, &no_types()),
             Some("score".to_string())
         );
 
         let nested_match = vec![match_stmt(pair())];
         assert_eq!(
-            nested_group_representative_callee(&nested_match, &susp, &cpu),
+            nested_group_representative_callee(&nested_match, &susp, &cpu, &no_types()),
             Some("score".to_string())
         );
 
         // A group in a `for` body is NOT a hosting site → None.
         let nested_for = vec![for_stmt(pair())];
         assert_eq!(
-            nested_group_representative_callee(&nested_for, &susp, &cpu),
+            nested_group_representative_callee(&nested_for, &susp, &cpu, &no_types()),
             None
         );
 
         // A group in a `while` body is NOT a hosting site → None.
         let nested_while = vec![while_stmt(pair())];
         assert_eq!(
-            nested_group_representative_callee(&nested_while, &susp, &cpu),
+            nested_group_representative_callee(&nested_while, &susp, &cpu, &no_types()),
             None
         );
     }

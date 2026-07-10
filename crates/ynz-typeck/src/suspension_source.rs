@@ -113,3 +113,28 @@ pub const CHANNEL_SUSPENDING_METHODS: &[&str] = &["send", "receive"];
 pub fn channel_method_suspends(receiver_is_conduit: bool, method: &str) -> bool {
     receiver_is_conduit && CHANNEL_SUSPENDING_METHODS.contains(&method)
 }
+
+/// THE authoritative classifier for UFCS method-call suspension (v0.3-M6 P1-1): does calling
+/// the method named `method` on a receiver introduce a suspension point, GIVEN that the
+/// receiver is a shape value?
+///
+/// UFCS identity: `value.method(args)` is parse-level sugar for `method(value, args)` — post-
+/// typeck, a shape-receiver method call's callee IS the function named `method` in the same
+/// `sig_table.fns` namespace (typeck enforces the first-parameter match), so `suspends` is the
+/// SAME transitive suspend lookup every Call-form consumer already threads. This arm exists so
+/// every predicate that classifies `Expr::MethodCall` reads ONE definition — never a per-site
+/// re-derivation of "does this method name resolve to a suspending fn?".
+///
+/// `receiver_is_shape` is supplied by the consumer from `expr_types` (the receiver resolves to
+/// `Type::Shape`), which excludes conduit receivers (classified by [`channel_method_suspends`])
+/// and primitive-intrinsic receivers. A method name that collides with a base suspension
+/// intrinsic (`sleep`) is excluded — the intrinsics are free functions, never shape methods;
+/// shadow resolution stays with callers that have the scope (see [`is_base_suspension_intrinsic`]).
+#[inline]
+pub fn ufcs_method_call_suspends(
+    receiver_is_shape: bool,
+    method: &str,
+    suspends: impl Fn(&str) -> bool,
+) -> bool {
+    receiver_is_shape && suspends(method) && !is_base_suspension_intrinsic(method)
+}

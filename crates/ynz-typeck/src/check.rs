@@ -700,8 +700,18 @@ impl<'b> Checker<'b> {
         // (Golden Rule 7). Keeping each suspending call on its own statement also means
         // M3b's auto-parallelization of independent statements works naturally: two
         // `let a = wait fa()` / `let b = wait fb()` lines get parallelized automatically.
+        self.check_stmts(&f.body.stmts);
+        self.scope.pop();
+
+        // Check 3 runs AFTER check_stmts (v0.3-M6 P1-1 site 9 reorder, mirroring checks
+        // 1a–1c below): the UFCS arm of the sub-expression walker reads receiver types
+        // from `self.expr_types`, which check_stmts populates.
         if !self.kernel_mode && is_suspending_fn {
-            let violations = suspending_calls_in_subexpr_position(&f.body.stmts, &suspending_fns);
+            let violations = suspending_calls_in_subexpr_position(
+                &f.body.stmts,
+                &suspending_fns,
+                &self.expr_types,
+            );
             for (span, callee_name) in violations {
                 self.diags.push(Diagnostic::error(
                     span,
@@ -717,9 +727,6 @@ impl<'b> Checker<'b> {
                 ));
             }
         }
-
-        self.check_stmts(&f.body.stmts);
-        self.scope.pop();
 
         // Checks 1a–1c (run after check_stmts so expr_types is populated — needed for
         // type lookups on identifiers in the for-loop iterator position):
@@ -6607,6 +6614,40 @@ pub fn expr_is_conduit_suspend(expr: &Expr, expr_types: &HashMap<(usize, usize),
     crate::suspension_source::channel_method_suspends(receiver_is_conduit, method)
 }
 
+/// v0.3-M6 P1-1: true when `expr` is a UFCS suspending method call at its ROOT —
+/// `value.method(args)` (optionally under an explicit `wait`) where the receiver's
+/// typeck-resolved type is a shape and the function named `method` transitively suspends.
+///
+/// Classification threads the ONE authoritative
+/// [`crate::suspension_source::ufcs_method_call_suspends`] arm — never a second name-keyed
+/// derivation. Unlike the conduit predicate, the receiver is NOT restricted to a plain
+/// identifier: any shape-typed receiver expression is legal UFCS.
+///
+/// `suspends` is the consumer's transitive suspend lookup (codegen closes over its
+/// `suspend_set`; typeck closes over its `suspending_fns` set).
+pub fn expr_is_ufcs_suspending_call(
+    expr: &Expr,
+    expr_types: &HashMap<(usize, usize), Type>,
+    suspends: &dyn Fn(&str) -> bool,
+) -> bool {
+    let inner = match expr {
+        Expr::Wait(inner, _) => inner.as_ref(),
+        other => other,
+    };
+    let Expr::MethodCall {
+        receiver, method, ..
+    } = inner
+    else {
+        return false;
+    };
+    let rspan = receiver.span();
+    let receiver_is_shape = matches!(
+        expr_types.get(&(rspan.start, rspan.end)),
+        Some(Type::Shape { .. })
+    );
+    crate::suspension_source::ufcs_method_call_suspends(receiver_is_shape, method, suspends)
+}
+
 /// v0.3-M4 Phase 2: true when `stmt` is a suspending conduit-method statement — a bare
 /// `ch.send(v)` / `ch.receive()` expression statement or a `let x = ch.receive()` binding.
 pub fn stmt_is_conduit_suspend(stmt: &Stmt, expr_types: &HashMap<(usize, usize), Type>) -> bool {
@@ -8819,9 +8860,10 @@ struct SubExprSuspendViolation {
 pub(crate) fn suspending_calls_in_subexpr_position(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
 ) -> Vec<(SourceSpan, String)> {
     let mut out = Vec::new();
-    collect_subexpr_violations_in_stmts(stmts, suspending, &mut out);
+    collect_subexpr_violations_in_stmts(stmts, suspending, expr_types, &mut out);
     out.into_iter().map(|v| (v.span, v.callee_name)).collect()
 }
 
@@ -8877,7 +8919,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
     }
 
     // Suspending call in a sub-expression position.
-    if !suspending_calls_in_subexpr_position(&f.body.stmts, suspending_fns).is_empty() {
+    if !suspending_calls_in_subexpr_position(&f.body.stmts, suspending_fns, expr_types).is_empty() {
         return true;
     }
 
@@ -9030,16 +9072,47 @@ fn resolve_type_for_guard_free(
 fn collect_subexpr_violations_in_stmts(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
     out: &mut Vec<SubExprSuspendViolation>,
 ) {
     for stmt in stmts {
-        collect_subexpr_violations_in_stmt(stmt, suspending, out);
+        collect_subexpr_violations_in_stmt(stmt, suspending, expr_types, out);
+    }
+}
+
+/// v0.3-M6 P1-1 (site 9): true when `e` is a ROOT UFCS suspending method call —
+/// the direct-statement Safe forms (`x.method()`, `let v = x.method()`,
+/// `return x.method()`, each with or without `wait`) mirror the Call-form arms below.
+/// Classified via the ONE authoritative `ufcs_method_call_suspends` arm through the
+/// shared helper (which unwraps a leading `Expr::Wait`), never a second derivation.
+fn is_root_ufcs_suspending(
+    e: &Expr,
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> bool {
+    expr_is_ufcs_suspending_call(e, expr_types, &|n| suspending.contains(n))
+}
+
+/// Scan a Safe-form UFCS method call's receiver + args for NESTED violations
+/// (the root call itself is a legal direct-statement suspension form).
+fn scan_ufcs_operands(
+    e: &Expr,
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    out: &mut Vec<SubExprSuspendViolation>,
+) {
+    if let Expr::MethodCall { receiver, args, .. } = e {
+        collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
+        for arg in args {
+            collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
+        }
     }
 }
 
 fn collect_subexpr_violations_in_stmt(
     stmt: &Stmt,
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
     out: &mut Vec<SubExprSuspendViolation>,
 ) {
     match stmt {
@@ -9047,8 +9120,14 @@ fn collect_subexpr_violations_in_stmt(
         Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => {
             // Allowed. But check the arguments for nested suspending calls.
             for arg in &c.args {
-                collect_subexpr_violations_in_expr(arg, suspending, out);
+                collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
             }
+        }
+        // Direct-statement UFCS call: `x.method()` — Safe (site 9 UFCS parity).
+        Stmt::Expr(e @ Expr::MethodCall { .. })
+            if is_root_ufcs_suspending(e, suspending, expr_types) =>
+        {
+            scan_ufcs_operands(e, suspending, expr_types, out);
         }
         // Direct-statement wait-of-call: `wait foo()` — the whole expression is Wait(Call). Safe.
         Stmt::Expr(Expr::Wait(inner, _)) => {
@@ -9056,15 +9135,21 @@ fn collect_subexpr_violations_in_stmt(
                 Expr::Call(c) if is_suspending_call(c, suspending) => {
                     // Allowed. Check args.
                     for arg in &c.args {
-                        collect_subexpr_violations_in_expr(arg, suspending, out);
+                        collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                     }
                 }
+                // `wait x.method()` — Safe (site 9 UFCS parity).
+                e @ Expr::MethodCall { .. }
+                    if is_root_ufcs_suspending(e, suspending, expr_types) =>
+                {
+                    scan_ufcs_operands(e, suspending, expr_types, out);
+                }
                 // `wait expr` where inner is not a direct call — scan inner for violations.
-                other => collect_subexpr_violations_in_expr(other, suspending, out),
+                other => collect_subexpr_violations_in_expr(other, suspending, expr_types, out),
             }
         }
         // Non-wait bare expression: scan for nested suspending calls.
-        Stmt::Expr(expr) => collect_subexpr_violations_in_expr(expr, suspending, out),
+        Stmt::Expr(expr) => collect_subexpr_violations_in_expr(expr, suspending, expr_types, out),
 
         // `let x = foo()` — the whole RHS IS the call. Safe.
         Stmt::Let {
@@ -9072,8 +9157,15 @@ fn collect_subexpr_violations_in_stmt(
             ..
         } if is_suspending_call(c, suspending) => {
             for arg in &c.args {
-                collect_subexpr_violations_in_expr(arg, suspending, out);
+                collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
             }
+        }
+        // `let v = x.method()` — Safe (site 9 UFCS parity).
+        Stmt::Let {
+            value: e @ Expr::MethodCall { .. },
+            ..
+        } if is_root_ufcs_suspending(e, suspending, expr_types) => {
+            scan_ufcs_operands(e, suspending, expr_types, out);
         }
         // `let x = wait foo()` — Safe.
         Stmt::Let {
@@ -9082,14 +9174,18 @@ fn collect_subexpr_violations_in_stmt(
         } => match inner.as_ref() {
             Expr::Call(c) if is_suspending_call(c, suspending) => {
                 for arg in &c.args {
-                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                    collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                 }
             }
-            other => collect_subexpr_violations_in_expr(other, suspending, out),
+            // `let v = wait x.method()` — Safe (site 9 UFCS parity).
+            e @ Expr::MethodCall { .. } if is_root_ufcs_suspending(e, suspending, expr_types) => {
+                scan_ufcs_operands(e, suspending, expr_types, out);
+            }
+            other => collect_subexpr_violations_in_expr(other, suspending, expr_types, out),
         },
         // `let x = <complex expr>` — scan the RHS.
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
-            collect_subexpr_violations_in_expr(value, suspending, out);
+            collect_subexpr_violations_in_expr(value, suspending, expr_types, out);
         }
 
         // `return foo()` — Safe.
@@ -9098,8 +9194,15 @@ fn collect_subexpr_violations_in_stmt(
             ..
         } if is_suspending_call(c, suspending) => {
             for arg in &c.args {
-                collect_subexpr_violations_in_expr(arg, suspending, out);
+                collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
             }
+        }
+        // `return x.method()` — Safe (site 9 UFCS parity).
+        Stmt::Return {
+            value: Some(e @ Expr::MethodCall { .. }),
+            ..
+        } if is_root_ufcs_suspending(e, suspending, expr_types) => {
+            scan_ufcs_operands(e, suspending, expr_types, out);
         }
         // `return wait foo()` — Safe.
         Stmt::Return {
@@ -9108,30 +9211,34 @@ fn collect_subexpr_violations_in_stmt(
         } => match inner.as_ref() {
             Expr::Call(c) if is_suspending_call(c, suspending) => {
                 for arg in &c.args {
-                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                    collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                 }
             }
-            other => collect_subexpr_violations_in_expr(other, suspending, out),
+            // `return wait x.method()` — Safe (site 9 UFCS parity).
+            e @ Expr::MethodCall { .. } if is_root_ufcs_suspending(e, suspending, expr_types) => {
+                scan_ufcs_operands(e, suspending, expr_types, out);
+            }
+            other => collect_subexpr_violations_in_expr(other, suspending, expr_types, out),
         },
         // `return <complex>` — scan.
         Stmt::Return {
             value: Some(expr), ..
         } => {
-            collect_subexpr_violations_in_expr(expr, suspending, out);
+            collect_subexpr_violations_in_expr(expr, suspending, expr_types, out);
         }
         Stmt::Return { value: None, .. } => {}
 
         // Control flow — recurse into bodies.
         Stmt::If { cond, body, .. } => {
-            collect_subexpr_violations_in_expr(cond, suspending, out);
-            collect_subexpr_violations_in_stmts(&body.stmts, suspending, out);
+            collect_subexpr_violations_in_expr(cond, suspending, expr_types, out);
+            collect_subexpr_violations_in_stmts(&body.stmts, suspending, expr_types, out);
         }
         Stmt::While { cond, body, .. }
         | Stmt::For {
             iter: cond, body, ..
         } => {
-            collect_subexpr_violations_in_expr(cond, suspending, out);
-            collect_subexpr_violations_in_stmts(&body.stmts, suspending, out);
+            collect_subexpr_violations_in_expr(cond, suspending, expr_types, out);
+            collect_subexpr_violations_in_stmts(&body.stmts, suspending, expr_types, out);
         }
         Stmt::Match {
             scrutinee,
@@ -9139,17 +9246,17 @@ fn collect_subexpr_violations_in_stmt(
             else_arm,
             ..
         } => {
-            collect_subexpr_violations_in_expr(scrutinee, suspending, out);
+            collect_subexpr_violations_in_expr(scrutinee, suspending, expr_types, out);
             for arm in arms {
-                collect_subexpr_violations_in_stmts(&arm.body.stmts, suspending, out);
+                collect_subexpr_violations_in_stmts(&arm.body.stmts, suspending, expr_types, out);
             }
             if let Some(b) = else_arm {
-                collect_subexpr_violations_in_stmts(&b.stmts, suspending, out);
+                collect_subexpr_violations_in_stmts(&b.stmts, suspending, expr_types, out);
             }
         }
         Stmt::FieldAssign { target, value, .. } => {
-            collect_subexpr_violations_in_expr(target, suspending, out);
-            collect_subexpr_violations_in_expr(value, suspending, out);
+            collect_subexpr_violations_in_expr(target, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(value, suspending, expr_types, out);
         }
         Stmt::IndexAssign {
             receiver,
@@ -9157,9 +9264,9 @@ fn collect_subexpr_violations_in_stmt(
             value,
             ..
         } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out);
-            collect_subexpr_violations_in_expr(index, suspending, out);
-            collect_subexpr_violations_in_expr(value, suspending, out);
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(index, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(value, suspending, expr_types, out);
         }
     }
 }
@@ -9171,6 +9278,7 @@ fn collect_subexpr_violations_in_stmt(
 fn collect_subexpr_violations_in_expr(
     expr: &Expr,
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
     out: &mut Vec<SubExprSuspendViolation>,
 ) {
     match expr {
@@ -9188,13 +9296,15 @@ fn collect_subexpr_violations_in_expr(
                 }
             }
             // Not suspending — but its arguments might be.
-            collect_subexpr_violations_in_expr(&c.callee, suspending, out);
+            collect_subexpr_violations_in_expr(&c.callee, suspending, expr_types, out);
             for arg in &c.args {
-                collect_subexpr_violations_in_expr(arg, suspending, out);
+                collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
             }
         }
         // `wait expr` in sub-expression position: the inner is already inside the larger expr.
-        Expr::Wait(inner, _) => collect_subexpr_violations_in_expr(inner, suspending, out),
+        Expr::Wait(inner, _) => {
+            collect_subexpr_violations_in_expr(inner, suspending, expr_types, out)
+        }
         // `background foo(a, b)`: the spawn target (`foo`) becomes its own state machine
         // and is a call-graph cut for suspension propagation.  BUT the arguments `a` and `b`
         // evaluate in the CALLING context before the spawn — exactly like the non-background
@@ -9208,66 +9318,86 @@ fn collect_subexpr_violations_in_expr(
             Expr::Call(c) => {
                 // Direct-spawn callee is a graph cut — skip `c.callee`. Scan args only.
                 for arg in &c.args {
-                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                    collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                 }
             }
             Expr::MethodCall { receiver, args, .. } => {
                 // Same reasoning: receiver + args evaluate in the caller.
-                collect_subexpr_violations_in_expr(receiver, suspending, out);
+                collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
                 for arg in args {
-                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                    collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                 }
             }
             // Unexpected inner shape (rare — background is statement-position-only in M2).
             // Recurse conservatively to catch any nested violations.
-            other => collect_subexpr_violations_in_expr(other, suspending, out),
+            other => collect_subexpr_violations_in_expr(other, suspending, expr_types, out),
         },
         Expr::BinOp { lhs, rhs, .. } => {
-            collect_subexpr_violations_in_expr(lhs, suspending, out);
-            collect_subexpr_violations_in_expr(rhs, suspending, out);
+            collect_subexpr_violations_in_expr(lhs, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(rhs, suspending, expr_types, out);
         }
         Expr::UnaryOp { operand, .. } => {
-            collect_subexpr_violations_in_expr(operand, suspending, out)
+            collect_subexpr_violations_in_expr(operand, suspending, expr_types, out)
         }
-        Expr::MethodCall { receiver, args, .. } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out);
+        Expr::MethodCall {
+            receiver,
+            method,
+            method_span,
+            args,
+            ..
+        } => {
+            // v0.3-M6 P1-1 (site 9): a UFCS suspending call in sub-expression position is
+            // the SAME violation as its Call-form twin — classified via the ONE
+            // authoritative `ufcs_method_call_suspends` arm through the shared helper.
+            // One error per call site; no operand recursion after reporting (mirrors the
+            // Call arm above).
+            if expr_is_ufcs_suspending_call(expr, expr_types, &|n| suspending.contains(n)) {
+                out.push(SubExprSuspendViolation {
+                    span: method_span.clone(),
+                    callee_name: method.clone(),
+                });
+                return;
+            }
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
             for a in args {
-                collect_subexpr_violations_in_expr(a, suspending, out);
+                collect_subexpr_violations_in_expr(a, suspending, expr_types, out);
             }
         }
         Expr::FieldAccess { receiver, .. } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out)
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out)
         }
         Expr::IndexAccess {
             receiver, index, ..
         } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out);
-            collect_subexpr_violations_in_expr(index, suspending, out);
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(index, suspending, expr_types, out);
         }
         Expr::StructLit { fields, .. } => {
             for f in fields {
-                collect_subexpr_violations_in_expr(&f.value, suspending, out);
+                collect_subexpr_violations_in_expr(&f.value, suspending, expr_types, out);
             }
         }
         Expr::ArrayLit { elements, .. } => {
             for e in elements {
-                collect_subexpr_violations_in_expr(e, suspending, out);
+                collect_subexpr_violations_in_expr(e, suspending, expr_types, out);
             }
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                collect_subexpr_violations_in_expr(k, suspending, out);
-                collect_subexpr_violations_in_expr(v, suspending, out);
+                collect_subexpr_violations_in_expr(k, suspending, expr_types, out);
+                collect_subexpr_violations_in_expr(v, suspending, expr_types, out);
             }
         }
         Expr::PostfixOp { receiver, .. } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out)
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out)
         }
-        Expr::Is { expr: inner, .. } => collect_subexpr_violations_in_expr(inner, suspending, out),
+        Expr::Is { expr: inner, .. } => {
+            collect_subexpr_violations_in_expr(inner, suspending, expr_types, out)
+        }
         Expr::InterpolatedString(parts, _) => {
             for p in parts {
                 if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
-                    collect_subexpr_violations_in_expr(e, suspending, out);
+                    collect_subexpr_violations_in_expr(e, suspending, expr_types, out);
                 }
             }
         }

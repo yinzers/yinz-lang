@@ -1293,12 +1293,33 @@ fn collect_calls_in_expr(
                 }
             }
         }
-        Expr::MethodCall { receiver, args, .. } => {
-            // MethodCall — dynamic dispatch detection. If the receiver has been
-            // typed as a `dynamic Contract`, we would need type information not
-            // available here. At the AST-walk level we conservatively recurse —
-            // can't-infer errors for `dynamic` dispatch are emitted at the typeck
-            // level (check.rs) where receiver type is known.
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            // v0.3-M6 P1-1: a UFCS method call IS a call to the free function named
+            // `method` (post-typeck, a Shape-receiver MethodCall's callee is exactly the
+            // `sig_table.fns` entry of that name — check.rs `check_method_call` Type::Shape
+            // arm). This fixpoint runs PRE-typing (no `expr_types` exists yet), so the arm
+            // stays name-keyed and mirrors the Call arm above: `local_fns` first (shadowing),
+            // then imported-suspending. Over-approximation is the safe direction — an edge to
+            // a NON-suspending fn contributes nothing to the fixpoint. The one residual: a
+            // user fn sharing a builtin method name (e.g. `add`) that transitively suspends
+            // falsely marks an enclosing fn that only calls the BUILTIN method of that name
+            // (SM with zero suspension states); type-aware downstream predicates classify the
+            // call itself correctly. Unresolved method names do NOT set the intrinsic flag —
+            // base suspension intrinsics (`sleep`) are free functions, never methods.
+            if !is_background_call {
+                if local_fns.contains(method) {
+                    if !edges.direct.contains(method) {
+                        edges.direct.push(method.clone());
+                    }
+                } else if imported_fns.contains(method) && imported_suspending.contains(method) {
+                    edges.calls_may_block_intrinsic = true;
+                }
+            }
             collect_calls_in_expr(
                 receiver,
                 local_fns,

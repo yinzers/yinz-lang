@@ -1,0 +1,31 @@
+// v0.3-M6 P1-1 RED fixture (a): TRANSITIVE suspension via UFCS.
+// `tally` has NO explicit `wait` and NO direct sleep — its ONLY suspension source is the
+// UFCS call `self.crew()` (sugar for `crew(self)`), whose callee suspends via sleep.
+// Correct behavior: the may-block analysis marks `tally` suspending through the UFCS
+// call-graph edge, `entrypoint` (a state machine via its own wait) inline-polls
+// `ship.tally()`, and the program prints 11 and exits 0.
+// Pre-fix failure (the documented P1-1 mode): `collect_calls_in_expr`'s MethodCall arm adds
+// no call-graph edge, `tally` is mis-lowered as a plain synchronous fn, and the suspending
+// callee falls through to the synchronous block_on wrapper on a runtime worker thread.
+
+shape Ship {
+  name: string
+  cargo: int
+}
+
+function crew(share self: Ship) -> int {
+  wait sleep(10)
+  return self.cargo
+}
+
+function tally(share self: Ship) -> int {
+  const c = self.crew()
+  return c + 1
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  const ship: Ship = { name: `Mon`, cargo: 10 }
+  const t = ship.tally()
+  print(t.toString())
+}

@@ -1,0 +1,29 @@
+// v0.3-M6 P1-1 RED fixture (c): MIXED UFCS + Call in ONE expression tree.
+// Suspending calls in sub-expression position are a PERMANENT typeck reject (Golden Rule 7,
+// check.rs "Check 3"): each suspending call gets its own statement. Correct behavior: the
+// compile fails with the teaching error fired for BOTH legs — the plain `fetchBase()` Call
+// leg AND the UFCS `ship.crew()` leg (UFCS parity: `ship.crew()` IS a suspending call).
+// Pre-fix failure (the documented P1-1 mode): the subexpr-position walker is
+// MethodCall-blind, so only the `fetchBase` violation is reported and the UFCS leg would
+// silently mis-lower through the synchronous wrapper.
+
+shape Ship {
+  name: string
+  cargo: int
+}
+
+function fetchBase() -> int {
+  wait sleep(5)
+  return 3
+}
+
+function crew(share self: Ship) -> int {
+  wait sleep(5)
+  return self.cargo
+}
+
+function entrypoint() -> nothing {
+  const ship: Ship = { name: `Mon`, cargo: 10 }
+  const total = fetchBase() + ship.crew()
+  print(total.toString())
+}

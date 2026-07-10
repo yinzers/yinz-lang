@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004"]
 created_at: "2026-07-04"
 updated_at: "2026-07-09"
 metadata:
@@ -213,9 +213,11 @@ money/PII/security-breach/irreversible-op in the anchor-sheet sense — every ch
 git-reversible, pre-v1.0, zero public users). **Severity is scored II-Critical for the
 silent-miscompile-class fixes (R1, R2, R4), consistent with this project's own established convention**
 (M5 scored the identical twin-derivation/silent-miscompile shape at Sev II — the recovery cost is
-real multi-round engineering debugging, not a cosmetic shrug, even pre-1.0/zero-users). **No HIGH
-residual anywhere in this table; no RISK OVERRIDE block is required.** All MEDIUMs are recorded here
-and parked with triggers in Future Requirements.
+real multi-round engineering debugging, not a cosmetic shrug, even pre-1.0/zero-users). **One signed
+HIGH residual exists in this table — R13, the shape-arg frame-backing UAF surfaced mid-execution by
+FRAGO 004; its RISK OVERRIDE block (below the table) is the plan's ONE signed HIGH-residual override,
+accepted by Patrick 2026-07-09 with Phase 1b as the trigger-to-close.** All other residuals are
+MEDIUM-or-below; MEDIUMs are recorded here and parked with triggers in Future Requirements.
 
 | Risk | Prob | Sev | Initial | Mitigations (bucket) | Residual | Gate |
 |------|------|-----|---------|----------------------|----------|------|
@@ -231,9 +233,26 @@ and parked with triggers in Future Requirements.
 | **R10 — demo/gallery/registry/roadmap reconciliation mechanical additions** — *Phase 8* | D | IV | L | Mechanical, docs-consistency + code-reviewer fan-out | **L** (D×IV) | pass |
 | **R11 — P2-7 `handle_recv_poll` panic-then-pending hang (newly surfaced, NOT fixed this milestone)** — *deferred* | D | III | L | Deferred to Future Requirements with a named trigger (Phase 3's register-before-poll pattern is the natural follow-on fix) — no mitigation needed to accept LOW as a documented deferral | **L** (D×III) | recorded — deferral, not a gate pass on unmitigated work |
 | **R12 — Sanitizer lane (Miri/TSan/ASan) surfaces a new confirmed bug beyond this phase's own immediate fix capacity** — *Phase 6b* | B | II | H | This phase's own existence is the engineered, bounded catch: any genuine new finding is triaged/routed through the plan-amendment + FRAGO seam before any release — never silently shipped, never silently dropped — inside a pre-1.0/zero-public-users/fully-git-reversible codebase, so a finding's real-world consequence drops from "would-be production Critical" to "caught, triaged, and fixed-or-properly-deferred pre-release" (**B2**, severity, −1 level; proof: the phase's own exit criteria — every finding triaged on the record — plus the Weather section's git-reversible/zero-users precondition) | **M** (B×III) | recorded |
+| **R13 — shape-arg frame-backing UAF: a shape-value argument to a suspending callee stages a dangling stack pointer across Pending — confirmed silent-garbage miscompile, pre-existing in shipped v0.3.0, reproduces in pure `Call` form + auto-inserted transitive suspension, likely also `fixed<T>`** (FRAGO 004) — *Phase 1b* | A | II | EH | RED-repro + full-regression gate (**B2**, prob −1; proof: Phase 1b's committed deterministic RED→GREEN repros + M3a-class regression run) — real elimination needs the crossing-classifier fix itself (Phase 1b), not yet built at signing time | **H** (B×II) | **RISK OVERRIDE — SIGNED (Patrick, 2026-07-09; block below)** |
+
+**RISK OVERRIDE — accepted residual: HIGH. SIGNED. (The plan's ONE signed HIGH-residual override —
+FRAGO 004, recorded verbatim from the audit sidecar.)**
+
+- **Risk:** shape-value argument to a suspending callee stages a dangling stack pointer across
+  Pending — confirmed UAF / silent-garbage miscompile; pre-existing in shipped v0.3.0; reproduces
+  in `wait fn(shapeArg)` Call form + auto-inserted transitive suspension; likely also `fixed<T>`.
+- **Why not mitigable to LOW now:** standard B2 only shifts Prob A→B; Sev II is the established
+  silent-miscompile anchor (D7); real elimination needs the crossing-classifier fix itself
+  (Phase 1b), not yet built.
+- **Accepted by: Patrick — 2026-07-09** (interactive CCIR-5 sign gate; disposition: "Sign + fix 1b
+  immediately next").
+- **Trigger to revisit / close:** Phase 1b's RED→GREEN fixture + full-regression proof lands
+  (converts accepted-HIGH interim risk → closed, fixed bug — before Phase 6b's sanitizer lane and
+  before release).
 
 **Floor check.** No Floor-A "no backout exists" condition (every change is git-reversible) and no
-Floor-B class (security/PII/money/irreversible-prod-op) fires anywhere in this table.
+Floor-B class (security/PII/money/irreversible-prod-op) fires anywhere in this table — R13 included
+(pre-v1.0, zero public users, git-reversible, runtime-only-within-one-execution).
 
 ### Cross-Cutting Factor Sweep (mandatory factors, woven into the risk rows + phases above)
 
@@ -289,10 +308,22 @@ routing must state the truth about what exists today versus what is deferred and
 
 **Key outcomes (definition of done):**
 
-1. `wait x.method()` — transitively, explicitly, mixed with `Call`, and under `background` — compiles
-   to a real suspension at every one of the 4 broken predicate sites, all threaded from the ONE
+1. `wait x.method()` — transitively, explicitly, mixed with `Call`, and under `background` — is
+   classified and lowered as a real suspension at every one of the enumerated broken predicate
+   sites — the original 4 (`may_block.rs:1296`, `cpu_admission.rs:823-828`, `emit.rs:653-658`,
+   `emit.rs:8433-8441`) PLUS the 5 coupled sites (`count_suspension_expr` `emit.rs:5117+`;
+   `emit_suspending_call_inline_poll`/`_heap_boxed` `emit.rs:10906+`; `callee_name_from_call_expr`
+   `emit.rs:7671`; `lower_expr_background` `emit.rs:15569`/`:15801`/`:12431`;
+   `suspending_calls_in_subexpr_position` `check.rs:704`) per FRAGO 003 — all threaded from the ONE
    authoritative `sig_table.fns.get(method)` resolution; zero regression in existing Call-based
-   suspension fixtures.
+   suspension fixtures (Phase 1). **Correctness of a shape (or `fixed<T>`) aggregate ARGUMENT
+   surviving that suspension — the pre-existing v0.3.0 shape-arg frame-backing UAF that keeps
+   fixture (b) RED — is Phase 1b's deliverable, not Phase 1's (FRAGO 004, signed).**
+1b. No shape (or `fixed<T>`) aggregate argument to a suspending callee is left in a dying stack
+   alloca across suspension — the confirmed pre-existing v0.3.0 UAF (parent Pending → stack dies →
+   child resumes on dangling `self` → silent garbage) is closed by extending the ONE authoritative
+   crossing classifier so the value is frame-backed via the existing `shape_embed` machinery,
+   proven by deterministic-across-runs RED→GREEN repros (Phase 1b, FRAGO 004).
 2. The block_on-fallback branch (`emit.rs:15122-15137`) is a compile-time hard error for any caller
    not reachable via the designated synchronous entry point — mirroring `emit.rs:11162`'s sibling.
 3. A cancelled sender's `pending_sends` entry is purged (idempotently) and the `caller_token` is
@@ -332,11 +363,14 @@ deferral naming the remaining gap, is not done.
 
 ### 3.2 Concept
 
-Eleven phases (0–8, with 3b inserted between 3 and 4 per FRAGO 001 and 6b inserted between 6 and 7 —
-see the amendment note in Terrain). **Gate first**
+Twelve phases (0–8, with 1b inserted between 1 and 2 per FRAGO 004 — Patrick-signed to run
+immediately after Phase 1 and BEFORE Phase 2 — 3b inserted between 3 and 4 per FRAGO 001, and 6b
+inserted between 6 and 7 — see the amendment note in Terrain). **Gate first**
 (P0 verifies the two THEORY findings, the dynamic-dispatch × suspension coverage question, and
-confirms the execution-gate precondition). **The flagship blocker + its escape hatch** (P1 UFCS fix; P2 the block_on-fallback
-guard — sequenced immediately after P1 because P2's correctness assertion depends on P1 actually being
+confirms the execution-gate precondition). **The flagship blocker + its escape hatch** (P1 UFCS fix
+on its carved 9-site scope; P1b the shape-arg frame-backing UAF fix — FRAGO 004, signed sequencing
+P1 → P1b → P2; P2 the block_on-fallback
+guard — sequenced after the P1/P1b pair because P2's correctness assertion depends on P1 actually being
 fixed, a deliberate resequencing of the audit's raw synthesis order, recorded as Decision D1 below).
 **Channel/scheduler correctness** (P3 ABA+orphan; P3b recursion-chain spike CPU-handle cleanup leak —
 FRAGO 001, sequenced right after P3 in the same drop-ladder region; P4 lost-wakeup; P5
@@ -430,9 +464,19 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
 #### Phase 1 — P1-1: UFCS suspension invisibility (BLOCKER fix)
 
 - **Task + purpose:** thread the ONE authoritative UFCS-suspends resolution
-  (`sig_table.fns.get(method)`, per the Terrain citation above) into all 4 broken predicate sites so
-  `wait x.method()` actually suspends, with a from-scratch RED fixture class authored BEFORE the fix
-  per verify-before-you-fix.
+  (`sig_table.fns.get(method)`, per the Terrain citation above) into all enumerated broken predicate
+  sites — the original 4 (`may_block.rs:1296`, `cpu_admission.rs:823-828`, `emit.rs:653-658`,
+  `emit.rs:8433-8441`) PLUS the 5 coupled sites (`count_suspension_expr` `emit.rs:5117+`;
+  `emit_suspending_call_inline_poll`/`_heap_boxed` `emit.rs:10906+`; `callee_name_from_call_expr`
+  `emit.rs:7671`; `lower_expr_background` `emit.rs:15569`/`:15801`/`:12431`;
+  `suspending_calls_in_subexpr_position` `check.rs:704`) per FRAGO 003 — so `wait x.method()`
+  actually suspends, with a from-scratch RED fixture class authored BEFORE the fix per
+  verify-before-you-fix. **Scope carve-out (FRAGO 004, signed):** fixture (b)'s residual RED — the
+  shape-arg frame-backing UAF, a confirmed pre-existing v0.3.0 miscompile OUTSIDE this phase's
+  9-site predicate-threading scope — is NOT this phase's deliverable; it is carved out to Phase 1b
+  as that phase's locked RED-repro (a legitimate planned-RED per no-duct-tape's inverse:
+  documented, locked by the failing test, closed by the immediately-next phase, never shipped
+  alone).
 - **Steps**
   1. Confirm the exact current shape of `check.rs`'s UFCS resolution (CCIR-1 re-verify — this plan's
      line numbers are this-session-verified but may drift); design the shared helper (or the minimal
@@ -453,24 +497,95 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
   6. Fix `emit.rs:8433-8440` (`is_direct_suspending_call`) to recognize a `MethodCall` whose resolved
      callee suspends, not only `Call`+`Ident`.
 
-     **CHECKPOINT** — all 4 sites threaded from the one source; grep gate confirms zero independent
-     method→fn suspend derivation anywhere outside the shared resolution (authoritative-derivation.md
-     discipline).
+     **CHECKPOINT** — all 9 sites (the original 4 + the 5 coupled, per FRAGO 003) threaded from the
+     one source; grep gate confirms zero independent method→fn suspend derivation anywhere outside
+     the shared resolution (authoritative-derivation.md discipline).
   7. Run the RED fixture class + the FULL existing suspension/state-machine test suite (`docker
-     compose run --rm dev cargo test --workspace`). RED fixtures flip to GREEN; every pre-existing
-     Call-based suspension fixture stays GREEN (the R1 regression gate).
+     compose run --rm dev cargo test --workspace`). RED fixtures flip to GREEN (per FRAGO 004:
+     fixtures (a)/(c)/(d) — fixture (b) stays RED as Phase 1b's carved-out locked repro); every
+     pre-existing Call-based suspension fixture stays GREEN (the R1 regression gate).
   8. Pin the audit's open question (block vs panic when UFCS previously fell through to the
      synchronous wrapper): capture the pre-fix failure mode via a controlled repro (on a throwaway
      branch/stash if the fix is already applied) and record which mode it WAS, closing the audit's
      "TBD" note.
-- **Exit criteria:** all 4 sites read from the one shared authoritative source (grep-verified, zero
-  second derivation); full RED→GREEN fixture class committed; zero regression in existing suspension
-  fixtures; the historical block-vs-panic question answered and recorded.
-- **Reviewer fan-out:** code-reviewer (the 4-site diff); adversarial gate-checker (does the RED
+- **Exit criteria:** all enumerated sites — the original 4 (`may_block.rs:1296`,
+  `cpu_admission.rs:823-828`, `emit.rs:653-658`, `emit.rs:8433-8441`) PLUS the 5 coupled sites
+  (`count_suspension_expr` `emit.rs:5117+`; `emit_suspending_call_inline_poll`/`_heap_boxed`
+  `emit.rs:10906+`; `callee_name_from_call_expr` `emit.rs:7671`; `lower_expr_background`
+  `emit.rs:15569`/`:15801`/`:12431`; `suspending_calls_in_subexpr_position` `check.rs:704`) per
+  FRAGO 003 — read from the one shared authoritative source (grep-verified, zero second
+  derivation); RED→GREEN fixture class committed for fixtures (a)/(c)/(d), with fixture (b)
+  committed and carved out as Phase 1b's locked RED-repro (FRAGO 004 — the shape-arg
+  frame-backing UAF, closed by Phase 1b immediately next, never shipped alone); zero regression
+  in existing suspension fixtures; the historical block-vs-panic question answered and recorded.
+- **Reviewer fan-out:** code-reviewer (the 9-site diff, per FRAGO 003); adversarial gate-checker
+  (does the RED
   fixture class genuinely exercise transitive / explicit / mixed / `background` UFCS, not just one
   shape?); design-doc-alignment reviewer (authoritative-derivation.md compliance — zero second
   derivation, grep-gate evidence attached).
 - **Model tag:** `(coding, high, medium)` — checkpoint marks mandatory (>5 steps).
+
+**Phase 1 complete on carved scope (executor `executor-2026-07-09-m6-phase1-seg4`, 2026-07-09):**
+all 9 FRAGO-003 sites threaded from the one authoritative resolution — grep gate PASS (one
+classifier + one AST wrapper; the only name-keyed producer is the ratified pre-typing
+`may_block.rs` fixpoint edge; zero second derivation); R1 zero-regression confirmed across every
+pre-existing Call-based suspension fixture; house clippy green; RED fixture class 3/4 GREEN
+(a/c/d); block-vs-panic answered and recorded: **PANIC-then-abort** (step 8, closing the audit's
+"TBD"); fixture (b) → Phase 1b (FRAGO 004 — its locked RED-repro for the shape-arg frame-backing
+UAF).
+
+#### Phase 1b — shape-arg frame-backing miscompile (confirmed UAF; pre-existing v0.3.0)
+
+- **Task + purpose:** close the confirmed pre-existing use-after-free (FRAGO 004 — surfaced by
+  Phase 1 segment 4, corroborated by the adversarial code-reviewer) where a shape-value argument
+  passed to a suspending callee is staged in the PARENT resume fn's STACK alloca: the child frame
+  holds a `ptrtoint` of it; parent returns Pending → parent stack dies → child resumes on a
+  dangling `self` → silent nondeterministic garbage. Reproduces in pure `Call` form
+  (`wait crew(ship)`) AND auto-inserted transitive suspension; PRE-EXISTING in shipped v0.3.0
+  (stash-to-`main` proof — NOT introduced by M6; UFCS merely made the shape-passing form natural
+  to exercise); likely also affects `fixed<T>` (string/array/map are safe — heap-backed, stable
+  pointer). Root cause: `locals_crossing_wait`/`collect_crossings_in_stmts`
+  (`crates/ynz-typeck/src/check.rs:8122+`) is a lexical "read-AFTER-suspension" source scan that
+  misses escape-through-a-callee-frame — the suspending callee holds the arg by pointer and reads
+  it after its own suspend point, so the value DOES cross, but the scan never flags it → no
+  `shape_embed` → plain stack alloca (`emit.rs:~4508`'s `is_shape → shape_embed_set` never
+  fires). M3a-class caution: this subsystem carries a ~10-round whack-a-mole history (D7) — RED
+  repro before fix, one authoritative crossing classifier, never a second frame-layout path
+  ([authoritative-derivation.md](../../../rules/authoritative-derivation.md)).
+- **Steps**
+  1. CCIR-1: re-verify the cited lines against the live tree (`check.rs:8122+`
+     `locals_crossing_wait`/`collect_crossings_in_stmts`; `emit.rs`'s `shape_embed`/`is_shape`
+     frame-backing path — re-grep the exact lines rather than trust this plan's citations).
+  2. Lock the RED repros (RED-repro-before-fix per
+     [verification.md](../../../rules/verification.md)): fixture (b)
+     `v0_3_m6_ufcs_explicit_wait.ynz` (already in tree, currently RED — Phase 1's carved-out
+     locked repro) PLUS a pure-`Call` shape-arg repro (`const c = wait crew(ship)`) PLUS (if
+     constructible) a `fixed<T>` stack-aggregate variant. Each asserts the CORRECT value
+     (deterministic, not garbage). Confirm each fails RED for the documented UAF reason, not some
+     unrelated bug.
+  3. Fix: extend the ONE authoritative crossing classifier so a shape (and `fixed<T>`) aggregate
+     passed BY POINTER to a suspending callee is classified as crossing → frame-backed via the
+     existing `shape_embed` machinery — never a second frame-layout path
+     (authoritative-derivation.md). Verify the emitted IR: the arg lives in the heap frame, not a
+     dying stack alloca; the child's `self` points into the surviving frame.
+  4. Full-regression: all Phase 1 fixtures (a, b, c, d) GREEN; full workspace suite green
+     (`docker compose run --rm dev cargo test --workspace`); house clippy `-D warnings` clean.
+     Explicitly re-verify no regression to the M3a/M4/M5 suspension + frame-layout suites (this
+     is the fragile subsystem).
+  5. Non-vacuous determinism proof: run the repro N times; assert the SAME correct value every
+     run (the pre-fix signature was nondeterministic garbage across runs).
+- **Exit criteria:** UAF closed via the one crossing-classifier extension (no second frame-layout
+  path); RED→GREEN repros committed (fixture (b) + the pure-`Call` repro + the `fixed<T>`
+  variant if constructible), deterministic across runs; full suite green including the M3a-class
+  regression surface (M3a/M4/M5 suspension + frame-layout suites); the FRAGO 004 signed RISK
+  OVERRIDE's revisit-trigger satisfied — this phase's proof landing converts the accepted-HIGH
+  interim risk (R13) to closed, fixed bug.
+- **Reviewer fan-out:** code-reviewer (the crossing-classifier + frame-layout diff); adversarial
+  gate-checker (does the repro genuinely exercise the dangling-stack window across pure-`Call`
+  AND auto-inserted transitive suspension, and is the determinism proof non-vacuous?);
+  design-doc-alignment reviewer (authoritative-derivation.md — the ONE crossing classifier
+  extended, no second frame-layout path).
+- **Model tag:** `(coding, high, medium)`
 
 #### Phase 2 — P4-3: block_on-fallback hard-error guard
 
@@ -701,7 +816,7 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
   concurrency integration fixtures, under Miri and under ThreadSanitizer/AddressSanitizer — the
   mechanical hunt for exactly the bug classes this milestone fixed by hand (UAF, double-free, data
   races) — and wire a permanent CI job so those classes are hunted on every future push/PR, not just
-  this one hotfix. Sequenced after Phases 1, 3, 3b, 4, and 5 (a real dependency, not mere convenience —
+  this one hotfix. Sequenced after Phases 1, 1b, 3, 3b, 4, and 5 (a real dependency, not mere convenience —
   see Coordinating Instructions): the sanitizers must scan the FIXED runtime code, or their findings
   would just be re-discoveries of bugs already known and scheduled.
 - **Steps**
@@ -862,17 +977,23 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
 
 ### 3.4 Coordinating Instructions
 
-- **Sequencing**: Phase 0 gates everything. Phase 1 → Phase 2 is a hard dependency (Decision D1) — do
-  not start Phase 2 before Phase 1's fixture class is GREEN. Phases 3, 4, 5 are independent of each
+- **Sequencing**: Phase 0 gates everything. **Phase 1b runs immediately after Phase 1 and BEFORE
+  Phase 2 (FRAGO 004 — Patrick-signed sequencing, 2026-07-09: a shipped memory-safety miscompile
+  is prioritized ahead of all remaining phases), and it remains a hard prerequisite of Phase 6b
+  (the sanitizer lane must scan the FIXED frame-backing).** Phase 1 → Phase 2 is a hard dependency
+  (Decision D1) — do not start Phase 2 before Phase 1's carved fixture set (a/c/d) is GREEN, and
+  per the signed sequencing not before Phase 1b closes fixture (b) (the full class GREEN).
+  Phases 3, 4, 5 are independent of each
   other and of Phases 1–2 (different subsystems); they are sequenced 3→4→5 for one conductor's
   convenience, not a hard dependency — a FRAGO reordering them is not a plan violation. **Phase 3b (FRAGO 001)
   is sequenced immediately after Phase 3** — same `runtime.rs:591-693` drop-ladder region, minimizing
   merge collision — **and is a hard prerequisite of Phase 6b** (the sanitizer lane must scan the FIXED
   recursion-chain cleanup path, same rationale as Phases 1/3/4/5). Phase 6 is
   independent of everything. **Phase 6b (sanitizer lane) has a real dependency, not mere convenience:
-  it must run AFTER Phases 1, 3, 3b, 4, and 5 land**, because Miri/TSan/ASan need to scan the FIXED runtime
-  code (the UFCS threading, the ABA purge, the recursion-chain spike-handle cleanup, the lost-wakeup
-  reorder, the drop-glue mechanism) — scanning
+  it must run AFTER Phases 1, 1b, 3, 3b, 4, and 5 land**, because Miri/TSan/ASan need to scan the FIXED runtime
+  code (the UFCS threading, the shape-arg frame-backing fix — the sanitizer lane must scan the
+  FIXED frame-backing, per FRAGO 004 — the ABA purge, the recursion-chain spike-handle cleanup,
+  the lost-wakeup reorder, the drop-glue mechanism) — scanning
   the pre-fix state would only re-discover bugs already known and scheduled. It is independent of
   Phase 6 itself; sequenced 6→6b for one conductor's convenience. Phase 7 should follow Phase 0's
   dormancy verdicts (so the Future Requirements it cross-references are settled) AND follow Phase 6b
@@ -940,7 +1061,14 @@ fixtures committed; Phase 1 (the flagship, >5 steps) checkpoints per the marks b
 ### Safety
 
 - No `wait x.method()` call is silently lowered as a synchronous blocking call — testable via
-  Phase 1's RED→GREEN fixture class asserting suspend-correct behavior at all 4 predicate sites.
+  Phase 1's RED→GREEN fixture class asserting suspend-correct behavior at all 9 predicate sites
+  (the original 4 + the 5 coupled, per FRAGO 003; fixtures (a)/(c)/(d) close in Phase 1, fixture
+  (b) closes in Phase 1b per FRAGO 004's carve-out).
+- No shape (or `fixed<T>`) aggregate argument to a suspending callee is left in a dying stack
+  alloca across suspension — it is frame-backed via the one `shape_embed` crossing classifier
+  (the single authoritative crossing classifier, extended — never a second frame-layout path);
+  the child's `self` points into the surviving frame, proven by a deterministic-across-runs
+  RED→GREEN repro (Phase 1b, FRAGO 004).
 - No suspending call reaches the block_on fallback (`emit.rs:15122-15137`) from a non-designated
   caller without a compile-time hard error (Phase 2).
 - No cancelled task's `pending_sends` entry survives its cancellation, from EITHER token producer

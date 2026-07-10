@@ -22,15 +22,22 @@
 //! ("the same set that drives codegen routing, so the hint and the binary always agree") is what
 //! this single home enforces.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use ynz_ast::nodes::{Block, Expr, FunctionDecl, Stmt};
 
 use crate::independence::collect_ident_names;
 use crate::suspension_source::is_base_suspension_intrinsic;
+use crate::types::Type;
 
 /// The transitive suspending-function name set (same shape codegen uses).
 pub type SuspendSet = HashSet<String>;
+
+/// Per-expression resolved types keyed by `(span.start, span.end)` — the same map
+/// `TypedModule.expr_types` carries. Threaded into the suspension predicates so the
+/// UFCS method-call arm can classify shape receivers via the ONE authoritative
+/// `suspension_source::ufcs_method_call_suspends` arm (v0.3-M6 P1-1).
+pub type ExprTypes = HashMap<(usize, usize), Type>;
 
 /// The admitted CPU group for one function: the member statements' indices within the block that
 /// directly contains them, plus the path of nested-block descent to reach that block.
@@ -84,11 +91,12 @@ pub fn admitted_cpu_group(
     f: &FunctionDecl,
     suspend_set: &SuspendSet,
     supported_callees: &HashSet<String>,
+    expr_types: &ExprTypes,
 ) -> Option<AdmittedCpuGroup> {
     // Single-group constraint: a function spike-hosts IFF it has EXACTLY ONE CPU group across all
     // depths. Two-or-more groups would alias the single group-0 slot region — a silent wrong
     // answer — so decline ALL spiking and lower sequentially. Zero groups: nothing to host.
-    if count_cpu_groups_all_depths(&f.body.stmts, suspend_set, supported_callees) != 1 {
+    if count_cpu_groups_all_depths(&f.body.stmts, suspend_set, supported_callees, expr_types) != 1 {
         return None;
     }
 
@@ -106,7 +114,9 @@ pub fn admitted_cpu_group(
     // `wait`-derived state), so a group co-resident with another suspension is safe once its
     // result names are correctly frame-backed — which `spike_cpu_group_result_names`'s
     // depth-aware pre-allocation (Step 1c) now guarantees for both top-level and nested groups.
-    if let Some(members) = cpu_group_member_indices(&f.body.stmts, suspend_set, supported_callees) {
+    if let Some(members) =
+        cpu_group_member_indices(&f.body.stmts, suspend_set, supported_callees, expr_types)
+    {
         let last_idx = *members.last().expect("group has ≥2 members");
         let post_stmts = &f.body.stmts[(last_idx + 1)..];
         if param_read_after_join(f, post_stmts) {
@@ -158,7 +168,7 @@ pub fn admitted_cpu_group(
         return None;
     }
 
-    nested_group_member_path(&f.body.stmts, suspend_set, supported_callees)
+    nested_group_member_path(&f.body.stmts, suspend_set, supported_callees, expr_types)
 }
 
 // ── Fused (mixed CPU+I/O) top-level group — v0.3-M3g Phase 3 ───────────────────────────────
@@ -249,6 +259,7 @@ pub fn admitted_fused_group(
     f: &FunctionDecl,
     suspend_set: &SuspendSet,
     supported_callees: &HashSet<String>,
+    expr_types: &ExprTypes,
 ) -> Option<AdmittedFusedGroup> {
     // A host with ANY parameter declines. Params and the fused group's CPU handle/result
     // reserve share the SAME byte-32-relative slot addressing (`admitted_cpu_group`'s top-level
@@ -348,10 +359,9 @@ pub fn admitted_fused_group(
     }
 
     // No pre-group statement may suspend.
-    if stmts[..first_idx]
-        .iter()
-        .any(|s| stmt_contains_wait_deep(s) || stmt_contains_suspending_call_deep(s, suspend_set))
-    {
+    if stmts[..first_idx].iter().any(|s| {
+        stmt_contains_wait_deep(s) || stmt_contains_suspending_call_deep(s, suspend_set, expr_types)
+    }) {
         return None;
     }
 
@@ -366,7 +376,7 @@ pub fn admitted_fused_group(
     }
     if post_stmts
         .iter()
-        .any(|s| stmt_contains_suspending_call_deep(s, suspend_set))
+        .any(|s| stmt_contains_suspending_call_deep(s, suspend_set, expr_types))
     {
         return None;
     }
@@ -415,6 +425,7 @@ pub fn cpu_group_member_indices(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     supported_callees: &HashSet<String>,
+    expr_types: &ExprTypes,
 ) -> Option<Vec<usize>> {
     let mut call_indices: Vec<usize> = Vec::new();
     for (i, stmt) in stmts.iter().enumerate() {
@@ -506,10 +517,9 @@ pub fn cpu_group_member_indices(
     }
 
     // No pre-group statement may suspend.
-    if stmts[..first_idx]
-        .iter()
-        .any(|s| stmt_contains_wait_deep(s) || stmt_contains_suspending_call_deep(s, suspend_set))
-    {
+    if stmts[..first_idx].iter().any(|s| {
+        stmt_contains_wait_deep(s) || stmt_contains_suspending_call_deep(s, suspend_set, expr_types)
+    }) {
         return None;
     }
 
@@ -528,7 +538,7 @@ pub fn cpu_group_member_indices(
     // No post-group statement may call a user-defined suspending callee. Intrinsic waits exempt.
     if post_stmts
         .iter()
-        .any(|s| stmt_contains_suspending_call_deep(s, suspend_set))
+        .any(|s| stmt_contains_suspending_call_deep(s, suspend_set, expr_types))
     {
         return None;
     }
@@ -543,8 +553,9 @@ pub fn pair_representative_callee(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     supported_callees: &HashSet<String>,
+    expr_types: &ExprTypes,
 ) -> Option<String> {
-    let members = cpu_group_member_indices(stmts, suspend_set, supported_callees)?;
+    let members = cpu_group_member_indices(stmts, suspend_set, supported_callees, expr_types)?;
     let first_idx = members[0];
     match &stmts[first_idx] {
         Stmt::Let {
@@ -586,14 +597,15 @@ pub fn count_cpu_groups_all_depths(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     supported_callees: &HashSet<String>,
+    expr_types: &ExprTypes,
 ) -> usize {
     let mut count = 0;
-    if cpu_group_member_indices(stmts, suspend_set, supported_callees).is_some() {
+    if cpu_group_member_indices(stmts, suspend_set, supported_callees, expr_types).is_some() {
         count += 1;
     }
     for stmt in stmts {
         for block in nested_blocks(stmt) {
-            count += count_cpu_groups_all_depths(block, suspend_set, supported_callees);
+            count += count_cpu_groups_all_depths(block, suspend_set, supported_callees, expr_types);
         }
     }
     count
@@ -607,16 +619,21 @@ pub fn nested_group_representative_callee(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     supported_callees: &HashSet<String>,
+    expr_types: &ExprTypes,
 ) -> Option<String> {
     for stmt in stmts {
         for block in nested_blocks(stmt) {
-            if let Some(callee) = pair_representative_callee(block, suspend_set, supported_callees)
+            if let Some(callee) =
+                pair_representative_callee(block, suspend_set, supported_callees, expr_types)
             {
                 return Some(callee);
             }
-            if let Some(callee) =
-                nested_group_representative_callee(block, suspend_set, supported_callees)
-            {
+            if let Some(callee) = nested_group_representative_callee(
+                block,
+                suspend_set,
+                supported_callees,
+                expr_types,
+            ) {
                 return Some(callee);
             }
         }
@@ -633,10 +650,13 @@ fn nested_group_member_path(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     supported_callees: &HashSet<String>,
+    expr_types: &ExprTypes,
 ) -> Option<AdmittedCpuGroup> {
     for (stmt_index, stmt) in stmts.iter().enumerate() {
         for (block_index, block) in nested_blocks(stmt).into_iter().enumerate() {
-            if let Some(members) = cpu_group_member_indices(block, suspend_set, supported_callees) {
+            if let Some(members) =
+                cpu_group_member_indices(block, suspend_set, supported_callees, expr_types)
+            {
                 return Some(AdmittedCpuGroup {
                     block_path: vec![BlockStep {
                         stmt_index,
@@ -646,7 +666,7 @@ fn nested_group_member_path(
                 });
             }
             if let Some(mut deeper) =
-                nested_group_member_path(block, suspend_set, supported_callees)
+                nested_group_member_path(block, suspend_set, supported_callees, expr_types)
             {
                 deeper.block_path.insert(
                     0,
@@ -748,23 +768,27 @@ fn expr_contains_wait(expr: &Expr) -> bool {
 /// sub-frame to alias a joined result slot.
 ///
 /// Time: O(N) where N = AST nodes  Space: O(D) recursion depth.
-pub fn stmt_contains_suspending_call_deep(stmt: &Stmt, suspend_set: &SuspendSet) -> bool {
+pub fn stmt_contains_suspending_call_deep(
+    stmt: &Stmt,
+    suspend_set: &SuspendSet,
+    expr_types: &ExprTypes,
+) -> bool {
     let block_has = |b: &Block| {
         b.stmts
             .iter()
-            .any(|s| stmt_contains_suspending_call_deep(s, suspend_set))
+            .any(|s| stmt_contains_suspending_call_deep(s, suspend_set, expr_types))
     };
     match stmt {
-        Stmt::Expr(e) => expr_contains_suspending_call(e, suspend_set),
+        Stmt::Expr(e) => expr_contains_suspending_call(e, suspend_set, expr_types),
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
-            expr_contains_suspending_call(value, suspend_set)
+            expr_contains_suspending_call(value, suspend_set, expr_types)
         }
         Stmt::Return { value, .. } => value
             .as_ref()
-            .is_some_and(|e| expr_contains_suspending_call(e, suspend_set)),
+            .is_some_and(|e| expr_contains_suspending_call(e, suspend_set, expr_types)),
         Stmt::FieldAssign { target, value, .. } => {
-            expr_contains_suspending_call(target, suspend_set)
-                || expr_contains_suspending_call(value, suspend_set)
+            expr_contains_suspending_call(target, suspend_set, expr_types)
+                || expr_contains_suspending_call(value, suspend_set, expr_types)
         }
         Stmt::IndexAssign {
             receiver,
@@ -772,18 +796,18 @@ pub fn stmt_contains_suspending_call_deep(stmt: &Stmt, suspend_set: &SuspendSet)
             value,
             ..
         } => {
-            expr_contains_suspending_call(receiver, suspend_set)
-                || expr_contains_suspending_call(index, suspend_set)
-                || expr_contains_suspending_call(value, suspend_set)
+            expr_contains_suspending_call(receiver, suspend_set, expr_types)
+                || expr_contains_suspending_call(index, suspend_set, expr_types)
+                || expr_contains_suspending_call(value, suspend_set, expr_types)
         }
         Stmt::If { cond, body, .. } => {
-            expr_contains_suspending_call(cond, suspend_set) || block_has(body)
+            expr_contains_suspending_call(cond, suspend_set, expr_types) || block_has(body)
         }
         Stmt::While { cond, body, .. } => {
-            expr_contains_suspending_call(cond, suspend_set) || block_has(body)
+            expr_contains_suspending_call(cond, suspend_set, expr_types) || block_has(body)
         }
         Stmt::For { iter, body, .. } => {
-            expr_contains_suspending_call(iter, suspend_set) || block_has(body)
+            expr_contains_suspending_call(iter, suspend_set, expr_types) || block_has(body)
         }
         Stmt::Match {
             scrutinee,
@@ -791,14 +815,18 @@ pub fn stmt_contains_suspending_call_deep(stmt: &Stmt, suspend_set: &SuspendSet)
             else_arm,
             ..
         } => {
-            expr_contains_suspending_call(scrutinee, suspend_set)
+            expr_contains_suspending_call(scrutinee, suspend_set, expr_types)
                 || arms.iter().any(|a| block_has(&a.body))
                 || else_arm.as_ref().is_some_and(block_has)
         }
     }
 }
 
-fn expr_contains_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
+fn expr_contains_suspending_call(
+    expr: &Expr,
+    suspend_set: &SuspendSet,
+    expr_types: &ExprTypes,
+) -> bool {
     match expr {
         Expr::Call(c) => {
             if let Expr::Ident(name, _) = &c.callee {
@@ -810,21 +838,28 @@ fn expr_contains_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool 
             }
             c.args
                 .iter()
-                .any(|a| expr_contains_suspending_call(a, suspend_set))
+                .any(|a| expr_contains_suspending_call(a, suspend_set, expr_types))
         }
-        Expr::Wait(inner, _) => expr_contains_suspending_call(inner, suspend_set),
+        Expr::Wait(inner, _) => expr_contains_suspending_call(inner, suspend_set, expr_types),
         // A `background` spawn schedules separately — it does not suspend the current function.
         Expr::Background(_inner, _) => false,
         Expr::BinOp { lhs, rhs, .. } => {
-            expr_contains_suspending_call(lhs, suspend_set)
-                || expr_contains_suspending_call(rhs, suspend_set)
+            expr_contains_suspending_call(lhs, suspend_set, expr_types)
+                || expr_contains_suspending_call(rhs, suspend_set, expr_types)
         }
-        Expr::UnaryOp { operand, .. } => expr_contains_suspending_call(operand, suspend_set),
+        Expr::UnaryOp { operand, .. } => {
+            expr_contains_suspending_call(operand, suspend_set, expr_types)
+        }
         Expr::MethodCall { receiver, args, .. } => {
-            expr_contains_suspending_call(receiver, suspend_set)
+            // v0.3-M6 P1-1: a UFCS suspending method call (`value.method()` where the shape
+            // receiver's `method` resolves to a suspending fn) — classified via the ONE
+            // authoritative `ufcs_method_call_suspends` arm through the shared typeck helper.
+            crate::check::expr_is_ufcs_suspending_call(expr, expr_types, &|n| {
+                suspend_set.contains(n)
+            }) || expr_contains_suspending_call(receiver, suspend_set, expr_types)
                 || args
                     .iter()
-                    .any(|a| expr_contains_suspending_call(a, suspend_set))
+                    .any(|a| expr_contains_suspending_call(a, suspend_set, expr_types))
         }
         _ => false,
     }

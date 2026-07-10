@@ -66,8 +66,9 @@ pub mod types;
 
 pub use check::{
     check, check_with_kernel_mode, crossing_local_names, crossing_local_names_with_cpu_spike,
-    expr_is_conduit_suspend, stmt_contains_conduit_suspend, stmt_is_conduit_suspend,
-    type_attached_const_type, LocalCrossesWait, TypedModule, DEFAULT_CHANNEL_CAPACITY,
+    expr_is_conduit_suspend, expr_is_ufcs_suspending_call, stmt_contains_conduit_suspend,
+    stmt_is_conduit_suspend, type_attached_const_type, LocalCrossesWait, TypedModule,
+    DEFAULT_CHANNEL_CAPACITY,
 };
 pub use effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
 pub use exports::ExportTable;

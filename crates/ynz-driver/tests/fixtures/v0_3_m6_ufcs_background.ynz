@@ -1,0 +1,25 @@
+// v0.3-M6 P1-1 RED fixture (d): `background`-SPAWNED UFCS suspending call.
+// Correct behavior: `background ship.haul()` spawns `haul(ship)` as an independent task
+// (UFCS sugar at the spawn site); the task suspends on its sleep, prints at ~+20ms, the
+// entrypoint prints at ~+120ms — stdout is exactly "Mon\ndone\n", exit 0.
+// The receiver is `give`-transferred (background borrow rules reject share/lend args), so
+// the binding is `let`, not `const` (const cannot be given away).
+// Pre-fix failure (the documented P1-1 mode): the background spawn lowering destructures
+// `Expr::Call`-shaped inners only — a MethodCall inner has no UFCS-resolved spawn path.
+
+shape Ship {
+  name: string
+  cargo: int
+}
+
+function haul(give self: Ship) -> nothing {
+  wait sleep(20)
+  print(self.name)
+}
+
+function entrypoint() -> nothing {
+  let ship: Ship = { name: `Mon`, cargo: 10 }
+  background ship.haul()
+  wait sleep(120)
+  print(`done`)
+}

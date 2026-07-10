@@ -2255,8 +2255,13 @@ pub fn parallel_group_hints(
             _ => None,
         })
         .filter(|g| {
-            crate::cpu_admission::admitted_cpu_group(g, &effective_suspends, &supported_callees)
-                .is_some()
+            crate::cpu_admission::admitted_cpu_group(
+                g,
+                &effective_suspends,
+                &supported_callees,
+                &check_out.typed_module.expr_types,
+            )
+            .is_some()
         })
         .map(|g| g.name.clone())
         .collect();
@@ -2290,6 +2295,7 @@ pub fn parallel_group_hints(
                 f,
                 &suspends_with_promotions,
                 &supported_callees,
+                &check_out.typed_module.expr_types,
             ) {
                 emit_fused_group_member_hints(&f.body.stmts, &fused, &source_text, &mut hints);
                 // Nested `if`/`while`/`for`/`match` bodies still get their own overlap detection
@@ -2347,6 +2353,7 @@ pub fn parallel_group_hints(
             f,
             &suspends_with_promotions,
             &supported_callees,
+            &check_out.typed_module.expr_types,
         ) else {
             continue;
         };
