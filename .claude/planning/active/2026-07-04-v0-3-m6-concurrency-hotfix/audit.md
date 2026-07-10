@@ -2587,3 +2587,58 @@ R2 = extend guard to UFCS + generic call forms (one shared helper). R3 = full-sl
   deterministic handle-seam ABA test), `lib.rs` (repro fallback note repointed). Gates: nextest
   workspace 2355 passed / 0 failed / 6 skipped exit 0; targeted ABA suite 5/5; clippy exit 0;
   fmt exit 0.
+
+## Conductor cold-resume note — 2026-07-10 (context clear at the Phase-3 → Phase-3b boundary)
+
+Supersedes the earlier "mid-Phase-1d-round-3" cold-resume note above (that one is historical).
+Written at a clean, nothing-in-flight boundary. State + pointers for the next conductor; NOT standing law.
+
+### State — clean break, nothing in flight
+- **HEAD = `9be047d`.** Sealed this session: P1c (`759bd9b`), P1d + guard sweep (`5fd10f2`), planning
+  coordination (`e6c80ac`), P2 block_on guard (`6390902`), store-site stopgap (`46906d1`), P3
+  ABA/orphan (`070beca`), roadmap freshness (`9be047d`).
+- **Done: Phases 0, 1, 1b, 1c, 1d, 2, 3 (+ store-site stopgap).** All the hard novel-machinery work.
+- **Next: Phase 3b** — P2-5 recursion-chain × spike CPU-handle cleanup leak (LIVE, confirmed Phase 0 /
+  FRAGO 001). Model tag `(coding, high, medium)`. Then 4, 4b, 5, 5b, 6, 6b, 7, 8.
+- **Working tree: clean except 4 PRE-EXISTING not-mine dirty files** — `CLAUDE.md`, `Dockerfile`,
+  `crates/ynz-watch/src/{error.rs,rebuild.rs}`. Do NOT touch/commit/stage these; they predate the session.
+
+### ⚠️ MODEL — Fable for the EXECUTION agent (this session's hard-won fix)
+- The global executor agent def (`claude-setup/agents/executor.md`, mirrors to `~/.claude/`) had its
+  `model: "opus"` frontmatter pin **REMOVED this session** — that pin was silently beating the per-call
+  override. With it gone, **dispatch executors with `model: "fable"` and they run Fable (VERIFIED via
+  the human's UI).** The Agent-tool `model` enum only accepts `sonnet|opus|haiku|fable` — the alias
+  `"fable"`, NOT the full `claude-fable-5` (which the schema rejects).
+- **Only the EXECUTION agent goes on Fable** (human's explicit call). Review/other agents run on their
+  own def defaults — no `model:` override.
+- **Cannot self-verify a subagent's model** — the tool result never reports it; only the human's status
+  bar shows it. Do not claim "on Fable" as verified without that confirmation.
+- Main loop is Opus 4.8 · medium (human's session `/model`).
+- **Fable window EXPIRES Mon 2026-07-13** (REF-model-selection hard-stop; reverts to Opus). Monday
+  consideration: the executor def pin is still removed — decide whether to restore `model: "opus"` or
+  let the REF reversion cover it.
+
+### Gate override — NEXTEST (keep writing it)
+All gates run `cargo nextest run --workspace` (+ `clippy --workspace -- -D warnings` no `--tests`, +
+`fmt --all --check`), in the dev container: `docker compose run --rm dev ...`. The host has NO
+cargo-nextest (all-docker); the global resolver emits slow `cargo test` — keep writing `nextest` into
+executor + green-check dispatches. Baseline count at seal: **2355 passed / 0 failed / 6 skipped.**
+
+### Discipline that held all session (keep it)
+- **Money-adjacent concurrency → review fleet BEFORE seal.** Reviews caught a real issue every phase
+  (P1d 27th slot, P2 mono-generic, stopgap generic over-reach, P3 gen-0 window). Do not trust an
+  executor's own "green tree."
+- **Conductor seals by name** (`git add <file> ...`, never `git add -A`), and gets the human's word
+  before committing. Context-segment log is conductor-owned (executors correctly refuse to write it).
+
+### Backlog / deferred (homed, not lost)
+- **Brittle flake:** `ynz-typeck` `test_cross_file_reference_count_estimate_completes_fast`
+  (`symbol_lookup.rs:547`, wall-clock `<5ms` assert) flaked once under full parallel load, passed on
+  rerun — pre-existing, will flake gates again; candidate cleanup, out of M6 scope.
+- **2 pre-existing `--all-targets` clippy lints** (`ynz-runtime/tests/m2_runtime.rs:275`, `lib.rs:2830`)
+  — Phase-1d-era, NOT the documented gate; leave alone.
+- **FRAGO 021/022** accepted as justified (factual citation fix / forced ABI salt-location / the
+  conductor-directed gen-0 eliminate) — recorded.
+- **int→number COERCION** deferred to stub plan `2026-07-04-v0-3-hotfix-int-literal-number` (3 facets:
+  store-site #9, call-site #14, field-default); **#18 decimal128 by-value return + #19 map<number> key
+  hashing** homed on the concurrency-perf roadmap Capability Ledger.
