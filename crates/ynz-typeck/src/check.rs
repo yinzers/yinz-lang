@@ -461,6 +461,46 @@ impl<'b> Checker<'b> {
                     for field in &s.fields {
                         self.collect_referenced_names_in_ast_type(&field.ty, &type_params);
                     }
+                    // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): a hidden
+                    // field with an int-literal default against a `number` type
+                    // (`hidden cache: number = 5`) is never typechecked here otherwise,
+                    // and codegen ICEs lowering the raw i64 into the decimal128 pointer
+                    // slot (emit.rs hidden-default store). Only hidden-field defaults are
+                    // lowered as defaults (non-hidden fields must be provided at
+                    // construction, so their default expr is dead), so the gate matches
+                    // that scope. Route through the SAME shared teaching gate as every
+                    // other int-literal→`number` slot (authoritative-derivation: one gate,
+                    // no per-slot twin). Coercion stays deferred to the stub plan.
+                    for field in &s.fields {
+                        if !field.is_hidden {
+                            continue;
+                        }
+                        let Some(default_expr) = &field.default else {
+                            continue;
+                        };
+                        // Guard on the RAW AST type before resolving through
+                        // ast_type_to_type. This arm runs with an empty
+                        // type_param_scope (it is only populated in
+                        // check_generic_function_body), so resolving a
+                        // type-param-typed field (`hidden buffer: array<T>`) would
+                        // emit a spurious "T is not a known type" diagnostic — the
+                        // exact trap the diagnostic-free walker above deliberately
+                        // avoids. `number` is banned from aliasing, so a `number`
+                        // slot is ALWAYS the literal AstType::Number here; matching
+                        // it directly resolves and fires the gate only for a bare
+                        // `number` annotation, never walking a generic param. The
+                        // gate already fires only on bare Type::Number (so `maybe
+                        // number` etc. fall through), so this loses nothing.
+                        if !matches!(&field.ty, AstType::Number { .. }) {
+                            continue;
+                        }
+                        let field_ty = self.ast_type_to_type(&field.ty);
+                        self.reject_int_literal_number_slot(
+                            NumberSlotRole::Field { name: &field.name },
+                            &field_ty,
+                            default_expr,
+                        );
+                    }
                     // Union type alias RHS: `shape PghEvent = SouthSideEvent | StripeDistrictEvent`.
                     // alias_ty is the raw AstType (Union) written in source. Because the check
                     // pass never enters ShapeDecl bodies, these member names are otherwise
@@ -1519,6 +1559,37 @@ impl<'b> Checker<'b> {
 
         let annotated_ty = annotation.map(|t| self.ast_type_to_type(t));
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
+
+        // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): `let x: number = 5`
+        // hints the int literal to `number`, so `types_compatible(number, number)`
+        // admits it — then codegen ICEs storing a raw i64 into the decimal128 pointer
+        // slot (the store-site #9 class). Route it through the SAME shared teaching
+        // gate as every other int-literal→`number` slot (authoritative-derivation: one
+        // gate, no per-slot twin). The int→number COERCION stays deferred to the
+        // 2026-07-04-v0-3-hotfix-int-literal-number stub plan — this rejects, not coerces.
+        if let Some(ann_ty) = &annotated_ty {
+            if self.reject_int_literal_number_slot(
+                NumberSlotRole::StoreBinding { name },
+                ann_ty,
+                value,
+            ) {
+                // Bind the name at the annotated `number` type so later uses don't
+                // cascade into spurious unknown-variable diagnostics.
+                self.scope.insert(
+                    name.to_string(),
+                    ScopeEntry {
+                        ty: ann_ty.clone(),
+                        is_const,
+                        is_param: false,
+                        param_ownership: None,
+                        is_loop_var: false,
+                        is_consumed: false,
+                        defined_at: name_span.clone(),
+                    },
+                );
+                return;
+            }
+        }
 
         // M7 P3c: range values are first-class — no restriction on storage.
         // (The M3 restriction is removed here.)
@@ -3840,13 +3911,16 @@ impl<'b> Checker<'b> {
     /// patterns) — so all render byte-identical core diagnostics per
     /// non-oop.md's identical-diagnostics-between-call-forms convention
     /// (authoritative-derivation: one gate, never per-slot twins). The store
-    /// sites are deliberately NOT gated here — both the local binding
-    /// (`let x: number = 5`) AND the declaration-site field default
-    /// (`hidden f: number = 5`) are store-site #9 class: they ICE today,
-    /// pending the same int→number coercion mechanism (Future-Req #9/#14),
-    /// which routes the raw i64 into the decimal128 slot rather than rejecting
-    /// it. Gating one store site while the other stays open would make the
-    /// class inconsistent, so both wait for the coercion together.
+    /// sites are ALSO gated now (v0.3-M6 store-site stopgap): the local binding
+    /// (`let x: number = 5`, via `NumberSlotRole::StoreBinding` in `check_let`)
+    /// AND the declaration-site hidden-field default (`hidden f: number = 5`, via
+    /// `NumberSlotRole::Field` in the `ShapeDecl` arm of `check_module`) both
+    /// route through this SAME gate and emit a teaching error instead of the raw
+    /// codegen ICE they produced before. The int→number COERCION (which would
+    /// route the raw i64 into the decimal128 slot rather than rejecting it)
+    /// remains deferred to the 2026-07-04-v0-3-hotfix-int-literal-number stub
+    /// plan — this stopgap uniformly REJECTS every facet; coercion replaces the
+    /// rejection later. Rejection is now consistent across all slots.
     ///
     /// Returns `true` when the diagnostic fired (the caller skips further
     /// checks for this argument).
@@ -3904,6 +3978,7 @@ impl<'b> Checker<'b> {
             }
             NumberSlotRole::Return => ("`return`".to_string(), "return value", None),
             NumberSlotRole::MatchArm => ("This arm pattern".to_string(), "match pattern", None),
+            NumberSlotRole::StoreBinding { name } => (format!("`{name}`"), "variable", None),
         };
         let variable_use = match call_name {
             Some(name) => format!(" then `{name}(amount)`"),
@@ -10586,6 +10661,13 @@ enum NumberSlotRole<'a> {
     Return,
     /// A multi-case-if arm value pattern against a `number` scrutinee.
     MatchArm,
+    /// A `let`/`const` binding store site with a `number` annotation
+    /// (`let x: number = 5`). `name` = the binding name. v0.3-M6 store-site
+    /// stopgap: typeck previously admitted this (the hinted int literal types
+    /// `number`) and codegen ICE'd storing a raw i64 into the decimal128 pointer
+    /// slot; the gate now rejects it with a teaching error. The int→number
+    /// COERCION remains deferred (2026-07-04-v0-3-hotfix-int-literal-number).
+    StoreBinding { name: &'a str },
 }
 
 fn simple_ident_name(expr: &Expr) -> Option<&str> {

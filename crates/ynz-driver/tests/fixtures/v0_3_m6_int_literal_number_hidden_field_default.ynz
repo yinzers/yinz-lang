@@ -1,0 +1,24 @@
+// WHY: int literal as the DECLARATION-site default of a hidden field typed `number`
+// (`hidden cache: number = 5`). Field defaults were never typechecked, so this
+// reached codegen, where the hidden-default store lowered the raw i64 into the
+// decimal128 pointer slot. Pre-fix RED signature (probe-confirmed against the
+// pre-fix tree): the "Yinz compiler bug" ICE banner, panic
+// `Found IntValue "i64 5" but expected PointerValue variant` at emit.rs
+// (hidden-default store path). v0.3-M6 store-site stopgap: the shared
+// int-literal→`number` gate now REJECTS this with a clean teaching error
+// (`NumberSlotRole::Field`, wired at the `ShapeDecl` decl site). Only hidden-field
+// defaults are lowered as defaults, so the gate matches that scope. The int→number
+// COERCION stays deferred to 2026-07-04-v0-3-hotfix-int-literal-number.
+shape Ledger {
+  label: string
+  hidden cache: number = 5
+}
+
+function getCache(share self: Ledger) -> number {
+  return self.cache
+}
+
+function entrypoint() -> nothing {
+  let l: Ledger = { label: `owed` }
+  print(l.getCache())
+}

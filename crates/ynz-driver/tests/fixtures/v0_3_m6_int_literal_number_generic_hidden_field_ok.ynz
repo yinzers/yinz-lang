@@ -1,0 +1,26 @@
+// WHY: POSITIVE regression for the v0.3-M6 store-site stopgap hidden-field gate.
+// A generic shape with a type-param-typed hidden field (`hidden buffer: array<T>`)
+// MUST compile clean. The gate's declaration-site arm (the `ShapeDecl` arm of
+// check_module) walks every shape's hidden-field defaults with an EMPTY
+// type_param_scope — that scope is only populated in check_generic_function_body —
+// so resolving `array<T>` through ast_type_to_type there emitted a spurious
+// `` `T` is not a known type `` diagnostic, rejecting valid generic-container code.
+// Hidden fields REQUIRE a default, so there was no workaround: any generic shape
+// with a type-param-typed hidden field failed to compile. Fix: guard on the raw
+// AstType and fire the gate only for a literal `number` annotation before resolving
+// (`number` is banned from aliasing, so a `number` slot is always the literal
+// AstType::Number). This fixture locks the over-reach out — a generic hidden field
+// must compile clean and must never emit `T is not a known type`. Declaration-site
+// only: the over-reach fired at shape-declaration time, independent of construction.
+shape Cache<T> {
+  label: string
+  hidden buffer: array<T> = []
+}
+
+function getLabel<T>(share self: Cache<T>) -> string {
+  return self.label
+}
+
+function entrypoint() -> nothing {
+  print(`generic-hidden-field-ok`)
+}

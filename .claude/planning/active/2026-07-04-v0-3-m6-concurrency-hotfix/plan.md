@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1"]
 created_at: "2026-07-04"
 updated_at: "2026-07-10"
 metadata:
@@ -376,9 +376,11 @@ routing must state the truth about what exists today versus what is deferred and
    just the spawn boundary) and COMPLETED a single authoritative rejection guard
    (`reject_int_literal_number_slot`) over every such slot; round 4 closed the errors-wrapped `return`
    gap in that guard. So Phase 1d's real deliverable is BOTH the FRAGO-009 decimal128-boundary fix
-   (A/C, D8/Option 2) AND the near-compiler-wide int-literal→`number` rejection guard — the store-site
-   coercion facets (`let x: number = 5` and `hidden f: number = 5`) remain deferred to the
-   int→number coercion (#9/#14), un-gated on purpose.
+   (A/C, D8/Option 2) AND the near-compiler-wide int-literal→`number` rejection guard. The two store
+   sites (`let x: number = 5` and `hidden f: number = 5`) are now ALSO gated by that same guard (the
+   v0.3-M6 store-site stopgap, FRAGO 020) — rejection is uniform across every facet; only the
+   int→number COERCION (#9/#14) remains deferred to the `2026-07-04-v0-3-hotfix-int-literal-number`
+   stub plan.
 2. The block_on-fallback branch (`emit.rs:15122-15137`) is a compile-time hard error for any caller
    not reachable via the designated synchronous entry point — mirroring `emit.rs:11162`'s sibling.
 3. A cancelled sender's `pending_sends` entry is purged (idempotently) and the `caller_token` is
@@ -1172,9 +1174,13 @@ slots (call-form text byte-identical to round 2 save one recorded WHY-clause wor
 "at a call site" → "automatically"). **24 committed RED fixtures + 25 committed tests** (24 slot tests +
 false-positive sweep) in `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`, all 24 flipped
 RED→GREEN (teaching error, non-zero exit, no ICE banner). **Covered set is now COMPLETE for the
-IntLit / `-IntLit` → `number` argument / construction / statement class, store-site `let x: number = 5`
-(#9, signed-stub territory) alone excepted** (deliberately not gated; controls `x = 5` reassign and the
-#9 store-site stay untouched, confirmed). Full step-4 gates GREEN: `cargo nextest run --workspace`
+IntLit / `-IntLit` → `number` argument / construction / statement class. The two STORE sites
+(`let x: number = 5` local binding; `hidden f: number = 5` field default) are ALSO rejected with the
+SAME teaching error as of the v0.3-M6 store-site stopgap (FRAGO 020, human-directed "no duct tape",
+2026-07-10): the REJECTION now covers every facet uniformly — only the int→number COERCION (#9/#14)
+remains deferred to the `2026-07-04-v0-3-hotfix-int-literal-number` stub plan** (controls `x = 5`
+reassign and `let x: number = 5.0` / `number`-typed variables stay clean, confirmed). Full step-4
+gates GREEN: `cargo nextest run --workspace`
 **2344 passed / 0 failed** (M3e `cross_impl_consistency` both GREEN under load, no flake fired);
 `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all --check` clean. **FOUR deviations
 surfaced to the deviation-judge → conductor seam (NOT self-adjudicated; recorded by FRAGO 018):**
@@ -2073,17 +2079,25 @@ lowering arm for ANY type.
    documentation-hygiene item, not a bug. COST to fix later: small (merge the two sections into one).
    TRIGGER: the next roadmap-editing session, or Patrick's explicit call to clean it up.
 9. **Roadmap ledger row 441 — codegen ICE: bare int literal into a `number`-typed slot crashes the
-   compiler (ELEVATED priority)** — this plan explicitly DECLINES it; it stays unclaimed between M6 and
-   M7 rather than being silently picked up here. WHAT: `store`/`store_field`'s `Type::Number` arm
-   assumes a decimal128-pointer representation while `Expr::IntLit` lowers to a raw `i64`; typeck admits
-   the coercion; codegen panics on common valid code (e.g. `let x: number = 5`). **Declaration-site
-   field defaults share this exact store-site root** — `hidden f: number = 5` ICEs identically (round 4
-   confirmed: `Found IntValue(i64 5) but expected PointerValue variant` at `emit.rs:20351`, from the
-   field-default lowering site `emit.rs:18233` calling `lower_expr` with no type hint → raw i64 →
-   `store_field` into a decimal128 slot), so both the local binding AND the shape-field default are the
-   SAME store-site #9 class and are subsumed by the SAME int→number coercion mechanism in the
-   `2026-07-04-v0-3-hotfix-int-literal-number` stub plan (see #14) — this plan records the linkage only;
-   it does NOT edit the stub plan (a conductor→human coordination item). WHY declined: this is
+   compiler (ELEVATED priority)** — the int→number COERCION stays unclaimed between M6 and M7 rather
+   than being silently picked up here; **but the raw-ICE EXPOSURE at both store sites is now closed by
+   the v0.3-M6 store-site stopgap (FRAGO 020, human-directed "no duct tape", 2026-07-10): both
+   `let x: number = 5` and `hidden f: number = 5` now emit the SAME clean teaching error as every other
+   int-literal→`number` slot instead of the raw "compiler bug" ICE banner.** WHAT (pre-stopgap root):
+   `store`/`store_field`'s `Type::Number` arm assumes a decimal128-pointer representation while
+   `Expr::IntLit` lowers to a raw `i64`; typeck admitted the coercion; codegen panicked on common valid
+   code (e.g. `let x: number = 5`). **Declaration-site field defaults shared this exact store-site
+   root** — `hidden f: number = 5` ICE'd identically (round 4 confirmed:
+   `Found IntValue(i64 5) but expected PointerValue variant` at `emit.rs:20351`, from the field-default
+   lowering site `emit.rs:18318` calling `lower_expr` with no type hint → raw i64 → `store_field` into a
+   decimal128 slot), so both the local binding AND the shape-field default are the SAME store-site #9
+   class. The stopgap REJECTS both facets via the shared `reject_int_literal_number_slot` gate
+   (`NumberSlotRole::StoreBinding` in `check_let`; `NumberSlotRole::Field` at the `ShapeDecl` decl site);
+   the int→number COERCION that would ACCEPT the int literal remains subsumed by the SAME mechanism in
+   the `2026-07-04-v0-3-hotfix-int-literal-number` stub plan (see #14) and will REPLACE this rejection
+   across all facets — this plan records the linkage and now files FRAGO 020 for the stopgap; it does
+   NOT edit the stub plan beyond its own reconciliation note (a conductor→human coordination item).
+   WHY the COERCION stays declined: this is
    NOT a concurrency-audit finding — it is a pre-existing literal-lowering bug orthogonal to M6's
    confirmed concurrency-race/leak/honesty charter; mixing an unrelated ICE fix into a hotfix milestone
    widens this plan's blast radius for no charter-aligned benefit (M7's own Future Requirements #3
@@ -2160,7 +2174,11 @@ lowering arm for ANY type.
     pointer-typed decimal128 param (LLVM verifier reject). Root cause is the SAME missing int→number
     coercion as item #9 (which is the STORE/binding-site facet, `let x: number = 5`); #9 and #14 are
     two sites of one gap and should very likely be fixed together (one int→number coercion, threaded
-    at both the store site and the call-argument site — authoritative-derivation, one mechanism).
+    at both the store site and the call-argument site — authoritative-derivation, one mechanism). Note
+    (v0.3-M6 store-site stopgap, FRAGO 020, 2026-07-10): #9's store sites — like this call-site facet
+    since round 1 — now REJECT with the shared teaching gate rather than ICE; rejection is uniform
+    across ALL sites, and the one int→number COERCION this entry tracks remains the deferred piece that
+    will REPLACE every such rejection.
     **WHY deferred (scoped OUT of Phase 1d):** this is a PRE-EXISTING GENERAL codegen coercion gap,
     orthogonal to FRAGO 009's decimal128-across-a-concurrency-boundary charter — it ICEs
     synchronously with no concurrency involved, and fixing it ONLY at the spawn boundary would ship
@@ -2198,16 +2216,20 @@ lowering arm for ANY type.
     `ErrorsCapable` before the `Type::Number` check (ONE gate, no parallel path), so an errors-return
     routes through the same teaching error as a plain `-> number` return. **So the guard is complete
     for the IntLit / `-IntLit` → `number` argument / construction / statement class INCLUDING the
-    errors-wrapped return — with the DECLARATION-SITE store sites explicitly carved out as store-site
-    #9 class: both `let x: number = 5` (local binding) AND `hidden f: number = 5` (shape field default)
-    ICE today** (the field default confirmed round 4: `Found IntValue(i64 5) but expected PointerValue
-    variant` at `emit.rs:20351`, from `lower_expr`-with-no-hint at the field-default lowering site
-    `emit.rs:18233` storing a raw i64 into a decimal128 slot — structurally identical to `let x: number
-    = 5`). The store sites stay UN-gated on purpose (routed to the int→number coercion, not a teaching
-    error — see #9); gating one declaration-site store while the other stays open would make the class
-    inconsistent. Tested by
+    errors-wrapped return. The DECLARATION-SITE store sites — both `let x: number = 5` (local binding)
+    AND `hidden f: number = 5` (shape field default) — are ALSO gated now, as of the v0.3-M6 store-site
+    stopgap (FRAGO 020, human-directed "no duct tape", 2026-07-10):** both ICE'd pre-stopgap (the field
+    default confirmed round 4: `Found IntValue(i64 5) but expected PointerValue variant` at
+    `emit.rs:20436`, from `lower_expr`-with-no-hint at the field-default lowering site `emit.rs:18318`
+    storing a raw i64 into a decimal128 slot — structurally identical to the `let x: number = 5` store
+    at `emit.rs:20268`), and both now REJECT with the SAME teaching error via the shared
+    `reject_int_literal_number_slot` gate (`NumberSlotRole::StoreBinding` in `check_let`;
+    `NumberSlotRole::Field` at the `ShapeDecl` decl site — one gate, no per-slot twin per
+    authoritative-derivation). Rejection is now uniform across every facet; the int→number COERCION
+    (which will ACCEPT the int literal) stays deferred (routed to the stub plan — see #9). Tested by
     `v03_m6_int_literal_to_number_param_{cpu_member,ufcs,generic_fn}_is_clean_teaching_error` plus the
-    24 round-3 slot tests, the round-4 `v03_m6_int_lit_number_return_errors_is_teaching_error`, and the
+    24 round-3 slot tests, the round-4 `v03_m6_int_lit_number_return_errors_is_teaching_error`, the
+    stopgap `v03_m6_int_lit_number_{let_store,hidden_field_default}_is_teaching_error`, and the
     false-positive sweep in `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`; the WHOLE guard
     must be REMOVED when the coercion ships (it rejects exactly the programs the coercion will accept).
 15. **`callee_takes_bare_number` / `callee_returns_bare_number` twin-scan consolidation**

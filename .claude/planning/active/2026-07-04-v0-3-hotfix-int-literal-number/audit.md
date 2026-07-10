@@ -46,6 +46,20 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   audit.md were NOT touched (another executor's territory). Session-id appended to this plan's
   frontmatter chain in the same action. Nothing committed or staged — conductor seals.
 
+- `executor-2026-07-10-m6-store-site-stopgap` — 2026-07-10 — cross-plan reconciliation from the v0.3-M6
+  store-site stopgap (M6 FRAGO 020, human-directed "no duct tape"). M6 landed a REJECTION stopgap that closes
+  the raw-ICE exposure at BOTH store-site facets — `let x: number = 5` (this stub's original target, facet 1)
+  and `hidden f: number = 5` (facet 2) now emit M6's shared int-literal→`number` teaching error instead of the
+  "compiler bug" ICE banner. Updated this stub's Mission intro (ICE exposure now closed by the stopgap) and the
+  SCOPE-WIDENED bullet (facets 1 & 2 flipped from "still ICE" to "now rejected-with-teaching by M6"; all THREE
+  facets are now uniformly rejected). **The stub's own job is UNCHANGED:** REPLACE that rejection with an actual
+  int→number COERCION (which accepts the int literal) across all three facets as ONE mechanism — the stopgap
+  only closed the crash exposure, it did NOT implement the coercion, and the whole M6 rejection guard is to be
+  REMOVED when this stub's coercion ships. RECORD-ONLY: no fix-shape adjudication performed. M6's plan.md /
+  audit.md carry the stopgap's own FRAGO 020 (that is the other executor's territory; this session touched them
+  only for the M6-side reconciliation directed by the task). Session-id appended to this plan's frontmatter
+  chain in the same action. Nothing committed or staged — conductor seals.
+
 ## FRAGO log
 
 (none — this plan has not been dispatched for execution; it is a freshly-authored stub.)

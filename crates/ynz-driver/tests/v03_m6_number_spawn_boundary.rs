@@ -425,8 +425,18 @@ fn v03_m6_number_arg_fused_cpu_member_is_deterministic_across_runs() {
 // `return`, multi-case-if arm patterns), and map bracket keys. Each fixture's
 // header records its pre-fix RED signature (segfault / LLVM verifier ICE /
 // internal panic banner / silent-wrong output), all probe-confirmed against the
-// pre-fix tree. The store site (`let x: number = 5`) is deliberately NOT gated
-// (Future-Req #9, routed to the int-literal-number hotfix plan).
+// pre-fix tree. The store sites (`let x: number = 5` binding; `hidden f: number = 5`
+// field default) are ALSO gated now — see the v0.3-M6 store-site stopgap tests below.
+//
+// INTENDED BEHAVIOR CHANGE (v0.3-M6 store-site stopgap, human-directed "no duct
+// tape"): Phase 1d deliberately left the store sites un-gated — this comment
+// previously pinned `let x: number = 5` as "deliberately NOT gated (Future-Req #9)".
+// The stopgap flips that: both store sites now REJECT with the SAME teaching error as
+// every other slot (store-site behavior intentionally changed ICE→teaching-error).
+// This is an intended contract change, NOT a weakened test. The int→number COERCION
+// (not the rejection) remains the deferred piece, routed to the
+// 2026-07-04-v0-3-hotfix-int-literal-number stub plan, which will REPLACE rejection
+// with coercion across ALL facets uniformly.
 
 /// Round-3 shared assertions: the int-literal→`number` teaching error at EVERY
 /// slot the class reaches. Asserts the role-agnostic CORE text (the
@@ -633,6 +643,64 @@ int_literal_number_slot_test!(
     "return-from-number-errors-fn",
     "5"
 );
+
+// ── v0.3-M6 store-site stopgap (human-directed "no duct tape") ────────────────
+//
+// The two STORE sites Phase 1d left un-gated (Future-Req #9): the local
+// `let x: number = 5` binding and the `hidden f: number = 5` declaration-site
+// field default. Both ICE'd at codegen pre-fix (raw i64 into the decimal128 pointer
+// slot — "Yinz compiler bug" banner). Each fixture's header records that pre-fix RED
+// signature; these tests lock the post-fix contract (clean teaching error via the
+// SAME shared gate as every slot above). Rejection is now uniform across every
+// facet; only the int→number COERCION stays deferred to the stub plan.
+int_literal_number_slot_test!(
+    v03_m6_int_lit_number_let_store_is_teaching_error,
+    "v0_3_m6_int_literal_number_let_store.ynz",
+    "let-binding store site (pre-fix ICE class)",
+    "5"
+);
+int_literal_number_slot_test!(
+    v03_m6_int_lit_number_hidden_field_default_is_teaching_error,
+    "v0_3_m6_int_literal_number_hidden_field_default.ynz",
+    "hidden-field-default decl site (pre-fix ICE class)",
+    "5"
+);
+
+#[test]
+fn v03_m6_generic_type_param_hidden_field_compiles_clean() {
+    // WHY: over-reach regression guard for the hidden-field-default gate. The
+    // gate's decl-site arm (ShapeDecl arm of check_module) runs with an EMPTY
+    // type_param_scope, so resolving a type-param-typed hidden field
+    // (`hidden buffer: array<T>`) through ast_type_to_type there emitted a
+    // spurious `T is not a known type` diagnostic — rejecting VALID generic
+    // code (hidden fields require a default, so there was no workaround). The
+    // fix guards on the raw AstType and resolves only for a literal `number`
+    // annotation. This positive fixture must COMPILE CLEAN, guarding against
+    // re-introducing the over-reach.
+    let (stdout, stderr, code, timed_out) = ynz_run_with_timeout(
+        "v0_3_m6_int_literal_number_generic_hidden_field_ok.ynz",
+        RUN_TIMEOUT,
+    );
+    assert!(
+        !timed_out,
+        "generic hidden-field fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        code, 0,
+        "a generic shape with a type-param-typed hidden field is VALID code and \
+         must compile clean (the gate must not over-reach onto generic params); \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("is not a known type"),
+        "the hidden-field gate must never emit `T is not a known type` on a valid \
+         generic-param field type; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "generic-hidden-field-ok\n",
+        "the fixture must run to completion with its expected output; stderr:\n{stderr}"
+    );
+}
 
 #[test]
 fn v03_m6_int_literal_number_gate_false_positive_sweep_stays_clean() {

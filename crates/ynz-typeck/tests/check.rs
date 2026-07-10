@@ -169,10 +169,42 @@ fn int_literal_infers_as_int() {
 }
 
 #[test]
-fn int_literal_retypes_as_number_with_annotation() {
-    // WHY: `let x: number = 42` must store x as `number`, not `int`.
-    // The annotation context must override the default literal inference.
-    assert_clean("function entrypoint() -> nothing { let x: number = 42\nprint(x) }");
+fn int_literal_number_store_binding_is_rejected_with_teaching_error() {
+    // WHY: `let x: number = 42` — an INT literal into a `number`-annotated store
+    // binding. INTENDED BEHAVIOR CHANGE (v0.3-M6 store-site stopgap, human-directed
+    // "no duct tape", FRAGO 020): this previously type-checked clean (the hinted
+    // infer retyped `42` as `number`) and then ICE'd at codegen (raw i64 into the
+    // decimal128 pointer slot). It is now REJECTED with the shared int-literal→`number`
+    // teaching error (`NumberSlotRole::StoreBinding`) — the SAME gate every other slot
+    // uses. This is an intended contract change, NOT a weakened test: the int→number
+    // COERCION that would accept it stays deferred to the
+    // `2026-07-04-v0-3-hotfix-int-literal-number` stub plan, which will REPLACE this
+    // rejection with coercion. (Prior name: `int_literal_retypes_as_number_with_annotation`,
+    // which asserted the old admit-then-ICE behavior.)
+    let output = assert_errors(
+        "function entrypoint() -> nothing { let x: number = 42\nprint(x) }",
+        1,
+    );
+    assert!(
+        output.diagnostics[0]
+            .what
+            .contains("is an int literal — passing an int literal to a `number`"),
+        "the store binding must render the shared int-literal→number teaching error; got: {:?}",
+        output.diagnostics[0].what
+    );
+    assert!(
+        output.diagnostics[0].what_instead.contains("42.0"),
+        "the teaching error must offer the decimal-literal WHAT-INSTEAD (`42.0`); got: {:?}",
+        output.diagnostics[0].what_instead
+    );
+}
+
+#[test]
+fn number_literal_stays_clean_in_number_store_binding() {
+    // WHY: the false-fire guard for the store-binding gate above — a genuine decimal
+    // literal (`42.0`) into a `number` binding is already a `number` and must compile
+    // clean; the gate must fire ONLY on int literals, never on decimals.
+    assert_clean("function entrypoint() -> nothing { let x: number = 42.0\nprint(x) }");
 }
 
 #[test]

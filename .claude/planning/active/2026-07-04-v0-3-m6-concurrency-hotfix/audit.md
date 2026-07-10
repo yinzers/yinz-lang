@@ -1071,6 +1071,65 @@ seals the boundary.
   NOT touch the dirty-not-mine files (`CLAUDE.md`, `Dockerfile`, `ynz-watch/src/{error,rebuild}.rs`). Did
   NOT commit/stage — conductor seals the boundary.
 
+- `executor-2026-07-10-m6-store-site-stopgap` — 2026-07-10 — v0.3-M6 store-site stopgap (human-directed
+  "no duct tape", FRAGO 020) — **DONE.** Closed the two LIVE raw-ICE store-site exposures Phase 1d left
+  un-gated: `let x: number = 5` (local binding) and `hidden f: number = 5` (field default) now REJECT with
+  the shared int-literal→`number` teaching error instead of the "Yinz compiler bug" ICE banner — the
+  int→number COERCION stays deferred to the `2026-07-04-v0-3-hotfix-int-literal-number` stub. Verify-before-fix
+  Paper-Trace (pre-fix ICE at `emit.rs:20268`/`:20436` → post-fix teaching error, controls clean) in FRAGO 020.
+  Extended the ONE shared `reject_int_literal_number_slot` gate (new `NumberSlotRole::StoreBinding` for the
+  binding, REUSED `NumberSlotRole::Field` for the field default — authoritative-derivation, no twin); 2 RED
+  fixtures + 2 slot tests; re-pointed the #9 store-site control comment AND the `int_literal_retypes_as_number_
+  with_annotation` typeck control (renamed to `..._store_binding_is_rejected_with_teaching_error`) to the new
+  intended behavior + added a decimal false-fire guard. Cross-plan doc reconciliation (M6 plan + stub plan +
+  both audit.md, whole-plan sibling sweep). Gates FULL GREEN: nextest --workspace 2349 passed / 0 failed / 6
+  skipped (+3 vs 2346 baseline); clippy clean; fmt clean. Deviation surfaced: roadmap row 441/497 "panics"
+  phrasing now stale (surfaced for the seam, not self-edited). Did NOT commit/stage — conductor seals.
+
+- `executor-2026-07-10-m6-store-site-stopgap-fixloop1` — 2026-07-10 — store-site stopgap **FIX-LOOP round 1**
+  — **DONE.** Closes the ONE confirmed code-review BLOCKER: the new hidden-field-default gate over-reached and
+  rejected VALID generic code. Root cause (empirically confirmed): the gate loop in the `ShapeDecl` arm of
+  `check_module` (`check.rs:481`) called `ast_type_to_type(&field.ty)` where `type_param_scope` is EMPTY (it is
+  only populated in `check_generic_function_body`), so a hidden field whose type references a generic type
+  param fell through to the unknown-type path and emitted a spurious `` `T` is not a known type `` — the exact
+  trap the adjacent original code (`check.rs` ~453-462) deliberately avoids with the diagnostic-free
+  `collect_referenced_names_in_ast_type` walker. **Fix (`check.rs`, hidden-field gate arm):** guard on the raw
+  AST type before resolving — `if !matches!(&field.ty, AstType::Number { .. }) { continue; }` — so the gate
+  resolves/fires ONLY for a literal `number` annotation and never walks a generic param (`number` is banned from
+  aliasing, so a `number` slot is always the literal `AstType::Number`; loses nothing — `maybe<number>` etc.
+  already fall through the gate, which matches only bare `Type::Number`). **Paper-Trace (verify before/after):**
+  regression case `shape Cache<T> { label: string; hidden buffer: array<T> = [] }` — Observed pre-fix: `Error: `T`
+  is not a known type` (exit 1, valid code REJECTED); Expected: clean compile; post-fix: compiles + runs clean
+  (exit 0, "generic-hidden-field-ok"), Residual 0. Stopgap facets all still hold post-fix: `hidden cache: number
+  = 5` STILL teaches (int-literal→`number` error, no ICE, exit 1); `hidden cache: number = 5.0` stays clean
+  (exit 0, "5.0"); `let x: number = 5` STILL teaches (exit 1); `let x: number = 5.0` stays clean (exit 0).
+  `check_let` NOT touched — verified its gate runs inside `check_generic_function_body` where `type_param_scope`
+  IS populated (a `let x: T = ...` resolves `T` correctly via line 4870), so it carries no analogous exposure.
+  **New POSITIVE regression fixture + test:** `crates/ynz-driver/tests/fixtures/v0_3_m6_int_literal_number_generic_hidden_field_ok.ynz`
+  (generic shape + type-param-typed hidden field, declaration-site — the over-reach fired at shape-declaration
+  time independent of construction; generic-shape *construction* via literal is a separate unshipped feature, so
+  the fixture is declaration-scoped to match the exact reproduction) + test
+  `v03_m6_generic_type_param_hidden_field_compiles_clean` (in `v03_m6_number_spawn_boundary.rs`) asserting exit
+  0, no `is not a known type`, byte-exact stdout. **Gates FULL GREEN:** `nextest --workspace` 2350 passed / 0
+  failed / 6 skipped (= 2349 baseline + 1 new positive regression test); `clippy --workspace -- -D warnings`
+  clean; `fmt --all --check` clean. No `#[allow]`, no `--no-verify`, no weakened test. Touched ONLY `check.rs` +
+  new fixture + `v03_m6_number_spawn_boundary.rs` + this `audit.md`. Did NOT commit/stage — conductor seals. See
+  the `maybe<number>` probe note below.
+  - **PROBE (record-only, NOT gated this round — sibling coverage gap):** the reviewer flagged `let x: maybe
+    number = 5` as possibly un-gated. Probed with corrected syntax (`maybe number` with a space is itself a
+    parse error — "`maybe` requires a type argument"; the valid form is `maybe<number>`). Result for `let x:
+    maybe<number> = 5`: does **NOT ICE** — it is cleanly REJECTED by the general assignment type-mismatch
+    diagnostic (`This value is `int`, but `x` is declared as `maybe<number>``, exit 1), NOT the tailored
+    int-literal→`number` teaching error (the shared gate matches only bare `Type::Number`, so a `maybe<number>`
+    slot falls through it). No crash, no ICE — so no four-field deferral trigger. **Candidate Future-Req note
+    (sibling of the int-literal→`number` gate, pre-existing, uniform across the gate, NOT introduced this
+    round):** the int-literal→`number` teaching gate does not extend to `maybe<number>` slots — an int literal
+    there gets the generic type-mismatch instead of the tailored decimal-literal teaching guidance; purely a
+    teaching-quality coverage gap, safe (no ICE). Routed to the conductor→seam as a candidate coverage-gap note;
+    NOT self-adjudicated, NOT gated (different type slot, scope discipline). (Aside, orthogonal: even `let x:
+    maybe<number> = 5.0` is rejected — `number` is not auto-wrapped into `maybe<number>` — a separate,
+    pre-existing maybe-wrapping matter, out of scope, noted only so the probe result isn't misread.)
+
 ## FRAGO log
 
 ### FRAGO 001 — 2026-07-09 — session-id: `conductor-2026-07-09-m6-exec`
@@ -2252,3 +2311,70 @@ R2 = extend guard to UFCS + generic call forms (one shared helper). R3 = full-sl
 - **Touched:** `crates/ynz-codegen/src/emit.rs` (3 fixes + shared helper) + this `audit.md`. `check.rs` NOT touched
   (item 3 recorded here per preferred route). Did NOT commit/stage — conductor seals. Session-id appended to
   `plan.md` frontmatter in the same action.
+
+### FRAGO 020 — 2026-07-10 — session-id: `executor-2026-07-10-m6-store-site-stopgap`
+
+- **Trigger.** Human-directed ("no duct tape") follow-on to the SEALED Phase 1d: close the two LIVE raw-ICE
+  store-site exposures Phase 1d deliberately left un-gated (FRAGO 019 Finding 2 + Future-Req #9). This is the
+  no-duct-tape live-exposure clause: `let x: number = 5` is "arguably the most common beginner mistake in the
+  language" and both facets ICE with the raw "Yinz compiler bug" banner, while a CHEAP in-scope mitigation
+  (the shared int-literal→`number` gate already exists and already teaches for every other slot) closes the
+  crash now. A standalone guard-extension task with its OWN FRAGO — NOT a Phase 1d reopen. The int→number
+  COERCION stays deferred to the `2026-07-04-v0-3-hotfix-int-literal-number` stub plan; this stopgap only
+  REJECTS (teaching error), it does not coerce.
+- **Corroboration (verify-before-fix Paper-Trace, probe-confirmed against the freshly-built debug binary).**
+  PRE-FIX: `let x: number = 5` → ICE banner, panic `Found IntValue "i64 5" but expected PointerValue variant`
+  at `emit.rs:20268` (store path); `hidden cache: number = 5` → same panic at `emit.rs:20436` (hidden-default
+  store, from `lower_expr`-no-hint at `emit.rs:18318`). POST-FIX: both emit the shared teaching error (exit 1,
+  `... is an int literal — passing an int literal to a \`number\` {variable|field} is not supported yet` +
+  `Write it as a decimal literal: \`5.0\``, NO "compiler bug"/"FRAGO" banner). Controls stay clean:
+  `let x: number = 5.0` → `5.0` exit 0; `number`-typed var → exit 0; `-5` negated store → teaches;
+  m5 hidden `int` default (`= 42`) → 42 exit 0 (gate matches `Type::Number` only, never `int`/`float`).
+- **Classification.** REJECTION stopgap that closes a live crash exposure via the ONE existing shared gate
+  (authoritative-derivation — new `NumberSlotRole::StoreBinding` for the binding; REUSED `NumberSlotRole::Field`
+  for the field default; no per-slot twin). Risk-neutral: intercepts a raw ICE with a clean teaching error and
+  adds no new miscompile surface. One INTENDED behavior change (documented as such, not a weakened test): the
+  store site flips ICE→teach, requiring the `int_literal_retypes_as_number_with_annotation` typeck control to be
+  re-pointed to assert the new rejection.
+- **Delta (applied to `check.rs` + the two test files + both plans, this same dispatch).**
+  (a) CODE — `crates/ynz-typeck/src/check.rs`: new `NumberSlotRole::StoreBinding { name }`; gate call in
+  `check_let` (subject `\`x\``, noun "variable") that binds the name at the annotated `number` type when it
+  fires so later uses don't cascade; gate call at the `ShapeDecl` arm of `check_module` over hidden-field
+  defaults (REUSING `NumberSlotRole::Field`, matching the codegen lowering scope — non-hidden defaults are dead,
+  fields must be provided at construction); stale "store sites deliberately NOT gated" doc-comment rewritten.
+  (b) TESTS — two RED fixtures (`v0_3_m6_int_literal_number_let_store.ynz`,
+  `v0_3_m6_int_literal_number_hidden_field_default.ynz`, headers recording the pre-fix ICE signature) + two slot
+  tests via the existing `int_literal_number_slot_test!` macro in `v03_m6_number_spawn_boundary.rs`; the #9
+  store-site control COMMENT (L428-429) re-pointed to "ALSO gated / intended behavior change"; the typeck control
+  `int_literal_retypes_as_number_with_annotation` renamed to
+  `int_literal_number_store_binding_is_rejected_with_teaching_error` asserting the teaching rejection + a new
+  `number_literal_stays_clean_in_number_store_binding` false-fire guard (`crates/ynz-typeck/tests/check.rs`).
+  (c) DOCS — M6 plan reconciled (Phase 1d deliverable summary, "COMPLETE except #9" claim, Future-Req #9,
+  Future-Req #14, round-4 carve-out); stub plan `2026-07-04-v0-3-hotfix-int-literal-number` reconciled (Mission
+  intro + SCOPE-WIDENED facets 1&2 flipped from "still ICE" to "now teach"); whole-plan sibling sweep run on both
+  (every store-site-ICE/#9-excepted sibling reconciled; clearly-historical step-narrative left as past-tense).
+  Roadmap row 441/497 noted as the coercion-assignment sibling (see the Roadmap note below).
+- **GATES (FULL, all GREEN).** `docker compose run --rm dev cargo nextest run --workspace --no-fail-fast` →
+  **exit 0, 2349 passed / 0 failed / 6 skipped** (+3 vs the Phase-2 baseline of 2346: two new store-site slot
+  tests + one new typeck false-fire guard; the pre-existing control was renamed/re-pointed, net 0 for that one).
+  The two `cross_impl_consistency` corpus tests GREEN under load (254s/272s); no known-flake re-runs needed.
+  `cargo clippy --workspace -- -D warnings` → exit 0 clean. `cargo fmt --all --check` → exit 0 clean.
+  No `#[allow]`, no `--no-verify`, no test weakened-to-force-green (the ONE control flip is an intended-behavior
+  update, documented above). Did NOT touch `CLAUDE.md` / `Dockerfile` / `ynz-watch/src/*` / roadmap #18/#19 rows.
+- **Roadmap note (row 441/497, active v0.3 roadmap).** Row 441 is the coercion-assignment row (still assigned to
+  the stub plan; coercion still deferred). Its "then the compiler panics" current-state phrasing is now stale —
+  the panic is intercepted by this stopgap's teaching error — but the row's core (coercion missing → assigned to
+  the stub) stands. Surfaced as a deviation for the conductor/deviation-judge rather than self-edited into that
+  large row: reconciling row 441 is a roadmap edit outside this task's named scope (the task scoped roadmap
+  touches to store-site-ICE *sibling statements* and explicitly fenced #18/#19). Flagged for the seam to decide.
+- **Deviations surfaced (not self-adjudicated):** (1) the roadmap row 441/497 "panics" phrasing is now stale
+  (above) — surfaced for the seam, not self-edited. (2) Recorded decisions: field-default gate scoped to HIDDEN
+  fields only (matches codegen lowering scope + confirmed exposure; non-hidden defaults are dead/ignored — a
+  non-hidden `number` field must be provided at construction); no demo/error-gallery extension (this reuses the
+  EXISTING int-literal→`number` teaching diagnostic — no NEW error class, so the plan-invariants gallery
+  obligation does not trigger); no `--release` rebuild performed (a new compile-time REJECTION, not a change to
+  the runtime behavior of already-valid programs consumer mounts run — flagged for the conductor's seal step).
+- **Touched:** `crates/ynz-typeck/src/check.rs`; `crates/ynz-typeck/tests/check.rs`;
+  `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`; two new fixtures under
+  `crates/ynz-driver/tests/fixtures/`; `plan.md` (M6) + the stub `plan.md` + both `audit.md`. Did NOT
+  commit/stage — conductor seals. Session-id appended to `plan.md` frontmatter in this same action.
