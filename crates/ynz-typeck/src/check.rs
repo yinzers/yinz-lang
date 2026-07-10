@@ -7576,6 +7576,23 @@ pub fn crossing_local_names_with_cpu_spike(
     // read appears lexically after the suspension (the natural read-after-suspension scan
     // above would miss exactly that case).
     collect_conduit_locals(stmts, param_names, expr_types, &mut seen, &mut names);
+    // v0.3-M6 Phase 1b (FRAGOs 004/005/006/007): a shape / fixed<T> / number value passed
+    // BY POINTER as an argument (or UFCS receiver) to a suspending callee crosses that
+    // callee's suspension even when no read appears lexically after it — the callee holds
+    // the pointer in its own frame and reads it after its own suspend point, while the
+    // parent's resume fn returns Pending and its stack (holding the staged value)
+    // dies. Marking the local crossing routes a shape into the existing frame-embed
+    // machinery, a fixed<T> into the existing Check 2b teaching error, and a number
+    // (decimal128) into the existing 2-slot frame-backing (the arg-staging path then
+    // stages a pointer into that frame region instead of a dying stack temp).
+    collect_aggregate_args_to_suspending_calls(
+        stmts,
+        param_names,
+        suspending,
+        expr_types,
+        &mut seen,
+        &mut names,
+    );
     // Collect synthetic frame slots for for-loops whose bodies contain a suspension.
     // For-loop iteration requires an internal index counter that must survive suspension;
     // giving it a named frame slot (prefixed `__ynz_for_idx_`) integrates it with the
@@ -7630,6 +7647,280 @@ fn collect_conduit_locals(
             }
             _ => {}
         }
+    }
+}
+
+/// v0.3-M6 Phase 1b: recursively collect every LET-bound local of stack-backed type
+/// (`shape` / `fixed<T>` / decimal128 `number`) that is passed as an argument — or UFCS
+/// receiver — to a suspending call, into the crossing-name set.
+///
+/// The arg is staged by pointer (`value_to_i64_bits` stores a `ptr_to_int` of the value
+/// pointer into the child frame), so the callee reads it AFTER its own suspend point:
+/// the value crosses the suspension through the CALLEE's frame, which the lexical
+/// read-after-suspension scan cannot see. This is a SOUND over-approximation in the same
+/// register as [`collect_conduit_locals`]: a shape arg to a suspending callee that never
+/// actually suspends before the read is merely frame-backed unnecessarily.
+///
+/// Exclusions (each deliberate):
+///   - Parameters — they already have frame slots (stable heap storage).
+///   - `Expr::Background` subtrees — background args are independently staged (safe).
+///   - Non-`Ident` args (literals, field accesses, index accesses) — no name to mark;
+///     recorded as a residual to probe, not silently widened here.
+///   - For-loop vars — not LET-bound (`find_crossing_local_typeck_type_in_map` returns
+///     `None`); loop-var-as-arg is a recorded residual with its own frame-slot hazards.
+///
+/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth
+fn collect_aggregate_args_to_suspending_calls(
+    stmts_topmost: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    collect_aggregate_args_in_stmts(
+        stmts_topmost,
+        stmts_topmost,
+        param_names,
+        suspending,
+        expr_types,
+        seen,
+        names,
+    );
+}
+
+/// Statement-level walker for [`collect_aggregate_args_to_suspending_calls`].
+/// `stmts_topmost` is threaded unchanged for the LET-bound lookup.
+///
+/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth
+fn collect_aggregate_args_in_stmts(
+    stmts: &[Stmt],
+    stmts_topmost: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    let walk_block =
+        |block: &Block, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
+            collect_aggregate_args_in_stmts(
+                &block.stmts,
+                stmts_topmost,
+                param_names,
+                suspending,
+                expr_types,
+                seen,
+                names,
+            );
+        };
+    let walk_expr =
+        |e: &Expr, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
+            collect_aggregate_args_in_expr(
+                e,
+                stmts_topmost,
+                param_names,
+                suspending,
+                expr_types,
+                seen,
+                names,
+            );
+        };
+    for stmt in stmts {
+        match stmt {
+            Stmt::Expr(e) => walk_expr(e, seen, names),
+            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => walk_expr(value, seen, names),
+            Stmt::If { cond, body, .. } | Stmt::While { cond, body, .. } => {
+                walk_expr(cond, seen, names);
+                walk_block(body, seen, names);
+            }
+            Stmt::For { iter, body, .. } => {
+                walk_expr(iter, seen, names);
+                walk_block(body, seen, names);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
+                walk_expr(scrutinee, seen, names);
+                for arm in arms {
+                    walk_block(&arm.body, seen, names);
+                }
+                if let Some(eb) = else_arm {
+                    walk_block(eb, seen, names);
+                }
+            }
+            Stmt::Return { value, .. } => {
+                if let Some(v) = value {
+                    walk_expr(v, seen, names);
+                }
+            }
+            Stmt::FieldAssign { target, value, .. } => {
+                walk_expr(target, seen, names);
+                walk_expr(value, seen, names);
+            }
+            Stmt::IndexAssign {
+                receiver,
+                index,
+                value,
+                ..
+            } => {
+                walk_expr(receiver, seen, names);
+                walk_expr(index, seen, names);
+                walk_expr(value, seen, names);
+            }
+        }
+    }
+}
+
+/// Expression-level walker for [`collect_aggregate_args_to_suspending_calls`]: find every
+/// suspending call (bare `Call` via [`is_suspending_call`], UFCS `MethodCall` via the ONE
+/// authoritative [`expr_is_ufcs_suspending_call`] arm) and mark its aggregate `Ident`
+/// args as crossing. Recurses into subexpressions so nested calls are covered; does NOT
+/// recurse into `Expr::Background` (separately-staged, safe).
+///
+/// Time: O(N) where N = expression nodes  Space: O(D) recursion depth
+fn collect_aggregate_args_in_expr(
+    expr: &Expr,
+    stmts_topmost: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    let walk = |e: &Expr, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
+        collect_aggregate_args_in_expr(
+            e,
+            stmts_topmost,
+            param_names,
+            suspending,
+            expr_types,
+            seen,
+            names,
+        );
+    };
+    match expr {
+        Expr::Wait(inner, _) => walk(inner, seen, names),
+        // Background args are independently staged by the spawn path — safe, and
+        // deliberately NOT a crossing source (matching the pre-fix passing fixture).
+        Expr::Background(_, _) => {}
+        Expr::Call(c) => {
+            if is_suspending_call(c, suspending) {
+                for arg in &c.args {
+                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, seen, names);
+                }
+            }
+            walk(&c.callee, seen, names);
+            for arg in &c.args {
+                walk(arg, seen, names);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            if expr_is_ufcs_suspending_call(expr, expr_types, &|n| suspending.contains(n)) {
+                // UFCS: the receiver is arg 0 of the desugared call.
+                mark_aggregate_arg(
+                    receiver,
+                    stmts_topmost,
+                    param_names,
+                    expr_types,
+                    seen,
+                    names,
+                );
+                for arg in args {
+                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, seen, names);
+                }
+            }
+            walk(receiver, seen, names);
+            for arg in args {
+                walk(arg, seen, names);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            walk(lhs, seen, names);
+            walk(rhs, seen, names);
+        }
+        Expr::UnaryOp { operand, .. } => walk(operand, seen, names),
+        Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
+            walk(receiver, seen, names);
+        }
+        Expr::StructLit { fields, .. } => {
+            for field in fields {
+                walk(&field.value, seen, names);
+            }
+        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
+            walk(receiver, seen, names);
+            walk(index, seen, names);
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for el in elements {
+                walk(el, seen, names);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                walk(k, seen, names);
+                walk(v, seen, names);
+            }
+        }
+        Expr::Is { expr: inner, .. } => walk(inner, seen, names),
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                    walk(e, seen, names);
+                }
+            }
+        }
+        // Leaf nodes — no calls.
+        Expr::Ident(_, _)
+        | Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => {}
+    }
+}
+
+/// Mark `arg` as a crossing local when it is a LET-bound `Ident` of stack-backed type —
+/// `shape` / `fixed<T>` (aggregates staged by pointer) or `number` with precision ≤ 34
+/// (decimal128: the arg-staging path copies the i128 bits into a resume-fn stack temp and
+/// stages a pointer to it — the same dying-stack class, FRAGOs 006/007 / signed R14).
+/// Bignum (`number` with precision > 34) is deliberately excluded: its slot stores a
+/// pointer to a heap-resident decimal string (stable across suspension).
+/// The candidate filter for [`collect_aggregate_args_to_suspending_calls`].
+fn mark_aggregate_arg(
+    arg: &Expr,
+    stmts_topmost: &[Stmt],
+    param_names: &[&str],
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    let Expr::Ident(name, span) = arg else {
+        return;
+    };
+    if param_names.contains(&name.as_str()) {
+        return;
+    }
+    let arg_ty = expr_types.get(&(span.start, span.end));
+    let is_stack_backed_aggregate =
+        matches!(arg_ty, Some(Type::Shape { .. } | Type::BuiltinFixed { .. }))
+            || matches!(
+                arg_ty,
+                Some(Type::Number { precision }) if *precision <= 34
+            );
+    if is_stack_backed_aggregate
+        && find_crossing_local_typeck_type_in_map(stmts_topmost, name, expr_types).is_some()
+        && seen.insert(name.clone())
+    {
+        names.push(name.clone());
     }
 }
 

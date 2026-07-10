@@ -1522,6 +1522,7 @@ fn lower_generic_function<'ctx>(
         sm_crossing_bool_set: HashSet::new(),
         sm_crossing_slot_indices: Vec::new(),
         sm_crossing_decimal128_set: HashSet::new(),
+        sm_number_param_set: HashSet::new(),
         sm_crossing_float_set: HashSet::new(),
         sm_crossing_errors_capable_set: HashSet::new(),
         sm_crossing_ec_number_set: HashSet::new(),
@@ -1832,6 +1833,13 @@ struct Cg<'ctx, 'g> {
     // Set of crossing local names whose type is decimal128 (number with precision ≤ 34).
     // These use 2 frame slots and i128 alloca (not ptr alloca).
     sm_crossing_decimal128_set: HashSet<String>,
+    // Set of resume-fn PARAMETER names whose type is decimal128 (number, precision ≤ 34).
+    // SM param allocas are uniformly i64 holding the staged POINTER bits (not the i128
+    // value), so reading one needs an extra indirection: load i64 → inttoptr → the ptr
+    // into the caller's live frame region (v0.3-M6 FRAGOs 006/007 — load()'s Number arm
+    // would otherwise mis-type the alloca as i128 and decode the pointer bits as a
+    // decimal, the child half of the number-arg UAF).
+    sm_number_param_set: HashSet<String>,
     // Set of crossing local names whose type is float (f64).
     // These use a bitcast (f64 ↔ i64) rather than a raw integer load.
     sm_crossing_float_set: HashSet<String>,
@@ -3900,6 +3908,7 @@ fn lower_function<'ctx, 'g>(
         sm_crossing_bool_set: HashSet::new(),
         sm_crossing_slot_indices: Vec::new(),
         sm_crossing_decimal128_set: HashSet::new(),
+        sm_number_param_set: HashSet::new(),
         sm_crossing_float_set: HashSet::new(),
         sm_crossing_errors_capable_set: HashSet::new(),
         sm_crossing_ec_number_set: HashSet::new(),
@@ -4398,6 +4407,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_bool_set: HashSet::new(),   // populated during alloca creation below
         sm_crossing_slot_indices: crossing_slot_indices.clone(),
         sm_crossing_decimal128_set: HashSet::new(), // populated during alloca creation below
+        sm_number_param_set: HashSet::new(),        // populated during param alloca creation below
         sm_crossing_float_set: HashSet::new(),      // populated during alloca creation below
         sm_crossing_errors_capable_set: HashSet::new(), // populated during alloca creation below
         sm_crossing_shape_embed_set: HashSet::new(), // populated during alloca creation below
@@ -4435,7 +4445,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Both parameters AND crossing locals get i64 allocas here; each is loaded from its
     // frame slot at the start of every continuation state block.
     cg_resume.builder.position_at_end(resume_entry);
-    for pname in &param_names {
+    for (pidx, pname) in param_names.iter().enumerate() {
         // Alloca sized to i64 (the frame slot width). The actual LLVM type is i64.
         let alloca = cg_resume
             .builder
@@ -4443,6 +4453,13 @@ fn lower_function_with_waits<'ctx, 'g>(
             .map_err(|e| format!("sm param alloca: {e}"))?;
         // Register in locals map — state blocks load from these allocas.
         cg_resume.locals.insert(pname.clone(), alloca);
+        // Record decimal128 params: their i64 alloca holds staged POINTER bits, so
+        // load()'s Number arm must add an indirection instead of mis-typing the alloca
+        // as i128 (v0.3-M6 FRAGOs 006/007 — child half of the number-arg UAF).
+        let param_ty = ast_type_to_typeck_type(&f.params[pidx].ty, shape_table);
+        if matches!(&param_ty, Type::Number { precision } if *precision <= 34) {
+            cg_resume.sm_number_param_set.insert(pname.clone());
+        }
     }
     // Crossing locals also get allocas in sm_entry so lower_stmt can reuse them.
     // LLVM SSA requires allocas to dominate all uses — sm_entry dominates all state
@@ -9735,10 +9752,11 @@ fn emit_io_member_init<'ctx, 'g>(
         .map(|l| l.n_locals)
         .unwrap_or(call_args.len());
     for (idx, arg) in call_args.iter().enumerate().take(child_n_locals) {
-        let arg_val = lower_expr(cg, arg)?;
-        let arg_ty = cg.expr_type(arg);
-        let bits = cg
-            .to_i64_bits(arg_val, &arg_ty)
+        // Route through the ONE staging rule (authoritative-derivation): a decimal128
+        // crossing local stages a GEP into the PARENT frame's 2-slot region, never a
+        // ptr_to_int of a dying resume-fn stack temp (the FRAGO 006/007 arg UAF —
+        // this was the third staging loop, missed by the initial two-loop conversion).
+        let bits = stage_suspending_call_arg_bits(cg, arg, frame_ptr)
             .map_err(|e| format!("{arg_bits_label}: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
@@ -11101,10 +11119,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         .map(|l| l.n_locals)
         .unwrap_or(arg_exprs.len());
     for (idx, arg) in arg_exprs.iter().copied().enumerate().take(child_n_locals) {
-        let arg_val = lower_expr(cg, arg)?;
-        let arg_ty = cg.expr_type(arg);
-        let bits = cg
-            .to_i64_bits(arg_val, &arg_ty)
+        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
             .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
@@ -11238,6 +11253,72 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     }
 }
 
+/// Stage one argument's i64 frame-slot bits for a suspending callee — the SINGLE staging
+/// rule shared by ALL child-frame arg-staging loops, per authoritative-derivation:
+/// the embedded-frame path (`emit_suspending_call_inline_poll`), the heap-boxed
+/// recursive path (`emit_suspending_call_heap_boxed`), and the auto-parallelized
+/// I/O-group path (`emit_io_member_init`, serving both `emit_independent_group_poll`
+/// and `emit_fused_group_spawn_poll`).
+///
+/// Default: lower the arg and marshal via `to_i64_bits`. Exception — a LET-bound
+/// decimal128 crossing local (member of `sm_crossing_decimal128_set`): lowering it would
+/// copy the i128 bits into a FRESH resume-fn STACK alloca (`load()`'s Number arm) and
+/// stage `ptr_to_int(temp)` into the child frame; the parent returns Pending, its stack
+/// dies, and the resumed child dereferences the dangling temp (the pre-existing v0.3.0
+/// arg UAF — FRAGOs 006/007, signed R14). Instead, stage a GEP into the PARENT frame's
+/// 2-slot decimal128 region for that crossing local: the composed frame is heap-resident
+/// and outlives the suspension, and `flush_crossing_local_if_needed` (which runs after
+/// every non-wait statement) keeps those slots current, so the child reads live bytes.
+///
+/// Time: O(1) per arg beyond `lower_expr`  Space: O(1)
+fn stage_suspending_call_arg_bits<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &Expr,
+    parent_frame: PointerValue<'ctx>,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let ctx = cg.ctx;
+    if let Expr::Ident(name, _) = arg {
+        if cg.sm_crossing_decimal128_set.contains(name.as_str()) {
+            let pos = cg
+                .sm_crossing_names
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .position(|n| n == name)
+                .ok_or_else(|| {
+                    format!(
+                        "sm arg staging: decimal128 crossing local `{name}` not in \
+                         sm_crossing_names"
+                    )
+                })?;
+            let slot_idx = cg.sm_crossing_slot_indices[pos];
+            let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START
+                + (slot_idx as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+            let region_ptr = unsafe {
+                cg.builder
+                    .build_gep(
+                        ctx.i8_type(),
+                        parent_frame,
+                        &[ctx.i64_type().const_int(byte_offset, false)],
+                        &format!("{name}_dec_frame_region"),
+                    )
+                    .map_err(|e| format!("sm arg staging dec GEP {name}: {e}"))?
+            };
+            return cg
+                .builder
+                .build_ptr_to_int(
+                    region_ptr,
+                    ctx.i64_type(),
+                    &format!("{name}_dec_frame_bits"),
+                )
+                .map_err(|e| format!("sm arg staging dec ptr_to_int {name}: {e}"));
+        }
+    }
+    let arg_val = lower_expr(cg, arg)?;
+    let arg_ty = cg.expr_type(arg);
+    cg.to_i64_bits(arg_val, &arg_ty)
+}
+
 /// Emit inline-poll-and-yield for a RECURSIVE suspending call (recursion/cycle edge).
 ///
 /// For recursive calls, the child frame cannot be embedded (infinite size). Instead:
@@ -11335,10 +11416,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
 
     // Write call arguments.
     for (idx, arg) in args.iter().copied().enumerate().take(child_n_locals) {
-        let arg_val = lower_expr(cg, arg)?;
-        let arg_ty = cg.expr_type(arg);
-        let bits = cg
-            .to_i64_bits(arg_val, &arg_ty)
+        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
             .map_err(|e| format!("rec arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
@@ -19849,6 +19927,22 @@ fn load<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, String> {
     match ty {
         Type::Number { precision } if *precision <= 34 => {
+            // SM resume-fn PARAM: the i64 alloca holds staged pointer bits (the caller
+            // staged a pointer to 16 live frame-resident bytes). Load the bits and
+            // return the pointer itself — no copy; the pointee (the caller's composed
+            // heap frame region) outlives this child (v0.3-M6 FRAGOs 006/007).
+            if cg.sm_number_param_set.contains(name) {
+                let ptr_bits = cg
+                    .builder
+                    .build_load(cg.i64(), slot, &format!("{name}_dec_ptr_bits"))
+                    .map_err(|e| format!("{e}"))?
+                    .into_int_value();
+                let dec_ptr = cg
+                    .builder
+                    .build_int_to_ptr(ptr_bits, cg.ptr(), &format!("{name}_dec_ptr"))
+                    .map_err(|e| format!("{e}"))?;
+                return Ok(dec_ptr.into());
+            }
             // Hardware decimal128: load i128 bits from slot, copy into fresh alloca, return ptr.
             let bits = cg
                 .builder

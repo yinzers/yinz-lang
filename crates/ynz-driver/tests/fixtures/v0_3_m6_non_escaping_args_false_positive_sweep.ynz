@@ -1,0 +1,37 @@
+// v0.3-M6 Phase 1b fix-loop: committed FALSE-POSITIVE sweep (Phase 1b step 4's sweep,
+// previously run only on gitignored probe files — locked into the suite here).
+// Correct behavior: a `number` arg and a `fixed<int>` arg passed to NON-suspending
+// callees, consumed entirely BEFORE the host's suspension, must be untouched by the
+// Phase 1b escape-to-suspending-callee classifier: the number is NOT wrongly
+// frame-backed (still computes 3.5) and the fixed<int> does NOT trip the Check 2b
+// UnsupportedCrossingLocalType rejection (compiles, runs). Prints 3.5 then 9, exits 0.
+// A wrong-widening failure mode: `bump`/`headroom` args classified as escaping-to-
+// suspending-callee → number frame-backed needlessly (wrong IR, possible garbage) or
+// fixed<int> rejected at compile time (exit != 0).
+// LAYOUT NOTES (deliberate, load-bearing — both verified while authoring):
+// 1. Both locals are declared AND consumed before the `wait`: the pre-existing BASE
+//    read-after-suspension scan flags a fixed<T>/maybe read appearing after ANY earlier
+//    suspension regardless of declaration position (pre-existing v0.3.x behavior,
+//    reproduced on the pre-Phase-1b tree — NOT this classifier), so declare-after-wait
+//    shapes cannot host this sweep.
+// 2. The two pure calls are separated by a plain statement so they are NOT adjacent —
+//    two adjacent non-suspending CPU-ABI calls form an M3d CPU spike pair whose join IS
+//    a genuine suspension point, making a fixed<int> arg a TRUE crossing.
+
+function bump(n: number) -> number {
+  return n + 1.0
+}
+
+function headroom(share nums: fixed<int>) -> int {
+  return 9
+}
+
+function entrypoint() -> nothing {
+  let x: number = 2.5
+  const b = bump(x)
+  let nums: fixed<int> = [2, 3, 4]
+  const h = headroom(nums)
+  wait sleep(1)
+  print(b.toString())
+  print(h.toString())
+}

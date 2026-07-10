@@ -3,9 +3,9 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1"]
 created_at: "2026-07-04"
-updated_at: "2026-07-09"
+updated_at: "2026-07-10"
 metadata:
   type: "plan"
 ---
@@ -213,10 +213,13 @@ money/PII/security-breach/irreversible-op in the anchor-sheet sense — every ch
 git-reversible, pre-v1.0, zero public users). **Severity is scored II-Critical for the
 silent-miscompile-class fixes (R1, R2, R4), consistent with this project's own established convention**
 (M5 scored the identical twin-derivation/silent-miscompile shape at Sev II — the recovery cost is
-real multi-round engineering debugging, not a cosmetic shrug, even pre-1.0/zero-users). **One signed
-HIGH residual exists in this table — R13, the shape-arg frame-backing UAF surfaced mid-execution by
-FRAGO 004; its RISK OVERRIDE block (below the table) is the plan's ONE signed HIGH-residual override,
-accepted by Patrick 2026-07-09 with Phase 1b as the trigger-to-close.** All other residuals are
+real multi-round engineering debugging, not a cosmetic shrug, even pre-1.0/zero-users). **Two signed
+HIGH residuals exist in this table — R13, the shape-arg frame-backing UAF surfaced mid-execution by
+FRAGO 004, and R14, the wider arg-UAF class (number/maybe/union + anonymous struct-literal args)
+surfaced by Phase 1b's post-fix residual probes via FRAGO 006; their RISK OVERRIDE blocks (below the
+table) are the plan's two signed HIGH-residual overrides, each accepted by Patrick 2026-07-09 —
+R13 with Phase 1b as the trigger-to-close, R14 with Phase 1b (number half) + Phase 1c
+(maybe/union + anonymous-aggregate half, per FRAGO 007) as the trigger-to-close.** All other residuals are
 MEDIUM-or-below; MEDIUMs are recorded here and parked with triggers in Future Requirements.
 
 | Risk | Prob | Sev | Initial | Mitigations (bucket) | Residual | Gate |
@@ -234,8 +237,9 @@ MEDIUM-or-below; MEDIUMs are recorded here and parked with triggers in Future Re
 | **R11 — P2-7 `handle_recv_poll` panic-then-pending hang (newly surfaced, NOT fixed this milestone)** — *deferred* | D | III | L | Deferred to Future Requirements with a named trigger (Phase 3's register-before-poll pattern is the natural follow-on fix) — no mitigation needed to accept LOW as a documented deferral | **L** (D×III) | recorded — deferral, not a gate pass on unmitigated work |
 | **R12 — Sanitizer lane (Miri/TSan/ASan) surfaces a new confirmed bug beyond this phase's own immediate fix capacity** — *Phase 6b* | B | II | H | This phase's own existence is the engineered, bounded catch: any genuine new finding is triaged/routed through the plan-amendment + FRAGO seam before any release — never silently shipped, never silently dropped — inside a pre-1.0/zero-public-users/fully-git-reversible codebase, so a finding's real-world consequence drops from "would-be production Critical" to "caught, triaged, and fixed-or-properly-deferred pre-release" (**B2**, severity, −1 level; proof: the phase's own exit criteria — every finding triaged on the record — plus the Weather section's git-reversible/zero-users precondition) | **M** (B×III) | recorded |
 | **R13 — shape-arg frame-backing UAF: a shape-value argument to a suspending callee stages a dangling stack pointer across Pending — confirmed silent-garbage miscompile, pre-existing in shipped v0.3.0, reproduces in pure `Call` form + auto-inserted transitive suspension, likely also `fixed<T>`** (FRAGO 004) — *Phase 1b* | A | II | EH | RED-repro + full-regression gate (**B2**, prob −1; proof: Phase 1b's committed deterministic RED→GREEN repros + M3a-class regression run) — real elimination needs the crossing-classifier fix itself (Phase 1b), not yet built at signing time | **H** (B×II) | **RISK OVERRIDE — SIGNED (Patrick, 2026-07-09; block below)** |
+| **R14 — the shape-arg UAF class is WIDER than R13's signed scope: `number`/`maybe`/`union` args to a suspending callee (the `value_to_i64_bits` by-pointer staging arm, `emit.rs:12323`) AND anonymous struct-literal args also stage a dangling pointer across suspension → silent garbage; both pre-existing in shipped v0.3.0** (FRAGO 006 — surfaced by Phase 1b's post-fix residual probes; phase assignment re-drawn by FRAGO 007) — *Phase 1b (number) + Phase 1c (maybe/union + anonymous)* | A (number/maybe/union) / B (anon) | II | EH / H | RED-repro + full-regression + determinism gate (**B2**, prob −1; proof: Phase 1b's number RED→GREEN repro + Phase 1c's maybe/union + anon-arg RED→GREEN repros, each with N≥10 determinism proof) — real elimination needs the frame-backing fixes themselves (extend Phase 1b; new-machinery Phase 1c), not yet built at signing time | **H** (B×II / C×II — converges HIGH either way) | **RISK OVERRIDE — SIGNED (Patrick, 2026-07-09; block below)** |
 
-**RISK OVERRIDE — accepted residual: HIGH. SIGNED. (The plan's ONE signed HIGH-residual override —
+**RISK OVERRIDE — accepted residual: HIGH. SIGNED. (R13 —
 FRAGO 004, recorded verbatim from the audit sidecar.)**
 
 - **Risk:** shape-value argument to a suspending callee stages a dangling stack pointer across
@@ -250,9 +254,24 @@ FRAGO 004, recorded verbatim from the audit sidecar.)**
   (converts accepted-HIGH interim risk → closed, fixed bug — before Phase 6b's sanitizer lane and
   before release).
 
+**RISK OVERRIDE — accepted residual: HIGH. SIGNED. (R14 —
+FRAGO 006, recorded verbatim from the audit sidecar.)**
+
+- **Risk:** the shape-arg UAF class is wider than R13 — `number`/`maybe`/`union` args AND anonymous
+  struct-literal args to a suspending callee also stage a dangling pointer across suspension →
+  silent garbage; pre-existing v0.3.0.
+- **Why not mitigable to LOW now:** same silent-miscompile class as R13; real elimination needs the
+  frame-backing fix itself (extend Phase 1b for number; Phase 1c for maybe/union + anon, per
+  FRAGO 007's re-homing — the signed class and disposition are unchanged).
+- **Accepted by: Patrick — 2026-07-09** (interactive gate; disposition: **"Fully fix the entire
+  class now"** — full frame-backing for the whole class, nothing rejected, nothing deferred).
+- **Trigger to close:** the number fix (Phase 1b) AND the maybe/union + anonymous-aggregate fixes
+  (Phase 1c) each land RED→GREEN + full-regression + determinism proof before Phase 6b's sanitizer
+  lane and before release.
+
 **Floor check.** No Floor-A "no backout exists" condition (every change is git-reversible) and no
-Floor-B class (security/PII/money/irreversible-prod-op) fires anywhere in this table — R13 included
-(pre-v1.0, zero public users, git-reversible, runtime-only-within-one-execution).
+Floor-B class (security/PII/money/irreversible-prod-op) fires anywhere in this table — R13 and R14
+included (pre-v1.0, zero public users, git-reversible, runtime-only-within-one-execution).
 
 ### Cross-Cutting Factor Sweep (mandatory factors, woven into the risk rows + phases above)
 
@@ -319,11 +338,25 @@ routing must state the truth about what exists today versus what is deferred and
    suspension fixtures (Phase 1). **Correctness of a shape (or `fixed<T>`) aggregate ARGUMENT
    surviving that suspension — the pre-existing v0.3.0 shape-arg frame-backing UAF that keeps
    fixture (b) RED — is Phase 1b's deliverable, not Phase 1's (FRAGO 004, signed).**
-1b. No shape (or `fixed<T>`) aggregate argument to a suspending callee is left in a dying stack
-   alloca across suspension — the confirmed pre-existing v0.3.0 UAF (parent Pending → stack dies →
-   child resumes on dangling `self` → silent garbage) is closed by extending the ONE authoritative
-   crossing classifier so the value is frame-backed via the existing `shape_embed` machinery,
-   proven by deterministic-across-runs RED→GREEN repros (Phase 1b, FRAGO 004).
+1b. No shape, `fixed<T>`, or `number` argument to a suspending callee is left in
+   a dying stack alloca across suspension — the confirmed pre-existing v0.3.0 UAF (parent Pending →
+   stack dies → child resumes on a dangling pointer → silent garbage) is closed by extending the
+   ONE authoritative crossing classifier: a shape arg is frame-backed via the existing `shape_embed`
+   machinery; a `fixed<T>` arg is routed into the existing Check 2b `UnsupportedCrossingLocalType`
+   guard → a deterministic teaching compile error (FRAGO 005 — no embed machinery exists for
+   `fixed<T>`); a `number` arg is frame-backed so it WORKS across suspension —
+   NOT rejected — via the same classifier plus consumer-side frame-backing plumbing in the
+   arg-staging path (the staged pointer targets the parent frame's decimal128 slot region)
+   (FRAGOs 006/007, R14 signed) —
+   all proven by deterministic-across-runs RED→GREEN repros (Phase 1b, FRAGOs 004/006/007).
+1c. No anonymous struct-literal, `maybe`, or `union` argument to a suspending callee is left in a
+   dying stack alloca across suspension — the hard new-machinery portion of the same
+   escape-through-callee-frame UAF class (anon: no LET name to anchor on, needs new anchoring;
+   maybe: needs envelope+payload ownership machinery, no Maybe arm in the crossing strategy
+   table; union: non-uniform repr, the documented `value_to_stable_bits` known-hole — all
+   near-new-design, M3a-class caution) is closed with full frame-backing — maybe/union routed
+   PAST Check 2b's rejection, never INTO it (nothing rejected, per R14) — proven by
+   deterministic-across-runs RED→GREEN repros (Phase 1c, FRAGOs 006/007, R14 signed).
 2. The block_on-fallback branch (`emit.rs:15122-15137`) is a compile-time hard error for any caller
    not reachable via the designated synchronous entry point — mirroring `emit.rs:11162`'s sibling.
 3. A cancelled sender's `pending_sends` entry is purged (idempotently) and the `caller_token` is
@@ -363,15 +396,18 @@ deferral naming the remaining gap, is not done.
 
 ### 3.2 Concept
 
-Twelve phases (0–8, with 1b inserted between 1 and 2 per FRAGO 004 — Patrick-signed to run
-immediately after Phase 1 and BEFORE Phase 2 — 3b inserted between 3 and 4 per FRAGO 001, and 6b
-inserted between 6 and 7 — see the amendment note in Terrain). **Gate first**
+Thirteen phases (0–8, with 1b AND 1c inserted between 1 and 2 per FRAGOs 004/006 — Patrick-signed
+to run immediately after Phase 1 and BEFORE Phase 2 — 3b inserted between 3 and 4 per FRAGO 001,
+and 6b inserted between 6 and 7 — see the amendment note in Terrain). **Gate first**
 (P0 verifies the two THEORY findings, the dynamic-dispatch × suspension coverage question, and
 confirms the execution-gate precondition). **The flagship blocker + its escape hatch** (P1 UFCS fix
-on its carved 9-site scope; P1b the shape-arg frame-backing UAF fix — FRAGO 004, signed sequencing
-P1 → P1b → P2; P2 the block_on-fallback
-guard — sequenced after the P1/P1b pair because P2's correctness assertion depends on P1 actually being
-fixed, a deliberate resequencing of the audit's raw synthesis order, recorded as Decision D1 below).
+on its carved 9-site scope; P1b the arg frame-backing UAF fix for shape/`fixed<T>`/number —
+FRAGOs 004/006/007, signed sequencing P1 → P1b → P1c → P2; P1c the hard new-machinery
+frame-backing fix for anonymous-aggregate + `maybe` + `union` args — FRAGOs 006/007, unnamed
+temporaries need new anchoring, maybe/union need new crossing machinery; P2 the block_on-fallback
+guard — sequenced after the P1/P1b/P1c set because P2's correctness assertion depends on P1 actually
+being fixed, a deliberate resequencing of the audit's raw synthesis order, recorded as Decision D1
+below).
 **Channel/scheduler correctness** (P3 ABA+orphan; P3b recursion-chain spike CPU-handle cleanup leak —
 FRAGO 001, sequenced right after P3 in the same drop-ladder region; P4 lost-wakeup; P5
 buffered-element leak — independent subsystems apart from the P3→P3b adjacency, sequenced for one
@@ -534,17 +570,28 @@ pre-existing Call-based suspension fixture; house clippy green; RED fixture clas
 "TBD"); fixture (b) → Phase 1b (FRAGO 004 — its locked RED-repro for the shape-arg frame-backing
 UAF).
 
-#### Phase 1b — shape-arg frame-backing miscompile (confirmed UAF; pre-existing v0.3.0)
+#### Phase 1b — arg frame-backing miscompile: shape/`fixed<T>`/number (confirmed UAF; pre-existing v0.3.0)
 
 - **Task + purpose:** close the confirmed pre-existing use-after-free (FRAGO 004 — surfaced by
-  Phase 1 segment 4, corroborated by the adversarial code-reviewer) where a shape-value argument
+  Phase 1 segment 4, corroborated by the adversarial code-reviewer; scope GROWN by FRAGO 006 /
+  signed R14, then re-scoped by FRAGO 007 to this phase's FEASIBLE cases — shape, `fixed<T>`,
+  `number`; the `maybe`/`union` half is re-homed to Phase 1c) where a shape-value argument
   passed to a suspending callee is staged in the PARENT resume fn's STACK alloca: the child frame
   holds a `ptrtoint` of it; parent returns Pending → parent stack dies → child resumes on a
   dangling `self` → silent nondeterministic garbage. Reproduces in pure `Call` form
   (`wait crew(ship)`) AND auto-inserted transitive suspension; PRE-EXISTING in shipped v0.3.0
   (stash-to-`main` proof — NOT introduced by M6; UFCS merely made the shape-passing form natural
   to exercise); likely also affects `fixed<T>` (string/array/map are safe — heap-backed, stable
-  pointer). Root cause: `locals_crossing_wait`/`collect_crossings_in_stmts`
+  pointer). **FRAGO 006 scope growth (R14, Patrick-signed "fully fix the entire class now"), as
+  re-scoped by FRAGO 007: a `number` arg to a suspending callee shares the same
+  escape-through-callee-frame class via the arg-staging `load()` copy → `value_to_i64_bits`
+  by-pointer arm (`emit.rs:12323`) — a by-pointer stage of a parent-stack alloca (`number` prints
+  0.000 vs 2.5, probe-confirmed LIVE). This phase frame-backs `number` so it WORKS across
+  suspension — NOT rejected. `maybe`/`union` are also probe-confirmed LIVE UAFs but
+  NEEDS-NEW-MACHINERY (no Maybe/Union arm in the crossing strategy table; the fixed<T>/anon
+  category, not number-like) — their FULL frame-backing moves to Phase 1c per FRAGO 007, same
+  signed R14 disposition, never rejected, never deferred.** Root cause:
+  `locals_crossing_wait`/`collect_crossings_in_stmts`
   (`crates/ynz-typeck/src/check.rs:8122+`) is a lexical "read-AFTER-suspension" source scan that
   misses escape-through-a-callee-frame — the suspending callee holds the arg by pointer and reads
   it after its own suspend point, so the value DOES cross, but the scan never flags it → no
@@ -560,31 +607,191 @@ UAF).
      [verification.md](../../../rules/verification.md)): fixture (b)
      `v0_3_m6_ufcs_explicit_wait.ynz` (already in tree, currently RED — Phase 1's carved-out
      locked repro) PLUS a pure-`Call` shape-arg repro (`const c = wait crew(ship)`) PLUS (if
-     constructible) a `fixed<T>` stack-aggregate variant. Each asserts the CORRECT value
-     (deterministic, not garbage). Confirm each fails RED for the documented UAF reason, not some
-     unrelated bug.
-  3. Fix: extend the ONE authoritative crossing classifier so a shape (and `fixed<T>`) aggregate
-     passed BY POINTER to a suspending callee is classified as crossing → frame-backed via the
-     existing `shape_embed` machinery — never a second frame-layout path
-     (authoritative-derivation.md). Verify the emitted IR: the arg lives in the heap frame, not a
-     dying stack alloca; the child's `self` points into the surviving frame.
-  4. Full-regression: all Phase 1 fixtures (a, b, c, d) GREEN; full workspace suite green
+     constructible) a `fixed<T>` stack-aggregate variant, PLUS (FRAGO 006, re-scoped by FRAGO
+     007) a `number` repro — bind a `number` local, pass it to a suspending
+     callee, assert the correct deterministic value. Each shape/number repro asserts
+     the CORRECT value (deterministic, not garbage); the `fixed<T>` repro asserts the
+     deterministic Check 2b compile error (FRAGO 005). Confirm each fails RED for the documented
+     UAF reason, not some unrelated bug. (The `maybe`/`union` repros move to Phase 1c per FRAGO
+     007 — their repro-locking follows the 1c disposition: assert-value frame-backing repros.)
+  3. Fix: extend the ONE authoritative crossing classifier so a value passed BY POINTER to a
+     suspending callee is classified as crossing — never a second frame-layout path
+     (authoritative-derivation.md). Per type (FRAGOs 005/006/007): a **shape** arg → frame-backed
+     via the existing `shape_embed` machinery (unchanged); a **`fixed<T>`** arg → routed into the
+     EXISTING Check 2b `UnsupportedCrossingLocalType` guard (`check.rs:872-984`) → the UAF is
+     closed as a deterministic teaching COMPILE ERROR (NOT frame-backing — no embed machinery
+     exists for `fixed<T>`), consistent with the read-after-wait twin's handling; a **`number`**
+     arg → widen the same classifier's candidate type-match arm
+     (`collect_aggregate_args_to_suspending_calls`) to include LET-bound `number` (decimal128)
+     idents that escape to a suspending callee, AND add the consumer-side frame-backing plumbing
+     in the arg-staging path (both the embedded-frame and heap-boxed inline-poll staging loops)
+     so the staged pointer targets the parent frame's 2-slot decimal128 region — full
+     frame-backing, it WORKS across suspension. Verify the emitted IR for shape AND number args:
+     the arg lives in the heap frame, not a dying stack alloca; the child's pointer points into
+     the surviving frame.
+  4. Full-regression: all Phase 1 fixtures (a, b, c, d) GREEN; all shape/fixed/number
+     repros GREEN; full workspace suite green
      (`docker compose run --rm dev cargo test --workspace`); house clippy `-D warnings` clean.
      Explicitly re-verify no regression to the M3a/M4/M5 suspension + frame-layout suites (this
-     is the fragile subsystem).
-  5. Non-vacuous determinism proof: run the repro N times; assert the SAME correct value every
-     run (the pre-fix signature was nondeterministic garbage across runs).
+     is the fragile subsystem). Run an explicit **false-positive sweep** (mirror Phase 2's corpus
+     false-positive discipline): confirm the extended classifier routes ONLY genuine
+     escape-to-suspending-callee cases — no `fixed<T>` argument that does not escape to a
+     suspending callee trips the Check 2b error, and no non-escaping `number`
+     arg is wrongly frame-backed/affected.
+  5. Non-vacuous determinism proof: run the shape + number repros N≥10 times each;
+     assert the SAME correct value every run (the pre-fix signature was nondeterministic garbage
+     across runs).
+  6. Post-fix residual probes (FRAGO 005 — **executed segment 2; verdicts recorded and routed
+     through FRAGOs 006/007 and R14**): anonymous-aggregate arg LIVE → Phase 1c (FRAGO 006);
+     indexed arg NOT REACHABLE (typeck-rejected); loop-var shape arg NOT LIVE (heap array storage
+     survives); `number` LIVE → THIS phase (signed R14); `maybe`/`union` probe-confirmed LIVE but
+     NEEDS-NEW-MACHINERY (segment 4) → Phase 1c (FRAGO 007). Any genuinely-NEW LIVE class found
+     beyond number/maybe/union/anon gets surfaced for its OWN FRAGO, never a quiet scope-add.
 - **Exit criteria:** UAF closed via the one crossing-classifier extension (no second frame-layout
-  path); RED→GREEN repros committed (fixture (b) + the pure-`Call` repro + the `fixed<T>`
-  variant if constructible), deterministic across runs; full suite green including the M3a-class
-  regression surface (M3a/M4/M5 suspension + frame-layout suites); the FRAGO 004 signed RISK
-  OVERRIDE's revisit-trigger satisfied — this phase's proof landing converts the accepted-HIGH
-  interim risk (R13) to closed, fixed bug.
+  path); RED→GREEN repros committed (fixture (b) + the pure-`Call` repro + the `number` repro
+  GREEN with deterministic correct values; the `fixed<T>` repro GREEN as an
+  asserted deterministic compile error per FRAGO 005), deterministic across runs (N≥10); the
+  false-positive sweep clean (only genuine escape-to-suspending-callee cases affected — Check 2b
+  for `fixed<T>`, frame-backing for number); full suite green including the
+  M3a-class regression surface (M3a/M4/M5 suspension + frame-layout suites); residual-probe
+  verdicts recorded (LIVE ⇒ surfaced for its own FRAGO, never self-folded); the FRAGO 004 signed
+  RISK OVERRIDE's revisit-trigger satisfied — this phase's proof landing converts the
+  accepted-HIGH interim risk (R13) to closed, fixed bug — and R14's shape+fixed+number portion
+  closed (the maybe/union + anonymous-aggregate portion remains OPEN until Phase 1c lands, per
+  FRAGO 007).
 - **Reviewer fan-out:** code-reviewer (the crossing-classifier + frame-layout diff); adversarial
   gate-checker (does the repro genuinely exercise the dangling-stack window across pure-`Call`
   AND auto-inserted transitive suspension, and is the determinism proof non-vacuous?);
   design-doc-alignment reviewer (authoritative-derivation.md — the ONE crossing classifier
   extended, no second frame-layout path).
+- **Model tag:** `(coding, high, medium)`
+
+**Phase 1b complete (executor `executor-2026-07-09-m6-phase1b-seg7`, sealed 2026-07-10):** the arg
+frame-backing UAF class is closed on this phase's full FRAGO-007 scope — **shape** (frame-backed via
+the existing `shape_embed` machinery), **`fixed<T>`** (deterministic Check 2b teaching compile
+error), **`number`** (frame-backed via the existing 2-slot decimal128 crossing machinery). ONE
+classifier drives all three (`collect_aggregate_args_to_suspending_calls` → `mark_aggregate_arg`,
+`check.rs`, type-match Shape | BuiltinFixed | Number{p≤34}); ONE shared staging rule
+(`stage_suspending_call_arg_bits`, `emit.rs`) serves ALL THREE child-frame arg-staging loops —
+the embedded-frame inline-poll, the heap-boxed recursive, AND (fix-loop 1, 2026-07-10) the
+auto-parallelized I/O-group `emit_io_member_init` loop shared by the independent and fused group
+paths (the seal's original "serves BOTH loops" wording was WRONG: the third loop had been missed,
+leaving the number-arg UAF live on the auto-parallelization path until the fix-loop closed it) —
+zero second frame-layout path, slot math read from the authoritative
+`sm_crossing_slot_indices` (authoritative-derivation holds). IR verified for shape (seg-2 receipt)
+AND number (seg 7): the pre-fix dangling pattern (`load()` copies the i128 into a fresh resume-fn
+stack alloca, `ptr_to_int` of the temp staged into the child frame — probe-confirmed `0.000` vs
+`2.5`) is GONE; the parent now stages a `getelementptr` into its own heap-resident frame's 2-slot
+decimal128 region (kept current by the per-statement flush) and the child reads the surviving frame
+bytes via the `sm_number_param_set` `inttoptr` indirection in `load()`. All repros GREEN with exact
+deterministic values (fixture (b) GREEN in `v03_m6_ufcs_suspension.rs`; pure-Call shape `7`;
+transitive chain `8`; number `2.5`; fixed<T> asserts the Check 2b teaching error); determinism
+proved N=10 per repro in-test for shape AND number. False-positive sweep clean (IR-verified: a
+non-escaping `number` arg stays a plain alloca with zero frame flushes; a non-escaping `fixed<T>`
+arg trips no Check 2b error). M3a-class regression: none — 522/522 green with the integration
+binary run alone; clippy `-D warnings` + `cargo fmt --check` clean. **R13 (shape) CLOSED; R14's
+number portion CLOSED; R14's maybe/union + anonymous-aggregate portion remains OPEN → Phase 1c
+(FRAGO 007).** **Deviation surfaced (not self-decided):**
+`v03_m3e_alias_local_name_collision_runs_correctly` fails 3/3 under full-workspace parallel load
+once this phase's 6 new tests (~26 added concurrent `ynz` process spawns) run alongside it, and
+passes 9/9 isolated + 522/522 integration-alone + full-workspace-green with the new tests skipped —
+IR-proven orthogonal to this diff (the fixture is all-int locals/literal args; its IR contains zero
+of the new instruction patterns); the root fragility is the M3e test's own fixed 300ms shutdown
+window (documented in its own comment as timing-sensitive). Routed to the deviation-judge → FRAGO
+seam for disposition (candidate remedy: make the M3e fixture's background-task completion
+deterministic instead of racing a fixed sleep).
+
+**Phase 1b fix-loop 1 (executor `executor-2026-07-10-m6-phase1b-fixloop1`, 2026-07-10 — code-reviewer
+BLOCKER closed):** the THIRD arg-staging loop (`emit_io_member_init`, serving the auto-parallelized
+independent AND fused I/O-group paths) now routes through the one `stage_suspending_call_arg_bits`
+helper; full staging-site sweep confirms exactly three child-frame arg-staging loops exist and all
+three route through it (no fourth). RED→GREEN proven on both group callers (independent:
+0.000/0.000 → 2.5/4.5; fused: 1226 + 0.000 → 1226/4.5), each locked with a value test + N=10
+in-test determinism gate (`v0_3_m6_number_arg_parallel_group.ynz`,
+`v0_3_m6_number_arg_fused_group.ynz`). Batched hardening: committed false-positive-sweep fixture
+(`v0_3_m6_non_escaping_args_false_positive_sweep.ynz` — non-escaping number NOT wrongly
+frame-backed, non-escaping fixed<int> NOT Check-2b-rejected) and the transitive-chain N=10
+determinism gate. Orthogonal findings surfaced to the seam (not self-decided): the background-spawn
+arg pipeline (`prepare_bg_arg_for_ctx`, no Number arm) and conduit send-value staging stage
+decimal128 by-pointer under a DIFFERENT lifetime class (helper inapplicable) — potential separate
+number-arg exposure needing its own probe/FRAGO; and the base read-after-suspension scan's
+declaration-position-insensitive fixed/maybe flagging is PRE-EXISTING (reproduced pre-Phase-1b),
+not a classifier regression. Gates: workspace 2300/2300 green (M3e flake did not fire), clippy
+`-D warnings` + `cargo fmt --check` clean. See the fix-loop Session-log entry in `audit.md`.
+
+#### Phase 1c — hard new-machinery frame-backing: anonymous-aggregate + `maybe` + `union` args across suspension (FRAGOs 006/007; pre-existing v0.3.0)
+
+- **Task + purpose:** close the remaining, hard new-machinery portion of the R14-signed UAF class
+  (FRAGO 006 — surfaced by Phase 1b's post-fix residual probes; scope re-drawn by FRAGO 007):
+  three probe-confirmed LIVE UAFs whose fixes each need **near-new machinery** rather than
+  Phase 1b's consumer-plumbing. (1) An **anonymous struct-literal argument** to a suspending
+  callee is staged in a dying stack slot across suspension (`wait crew({...})` prints garbage,
+  e.g. 4240380 vs 7) — same escape-through-callee-frame root cause as Phase 1b, but with NO LET
+  name for the classifier to anchor on: needs **new anchoring for unnamed temporaries**. (2) A
+  **`maybe`** argument is a LIVE UAF (probe-confirmed segment 4: compiles — Check 2b never fires
+  on arg-escape — and prints NONDETERMINISTIC 13-15-digit pointer garbage vs the correct 42):
+  there is NO Maybe arm in the crossing save/restore strategy table (`emit.rs:4492-4556`), and
+  Maybe frame-backing needs **envelope+payload ownership machinery** (cf. the `maybe_to_owned` /
+  `maybe_to_heap_cell` funnels). (3) A **`union`** argument is a LIVE UAF (probe-confirmed
+  segment 4: deterministically WRONG variant — a Square arg prints `circle` 5/5 runs from the
+  dangling tag read; the non-suspending control prints `square`): Union repr is **non-uniform**
+  ({i64 tag, i64 data} tagged struct vs NULL ptr for `T | nothing`) — an explicitly documented
+  KNOWN-HOLE in `value_to_stable_bits`, loud-fail-pinned by
+  `m5_p3_sweep_union_readback_blocked_*.ynz`. All three are near-new-design territory, M3a-class
+  caution (this subsystem carries a ~10-round whack-a-mole history, D7): RED repro before fix,
+  one authoritative crossing classifier, never a second frame-layout path
+  ([authoritative-derivation.md](../../../rules/authoritative-derivation.md)). Per the signed R14
+  disposition ("fully fix the entire class now"), carried unchanged through FRAGO 007: full
+  frame-backing — anon/`maybe`/`union` args WORK across suspension, NOT rejected. **Explicit
+  Check 2b obligation (per R14's "nothing rejected"): the maybe/union fix must route these
+  crossing locals PAST Check 2b's `UnsupportedCrossingLocalType` rejection (`check.rs:919-933`)
+  — NOT into it; a compile-error reject is not an acceptable disposition — and must do so without
+  a second classification path.**
+- **Steps**
+  1. CCIR-1: re-verify the cited lines against the live tree (the Phase 1b classifier extension
+     `collect_aggregate_args_to_suspending_calls` / `mark_aggregate_arg` in
+     `crates/ynz-typeck/src/check.rs`; the `shape_embed` frame-backing path + the crossing
+     strategy table in `crates/ynz-codegen/src/emit.rs`; Check 2b `check.rs:919-933`; the
+     anon-arg staging site) before acting on them.
+  2. Lock the RED repros (RED-repro-before-fix, one per case): (a) anon-arg — pass an anonymous
+     struct literal to a suspending callee (`wait crew({...})` form); (b) `maybe`-arg — bind a
+     `maybe<int>` local (fixture-proven constructible form: bare `m: maybe<int>` param shape,
+     `` `42`.toInt() `` RHS, `.or(0)` read), pass it to a suspending callee; (c) `union`-arg —
+     bind a union local (`shape Figure = Circle | Square` form), pass it to a suspending callee.
+     Each asserts the CORRECT deterministic value (frame-backing disposition — assert-value, not
+     assert-compile-error); confirm each fails RED pre-fix for the documented UAF reason
+     (garbage / wrong variant, not some unrelated bug).
+  3. The fixes (each via the ONE authoritative classifier, never a second frame-layout path):
+     (a) anchoring for unnamed temporaries so the anonymous aggregate is classified as crossing
+     and frame-backed; (b) Maybe crossing machinery (envelope+payload ownership semantics — a
+     new Maybe arm in the one strategy table); (c) Union crossing machinery (resolving the
+     non-uniform-repr `value_to_stable_bits` known-hole for the crossing path — a new Union arm
+     in the one strategy table). Explicitly verify the fix routes maybe/union crossing locals
+     PAST Check 2b's rejection, NOT into it (never a compile-error reject, per R14). Verify the
+     emitted IR per case: the arg lives in the surviving heap frame, not a dying stack slot.
+  4. Full-regression + determinism proof: all Phase 1/1b fixtures + repros GREEN; full workspace
+     suite green (`docker compose run --rm dev cargo test --workspace`); house clippy
+     `-D warnings` clean; N≥10 runs of EACH new repro (anon, maybe, union), same correct value
+     every run.
+  5. False-positive sweep: no non-escaping anonymous aggregate, `maybe`, or `union` local (one
+     consumed entirely before any suspension) is wrongly affected by the new anchoring/machinery;
+     the pre-existing Check 2b read-after-wait rejections for maybe/union remain exactly as the
+     design intends post-fix (no silent widening or narrowing beyond the arg-escape path's
+     frame-backing).
+- **Exit criteria:** all three UAFs (anon, maybe, union) closed via the one crossing-classifier
+  extension + the one strategy table (no second frame-layout path, no second classification
+  path); RED→GREEN repros committed for all three, each deterministic across runs (N≥10);
+  maybe/union verified routed PAST Check 2b (nothing rejected, per R14); false-positive sweep
+  clean; full suite green including the M3a-class regression surface (M3a/M4/M5 suspension +
+  frame-layout suites); R14's maybe/union + anonymous-aggregate portion closed — with Phase 1b's
+  shape+fixed+number portion already landed, this converts the whole accepted-HIGH R14 interim
+  risk to closed, fixed bug (before Phase 6b's sanitizer lane and before release).
+- **Reviewer fan-out:** code-reviewer (the anchoring + Maybe/Union machinery + frame-layout
+  diff); adversarial gate-checker (do the repros genuinely exercise the dangling-stack window for
+  an UNNAMED temporary and for maybe/union args; is each determinism proof non-vacuous; are
+  maybe/union genuinely frame-backed rather than quietly rejected?); design-doc-alignment
+  reviewer (authoritative-derivation.md — the ONE crossing classifier extended, no second
+  frame-layout path).
 - **Model tag:** `(coding, high, medium)`
 
 #### Phase 2 — P4-3: block_on-fallback hard-error guard
@@ -816,7 +1023,7 @@ UAF).
   concurrency integration fixtures, under Miri and under ThreadSanitizer/AddressSanitizer — the
   mechanical hunt for exactly the bug classes this milestone fixed by hand (UAF, double-free, data
   races) — and wire a permanent CI job so those classes are hunted on every future push/PR, not just
-  this one hotfix. Sequenced after Phases 1, 1b, 3, 3b, 4, and 5 (a real dependency, not mere convenience —
+  this one hotfix. Sequenced after Phases 1, 1b, 1c, 3, 3b, 4, and 5 (a real dependency, not mere convenience —
   see Coordinating Instructions): the sanitizers must scan the FIXED runtime code, or their findings
   would just be re-discoveries of bugs already known and scheduled.
 - **Steps**
@@ -977,12 +1184,16 @@ UAF).
 
 ### 3.4 Coordinating Instructions
 
-- **Sequencing**: Phase 0 gates everything. **Phase 1b runs immediately after Phase 1 and BEFORE
-  Phase 2 (FRAGO 004 — Patrick-signed sequencing, 2026-07-09: a shipped memory-safety miscompile
-  is prioritized ahead of all remaining phases), and it remains a hard prerequisite of Phase 6b
-  (the sanitizer lane must scan the FIXED frame-backing).** Phase 1 → Phase 2 is a hard dependency
+- **Sequencing**: Phase 0 gates everything. **Phase 1b runs immediately after Phase 1, Phase 1c
+  immediately after Phase 1b, and BOTH run BEFORE
+  Phase 2 (FRAGOs 004/006 — Patrick-signed sequencing, 2026-07-09: shipped memory-safety
+  miscompiles are prioritized ahead of all remaining phases — P1 → P1b → P1c → P2), and both
+  remain hard prerequisites of Phase 6b
+  (the sanitizer lane must scan ALL the FIXED frame-backing).** Phase 1 → Phase 2 is a hard dependency
   (Decision D1) — do not start Phase 2 before Phase 1's carved fixture set (a/c/d) is GREEN, and
-  per the signed sequencing not before Phase 1b closes fixture (b) (the full class GREEN).
+  per the signed sequencing not before Phase 1b closes fixture (b) plus the number
+  repro AND Phase 1c closes the maybe/union + anon-arg repros (the full class GREEN, per
+  FRAGO 007's phase assignment).
   Phases 3, 4, 5 are independent of each
   other and of Phases 1–2 (different subsystems); they are sequenced 3→4→5 for one conductor's
   convenience, not a hard dependency — a FRAGO reordering them is not a plan violation. **Phase 3b (FRAGO 001)
@@ -990,9 +1201,10 @@ UAF).
   merge collision — **and is a hard prerequisite of Phase 6b** (the sanitizer lane must scan the FIXED
   recursion-chain cleanup path, same rationale as Phases 1/3/4/5). Phase 6 is
   independent of everything. **Phase 6b (sanitizer lane) has a real dependency, not mere convenience:
-  it must run AFTER Phases 1, 1b, 3, 3b, 4, and 5 land**, because Miri/TSan/ASan need to scan the FIXED runtime
-  code (the UFCS threading, the shape-arg frame-backing fix — the sanitizer lane must scan the
-  FIXED frame-backing, per FRAGO 004 — the ABA purge, the recursion-chain spike-handle cleanup,
+  it must run AFTER Phases 1, 1b, 1c, 3, 3b, 4, and 5 land**, because Miri/TSan/ASan need to scan the FIXED runtime
+  code (the UFCS threading, the arg frame-backing fixes — the sanitizer lane must scan ALL the
+  FIXED frame-backing: shape/`fixed<T>`/number (Phase 1b) AND maybe/union + anonymous aggregates
+  (Phase 1c), per FRAGOs 004/006/007 — the ABA purge, the recursion-chain spike-handle cleanup,
   the lost-wakeup reorder, the drop-glue mechanism) — scanning
   the pre-fix state would only re-discover bugs already known and scheduled. It is independent of
   Phase 6 itself; sequenced 6→6b for one conductor's convenience. Phase 7 should follow Phase 0's
@@ -1064,11 +1276,22 @@ UAF).
   Phase 1's RED→GREEN fixture class asserting suspend-correct behavior at all 9 predicate sites
   (the original 4 + the 5 coupled, per FRAGO 003; fixtures (a)/(c)/(d) close in Phase 1, fixture
   (b) closes in Phase 1b per FRAGO 004's carve-out).
-- No shape (or `fixed<T>`) aggregate argument to a suspending callee is left in a dying stack
-  alloca across suspension — it is frame-backed via the one `shape_embed` crossing classifier
-  (the single authoritative crossing classifier, extended — never a second frame-layout path);
-  the child's `self` points into the surviving frame, proven by a deterministic-across-runs
-  RED→GREEN repro (Phase 1b, FRAGO 004).
+- No shape, `fixed<T>`, or `number` argument to a suspending callee is left in
+  a dying stack alloca across suspension — the single authoritative crossing classifier, extended
+  (never a second frame-layout path), frame-backs a shape arg via the existing `shape_embed`
+  machinery (the child's `self` points into the surviving frame), routes a `fixed<T>` arg into the
+  existing Check 2b `UnsupportedCrossingLocalType` guard → deterministic teaching compile error
+  (FRAGO 005), and frame-backs a `number` arg via the same classifier plus the
+  consumer-side plumbing in the arg-staging path so the staged
+  pointer targets the surviving heap frame's decimal128 slot region (FRAGOs 006/007, R14);
+  proven by deterministic-across-runs RED→GREEN repros (Phase 1b, FRAGOs 004/006/007).
+- No anonymous struct-literal, `maybe`, or `union` argument to a suspending callee is left in a
+  dying stack slot across suspension — the same single authoritative crossing classifier,
+  extended with anchoring for unnamed temporaries plus new Maybe/Union crossing machinery in the
+  one strategy table (never a second frame-layout path, never a second classification path),
+  frame-backs all three so they work across suspension — maybe/union routed PAST Check 2b's
+  rejection, never INTO it (nothing rejected, per R14); proven by deterministic-across-runs
+  RED→GREEN repros (Phase 1c, FRAGOs 006/007, R14).
 - No suspending call reaches the block_on fallback (`emit.rs:15122-15137`) from a non-designated
   caller without a compile-time hard error (Phase 2).
 - No cancelled task's `pending_sends` entry survives its cancellation, from EITHER token producer
@@ -1333,3 +1556,15 @@ UAF).
     lowering ships (the remaining M4 P4 work — owning milestone TBD, flagged to Patrick at Gate-4
     rather than left "someday"). (FRAGO 002 — deferral-with-trigger per the D4/P2-3 precedent, not
     a fix phase.)
+11. **Pre-existing backend ICE on `fixed<T>` PARAM iteration** ("cannot iterate fixed array with
+    unknown size" — surfaced by Phase 1b segment 1 while constructing the `fixed<T>` escape
+    fixture; the fixture's callee deliberately does not iterate its param to stay clear of it).
+    **WHAT:** codegen ICEs when a function body iterates a `fixed<T>` received as a PARAMETER
+    (size not statically known at the callee). **WHY deferred:** a different bug class entirely —
+    a backend lowering ICE, not the UAF/crossing class Phase 1b closes; orthogonal to M6's
+    concurrency charter (same non-absorption shape as D6/P2-7); it is a LOUD compile-time crash,
+    never a silent miscompile. **COST to fix later:** ~0.5-1 session (thread the fixed-array size
+    through the param ABI, or reject fixed-param iteration with a teaching error — needs its own
+    small design pass). **TRIGGER:** the next milestone touching `fixed<T>` codegen/ABI, or a
+    real user hitting the ICE on valid-looking code. (FRAGO 005 — recorded as a deferral, not a
+    Phase 1b scope-add.)
