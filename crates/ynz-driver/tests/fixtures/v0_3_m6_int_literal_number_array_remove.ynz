@@ -1,0 +1,9 @@
+// WHY: int literal into `array<number>.remove(5)` — the elem-typed remove arg
+// must render the same teaching error as the other elem slots. (That `remove`
+// has no codegen lowering AT ALL yet is a separate, recorded out-of-scope gap —
+// the typeck gate fires first either way.)
+function entrypoint() -> nothing {
+  let prices: array<number> = [1.5]
+  prices.remove(5)
+  print(prices.count())
+}

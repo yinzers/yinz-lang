@@ -1,0 +1,12 @@
+// WHY: int literal into an EXPLICIT-type-arg generic `number` param (`pass<number>(5)`).
+// Pre-fix: the in-loop gate matched only a DECLARED `number` param — a TypeParam
+// resolved to number via explicit type args bypassed it and ICE'd at codegen
+// (IntValue where PointerValue expected). Must be the shared teaching error.
+function pass<T>(v: T) -> T {
+  return v
+}
+
+function entrypoint() -> nothing {
+  let got = pass<number>(5)
+  print(got)
+}

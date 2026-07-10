@@ -1,0 +1,11 @@
+// WHY: int literal into the KEY slot of `map<number, string>` methods
+// (`.set(5, ...)` / `.get(5)`) — key args were never checked. Pre-fix: SILENT
+// type corruption — a raw i64 5 stored/looked-up by bit identity where a
+// decimal128 pointer belongs (prints `a`, exit 0); any deref of the key as a
+// number pointer is a latent segfault. Must be the teaching error.
+function entrypoint() -> nothing {
+  let names: map<number, string> = {}
+  names.set(5, `a`)
+  let got = names.get(5)
+  print(got.or(`none`))
+}

@@ -1,0 +1,7 @@
+// WHY: int literal as a `fixed<number>` literal element — same hinted-elem-infer
+// class as the array literal. Pre-fix: codegen ICE panic.
+function entrypoint() -> nothing {
+  let prices: fixed<number> = [5]
+  let got = prices.get(0)
+  print(got.or(0.0))
+}

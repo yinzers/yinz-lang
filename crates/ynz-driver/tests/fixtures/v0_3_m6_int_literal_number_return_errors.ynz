@@ -1,0 +1,16 @@
+// WHY: `return 5` from a `-> number errors` function. The return type is
+// `Type::ErrorsCapable{ inner: Number }`, so the shared int-literal→number gate's
+// `matches!(expected_ty, Type::Number{..})` was FALSE through the wrapper and the
+// return-site consumer fell through to the GENERIC mismatch instead of the
+// teaching error. Pre-fix RED signature (fix-loop round 4):
+//   `return` produces `int`, but this function must return `number errors`.
+// Post-fix: the SAME teaching error the plain `-> number` return emits
+// (`Write it as a decimal literal: 5.0`), routed through the one shared gate
+// after unwrapping the ErrorsCapable wrapper.
+function toll() -> number errors {
+  return 5
+}
+
+function entrypoint() -> nothing {
+  print(`unreachable`)
+}

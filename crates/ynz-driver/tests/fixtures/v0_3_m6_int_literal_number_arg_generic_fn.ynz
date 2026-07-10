@@ -1,0 +1,21 @@
+// v0.3-M6 Phase 1d fix-loop round 2 fixture: an INT LITERAL argument into a
+// CONCRETE `number` param of a GENERIC function (`scale(5, item)` where
+// `function scale<T>(factor: number, give item: T)`). Int→number call-site
+// coercion does not exist yet (Future-Req #14, sibling of the store-site gap
+// #9), so this program must be REJECTED with the SAME typeck teaching compile
+// error the plain call form renders ("passing an int literal to a `number`
+// parameter is not supported yet") — never the generic "compiler bug" ICE
+// banner. Pre-round-2 `check_generic_fn_call` inferred args with no hint and
+// DISCARDED the `unify_param` mismatch (`let _ =`), so this exact program
+// passed typeck silently and ICE'd at codegen (an LLVM verifier reject: i64
+// arg against the callee's pointer-typed decimal128 param).
+
+function scale<T>(factor: number, give item: T) -> number {
+  return factor
+}
+
+function entrypoint() -> nothing {
+  let tag = `crate`
+  let scaled = scale(5, tag)
+  print(scaled.toString())
+}

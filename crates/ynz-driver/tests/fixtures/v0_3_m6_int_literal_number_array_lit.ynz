@@ -1,0 +1,7 @@
+// WHY: int literal as an `array<number>` literal element — the hinted elem infer
+// types the IntLit as number, silently passing typeck. Pre-fix: codegen ICE panic.
+function entrypoint() -> nothing {
+  let prices: array<number> = [5]
+  let got = prices.get(0)
+  print(got.or(0.0))
+}

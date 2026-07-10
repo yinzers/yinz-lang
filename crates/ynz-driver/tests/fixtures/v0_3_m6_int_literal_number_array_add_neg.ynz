@@ -1,0 +1,8 @@
+// WHY: NEGATIVE int literal into `array<number>.add(-5)` — the `-IntLit` face
+// of the unchecked-builtin-arg class. Pre-fix: silent type corruption (raw
+// i64 -5 stored where a decimal128 pointer belongs).
+function entrypoint() -> nothing {
+  let prices: array<number> = [1.5]
+  prices.add(-5)
+  print(prices.count())
+}

@@ -3440,6 +3440,33 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(cell)
     }
 
+    /// Persist-side ownership for a decimal128 (`number`, N ≤ 34) value that
+    /// crosses a concurrency boundary (v0.3-M6 Phase 1d, FRAGO 009 defects A/C).
+    /// A number VALUE in codegen is a POINTER to 16 bytes of i128 storage on the
+    /// producing frame (a hardware-decimal128 stack alloca, or the staged pointer
+    /// bits of an `sm_number_param_set` param). When the value is handed to a
+    /// `background`/cpu-member task that outlives the spawner's frame, those bytes
+    /// are dead by the time the task reads them (UAF / stack-garbage). Copy the
+    /// i128 bits into a counted heap cell and return the cell pointer, so the
+    /// task's pointer survives the spawner's frame return — the ONE mechanism both
+    /// defect A (spawn-arg pre-gate) and defect C (cpu-member spawn) consume
+    /// (authoritative-derivation: no second boundary-crossing derivation).
+    fn number_to_heap_cell(
+        &self,
+        num_ptr: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let cell = self.heap_cell(self.i64().const_int(16, false), site)?;
+        let bits = self
+            .builder
+            .build_load(self.i128(), num_ptr, &format!("{site}_num_ld"))
+            .map_err(|e| format!("number_to_heap_cell load {site}: {e}"))?;
+        self.builder
+            .build_store(cell, bits)
+            .map_err(|e| format!("number_to_heap_cell store {site}: {e}"))?;
+        Ok(cell)
+    }
+
     /// The ONE stable-bits marshalling point for persist surfaces (v0.3-M5 P2
     /// fix rounds 2–3; generalized from the round-2 map-only form).
     ///
@@ -9539,13 +9566,38 @@ fn build_cpu_trampoline<'ctx, 'g>(
         .map_err(|e| format!("trampoline load arg {trampoline_name}: {e}"))?
         .into_int_value();
 
-    // Call the compiled callee(arg_val).
+    // v0.3-M6 Phase 1d (FRAGO 009 defect C): for a bare-`number` callee the ctx
+    // word holds a POINTER (as i64) to a 16-byte heap cell that `emit_cpu_member_
+    // spawn` staged (the decimal128 ABI is by-pointer); reconstruct the pointer and
+    // pass IT to the callee. For every other callee the ctx word IS the i64 value.
+    // The SAME `callee_takes_bare_number` predicate keys both sides (authoritative-
+    // derivation). The cell is freed AFTER result packing below — never before —
+    // because an identity callee (`return n`) may return this very pointer, and
+    // packing must read the i128 out of the return pointer first.
+    let takes_number = callee_takes_bare_number(cg.typed, cg.imported_fns, callee);
+    let (call_arg, arg_cell): (
+        inkwell::values::BasicMetadataValueEnum<'ctx>,
+        Option<PointerValue<'ctx>>,
+    ) = if takes_number {
+        let cell = tramp_builder
+            .build_int_to_ptr(
+                arg_val,
+                ctx.ptr_type(AddressSpace::default()),
+                "spike_num_arg_ptr",
+            )
+            .map_err(|e| format!("trampoline num arg inttoptr {trampoline_name}: {e}"))?;
+        (cell.into(), Some(cell))
+    } else {
+        (arg_val.into(), None)
+    };
+
+    // Call the compiled callee(call_arg).
     let callee_fn = cg
         .module
         .get_function(callee)
         .ok_or_else(|| format!("spike: callee `{callee}` not declared"))?;
     let call_result = tramp_builder
-        .build_call(callee_fn, &[arg_val.into()], "spike_call")
+        .build_call(callee_fn, &[call_arg], "spike_call")
         .map_err(|e| format!("trampoline call {trampoline_name}: {e}"))?
         .try_as_basic_value()
         .basic()
@@ -9653,6 +9705,22 @@ fn build_cpu_trampoline<'ctx, 'g>(
         .map_err(|e| format!("trampoline insert w1 {trampoline_name}: {e}"))?
         .into_struct_value();
 
+    // FRAGO 009 defect C: free the staged decimal128 arg cell now — AFTER packing
+    // copied the i128 out of any return pointer that may alias it. One alloc (spawn
+    // site) / one free (here). A blocking-pool task dropped un-run at runtime
+    // shutdown leaks this cell (process-exit-only, same class as the shipped
+    // never-drop-locals semantics — tracked as v0.3-M6 Future-Req #17, deferred to
+    // the drop-story milestone).
+    if let Some(cell) = arg_cell {
+        tramp_builder
+            .build_call(
+                cg.rt.ynz_free,
+                &[cell.into(), i64_ty.const_int(16, false).into()],
+                "spike_num_free",
+            )
+            .map_err(|e| format!("trampoline num free {trampoline_name}: {e}"))?;
+    }
+
     tramp_builder
         .build_return(Some(&packed))
         .map_err(|e| format!("trampoline ret {trampoline_name}: {e}"))?;
@@ -9676,6 +9744,7 @@ fn emit_cpu_member_spawn<'ctx, 'g>(
     member_noun: &str,
     idx: usize,
     args: &[Expr],
+    callee: &str,
     trampoline_fn: FunctionValue<'ctx>,
     handle_offset: u64,
     frame_ptr: PointerValue<'ctx>,
@@ -9683,7 +9752,51 @@ fn emit_cpu_member_spawn<'ctx, 'g>(
     let ctx = cg.ctx;
     let i64_ty = ctx.i64_type();
 
+    // v0.3-M6 Phase 1d (FRAGO 009 defect C): when the callee takes a bare
+    // decimal128 (`number`, N ≤ 34) param, the ctx word must carry a POINTER to a
+    // 16-byte heap cell (the number ABI is by-pointer), staged here and freed by
+    // the trampoline after result packing. The SAME `callee_takes_bare_number`
+    // predicate steers `build_cpu_trampoline`'s reconstruction (authoritative-
+    // derivation — the two sides cannot disagree).
+    let takes_number = callee_takes_bare_number(cg.typed, cg.imported_fns, callee);
+
     let arg_llvm = match args.first() {
+        // Ident number arg: read via the authoritative load path (`lower_expr` →
+        // `load()`'s Number arm returns a pointer to the i128 storage for both a
+        // hardware-decimal128 local AND an `sm_number_param_set` pointer-bits
+        // param), heap-copy the bits so the pointee survives the spawner's frame,
+        // and stage the cell pointer as the ctx word.
+        Some(arg @ Expr::Ident(..)) if takes_number => {
+            let num_ptr = lower_expr(cg, arg)?.into_pointer_value();
+            let cell = cg.number_to_heap_cell(num_ptr, &format!("{name_prefix}_num_{idx}"))?;
+            cg.builder
+                .build_ptr_to_int(cell, i64_ty, &format!("{name_prefix}_num_bits_{idx}"))
+                .map_err(|e| format!("{name_prefix} num ptr_to_int {idx}: {e}"))?
+        }
+        // Int-literal to a `number` param: a PRE-EXISTING general codegen gap that
+        // ICEs even in a plain synchronous call (`lower_expr(IntLit)` yields an i64;
+        // no call site coerces int→number) — orthogonal to FRAGO 009's decimal128-
+        // across-a-concurrency-boundary charter, and deliberately NOT fixed only at
+        // this boundary (that would make `background f(5)` work while `f(5)` stays
+        // broken; Future-Req #14). The user-facing rejection is typeck's shared
+        // int-literal-to-`number` slot gate `reject_int_literal_number_slot`
+        // (with the thin `reject_int_literal_number_arg` call-arg wrapper), which
+        // is COMPLETE for the `IntLit` / `-IntLit` → `number` argument /
+        // construction / statement class — every call form (plain `f(5)`, UFCS
+        // `p.f(5)`, generic `f<T>(5, ...)`), collection-element slot, struct /
+        // array / fixed / map literal, index / field assignment, `return`, and
+        // match-arm pattern — with only the store-site `let x: number = 5` (#9,
+        // signed-stub territory) excepted. This arm is an unreachable internal
+        // backstop so a typeck regression can never stage a raw int the
+        // number-typed trampoline would `int_to_ptr` into an invalid pointer.
+        Some(Expr::IntLit(_, span)) if takes_number => {
+            return Err(format!(
+                "internal: int-literal argument to a `number`-param CPU member reached \
+                 codegen ({name_prefix} member {idx}, source offsets {}..{}) — typeck's \
+                 int-literal-to-number call-site gate should have rejected this program",
+                span.start, span.end
+            ));
+        }
         Some(Expr::IntLit(n, _)) => i64_ty.const_int(*n as u64, true),
         Some(Expr::Ident(name, span)) => {
             let local_ptr =
@@ -10219,6 +10332,7 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
             "child",
             idx,
             &child.args,
+            &child.callee,
             trampoline_fns[idx],
             handle_offsets[idx],
             frame_ptr,
@@ -10945,6 +11059,7 @@ fn emit_fused_group_spawn_poll<'ctx, 'g>(
             "cpu member",
             idx,
             &child.args,
+            &child.callee,
             trampoline_fns[idx],
             handle_offsets[idx],
             frame_ptr,
@@ -15670,6 +15785,29 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
     }
 
+    // v0.3-M6 Phase 1d (FRAGO 009 defect A): a decimal128 (`number`, N ≤ 34) arg
+    // ALWAYS needs stabilization — an UNCONDITIONAL pre-gate, independent of
+    // give/copy inference (mirroring the MapEntry pre-gate above), because the
+    // value is a POINTER to per-site i128 storage on the spawner's frame — a
+    // hardware-decimal128 stack alloca or the staged pointer bits of an SM number
+    // param — regardless of whether the ident lands in
+    // `background_arg_inferred_ownership`. That storage dies with the spawner's
+    // frame; the task (CPU-spawn arm via `ynz_rt_spawn_blocking`, or SM-spawn arm
+    // via `ynz_rt_spawn`) reads dangling bits after the spawner returns/suspends
+    // (probe: deterministic `0.000...` vs `2.5`). Copy the i128 into a counted
+    // heap cell via the ONE `number_to_heap_cell` mechanism the cpu-member path
+    // also consumes (authoritative-derivation). The 16-byte cell rides the free
+    // ladder's `HeapShape` protocol — closure-body `emit_bg_arg_frees` (CPU arm)
+    // and `BgArgDropEntry` kind-0 (SM arm) both free it exactly once. The SM
+    // child-side read is unchanged: `load()`'s `sm_number_param_set` indirection
+    // now derefs the heap cell instead of the dead stack temp. N > 34 (bignum, a
+    // heap/global string pointer that already survives the frame) is deliberately
+    // out of scope — it falls through to the by-pointer default arm below.
+    if matches!(cg.resolve_type(ty), Type::Number { precision } if precision <= 34) {
+        let cell = cg.number_to_heap_cell(val.into_pointer_value(), "bg_number")?;
+        return Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+    }
+
     let is_heap_arg = match arg {
         ynz_ast::nodes::Expr::Ident(_, s) => {
             // Plain ident: any inferred Give or Copy ownership gets the heap fix.
@@ -18780,6 +18918,42 @@ fn callee_returns_bare_number(
     imported_fns.get(fn_name).is_some_and(
         |sig| matches!(sig.ret, ynz_typeck::types::Type::Number { precision } if precision <= 34),
     )
+}
+
+/// True when the named function's FIRST parameter is a bare decimal128 (`number`,
+/// N ≤ 34) — the first-param twin of `callee_returns_bare_number` (v0.3-M6 Phase
+/// 1d, FRAGO 009 defect C). A cpu-member spawn stages an 8-byte ctx word and the
+/// shared trampoline passes it to the compiled callee; for a number-param callee
+/// the number ABI is a POINTER, so the ctx word must carry a heap-cell pointer
+/// (not the raw i128 low bits) and the trampoline must reconstruct that pointer.
+/// This ONE predicate is consumed by BOTH the spawn site (`emit_cpu_member_spawn`)
+/// and the trampoline (`build_cpu_trampoline`) so the two sides cannot drift on
+/// "does this callee take a bare number?" (authoritative-derivation).
+fn callee_takes_bare_number(
+    typed: &TypedModule,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    fn_name: &str,
+) -> bool {
+    let local = typed.module.items.iter().any(|item| {
+        if let ynz_ast::nodes::Item::Function(f) = item {
+            f.name == fn_name
+                && matches!(
+                    f.params.first().map(|p| &p.ty),
+                    Some(ynz_ast::nodes::Type::Number { precision }) if *precision <= 34
+                )
+        } else {
+            false
+        }
+    });
+    if local {
+        return true;
+    }
+    imported_fns.get(fn_name).is_some_and(|sig| {
+        matches!(
+            sig.params.first().map(|(_, t)| t),
+            Some(ynz_typeck::types::Type::Number { precision }) if *precision <= 34
+        )
+    })
 }
 
 /// True when the named function has `errors_capable = true`, checking both local

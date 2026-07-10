@@ -1,0 +1,10 @@
+// WHY: int literal as a multi-case-if arm pattern against a `number` scrutinee —
+// the hinted pattern infer types the IntLit as number, silently passing typeck.
+// Pre-fix: LLVM verifier ICE (`ynz_decimal_compare(ptr, i64 5)`).
+function entrypoint() -> nothing {
+  let price: number = 5.0
+  if (price) {
+    5 => { print(`hit`) }
+    else => { print(`miss`) }
+  }
+}

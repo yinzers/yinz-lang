@@ -1,0 +1,7 @@
+// WHY: int literal into `array<number>.contains(5)` — contains compares by
+// 8-byte cell BIT identity, so a raw i64 5 never matches a decimal128 pointer.
+// Pre-fix: SILENT WRONG — prints `false`, exit 0. Must be the teaching error.
+function entrypoint() -> nothing {
+  let prices: array<number> = [1.5]
+  print(prices.contains(5))
+}

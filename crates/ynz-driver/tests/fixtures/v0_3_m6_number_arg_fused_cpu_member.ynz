@@ -1,0 +1,34 @@
+// v0.3-M6 Phase 1d RED fixture (FRAGO 009 defect C, fused mixed CPU+I/O group): a
+// decimal128 (`number`) argument into the CPU member of a FUSED group
+// (`emit_fused_group_spawn_poll` → the SAME shared `emit_cpu_member_spawn` +
+// `build_cpu_trampoline` as the pure-CPU path). Admission
+// (cpu_admission::admitted_fused_group): host has no params, no pre-group statement
+// suspends, `heavyEcho`/`fetchInt` are adjacent direct ident calls with one
+// scalar/Ident arg each, one CPU member (does_real_work loop) + one Suspending
+// member. Correct behavior: prints 2.5 (CPU member's number arg) then 7, exits 0.
+// Pre-fix failure (the documented ICE, fable-probe-confirmed on HEAD 47abd29 —
+// fused variant): same i64-load-vs-pointer-param mismatch as the pure-CPU spike
+// path — LLVM verifier failure surfaced as "compiler bug" on valid code.
+
+function heavyEcho(n: number) -> number {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return n
+}
+
+function fetchInt(k: int) -> int {
+  wait sleep(0)
+  return k
+}
+
+function entrypoint() -> nothing {
+  let x: number = 2.5
+  let a = heavyEcho(x)
+  let b = fetchInt(7)
+  print(a.toString())
+  print(b.toString())
+}

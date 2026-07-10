@@ -215,3 +215,37 @@ pub fn map_method_return(method: &str, key: &Type, val: &Type) -> Option<Type> {
 pub fn map_method_is_mutating(method: &str) -> bool {
     matches!(method, "set" | "remove" | "clear")
 }
+
+/// The receiver-typed argument positions of the built-in collection methods:
+/// which arg positions of `method` carry the collection's elem / inner / key /
+/// value type (rather than an `int` index or a closure).
+///
+/// The ONE authoritative position table (authoritative-derivation) consumed by
+/// `check_method_call`'s int-literal→`number` slot gate — when a collection
+/// method gains an element-typed argument, extend THIS table, never a per-arm
+/// twin. (`concat`/`append`/`prepend` take a whole collection, not an element,
+/// so they carry no entry here.)
+pub fn collection_method_arg_slots(receiver: &Type, method: &str) -> Vec<(usize, Type)> {
+    match receiver {
+        Type::BuiltinArray { elem } => match method {
+            "add" | "contains" | "remove" => vec![(0, elem.as_ref().clone())],
+            "set" => vec![(1, elem.as_ref().clone())],
+            _ => Vec::new(),
+        },
+        Type::BuiltinFixed { elem, .. } => match method {
+            "contains" => vec![(0, elem.as_ref().clone())],
+            "set" => vec![(1, elem.as_ref().clone())],
+            _ => Vec::new(),
+        },
+        Type::Maybe { inner } => match method {
+            "or" => vec![(0, inner.as_ref().clone())],
+            _ => Vec::new(),
+        },
+        Type::BuiltinMap { key, val } => match method {
+            "set" => vec![(0, key.as_ref().clone()), (1, val.as_ref().clone())],
+            "get" | "has" | "remove" | "find" => vec![(0, key.as_ref().clone())],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}

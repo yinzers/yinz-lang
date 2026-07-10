@@ -1,0 +1,12 @@
+// WHY: int literal into a SIBLING-BOUND generic `number` param — `pick(price, 5)`
+// binds T = number from arg 0, so arg 1's IntLit lands in a number slot the
+// in-loop gate never saw (unify mismatch discarded). Pre-fix: codegen ICE panic.
+function pick<T>(a: T, b: T) -> T {
+  return a
+}
+
+function entrypoint() -> nothing {
+  let price: number = 1.5
+  let got = pick(price, 5)
+  print(got)
+}

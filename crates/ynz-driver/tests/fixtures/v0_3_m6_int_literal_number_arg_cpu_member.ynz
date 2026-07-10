@@ -1,0 +1,35 @@
+// v0.3-M6 Phase 1d fix-loop fixture: an INT LITERAL argument into a `number`-param
+// CPU-member spawn (`f(5)` where `f(n: number)`, same admitted-spike-group shape as
+// v0_3_m6_number_arg_cpu_member.ynz). Int→number call-site coercion does not exist
+// yet (Future-Req #14, sibling of the store-site gap #9), so this program must be
+// REJECTED with typeck's clean teaching compile error ("passing an int literal to a
+// `number` parameter is not supported yet") — never the generic "compiler bug" ICE
+// banner, never a segfault from staging a raw i64 as a heap-cell pointer.
+
+function heavyGrow(n: number) -> number {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return n
+}
+
+function heavyShrink(m: number) -> number {
+  let total = 0
+  let i = 0
+  while (i < 40) {
+    total = total + i
+    i = i + 1
+  }
+  return m
+}
+
+function entrypoint() -> nothing {
+  let y: number = 4.5
+  let a = heavyGrow(5)
+  let b = heavyShrink(y)
+  print(a.toString())
+  print(b.toString())
+}

@@ -8,9 +8,9 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
     builtins::{
-        array_method_is_mutating, array_method_return, fixed_method_is_mutating,
-        fixed_method_return, map_method_is_mutating, map_method_return, maybe_method_return,
-        sensitive_method_return, string_method_return,
+        array_method_is_mutating, array_method_return, collection_method_arg_slots,
+        fixed_method_is_mutating, fixed_method_return, map_method_is_mutating, map_method_return,
+        maybe_method_return, sensitive_method_return, string_method_return,
     },
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
@@ -1885,6 +1885,17 @@ impl<'b> Checker<'b> {
             match &arm.pattern.kind {
                 MatchPatternKind::Value(pat_expr) => {
                     let pat_ty = self.infer_expr(pat_expr, Some(&scrutinee_ty));
+                    // Int literal as an arm pattern against a `number`
+                    // scrutinee — the hinted infer silently types it `number`
+                    // and the LLVM verifier rejects the raw-i64
+                    // `ynz_decimal_compare` operand at codegen (#14).
+                    if self.reject_int_literal_number_slot(
+                        NumberSlotRole::MatchArm,
+                        &scrutinee_ty,
+                        pat_expr,
+                    ) {
+                        continue;
+                    }
                     if pat_ty != Type::Error
                         && scrutinee_ty != Type::Error
                         && pat_ty != scrutinee_ty
@@ -2153,6 +2164,12 @@ impl<'b> Checker<'b> {
             }
             (Some(expr), ret) => {
                 let val_ty = self.infer_expr(expr, Some(ret));
+                // Int literal returned from a `-> number` function — the hinted
+                // infer silently types it `number` and the LLVM verifier rejects
+                // the raw-i64 ret at codegen (Future-Req #14, shared gate).
+                if self.reject_int_literal_number_slot(NumberSlotRole::Return, ret, expr) {
+                    return;
+                }
                 if val_ty != Type::Error && *ret != Type::Error && !types_compatible(ret, &val_ty) {
                     // M7 P3a: in an errors-capable function, returning the inner success
                     // type is valid (the auto-propagation machinery wraps it at codegen).
@@ -2342,6 +2359,7 @@ impl<'b> Checker<'b> {
                             Some(receiver),
                             method,
                             method_span,
+                            args,
                         )
                     }
                 } else {
@@ -2353,6 +2371,7 @@ impl<'b> Checker<'b> {
                         Some(receiver),
                         method,
                         method_span,
+                        args,
                     )
                 }
             }
@@ -2439,7 +2458,21 @@ impl<'b> Checker<'b> {
                     Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => Type::Maybe {
                         inner: elem.clone(),
                     },
-                    Type::BuiltinMap { val, .. } => Type::Maybe { inner: val.clone() },
+                    Type::BuiltinMap { key, val } => {
+                        // Int literal as a `number` bracket key (`names[5]` on a
+                        // `map<number, V>`) — the index is inferred with an
+                        // unconditional `int` hint and never checked against the
+                        // key type (silent bit-identity corruption; #14).
+                        self.reject_int_literal_number_slot(
+                            NumberSlotRole::Collection {
+                                container: "map",
+                                noun: "key",
+                            },
+                            key.as_ref(),
+                            index,
+                        );
+                        Type::Maybe { inner: val.clone() }
+                    }
                     // M7 P3b: string bracket access desugars to .get(n) → maybe<string>
                     Type::String => Type::Maybe {
                         inner: Box::new(Type::String),
@@ -3784,6 +3817,117 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// v0.3-M6 (Phase 1d boundary review; extended to ALL call forms in fix-loop
+    /// round 2, to EVERY `number`-typed slot in round 3, and to the
+    /// `errors`-wrapped return `-> number errors` in round 4): an int literal (or
+    /// `-IntLit`) where a `number` is expected type-checks (via the literal-hint
+    /// rule, or by a path that never checks the slot at all), but codegen has no
+    /// int→number conversion yet — the compiled code would carry a raw i64 where
+    /// a pointer-typed decimal128 belongs (an LLVM verifier reject or internal
+    /// panic surfaced as "compiler bug" on valid code, a segfault, or a silently
+    /// wrong bit-identity compare). Reject with a teaching error until the one
+    /// int→number coercion ships for BOTH the store site and the call/slot sites
+    /// (Future-Req #9/#14, routed to the int-literal-number hotfix plan).
+    /// Mirrors the `channel<number>` gate: a clean compile error, never an ICE.
+    ///
+    /// The ONE gate shared by every slot the class reaches — the call forms
+    /// (plain `f(5)` in `check_user_fn_call`, UFCS `p.f(5)` in
+    /// `check_method_call`'s shape/UFCS arm, generic `f<T>(5, ...)` post-loop in
+    /// `check_generic_fn_call`, built-in collection method args via the
+    /// `collection_method_arg_slots` position table) AND the construction /
+    /// statement slots (shape fields, array/fixed/map literal elements, index
+    /// and bracket assigns, map bracket keys, `return`, multi-case-if arm
+    /// patterns) — so all render byte-identical core diagnostics per
+    /// non-oop.md's identical-diagnostics-between-call-forms convention
+    /// (authoritative-derivation: one gate, never per-slot twins). The store
+    /// sites are deliberately NOT gated here — both the local binding
+    /// (`let x: number = 5`) AND the declaration-site field default
+    /// (`hidden f: number = 5`) are store-site #9 class: they ICE today,
+    /// pending the same int→number coercion mechanism (Future-Req #9/#14),
+    /// which routes the raw i64 into the decimal128 slot rather than rejecting
+    /// it. Gating one store site while the other stays open would make the
+    /// class inconsistent, so both wait for the coercion together.
+    ///
+    /// Returns `true` when the diagnostic fired (the caller skips further
+    /// checks for this argument).
+    fn reject_int_literal_number_arg(
+        &mut self,
+        name: &str,
+        expected_ty: &Type,
+        arg: &Expr,
+    ) -> bool {
+        self.reject_int_literal_number_slot(NumberSlotRole::CallArg { name }, expected_ty, arg)
+    }
+
+    /// The role-parameterized body of the int-literal→`number` gate: fires on a
+    /// bare `IntLit` OR a negated one (`-5` — a `UnaryOp{Neg, IntLit}`, which
+    /// always types `int` because the hint is not propagated into unary ops).
+    /// The role varies ONLY the diagnostic's subject and the WHAT-INSTEAD
+    /// closing clause; the core WHAT/WHY text stays byte-identical across every
+    /// slot, mirroring the identical-diagnostics-between-call-forms convention.
+    fn reject_int_literal_number_slot(
+        &mut self,
+        role: NumberSlotRole<'_>,
+        expected_ty: &Type,
+        arg: &Expr,
+    ) -> bool {
+        // A `-> number errors` return type carries the `number` inside an
+        // `ErrorsCapable` wrapper, so `matches!(_, Type::Number)` is false
+        // through it and an int-literal return would fall through to the
+        // generic mismatch instead of this teaching error. Unwrap the wrapper
+        // so the errors-return slot routes through the SAME gate — one
+        // authoritative check, not a second parallel one (authoritative-derivation).
+        let expected_ty = match expected_ty {
+            Type::ErrorsCapable { inner } => inner.as_ref(),
+            other => other,
+        };
+        if !matches!(expected_ty, Type::Number { .. }) {
+            return false;
+        }
+        let lit = match arg {
+            Expr::IntLit(n, _) => n.to_string(),
+            Expr::UnaryOp {
+                op: ynz_ast::nodes::UnaryOpKind::Neg,
+                operand,
+                ..
+            } => match operand.as_ref() {
+                Expr::IntLit(n, _) => format!("-{n}"),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        let (subject, noun, call_name) = match role {
+            NumberSlotRole::CallArg { name } => (format!("`{name}`"), "parameter", Some(name)),
+            NumberSlotRole::Field { name } => (format!("Field `{name}`"), "field", None),
+            NumberSlotRole::Collection { container, noun } => {
+                (format!("This {container}"), noun, None)
+            }
+            NumberSlotRole::Return => ("`return`".to_string(), "return value", None),
+            NumberSlotRole::MatchArm => ("This arm pattern".to_string(), "match pattern", None),
+        };
+        let variable_use = match call_name {
+            Some(name) => format!(" then `{name}(amount)`"),
+            None => String::new(),
+        };
+        self.diags.push(Diagnostic::error(
+            arg.span().clone(),
+            format!(
+                "{subject} expects a `number` here, but `{lit}` is an int literal — \
+                 passing an int literal to a `number` {noun} is not supported yet."
+            ),
+            format!(
+                "Write it as a decimal literal: `{lit}.0`. A decimal literal is \
+                 already a `number`, so no conversion is needed. A `number`-typed \
+                 variable works too: `let amount: number = {lit}.0`{variable_use}."
+            ),
+            "The compiler does not yet convert an int literal to a `number` \
+             automatically. An `int` and a `number` are stored in different formats \
+             (a `number` is a 34-digit decimal), so the conversion needs its own \
+             compile step, which ships in a later milestone.",
+        ));
+        true
+    }
+
     fn check_user_fn_call(
         &mut self,
         call: &CallExpr,
@@ -3811,6 +3955,10 @@ impl<'b> Checker<'b> {
         for (i, (arg, (_, expected_ty))) in call.args.iter().zip(params.iter()).enumerate() {
             let ownership = ownerships.get(i).and_then(|o| o.as_ref());
             let actual_ty = self.infer_expr(arg, Some(expected_ty));
+
+            if self.reject_int_literal_number_arg(name, expected_ty, arg) {
+                continue;
+            }
 
             // Ownership enforcement on direct identifier arguments.
             if let Some(binding_name) = simple_ident_name(arg) {
@@ -4123,6 +4271,7 @@ impl<'b> Checker<'b> {
         for (i, (arg, (_, param_ty))) in call.args.iter().zip(non_self_params.iter()).enumerate() {
             let actual = self.infer_expr(arg, None);
             arg_types.push(actual.clone());
+
             if actual != Type::Error {
                 let _ = unify_param(param_ty, &actual, &mut subst);
             }
@@ -4131,6 +4280,21 @@ impl<'b> Checker<'b> {
             if let Some(binding_name) = simple_ident_name(arg) {
                 self.check_arg_ownership(binding_name, ownership, name, arg.span());
             }
+        }
+
+        // Int literal into a `number` param of a generic fn — CONCRETE
+        // (`tag(`x`, 5)` with a declared `number` param), EXPLICIT
+        // (`pass<number>(5)`), or SIBLING-BOUND (`pick(price, 5)` where T =
+        // number from arg 0). One post-loop pass over the SUBSTITUTED param
+        // types catches all three via the same shared gate (Future-Req #14):
+        // an unresolved TypeParam stays a TypeParam and never matches
+        // `Number`, so partial substitutions cannot false-fire. (The
+        // `unify_param` mismatch above is deliberately discarded — generic
+        // inference tolerates partial unification — so without this gate the
+        // program passes typeck silently and ICEs at codegen.)
+        for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params.iter()) {
+            let resolved = apply_substitution(param_ty, &subst);
+            self.reject_int_literal_number_arg(name, &resolved, arg);
         }
 
         // Verify all type params were resolved — emit one consolidated error if multiple are missing.
@@ -4243,6 +4407,7 @@ impl<'b> Checker<'b> {
         receiver_expr: Option<&Expr>,
         method: &str,
         method_span: &SourceSpan,
+        args: &[Expr],
     ) -> Type {
         if *receiver_ty == Type::Error {
             return Type::Error;
@@ -4269,6 +4434,20 @@ impl<'b> Checker<'b> {
         // Primitive intrinsic methods (M2/M3 — toString, toFloat, etc.)
         if let Some(ret_ty) = self.intrinsics.lookup_method(receiver_ty, method) {
             return ret_ty;
+        }
+
+        // Int literal (or `-IntLit`) into a `number`-typed elem/key/value slot
+        // of a built-in collection method — these args are inferred hint-free
+        // upstream and the builtin arms check nothing, so without this gate the
+        // program passes typeck and miscompiles (raw i64 bits where a decimal128
+        // pointer belongs: `array<number>.add(5)` segfaults; `.contains(5)` is
+        // silently wrong). ONE authoritative position table
+        // (`collection_method_arg_slots`) + the ONE shared gate — no per-arm
+        // twins (authoritative-derivation, Future-Req #14).
+        for (pos, slot_ty) in collection_method_arg_slots(receiver_ty, method) {
+            if let Some(arg) = args.get(pos) {
+                self.reject_int_literal_number_arg(method, &slot_ty, arg);
+            }
         }
 
         // M5 P3b: built-in collection method dispatch.
@@ -4436,6 +4615,17 @@ impl<'b> Checker<'b> {
                                     recv_expr.span(),
                                 );
                             }
+                        }
+                        // Int literal into a `number` param through the UFCS
+                        // dot-call form (`p.f(5)` — sugar for `f(p, 5)`): the
+                        // non-receiver args were inferred with no hint upstream,
+                        // so without this gate the program passes typeck and
+                        // ICEs at codegen. Same shared gate as the plain call
+                        // form so both render byte-identical diagnostics per
+                        // non-oop.md's dual-style convention (Future-Req #14).
+                        // Receiver is the first param; args map to params[1..].
+                        for (arg, (_, expected_ty)) in args.iter().zip(sig.params.iter().skip(1)) {
+                            self.reject_int_literal_number_arg(method, expected_ty, arg);
                         }
                         // Kernel-mode rejection for UFCS suspending method calls. The
                         // bare call-dispatch arm guards `Expr::Call name =>` at the call site;
@@ -5473,6 +5663,19 @@ impl<'b> Checker<'b> {
             let val = val.as_ref().clone();
             for f in fields {
                 let actual = self.infer_expr(&f.value, Some(&val));
+                // Int literal as a `number` map value through the identifier-key
+                // struct-lit form — the hinted infer silently types it `number`
+                // and ICEs at codegen (Future-Req #14, shared gate).
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "value",
+                    },
+                    &val,
+                    &f.value,
+                ) {
+                    continue;
+                }
                 if actual != Type::Error && val != Type::Error && actual != val {
                     self.diags.push(Diagnostic::error(
                         f.value.span().clone(),
@@ -5697,6 +5900,18 @@ impl<'b> Checker<'b> {
                 Some(field_def) => {
                     let expected = field_def.ty.clone();
                     let actual = self.infer_expr(&lit_field.value, Some(&expected));
+                    // Int literal into a `number`-typed field at construction —
+                    // the hinted infer silently types it `number` and ICEs at
+                    // codegen (Future-Req #14, shared gate).
+                    if self.reject_int_literal_number_slot(
+                        NumberSlotRole::Field {
+                            name: &lit_field.name,
+                        },
+                        &expected,
+                        &lit_field.value,
+                    ) {
+                        continue;
+                    }
                     if actual != Type::Error
                         && expected != Type::Error
                         && !types_compatible(&actual, &expected)
@@ -5856,6 +6071,16 @@ impl<'b> Checker<'b> {
         let field_ty = self.infer_field_access(receiver, field, field_span);
         let value_ty = self.infer_expr(value, Some(&field_ty));
 
+        // Int literal assigned to a `number`-typed field — the hinted infer
+        // silently types it `number` and ICEs at codegen (Future-Req #14).
+        if self.reject_int_literal_number_slot(
+            NumberSlotRole::Field { name: field },
+            &field_ty,
+            value,
+        ) {
+            return;
+        }
+
         if field_ty != Type::Error && value_ty != Type::Error && field_ty != value_ty {
             self.diags.push(Diagnostic::error(
                 span.clone(),
@@ -5931,6 +6156,20 @@ impl<'b> Checker<'b> {
         let mut elem_ty = hint_elem.clone().unwrap_or(Type::Error);
         for (i, elem) in elements.iter().enumerate() {
             let ty = self.infer_expr(elem, hint_elem.as_ref());
+            // Int literal as a `number` collection-literal element — the hinted
+            // infer silently types it `number` and ICEs at codegen (#14).
+            if let Some(h) = hint_elem.as_ref() {
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: if is_fixed { "fixed array" } else { "array" },
+                        noun: "element",
+                    },
+                    h,
+                    elem,
+                ) {
+                    continue;
+                }
+            }
             if i == 0 && elem_ty == Type::Error {
                 elem_ty = ty.clone();
             } else if ty != Type::Error && elem_ty != Type::Error && ty != elem_ty {
@@ -6016,6 +6255,18 @@ impl<'b> Checker<'b> {
             Type::BuiltinArray { elem } => {
                 let expected = elem.as_ref().clone();
                 let val_ty = self.infer_expr(value, Some(&expected));
+                // Int literal index-assigned into a `number` element — the
+                // hinted infer silently types it `number`, ICE at codegen (#14).
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "array",
+                        noun: "element",
+                    },
+                    &expected,
+                    value,
+                ) {
+                    return;
+                }
                 if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -6032,6 +6283,16 @@ impl<'b> Checker<'b> {
             Type::BuiltinFixed { elem, .. } => {
                 let expected = elem.as_ref().clone();
                 let val_ty = self.infer_expr(value, Some(&expected));
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "fixed array",
+                        noun: "element",
+                    },
+                    &expected,
+                    value,
+                ) {
+                    return;
+                }
                 if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -6045,9 +6306,35 @@ impl<'b> Checker<'b> {
                     ));
                 }
             }
-            Type::BuiltinMap { val: map_val, .. } => {
+            Type::BuiltinMap {
+                key: map_key,
+                val: map_val,
+            } => {
                 let expected = map_val.as_ref().clone();
                 let val_ty = self.infer_expr(value, Some(&expected));
+                // Int literal as a `number` bracket KEY (`names[5] = ...` on a
+                // `map<number, V>`) — the index expr is inferred with an
+                // unconditional `int` hint and never checked against the map's
+                // key type, so raw i64 bits land where a decimal128 pointer
+                // belongs (silent bit-identity corruption; Future-Req #14).
+                self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "key",
+                    },
+                    map_key.as_ref(),
+                    index,
+                );
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "value",
+                    },
+                    &expected,
+                    value,
+                ) {
+                    return;
+                }
                 if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -6098,6 +6385,31 @@ impl<'b> Checker<'b> {
         for (key_expr, val_expr) in entries {
             let k = self.infer_expr(key_expr, hint_key.as_ref());
             let v = self.infer_expr(val_expr, hint_val.as_ref());
+
+            // Int literal as a `number` map-literal key/value — the hinted
+            // infer silently types it `number` and ICEs at codegen (#14).
+            if let Some(hk) = hint_key.as_ref() {
+                self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "key",
+                    },
+                    hk,
+                    key_expr,
+                );
+            }
+            if let Some(hv) = hint_val.as_ref() {
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "value",
+                    },
+                    hv,
+                    val_expr,
+                ) {
+                    continue;
+                }
+            }
 
             if key_ty == Type::Error {
                 key_ty = k.clone();
@@ -10254,6 +10566,28 @@ fn levenshtein(a: &str, b: &str) -> usize {
 ///
 /// Used for ownership checking: ownership enforcement only applies to direct
 /// binding references, not to computed expressions like `foo()` or `a + b`.
+/// Where an int literal met a `number`-typed slot — consumed by
+/// `reject_int_literal_number_slot`. The role varies ONLY the diagnostic's
+/// subject and the WHAT-INSTEAD closing clause; the core WHAT/WHY text stays
+/// byte-identical across every slot (non-oop.md's
+/// identical-diagnostics-between-call-forms convention, lifted to all slots).
+enum NumberSlotRole<'a> {
+    /// A call argument — plain `f(5)`, UFCS `p.f(5)`, generic `f<T>(5, ...)`,
+    /// or a built-in collection method arg. `name` = the function/method name.
+    CallArg { name: &'a str },
+    /// A shape field at construction (`{ total: 5 }`) or assignment
+    /// (`o.total = 5`). `name` = the field name.
+    Field { name: &'a str },
+    /// A collection literal element / index-assign / bracket slot.
+    /// `container` = "array" | "fixed array" | "map";
+    /// `noun` = "element" | "key" | "value".
+    Collection { container: &'a str, noun: &'a str },
+    /// `return 5` from a `-> number` function.
+    Return,
+    /// A multi-case-if arm value pattern against a `number` scrutinee.
+    MatchArm,
+}
+
 fn simple_ident_name(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Ident(name, _) => Some(name.as_str()),

@@ -1,0 +1,26 @@
+// v0.3-M6 Phase 1d fix-loop round 2 fixture: an INT LITERAL argument into a
+// `number` param through the UFCS DOT-CALL form (`p.scale(5)` — sugar for
+// `scale(p, 5)`). Int→number call-site coercion does not exist yet (Future-Req
+// #14, sibling of the store-site gap #9), so this program must be REJECTED with
+// the SAME typeck teaching compile error the plain call form renders ("passing
+// an int literal to a `number` parameter is not supported yet") — never the
+// generic "compiler bug" ICE banner. Pre-round-2 the guard fired only on the
+// plain `f(5)` form; the UFCS arm inferred non-receiver args with no hint and
+// checked only receiver-vs-first-param, so this exact program ICE'd (an LLVM
+// verifier reject: i64 arg against the callee's pointer-typed decimal128 param),
+// breaking non-oop.md's identical-diagnostics-between-call-forms convention.
+
+shape Player {
+  name: string
+  health: int
+}
+
+function scale(share self: Player, factor: number) -> number {
+  return factor
+}
+
+function entrypoint() -> nothing {
+  let p: Player = { name: `Pat`, health: 100 }
+  let scaled = p.scale(5)
+  print(scaled.toString())
+}

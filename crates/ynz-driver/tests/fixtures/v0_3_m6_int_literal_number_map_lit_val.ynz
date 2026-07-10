@@ -1,0 +1,7 @@
+// WHY: int literal as a `map<string, number>` literal VALUE — the hinted value
+// infer types the IntLit as number, silently passing typeck. Pre-fix: ICE panic.
+function entrypoint() -> nothing {
+  let prices: map<string, number> = {`a`: 5}
+  let got = prices.get(`a`)
+  print(got.or(0.0))
+}

@@ -1,0 +1,7 @@
+// WHY: int literal into `maybe<number>.or(5)` — the `.or` default arg was never
+// checked against the inner type. Pre-fix: LLVM ICE (`Invalid operands for select`).
+function entrypoint() -> nothing {
+  let prices: array<number> = [1.5]
+  let got = prices.get(0)
+  print(got.or(5))
+}

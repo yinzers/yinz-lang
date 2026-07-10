@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4"]
 created_at: "2026-07-04"
 updated_at: "2026-07-10"
 metadata:
@@ -364,10 +364,21 @@ routing must state the truth about what exists today versus what is deferred and
    longer dereferences a stack-dangling pointer after the spawner returns, and a `number` argument
    into a cpu-member spawn no longer ICEs the compiler — via the phase executor's own recorded
    design decision (weighing gate-consistent-rejection against the existing `channel<number>`
-   compile gate, `check.rs:3369-3398`, vs. an eager i128 heap-copy), proven by
+   compile gate, `check.rs:3417-3451`, vs. an eager i128 heap-copy), proven by
    deterministic-across-runs RED→GREEN repros (Phase 1d). The conduit-send half of the same class
    (`emit.rs:11809`) is verified-safe-by-gate — `channel<number>` is compile-gated today, so this
    path is unreachable — and is recorded as a Future-Requirements deferral (#12), not fixed here.
+   **Headline-vs-delivered reconciliation (fix-loop rounds 1-4, FRAGOs 016/018/019):** the DELIVERED
+   scope of Phase 1d grew well past these two concurrency-boundary defects (A/C). Round 1 rerouted the
+   interim int-literal→`number` guard from the ICE banner to a typeck teaching error; rounds 2-3
+   discovered the class was near-compiler-wide (an int literal / `-IntLit` into a `number` slot
+   segfaults, silently mis-compares, or ICEs across ~27 argument / construction / statement slots, not
+   just the spawn boundary) and COMPLETED a single authoritative rejection guard
+   (`reject_int_literal_number_slot`) over every such slot; round 4 closed the errors-wrapped `return`
+   gap in that guard. So Phase 1d's real deliverable is BOTH the FRAGO-009 decimal128-boundary fix
+   (A/C, D8/Option 2) AND the near-compiler-wide int-literal→`number` rejection guard — the store-site
+   coercion facets (`let x: number = 5` and `hidden f: number = 5`) remain deferred to the
+   int→number coercion (#9/#14), un-gated on purpose.
 2. The block_on-fallback branch (`emit.rs:15122-15137`) is a compile-time hard error for any caller
    not reachable via the designated synchronous entry point — mirroring `emit.rs:11162`'s sibling.
 3. A cancelled sender's `pending_sends` entry is purged (idempotently) and the `caller_token` is
@@ -1029,6 +1040,154 @@ shape+fixed+number portion, the whole accepted-HIGH R14 interim risk is now clos
   IMP-no-function-coloring.md rather than asserted).
 - **Model tag:** `(coding, high, medium)`
 
+**Phase 1d complete (executor `executor-2026-07-10-m6-phase1d-seg3`, 2026-07-10; segments 1-3):**
+the sibling decimal128-across-a-concurrency-boundary defects A + C are CLOSED via **Decision D8 =
+Option 2 (eager decimal128 heap-copy at the spawn boundary)**, through ONE authoritative mechanism
+(authoritative-derivation), all in `crates/ynz-codegen/src/emit.rs`: new `Cg::number_to_heap_cell`
+(the single 16-byte boundary-cross copy both defects consume, beside `shape_bytes_to_heap_cell`) —
+**Defect A** (background-spawn `number` arg UAF) via an unconditional `Type::Number{precision<=34}`
+pre-gate in `prepare_bg_arg_for_ctx` returning `(cell, HeapShape{16})`, freed by BOTH spawn arms
+(CPU-spawn `emit_bg_arg_frees` HeapShape + SM-spawn `BgArgDropEntry` kind-0; SM child-side
+`sm_number_param_set` read unchanged, now derefing the heap cell); **Defect C** (cpu-member `number`
+arg ICE) via the new first-param twin predicate `callee_takes_bare_number` consumed by BOTH
+`emit_cpu_member_spawn` (stages the heap-cell pointer as the ctx word) AND `build_cpu_trampoline`
+(reconstructs the pointer, passes it to the callee, frees the cell AFTER result packing — one
+alloc / one free). N>34 bignum deliberately untouched. **8/8 locked RED repros GREEN** (value +
+N=10 determinism, A CPU-arm/SM-arm + C pure-spike/fused). **Step 4 gates (segment 3):** confirming
+full workspace suite **GREEN — `cargo test --workspace` exit 0, 2315 passed / 0 failed** (M3e
+determinism holding under load: `cross_impl_consistency` 2/2 GREEN, 251s); `cargo fmt --all --check`
+clean (one seg-2 leftover line in `emit.rs` formatted via `cargo fmt -p ynz-codegen` — no
+`#[allow]`, no `--no-verify`); house `cargo clippy --workspace -- -D warnings` clean. **First
+full-suite run had ONE transient flake** — `current_rss_bytes_returns_value_on_supported_platforms`
+(`crates/ynz-watch/tests/long_session.rs`, a live-process RSS `mb > 0` assertion) failed with
+"got 0MB"; it is in `ynz-watch` (explicitly not-this-executor's, dirty from a separate change), in
+UNMODIFIED source (`memory.rs` + the test file both clean; the dirty `error.rs`/`rebuild.rs` don't
+touch RSS polling), structurally unrelated to a codegen change in a different crate, passed 3/3 on
+isolated re-run AND did NOT recur on the confirming full-suite re-run — surfaced as a deviation, not
+this executor's to fix. **False-positive sweep — scope stated honestly (wording corrected in fix-loop round 1):** the
+committed `v03_m6_non_escaping_args_of_every_widened_type_are_not_wrongly_affected` test GREEN,
+PLUS the IR-level proof that a non-escaping `number` arg is NOT heap-copied — ZERO number heap-cell
+markers (`bg_number` / `_num_ld` / `_num_bits_` / `spike_num_arg_ptr` / `number_to_heap_cell`) in
+the IR, and the non-escaping `bump(x)` lowering to a plain by-pointer `call ... @bump(ptr ...)` —
+now PERSISTED as the committed test `v03_m6_non_escaping_number_ir_stays_by_pointer`
+(`crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`), not a session-local `--emit-ir` run.
+Scope: the sweep fixture contains ZERO spawn calls, so this sweep pins CODE-PATH DISJOINTNESS
+(Phase 1b/1c's classifier + normal call lowering untouched by the Phase 1d machinery) — it does
+NOT exercise Phase 1d's boundary discrimination. No in-boundary false-positive case exists under
+Option 2's design: the `Type::Number{precision<=34}` pre-gate is UNCONDITIONAL at the spawn
+boundary (every `number` arg that reaches it is heap-copied by intent), and in-boundary
+correctness is asserted by the 8 value/N=10-determinism repros, not by the sweep. **Step 5:** Future-Requirements #12
+(conduit-send decimal128) tightened — stale `check.rs:3369-3398` → live `check.rs:3417-3451`, COST
+narrowed to state D8/Option 2 was chosen (reuses `number_to_heap_cell`, still needs its own conduit
+send/recv marshalling pass; the `channel<number>` gate stays UNTOUCHED per D8 reason 5); new
+Future-Requirements #14 records the surfaced **IntLit→`number`-param call-site coercion gap** (ICEs
+even synchronously; the sibling call-site facet of #9's store-site ICE — same root class, different
+site; scoped OUT of FRAGO 009's concurrency charter — the seg-3 guard's "clean compile error" was in
+fact the generic ICE banner, corrected in fix-loop round 1 to a typeck teaching error, below)
+as a candidate four-field deferral SURFACED for the deviation-judge → conductor seam (NOT
+self-adjudicated; since RATIFIED as #14 via FRAGO 016, below). With Phase 1b (shape/fixed/number) and Phase 1c (maybe/union/anon), the whole
+R15/FRAGO-009 interim risk is now closed, fixed bug. **DEVIATIONS SURFACED for the seam (NOT
+self-decided):** (1) the IntLit→`number` call-site coercion scope-out (candidate #14); (2) the
+transient not-mine ynz-watch RSS flake on the first full-suite run (unmodified source, did not
+recur).
+
+**Phase 1d fix-loop round 1 (executor `executor-2026-07-10-m6-phase1d-fixloop1`, 2026-07-10 —
+post-review should-fixes; correctness already verified clean, 0 blockers):** (1) the interim
+IntLit→`number` cpu-member guard's diagnostic REROUTED from the generic ICE banner to a proper
+typeck teaching error — new WHAT/WHAT-INSTEAD/WHY diagnostic in `check_user_fn_call`
+(`crates/ynz-typeck/src/check.rs`, mirroring the `channel<number>` gate convention, the codebase's
+one established home for known-limitation compile errors; codegen has no user-facing diagnostic
+path — every `emit_artifact` `Err(String)` hits `queries.rs`'s "compiler bug" wrapper), firing on
+`f(5)` synchronous AND at the spawn boundary (the round-1 "EVERY call site uniformly" wording
+overclaimed — the UFCS and generic-fn forms still bypassed it; corrected in fix-loop round 2,
+below, which made the uniformity real); "FRAGO 009" and the raw `{span:?}` dump dropped from all user-visible
+text; the codegen arm (`emit.rs` `emit_cpu_member_spawn`) retained as an unreachable internal
+backstop naming the typeck gate. (2) The guard is now TESTED: RED confirmed against the pre-change
+binary (ICE banner + FRAGO leak reproduced verbatim), GREEN post-change —
+`v03_m6_int_literal_to_number_param_cpu_member_is_clean_teaching_error` (new fixture
+`v0_3_m6_int_literal_number_arg_cpu_member.ynz`, the admitted-spike-group shape with `heavyGrow(5)`)
+asserts non-zero exit, no hang, the teaching message present, and NEITHER "compiler bug" NOR "FRAGO"
+in stderr. (3) Both narrative overclaims corrected (this note above + audit.md seg-3), and the
+IR-level proof persisted as `v03_m6_non_escaping_number_ir_stays_by_pointer`. (4) Future-Req #14
+RATIFIED per the deviation-judge's JUSTIFIED/risk-neutral verdict → **FRAGO 016** (fix routed to the
+existing stub plan `2026-07-04-v0-3-hotfix-int-literal-number`, to be expanded — by the conductor's
+separate coordination item, NOT by this plan — to cover both the #9 store-site and #14 call-site
+facets under ONE coercion mechanism); the two code-reviewer polish minors filed as Future-Req #15
+(`callee_takes_bare_number`/`callee_returns_bare_number` shared-scan-helper consolidation) and #16
+(named shared const for the decimal128 16-byte cell size across the alloc/free ladder).
+
+**Phase 1d fix-loop round 2 (executor `executor-2026-07-10-m6-phase1d-fixloop2`, 2026-07-10 —
+post-review should-fixes; correctness verified clean, 0 blockers):** (1) round 1's "fires on EVERY
+call site uniformly" claim was FALSE — code-reviewer proved two user-reachable call forms bypassed
+the typeck gate and still ICE'd: the UFCS dot-call `p.scale(5)` (the MethodCall arm inferred
+non-receiver args with no hint; `check_method_call` checked only receiver-vs-first-param — ALSO
+breaking non-oop.md's identical-diagnostics-between-call-forms convention) and a generic fn's
+concrete `number` param `scale(5, item)` (`check_generic_fn_call` discarded the `unify_param`
+mismatch). Both locked RED against the pre-fix tree (UFCS: LLVM verifier reject `i64 5` vs pointer
+param → "compiler bug" banner; generic: IntValue-vs-PointerValue internal panic banner), then the
+gate was extracted into ONE shared `reject_int_literal_number_arg` helper (`check.rs`,
+authoritative-derivation — no per-form twins) consumed by all THREE arg loops (plain
+`check_user_fn_call`, UFCS `check_method_call` shape arm with args now threaded through, generic
+`check_generic_fn_call`); RED→GREEN via
+`v03_m6_int_literal_to_number_param_{ufcs,generic_fn}_is_clean_teaching_error` (new fixtures
+`v0_3_m6_int_literal_number_arg_{ufcs,generic_fn}.ynz`), byte-identical diagnostic text across all
+three forms — the uniformity claim (and `emit.rs`'s backstop comment, updated to name the shared
+helper) is now TRUE. Gate keyed on exactly `(Type::Number, Expr::IntLit)`: `f(5.0)`, number idents,
+and `f(-5)` (UnaryOp) stay untouched (full-suite false-positive sweep green). NOTE (pre-existing,
+not introduced or fixed here): the diagnostic's rendered span is one line off for this error class
+in ALL call forms (observed identically on the round-1 plain-form fixture) — an IntLit
+span-rendering nit that dies with the interim guard when #14's coercion ships. (2) The untracked
+trampoline arg-cell shutdown-drop leak (round-1's "noted, not fixed here" code comment,
+`emit.rs:~9708`) formalized as four-field **Future-Req #17** + added to Phase 8's FRAGO-012
+lift-list (FRAGO 017). (3) The IR-proof test hardened per test-quality: each negative marker now
+has a POSITIVE control (the same marker asserted present in a boundary fixture's IR, cached
+per-fixture builds) so a codegen rename flips the control red instead of silently hollowing the
+sweep; the inert `number_to_heap_cell` marker (a Rust fn name, never an emitted IR value) dropped —
+probe also proved `spike_num_free` inert (LLVM drops names on void calls), so the marker list is
+exactly the four proven-emitted names (`bg_number`, `_num_ld`, `_num_bits_`, `spike_num_arg_ptr`).
+
+**Phase 1d fix-loop round 3 — the guard COMPLETION sweep (executors
+`executor-2026-07-10-m6-phase1d-fixloop3` [enumeration] + `-seg2` [RED lock + implement] +
+`-seg3` [gates + close-out], 2026-07-10 — SCOPE EXPANSION, FRAGO 018).** Rounds 1–2 upgraded the
+interim IntLit→`number` guard and extended it across the three *call-argument* forms (plain / UFCS /
+generic). Round 3's enumeration then found the class was far wider than the call forms — an
+exhaustive slot sweep (27 `infer_expr(_, Some())` sites classified, grep-completeness-argued: no
+`Paren` AST node, zero `number`-param intrinsics, all named/cross-module calls routing through the
+gated fns) surfaced REAL user-reachable danger beyond the three gated call forms: `array<number>.add(5)`
+**segfaults (exit 139)**, `contains(5)` returns a **SILENT wrong `false` (exit 0)** — worse than a
+crash — and ~24 further arg / construction / statement slots ICE or silently corrupt. The human chose
+**complete the guard across EVERY IntLit / `-IntLit` → `number` slot** over defer, justified by that
+finding. **Mechanism (one authoritative gate, authoritative-derivation):** `reject_int_literal_number_arg`
+became a thin wrapper over the new role-parameterized `reject_int_literal_number_slot(NumberSlotRole, …)`
+(`crates/ynz-typeck/src/check.rs`); a `-IntLit` (`UnaryOp{Neg, IntLit}`) arm added; the generic case
+moved to ONE post-arg-loop `apply_substitution` pass (concrete + explicit `pass<number>(5)` +
+sibling-bound `pick(price, 5)`, no double-emit, unresolved TypeParams never match Number); a single
+authoritative `collection_method_arg_slots(receiver, method)` table (`crates/ynz-typeck/src/builtins.rs`,
+beside the method-surface tables) drives ONE gate loop over the collection-method element positions;
+and the hinted construction / statement slots (struct-lit field + map-hint twin, array/fixed literal
+elements, map-literal key+value, index assigns incl. the map KEY, map bracket-key READ, field assign,
+`return`, multi-case-if arm pattern) gate through the same slot fn. The role varies ONLY the WHAT
+subject+noun and the WHAT-INSTEAD closing clause; the core teaching text stays byte-identical across
+slots (call-form text byte-identical to round 2 save one recorded WHY-clause wording change,
+"at a call site" → "automatically"). **24 committed RED fixtures + 25 committed tests** (24 slot tests +
+false-positive sweep) in `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`, all 24 flipped
+RED→GREEN (teaching error, non-zero exit, no ICE banner). **Covered set is now COMPLETE for the
+IntLit / `-IntLit` → `number` argument / construction / statement class, store-site `let x: number = 5`
+(#9, signed-stub territory) alone excepted** (deliberately not gated; controls `x = 5` reassign and the
+#9 store-site stay untouched, confirmed). Full step-4 gates GREEN: `cargo nextest run --workspace`
+**2344 passed / 0 failed** (M3e `cross_impl_consistency` both GREEN under load, no flake fired);
+`cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all --check` clean. **FOUR deviations
+surfaced to the deviation-judge → conductor seam (NOT self-adjudicated; recorded by FRAGO 018):**
+(1) enumeration-completeness amendment — two map-bracket-KEY sibling slots the seg-1 table missed
+(index-assign `names[5] = …` and index-read `names[5]`, both probe-confirmed silent type-corruption),
+fixed IN-CLASS this round + tested; (2) NEW pre-existing decimal128 **by-value RETURN** garbage from a
+synchronous user fn (nondeterministic, `print(toll(5.0))`), out of charter — candidate Future-Req;
+(3) NEW pre-existing `map<number, V>` real-number-literal-key silent breakage (keys hash/compare by
+pointer identity; `set(1.5,…)` then `get(1.5)` → `none`, exit 0), out of charter — candidate
+Future-Req; (4) unchanged out-of-scope gaps from prior rounds — the general UFCS arg-validation gap
+(`a.concat([5])` / `pick(5, price)`, number→int direction) and `array.remove` having no codegen
+lowering arm for ANY type.
+
 #### Phase 2 — P4-3: block_on-fallback hard-error guard
 
 - **Task + purpose:** close the escape hatch at `emit.rs:15122-15137` so any non-SM-classified caller
@@ -1450,8 +1609,14 @@ shape+fixed+number portion, the whole accepted-HIGH R14 interim risk is now clos
      promise).** Lift every surviving Future-Requirements deferral — P2-3; bare-channel end-of-stream/
      channel-close semantics; preemption real back-edge yield; `background.cpuBound`; the two orthogonal
      ICEs (roadmap-ledger row 441 + `fixed<T>` param-iteration); the dynamic-dispatch × suspension
-     predicate gap (#10); FRAGO-009's conduit-send-number deferral (#12); and the Phase 1c per-iteration
-     maybe/union heap-cell loop leak (#13, FRAGO 015) — into the roadmap's
+     predicate gap (#10); FRAGO-009's conduit-send-number deferral (#12); the Phase 1c per-iteration
+     maybe/union heap-cell loop leak (#13, FRAGO 015); the IntLit→`number` call-site coercion facet
+     (#14, FRAGO 016 — lifted PAIRED with row 441/#9, both facets of one coercion mechanism routed
+     to the `2026-07-04-v0-3-hotfix-int-literal-number` stub plan, pending Patrick's Gate-4 home
+     call); the two Phase 1d polish minors (#15 twin-scan consolidation, #16 named decimal128
+     cell-size const — FRAGO 016); and the trampoline staged arg-cell shutdown-drop leak (#17,
+     FRAGO 017 — joins #13 in the never-drop-locals class, `unscoped → needs the drop-story
+     milestone`) — into the roadmap's
      durable store (`2026-05-21-v0-3-concurrency-perf/`, which stays `active` until the whole v0.3
      campaign finishes, so it survives this plan's `git mv` to `done/`): the full four-field
      WHAT/WHY/COST/TRIGGER payload for each goes into the roadmap's own `audit.md`; a pointer row for
@@ -1832,6 +1997,33 @@ shape+fixed+number portion, the whole accepted-HIGH R14 interim risk is now clos
   twin-derivation/silent-miscompile shape at Sev II even pre-1.0/zero-users), because the real cost —
   multi-round whack-a-mole debugging, per M3a's ~10-round precedent — is genuine engineering cost, not
   a cosmetic shrug just because there are no external users yet.
+- **D8 — Phase 1d (FRAGO 009) selects Option 2: eager decimal128 heap-copy at the spawn boundary**
+  (the phase executor's own recorded design call, `executor-2026-07-10-m6-phase1d`, made at step 1
+  BEFORE implementing, weighed against IMP-concurrency.md / IMP-no-function-coloring.md and this
+  plan's own precedents; the `channel<number>` compile gate at `check.rs:3417-3451` — drifted from
+  the cited :3369-3398 — stays UNTOUCHED). Reasons, in force order: (1) **design-doc alignment** —
+  IMP-concurrency.md "Ownership with Background Tasks" specifies values cross the `background`
+  boundary via compiler-inferred `.give`/`.copy` with "small value → `.copy`, cost trivial"; a
+  gate-consistent REJECTION of a `number` background arg would contradict the governing design (the
+  design doc wins over the cheaper fix). (2) **Option 1 is structurally unavailable for defect C** —
+  cpu-member spawn is AUTO-parallelization (an auto-promotion surface, per auto-promotion.md): the
+  user wrote valid sequential code and never opted in, so a teaching ERROR there is architecturally
+  wrong; the only Option-1-shaped move for C would be an admission decline, which silently
+  de-parallelizes every number workload forever — the exact "punishes instead of rewards" inverse
+  the auto-promotion rule bans. A policy that rejects A but declines C is two policies, not one.
+  (3) **precedent** — Phase 1b's signed R14 disposition already established "a `number` arg ...
+  WORKS across suspension — NOT rejected" (§3.1 outcome 1b); rejecting the same value class at the
+  sibling spawn boundary would ship an inconsistent teaching story (`wait f(x)` works;
+  `background f(x)` errors). (4) **the "hard machinery" framing dissolved on CCIR-1 re-read** —
+  `prepare_bg_arg_for_ctx` already carries the per-type heap-upgrade discipline (Shape / Maybe /
+  array / MapEntry arms, the MapEntry one an unconditional pre-gate returning
+  `BgArgFreeKind::HeapShape`), the heap-cell core family (`heap_cell`,
+  `shape_bytes_to_heap_cell`, `maybe_to_heap_cell`) exists, and both spawn arms already own
+  balanced free paths (closure-body `emit_bg_arg_frees`; `BgArgDropEntry` kind-0) — a
+  `number_to_heap_cell` sibling is a small, precedented extension, not new machinery. (5) **scope
+  containment** — Option 2 does NOT unlock `channel<number>` (the plan text's "side effect" framing
+  overstated it): the conduit surface needs its own send/recv marshalling design pass; the gate
+  stays, and Future-Requirements #12 records the mechanism-reuse trigger.
 
 ## Future Requirements / Revisit
 
@@ -1884,7 +2076,14 @@ shape+fixed+number portion, the whole accepted-HIGH R14 interim risk is now clos
    compiler (ELEVATED priority)** — this plan explicitly DECLINES it; it stays unclaimed between M6 and
    M7 rather than being silently picked up here. WHAT: `store`/`store_field`'s `Type::Number` arm
    assumes a decimal128-pointer representation while `Expr::IntLit` lowers to a raw `i64`; typeck admits
-   the coercion; codegen panics on common valid code (e.g. `let x: number = 5`). WHY declined: this is
+   the coercion; codegen panics on common valid code (e.g. `let x: number = 5`). **Declaration-site
+   field defaults share this exact store-site root** — `hidden f: number = 5` ICEs identically (round 4
+   confirmed: `Found IntValue(i64 5) but expected PointerValue variant` at `emit.rs:20351`, from the
+   field-default lowering site `emit.rs:18233` calling `lower_expr` with no type hint → raw i64 →
+   `store_field` into a decimal128 slot), so both the local binding AND the shape-field default are the
+   SAME store-site #9 class and are subsumed by the SAME int→number coercion mechanism in the
+   `2026-07-04-v0-3-hotfix-int-literal-number` stub plan (see #14) — this plan records the linkage only;
+   it does NOT edit the stub plan (a conductor→human coordination item). WHY declined: this is
    NOT a concurrency-audit finding — it is a pre-existing literal-lowering bug orthogonal to M6's
    confirmed concurrency-race/leak/honesty charter; mixing an unrelated ICE fix into a hotfix milestone
    widens this plan's blast radius for no charter-aligned benefit (M7's own Future Requirements #3
@@ -1925,13 +2124,16 @@ shape+fixed+number portion, the whole accepted-HIGH R14 interim risk is now clos
     `ptr_to_int` of a stack temp sent as a raw i64 into `mpsc<i64>`; a receiver on another frame
     would reconstruct a pointer into the sender's dead resume-fn stack — the same
     decimal128-across-a-concurrency-boundary UAF shape as Phase 1d's A/C. **WHY deferred:**
-    VERIFIED-SAFE-BY-GATE — `channel<number>` is compile-gated by typeck (`check.rs:3369-3398`)
+    VERIFIED-SAFE-BY-GATE — `channel<number>` is compile-gated by typeck (`check.rs:3417-3451` —
+    drifted from the originally-cited :3369-3398 per D8/CCIR-1; confirmed live this segment)
     with a teaching error naming this exact UAF class, so this path is unreachable from any current
     syntax (unlike A/C, which Phase 1d confirms are LIVE). Fixing unreachable code now is
     speculative work against dead code, the same YAGNI-ceiling shape D4/P2-3 and FRAGO 002's #10
-    already name. **COST to fix later:** small — reuses Phase 1d's chosen mechanism directly if
-    Phase 1d selected Option 2 (eager i128 heap-copy); needs its own design pass if Phase 1d
-    selected Option 1 (gate-consistent reject), since the two options aren't interchangeable.
+    already name. **COST to fix later:** small — Phase 1d selected **Option 2 (D8: eager i128
+    heap-copy)**, so this deferral directly reuses the shipped `number_to_heap_cell` codegen helper
+    (`emit.rs`) for the value copy; it still needs its OWN send/recv conduit-marshalling design pass
+    to remove the `check.rs:3417-3451` gate — Option 2 does NOT unlock `channel<number>` on its own
+    (D8 reason 5: the conduit surface is a separate marshalling problem from the spawn-arg boundary).
     **TRIGGER:** `channel<number>`'s heap-copy machinery ships (removing the existing compile
     gate), or a real workload needs `channel<number>` to work rather than be rejected. (FRAGO 009 —
     item B, recorded as a deferral, not a Phase 1d scope-add.)
@@ -1948,3 +2150,144 @@ shape+fixed+number portion, the whole accepted-HIGH R14 interim risk is now clos
     `v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak` so any new leak class or a
     landed drop story shifts it loudly. (FRAGO 015 — deferral formalized from the Phase 1c completion
     note, per the deviation-judge's JUSTIFIED/risk-neutral verdict.)
+14. **Int-literal → `number`-param CALL-SITE coercion gap** (surfaced by Phase 1d segment 2 while
+    resolving the cpu-member IntLit sub-case; the sibling call-site facet of item #9's store-site
+    ICE — SAME root class, different site). **WHAT:** a bare int literal passed as a CALL ARGUMENT to
+    a `number`-typed parameter (`f(5)` where `f(n: number)`) type-checks but ICEs at codegen — even
+    in a plain SYNCHRONOUS call — because `lower_expr(Expr::IntLit)` emits a raw `i64`
+    (`emit.rs:14514`) and the normal call-argument loop performs no int→number coercion
+    (`emit.rs:14986-14990`), so the compiled callee is handed `call ptr @f(i64 5)` against its
+    pointer-typed decimal128 param (LLVM verifier reject). Root cause is the SAME missing int→number
+    coercion as item #9 (which is the STORE/binding-site facet, `let x: number = 5`); #9 and #14 are
+    two sites of one gap and should very likely be fixed together (one int→number coercion, threaded
+    at both the store site and the call-argument site — authoritative-derivation, one mechanism).
+    **WHY deferred (scoped OUT of Phase 1d):** this is a PRE-EXISTING GENERAL codegen coercion gap,
+    orthogonal to FRAGO 009's decimal128-across-a-concurrency-boundary charter — it ICEs
+    synchronously with no concurrency involved, and fixing it ONLY at the spawn boundary would ship
+    an inconsistent teaching story (`background f(5)` would work while `f(5)` stays broken). It is a
+    LOUD compile-time crash, never a silent miscompile. Phase 1d's cpu-member path guards the
+    boundary-local sub-case to a clean teaching COMPILE ERROR (never a segfault — since fix-loop
+    round 1, the typeck-level teaching error in `check_user_fn_call`, uniform across all call
+    sites; the codegen arm is an unreachable internal backstop), so no
+    concurrency-path regression rides on the deferral. **COST to fix later:** unchanged from #9's
+    estimate — ~0.5-1 session (expected-type-aware `Expr::IntLit` lowering, or typeck-level
+    int→number coercion; its own small design + call-site audit covering BOTH the store site (#9)
+    and the call-argument site (this entry)). **TRIGGER:** the same Gate-4 conversation that assigns
+    item #9 (roadmap ledger row 441) a home — Patrick assigns the int→number coercion class a home;
+    or a real user hitting the ICE on valid-looking code. **RATIFIED — FRAGO 016 (deviation-judge
+    verdict: scope-out JUSTIFIED / risk-neutral; formalized from the Phase 1d completion note,
+    mirroring FRAGO 015/#13).** The FIX routes to the existing stub plan
+    `2026-07-04-v0-3-hotfix-int-literal-number`, expanded to cover BOTH the store-site (#9) and
+    call-site (this entry) facets under ONE coercion mechanism (authoritative-derivation) — that
+    cross-plan expansion is a conductor→human coordination item, deliberately NOT applied to the
+    stub plan by this plan's executors. Interim guard upgraded in fix-loop round 1 (typeck-level
+    WHAT/WHAT-INSTEAD/WHY teaching error) and extended in fix-loop round 2 to the three
+    user-reachable call-argument forms via the ONE shared `reject_int_literal_number_arg` gate —
+    plain `f(5)`, UFCS dot-call `p.f(5)`, and a generic fn's concrete `number` param (round 1's gate
+    lived only in `check_user_fn_call`; the UFCS and generic arg loops bypassed it and still ICE'd).
+    **Fix-loop round 3 (FRAGO 018) then COMPLETED the guard** across the full class after enumeration
+    surfaced real danger beyond the call forms (`array<number>.add(5)` segfault exit 139;
+    `contains(5)` silent-wrong `false` exit 0; ~24 slots): `reject_int_literal_number_arg` is now a
+    thin wrapper over the role-parameterized `reject_int_literal_number_slot`, which also matches a
+    negated `-IntLit` literal and gates every collection-element slot (via the one
+    `collection_method_arg_slots` table), struct / array / fixed / map literal, index / field
+    assignment, `return`, and match-arm pattern. **Fix-loop round 4 (FRAGO 019) then closed the last
+    honesty-gap in that "COMPLETE" claim:** the plain `return` slot did NOT cover an `errors`-wrapped
+    return — `return 5` from a `-> number errors` fn slipped to the GENERIC mismatch because the shared
+    gate's `Type::Number` match was false through the `ErrorsCapable` wrapper; the gate now unwraps
+    `ErrorsCapable` before the `Type::Number` check (ONE gate, no parallel path), so an errors-return
+    routes through the same teaching error as a plain `-> number` return. **So the guard is complete
+    for the IntLit / `-IntLit` → `number` argument / construction / statement class INCLUDING the
+    errors-wrapped return — with the DECLARATION-SITE store sites explicitly carved out as store-site
+    #9 class: both `let x: number = 5` (local binding) AND `hidden f: number = 5` (shape field default)
+    ICE today** (the field default confirmed round 4: `Found IntValue(i64 5) but expected PointerValue
+    variant` at `emit.rs:20351`, from `lower_expr`-with-no-hint at the field-default lowering site
+    `emit.rs:18233` storing a raw i64 into a decimal128 slot — structurally identical to `let x: number
+    = 5`). The store sites stay UN-gated on purpose (routed to the int→number coercion, not a teaching
+    error — see #9); gating one declaration-site store while the other stays open would make the class
+    inconsistent. Tested by
+    `v03_m6_int_literal_to_number_param_{cpu_member,ufcs,generic_fn}_is_clean_teaching_error` plus the
+    24 round-3 slot tests, the round-4 `v03_m6_int_lit_number_return_errors_is_teaching_error`, and the
+    false-positive sweep in `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`; the WHOLE guard
+    must be REMOVED when the coercion ships (it rejects exactly the programs the coercion will accept).
+15. **`callee_takes_bare_number` / `callee_returns_bare_number` twin-scan consolidation**
+    (`emit.rs:18922` / `:18885`-region; code-reviewer polish minor, Phase 1d fix-loop round 1 —
+    explicitly "not debt"). **WHAT:** the first-param predicate copies the return-type predicate's
+    local-items + imported-fns scan plumbing verbatim; a shared scan helper (param-vs-ret selector
+    as the parameter) would consolidate. **WHY deferred:** pure polish — both predicates are
+    correct, each is a single authoritative consumer-shared source already (no drift risk named by
+    the reviewer); consolidating mid-hotfix buys no behavior. **COST to fix later:** trivial
+    (~30 min, one extraction + two call-site updates). **TRIGGER:** the next milestone that touches
+    either predicate or adds a third bare-number callee probe. (FRAGO 016.)
+16. **Decimal128 heap-cell size `16` as a named shared const** (alloc site `emit.rs:3459`
+    `number_to_heap_cell`; free sites `:9717` trampoline `spike_num_free` and `:15798`
+    `BgArgFreeKind::HeapShape { byte_size: 16 }`; code-reviewer polish minor, Phase 1d fix-loop
+    round 1 — explicitly "not debt"). **WHAT:** the 16-byte cell size is a bare literal at the
+    alloc site and both free sites with no compile-time link; a named shared const would give the
+    alloc/free ladder a one-source link (authoritative-derivation-aligned). **WHY deferred:** pure
+    polish — the three sites ship together in one mechanism authored in one phase; no observed or
+    reviewer-named drift path today. **COST to fix later:** trivial (~15 min, one const + three
+    substitutions). **TRIGGER:** the next milestone that touches the decimal128 boundary machinery
+    (e.g. #12's conduit marshalling pass, which would add a fourth site). (FRAGO 016.)
+17. **Trampoline staged decimal128 arg-cell leak on a blocking-pool task dropped UN-RUN at runtime
+    shutdown** (`emit.rs` `build_cpu_trampoline` free site ~:9708-9721 `spike_num_free`; surfaced by
+    Phase 1d's D8 mechanism, previously tracked only as a code comment — formalized in fix-loop
+    round 2 per the graveyard + rules-compliance reviewers). **WHAT:** the cpu-member spawn site
+    heap-allocates the 16-byte decimal128 arg cell and the trampoline frees it AFTER result packing
+    (one alloc / one free); a blocking-pool task that is queued but dropped UN-RUN at runtime
+    shutdown never executes its trampoline, so its one balancing free never runs — the staged cell
+    leaks, held to process exit only (never a UAF, never a double-free). **WHY deferred:** same
+    never-drop-locals class as M5's Future-Req #6 and this plan's #13 — freeing a staged cell whose
+    consumer never ran needs the ownership drop story (a drop-glue registration for un-run task ctx
+    words), out of this hotfix's charter; process-exit-only, zero live corruption exposure.
+    **COST to fix later:** small once the drop-story milestone lands — register the staged cell
+    with the same drop mechanism and update the free sites (the trampoline free + the shutdown
+    drop path must be exactly-once between them). **TRIGGER:** the drop story lands, OR a real
+    long-lived workload measurably accumulates un-run dropped blocking-pool tasks at shutdown.
+    (FRAGO 017.)
+18. **Synchronous decimal128 by-value RETURN garbage** (surfaced by Phase 1d fix-loop round 3's slot
+    enumeration; formalized round 4). **WHAT:** a `number` returned BY VALUE from a synchronous user
+    function prints nondeterministic garbage — `print(toll(5.0))` where `toll() -> number` returns a
+    valid decimal literal yields 13-15-digit pointer garbage instead of the value (a stack-dangling
+    decimal128 pointer returned by value, then read after the callee frame is gone). This is why the
+    Phase 1d false-positive sweep fixture's `toll` deliberately returns `nothing` rather than a
+    `number`. **WHY deferred (out of charter):** this is a **function-return ABI defect**, not a
+    concurrency-boundary-argument defect — FRAGO 009's charter is decimal128 crossing a *concurrency*
+    boundary (background-spawn / cpu-member args), whereas this corrupts on a plain SYNCHRONOUS return
+    with no concurrency involved; orthogonal class, same non-absorption shape as #11/#14. It is a
+    SILENT miscompile (wrong value, exit 0), so it is loud only under a value-asserting test.
+    **COST to fix later:** a decimal128 return-ABI pass — return the 16-byte value by a hidden
+    out-pointer (sret) or heap-cell the way Phase 1d's D8 heap-copies decimal128 across the spawn
+    boundary; needs its own small design pass (return-slot ABI, not arg-slot). **TRIGGER:** the
+    milestone that owns the decimal128 by-value-return ABI (return-ABI work — owning milestone TBD,
+    flagged to Patrick at Gate-4), or a real user hitting garbage on a valid `-> number` return.
+    (FRAGO 019 — deferral formalized from the round-3 deviation surface, per the deviation-judge's
+    should-fix; NOT a round-4 scope-add.)
+19. **`map<number, V>` real-number-literal-KEY silent breakage** (surfaced by Phase 1d fix-loop
+    round 3; formalized round 4). **WHAT:** a `map<number, V>` keyed by a decimal literal never
+    matches — `m.set(1.5, v)` then `m.get(1.5)` returns `none` (exit 0), because decimal128 keys
+    hash and compare by POINTER IDENTITY, so two equal decimal literals `1.5` and `1.5` are distinct
+    keys and a lookup never finds a prior insert. **WHY deferred (out of charter):** orthogonal to
+    M6's concurrency-race/leak/honesty charter — a decimal128 map-key hashing/equality gap, not a
+    concurrency defect; same pre-existing-and-orthogonal shape as #18. It is a SILENT-WRONG
+    correctness bug (wrong `none`, exit 0), loud only under a value-asserting test. **COST to fix
+    later:** implement decimal128 value-based hashing + equality for map keys (hash the 16-byte
+    decimal payload, compare by value not pointer) — its own design pass (canonicalization of equal
+    decimal representations, NaN/negative-zero handling). **TRIGGER:** a real workload needs
+    `map<number, V>` with literal keys, or the decimal128 stdlib hashing work lands. (FRAGO 019 —
+    deferral formalized from the round-3 deviation surface, per the deviation-judge's should-fix.)
+20. **General UFCS arg-validation gap + `array.remove` has no codegen lowering** (pre-existing, carried
+    unchanged from prior Phase 1d rounds; formalized round 4). **WHAT (two orthogonal sub-items):**
+    (a) the general UFCS/collection arg-validation surface does NOT validate the `number`→`int`
+    direction — `a.concat([5])` and `pick(5, price)` (an int literal where an `int` is fine but the
+    surrounding number/int mixing is unchecked) pass typeck without the int→number gate's scrutiny in
+    the reverse direction; (b) `array.remove` has NO codegen lowering arm for ANY element type — it is
+    unimplemented at the backend, not merely for `number`. **WHY deferred (out of charter):** both are
+    pre-existing gaps orthogonal to M6's concurrency charter and to the int-literal→number gate this
+    plan completed (which covers the int-literal→`number` direction, not the reverse and not the
+    `array.remove` lowering); neither is a concurrency defect. **COST to fix later:** (a) extend the
+    arg-validation surface to the reverse direction — small, folds into #14's coercion + a validation
+    pass; (b) implement the `array.remove` codegen lowering arm — its own small backend pass.
+    **TRIGGER:** a real user hits either gap, or the milestone that owns collection-method codegen /
+    the int↔number coercion class picks them up alongside #14. (FRAGO 019 — deferral formalized from
+    the round-3 deviation surface, per the deviation-judge's should-fix.)

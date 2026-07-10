@@ -807,6 +807,270 @@ this file is the session + FRAGO + context-segment log.
 - No new deviation surfaced; this dispatch transcribes an already-adjudicated delta per the
   dispatching brief's explicit instruction, not a fresh classification.
 
+- `conductor-2026-07-10-m6-exec2` — 2026-07-10 — **SESSION-END HANDOFF (conductor context deep →
+  execution continues in a NEW chat via a fresh `/execute-plan --auto` cold-resume).** Paused at a
+  CLEAN SEALED boundary (Phase 1c committed), deliberately NOT mid-phase — no half-built state to
+  reconcile.
+  - **COMMITTED (HEAD = `759bd9b`):** Phase 0 (`96bff95`) · Phase 1 (`f921efe`) · Phase 1b (`47abd29`,
+    shape/fixed/number arg-UAF) · Phase 1c (`759bd9b`, maybe/union/anon arg-UAF + M3e determinism).
+    **Reconcile caveat:** the Phase 0/1 commits carry a SPLIT-TRAILER (blank line before `Co-Authored-By`)
+    so `%(trailers:key=Plan-Phase,valueonly)` returns EMPTY for them — they ARE real boundary commits
+    (verified full-body). MY commits (1b `47abd29`, 1c `759bd9b`) carry PROPER single-paragraph trailers
+    (accessor-legible `#1b`/`#1c`). A cold-resume must corroborate 0/1 by full-body read, not the accessor.
+  - **NEXT PHASE = Phase 1d** (FRAGO 009 — the sibling decimal128-across-a-concurrency-boundary UAF class,
+    EMPIRICALLY VERIFIED this session): (A) background-spawn decimal128 arg = **LIVE** silent-garbage UAF
+    (`prepare_bg_arg_for_ctx` no Number arm, both spawn arms → `0.000`); (C) cpu-member decimal128 arg =
+    **LIVE** compile-time ICE (`emit_cpu_member_spawn` i64/ptr mismatch). Both to fix. (B) conduit-send
+    decimal128 = **VERIFIED-SAFE-BY-GATE** (channel<number> compile-gated, unreachable) → Future-Req #12,
+    do NOT fix (dead code). **FIX APPROACH is Phase 1d's own step-1 DESIGN decision (route-not-design):**
+    gate-consistently-with-the-existing-channel<number>-compile-gate (check.rs:3369-3398) vs eager i128
+    heap-copy — the executor decides against IMP-concurrency, NOT pre-decided.
+  - **REMAINING (plan Concept sequence):** 1d → 2 → 3 → 3b → 4 → 4b(P2-7) → 5 → 5b(P1-2) → 6 → 6b(sanitizer
+    lane) → 7 → 8(roadmap durable-home lift). 16 phases total, 4 sealed.
+  - **FRAGOs filed this session (all risk-neutral OR within already-signed R13/R14 — NONE tripped a fresh
+    signature gate):** 008 (materialized M3e→1c step-0), 009 (sibling decimal128→Phase 1d), 010 (P2-7→Phase
+    4b), 011 (P1-2→Phase 5b), 012 (durable-home lift→Phase 8), 013 (union heap-cell mechanism), 014
+    (over-fat-step 3a-3d split + Check-2 naming), 015 (heap-cell loop-leak durable-home). Plus a mid-Phase-1c
+    fix-loop (a hidden THIRD staging loop caught by code-reviewer in Phase 1b, fixed pre-seal) and a
+    code-reviewer nested-shape finding REFUTED by empirical probe (stale pre-M5 premise).
+  - **DELEGATED-SIGNATURE MECHANISM (Patrick's, this run):** on any risk-raising HIGH-residual signature
+    gate the conductor may self-sign IF it (1) documents the FRAGO, (2) dispatches an INDEPENDENT sonnet
+    agent to adversarially bias-review the self-sign, (3) proceeds ONLY on a clean bias-review (a "biased/
+    unjustified" verdict HALTS for Patrick). **NEVER TRIPPED this session** — every deviation was
+    risk-neutral or fell inside the already-signed R13 (shape) / R14 (maybe/union/number/anon) HIGH
+    overrides. STILL IN FORCE for the next session (re-state it in the fresh chat).
+  - **⚠ DOCKERFILE QUARANTINE — FLAGGED FOR PATRICK (decide keep-vs-revert):** an UNSANCTIONED
+    `cargo-nextest` install was added to `Dockerfile` mid-session (provenance uncertain — likely a global
+    gate-resolver auto-patch; the Phase-1c executor claimed it untouched). QUARANTINED to known-not-mine
+    (never staged into any commit — verified excluded from `47abd29` + `759bd9b`); NOT reverted (a
+    `git checkout` on Patrick's build infra is his call). Verification integrity CONFIRMED UNCONTAMINATED
+    (every green-check + executor ran `cargo test`, NOT nextest). For a CONCURRENCY milestone nextest's
+    process-isolation changes the flake-exposure profile — adopting it must be DELIBERATE. If it re-appears
+    after a future gate run, that confirms auto-patching infra to fix at source.
+  - **KNOWN-NOT-MINE (NEVER stage):** `CLAUDE.md`, `Dockerfile`, `crates/ynz-watch/src/{error,rebuild}.rs`.
+  - **EXECUTOR MODEL OVERRIDE (re-state next chat):** **fable for ALL code execution**; reviewers/gates/
+    recon unchanged (their normal models). Run mode **`--auto`** (host `gitleaks` clears the 8.0b commit
+    guard).
+  - **OPEN DEFERRALS (recorded, lifted to the roadmap at Phase 8 via FRAGO 012+015):** the per-iteration
+    maybe/union heap-cell loop leak (Future-Req #13, pinned loud via `v03_m6_p1c_heap_cell_loop_parity_*`),
+    plus the pre-existing Future-Reqs (P2-3, channel-close, preemption, background.cpuBound, the 2 ICEs,
+    dynamic-dispatch #10, fixed<T> param-iter #11, conduit-send-number #12). Gitignored probe scratch left
+    for reference under `target/scratch-1c*/` and `target/probe_*` (safe to clean).
+
+### `executor-2026-07-10-m6-phase1d` — 2026-07-10 — Phase 1d segment 1 (steps 1–2), PARTIAL checkpoint
+
+- **Step 1 DONE.** CCIR-1: all FRAGO-009 citations re-verified against the live tree (content
+  matches; line drift recorded in `handoff-phase-1d.md` receipts — `prepare_bg_arg_for_ctx` now
+  emit.rs:15616, cpu-member i64 load :9686-9697, channel gate check.rs:3417-3451). Design decision
+  made and recorded as **plan.md Recorded Decision D8**: **Option 2 — eager decimal128 heap-copy at
+  the spawn boundary** (channel<number> gate untouched; Future-Req #12 unchanged). Load-bearing
+  reasons: IMP-concurrency's background-args give/copy design contradicts a rejection; Option 1 is
+  structurally unavailable for defect C (cpu-member spawn is auto-promotion — a teaching error on
+  code the user never opted into is architecturally wrong, and an admission decline is a silent
+  permanent de-parallelization); Phase 1b's signed-R14 "number WORKS across suspension — NOT
+  rejected" precedent; the "hard machinery" framing dissolved on re-read (MapEntry pre-gate
+  precedent + existing heap-cell core family + both spawn arms' balanced free ladders).
+- **Step 2 DONE.** Four RED repros committed-shape + harness
+  `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs` (8 tests: value + N=10 determinism per
+  repro), **all 8 confirmed RED for the documented reasons** on the pre-fix tree: A (bg-spawn, CPU
+  and SM arms) Paper-Traced `0.000000...` vs staged 2.5/4.5, 3/3 deterministic per arm; C
+  (cpu-member, pure-spike AND fused) verbatim LLVM verifier ICE `Call parameter type does not match
+  function signature! ... call ptr @heavyGrow(i64 %spike_arg)` surfaced as "compiler bug".
+  Repro-shape discovery recorded in the handoff: a bare fire-and-forget last-statement spawn does
+  NOT reproduce (CPU arm reads the not-yet-clobbered dead alloca; SM arm's task is cancelled at
+  shutdown) — the proven shape suspends the spawner after the spawn (`wait sleep(60)`).
+- **Checkpoint (context budget):** conductor-authorized PARTIAL at the step-2→3 boundary (the
+  Phase-1 seg-1 precedent: RED class locked, fix next). Tree green-building: builds clean; the only
+  reds are the 8 locked Phase-1d RED repros (documented planned RED, step 3 on record to green
+  them). Handoff `handoff-phase-1d.md` written (settled step-3 blueprint: one
+  `number_to_heap_cell` mechanism; `prepare_bg_arg_for_ctx` unconditional Number pre-gate returning
+  `HeapShape{16}`; `callee_takes_bare_number` predicate consumed by both `emit_cpu_member_spawn`
+  and `build_cpu_trampoline`; free-after-pack ordering invariant; one OPEN probe item —
+  IntLit-vs-number-param typecheck reachability). Resume-at **`phase-1d/step-3`**. Nothing
+  staged/committed (conductor seals). KNOWN-NOT-MINE (CLAUDE.md, crates/ynz-watch/**, Dockerfile)
+  untouched.
+
+### `executor-2026-07-10-m6-phase1d-seg2` — 2026-07-10 — Phase 1d segment 2 (step 3 + OPEN probe), PARTIAL checkpoint
+
+- **Step 3 DONE.** Option-2 (D8) fix implemented in `crates/ynz-codegen/src/emit.rs` via ONE
+  authoritative mechanism (authoritative-derivation): new `Cg::number_to_heap_cell` (16-byte counted
+  cell, load i128 → store; beside `shape_bytes_to_heap_cell`). **Defect A (both arms):** an
+  UNCONDITIONAL `Type::Number{precision<=34}` pre-gate in `prepare_bg_arg_for_ctx` (after the MapEntry
+  pre-gate) returns `(cell, HeapShape{16})` — shared by the CPU-spawn arm (`ynz_rt_spawn_blocking`,
+  free via `emit_bg_arg_frees` HeapShape) and the SM-spawn arm (`ynz_rt_spawn`, free via
+  `BgArgDropEntry` kind-0); SM child-side read unchanged (`load()`'s `sm_number_param_set` indirection
+  now derefs the heap cell). **Defect C:** new `callee_takes_bare_number` predicate (first-param twin
+  of `callee_returns_bare_number`) consumed by BOTH `emit_cpu_member_spawn` (Ident number arg → read
+  via authoritative `lower_expr`/`load()` → `number_to_heap_cell` → ptr_to_int ctx word; new `callee`
+  param, both callers pass `&child.callee`) AND `build_cpu_trampoline` (int_to_ptr the ctx word → pass
+  the pointer to the callee; free the cell AFTER result packing — the identity-callee aliasing
+  invariant). One alloc / one free.
+- **OPEN probe RESOLVED (verify-before-fix, scratch fixture + `ynz run`).** `grow(5)` (int literal →
+  `number` param) **typechecks** (typeck coerces IntLit→Number{34}, check.rs:2224 via the hint at
+  :3813) but **ICEs at codegen EVEN SYNCHRONOUSLY**: `Call parameter type does not match function
+  signature! ... call ptr @grow(i64 5)`. Root cause: `lower_expr(IntLit)` yields an i64 (emit.rs:14514)
+  and NO call site coerces int→number (normal call loop :14986-14990). So int-literal-to-`number`-param
+  is a **pre-existing GENERAL codegen gap orthogonal to FRAGO 009's concurrency-boundary charter** — it
+  is NOT fixed here, and the cpu-member IntLit sub-case is deliberately guarded to a clean compile error
+  (never a new segfault from `int_to_ptr(5)`) rather than given a partial fix that would make
+  `background f(5)` work while `f(5)` stays broken. **SURFACED as a deviation** for the deviation-judge
+  → conductor seam (candidate Future-Requirements deferral; NOT self-decided, NOT absorbed).
+- **Verification (my new work, unconditional).** `cargo build -p ynz-driver` clean; the 8 Phase-1d RED
+  repros (`v03_m6_number_spawn_boundary.rs`) now **8/8 GREEN** incl. N=10 determinism per repro
+  (value + determinism arms, A CPU/SM + C pure/fused). Scratch probe fixture removed.
+- **Checkpoint (context budget) at the step-3→4 boundary.** Tree green-building (builds clean; no
+  planned RED remaining — the 8 repros are green). Handoff `handoff-phase-1d.md` rewritten in place;
+  resume-at **`phase-1d/step-4`** (full `cargo test --workspace` + clippy `-D warnings` + `fmt --check`
+  + false-positive sweep, then step 5 Future-Req #12 confirmation, then completion note + handoff
+  delete). Nothing staged/committed (conductor seals). KNOWN-NOT-MINE untouched.
+
+### 2026-07-10 — `executor-2026-07-10-m6-phase1d-fixloop1` — Phase 1d fix-loop round 1 (post-review should-fixes)
+
+Correctness already verified clean by code-reviewer (0 blockers); this round addressed the fleet's
+should-fix cluster. (1) **Guard diagnostic rerouted** — the IntLit→`number` cpu-member guard's raw
+`Err(String)` (which hit `queries.rs:421`'s generic "compiler bug" ICE wrapper, leaking "FRAGO 009"
++ a `{span:?}` dump) replaced by a typeck-level WHAT/WHAT-INSTEAD/WHY teaching error in
+`check_user_fn_call` (`crates/ynz-typeck/src/check.rs`), mirroring the `channel<number>` gate — the
+codebase's established home for known-limitation compile errors (codegen has NO user-facing
+diagnostic path; investigated `queries.rs`/`build.rs` wrappers + emit.rs before deciding). Fires
+uniformly on every call site (`f(5)` synchronous AND spawn boundary — inconsistent-teaching-story
+concern moot). Codegen arm kept as an unreachable internal backstop (offsets, no FRAGO id).
+(2) **Guard tested, RED→GREEN** — RED reproduced live against the pre-change binary (ICE banner +
+FRAGO leak verbatim); new fixture `v0_3_m6_int_literal_number_arg_cpu_member.ynz` (admitted
+spike-group, `heavyGrow(5)`) + test
+`v03_m6_int_literal_to_number_param_cpu_member_is_clean_teaching_error` (non-zero exit, no hang,
+teaching message present, NO "compiler bug", NO "FRAGO"). (3) **Narrative overclaims corrected** —
+plan.md completion note rewritten (sweep = code-path disjointness only; no in-boundary
+false-positive case exists by design under the unconditional pre-gate); the seg-3 entry annotated
+in place (below); the IR proof PERSISTED as committed test
+`v03_m6_non_escaping_number_ir_stays_by_pointer` (zero heap-cell markers + by-pointer `@bump(ptr`
+pinned). (4) **FRAGO 016 filed** — #14 ratified (fix routed to the
+`2026-07-04-v0-3-hotfix-int-literal-number` stub plan, expansion = conductor→human coordination,
+stub NOT edited); #15/#16 polish minors filed four-field; Phase 8 lift-list amended to carry
+#14/#15/#16. Gates: full-workspace nextest + clippy `-D warnings` + fmt (results in the return).
+Observation (not fixed, pre-existing, shared renderer): the diagnostic renderer's printed line/col
+maps byte offset 950 (line 31 col 21, verified) to a displayed `:32:2` — an off-by-one in the
+DISPLAY mapping common to all diagnostics, not introduced by this change; noted for a future
+diagnostics-touching milestone. Did NOT commit/stage — conductor seals the boundary.
+
+### 2026-07-10 — `executor-2026-07-10-m6-phase1d-fixloop2` — Phase 1d fix-loop round 2 (post-review should-fixes)
+
+Correctness verified clean (0 blockers, all 5 reviewers); this round addressed three should-fixes.
+(1) **Guard extended to ALL call forms (verify-then-fix)** — code-reviewer proved round 1's "every
+call site uniformly" claim FALSE: UFCS `p.scale(5)` and generic-concrete-param `scale(5, tag)` both
+bypassed the `check_user_fn_call`-only gate and ICE'd. Both locked RED pre-fix (new fixtures
+`v0_3_m6_int_literal_number_arg_{ufcs,generic_fn}.ynz`; UFCS: LLVM verifier reject
+`call ptr @scale(ptr %p1, i64 5)` → "This is a compiler bug.", exit 1; generic: IntValue-vs-
+PointerValue panic at `emit.rs:20176` → panic banner, exit 2). Fix: gate extracted into ONE shared
+`reject_int_literal_number_arg` helper (`check.rs`, authoritative-derivation) consumed by all three
+arg loops — `check_user_fn_call`, `check_method_call`'s shape/UFCS arm (args now threaded through
+its signature; non-receiver args zipped against `sig.params[1..]`), and `check_generic_fn_call`
+(gate BEFORE the discarded `unify_param`). RED→GREEN: byte-identical teaching diagnostic across all
+three forms (non-oop.md dual-style convention restored), pinned by
+`v03_m6_int_literal_to_number_param_{ufcs,generic_fn}_is_clean_teaching_error` + the round-1
+plain-form test refactored onto one shared assertion helper. False-positive key unchanged:
+exactly `(Type::Number, Expr::IntLit)`. `emit.rs` backstop comment + plan.md round-1 note +
+Future-Req #14 all corrected to the now-true uniform claim. (2) **Future-Req #17 filed (FRAGO
+017)** — the trampoline staged decimal128 arg-cell shutdown-drop leak (round-1's "noted, not fixed
+here" comment at `emit.rs:~9708`) formalized four-field + added to Phase 8's FRAGO-012 lift-list;
+the code comment now points at #17. (3) **IR-proof test hardened** (test-quality) — positive
+controls added: each negative marker asserted PRESENT in a boundary fixture's IR (probe-verified:
+`bg_number`/`_num_ld` in the background-CPU fixture; `_num_bits_`/`spike_num_arg_ptr` in the
+cpu-member fixture), inert `number_to_heap_cell` dropped (Rust fn name, never IR), `spike_num_free`
+probe-proven ALSO inert (void-call names dropped by LLVM) and rejected as replacement. Gates:
+full-workspace nextest + clippy `-D warnings` + fmt (results in the return). Did NOT commit/stage —
+conductor seals the boundary.
+
+### 2026-07-10 — Phase 1d fix-loop round 3 — the guard COMPLETION sweep (FRAGO 018)
+
+Three segments: `executor-2026-07-10-m6-phase1d-fixloop3` (seg 1, enumeration),
+`executor-2026-07-10-m6-phase1d-fixloop3-seg2` (seg 2, RED lock + implement),
+`executor-2026-07-10-m6-phase1d-fixloop3-seg3` (seg 3, gates + close-out). Human-directed SCOPE
+EXPANSION over defer, justified by enumeration finding real user-reachable danger beyond rounds 1–2's
+three call-argument forms.
+
+**Seg 1 (enumeration).** Exhaustive slot enumeration DONE with a grep-completeness argument (27
+`infer_expr(_, Some())` sites classified; no `Paren` AST node; zero `number`-param intrinsics; all
+named/cross-module calls route through the gated fns; `channel<number>` construction-gated). Root
+mechanism: the literal-hint rule (`check.rs:2223-2227`) types an IntLit hinted `Number{34}` as number
+→ codegen lowers a raw i64. 25-row slot table; new confirmed-RED slots beyond the 3 gated include
+`array<number>.add(5)` **SEGFAULT (exit 139)** and `contains(5)` **SILENT wrong `false` (exit 0)**.
+Fix recipe settled. Zero code landed (PARTIAL, tree byte-identical to HEAD `759bd9b`).
+
+**Seg 2 (RED lock + implement).** 24 committed RED fixtures (`v0_3_m6_int_literal_number_*.ynz`, each
+header recording its probe-confirmed pre-fix signature) + 25 committed tests (24 slot tests + false-
+positive sweep) in `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`. Implemented the extended
+shared gate + all three mechanisms (all `crates/ynz-typeck/`, authoritative-derivation — one gate, no
+per-form twins): `reject_int_literal_number_arg` → thin wrapper over role-parameterized
+`reject_int_literal_number_slot(NumberSlotRole, …)` (adds a `-IntLit` `UnaryOp{Neg, IntLit}` arm);
+the generic case moved to ONE post-arg-loop `apply_substitution` pass (concrete + explicit
+`pass<number>(5)` + sibling-bound `pick(price, 5)`, unresolved TypeParams never match Number); the
+one authoritative `collection_method_arg_slots(receiver, method)` table in `builtins.rs` drives one
+gate loop over collection-method element positions; hinted construction/statement slots (struct-lit
+field + map-hint twin, array/fixed literal elements, map-literal key+value, index assigns incl. the
+map KEY, map bracket-key READ, field assign, `return`, multi-case-if arm pattern) gate through the
+slot fn. All 24 fixtures flipped RED→GREEN; targeted nextest 29/29.
+
+**Seg 3 (gates + close-out, this entry — DONE).** Step-4 full gates ALL GREEN:
+`cargo nextest run --workspace` **2344 passed / 0 failed** (exit 0; M3e `cross_impl_consistency` both
+GREEN under load, no flake fired — `long_session` RSS / `contract_3_wait_inside_if` /
+`spawn_panic_ctx_no_leak` none tripped); `cargo clippy --workspace -- -D warnings` clean;
+`cargo fmt --all --check` clean. No `#[allow]` / `--no-verify` / weakened test. **Step 5 close-out:**
+covered-set narrated as COMPLETE for the IntLit / `-IntLit` → `number` argument / construction /
+statement class, store-site #9 (`let x: number = 5`, signed-stub territory) excepted — Phase 1d
+completion note gains the round-3 sub-note, Future-Req #14 updated, `emit.rs` backstop comment near
+`emit_cpu_member_spawn` updated to name the shared slot gate + true covered set. **FRAGO 018 filed**
+(this dispatch) recording the scope expansion + the FOUR surfaced deviations (enumeration-completeness
+map-bracket-KEY amendment fixed in-class; NEW decimal128 by-value RETURN garbage; NEW `map<number,V>`
+real-key silent breakage; the unchanged concat/pick + `array.remove` gaps) — SURFACED for the
+deviation-judge → conductor seam, NOT self-adjudicated. Session-ids for all three fixloop3 segments
+appended to the frontmatter chain WITH this entry (seg 1 and seg 2 were both absent — appended here to
+keep the chain consistent with the plan's own precedent that every PARTIAL executor segment is
+recorded). Handoff `handoff-phase-1d.md` DELETED as the final act. Did NOT commit/stage — conductor
+seals the boundary.
+
+- `executor-2026-07-10-m6-phase1d-fixloop4` — 2026-07-10 — **Phase 1d fix-loop round 4 — DONE.**
+  Closed TWO confirmed honesty-gaps in round 3's "COMPLETE" claim plus formalized deferrals; small,
+  precise round (round 3 NOT re-swept). **FINDING 1 (code fix).** `return 5` from a `-> number errors`
+  fn missed the round-3 teaching gate — Paper-Trace verified against the live tree: pre-fix it emitted
+  the GENERIC mismatch (`return produces int, but this function must return number errors`, exit 1)
+  while the plain `-> number` control taught (`Write it as a decimal literal: 5.0`); root cause — the
+  return type is `Type::ErrorsCapable{ inner: Number }`, so the shared gate's
+  `matches!(expected_ty, Type::Number{..})` was FALSE through the wrapper and the return-site consumer
+  (`check.rs:2170`) fell through to the generic path (`check.rs:2185`). Fix: unwrap `ErrorsCapable`
+  before the `Type::Number` check inside `reject_int_literal_number_slot` (`crates/ynz-typeck/src/check.rs`)
+  — ONE gate, no parallel path (authoritative-derivation). Post-fix Paper-Trace: errors-return now
+  teaches (exit 1); plain `-> number` UNCHANGED; `return 5` from `-> int errors` stays clean (exit 0);
+  `return 5.0` from `-> number errors` stays clean (exit 0). ONE RED fixture
+  (`v0_3_m6_int_literal_number_return_errors.ynz`, header records the pre-fix generic signature) + ONE
+  test (`v03_m6_int_lit_number_return_errors_is_teaching_error`) appended to
+  `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs` via the existing slot-test macro (asserts
+  the teaching text, not merely exit≠0). **FINDING 2 (doc only, NO code).** `hidden cache: number = 5`
+  ICEs — Paper-Trace confirmed: `Found IntValue(i64 5) but expected PointerValue variant` at
+  `emit.rs:20351`, from the field-default lowering site `emit.rs:18233` calling `lower_expr` with no
+  type hint → raw i64 → `store_field` into a decimal128 slot. This is STORE-SITE #9 class, structurally
+  identical to `let x: number = 5`; NOT gated (gating one store site while the other stays open would
+  make the class inconsistent) — carved out of the "COMPLETE" claim and folded into #9/#14's coercion
+  stub-plan scope. **Doc corrections:** (a) `check.rs` gate doc-comment + Future-Req #14 + Key Outcome
+  1d corrected — guard complete for the class INCLUDING the errors-wrapped return, with BOTH
+  declaration-site store facets (`let x: number = 5` AND `hidden f: number = 5`) carved out; (b)
+  hidden-field-default folded into #9 (records linkage to the `2026-07-04-v0-3-hotfix-int-literal-number`
+  stub plan; did NOT edit the stub plan — conductor→human coordination item); (c) three deviation-judge
+  should-fixes promoted to four-field Future-Reqs #18 (sync decimal128 by-value RETURN garbage), #19
+  (`map<number,V>` real-number-key silent breakage), #20 (general UFCS number→int arg-validation gap +
+  `array.remove` no codegen lowering); (d) Key Outcome 1d amended with the headline-vs-delivered
+  reconciliation (scope grew from A/C to the near-compiler-wide IntLit→number rejection guard), and its
+  unqualified stale `check.rs:3369-3398` citation corrected to the live `:3417-3451` (an already-recorded
+  fixed fact whose headline sibling was never swept — plan-source-of-truth sibling sweep; the historical
+  step-text/D8 citations are deliberately-preserved originals whose drift #12 already documents, left
+  untouched). **FRAGO 019 filed** (this dispatch). **Gates ALL GREEN:** `cargo nextest run --workspace`
+  **2345 passed / 0 failed** (exit 0; +1 vs round 3's 2344 = the new errors-return test; M3e
+  `cross_impl_consistency` both GREEN under load at 285s/304s, no flake fired — `long_session` RSS /
+  `contract_3_wait_inside_if` / `spawn_panic_ctx_no_leak` none tripped); `cargo clippy --workspace -- -D
+  warnings` clean; `cargo fmt --all --check` clean. No `#[allow]` / `--no-verify` / weakened test. Did
+  NOT touch the dirty-not-mine files (`CLAUDE.md`, `Dockerfile`, `ynz-watch/src/{error,rebuild}.rs`). Did
+  NOT commit/stage — conductor seals the boundary.
+
 ## FRAGO log
 
 ### FRAGO 001 — 2026-07-09 — session-id: `conductor-2026-07-09-m6-exec`
@@ -1424,6 +1688,177 @@ this file is the session + FRAGO + context-segment log.
   probe-refuted false positive. Rides into the Phase 1c boundary commit.
 - **Authority.** deviation-judge + rules-compliance surfaced; risk-neutral; conductor auto-apply + log.
 
+### FRAGO 016 — 2026-07-10 — session-id: `executor-2026-07-10-m6-phase1d-fixloop1`
+
+- **Trigger.** Phase 1d boundary fan-out: seg-2 surfaced (seg-3 recorded) the IntLit→`number`-param
+  CALL-SITE coercion gap as candidate Future-Req #14 — explicitly NOT self-adjudicated, routed to the
+  deviation-judge → conductor seam. Separately, the fleet review flagged a should-fix cluster on the
+  interim guard: (a) its rejection rendered the generic "compiler bug" ICE banner for a KNOWN
+  user-triggerable limitation, leaked the internal ID "FRAGO 009" and a raw `{span:?}` Debug dump into
+  user-facing text (rules-compliance + 2 others); (b) the guard was untested new code (test-quality /
+  verification.md); (c) two narrative overclaims (unpersisted "IR-level proof"; false-positive-sweep
+  wording claiming boundary discrimination a zero-spawn fixture cannot prove); (d) two code polish
+  minors (twin-scan plumbing; bare 16-byte cell-size literals).
+- **Corroboration.** deviation-judge ruled the #14 scope-out JUSTIFIED / risk-neutral (pre-existing
+  general coercion gap, ICEs synchronously with zero concurrency, orthogonal to FRAGO 009's charter;
+  boundary-only fix would ship an inconsistent teaching story). Fix-loop round 1 reproduced the guard's
+  RED live (pre-change binary: ICE banner + FRAGO leak verbatim) before rerouting it.
+- **Classification.** JUSTIFIED / RISK-NEUTRAL (deferral formalization + review should-fixes; same
+  shape as FRAGO 015/#13). No signature gate trips.
+- **Delta (applied to plan.md by `executor-2026-07-10-m6-phase1d-fixloop1` in this same dispatch).**
+  (a) Future-Req #14 RATIFIED as a four-field deferral; FIX routed to the existing stub plan
+  `2026-07-04-v0-3-hotfix-int-literal-number`, to be expanded to cover BOTH #9's store-site and #14's
+  call-site facets under ONE coercion mechanism — the cross-plan stub expansion is a conductor→human
+  coordination item, deliberately NOT applied by this plan's executors. (b) Interim guard rerouted:
+  typeck-level WHAT/WHAT-INSTEAD/WHY teaching error in `check_user_fn_call` (the `channel<number>`-gate
+  convention — codegen has no user-facing diagnostic path), firing uniformly on every call site; no
+  "FRAGO 009", no `{span:?}` in user text; codegen arm retained as an unreachable internal backstop.
+  Tested RED→GREEN (`v03_m6_int_literal_to_number_param_cpu_member_is_clean_teaching_error`, new
+  spike-group fixture `v0_3_m6_int_literal_number_arg_cpu_member.ynz`). (c) Both narrative overclaims
+  corrected (plan.md completion note; seg-3 entry annotated below); IR proof persisted as
+  `v03_m6_non_escaping_number_ir_stays_by_pointer`. (d) Polish minors filed as Future-Req #15
+  (twin-scan consolidation) + #16 (named decimal128 cell-size const), both four-field, both
+  "not debt" per code-reviewer. (e) Phase 8's FRAGO-012 durable-home lift-list amended to carry
+  #14/#15/#16 so none is lost on the plan's `git mv` to `done/` (FRAGO 015 discipline).
+- **Authority.** deviation-judge JUSTIFIED/risk-neutral verdict relayed via the conductor's fix-loop
+  round-1 dispatch; risk-neutral → auto-apply + log per Step-7 flow.
+
+### FRAGO 017 — 2026-07-10 — session-id: `executor-2026-07-10-m6-phase1d-fixloop2`
+
+- **Trigger.** Phase 1d fix-loop round 2 (conductor-routed, fleet-surfaced): (a) graveyard-auditor +
+  rules-compliance flagged the trampoline staged decimal128 arg-cell shutdown-drop leak
+  (`emit.rs:~9708` `spike_num_free` free site) as an UNTRACKED deferral — only a "noted, not fixed
+  here" code comment, no plan-seam entry, so it would be LOST on the plan's `git mv` to `done/`
+  (the exact FRAGO 015 failure shape); (b) code-reviewer proved round 1's "fires on every call site
+  uniformly" guard claim FALSE (UFCS + generic-concrete-param forms bypassed → still ICE'd);
+  (c) test-quality flagged the IR-proof markers as mechanically unlinked to codegen's emitted names
+  (one already inert).
+- **Corroboration.** Both bypass forms reproduced RED live against the pre-fix binary (verifier
+  reject / IntValue panic, banners verbatim); marker inertness probe-confirmed against emitted IR
+  (`number_to_heap_cell` 0 hits everywhere; `spike_num_free` 0 hits — void-call names dropped).
+- **Classification.** JUSTIFIED / RISK-NEUTRAL (deferral formalization + review should-fixes; same
+  shape as FRAGO 015/016). No signature gate trips.
+- **Delta (applied to plan.md by `executor-2026-07-10-m6-phase1d-fixloop2` in this same dispatch).**
+  (a) NEW Future-Req #17: trampoline staged arg-cell leak on a blocking-pool task dropped un-run at
+  runtime shutdown — four-field (WHAT process-exit-only cell leak, one balancing free never runs;
+  WHY never-drop-locals class, same as M5 #6 / this plan's #13, needs the drop story; COST small
+  once the drop-story milestone lands, exactly-once between trampoline free + shutdown drop path;
+  TRIGGER drop story lands OR a real workload accumulates un-run dropped tasks). (b) Phase 8's
+  FRAGO-012 lift-list amended to carry #17 (owner-tag `unscoped → needs the drop-story milestone`,
+  joining #13). (c) Guard-extension deltas recorded in the Phase 1d completion narrative + #14's
+  entry (round-1 uniformity overclaim corrected in place; round-2 note added). (d) `emit.rs` leak
+  comment updated to cite #17.
+- **Authority.** Fleet-surfaced should-fixes routed via the conductor's fix-loop round-2 dispatch;
+  risk-neutral → auto-apply + log per Step-7 flow (FRAGO 015/016 precedent).
+
+### FRAGO 018 — 2026-07-10 — session-id: `executor-2026-07-10-m6-phase1d-fixloop3-seg3`
+
+- **Trigger.** Phase 1d fix-loop round 3 (conductor-routed, human-directed): round 3's exhaustive
+  slot enumeration proved the interim IntLit→`number` guard's danger class is far WIDER than the
+  three call-argument forms rounds 1–2 covered. Probe-confirmed, pre-fix, on live-reachable Yinz
+  source: `array<number>.add(5)` **SEGFAULTS (exit 139)**; `contains(5)` returns a **SILENT wrong
+  `false` (exit 0)** — worse than a crash; plus ~24 further arg / construction / statement slots that
+  ICE or silently corrupt (generic-explicit `pass<number>(5)`, sibling-bound `pick(price, 5)`,
+  array/fixed `.set`, `maybe<number>.or(5)`, struct-lit field, array/fixed/map literal elements,
+  index-assign incl. the map KEY, map bracket-key READ, field-assign, `return 5` from `-> number`,
+  neg-literal `-5`). The human chose **complete the guard across EVERY IntLit / `-IntLit` → `number`
+  slot** over defer, justified by that finding (recorded in the conductor cold-resume note).
+- **Corroboration.** All 24 committed RED fixtures re-confirmed RED against the pre-fix binary
+  (verbatim signatures in each fixture header: ICE panic exit 2, LLVM-verifier ICE, silent exit 1,
+  and the two SILENT-WRONG exit-0 cases); post-fix all 24 flip RED→GREEN (teaching error, non-zero
+  exit, no "compiler bug"/"FRAGO" banner); false-positive sweep byte-exact clean; controls
+  (`x = 5` reassign, the #9 `let x: number = 5` store-site) confirmed UNCHANGED. Full step-4 gates:
+  `cargo nextest run --workspace` 2344 passed / 0 failed (exit 0; M3e `cross_impl_consistency` both
+  GREEN under load, no flake); `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all
+  --check` clean.
+- **Classification.** SCOPE EXPANSION (defer → complete-the-guard), human-directed; JUSTIFIED /
+  RISK-NEUTRAL as a delta — it extends an existing COMPILE-TIME teaching error to more slots,
+  converting segfaults / silent corruption / ICEs into clean WHAT/WHAT-INSTEAD/WHY rejections; no
+  runtime behavior changes, no new miscompile surface, one authoritative gate (no per-form twins).
+  No signature gate trips. (The four deviations in the Delta below are SURFACED for the
+  deviation-judge → conductor seam — this FRAGO RECORDS them; it does NOT rule on whether the
+  out-of-charter scope-outs were justified.)
+- **Delta (applied to plan.md by `executor-2026-07-10-m6-phase1d-fixloop3-seg3` in this same
+  dispatch).** (a) Phase 1d completion narrative gains the **fix-loop round 3** note (scope
+  expansion + the one-authoritative-gate mechanism: `reject_int_literal_number_arg` → thin wrapper
+  over role-parameterized `reject_int_literal_number_slot`; `-IntLit` arm; generic post-loop
+  `apply_substitution` pass; the one `collection_method_arg_slots` table in `builtins.rs`; hinted
+  construction / statement slots). (b) Future-Req #14 updated to state the guard is now COMPLETE for
+  the IntLit / `-IntLit` → `number` argument / construction / statement class, store-site #9
+  excepted, and that the WHOLE guard is removed when the coercion ships. (c) `emit.rs` backstop
+  comment near `emit_cpu_member_spawn` updated to name the shared slot gate + the true covered set.
+  (d) **FOUR deviations surfaced (routed, NOT self-adjudicated):** (1) enumeration-completeness
+  amendment — two map-bracket-KEY sibling slots the seg-1 25-row table missed (index-assign
+  `names[5] = …` and index-read `names[5]`, both probe-confirmed silent type-corruption), fixed
+  IN-CLASS this round + tested (`..._map_bracket_key.ynz`); (2) NEW pre-existing decimal128
+  **by-value RETURN** garbage from a synchronous user fn (`print(toll(5.0))` nondeterministic; the
+  synchronous return-value sibling of Phase 1d's arg class), out of hotfix charter — candidate
+  Future-Req; (3) NEW pre-existing `map<number, V>` REAL-number-literal-key silent breakage (keys
+  hash/compare by pointer identity; `set(1.5,…)` then `get(1.5)` → `none`, exit 0), out of charter —
+  candidate Future-Req; (4) unchanged prior-round out-of-scope gaps — the general UFCS
+  arg-validation gap (`a.concat([5])` / `pick(5, price)`, number→int direction) and `array.remove`
+  having no codegen lowering arm for ANY type.
+- **Authority.** Human-directed scope expansion relayed via the conductor's fix-loop round-3
+  dispatch; risk-neutral delta → auto-apply + log per Step-7 flow (FRAGO 015/016/017 precedent). The
+  four surfaced deviations await the deviation-judge → conductor seam's disposition (candidate
+  Future-Reqs for #2/#3; the #4 pair pre-recorded, unchanged).
+
+### FRAGO 019 — 2026-07-10 — session-id: `executor-2026-07-10-m6-phase1d-fixloop4`
+
+- **Trigger.** Phase 1d fix-loop round 4 (conductor-routed): a five-lens review of round 3 confirmed
+  0 blockers but surfaced TWO honesty-gaps in round 3's "COMPLETE" claim, both reproduced by the
+  conductor and re-verified against the live tree this round. **Finding 1 (code):** `return 5` from a
+  `-> number errors` fn missed the round-3 teaching gate — pre-fix it emitted the GENERIC mismatch
+  (`return produces int, but this function must return number errors`, exit 1) where the plain
+  `-> number` control taught (`Write it as a decimal literal: 5.0`). Root cause: the return type is
+  `Type::ErrorsCapable{ inner: Number }`, so the shared gate's `matches!(expected_ty, Type::Number{..})`
+  is false through the wrapper and the return-site consumer (`check.rs:2170`) falls through to the
+  generic path (`check.rs:2185`). Both paths reject cleanly (exit 1) — NO ICE, NO silent-wrong — so a
+  diagnostic-QUALITY gap inside round 3's own claimed "return" scope, contradicting the doc-comment;
+  Golden Rule 11 makes the inconsistency worth closing. **Finding 2 (doc only):** `hidden cache: number
+  = 5` ICEs (`Found IntValue(i64 5) but expected PointerValue variant` at `emit.rs:20351`, from the
+  field-default lowering site `emit.rs:18233` calling `lower_expr` with no hint → raw i64 →
+  `store_field` into a decimal128 slot) — STORE-SITE #9 class, structurally identical to `let x: number
+  = 5`; NOT gated (gating it alone while `let x: number = 5` stays un-gated would make the store-site
+  class inconsistent).
+- **Corroboration.** Finding 1 Paper-Trace verified against the freshly-built debug binary: pre-fix
+  errors-return → generic mismatch (exit 1); post-fix errors-return → teaching error (exit 1); plain
+  `-> number` UNCHANGED (teaches); controls stay clean — `return 5` from `-> int errors` → `ok` (exit
+  0), `return 5.0` from `-> number errors` → `ok` (exit 0). Finding 2 Paper-Trace confirmed the ICE +
+  panic location. Full step-4 gates: `cargo nextest run --workspace` **2345 passed / 0 failed** (exit
+  0; +1 vs round 3's 2344 = the new errors-return test; M3e `cross_impl_consistency` both GREEN under
+  load, no flake); `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all --check` clean.
+- **Classification.** Finding 1 is a DIAGNOSTIC-QUALITY completion within round 3's own claimed scope
+  — extends the existing COMPILE-TIME teaching error to the errors-wrapped return through the ONE
+  shared gate (authoritative-derivation: unwrap `ErrorsCapable` before the `Type::Number` check, no
+  parallel path); no runtime behavior change, no new miscompile surface. Finding 2 is a DOC-ONLY
+  carve-out (no code) of a pre-existing store-site ICE the round-3 "COMPLETE" claim over-swept. The
+  three formalized deferrals (#18/#19/#20) are OUT-OF-CHARTER pre-existing gaps promoted from round 3's
+  surfaced-deviation list — RECORDED, not ruled on. No signature gate trips (risk-neutral delta).
+- **Delta (applied to plan.md + check.rs + the test file by `executor-2026-07-10-m6-phase1d-fixloop4`
+  in this same dispatch).** (a) CODE: `reject_int_literal_number_slot` (`crates/ynz-typeck/src/check.rs`)
+  unwraps `ErrorsCapable{inner}` before the `Type::Number` check; new RED fixture
+  `v0_3_m6_int_literal_number_return_errors.ynz` + test
+  `v03_m6_int_lit_number_return_errors_is_teaching_error` in
+  `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`. (b) `check.rs` gate doc-comment updated —
+  round-4 errors-return added to the round list; BOTH declaration-site store facets (`let x: number =
+  5`, `hidden f: number = 5`) named as the #9 store-site carve-out. (c) Future-Req #14 corrected — the
+  "COMPLETE" claim now reads complete INCLUDING the errors-wrapped return, with both store facets carved
+  out; the new errors-return test added to the tested set. (d) Future-Req #9 folds in the
+  hidden-field-default (records the shared store-site root + the linkage to the
+  `2026-07-04-v0-3-hotfix-int-literal-number` stub plan under ONE coercion; did NOT edit the stub plan —
+  conductor→human coordination item). (e) THREE four-field deferrals formalized: #18 (sync decimal128
+  by-value RETURN garbage), #19 (`map<number,V>` real-number-key silent breakage), #20 (general UFCS
+  number→int arg-validation gap + `array.remove` no codegen lowering) — promoted from FRAGO 018's
+  surfaced-deviation list. (f) Key Outcome 1d amended with the headline-vs-delivered reconciliation, and
+  its unqualified stale `check.rs:3369-3398` citation corrected to the live `:3417-3451` (an
+  already-recorded fixed fact whose headline sibling was never swept; historical step-text/D8 citations
+  left as deliberately-preserved originals per #12's documented drift note).
+- **Authority.** Conductor-routed fix-loop round-4 dispatch; risk-neutral deltas → auto-apply + log per
+  Step-7 flow (FRAGO 015/016/017/018 precedent). Finding 2's carve-out and the three deferrals are
+  RECORDED here, not self-adjudicated — the deviation-judge → conductor seam owns any further ruling;
+  the cross-plan stub-plan expansion (#9/#14 coercion) remains a conductor→human coordination item.
+
 ## Context-segment log
 
 ### 2026-07-09 — Phase 1, segment 1
@@ -1603,3 +2038,99 @@ Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1c-segment-7
 - **checkpoint reason:** phase DONE (steps 3d + 4 + 5 + close-out all complete; handoff deleted as the final act).
 - **canonical resume-at pointer:** n/a — Phase 1c COMPLETE (advanced from seg-6's `phase-1c/step-3d`).
 - **segment verdict:** **DONE.** **Step 3d parity verdict — LEAK-BY-SHIPPED-DESIGN CONFIRMED (Paper-Trace, not assumed):** 5-iter crossing-maybe + 3-iter crossing-union loop probe; predicted gap 11 (5×1 maybe + 3×2 union cells) BEFORE first run; observed alloc=12/free=1, residual 0, stable 4/4. Pinned as `v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak` (integration.rs, M5-E8 exact-gap convention `alloc = free + 11`). Per-case IR proof (maybe/union/anon all staged from a SURVIVING allocation, never a dying stack temp). **Step 5:** false-positive sweep extended to non-escaping maybe/union/anon (renamed test, all prior assertions retained, IR-verified zero promotion sites). **Step 4 gates:** full workspace **2307 passed / 0 failed** (run twice; M3e determinism holding under load both times); fmt + `clippy --workspace -D warnings` clean; the TWO pre-existing warnings GENUINELY fixed (integration.rs unused-`stderr` → strengthened assertion; cross_impl_consistency collapsible-if → `&&`) — no `#[allow]`, no `--no-verify`. WHY-comment minor confirmed already folded (seg-2). **DEVIATION SURFACED (for the seam — NOT self-decided):** the per-iteration heap-cell leak is a REAL finding (exact gap=11), fixing needs the ownership drop story (out of hotfix charter) — proposed four-field deferral: WHAT per-iteration heap-cell leak for crossing maybe/union LOOP bindings (1-2 cells/iter, held to process exit); WHY freeing needs the drop story (same class as M5 FRAGO-009 / Future-Req #6 — maybe/union joining the existing never-drop-locals regime); COST drop-story milestone (1-2 sessions) + update the 2 parity pins; TRIGGER drop story lands OR a real unbounded-suspension-loop-over-maybe/union workload. Exposure pinned LOUD in-suite meanwhile. Disposition = seam's call (fleet deviation-judge). Phase 1c completion note written to plan.md.
+
+### 2026-07-10 — Phase 1d, segment 1
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1d-segment-1
+
+- **segment number:** 1
+- **session-id:** `executor-2026-07-10-m6-phase1d`
+- **subagent_tokens actual:** 298722
+- **checkpoint reason:** executor's own early-checkpoint judgment call (context budget past threshold at the step-2→step-3 boundary; conductor-authorized). No `**OVER-FAT-STEP PROPOSAL**` sentinel — a plain PARTIAL on a completed-step boundary, not a split proposal.
+- **canonical resume-at pointer:** `phase-1d/step-3` (first segment of the phase — no previous pointer to stall-compare against, so re-dispatch is unconditional).
+- **segment verdict:** `STATUS: PARTIAL`. **Steps 1-2 DONE.** Step 1: FRAGO-009 citations re-verified against live tree (line drift only, content matches: `prepare_bg_arg_for_ctx` emit.rs:15616, cpu-member i64 load emit.rs:9686-9697, `channel<number>` gate check.rs:3417-3451); **Recorded Decision D8 = Option 2 (eager decimal128 heap-copy at the spawn boundary; `channel<number>` gate untouched, Future-Req #12 keeps that trigger)** recorded in plan.md BEFORE implementation, weighed against IMP-concurrency/IMP-no-function-coloring (design doc's `.give`/`.copy` background-args model + Option-1 structurally unavailable for defect C's auto-promotion path). Step 2: 8 RED repros locked + Paper-Traced (A-arms `0.000...` vs 2.5/4.5, 3/3 deterministic per arm; C-forms verbatim ICE `Call parameter type does not match function signature!` on pure-spike + fused). Repro-shape discovery recorded: bare fire-and-forget last-statement spawn does NOT repro — proven shape suspends the spawner after the spawn. No code changed; the only reds are the 8 planned-RED repros step 3 is on record to green. No deviation surfaced. One OPEN probe carried in handoff (not a deviation): whether `f(5)` typechecks against a `number` param (decides the cpu-member IntLit sub-case). Resume at `phase-1d/step-3` via handoff.
+
+### 2026-07-10 — Phase 1d, segment 2
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1d-segment-2
+
+- **segment number:** 2
+- **session-id:** `executor-2026-07-10-m6-phase1d-seg2`
+- **subagent_tokens actual:** 244382
+- **checkpoint reason:** executor's own early-checkpoint judgment call (past budget at the clean step-3→step-4 boundary; the step-4 full-workspace run is substantial and warranted a fresh window). No `**OVER-FAT-STEP PROPOSAL**` sentinel — plain PARTIAL on a completed-step boundary.
+- **canonical resume-at pointer:** `phase-1d/step-4` (advanced from seg-1's `phase-1d/step-3` — no stall).
+- **segment verdict:** `STATUS: PARTIAL`. **Step 3 DONE — the Option-2 (D8) fix, ONE authoritative mechanism, all in emit.rs:** new `Cg::number_to_heap_cell` (single 16-byte boundary-cross copy both defects consume, beside `shape_bytes_to_heap_cell`); Defect A both spawn arms via unconditional `Type::Number{precision<=34}` pre-gate in `prepare_bg_arg_for_ctx` → `(cell, HeapShape{16})`, freed by the CPU-spawn `emit_bg_arg_frees` + SM-spawn `BgArgDropEntry` kind-0 (SM child-side read unchanged); Defect C via new `callee_takes_bare_number` predicate consumed by BOTH `emit_cpu_member_spawn` + `build_cpu_trampoline` (one alloc/one free). **8/8 Phase-1d RED repros GREEN** (value + N=10 determinism, A CPU/SM + C pure/fused); `cargo build -p ynz-driver` clean. **Full workspace suite / clippy / fmt / false-positive sweep NOT yet run — that is step 4.** **OPEN probe RESOLVED (verify-before-fix):** `f(5)` (IntLit→`number` param) typechecks but ICEs at codegen even SYNCHRONOUSLY (`call ptr @grow(i64 5)`; root cause `lower_expr(IntLit)`=i64 emit.rs:14514, no call-site int→number coercion emit.rs:14986-14990) — so the cpu-member IntLit sub-case needed NO bespoke boundary fix; guarded to a clean compile error, never a segfault. **DEVIATION SURFACED (NOT self-decided — for the deviation-judge → conductor seam at the phase boundary):** IntLit→`number`-param is a PRE-EXISTING GENERAL codegen coercion gap (ICEs synchronously), orthogonal to FRAGO-009's concurrency charter; fixing it only at the boundary would ship an inconsistent teaching story (`background f(5)` works, `f(5)` doesn't), so the executor scoped it OUT and guarded it cleanly — candidate Future-Requirements deferral (int-literal→`number` call-site coercion), to be routed through the seam by the step-5 segment / boundary fan-out. Evidence: `lower_expr` emit.rs:14514, normal call loop emit.rs:14986-14990, typeck coercion check.rs:2224/:3813. Resume at `phase-1d/step-4` via handoff.
+
+### 2026-07-10 — Phase 1d, segment 3 (DONE)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1d-segment-3
+
+- **segment number:** 3
+- **session-id:** `executor-2026-07-10-m6-phase1d-seg3`
+- **subagent_tokens actual:** 261721 (authoritative, from the conductor's task-notification usage block; the executor's own ~186000 was an estimate — this entry was written by the executor, an §3a.1 overstep the conductor reconciled)
+- **checkpoint reason:** phase DONE (steps 4 + 5 + close-out all complete; handoff deleted as the final act).
+- **canonical resume-at pointer:** n/a — Phase 1d COMPLETE (advanced from seg-2's `phase-1d/step-4`).
+- **segment verdict:** **DONE.** **Step 4 gates all GREEN.** Confirming full workspace re-run `cargo test --workspace` **exit 0 — 2315 passed / 0 failed** (M3e determinism holding under load: `cross_impl_consistency` 2/2, 251s). `cargo fmt --all --check` clean (formatted ONE seg-2 leftover line in `emit.rs` via `cargo fmt -p ynz-codegen` — no `#[allow]`, no `--no-verify`); house `cargo clippy --workspace -- -D warnings` clean. 8/8 Phase-1d repros GREEN (value + N=10, A CPU/SM + C pure/fused). **False-positive sweep clean** — committed sweep test GREEN + IR-level proof (`ynz build --emit-ir` on the sweep fixture): ZERO number heap-cell markers (`bg_number`/`_num_ld`/`_num_bits_`/`spike_num_arg_ptr`/`number_to_heap_cell`), non-escaping `bump(x)` → `call ptr @bump(ptr %x1)` (by-pointer, no cell). **[CORRECTED — fix-loop round 1, `executor-2026-07-10-m6-phase1d-fixloop1`, FRAGO 016: (a) that IR proof was a session-local run with NO persisted artifact — now committed as `v03_m6_non_escaping_number_ir_stays_by_pointer`; (b) "sweep clean" overstated — the sweep fixture has ZERO spawn calls, so it proves Phase 1b/1c's disjoint classifier untouched (code-path disjointness), NOT Phase 1d boundary discrimination; no in-boundary false-positive case exists BY DESIGN under Option 2's unconditional Number pre-gate, and in-boundary correctness is carried by the 8 value/determinism repros.]** **Step 5:** Future-Req #12 tightened (stale `check.rs:3369-3398` → live `check.rs:3417-3451`; COST narrowed to D8/Option 2 — reuses `number_to_heap_cell`, still needs its own conduit send/recv marshalling pass; gate untouched per D8 reason 5); new Future-Req #14 = surfaced **IntLit→`number`-param call-site coercion gap** (ICEs even synchronously; sibling call-site facet of #9's store-site ICE, same root class; scoped OUT of FRAGO-009 charter, guarded to a clean cpu-member compile error) recorded as a candidate four-field deferral. **DEVIATIONS SURFACED (NOT self-adjudicated — for the deviation-judge → conductor seam):** (1) IntLit→`number` call-site coercion scope-out (candidate #14 — the seam rules whether the scope-out was justified + formalizes a FRAGO number, mirroring FRAGO 015/#13); (2) first full-suite run had ONE transient flake — `current_rss_bytes_returns_value_on_supported_platforms` (`crates/ynz-watch/tests/long_session.rs`, live-process RSS `mb > 0`), in not-this-executor's `ynz-watch`, UNMODIFIED source (`memory.rs` + test file both clean; dirty `error.rs`/`rebuild.rs` don't touch RSS), structurally unrelated to a codegen change, passed 3/3 isolated AND did not recur on the confirming re-run. **OBSERVATION (not a gate failure):** the stricter `clippy --workspace --all-targets` (NOT the documented gate) surfaces two pre-existing test-code lints in `ynz-numerics` + `ynz-runtime` (`elem[1] = -1` unused-assignment) — not-this-executor's crates, candidate future cleanup. Phase 1d completion note written to plan.md; session-id appended; handoff `handoff-phase-1d.md` deleted as the final act. With Phase 1b + 1c, the whole R15/FRAGO-009 interim risk is closed. Did NOT commit/stage — conductor seals the boundary.
+
+### 2026-07-10 — Phase 1d, fix-loop round 3, segment 1 (enumeration)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1d-fixloop3-segment-1
+
+- **segment number:** fixloop3-seg1
+- **session-id:** `executor-2026-07-10-m6-phase1d-fixloop3` (segment 1)
+- **subagent_tokens actual:** 227028
+- **checkpoint reason:** executor early-checkpoint judgment (3 context-budget nudges) at the enumeration→implementation boundary; green tree, ZERO code changes landed (byte-identical to HEAD 759bd9b). No `**OVER-FAT-STEP PROPOSAL**` sentinel — plain PARTIAL.
+- **canonical resume-at pointer:** `phase-1d/fixloop3-step-2` (first segment of round 3 — no previous fixloop3 pointer to stall-compare).
+- **segment verdict:** `STATUS: PARTIAL`. **The #1 deliverable — exhaustive slot enumeration — is DONE**, with a grep-derived completeness argument (27 `infer_expr(_, Some())` sites classified; no `Paren` AST node so `f((5))` can't defeat the IntLit match; zero `number`-param intrinsics in features.toml; all named/cross-module calls route through exactly the 3 gated fns; `channel<number>` construction-gated). **Root mechanism:** the literal-hint rule check.rs:2223-2227 (IntLit hinted `Number{34}` types as number → codegen lowers raw i64). **25-row slot table (handoff).** New confirmed-RED slots beyond the 3 gated: generic-explicit `pass<number>(5)` + sibling-bound `pick(price, 5)` (ICE, the blocker); `array<number>.add(5)` (**SEGFAULT exit 139**, direct-run verified); array/fixed `.set`; `maybe<number>.or(5)` (LLVM select ICE); `contains(5)` (**SILENT wrong `false`, exit 0 — worse than a crash**); struct-lit field, array/fixed literal elements, index-assign, field-assign, `return 5` from `-> number` (all ICE w/ verbatim evidence); neg-literal UFCS `-5` ICE; plain `f(-5)` already clean (control). Excluded-and-verified-safe: `let x: number = 5` (#9 signed territory), reassign, BinOp, intrinsics. **Fix recipe settled** (extend the one shared gate with a `-IntLit` arm + a post-loop `apply_substitution` pass for the generic case + a per-method elem-slot table for the 4 collection arms + construction/stmt-slot gating). **Deviations surfaced (not self-decided):** (1) `a.concat([5])`/`pick(5, price)` reach breakage only via the pre-existing general arg-validation gap (number→int direction) — NOT cleanly separable into the IntLit→number class, noted-not-gated per the exclusion; (2) `array.remove` has no codegen lowering arm at all (pre-existing). Remaining: steps 2 (RED fixtures) → 3 (implement) → 4 (gates) → 5 (close-out + FRAGO 018). Resume `phase-1d/fixloop3-step-2` via handoff.
+
+## Conductor cold-resume note — 2026-07-10 (context clear mid-Phase-1d-round-3)
+
+Written by conductor `conductor-2026-07-10-m6-exec2`-lineage session at a human-requested context
+clear, mid-execution. Phase 1c is sealed (commit 759bd9b); **Phase 1d is NOT sealed** — it is
+mid fix-loop **round 3** (the guard-completion sweep). This note is state + history for the next
+conductor; it is NOT standing law (do not absorb it as operating rules — verify against current
+global charter).
+
+### ⚠️ IN-FLIGHT EXECUTOR AT CLEAR TIME — reconcile BEFORE re-dispatching (anti-collision)
+An implement executor (`executor-2026-07-10-m6-phase1d-fixloop3-seg2`) was **dispatched and running**
+when this context was cleared, implementing round-3 steps 2→5 from `phase-1d/fixloop3-step-2`. A
+cold-resuming conductor MUST reconcile its status before re-dispatching anything from the handoff,
+or two producers collide:
+- **Check completion:** does `executor-2026-07-10-m6-phase1d-fixloop3-seg2` appear in `plan.md`
+  frontmatter's session-id chain (it appends on completion)? Has the handoff pointer advanced past
+  `phase-1d/fixloop3-step-2`, or is the handoff deleted (= round-3 DONE)?
+- **If completed** → resume from the updated on-disk state (route its return per Step 3a: PARTIAL →
+  continue the checkpoint loop; DONE → run the full re-gate, code-reviewer's completeness lens is
+  the real test, then seal).
+- **If still running** → WAIT for it; do not re-dispatch the same step.
+
+### Round-3 state (guard-completion sweep)
+Human chose "complete the IntLit/`-IntLit`→`number` guard across EVERY arg/construction slot" over
+defer, justified by the enumeration finding real danger (segfault exit 139 on `array<number>.add(5)`;
+silent-wrong `false` on `contains(5)`; ~10+ slots). Enumeration is DONE + grep-completeness-argued
+(see the `## Context-segment log` fixloop3-seg1 entry + `handoff-phase-1d.md`'s 25-row slot table).
+Excluded: `let x: number = 5` (#9, signed stub-plan territory). Two out-of-scope deviations surfaced
+(the general UFCS arg-validation gap; `array.remove` no-lowering). Closing dispatch files **FRAGO 018**.
+
+### NEXTEST — session speed override (continue it)
+This session ran ALL gates via `cargo nextest run --workspace` (dispatch-prompt override in executor
++ green-check prompts), NOT the resolver default. Reason: the global resolver probes `cargo-nextest`
+on the HOST (absent — all-docker setup), so it emits slow `cargo test`; nextest lives only in the dev
+container. The durable fix is an **inbox candidate in CANON** (`inbox/2026-07-10-resolver-nextest-env-mismatch.md`,
+covers a hook-author resolver fix + a rule-author corpse). Until that lands, KEEP writing
+`cargo nextest run --workspace` into executor + green-check dispatches, else gates revert to slow
+`cargo test`. Speed only, not correctness.
+
+### Model — Fable restored (no action needed)
+`coding·high` → Fable·medium is live in the CANON REF binding (commit 2719845 + mirrored to
+`~/.claude/`), **expiry hard-stop 2026-07-13** (auto-reverts to Opus Monday; revert target 0628136).
+`select-model` auto-resolves Fable — no manual model override needed for dispatches.
+
+### Coordination items to surface to the human at 1d seal (candidate findings, NOT yet routed)
+1. **Stub-plan expansion** — #14's call-site facet should be added to the `2026-07-04-v0-3-hotfix-int-literal-number`
+   stub plan's scope so the store-site (#9) + call-site (#14) coercion lands as ONE mechanism. This is
+   a cross-plan edit reserved for conductor→human coordination; deliberately NOT self-applied.
+2. **UFCS general arg-validation gap** — pre-existing: general arg-type/arity through `p.method(...)`
+   isn't validated beyond the new IntLit gate. Orthogonal to #14; belongs to whoever owns the UFCS
+   typeck surface next.
+
+### Fix-loop history (Phase 1d)
+R1 = guard diagnostic reroute (typeck WHAT/WHAT-INSTEAD/WHY) + narrative overclaim corrections.
+R2 = extend guard to UFCS + generic call forms (one shared helper). R3 = full-slot completion sweep
+(in flight). All original 1d exit criteria + defects A/C were verified MET before the fix-loop began.
