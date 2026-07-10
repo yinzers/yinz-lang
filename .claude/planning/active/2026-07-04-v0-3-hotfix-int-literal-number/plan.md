@@ -3,9 +3,9 @@ name: "v0-3-hotfix-int-literal-number"
 plan-id: "2026-07-04-v0-3-hotfix-int-literal-number"
 status: "stub"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["gate4-signatures-2026-07-04"]
+session-id: ["gate4-signatures-2026-07-04", "m6-p1d-crossplan-coord-2026-07-10"]
 created_at: "2026-07-04"
-updated_at: "2026-07-04"
+updated_at: "2026-07-10"
 metadata:
   type: "plan"
 ---
@@ -34,6 +34,24 @@ metadata:
        at the retype point, before codegen ever sees a raw `i64` in a `number` slot.
     Either candidate needs its own small call-site audit (an E7-style sweep, per the roadmap ledger's
     own framing) before implementation — not yet done.
+  - **SCOPE WIDENED — M6 Phase 1d discovery: this int-literal→`number` class has THREE sibling facets
+    sharing ONE root** (a raw `i64` reaches a decimal128 `number` slot with no coercion). The stub was
+    originally framed as the store-site codegen ICE only; v0.3-M6
+    (`2026-07-04-v0-3-m6-concurrency-hotfix`) Phase 1d confirmed the class is broader:
+    1. **store-site** — `let x: number = 5` (this stub's original target; M6 Future-Req #9) — ICEs.
+    2. **declaration-site field default** — `hidden cache: number = 5` — ICEs at
+       `crates/ynz-codegen/src/emit.rs:20347`/`:20351` (`Found IntValue "i64 5" but expected the
+       PointerValue variant`), from field-default lowering at `emit.rs:18233` (bare `lower_expr`, no
+       expected-type hint, storing a raw `i64` into a decimal128 slot).
+    3. **call-site / arg positions** — `background f(5)`, collection-method args, etc. (M6 Future-Req
+       #14) — currently REJECTED by M6's teaching gate, wants a real coercion rather than rejection.
+    M6 Phase 1d shipped a REJECTION gate (clean teaching errors) for facet 3's arg / construction /
+    statement slots, but facets 1 & 2 still ICE. **This stub's coercion fix should REPLACE rejection
+    with actual int→number coercion across ALL THREE facets as ONE mechanism** — fix-shape candidate 2
+    above (typeck-level coercion materializing the decimal128 representation at the retype point)
+    naturally subsumes all three, and the call-site audit this stub already calls for should enumerate
+    all three facets' slots. (WHICH fix-shape candidate to adopt stays this stub's own graduation-pass
+    decision — this bullet records only the widened scope, not the fix choice.)
   - **Both v0.3-M6 (`2026-07-04-v0-3-m6-concurrency-hotfix`) and v0.3-M7
     (`2026-07-04-v0-3-m7-optimizer-pipeline`) explicitly declined to absorb this fix as out-of-charter**
     — see each plan's own Future Requirements section. It needs its own small hotfix slot.

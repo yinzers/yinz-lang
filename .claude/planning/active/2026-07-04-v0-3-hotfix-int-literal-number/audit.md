@@ -26,6 +26,26 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   duplicate tables, to point at this plan-id (see roadmap's own `audit.md` / this plan's session-log
   entry there for the lockstep confirmation).
 
+- `m6-p1d-crossplan-coord-2026-07-10` — 2026-07-10 — DOC-ONLY scope-widening pass recording a v0.3-M6
+  Phase 1d discovery into this stub's `## Situation` section (no code, no compiler files touched). M6
+  Phase 1d shipped a typeck REJECTION gate turning "int literal / negated int literal supplied where a
+  `number` is expected" into a clean teaching error across arg / construction / statement slots, and
+  in doing so confirmed this int-literal→`number` class has THREE sibling facets sharing ONE root (a
+  raw `i64` reaches a decimal128 `number` slot with no coercion): (1) **store-site** `let x: number =
+  5` (this stub's original target; M6 Future-Req #9) — ICEs; (2) **declaration-site field default**
+  `hidden f: number = 5` — CONFIRMED ICE `Found IntValue "i64 5" but expected PointerValue variant` at
+  `crates/ynz-codegen/src/emit.rs:20347`/`:20351`, from field-default lowering at `emit.rs:18233`
+  (bare `lower_expr`, no expected-type hint); (3) **call-site / arg positions** `background f(5)` /
+  collection-method args (M6 Future-Req #14) — currently REJECTED by M6's gate, wants coercion. The
+  Situation bullet records that this stub's coercion fix should REPLACE rejection with actual
+  int→number coercion across ALL THREE facets as ONE mechanism (fix-shape candidate 2 — typeck-level
+  coercion at the retype point — naturally subsumes all three), and that the call-site audit the stub
+  already calls for should enumerate all three facets' slots. RECORD-ONLY: the fix-shape decision stays
+  the graduation pass's own call — no adjudication performed this session. Transcribed from the M6 plan
+  (`2026-07-04-v0-3-m6-concurrency-hotfix`) Future-Req #9/#14 and Phase 1d evidence; M6's own plan.md /
+  audit.md were NOT touched (another executor's territory). Session-id appended to this plan's
+  frontmatter chain in the same action. Nothing committed or staged — conductor seals.
+
 ## FRAGO log
 
 (none — this plan has not been dispatched for execution; it is a freshly-authored stub.)

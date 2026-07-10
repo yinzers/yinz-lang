@@ -458,3 +458,35 @@ in `roadmap.md`, applied identically to BOTH Capability Ledger tables (lines ~44
 
 No code touched. Nothing committed. Session-id `gate4-signatures-2026-07-04` appended to the
 roadmap's frontmatter chain in the same action as this entry.
+
+## 2026-07-10 — Session log: two v0.3-M6 decimal128 defects (Future-Req #18/#19) surfaced to the Capability Ledger to survive M6 archival (DOC-ONLY cross-plan coordination)
+Filed-by-session: m6-p1d-crossplan-coord-2026-07-10
+
+Standalone roadmap-only edit, DOC-ONLY (no code, no compiler files) — a cross-plan coordination pass
+recording two decimal128 defects that v0.3-M6 (`2026-07-04-v0-3-m6-concurrency-hotfix`) Phase 1d
+surfaced as formal four-field Future-Reqs #18/#19 (FRAGO 019). They are NOT int-literal→`number`
+class (that class is row 441's hotfix stub) — they are separate decimal128 ABI/hashing defects — and
+they would go invisible when M6 archives to `done/`, so they get durable roadmap-level anchors here.
+Changes, in `roadmap.md`, applied identically to BOTH Capability Ledger tables (after the
+int-literal-into-`number` row in each):
+
+- **decimal128 by-value RETURN ABI defect** — a synchronous `-> number` fn returning a valid decimal
+  literal prints nondeterministic pointer garbage (stack-dangling decimal128 returned by value; a
+  function-return ABI defect, orthogonal to FRAGO 009's concurrency-crossing charter; SILENT
+  miscompile, exit 0). Cited M6 FRAGO 019 / plan Future-Req #18. Fix: return-slot ABI (sret / heap
+  out-pointer), its own small design pass. Est/COST + TRIGGER transcribed from #18. Status: unscoped
+  → needs a milestone. Triage: BUG.
+- **`map<number, V>` real-number-key silent breakage** — decimal128 keys hash/compare by pointer
+  identity, so equal literal keys never match (`m.set(1.5,v)` then `m.get(1.5)` → `none`, exit 0).
+  Cited M6 FRAGO 019 / plan Future-Req #19. Fix: value-based decimal128 hashing + equality (hash the
+  16-byte payload, compare by value). Est/COST + TRIGGER transcribed from #19. Status: unscoped →
+  needs a milestone. Triage: BUG.
+
+Both rows mirror the existing unscoped-bug row format (Capability | Owning milestone | Status | Notes,
+with **Capability discovery …** + COST + TRIGGER + **Triage** in Notes), and were added to BOTH the
+"SSOT" table (~line 423) and the merged pre-migration table (~line 479) so the two duplicate ledgers
+stay in lockstep — table 1 with the bold-capability styling, table 2 plain, matching each table's own
+convention. RECORD-ONLY: transcribing already-decided M6 Future-Reqs into their durable roadmap home,
+no adjudication. M6's own plan.md / audit.md were NOT touched (another executor's territory this turn).
+No code touched. Nothing committed. Session-id `m6-p1d-crossplan-coord-2026-07-10` appended to the
+roadmap's frontmatter chain in the same action as this entry.
