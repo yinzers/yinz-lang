@@ -490,3 +490,8 @@ convention. RECORD-ONLY: transcribing already-decided M6 Future-Reqs into their 
 no adjudication. M6's own plan.md / audit.md were NOT touched (another executor's territory this turn).
 No code touched. Nothing committed. Session-id `m6-p1d-crossplan-coord-2026-07-10` appended to the
 roadmap's frontmatter chain in the same action as this entry.
+
+## 2026-07-10 — Session log: int-literal-into-`number` ledger row reconciled to the v0.3-M6 store-site stopgap (DOC-ONLY, both tables)
+Filed-by-session: m6-storesite-stopgap-ledger-reconcile-2026-07-10
+
+DOC-ONLY single-sentence reconciliation, both Capability Ledger tables' int-literal-into-`number` row (historically row 441 + its ~497 duplicate): the stale "typeck ADMITS the coercion … then the compiler panics" phrasing was rewritten to record that v0.3-M6's store-site stopgap (M6 FRAGO 020, commit `46906d1`) makes typeck REJECT the bare int literal at `number` slots (including store sites) with a teaching error — the ICE is no longer reachable — while the row's core point stands unchanged: the actual int→`number` coercion remains unimplemented and stays assigned to plan-id `2026-07-04-v0-3-hotfix-int-literal-number`. Ownership/status columns untouched; rows #18/#19 untouched. No code touched. Nothing committed (conductor seals). Session-id `m6-storesite-stopgap-ledger-reconcile-2026-07-10` appended to the roadmap's frontmatter chain in the same action as this entry.
