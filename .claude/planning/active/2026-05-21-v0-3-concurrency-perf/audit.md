@@ -553,3 +553,11 @@ M6's own plan.md FR #24 received a one-line lifted-to-roadmap cross-reference in
 (recorded in the M6 audit.md Session log); FR #24 was not otherwise restructured. No code touched.
 Nothing committed (conductor seals). Session-id `m6-fr24-crossplan-lift-2026-07-11` appended to the
 roadmap's frontmatter chain in the same action as this entry.
+
+## 2026-07-11 — Deferral: wake_recv_waiters drain-then-wake hardening (non-blocking — deferred by 2026-07-04-v0-3-m6-concurrency-hotfix#4 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#4: crates-ynz-runtime-src-channel-rs-208
+
+- **WHAT** — harden `wake_recv_waiters` (crates/ynz-runtime/src/channel.rs) to drain recorded wakers into a local Vec, drop the `recv_waiters` guard, THEN call `.wake()` on each — removing the call-while-locked pattern.
+- **WHY** — currently safe only under the assumption that every forwarded waker is a Tokio task waker whose `wake()` never synchronously re-enters; a drain-then-wake-outside-lock removes that latent coupling entirely, but is not a live bug today (no reentrant waker is ever installed in this runtime) and is out of Phase 4's narrow P3-2 scope (register-before-poll only).
+- **COST** — small: one extra short-lived Vec allocation per drain call (an already-uncommon, small-N path — typically 1-2 waiters).
+- **TRIGGER** — if this runtime ever accepts a caller-supplied or otherwise non-Tokio waker implementation (breaking the "wake() never re-enters" assumption), or if Phase 6b's sanitizer lane (Miri/ThreadSanitizer) flags this call-under-lock pattern.

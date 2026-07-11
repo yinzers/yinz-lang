@@ -69,6 +69,11 @@
 //! `receive()` on one shared channel would lose a wakeup (silent hang class). Every successful
 //! send therefore wakes EVERY recorded receive-waiter (they re-poll; one wins, the rest
 //! re-register) — sound because every producer in a Yinz program goes through this C-ABI.
+//! Each receiver records itself BEFORE polling (v0.3-M6 P3-2), so a send can never land in an
+//! unregistered gap between a receiver's poll and a late registration. Closure observed by one
+//! receiver is NOT propagated to recorded co-waiters — presently unreachable in production (bare
+//! channels never close; every close-simulation is `#[cfg(test)]`-only), left for the M8
+//! channel-close-semantics design pass rather than fixed piecemeal here.
 //!
 //! # The poll ABI (mirrors `ynz_rt_async_sleep_poll`)
 //!
@@ -405,15 +410,33 @@ pub(crate) unsafe fn channel_send_poll_guarded(
 /// Poll a `receive()` on the channel `chan_ptr`, forwarding the enclosing task's waker.
 ///
 /// # Flow
+/// Record the waker as a receive-waiter FIRST (v0.3-M6 P3-2 — see below), then
 /// `receiver.poll_recv(cx)`: on `Ready(Some(v))` write `v` to `out` and return
 /// [`CHANNEL_READY`]; on `Ready(None)` (all senders dropped AND drained) return
-/// [`CHANNEL_CLOSED`]; on `Pending` record the waker as a receive-waiter and return
-/// [`CHANNEL_PENDING`] — the task suspends until a value arrives.
+/// [`CHANNEL_CLOSED`]; on `Pending` return [`CHANNEL_PENDING`] — the task suspends until a
+/// value arrives (its waker is already recorded). The `Ready(Some)` exit drains the
+/// registration via [`YnzChannel::wake_recv_waiters`] (a self-wake is a harmless spurious
+/// re-poll). The `Ready(None)` exit leaves the register-first entry recorded and wakes
+/// nobody — closure is unreachable in production today (bare channels never close; every
+/// close-simulation is `#[cfg(test)]`-only), and closed-channel wake propagation is an M8
+/// channel-close-semantics design question, not fixed piecemeal here; the stale entry is
+/// freed with the channel.
+///
+/// Register-before-poll ordering (v0.3-M6 P3-2): `poll_recv` parks the waker in mpsc's
+/// SINGLE slot, where a later consumer's poll clobbers it. With the old poll-then-record
+/// ordering, a send landing between an unregistered poll and the late record woke nobody —
+/// if that was the channel's FINAL send, a permanent hang. Registering first closes the
+/// window: a send's waiter drain is serialized against the record by the `recv_waiters`
+/// mutex, so either the drain sees this waker (record first → woken), or the record ran
+/// after the drain — in which case the send's enqueue happens-before the `poll_recv` below,
+/// which then observes the value.
 ///
 /// `poll_recv` is natively poll-based and re-entrant, so no in-flight future is stored.
 ///
 /// # Side effects
-/// Time: O(1)  Space: O(1) — one `poll_recv`; writes `*out` only on the Ready path.
+/// Time: O(w) where w = suspended receivers, typically 0 or 1 (waiter-record dedup scan +
+/// the `Ready(Some)` drain)  Space: O(1) — one `poll_recv`; writes `*out` only on the Ready
+/// path.
 ///
 /// # Safety
 /// - `chan_ptr` must be a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`].
@@ -431,6 +454,11 @@ pub unsafe extern "C" fn ynz_channel_recv_poll(
         let chan = &*(chan_ptr as *const YnzChannel);
         // SAFETY: waker_ctx was cast from &mut Context<'_> by the enclosing state-machine poll.
         let cx = &mut *(waker_ctx as *mut Context<'_>);
+        // Register BEFORE polling — the P3-2 lost-wakeup fix; ordering rationale in the fn
+        // doc above. Each mutex is taken and released on its own (record releases
+        // recv_waiters before the receiver lock below is taken — no nesting, no lock held
+        // across the non-blocking poll).
+        chan.record_recv_waiter(cx.waker());
         let poll = lock_or_recover(&chan.receiver).poll_recv(cx);
         match poll {
             Poll::Ready(Some(v)) => {
@@ -438,15 +466,13 @@ pub unsafe extern "C" fn ynz_channel_recv_poll(
                 *out = v;
                 // A slot just freed — wake any OTHER receive-waiters so a multi-consumer
                 // arrangement re-polls (and, transitively, suspended senders progress via
-                // their own per-future waker registrations).
+                // their own per-future waker registrations). Also drains this call's own
+                // register-first entry.
                 chan.wake_recv_waiters();
                 CHANNEL_READY
             }
             Poll::Ready(None) => CHANNEL_CLOSED,
-            Poll::Pending => {
-                chan.record_recv_waiter(cx.waker());
-                CHANNEL_PENDING
-            }
+            Poll::Pending => CHANNEL_PENDING,
         }
     });
     match result {
@@ -521,7 +547,7 @@ pub(crate) unsafe fn pending_send_count(chan_ptr: *mut u8) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::Wake;
 
     /// A minimal counting waker — proves the poll ABI works WITHOUT a Tokio runtime (mpsc's
@@ -696,6 +722,146 @@ mod tests {
                 "send to a dropped-receiver channel must return Closed (typed errors), never Ready"
             );
             ynz_channel_free(chan_ptr);
+        }
+    }
+
+    /// v0.3-M6 P3-2 RED→GREEN: the caller's waker must be recorded in `recv_waiters`
+    /// BEFORE `poll_recv` runs. `poll_recv` parks the waker in mpsc's SINGLE slot, where a
+    /// later consumer's poll clobbers it — so with poll-then-record ordering, a final send
+    /// landing in the gap (after consumer A's unregistered poll, after consumer C clobbered
+    /// the slot, before A's late record) wakes only C, and A hangs permanently.
+    ///
+    /// The window lives INSIDE one `ynz_channel_recv_poll` call, so the deterministic probe
+    /// drives the REAL extern fn with a manual `RawWaker` whose clone hook observes the
+    /// ordering directly: the fn clones the waker at exactly two sites —
+    /// `record_recv_waiter`'s push (recv_waiters mutex HELD → `try_lock` fails) and
+    /// `poll_recv`'s mpsc slot registration (recv_waiters free → `try_lock` succeeds). At
+    /// the mpsc-site clone, the fix's invariant is that the waker is ALREADY recorded.
+    struct OrderProbe {
+        chan: *mut u8,
+        /// At the mpsc-slot registration, was the waker already in `recv_waiters`?
+        registered_before_poll: AtomicBool,
+        /// Vacuity guard: the probe actually observed the mpsc-slot clone.
+        mpsc_clone_seen: AtomicBool,
+        wakes: AtomicUsize,
+    }
+
+    const ORDER_PROBE_VTABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
+        order_probe_clone,
+        order_probe_wake,
+        order_probe_wake_by_ref,
+        order_probe_drop,
+    );
+
+    unsafe fn order_probe_clone(data: *const ()) -> std::task::RawWaker {
+        let st = &*(data as *const OrderProbe);
+        let chan = &*(st.chan as *const YnzChannel);
+        // recv_waiters held ⇒ this is record_recv_waiter's own push-clone: skip.
+        // recv_waiters free ⇒ this is poll_recv's mpsc slot-registration clone: inspect.
+        if let Ok(waiters) = chan.recv_waiters.try_lock() {
+            st.mpsc_clone_seen.store(true, Ordering::SeqCst);
+            st.registered_before_poll
+                .store(!waiters.is_empty(), Ordering::SeqCst);
+        }
+        std::task::RawWaker::new(data, &ORDER_PROBE_VTABLE)
+    }
+    unsafe fn order_probe_wake(data: *const ()) {
+        (*(data as *const OrderProbe))
+            .wakes
+            .fetch_add(1, Ordering::SeqCst);
+    }
+    unsafe fn order_probe_wake_by_ref(data: *const ()) {
+        (*(data as *const OrderProbe))
+            .wakes
+            .fetch_add(1, Ordering::SeqCst);
+    }
+    unsafe fn order_probe_drop(_data: *const ()) {}
+
+    #[test]
+    fn recv_poll_registers_waiter_before_polling() {
+        let chan = ynz_channel_create(1);
+        let probe = OrderProbe {
+            chan,
+            registered_before_poll: AtomicBool::new(false),
+            mpsc_clone_seen: AtomicBool::new(false),
+            wakes: AtomicUsize::new(0),
+        };
+        unsafe {
+            let probe_waker = Waker::from_raw(std::task::RawWaker::new(
+                &probe as *const OrderProbe as *const (),
+                &ORDER_PROBE_VTABLE,
+            ));
+            let mut out: i64 = 0;
+            let mut cx = Context::from_waker(&probe_waker);
+            let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
+
+            // Consumer A suspends on the empty channel through the real ABI fn.
+            assert_eq!(
+                ynz_channel_recv_poll(chan, &mut out, cx_ptr),
+                CHANNEL_PENDING
+            );
+            assert!(
+                probe.mpsc_clone_seen.load(Ordering::SeqCst),
+                "probe never observed the mpsc slot registration — vacuous run"
+            );
+            assert!(
+                probe.registered_before_poll.load(Ordering::SeqCst),
+                "the waker must be recorded as a receive-waiter BEFORE poll_recv runs; \
+                 poll-then-record leaves a gap where a clobbered mpsc slot + the channel's \
+                 FINAL send wake nobody and the receiver hangs permanently (P3-2)"
+            );
+
+            // Semantic follow-through: a send after the Pending must wake the recorded waiter.
+            let (_arc, send_waker) = make_waker();
+            assert_eq!(send(chan, 5, &send_waker), CHANNEL_READY);
+            assert!(
+                probe.wakes.load(Ordering::SeqCst) > 0,
+                "a successful send must wake the suspended receiver"
+            );
+            assert_eq!(ynz_channel_recv_poll(chan, &mut out, cx_ptr), CHANNEL_READY);
+            assert_eq!(out, 5);
+            ynz_channel_free(chan);
+        }
+    }
+
+    /// v0.3-M6 P3-2 — the literal 3-party scenario Phase 4 targets: consumer A suspends and
+    /// its mpsc SINGLE-slot registration is clobbered by consumer C's later poll, then a LIVE
+    /// send fires. mpsc's native wake reaches only the slot registrant (C); the send path's
+    /// drain-all over `recv_waiters` must wake A too, or — if this was the channel's FINAL
+    /// send — A hangs permanently. Asserts value delivery on A's re-poll, not just the wake
+    /// (the delivered value is what the lost-wakeup race actually forfeits). Deterministic
+    /// single-threaded construction per this module's manual-`Waker` precedent.
+    #[test]
+    fn live_send_after_slot_clobber_wakes_clobbered_receiver() {
+        let (arc_a, waker_a) = make_waker();
+        let (_arc_c, waker_c) = make_waker();
+        let chan = ynz_channel_create(2);
+        unsafe {
+            // A suspends first (mpsc slot = A, recorded in recv_waiters).
+            let (code, _) = recv(chan, &waker_a);
+            assert_eq!(code, CHANNEL_PENDING);
+            // C suspends next — C's poll clobbers the mpsc single-slot waker (slot = C).
+            let (code, _) = recv(chan, &waker_c);
+            assert_eq!(code, CHANNEL_PENDING);
+
+            // A live send fires while A's slot registration is clobbered.
+            let wakes_a_before = arc_a.0.load(Ordering::SeqCst);
+            let (_arc_s, send_waker) = make_waker();
+            assert_eq!(send(chan, 42, &send_waker), CHANNEL_READY);
+            assert!(
+                arc_a.0.load(Ordering::SeqCst) > wakes_a_before,
+                "a successful send must wake EVERY recorded receive-waiter — A's mpsc \
+                 single-slot registration was clobbered by C, so without the drain-all \
+                 wake A misses the channel's final send and hangs permanently (P3-2)"
+            );
+            // A re-polls and receives the sent value — delivery, not just a wake.
+            let (code, val) = recv(chan, &waker_a);
+            assert_eq!(code, CHANNEL_READY);
+            assert_eq!(val, 42);
+            // C re-polls and suspends again — one waiter wins, the rest re-register.
+            let (code, _) = recv(chan, &waker_c);
+            assert_eq!(code, CHANNEL_PENDING);
+            ynz_channel_free(chan);
         }
     }
 

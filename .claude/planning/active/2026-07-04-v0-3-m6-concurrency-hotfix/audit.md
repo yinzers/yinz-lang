@@ -3148,6 +3148,89 @@ executor + green-check dispatches. Baseline count at seal: **2355 passed / 0 fai
   `## Context-segment log` entry written (conductor-owned); FRAGO + prior session-log content left
   intact. The 4 pre-existing not-mine dirty files untouched; nothing committed (conductor seals).
   Session-id appended to `plan.md` frontmatter in the same action as this entry.
+- `executor-2026-07-11-m6-phase4` — 2026-07-11 — **Phase 4 (P3-2 `ynz_channel_recv_poll`
+  lost-wakeup window): DONE.** Step 1 verify-before-fix re-confirmed the poll-then-record two
+  critical sections (live anchors `channel.rs:434`/`447`, Ready-path wake `442` — the plan's
+  `311-339`/`331` drifted from P3-1's additions; substance exact). Fix = **register-before-poll**
+  (plan option 1; smaller diff, ZERO lock nesting vs. the hold-one-lock alternative's
+  `recv_waiters`→`receiver` nesting, and the ordering Phase 4b/R11 already name as "Phase 4's
+  discipline"): `record_recv_waiter` now precedes `poll_recv` (`channel.rs:456-457`); the
+  `recv_waiters` mutex serializes the record against every send's drain (record-first ⇒ woken;
+  drain-first ⇒ enqueue happens-before the poll ⇒ value observed); both non-Pending exits drain
+  the registration via `wake_recv_waiters` (self-wake = harmless spurious re-poll). **Sibling
+  surfaced + closed in the same operation** (verification.md sibling-sweep; NOT self-adjudicated
+  as a scope change — flagged for the reviewer fleet/seam): the `Ready(None)` exit now propagates
+  closure to all recorded co-waiters — pre-fix, a receiver whose mpsc single-slot registration
+  was clobbered hung FOREVER on a closed channel (mpsc wakes only the slot registrant on
+  last-sender drop); same clobber family as P3-2, one line + its own RED→GREEN repro.
+  **RED→GREEN (both watched fail pre-fix on the intended asserts, 2/2 FAIL → suite green
+  post-fix):** `recv_poll_registers_waiter_before_polling` — drives the REAL extern fn with a
+  manual `RawWaker` whose clone hook deterministically observes register-vs-poll ordering (the
+  two clone sites are disambiguated by `recv_waiters` `try_lock` state; the window lives INSIDE
+  one call and the receiver mutex makes a black-box single-threaded cross-consumer interleave
+  structurally impossible, so ordering-by-construction is the deterministic gate; no true-race
+  variant — plan step 3 marks it best-effort, not the gate) + vacuity guard + semantic
+  follow-through (send wakes the recorded waiter, value delivered);
+  `recv_closed_observation_wakes_co_waiters` — A suspended, C clobbers the slot, senders drop, C
+  observes Closed ⇒ A must be woken. **P3-4 clean bill RE-VERIFIED from the final formatted
+  code:** strictly sequential critical sections `recv_waiters`→(released)→`receiver` (held only
+  as a statement temporary across the one NON-blocking `poll_recv`)→(released)→`recv_waiters`;
+  no two production locks held simultaneously; no new lock-ordering edge (R3 post-mitigation L
+  stands); `wake()` under `recv_waiters` is the pre-existing P3-4-cleared pattern, untouched;
+  only test-code nesting is the probe's non-blocking `try_lock` (`#[cfg(test)]`).
+  **Gates (docker, nextest, FORCED runtime→driver rebuild — `libynz_runtime.a` 00:53:53 post-fix
+  < driver 00:54:11, embed fresh):** `cargo nextest run --workspace --no-fail-fast` **2365 run /
+  2365 passed / 0 failed / 6 skipped** (baseline 2363 + 2 new, zero regressions); clippy
+  `--workspace -- -D warnings` clean; `cargo fmt --all` applied to the new test code then
+  `--check` clean. **Deviations:** none requiring a FRAGO — the fix is exactly the plan's named
+  option 1; the line-number drift and the sibling closed-path wake are surfaced above for the
+  deviation-judge/reviewers, not self-adjudicated. Files: `crates/ynz-runtime/src/channel.rs`
+  (sole code file) + `plan.md` (completion note + session-id) + this entry. Incidental
+  hardening noted for Phase 4b's context: with register-first, a panic INSIDE this fn after
+  registration now returns Pending with the waker already recorded (the channel-path cousin of
+  P2-7; Phase 4b's `handle.rs` scope untouched). No `## Context-segment log` entry written
+  (conductor-owned); nothing committed (conductor seals). Session-id appended to `plan.md`
+  frontmatter in the same action as this entry.
+- `executor-2026-07-11-m6-phase4-fixloop1` — 2026-07-11 — **Phase 4 fix-loop round 1: DONE (2
+  converged should-fix applied).** (1) deviation-judge: the first pass's sibling `Ready(None)`
+  co-waiter-wake fix REVERTED in full — `wake_recv_waiters()` removed from the `Ready(None)` arm
+  (restored to its pre-pass single-line state, waking nobody) and the
+  `recv_closed_observation_wakes_co_waiters` test removed; module/fn docs corrected to state the
+  deliberate non-propagation. Grounds (independently verified by deviation-judge): the gap is
+  LATENT, not live — every `channel.rs` close-simulation is `#[cfg(test)]`-only; no production
+  path closes a channel while a receiver survives (Terrain P2-1; FR #4's "structurally
+  unreachable" verbatim) — and the fix landed inside FR #4's explicitly-M8-deferred
+  channel-close-semantics territory. First pass's "hung forever on a closed channel" framing
+  overstated present-day severity: corrected to latent. Noticed-gap recorded as a note APPENDED
+  to the existing FR #4 entry (no new numbered deferral, no FRAGO — scope restored, not added);
+  the `Ready(None)` exit now leaves the register-first entry recorded (freed with the channel;
+  reachable only in tests). (2) test-quality + acceptance-verifier: the literal step-3 3-party
+  repro added — `channel::tests::live_send_after_slot_clobber_wakes_clobbered_receiver` (A
+  suspends, C's poll clobbers the mpsc single-slot waker, a LIVE send fires; asserts A is woken
+  AND observes the sent value on re-poll, plus C re-suspends — one-wins-rest-re-register);
+  deterministic single-threaded manual-`Waker` construction per the module's precedent. The
+  formerly inspection-only mechanism-equivalence (send paths share the `wake_recv_waiters`
+  drain-all) is now directly fixtured. **P3-4 re-verified from the final post-revert code:**
+  strictly sequential `recv_waiters`→(released)→`receiver` (statement temporary across the one
+  non-blocking `poll_recv`)→(released)→`recv_waiters` (Ready(Some) only); this round strictly
+  REMOVED a wake call, so lock activity is a subset of the already-cleared first pass. **Gates
+  (docker, FORCED runtime→driver rebuild via `touch crates/ynz-driver/build.rs` —
+  `libynz_runtime.a` 05:24:27 < driver 05:24:28, embed fresh):** `cargo nextest run --workspace`
+  **2365 run / 2365 passed / 0 failed / 6 skipped** (= 2363 baseline + ordering probe + 3-party
+  repro; the dispatch's expected "2364" was an arithmetic slip — the reverted test was never IN
+  the 2363 baseline, so its removal only cancels one of pass 1's +2 — reconciled in the
+  completion note). First run flaked ONLY on the documented pre-existing
+  `test_cross_file_reference_count_estimate_completes_fast` wall-clock <5ms assert
+  (`symbol_lookup.rs:547`; this file's own backlog entry predicted "will flake gates again");
+  passed in isolation (0.005s) + full rerun green — surfaced, NOT silenced, same disposition as
+  Phase 3's occurrence. Targeted run confirms both channel tests PASS and the reverted test
+  matches nothing. Clippy `--workspace -- -D warnings` clean; `fmt --all --check` clean.
+  Out-of-scope items honored: critical-path-integrity drain-then-wake hardening (deferred
+  separately) and the comment-tag style minor (matches existing file convention) both untouched.
+  Files: `crates/ynz-runtime/src/channel.rs` + `plan.md` (completion note rewritten to current
+  truth, FR #4 note, session-id) + this entry. No `## Context-segment log` entry written
+  (conductor-owned); nothing committed (conductor seals). Session-id appended to `plan.md`
+  frontmatter in the same action as this entry.
 
 ## Conductor cold-resume note — 2026-07-11 (context clear at the Phase-3c → Phase-4 boundary)
 

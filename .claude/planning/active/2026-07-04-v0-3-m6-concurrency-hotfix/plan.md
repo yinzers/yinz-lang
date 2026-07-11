@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11", "executor-2026-07-11-m6-phase4", "executor-2026-07-11-m6-phase4-fixloop1"]
 created_at: "2026-07-04"
 updated_at: "2026-07-11"
 metadata:
@@ -1652,6 +1652,55 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
 - **Reviewer fan-out:** code-reviewer; adversarial gate-checker (does the repro exercise the narrow
   window Fable identified, or a broader/different hang?).
 - **Model tag:** `(coding, standard, small)`
+- **Completion note (2026-07-11, `executor-2026-07-11-m6-phase4`; fix-loop round 1
+  `executor-2026-07-11-m6-phase4-fixloop1`):** DONE — race closed via **register-before-poll**
+  (plan option 1; the smaller diff, zero lock nesting — the hold-one-lock alternative would
+  nest `recv_waiters`→`receiver` — and the ordering Phase 4b is already sequenced to mirror).
+  `chan.record_recv_waiter(cx.waker())` now runs BEFORE `poll_recv` in `ynz_channel_recv_poll`
+  (`channel.rs:461-462`; the plan's `311-339`/`331` anchors had drifted to `423-462`/`442` from
+  P3-1's earlier additions — substance matched exactly). Correctness: a send's waiter drain is
+  serialized against the record by the `recv_waiters` mutex — record-first ⇒ drained/woken;
+  drain-first ⇒ the send's enqueue happens-before the subsequent `poll_recv`, which observes
+  the value. The `Ready(Some)` exit drains the registration via `wake_recv_waiters` (self-wake
+  = harmless spurious re-poll); the `Ready(None)` exit wakes nobody, deliberately — see the
+  fix-loop record below. **Fix-loop round 1 (reviewer fleet, 2 converged should-fix):**
+  (1) the first pass's sibling `Ready(None)` co-waiter-wake fix + its
+  `recv_closed_observation_wakes_co_waiters` test were REVERTED per deviation-judge — the gap
+  is LATENT, not live (every close-simulation in `channel.rs` is `#[cfg(test)]`-only; no
+  production path closes a channel while a receiver survives, per Terrain P2-1), and it lands
+  inside Future Requirements #4's explicitly-deferred channel-close-semantics territory (M8);
+  the first pass's "hung forever on a closed channel" framing overstated present-day severity.
+  Noticed-gap recorded as a note under FR #4, not a new deferral. Phase 4's shipped scope is
+  therefore exactly the plan's: the register-before-poll reorder for the live send-race window,
+  nothing about channel closure. (2) The literal 3-party repro from step 3 added (test-quality
+  + acceptance-verifier converged): `live_send_after_slot_clobber_wakes_clobbered_receiver` —
+  A suspends, C's poll clobbers the mpsc single-slot waker, a LIVE send fires; asserts A is
+  woken AND observes the sent value on re-poll (deterministic single-threaded manual-`Waker`
+  construction; no true-race variant, per plan step 3 it would be best-effort not the gate).
+  **Committed test coverage (final):** `channel::tests::recv_poll_registers_waiter_before_polling`
+  (RED→GREEN, watched fail pre-fix: drives the REAL extern fn with a manual `RawWaker` clone-probe
+  that deterministically observes the register-vs-poll ordering — the window lives inside one call,
+  so ordering-by-construction is the deterministic gate; the receiver mutex makes an in-call
+  cross-consumer interleave structurally impossible to drive black-box single-threaded) and
+  `channel::tests::live_send_after_slot_clobber_wakes_clobbered_receiver` (direct fixture of the
+  3-party scenario, authored post-fix against the already-fixed code: the step-3 scenario
+  end-to-end; the wake it asserts is mechanism-equivalent to the fix's drain-all, directly
+  fixtured rather than argued by inspection). **P3-4 clean bill RE-VERIFIED from the final post-revert code, not carried
+  forward:** the critical sections are strictly sequential — `recv_waiters` (released) →
+  `receiver` (released, held only across the one non-blocking `poll_recv` as a statement
+  temporary) → `recv_waiters` (Ready(Some) only, released); no two production locks ever held
+  simultaneously, no new lock-ordering edge (R3 mitigated as designed); `wake()` under
+  `recv_waiters` is the pre-existing P3-4-cleared pattern, unchanged. **Gates (docker, nextest,
+  forced runtime→driver rebuild — `libynz_runtime.a` 05:24:27 < driver 05:24:28, embed fresh):**
+  `cargo nextest run --workspace` **2365 run / 2365 passed / 0 failed / 6 skipped** (= baseline
+  2363 + the ordering probe + the 3-party repro; the reverted sibling test was added and removed
+  within Phase 4, net zero vs. baseline — the fix-loop dispatch's expected "2364" was an
+  arithmetic slip, reconciled here). First full run hit the DOCUMENTED pre-existing
+  `ynz-typeck::symbol_lookup::test_cross_file_reference_count_estimate_completes_fast` wall-clock
+  flake (audit backlog: "will flake gates again"; same disposition as Phase 3's occurrence) —
+  passed in isolation (0.005s) and in the full rerun; surfaced, NOT silenced. Clippy `--workspace
+  -- -D warnings` clean; `fmt --all --check` clean. Files: `crates/ynz-runtime/src/channel.rs`
+  (only code file) + `plan.md`/`audit.md`. Nothing committed (conductor seals).
 
 #### Phase 4b — P2-7: `handle_recv_poll` panic-then-pending hang (FRAGO 010; un-deferred)
 
@@ -2359,7 +2408,17 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
    channel object itself holds a Sender?) — out of this hotfix's scope by the brief's explicit
    disposition. COST to fix later: unknown — needs its own design pass before a cost estimate is
    honest. TRIGGER: a real user/workload needs bounded-lifetime channel consumption, or before any
-   production-representative concurrency use case ships.
+   production-representative concurrency use case ships. *Phase 4 note (2026-07-11, fix-loop
+   round 1, `executor-2026-07-11-m6-phase4-fixloop1`):* Phase 4's executor independently noticed
+   the same gap's Closed-co-waiter-wake-propagation facet during the P3-2 register-before-poll
+   work — a receiver observing `Ready(None)` wakes no recorded co-waiter whose mpsc single-slot
+   registration was clobbered. Confirmed presently LATENT, not live: every close-simulation in
+   `channel.rs` is `#[cfg(test)]`-only (`mem::replace` sender swaps); no production path closes a
+   channel while a receiver survives (matches Terrain P2-1 and this entry's own "structurally
+   unreachable" framing). A first-pass piecemeal fix (drain-all wake on the `Ready(None)` arm +
+   repro test) was REVERTED per deviation-judge review as landing inside this entry's deferred
+   territory; the wake-propagation question is explicitly left for this entry's M8
+   channel-close-semantics design pass to resolve properly, not silently fixed piecemeal.
 5. **Preemption real back-edge yield** — registry entry `cooperative-preemption-back-edge-yield`
    (Phase 7). WHY deferred: 1190% O0 call-site cost (M5 spike); no offsetting benefit until the
    optimizer pipeline exists. COST to fix later: implementation-sized, folded into M7's scope. TRIGGER:
