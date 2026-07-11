@@ -12,6 +12,12 @@ pub enum WatchError {
     ChildSpawnFailed { binary: PathBuf, reason: String },
     /// A codegen write failed (e.g., tempdir full or permissions).
     CodegenWrite { path: PathBuf, reason: String },
+    /// The linker ran but exited non-zero (undefined symbols, missing libs, etc.).
+    LinkFailed {
+        path: PathBuf,
+        status: String,
+        stderr: String,
+    },
     /// RSS polling returned an unexpected error (distinct from None/unavailable).
     RssError { reason: String },
     /// An I/O error not covered by more specific variants.
@@ -67,6 +73,20 @@ impl std::fmt::Display for WatchError {
                      WHAT INSTEAD: Check that the temp directory has free space and \
                      write permissions. Run `df -h $TMPDIR` to check.\n\
                      WHY: {reason}",
+                    path.display()
+                )
+            }
+            WatchError::LinkFailed {
+                path,
+                status,
+                stderr,
+            } => {
+                write!(
+                    f,
+                    "WHAT: The linker failed to produce `{}` (exited with {status}).\n\
+                     WHAT INSTEAD: This is a compiler bug. Please report it with the \
+                     linker output below.\n\
+                     WHY: Linker stderr:\n{stderr}",
                     path.display()
                 )
             }
