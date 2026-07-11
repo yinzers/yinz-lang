@@ -3129,3 +3129,82 @@ executor + green-check dispatches. Baseline count at seal: **2355 passed / 0 fai
   entry written (conductor-owned); FRAGO 023–026 + prior session-log content left intact. The 4
   pre-existing not-mine dirty files untouched; nothing committed (conductor seals). Session-id
   appended to `plan.md` frontmatter in the same action as this entry.
+- `m6-fr24-crossplan-lift-2026-07-11` — 2026-07-11 — Cross-plan durable-home lift (DOC-ONLY, no
+  code): FR #24 (general union-narrowing payload-extraction defect class — narrowed direct field
+  access silent-wrong + union→shape re-bind OOB/SIGSEGV, both reproducing with NO concurrency)
+  lifted to the roadmap's durable store so it survives this plan's archival to `done/`. Roadmap
+  `2026-05-21-v0-3-concurrency-perf`: a pointer row added to BOTH Capability Ledger tables (after
+  the two M6 decimal128 rows in each; status **unscoped → needs a milestone**, with the explicit
+  "pre-existing GENERAL union-narrowing memory-safety/correctness defects, NOT concurrency
+  defects, do not mis-triage as spawn/concurrency cleanup" callout and the `union_to_heap_cell`
+  (`emit.rs:3248`) reuse pointer shared with FR #21), and the faithful four-field
+  WHAT/WHY/COST/TRIGGER payload appended to the roadmap's `audit.md` as a dated ledger amendment
+  under Idempotency-Key `2026-07-04-v0-3-m6-concurrency-hotfix#24: union-narrowing-payload-extraction`
+  (the re-run sentinel — a later Phase-8 deferral lift finds it present and skips re-appending).
+  The ONLY M6-plan edit: a one-line LIFTED cross-reference appended at the end of plan.md FR #24
+  (FR #24 not otherwise restructured; FR #21's cross-refs intact). RECORD-ONLY transcription of an
+  already-decided deferral — no adjudication, no FRAGO needed (no plan content changed beyond the
+  cross-reference; the deferral itself was decided and homed at the Phase 3c polish round). No
+  `## Context-segment log` entry written (conductor-owned); FRAGO + prior session-log content left
+  intact. The 4 pre-existing not-mine dirty files untouched; nothing committed (conductor seals).
+  Session-id appended to `plan.md` frontmatter in the same action as this entry.
+
+## Conductor cold-resume note — 2026-07-11 (context clear at the Phase-3c → Phase-4 boundary)
+
+Supersedes the earlier P3→P3b cold-resume note. Clean, nothing-in-flight boundary. State + pointers for the
+next conductor; NOT standing law.
+
+### State — clean break, nothing in flight
+- **HEAD = `4a13241`.** Sealed since the last note: **P3b** (`1b7e567` — recursion-chain spike CPU-handle
+  cleanup leak, one-choke-point fix + RED→GREEN); **P3c** (`03273be` — the flagship `background x.method()`
+  UFCS-receiver use-after-free, BOTH spawn forms, + narrowed-union OOB fail-closed teaching rejection; 4
+  fix-loop rounds); user's out-of-band commits `aabb5bc`/`9893406` (ynz-watch rebuild + docker nextest, the
+  ex-"not-mine" files) and `4a13241` (FR#24 roadmap lift).
+- **Done: Phases 0, 1, 1b, 1c, 1d, 2, 3, 3b, 3c.** M6 suite is now GENUINELY green — **2363 passed / 0
+  failed / 6 skipped**. (The old "2355/0/6" P3 baseline was a timing-masked pass — the flagship UFCS test
+  `v03_m6_ufcs_background_spawned_method_call_runs` was already RED at `fc7797f`; P3c is what actually
+  closed it. Corroborated by independent clean-HEAD reproduction.)
+- **Next: Phase 4** — P3-2 `ynz_channel_recv_poll` lost-wakeup window (register-before-poll). Then **4b, 5,
+  5b, 6, 6b, 7, 8** (see plan.md `#### Phase` headers, lines ~1632–1884).
+- **Working tree: CLEAN** except this one uncommitted M6 `audit.md` (this note + the FR#24-lift session-log
+  line), which the conductor seals next. The 4 formerly-"known-not-mine" dirty files (CLAUDE.md, Dockerfile,
+  ynz-watch/{error,rebuild}.rs) are NOW ALL COMMITTED by the user — the next chat no longer needs to avoid them.
+
+### ⚠️ MODEL — Fable for the EXECUTION agent (unchanged); reviewers on their own defaults
+- Dispatch executors with `model: "fable"` (the alias, not `claude-fable-5`). ONLY the execution agent; all
+  review/gate agents run their own def defaults (no `model:` override). This session honored that throughout.
+- **Fable window EXPIRES Mon 2026-07-13** (REF-model-selection hard-stop → reverts to Opus). Two days left.
+- Main loop was Opus 4.8 · medium this session.
+
+### Gate override — NEXTEST, ALL IN DOCKER (keep writing it)
+Host has NO cargo/nextest. Every gate runs `docker compose run --rm dev cargo nextest run --workspace`
+(+ `clippy --workspace -- -D warnings`, + `fmt --all --check`). The driver `include_bytes!`s
+`libynz_runtime.a`, so a typeck/runtime change needs a FORCED runtime→driver rebuild or you test a stale
+embed (this bit us mid-P3b/P3c — force it). Baseline at seal: **2363 passed / 0 failed / 6 skipped.**
+
+### Discipline that held (keep it)
+- **Money-adjacent concurrency → FULL review fleet BEFORE seal.** It caught a real issue every phase this
+  session: P3c's flagship UAF, the handle-form twin, the fix-INTRODUCED OOB (CWE-125), and a teaching
+  message that would've steered users into a segfault. Do NOT trust an executor's own "green tree" — an
+  independent green-check + the fleet is the seal gate.
+- **Verify a surprising claim against ground truth** — the "pre-existing" baseline claim, the falsified
+  fix-spec, the "missing fixture" false-negative were all resolved by reproduction, not by trusting a
+  subagent's word. A router's own authored fix-spec is a claim too (my FRAGO-026 WHAT-INSTEAD was falsified
+  live by the executor — good).
+- **Conductor seals by name** (`git add <file> …`, never `-A`), human confirms before commit.
+
+### Deferrals / open decisions (homed, not lost)
+- **FR #24 — union-narrowing payload-extraction defect CLUSTER: LIFTED + committed to the roadmap**
+  (`2026-05-21-v0-3-concurrency-perf/audit.md` + Capability Ledger, key
+  `2026-07-04-v0-3-m6-concurrency-hotfix#24: union-narrowing-payload-extraction`, **unscoped → needs a
+  milestone**). A GENERAL memory-safety class, ORTHOGONAL to M6 concurrency: (a) narrowed field access
+  `fig.radius` silently prints 0; (b) `let inner: Circle = fig` then a pointer-field read SIGSEGVs (CWE-125).
+  Reproduce with NO background/spawn. **Patrick's call to schedule its own milestone.**
+- **FR #21** (narrowed-union durable extraction so it WORKS, reusing `union_to_heap_cell` emit.rs:3248),
+  **#23** (non-plain-ident receivers, both spawn forms), **#22** (Call-only large-copy warning) — all in M6
+  plan.md Future Requirements, flagged for the **milestone-seal human call** (Phase 8 lifts the full set to
+  the roadmap per Key Outcome 11; #24 already lifted early to de-risk it).
+- **Also noted (out of M6 scope, NOT fixed):** a pre-existing global `float.toString()` bug — `let f: float
+  = 5.0; print(f.toString())` prints `0.0`. Candidate only; recorded in the P3c polish round.
+- Prior deferrals still standing: int→number COERCION (stub plan `2026-07-04-v0-3-hotfix-int-literal-number`);
+  #18 decimal128 by-value return + #19 map<number> key hashing (roadmap ledger).
