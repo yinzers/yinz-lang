@@ -4707,6 +4707,14 @@ fn lower_function_with_waits<'ctx, 'g>(
             // Resolve the typeck type (catches inferred types like number).
             let crossing_ty = crossing_local_type_from_body(&f.body, cname.as_str(), &cg_resume);
             // Cross-check against typeck expr_types for decimal128 (annotation may miss inferred).
+            //
+            // Both calls route through the ONE authoritative walker
+            // (`find_let_typeck_type_in_stmts`): `crossing_local_type_from_body` above
+            // delegates to it via the substitution wrapper `find_let_type_in_stmts`; this
+            // second call reads it directly (unsubstituted). `type_subst` is always empty
+            // on this call path (`lower_function_with_waits` never runs for a generic
+            // function), so this is a cheap, correct no-op cross-check today — and a real,
+            // still-correct substituted-vs-raw comparison the day that changes.
             let crossing_ty = {
                 let typeck_ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
                 match typeck_ty {
@@ -8562,6 +8570,17 @@ fn crossing_local_total_slots(
 /// have no Stmt::Let) get their correct 2-slot width in crossing_local_total_slots and
 /// crossing_slot_indices — without it, a `number` loop var is assigned 1 slot and the
 /// flush/reload writes out of bounds into the next local's slot region.
+///
+/// v0.3-M6 P1-2 (FRAGO 011): this is the ONE authoritative body-walk for "what type does
+/// crossing local `target` have?" — every consumer that needs the type-param-substituted
+/// view (`find_let_type_in_stmts`, called only where a live `Cg` with `type_subst` is in
+/// scope) delegates to THIS walker and layers `Cg::resolve_type` on the returned `Type`
+/// as a pure post-processing step, rather than re-implementing the traversal a second
+/// time. Per `.claude/rules/authoritative-derivation.md`: thread the one derivation, never
+/// fork a second independently-maintained walker. Applying the substitution once to the
+/// final selected type (instead of mid-walk, per recursive level) is behavior-preserving —
+/// `resolve_type` is a pure, structurally-homomorphic function of the raw `Type` value
+/// found, so it does not matter whether it runs before or after the type is selected.
 fn find_let_typeck_type_in_stmts(
     stmts: &[Stmt],
     target: &str,
@@ -8650,67 +8669,22 @@ fn crossing_local_type_from_body<'ctx>(
     find_let_type_in_stmts(&body.stmts, target, cg).unwrap_or(Type::Int)
 }
 
+/// The type-param-substituted view of `find_let_typeck_type_in_stmts` — for a crossing
+/// local declared inside a monomorphized (generic) function body, applies the current
+/// `Cg::type_subst` to the raw typeck type so a `TypeParam`/`Generic`/`BuiltinArray`/
+/// `BuiltinFixed`/`Maybe` resolves to its concrete instantiated type.
+///
+/// Per `.claude/rules/authoritative-derivation.md`, this delegates its entire traversal
+/// to `find_let_typeck_type_in_stmts` — the ONE authoritative walker — and applies the
+/// substitution once, to the final selected type, rather than re-walking the statement
+/// tree. `type_subst` is empty on every reachable call path today (every current call
+/// site constructs its `Cg` with `type_subst: HashMap::new()`, since
+/// `lower_function_with_waits` is only ever invoked for `f.generics.is_empty()`
+/// functions), so the substitution step is a no-op unless that changes — worth stating
+/// explicitly, since a second, independently-maintained traversal here is exactly the
+/// twin-derivation shape that has caused silent miscompiles in this codebase's history.
 fn find_let_type_in_stmts<'ctx>(stmts: &[Stmt], target: &str, cg: &Cg<'ctx, '_>) -> Option<Type> {
-    for stmt in stmts {
-        match stmt {
-            Stmt::Let { name, value, .. } if name == target => {
-                return Some(cg.expr_type(value));
-            }
-            // For-loop variable: the loop var is bound by the iteration mechanism, not via
-            // Stmt::Let, so the Stmt::Let arm above never fires. Derive the element type
-            // directly from the iterator expression's collection type so the type classifier
-            // picks the correct alloca (i1 for bool, f64 for float, i64 for int, i128 for
-            // decimal128, {i64,i64} struct for MapEntry).
-            Stmt::For {
-                var, iter, body, ..
-            } if var == target => {
-                let iter_ty = cg.expr_type(iter);
-                let elem_ty = match iter_ty {
-                    Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => Some(*elem),
-                    // Range element is always Int.
-                    Type::Range { .. } => Some(Type::Int),
-                    // Map iteration: the loop var is a MapEntry<K,V> struct. Returning
-                    // the real type here ensures UnsupportedCrossingLocalType is triggered
-                    // by codegen's classifier for names that reach flush_for_loop_var.
-                    Type::BuiltinMap { key, val } => Some(Type::MapEntry { key, val }),
-                    _ => None,
-                };
-                if let Some(t) = elem_ty {
-                    return Some(t);
-                }
-                // Recurse into body for declarations with the same name.
-                if let Some(t) = find_let_type_in_stmts(&body.stmts, target, cg) {
-                    return Some(t);
-                }
-            }
-            Stmt::If { body, .. } => {
-                if let Some(t) = find_let_type_in_stmts(&body.stmts, target, cg) {
-                    return Some(t);
-                }
-            }
-            // Mirror the same recursion as find_let_typeck_type_in_stmts: crossing locals
-            // declared inside loop/match bodies must be found for correct type classification.
-            Stmt::While { body, .. } | Stmt::For { body, .. } => {
-                if let Some(t) = find_let_type_in_stmts(&body.stmts, target, cg) {
-                    return Some(t);
-                }
-            }
-            Stmt::Match { arms, else_arm, .. } => {
-                for arm in arms {
-                    if let Some(t) = find_let_type_in_stmts(&arm.body.stmts, target, cg) {
-                        return Some(t);
-                    }
-                }
-                if let Some(eb) = else_arm {
-                    if let Some(t) = find_let_type_in_stmts(&eb.stmts, target, cg) {
-                        return Some(t);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    find_let_typeck_type_in_stmts(stmts, target, cg.typed).map(|ty| cg.resolve_type(&ty))
 }
 
 /// True when `expr` is a `sleep(...)` call (the yielding non-blocking sleep intrinsic).

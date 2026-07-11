@@ -577,3 +577,11 @@ Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#5: crates-ynz-runtime-src
 - **WHY** — reusability gate-2 is technically met (2 identical-shape consumers), but the duplication is a 4-line, trivially-correct loop with distinct per-site SAFETY comments explaining each site's own disjointness argument — extracting now, in an already-heavily-reviewed phase, would touch reviewed code for marginal benefit rather than fixing a real defect.
 - **COST** — trivial: define one 3-line helper fn, replace both call sites with a single call each. Under 10 minutes.
 - **TRIGGER** — a third glue-invocation site appears anywhere in ynz-runtime (three instances of the same pattern is a much stronger reuse signal than two), or the next phase/session that touches either of these two functions for any other reason (natural opportunity to fold in the extraction in the same diff).
+
+## 2026-07-11 — Deferral: sibling type-walker in ynz-typeck (non-blocking — deferred by 2026-07-04-v0-3-m6-concurrency-hotfix#5b at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#5b: crates-ynz-typeck-src-check-rs-7285
+
+- **WHAT** — confirm whether `find_crossing_local_typeck_type_in_map`/`find_crossing_local_typeck_type_in_stmts` (crates/ynz-typeck/src/check.rs:7279-7285) is an intentional separate-lifecycle-stage traversal (typeck's own Check-2 pass, distinct from codegen's now-unified `find_let_typeck_type_in_stmts`) or an accidental second derivation of the same "type of this crossing local" question that authoritative-derivation.md would want unified/linked.
+- **WHY** — out of Phase 5b's committed scope (the P1-2 audit finding and this phase's CCIR-1 recon named only the emit.rs pair); expanding scope mid-phase to investigate a different crate's traversal was not warranted for zero added correctness gain to THIS phase's exit criteria.
+- **COST** — a recon-sized investigation (read both traversals, confirm lifecycle-stage separation or file a follow-up unification phase) — well under one session.
+- **TRIGGER** — the next time authoritative-derivation.md-class hardening work touches ynz-typeck, or a bug is found where these two "crossing local type" answers disagree.

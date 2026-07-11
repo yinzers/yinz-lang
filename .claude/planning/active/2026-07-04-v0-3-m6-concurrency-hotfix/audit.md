@@ -3539,3 +3539,65 @@ glue-less leak → FIX now, not deferred; plan.md body edit applied by re-dispat
   cancellation-path parity test + full-suite run recorded in the Phase 5 FRAGO 028 completion
   addendum in plan.md (numbers reconciled there). Session-id appended to plan.md frontmatter in the
   same action as this entry.
+
+- `executor-2026-07-11-m6-phase5b` — 2026-07-11 — **Phase 5b: P1-2 twin type-walker unification
+  (FRAGO 011, dormant hardening) — COMPLETE, no FRAGO needed.** CCIR-1 re-verified the plan's cited
+  `emit.rs:8276`/`emit.rs:8364` against the live tree: line numbers had drifted (functions now at
+  `8585`/`8679`, `crossing_local_type_from_body` at `8656`) but the function names and the
+  confirmed-dormant divergence shape (only under non-empty `Cg.type_subst`) matched exactly — treated
+  as line-number drift, not a plan-vs-reality deviation, per the executor charter's own guidance on
+  minor drift. Recon confirmed the full call-site graph: `find_let_type_in_stmts` has exactly one
+  call site (`crossing_local_type_from_body`, itself called once, inside `lower_function_with_waits`
+  — the SM-resume path); `find_let_typeck_type_in_stmts` has 3 call sites, all inside the same
+  function's frame-layout/alloca-classification code, one of which (`crossing_local_total_slots`) is
+  also reached from `compute_frame_size`/`build_frame_layouts_with_resolver` — the "generic-lowering"
+  frame-size-precomputation pass the plan names, which runs BEFORE any `Cg` exists. Confirmed
+  `lower_function_with_waits` (hence every `Cg`/`cg_resume` built inside it) is reachable only for
+  `f.generics.is_empty()` functions (`emit.rs:1298`, `emit.rs:4044`) and both `Cg` literals built
+  there hardcode `type_subst: HashMap::new()` — the divergence was dormant BY CONSTRUCTION, not
+  merely unobserved. Fix: `find_let_type_in_stmts` now delegates its entire traversal to
+  `find_let_typeck_type_in_stmts` (`find_let_typeck_type_in_stmts(stmts, target,
+  cg.typed).map(|ty| cg.resolve_type(&ty))`) — the ~60-line duplicated `Stmt::Let`/`For`/`If`/
+  `While`/`Match` match arms are DELETED, not left as a second copy calling the first. Proved
+  behavior-preserving algebraically before editing: `Cg::resolve_type` is a pure,
+  structurally-homomorphic function over `Type` (`emit.rs:2007-2030`), so applying it once to the
+  final selected type is observationally identical to applying it inline at each original recursive
+  arm, for every arm (`Stmt::Let`'s direct value type; `Stmt::For`'s `BuiltinArray`/`BuiltinFixed`/
+  `Range`/`BuiltinMap` iterator-derived element type). Grep-gate: `grep -n 'Stmt::Let { name, value,
+  .. } if name == target'` → exactly 1 hit (`emit.rs:8592`, the sole remaining traversal) — zero
+  second derivation confirmed. Full workspace suite: 0 failed (`cargo test --workspace`); SM-resume +
+  frame-layout suites re-run standalone (`cargo test -p ynz-codegen --test frame_layouts_query --test
+  golden`, 9/9 + 34/34, every IR-snapshot/SHA256 golden byte-identical to pre-fix — confirms a pure
+  no-op on current codegen output); `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all
+  -- --check` clean. Completion note written into Phase 5b in the same edit as this entry;
+  session-id appended to plan.md frontmatter in the same action. No handoff file (phase completed in
+  one segment; nothing to checkpoint). Files touched: `crates/ynz-codegen/src/emit.rs` only.
+
+- `executor-2026-07-11-m6-phase5b-nits` — 2026-07-11 — **Phase 5b closeout: two non-blocking
+  should-fix nits from the reviewer fleet, closed before the phase boundary commit.** (1)
+  rules-compliance's `.claude/rules/comments.md` "durable, not changelog" finding: both doc
+  comments `emit.rs:8678-8687` (on `find_let_type_in_stmts`) and `emit.rs:4711-4718` (the
+  cross-check call site inside `lower_function_with_waits`) mixed the legitimate dormancy-proof
+  invariant with banned "used to be a second… / No longer two…" changelog narration — rephrased
+  both to state only the current code's properties (delegates to the one authoritative walker;
+  `type_subst` is empty on every reachable path today, so the substitution/cross-check is a no-op
+  unless that changes), cutting the diff-history framing while keeping the durable
+  dormancy-proof content. Verified with `docker compose run --rm dev cargo build -p ynz-codegen` —
+  clean build, no warnings. (2) acceptance-verifier's out-of-phase-scope finding: filed a
+  non-blocking nit-only Future-Requirements-style deferral (no Capability Ledger row — payload
+  only, per this plan's execute-plan conventions) into the ROADMAP's own audit.md
+  (`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md`) for
+  `find_crossing_local_typeck_type_in_map`/`find_crossing_local_typeck_type_in_stmts`
+  (`crates/ynz-typeck/src/check.rs:7279-7285`) — a structurally similar "type of this crossing
+  local" traversal in ynz-typeck, plausibly a legitimate separate-lifecycle-stage pass (typeck's
+  own Check-2, distinct from codegen's now-unified walker) but never named in the original P1-2
+  audit finding or this phase's CCIR-1 recon scope, so out of Phase 5b's committed scope to
+  investigate further now. Idempotency-Key
+  `2026-07-04-v0-3-m6-concurrency-hotfix#5b: crates-ynz-typeck-src-check-rs-7285` checked absent
+  before appending (grep -Fxq, confirmed not already filed). No plan.md body edit needed (both
+  fixes are within Phase 5b's already-landed diff; no deviation from plan text). Session-id
+  appended to plan.md frontmatter in the same action as this entry. Files touched:
+  `crates/ynz-codegen/src/emit.rs` (both comment rephrasings);
+  `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` (new deferral entry);
+  `.claude/planning/active/2026-07-04-v0-3-m6-concurrency-hotfix/plan.md` (frontmatter session-id
+  only); this file (session log).

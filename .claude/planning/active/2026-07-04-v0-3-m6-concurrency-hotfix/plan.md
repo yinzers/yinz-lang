@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11", "executor-2026-07-11-m6-phase4", "executor-2026-07-11-m6-phase4-fixloop1", "executor-2026-07-11-m6-phase4b", "executor-2026-07-11-m6-phase5-seg1", "executor-2026-07-11-m6-phase5-seg2", "executor-2026-07-11-m6-phase5-seg3", "executor-2026-07-11-m6-phase5-frago028"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11", "executor-2026-07-11-m6-phase4", "executor-2026-07-11-m6-phase4-fixloop1", "executor-2026-07-11-m6-phase4b", "executor-2026-07-11-m6-phase5-seg1", "executor-2026-07-11-m6-phase5-seg2", "executor-2026-07-11-m6-phase5-seg3", "executor-2026-07-11-m6-phase5-frago028", "executor-2026-07-11-m6-phase5b", "executor-2026-07-11-m6-phase5b-nits"]
 created_at: "2026-07-04"
 updated_at: "2026-07-11"
 metadata:
@@ -1895,6 +1895,43 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
 - **Reviewer fan-out:** code-reviewer; design-doc-alignment reviewer
   (authoritative-derivation.md compliance — grep-gate evidence attached).
 - **Model tag:** `(coding, standard, small)`
+- **Completion note (2026-07-11, `executor-2026-07-11-m6-phase5b`):** COMPLETE. CCIR-1: cited lines
+  drifted (`emit.rs:8276`→`8585` typeck walker def at time of edit, `emit.rs:8364`→`8679` Cg walker
+  def, `crossing_local_type_from_body` def now `8656`) but both function NAMES and the confirmed-
+  dormant divergence shape (only under non-empty `Cg.type_subst`) matched the plan text exactly —
+  line-number drift only, not a deviation. Confirmed at recon: `find_let_type_in_stmts`'s only call
+  site is `crossing_local_type_from_body` (`emit.rs:8656`), itself called only once
+  (`emit.rs:4708`, inside `lower_function_with_waits` — the SM-resume path); `find_let_typeck_type_in_stmts`
+  has 3 call sites, all also inside `lower_function_with_waits`'s frame-layout/alloca-classification
+  code (the cross-check at `emit.rs:4711`, `crossing_slot_indices` at `emit.rs:4432`, and
+  `crossing_local_total_slots` at `emit.rs:8535` — the latter is also the "generic-lowering"
+  frame-size-precomputation call path, reached from `compute_frame_size`/`build_frame_layouts_with_resolver`
+  BEFORE any `Cg` exists). Confirmed `lower_function_with_waits` (hence every `Cg`/`cg_resume`
+  constructed there, hence `type_subst`) is reachable ONLY for `f.generics.is_empty()` functions
+  (`emit.rs:1298`, `emit.rs:4044`) and both `Cg` literals built inside it hardcode
+  `type_subst: HashMap::new()` — so the divergence was confirmed dormant-by-construction, not just
+  "no repro found." Unified: `find_let_type_in_stmts` now delegates its ENTIRE traversal to
+  `find_let_typeck_type_in_stmts` (`find_let_typeck_type_in_stmts(stmts, target, cg.typed).map(|ty|
+  cg.resolve_type(&ty))`) — the ~60-line duplicated `Stmt::Let`/`For`/`If`/`While`/`Match` match arms
+  are deleted, not just refactored to call each other. Proved behavior-preserving (not just
+  "probably fine"): `Cg::resolve_type` is a pure, structurally-homomorphic function over `Type`
+  (recurses into `TypeParam`/`Generic`/`BuiltinArray`/`BuiltinFixed`/`Maybe`, clones everything
+  else unchanged — `emit.rs:2007-2030`), so applying it once to the final selected type is
+  observationally identical to applying it inline at each recursive match arm as the original code
+  did — verified this algebraically for every arm (`Stmt::Let`'s direct value type,
+  `Stmt::For`'s `BuiltinArray`/`BuiltinFixed`/`Range`/`BuiltinMap` iterator-derived element type)
+  before editing, not asserted after. Grep-gate (zero second derivation): `grep -n 'Stmt::Let { name,
+  value, .. } if name == target'` returns exactly ONE hit (`emit.rs:8592`, inside
+  `find_let_typeck_type_in_stmts` — the sole remaining traversal). Full workspace suite: 0 failures
+  (ran via `cargo test --workspace` — every `test result: ok` line, no FAILED, no panic); house
+  `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all -- --check` clean. SM-resume +
+  frame-layout suites explicitly re-run standalone: `cargo test -p ynz-codegen --test
+  frame_layouts_query --test golden` — 9/9 and 34/34 passed, including every IR-snapshot/SHA256
+  golden test (`ir_text_snapshot`, `m4_player_ir_snapshot`, `v03_m2_*_ir_snapshot` ×7,
+  `object_file_sha256_matches_golden`, `m3_fib_sha256_golden`) byte-identical to pre-fix —
+  confirms the unification is a pure no-op on current codegen output, not merely "tests still
+  pass." No FRAGO needed (in-scope mechanical unification, no plan-vs-reality divergence beyond the
+  already-noted line-number drift). Files touched: `crates/ynz-codegen/src/emit.rs` only.
 
 #### Phase 6 — Mechanical fixes: shutdown mutex scope + `ynz run` signal masking
 
