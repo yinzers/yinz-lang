@@ -43,27 +43,6 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 ---
 
-## Rules Files
-
-| File | Load when |
-|------|-----------|
-| [`.claude/rules/non-oop.md`](.claude/rules/non-oop.md) | **LOAD FIRST** for any feature touching shapes/methods/dispatch/inheritance/contracts. Yinz is NOT object-oriented — data shapes + standalone functions + UFCS dot-call sugar. Drift back into OOP patterns is the most common modeling mistake. |
-| [`.claude/rules/dot-postfix.md`](.claude/rules/dot-postfix.md) | Designing any syntax using dot-postfix (`value.x` vs `value.x()`). Parens for actions, no parens for access. |
-| [`.claude/rules/vocabulary.md`](.claude/rules/vocabulary.md) | Any docs work — authoritative reference for Yinz user-facing terms (shape, value, map, options, etc.) |
-| [`.claude/rules/naming.md`](.claude/rules/naming.md) | Capital-letter-=-type rule, module/type case distinctions, renamed-concepts table |
-| [`.claude/rules/inference.md`](.claude/rules/inference.md) | Designing IDE behavior, ownership UI, type-inference UI, any teaching surface where the compiler figures things out automatically |
-| [`.claude/rules/auto-promotion.md`](.claude/rules/auto-promotion.md) | Designing any new feature, stdlib type, or compiler optimization — mandates auto-promotion analysis (silent codegen + muted hint + Tier 3 lint) when a stricter/faster form fits. The "fast by design even for inexperienced developers" pattern. |
-| [`.claude/rules/stdlib-design.md`](.claude/rules/stdlib-design.md) | Designing or reviewing any stdlib module — six rules: pure-named methods are pure, no parallel APIs, no platform-default config, bounded queues, receiver-first args, codegen serialization. |
-| [`.claude/rules/feature-registry.md`](.claude/rules/feature-registry.md) | Adding any new keyword, jargon entry, primitive method, type constant, deferred feature, diagnostic template, or muted-hint domain — all go in [`registry/features.toml`](registry/features.toml) first |
-| [`.claude/rules/plan-invariants.md`](.claude/rules/plan-invariants.md) | Writing or reviewing milestone plans (M4 onward must include the 7-subsection Invariants block; v0.2-M2+ plans also require `### Feature Registry Entries`) |
-| [`.claude/rules/spec-writing.md`](.claude/rules/spec-writing.md) | Writing or editing `docs/reference/REF-*.md` language-spec files |
-| [`.claude/rules/language-design.md`](.claude/rules/language-design.md) | Making or reviewing language design decisions |
-| [`.claude/rules/docs-checklist.md`](.claude/rules/docs-checklist.md) | Adding new `docs/internal/implementation/IMP-*.md` design docs, `docs/internal/scratchpad/SCRATCH-*.md` future-list ideas, or `docs/reference/REF-*.md` spec sections |
-| [`.claude/rules/examples-structure.md`](.claude/rules/examples-structure.md) | Adding, renaming, or restructuring anything under `examples/` — flat layout, Pittsburgh-themed folder names, no nested workspaces |
-| [`.claude/rules/authoritative-derivation.md`](.claude/rules/authoritative-derivation.md) | Designing or reviewing any compiler pass/guard/codegen path that consumes a derived analysis result (crossing/suspend sets, ABI/aliasing predicates, admission gates) — or anywhere two+ code paths must agree on the same computed answer. Thread the one authoritative source; never re-derive an "equivalent" twin. Design-time guard for the twin-computation-drift class that shipped silent miscompiles across M3a/M3d/M3e/M3g. |
-
----
-
 ## When Working on This Project
 
 - **Design docs (`docs/internal/implementation/IMP-*.md`) are the GOVERNING source of truth — read them before planning AND keep them open while executing.** `docs/internal/implementation/` (especially `docs/internal/scratchpad/SCRATCH-future-*.md` for end-state vision like [`docs/internal/implementation/IMP-no-function-coloring.md`](docs/internal/implementation/IMP-no-function-coloring.md)) defines what the language IS; a plan is just a route to that destination, never an override of it. Mandatory:
@@ -94,6 +73,17 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 **Dev container**: `docker-compose.yml` defines a `dev` service (image `ynz-dev`, built from `Dockerfile`).
 All compiler build / test / fixture work runs inside this container. The bind mount `.:/work` makes
 `target/` host-readable (uid 1000 / patrick) so `trading-v4` can mount `target/release`.
+
+**`target/release` is a live consumer mount, not a release-only artifact.** External projects
+(`trading-v4`, `backfillMarketData`, etc.) mount `../ynz/target/release` read-only and run whatever
+binary is currently sitting there — continuously, at dev time, not just after a tagged `/release`.
+**Any fix to `ynz-driver` / `ynz-watch` / `ynz-lsp` that needs to reach one of those consumer
+projects must be rebuilt with `--release`, in the SAME session as the fix** — a `cargo build`
+(debug) proves the code compiles and runs, but it does NOT update the binary those mounts actually
+read. Forgetting the `--release` rebuild reproduces the exact bug you just "fixed" the moment the
+consumer project re-runs it. See CHANGELOG/git history around 2026-07-06 for the incident this
+note was added from (a `ynz-watch` linker fix verified against `target/debug`, shipped, and still
+reproduced in `backfillMarketData` because `target/release` was stale).
 
 ```bash
 # Start the dev container (background)

@@ -495,3 +495,61 @@ roadmap's frontmatter chain in the same action as this entry.
 Filed-by-session: m6-storesite-stopgap-ledger-reconcile-2026-07-10
 
 DOC-ONLY single-sentence reconciliation, both Capability Ledger tables' int-literal-into-`number` row (historically row 441 + its ~497 duplicate): the stale "typeck ADMITS the coercion … then the compiler panics" phrasing was rewritten to record that v0.3-M6's store-site stopgap (M6 FRAGO 020, commit `46906d1`) makes typeck REJECT the bare int literal at `number` slots (including store sites) with a teaching error — the ICE is no longer reachable — while the row's core point stands unchanged: the actual int→`number` coercion remains unimplemented and stays assigned to plan-id `2026-07-04-v0-3-hotfix-int-literal-number`. Ownership/status columns untouched; rows #18/#19 untouched. No code touched. Nothing committed (conductor seals). Session-id `m6-storesite-stopgap-ledger-reconcile-2026-07-10` appended to the roadmap's frontmatter chain in the same action as this entry.
+
+## 2026-07-11 — Ledger amendment: general union-narrowing payload-extraction defect class (v0.3-M6 Future-Req #24) lifted to the Capability Ledger to survive M6 archival (DOC-ONLY cross-plan coordination)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#24: union-narrowing-payload-extraction
+Filed-by-session: m6-fr24-crossplan-lift-2026-07-11
+
+Standalone roadmap-only edit, DOC-ONLY (no code, no compiler files) — a cross-plan coordination pass
+lifting the four-field deferral that v0.3-M6 (`2026-07-04-v0-3-m6-concurrency-hotfix`) homed as
+Future-Req #24 at its Phase 3c polish round (per the deviation-judge should-fix, both surfaces probed
+live 2026-07-10 during the FRAGO 026 round). It currently lives ONLY in that plan's Future
+Requirements and would go invisible when M6 archives to `done/`, so it gets a durable roadmap-level
+anchor here: this payload entry plus a pointer row in BOTH Capability Ledger tables (after the two
+M6 decimal128 rows in each — table 1 with the bold-capability styling, table 2 plain, matching each
+table's own convention), status **unscoped → needs a milestone**.
+
+> **Orthogonality callout — do NOT mis-triage as spawn/concurrency cleanup.** Both surfaces below
+> reproduce with NO `background`/spawn anywhere: pre-existing GENERAL union-narrowing
+> memory-safety/correctness defects, NOT concurrency defects, out of M6's concurrency-race/leak/
+> honesty charter (same non-absorption shape as M6 Future-Reqs #18/#19/#20). The
+> concurrency-reachable face of the same root (the narrowed `background` receiver) is already
+> fail-closed rejected by M6's FRAGO 026 teaching error and stays with M6 FR #21.
+
+Four fields, carried faithfully from M6 plan FR #24:
+
+- **WHAT (two surfaces, one root)** — narrowing a union to a shape variant does NOT extract the
+  variant payload; the narrowed value is still the 16-byte `{tag,data}` union envelope.
+  (a) direct field access on a narrowed union binding is SILENTLY WRONG — `if (fig is Circle) {
+  print(fig.radius) }` prints `0` for `5.0`, exit 0: the field read is lowered against the union's
+  `{tag,data}` storage, not the variant's payload (a Golden Rule 5 silent-wrong correctness bug);
+  (b) re-binding a narrowed union value to a shape-typed binding is a MEMORY-SAFETY bug (CWE-125,
+  security-reproduced as a SIGSEGV) — `let inner: Circle = fig` inside the `is Circle` arm copies
+  the 16-byte union envelope into a shape-sized binding, and a subsequent pointer-field read (or
+  `background inner.haul()`) reads out of bounds; this is the union→shape assignment-lowering face
+  of the same root, and it is why the FRAGO 026 teaching error's WHAT-INSTEAD explicitly warns
+  AGAINST the re-bind.
+- **WHY deferred (out of M6's charter)** — union-payload extraction is general typeck/codegen
+  lowering work with no concurrency dimension; M6's charter is concurrency races/leaks/honesty.
+  The concurrency-reachable face of the same root (the narrowed `background` receiver) is already
+  fail-closed rejected (FRAGO 026), and the teaching text steers users away from the (b) re-bind —
+  but (a) and the (b) re-bind themselves remain reachable in plain non-concurrent code today
+  (silent-wrong / SIGSEGV, no guard); a cheap interim fail-closed rejection of the union→shape
+  re-bind (mirroring FRAGO 026's precedent) is a CANDIDATE for whoever owns this, surfaced at the
+  Phase 3c polish round, not self-decided there.
+- **COST to fix later** — the same `union_to_heap_cell`-based payload-extraction machinery as M6
+  FR #21 (`crates/ynz-codegen/src/emit.rs:3248` already does exactly this extraction for the
+  let-bound union arg-escape case and is the reuse target) — ONE design pass closes FR #21 and both
+  surfaces here: (a) needs narrowed field-access lowering to resolve the payload (not the
+  envelope); (b) needs union→shape assignment lowering to extract the payload (or reject the
+  re-bind) rather than envelope-copy.
+- **TRIGGER** — the milestone that owns union-payload extraction (land together with M6 FR #21),
+  OR a user hits the silent-wrong narrowed field read / the re-bind SIGSEGV in the wild.
+
+RECORD-ONLY: transcribing an already-decided M6 Future-Req into its durable roadmap home, no
+adjudication. The `Idempotency-Key:` line above is the re-run sentinel — a later M6 Phase-8
+deferral lift that finds it present must NOT re-append this payload or duplicate the ledger rows.
+M6's own plan.md FR #24 received a one-line lifted-to-roadmap cross-reference in the same action
+(recorded in the M6 audit.md Session log); FR #24 was not otherwise restructured. No code touched.
+Nothing committed (conductor seals). Session-id `m6-fr24-crossplan-lift-2026-07-11` appended to the
+roadmap's frontmatter chain in the same action as this entry.
