@@ -33,6 +33,14 @@ WORKDIR /home/ubuntu
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
 ENV PATH="/home/ubuntu/.cargo/bin:${PATH}"
 
+# cargo-nextest — prebuilt binary install (no compiling nextest itself from source,
+# which would cost several extra minutes on image build). Runs the workspace test
+# suite in parallel processes instead of cargo test's single-process runner; the
+# shared global gate-resolver (lib-gate-resolver.sh) prefers it automatically over
+# `cargo test` whenever `cargo-nextest` is on PATH in whichever environment resolves
+# the gate — for this project that's inside this container, never the bare host.
+RUN curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C /home/ubuntu/.cargo/bin
+
 # Pre-create the registry cache directory so the named volume mount (declared in
 # docker-compose.yml) inherits ubuntu ownership from the image layer rather than
 # being initialized as root. Docker copies image-directory contents into a newly
