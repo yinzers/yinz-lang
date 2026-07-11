@@ -2194,6 +2194,26 @@ Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#1d-fixloop3-segment-1
 - **canonical resume-at pointer:** `phase-1d/fixloop3-step-2` (first segment of round 3 — no previous fixloop3 pointer to stall-compare).
 - **segment verdict:** `STATUS: PARTIAL`. **The #1 deliverable — exhaustive slot enumeration — is DONE**, with a grep-derived completeness argument (27 `infer_expr(_, Some())` sites classified; no `Paren` AST node so `f((5))` can't defeat the IntLit match; zero `number`-param intrinsics in features.toml; all named/cross-module calls route through exactly the 3 gated fns; `channel<number>` construction-gated). **Root mechanism:** the literal-hint rule check.rs:2223-2227 (IntLit hinted `Number{34}` types as number → codegen lowers raw i64). **25-row slot table (handoff).** New confirmed-RED slots beyond the 3 gated: generic-explicit `pass<number>(5)` + sibling-bound `pick(price, 5)` (ICE, the blocker); `array<number>.add(5)` (**SEGFAULT exit 139**, direct-run verified); array/fixed `.set`; `maybe<number>.or(5)` (LLVM select ICE); `contains(5)` (**SILENT wrong `false`, exit 0 — worse than a crash**); struct-lit field, array/fixed literal elements, index-assign, field-assign, `return 5` from `-> number` (all ICE w/ verbatim evidence); neg-literal UFCS `-5` ICE; plain `f(-5)` already clean (control). Excluded-and-verified-safe: `let x: number = 5` (#9 signed territory), reassign, BinOp, intrinsics. **Fix recipe settled** (extend the one shared gate with a `-IntLit` arm + a post-loop `apply_substitution` pass for the generic case + a per-method elem-slot table for the 4 collection arms + construction/stmt-slot gating). **Deviations surfaced (not self-decided):** (1) `a.concat([5])`/`pick(5, price)` reach breakage only via the pre-existing general arg-validation gap (number→int direction) — NOT cleanly separable into the IntLit→number class, noted-not-gated per the exclusion; (2) `array.remove` has no codegen lowering arm at all (pre-existing). Remaining: steps 2 (RED fixtures) → 3 (implement) → 4 (gates) → 5 (close-out + FRAGO 018). Resume `phase-1d/fixloop3-step-2` via handoff.
 
+### 2026-07-10 — Phase 3b, segment 1
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#3b-segment-1
+
+- **segment number:** 1
+- **session-id:** `executor-2026-07-10-m6-phase3b-seg1`
+- **subagent_tokens actual:** 247305 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** executor's own early-checkpoint judgment call (context budget crossed ~150k at the step-1→step-2 boundary, before any source was written; the dispatch authorized the handoff convention). No `**OVER-FAT-STEP PROPOSAL**` sentinel — a plain PARTIAL on a completed-step boundary.
+- **canonical resume-at pointer:** `phase-3b/step-2` (first segment of the phase — no previous pointer to stall-compare against, so re-dispatch is unconditional).
+- **segment verdict:** `STATUS: PARTIAL`. **Step 1 (CCIR-1) DONE** against HEAD `fc7797f`: six cited anchors re-verified — three trivial line-shift drifts corrected (`runtime.rs:607`→`:629` root-frame `cleanup_spike_cpu_handles` call; `runtime.rs:659-680`→`:677-707` chain walk, confirmed it frees each child's sleep handle + frame but never its spike CPU handles; `may_block.rs:1638` SCC `len() >= 2` filter), `cpu_admission.rs:508-534` + `queries.rs:900-917` MATCH, stale `queries.rs:941-944` "structurally inert" comment CONFIRMED present + stale (cpu_admission.rs:109-152 documents the M3g Phase 3 decline removal). **Load-bearing orientation finding:** `YNZ_ALLOC_COUNTER` counts only `ynz_alloc`/`ynz_free` — `Box<CpuJoinHandle>` (Rust allocator) is invisible to it, so the plan's "or handle-count instrumentation" branch is REQUIRED for the RED fixture (env-gated handle counters; expected RED `handle_alloc=4, handle_free=2`). Fully-settled design D-3b-1..6 in `handoff-phase-3b.md` (RED fixture source + timeline, parity + positive-control + `YNZ_SKIP_RECURSION_DROP` negative-control integration tests, a deterministic drop-probe unit test, the one-choke-point fix site `cleanup_spike_cpu_handles(child_ptr)` at `runtime.rs:691-706`, the `queries.rs` comment rewrite). No code touched; tree unchanged (4 pre-existing not-mine dirty files untouched). No deviation surfaced — anchor drifts are the trivial class Phase 0 precedented. One conditional pre-registered in the handoff: if the RED positive-control fails to reproduce the leak, that falsifies Phase 0's reachability claim → surface to the deviation-judge seam, do not self-adjudicate. Resume `phase-3b/step-2` via handoff.
+
+### 2026-07-10 — Phase 3b, segment 2 (DONE)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#3b-segment-2
+
+- **segment number:** 2
+- **session-id:** `executor-2026-07-10-m6-phase3b-seg2`
+- **subagent_tokens actual:** 261748 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** phase DONE (steps 2–5 all complete; handoff `handoff-phase-3b.md` deleted as the final act).
+- **canonical resume-at pointer:** n/a — Phase 3b work COMPLETE (resumed at seg-1's `phase-3b/step-2`, advanced through to DONE; no stall).
+- **segment verdict:** **DONE.** **The fix landed** — chain-walk drop (`runtime.rs:677-707`) now calls the SAME `cleanup_spike_cpu_handles(child_ptr)` the root frame uses (one authoritative cleanup choke point, no second drop path; helper doc names both grains + the never-duplicate rule). **RED→GREEN non-vacuous** via env-gated `CpuJoinHandle` handle counters (alloc-counter-invisible `Box`): RED integration `handle_alloc=4, handle_free=2` + unit probe `0 != 1`; GREEN `4/4` + probe `1` + frame parity `3/3`; **durable negative control** `YNZ_SKIP_RECURSION_DROP=1` still leaks post-fix. **Positive control PASSED** (`handle_alloc >= 4`) → Phase-0 reachability claim CONFIRMED; the pre-registered falsification conditional did NOT fire. New fixtures: `crates/ynz-driver/tests/fixtures/v0_3_m6_recursive_spike_cancel.ynz` + `tests/v03_m6_recursive_spike_cancel.rs`; unit `recursion_chain_child_spike_handles_freed_on_drop`. Stale `queries.rs:941-944` comment corrected (step 4). Debug detour: a first post-fix red was a **stale runtime embed** (driver `include_bytes!`s `libynz_runtime.a`; forced re-embed resolved it; an offset-mismatch hypothesis was checked + falsified). **nextest full workspace: 2360 run / 2359 passed / 1 failed / 6 skipped** (baseline 2355 + 5 new; M3g/M4 recursion + CPU-group + all 3 `recursion_cancellation*` pass); clippy `-D warnings` clean; fmt clean. **DEVIATION SURFACED (NOT self-adjudicated — for the deviation-judge → conductor seam):** the 1 failure `v03_m6_ufcs_background_spawned_method_call_runs` is **bisect-proven PRE-EXISTING** (fails 2/2 with this phase's source diff fully reverted + runtime force-re-embedded; symptom: spawned task prints empty line instead of "Mon"), NOT caused by this diff — the pre-existing dirty `Dockerfile` noted as a candidate suspect, not investigated. Open question for the seam: is the "full suite green" exit criterion met given one bisect-proven pre-existing failure. Did NOT commit/stage — conductor seals the boundary.
+
 ## Conductor cold-resume note — 2026-07-10 (context clear mid-Phase-1d-round-3)
 
 Written by conductor `conductor-2026-07-10-m6-exec2`-lineage session at a human-requested context
@@ -2588,6 +2608,54 @@ R2 = extend guard to UFCS + generic call forms (one shared helper). R3 = full-sl
   workspace 2355 passed / 0 failed / 6 skipped exit 0; targeted ABA suite 5/5; clippy exit 0;
   fmt exit 0.
 
+### FRAGO 023 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-phase3b` (filed at seal; plan.md body edit applied by re-dispatched executor)
+
+- **Trigger.** Phase 3b boundary review. The reviewer fleet on Phase 3b's own work returned **0
+  blockers** (code-reviewer clean; critical-path-integrity clean; test-quality MEANINGFUL;
+  rules-compliance 0-blocker; graveyard clean) — the leak fix, its non-vacuous RED→GREEN repro, and the
+  stale-comment correction are all delivered and exemplary. But two things surfaced that the plan seam
+  must record: (a) the exit-criterion "full suite green" is literally NOT met, and (b) the sole failure
+  is a corroborated-pre-existing, orthogonal, **flagship** regression the milestone did not know about.
+  This FRAGO reframes (a) honestly and records (b) as a tracked milestone finding. deviation-judge ruled
+  the executor's scope-out **JUSTIFIED, risk-neutral** — so this is auto-apply + log, no signature.
+- **Deviation 1 — Phase 3b exit-criterion #4 "full suite green" reframed to the honest reality.** Plan
+  text (Phase 3b Exit criteria, `plan.md` ~:1403-1405) said "full suite green." Reality: the workspace is
+  RED on exactly ONE test, `v03_m6_ufcs_background_spawned_method_call_runs`
+  (`crates/ynz-driver/tests/v03_m6_ufcs_suspension.rs`), which is **corroborated PRE-EXISTING and
+  orthogonal** to Phase 3b's diff. **Independent corroboration (not the executor's word alone):** (i)
+  green-check reproduced it 3/3 on the current tree; (ii) a ground-truth pass reproduced the identical
+  symptom (`left "\ndone\n"` vs `right "Mon\ndone\n"`, exit fail) at the CLEAN committed baseline
+  `fc7797f` with a forced clean rebuild and ZERO Phase-3b changes applied, then restored the tree.
+  Phase 3b's diff (runtime drop-walk + env-gated counters + a typeck comment) does not touch the
+  UFCS/background-spawn lowering path the failure lives in. **Reframe applied to plan.md:** exit-criterion
+  #4 is rewritten to "Phase 3b's own work is green (the recursion-chain spike-handle leak closed, repro
+  GREEN); one corroborated-pre-existing orthogonal failure (`v03_m6_ufcs_background_spawned_method_call_runs`)
+  remains, tracked as a separate milestone finding (Deviation 2 below) — NOT caused by or curable within
+  Phase 3b."
+- **Deviation 2 — a flagship milestone regression was discovered at HEAD and is NOT deferred (user-directed:
+  hunt it now).** `v03_m6_ufcs_background_spawned_method_call_runs` exercises `background ship.haul()` —
+  a `background`-spawned UFCS suspending call with a `give`-transferred receiver — which is **Key Outcomes
+  1 & 8** (the flagship "`wait`/`background` x.method() must actually suspend and deliver correct output"
+  deliverable M6 exists to make correct against released v0.3.0). At HEAD `fc7797f` the spawned task loses
+  its output (prints `""` instead of `"Mon"`). The recorded seal-time baseline "2355 passed / 0 failed"
+  (Phase 3's completion note, `plan.md` ~:1327; FRAGO 022 evidence line) was therefore **wrong** — this
+  test was already red before Phase 3b began and went unrecorded. Surfaced to the human at the Phase 3b
+  boundary; **user directed: seal Phase 3b, then hunt the regression this session** (not a Future-Requirements
+  deferral). Its root-cause + fix will be scoped as its own phase/FRAGO once the investigation lands; this
+  FRAGO records the discovery + the corroboration so it is not lost.
+- **Classification.** Risk-NEUTRAL (documents an already-existing reality honestly; adds no destructive or
+  irreversible op; removes/weakens no mitigation). No signature required (deviation-judge: justified +
+  risk-neutral). Also filed in this same dispatch: the one in-phase should-fix from the fleet
+  (rules-compliance + test-quality `hot-path.md`: `std::env::var("YNZ_SKIP_RECURSION_DROP")` uncached on
+  every `SpawnStateFnFuture::drop`) is being fixed in the accompanying fix-loop round by caching the flag
+  like `ALLOC_COUNTER_ENABLED`, plus a timing-triage comment on the wall-clock integration test — those
+  are code cleanups, not deviations, recorded here only for a complete boundary record.
+- **Evidence.** Fleet verdicts this boundary (all this session's dispatches): code-reviewer clean;
+  critical-path-integrity 0-blocker/1-minor(pre-existing, out-of-diff); test-quality MEANINGFUL;
+  rules-compliance 0-blocker/1-should-fix(hot-path, being fixed); deviation-judge JUSTIFIED+risk-neutral;
+  green-check red-on-1-test (secret-scan pass via gitleaks); graveyard clean. Ground-truth corroboration
+  of the pre-existing failure at clean `fc7797f` (independent stash+rebuild+run, tree restored clean).
+
 ## Conductor cold-resume note — 2026-07-10 (context clear at the Phase-3 → Phase-3b boundary)
 
 Supersedes the earlier "mid-Phase-1d-round-3" cold-resume note above (that one is historical).
@@ -2642,3 +2710,99 @@ executor + green-check dispatches. Baseline count at seal: **2355 passed / 0 fai
 - **int→number COERCION** deferred to stub plan `2026-07-04-v0-3-hotfix-int-literal-number` (3 facets:
   store-site #9, call-site #14, field-default); **#18 decimal128 by-value return + #19 map<number> key
   hashing** homed on the concurrency-perf roadmap Capability Ledger.
+
+## Session log (continued)
+
+- `executor-2026-07-10-m6-phase3b-seg1` — 2026-07-10 — Phase 3b segment 1 (fresh dispatch;
+  checkpointed at the step 1→2 boundary on the context budget; `STATUS: PARTIAL`, resume-at
+  `phase-3b/step-2`, relay `handoff-phase-3b.md`). Step 1 (CCIR-1) COMPLETE against HEAD
+  `fc7797f`: all six cited anchors re-verified — three trivial line-shift drifts corrected
+  (`runtime.rs:607`→`:629` root cleanup call; `runtime.rs:659-680`→`:677-707` chain walk;
+  `may_block.rs:1617`→`:1638` SCC `len() >= 2` filter), `cpu_admission.rs:508-534` and
+  `queries.rs:900-917` MATCH, and the stale `queries.rs:941-944` comment CONFIRMED present +
+  stale (cpu_admission.rs:109-152 documents the M3g Phase 3 decline removal). Leak mechanism
+  re-confirmed in the live tree: chain walk frees each child's sleep handle + frame, never its
+  spike CPU handles. Key orientation finding: `YNZ_ALLOC_COUNTER` sees only `ynz_alloc`/`ynz_free`
+  — `Box<CpuJoinHandle>` (Rust allocator) is invisible to it, so the RED fixture requires the
+  plan's handle-count-instrumentation branch (env-gated `handle_alloc=`/`handle_free=` counters
+  mirroring the alloc-counter pattern; design settled as D-3b-1..6 in the handoff, including the
+  full RED fixture shape/timing, integration + unit test designs, the one-choke-point fix site,
+  and the queries.rs comment rewrite). Confirmed `sleepBlocking` ∉ `BASE_SUSPENSION_INTRINSICS`
+  (deterministic CPU-member duration is legal). No code touched; tree unchanged (4 pre-existing
+  not-mine dirty files untouched). No deviation surfaced — anchor drifts are the trivial class
+  Phase 0 precedented.
+
+- `executor-2026-07-10-m6-phase3b-seg2` — 2026-07-10 — Phase 3b segment 2 (resumed at
+  `phase-3b/step-2` from `handoff-phase-3b.md`; inherited seg-1 receipts, re-verified nothing
+  already receipted). Steps 2–5 COMPLETE; phase DONE; relay deleted as final act.
+  **Step 2 (RED, non-vacuous):** landed D-3b-1 (env-gated `CpuJoinHandle` parity counters —
+  `YNZ_HANDLE_ALLOC_COUNT`/`YNZ_HANDLE_FREE_COUNT` statics in `lib.rs`, alloc recorded in
+  `CpuJoinHandle::new`, `Drop` made UNCONDITIONAL as the one free choke point, `handle_alloc=`/
+  `handle_free=` lines appended after `alloc=`/`free=` in the shutdown counter dump — prefix-parser
+  safe), D-3b-2 (fixture `v0_3_m6_recursive_spike_cancel.ynz`), D-3b-3 (4 integration tests in
+  `v03_m6_recursive_spike_cancel.rs`: parity gate, positive control, `YNZ_SKIP_RECURSION_DROP`
+  negative control, frame alloc=free guard), D-3b-4 (deterministic unit test
+  `recursion_chain_child_spike_handles_freed_on_drop`; `SpawnStateFnFuture::new` test-ctor
+  vestigial `rec_slot: *mut u8` → `recursion_slot_offset: i64`, 3 call sites now pass `-1`).
+  RED evidence: unit probe `0 != 1`; integration `handle_alloc=4, handle_free=2`; positive control
+  PASSED (`handle_alloc>=4`) → Phase-0 reachability claim CONFIRMED (pre-registered falsification
+  conditional did NOT fire). **Step 3 (fix):** `cleanup_spike_cpu_handles(child_ptr)` threaded into
+  the chain-walk loop (after child sleep-handle free, before grandchild read) — the SAME helper the
+  root uses at drop step 1.5; docs updated (Drop free-order ladder + the helper's "Called from",
+  which now names both grains and the never-duplicate rule). GREEN: unit probe `1`; integration
+  `4/4`; frame parity `3/3`. Debug detour worth recording: the first post-fix nextest run still
+  showed `4/2` — root-caused to a STALE RUNTIME EMBED (`ynz-driver` `include_bytes!`s
+  `target/debug/libynz_runtime.a`; the nextest flow had not re-embedded the fixed archive). Fixed
+  by forced rebuild (`touch crates/ynz-driver/build.rs && cargo build -p ynz-driver`) — same
+  staleness class as the CLAUDE.md `target/release` consumer-mount note, at debug grain. A
+  dead-end hypothesis (composed `cpu_group_slots` offsets diverging from the runtime's canonical
+  `SPIKE_HANDLE_BASE_OFFSET` scan) was checked and FALSIFIED: `emit.rs` places `cpu_reserve`
+  immediately after the frame header, so handle slots ARE canonical. **Step 4:** stale
+  `queries.rs:941-944` "structurally inert" comment corrected to current truth (M3g Phase 3 flip
+  removed the co-resident-suspension decline in both arms; admitted groups DO fire). **Step 5
+  (gates, all in docker):** `cargo fmt --all` clean (trivial rewraps of this phase's own files);
+  `cargo clippy --workspace -- -D warnings` clean; full `cargo nextest run --workspace
+  --no-fail-fast`: **2360 run / 2359 passed / 1 failed / 6 skipped** (baseline 2355 + this phase's
+  5 new tests). M3g/M4 recursion + CPU-group suites and the 3 `recursion_cancellation*` tests all
+  pass. **DEVIATION SURFACED (not self-adjudicated):** the single failure,
+  `v03_m6_ufcs_background_spawned_method_call_runs` (M6 Phase-1-era test), is PRE-EXISTING —
+  plan/dispatch said baseline "2355 passed / 0 failed"; reality is this test fails
+  deterministically under nextest on the live tree, BISECT-PROVEN: with this phase's 3 source-file
+  diffs reverted (`git checkout`) and the runtime force-re-embedded, it still fails 2/2 runs
+  (symptom: spawned `ship.haul()` prints an EMPTY line instead of "Mon"; exit 1 under the harness,
+  exit 0 with the same empty print when run manually). Not caused by, and not fixed by, this
+  phase's diff — for the deviation-judge → conductor seam to adjudicate (candidate suspects
+  include host-environment drift; the pre-existing not-mine dirty `Dockerfile` is noted for the
+  seam, not investigated). This phase's touched files for the boundary commit:
+  `crates/ynz-runtime/src/lib.rs`, `crates/ynz-runtime/src/runtime.rs`,
+  `crates/ynz-typeck/src/queries.rs`, `crates/ynz-driver/tests/v03_m6_recursive_spike_cancel.rs`
+  (new), `crates/ynz-driver/tests/fixtures/v0_3_m6_recursive_spike_cancel.ynz` (new), plus
+  `plan.md`/`audit.md`. Nothing committed (conductor seals). Session-id appended to `plan.md`
+  frontmatter in the same action as this entry.
+
+- `executor-2026-07-10-m6-phase3b-fixloop1` — 2026-07-10 — Phase 3b fix-loop round (review-fix
+  cleanups + FRAGO 023 plan.md body edit, per the conductor's classified instruction).
+  **Hot-path should-fix (rules-compliance + test-quality):** `SpawnStateFnFuture::drop`'s uncached
+  per-drop `std::env::var("YNZ_SKIP_RECURSION_DROP")` read (process-env lock + String alloc on
+  every task completion/cancellation) replaced with a once-latched `static AtomicBool`
+  (`SKIP_RECURSION_DROP` + `skip_recursion_drop()` + `init_skip_recursion_drop_flag()` in
+  `lib.rs`, co-located with sibling `ALLOC_COUNTER_ENABLED`; latched in `ynz_rt_init` right beside
+  `init_alloc_counter_flag()` — ONE authoritative cached-flag pattern, not a second scheme).
+  Env-var name + semantics unchanged (non-empty ⇒ skip; default false ⇒ walk always runs; tests
+  set the var before the child process starts, so init-time latching is behavior-identical).
+  **Timing-triage comment** added in `v03_m6_recursive_spike_cancel.rs` ahead of the cancel-timing
+  tests: repeated CI flakes there are timing-margin drift (±300ms fixture margins; widen the
+  burn/cancel windows), not dismissible — `recursion_chain_child_spike_handles_freed_on_drop` is
+  the primary timing-independent proof. Comment only, no assertion change. **FRAGO 023 body edit
+  applied:** Phase 3b exit-criterion #4 rewritten from "full suite green" to the honest reality
+  (Phase 3b's own work green; one corroborated-pre-existing orthogonal failure
+  `v03_m6_ufcs_background_spawned_method_call_runs` tracked per FRAGO 023 Deviation 2, under
+  investigation this session, not deferred); clauses 1–3 intact. **Completion note finalized**
+  (0-blocker fleet outcome + FRAGO 023 adjudication + this round's cleanups + re-run gate counts).
+  **Gates re-run (docker, nextest):** build green; `cargo nextest run --workspace --no-fail-fast`
+  **2360 run / 2359 passed / 1 failed / 6 skipped** — sole failure is the tracked pre-existing
+  `v03_m6_ufcs_background_spawned_method_call_runs`; clippy `--workspace -- -D warnings` clean;
+  `fmt --all` + `--check` clean. Files touched this round: `crates/ynz-runtime/src/lib.rs`,
+  `crates/ynz-runtime/src/runtime.rs`, `crates/ynz-driver/tests/v03_m6_recursive_spike_cancel.rs`,
+  `plan.md`, `audit.md`. The 4 pre-existing not-mine dirty files untouched; nothing committed
+  (conductor seals). Session-id appended to `plan.md` frontmatter in the same action as this entry.

@@ -1,0 +1,56 @@
+// v0.3-M6 Phase 3b: recursion-chain × spike CPU-handle cancellation-cleanup fixture (P2-5).
+//
+// SHAPE: a zero-param self-recursive suspending host (`looper`) with a nested branch-arm
+// pure-CPU group (the two `burn` members inside `if (go)`). This is the exact admission
+// shape Phase 0 confirmed LIVE: SCC self-loops survive the mutual-suspension `len() >= 2`
+// filter, nested admission gates are block-local, and a zero-param nested host is admitted.
+// `burn` does real work (its own loop), returns int (CPU-result ABI), and calls only
+// `sleepBlocking` (an ordinary free-fn intrinsic, NOT a suspension source) — so it stays
+// pure-CPU-eligible with a deterministic ~600ms duration.
+//
+// TIMING DESIGN (run with YNZ_ALLOC_COUNTER=1 + YNZ_SHUTDOWN_TIMEOUT_MS=200):
+//   At    0ms: looper level 0 (root frame) spawns its 2-member CPU group
+//              (handle_alloc=2), parks at the CPU join.
+//   At ~600ms: both burns finish; the joins poll Ready — ynz_rt_join_poll drops both
+//              boxed handles (handle_free=2) — then `wait sleep(100)`.
+//   At ~700ms: the self-call allocates a heap-boxed chain-child frame; the child spawns
+//              ITS 2-member group (handle_alloc=4) and parks at its CPU join during
+//              [~700, ~1300)ms.
+//   At 1000ms: entrypoint wakes and returns → ynz_rt_shutdown cancels the spawned task
+//              mid-join. SpawnStateFnFuture::drop must free the chain child's live
+//              CpuJoinHandles through the same cleanup choke point the root frame uses.
+//   Margins: ±300ms — delays only shift both paths later together; the cancel always
+//   lands inside the child's [~700, ~1300)ms parked-at-join window.
+//
+// Expected counter parity: handle_alloc == handle_free (4/4).
+// A leak (handle_free < handle_alloc) means the recursion-chain drop walk freed the
+// child's sleep handle + frame but never its spike CPU handles.
+// Negative control (YNZ_SKIP_RECURSION_DROP=1): the chain walk is skipped entirely, so
+// handle_alloc > handle_free proves the walk is the mechanism responsible for the cleanup.
+
+function burn(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  sleepBlocking(600)
+  return total + seed
+}
+
+function looper() -> nothing {
+  let go = true
+  if (go) {
+    let lo = burn(3)
+    let hi = burn(4)
+  }
+  wait sleep(100)
+  looper()
+}
+
+function entrypoint() -> nothing {
+  background looper()
+  wait sleep(1000)
+  print(`done`)
+}

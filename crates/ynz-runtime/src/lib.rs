@@ -319,6 +319,16 @@ static YNZ_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Running count of `ynz_free` calls since last reset.
 static YNZ_FREE_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Running count of `CpuJoinHandle` boxes created since last reset (one per CPU-group
+/// member spawn). Counted separately from `YNZ_ALLOC_COUNT` because the handle Box lives
+/// on the RUST allocator (`Box::new`), which `ynz_alloc`/`ynz_free` never see — a leaked
+/// handle is invisible to the alloc/free pair and needs its own parity counters.
+static YNZ_HANDLE_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Running count of `CpuJoinHandle` drops since last reset. Every free path (Ready poll,
+/// detach free, cancellation cleanup) destroys the handle VALUE, so `CpuJoinHandle`'s
+/// `Drop` is the one choke point that observes them all.
+static YNZ_HANDLE_FREE_COUNT: AtomicU64 = AtomicU64::new(0);
+
 /// Return true when alloc-counter instrumentation is enabled.
 ///
 /// Reads a `static AtomicBool` set once at `ynz_rt_init`; cost is a single
@@ -336,6 +346,35 @@ pub(crate) fn init_alloc_counter_flag() {
     ALLOC_COUNTER_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
+/// Set once at `ynz_rt_init` time from the `YNZ_SKIP_RECURSION_DROP` env var.
+/// Same latch pattern as `ALLOC_COUNTER_ENABLED` above — one authoritative
+/// cached-flag scheme, not a second ad-hoc one.
+// test-only: the negative-control leak tests set `YNZ_SKIP_RECURSION_DROP` before
+// the child process starts; `ynz_rt_init` reads it once here. Production runs never
+// set it, so the `false` default means the recursion-chain drop walk always runs.
+static SKIP_RECURSION_DROP: AtomicBool = AtomicBool::new(false);
+
+/// Return true when the test-only recursion-chain drop-walk bypass is armed.
+///
+/// Reads a `static AtomicBool` set once at `ynz_rt_init`; cost is a single relaxed
+/// atomic load. `SpawnStateFnFuture::drop` runs on every task completion AND
+/// cancellation — a hot path where an env-var read per drop (process-env lock +
+/// String allocation + UTF-8 validation) violates Golden Rule 8 (zero-cost),
+/// exactly like the per-alloc case above.
+#[inline]
+pub(crate) fn skip_recursion_drop() -> bool {
+    SKIP_RECURSION_DROP.load(Ordering::Relaxed)
+}
+
+/// Called by `ynz_rt_init` to latch the env-var check once per process.
+/// Identical semantics to the per-drop read it replaces: any non-empty value ⇒ skip.
+pub(crate) fn init_skip_recursion_drop_flag() {
+    let skip = std::env::var("YNZ_SKIP_RECURSION_DROP")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false); // production default: run the chain walk
+    SKIP_RECURSION_DROP.store(skip, Ordering::Relaxed);
+}
+
 /// Read the current alloc call count. Zero when counter not enabled.
 #[no_mangle]
 pub extern "C" fn ynz_alloc_count() -> u64 {
@@ -348,11 +387,40 @@ pub extern "C" fn ynz_free_count() -> u64 {
     YNZ_FREE_COUNT.load(Ordering::Relaxed)
 }
 
-/// Reset both counters to zero.
+/// Reset all counters to zero (frame alloc/free AND CpuJoinHandle alloc/free).
 #[no_mangle]
 pub extern "C" fn ynz_alloc_count_reset() {
     YNZ_ALLOC_COUNT.store(0, Ordering::Relaxed);
     YNZ_FREE_COUNT.store(0, Ordering::Relaxed);
+    YNZ_HANDLE_ALLOC_COUNT.store(0, Ordering::Relaxed);
+    YNZ_HANDLE_FREE_COUNT.store(0, Ordering::Relaxed);
+}
+
+/// Record one `CpuJoinHandle` creation. No-op unless the alloc counter is enabled
+/// (same `YNZ_ALLOC_COUNTER` gate as the frame counters — no separate env var).
+#[inline]
+pub(crate) fn handle_counter_record_alloc() {
+    if alloc_counter_enabled() {
+        YNZ_HANDLE_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Record one `CpuJoinHandle` drop. No-op unless the alloc counter is enabled.
+#[inline]
+pub(crate) fn handle_counter_record_free() {
+    if alloc_counter_enabled() {
+        YNZ_HANDLE_FREE_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Read the current `CpuJoinHandle` alloc count. Zero when counter not enabled.
+pub(crate) fn ynz_handle_alloc_count() -> u64 {
+    YNZ_HANDLE_ALLOC_COUNT.load(Ordering::Relaxed)
+}
+
+/// Read the current `CpuJoinHandle` free count. Zero when counter not enabled.
+pub(crate) fn ynz_handle_free_count() -> u64 {
+    YNZ_HANDLE_FREE_COUNT.load(Ordering::Relaxed)
 }
 
 /// Allocate `size` bytes. Aborts on OOM — Yinz programs cannot recover from OOM.
@@ -3733,7 +3801,7 @@ mod m3d_join_shims {
                 noop_resume_c1,
                 frame_ptr,
                 80,
-                std::ptr::null_mut::<u8>(),
+                -1, // recursion_slot_offset — no recursion slot
                 std::ptr::null::<runtime::BgArgDropEntry>(),
                 0,
             );
@@ -4045,9 +4113,9 @@ mod m3d_join_shims {
                 noop_resume,
                 frame_ptr,
                 80,
-                std::ptr::null_mut::<u8>(), // rec_slot — none (-1 path in new())
+                -1, // recursion_slot_offset — no recursion slot
                 std::ptr::null::<runtime::BgArgDropEntry>(), // arg_drops — none
-                0,                          // arg_drop_count
+                0,  // arg_drop_count
             );
             // Drop fires here: step 1.5 calls cleanup_spike_cpu_handles → frees handle at slot 0.
         }
@@ -4067,6 +4135,97 @@ mod m3d_join_shims {
         assert!(
             completed.load(Ordering::Acquire),
             "blocking task must complete after handle was freed on drop-before-poll"
+        );
+    }
+
+    /// Verify the recursion-chain drop walk frees a chain CHILD's spike CPU handles through
+    /// the same `cleanup_spike_cpu_handles` choke point the root frame uses (v0.3-M6 P2-5).
+    ///
+    /// Layout: a non-spike ROOT frame whose recursion slot (offset 48) points at a
+    /// heap-boxed chain-child frame; the CHILD is a spike frame (packed discriminator with
+    /// handle count 2, live probed `CpuJoinHandle` in slot 0, null slot 1) whose own
+    /// recursion slot stays null (chain end). Dropping the `SpawnStateFnFuture` must walk
+    /// the chain and free the child's live handle — probe == 1.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recursion_chain_child_spike_handles_freed_on_drop() {
+        // WHY: the chain walk in SpawnStateFnFuture::drop freed each child's sleep handle
+        // + frame but NEVER its spike CPU handles (P2-5, confirmed LIVE in M6 Phase 0) —
+        // one leaked Box<CpuJoinHandle> per live handle per cancelled chain child,
+        // unbounded over program lifetime. This test is the deterministic (no timing
+        // window) unit-level twin of the v0_3_m6_recursive_spike_cancel.ynz integration
+        // repro: it plants the exact frame shapes the leak needs and asserts the child's
+        // handle is freed on drop.
+        use crate::runtime::{CpuJoinHandle, SpawnStateFnFuture};
+
+        /// Byte offset of the recursion-slot pointer within both 80-byte test frames —
+        /// past the frame header (32) and the two spike handle slots (32, 40).
+        const REC_SLOT_OFFSET: usize = 48;
+
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_child = completed.clone();
+        // Per-handle drop probe: increments exactly when THIS CpuJoinHandle is dropped.
+        let drop_count = Arc::new(AtomicUsize::new(0));
+
+        // Spawn a real blocking task so the CHILD's CpuJoinHandle wraps a live JoinHandle.
+        let join_handle = tokio::task::spawn_blocking(move || -> YnzCpuResult {
+            completed_child.store(true, Ordering::Release);
+            YnzCpuResult([7, 0])
+        });
+        let mut cpu_handle = CpuJoinHandle::new(join_handle);
+        cpu_handle.set_drop_probe(Arc::clone(&drop_count));
+        let handle_ptr = Box::into_raw(Box::new(cpu_handle)) as *mut u8;
+
+        // CHILD frame (heap-boxed chain child, same allocator + layout the walk frees):
+        // spike discriminator + live handle in slot 0; slot 1 and the recursion slot stay
+        // zeroed (null grandchild = chain end).
+        let child_ptr = unsafe { ynz_alloc_zeroed(80) };
+        assert!(!child_ptr.is_null(), "child frame alloc must succeed");
+        unsafe {
+            (child_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 2);
+            (child_ptr.add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr);
+        }
+
+        // ROOT frame: NON-spike (discriminator stays zero — the root's own step-1.5
+        // cleanup must decode None and touch nothing); recursion slot points at the child.
+        let frame_ptr = unsafe { ynz_alloc_zeroed(80) };
+        assert!(!frame_ptr.is_null(), "root frame alloc must succeed");
+        unsafe {
+            (frame_ptr.add(REC_SLOT_OFFSET) as *mut *mut u8).write(child_ptr);
+        }
+
+        unsafe extern "C-unwind" fn noop_resume_chain(_frame: *mut u8, _waker: *mut u8) -> i32 {
+            1 // Pending — never polled.
+        }
+
+        // Drop the future without polling: the chain walk must free the child's sleep
+        // handle (null → skip), its spike CPU handles (the probed box), and its frame —
+        // then the root frame.
+        {
+            let _future = SpawnStateFnFuture::new(
+                noop_resume_chain,
+                frame_ptr,
+                80,
+                REC_SLOT_OFFSET as i64,
+                std::ptr::null::<runtime::BgArgDropEntry>(),
+                0,
+            );
+        }
+
+        assert_eq!(
+            drop_count.load(Ordering::SeqCst),
+            1,
+            "the recursion-chain drop walk must free the chain child's CpuJoinHandle via \
+             cleanup_spike_cpu_handles — 0 means the walk freed the child's frame but \
+             leaked its spike CPU handles (P2-5)"
+        );
+
+        // Both frames were freed by the drop; do not touch frame_ptr/child_ptr past here.
+        // Give the detached child task time to complete after its handle was dropped.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            completed.load(Ordering::Acquire),
+            "chain child's blocking task must run to completion after detach"
         );
     }
 }
@@ -4170,7 +4329,7 @@ mod m6_pending_send_aba {
             send_from_frame_resume,
             frame,
             FRAME_SIZE as i64,
-            std::ptr::null_mut::<u8>(),
+            -1, // recursion_slot_offset — no recursion slot
             descs,
             1,
         );

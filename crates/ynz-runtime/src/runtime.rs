@@ -102,9 +102,12 @@ fn decode_spike_discriminator(disc: u32) -> Option<usize> {
 /// Starts OS threads. No I/O until a task is spawned.
 #[no_mangle]
 pub extern "C" fn ynz_rt_init() {
-    // Latch the alloc-counter flag once here so per-alloc cost is a cheap atomic load.
-    // The env var read (lock + heap + UTF-8 scan) happens only once at program start.
+    // Latch both test-only env flags once here so their hot-path gates are cheap
+    // atomic loads: the alloc counter (per-alloc gate) and the recursion-drop skip
+    // (per-task-drop gate). Each env var read (lock + heap + UTF-8 scan) happens
+    // only once at program start.
     crate::init_alloc_counter_flag();
+    crate::init_skip_recursion_drop_flag();
 
     let mutex = RUNTIME.get_or_init(|| Mutex::new(None));
     let mut lock = mutex.lock().expect("ynz_rt_init: mutex poisoned");
@@ -117,8 +120,8 @@ pub extern "C" fn ynz_rt_init() {
         *lock = Some(rt);
     }
     // If already initialised (e.g., double-init in the same program or after shutdown
-    // in a test harness that re-calls init), this is a no-op. The alloc-counter flag
-    // call above is idempotent: re-reading the same env var produces the same value.
+    // in a test harness that re-calls init), this is a no-op. The two flag calls
+    // above are idempotent: re-reading the same env vars produces the same values.
 }
 
 /// RAII guard that frees the heap frame when dropped (normal return AND unwind).
@@ -346,7 +349,15 @@ pub extern "C" fn ynz_rt_shutdown() {
         if !output_path.is_empty() {
             let alloc_count = crate::ynz_alloc_count();
             let free_count = crate::ynz_free_count();
-            let content = format!("alloc={alloc_count}\nfree={free_count}\n");
+            let handle_alloc_count = crate::ynz_handle_alloc_count();
+            let handle_free_count = crate::ynz_handle_free_count();
+            // The handle_* lines come AFTER the alloc=/free= lines: existing prefix-parsers
+            // take the FIRST line matching starts_with("alloc")/starts_with("free"), and
+            // neither "handle_alloc" nor "handle_free" matches those prefixes.
+            let content = format!(
+                "alloc={alloc_count}\nfree={free_count}\n\
+                 handle_alloc={handle_alloc_count}\nhandle_free={handle_free_count}\n"
+            );
             // Best-effort write: ignore errors (the alloc counter is test-only).
             let _ = std::fs::write(&output_path, content);
         }
@@ -531,16 +542,15 @@ impl SpawnStateFnFuture {
         resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
         frame_ptr: *mut u8,
         frame_size: i64,
-        rec_slot: *mut u8,
+        recursion_slot_offset: i64,
         arg_drop_ptr: *const BgArgDropEntry,
         arg_drop_count: i64,
     ) -> Self {
-        let _ = rec_slot; // tested via recursion_slot_offset=-1 path
         Self {
             resume_fn,
             frame_ptr,
             frame_size,
-            recursion_slot_offset: -1,
+            recursion_slot_offset,
             arg_drop_ptr,
             arg_drop_count: arg_drop_count as usize,
             task_gen: crate::channel::next_caller_generation(),
@@ -564,7 +574,10 @@ unsafe impl Send for SpawnStateFnFuture {}
 /// task (it runs to completion; results are discarded). Null slots are skipped — they were
 /// either never spawned or already consumed by a Ready poll.
 ///
-/// Called from `SpawnStateFnFuture::drop` on cancellation. Extracted as a `pub(crate)` helper
+/// Called from `SpawnStateFnFuture::drop` on cancellation, at BOTH frame grains: on the
+/// root frame (drop step 1.5) and on each recursion-chain child frame inside the chain
+/// walk (drop step 3) — the ONE authoritative cleanup path for spike CPU handles; never
+/// duplicate this logic at a call site. Extracted as a `pub(crate)` helper
 /// so the discriminator + handle-free logic can be tested independently without constructing
 /// a full `SpawnStateFnFuture` (which requires live resume-fn scaffolding).
 ///
@@ -606,6 +619,9 @@ impl Drop for SpawnStateFnFuture {
     /// 2. Heap arg-copies: read each entry in `arg_drop_descs`, recover the pointer from the
     ///    frame slot, and free it — BEFORE freeing the frame (avoids use-after-free on the slots).
     /// 3. Recursion-chain child frames (for self-recursive SM functions — walks the chain).
+    ///    Each child's sleep handle AND spike CPU handles (via the same
+    ///    `cleanup_spike_cpu_handles` choke point step 1.5 uses on the root) are freed
+    ///    before the child frame itself.
     /// 4. The arg-drop descriptor array itself (freed via `ynz_free`, same allocator as codegen).
     /// 5. The root frame (freed last, after all frame-resident pointers have been read).
     ///
@@ -678,12 +694,11 @@ impl Drop for SpawnStateFnFuture {
             //
             // test-only: `YNZ_SKIP_RECURSION_DROP` bypasses the chain walk so the
             // negative-control test can verify a measurable leak without this code.
-            // Production runs never set this env var; the unwrap_or(false) default
-            // means the walk always runs in production.
-            let skip_recursion_drop = std::env::var("YNZ_SKIP_RECURSION_DROP")
-                .map(|v| !v.is_empty())
-                .unwrap_or(false); // production default: run the chain walk
-            if self.recursion_slot_offset >= 0 && !skip_recursion_drop {
+            // Production runs never set this env var; the latched `false` default
+            // means the walk always runs in production. The flag is a once-latched
+            // atomic (see `init_skip_recursion_drop_flag`), not a per-drop env read:
+            // this drop runs on every task completion/cancellation — a hot path.
+            if self.recursion_slot_offset >= 0 && !crate::skip_recursion_drop() {
                 // SAFETY: frame_ptr is valid; recursion_slot_offset is within the frame.
                 let rec_slot =
                     self.frame_ptr.add(self.recursion_slot_offset as usize) as *const *mut u8;
@@ -696,6 +711,13 @@ impl Drop for SpawnStateFnFuture {
                     if !child_handle.is_null() {
                         drop(Box::from_raw(child_handle as *mut Pin<Box<Sleep>>));
                     }
+                    // Free the child's spike CPU handles through the SAME choke point the
+                    // root frame uses (step 1.5) — a chain child cancelled while parked at
+                    // its CPU join owns live boxed CpuJoinHandles in its frame handle slots.
+                    // SAFETY: child_ptr was allocated by ynz_alloc_zeroed(frame_size) with
+                    // the same layout as the root (self-recursion, same function); a
+                    // non-spike child's zeroed discriminator decodes None and is untouched.
+                    cleanup_spike_cpu_handles(child_ptr);
                     // Read grandchild pointer BEFORE freeing child (use-after-free guard).
                     let grandchild_slot =
                         child_ptr.add(self.recursion_slot_offset as usize) as *const *mut u8;
@@ -1116,6 +1138,7 @@ impl CpuJoinHandle {
     /// reference, which would let them call `.abort()` independently of the slot-null
     /// protocol that prevents double-frees.
     pub(crate) fn new(h: tokio::task::JoinHandle<YnzCpuResult>) -> Self {
+        crate::handle_counter_record_alloc();
         CpuJoinHandle {
             inner: h,
             #[cfg(test)]
@@ -1134,9 +1157,14 @@ impl CpuJoinHandle {
     }
 }
 
-#[cfg(test)]
 impl Drop for CpuJoinHandle {
+    /// Every handle-free path — Ready poll (`ynz_rt_join_poll`), detach free
+    /// (`ynz_rt_join_handle_free`), and cancellation cleanup (`cleanup_spike_cpu_handles`)
+    /// — destroys the handle VALUE via `Box::from_raw` + drop, so this `Drop` is the one
+    /// choke point that observes them all for the env-gated handle parity counter.
     fn drop(&mut self) {
+        crate::handle_counter_record_free();
+        #[cfg(test)]
         if let Some(probe) = &self.probe {
             probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }

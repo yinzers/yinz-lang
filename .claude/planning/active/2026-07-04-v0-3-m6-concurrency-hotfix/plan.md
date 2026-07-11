@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1"]
 created_at: "2026-07-04"
 updated_at: "2026-07-10"
 metadata:
@@ -1402,7 +1402,38 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
      recursion + CPU-group fixtures.
 - **Exit criteria:** leak closed via the one shared cleanup choke point; RED→GREEN repro committed
   with non-vacuous alloc=free (or handle-count) parity; stale `queries.rs:942-943` comment
-  corrected; full suite green.
+  corrected; Phase 3b's own work is green (recursion-chain spike-handle leak closed; RED→GREEN
+  repro GREEN; stale comment corrected). One corroborated-PRE-EXISTING orthogonal failure
+  (`v03_m6_ufcs_background_spawned_method_call_runs`) remains — NOT caused by or curable within
+  Phase 3b (reproduces at clean committed `fc7797f` with zero Phase-3b changes); tracked as a
+  separate flagship milestone finding per FRAGO 023 (Deviation 2), under investigation this
+  session, not deferred.
+- **Completion note (2026-07-10, `executor-2026-07-10-m6-phase3b-seg2`):** COMPLETE. Leak closed by
+  threading the SAME `cleanup_spike_cpu_handles` the root frame uses into the recursion-chain drop
+  walk (one authoritative choke point, `runtime.rs`). RED→GREEN proven non-vacuously via new
+  env-gated `CpuJoinHandle` parity counters (`handle_alloc=`/`handle_free=` lines, same
+  `YNZ_ALLOC_COUNTER` gate): pre-fix `handle_alloc=4, handle_free=2` (integration) + drop-probe
+  `0≠1` (unit); post-fix `4/4` + probe `1` — with positive control (`handle_alloc>=4`, confirming
+  the Phase-0 reachability claim), durable negative control (`YNZ_SKIP_RECURSION_DROP=1` still
+  leaks post-fix), and frame alloc=free regression guard. Stale `queries.rs:941-944` comment
+  corrected. Full suite 2359/2360 passed (+5 new tests, 6 skipped); the single failure
+  (`v03_m6_ufcs_background_spawned_method_call_runs`) is PRE-EXISTING — bisect-proven present with
+  this phase's source diff fully reverted and the runtime re-embedded — adjudicated JUSTIFIED +
+  risk-neutral by the deviation-judge and recorded as FRAGO 023 (exit-criterion #4 reframed
+  accordingly; Deviation 2 tracks the flagship finding, under investigation this session, not
+  deferred). Clippy/fmt clean. **Boundary review (2026-07-10):** reviewer fleet returned 0
+  blockers (code-reviewer clean; critical-path-integrity clean; test-quality MEANINGFUL;
+  rules-compliance 0-blocker; graveyard clean) — fix + repro delivered as specified.
+  **Fix-loop round (`executor-2026-07-10-m6-phase3b-fixloop1`):** applied the fleet's one
+  should-fix — `YNZ_SKIP_RECURSION_DROP` is now latched once at `ynz_rt_init` into a `static
+  AtomicBool` read via a relaxed load in `SpawnStateFnFuture::drop` (same authoritative cached-flag
+  pattern as `ALLOC_COUNTER_ENABLED`; behavior identical, per-drop env read removed from the
+  task-drop hot path) — plus a timing-triage comment on the wall-clock cancel-timing integration
+  tests (flakes = timing-margin drift; the deterministic unit test
+  `recursion_chain_child_spike_handles_freed_on_drop` is the primary timing-independent proof).
+  Gates re-run post-cleanup: build green; nextest 2359 passed / 1 failed (the tracked pre-existing
+  `v03_m6_ufcs_background_spawned_method_call_runs` only) / 6 skipped; clippy `-D warnings` clean;
+  fmt `--check` clean. Phase 3b meets its (reframed) exit criteria.
 - **Reviewer fan-out:** code-reviewer; adversarial gate-checker (does the repro genuinely exercise
   the nested-branch-arm self-recursive-host cancellation window, or a broader/different leak?);
   design-doc-alignment reviewer (authoritative-derivation.md — one cleanup choke point threaded to
