@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11", "executor-2026-07-11-m6-phase4", "executor-2026-07-11-m6-phase4-fixloop1", "executor-2026-07-11-m6-phase4b"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11", "executor-2026-07-11-m6-phase4", "executor-2026-07-11-m6-phase4-fixloop1", "executor-2026-07-11-m6-phase4b", "executor-2026-07-11-m6-phase5-seg1", "executor-2026-07-11-m6-phase5-seg2", "executor-2026-07-11-m6-phase5-seg3", "executor-2026-07-11-m6-phase5-frago028"]
 created_at: "2026-07-04"
 updated_at: "2026-07-11"
 metadata:
@@ -95,7 +95,11 @@ metadata:
   so P2-1 is a KNOWN M4 design state, not a latent surprise, and P2-3's closed-send leak
   (`emit.rs:~11833-11960` closed1/closed2 blocks dropping no `value_bits`) is genuinely unreachable
   dead code until channel-close semantics ship. P2-4 (buffered elements at channel DROP, not at a
-  closed-send) IS reachable today regardless of P2-1/P2-3 and is this milestone's scope.
+  closed-send) is confirmed UNREACHABLE via any compiled program today — same structural shape as
+  P2-3, closed by the drop-story milestone rather than channel-close semantics (FRAGO 027: no codegen
+  path ever releases the creator's channel reference, so `YnzChannel`'s last-ref drop never fires from
+  compiled Yinz; the Phase 5 drop-glue mechanism is built and proven at the runtime-ABI level, folded
+  into Future Requirements #13/#17 for the E2E path).
 - **P3-3 — shutdown mutex over-scoped.** `runtime.rs:316-354`'s `ynz_rt_shutdown` holds the RUNTIME
   mutex across the up-to-5s `shutdown_timeout` drain (the "lock drops here" comment is fiction — the
   lock is function-scoped). The correct pattern already exists in the same file:
@@ -1802,20 +1806,69 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
      glue at each `channel<T>()` construction; add an explicit teardown routine (there is currently no
      `Drop` impl, audit-confirmed) that walks the buffer — and, defensively, any residual
      `pending_sends` payloads — invoking the glue on the channel's last-ref drop.
+     - **FRAGO 028 addition:** invoke `drop_glue` at BOTH cancellation-path removal sites —
+       `purge_pending_sends` (the live purge called from the real drop ladder and `ynz_handle_free`)
+       and the insert-time stale-same-token/different-generation sweep inside
+       `channel_send_poll_guarded` — not just at the channel's own `Drop` impl: an entry removed on
+       either path is gone before `Drop` could ever see it, so its heap payload leaks otherwise.
+       Reuses the EXISTING glue registered at construction (no new ABI surface, no new
+       construction-site call).
   3. Explicitly confirm P2-3 (closed-send leak) is UNCHANGED by this phase — the closed1/closed2
      codegen blocks stay untouched and stay deferred (Future Requirements #1); this phase's drop-glue
      mechanism must not accidentally start reaching them.
-  4. Author the alloc=free parity gate: `YNZ_ALLOC_COUNTER_OUTPUT` before/after for a channel holding
-     heap-element types (`string`/`array`/`map`/`shape`) dropped with elements still buffered — assert
-     parity, and confirm the gate shows NON-ZERO allocations exercised (never a vacuous zero-alloc
-     pass, per M5's FRAGO-005 lesson).
+  4. Author the alloc=free parity gate at the **runtime C-ABI level** (FRAGO 027 — NOT an E2E
+     fixture): a `channel.rs` `#[test]` directly driving `ynz_channel_create` (with real per-type
+     glue) → send heap-element values (`array`/`map`/`shape` — NOT `string`, which has no sound free
+     and is invisible to the alloc counter) with elements still buffered → `ynz_channel_free` →
+     assert alloc=free parity, and confirm the gate shows NON-ZERO allocations exercised (never a
+     vacuous zero-alloc pass, per M5's FRAGO-005 lesson). This proves the drop-glue MECHANISM works
+     correctly; it does NOT prove any compiled Yinz program currently reaches it — the channel's
+     last-ref drop is E2E-unreachable today (no codegen path releases the creator's reference, per
+     FRAGO 027), so an E2E fixture gate would be vacuous by construction.
   5. Run the full suite; confirm no regression to channel send/receive semantics.
-- **Exit criteria:** drop-glue mechanism live; alloc=free parity gate GREEN with non-vacuous coverage;
-  P2-3 confirmed untouched and still correctly deferred.
+- **Exit criteria:** drop-glue mechanism live; alloc=free parity gate GREEN with non-vacuous coverage
+  AT THE RUNTIME-ABI LEVEL (E2E unreachable today — folded into Future Requirements #13/#17, see the
+  deferral note there; FRAGO 027); the cancellation-path leak (purge_pending_sends + insert-time
+  stale sweep) is closed with its own non-vacuous parity gate — not folded into the FR#13/#17
+  E2E-unreachable-drop deferral (FRAGO 028); P2-3 confirmed untouched and still correctly deferred.
 - **Reviewer fan-out:** code-reviewer; adversarial gate-checker (parity-gate non-vacuousness, per the
   M5 FRAGO-005 precedent); design-doc-alignment reviewer (authoritative-derivation.md — one drop-glue
   choke point, no parallel path).
 - **Model tag:** `(coding, high, medium)`
+- **Completion note (2026-07-11, `executor-2026-07-11-m6-phase5-seg3`):** COMPLETE (Steps 2–5;
+  Step 1 + FRAGO 027 landed by seg1/seg2). Drop-glue mechanism live: `YnzChannel.drop_glue`
+  (`Option<unsafe extern "C" fn(i64)>` — preserves auto Send/Sync), registered ONCE at
+  `ynz_channel_create(capacity, drop_glue)` (`channel.rs`); codegen synthesizes memoized
+  per-element-type glue at the single `"channel"` intrinsic choke point (`emit.rs`
+  `channel_drop_glue`, exactly TWO non-null arms — array→`ynz_array_drop`, map→`ynz_map_drop`;
+  string/primitives null per the typeck element gate; no dead shape arm). `pending_sends` values
+  became `PendingSendEntry { fut, value_bits }` so teardown can glue residual suspended-send
+  payloads; `impl Drop for YnzChannel` drains buffered elements then walks residual entries
+  (disjoint sets — no-double-free argument on the impl doc). `purge_pending_sends` initially shipped
+  glue-less; the Phase 5 review's deviation-judge surfaced that as a REACHABLE live leak and
+  FRAGO 028 closed it — see the FRAGO 028 completion addendum below. Parity gates at the
+  runtime C-ABI (FRAGO 027): `channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity`
+  (array+map+shape-like glue, ≥18 counted allocs asserted — non-vacuous per M5 FRAGO-005) and
+  `channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity` (≥4), both GREEN.
+  13 IR golden snapshots regenerated (decl-line-only: `ynz_channel_create(i64)`→`(i64, ptr)`).
+  Suite 2369/0/6 vs 2367/0/6 baseline (+2 = the new gates). D4 verified: closed1/closed2 conduit
+  blocks byte-unchanged (`git diff` hunks all ≥ emit.rs:14678). P2-3 stays deferred.
+- **FRAGO 028 completion addendum (2026-07-11, `executor-2026-07-11-m6-phase5-frago028`):** the
+  cancellation-path glue-less leak (deviation-judge finding, FRAGO 028 → FIX now) is CLOSED. Both
+  removal sites now invoke the registered `drop_glue` on each removed `PendingSendEntry`'s
+  `value_bits`: `purge_pending_sends` (collect-under-lock, glue-after-unlock) and the insert-time
+  stale-same-token/different-generation sweep in `channel_send_poll_guarded` (same pattern). No new
+  ABI surface — reuses the construction-registered glue; no double-free (a glued entry is removed,
+  so the `Drop` walk never sees it; parked payloads are never buffered). New non-vacuous parity
+  gate `cancellation_purge_and_stale_sweep_glue_free_parked_payloads_alloc_free_parity`
+  (`channel.rs` tests): capacity-1 array channel with real glue, 4 heap payloads (≥8 counted allocs
+  asserted), exercises BOTH sites + last-ref drop, asserts alloc==free; RED→GREEN
+  mutation-proven (glue calls neutralized → fails exactly alloc_delta=8/free_delta=4, the two
+  parked payloads). Suite **2370/0/6** vs 2369/0/6 (+1 = the new gate; one load-induced timing
+  flake of `recursion_cancellation_positive_control_heap_boxes_were_live` under the parallel run,
+  channel-free M2 fixture, passes 3/3 in isolation — clean 2370/0/6 on re-run). clippy
+  `-D warnings` + `fmt --check` green. `target/release` runtime→driver rebuilt in-session per the
+  consumer-mount rule (release binary postdates the fix).
 
 #### Phase 5b — P1-2: twin type-walker unification (FRAGO 011; un-deferred, dormant hardening)
 
@@ -2205,8 +2258,12 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
 - No `ynz_handle_recv_poll` panic can return `Pending` with an unregistered waker — the same
   register-before-poll discipline Phase 4 applied to `ynz_channel_recv_poll` is mirrored onto the
   handle poll path, proven by a RED→GREEN panic-before-registration repro (Phase 4b, FRAGO 010).
-- No buffered channel element leaks at channel drop — alloc=free parity, proven non-vacuously
-  (Phase 5).
+- No buffered channel element leaks at channel drop — alloc=free parity, proven non-vacuously at the
+  runtime-ABI level (Phase 5; channel drop is E2E-unreachable today per FRAGO 027 — the E2E path
+  folds into Future Requirements #13/#17's drop-story class). No cancelled/superseded suspended
+  send's heap payload leaks at its removal either — `purge_pending_sends` and the insert-time stale
+  sweep invoke the registered glue, proven by their own non-vacuous cancellation-path parity gate
+  (FRAGO 028; this path IS live/reachable today, unlike last-ref drop).
 - The two frame-layout/SM-resume type-walkers (`emit.rs:8276`/`:8364`) are unified behind ONE
   authoritative resolution rather than left as a dormant twin-derivation risk — proven by a
   grep-verified zero-second-derivation gate plus a clean SM-resume + frame-layout regression run
@@ -2581,6 +2638,23 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     `v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak` so any new leak class or a
     landed drop story shifts it loudly. (FRAGO 015 — deferral formalized from the Phase 1c completion
     note, per the deviation-judge's JUSTIFIED/risk-neutral verdict.)
+    **Phase 5 / FRAGO 027 addition to this same never-drop-locals / drop-story class (also covers
+    #17 — one class, no new numbered deferral):** Phase 5 confirmed that `YnzChannel`'s creator-side
+    reference is never released by any codegen path today (`ynz_channel_create` emitted at exactly one
+    site, `ynz_channel_share` is refcount-increment-only inside background-arg staging,
+    `ynz_channel_free` emitted only in the background-task drop ladder, `ynz_handle_free` declared but
+    never emitted) — so the channel's LAST-REF-DROP teardown built in Phase 5 is correct but currently
+    unreachable from any compiled Yinz program; its non-vacuous parity proof lives at the runtime-ABI
+    level (Phase 5 step 4). **Scope correction (FRAGO 028): the cancellation-path leak —
+    `purge_pending_sends` (called from the live drop ladder on every task cancellation and from
+    `ynz_handle_free`) and the insert-time stale-entry sweep removing a `PendingSendEntry` without
+    invoking `drop_glue` — is NOT part of this deferral. That path is REACHABLE and live today, and it
+    is FIXED (both sites invoke the registered glue, with their own non-vacuous cancellation-path
+    parity gate); this entry covers ONLY the genuinely E2E-unreachable last-ref-drop mechanism.**
+    This folds into the WHY/COST/TRIGGER already recorded here and in #17: the
+    drop-story milestone that frees crossing locals is the same machinery that will release the
+    creator's channel reference at scope exit (`.give`/`.share`/return-escape aware), at which point
+    Phase 5's runtime-ABI parity pin gains its E2E sibling.
 14. **Int-literal → `number`-param CALL-SITE coercion gap** (surfaced by Phase 1d segment 2 while
     resolving the cpu-member IntLit sub-case; the sibling call-site facet of item #9's store-site
     ICE — SAME root class, different site). **WHAT:** a bare int literal passed as a CALL ARGUMENT to

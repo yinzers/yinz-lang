@@ -4345,7 +4345,7 @@ mod m6_pending_send_aba {
     fn cancelled_frame_sender_is_purged_and_reused_address_cannot_resurrect_it() {
         let waker = make_waker();
         unsafe {
-            let chan = ynz_channel_create(1);
+            let chan = ynz_channel_create(1, std::ptr::null_mut());
             prefill(chan, 42, &waker); // capacity-1 channel is now FULL — backpressure
 
             // Task A suspends on send(111).
@@ -4458,7 +4458,7 @@ mod m6_pending_send_aba {
     async fn freed_handle_sender_is_purged_and_reused_address_cannot_resurrect_it() {
         let waker = make_waker();
         unsafe {
-            let chan = ynz_channel_create(1);
+            let chan = ynz_channel_create(1, std::ptr::null_mut());
             prefill(chan, 42, &waker);
 
             // Handle A: parent's h.send(111) suspends on the full conduit.

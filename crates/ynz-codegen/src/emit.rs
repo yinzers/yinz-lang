@@ -14675,6 +14675,66 @@ fn extract_range_bounds<'ctx>(
     }
 }
 
+/// Synthesize (memoized per element type) the `channel<T>` element drop-glue function and
+/// return it as the pointer value for `ynz_channel_create`'s glue parameter (v0.3-M6 P2-4).
+///
+/// The glue is registered ONCE at construction — the single authoritative element-drop choke
+/// point (authoritative-derivation.md); the runtime's `YnzChannel::drop` invokes it on each
+/// residual buffered element / suspended-send payload at last-ref teardown. Typeck
+/// (`check_channel_construction`) admits only int/float/bool/string/array/map element types,
+/// so exactly TWO non-null arms exist:
+///   - `array<T>` → `void glue(i64 bits) { ynz_array_drop(bits as ptr) }`
+///   - `map<K,V>` → `void glue(i64 bits) { ynz_map_drop(bits as ptr) }`
+///
+/// int/float/bool are value bits (nothing to drop) and `string` is DELIBERATELY glue-less
+/// (raw-malloc'd immortal bytes, invisible to the alloc counter — freeing would be unsound):
+/// all pass null. A shape arm would be dead code (typeck rejects shape elements) — none exists.
+fn channel_drop_glue<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+) -> Result<PointerValue<'ctx>, String> {
+    let elem = match cg.expr_type(expr) {
+        // resolve_type doesn't recurse into BuiltinChannel, so substitute the element
+        // explicitly (a `channel<array<T>>` inside a generic fn must mangle concretely).
+        Type::BuiltinChannel { elem } => cg.resolve_type(&elem),
+        other => {
+            return Err(format!(
+                "channel construction: expression typed {other:?}, expected a channel type"
+            ))
+        }
+    };
+    let drop_fn = match &elem {
+        Type::BuiltinArray { .. } => cg.rt.ynz_array_drop,
+        Type::BuiltinMap { .. } => cg.rt.ynz_map_drop,
+        _ => return Ok(cg.ptr().const_null()),
+    };
+    let name = format!("ynz_chan_drop_glue_{}", mangle_type(&elem));
+    let glue_fn = match cg.module.get_function(&name) {
+        Some(f) => f,
+        None => {
+            let fn_ty = cg.ctx.void_type().fn_type(&[cg.i64().into()], false);
+            let f = cg.module.add_function(&name, fn_ty, None);
+            let entry = cg.ctx.append_basic_block(f, "entry");
+            // A fresh builder leaves the caller's insertion point untouched (the
+            // build_cpu_trampoline precedent) — glue is synthesized mid-lower_expr.
+            let b = cg.ctx.create_builder();
+            b.position_at_end(entry);
+            let bits = f
+                .get_nth_param(0)
+                .ok_or_else(|| format!("{name}: missing bits param"))?
+                .into_int_value();
+            let elem_ptr = b
+                .build_int_to_ptr(bits, cg.ptr(), "elem_ptr")
+                .map_err(|e| format!("{name}: {e}"))?;
+            b.build_call(drop_fn, &[elem_ptr.into()], "")
+                .map_err(|e| format!("{name}: {e}"))?;
+            b.build_return(None).map_err(|e| format!("{name}: {e}"))?;
+            f
+        }
+    };
+    Ok(glue_fn.as_global_value().as_pointer_value())
+}
+
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
     match expr {
         Expr::IntLit(n, _) => Ok(cg.i64().const_int(*n as u64, true).into()),
@@ -14971,9 +15031,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             .const_int(ynz_typeck::DEFAULT_CHANNEL_CAPACITY as u64, false),
                         _ => lower_expr(cg, &call.args[0])?.into_int_value(),
                     };
+                    // v0.3-M6 P2-4: register the per-element-type drop glue at the ONE
+                    // construction choke point (null for primitive/string element types).
+                    let glue = channel_drop_glue(cg, expr)?;
                     let chan = cg
                         .builder
-                        .build_call(cg.rt.ynz_channel_create, &[capacity.into()], "channel_new")
+                        .build_call(
+                            cg.rt.ynz_channel_create,
+                            &[capacity.into(), glue.into()],
+                            "channel_new",
+                        )
                         .map_err(|e| format!("channel construction: {e}"))?
                         .try_as_basic_value()
                         .basic()

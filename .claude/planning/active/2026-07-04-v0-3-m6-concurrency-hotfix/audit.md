@@ -3268,6 +3268,102 @@ executor + green-check dispatches. Baseline count at seal: **2355 passed / 0 fai
   committed (conductor seals). Session-id appended to `plan.md` frontmatter in the same action as
   this entry.
 
+- `executor-2026-07-11-m6-phase5-seg1` — 2026-07-11 — **Phase 5 (P2-4 buffered-channel
+  heap-element leak) segment 1: STATUS PARTIAL, checkpointed at the plan's own `**CHECKPOINT**`
+  mark after Step 1.** Step 1 (ABI blast-radius enumeration) COMPLETE: `ynz_channel_create` has
+  exactly ONE codegen emission site (`emit.rs:14976`, the `"channel"` intrinsic arm) + the decl
+  (`runtime_decls.rs:469-473`) + the runtime definition (`channel.rs:238`) + ~13 Rust-internal
+  test call sites — materially smaller than the plan's upper bound. **Zero code changed; tree
+  clean at `b0cdbd3`** (sealed 2367/0/6 baseline). **CRITICAL DEVIATION SURFACED (not
+  self-adjudicated), for the deviation-judge → FRAGO seam:** the CREATOR's channel reference is
+  never released by v0.3 codegen (only the spawned task's kind-2 drop-ladder arm frees;
+  `ynz_handle_free` is declared but never emitted), verified by exhaustive grep + a compiled-IR
+  probe of `v0_3_m4_channel_never_drained.ynz` (`create=1 share=1 free=0`) — so YnzChannel's
+  last-ref drop is UNREACHABLE from any compiled program today and Step 4's E2E
+  `YNZ_ALLOC_COUNTER_OUTPUT` fixture gate would be VACUOUS as written (the FRAGO-005 false-pass
+  class). Options surfaced in `handoff-phase-5.md` (runtime-C-ABI-level gate / creator-side free
+  scope growth / hybrid). Design invariants for Step 2 (per-type glue table incl. the
+  string-has-no-sound-free finding, pending_sends payload-extraction refactor need, Drop-impl
+  shape, D4 closed1/closed2 byte-untouched guard) recorded in `handoff-phase-5.md` with
+  verification receipts R1-R3 against `b0cdbd3`. Resume-at: `phase-5/step-2`. Session-id appended
+  to `plan.md` frontmatter in the same action as this entry.
+
+### FRAGO 027 — 2026-07-11 — session-id: `conductor-2026-07-11-m6-phase5` (Terrain P2-4 correction +
+Step 4 gate re-level + Future Requirements deferral; plan.md body edit applied by re-dispatched
+executor)
+
+- **Trigger.** Phase 5 segment 1's mid-phase surfacing (executor `executor-2026-07-11-m6-phase5-seg1`,
+  zero code changes): the plan's own Step 4 gate design ("alloc=free parity gate for a channel dropped
+  with elements still buffered") is premised on a compiled Yinz program ever releasing a `YnzChannel`'s
+  LAST reference — which does not happen in v0.3 codegen today.
+- **Independent re-verification (deviation-judge, NOT the executor's narration alone).** Read
+  `emit.rs` directly: `ynz_channel_create` — 1 emission site (14976); `ynz_channel_share` — 1 site
+  (15845), scoped entirely inside `bg_arg_heap_upgrade_if_needed`'s background-arg staging (own
+  comment: "neither give nor copy is correct for a conduit" — refcount increment only, creator's ref
+  never consumed); `ynz_channel_free` — 1 call site (16176), scoped entirely inside
+  `BgArgFreeKind::SharedChannel`'s background-task drop ladder; `ynz_handle_free` — declared
+  (`runtime_decls.rs:521-524`) but ZERO call sites anywhere in `ynz-codegen`. No `impl Drop for
+  YnzChannel` exists in `channel.rs`; `ynz_channel_free` is a manual `Arc::from_raw`+`drop` with no
+  scope-exit trigger. **Generalizes past channels**: `alloca()` (`emit.rs:2084-2113`) groups
+  `BuiltinChannel` with array/map/Maybe/Union as "opaque pointer" locals, and `ynz_free`/
+  `ynz_array_drop` calls are equally scoped ONLY inside the background-arg drop ladder
+  (`emit.rs:16098/16123/16150`) — never at a plain local's scope exit. `emit.rs:9759-9764`'s own
+  comment names this: "the shipped never-drop-locals semantics… tracked as v0.3-M6 Future-Req #17,
+  deferred to the drop-story milestone." **This is the SAME pre-existing, already-tracked gap
+  (Future-Req #13/#17) — not a new, channel-specific defect.**
+- **Terrain P2-4 citation falsified.** Plan.md's Terrain (~line 97-98) asserted P2-4 ("buffered
+  elements at channel DROP") "IS reachable today regardless of P2-1/P2-3." This does not hold against
+  the actual codegen: P2-4 is currently just as structurally unreachable as P2-3, for a sibling reason
+  (no drop-story machinery exists yet, vs. no channel-close semantics exist yet). Corrected in the same
+  edit this FRAGO applies.
+- **Ruling — option (a)+(c), rejecting (b).** (a) Author the alloc=free parity gate at the RUNTIME
+  C-ABI level: a `channel.rs` `#[test]` directly driving `ynz_channel_create` (with glue) → send heap
+  elements → `ynz_channel_free` → assert non-vacuous counter parity — proves the drop-glue MECHANISM is
+  correct (per M5's FRAGO-005 non-vacuous lesson) without requiring an E2E path that cannot exist for
+  ANY heap-typed local today, not just channels. Precedented (`arc.rs:23-26`'s existing
+  `YNZ_ALLOC_COUNTER_OUTPUT` Arc-control-block gate uses the identical runtime-ABI-level shape). (c) Fold
+  the E2E-unreachability gap into the EXISTING Future-Req #13/#17 drop-story-milestone class (not a
+  fresh deferral) — WHAT: `YnzChannel`'s creator-side reference (and thus the whole object, drop-glue
+  included) is never released by any codegen path today; the mechanism built this phase is correct but
+  currently dead code. WHY deferred: freeing needs the general ownership/lifetime drop story (tracking a
+  local's last real use across every control-flow path, `.give`/`.share`/return-escape aware) —
+  building that correctly just for channels here would smuggle a milestone-scale capability into a
+  single hotfix phase. COST: folds into the already-budgeted drop-story milestone estimate (1-2
+  sessions, per #13/#17) plus updating this phase's own parity-gate pin when it lands. TRIGGER: the
+  drop-story milestone ships, or a real workload needs channel-object memory reclaimed before process
+  exit. **Option (b)** (extend codegen to emit a creator-side `ynz_channel_free` at scope-exit) is
+  REJECTED as disproportionate: it would special-case channels while every other heap-typed local
+  (string/array/map/shape) remains equally never-freed — an inconsistent partial fix; it cannot be done
+  safely without the general lifetime machinery (a naive scope-exit free risks UAF/double-free the
+  moment a channel is `.give`n/`.share`d/escapes via return — doing it correctly IS the drop-story
+  milestone); it would add a genuinely new, unenumerated ABI-blast-radius class (every channel-local
+  scope-exit point) beyond Step 1's "bounded to channel-construction sites" enumeration — real
+  scope growth requiring its own signed risk-raising FRAGO, not a silent Phase 5 add; and it is
+  disproportionate to this milestone's Mission (a bounded patch hotfix against named, confirmed,
+  bounded correctness bugs — UAF/ABA/leaks — not a general lifetime-machinery build).
+- **Classification.** Risk-NEUTRAL, auto-apply-able: narrows Step 4's gate LEVEL (E2E → runtime-ABI,
+  substance preserved — "alloc=free parity gate GREEN with non-vacuous coverage" is still satisfied),
+  adds a deferral note folded into an already-existing tracked class, corrects a plan-text citation. No
+  new ABI surface, no new codegen call sites, Phase 5's own scope (D3, construction-time glue
+  registration) is unchanged. Matches this plan's established JUSTIFIED/risk-neutral pattern (FRAGOs
+  015/016/017/020). Auto-apply + log; no signature.
+- **Structural note for Patrick (beyond the a/b/c pick).** Phase 5's deliverable, as scoped, is
+  currently unreachable dead code from any compiled Yinz program — P2-3's fate, via a different,
+  larger, already-tracked cause. Building the mechanism now is still correct (D3's single-authoritative-
+  choke-point reasoning holds for future work; it satisfies no-duct-tape's legitimate-RED pattern:
+  documented, pinned by a real test, never shipped as "the finished state" alone) — this is named
+  explicitly so it reads as a deliberate, locked decision rather than an oversight discovered later.
+- **Plan.md edit (applied by re-dispatched executor, this same FRAGO).** (1) Terrain P2-4 citation
+  corrected from "reachable today" to "confirmed UNREACHABLE via any compiled program today — same
+  structural shape as P2-3, closed by the drop-story milestone rather than channel-close semantics."
+  (2) Phase 5 Step 4 rewritten: gate moves from an E2E `YNZ_ALLOC_COUNTER_OUTPUT` fixture to a
+  `channel.rs` runtime-ABI-level `#[test]` (create-with-glue → send heap elements → `ynz_channel_free`
+  → assert non-vacuous parity); E2E-unreachability noted explicitly in the step text. (3) Exit criteria
+  updated to match: "alloc=free parity gate GREEN with non-vacuous coverage at the runtime-ABI level
+  (E2E unreachable today, folded into Future-Req #13/#17 — see deferral)." (4) A note appended to the
+  EXISTING Future Requirements #13/#17 entry recording this phase's confirmation + the four fields
+  above — not a new numbered deferral.
+
 ## Conductor cold-resume note — 2026-07-11 (context clear at the Phase-3c → Phase-4 boundary)
 
 Supersedes the earlier P3→P3b cold-resume note. Clean, nothing-in-flight boundary. State + pointers for the
@@ -3327,3 +3423,119 @@ embed (this bit us mid-P3b/P3c — force it). Baseline at seal: **2363 passed / 
   = 5.0; print(f.toString())` prints `0.0`. Candidate only; recorded in the P3c polish round.
 - Prior deferrals still standing: int→number COERCION (stub plan `2026-07-04-v0-3-hotfix-int-literal-number`);
   #18 decimal128 by-value return + #19 map<number> key hashing (roadmap ledger).
+
+## Session log (continued)
+
+- `executor-2026-07-11-m6-phase5-seg2` — 2026-07-11 — **Phase 5 segment 2: FRAGO 027 plan.md body
+  edit applied + Steps 2-5 (drop-glue implementation, D4 guard, runtime-ABI parity gate, full
+  suite).** FRAGO 027's four plan.md edits landed first, under this session-id, per the conductor's
+  classified instruction: (1) Terrain P2-4 clause corrected to "confirmed UNREACHABLE via any
+  compiled program today — same structural shape as P2-3, closed by the drop-story milestone";
+  (2) Phase 5 Step 4 rewritten to the runtime-C-ABI-level `channel.rs` `#[test]` gate
+  (create-with-glue → send array/map/shape heap elements, NOT string → `ynz_channel_free` → parity),
+  with the E2E-unreachability noted in the step text; (3) exit criteria re-leveled ("AT THE
+  RUNTIME-ABI LEVEL (E2E unreachable today — folded into Future Requirements #13/#17)");
+  (4) deferral note appended to the existing FR #13 entry (explicitly also covering #17's class) —
+  creator-side channel reference never released by any codegen path today, mechanism correct but
+  currently dead code, folds into the existing WHY/COST/TRIGGER, no new numbered deferral. Sibling
+  sweep per plan-source-of-truth found ONE additional stale restatement of the same fact — the
+  Safety-invariant line "No buffered channel element leaks at channel drop — proven non-vacuously
+  (Phase 5)" (~line 2218) — qualified to "at the runtime-ABI level" with the FRAGO 027 citation, in
+  the same edit pass. Session-id appended to plan.md frontmatter in the same action as this entry.
+  **STATUS PARTIAL — checkpointed at the Step-2 boundary on a green tree** (context past the
+  calibration threshold before implementation began; the FRAGO application is a complete, coherent
+  unit; zero code changes — code tree byte-identical to `b0cdbd3`, 2367/0/6 baseline intact).
+  Implementation scouting for Steps 2-4 completed and recorded as NEW verification receipts
+  R4 (typeck's `check_channel_construction` gate: only int/float/bool/string/array/map channel
+  element types — shape/number REJECTED, so codegen glue needs only array/map arms) and R5
+  (emission-site mechanics: `cg.expr_type(expr)`, `mangle_type`, builder save/restore, glue
+  memoization) in `handoff-phase-5.md`, which was REPLACED in place with current truth (design
+  notes: `Option<unsafe extern "C" fn(i64)>` glue field to preserve YnzChannel's auto Send/Sync;
+  `PendingSendEntry { fut, value_bits }` refactor sites; no-double-free analysis for the Drop
+  impl's drain+pending walk; nextest process-per-test satisfies the counter-race warning;
+  purge_pending_sends stays glue-less per the seam). Resume-at: `phase-5/step-2`.
+
+- `executor-2026-07-11-m6-phase5-seg3` — 2026-07-11 — **Phase 5 segment 3: Steps 2–5 COMPLETE —
+  phase DONE.** Resumed from `handoff-phase-5.md` at `phase-5/step-2`; inherited receipts R1–R5
+  (re-verified only the delta: tree still byte-identical to `b0cdbd3` code-wise). Step 2:
+  `YnzChannel.drop_glue: Option<unsafe extern "C" fn(i64)>` field + `ynz_channel_create(capacity,
+  drop_glue)` (now `unsafe extern "C"` with a `# Safety` contract; null→None, non-null→transmuted
+  fn ptr); `PendingSendEntry { fut, value_bits }` refactor (field decl, get_mut re-poll, insert —
+  `purge_pending_sends`/`pending_send_count` unchanged; purge documented as DELIBERATELY glue-less);
+  `impl Drop for YnzChannel` (get_mut poison-tolerant, try_recv drain + residual pending walk,
+  disjoint-sets no-double-free argument in the impl doc); 13 Rust-internal call sites → null glue
+  (channel.rs tests via a `make_chan` helper, handle.rs:565, lib.rs:4348/4461 — whole-tree grep
+  clean); codegen: `runtime_decls.rs` decl `ptr(i64, ptr)` + `emit.rs` `channel_drop_glue` helper
+  (memoized `ynz_chan_drop_glue_<mangle>` synthesis on a FRESH builder per the build_cpu_trampoline
+  precedent; explicit `resolve_type` on the channel elem since resolve_type doesn't recurse into
+  BuiltinChannel; exactly two non-null arms per R4) wired at the single `"channel"` intrinsic arm.
+  Step 3 (D4): all emit.rs diff hunks ≥ line 14678; closed1/closed2 conduit blocks byte-unchanged.
+  Step 4: two runtime-C-ABI parity gates in channel.rs tests —
+  `channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity` (3 arrays + 2 maps + 2
+  shape-like 16-byte cells across three channels with REAL per-type glue; asserts alloc_delta ≥ 18
+  AND alloc==free) and `channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity`
+  (capacity-1, parked send with heap payload; ≥ 4 AND alloc==free); counter enabled in-process
+  (nextest = process per test). Step 5: embed refresh forced (runtime → driver, rerun-if-changed
+  on libynz_runtime.a confirmed in driver build.rs) then full suite: **2369 passed / 0 failed /
+  6 skipped** vs 2367/0/6 baseline (+2 = the new gates; no flake). 13 IR golden snapshots
+  regenerated — verified decl-line-only (`declare ptr @ynz_channel_create(i64)` → `(i64, ptr)` +
+  insta assertion_line header churn). clippy `--workspace -- -D warnings` + `fmt --all --check`
+  green (two clippy `--tests` failures confirmed PRE-existing via stash probe, untouched).
+  Completion note written into Phase 5; session-id appended to frontmatter in the same action as
+  this entry. `handoff-phase-5.md` deleted as the final act (phase DONE).
+
+### FRAGO 028 — 2026-07-11 — session-id: `conductor-2026-07-11-m6-phase5-review` (cancellation-path
+glue-less leak → FIX now, not deferred; plan.md body edit applied by re-dispatched executor)
+
+- **Trigger.** deviation-judge's Phase 5 review (the 7-reviewer fan-out over Steps 2-5) surfaced a
+  should-fix + FRAGO candidate: `purge_pending_sends` (`channel.rs:609-616`, the cancellation path
+  called from the REAL, live drop ladder — `runtime.rs:683` on task cancellation, `handle.rs:434` on
+  handle free) and the insert-time stale-same-token/different-generation sweep inside
+  `channel_send_poll_guarded` (`channel.rs:457-461`) both remove a `PendingSendEntry` without ever
+  invoking `chan.drop_glue` on `entry.value_bits` — leaking a cancelled send's heap-typed payload
+  forever, since the entry is gone before the channel's own `Drop` impl could ever see it.
+- **Why this is DISTINCT from the FR#13/#17 citation it was informally riding on.** FR#13/#17 (and
+  FRAGO 027's own scope) cover a channel's LAST-REF DROP, confirmed E2E-UNREACHABLE from any compiled
+  Yinz program today (no codegen path releases the creator's reference). `purge_pending_sends` is the
+  opposite: a REACHABLE, LIVE path exercised by every real background-task cancellation in production
+  today. Folding a live, reachable leak under an "unreachable today" citation mischaracterizes its
+  urgency — deviation-judge named this explicitly.
+- **Ruling — FIX NOW, not deferred.** Per no-duct-tape.md's "live exposure before the trigger + a
+  cheap in-scope mitigation" test: this IS live-exposed (unlike the deferred E2E-unreachable case), and
+  the mitigation is cheap and in-scope — `chan.drop_glue` is already a field on the same `&YnzChannel`
+  both leak sites already dereference; no new ABI surface, no new call sites beyond the two already-
+  reachable functions, no scope growth analogous to the rejected option (b) (this reuses the EXISTING
+  glue registered at construction, it does not add a new release trigger). Add `if let Some(glue) =
+  chan.drop_glue { unsafe { glue(entry.value_bits) } }` (or the equivalent already-established pattern
+  from the `Drop` impl) at both sites, plus a cancellation-path parity test (a task suspended on a full
+  heap-typed channel, cancelled via the real drop ladder, asserting alloc==free non-vacuously — mirrors
+  the existing `channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity` shape but
+  drives it through `purge_pending_sends`/the real cancellation path rather than `ynz_channel_free`
+  directly, per deviation-judge's own note that "this scenario is genuinely unverified either way").
+- **Classification.** Risk-NEUTRAL / risk-REDUCING: closes a genuine, reachable memory leak using
+  already-registered state, adds no new ABI parameter, no new construction-site call, touches only the
+  two cancellation-path functions. Auto-apply + log; no signature.
+- **Plan.md edit (applied by re-dispatched executor, this same FRAGO).** Phase 5's Step 2 gains an
+  explicit sub-item: invoke `drop_glue` at both cancellation-path removal sites
+  (`purge_pending_sends`, the insert-time stale-entry sweep), not just at the channel's own `Drop`.
+  Phase 5's exit criteria gains: "the cancellation-path leak (purge_pending_sends + insert-time stale
+  sweep) is closed with its own non-vacuous parity gate — not folded into the FR#13/#17
+  E2E-unreachable-drop deferral." The FR#13/#17 note added by FRAGO 027 is corrected to remove this
+  cancellation-path leak from its scope (it is FIXED, not deferred) — FR#13/#17 continues to cover only
+  the genuinely E2E-unreachable last-ref-drop mechanism.
+
+- `executor-2026-07-11-m6-phase5-frago028` — 2026-07-11 — **FRAGO 028 applied: plan.md body edits +
+  cancellation-path drop-glue fix + parity gate.** Plan.md edits landed FIRST, under this session-id,
+  per the conductor's classified instruction: (1) Phase 5 Step 2 gained the FRAGO 028 sub-item
+  (invoke `drop_glue` at both cancellation-path removal sites, not just the `Drop` impl); (2) Phase 5
+  exit criteria gained the cancellation-path-leak-closed-with-own-non-vacuous-gate clause; (3) the
+  FR#13 FRAGO-027 deferral note corrected with an explicit **Scope correction (FRAGO 028)** block —
+  cancellation-path leak removed from the deferral's scope (FIXED, not deferred); FR#13/#17 covers
+  ONLY the E2E-unreachable last-ref-drop mechanism. Sibling sweep per plan-source-of-truth found TWO
+  additional stale restatements, both corrected in the same pass: the Phase 5 completion-note clause
+  "`purge_pending_sends` deliberately left glue-less (… stay with FR #13/#17)" and the Safety
+  invariant "No buffered channel element leaks at channel drop" (which read as if ALL channel-payload
+  leak protection were E2E-unreachable — extended with the live cancellation-path clause). Code fix +
+  cancellation-path parity test + full-suite run recorded in the Phase 5 FRAGO 028 completion
+  addendum in plan.md (numbers reconciled there). Session-id appended to plan.md frontmatter in the
+  same action as this entry.

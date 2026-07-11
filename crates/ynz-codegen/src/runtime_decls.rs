@@ -102,7 +102,9 @@ pub struct RuntimeDecls<'ctx> {
     // `tokio::sync::mpsc`. Phase 1 lowers construction only; the suspending send/recv poll ABI
     // (`ynz_channel_send_poll` / `ynz_channel_recv_poll`) and the free path (`ynz_channel_free`)
     // are wired in Phase 2 with the handle-form (FRAGO 004).
-    // ynz_channel_create(i64 capacity) -> ptr
+    // ynz_channel_create(i64 capacity, ptr drop_glue) -> ptr — drop_glue is the per-element-type
+    // teardown glue registered ONCE at construction (v0.3-M6 P2-4; null for primitive/string
+    // element types — see emit.rs channel_drop_glue)
     pub ynz_channel_create: FunctionValue<'ctx>,
     // v0.3-M4 Phase 2 — channel op + task-handle ABI (see ynz-runtime channel.rs / handle.rs):
     // ynz_channel_share(chan: ptr) -> ptr (refcount bump at each spawn boundary)
@@ -469,7 +471,7 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_channel_create: declare_fn(
                 module,
                 "ynz_channel_create",
-                ptr.fn_type(&[i64.into()], false),
+                ptr.fn_type(&[i64.into(), ptr.into()], false),
             ),
             ynz_channel_share: declare_fn(
                 module,

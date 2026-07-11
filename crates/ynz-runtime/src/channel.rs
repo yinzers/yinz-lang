@@ -61,7 +61,9 @@
 //!   generations differ even inside the purge's race window.
 //! - **Purge on cancellation.** ONE shared idempotent helper ([`purge_pending_sends`]) removes a
 //!   dying identity's entries at BOTH cancellation paths (the drop ladder's kind-2 shared-channel
-//!   arm for frame tokens; `ynz_handle_free` for handle tokens), closing the orphan leak (P2-2).
+//!   arm for frame tokens; `ynz_handle_free` for handle tokens), closing the orphan leak (P2-2),
+//!   and frees each purged entry's heap payload through the channel's registered drop glue
+//!   (FRAGO 028 — a removed entry is invisible to the channel's own `Drop`).
 //!
 //! # Multi-waiter receive wakeups
 //!
@@ -105,6 +107,17 @@ pub(crate) const CHANNEL_CLOSED: i32 = 2;
 /// The in-flight `send()` endpoint future: owns a cloned `Sender` + the pending value, resolves
 /// to `Ok(())` when the value is accepted or `Err(())` when the receiver has been dropped.
 type PendingSend = Pin<Box<dyn Future<Output = Result<(), ()>> + Send>>;
+
+/// A suspended send parked in [`YnzChannel::pending_sends`]: the boxed endpoint future plus a
+/// mirror of the element value bits it captured (v0.3-M6 P2-4). The future owns the value and
+/// never exposes it, so the bits are mirrored here at insert time — channel teardown
+/// ([`YnzChannel`]'s `Drop`) needs them to run the element drop glue on payloads that never
+/// reached the buffer.
+struct PendingSendEntry {
+    fut: PendingSend,
+    /// The suspended send's element value as i64 bits (pointer bits for heap elements).
+    value_bits: i64,
+}
 
 /// The ONE global monotonic caller-generation counter (v0.3-M6 P3-1) — the single salting
 /// scheme every caller identity mints from (a spawned task's `task_gen`, a handle's
@@ -197,9 +210,22 @@ pub struct YnzChannel {
     /// forwarded waker on each resume, and removed when it resolves. A cancelled caller's entry
     /// is purged at its cancellation path via [`purge_pending_sends`]; the generation salt keeps
     /// a reused token address from ever matching a stale entry in the interim.
-    pending_sends: Mutex<HashMap<(u64, u64), PendingSend>>,
+    pending_sends: Mutex<HashMap<(u64, u64), PendingSendEntry>>,
     /// Wakers of every task currently suspended on `receive()` (see module docs).
     recv_waiters: Mutex<Vec<Waker>>,
+    /// Per-element-type drop glue, registered ONCE at construction (v0.3-M6 P2-4) — the single
+    /// authoritative element-drop choke point. Invoked by this type's `Drop` impl on each
+    /// residual buffered element and suspended-send payload at last-ref teardown, AND on each
+    /// `PendingSendEntry` removed at the two cancellation paths ([`purge_pending_sends`] and
+    /// `channel_send_poll_guarded`'s insert-time stale-entry sweep — FRAGO 028: a removed
+    /// entry's payload is unreachable to `Drop` and would leak otherwise). `None` for
+    /// element types with no runtime-owned heap payload: int/float/bool (value bits) AND
+    /// `string` (raw-malloc'd immortal bytes, invisible to the alloc counter — never freed).
+    ///
+    /// Stored as an `Option` of a fn pointer, NOT a raw `*mut u8` field: `YnzChannel` is
+    /// `Arc`-shared cross-thread relying on AUTO `Send`/`Sync`, which a raw-pointer field
+    /// would silently break (fn pointers are `Send + Sync`).
+    drop_glue: Option<unsafe extern "C" fn(i64)>,
 }
 
 impl YnzChannel {
@@ -221,6 +247,45 @@ impl YnzChannel {
     }
 }
 
+/// Channel teardown (v0.3-M6 P2-4): with the LAST reference gone, elements still sitting in
+/// the bounded buffer — and suspended-send payloads that never reached it — would leak their
+/// heap payload (the buffer is typeless i64 bits; tokio's own drop cannot free what the bits
+/// point at). The glue registered at construction is the one authoritative per-element drop
+/// path (authoritative-derivation.md — never a second ad hoc walk).
+///
+/// No double-free between the buffered drain and the pending-sends walk: the two touch
+/// DISJOINT value sets by construction. tokio mpsc's `send` future enqueues its value in the
+/// SAME poll that returns `Ready(Ok)`, and `channel_send_poll_guarded` removes the entry
+/// inside that same call before returning — there is no state where a value is in the buffer
+/// while its `pending_sends` entry survives. A residual entry's `value_bits` is therefore
+/// never ALSO a buffered element; each payload sees the glue exactly once.
+///
+/// Time: O(b + p) where b = buffered elements, p = residual suspended sends  Space: O(1).
+impl Drop for YnzChannel {
+    fn drop(&mut self) {
+        let Some(glue) = self.drop_glue else {
+            return; // primitive/string element types: nothing per-element to drop
+        };
+        // `&mut self` is exclusive access: `get_mut` bypasses locking entirely, with the same
+        // poison tolerance as `lock_or_recover` (which needs `&Mutex`, not owned access).
+        let receiver = self.receiver.get_mut().unwrap_or_else(|e| e.into_inner());
+        while let Ok(bits) = receiver.try_recv() {
+            // SAFETY: glue was registered at construction for exactly this channel's element
+            // type; each buffered element's bits pass through it exactly once (see above).
+            unsafe { glue(bits) };
+        }
+        let pending = self
+            .pending_sends
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner());
+        for entry in pending.values() {
+            // SAFETY: as above — a residual entry's payload never reached the buffer (the
+            // disjointness argument in the impl doc), so this is its only drop.
+            unsafe { glue(entry.value_bits) };
+        }
+    }
+}
+
 /// Construct a bounded channel with `capacity` slots. Returns an opaque `Arc`-backed pointer
 /// (strong count 1).
 ///
@@ -234,19 +299,35 @@ impl YnzChannel {
 /// # Side effects
 /// Heap-allocates one `YnzChannel` (`Arc`). Each holder releases its reference with
 /// [`ynz_channel_free`] exactly once (alloc=free by refcount balance).
+///
+/// # Safety
+/// `drop_glue` must be null (no per-element glue — primitive/string element types) or a valid
+/// `unsafe extern "C" fn(i64)` that remains callable for the channel's entire lifetime
+/// (codegen passes a module-level synthesized function; Rust tests pass a static fn). At
+/// last-ref teardown the glue receives each residual element's i64 bits exactly once.
 #[no_mangle]
-pub extern "C" fn ynz_channel_create(capacity: i64) -> *mut u8 {
+pub unsafe extern "C" fn ynz_channel_create(capacity: i64, drop_glue: *mut u8) -> *mut u8 {
     debug_assert!(
         capacity >= 1,
         "ynz_channel_create: capacity must be >= 1 (typeck rejects non-positive capacity); got {capacity}"
     );
     let cap = if capacity < 1 { 1 } else { capacity as usize };
     let (sender, receiver) = mpsc::channel::<i64>(cap);
+    let glue: Option<unsafe extern "C" fn(i64)> = if drop_glue.is_null() {
+        None
+    } else {
+        // SAFETY: caller guarantees non-null `drop_glue` is a valid extern "C" fn(i64) (the
+        // fn-pointer form, not a raw field, is what preserves YnzChannel's auto Send/Sync).
+        Some(std::mem::transmute::<*mut u8, unsafe extern "C" fn(i64)>(
+            drop_glue,
+        ))
+    };
     let chan = Arc::new(YnzChannel {
         sender: Mutex::new(sender),
         receiver: Mutex::new(receiver),
         pending_sends: Mutex::new(HashMap::new()),
         recv_waiters: Mutex::new(Vec::new()),
+        drop_glue: glue,
     });
     Arc::into_raw(chan) as *mut u8
 }
@@ -342,8 +423,8 @@ pub(crate) unsafe fn channel_send_poll_guarded(
         // Re-poll THIS caller's already-suspended send (never another caller's — the
         // token+generation keying is what makes the shared-channel model silent-wrong-proof).
         let mut pending = lock_or_recover(&chan.pending_sends);
-        if let Some(fut) = pending.get_mut(&key) {
-            return match fut.as_mut().poll(cx) {
+        if let Some(entry) = pending.get_mut(&key) {
+            return match entry.fut.as_mut().poll(cx) {
                 Poll::Pending => CHANNEL_PENDING,
                 Poll::Ready(Ok(())) => {
                     pending.remove(&key);
@@ -381,9 +462,32 @@ pub(crate) unsafe fn channel_send_poll_guarded(
                         // Missed-path leak backstop: two LIVE caller identities can never
                         // share a token address, so any same-token / different-generation
                         // entry has a DEAD owner — sweep it here. Closes the P2-2 orphan for
-                        // any cancellation path not wired to purge_pending_sends.
-                        pending.retain(|k, _| k.0 != caller_token || k.1 == caller_generation);
-                        pending.insert(key, fut);
+                        // any cancellation path not wired to purge_pending_sends. Each swept
+                        // entry's heap payload is freed through the registered glue (FRAGO
+                        // 028) — the entry is gone before `Drop` could see it, and a parked
+                        // payload is never buffered, so this is its only drop.
+                        let mut swept_bits: Vec<i64> = Vec::new();
+                        pending.retain(|k, entry| {
+                            let keep = k.0 != caller_token || k.1 == caller_generation;
+                            if !keep {
+                                swept_bits.push(entry.value_bits);
+                            }
+                            keep
+                        });
+                        // `v` is Copy (i64): the future captured its own copy above; this
+                        // mirror is what channel teardown's drop glue reads (P2-4).
+                        pending.insert(key, PendingSendEntry { fut, value_bits: v });
+                        drop(pending);
+                        // Glue outside the pending_sends lock (never run an arbitrary
+                        // extern fn under a channel-internal lock).
+                        if let Some(glue) = chan.drop_glue {
+                            for bits in swept_bits {
+                                // SAFETY: glue was registered at construction for exactly
+                                // this channel's element type; the swept entry's payload
+                                // sees it exactly once (see above).
+                                unsafe { glue(bits) };
+                            }
+                        }
                         CHANNEL_PENDING
                     }
                     Poll::Ready(Ok(())) => {
@@ -510,7 +614,16 @@ pub unsafe extern "C" fn ynz_channel_free(chan_ptr: *mut u8) {
 ///
 /// Purges by GENERATION, not by token: one call sweeps every token the dying identity ever
 /// minted on this channel (root frame, embedded-child, chain-child), and each dropped entry
-/// releases its boxed endpoint future + cloned sender + captured value (the leak fix).
+/// releases its boxed endpoint future + cloned sender + captured value bits (the leak fix).
+/// Each purged entry's heap payload is freed through the channel's registered [`drop_glue`]
+/// (v0.3-M6 FRAGO 028): a purged entry is removed from `pending_sends` here, so the channel's
+/// own `Drop` can never see it — without the glue call the payload would leak forever, and
+/// this path (unlike last-ref drop) is LIVE today, called on every real task cancellation.
+/// No double-free with `YnzChannel::drop`: glue-at-purge removes the entry it frees, and the
+/// `Drop` walk only glues entries still present. A parked payload is never ALSO buffered
+/// (the disjointness argument on the `Drop` impl), so each payload sees the glue exactly once.
+///
+/// [`drop_glue`]: YnzChannel::drop_glue
 ///
 /// **Idempotent by construction**: no matching entry (double-cancel, already-resolved,
 /// already-purged) is a safe no-op — never a panic or UB. Null `chan_ptr` is a no-op (the
@@ -530,7 +643,25 @@ pub(crate) unsafe fn purge_pending_sends(chan_ptr: *mut u8, caller_generation: u
     }
     // SAFETY: chan_ptr is a live Arc-backed pointer (caller guarantee); shared &.
     let chan = &*(chan_ptr as *const YnzChannel);
-    lock_or_recover(&chan.pending_sends).retain(|k, _| k.1 != caller_generation);
+    let mut purged_bits: Vec<i64> = Vec::new();
+    lock_or_recover(&chan.pending_sends).retain(|k, entry| {
+        let keep = k.1 != caller_generation;
+        if !keep {
+            purged_bits.push(entry.value_bits);
+        }
+        keep
+    });
+    // Glue OUTSIDE the pending_sends lock (the guard above is a temporary — dropped at the
+    // end of that statement): the glue is an arbitrary extern fn and must never run under a
+    // channel-internal lock.
+    if let Some(glue) = chan.drop_glue {
+        for bits in purged_bits {
+            // SAFETY: glue was registered at construction for exactly this channel's element
+            // type; a purged entry's payload never reached the buffer and its entry is gone,
+            // so this is its only drop (FRAGO 028 — see the doc above).
+            unsafe { glue(bits) };
+        }
+    }
 }
 
 /// Test-support: number of in-flight suspended sends currently parked on the channel
@@ -568,6 +699,13 @@ mod tests {
         (arc, waker)
     }
 
+    /// Construct a glue-less channel through the real C-ABI (null drop glue — the
+    /// primitive-element form; per-element glue is exercised by the P2-4 parity tests below).
+    fn make_chan(capacity: i64) -> *mut u8 {
+        // SAFETY: null glue is the documented no-glue form.
+        unsafe { ynz_channel_create(capacity, std::ptr::null_mut()) }
+    }
+
     /// Poll a send through the real C-ABI with a `*mut Context`.
     unsafe fn send_tok(chan: *mut u8, value: i64, waker: &Waker, token: u64) -> i32 {
         let mut cx = Context::from_waker(waker);
@@ -594,7 +732,7 @@ mod tests {
     fn send_on_full_suspends_then_resumes_after_drain() {
         let (_arc, waker) = make_waker();
         // Capacity-1 channel forces backpressure on the second send.
-        let chan = ynz_channel_create(1);
+        let chan = make_chan(1);
         unsafe {
             // First send fills the single slot — Ready immediately (fast path, no suspension).
             assert_eq!(
@@ -642,7 +780,7 @@ mod tests {
     #[test]
     fn per_caller_token_keeps_suspended_sends_separate() {
         let (_arc, waker) = make_waker();
-        let chan = ynz_channel_create(1);
+        let chan = make_chan(1);
         unsafe {
             assert_eq!(send_tok(chan, 1, &waker, 0xAA), CHANNEL_READY);
             // Caller A suspends with value 2; caller B suspends with value 3.
@@ -681,7 +819,7 @@ mod tests {
     #[test]
     fn recv_on_empty_suspends_then_delivers() {
         let (arc, waker) = make_waker();
-        let chan = ynz_channel_create(4);
+        let chan = make_chan(4);
         unsafe {
             // Empty channel → recv suspends (Pending), never blocks.
             let (code, _) = recv(chan, &waker);
@@ -708,7 +846,7 @@ mod tests {
     #[test]
     fn send_to_closed_returns_closed() {
         let (_arc, waker) = make_waker();
-        let chan_ptr = ynz_channel_create(2);
+        let chan_ptr = make_chan(2);
         unsafe {
             // Drop the real receiver (swap in a detached one) so the sender observes closure.
             let chan = &*(chan_ptr as *const YnzChannel);
@@ -779,7 +917,7 @@ mod tests {
 
     #[test]
     fn recv_poll_registers_waiter_before_polling() {
-        let chan = ynz_channel_create(1);
+        let chan = make_chan(1);
         let probe = OrderProbe {
             chan,
             registered_before_poll: AtomicBool::new(false),
@@ -835,7 +973,7 @@ mod tests {
     fn live_send_after_slot_clobber_wakes_clobbered_receiver() {
         let (arc_a, waker_a) = make_waker();
         let (_arc_c, waker_c) = make_waker();
-        let chan = ynz_channel_create(2);
+        let chan = make_chan(2);
         unsafe {
             // A suspends first (mpsc slot = A, recorded in recv_waiters).
             let (code, _) = recv(chan, &waker_a);
@@ -869,7 +1007,7 @@ mod tests {
     #[test]
     fn recv_on_closed_drained_returns_closed() {
         let (_arc, waker) = make_waker();
-        let chan_ptr = ynz_channel_create(2);
+        let chan_ptr = make_chan(2);
         unsafe {
             // Drop the real sender so the receiver observes closure once drained.
             let chan = &*(chan_ptr as *const YnzChannel);
@@ -891,7 +1029,7 @@ mod tests {
     #[test]
     fn purge_pending_sends_is_idempotent_and_gen0_is_reserved() {
         let (_arc, waker) = make_waker();
-        let chan = ynz_channel_create(1);
+        let chan = make_chan(1);
         unsafe {
             // Purge on an EMPTY map: no-op, no panic.
             purge_pending_sends(chan, 7);
@@ -942,7 +1080,7 @@ mod tests {
     #[test]
     fn same_token_different_generation_never_collides_and_stale_is_swept() {
         let (_arc, waker) = make_waker();
-        let chan = ynz_channel_create(1);
+        let chan = make_chan(1);
         unsafe {
             assert_eq!(send(chan, 42, &waker), CHANNEL_READY); // fill capacity-1
             let mut cx = Context::from_waker(&waker);
@@ -989,11 +1127,218 @@ mod tests {
         }
     }
 
+    // ── v0.3-M6 Phase 5 (P2-4): drop-glue alloc=free parity at the runtime C-ABI ──────────
+    //
+    // FRAGO 027: the channel's last-ref drop is E2E-unreachable today (no codegen path
+    // releases the creator's reference), so the parity gate drives the C-ABI directly —
+    // ynz_channel_create with real per-type glue → buffer heap elements → ynz_channel_free.
+    // cargo-nextest runs one process per test, so enabling the process-wide alloc counter
+    // in-process cannot race sibling tests; DELTAS (never absolutes) are asserted anyway.
+
+    /// Element drop glue for `channel<array<T>>` — the exact call codegen's synthesized
+    /// `ynz_chan_drop_glue_array_*` makes.
+    unsafe extern "C" fn array_elem_glue(bits: i64) {
+        crate::ynz_array_drop(bits as *mut crate::YnzArray);
+    }
+
+    /// Element drop glue for `channel<map<K,V>>` — the exact call codegen's synthesized
+    /// `ynz_chan_drop_glue_map_*` makes.
+    unsafe extern "C" fn map_elem_glue(bits: i64) {
+        crate::ynz_map_drop(bits as *mut crate::YnzMap);
+    }
+
+    /// Shape-LIKE glue, hand-written: typeck rejects `shape` channel elements today, so
+    /// codegen has no shape arm — but the runtime mechanism is element-type-agnostic; this
+    /// proves it against a plain counted 16-byte cell (FRAGO 027's array/map/shape coverage).
+    unsafe extern "C" fn shape_cell_glue(bits: i64) {
+        crate::ynz_free(bits as *mut u8, 16);
+    }
+
+    /// Construct a channel through the real C-ABI with real per-element drop glue.
+    fn make_chan_with_glue(capacity: i64, glue: unsafe extern "C" fn(i64)) -> *mut u8 {
+        // SAFETY: `glue` is a static extern "C" fn — callable for the process lifetime.
+        unsafe { ynz_channel_create(capacity, glue as *mut u8) }
+    }
+
+    /// P2-4 parity gate (buffered elements): heap elements still sitting in the buffer at
+    /// last-ref drop must be freed through the registered glue — alloc=free, NON-vacuously
+    /// (M5 FRAGO-005: a zero-alloc parity pass proves nothing).
+    #[test]
+    fn channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity() {
+        crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
+        let (_arc, waker) = make_waker();
+        let alloc_before = crate::ynz_alloc_count();
+        let free_before = crate::ynz_free_count();
+        unsafe {
+            // One channel per glue kind, several elements each, buffered and NEVER
+            // drained — the exact P2-4 leak shape.
+            let chan_arr = make_chan_with_glue(4, array_elem_glue);
+            for _ in 0..3 {
+                let arr = crate::ynz_array_new(8); // 2 counted allocs (header + buffer)
+                assert_eq!(send(chan_arr, arr as i64, &waker), CHANNEL_READY);
+            }
+            let chan_map = make_chan_with_glue(4, map_elem_glue);
+            for _ in 0..2 {
+                let map = crate::ynz_map_new(8); // 5 counted allocs
+                assert_eq!(send(chan_map, map as i64, &waker), CHANNEL_READY);
+            }
+            let chan_shape = make_chan_with_glue(4, shape_cell_glue);
+            for _ in 0..2 {
+                let cell = crate::ynz_alloc(16); // 1 counted alloc
+                assert_eq!(send(chan_shape, cell as i64, &waker), CHANNEL_READY);
+            }
+
+            // Last-ref drop of each channel: the Drop impl's buffered drain must free
+            // every element through its registered glue.
+            ynz_channel_free(chan_arr);
+            ynz_channel_free(chan_map);
+            ynz_channel_free(chan_shape);
+        }
+        let alloc_delta = crate::ynz_alloc_count() - alloc_before;
+        let free_delta = crate::ynz_free_count() - free_before;
+        // Non-vacuous: 3 arrays × 2 + 2 maps × 5 + 2 cells × 1 = 18 counted allocs MUST
+        // have been exercised.
+        assert!(
+            alloc_delta >= 18,
+            "vacuous parity run: expected >= 18 counted allocs, saw {alloc_delta}"
+        );
+        assert_eq!(
+            alloc_delta, free_delta,
+            "channel drop glue must free EVERY buffered heap element (P2-4): \
+             alloc_delta={alloc_delta} free_delta={free_delta}"
+        );
+    }
+
+    /// P2-4 parity gate (residual suspended send): a channel dropped while a send is still
+    /// parked in `pending_sends` with a heap payload must glue-free BOTH the buffered element
+    /// AND the parked entry's mirrored payload — disjoint sets, each exactly once (the Drop
+    /// impl's no-double-free invariant, asserted by exact parity: one double-free or one leak
+    /// would each break alloc==free).
+    #[test]
+    fn channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity() {
+        crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
+        let (_arc, waker) = make_waker();
+        let alloc_before = crate::ynz_alloc_count();
+        let free_before = crate::ynz_free_count();
+        unsafe {
+            // Capacity-1 array channel: the first heap element fills the buffer; the second
+            // send suspends, parking its payload in pending_sends (never buffered).
+            let chan = make_chan_with_glue(1, array_elem_glue);
+            let buffered = crate::ynz_array_new(8); // 2 counted allocs
+            assert_eq!(send(chan, buffered as i64, &waker), CHANNEL_READY);
+            let parked = crate::ynz_array_new(8); // 2 counted allocs
+            assert_eq!(send(chan, parked as i64, &waker), CHANNEL_PENDING);
+            assert_eq!(
+                pending_send_count(chan),
+                1,
+                "the second send must be parked"
+            );
+
+            // Last-ref drop with the send STILL suspended.
+            ynz_channel_free(chan);
+        }
+        let alloc_delta = crate::ynz_alloc_count() - alloc_before;
+        let free_delta = crate::ynz_free_count() - free_before;
+        assert!(
+            alloc_delta >= 4,
+            "vacuous parity run: expected >= 4 counted allocs, saw {alloc_delta}"
+        );
+        assert_eq!(
+            alloc_delta, free_delta,
+            "channel drop must free the buffered element AND the parked pending-send \
+             payload, each exactly once (P2-4): alloc_delta={alloc_delta} \
+             free_delta={free_delta}"
+        );
+    }
+
+    /// FRAGO 028 parity gate (cancellation path — LIVE today, unlike last-ref drop): a task
+    /// suspended on a full heap-typed channel whose identity is then cancelled must have its
+    /// parked payload freed through the registered glue at BOTH removal sites —
+    /// `purge_pending_sends` (the exact call the real drop ladder / `ynz_handle_free` makes)
+    /// and the insert-time stale-same-token/different-generation sweep. Pre-fix, both sites
+    /// removed the entry glue-less: the payload was gone from `pending_sends` before the
+    /// channel's own `Drop` could ever see it — leaked forever. Exact alloc==free parity also
+    /// asserts no double-free against the `Drop` walk (a glued entry is removed, so `Drop`
+    /// never sees it twice).
+    #[test]
+    fn cancellation_purge_and_stale_sweep_glue_free_parked_payloads_alloc_free_parity() {
+        crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
+        let (_arc, waker) = make_waker();
+        let alloc_before = crate::ynz_alloc_count();
+        let free_before = crate::ynz_free_count();
+        unsafe {
+            // Capacity-1 array channel with REAL glue: the first heap element fills the
+            // buffer; every later send suspends, parking its payload in pending_sends.
+            let chan = make_chan_with_glue(1, array_elem_glue);
+            let mut cx = Context::from_waker(&waker);
+            let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
+            const T: u64 = 0xC0FFEE;
+
+            let buffered = crate::ynz_array_new(8); // 2 counted allocs
+            assert_eq!(
+                channel_send_poll_guarded(chan, buffered as i64, cx_ptr, T, 7),
+                CHANNEL_READY
+            );
+
+            // Site 1 — the real cancellation purge. Gen-7 caller suspends with a heap
+            // payload, then is cancelled (purge_pending_sends is EXACTLY what the drop
+            // ladder's kind-2 arm and ynz_handle_free call).
+            let parked_purged = crate::ynz_array_new(8); // 2 counted allocs
+            assert_eq!(
+                channel_send_poll_guarded(chan, parked_purged as i64, cx_ptr, T, 7),
+                CHANNEL_PENDING
+            );
+            assert_eq!(pending_send_count(chan), 1, "the send must be parked");
+            purge_pending_sends(chan, 7);
+            assert_eq!(
+                pending_send_count(chan),
+                0,
+                "purge must remove the cancelled identity's entry"
+            );
+
+            // Site 2 — the insert-time stale sweep. Gen-8 caller suspends at token T and
+            // "dies" WITHOUT a purge (the missed-path window); gen-9 reusing the same token
+            // suspends next, and the insert sweep removes the dead gen-8 entry — which must
+            // glue-free its parked payload.
+            let parked_swept = crate::ynz_array_new(8); // 2 counted allocs
+            assert_eq!(
+                channel_send_poll_guarded(chan, parked_swept as i64, cx_ptr, T, 8),
+                CHANNEL_PENDING
+            );
+            let parked_residual = crate::ynz_array_new(8); // 2 counted allocs
+            assert_eq!(
+                channel_send_poll_guarded(chan, parked_residual as i64, cx_ptr, T, 9),
+                CHANNEL_PENDING
+            );
+            assert_eq!(
+                pending_send_count(chan),
+                1,
+                "the stale gen-8 entry must be swept on insert"
+            );
+
+            // Last-ref drop frees the buffered element + the residual gen-9 entry — exact
+            // parity proves the purge/sweep glue calls freed ONLY their own payloads.
+            ynz_channel_free(chan);
+        }
+        let alloc_delta = crate::ynz_alloc_count() - alloc_before;
+        let free_delta = crate::ynz_free_count() - free_before;
+        // Non-vacuous (M5 FRAGO-005): 4 arrays x 2 counted allocs each MUST be exercised.
+        assert!(
+            alloc_delta >= 8,
+            "vacuous parity run: expected >= 8 counted allocs, saw {alloc_delta}"
+        );
+        assert_eq!(
+            alloc_delta, free_delta,
+            "cancellation-path removal must glue-free each parked payload exactly once \
+             (FRAGO 028): alloc_delta={alloc_delta} free_delta={free_delta}"
+        );
+    }
+
     /// Refcount balance: share bumps, free releases; the object survives until the LAST free.
     #[test]
     fn share_then_free_is_refcount_balanced() {
         let (_arc, waker) = make_waker();
-        let chan = ynz_channel_create(2);
+        let chan = make_chan(2);
         unsafe {
             let alias = ynz_channel_share(chan);
             assert_eq!(alias, chan, "share returns the same pointer");

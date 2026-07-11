@@ -1,6 +1,5 @@
 ---
 source: crates/ynz-codegen/tests/golden.rs
-assertion_line: 163
 expression: artifact.ir_text
 ---
 ; ModuleID = 'ynz-hello.ynz'
@@ -102,7 +101,7 @@ declare i64 @ynz_map_iter_get_str(ptr, i64, ptr, ptr)
 
 declare void @ynz_map_drop(ptr)
 
-declare ptr @ynz_channel_create(i64)
+declare ptr @ynz_channel_create(i64, ptr)
 
 declare ptr @ynz_channel_share(ptr)
 

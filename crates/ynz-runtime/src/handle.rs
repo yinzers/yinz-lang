@@ -562,7 +562,7 @@ mod tests {
         let mut cx = Context::from_waker(&waker);
         let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
         unsafe {
-            let chan = crate::channel::ynz_channel_create(1);
+            let chan = crate::channel::ynz_channel_create(1, std::ptr::null_mut());
             // Fill the single slot via the bare ABI (Ready path — no pending entry).
             assert_eq!(
                 crate::channel::ynz_channel_send_poll(chan, 42, cx_ptr, 0xF),
