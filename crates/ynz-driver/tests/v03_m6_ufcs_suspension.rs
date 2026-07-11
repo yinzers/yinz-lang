@@ -167,3 +167,102 @@ fn v03_m6_ufcs_background_spawned_method_call_runs() {
          stderr:\n{stderr}"
     );
 }
+
+#[test]
+fn v03_m6_ufcs_background_handle_receiver_survives_spawner_frame() {
+    // WHY: `let h = background barge.haul()` (HANDLE form) is the same UFCS spawn as the
+    // statement form one binding over — the give-transferred shape receiver must be
+    // heap-upgraded through the ONE typeck spawn normalization, so the task reads both
+    // receiver fields intact after the spawner's resume-fn frame dies at `wait sleep(120)`.
+    // Pre-fix (FRAGO 025, security-reproduced): `check_background_handle_spawn` registered
+    // ownership / resolved the callee only for `Expr::Call` inners — the receiver rode into
+    // the task as a raw pointer to the dead spawner frame (empty name / heap corruption),
+    // and the program compiled clean with zero diagnostics.
+    let (stdout, stderr, code, timed_out) =
+        ynz_run_with_timeout("v0_3_m6_ufcs_background_handle.ynz", RUN_TIMEOUT);
+    assert!(
+        !timed_out,
+        "handle-form background UFCS fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        code, 0,
+        "handle-form UFCS spawn must compile and run clean; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "Mon\n7\ndone\n",
+        "the spawned task must read BOTH receiver fields intact after the spawner's \
+         frame death (handle-form heap upgrade); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m6_ufcs_background_narrowed_union_receiver_rejected_both_forms() {
+    // WHY: a union binding narrowed to a shape variant (`is Circle =>` arm) must be a
+    // FAIL-CLOSED teaching compile error as a `background` receiver in BOTH spawn forms
+    // (FRAGO 026). The binding still holds the 16-byte {tag,data} union storage; codegen's
+    // Shape heap-upgrade would load sizeof(shape) >= 64 bytes from it — a confirmed
+    // out-of-bounds read (CWE-125). Pre-fix: the fixture compiled clean, ran, and printed
+    // garbage (`0` for radius 5.0). The durable payload-extraction fix is deferred
+    // (Future Requirements #21); until it lands, rejection is the contract.
+    let (stdout, stderr, code, timed_out) =
+        ynz_run_with_timeout("v0_3_m6_ufcs_background_narrowed_union.ynz", RUN_TIMEOUT);
+    assert!(
+        !timed_out,
+        "narrowed-union fixture must fail at COMPILE time, never run; stdout:\n{stdout}"
+    );
+    assert_ne!(
+        code, 0,
+        "a narrowed-union background receiver must be a compile error (pre-fix it \
+         compiled and ran the OOB read); stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "compile rejection must produce no program output; stdout:\n{stdout}"
+    );
+    // Statement form (`background fig.haul()`, narrowed to Circle).
+    assert!(
+        stderr.contains(
+            "a union value narrowed to `Circle` cannot yet be used as a `background` receiver"
+        ),
+        "the STATEMENT-form spawn must be rejected with the teaching error; stderr:\n{stderr}"
+    );
+    // Handle form (`let h = background shp.mend()`, narrowed to Square).
+    assert!(
+        stderr.contains(
+            "a union value narrowed to `Square` cannot yet be used as a `background` receiver"
+        ),
+        "the HANDLE-form spawn must be rejected with the SAME teaching error; stderr:\n{stderr}"
+    );
+    // Exactly one diagnostic per spawn site — no double emission through the shared
+    // normalization helper.
+    assert_eq!(
+        stderr
+            .matches("cannot yet be used as a `background` receiver")
+            .count(),
+        2,
+        "exactly one rejection per spawn site (2 spawns); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m6_ufcs_background_give_receiver_multifield_survives_spawner_frame() {
+    // WHY: the Phase 3c UAF fix (FRAGO 024) heap-upgrades the WHOLE give-transferred UFCS
+    // receiver, not just its first slot. The task reads BOTH fields (string + int) after
+    // its own suspension — strictly after the spawner's resume-fn frame has died at
+    // `wait sleep(120)`. Pre-fix both reads hit freed stack (empty/garbage output).
+    let (stdout, stderr, code, timed_out) =
+        ynz_run_with_timeout("v0_3_m6_ufcs_background_multifield.ynz", RUN_TIMEOUT);
+    assert!(
+        !timed_out,
+        "multifield background UFCS fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        code, 0,
+        "give-receiver UFCS spawn must compile and run clean; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "Mon\n42\ndone\n",
+        "the spawned task must read BOTH receiver fields intact after the spawner's \
+         frame death (whole-struct heap upgrade); stderr:\n{stderr}"
+    );
+}

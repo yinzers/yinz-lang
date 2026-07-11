@@ -2656,6 +2656,159 @@ R2 = extend guard to UFCS + generic call forms (one shared helper). R3 = full-sl
   green-check red-on-1-test (secret-scan pass via gitleaks); graveyard clean. Ground-truth corroboration
   of the pre-existing failure at clean `fc7797f` (independent stash+rebuild+run, tree restored clean).
 
+### FRAGO 024 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-phase3b` (adds Phase 3c; plan.md body edit applied by re-dispatched executor)
+
+- **Trigger.** FRAGO-023 Deviation-2 (the flagship `background ship.haul()` regression) was root-caused
+  this session by an independent read-only investigation (IR-proven, git-bisected). User directed "hunt
+  the regression now" → it is FIXED here, not deferred: this FRAGO inserts **Phase 3c** to close it,
+  mirroring how FRAGOs 004/006/010 inserted Phases 1b/1c/4b.
+- **Root cause (CONFIRMED, IR-proven).** `background ship.haul()` is an `Expr::MethodCall` (UFCS). The
+  statement-level background give/copy ownership inference in `crates/ynz-typeck/src/check.rs:1388` only
+  matches `Expr::Call`, so the receiver ident `ship`'s span is NEVER inserted into
+  `background_arg_inferred_ownership`. Downstream, `crates/ynz-codegen/src/emit.rs:15896-15913`
+  (`prepare_bg_arg_for_ctx`) gates the Shape heap-upgrade on span membership → absent → the receiver is
+  passed as a RAW POINTER into `entrypoint`'s resume-fn stack frame (`%ship_own` alloca). When entrypoint
+  returns Pending at `wait sleep(120)` that frame dies; the spawned task reads `self.name` from freed
+  stack → empty string / garbage / crash. **A use-after-free in the flagship deliverable (Key Outcomes
+  1 & 8).** Contrast: the Call-form `background haul(ship)` heap-upgrades correctly (30/30 green) — the
+  ONLY codegen delta is the missing receiver upgrade.
+- **Regression history.** CONGENITAL to `f921efe` (M6 P1-1) — a latent UAF that was timing-masked and
+  genuinely passed 30/30 through `46906d1`. `070beca` (M6 P3) added the `TaskGenGuard` thread-local (zero
+  codegen delta), which perturbed stack-reuse timing enough to expose it deterministically at HEAD. So
+  the P3-seal "2355/0/6" baseline was a timing-masked pass, not a true green. This is a **genuine
+  coverage gap, NOT a regression in Phase 1b/1c/1d** — those hardened arg-TYPE arms, all behind the same
+  membership set only populated for `Expr::Call`; the UFCS receiver is a distinct arg slot that never
+  enters it.
+- **Phase 3c (the fix, applied to plan.md by a re-dispatched executor).** Extend `check.rs:1387-1442`'s
+  background give/copy inference to ALSO match `Expr::MethodCall` with a shape receiver — normalize to
+  `[receiver, ...args]` (mirroring codegen's existing `synthesize_ufcs_call_expr` at emit.rs:16211) and
+  run the identical per-plain-ident inference that registers each ident span. Then the existing codegen
+  Shape arm heap-upgrades the receiver exactly as the Call form does — NO codegen change, no new
+  machinery (authoritative-derivation.md: reuse the one inference path + the one codegen normalization).
+  The existing failing test `v03_m6_ufcs_background_spawned_method_call_runs` IS the locked RED that
+  flips GREEN (verify-before-fix satisfied by the pre-existing test); add a give-`fixed<T>`-receiver /
+  second-shape-field sibling case if cheap, and confirm the full suite returns to 0 real failures.
+- **Classification.** Risk-NEUTRAL / risk-REDUCING: closes a UAF (memory-safety), adds no
+  destructive/irreversible op, removes/weakens no mitigation, reuses the authoritative inference +
+  codegen paths. Scope addition (a new phase) but squarely in-Mission (the flagship must deliver the
+  correctness it was released to deliver). Auto-apply + log; no signature (no HIGH residual, no
+  destructive op). The human was surfaced the root cause + fix approach before execution and directed the
+  hunt; the Step-8 CONFIRM commit gate remains the human's review before anything seals.
+- **Evidence.** Independent root-cause investigation this session (`git-bisect` monotonic boundary
+  `46906d1` PASS → `070beca` FAIL, IR of `ynz_sm_entrypoint_resume` showing the raw-stack-pointer store +
+  `arg_drop_count=0`; contrast IR of the Call form showing `ynz_alloc` + 24-byte arg-drop descriptor).
+  Tree restored clean after the investigation.
+
+### FRAGO 025 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-phase3b` (extends Phase 3c scope; plan.md body edit applied by re-dispatched executor)
+
+- **Trigger.** Phase 3c review fleet found a **LIVE use-after-free blocker** the `security` reviewer
+  REPRODUCED in-container, plus a should-fix in the fix's own predicate. Blockers route to the fix loop;
+  this FRAGO records the scope extension the blocker forces (Phase 3c statement-form-only → both spawn
+  forms of the UFCS-receiver UAF) so the seam matches the fix. Conductor override note: `deviation-judge`
+  classified the handle-form as a JUSTIFIED scope-out, but on the explicit factual premise that a silent
+  `Type::Error` is "a benign compile-stop, not a runtime UAF." `security`'s **live reproduction** falsifies
+  that premise (compiles clean, zero diagnostics, reads freed stack at runtime — a real UAF). Per
+  verify-before-trust (a fellow agent's verdict is a claim; a live repro is ground truth), the conductor
+  routes it as a confirmed blocker to the fix loop — NOT self-adjudicating a FRAGO's justification, but
+  routing a reproduced live memory-safety defect, which is the conductor's job on a blocker.
+- **Deviation 1 — Phase 3c scope extended to BOTH spawn forms (blocker fix).** The handle form
+  `let h = background ship.haul()` is the SAME FRAGO-024 UAF class: `check_background_handle_spawn`
+  (`crates/ynz-typeck/src/check.rs:1699-1811`) resolves the receiver/callee only for `Expr::Call`
+  (registers ownership at ~:1723, callee_name at ~:1745) and returns `Type::Error` at ~:1754 on a STALE
+  "already diagnosed by the Background arm" comment — but the Background arm (check.rs:2697) now accepts
+  `Expr::MethodCall`, so NO diagnostic fires → codegen (`lower_let_background_handle`, emit.rs:~11985)
+  spawns the receiver WITHOUT the heap-upgrade → raw pointer into the dead spawner frame. `security`
+  reproduced empty `self.name` / zero-output heap-corruption live. **Fix:** thread the SAME statement-form
+  normalization into `check_background_handle_spawn` — register the shape receiver span in `bg_inferred`
+  AND resolve `callee_name` from the MethodCall method (the one authoritative inference path, no second
+  derivation). Add a handle-form RED→GREEN repro.
+- **Deviation 2 — narrowed-union receiver predicate (should-fix, fix's own code).** The Phase-3c
+  `receiver_is_shape` predicate (check.rs:~1404) reads `self.scope.lookup(rname).ty` — a raw scope read
+  that is NOT narrowing-aware, so a union receiver narrowed to a shape variant inside `if (x is Ship)`
+  returns the un-narrowed union → predicate false → the same UAF for the narrowed-union subcase
+  (authoritative-derivation: it must consume the narrowing-aware authoritative source codegen reads —
+  `resolve_ident`/`self.expr_types` — not a second parallel derivation). **Fix:** thread the
+  narrowing-aware authoritative type source (or add a parity link). Add a narrowed-union repro if cheap.
+- **Deviation 3 — non-plain-ident receivers/args DEFERRED (four-field), flagged for the MILESTONE-seal
+  decision.** `background fleet.flagship.haul()` / `ships[0].haul()` (and the Call-form equivalent
+  `background haul(fleet.flagship)`) still ride as raw pointers — `is_heap_arg` (emit.rs:~15909) gates on
+  `Expr::Ident`/explicit `.copy()`, dropping any field-access/index expr to no-heap-upgrade. **Pre-existing,
+  shared by BOTH spawn forms, NOT introduced or widened by Phase 3c.** `security` could NOT reproduce a
+  live UAF for the simple field-access case (the base local's storage survived) and `critical-path`
+  couldn't confirm the full blast radius — so it is a latent asymmetry, not a confirmed-live blocker.
+  Four-field deferral: **WHAT** — heap-upgrade non-plain-ident shape receivers/args in background-spawn
+  position (both forms); **WHY** — needs new field-projection give/copy machinery beyond Phase 3c's
+  give-transferred-plain-ident-receiver charter; building it now expands the phase for an unconfirmed-live
+  exposure; **COST** — a dedicated fix (new codegen give/copy machinery for field/index/return-materialized
+  receivers), ~1 phase; **TRIGGER** — a live UAF is reproduced for a non-plain-ident receiver, OR the
+  milestone-seal review (per deviation-judge, route like the R13/R14 signed-risk overrides if confirmed
+  live). SURFACED to the human at this boundary for the milestone-level call; homed durably here + to be
+  echoed to Future Requirements by the fix-loop executor.
+- **Deviation 4 — Call-only large-copy Tier-3 warning DEFERRED (minor, teaching-only).** The
+  large-copy lint (check.rs:~2841) fires only for `Expr::Call`; a UFCS receiver >64 bytes gets no
+  give-vs-copy teaching warning. No correctness/memory-safety impact. Four-field: **WHAT** — extend the
+  large-copy lint to the UFCS receiver; **WHY** — teaching-parity only, zero safety impact, and the phase
+  already built the `bg_args` normalization it would reuse; **COST** — small (<1 session); **TRIGGER** —
+  whichever future phase next touches background-spawn UFCS diagnostics. Homed here + Future Requirements.
+- **Classification.** Deviations 1-2: risk-REDUCING (close/​harden a UAF via the one authoritative path,
+  no destructive op) → fix loop, no signature. Deviations 3-4: four-field deferrals (3 flagged for the
+  milestone-seal human call). rules-compliance "missing fixture" blocker DISMISSED as a false negative
+  (`v0_3_m6_ufcs_background_multifield.ynz` verified present on disk, 815 bytes, untracked; green-check ran
+  the test green with a forced rebuild; test-quality/code-reviewer/acceptance-verifier all read it).
+- **Evidence.** security live in-container repro of the handle-form UAF (empty `self.name`, nondeterministic
+  zero-output heap corruption); rules-compliance narrowed-union static trace (`scope.lookup` vs
+  narrowing-aware `resolve_ident`); code-reviewer/critical-path non-ident-receiver traces; fleet verdicts
+  this boundary (security 1-blocker/1-should-fix/1-minor; rules-compliance 1-blocker[dismissed]/1-should-fix;
+  code-reviewer 0-blocker/1-should-fix/1-minor; critical-path 0-blocker/1-should-fix; test-quality
+  MEANINGFUL; acceptance-verifier MET; deviation-judge per-candidate; green-check green; graveyard clean).
+
+### FRAGO 026 — 2026-07-10 — session-id: `conductor-2026-07-10-m6-phase3b` (fix-introduced OOB → fail-closed rejection; plan.md body edit + #21 rescope applied by re-dispatched executor)
+
+- **Trigger.** Phase 3c fix-loop round-1 re-review: the memory-safety fleet converged (security + critical-path
+  + rules-compliance + deviation-judge) that the narrowed-union background-receiver path FRAGO-025 round-1
+  deferred as "silent-wrong (#21)" is in fact a **confirmed, reachable out-of-bounds read (CWE-125)** that
+  the round-1 predicate hardening ITSELF introduced. Blocker → this round's fix loop.
+- **Deviation — narrowed-union background-spawn shape receiver must be FAIL-CLOSED REJECTED now (in-scope
+  blocker), not deferred as silent-wrong.** The round-1 `binding_ty_narrowed` predicate change newly routed a
+  union receiver narrowed to a shape variant (`if (fig is Circle) { background fig.haul() }`) into codegen's
+  `Type::Shape` heap-upgrade arm (`emit.rs:15918/15946`), which `build_load`s `sizeof(shape)` bytes from what
+  is actually the **16-byte `{i64 tag, i64 data}` union envelope** — the shape payload lives behind the
+  envelope's `data` pointer, ignored. Minimum shape size (64B, field-padded) > 16B envelope, so **every**
+  narrowed-union shape receiver over-reads (security: 48B OOB for a 1-field shape, 176B for 3-field;
+  critical-path: OOB for any variant >16B; both reproduced via IR). Compiles + runs today (typeck's Check 2b
+  `UnsupportedCrossingLocalType` gate covers a union *crossing a wait*, not this heap-upgrade path). **This is
+  a FIX-INTRODUCED gap on Phase 3c's OWN in-charter plain-ident-receiver surface** (`fig` is a plain ident) —
+  round-1 converted the old dangling-pointer UAF into a heap-upgraded OOB — so per verification.md's
+  mirror-case rule (a hole the last fix just opened is fix-now, not defer) and the plan's OWN signed
+  **R14 / FRAGO 005 precedent** (un-embeddable `fixed<T>` crossings route to a deterministic teaching compile
+  error — "in no case ship silently"), it is NOT eligible for the milestone-seal deferral #21 wrongly folded
+  it into. **Fix (interim, in-scope, small):** at the shape-receiver predicate site, detect that the
+  receiver's shape-ness came from union-narrowing (via the `binding_ty_narrowed` primitive round-1 already
+  built) and route to a fail-closed teaching compile error (mirror Check 2b / FRAGO 005: "a union value
+  narrowed to a shape can't yet be spawned as a background receiver — bind the inner value to a `let` first"),
+  instead of the naive Shape heap-upgrade. This closes the OOB now, memory-safe + teaching-consistent.
+- **#21 rescoped.** FRAGO-025 Deviation-3/#21 conflated the narrowed-union case (fix-introduced, in-charter)
+  with the genuinely-pre-existing non-plain-ident case. Split them: (a) the interim narrowed-union
+  **rejection** lands NOW (this FRAGO); (b) the DURABLE full fix — correct union-payload extraction so a
+  narrowed-union receiver WORKS (reusing the existing `union_to_heap_cell` envelope+tag-resolved deep-copy at
+  `emit.rs:3248/13069`, which already does exactly this for the let-bound union arg-escape case) — stays
+  deferred (#21, now correctly scoped to "make it work," not "stop the OOB"); (c) the non-plain-ident
+  receiver class (Deviation-3, both spawn forms, genuinely pre-existing) remains its own four-field deferral
+  flagged for the milestone-seal call. The #21 text's "silent-wrong / lifetime-safe" framing is corrected to
+  "confirmed OOB (CWE-125), interim fail-closed rejection landed FRAGO 026, full extraction deferred."
+- **Classification.** Risk-REDUCING: closes a confirmed OOB read (memory-safety) via a fail-closed teaching
+  error, no destructive op, reuses the round-1 detection primitive + the established Check-2b rejection
+  pattern (authoritative-derivation-clean). In-scope blocker fix for Phase 3c (fix-introduced on its own
+  surface), no signature (no HIGH residual — the OOB is CLOSED, not accepted). The `code-reviewer` 2 minors
+  (Call-only large-copy warning #22; Call-only false-sharing crossing-shape collection) stay deferred —
+  teaching/analysis-only, no correctness/safety impact.
+- **Evidence.** security reproduced-IR OOB (`ynz_alloc(64)` + `load {double,[56xi8]}` from a 16-byte
+  `{i64,i64}` envelope; 48B/176B over-read; CWE-125); critical-path IR confirmation (>16B variant OOB, free
+  side consistent so no double-free/leak — the defect is a source over-read); deviation-judge MUST-REJECT-NOW
+  (fix-introduced, in-charter plain-ident surface, R14/FRAGO-005 precedent, `union_to_heap_cell` exists);
+  rules-compliance no-duct-tape blocker (deferral WHY written for the wrong sub-case). Handle-form UAF fix
+  itself: code-reviewer clean, test-quality MEANINGFUL, security/critical-path handoff SOUND.
+
 ## Conductor cold-resume note — 2026-07-10 (context clear at the Phase-3 → Phase-3b boundary)
 
 Supersedes the earlier "mid-Phase-1d-round-3" cold-resume note above (that one is historical).
@@ -2806,3 +2959,173 @@ executor + green-check dispatches. Baseline count at seal: **2355 passed / 0 fai
   `crates/ynz-runtime/src/runtime.rs`, `crates/ynz-driver/tests/v03_m6_recursive_spike_cancel.rs`,
   `plan.md`, `audit.md`. The 4 pre-existing not-mine dirty files untouched; nothing committed
   (conductor seals). Session-id appended to `plan.md` frontmatter in the same action as this entry.
+
+- `conductor-2026-07-10-m6-phase3b` — 2026-07-10 — **Phase 3b SEALED at commit `1b7e567`** (boundary
+  commit, `Plan-Phase: …#3b` trailer accessor-verified). Fleet at the boundary: 0 blockers
+  (code-reviewer clean; critical-path-integrity 0-blocker; test-quality MEANINGFUL; rules-compliance
+  0-blocker after the hot-path fix-loop round; deviation-judge JUSTIFIED+risk-neutral; graveyard clean;
+  green-check green modulo the 1 pre-existing red). Two boundary minors dispositioned no-fix (YAGNI
+  ceiling): (1) rules-compliance CARVE-OUT restatement — `ynz-runtime` is outside the scattered-registry
+  Bouncer grep scope and the sibling alloc-counter statics carry the same rationale; (2)
+  critical-path-integrity empty-predicate confirm — resolved (new `!is_empty()` mirrors
+  `init_alloc_counter_flag`; negative control passes). **FRAGO 023 filed** (risk-neutral, auto-applied):
+  clause-4 "full suite green" reframed + the flagship regression recorded. **PIVOT (user-directed: hunt
+  the regression now):** next action is a root-cause investigation of FRAGO-023 Deviation-2 —
+  `v03_m6_ufcs_background_spawned_method_call_runs` (`background ship.haul()` loses its output; Key
+  Outcomes 1 & 8), corroborated pre-existing at `fc7797f`. NOT advancing to Phase 4 until the regression
+  is scoped.
+
+- `executor-2026-07-10-m6-phase3c` — 2026-07-10 — Phase 3c (FRAGO 024: `background ship.haul()`
+  UFCS-receiver use-after-free). **Authored Phase 3c into plan.md** (inserted after Phase 3b,
+  before Phase 4, per FRAGO 024's classified instruction — same shape as the neighboring inserted
+  phases: Task + purpose / Steps / Exit criteria / Reviewer fan-out / Model tag `(coding, high,
+  medium)`). **Fix implemented in the ONE authoritative typeck inference path**
+  (`crates/ynz-typeck/src/check.rs`, statement-level background give/copy block): the spawn target
+  is normalized to its Call-form argument list — `Expr::Call` args as-is; a shape-receiver
+  `Expr::MethodCall` (plain-ident receiver whose scope type is `Type::Shape`, the same pre-infer
+  scope-lookup source the sibling channel gate already uses) contributes `[receiver, ...args]`,
+  the typeck twin of codegen's existing `synthesize_ufcs_call_expr` — then the IDENTICAL
+  per-plain-ident inference loop runs over the normalized list, so the receiver's span enters
+  `background_arg_inferred_ownership` and codegen's existing Shape arm heap-upgrades it exactly as
+  the Call form. ZERO codegen change; no second normalization scheme; no ad-hoc receiver pre-gate
+  (authoritative-derivation.md). **Verify-before-fix:** RED re-confirmed pre-fix on the live tree
+  at HEAD `1b7e567` with a forced runtime-then-driver rebuild (fresh `libynz_runtime.a` embed) —
+  `v03_m6_ufcs_background_spawned_method_call_runs` FAILED (fixture exit 1, lost `Mon` output);
+  GREEN post-fix (PASS). The locked RED test untouched/un-weakened. **Sibling coverage added:**
+  `v03_m6_ufcs_background_give_receiver_multifield_survives_spawner_frame` + fixture
+  `v0_3_m6_ufcs_background_multifield.ynz` (task reads BOTH receiver fields — string + int — after
+  its own suspension; locks the whole-struct heap upgrade). **Gates (docker, nextest):**
+  `cargo nextest run --workspace --no-fail-fast` **2361 run / 2361 passed / 0 failed / 6 skipped**
+  (baseline 2360 + 1 new test; 0 real failures — the FRAGO 023 "1 tracked pre-existing failure"
+  reframe is retired; Call-form background fixtures + Phase 3b recursion-spike suite
+  regression-free; the known brittle `symbol_lookup` wall-clock flake did not fire); clippy
+  `--workspace -- -D warnings` clean; `fmt --all` + `--check` clean. **Three sibling gaps
+  SURFACED for the deviation-judge → conductor seam (not self-adjudicated):** (1) handle-form
+  `let h = background ship.haul()` silently types the handle `Type::Error`
+  (`check_background_handle_spawn` resolves no callee for a MethodCall inner; its "already
+  diagnosed by the Background arm" comment is stale — the arm accepts UFCS since P1-1); (2)
+  NON-plain-ident shape receivers/args (`background fleet.flagship.haul()`, equally Call-form
+  `background haul(fleet.flagship)`) still ride membership-less as raw pointers — a pre-existing
+  class shared by BOTH spawn forms, not introduced or widened here, needing field-projection
+  give/copy machinery; (3) the large-copy Tier-3 warning loop is `Expr::Call`-only
+  (teaching-parity gap for a copy-inferred UFCS receiver). Files touched for the boundary commit:
+  `crates/ynz-typeck/src/check.rs`, `crates/ynz-driver/tests/v03_m6_ufcs_suspension.rs`,
+  `crates/ynz-driver/tests/fixtures/v0_3_m6_ufcs_background_multifield.ynz` (new), plus
+  `plan.md`/`audit.md`. The 4 pre-existing not-mine dirty files untouched; nothing committed
+  (conductor seals). Session-id appended to `plan.md` frontmatter in the same action as this entry.
+
+- `executor-2026-07-10-m6-phase3c-fix1` — 2026-07-10 — Phase 3c fix-loop round 1 (FRAGO 025:
+  handle-form UAF blocker + narrowed-union predicate should-fix). **Deviation 1 CLOSED:** the spawn
+  target normalization is now the ONE shared helper `Checker::background_spawn_call_form`
+  (`crates/ynz-typeck/src/check.rs` — the typeck twin of codegen's `synthesize_ufcs_call_expr`),
+  consumed by BOTH spawn forms: the statement path's give/copy inference block now calls it, and
+  `check_background_handle_spawn` pre-records ownership over the normalized `[receiver, ...args]`
+  list (the shape receiver's span enters `background_arg_inferred_ownership`, so codegen's existing
+  Shape arm heap-upgrades it — ZERO codegen change) AND resolves `callee_name` from the same
+  normalization (UFCS callee = method name), retiring the stale "already diagnosed by the
+  Background arm" comment. **Verify-before-fix:** new handle-form repro
+  `v03_m6_ufcs_background_handle_receiver_survives_spawner_frame` + fixture
+  `v0_3_m6_ufcs_background_handle.ynz` FAILED pre-fix on the live tree with a fresh
+  runtime-then-driver rebuild — compiled clean (zero diagnostics, exit 0) and printed
+  `"\n7\ndone\n"` (empty `self.name` read from the dead spawner frame — the exact
+  security-reproduced signature); PASSES post-fix (`"Mon\n7\ndone\n"`). **Deviation 2 CLOSED at
+  both sites:** the shape-receiver predicate reads `Checker::binding_ty_narrowed` (the
+  `union_narrowed` overlay over the scope entry — the same overlay order `resolve_ident` applies;
+  `resolve_ident`'s narrowing head now delegates its overlay branch to the same helper so the two
+  readers cannot drift) instead of the raw `scope.lookup`; both spawn forms consume it through the
+  one normalization helper. **Narrowed-union repro: CANDIDATE, not a test** — probed live
+  post-fix: the narrowed spawn compiles, registers ownership, and heap-upgrades (deterministic
+  output, no dead-frame ride — risk-reduced vs the pre-fix raw-pointer ride), but the heap copy
+  duplicates the union's `{tag,data}` envelope bytes misread as the variant shape (probe printed
+  `0` for `radius: 5.0`): correct payload needs union-payload-extraction machinery, the same
+  new-machinery family as FRAGO 025 deviation 3 — SURFACED for the seam (recorded on Future
+  Requirements #21), not silently fixed. **Gates (docker, nextest):**
+  `cargo nextest run --workspace --no-fail-fast` **2362 run / 2361 passed / 1 failed / 6 skipped**;
+  the 1 failure = `ynz-runtime::m2_spike sync_bridge_overhead_measurement`, a wall-clock
+  overhead-measurement test that flaked under full parallel load and PASSES in isolation on rerun
+  (verified, not assumed — same brittleness class as the known `symbol_lookup` flake) → **0 real
+  failures** (baseline 2361 + 1 new test). Clippy `--workspace -- -D warnings` clean; `fmt --all`
+  + `--check` clean. No existing test edited or weakened. **Plan edits (same dispatch):** Phase 3c
+  Task+purpose/Steps/Exit-criteria extended to BOTH spawn forms + predicate hardening; fix-loop
+  round 1 completion note appended; FRAGO 025 deviations 3 & 4 echoed to Future Requirements
+  #21/#22 as four-field entries (#21 stays flagged for the milestone-seal human call). Files
+  touched for the boundary commit: `crates/ynz-typeck/src/check.rs`,
+  `crates/ynz-driver/tests/v03_m6_ufcs_suspension.rs`,
+  `crates/ynz-driver/tests/fixtures/v0_3_m6_ufcs_background_handle.ynz` (new), plus
+  `plan.md`/`audit.md`. The 4 pre-existing not-mine dirty files untouched; nothing committed
+  (conductor seals). Session-id appended to `plan.md` frontmatter in the same action as this entry.
+- `executor-2026-07-10-m6-phase3c-fix2` — 2026-07-10 — Phase 3c fix-loop round 2 (FRAGO 026:
+  narrowed-union background receiver = confirmed reachable OOB read, CWE-125, fix-introduced by
+  round 1's predicate hardening → interim fail-closed rejection). **CLOSED fail-closed:** the ONE
+  spawn normalization (`Checker::background_spawn_call_form`, `crates/ynz-typeck/src/check.rs`)
+  now detects a receiver whose shape-ness comes from union-narrowing (the `union_narrowed`
+  overlay — the exact source `binding_ty_narrowed` reads; no second detection derivation) and
+  emits a WHAT/WHAT-INSTEAD/WHY teaching compile error instead of routing into codegen's
+  `Type::Shape` heap-upgrade — BOTH spawn forms through the one shared helper, ZERO codegen
+  change. Verify-before-fix: probed live pre-fix — the narrowed spawn compiled clean and ran,
+  printing `0` for `radius: 5.0` (64-byte shape loaded from the 16-byte `{tag,data}` union
+  storage); post-fix a deterministic teaching error, exactly ONE diagnostic per spawn site.
+  RED→GREEN: `v03_m6_ufcs_background_narrowed_union_receiver_rejected_both_forms` + fixture
+  `v0_3_m6_ufcs_background_narrowed_union.ynz` (both forms, distinct variants + no-double-emission
+  count asserted). Gallery: `examples/primantis-orders/m6_errors.ynz` trigger added (10
+  diagnostics) + phrase assertion in `error_galleries.rs`. Registry: per-site dynamic message —
+  the `[[diagnostic_template]]` carve-out (Check 2b / M6 teaching-error convention), no entry.
+  Gates (docker, nextest, forced runtime→driver rebuild): `cargo nextest run --workspace
+  --no-fail-fast` **2363 run / 2363 passed / 0 failed / 6 skipped** (baseline 2362 + 1 new test;
+  round-1's `sync_bridge_overhead_measurement` flake passed this run); clippy `-D warnings`
+  clean; `fmt --all` + `--check` clean; plain-shape statement/multifield/handle + Call-form
+  background fixtures green un-weakened. **Deviation surfaced (FRAGO 026's prescribed
+  WHAT-INSTEAD falsified live):** `let ship: Circle = fig` inside the `is` arm does NOT extract
+  the payload (the re-bind copies the union storage; prints `0` with no spawn involved) — the
+  shipped message steers to a shape-typed binding at the value's creation site (probe-verified
+  working) instead. **Two sibling union-payload surfaces probed + SURFACED for the seam
+  (pre-existing, same family as FR #21, NOT fixed):** (a) direct narrowed field access
+  (`fig.radius` inside `is Circle`) silently prints `0` for `5.0`; (b) Call-form
+  `background work(fig)` with a give-transferred UNION arg runs but the task's tag-match
+  produces NO output (expected `circle`). Plan edits applied per FRAGO 026's classified
+  instruction: round-1 completion-note framing corrected (OOB, not silent-wrong/lifetime-safe),
+  round-2 completion note added, FR #21 rescoped to the durable union-payload extraction, the
+  non-plain-ident class split to NEW FR #23 (still milestone-seal-flagged), the round-1 note's
+  `#21/#22` echo reconciled to `#23/#22`, and one Teaching-invariant bullet added for the new
+  diagnostic class. Files touched: `crates/ynz-typeck/src/check.rs`,
+  `crates/ynz-driver/tests/v03_m6_ufcs_suspension.rs`,
+  `crates/ynz-driver/tests/fixtures/v0_3_m6_ufcs_background_narrowed_union.ynz` (new),
+  `crates/ynz-driver/tests/error_galleries.rs`, `examples/primantis-orders/m6_errors.ynz`, plus
+  `plan.md`/`audit.md`. The 4 pre-existing not-mine dirty files untouched; nothing committed
+  (conductor seals). Session-id appended to `plan.md` frontmatter in the same action as this entry.
+- `executor-2026-07-10-m6-phase3c-polish` — 2026-07-10 — Phase 3c final polish round (teaching-text
+  polish + honest deferral homing only; ZERO detection/rejection logic change, no test weakened).
+  **(1) WHAT-INSTEAD reworded (security should-fix):** the FRAGO 026 narrowed-union rejection's
+  WHAT-INSTEAD (`crates/ynz-typeck/src/check.rs`, `background_spawn_call_form`) previously led with
+  "Keep the value in a `<Variant>`-typed binding…", misreadable as "re-bind here" —
+  `let inner: Circle = fig` inside the `is` arm, which security reproduced as a SIGSEGV (the 16-byte
+  union envelope copied into a shape-sized binding → OOB read on a pointer field). New text states
+  the probe-verified working pattern (spawn on the original `<Variant>`-typed binding where the
+  value is created, BEFORE the union store) AND explicitly warns against the re-bind, naming it
+  inline (`let inner: <Variant> = <narrowed>` → "would hold the union's storage, not a `<Variant>`
+  value"). WHAT + WHY unchanged; the content-specific asserted phrase ("a union value narrowed to
+  `<Variant>` cannot yet be used as a `background` receiver") unchanged — rejection test +
+  m6-gallery assertions pass un-edited, nothing weakened. **(2) Deferral cluster homed honestly
+  (deviation-judge should-fix):** the round-2 sibling surfaces split by orthogonality — NEW FR #24
+  now carries (a) narrowed direct field access silent-wrong (`fig.radius` prints `0` for `5.0`, no
+  spawn) and (b) union→shape re-bind OOB/SIGSEGV (CWE-125, no spawn), each with the explicit
+  "pre-existing GENERAL union-narrowing bugs, NOT concurrency defects, orthogonal to M6's
+  concurrency charter" callout (the #18/#19/#20 mold) so no future owner mis-triages them as
+  spawn-family cleanup; (c) the give-transferred union-arg surface (concurrency-adjacent) stays on
+  FR #21, which now cross-references #24 (one `union_to_heap_cell` extraction machinery closes
+  both). CANDIDATE recorded inside #24, surfaced not self-decided: a cheap interim fail-closed
+  rejection of the (b) re-bind (FRAGO 026's precedent) for whoever owns the class — (a)/(b) remain
+  reachable in plain non-concurrent code today. **(3) Example cleanliness:** fixture
+  `v0_3_m6_ufcs_background_narrowed_union.ynz` + the m6-gallery shapes (`m6_errors.ynz`) swapped
+  `float`→`int` fields so a copied example doesn't hit the SEPARATE pre-existing global
+  `float.toString` bug (`print(f.toString())` on a float prints `0.0`) — surfaced as a one-line
+  candidate for the seam, far out of M6 scope, NOT fixed. **Gates (docker, nextest, forced
+  runtime→driver rebuild):** `cargo nextest run --workspace --no-fail-fast` **2363 run /
+  2363 passed / 0 failed / 6 skipped** (baseline held, 0 real failures); clippy `--workspace
+  -- -D warnings` clean; `fmt --all` + `--check` clean. Files touched:
+  `crates/ynz-typeck/src/check.rs`,
+  `crates/ynz-driver/tests/fixtures/v0_3_m6_ufcs_background_narrowed_union.ynz`,
+  `examples/primantis-orders/m6_errors.ynz`, plus `plan.md`/`audit.md`. No `## Context-segment log`
+  entry written (conductor-owned); FRAGO 023–026 + prior session-log content left intact. The 4
+  pre-existing not-mine dirty files untouched; nothing committed (conductor seals). Session-id
+  appended to `plan.md` frontmatter in the same action as this entry.

@@ -90,7 +90,8 @@ fn m5_gallery_fires_expected_diagnostics() {
 
 #[test]
 fn m6_gallery_fires_expected_diagnostics() {
-    // WHY: m6_errors.ynz covers union type errors. 9 diagnostics expected.
+    // WHY: m6_errors.ynz covers union type errors plus the narrowed-union background
+    // receiver rejection (FRAGO 026). 10 diagnostics expected.
     let (stderr, code) = compile_gallery(&gallery("m6_errors.ynz"));
     assert_ne!(code, 0, "m6 gallery must exit non-zero");
 
@@ -98,6 +99,11 @@ fn m6_gallery_fires_expected_diagnostics() {
     assert!(
         (7..=14).contains(&error_count),
         "m6 gallery must produce 7–14 errors; got {error_count}.\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet be used as a `background` receiver"),
+        "m6 gallery must include the narrowed-union background-receiver rejection \
+         (FRAGO 026); got:\n{stderr}"
     );
 }
 

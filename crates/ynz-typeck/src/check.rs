@@ -1385,12 +1385,20 @@ impl<'b> Checker<'b> {
                     // infer `.copy` (caller keeps original, task gets its own copy). Only infer
                     // `.give` when we can prove the binding is NOT read in any remaining statement.
                     if let Expr::Background(inner, _) = expr {
-                        if let Expr::Call(call) = inner.as_ref() {
+                        // Normalize the spawn target to its Call-form argument list via
+                        // the ONE spawn-site normalization both `background` forms
+                        // consume (`background_spawn_call_form` — the typeck twin of
+                        // codegen's `synthesize_ufcs_call_expr`; the full UAF rationale
+                        // lives on the helper).
+                        let bg_args: Option<Vec<&Expr>> = self
+                            .background_spawn_call_form(inner.as_ref())
+                            .map(|(_, args)| args);
+                        if let Some(bg_args) = bg_args {
                             let remaining = &stmts[i + 1..];
                             // Only infer for plain Expr::Ident args — explicit .give/.copy()
                             // postfix args are handled by the postfix-op path; explicit wins.
                             let mut gives: Vec<String> = Vec::new();
-                            for arg in &call.args {
+                            for arg in bg_args {
                                 if let Expr::Ident(name, span) = arg {
                                     // v0.3-M4: a channel argument is SHARED with the task
                                     // (refcounted alias) — both sides must operate on the
@@ -1652,6 +1660,108 @@ impl<'b> Checker<'b> {
         );
     }
 
+    /// Normalize a `background` spawn target to its Call-form (callee ident, argument
+    /// list): a plain call contributes its callee + args as-is; a shape-receiver method
+    /// call (UFCS) contributes the method name + `[receiver, ...args]` — the typeck twin
+    /// of codegen's `synthesize_ufcs_call_expr` spawn-site normalization
+    /// (`background ship.haul()` IS `background haul(ship)`; never a second
+    /// normalization scheme). BOTH spawn forms consume this one helper: the statement
+    /// form's give/copy inference (`check_stmts`) and the handle form's ownership
+    /// pre-record + callee resolution (`check_background_handle_spawn`). Without the
+    /// receiver in the argument list its ident span never enters
+    /// `background_arg_inferred_ownership`, codegen's Shape heap-upgrade gate skips it,
+    /// and the spawned task reads the receiver through a raw pointer into the spawner's
+    /// dead resume-fn stack frame once the spawner suspends — a use-after-free
+    /// (M6 Phase 3c: FRAGO 024 statement form; FRAGO 025 handle form). The receiver's
+    /// shape test reads the narrowing-aware `binding_ty_narrowed` — never a raw
+    /// `scope.lookup`. A union receiver narrowed to a shape variant (its shape-ness
+    /// comes from the `union_narrowed` overlay, the same overlay `binding_ty_narrowed`
+    /// reads) is FAIL-CLOSED REJECTED with a teaching error here (FRAGO 026): the
+    /// binding still holds the 16-byte `{tag, data}` union storage, so codegen's Shape
+    /// heap-upgrade would `load` `sizeof(shape)` bytes from it — a confirmed
+    /// out-of-bounds read (CWE-125), 48+ bytes past the storage for every variant.
+    /// The durable fix (extracting the variant's payload via `union_to_heap_cell`) is
+    /// deferred as Future Requirements #21; until it lands, the spawn is a
+    /// deterministic compile error, never a silent OOB (the Check 2b / FRAGO 005
+    /// precedent: un-embeddable crossings teach, never ship silently wrong).
+    /// Non-shape receivers (conduit/intrinsic method calls) are not UFCS function
+    /// calls — the same exclusion codegen's normalization applies. Returns `None` for
+    /// non-call targets, non-UFCS method calls, and the rejected narrowed-union case;
+    /// the callee ident is `None` for a non-ident `Call` callee.
+    fn background_spawn_call_form<'e>(
+        &mut self,
+        inner: &'e Expr,
+    ) -> Option<(Option<&'e str>, Vec<&'e Expr>)> {
+        match inner {
+            Expr::Call(call) => {
+                let callee = match &call.callee {
+                    Expr::Ident(n, _) => Some(n.as_str()),
+                    _ => None,
+                };
+                Some((callee, call.args.iter().collect()))
+            }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                let Expr::Ident(rname, rspan) = receiver.as_ref() else {
+                    return None;
+                };
+                let Some(Type::Shape { name: variant }) = self.binding_ty_narrowed(rname) else {
+                    return None;
+                };
+                // FRAGO 026: the receiver's shape-ness comes from union-narrowing
+                // (the binding is in the `union_narrowed` overlay — the exact source
+                // `binding_ty_narrowed` read above), so the value is still the union's
+                // storage, not the shape. Fail closed with a teaching error instead of
+                // letting codegen's Shape heap-upgrade over-read it. NOTE: the
+                // WHAT-INSTEAD deliberately steers to spawning on the original
+                // shape-typed binding at the value's CREATION site (before the union
+                // store) AND explicitly warns against re-binding the narrowed value:
+                // probed live, `let inner: Circle = fig` copies the union storage
+                // into a shape-sized binding — an OOB read that SIGSEGVs on a
+                // pointer-field read, one binding over (Future Requirements #24).
+                if self.union_narrowed.contains_key(rname) {
+                    self.diags.push(Diagnostic::error(
+                        rspan.clone(),
+                        format!(
+                            "a union value narrowed to `{variant}` cannot yet be used \
+                             as a `background` receiver."
+                        ),
+                        format!(
+                            "Start the background task where the `{variant}` value is \
+                             created, before it is stored into the union — call \
+                             `background <binding>.{method}()` on the original \
+                             `{variant}`-typed binding at that point. Do not copy \
+                             `{rname}` into a new `{variant}`-typed binding here (for \
+                             example, `let inner: {variant} = {rname}`): inside this \
+                             `is` arm `{rname}` is still the union, so the new binding \
+                             would hold the union's storage, not a `{variant}` value."
+                        ),
+                        format!(
+                            "Inside an `is {variant}` arm, `{rname}` still holds the \
+                             whole union — which variant it is plus that variant's \
+                             data — not a standalone `{variant}` value. The compiler \
+                             cannot yet copy the variant's data out of a union to hand \
+                             the background task its own `{variant}`, so it stops here \
+                             instead of starting the task with wrong or unsafe data."
+                        ),
+                    ));
+                    return None;
+                }
+                Some((
+                    Some(method.as_str()),
+                    std::iter::once(receiver.as_ref())
+                        .chain(args.iter())
+                        .collect(),
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// v0.3-M4 Phase 2: typecheck `let h = background fn(...)` and compute the handle type.
     ///
     /// Runs the standard `Expr::Background` checks (kernel gate, must-wrap-a-call, borrow
@@ -1689,9 +1799,16 @@ impl<'b> Checker<'b> {
         // Pre-record inferred ownership for plain-ident args BEFORE the Background arm's
         // large-copy warning reads it: channels are SHARED (refcounted alias — both sides
         // must operate on the same bounded buffer); everything else defaults to Copy (safe
-        // direction — the caller keeps its original).
-        if let Expr::Call(call) = inner {
-            for arg in &call.args {
+        // direction — the caller keeps its original). The spawn target is normalized to
+        // its Call-form first (`background_spawn_call_form` — the one normalization both
+        // spawn forms consume), so a UFCS shape receiver registers exactly like a
+        // Call-form arg: its span entering `background_arg_inferred_ownership` is what
+        // gates codegen's Shape heap-upgrade. Without it the receiver rides into the
+        // task as a raw pointer to the spawner's dead resume-fn frame — the FRAGO 025
+        // handle-form twin of the FRAGO 024 statement-form use-after-free.
+        let call_form = self.background_spawn_call_form(inner);
+        if let Some((_, args)) = &call_form {
+            for &arg in args {
                 if let Expr::Ident(n, span) = arg {
                     let is_channel = self
                         .scope
@@ -1711,16 +1828,16 @@ impl<'b> Checker<'b> {
         // large-copy warnings). Its Type::Nothing result is replaced below.
         let _ = self.infer_expr(full_value, None);
 
-        // Resolve the spawned callee's signature for the handle type.
-        let callee_name = match inner {
-            Expr::Call(call) => match &call.callee {
-                Expr::Ident(n, _) => Some(n.clone()),
-                _ => None,
-            },
-            _ => None,
-        };
+        // Resolve the spawned callee's signature for the handle type — from the SAME
+        // Call-form normalization (a UFCS spawn's callee is the method name: `haul` in
+        // `let h = background barge.haul()`).
+        let callee_name = call_form.and_then(|(callee, _)| callee.map(str::to_string));
         let Some(callee_name) = callee_name else {
-            // Non-call / non-ident callee — already diagnosed by the Background arm.
+            // No user-defined callee to derive a handle type from: a non-call target
+            // (the Background arm's must-wrap-a-call error already fired), a non-ident
+            // `Call` callee, or a non-UFCS method call (a non-shape receiver — a
+            // conduit/intrinsic method is not a user function). The binding stays
+            // `Type::Error` so later uses of the handle do not cascade.
             return Type::Error;
         };
         let Some((suspends, ret, params)) = self
@@ -2855,10 +2972,32 @@ impl<'b> Checker<'b> {
         ty
     }
 
+    /// Narrowing-aware plain-ident binding type: the union `is`-arm overlay
+    /// (`union_narrowed`) wins over the raw scope entry. This is the ONE
+    /// narrowing-aware, side-effect-free read for "what type does this binding have
+    /// right here" — the background spawn-site shape-receiver predicate
+    /// (`background_spawn_call_form`) consumes it, and `resolve_ident`'s narrowing head
+    /// delegates its overlay branch to it — so no reader can drift back to a raw
+    /// `scope.lookup` twin. FRAGO 025 deviation 2: the raw read returned the
+    /// un-narrowed union for a receiver narrowed to a shape variant, skipping the
+    /// spawn heap-upgrade — the same UAF one subcase over.
+    fn binding_ty_narrowed(&self, name: &str) -> Option<Type> {
+        self.union_narrowed
+            .get(name)
+            .cloned()
+            .or_else(|| self.scope.lookup(name).map(|e| e.ty.clone()))
+    }
+
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
-        // M6: if inside a union `is` arm, the binding may be narrowed to a specific variant.
-        if let Some(narrowed_ty) = self.union_narrowed.get(name).cloned() {
-            return narrowed_ty;
+        // M6: if inside a union `is` arm, the binding is narrowed to a specific variant.
+        // The overlay branch reads through `binding_ty_narrowed` (the one narrowing-aware
+        // source); only the narrowed case returns here — the un-narrowed path continues
+        // below to the side-effecting scope checks (use-after-give, ErrorsCapable
+        // narrowing) the overlay window bypasses.
+        if self.union_narrowed.contains_key(name) {
+            if let Some(narrowed_ty) = self.binding_ty_narrowed(name) {
+                return narrowed_ty;
+            }
         }
         if let Some(entry) = self.scope.lookup(name) {
             if entry.is_consumed {

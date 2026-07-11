@@ -54,16 +54,16 @@ function badVariant() -> nothing {
 
 // WHY: non-exhaustive union multi-case — missing variant named in diagnostic
 shape Circle {
-  radius: float
+  radius: int
 }
 
 shape Square {
-  side: float
+  side: int
 }
 
 shape Triangle {
-  width: float
-  height: float
+  width: int
+  height: int
 }
 
 shape AnyShape = Circle | Square | Triangle
@@ -98,6 +98,26 @@ function isOnString() -> nothing {
 function valueWithoutCheck() -> nothing {
   let x: maybe<int> = `bad`.toInt()
   print(x.value.toString())
+}
+
+// WHY: narrowed-union background receiver — fail-closed teaching error (FRAGO 026 /
+// NarrowedUnionBackgroundReceiver class). Inside the `is Circle` arm the binding still
+// holds the union's storage, not a standalone Circle; running it in the background
+// would read past that storage, so the compiler rejects it deterministically.
+function haulCircle(give self: Circle) -> nothing {
+  wait sleep(20)
+  print(`hauling`)
+}
+
+function narrowedUnionSpawn(fig: AnyShape) -> nothing {
+  if (fig) {
+    is Circle => {
+      background fig.haulCircle()
+    }
+    else => {
+      print(`other`)
+    }
+  }
 }
 
 function entrypoint() -> nothing { }
