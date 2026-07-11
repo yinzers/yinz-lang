@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11", "executor-2026-07-11-m6-phase4", "executor-2026-07-11-m6-phase4-fixloop1"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11", "executor-2026-07-11-m6-phase4", "executor-2026-07-11-m6-phase4-fixloop1", "executor-2026-07-11-m6-phase4b"]
 created_at: "2026-07-04"
 updated_at: "2026-07-11"
 metadata:
@@ -1722,6 +1722,62 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
 - **Reviewer fan-out:** code-reviewer; adversarial gate-checker (does the repro genuinely exercise
   the panic-before-registration window?).
 - **Model tag:** `(coding, standard, small)`
+- **Completion note (2026-07-11, `executor-2026-07-11-m6-phase4b`):** DONE — hang closed via the
+  exact mirror of Phase 4's **register-before-poll** discipline, lifted to the handle seam.
+  **CCIR-1 (step 1):** the plan's `handle.rs:297-303` anchor had drifted — the fn spans `290-319`
+  pre-fix, panic arm `312-318`; substance confirmed exactly: `poll_recv` ran with NO registration
+  of any kind (unlike `channel.rs`, whose `recv_waiters` registry predated P3-2, the handle path
+  had no side registry at all), so a panic before mpsc's single-slot registration returned Pending
+  permanently unwakeable. **Fix (step 3) — three mirrored parts, all required for the pattern to
+  HOLD** (register-first into a registry nothing drains would be present-but-not-holding):
+  (1) `recv_waiters: Mutex<Vec<Waker>>` on `HandleShared` (already Arc-shared between
+  `YnzTaskHandle` and the child `HandleStateFnFuture`) with `record_recv_waiter`/
+  `wake_recv_waiters` mirroring `YnzChannel`'s verbatim; (2) `handle.shared.record_recv_waiter(
+  cx.waker())` BEFORE `poll_recv` in `ynz_handle_recv_poll` + the `Ready(Some)` drain;
+  (3) producer-side drain: `HandleStateFnFuture::poll`'s Ready arm wakes `recv_waiters` after the
+  completion `try_send` (the mirror of the channel send path's wake-after-enqueue). Same
+  serialization argument as Phase 4 (record vs. drain serialized by the `recv_waiters` mutex;
+  drain-first ⇒ enqueue happens-before the poll ⇒ value observed); panic case: record-first ⇒ any
+  panic below returns Pending with the waker ALREADY recorded ⇒ the completion drain wakes it. The
+  `Ready(None)`/Closed exit leaves the register-first entry recorded and wakes nobody — mirrors
+  the channel's closed-exit convention (FR #4 / Phase 4 fix-loop revert precedent); for the handle
+  Closed IS a live path (second `.receive()`) but returns a terminal answer — no hang; entries
+  dedup per task (`will_wake`), freed at handle free. `#[expect(dead_code)]` on
+  `YnzTaskHandle.shared` removed (the field is now genuinely read). **RED→GREEN (step 2 before
+  step 3, staged):** structural substrate (registry + helpers + producer drain — behavior-identical
+  while nothing records; the drain fired on an always-empty vec) + both tests landed FIRST against
+  the UNCHANGED poll ordering and were watched FAIL 2/2 on the intended asserts (ordering probe:
+  `registered_before_poll` false; behavioral repro: wakes == 0 — the literal P2-7 hang), then the
+  two-statement recv-poll fix flipped both GREEN. **Tests:**
+  `handle::tests::handle_recv_poll_registers_waiter_before_polling` (ordering probe — clone sites
+  disambiguated by `recv_waiters` `try_lock` state, vacuity guard, semantic follow-through; the
+  channel probe's mirror) and
+  `handle::tests::completion_wakes_receiver_after_panic_before_slot_registration` (the
+  panic-before-registration repro: the armed probe panics AT the mpsc slot-registration clone — a
+  real panic through the fn's `catch_unwind`, stderr confirmed the fn's own
+  "`ynz_handle_recv_poll` panicked (returning Pending)" eprintln fired — child then completes;
+  asserts the wake arrives and the value is collected through the panic-poisoned,
+  `lock_or_recover`-recovered outbox mutex). **Lock discipline (P3-4 pattern, verified from final
+  code):** strictly sequential `recv_waiters` (released inside record) → `outbox_rx` (statement
+  temporary across the one non-blocking `poll_recv`) → `recv_waiters` (`Ready(Some)` only);
+  producer side `try_send` (no lock) → `recv_waiters`; no nesting, no new lock-ordering edge.
+  **Gates (docker, nextest, FORCED runtime→driver rebuild — `touch crates/ynz-driver/build.rs`;
+  `libynz_runtime.a` 07:09:30 < driver 07:09:59, embed fresh):** `cargo nextest run --workspace`
+  **2367 run / 2367 passed / 0 failed / 6 skipped** (= baseline 2365 + the 2 new repros); explicit
+  no-regression receipts: `channel::` 10/10 (Phase 4's fix intact) and `handle::` 6/6
+  (`ynz_handle_send_poll` ABA + drop paths untouched and green); clippy `--workspace -- -D
+  warnings` clean; `fmt --all --check` clean; the documented typeck flake did not fire. **Recorded
+  decisions:** (a) zero diff outside `handle.rs` — `channel.rs` (sealed Phase 4 code) untouched;
+  `panic_payload_msg` stays private there, so the handle's panic eprintln keeps its existing
+  payload-less `Err(_)` shape (exact scope over cosmetic mirror); (b) the registry helpers are
+  deliberately duplicated onto `HandleShared` rather than extracting a shared WakerSet out of
+  sealed `channel.rs` — surfaced for the reviewer seam as a possible future DRY extraction, not
+  self-applied. **Deviations:** line-anchor drift only (pre-warned by the plan; surfaced, no
+  FRAGO). Residual noted for reviewers (same shape Phase 4 shipped, not new): a panic INSIDE
+  `record_recv_waiter`'s own `waker.clone()` would still miss registration — identical residual to
+  the sealed channel fix, theoretical for real Arc-based wakers; mirrored, not gold-plated. Files:
+  `crates/ynz-runtime/src/handle.rs` (sole code file) + `plan.md`/`audit.md`. Nothing committed
+  (conductor seals).
 
 #### Phase 5 — P2-4: buffered-channel heap-element leak (design decision + fix)
 

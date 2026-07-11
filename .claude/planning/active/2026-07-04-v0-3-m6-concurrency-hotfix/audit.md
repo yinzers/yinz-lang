@@ -3231,6 +3231,42 @@ executor + green-check dispatches. Baseline count at seal: **2355 passed / 0 fai
   truth, FR #4 note, session-id) + this entry. No `## Context-segment log` entry written
   (conductor-owned); nothing committed (conductor seals). Session-id appended to `plan.md`
   frontmatter in the same action as this entry.
+- `executor-2026-07-11-m6-phase4b` — 2026-07-11 — **Phase 4b (P2-7 `ynz_handle_recv_poll`
+  panic-then-Pending hang, FRAGO 010 un-deferred): DONE.** CCIR-1 confirmed the drifted anchor
+  (fn at `handle.rs:290-319` pre-fix, panic arm `312-318`) and the substance exactly: the handle
+  path had NO waker registry at all — a panic before mpsc's single-slot registration returned
+  Pending permanently unwakeable. Fix = Phase 4's register-before-poll mirrored whole (three
+  parts, all load-bearing): `recv_waiters` registry on `HandleShared` (Arc-shared with the child
+  future) + record-BEFORE-`poll_recv` in `ynz_handle_recv_poll` (with the `Ready(Some)` drain) +
+  the producer-side drain in `HandleStateFnFuture::poll`'s Ready arm after the completion
+  `try_send` (the wake-after-enqueue mirror — without it the registry would be present but not
+  holding). `Ready(None)`/Closed leaves the entry recorded and wakes nobody (channel closed-exit
+  convention per the Phase 4 fix-loop revert; handle-Closed is live but terminal — no hang).
+  **RED→GREEN, staged and watched:** substrate + tests landed first against the UNCHANGED poll
+  ordering — `handle_recv_poll_registers_waiter_before_polling` (ordering probe, try_lock-
+  disambiguated clone sites + vacuity guard) and
+  `completion_wakes_receiver_after_panic_before_slot_registration` (armed probe panics AT the
+  mpsc slot-registration clone; the fn's own panic-path eprintln confirmed on stderr; asserts the
+  completion wake arrives + the value collects through the panic-poisoned/`lock_or_recover`-
+  recovered outbox mutex) — both watched FAIL on the intended asserts (wakes == 0 = the literal
+  hang), then the two-statement fix flipped both GREEN. Lock discipline re-verified from final
+  code: strictly sequential, no nesting, no new lock-ordering edge (P3-4 pattern). **Gates
+  (docker, FORCED runtime→driver rebuild via `touch crates/ynz-driver/build.rs` —
+  `libynz_runtime.a` 07:09:30 < driver 07:09:59, embed fresh):** `cargo nextest run --workspace`
+  **2367 run / 2367 passed / 0 failed / 6 skipped** (= baseline 2365 + 2 new); explicit receipts:
+  `channel::` 10/10 (Phase 4 fix intact), `handle::` 6/6 (send-poll ABA + drop paths green);
+  clippy `-D warnings` clean; `fmt --check` clean; documented typeck flake did not fire. Recorded
+  decisions: zero diff outside `handle.rs` (sealed `channel.rs` untouched; `panic_payload_msg`
+  stays private, handle keeps its payload-less `Err(_)` eprintln — exact scope over cosmetic
+  mirror); registry helpers deliberately duplicated onto `HandleShared` rather than extracting a
+  shared WakerSet from sealed code — surfaced for the reviewer seam, not self-applied. Deviations:
+  anchor drift only (pre-warned; no FRAGO). Residual noted for reviewers (identical shape to the
+  sealed channel fix, not new): a panic inside `record_recv_waiter`'s own `waker.clone()` would
+  still miss registration — theoretical for real Arc-based wakers; mirrored, not gold-plated.
+  Files: `crates/ynz-runtime/src/handle.rs` (sole code file) + `plan.md` (completion note +
+  session-id) + this entry. No `## Context-segment log` entry written (conductor-owned); nothing
+  committed (conductor seals). Session-id appended to `plan.md` frontmatter in the same action as
+  this entry.
 
 ## Conductor cold-resume note — 2026-07-11 (context clear at the Phase-3c → Phase-4 boundary)
 
