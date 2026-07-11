@@ -272,7 +272,6 @@ fn sleep_eight_concurrent_share_threads() {
 /// | 8      | sleep_handle   |
 /// | 16     | return_val_lo  | ← SyncStateFnFuture::poll reads i64 here → truncates to i32
 /// | 24     | return_val_hi  | (unused by this test)
-#[repr(C)]
 struct SyncValueSm {
     resume_point: i32,
     _padding: i32,

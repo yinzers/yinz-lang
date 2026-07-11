@@ -318,11 +318,20 @@ pub extern "C" fn ynz_rt_check_preempt() {
 #[no_mangle]
 pub extern "C" fn ynz_rt_shutdown() {
     let Some(guard) = RUNTIME.get() else { return };
-    let mut lock = match guard.lock() {
-        Ok(l) => l,
-        Err(e) => e.into_inner(), // still usable after poisoning
-    };
-    if let Some(rt) = lock.take() {
+    // Take ownership of the Runtime and RELEASE the lock before shutdown_timeout —
+    // mirrors the ynz_rt_run_entrypoint pattern (:1052-1062). Holding the mutex across
+    // the up-to-5s drain would block any concurrent ynz_rt_spawn_blocking / ynz_rt_spawn
+    // caller (they also lock RUNTIME on their fallback path) for the full drain window
+    // instead of failing fast with "called after ynz_rt_shutdown" the instant the Option
+    // goes to None.
+    let rt = {
+        let mut lock = match guard.lock() {
+            Ok(l) => l,
+            Err(e) => e.into_inner(), // still usable after poisoning
+        };
+        lock.take()
+    }; // mutex released here — before shutdown_timeout
+    if let Some(rt) = rt {
         // `shutdown_timeout` requires owned `Runtime`, which we now have.
         // test-only: `YNZ_SHUTDOWN_TIMEOUT_MS` lets tests shorten the shutdown drain
         // window to trigger cancellation faster. Production default is 5000ms (5s),
@@ -340,7 +349,6 @@ pub extern "C" fn ynz_rt_shutdown() {
                               // on the worker threads before returning.
         rt.shutdown_timeout(Duration::from_millis(timeout_ms));
     }
-    // `lock` drops here, releasing the mutex.
 
     // Dump alloc counts AFTER shutdown so all Drop impls (including SpawnStateFnFuture::Drop
     // which calls ynz_free) have run. Writing before shutdown would give stale counts on

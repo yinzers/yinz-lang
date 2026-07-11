@@ -1,0 +1,17 @@
+// M6 Phase 6 regression fixture — `ynz run` signal-masking fix.
+//
+// Unbounded non-tail recursion with no `wait` point grows the native call stack until
+// it exceeds the OS-mapped guard region, which the kernel reports to the process as a
+// real, deterministic SIGSEGV (signal 11) — no compiler bug required. Compiled Yinz
+// binaries link a plain C-style `main` (see `crates/ynz-driver/src/build.rs`'s linker
+// invocation), so no Rust `std::rt` stack-overflow guard-page handler is installed for
+// the process's main thread; the raw kernel SIGSEGV reaches `ynz run`'s child-process
+// wait unmodified. Used by `tests/run_cli.rs` to prove `ynz run` reports "killed by
+// signal 11 (SIGSEGV)" instead of masking the crash as exit code 1.
+function recurse(n: int) -> int {
+  return recurse(n + 1)
+}
+
+function entrypoint() -> nothing {
+  recurse(0)
+}

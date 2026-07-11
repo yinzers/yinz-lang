@@ -2896,6 +2896,10 @@ mod array_runtime {
                 // Clobber the source AFTER the push — the array owns its own copy.
                 elem[0] = -1;
                 elem[1] = -1;
+                // Read `elem` back so the clobber isn't a compiler-eliminable dead store —
+                // the proof this test cares about is the LATER ynz_array_get assertion on
+                // the array's own stored copy, but the clobber itself must actually execute.
+                std::hint::black_box(elem);
             }
             assert_eq!(ynz_array_count(arr), 10);
 

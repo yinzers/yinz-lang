@@ -2439,6 +2439,7 @@ dependencies = [
  "clap",
  "criterion",
  "insta",
+ "nix",
  "predicates",
  "serde",
  "serde_json",

@@ -3601,3 +3601,171 @@ glue-less leak → FIX now, not deferred; plan.md body edit applied by re-dispat
   `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` (new deferral entry);
   `.claude/planning/active/2026-07-04-v0-3-m6-concurrency-hotfix/plan.md` (frontmatter session-id
   only); this file (session log).
+
+- `executor-2026-07-11-m6-phase6-fixloop1` — 2026-07-11 — **Phase 6 fix-loop round 1: added
+  `TEST_LOCK`-style mutex serialization to close a `channel.rs` alloc/free-parity flake —
+  later found INSUFFICIENT (see the fixloop2 entry below — honest correction, not silently
+  papered over).** Closed the flake flagged by Phase 6's own Step-4 gate run and independently
+  corroborated by the green-check gate dispatch (identical failures:
+  `alloc_delta=26 free_delta=25`, `alloc_delta=8 free_delta=24`; confirmed `channel.rs` absent
+  from Phase 6's own diff — a Phase-5-owned latent defect from already-sealed commit `94fa536`,
+  M6 P2-4/FRAGO 027/028). Root cause, confirmed by direct read: `ALLOC_COUNTER_ENABLED` is a
+  STICKY process-global `AtomicBool` that never resets once flipped true; three tests in
+  `channel.rs` — `channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity`,
+  `channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity`, and
+  `cancellation_purge_and_stale_sweep_glue_free_parked_payloads_alloc_free_parity` (the third
+  found via an explicit grep sweep for siblings, not named in the original two-test report) —
+  each measure a before/after delta on the shared global `YNZ_ALLOC_COUNT`/`YNZ_FREE_COUNT`
+  counters with no serialization against each other. Fix: reused the pre-existing `TEST_LOCK`
+  -around-the-critical-section pattern already established in `tests/spike.rs`/
+  `tests/m2_spike.rs`/`tests/m2_runtime.rs` (per `authoritative-derivation.md` — no new
+  mechanism invented) — a `static TEST_LOCK: Mutex<()>` plus a lock acquisition as the first
+  statement of each of the three tests. Verified via 14 consecutive green parallel
+  `cargo test -p ynz-runtime --lib` runs (6 full-suite + 8 filtered to the racing tests), zero
+  flakes at the time this round ran; clippy/fmt clean. **This fix was correct in mechanism but
+  incomplete in scope** — it serializes the three tests against each other but does nothing to
+  stop the ~90+ OTHER, unrelated tests in the same binary from polluting the same global
+  counters; the gap surfaced in round 2 below. Flagged the out-of-declared-surface edit
+  (`channel.rs` named nowhere in Phase 6's own Task/Steps text) for the conductor rather than
+  self-adjudicating; classified JUSTIFIED/RISK-NEUTRAL by the deviation-judge and ratified by
+  the conductor as FRAGO 029 (below). Not committed — left for the conductor's commit gate.
+  Files touched: `crates/ynz-runtime/src/channel.rs` only.
+
+### FRAGO 029 — 2026-07-11 — session-id: `conductor-2026-07-11-m6-phase6` (Phase 6 fix-loop
+touched channel.rs, outside its declared surface → JUSTIFIED/RISK-NEUTRAL; plan.md body edit
+applied by re-dispatched executor)
+
+- **Trigger.** Phase 6's Step-4 cheap-gate run (`cargo test --workspace`) came back RED —
+  not from anything in Phase 6's own diff (`runtime.rs` P3-3 mutex-scope fix; `run.rs`
+  signal-masking fix), but from a pre-existing, corroborated flaky race in THREE tests in
+  `crates/ynz-runtime/src/channel.rs` (`:1167`, `:1218`, `:1264` —
+  `channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity`,
+  `channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity`,
+  `cancellation_purge_and_stale_sweep_glue_free_parked_payloads_alloc_free_parity`), all
+  measuring a delta on the shared global `YNZ_ALLOC_COUNT`/`YNZ_FREE_COUNT` counters (gated by
+  a STICKY, never-reset `ALLOC_COUNTER_ENABLED` `AtomicBool`) with no serialization against
+  each other — contaminating one another under `cargo test`'s default parallel execution.
+  Root cause traces to Phase 5's already-sealed commit `94fa536` (M6 P2-4/FRAGO 027/028),
+  which added these tests without the `TEST_LOCK`-style serialization an established sibling
+  pattern (`tests/spike.rs`/`tests/m2_spike.rs`/`tests/m2_runtime.rs`) already uses for exactly
+  this class of global-counter test. `channel.rs` is not named anywhere in Phase 6's declared
+  Task/Steps text.
+- **Why this couldn't be waved through or deferred.** This repo's `/execute-plan` procedure
+  routes ANY undocumented Step-4 red straight to the fix loop, with no "not my file" exemption
+  — and this is not a documented cross-milestone RED (no `Depends on` roadmap edge names it).
+  The primary Phase 6 dispatch correctly stayed in scope and declined to fix it inline,
+  flagging it for the conductor instead of self-adjudicating. Only a conductor-dispatched
+  fix-loop round, under an explicit instruction, touched `channel.rs`.
+- **Corroboration.** Independently reproduced by the green-check gate dispatch (not just the
+  executor's own report): identical failures (`alloc_delta=26 free_delta=25`,
+  `alloc_delta=8 free_delta=24`), confirmed `channel.rs` absent from `git diff --stat HEAD`
+  against Phase 6's own work, confirmed deterministic pass under `--test-threads=1` (proving
+  test-isolation, not a real leak). Fix-loop round found a THIRD affected sibling test via an
+  explicit grep sweep, not named in the original two-test report. Fix verified via 14
+  consecutive green parallel `cargo test -p ynz-runtime --lib` runs (6 full-suite + 8 filtered
+  to the racing tests), clippy clean, fmt clean.
+- **Classification.** deviation-judge (this dispatch): **JUSTIFIED / RISK-NEUTRAL.** The fix
+  is minimal-scope (reused the pre-existing `TEST_LOCK` serialization primitive per
+  `authoritative-derivation.md` — no new mechanism invented), test-module-only (no production
+  code touched), root-cause-verified via the Paper-Trace discipline (not duct tape), and both
+  surfacing points (pre-fix flag, post-fix re-flag) are explicit and on the record rather than
+  a silent stray. No Floor-B trigger; pre-v1.0, zero-users, git-reversible → no signed RISK
+  OVERRIDE required.
+- **Delta (applied to `plan.md` by re-dispatched executor, per charter — conductor logs, does
+  not hand-edit the body).** Phase 6's Files/touched-surface list in its completion note gains
+  `crates/ynz-runtime/src/channel.rs` (fix-loop round 1 only, with the three-test-race
+  root-cause + fix + verification-run-count recorded), explicitly attributed as a
+  Phase-5-owned latent test-isolation defect closed opportunistically during Phase 6's own
+  gate-blocking fix loop — not reclassified as Phase 6's "own" surface.
+- **Authority.** deviation-judge classified JUSTIFIED/RISK-NEUTRAL; conductor
+  (`conductor-2026-07-11-m6-phase6`) ratified auto-apply per Step-7 risk-neutral flow (no
+  signature gate).
+
+- `executor-2026-07-11-m6-phase6-fixloop2` — 2026-07-11 — **Phase 6 fix-loop round 2: round 1's
+  `TEST_LOCK` fix was INSUFFICIENT — replaced with genuine OS-process isolation (an honest
+  correction, not a paper-over).** An independent green-check gate re-run
+  (`cargo test -p ynz-runtime --lib` at full default parallelism, 8 consecutive runs)
+  reproduced the SAME `channel.rs` alloc/free-parity flake again post-round-1: 6/8 green,
+  2/8 red. Root cause of round 1's gap, confirmed by direct read of `crates/ynz-runtime/src/
+  lib.rs:292-346` and `channel.rs`'s own pre-existing comment: `TEST_LOCK` correctly
+  serializes the three `*_alloc_free_parity` tests AGAINST EACH OTHER, but does nothing about
+  the other ~90+ unrelated tests in the SAME `ynz-runtime --lib` test binary — any of them
+  that allocate/free (directly or transitively) can run concurrently with one of the three
+  tests' measurement window once the STICKY `ALLOC_COUNTER_ENABLED` latch has flipped true,
+  and pollute its delta. The pre-existing in-file comment claiming safety ("cargo-nextest runs
+  one process per test, so enabling the process-wide alloc counter in-process cannot race
+  sibling tests") is true only under `cargo nextest` specifically and does NOT hold under a
+  plain `cargo test -p ynz-runtime --lib` invocation — a legal, harness-independent way to run
+  this suite, and exactly what the green-check gate used. `TEST_LOCK` alone could never close
+  this: no mutex shared only by three tests can stop the other ~90 from touching the same
+  global statics. **Fix**: genuine OS-process isolation, harness-independent — added
+  `run_isolated_or_return(name)`, called as the first action of each of the three tests: it
+  re-execs `std::env::current_exe()` (the compiled test binary itself) filtered to just that
+  one test (`--exact <qualified_name>`) in a brand-new child process (env-marked via
+  `YNZ_ALLOC_PARITY_CHILD` to prevent infinite re-exec); the PARENT call returns immediately
+  without running its own body, while the re-exec'd CHILD runs the real measured body in a
+  process with fresh, unshared `ALLOC_COUNTER_ENABLED`/`YNZ_ALLOC_COUNT`/`YNZ_FREE_COUNT`
+  statics that no other test, in any harness, can ever share. `TEST_LOCK` removed entirely —
+  with each test's measurement isolated to its own process, there is nothing left to
+  serialize against in-process. Mirrors the SAME authoritative house-style pattern the M2/M5
+  subprocess parity gates already use (isolate via a real OS process, read the result back)
+  rather than inventing a second ad hoc scheme (`authoritative-derivation.md`). Considered and
+  rejected: (a) converting the global counters to `thread_local!` — would break the EXISTING,
+  already-correct M2/M5 subprocess gates, whose counted allocations can legitimately happen on
+  a spawned Tokio worker thread different from the thread that reads the count at shutdown;
+  (b) documenting "these tests require nextest" as the fix — rejected because it makes
+  correctness depend on which test runner invokes the suite, exactly the assumption that just
+  failed. **Verification**: 35 consecutive green `cargo test -p ynz-runtime --lib` runs at
+  full default parallelism (versus round 1's confirmed 6/8 green, 2/8 red under the identical
+  command), zero flakes; `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all --
+  check` clean. Full `cargo test --workspace` (forced `ynz-runtime` → `ynz-driver` debug
+  rebuild first, per this project's live-mount convention) green: 0 `FAILED` occurrences
+  across the entire log, corroborated by a second, independent full-workspace run completing
+  at exit code 0. Not committed — left for the conductor's commit gate. Files touched:
+  `crates/ynz-runtime/src/channel.rs` only (same file as round 1 — no new out-of-surface
+  file). Session-id appended to plan.md frontmatter alongside this entry (both had been
+  minted and their completion notes written into plan.md's Phase 6 section, but the matching
+  frontmatter/session-log entries had not yet been appended — closed as a fix-loop round 3
+  should-fix finding; see the fixloop3 entry below).
+
+- `executor-2026-07-11-m6-phase6-fixloop3` — 2026-07-11 — **Phase 6 fix-loop round 3: closed
+  three should-fix/minor reviewer findings, no blockers.** (1) Appended the missing
+  `executor-2026-07-11-m6-phase6-fixloop1`/`-fixloop2` session-ids (and this round's own) to
+  `plan.md`'s frontmatter `session-id` array — verified directly that they were NOT already
+  present, contradicting the dispatching finding's assumption — and added the fixloop1/fixloop2
+  session-log bullets above (fixloop1's bullet states honestly that its fix was correct in
+  mechanism but incomplete in scope, matching `plan.md`'s own honest framing rather than papering
+  over it). (2) Reformatted `crates/ynz-driver/src/run.rs`'s `exit_code_for` signal-death message
+  from a single `eprintln!` paragraph into the exact `RUNTIME ERROR:`-prefixed, three-part
+  WHAT/WHAT-INSTEAD/WHY anatomy `docs/reference/REF-compiler-errors.md` specifies — compiled and
+  ran the literal replacement string standalone inside the `dev` container before editing the
+  real source, confirming the rendered output (blank-line-separated paragraphs, both
+  pre-existing required substrings — "killed by signal 11 (SIGSEGV)", "compiler miscompile" —
+  intact) rather than trusting the string escapes by inspection alone. The `128 + signal`
+  exit-code behavior is byte-identical to before; message-formatting only.
+  `crates/ynz-driver/tests/run_cli.rs` gained an additional
+  `.stderr(predicate::str::contains("RUNTIME ERROR:"))` assertion; its two pre-existing
+  substring assertions needed no change (both still match the reformatted message). (3) Reframed
+  two `channel.rs` test-isolation comments (the block above `run_isolated_or_return`'s
+  definition, plus a shorter sibling NOTE found by sweeping for the same disease rather than
+  fixing only the cited one) that narrated "Round 1 (fix-loop)… Round 2 (this fix)…" /
+  "corrects the claim this comment used to make" diff-history framing — banned under
+  `.claude/rules/comments.md` "durable, not changelog" — to instead state only the current
+  code's durable invariant (why the sticky, never-reset `ALLOC_COUNTER_ENABLED` global forces
+  genuine OS-process isolation rather than a mutex), keeping the legitimate
+  `authoritative-derivation.md` cross-reference. Left untouched, per the dispatch's explicit
+  scope: two code-reviewer minors the reviewer itself had already marked "no fix required"
+  (`channel.rs:789`'s `YNZ_ALLOC_PARITY_CHILD` ambient-env collision risk; `channel.rs:822`'s
+  dependency on libtest's literal `"1 passed"`/`"1 failed"` strings).
+  **Verification**: `cargo build -p ynz-runtime -p ynz-driver` clean;
+  `cargo test -p ynz-driver --test run_cli` 1/1 passed against the reformatted message;
+  `cargo test -p ynz-runtime --lib` — 5 consecutive full-default-parallelism runs, 99/99 passed
+  every time, zero flakes (comment-only edit, re-verified anyway given this exact file's flake
+  history); full `cargo test --workspace` — 0 `FAILED` occurrences across the entire log, every
+  `test result:` line `0 failed`; `cargo clippy --workspace -- -D warnings` clean (exit 0);
+  `cargo fmt --all -- --check` clean (exit 0). Completion note written into Phase 6 in the same
+  edit as this entry; session-id appended to `plan.md` frontmatter in the same action. Not
+  committed — left for the conductor's commit gate, per this round's own dispatch instructions.
+  Files touched: `crates/ynz-driver/src/run.rs`, `crates/ynz-driver/tests/run_cli.rs`,
+  `crates/ynz-runtime/src/channel.rs` (comments only), `plan.md` (frontmatter + Phase 6
+  completion note), this file (session log).

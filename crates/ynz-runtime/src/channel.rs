@@ -681,6 +681,101 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::Wake;
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Test isolation for the three `*_alloc_free_parity` gates below (search
+    // `ALLOC_COUNTER_ENABLED.store(true` in this file).
+    //
+    // `YNZ_ALLOC_COUNT`/`YNZ_FREE_COUNT` (lib.rs) are process-global counters gated by
+    // a STICKY `ALLOC_COUNTER_ENABLED` latch that, once flipped true by any test, never
+    // resets for the rest of the process's life. Any OTHER test in this binary that
+    // allocates — directly or transitively (array/map/shape/channel construction) —
+    // increments the SAME global counters once the latch is live, so a mutex serializing
+    // only these three parity tests against each other is not enough: it does nothing to
+    // stop the ~90+ unrelated tests in the same `ynz-runtime --lib` binary from polluting
+    // one of these three tests' before/after measurement window if it happens to run
+    // concurrently under `cargo test`'s default thread-per-test parallelism.
+    //
+    // The isolation that actually holds — independent of which harness invokes the outer
+    // suite (`cargo test`, `cargo nextest`, or anything else) — is genuine OS-process
+    // isolation, via `run_isolated_or_return` below. Each parity test's `#[test]` fn, as
+    // its first action, re-execs the CURRENT test binary (`std::env::current_exe()`)
+    // filtered to just itself (`--exact <qualified_name>`) in a brand-new child process,
+    // then returns without running its own body — the re-exec'd CHILD process (detected
+    // via the `YNZ_ALLOC_PARITY_CHILD` env var) is the one that actually runs the
+    // measured body. A fresh process has fresh `ALLOC_COUNTER_ENABLED`/
+    // `YNZ_ALLOC_COUNT`/`YNZ_FREE_COUNT` statics that no other concurrently-running test,
+    // in any harness, can ever share — nothing is left to serialize in-process, so no
+    // mutex is needed here.
+    //
+    // This mirrors the SAME authoritative house-style pattern the M2/M5 subprocess parity
+    // gates already use (spawn an isolated process, communicate the result back — see
+    // `runtime.rs`'s `YNZ_ALLOC_COUNTER_OUTPUT` file-based readback and
+    // `crates/ynz-driver/tests/m2_state_machine_integration.rs`'s `Command::new(...ynz...)`
+    // fixture runs) rather than inventing a second, ad hoc isolation scheme
+    // (authoritative-derivation.md). Those gates spawn the compiled `ynz` PRODUCT binary,
+    // because their fixtures are real `.ynz` programs; these three tests exercise private
+    // crate-internal runtime C-ABI functions with no product binary to spawn, so they
+    // isolate by re-exec'ing THIS test binary filtered to themselves instead — same
+    // "isolate via a real OS process, read the result back" idea, applied at the layer
+    // these tests actually operate at.
+    //
+    // Communicating the result back: unlike the file-based `YNZ_ALLOC_COUNTER_OUTPUT`
+    // readback, this helper reads the child's PROCESS EXIT STATUS (libtest already fails
+    // the process with a non-zero exit code and a panic message on stderr/stdout when a
+    // `#[test]` fn panics) — no new file-based protocol needed; the parent surfaces the
+    // child's captured stdout/stderr verbatim on failure so the original assertion
+    // message is never lost.
+    ///
+    /// Ensures the calling `#[test]` fn's alloc/free-counting body runs in a fully
+    /// isolated child process rather than the shared, parallel `cargo test` process.
+    ///
+    /// Returns `true` when called from the PARENT (a child was just spawned and awaited —
+    /// the caller MUST `return` immediately without running its own body) and `false` when
+    /// called from the re-exec'd CHILD (the caller should proceed to run its real body,
+    /// which now executes in an otherwise-empty process with no other test's alloc/free
+    /// activity able to contend with it).
+    ///
+    /// `qualified_test_name` must be the EXACT libtest path shown by `cargo test -- --list`
+    /// for the calling `#[test]` fn (e.g.
+    /// `"channel::tests::channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity"`)
+    /// — `--exact` requires an exact match, so a drifted name (a renamed test whose call
+    /// site wasn't updated) fails LOUD (the child matches zero tests, libtest still exits
+    /// 0 with "0 passed", parent's non-vacuous alloc_delta assertion — which never ran —
+    /// would be silently skipped) rather than silently passing. Guarded by the child-count
+    /// assertion below specifically to catch that drift.
+    fn run_isolated_or_return(qualified_test_name: &str) -> bool {
+        if std::env::var_os("YNZ_ALLOC_PARITY_CHILD").is_some() {
+            return false; // we ARE the re-exec'd child — run the real measured body
+        }
+        let exe = std::env::current_exe()
+            .expect("run_isolated_or_return: std::env::current_exe() failed");
+        let output = std::process::Command::new(exe)
+            .arg(qualified_test_name)
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("YNZ_ALLOC_PARITY_CHILD", "1")
+            .output()
+            .unwrap_or_else(|e| {
+                panic!("run_isolated_or_return: failed to spawn isolated child for {qualified_test_name}: {e}")
+            });
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Catches the qualified_test_name drift case named in the doc comment above: a
+        // filter matching zero tests still exits 0 with "0 passed; ... 99 filtered out".
+        assert!(
+            stdout.contains("1 passed") || stdout.contains("1 failed"),
+            "run_isolated_or_return: filter {qualified_test_name:?} matched zero tests in \
+             the child process (stale/drifted name?) — child stdout:\n{stdout}"
+        );
+        assert!(
+            output.status.success(),
+            "alloc/free parity test {qualified_test_name} failed in its isolated child \
+             process (exit {:?}):\n--- child stdout ---\n{stdout}\n--- child stderr ---\n{}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        true // we are the parent — caller must return without running its own body
+    }
+
     /// A minimal counting waker — proves the poll ABI works WITHOUT a Tokio runtime (mpsc's
     /// waker registration is runtime-agnostic) and lets a test assert wakeups happened.
     struct CountingWaker(AtomicUsize);
@@ -1132,8 +1227,13 @@ mod tests {
     // FRAGO 027: the channel's last-ref drop is E2E-unreachable today (no codegen path
     // releases the creator's reference), so the parity gate drives the C-ABI directly —
     // ynz_channel_create with real per-type glue → buffer heap elements → ynz_channel_free.
-    // cargo-nextest runs one process per test, so enabling the process-wide alloc counter
-    // in-process cannot race sibling tests; DELTAS (never absolutes) are asserted anyway.
+    //
+    // Isolation for these three tests does not depend on which harness runs the suite
+    // (`cargo test`, `cargo nextest`, or anything else) — see the test-isolation block
+    // above `run_isolated_or_return`'s definition: each parity test re-execs itself into
+    // its own OS process, so the `ALLOC_COUNTER_ENABLED`/`YNZ_ALLOC_COUNT`/
+    // `YNZ_FREE_COUNT` globals are never shared with any other concurrently-running test
+    // regardless of the runner.
 
     /// Element drop glue for `channel<array<T>>` — the exact call codegen's synthesized
     /// `ynz_chan_drop_glue_array_*` makes.
@@ -1165,6 +1265,11 @@ mod tests {
     /// (M5 FRAGO-005: a zero-alloc parity pass proves nothing).
     #[test]
     fn channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity() {
+        if run_isolated_or_return(
+            "channel::tests::channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity",
+        ) {
+            return;
+        }
         crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
         let (_arc, waker) = make_waker();
         let alloc_before = crate::ynz_alloc_count();
@@ -1216,6 +1321,11 @@ mod tests {
     /// would each break alloc==free).
     #[test]
     fn channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity() {
+        if run_isolated_or_return(
+            "channel::tests::channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity",
+        ) {
+            return;
+        }
         crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
         let (_arc, waker) = make_waker();
         let alloc_before = crate::ynz_alloc_count();
@@ -1262,6 +1372,11 @@ mod tests {
     /// never sees it twice).
     #[test]
     fn cancellation_purge_and_stale_sweep_glue_free_parked_payloads_alloc_free_parity() {
+        if run_isolated_or_return(
+            "channel::tests::cancellation_purge_and_stale_sweep_glue_free_parked_payloads_alloc_free_parity",
+        ) {
+            return;
+        }
         crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
         let (_arc, waker) = make_waker();
         let alloc_before = crate::ynz_alloc_count();
