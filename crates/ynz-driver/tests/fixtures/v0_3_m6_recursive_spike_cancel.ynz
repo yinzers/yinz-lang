@@ -8,7 +8,10 @@
 // `sleepBlocking` (an ordinary free-fn intrinsic, NOT a suspension source) — so it stays
 // pure-CPU-eligible with a deterministic ~600ms duration.
 //
-// TIMING DESIGN (run with YNZ_ALLOC_COUNTER=1 + YNZ_SHUTDOWN_TIMEOUT_MS=200):
+// TIMING DESIGN (run with YNZ_ALLOC_COUNTER=1 + YNZ_SHUTDOWN_TIMEOUT_MS set to whatever
+// value crates/ynz-driver/tests/v03_m6_recursive_spike_cancel.rs currently passes — that
+// .rs harness is the source of truth for the exact value, not this comment, to avoid the
+// two drifting apart; as of the M6 Phase 6b timeout recalibration it is 900):
 //   At    0ms: looper level 0 (root frame) spawns its 2-member CPU group
 //              (handle_alloc=2), parks at the CPU join.
 //   At ~600ms: both burns finish; the joins poll Ready — ynz_rt_join_poll drops both

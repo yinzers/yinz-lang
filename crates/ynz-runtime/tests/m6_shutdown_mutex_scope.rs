@@ -14,15 +14,6 @@ use std::time::{Duration, Instant};
 
 use ynz_runtime::runtime::{ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn_blocking};
 
-/// Transmute a Rust `fn(*mut u8)` to `extern "C" fn(*mut u8)`.
-///
-/// SAFETY: on x86_64 Linux (System V AMD64 ABI), these calling conventions are
-/// identical for a single pointer argument. Mirrors the identical helper + rationale
-/// in `tests/spike.rs`.
-unsafe fn as_c_fn(f: fn(*mut u8)) -> extern "C" fn(*mut u8) {
-    std::mem::transmute(f)
-}
-
 // WHY: `ynz_rt_shutdown` extracts the owned `Runtime` via `lock.take()` but, before this
 // fix, never dropped the `MutexGuard` before calling the up-to-5s-blocking
 // `rt.shutdown_timeout(...)` — Rust does NOT early-drop a named `MutexGuard` at its last
@@ -38,17 +29,17 @@ unsafe fn as_c_fn(f: fn(*mut u8)) -> extern "C" fn(*mut u8) {
 fn shutdown_does_not_hold_runtime_mutex_across_drain_window() {
     static TASK_DONE: AtomicBool = AtomicBool::new(false);
 
-    fn slow_task(_ctx: *mut u8) {
+    extern "C-unwind" fn slow_task(_ctx: *mut u8) {
         std::thread::sleep(Duration::from_millis(600));
         TASK_DONE.store(true, Ordering::SeqCst);
     }
 
-    fn noop_task(_ctx: *mut u8) {}
+    extern "C-unwind" fn noop_task(_ctx: *mut u8) {}
 
     ynz_rt_init();
 
     // SAFETY: slow_task takes no ctx; passing null is safe per its signature.
-    unsafe { ynz_rt_spawn_blocking(as_c_fn(slow_task), std::ptr::null_mut(), 0) };
+    unsafe { ynz_rt_spawn_blocking(slow_task, std::ptr::null_mut(), 0) };
 
     // Shutdown runs on its own OS thread so this test thread can race a concurrent
     // RUNTIME-mutex contender against the drain window. The unset YNZ_SHUTDOWN_TIMEOUT_MS
@@ -65,7 +56,7 @@ fn shutdown_does_not_hold_runtime_mutex_across_drain_window() {
     // SAFETY: noop_task takes no ctx; passing null is safe. This thread is NOT inside a
     // Tokio context, so this call takes ynz_rt_spawn_blocking's RUNTIME-mutex fallback
     // path — exactly the path that contends with ynz_rt_shutdown's mutex.
-    unsafe { ynz_rt_spawn_blocking(as_c_fn(noop_task), std::ptr::null_mut(), 0) };
+    unsafe { ynz_rt_spawn_blocking(noop_task, std::ptr::null_mut(), 0) };
     let contender_elapsed = contender_start.elapsed();
 
     shutdown_thread.join().expect("shutdown thread panicked");

@@ -12,21 +12,6 @@ use ynz_runtime::runtime::{
     ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn_blocking, ynz_thread_sleep_ms,
 };
 
-/// Transmute a Rust `fn(*mut u8)` to `extern "C" fn(*mut u8)`.
-///
-/// SAFETY: on x86_64 Linux (System V AMD64 ABI), these calling conventions are
-/// identical for a single pointer argument. The critical difference is that Rust
-/// `fn` does NOT get the `nounwind` LLVM attribute, so `panic!()` inside the fn
-/// can unwind normally and be caught by `catch_unwind`. Using `extern "C" fn`
-/// in spike tests would add `nounwind` and abort the process on any panic, which
-/// would mask whether our catch_unwind boundary works.
-///
-/// In production, Yinz-compiled code is emitted as LLVM IR without `nounwind`,
-/// so this matches the real behavior that `ynz_rt_spawn_blocking` must handle.
-unsafe fn as_c_fn(f: fn(*mut u8)) -> extern "C" fn(*mut u8) {
-    std::mem::transmute(f)
-}
-
 // ---------------------------------------------------------------------------
 // Test serialization: these tests share the global C-ABI runtime.
 // A mutex prevents concurrent init/shutdown races between parallel test threads.
@@ -53,7 +38,7 @@ fn with_runtime<F: FnOnce()>(f: F) {
 fn spawn_join_main_continues_before_background() {
     static BACKGROUND_DONE: AtomicBool = AtomicBool::new(false);
 
-    fn slow_task(_ctx: *mut u8) {
+    extern "C-unwind" fn slow_task(_ctx: *mut u8) {
         std::thread::sleep(Duration::from_millis(200));
         BACKGROUND_DONE.store(true, Ordering::SeqCst);
     }
@@ -62,7 +47,7 @@ fn spawn_join_main_continues_before_background() {
         let start = Instant::now();
 
         // SAFETY: slow_task takes no ctx; passing null is safe per its signature.
-        unsafe { ynz_rt_spawn_blocking(as_c_fn(slow_task), std::ptr::null_mut(), 0) };
+        unsafe { ynz_rt_spawn_blocking(slow_task, std::ptr::null_mut(), 0) };
 
         // Main continues immediately — spawn is non-blocking.
         let after_spawn = start.elapsed();
@@ -95,13 +80,13 @@ fn spawn_join_main_continues_before_background() {
 fn spawn_drop_program_continues() {
     static REACHED_END: AtomicBool = AtomicBool::new(false);
 
-    fn long_task(_ctx: *mut u8) {
+    extern "C-unwind" fn long_task(_ctx: *mut u8) {
         std::thread::sleep(Duration::from_millis(500));
     }
 
     let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     ynz_rt_init();
-    unsafe { ynz_rt_spawn_blocking(as_c_fn(long_task), std::ptr::null_mut(), 0) };
+    unsafe { ynz_rt_spawn_blocking(long_task, std::ptr::null_mut(), 0) };
     // Short sleep so the task has time to start before we shut down.
     std::thread::sleep(Duration::from_millis(10));
     // Shutdown with the normal 5s timeout — tasks that haven't finished are dropped.
@@ -125,12 +110,12 @@ fn spawn_drop_program_continues() {
 fn spawn_panic_does_not_propagate() {
     static MAIN_REACHED_END: AtomicBool = AtomicBool::new(false);
 
-    fn panicking_task(_ctx: *mut u8) {
+    extern "C-unwind" fn panicking_task(_ctx: *mut u8) {
         panic!("intentional background task panic");
     }
 
     with_runtime(|| {
-        unsafe { ynz_rt_spawn_blocking(as_c_fn(panicking_task), std::ptr::null_mut(), 0) };
+        unsafe { ynz_rt_spawn_blocking(panicking_task, std::ptr::null_mut(), 0) };
         // Main continues without seeing the panic.
         MAIN_REACHED_END.store(true, Ordering::SeqCst);
     });
@@ -180,7 +165,7 @@ fn spawn_panic_ctx_no_leak() {
     // thread — never concurrently. The DROP_COUNTER pointer lives for the whole test.
     unsafe impl Send for Ctx {}
 
-    fn counting_panic_task(ctx: *mut u8) {
+    extern "C-unwind" fn counting_panic_task(ctx: *mut u8) {
         TASK_COUNTER.fetch_add(1, Ordering::SeqCst);
         // Increment the drop counter BEFORE panic so that even if panic prevents
         // reaching the line after, we can tell whether the catch_unwind caught it.
@@ -202,7 +187,7 @@ fn spawn_panic_ctx_no_leak() {
         unsafe {
             // Pass the Ctx struct (64 bytes) — ynz_rt_spawn_blocking makes a heap copy.
             ynz_rt_spawn_blocking(
-                as_c_fn(counting_panic_task),
+                counting_panic_task,
                 &raw mut ctx as *mut u8,
                 std::mem::size_of::<Ctx>() as i64,
             );
@@ -237,14 +222,14 @@ fn spawn_panic_ctx_no_leak() {
 fn panic_during_shutdown_caught() {
     static MAIN_FINISHED: AtomicBool = AtomicBool::new(false);
 
-    fn slow_then_panic(_ctx: *mut u8) {
+    extern "C-unwind" fn slow_then_panic(_ctx: *mut u8) {
         std::thread::sleep(Duration::from_millis(50));
         panic!("panic during shutdown window");
     }
 
     let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     ynz_rt_init();
-    unsafe { ynz_rt_spawn_blocking(as_c_fn(slow_then_panic), std::ptr::null_mut(), 0) };
+    unsafe { ynz_rt_spawn_blocking(slow_then_panic, std::ptr::null_mut(), 0) };
     // Don't wait — trigger shutdown immediately while task is still sleeping.
     ynz_rt_shutdown(); // 5s timeout; task finishes in ~50ms and panics; must be caught.
 
@@ -272,14 +257,14 @@ fn nested_spawn_inner_panic_isolated() {
     // 0 = not started, 1 = outer done (inner spawned), used to gate shutdown.
     static OUTER_DONE_FLAG: AtomicUsize = AtomicUsize::new(0);
 
-    fn inner_panicking(_ctx: *mut u8) {
+    extern "C-unwind" fn inner_panicking(_ctx: *mut u8) {
         INNER_PANICKED.store(true, Ordering::SeqCst);
         panic!("inner nested task panic");
     }
 
-    fn outer_task(_ctx: *mut u8) {
+    extern "C-unwind" fn outer_task(_ctx: *mut u8) {
         // Spawn the inner panicking task — runtime is still alive.
-        unsafe { ynz_rt_spawn_blocking(as_c_fn(inner_panicking), std::ptr::null_mut(), 0) };
+        unsafe { ynz_rt_spawn_blocking(inner_panicking, std::ptr::null_mut(), 0) };
         // Sleep briefly to let the inner task start and panic.
         std::thread::sleep(Duration::from_millis(30));
         OUTER_COMPLETED.store(true, Ordering::SeqCst);
@@ -289,7 +274,7 @@ fn nested_spawn_inner_panic_isolated() {
 
     let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     ynz_rt_init();
-    unsafe { ynz_rt_spawn_blocking(as_c_fn(outer_task), std::ptr::null_mut(), 0) };
+    unsafe { ynz_rt_spawn_blocking(outer_task, std::ptr::null_mut(), 0) };
 
     // Wait for the outer task to signal before calling shutdown.
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -317,6 +302,16 @@ fn nested_spawn_inner_panic_isolated() {
 // WHY: hello-world programs should start in ≤ 50ms end-to-end. Runtime init
 // must not dominate that budget. Threshold from P1 plan gate.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "pure wall-clock latency measurement with no correctness assertion beyond the \
+              timing threshold itself — same class as sync_bridge_overhead_measurement \
+              (tests/m2_spike.rs). Miri's interpreter overhead dwarfs the ≤500ms debug budget \
+              (observed 569ms for what native runs in single-digit ms); there is no secondary \
+              ordering/return-value assertion here worth preserving under a widened budget, so \
+              this is ignored rather than budget-widened. See \
+              https://github.com/rust-lang/miri#miri (interpreter overhead is inherent)."
+)]
 fn rt_init_shutdown_within_5ms() {
     let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let start = Instant::now();
@@ -344,6 +339,15 @@ fn rt_init_shutdown_within_5ms() {
 // WHY: check_preempt is inserted at every loop back-edge + function call site.
 // Per-call cost must be negligible. This measures the no-Tokio-context path.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "pure per-call nanosecond-cost benchmark with no correctness assertion beyond the \
+              timing threshold — same class as sync_bridge_overhead_measurement \
+              (tests/m2_spike.rs). Miri's interpreter overhead is orders of magnitude above the \
+              debug-build 500ns/call budget by design (observed ~120000ns/call), and there is no \
+              secondary behavior to preserve under a widened budget — the ONLY thing this test \
+              checks is the ns/call figure itself. See https://github.com/rust-lang/miri#miri."
+)]
 fn check_preempt_per_call_cost() {
     use ynz_runtime::runtime::ynz_rt_check_preempt;
     const ITERS: u64 = 1_000_000;
@@ -371,6 +375,13 @@ fn check_preempt_per_call_cost() {
 // cost of the no-op stub to confirm M1's loop back-edge insertion is viable.
 // The Spike Findings section in the plan documents the full gate decision.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "pure per-call nanosecond-cost benchmark, identical class and cause as \
+              check_preempt_per_call_cost immediately above — no correctness assertion beyond \
+              the ns/call figure, so ignored rather than budget-widened under Miri's inherent \
+              interpreter overhead."
+)]
 fn check_preempt_noop_per_call_cost_acceptable() {
     use ynz_runtime::runtime::ynz_rt_check_preempt;
 

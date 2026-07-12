@@ -3769,3 +3769,592 @@ applied by re-dispatched executor)
   Files touched: `crates/ynz-driver/src/run.rs`, `crates/ynz-driver/tests/run_cli.rs`,
   `crates/ynz-runtime/src/channel.rs` (comments only), `plan.md` (frontmatter + Phase 6
   completion note), this file (session log).
+
+## Context-segment log (continued)
+
+### 2026-07-11 — Phase 6b, segment 1
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-segment-1
+
+- **segment number:** 1
+- **session-id:** `executor-2026-07-11-m6-phase6b-seg1`
+- **subagent_tokens actual:** 250760 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** executor's own early-checkpoint judgment call (context budget; stopped
+  mid-Step-4 at a clean, coherent, buildable stopping point — all Miri UB findings fixed, only
+  leak-triage remains — rather than grinding into TSan/ASan/CI-authoring on a shrinking window).
+  No `**OVER-FAT-STEP PROPOSAL**` sentinel — a plain PARTIAL.
+- **canonical resume-at pointer:** `phase-6b/step-4` (first segment of the phase — no previous
+  pointer to stall-compare against, so re-dispatch is unconditional).
+- **segment verdict:** `STATUS: PARTIAL`. Step 1 (nightly toolchain + Miri + `rust-src` in
+  `Dockerfile`, image rebuilt) DONE. Step 2 (Miri lane run) DONE, repeated as fixes landed. Step 4
+  (fix-or-triage) IN PROGRESS: 2 REAL confirmed production bugs fixed in
+  `crates/ynz-runtime/src/runtime.rs` (`ynz_rt_spawn_blocking`/`ynz_rt_spawn_blocking_joinable`'s
+  ctx-heap-copy path — a Stacked-Borrows violation from `Box<[u8]>::as_mut_ptr()` then
+  `mem::forget`, plus an alignment violation from reading the byte buffer back through typed
+  pointers — both fixed by routing through the crate's one authoritative `ynz_alloc`/`ynz_free`
+  choke point instead of a parallel `Box<[u8]>` path, per `authoritative-derivation.md`;
+  `FrameDropGuard::drop` updated to match); 4 test-only alignment bugs of the same class fixed in
+  `crates/ynz-runtime/src/lib.rs`; 3 tests in `crates/ynz-runtime/src/channel.rs` triaged as
+  structurally Miri-incompatible (Miri cannot support `posix_spawn` at all — confirmed by direct
+  experiment including `-Zmiri-disable-isolation`, not inferred — `#[cfg_attr(miri, ignore =
+  "...")]` added with the reason cited inline; behavior stays covered by `cargo test`/`nextest`).
+  **6 memory-leak findings remain UNTRIAGED** — the actual resume point; full alloc-site chains
+  captured in `handoff-phase-6b.md` (a scratch backtrace file referenced there will NOT survive to
+  the next session — re-run to regenerate). 0 UB errors remain (96 passed / 3 ignored). Steps 3
+  (TSan/ASan), 5 (CI job), 6 (non-vacuousness proof), 7 (full workspace suite) NOT STARTED.
+  **No deviation surfaced** — the Miri findings are exactly what this phase's own R12 risk row
+  anticipated and are being routed through the phase's own normal fix-or-triage loop, not a
+  divergence from it. Verification: `cargo build -p ynz-runtime` clean; `cargo test -p
+  ynz-runtime` 99/99 green; `cargo +nightly miri test -p ynz-runtime` 96 passed/3 ignored/0 UB
+  errors/6 unresolved leaks. Not committed — tree left dirty per executor charter. Files touched:
+  `Dockerfile`, `crates/ynz-runtime/src/runtime.rs`, `crates/ynz-runtime/src/lib.rs`,
+  `crates/ynz-runtime/src/channel.rs`, `plan.md` (Phase 6b completion note + frontmatter
+  session-id), `handoff-phase-6b.md` (new). Resume `phase-6b/step-4` via handoff.
+
+### 2026-07-11 — Phase 6b, segment 2
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-segment-2
+
+- **segment number:** 2
+- **session-id:** `executor-2026-07-11-m6-phase6b-seg2`
+- **checkpoint reason:** context-budget nudges fired repeatedly well past the 150k calibration
+  threshold; landed at a clean, coherent, buildable stopping point (Miri clean through `lib.rs` +
+  `m2_runtime.rs`; new findings in `m2_spike.rs` fully characterized for handoff) rather than
+  grinding into the next target with a near-exhausted window. No `**OVER-FAT-STEP PROPOSAL**`
+  sentinel — a plain PARTIAL, same step as segment 1 left it (`phase-6b/step-4`).
+- **canonical resume-at pointer:** `phase-6b/step-4` (unchanged from segment 1 — same step,
+  further progress within it).
+- **segment verdict:** `STATUS: PARTIAL`. Consumed segment 1's handoff (read + deleted per
+  convention), inherited its toolchain-presence receipt without re-verifying. Fixed all 6 of
+  segment 1's untriaged leak findings (isolated to their owning tests via narrowed Miri re-runs
+  first, per verification.md): `ynz_rt_join_poll`'s panic/abort arm was leaking
+  `Box<CpuJoinHandle>` unboundedly (the existing "bounded, program terminating anyway" doc claim
+  was disproved by this crate's OWN `panic_reraises_in_parent` test, which `catch_unwind`s the
+  re-raise) — fixed by freeing the box before `resume_unwind`/`panic!`
+  (`crates/ynz-runtime/src/runtime.rs`); a `descs`-array leak in the pending-send-ABA test's
+  miss-cleanup loop, matching an already-documented-but-never-fixed comment — fixed by threading
+  the pointer out of `build_send_task` (`crates/ynz-runtime/src/lib.rs`); 3 split-string leaks in
+  `string_split_basic` from `ynz_array_drop`'s by-design element-blindness (D6) — fixed by freeing
+  each element first (`crates/ynz-runtime/src/lib.rs`). Discovered and fixed 2 NEW findings once
+  the lib target's zero exit let Miri proceed into `crates/ynz-runtime/tests/m2_runtime.rs` for the
+  first time: a Stacked-Borrows retag bug (`.as_mut()` + `mem::forget`, same class as this phase's
+  earlier production ctx-copy fix — fixed via `Box::into_raw`) and an allocator-mismatch bug
+  (Rust-`Box`-allocated frame freed via the runtime's C `ynz_free` — fixed by allocating via
+  `ynz_alloc_zeroed` + placement `ptr::write`, matching every production frame; this ALSO surfaced
+  and fixed a real, previously Miri-invisible leak of the frame's embedded
+  `Box<TestStateMachine>`/`Sender<()>`, closed via an explicit `drop_in_place` before the resume fn
+  returns Ready). Triaged one test (`sleep_eight_concurrent_share_threads`) as Miri-incompatible —
+  a wall-clock 8-way-concurrency timing assertion, checked against Miri's own documented
+  threading-timing limitation before triaging (confirmed via the fact that every OTHER
+  timing-bounded test in the same file passes cleanly under Miri; only the concurrent one is
+  affected) — `#[cfg_attr(miri, ignore = "...")]` with the reasoning cited inline, per R12's
+  mandate. Miri is now clean through `lib.rs` + `m2_runtime.rs` (0 UB, 0 leaks, both confirmed via
+  isolated re-runs). The full unnarrowed `cargo +nightly miri test -p ynz-runtime` proceeds further
+  and surfaces 2 NEW, NOT-YET-TRIAGED findings in `crates/ynz-runtime/tests/m2_spike.rs` — one whose
+  real error text this segment's own truncated `tail` piping failed to capture, one a
+  `clock_gettime`/`SystemTime::now()` Miri default-isolation error whose Miri-suggested remediation
+  (`-Zmiri-disable-isolation`) is NOT yet confirmed. Full alloc-site-equivalent detail + exact next
+  steps in the rewritten `handoff-phase-6b.md`. Steps 3 (TSan/ASan), 5 (CI job), 6
+  (non-vacuousness proof), 7 (full workspace suite) still NOT STARTED. **No deviation surfaced** —
+  same as segment 1, these are exactly the R12 risk row's anticipated fix-or-triage loop, not a
+  divergence. Verification: `cargo test -p ynz-runtime` (normal, non-Miri) 100% green across all 8
+  reported test-result blocks, confirmed AFTER all fixes; `cargo +nightly miri test -p ynz-runtime
+  --lib` and `--test m2_runtime` both clean (0 UB, 0 leaks). Not committed — tree left dirty per
+  executor charter. Files touched: `crates/ynz-runtime/src/runtime.rs`,
+  `crates/ynz-runtime/src/lib.rs`, `crates/ynz-runtime/tests/m2_runtime.rs`, `plan.md` (Phase 6b
+  completion note + frontmatter session-id), `handoff-phase-6b.md` (rewritten in place, per the
+  replace-in-place convention — not appended). Resume `phase-6b/step-4` via handoff.
+
+**Conductor stall-check resolution (2026-07-11).** Segment 2's canonical resume-at pointer
+(`phase-6b/step-4`) exact-matched segment 1's — the mechanical adjacent-pair stall signal (Step 3a)
+fired and the conductor halted per procedure rather than self-judging it a false positive. Surfaced
+to Patrick with both identical pointers as evidence, per the rule's "detect THAT, never WHY"
+discipline. **Patrick's disposition: continue** — no-duct-tape, keep fixing real findings properly.
+Read as authorization to proceed past this stall detection: Step 4's coarse step-granularity (one
+step covering the whole Miri/TSan/ASan/CI-authoring/non-vacuousness-proof sweep) legitimately does
+not advance the canonical pointer across multiple genuinely-productive segments — confirmed by both
+segments' cited, verification-backed findings, not a wedge. Re-dispatching segment 3 from
+`phase-6b/step-4`. (Also noted, not fixed: both segment 1 and segment 2 wrote their own
+Context-segment log entries directly — per this project's `execute-plan §3a.1`, this log is
+conductor-owned; a minor, harmless charter drift, flagged for awareness, not corrected
+retroactively.)
+
+### 2026-07-11 — Phase 6b, segment 3
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-segment-3
+
+- **segment number:** 3
+- **session-id:** `executor-2026-07-11-m6-phase6b-seg3`
+- **subagent_tokens actual:** 276275 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** executor's own early-checkpoint judgment call, landed at the Step-4/Step-3
+  boundary (Miri fix-or-triage loop fully complete, zero MIRIFLAGS required end-state; TSan/ASan not
+  yet started). No `**OVER-FAT-STEP PROPOSAL**` sentinel — a plain PARTIAL.
+- **canonical resume-at pointer:** `phase-6b/step-3` (differs from segment 2's `phase-6b/step-4` —
+  no stall; this segment finished Miri work the phase's literal step order had deferred, then
+  returned to the still-unstarted Step 3/TSan-ASan).
+- **segment verdict:** `STATUS: PARTIAL`. Consumed + deleted segment 2's handoff. Disposed of every
+  remaining Miri finding in `crates/ynz-runtime/tests/m2_spike.rs` and
+  `crates/ynz-runtime/tests/m6_shutdown_mutex_scope.rs`: `contract_1_single_wait_suspension_resume`
+  triaged (same wall-clock 8-way-concurrency-timing class as an already-triaged sibling, cited);
+  `contract_2_multi_wait_sequential`'s `SystemTime::now()` — investigated the Miri-suggested
+  `-Zmiri-disable-isolation` remediation per R12's mandate rather than applying it blindly, found it
+  broke a DIFFERENT previously-green test (an address-reuse-forcing test, confirmed via isolation),
+  and instead fixed the real root cause: replaced `FnChain`'s two `SystemTime::now()` call sites with
+  a monotonic `Instant`-backed `chain_now_ns()` helper — removes the crate's ONLY `SystemTime`
+  dependency, needs zero `MIRIFLAGS`, and is more correct even outside Miri (`SystemTime` isn't
+  guaranteed monotonic). 6 more tight-timing-budget failures fixed via a `miri_budget()` helper
+  widening only the upper bound under `cfg!(miri)`, preserving the real correctness assertions
+  underneath; 1 pure overhead-ratio benchmark triaged/ignored (no correctness assertion to preserve).
+  **1 REAL confirmed UB bug found and fixed at root cause, not worked around:**
+  `ynz_rt_spawn_blocking`/`_joinable`'s `fn_ptr` parameter was typed plain `extern "C"` when it
+  should have been `extern "C-unwind"` all along, matching every other resume-fn in the crate
+  (`ynz_rt_run_entrypoint`, `ynz_rt_join_poll`, `HandleHeader::resume_fn`) and the crate's own
+  documented non-`nounwind` production-ABI invariant; a test-side `transmute`-based
+  `as_c_fn` workaround (built to dodge exactly this signature mismatch) is now unnecessary and was
+  deleted. Fixed the 2 signatures + all 22 callee test functions across `lib.rs`/`m2_spike.rs`/
+  `spike.rs`/`m6_shutdown_mutex_scope.rs`. Miri now fully clean (0 UB, 0 leaks) across every target
+  reached — lib, m2_runtime, m2_spike, m6_shutdown_mutex_scope — with **zero `MIRIFLAGS`** required,
+  a strictly better end-state than the flag-workaround the plan's own Step 2 sketch anticipated (a
+  deviation surfaced honestly, not silently substituted — no FRAGO needed, in-scope fix-or-triage
+  work). `no_blocking_in_conduit_path.rs`, `spike.rs` (as a Miri TARGET, distinct from its role as a
+  callee-fix site above), and `spike_frame_abi_no_bare_offsets.rs` not yet Miri-run; one final
+  single-command whole-crate Miri run (all 6 targets, one invocation) not yet confirmed atomically
+  (done piecemeal this segment under context pressure) — named as next segment's first action.
+  Steps 3 (TSan/ASan), 5 (CI job), 6 (non-vacuousness proof), 7 (full workspace suite) still NOT
+  STARTED. Verification: `cargo check -p ynz-runtime --tests` clean; `cargo test -p ynz-runtime`
+  100% green (8/8 blocks `0 failed`); per-target Miri (lib, m2_runtime, m2_spike,
+  m6_shutdown_mutex_scope) all green, 0 UB, 0 leaks. Not committed — tree left dirty. Did NOT write
+  its own Context-segment log entry this time (corrected per this segment's dispatch note). Files
+  touched: `crates/ynz-runtime/tests/m2_spike.rs`, `crates/ynz-runtime/src/runtime.rs`,
+  `crates/ynz-runtime/src/lib.rs`, `crates/ynz-runtime/tests/spike.rs`,
+  `crates/ynz-runtime/tests/m6_shutdown_mutex_scope.rs`, `plan.md` (completion note + frontmatter
+  session-id), `handoff-phase-6b.md` (rewritten in place). Resume `phase-6b/step-3` via handoff.
+
+### 2026-07-11 — Phase 6b, segment 4
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-segment-4
+
+- **segment number:** 4
+- **session-id:** `executor-2026-07-11-m6-phase6b-seg4`
+- **subagent_tokens actual:** 266976 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** executor's own early-checkpoint judgment call, landed at a clean boundary
+  after closing Miri entirely and completing the TSan lane with one real confirmed-and-fixed bug.
+  No `**OVER-FAT-STEP PROPOSAL**` sentinel — a plain PARTIAL.
+- **canonical resume-at pointer:** `phase-6b/step-3` — **exact-matches segment 3's pointer.** Second
+  adjacent-pair stall signal this phase. Per the mechanical stall-check discipline, detected and
+  logged rather than silently passed over. **Resolution:** applying Patrick's already-recorded
+  standing disposition from the first stall (segment 1→2, "no duct tape, do the right thing") — the
+  same root cause applies identically: Step 3 (TSan/ASan) is itself a coarse, multi-part step
+  (enable TSan in the container, run it against 7 targets, triage/fix findings, then repeat the whole
+  cycle for ASan), so two segments both landing at `phase-6b/step-3` with cited, verification-backed
+  progress in each (segment 3: finished Miri entirely + started TSan enablement work implicitly via
+  its own scope; segment 4: enabled TSan in `docker-compose.yml`, ran it, found+fixed one REAL
+  confirmed shutdown-blocking-task-loss bug in `runtime.rs` via Tokio source-doc root-causing, not a
+  hand-waved false positive) is the expected shape of this step's real size, not a wedge. Continuing
+  to segment 5 without re-asking — the disposition already covers this recurring pattern within this
+  phase; a genuinely different stall shape (e.g. an unproductive segment with no new findings) would
+  still warrant a fresh surface.
+- **segment verdict:** `STATUS: PARTIAL`. Miri lane fully closed (Steps 1/2/4-Miri-portion DONE):
+  confirmed the whole-crate `cargo +nightly miri test -p ynz-runtime` atomically clean (0 MIRIFLAGS,
+  exit 0) across all 6 integration targets + lib; triaged 5 more findings in the 3 previously-unreached
+  test files (`no_blocking_in_conduit_path.rs` ×2, `spike_frame_abi_no_bare_offsets.rs` ×1 — all
+  `fs::read_to_string`/Miri-isolation-blocked, cited; `spike.rs` ×3 pure wall-clock micro-benchmarks,
+  same precedented treatment as `sync_bridge_overhead_measurement`). **TSan enabled**: fixed a
+  container-level `FATAL: ThreadSanitizer ... unable to disable ASLR` by adding
+  `cap_add: [SYS_PTRACE]` + `security_opt: [seccomp:unconfined]` to `docker-compose.yml`'s `dev`
+  service, probed live via a throwaway `docker run` before committing to compose (run-in-docker.md
+  discipline). **1 REAL confirmed bug found + fixed via TSan**, root-caused by reading Tokio
+  1.52.3's own source/docs (not asserted): `ynz_rt_spawn_blocking`/`_joinable` funnel into Tokio's
+  `spawn_blocking`, which Tokio documents as non-mandatory — a task still queued (not yet popped by a
+  worker) when `ynz_rt_shutdown`'s `shutdown_timeout` begins is silently cancelled, contradicting the
+  function's own "tasks get N seconds to finish" doc claim; reproduced via `spike.rs`'s
+  `spawn_panic_ctx_no_leak` flaking under TSan (variable task loss across runs). Fixed via a new
+  `PENDING_BLOCKING_TASKS` atomic counter + RAII guard (decrements on both normal return and
+  `resume_unwind` unwind) wired into both spawn entry points; `ynz_rt_shutdown` now drains the
+  counter to zero (bounded by the existing `timeout_ms` budget) before calling
+  `rt.shutdown_timeout()`. Verified: 20/20 clean stress runs of the previously-flaky test post-fix;
+  full TSan re-run of lib + all 6 targets green; normal `cargo test -p ynz-runtime` still 100% green,
+  no regression. One rustdoc+sanitizer ABI-mismatch doctest-driver limitation noted as moot (crate
+  has zero real doctests) — scope the eventual CI sanitizer lane to `--lib --tests`, excluding
+  `--doc`. **No deviation requiring a FRAGO** — the `docker-compose.yml` change is a direct, minimal
+  enablement of this step's own prescribed TSan work, which the plan's own step-3 text explicitly
+  anticipated needing live confirmation. ASan (step 3's second sanitizer), CI job authoring (step 5),
+  the mandatory non-vacuousness proof (step 6), and the full workspace suite (step 7) are **still
+  NOT STARTED** — the actual resume point. Verification: `cargo test -p ynz-runtime` 100% green;
+  Miri whole-crate atomic run 0 MIRIFLAGS/exit 0; TSan lib+6-targets green post-fix; 20/20 stress
+  runs of the fixed test. Not committed — tree left dirty. Did NOT write its own Context-segment log
+  entry (correctly following the seg3 correction). Files touched:
+  `crates/ynz-runtime/tests/no_blocking_in_conduit_path.rs`,
+  `crates/ynz-runtime/tests/spike_frame_abi_no_bare_offsets.rs`,
+  `crates/ynz-runtime/tests/spike.rs`, `docker-compose.yml`, `crates/ynz-runtime/src/runtime.rs`,
+  `plan.md` (completion note + frontmatter session-id), `handoff-phase-6b.md` (rewritten in place).
+  Resume `phase-6b/step-3` via handoff (ASan next, then steps 5/6/7).
+
+### 2026-07-11 — Phase 6b, segment 5
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-segment-5
+
+- **segment number:** 5
+- **session-id:** `executor-2026-07-11-m6-phase6b-seg5`
+- **subagent_tokens actual:** 250495 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** executor's own early-checkpoint judgment call, landed at a clean boundary
+  with only Step 7 (full workspace suite) remaining before the phase can close. No
+  `**OVER-FAT-STEP PROPOSAL**` sentinel — a plain PARTIAL.
+- **canonical resume-at pointer:** `phase-6b/step-7` (differs from segment 4's `phase-6b/step-3` —
+  no stall; real forward progress through ASan, CI-job authoring, and the non-vacuousness proof).
+- **segment verdict:** `STATUS: PARTIAL`. **ASan run, 1 finding, fixed at root cause (not a
+  production bug)**: `m6_pending_send_aba::cancelled_frame_sender_is_purged_and_reused_address_cannot_resurrect_it`'s
+  force-frame-address-reuse-within-64-allocations technique reliably fails under ASan because ASan's
+  quarantine deliberately withholds freed allocations from reuse to widen UAF detection — confirmed
+  via Paper-Trace, not assumed (`ASAN_OPTIONS=quarantine_size_mb=0` restored reuse immediately,
+  isolating quarantine as the exact cause; the accompanying leak report was a pure corollary of the
+  panic exiting before cleanup, not a real leak). Fixed by restructuring the test to gracefully
+  degrade exactly like its already-precedented sibling `freed_handle_sender_...` test, backstopped by
+  the pre-existing deterministic `channel.rs` ABA-half test that covers the correctness property
+  independent of allocator behavior — a real minimal-scope fix, not a skip. Post-fix: ASan clean
+  across lib + all 6 targets, zero failures/leaks; no regression in normal tests, Miri, or TSan.
+  **Step 5 (CI job) DONE**: new `sanitizers` job in `.github/workflows/ci.yml` — Miri (whole-crate,
+  zero MIRIFLAGS) + TSan + ASan (`--lib --tests`, excluding `--doc`), scoped to `-p ynz-runtime`, same
+  triggers as the existing workflow. One honestly-flagged, unverifiable-from-this-sandbox assumption
+  recorded in the job's own comments: it runs on bare `ubuntu-latest` without the dev-container's
+  Docker-seccomp TSan workaround (reasoned unnecessary — GH runners are unrestricted VMs — but not
+  confirmable without a bare non-containerized toolchain; named for the first real CI run to verify).
+  **Step 6 (non-vacuousness proof) DONE, MANDATORY, genuinely performed**: first attempt (revert this
+  phase's own `PendingBlockingGuard` fix, 25× stress-loop) did not reproduce in isolation (0/25) — reverted
+  that attempt cleanly (byte-identical restoration confirmed via `git diff --stat`) rather than force a
+  false proof, and used the sanctioned alternative — a deterministic synthetic data race in a throwaway
+  `tests/zz_scratch_nonvacuousness_proof.rs`, run through the EXACT CI-authored TSan command. Real
+  captured output: `SUMMARY: ThreadSanitizer: data race .../zz_scratch_nonvacuousness_proof.rs:14`,
+  `reported 2 warnings`, exit status 66 — genuinely RED. Scratch file then deleted (confirmed zero git
+  residue) and green re-confirmed (`cargo build -p ynz-runtime` clean; `cargo test -p ynz-runtime --lib`
+  99/99). **Step 7 (full workspace suite) — NOT YET RUN — the sole remaining exit criterion.** No
+  deviation surfaced — both judgment calls (pivoting the non-vacuousness proof to a synthetic bug;
+  scoping the CI job to bare `ubuntu-latest`) were within the dispatch's own sanctioned latitude and
+  recorded on the record, not silent. Not committed — tree left dirty; net-zero diff on
+  `runtime.rs` (temporarily edited for the reverted first proof attempt, fully restored). Did NOT
+  write its own Context-segment log entry. Files touched: `crates/ynz-runtime/src/lib.rs` (ASan
+  fix), `.github/workflows/ci.yml` (new), `crates/ynz-runtime/src/runtime.rs` (net zero), `plan.md`
+  (completion note + frontmatter session-id), `handoff-phase-6b.md` (rewritten in place). Resume
+  `phase-6b/step-7` via handoff — only the full workspace suite remains.
+
+### 2026-07-11 — Phase 6b, segment 6 (DONE)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-segment-6
+
+- **segment number:** 6
+- **session-id:** `executor-2026-07-11-m6-phase6b-seg6`
+- **subagent_tokens actual:** 250720 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** phase DONE (Step 7 completed; all exit criteria met; handoff deleted as
+  the final act).
+- **canonical resume-at pointer:** n/a — Phase 6b work COMPLETE (resumed at seg-5's
+  `phase-6b/step-7`, advanced through to DONE; no stall).
+- **segment verdict:** **DONE.** Forced a clean rebuild of the embedded runtime archive first
+  (`ynz-runtime` debug+release, then `ynz-driver`/`ynz-watch` debug+release — confirmed the release
+  archive was genuinely stale before rebuilding, the exact trap segment 3 hit earlier this phase).
+  **Step 7's first run surfaced a genuine regression**: `crates/ynz-driver/tests/integration.rs`'s
+  `v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged` hit a full-process abort (a
+  misaligned-pointer panic inside Tokio's own `AtomicUsize::with_mut`). Root-caused via bisection —
+  reverted `ynz-runtime` to pre-Phase-6b HEAD (`4200251`), ran the same test 5× (100 sub-runs), zero
+  crashes, confirming NOT pre-existing; restored the tree and isolated the cause to segment 2's
+  `ynz_rt_join_poll` fix, which had freed the leaked `Box<CpuJoinHandle>` in BOTH the panic arm
+  (Miri-confirmed leak, correctly fixed) AND the abort arm (added by analogy, with no repro of its
+  own) — the abort arm's free races Tokio's internal blocking-pool cancellation during
+  `ynz_rt_shutdown`'s `shutdown_timeout()`. Confirmed no `.abort()` call site exists on any
+  `CpuJoinHandle` in this crate, so that arm is reachable only via Tokio's own shutdown-time
+  cancellation, meaning "the program is terminating anyway" is genuinely true there (unlike the
+  panic arm) — restoring the original leak-but-safe rationale. **Fix**: reverted only the abort
+  arm's free in `crates/ynz-runtime/src/runtime.rs`, kept the panic arm's fix, rewrote the
+  surrounding comments to document the asymmetry + the regression evidence. Verified: the
+  integration test 8× (160 sub-runs) post-fix, zero crashes; Miri/TSan/ASan re-run against
+  `ynz-runtime`, all three still clean; full workspace suite re-run twice more (once post-fix, once
+  post-`cargo fmt` reformat of two pre-existing mechanical drifts) — **exit 0, zero `FAILED`
+  occurrences, every `test result:` line `0 failed`, all three times**. `cargo clippy --workspace --
+  -D warnings` clean; `cargo fmt --all -- --check` clean (after the one reformat pass). **Phase 6b's
+  exit criteria are now ALL met**: Miri fully clean/atomic/zero-flags; TSan clean with 1 real bug
+  found+fixed (Tokio non-mandatory blocking-task shutdown drop); ASan clean with 1 real
+  test-fragility fix (quarantine defeats a force-reuse test technique); the `sanitizers` CI job is
+  authored in `.github/workflows/ci.yml` and proven non-vacuous (a genuine synthetic-race RED,
+  captured real ThreadSanitizer output, then restored green); the `Dockerfile` nightly-toolchain
+  addition is in place; full workspace suite green including the regression this very segment found
+  and fixed. **Deviation noted, not requiring a FRAGO**: fixing the Step-7-discovered regression was
+  pre-authorized in-scope by this segment's own dispatch instructions ("if something regresses, this
+  IS in-scope to fix"); the fix is a proven-safe minimal-scope revert, not a new mechanism. **Open
+  item flagged by the executor for reviewer judgment** (not self-decided): whether the abort-arm
+  revert is the right long-term shape, or whether a future phase should pursue a proper fix inside
+  `ynz_rt_shutdown`'s ordering to make freeing safe in both arms — out of this phase's bounded scope,
+  named for the fan-out below to weigh in on. Did NOT write its own Context-segment log entry
+  (correctly following the seg3+ correction). Files touched:
+  `crates/ynz-runtime/src/runtime.rs` (regression fix + comment rewrite),
+  `crates/ynz-runtime/src/lib.rs` + `crates/ynz-runtime/tests/m2_runtime.rs` (mechanical `cargo fmt`
+  reformat only, no logic change), `plan.md` (final Phase 6b completion note + frontmatter
+  session-id), `handoff-phase-6b.md` (deleted — phase complete).
+
+**Phase 6b arc summary (6 segments, all logged above): ~19 real confirmed bugs found and fixed
+(Stacked-Borrows violations, alignment violations, allocator-mismatch bugs, unbounded handle/leak
+bugs, a calling-convention ABI bug, a `SystemTime`/Miri-isolation conflict resolved via a monotonic
+rewrite, a Tokio non-mandatory-blocking-task shutdown-drop race, an ASan-quarantine test fragility,
+and a self-introduced abort-arm regression caught by this phase's own Step 7) across Miri, TSan, and
+ASan — zero findings hand-waved as false positives without a cited, checked justification; a
+permanent CI job wired and genuinely proven non-vacuous. Proceeding to the cheap gates + reviewer
+fan-out over the whole-phase diff.**
+
+## Phase 6b — cheap gates + 7-agent reviewer fan-out (post-DONE, pre-commit)
+
+**Cheap gates**: green-check (`mode: affected, scope: HEAD`) — VERDICT: green, 6/6 gates pass,
+secret-scan via `gitleaks`, full `cargo nextest run --workspace` (2372 run/2372 passed) used since
+cargo has no safe affected-mode fallback. graveyard-auditor — VERDICT: clean, 36 corpses considered
+(18 global + 18 project-local), 0 findings.
+
+**Reviewer fan-out** (core four + security + test-quality + critical-path-integrity, given
+Dockerfile/compose/CI touched-surface + heavy test-modification + concurrency-race content):
+- code-reviewer: changes-requested — 0 blockers, 2 should-fix (drain-wait comment misstates actual
+  2×timeout_ms bound vs documented ~5s; duplicated ctx-copy-to-heap logic across both spawn
+  entry points), 1 minor (seccomp:unconfined broader than needed). All three flagged
+  reviewer-judgment questions (abort/panic asymmetry, ABI migration completeness,
+  PENDING_BLOCKING_TASKS correctness) resolved sound.
+- acceptance-verifier: not-met — 2 "blockers," both procedural non-issues (exit criteria "CI job
+  committed" / "Dockerfile addition committed" correctly observed as unmet because nothing has
+  reached git yet — expected state pre-Step-8; resolves automatically once the commit gate runs).
+  Sanitizer-lanes-green and full-workspace-suite-green both independently corroborated MET via
+  artifact cross-check (not self-report).
+- rules-compliance: clean — 4 rules checked (authoritative-derivation, no-duct-tape, verification,
+  run-in-docker), 0 findings.
+- deviation-judge: changes-requested (procedural grade only) — 0 blockers, 1 minor unjustified
+  stray (seg1/seg2 wrote their own Context-segment log entries, already self-corrected from seg3
+  onward, no FRAGO needed), 4 other nominated divergences all JUSTIFIED (SystemTime→Instant
+  improvement-over-plan; docker-compose seccomp infra; seg6 self-correcting its own regression;
+  conductor reapplying the standing stall-disposition to a second identical-shape recurrence).
+- security: changes-requested — 0 blockers, 2 should-fix (**seccomp:unconfined disables Docker's
+  entire default filter when TSan needs only `personality`, real widened attack surface on a
+  container that runs untrusted crates.io build scripts**; new `sanitizers` CI job inherits an
+  unset `permissions:` block, ambient `GITHUB_TOKEN` scope unknown), 2 minor (unpinned nightly
+  toolchain; unpinned third-party GH Action tags, both pre-existing repo-wide patterns).
+- test-quality: clean — every triage/budget-widening/restructure claim verified against the actual
+  code, 0 findings.
+- critical-path-integrity: changes-requested — **1 REAL BLOCKER**: TOCTOU race in
+  `ynz_rt_shutdown`'s drain-then-shutdown sequencing (`runtime.rs:414-425`) — the drain loop
+  observes `PENDING_BLOCKING_TASKS == 0` then unconditionally calls `shutdown_timeout()` with no
+  re-check; a task still executing inside the runtime can call `spawn_blocking`/`_joinable` via
+  `Handle::try_current()` (bypassing the emptied `RUNTIME` mutex entirely) in that exact window,
+  re-opening the identical silent-task-loss bug this phase's own TSan fix (segment 4) was built to
+  close. No test exercised this scenario (grep-confirmed). Also 1 should-fix (the guard's
+  ran-vs-discarded ambiguity, tied to the blocker). The abort/panic asymmetry (c) independently
+  re-verified safe (zero `.abort()` call sites on any `CpuJoinHandle` crate-wide).
+
+**Routing**: the confirmed blocker → fix loop (yours, per Step 6). Bundled every should-fix from
+code-reviewer + security + critical-path-integrity into one fix-loop round (multi-lens round per
+§6.0 — full fleet re-run once clean). The two minor unpinned-toolchain/action-tag findings routed
+to a four-field no-duct-tape deferral in the fix-loop dispatch rather than fixed now (repo-wide
+pre-existing pattern, out of this diff's blast radius). The deviation-judge's 1 minor stray needs
+no action (already self-corrected). acceptance-verifier's 2 "blockers" need no fix-loop action —
+they resolve at the Step-8 commit gate.
+
+### Fix-loop round 1, segment 1 (checkpointed — PARTIAL)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-fixloop1-segment-1
+
+- **session-id:** `executor-2026-07-11-m6-phase6b-fixloop1`
+- **subagent_tokens actual:** 250567 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** executor's own early-checkpoint judgment call — landed all 5 code-level
+  fixes clean-compiling, but the blocker's regression test (the hard, critical part) and full
+  Miri/TSan/ASan/workspace-suite re-verification are still pending; a genuinely large remaining
+  scope, checkpointed rather than forced.
+- **segment verdict:** `STATUS: PARTIAL`. **[BLOCKER] TOCTOU race — code FIXED, not yet
+  regression-tested.** New `SHUTDOWN_STARTED` atomic + `PendingBlockingGuard::try_new()` (renamed
+  from `new()`) implementing increment-then-check admission (not check-then-increment) — provably
+  closes the race via the existing SeqCst total-order guarantee, per the doc-comment proof; both
+  spawn entry points bail cleanly on `None` before any heap allocation; `ynz_rt_shutdown` sets
+  `SHUTDOWN_STARTED` as its literal first statement; `ynz_rt_init` resets it (mirrors `RUNTIME`'s
+  own re-populate contract). **Not yet regression-tested — the single most important remaining
+  item.** [should-fix] guard ran-vs-discarded ambiguity resolved as moot by the fix (recorded, no
+  code change). [should-fix] drain-wait 2×timeout bug FIXED (one shared deadline, remaining budget
+  passed to `shutdown_timeout`, docs updated). [should-fix] duplicated ctx-copy FIXED (new
+  `copy_ctx_to_heap` helper, both sites use it). [should-fix] seccomp — narrower profile AUTHORED
+  (`docker/tsan-seccomp.json`, confirmed as genuinely Docker's real default profile plus one added
+  `personality`/`ADDR_NO_RANDOMIZE` allow-rule, verified against the fetched upstream default.json
+  rather than assumed), `docker-compose.yml` updated, `cap_add: SYS_PTRACE` investigated and kept
+  for TSan's symbolizer `/proc` access with a corrected comment (confirmed NOT needed for
+  `personality(2)` itself) — **NOT YET verified against a live TSan run**. [should-fix] `ci.yml`
+  permissions FIXED (workflow-level `contents: read`, confirmed no job needs write). [minor,
+  deferred] unpinned nightly + GH Action tags — four-field deferral recorded in `plan.md`'s
+  completion note. Verification this segment: `cargo check -p ynz-runtime --tests` clean;
+  `docker compose config` valid; ci.yml YAML valid. Miri/TSan/ASan/full-workspace-suite/clippy/fmt
+  **NOT YET RUN** — explicitly flagged as pending, not assumed clean. Not committed. Did NOT write
+  its own Context-segment log entry. Files touched: `crates/ynz-runtime/src/runtime.rs` (all 5
+  code fixes), `docker-compose.yml`, `docker/tsan-seccomp.json` (new), `.github/workflows/ci.yml`,
+  `plan.md` (frontmatter session-id + fix-loop-round-1 completion note),
+  `handoff-phase-6b-fixloop1.md` (new). Resume: write the TOCTOU regression test, verify the
+  narrower seccomp profile live against TSan, run the full verification suite, finalize.
+
+### Fix-loop round 1, segment 2 (checkpointed — PARTIAL)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-fixloop1-segment-2
+
+- **session-id:** `executor-2026-07-11-m6-phase6b-fixloop1-seg2`
+- **subagent_tokens actual:** 248293 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** executor's own early-checkpoint judgment call — landed the two hardest,
+  highest-risk remaining items (the blocker's regression test + live seccomp verification under
+  TSan); remaining work (Miri/ASan/full-workspace/clippy/fmt) is mechanical verification-only, no
+  more design judgment calls remain.
+- **segment verdict:** `STATUS: PARTIAL`. **[BLOCKER] TOCTOU regression test WRITTEN, RED→GREEN
+  PROVEN with real command output (per verification.md discipline, not asserted).** New
+  `crates/ynz-runtime/tests/m6_shutdown_admission_race.rs`: an `outer_task` spawned via
+  `ynz_rt_spawn_blocking`, once running, sleeps 300ms after `ynz_rt_shutdown()` begins on a separate
+  thread (real-time separation, no sub-ms race reliance) then attempts a NESTED
+  `ynz_rt_spawn_blocking` call from inside its own closure — a genuine `Handle::try_current()`
+  -succeeding live-Tokio-context caller, the exact vulnerable scenario the fix targets. GREEN: `test
+  ... ok`, log `"...called after ynz_rt_shutdown began — task discarded"`. RED (temporarily reverted
+  `try_new` to unconditional `Some(Self)` via `Edit`, no git ops, immediately restored + `git diff`
+  confirmed byte-identical): same test panics, `"...was ADMITTED"`. Passes standalone under TSan
+  too. Scope honestly noted in the test's own header: proves the gate closes for a live-Tokio-context
+  caller specifically; does not re-race the increment-vs-check ordering itself (proven mathematically
+  in `try_new`'s own doc comment) nor re-test the bare-external-OS-thread path (already covered by
+  `m6_shutdown_mutex_scope.rs`). **[should-fix] seccomp — VERIFIED LIVE, clean, with a real caught
+  gap along the way**: discovered the running dev container was STILL on `seccomp:unconfined`
+  despite the compose-file edit (compose doesn't auto-detect this drift; the container needed
+  `--force-recreate`) — force-recreated, re-inspected to confirm the narrower profile + the
+  `personality`/262144 rule are actually live, then ran the FULL TSan lane against the recreated
+  container: 145 tests across 8 binaries, all green, zero seccomp denials, zero TSan warnings
+  (grepped the full log for `warning: threadsanitizer|data race|FATAL`, zero matches). This receipt
+  is durable — the seccomp diff is unchanged since fixloop1 seg1, no need to re-verify. Not yet run:
+  Miri whole-crate, ASan lane, full workspace rebuild+suite, clippy, fmt. Not committed. Did NOT
+  write its own Context-segment log entry. Files touched:
+  `crates/ynz-runtime/tests/m6_shutdown_admission_race.rs` (new), `crates/ynz-runtime/src/runtime.rs`
+  (temporarily reverted+restored, net diff unchanged), `plan.md` (frontmatter + completion-note
+  extension), `handoff-phase-6b-fixloop1.md` (rewritten in place). Resume: Miri, ASan, full
+  workspace (debug+release rebuild first), clippy, fmt, then finalize.
+
+### Fix-loop round 1, segment 3 (checkpointed — PARTIAL)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-fixloop1-segment-3
+
+- **session-id:** `executor-2026-07-11-m6-phase6b-fixloop1-seg3` (per its own report; verify against
+  frontmatter)
+- **subagent_tokens actual:** 246460 (authoritative, from the conductor's `Task` tool-result usage block)
+- **checkpoint reason:** executor's own early-checkpoint judgment call at a clean, green-building
+  boundary, after root-causing and fixing a genuine regression the mechanical verification sweep
+  surfaced. TSan/ASan re-runs (stale relative to this fix) + clippy/fmt still pending.
+- **segment verdict:** `STATUS: PARTIAL`. **Miri whole-crate: clean** (0 UB/leaks, including the new
+  `m6_shutdown_admission_race.rs` test, no widening needed). **Full workspace rebuild+suite
+  surfaced a REAL, reproducible regression**:
+  `recursive_spike_cancellation_frame_alloc_free_parity` (`crates/ynz-driver/tests/v03_m6_recursive_spike_cancel.rs`)
+  — root-caused as TWO compounding issues, neither hand-waved: (1) production —
+  `PendingBlockingGuard` held its guard for a task's ENTIRE body instead of just the
+  "queued-not-yet-popped" window its own doc comment describes; combined with this round's shared
+  shutdown deadline, a long-running blocking task could consume the whole shutdown budget in the
+  drain loop, starving async cleanup — fixed by moving `drop(_pending)` to the first statement
+  inside both `ynz_rt_spawn_blocking`/`_joinable` closures; (2) test fixture — the same file's
+  `YNZ_SHUTDOWN_TIMEOUT_MS=200` was unknowingly relying on the OLD ~2×-timeout bug's ~400ms real
+  budget; recalibrated to `900` with a doc comment recording why. Verified empirically: 10× clean
+  re-runs post-fix (previously failed deterministically at 200ms across 5 runs); swept for sibling
+  `YNZ_SHUTDOWN_TIMEOUT_MS` usages (`m2_state_machine_integration.rs` — confirmed unaffected, 31/31
+  pass). Re-ran Miri (clean) + full workspace suite (clean, exit 0, zero `FAILED`) after both fixes.
+  **Deviation surfaced, no FRAGO**: the prior dispatch's framing ("mechanical, no more judgment
+  calls") was wrong — recorded honestly, not silently corrected without note. **Not yet run**: TSan
+  and ASan (both stale relative to this segment's `runtime.rs` fix), clippy, fmt — the round is
+  **not yet fully closed**. Not committed. Did NOT write its own Context-segment log entry. Files
+  touched: `crates/ynz-runtime/src/runtime.rs` (guard drop-timing fix),
+  `crates/ynz-driver/tests/v03_m6_recursive_spike_cancel.rs` (timeout recalibration + doc comment),
+  `plan.md` (frontmatter + completion-note extension), `handoff-phase-6b-fixloop1.md` (rewritten in
+  place, NOT deleted — round incomplete). Resume: re-run TSan + ASan against the current tree,
+  clippy, fmt, then finalize.
+
+### Fix-loop round 1, segment 4 (DONE — round fully closed)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-fixloop1-segment-4
+
+- **session-id:** `executor-2026-07-11-m6-phase6b-fixloop1-seg4`
+- **subagent_tokens actual:** 176774 + 141324 (two Task dispatches — the agent's first turn
+  anomalously returned mid-work claiming it was "waiting for a background monitor notification"
+  that was never coming its way; resumed via `SendMessage` with an explicit instruction to poll its
+  own background run directly rather than wait passively; the resumed turn completed genuinely)
+- **checkpoint reason:** phase DONE (verification-only closing segment; no production/test code
+  changed; handoff deleted as the final act).
+- **segment verdict:** **DONE.** Re-ran TSan (145 tests/8 binaries, clean, zero data-race warnings)
+  and ASan (same suite, clean, zero errors) against the current tree — both genuinely re-verified
+  post segment-3's guard-drop-timing fix, not assumed still-clean. `cargo clippy --workspace -- -D
+  warnings` clean. `cargo fmt --all -- --check` clean (no reformat needed). Full `cargo test
+  --workspace`: exit 0, 131 test-result blocks all `0 failed`, zero regressions. Container seccomp
+  re-confirmed still active (no drift since segment 2). **Every finding from the original 7-agent
+  review is now empirically closed**: the TOCTOU blocker (fixed + regression-tested across
+  native/Miri/TSan/ASan), all 5 should-fix items (drain-timeout math, ctx-copy dedup, seccomp
+  narrowing verified live twice, CI permissions), the 2 minors properly deferred (four-field, not
+  silently dropped), PLUS the segment-3-caught bonus regression (shutdown-drain-vs-cleanup-budget
+  starvation) fixed and re-verified. Not committed. Files touched: `plan.md` (frontmatter +
+  completion-note finalization), `handoff-phase-6b-fixloop1.md` (deleted). Ready for the full
+  reviewer fan-out re-run (§6.0 multi-lens round — this fix-loop spanned code-reviewer, security,
+  and critical-path-integrity findings, so the FULL Step-5 fleet re-runs, not a scoped subset) then
+  the Step-8 commit gate.
+
+## Phase 6b — full 7-agent reviewer re-run (post fix-loop round 1)
+
+Cheap gates re-run: green-check (`mode: affected, scope: HEAD`) — VERDICT: green, 6/6 gates,
+`cargo test --workspace` 131 blocks all `0 failed`. graveyard-auditor — VERDICT: clean, 0 findings
+(2 look-alikes explicitly ruled out: the ASan-quarantine graceful-degrade test restructure and the
+`cfg_attr(miri, ignore)` additions both correctly cleared against Test-Weakening's exemption bar).
+
+Full 7-agent re-run, **zero blockers this round** — a marked improvement over round 1's TOCTOU
+blocker:
+- code-reviewer: changes-requested — 0 blockers, **1 should-fix**: `runtime.rs:75-80`'s
+  `PendingBlockingGuard` STRUCT DOC is stale — still describes the pre-follow-up-fix lifetime
+  ("constructed inside the closure... for exactly the closure's lifetime"), contradicting the
+  actual code (constructed on the spawning thread; dropped at the closure's first line, covering
+  only the queued window) and the fix's own drop-site rationale. Confirmed all 3 original findings
+  genuinely fixed; independently re-derived the SeqCst total-order proof for the TOCTOU fix (sound);
+  confirmed the regression test exercises the real vulnerable path; confirmed the drop-timing
+  follow-up is safe (`PENDING_BLOCKING_TASKS` has exactly one consumer, grep-confirmed).
+- acceptance-verifier: **met** — every exit criterion, re-verified against actual repo content
+  (not the prior "not committed" procedural non-blockers, correctly not re-flagged this pass).
+- rules-compliance: changes-requested — 0 blockers, **1 minor**: `docker-compose.yml:33-35`'s
+  comment still says the seccomp profile "must be verified... never assumed correct" but it WAS
+  verified live twice — stale caveat on now-verified code.
+- deviation-judge: **on-plan** — 0 unjustified strays, 0 FRAGO candidates. Confirmed
+  segment-3's mid-round regression-fix and segment-4's mid-turn harness anomaly (resumed via
+  SendMessage) both handled correctly with no lasting effect; confirmed the four-field deferral is
+  durably recorded in `plan.md`, not chat-only.
+- security: **clean** — fetched the REAL upstream Docker seccomp default profile and structurally
+  diffed it against `docker/tsan-seccomp.json`: zero rules missing/altered, exactly one added
+  `personality`/262144 rule, correctly value-pinned (not wildcarded). CI permissions block
+  correctly placed and valid. No new security-class issue from the TOCTOU admission-gate logic
+  (in-process task-lifecycle race, not a security boundary — critical-path-integrity's lane).
+- test-quality: changes-requested — 0 blockers, **1 minor**: the `.ynz` fixture's own
+  "TIMING DESIGN" comment still cites the stale `YNZ_SHUTDOWN_TIMEOUT_MS=200` value; the `.rs`
+  harness correctly uses 900 now. Confirmed the new regression test is meaningful (not vacuous —
+  traced the exact code path it exercises) and the timeout recalibration is genuine math-justified
+  margin-widening, not assertion-loosening.
+- critical-path-integrity: changes-requested — 0 blockers, **1 should-fix**: independently walked
+  both branches of the SeqCst total-order case split by hand (not trusting the doc comment) and
+  confirmed the TOCTOU fix genuinely closes the race, confirmed the regression test's timing margins
+  are non-flaky, and confirmed the early `drop(_pending)` doesn't reopen a task-killing race — BUT
+  the safety argument for the early-drop fix rests on an assumption about `tokio::shutdown_timeout`'s
+  OWN internal budgeting behavior (that it independently allocates time for both outstanding
+  blocking-pool threads AND async Drop-chain cleanup without one starving the other) that this
+  crate cannot verify by reading its own source — an ungated critical-path concern, not a blocker
+  (worst-case failure mode is an already-documented bounded thread-leak-past-timeout, not
+  corruption/double-execution). Recommends confirming against Tokio's own docs/source, or adding a
+  stress variant of the recursive-spike-cancel fixture with a much higher ratio.
+
+**Routing**: no blockers this round. 2 should-fix (cheap: a doc-comment rewrite; a
+verify-or-stress-test task) + 2 minor (both stale-comment fixes) bundled into one more small
+fix-loop round — all four are cheap and bounded, no reason to defer.
+
+### Fix-loop round 2 (DONE — comment/doc-only, gates-only re-verification)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-fixloop2-segment-1
+
+- **session-id:** `executor-2026-07-11-m6-phase6b-fixloop2`
+- **subagent_tokens actual:** 195724 (authoritative, from the conductor's `Task` tool-result usage block)
+- **segment verdict:** **DONE.** All 4 findings closed, zero logic changes: (1) rewrote
+  `PendingBlockingGuard`'s stale struct doc to state the real current contract (spawning-thread
+  construction, closure-start drop, queued-window-only scope) with an explicit warning against
+  reverting to closure-end drop. (2) Resolved the Tokio internal-budgeting assumption via CITATION,
+  not a stress test: read Tokio 1.52.3's own vendored source and confirmed
+  `shutdown_timeout(duration)` spends `duration` in exactly one place
+  (`blocking_pool.shutdown(Some(duration))`), and the multi-thread scheduler's own async-worker
+  threads are themselves spawned through that SAME blocking pool and tracked in the identical
+  join-map — so one shared clock genuinely covers both concerns, no internal starvation window.
+  Added as a durable, version-pinned code comment (flagged for re-check on Tokio upgrade) at the
+  `shutdown_timeout` call site + cross-referenced at both `drop(_pending)` sites. (3) Updated the
+  `docker-compose.yml` seccomp comment to state it WAS verified live (twice), dropping the stale
+  open-caveat framing. (4) Updated the `.ynz` fixture's TIMING DESIGN comment to point at the `.rs`
+  harness as the timeout value's source of truth instead of a hardcoded number that can drift again.
+  Verification: `docker compose config --quiet` clean; `cargo check -p ynz-runtime -p ynz-driver
+  --tests` clean; `cargo test -p ynz-driver --test v03_m6_recursive_spike_cancel` 4/4 pass (confirms
+  the comment-only fixture edit didn't disturb it). Not committed. Did NOT write its own
+  Context-segment log entry. Files touched: `crates/ynz-runtime/src/runtime.rs` (doc comments only),
+  `docker-compose.yml` (comment only), `crates/ynz-driver/tests/fixtures/v0_3_m6_recursive_spike_cancel.ynz`
+  (comment only), `plan.md` (frontmatter + completion note).
+
+**Routing — gates-only re-run (§6.0)**: every fix this round is comment/doc-only, zero logic
+change, touched-paths a subset of the original phase surface, no new files. Per §6.0's tiering, this
+qualifies for a gates-only re-run — cheap gates only (green-check + graveyard-auditor), zero LLM
+reviewers spent on a round that changed no executable logic.

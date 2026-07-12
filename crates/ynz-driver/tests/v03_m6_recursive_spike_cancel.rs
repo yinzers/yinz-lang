@@ -49,11 +49,30 @@ fn fixture(name: &str) -> PathBuf {
 /// Run the recursive-spike-cancel fixture with the alloc counter enabled and return all
 /// four counters. `skip_recursion_drop` arms the negative control (`YNZ_SKIP_RECURSION_DROP`).
 ///
-/// `YNZ_SHUTDOWN_TIMEOUT_MS=200`: generous margin for the worker threads to run
+/// `YNZ_SHUTDOWN_TIMEOUT_MS=900`: generous margin for the worker threads to run
 /// `SpawnStateFnFuture::drop` before the counters are read. Generous is SAFE here:
 /// nothing polls the dropped future after cancellation, so the chain child's handles
 /// stay live-in-frame (leaked or cleaned, per the code under test) regardless of the
 /// timeout length — a longer window cannot turn a leak into a false pass.
+///
+/// Recalibrated from 200 to 900 (M6 Phase 6b fix-loop round 1): `ynz_rt_shutdown` used
+/// to give the drain-wait loop and `shutdown_timeout` each their OWN full `timeout_ms`
+/// window (an undocumented ~2x-timeout bug, fixed this round) — this fixture's 200ms
+/// value was, unknowingly, relying on that bug's ~400ms real total budget to give the
+/// child's two in-flight `burn()` blocking-pool tasks (spawned ~700ms, ~600ms each,
+/// finishing ~1300ms) enough real wall-clock time to complete naturally after the
+/// ~1000ms cancel and free their ctx-copy heap allocations via normal
+/// `FrameDropGuard` drop. Once the drain-wait fix correctly bounds TOTAL shutdown time
+/// to `timeout_ms` (matching `ynz_rt_shutdown`'s own "up to timeout_ms total"
+/// contract), 200ms was no longer enough real time past the ~1000ms cancel for those
+/// two still-running blocking threads to finish (they need ~300ms) — confirmed live:
+/// `recursive_spike_cancellation_frame_alloc_free_parity` failed deterministically at
+/// 200ms (`alloc=7, free=5` across 10 repeated runs) and passed cleanly at 900ms across
+/// 10 repeated runs. This is a fixture timing-margin recalibration, not a weakened
+/// assertion — `alloc == free` is exactly as strict as before; only the real wall-clock
+/// room given for legitimate (non-stuck) in-flight work to finish has grown, per this
+/// file's own "Timing triage" comment below (triage timing flakes by widening margins,
+/// never by loosening the assertion).
 fn run_recursive_spike_cancel(skip_recursion_drop: bool) -> Counters {
     let count_file = std::env::temp_dir().join(format!(
         "ynz_handle_count_recursive_spike_{}_{}.txt",
@@ -74,7 +93,7 @@ fn run_recursive_spike_cancel(skip_recursion_drop: bool) -> Counters {
         "YNZ_ALLOC_COUNTER_OUTPUT",
         count_file.to_str().expect("valid path"),
     )
-    .env("YNZ_SHUTDOWN_TIMEOUT_MS", "200");
+    .env("YNZ_SHUTDOWN_TIMEOUT_MS", "900");
     if skip_recursion_drop {
         cmd.env("YNZ_SKIP_RECURSION_DROP", "1");
     }

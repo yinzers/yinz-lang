@@ -2757,6 +2757,17 @@ mod m7_string_runtime {
             let flag = ynz_array_get(parts, 0, (&mut bits as *mut i64) as *mut u8);
             assert_eq!(flag, 1);
             assert_eq!(str_from_ptr(bits as *const u8), "a");
+            // ynz_array_drop is element-blind by design (D6) — it frees the pointer-cell
+            // buffer, never the strings the cells point to. Real Yinz codegen emits an
+            // explicit per-element free for an owned array<string> before the array drop;
+            // this test must do the same, or each split-off string leaks (confirmed via
+            // Miri, M6 Phase 6b — this test leaked 3 strings before this fix).
+            for i in 0..ynz_array_count(parts) {
+                let mut elem_bits: i64 = 0;
+                let has = ynz_array_get(parts, i, (&mut elem_bits as *mut i64) as *mut u8);
+                assert_eq!(has, 1);
+                free(elem_bits as *mut core::ffi::c_void);
+            }
             ynz_array_drop(parts);
         }
     }
@@ -3036,12 +3047,12 @@ mod m3d_join_shims {
     };
 
     // A trivially-copyable int result: [42, 0]
-    extern "C" fn returns_42(_ctx: *mut u8) -> YnzCpuResult {
+    extern "C-unwind" fn returns_42(_ctx: *mut u8) -> YnzCpuResult {
         YnzCpuResult([42, 0])
     }
 
     // Returns saturated values to confirm [i64::MIN, i64::MAX] survives the ABI.
-    extern "C" fn returns_saturated(_ctx: *mut u8) -> YnzCpuResult {
+    extern "C-unwind" fn returns_saturated(_ctx: *mut u8) -> YnzCpuResult {
         YnzCpuResult([i64::MIN, i64::MAX])
     }
 
@@ -3161,13 +3172,13 @@ mod m3d_join_shims {
     }
 
     // float result: the f64 is bit-cast (NOT truncated) into the low i64 word.
-    extern "C" fn returns_float(_ctx: *mut u8) -> YnzCpuResult {
+    extern "C-unwind" fn returns_float(_ctx: *mut u8) -> YnzCpuResult {
         YnzCpuResult([(std::f64::consts::PI).to_bits() as i64, 0])
     }
 
     // heap-pointer result (string/array/map class): an arbitrary pointer-shaped bit pattern
     // in the low word. The runtime treats it as opaque bits — it does not dereference it.
-    extern "C" fn returns_ptr_bits(_ctx: *mut u8) -> YnzCpuResult {
+    extern "C-unwind" fn returns_ptr_bits(_ctx: *mut u8) -> YnzCpuResult {
         YnzCpuResult([0x0000_7FFF_DEAD_C0DE_u64 as i64, 0])
     }
 
@@ -3175,7 +3186,7 @@ mod m3d_join_shims {
     // Uses a value with non-trivial bits in BOTH words so a lo/hi swap or a dropped high word
     // would fail the reconstruction assertion.
     const DECIMAL128_TEST_VALUE: u128 = 0x1234_5678_9ABC_DEF0_0FED_CBA9_8765_4321_u128;
-    extern "C" fn returns_decimal128(_ctx: *mut u8) -> YnzCpuResult {
+    extern "C-unwind" fn returns_decimal128(_ctx: *mut u8) -> YnzCpuResult {
         let lo = DECIMAL128_TEST_VALUE as u64;
         let hi = (DECIMAL128_TEST_VALUE >> 64) as u64;
         YnzCpuResult([lo as i64, hi as i64])
@@ -3183,7 +3194,7 @@ mod m3d_join_shims {
 
     // `T errors` (error-channel pair) result: [err_tag, ok_bits]. err_tag != 0 marks the
     // error variant; the ok word carries whatever the codegen packs alongside.
-    extern "C" fn returns_error_pair(_ctx: *mut u8) -> YnzCpuResult {
+    extern "C-unwind" fn returns_error_pair(_ctx: *mut u8) -> YnzCpuResult {
         YnzCpuResult([7, 0])
     }
 
@@ -3196,7 +3207,7 @@ mod m3d_join_shims {
     // Time: O(n) where n = number of Pending polls before the blocking task completes
     // (one yield-to-executor cycle per Pending). Space: O(1) — a single 16-byte result slot.
     async fn spawn_join_collect(
-        fn_ptr: extern "C" fn(*mut u8) -> YnzCpuResult,
+        fn_ptr: extern "C-unwind" fn(*mut u8) -> YnzCpuResult,
     ) -> AlignedResultSlot {
         unsafe {
             let handle_ptr = ynz_rt_spawn_blocking_joinable(fn_ptr, std::ptr::null_mut(), 0);
@@ -3302,7 +3313,7 @@ mod m3d_join_shims {
     async fn ctx_copy_contents_reach_child() {
         // WHY: guards the ctx-copy path — child must see the same bytes that were in
         // the parent's ctx at spawn time. Uses a 16-byte ctx with a recognizable pattern.
-        extern "C" fn reads_ctx(ctx: *mut u8) -> YnzCpuResult {
+        extern "C-unwind" fn reads_ctx(ctx: *mut u8) -> YnzCpuResult {
             // Read two i64 from the ctx and return them as the result.
             // SAFETY: caller passed 16 valid bytes.
             let a = unsafe { (ctx as *const i64).read() };
@@ -3310,20 +3321,17 @@ mod m3d_join_shims {
             YnzCpuResult([a, b])
         }
 
-        let mut ctx_data = [0u8; 16];
-        {
-            let ptr = ctx_data.as_mut_ptr() as *mut i64;
-            unsafe {
-                ptr.write(0x1234_5678);
-                ptr.add(1).write(0xDEAD_BEEF_i64);
-            }
-        }
+        // `[i64; 2]` (not `[u8; 16]`) — confirmed live under Miri (M6 Phase 6b): a
+        // `[u8; N]` array only guarantees 1-byte alignment, but `reads_ctx` above reads it
+        // back through `*const i64` (align 8) — storing as `i64` directly gives the
+        // natural alignment the pointer cast requires.
+        let mut ctx_data: [i64; 2] = [0x1234_5678, 0xDEAD_BEEF_i64];
 
         unsafe {
             let handle_ptr = ynz_rt_spawn_blocking_joinable(
                 reads_ctx,
-                ctx_data.as_mut_ptr(),
-                ctx_data.len() as i64,
+                ctx_data.as_mut_ptr() as *mut u8,
+                std::mem::size_of_val(&ctx_data) as i64,
             );
             assert!(!handle_ptr.is_null());
 
@@ -3369,14 +3377,13 @@ mod m3d_join_shims {
         // Capture the Arc pointer as a raw ptr in ctx (16 bytes: pointer + sentinel).
         // The child reads it out, runs to completion, and sets the flag.
         let arc_ptr = Arc::into_raw(completed_clone) as u64;
-        let mut ctx_data = [0u8; 16];
-        unsafe {
-            let p = ctx_data.as_mut_ptr() as *mut u64;
-            p.write(arc_ptr);
-            p.add(1).write(0xCAFE_BABE);
-        }
+        // `[u64; 2]` (not `[u8; 16]`) — confirmed live under Miri (M6 Phase 6b): a
+        // `[u8; N]` array only guarantees 1-byte alignment; storing as `u64` directly
+        // gives the natural alignment `sets_flag_and_returns` below requires when it reads
+        // back through `*const u64`.
+        let mut ctx_data: [u64; 2] = [arc_ptr, 0xCAFE_BABE];
 
-        extern "C" fn sets_flag_and_returns(ctx: *mut u8) -> YnzCpuResult {
+        extern "C-unwind" fn sets_flag_and_returns(ctx: *mut u8) -> YnzCpuResult {
             // Read the Arc pointer back and signal completion.
             // SAFETY: ctx is valid for 16 bytes (caller guarantee).
             let arc_ptr = unsafe { (ctx as *const u64).read() };
@@ -3389,8 +3396,8 @@ mod m3d_join_shims {
         unsafe {
             let handle_ptr = ynz_rt_spawn_blocking_joinable(
                 sets_flag_and_returns,
-                ctx_data.as_mut_ptr(),
-                ctx_data.len() as i64,
+                ctx_data.as_mut_ptr() as *mut u8,
+                std::mem::size_of_val(&ctx_data) as i64,
             );
             assert!(!handle_ptr.is_null());
 
@@ -3480,7 +3487,7 @@ mod m3d_join_shims {
         use std::sync::atomic::AtomicUsize;
 
         // The child reads its ctx copy to prove the bytes survived the copy, then returns them.
-        extern "C" fn echo_ctx_first_word(ctx: *mut u8) -> YnzCpuResult {
+        extern "C-unwind" fn echo_ctx_first_word(ctx: *mut u8) -> YnzCpuResult {
             assert!(!ctx.is_null(), "ctx copy must be non-null in the child");
             // SAFETY: ynz_rt_spawn_blocking_joinable copied ctx_size (8) bytes into this buffer.
             let word = unsafe { (ctx as *const i64).read_unaligned() };
@@ -3536,7 +3543,7 @@ mod m3d_join_shims {
         // live only in the separate tests/*.rs integration binaries), so the process-global RUNTIME
         // OnceLock is never populated here — RUNTIME.get() is None and the spawn takes the
         // "called before ynz_rt_init" discard branch deterministically.
-        extern "C" fn never_runs(_ctx: *mut u8) -> YnzCpuResult {
+        extern "C-unwind" fn never_runs(_ctx: *mut u8) -> YnzCpuResult {
             YnzCpuResult([1, 0])
         }
         let handle_ptr =
@@ -3565,12 +3572,12 @@ mod m3d_join_shims {
         let ran_counter = Arc::new(AtomicUsize::new(0));
         let counter_ptr = Arc::as_ptr(&ran_counter) as u64;
 
-        let mut ctx_data = [0u8; 8];
-        unsafe {
-            (ctx_data.as_mut_ptr() as *mut u64).write(counter_ptr);
-        }
+        // `u64` (not `[u8; 8]`) — confirmed live under Miri (M6 Phase 6b): a `[u8; 8]`
+        // array only guarantees 1-byte alignment; `increment_counter` below reads it back
+        // through `*const u64` (align 8).
+        let mut ctx_data: u64 = counter_ptr;
 
-        extern "C" fn increment_counter(ctx: *mut u8) -> YnzCpuResult {
+        extern "C-unwind" fn increment_counter(ctx: *mut u8) -> YnzCpuResult {
             // SAFETY: ctx holds an 8-byte counter pointer; the Arc is still alive
             // (the outer test holds a ref; this does not take ownership).
             let ptr = unsafe { (ctx as *const u64).read() } as *const AtomicUsize;
@@ -3579,8 +3586,11 @@ mod m3d_join_shims {
         }
 
         unsafe {
-            let handle_ptr =
-                ynz_rt_spawn_blocking_joinable(increment_counter, ctx_data.as_mut_ptr(), 8);
+            let handle_ptr = ynz_rt_spawn_blocking_joinable(
+                increment_counter,
+                &mut ctx_data as *mut u64 as *mut u8,
+                8,
+            );
             assert!(!handle_ptr.is_null(), "spawn must return non-null handle");
 
             // Free the handle immediately (simulate parent cancellation mid-join).
@@ -3672,23 +3682,26 @@ mod m3d_join_shims {
         // Each join is poll-based (no thread parked), so pool exhaustion only queues tasks.
         const JOIN_COUNT: usize = 640; // well above the 512-thread default pool size
 
-        extern "C" fn double_seq(ctx: *mut u8) -> YnzCpuResult {
+        extern "C-unwind" fn double_seq(ctx: *mut u8) -> YnzCpuResult {
             // Read the sequence number from ctx (8 bytes) and return seq × 2.
             let seq = unsafe { (ctx as *const i64).read() };
             YnzCpuResult([seq * 2, 0])
         }
 
         let mut handles: Vec<*mut u8> = Vec::with_capacity(JOIN_COUNT);
-        let mut ctx_data: Vec<[u8; 8]> = Vec::with_capacity(JOIN_COUNT);
+        // `i64` (not `[u8; 8]`) — confirmed live under Miri (M6 Phase 6b): a `[u8; 8]`
+        // array only guarantees 1-byte alignment, but the loop below writes/reads it
+        // through an `*mut i64` (align 8) — storing the ctx data as `i64` directly gives
+        // the natural alignment the pointer cast requires, with no intermediate byte-buffer
+        // reinterpretation.
+        let mut ctx_data: Vec<i64> = Vec::with_capacity(JOIN_COUNT);
 
         // Spawn all tasks before polling any of them — maximises pool pressure.
         unsafe {
             for i in 0..JOIN_COUNT {
-                let mut buf = [0u8; 8];
-                (buf.as_mut_ptr() as *mut i64).write(i as i64);
-                ctx_data.push(buf);
-                let handle =
-                    ynz_rt_spawn_blocking_joinable(double_seq, ctx_data[i].as_mut_ptr(), 8);
+                ctx_data.push(i as i64);
+                let ctx_ptr = ctx_data.as_mut_ptr().add(i) as *mut u8;
+                let handle = ynz_rt_spawn_blocking_joinable(double_seq, ctx_ptr, 8);
                 assert!(
                     !handle.is_null(),
                     "spawn {i}: expected non-null handle from live Tokio context"
@@ -3839,17 +3852,22 @@ mod m3d_join_shims {
         let cpu_handle2 = Box::new(CpuJoinHandle::new(join_handle2));
         let handle_ptr2 = Box::into_raw(cpu_handle2) as *mut u8;
 
-        let mut frame2 = vec![0u8; 80];
+        // `ynz_alloc_zeroed` (not `vec![0u8; 80]`) — confirmed live under Miri (M6 Phase
+        // 6b): `Vec<u8>` only guarantees 1-byte alignment, but the write below stores a
+        // pointer (8-byte-aligned) at `SPIKE_HANDLE_BASE_OFFSET` — an alignment-8 write off
+        // an alignment-1 allocation is UB. Matches Case 1's allocator above.
+        let frame2_ptr = unsafe { ynz_alloc_zeroed(80) };
+        assert!(!frame2_ptr.is_null(), "frame2 alloc must succeed");
         unsafe {
             // No magic at offset 4 — frame looks like a normal (non-spike) SM frame.
             // Write the handle pointer at offset 32 to confirm it is NOT freed.
-            (frame2.as_mut_ptr().add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr2);
+            (frame2_ptr.add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr2);
 
             // Call the helper — discriminator is zero, so the if-branch must be skipped.
-            cleanup_spike_cpu_handles(frame2.as_mut_ptr());
+            cleanup_spike_cpu_handles(frame2_ptr);
 
             // The handle pointer at offset 32 must still be non-null and valid.
-            let still_there = *(frame2.as_ptr().add(SPIKE_HANDLE_BASE_OFFSET) as *const *mut u8);
+            let still_there = *(frame2_ptr.add(SPIKE_HANDLE_BASE_OFFSET) as *const *mut u8);
             assert_eq!(
                 still_there, handle_ptr2,
                 "non-spike frame: handle pointer must be untouched by cleanup"
@@ -3857,6 +3875,9 @@ mod m3d_join_shims {
 
             // Manually free the handle so the test does not leak it.
             ynz_rt_join_handle_free(handle_ptr2);
+            // Manually free the frame itself — no SpawnStateFnFuture ever took ownership of
+            // it in this branch (cleanup_spike_cpu_handles is called directly).
+            ynz_free(frame2_ptr, 80);
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -4317,7 +4338,16 @@ mod m6_pending_send_aba {
     /// Build a repro task: a frame at a chosen (or fresh) address whose resume fn suspends on
     /// `send(value)`, with a kind-2 `BgArgDropEntry` so the drop ladder releases (and, post-fix,
     /// purges) the task's shared-channel reference — the REAL cancellation path end-to-end.
-    unsafe fn build_send_task(chan: *mut u8, value: i64) -> (SpawnStateFnFuture, *mut u8) {
+    ///
+    /// Returns the descs pointer alongside the future/frame so a caller that deliberately
+    /// `mem::forget`s the future (to hold a frame address without triggering its free-list
+    /// reuse) can still free the descs array by hand — confirmed via Miri (M6 Phase 6b): an
+    /// un-freed `descs` array is a genuine, avoidable leak, not an inherent cost of the
+    /// forget-and-hold technique.
+    unsafe fn build_send_task(
+        chan: *mut u8,
+        value: i64,
+    ) -> (SpawnStateFnFuture, *mut u8, *mut BgArgDropEntry) {
         let frame = ynz_alloc_zeroed(FRAME_SIZE);
         assert!(!frame.is_null());
         // The task's own refcounted channel reference (what codegen's spawn site emits).
@@ -4337,7 +4367,7 @@ mod m6_pending_send_aba {
             descs,
             1,
         );
-        (fut, frame)
+        (fut, frame, descs)
     }
 
     /// **Frame-path ABA + orphan purge** (P3-1 root finding + P2-2), through the REAL drop
@@ -4353,7 +4383,7 @@ mod m6_pending_send_aba {
             prefill(chan, 42, &waker); // capacity-1 channel is now FULL — backpressure
 
             // Task A suspends on send(111).
-            let (mut fut_a, frame_a) = build_send_task(chan, 111);
+            let (mut fut_a, frame_a, _descs_a) = build_send_task(chan, 111);
             let mut cx = Context::from_waker(&waker);
             assert_eq!(
                 Pin::new(&mut fut_a).poll(&mut cx),
@@ -4375,59 +4405,86 @@ mod m6_pending_send_aba {
             );
 
             // Force frame-address reuse: same-size allocation right after the free.
-            let mut misses: Vec<*mut u8> = Vec::new();
+            // Best-effort — allocator-dependent (see the graceful-degradation note below;
+            // mirrors the handle-path sibling test's identical fallback shape).
+            let mut misses: Vec<(*mut u8, *mut BgArgDropEntry)> = Vec::new();
             let mut fut_b = None;
             for _ in 0..64 {
-                let (fut, frame) = build_send_task(chan, 222);
+                let (fut, frame, descs) = build_send_task(chan, 222);
                 if frame as usize == addr_a {
                     fut_b = Some(fut);
                     break;
                 }
-                misses.push(frame);
+                misses.push((frame, descs));
                 // Leak-free discard: dropping the future frees its frame + channel ref,
                 // but that would put the chunk right back on top of the free list and
-                // loop us to the same non-matching address — hold it instead.
+                // loop us to the same non-matching address — hold it instead. The descs
+                // pointer is captured above and freed by hand in the cleanup loop below
+                // (confirmed via Miri, M6 Phase 6b: forgetting it here leaked 24 bytes
+                // per miss — a real, cheaply-avoidable leak, not an inherent cost of the
+                // forget-and-hold technique).
                 std::mem::forget(fut);
             }
-            let mut fut_b = fut_b.expect(
-                "allocator never reused the cancelled task's frame address within 64 \
-                 same-size allocations — reuse forcing failed, repro inconclusive",
-            );
+            if let Some(mut fut_b) = fut_b {
+                // Task B (at A's reused address) suspends on send(222).
+                assert_eq!(Pin::new(&mut fut_b).poll(&mut cx), Poll::Pending);
 
-            // Task B (at A's reused address) suspends on send(222).
-            assert_eq!(Pin::new(&mut fut_b).poll(&mut cx), Poll::Pending);
+                // Drain the prefill; a slot frees; re-poll B.
+                assert_eq!(recv(chan, &waker), (0, 42));
+                assert_eq!(
+                    Pin::new(&mut fut_b).poll(&mut cx),
+                    Poll::Ready(()),
+                    "task B's send must complete once a slot freed"
+                );
 
-            // Drain the prefill; a slot frees; re-poll B.
-            assert_eq!(recv(chan, &waker), (0, 42));
-            assert_eq!(
-                Pin::new(&mut fut_b).poll(&mut cx),
-                Poll::Ready(()),
-                "task B's send must complete once a slot freed"
-            );
+                // ABA half (P3-1): the delivered value must be B's 222 — pre-fix, the
+                // stale entry keyed by the reused address delivers DEAD task A's 111 and
+                // silently discards B's 222 (silent cross-task data corruption).
+                let (code, v) = recv(chan, &waker);
+                assert_eq!(code, 0);
+                assert_eq!(
+                    v, 222,
+                    "the NEW task's value must be delivered; a DEAD task's stale \
+                     suspended send must never resurface under the new task's identity \
+                     (caller_token ABA)"
+                );
 
-            // ABA half (P3-1): the delivered value must be B's 222 — pre-fix, the stale
-            // entry keyed by the reused address delivers DEAD task A's 111 and silently
-            // discards B's 222 (silent cross-task data corruption).
-            let (code, v) = recv(chan, &waker);
-            assert_eq!(code, 0);
-            assert_eq!(
-                v, 222,
-                "the NEW task's value must be delivered; a DEAD task's stale suspended \
-                 send must never resurface under the new task's identity (caller_token ABA)"
-            );
-
-            drop(fut_b);
-            // Repeated-cancel idempotency: B's entry resolved Ready before its drop, so the
-            // drop-ladder purge finds no matching entry — must be a safe no-op, never a panic.
-            assert_eq!(pending_send_count(chan), 0);
+                drop(fut_b);
+                // Repeated-cancel idempotency: B's entry resolved Ready before its drop,
+                // so the drop-ladder purge finds no matching entry — must be a safe
+                // no-op, never a panic.
+                assert_eq!(pending_send_count(chan), 0);
+            } else {
+                // Allocator never reused the address within bounds (observed under
+                // AddressSanitizer: its quarantine deliberately holds freed allocations
+                // aside before making them reusable, specifically to widen the
+                // use-after-free detection window — confirmed live via
+                // `ASAN_OPTIONS=quarantine_size_mb=0`, which restores reuse within the
+                // same 64-attempt bound; M6 Phase 6b ASan triage). The ABA half of THIS
+                // producer is covered deterministically at the keyed-core seam
+                // (channel.rs::tests::same_token_different_generation_never_collides_and_stale_is_swept
+                // — the same (caller_token, generation) collision proof, address-independent);
+                // the orphan-purge half above stays fully asserted here regardless. This
+                // mirrors the handle-path sibling test's identical best-effort/backstop
+                // shape.
+                eprintln!(
+                    "m6 frame ABA repro: no address reuse in 64 attempts — ABA half \
+                     covered by the deterministic keyed-core collision test"
+                );
+                // Drain so the held misses can be cleaned up below without disturbing
+                // the channel's remaining state.
+                assert_eq!(recv(chan, &waker), (0, 42));
+            }
 
             // Cleanup the held miss-frames (their futures were forgotten deliberately).
-            for frame in misses {
+            // The descs array is freed by hand here too — the forgotten future's normal
+            // drop ladder never ran, so nothing else would free it (confirmed via Miri,
+            // M6 Phase 6b — this used to leak 24 bytes per miss).
+            for (frame, descs) in misses {
                 let chan_ref = *(frame.add(CHAN_SLOT) as *const i64) as *mut u8;
                 ynz_channel_free(chan_ref);
                 ynz_free(frame, FRAME_SIZE);
-                // The forgotten futures' desc arrays leak in this test-only path; each is
-                // 24 bytes and test-scoped. Frames + channel refs are balanced above.
+                ynz_free(descs as *mut u8, std::mem::size_of::<BgArgDropEntry>());
             }
             ynz_channel_free(chan);
         }

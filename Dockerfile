@@ -33,6 +33,15 @@ WORKDIR /home/ubuntu
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
 ENV PATH="/home/ubuntu/.cargo/bin:${PATH}"
 
+# Nightly toolchain + Miri + rust-src — Miri (UB/leak detector) and the ASan/TSan
+# sanitizers (RUSTFLAGS="-Zsanitizer=...") both require nightly plus rust-src (so
+# cargo can build libstd from source with the sanitizer instrumented in). This is
+# a dev-time/CI-time verification toolchain only — it never ships in a Yinz-compiled
+# binary, so it does not affect the language's own runtime-dependency story (M6
+# Phase 6b: `ynz-runtime`'s Miri + TSan/ASan sanitizer lane).
+RUN rustup toolchain install nightly \
+    && rustup component add --toolchain nightly miri rust-src
+
 # cargo-nextest — prebuilt binary install (no compiling nextest itself from source,
 # which would cost several extra minutes on image build). Runs the workspace test
 # suite in parallel processes instead of cargo test's single-process runner; the

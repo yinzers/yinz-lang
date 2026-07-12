@@ -743,6 +743,19 @@ mod tests {
     /// 0 with "0 passed", parent's non-vacuous alloc_delta assertion — which never ran —
     /// would be silently skipped) rather than silently passing. Guarded by the child-count
     /// assertion below specifically to catch that drift.
+    ///
+    /// **Not run under Miri** (see `#[cfg(not(miri))]` on each caller below): Miri does not
+    /// support `Command::spawn`/`posix_spawn` at all — confirmed live, M6 Phase 6b —
+    /// (`error: unsupported operation: can't call foreign function \`posix_spawnattr_init\`
+    /// on OS \`linux\`` / "this means the program tried to do something Miri does not
+    /// support; it does not indicate a bug in the program" — Miri's own diagnostic, not an
+    /// inferred workaround), and even with `-Zmiri-disable-isolation` the re-exec'd "child"
+    /// has no real interpreted binary to spawn in the first place (Miri never produces a
+    /// natively-executable artifact matching the interpreted test — `current_exe()` names
+    /// the `cargo-miri` driver process, not the test binary). The alloc/free-parity
+    /// assertions these tests make are still exercised under the ordinary
+    /// `cargo test`/`cargo nextest` CI lane; only the Miri UB/leak scan is skipped for this
+    /// specific process-isolation mechanism, not the behavior it tests.
     fn run_isolated_or_return(qualified_test_name: &str) -> bool {
         if std::env::var_os("YNZ_ALLOC_PARITY_CHILD").is_some() {
             return false; // we ARE the re-exec'd child — run the real measured body
@@ -1264,6 +1277,12 @@ mod tests {
     /// last-ref drop must be freed through the registered glue — alloc=free, NON-vacuously
     /// (M5 FRAGO-005: a zero-alloc parity pass proves nothing).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "process re-exec isolation unsupported under Miri (posix_spawn); see \
+                  run_isolated_or_return's doc comment — behavior is still covered by \
+                  cargo test/nextest"
+    )]
     fn channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity() {
         if run_isolated_or_return(
             "channel::tests::channel_drop_glue_frees_buffered_heap_elements_alloc_free_parity",
@@ -1320,6 +1339,12 @@ mod tests {
     /// impl's no-double-free invariant, asserted by exact parity: one double-free or one leak
     /// would each break alloc==free).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "process re-exec isolation unsupported under Miri (posix_spawn); see \
+                  run_isolated_or_return's doc comment — behavior is still covered by \
+                  cargo test/nextest"
+    )]
     fn channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity() {
         if run_isolated_or_return(
             "channel::tests::channel_drop_glue_frees_residual_pending_send_payload_alloc_free_parity",
@@ -1371,6 +1396,12 @@ mod tests {
     /// asserts no double-free against the `Drop` walk (a glued entry is removed, so `Drop`
     /// never sees it twice).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "process re-exec isolation unsupported under Miri (posix_spawn); see \
+                  run_isolated_or_return's doc comment — behavior is still covered by \
+                  cargo test/nextest"
+    )]
     fn cancellation_purge_and_stale_sweep_glue_free_parked_payloads_alloc_free_parity() {
         if run_isolated_or_return(
             "channel::tests::cancellation_purge_and_stale_sweep_glue_free_parked_payloads_alloc_free_parity",
