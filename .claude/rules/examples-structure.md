@@ -1,3 +1,19 @@
+---
+name: "examples-structure"
+description: >
+  How examples/ is organized and how new demos get added — flat layout, Pittsburgh-themed
+  folder names, the project-vs-gallery split, and the not-a-workspace constraint.
+tags:
+  - "yinz-compiler"
+  - "examples"
+created_at: "2026-05-20"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Examples Structure Rule
 
 How `examples/` is organized and how new demos get added. This rule is **load-bearing** — it stops `examples/` from drifting back into a flat dump of unrelated demos.
@@ -35,7 +51,7 @@ Both project examples MUST have a [`README.md`](../../README.md) at the project 
 
 Loose `.ynz` files exercising specific compiler/tool behavior. Not Yinz projects. Examples:
 
-- **`primantis-orders/`** — per-milestone compile-error gallery (one file per M1-M8 + v0.2-M1-M3).
+- **`primantis-orders/`** — per-milestone compile-error gallery (one file per milestone, growing as new milestones ship).
 - **`burgh-poem/`** — formatter input demo (`messy.ynz`).
 - **`incline-watcher/`** — `ynz watch` file-watcher demonstration (v0.2-M4). Themed as the Duquesne Incline tracking its elevation.
 

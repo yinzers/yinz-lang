@@ -1,3 +1,20 @@
+---
+name: "auto-promotion"
+description: >
+  The compiler-picks-the-stricter/faster-form pattern — codegen auto-promotion, muted IDE
+  hints, and Tier 3 lint suggestions, when each surface applies, and the override-pattern
+  checklist (force-the-auto-pick / force-the-other-pick) every new feature must answer.
+tags:
+  - "yinz-compiler"
+  - "performance"
+created_at: "2026-05-15"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Auto-Promotion Rule — Compiler Picks the Stricter/Faster Form
 
 This rule captures Yinz's load-bearing commitment to "fast by design even for inexperienced developers." Whenever the compiler can prove a stricter or faster form of code fits the user's actual usage, it picks that form automatically AND surfaces the choice through teaching surfaces so the user learns over time.
@@ -97,7 +114,7 @@ When M4 implements map syntax, BOTH override forms must be designed together wit
 
 **Static dispatch on `follows`** ([`docs/internal/implementation/IMP-type-system.md`](../../docs/internal/implementation/IMP-type-system.md)): auto-picks static when concrete type is known. Override form: `dynamic Foo` for the case where the user explicitly wants runtime-lookup dispatch on a stored value. The reverse (force static when type is unknown) is impossible — the compiler can't manufacture knowledge it doesn't have.
 
-**Auto-Arc cross-thread** ([`docs/internal/implementation/IMP-no-function-coloring.md`](../../docs/internal/implementation/IMP-no-function-coloring.md)): auto-wraps in Arc when value crosses thread boundary. Override form: `.give` or `.copy` at the spawn site to avoid Arc. The reverse (force Arc when no boundary crossing) doesn't make sense — Arc has cost, and if the compiler doesn't need it, manufacturing it would be pointless.
+**Auto-Arc cross-thread** ([`docs/internal/implementation/IMP-no-function-coloring.md`](../../docs/internal/implementation/IMP-no-function-coloring.md)): auto-wraps in Arc when value crosses thread boundary. Override form: pass the value as a `give` parameter (transfers ownership instead of sharing) or call `.copy()` on it before the spawn, to avoid Arc. The reverse (force Arc when no boundary crossing) doesn't make sense — Arc has cost, and if the compiler doesn't need it, manufacturing it would be pointless.
 
 ### Examples — both directions handled by existing syntax
 

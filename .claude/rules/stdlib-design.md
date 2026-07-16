@@ -1,3 +1,21 @@
+---
+name: "stdlib-design"
+description: >
+  The eight rules every Yinz stdlib module must follow — pure-named methods stay pure, no
+  parallel APIs, no platform-default config, bounded-always collections, receiver-first
+  argument order, codegen (not reflection) serialization, linear-time NFA regex, and
+  SIMD-accelerated byte-touching operations.
+tags:
+  - "yinz-compiler"
+  - "stdlib"
+created_at: "2026-05-15"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Stdlib Design Rules
 
 Rules every Yinz stdlib module must follow. Distinct from [`.claude/rules/language-design.md`](language-design.md) (which covers language features) — this file covers stdlib API contracts.
@@ -94,16 +112,17 @@ This applies to:
 
 ---
 
-## Rule 4: Bounded by Default — Unbounded Requires Explicit Opt-In
+## Rule 4: Bounded Always — Explicit Capacity or the Locked Default (64); No Unbounded Constructor
 
-**The rule**: stdlib types that hold collections of unknown future size (queues, channels, mailboxes, retry buffers) are bounded by construction. Unbounded behavior requires explicit opt-in with a name that surfaces the danger.
+**The rule**: stdlib types that hold collections of unknown future size (queues, channels, mailboxes, retry buffers) are bounded always. There is no unbounded constructor — capacity is either passed explicitly or falls back to the registry-locked default (**64**, `channel_capacity` domain in [`registry/features.toml`](../../registry/features.toml)).
 
 **Why this rule exists**: Erlang mailboxes (unbounded by design) → cascading node failures in production telecom systems for 30+ years (mitigated only in OTP 19 with `max_heap_size`, still reactive not preventive). Rust's `tokio::mpsc::unbounded_channel` exists as a permanent footgun. Node.js streams pre-streams2 had unbounded buffering by default. The pattern: unbounded queues hide backpressure, producer outpaces consumer, memory exhausts, OOM kill.
 
-For Yinz's eventual channel/queue stdlib (v0.2 concurrency primitives or whenever it lands):
-- `channel<T>(capacity: int)` — bounded, the only constructor.
-- For "I really want unbounded": `channel<T>(capacity: int.max)` with a comment explaining why.
-- No `unboundedChannel()`, no convenience constructor that hides the cost.
+For Yinz's channel/queue stdlib:
+- `channel<T>()` — bounded at the locked default capacity (64, per the registry's `channel_capacity` domain).
+- `channel<T>(capacity: int)` — bounded at an explicit capacity.
+- For "I really want a very large buffer": `channel<T>(capacity: int.max)` with a comment explaining why — still a bounded constructor, just a large explicit number.
+- No `unboundedChannel()`, no convenience constructor that hides the cost, and no unbounded default.
 
 ---
 
@@ -141,7 +160,7 @@ Python `re` and Ruby `=~` are still backtracking engines. Production services th
 
 **Implementation**: when v0.14 designs the regex module, the locked target is RE2 or a Yinz-native NFA implementation matching RE2's semantics (linear-time guarantee, no backtracking-required features). Lock this as the v0.14 design's first principle.
 
-This rule should be cross-referenced into a future `design/stdlib/regex.md` when written. Until then, it lives here to prevent the v0.14 designer from defaulting to PCRE-style features out of habit.
+This rule should be cross-referenced into a future `docs/internal/scratchpad/SCRATCH-stdlib-regex.md` when written. Until then, it lives here to prevent the v0.14 designer from defaulting to PCRE-style features out of habit.
 
 ---
 
@@ -180,5 +199,3 @@ This rule should be cross-referenced into the v0.8 (`json`), v0.14 (`regex`), an
 - [`docs/internal/decisions/ADR-versioning.md`](../../docs/internal/decisions/ADR-versioning.md) (no-backwards-compat-pre-v1.0; this rule is the operational corollary)
 - [`docs/internal/implementation/IMP-strings.md`](../../docs/internal/implementation/IMP-strings.md) (Rule 3 — UTF-8 default cited there)
 - [`docs/internal/scratchpad/SCRATCH-stdlib-data.md`](../../docs/internal/scratchpad/SCRATCH-stdlib-data.md) (where Rule 6 — codegen serialization — lands when JSON v0.8 is designed; currently a stub)
-- `lockin-stdlib-and-syntax.md` Findings #5 (Java URL.equals), #14 (Go encoding/json), #30 (Java NIO/IO duality)
-- `lockin-build-and-crossplat.md` Finding #8 (Python encoding default)

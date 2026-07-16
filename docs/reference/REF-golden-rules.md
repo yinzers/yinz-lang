@@ -1,10 +1,10 @@
 ---
 name: "REF-golden-rules"
-description: "The 12 rules with full reasoning. The rules themselves also live in CLAUDE.md (loaded every turn). This file adds the 'why' behind each one."
+description: "The 13 rules with full reasoning. The rules themselves also live in CLAUDE.md (loaded every turn). This file adds the 'why' behind each one."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -13,13 +13,13 @@ metadata:
 
 # Golden Rules — Extended Reference
 
-The 12 rules with full reasoning. The rules themselves also live in [`CLAUDE.md`](../../CLAUDE.md) (loaded every turn). This file adds the "why" behind each one.
+The 13 rules with full reasoning. The rules themselves also live in [`CLAUDE.md`](../../CLAUDE.md) (loaded every turn). This file adds the "why" behind each one.
 
 ---
 
 ## Cross-cutting principle: Yinz is NOT object-oriented
 
-Before applying the 12 rules, internalize this: **Yinz is data shapes + standalone functions + UFCS dot-call sugar.** Not OOP.
+Before applying the 13 rules, internalize this: **Yinz is data shapes + standalone functions + UFCS dot-call sugar.** Not OOP.
 
 - Shape declarations hold data fields + (optionally) contract method-signature declarations. **NO method implementations inside shapes.**
 - Methods are standalone `function` declarations at file/module level. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax). Both call forms are legal and equivalent.
@@ -32,7 +32,7 @@ This is a deliberate alignment with Rust/Go (zero per-instance method storage; o
 
 Locked r10–r13 (2026-05-16). Full discussion: [`.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md`](../../.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md) Reviewer Disputes rounds 10–13. Canonical rule: [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md).
 
-When the 12 rules below mention "method" or "dispatch," apply them with the non-OOP interpretation: methods are functions; dispatch is overload resolution by argument type (plus contract-table lookup for `dynamic Foo`).
+When the 13 rules below mention "method" or "dispatch," apply them with the non-OOP interpretation: methods are functions; dispatch is overload resolution by argument type (plus contract-table lookup for `dynamic Foo`).
 
 ---
 
@@ -133,24 +133,17 @@ The WHY must be **specific and contextual**, not generic. The compiler knows the
 
 **Shared wording rule**: one canonical explanation per concept, used wherever it surfaces. Don't write a different explanation for the same concept in the compiler vs the IDE tooltip vs the spec. The canonical form lives in one place (the rule file or design doc) and other surfaces re-use the same text.
 
-**Canonical example** — hovering muted `.share` on a call passing a `const player`:
+**Canonical example** — hovering the muted `share` hint on a call passing a `const player`:
 
-> **WHAT**: This is inferred as `.share` because `player` is declared `const`. The function gets read-only access; you keep ownership.
+> **WHAT**: This is inferred as `share` because `player` is declared `const`. The function gets read-only access; you keep ownership.
 >
-> **WHAT INSTEAD**: You could write `foo(player.share)` to make it explicit. The behavior is identical.
+> **WHAT INSTEAD**: Nothing to type here — `share` is a signature-only keyword with no body-level call-site syntax. Click jumps to `foo`'s signature, where the `share` keyword is written (or can be made explicit if the signature is currently bare).
 >
-> **WHY**: `const` bindings can only grant read-only access. If you need mutation, declare `player` with `let` instead. (Trying to write `foo(player.lend)` here would produce a compile error: "cannot lend a const binding.")
+> **WHY**: `const` bindings can only grant read-only access. If `foo`'s signature instead declared `lend` (mutable borrow), passing this `const` binding would produce a compile error: "cannot lend a const binding."
 
 *Why*: Learning happens at the moment of feedback. A developer who just hit an ownership violation is primed to understand ownership. A developer who just wrote `map<string, number>` with all-static keys is primed to learn why a `shape` is faster. That's the optimal moment to teach — not in a doc they read two weeks earlier, not after the bug ships. IDE hints extend that mentorship to every keystroke, not just error cases.
 
 The teaching mission is a first-class language goal — see [`docs/reference/REF-teaching-mission.md`](REF-teaching-mission.md) for the full rationale, the required three-part diagnostic format, and the long-term aspiration that Yinz becomes a CS-101 teaching language. The inference protocol that powers IDE hints lives in [`.claude/rules/inference.md`](../../.claude/rules/inference.md).
-
----
-
-**13. Capital letter = type. Everything else = lowercase.**
-Scan any line of code. Capital letter = type. No capital = not a type. Modules are lowercase (`request`, `file`, `math`). Types are PascalCase (`Player`, `Response`, `Date`). Functions, variables, keywords — all lowercase. The same base name can exist in both casings: `Date` is the type, `date` is the module; `Request` is the type, `request` is the module.
-
-*Why*: Zero-cost scannability. Reading code is faster when the type system is visually encoded in casing. No context-reading required to distinguish a module call from a type annotation. Any pair of eyes — experienced or new — instantly knows what category they're looking at.
 
 ---
 
@@ -160,3 +153,10 @@ Scan any line of code. Capital letter = type. No capital = not a type. Modules a
 *Why*: The stated goal is accessibility to junior developers. Every term that requires CS background knowledge is a barrier to entry. Plain English words are memorable, guessable, and require no prior knowledge.
 
 **Exception — union syntax uses `|`, not `or`**: Yinz writes union types as `shape Result = Success | Failure`, matching TypeScript convention. The `or` keyword was considered (and previously documented here) but rejected because `or` is triple-overloaded: boolean operator (`if (a or b)`), union type syntax, and the word in prose. `|` is unambiguous as a type-syntax symbol and reads naturally to TypeScript developers. Locked 2026-05-14 per Patrick's call during the design-lockdown conversation. This is the ONE place Yinz prefers a symbol over a word — every other operator/keyword stays as a word.
+
+---
+
+**13. Capital letter = type. Everything else = lowercase.**
+Scan any line of code. Capital letter = type. No capital = not a type. Modules are lowercase (`request`, `file`, `math`). Types are PascalCase (`Player`, `Response`, `Date`). Functions, variables, keywords — all lowercase. The same base name can exist in both casings: `Date` is the type, `date` is the module; `Request` is the type, `request` is the module.
+
+*Why*: Zero-cost scannability. Reading code is faster when the type system is visually encoded in casing. No context-reading required to distinguish a module call from a type annotation. Any pair of eyes — experienced or new — instantly knows what category they're looking at.

@@ -218,7 +218,7 @@ The only place `v-html` appears in our site is `<YCode>` rendering Shiki's pre-h
 
 ### Tokens live in `@theme` — not in components
 
-All colors, fonts, radii, breakpoints, and container widths live in `app/assets/css/tailwind.css` under the `@theme` block. Source of truth is the prototype `shared.css` `:root` vars.
+All colors, fonts, radii, breakpoints, and container widths live in `app/assets/css/tailwind.css` under the `@theme` block — that block is the source of truth. (The tokens were originally extracted from a prototype `shared.css` `:root` block during foundation Phase 2; that prototype file was a one-time seed, not an ongoing reference — the `@theme` block is what you edit and cite going forward.)
 
 ```css
 /* app/assets/css/tailwind.css */
@@ -352,4 +352,4 @@ If a future milestone genuinely needs one of these, justify it in the plan first
 - `~/.claude/rules/coding-style.md` — `T | null` over `T?`, no `any`, arrow functions, satisfies/as guidance
 - [`.claude/planning/active/2026-05-20-webpage-docs/roadmap.md`](../planning/active/2026-05-20-webpage-docs/roadmap.md) — locked stack decisions (Nuxt 4, Tailwind v4, Bun, hosting, fonts, SSG)
 - [`.claude/planning/done/2026-05-20-webpage-foundation/plan.md`](../planning/done/2026-05-20-webpage-foundation/plan.md) — foundation milestone (component inventory, phase breakdown; status done)
-- `/tmp/yinz-design/yinz/project/shared.css` — design token source-of-truth (extracted into `@theme` block in foundation Phase 2)
+- `app/assets/css/tailwind.css` `@theme` block — design token source-of-truth (one-time seed extracted from a prototype `shared.css` during foundation Phase 2; that prototype file was a local, machine-specific scratch path and is not a live reference)
