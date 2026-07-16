@@ -3,9 +3,9 @@ name: "v0-3-concurrency-perf"
 plan-id: "2026-05-21-v0-3-concurrency-perf"
 status: "active"
 roadmap-id: null
-session-id: ["4da497e1-c5bf-4d07-9ffd-a297ade26351", "phase4-deferral-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5-closing", "plan-fixup-ledgerstatus-2026-07-04-m5", "roadmap-fixup-triage-2026-07-04", "roadmap-m6-m7-m8-battlefield-update-2026-07-04", "gate4-signatures-2026-07-04", "m6-p1d-crossplan-coord-2026-07-10", "m6-storesite-stopgap-ledger-reconcile-2026-07-10", "m6-fr24-crossplan-lift-2026-07-11"]
+session-id: ["4da497e1-c5bf-4d07-9ffd-a297ade26351", "phase4-deferral-executor-2026-07-03-m5", "phase5-executor-2026-07-03-m5-closing", "plan-fixup-ledgerstatus-2026-07-04-m5", "roadmap-fixup-triage-2026-07-04", "roadmap-m6-m7-m8-battlefield-update-2026-07-04", "gate4-signatures-2026-07-04", "m6-p1d-crossplan-coord-2026-07-10", "m6-storesite-stopgap-ledger-reconcile-2026-07-10", "m6-fr24-crossplan-lift-2026-07-11", "m6-p7-registry-triggers-deferral-lift-2026-07-16"]
 created_at: "2026-05-21"
-updated_at: "2026-07-11"
+updated_at: "2026-07-16"
 metadata:
   type: "roadmap"
 legacy:

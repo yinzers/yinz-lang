@@ -585,3 +585,22 @@ Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#5b: crates-ynz-typeck-src
 - **WHY** — out of Phase 5b's committed scope (the P1-2 audit finding and this phase's CCIR-1 recon named only the emit.rs pair); expanding scope mid-phase to investigate a different crate's traversal was not warranted for zero added correctness gain to THIS phase's exit criteria.
 - **COST** — a recon-sized investigation (read both traversals, confirm lifecycle-stage separation or file a follow-up unification phase) — well under one session.
 - **TRIGGER** — the next time authoritative-derivation.md-class hardening work touches ynz-typeck, or a bug is found where these two "crossing local type" answers disagree.
+
+## 2026-07-16 — Deferral: registry triggers-field schema drift (non-blocking — deferred by 2026-07-04-v0-3-m6-concurrency-hotfix#7 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#7: registry-features-toml-1330
+
+- **WHAT** — the `triggers` field on several `[[deferred_language_feature]]`/`[[deferred_tooling_feature]]`
+  registry entries (both pre-existing: auto-arc-codegen-emission, background-handle-cancel-injection,
+  seq-cst-ordering-opt-in; and new from M6 Phase 7: background.cpuBound, cooperative-preemption-back-edge-yield)
+  describes a runtime/measurement event rather than user-typeable trigger code, diverging from the
+  documented schema in IMP-feature-registry.md:202.
+- **WHY** — reconciling this is a cross-cutting registry-schema question spanning entries this phase
+  didn't author; fixing it here would expand Phase 7's docs/registry-only charter into a schema audit
+  of the whole registry file, which is out of scope for a single phase.
+- **COST** — a dedicated small pass: either (a) relax IMP-feature-registry.md's documented schema to
+  explicitly allow a measurement-event trigger for deferred features gated on real-world evidence
+  rather than user syntax, or (b) rewrite the drifted entries' triggers fields to be genuinely
+  user-typeable where that's actually possible. Estimate: <1 session.
+- **TRIGGER** — the next time someone designs a new deferred_* registry entry and has to decide which
+  triggers convention to follow, or a registry/schema-focused milestone/plan picks up general registry
+  hygiene.

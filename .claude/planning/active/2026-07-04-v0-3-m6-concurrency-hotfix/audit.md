@@ -4357,4 +4357,202 @@ Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#6b-fixloop2-segment-1
 **Routing — gates-only re-run (§6.0)**: every fix this round is comment/doc-only, zero logic
 change, touched-paths a subset of the original phase surface, no new files. Per §6.0's tiering, this
 qualifies for a gates-only re-run — cheap gates only (green-check + graveyard-auditor), zero LLM
+
+## Phase 7 — Docs/registry honesty sweep (P4-1, P4-2, P2-1 footgun doc, P4-4) + deferral recording
+
+### Phase 7 execution (DONE — single segment, docs/registry-only, no checkpoint)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#phase7
+
+- **session-id:** `executor-2026-07-16-m6-phase7`
+- **segment verdict:** **DONE.** All 8 steps closed in one segment (no `crates/**` logic touched, per
+  the phase's docs/registry-only charter). Every specific file:line citation was re-verified against
+  the live tree before being written into prose (several plan-cited line numbers had drifted since
+  authoring — CCIR-1 — and the corrected prose cites the current, re-verified locations instead).
+  1. `IMP-no-function-coloring.md` "Scheduler Preemption Model" (:214-226 post-edit): kept the
+     starvation-guarantee INTENT sentence, added an "Implementation status" subsection stating the
+     mechanism is a stub today (loop-back-edge call site real, `ynz_rt_check_preempt`
+     (`crates/ynz-runtime/src/runtime.rs:463-481`) a documented no-op; call-site checks never
+     implemented at all), citing the re-verified `emit_loop_preempt` site
+     (`crates/ynz-codegen/src/emit.rs:12884-12895`, drifted from the plan's stale :12356-12365) and
+     the re-verified stub (`runtime.rs:463-481`, drifted from the plan's stale :281-299). Also
+     corrected the adjacent "Time quantum" sentence (no code backs the ~10ms figure today) — a sibling
+     finding discovered while verifying, fixed in the same pass per verification.md's "sweep for
+     sibling failure modes."
+  2. Added `[[deferred_tooling_feature]]` `cooperative-preemption-back-edge-yield` to
+     `registry/features.toml` — full four fields (substitute/why/ships_in/design_doc/triggers) per
+     the plan's exact spec. `docker compose run --rm dev cargo test -p ynz-registry` green
+     (`every_registry_entry_design_doc_exists`, `every_future_doc_has_a_registry_entry_or_is_skipped`,
+     `deferred_tooling_feature_lookup`, all passing) — registry entry schema-conformant and TOML-valid
+     (also spot-checked via a throwaway `tomllib.load` parse).
+  3. Added `[[deferred_language_feature]]` `background.cpuBound` to `registry/features.toml` — same
+     four-field spec — and corrected `IMP-no-function-coloring.md`'s explicit-override paragraph
+     (:257 post-edit) from present-tense ("the user can force routing with...") to "spec'd, NOT
+     implemented," cross-referencing the new registry entry. Confirmed the auto-inference HALF of
+     that section (:248, may-block-driven routing to `ynz_rt_spawn`/`ynz_rt_spawn_blocking`) is
+     genuinely live (`crates/ynz-codegen/src/emit.rs:16311-16318`) before leaving it unchanged — only
+     the override half was false.
+  4. Extended `IMP-concurrency.md`'s Design Divergences section (new subsection after the
+     write-effect-floor entry, before "share read-only enforcement") with the bare-channel
+     receive-forever footgun, matching the section's existing WHAT-ships/named-cost/reversal-path
+     pattern. Citations re-verified against the live file: `YnzChannel` holds both `sender`/`receiver`
+     endpoints for its whole life at `crates/ynz-runtime/src/channel.rs:198-229` (the plan's cited
+     :109-123 was stale — that region is `PendingSend`/`PendingSendEntry`, not the struct). Confirmed
+     `docs/reference/REF-concurrency.md` IS the user-facing channel spec (exists, covers construction/
+     capacity/handle-forms) and does NOT document this footgun; cross-referenced it plus the
+     spec-writing.md "no unresolved design questions in spec files" reason it stays undocumented there
+     until channel-close semantics actually ship. Linked to this plan's own Future Requirements #4.
+  5. Fixed `docs/reference/REF-ffi.md` and `docs/internal/implementation/IMP-ffi.md` — both read as
+     fully present-tense usable FFI with zero deferred-status marker, despite `foreign` being a
+     confirmed `[[deferred_language_feature]]` (v2+, `registry/features.toml`) with ZERO code sites
+     (not even lexer-reserved). Added a clear status callout to both, cross-referencing
+     `REF-mvp-scope.md`'s v2+ section and the registry entry. Also added a one-line status note to
+     `IMP-no-function-coloring.md`'s "FFI annotation requirement" section (a sibling present-tense
+     claim in the SAME governing doc Step 1 was already editing) so it reads as the locked plan for
+     when `foreign` ships, not current behavior.
+  6. Fixed `IMP-no-function-coloring.md`'s `KernelModeRejectsWait` table row (:321 post-edit) and its
+     trailing sentence (:324): both previously claimed "reserved... 0 code sites today / post-v0.3."
+     Direct read of `crates/ynz-typeck/src/check.rs` this session confirmed the rejection is genuinely
+     shipped across three arms — `Expr::Wait` (:2726-2732, the literal `wait sleep(ms)` case),
+     the bare auto-suspending call arm (:3234-3241), and its UFCS dot-call mirror (:4849-4857) — all
+     re-verified live at their CURRENT line numbers (drifted from the plan's stale :4384-4392 /
+     :2930-2937 citations). Corrected the doc to state this accurately, including the WHAT-INSTEAD
+     nuance the original row conflated (the `wait sleep(ms)` case gets the generic kernel-mode
+     WHAT-INSTEAD; a bare `sleep(ms)` with no `wait` — a separate live arm, :3108-3118 — gets the more
+     specific "use `sleepBlocking`" redirect the original row had misattributed).
+  7. Recorded the P2-6 (auto-Arc unwired) "no action needed" disposition explicitly and permanently in
+     `IMP-no-function-coloring.md` itself (a new "P2-6 disposition" paragraph under the Runtime
+     section's auto-Arc bullet, :58-60 post-edit), not just in `plan.md`'s own Terrain/Design-Doc-
+     Alignment text (which already recorded it, per this session's re-confirmation). Re-verified
+     both `auto-arc-codegen-emission` (`[[deferred_language_feature]]`) and `auto-arc-cautionary-tint`
+     (`[[deferred_tooling_feature]]`) genuinely exist in `registry/features.toml` before asserting
+     they do — confirmed, not inferred. Also corrected the same section's present-tense "Cross-thread
+     shared state crosses a `background` boundary via auto-inferred `Arc<T>` wrapping" sentence
+     (a sibling present-tense-overclaim finding in the same doc, fixed alongside per
+     verification.md), which contradicted the doc's OWN later honest note (:212) that the emission is
+     deferred to v0.4+.
+  8. Cross-referenced Future Requirements items 1 (P2-3), 2 (P1-2), 3 (P2-5), 7 (P2-7), and 10
+     (dynamic-dispatch × suspension, FRAGO 002) — all already correct and complete, confirmed against
+     both the plan text and (for P1-2/P2-5/P2-7) the actual git history (`bc13fa2` P1-2/Phase 5b,
+     `1b7e567` P2-5/Phase 3b, `b0cdbd3` P2-7/Phase 4b — all present). No plan.md edits were needed;
+     all four items already record their correct final disposition (P2-3 and #10 as real four-field
+     deferrals; P1-2/P2-5/P2-7 as "no longer a deferral, fixed in Phase N" notes, exactly matching the
+     pattern the phase text itself prescribes).
+  Verification: `docker compose run --rm dev cargo build -p ynz-registry` and
+  `docker compose run --rm dev cargo test -p ynz-registry` both green (11 + 3 + 12 + 32 tests passing,
+  0 failed) — confirms the two new TOML entries are schema-valid and their `design_doc` paths resolve.
+  No `crates/**` source files touched (docs/registry-only, per charter). Not committed. Files touched:
+  `registry/features.toml` (2 new entries), `docs/internal/implementation/IMP-no-function-coloring.md`
+  (Scheduler Preemption Model, FFI annotation requirement, KernelModeRejectsWait table row + trailing
+  sentence, P2-6/auto-Arc paragraph), `docs/internal/implementation/IMP-concurrency.md` (new Design
+  Divergences entry), `docs/reference/REF-ffi.md` (status callout), `docs/internal/implementation/IMP-ffi.md`
+  (status callout), `plan.md` (frontmatter session-id append only — Future Requirements section
+  needed no edits, already correct per step 8's cross-reference).
+
+
 reviewers spent on a round that changed no executable logic.
+
+### Phase 7 fix-loop round 1 — jargon_audit gate failure closed (registry-text-only)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#phase7-fixloop-jargon
+
+- **session-id:** `executor-2026-07-16-m6-phase7-fixloop-jargon`
+- **Trigger:** green-check's `crates/ynz-diagnostics/tests/jargon_audit.rs
+  no_banned_jargon_in_deferred_feature_user_facing_fields` failed against the two
+  `registry/features.toml` entries Phase 7 added: `[[deferred_language_feature]] background.cpuBound`
+  (banned "Either" in `substitute`; banned "inference"/"implementation" in `why`; banned "inference"
+  in `ships_in`) and `[[deferred_tooling_feature]] cooperative-preemption-back-edge-yield` (banned
+  "narrow" in `substitute`; banned "implementation" in `why`).
+- **Fix:** reworded only the flagged TOML string fields on those two entries to Yinz-approved
+  vocabulary (per `.claude/rules/vocabulary.md` / `registry/features.toml`'s own `[[banned_jargon]]`
+  table), preserving every fact/citation (the 1190% O0 measurement, design_doc paths, triggers text,
+  file:line citations) verbatim. No other registry entries or files touched.
+- **Verification:** `docker compose run --rm dev cargo test -p ynz-diagnostics --test jargon_audit`
+  — all 10 tests green (was 1 failing). `docker compose run --rm dev cargo test -p ynz-registry` — all
+  32 tests green (unaffected, confirms schema/design_doc tests still hold).
+- **Files touched:** `registry/features.toml` (reworded 5 flagged fields across the two entries
+  above only), `plan.md` (frontmatter session-id append), `audit.md` (this entry).
+
+### Phase 7 fix-loop round 2 — committed TextMate grammar drift closed (regenerate-only)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#phase7-fixloop-grammar
+
+- **session-id:** `executor-2026-07-16-m6-phase7-fixloop-grammar`
+- **Trigger:** green-check's re-verification found
+  `crates/ynz-tmgrammar/tests/grammar_snapshot.rs:30`
+  (`committed_grammar_matches_generator_output`) failing — Phase 7's new
+  `[[deferred_language_feature]]` `background.cpuBound` entry in `registry/features.toml` feeds
+  `ynz_registry::deferred_language_features()` → `ynz-tmgrammar`'s `deferred-features` regex
+  alternation (`crates/ynz-tmgrammar/src/grammar.rs:24-30,86-88`), but the committed
+  `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` had never been regenerated after Phase 7 landed
+  the entry, so the committed file and the generator's live output had drifted apart.
+- **Investigated and ruled out as in-scope**: the dispatch brief also named the sibling
+  `[[deferred_tooling_feature]]` `cooperative-preemption-back-edge-yield` entry as a possible
+  second driver of the drift. Direct read of `crates/ynz-tmgrammar/src/grammar.rs:24` confirmed the
+  `deferred-features` pattern is built ONLY from `ynz_registry::deferred_language_features()` —
+  `deferred_tooling_feature` entries are never consumed by the grammar generator at all. Regenerating
+  confirmed this empirically: the resulting diff added exactly one new alternative
+  (`background.cpuBound`) and nothing else. No code or registry change was needed to account for the
+  tooling-feature entry; recorded here so the next reader doesn't re-investigate the same
+  non-finding.
+- **Fix:** ran `docker compose run --rm dev cargo run -p ynz-tmgrammar` to regenerate
+  `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` from the current `registry/features.toml`. Diff
+  is a single-line change to the `deferred-features` repository rule's `match` regex, inserting
+  `background.cpuBound` into the alternation (between `self-referential-shape` and `scratch`). No
+  other lines changed.
+- **Verification:**
+  - `docker compose run --rm dev cargo test -p ynz-tmgrammar` — all 6 tests green, including the
+    previously-failing `committed_grammar_matches_generator_output`.
+  - `docker compose run --rm dev cargo test --workspace` — first pass (default parallel threads)
+    surfaced two DIFFERENT, unrelated failures on two separate invocations:
+    `v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged`
+    (`crates/ynz-driver/tests/integration.rs`, a background-task timing assertion) and
+    `watcher::tests::read_debounce_ms_custom` (`crates/ynz-watch/src/watcher.rs`, an env-var-driven
+    unit test). Both re-ran green in isolation
+    (`cargo test -p ynz-driver --test integration <name>` and
+    `cargo test -p ynz-watch --lib <name>`), and a full
+    `cargo test --workspace -- --test-threads=1` run (serialized, eliminating cross-test env-var/
+    timing pollution) completed 100% green with exit code 0. Both failures are pre-existing
+    test-isolation flakes in the suite (unrelated to the grammar regeneration — neither touches
+    `ynz-tmgrammar`, `ynz-registry`, or anything this fix-loop round changed) and not a regression
+    introduced by this fix.
+- **Files touched:** `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` (regenerated, single-line
+  diff), `plan.md` (frontmatter session-id append), `audit.md` (this entry).
+
+### Phase 7 review-minors closeout — 3 trivial docs fixes + 1 cross-plan deferral routed (post-review, zero blockers)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#phase7-review-minors
+
+- **session-id:** `executor-2026-07-16-m6-phase7-review-minors`
+- **Trigger:** reviewer fleet returned zero blockers on Phase 7 but flagged 3 trivial docs/registry
+  minors plus 1 broader registry-schema finding not fixable in-phase.
+- **Fixed directly (docs/registry-only, no logic changes):**
+  1. Bumped stale `updated_at` frontmatter to `"2026-07-16"` on the 4 files substantively edited
+     this phase: `docs/internal/implementation/IMP-concurrency.md`,
+     `docs/internal/implementation/IMP-ffi.md`,
+     `docs/internal/implementation/IMP-no-function-coloring.md`, `docs/reference/REF-ffi.md`.
+     Verified post-edit via grep — all 4 now read `"2026-07-16"`.
+  2. Fixed a broken self-citation in `IMP-no-function-coloring.md:58` — "the honesty note under
+     'Auto-parallelization'" pointed at a heading that doesn't exist; corrected to name the real
+     heading, `## False Sharing Auto-Padding — Locked Pre-v0.3` (line 206), where the actual FRAGO
+     009 honesty note lives. Verified post-edit via grep.
+- **Routed, not fixed (broader than this phase's charter):** two reviewers (code-reviewer,
+  rules-compliance) independently found the registry's `triggers` field schema drift — several
+  `[[deferred_language_feature]]`/`[[deferred_tooling_feature]]` entries (both pre-existing:
+  `auto-arc-codegen-emission`, `background-handle-cancel-injection`, `seq-cst-ordering-opt-in`; and
+  new from this phase: `background.cpuBound`, `cooperative-preemption-back-edge-yield`) describe a
+  runtime/measurement event rather than a user-typeable trigger, diverging from the documented
+  schema in `docs/internal/implementation/IMP-feature-registry.md:202`. Spans entries this phase
+  didn't author — not a silent in-phase patch. Filed as a proper four-field WHAT/WHY/COST/TRIGGER
+  deferral in the roadmap's own audit sidecar (this plan is `roadmap-id:
+  "2026-05-21-v0-3-concurrency-perf"`-linked): see
+  `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` "2026-07-16 — Deferral:
+  registry triggers-field schema drift" (Idempotency-Key
+  `2026-07-04-v0-3-m6-concurrency-hotfix#7: registry-features-toml-1330`), plus the roadmap's own
+  frontmatter session-id append (`m6-p7-registry-triggers-deferral-lift-2026-07-16`) and
+  `updated_at` bump.
+- **Verification:** no compiler/registry code touched — grep-confirmed both docs fixes landed
+  correctly; no build/test re-run required for a docs-only diff.
+- **Files touched:** `docs/internal/implementation/IMP-concurrency.md`,
+  `docs/internal/implementation/IMP-ffi.md`, `docs/internal/implementation/IMP-no-function-coloring.md`,
+  `docs/reference/REF-ffi.md` (frontmatter date bump; the last also gets the citation fix),
+  `plan.md` (frontmatter session-id append), `audit.md` (this entry). Cross-plan:
+  `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md` (frontmatter session-id +
+  `updated_at`), `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` (new deferral
+  section).

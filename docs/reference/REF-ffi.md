@@ -4,7 +4,7 @@ description: "Call functions from C libraries, system APIs, and other non-Yinz c
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -14,6 +14,13 @@ metadata:
 # Foreign Function Interface (FFI)
 
 Call functions from C libraries, system APIs, and other non-Yinz code.
+
+> **Not available yet.** `foreign` is planned for **v2+** — it is not a keyword the compiler
+> recognizes today (writing `foreign` as an identifier works fine; it isn't reserved). Everything
+> below describes the planned design so you know what's coming. Until v2+ ships, if you need C
+> interop (file I/O, networking, math), use the stdlib modules that already wrap C internally —
+> you never see the `foreign` boundary yourself. See
+> [`docs/reference/REF-mvp-scope.md`](REF-mvp-scope.md) (v2+ section) for why it's deferred.
 
 ---
 

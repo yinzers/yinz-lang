@@ -4,7 +4,7 @@ description: "Full design document. Companion to docs/reference/REF-concurrency.
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-02"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -866,6 +866,16 @@ This follows the golden rules directly: **Golden Rule 5 (compile-time soundness 
 **Named cost**: two suspending calls that each take a mutable-heap argument do not overlap, even when both only READ their argument (e.g. two suspending reads of distinct shapes). This forfeits the read-only-mutable-heap-argument overlap. It is a perf miss, never a correctness miss — the floor only ever *adds* sequencing, never introduces a wrong parallel execution. The I/O-overlap headline is unaffected: no-argument, primitive-argument, and immutable-`string`-argument suspending calls (the realistic I/O-fan-out shapes) still parallelize.
 
 **Reversal path**: a real type+alias-aware ownership analysis (M4 borrow-checker completion — receiver types threaded through the analysis + intra-procedural alias tracking) that can PROVE a heap argument is both read-only AND non-aliased re-enables narrowing the floor to permit proven-read mutable-heap arguments to overlap. Until that exists, the floor stands. (M3d CPU-parallel reuses this same type-based write-effect source — the floor transfers unchanged.)
+
+### Bare `channel<T>` never closes — `receive()` after all producers finish parks forever
+
+**Scope note**: this entry documents a v0.3-M4/M6 gap in the channel primitive itself, not the M3b auto-parallelization pass this section otherwise covers — it lives here because this is the doc's one "documented divergence, named cost, reversal path" convention, and the v0.3-M6 concurrency-hotfix audit (P2-1) requires it be documented loudly rather than silently carried forward.
+
+**What ships**: a `channel<T>` value (`YnzChannel`, `crates/ynz-runtime/src/channel.rs:200-229`) holds BOTH its sender and receiver endpoints for the object's entire lifetime — "Holds BOTH endpoints of one bounded mpsc channel" (`channel.rs:198`). There is no user-facing or runtime operation that closes only the sender side or otherwise signals "no more values are coming." The object closes only when the WHOLE thing is freed (the last `Arc` reference drops via `ynz_channel_free`), at which point there is nothing left to call `.receive()` on anyway.
+
+**Named cost**: the most natural fan-in pattern — spawn N producer tasks against one shared channel, `.receive()` in a loop until the channel reports "closed" — never gets that signal in Yinz today. The receiver parks (suspends) forever once producers stop sending, because the sender endpoint they used is still alive inside the same object the receiver holds; there is no way to observe "drained AND no more are coming." This is a real production footgun for that pattern, not a rare edge case — it is the default shape a `channel<T>` fan-in naturally takes. (A related, presently-unreachable facet: `Ready(None)`-style closure observed by one receiver does not propagate a wake to other recorded co-waiters on the same channel — `channel.rs:74-78` — moot until closure itself becomes reachable in production.)
+
+**Reversal path**: this is not a bug fix — it is an undesigned feature. Channel-close semantics (what `.close()` looks like; whether dropping the last `Sender` auto-closes given the channel object itself always retains one; how a receiver distinguishes "drained and closed" from "still open, just momentarily empty") are a real, scoped roadmap item: Future Requirements item 4 in [the v0.3-M6 concurrency-hotfix plan](../../../.claude/planning/active/2026-07-04-v0-3-m6-concurrency-hotfix/plan.md) ("Future Requirements / Revisit" section), owner-tagged for a future milestone (M8), not an M6 deliverable. The user-facing channel spec, [`docs/reference/REF-concurrency.md`](../../reference/REF-concurrency.md), does not currently describe this footgun or a `.close()` operation — per [`.claude/rules/spec-writing.md`](../../../.claude/rules/spec-writing.md)'s "no unresolved design questions in spec files" convention, that stays undocumented in the user-facing spec until channel-close semantics are actually designed and shipped, rather than wedging an unresolved-bug note into a file meant to show only what exists today. That is a real gap in end-user documentation, named here rather than silently left for a user to discover by hanging.
 
 ### `share` read-only enforcement is best-effort (transitive teaching error)
 

@@ -4,7 +4,7 @@ description: "Design rationale for Yinz's foreign function interface: the 'forei
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -14,6 +14,14 @@ metadata:
 # Foreign Function Interface — Design Decisions
 
 User spec: [`docs/reference/REF-ffi.md`](../../reference/REF-ffi.md)
+
+> **Status: deferred to v2+, not implemented.** `foreign` is a registered
+> `[[deferred_language_feature]]` (`registry/features.toml`, design doc
+> [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) v2+ section) — it is not yet
+> a reserved keyword, and none of the mechanisms below exist in the compiler today. Stdlib modules
+> that need C interop call C internally via compiler-private mechanisms users never see. The
+> decisions below are the locked DESIGN for when v2+ builds this out, not a description of current
+> behavior.
 
 ---
 
