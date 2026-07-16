@@ -13,7 +13,7 @@ metadata:
 
 # Naming — Design Decisions
 
-User spec: [`docs/reference/REF-language-overview.md`](REF-language-overview.md) (golden rules), [`.claude/rules/naming.md`](../../.claude/rules/naming.md)
+User spec: [`docs/reference/REF-language-overview.md`](REF-language-overview.md) (golden rules), [`.claude/rules/vocabulary.md`](../../.claude/rules/vocabulary.md)
 
 ---
 

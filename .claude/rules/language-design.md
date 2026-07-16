@@ -1,3 +1,20 @@
+---
+name: "language-design"
+description: >
+  Rules for making and reviewing Yinz language design decisions — the readability, duplication,
+  performance, OOP-drift, and teaching tests every proposed feature or keyword must pass before
+  it ships, plus where decisions get documented.
+tags:
+  - "yinz-compiler"
+  - "language-design"
+created_at: "2026-05-12"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Language Design Rules
 
 Rules for making and reviewing language design decisions.
@@ -6,7 +23,7 @@ Rules for making and reviewing language design decisions.
 
 ## Before Adding Anything New
 
-Check every proposed feature against all 12 golden rules (in [`CLAUDE.md`](../../CLAUDE.md)). If it violates any rule, don't add it. If there's tension between two rules, the lower-numbered rule wins.
+Check every proposed feature against all golden rules (in [`CLAUDE.md`](../../CLAUDE.md)). If it violates any rule, don't add it. If there's tension between two rules, the lower-numbered rule wins.
 
 ---
 
@@ -38,14 +55,11 @@ The developer who doesn't think about performance should automatically write fas
 
 Ask: "Does this design assume object-oriented patterns?"
 
-If yes → reconsider. Yinz is data shapes + standalone functions + UFCS dot-call sugar — NOT OOP. Common drift signals:
-
-- **Methods declared inside a shape body** (`shape X { function foo(...) {...} }`) — methods are standalone functions at file/module level; shape body holds data + contract signatures only
-- **`override` keyword** — does not exist; use function overloading by argument type (`function greet(share self: Entity)` + `function greet(share self: Warrior)` — compiler picks the most specific overload at the call site)
-- **`extends` for behavior reuse** — `extends` is DATA-only inheritance; child gets parent's fields; behavior comes from standalone functions
-- **Storing function-typed values as fields to simulate methods** — refactor to standalone functions + UFCS unless the use case genuinely needs per-instance callback semantics (rare)
-- **Spec/design language that frames Yinz as "object-oriented" or describes patterns in OOP terms** — use the non-OOP framing per [`.claude/rules/non-oop.md`](non-oop.md)
-- **Reaching for `class`, `instance`, `new`, `this`, `instanceof`** — none of these exist in Yinz; their presence in your design signals OOP drift
+If yes → reconsider. Yinz is data shapes + standalone functions + UFCS dot-call sugar — NOT OOP. Two
+of the most common tells: reaching for `override`, or storing function-typed fields to simulate a
+method. The full enumerated list of drift signals (and which ones are compile errors vs. review
+warnings) is the [`.claude/rules/non-oop.md`](non-oop.md) Banned Anti-Patterns table — one home, not
+restated here.
 
 See [`.claude/rules/non-oop.md`](non-oop.md) for the full model + the dual-style diagnostic format for UFCS errors. Locked r10–r13.
 
@@ -67,7 +81,7 @@ See [`docs/reference/REF-teaching-mission.md`](../../docs/reference/REF-teaching
 
 ## Documenting Decisions
 
-Every decision goes in `/docs/README.md` with:
+Every decision goes in its `docs/internal/implementation/IMP-<feature>.md` file (create it if it doesn't exist) per [`.claude/rules/docs-checklist.md`](docs-checklist.md), with:
 1. What was decided
 2. Alternatives that were considered
 3. Which golden rule(s) drove the decision and why
@@ -84,4 +98,4 @@ Unresolved design questions go in `/docs/internal/scratchpad/SCRATCH-open-questi
 
 ## Spec Updates
 
-When a decision is made, update the relevant `/spec/` file immediately. Spec files are the user-facing truth — they should never be out of date with the decisions log.
+When a decision is made, update the relevant `docs/reference/REF-*.md` file immediately. Spec files are the user-facing truth — they should never be out of date with the decisions log.

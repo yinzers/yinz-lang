@@ -1,3 +1,22 @@
+---
+name: "inference"
+description: >
+  How Yinz handles the work the compiler can figure out automatically vs. what the developer
+  types — the muted-hint IDE protocol, its three placement categories (Addition/Replacement/
+  Informational), the hover tooltip format, and the dual-audience infer/inference vocabulary
+  split (banned user-facing, correct in this rules corpus).
+tags:
+  - "yinz-compiler"
+  - "ide"
+  - "teaching"
+created_at: "2026-05-14"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Inference Rule — Compiler Infers, IDE Teaches
 
 This file governs how Yinz handles the work the compiler can figure out automatically vs. what the developer types.
@@ -6,7 +25,7 @@ This file governs how Yinz handles the work the compiler can figure out automati
 
 ## Dual-Audience Disclaimer (READ FIRST)
 
-This rule file uses the words `infer`, `inferred`, and `inference` deliberately. **These words are banned in user-facing compiler diagnostics** per `crates/ynz-diagnostics/src/banned_jargon.rs` and [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) — those audiences need plain-English replacements ("figure out automatically", "the compiler can tell").
+This rule file uses the words `infer`, `inferred`, and `inference` deliberately. **These words are banned in user-facing compiler diagnostics** per [`registry/features.toml`](../../registry/features.toml) `[[banned_jargon]]` entries (the SSOT — `crates/ynz-diagnostics/src/banned_jargon.rs` is a thin generated adapter over it, not the source itself) and [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) — those audiences need plain-English replacements ("figure out automatically", "the compiler can tell").
 
 The divergence is intentional and load-bearing:
 
@@ -40,9 +59,13 @@ Each row shows the muted text the IDE renders directly inline. The text is infor
 | Ownership at call sites | `foo(player)` where `player` is `const` and signature is `share` | `share (read-only — matches foo's signature)` after `player` — shows the modifier AND why this one was picked. **Informational category** (no body-level syntax to insert — call-site ownership modifiers don't exist as Yinz source; only signatures carry the modifier; the muted hint is purely teaching). Click jumps to foo's signature. |
 | Ownership at call sites — mutation | `bar(player)` where `player` is `let` and signature is `lend` | `lend (function will mutate — see bar's signature)` after `player` — same pattern, cautionary styling. **Informational category** (same rationale as above). |
 | Wait points on I/O | `db.fetch("users")` | `wait (db.fetch may suspend on I/O)` before the call — shows the keyword AND why suspension happens here |
+| Background routing | `background process(order)` | `// routed to I/O pool — calls sleep (may suspend)` — shows which thread pool the spawn routes to. **Informational category** (a scheduler decision, no typeable source form). Reads the same suspend-analysis flag that drives the actual codegen routing, so the hint and the binary always agree. |
+| Parallel groups | `let hits = crunchStat(2)` | `// runs at the same time as line 12 — separate core` — shows which other statement this one overlaps with. **Informational category** (the independence analysis that drives the actual parallel execution, no typeable source form). |
 | Lifetimes | always inferred (only shown on user request) | `'request_scope` — shows the lifetime; on request because lifetime hints are usually noise |
 | Allocators | `let temp: array<int> = []` inside `arena scratch { ... }` | `.in(scratch) — current arena` after the constructor — shows the allocator AND that it's the active scope's arena |
-| Copy points (trivially-copyable types) | implicit copy at a call site, e.g., passing `let n: int` to two functions | `.copy (8 bytes, trivially copyable)` — shows the action AND why it's free |
+| Channel capacity | `let ch: channel<int> = channel<int>()` | `64` — shows the locked default capacity the compiler fills into the empty constructor parens. **Addition category** (click inserts the literal `64` as an explicit argument). |
+| Copy points (trivially-copyable types) | implicit copy at a call site, e.g., passing `let n: int` to two functions | `.copy() (8 bytes, trivially copyable)` — shows the action AND why it's free |
+| Auto-Arc across `background` boundaries | `background render(scene)` | `// shared by reference count across tasks — read-only` — shows where a read-only value crossing a `background` boundary is reference-counted instead of deep-copied. **Informational category** (a codegen choice, no typeable source form — call `.copy()` for an independent copy instead). |
 | `array<T>` → `fixed<T>` promotion | `let nums: array<int> = [1, 2, 3]` (never grown) | `// promoted to fixed<int, 3> — never grown` after the binding; click rewrites annotation to `fixed<int>` |
 | `let` → `const` (binding never reassigned/mutated/lent) | `let count = 5` (never written after) | `// effectively const — never reassigned` after the binding; click rewrites `let` to `const` |
 
@@ -78,9 +101,9 @@ When the explicit form has no typeable syntax, the muted-hint protocol does NOT 
 
 ### Rule of thumb
 
-Compiler made a decision the user could have made themselves in source → both surfaces. Compiler made a decision with no equivalent user-typeable form → Tier 3 lint only.
-
-See [`docs/internal/implementation/IMP-collections.md`](../../docs/internal/implementation/IMP-collections.md) "Auto-promotion: `array<T>` → `fixed<T>`" section for the canonical hybrid-model rationale.
+The typeability criterion above is [`auto-promotion.md`](auto-promotion.md)'s Pattern table
+(Surface | Applies when) — this file's job is which IDE surface renders it, not re-deriving the
+criterion. See [`docs/internal/implementation/IMP-collections.md`](../../docs/internal/implementation/IMP-collections.md) "Auto-promotion: `array<T>` → `fixed<T>`" section for the canonical hybrid-model rationale.
 
 ---
 
@@ -103,11 +126,13 @@ User could have typed the explicit form IN A SPECIFIC POSITION but didn't. The m
 
 ```ynz
 let i = 4                              // muted `: int` between `i` and `=`
-foo(player)                            // muted `.share` after `player`
 let queue = channel<Order>()           // muted `64` INSIDE the empty parens
 db.fetch("users")                      // muted `wait` BEFORE the call
 arena scratch { let temp = array<int>() }   // muted `.in(scratch)` after the constructor
 ```
+
+(Ownership at call sites is NOT an Addition-category example — see the Domains table above: it is
+Informational, because there is no body-level syntax to insert.)
 
 Zero source-vs-render ambiguity. Click-to-make-explicit is trivial — the muted bytes get inserted at the position they're rendered. Visibility is passive (you see the info while reading the file; no hover needed).
 
@@ -174,7 +199,7 @@ If a domain seems to fit multiple categories, the test in "Test for which catego
 Two visual tiers of muted text:
 
 - **Neutral muted (gray)**: benign inference — type inference, lifetime inference, allocator inference. Hover-tooltip explains what and why.
-- **Cautionary muted (red-tinted)**: inference involving mutation, ownership transfer, or thread crossing. Examples: `.lend` on a `let` binding, `.give`, auto-`Arc` for cross-thread shared state. Same hover format; visual styling flags the higher-stakes inference.
+- **Cautionary muted (red-tinted)**: inference involving mutation, ownership transfer, or thread crossing. Examples: `lend` on a `let` binding, `give`, auto-`Arc` for cross-thread shared state. Same hover format; visual styling flags the higher-stakes inference.
 
 **Compile errors are NOT muted hints.** Errors use standard error styling (red squiggly + diagnostic in error panel). The two styles are separate — never collapse them.
 
@@ -188,13 +213,13 @@ Every muted hint, on hover, gives a three-part explanation matching Golden Rule 
 - **WHAT INSTEAD** the developer could write to make it explicit
 - **WHY** the compiler chose this (with the contextual reason — not generic, tied to THIS call site)
 
-Canonical example — hovering muted `.share` on a call passing a `const player`:
+Canonical example — hovering the muted `share` hint on a call passing a `const player`:
 
-> **WHAT**: This is inferred as `.share` because `player` is declared `const`. The function gets read-only access; you keep ownership.
+> **WHAT**: This is inferred as `share` because `player` is declared `const`. The function gets read-only access; you keep ownership.
 >
-> **WHAT INSTEAD**: You could write `foo(player.share)` to make it explicit. The behavior is identical.
+> **WHAT INSTEAD**: Nothing to type here — `share` is a signature-only keyword with no body-level call-site syntax (Informational category, per the Domains table above). Click jumps to `foo`'s signature, where the `share` keyword is written (or can be made explicit if the signature is currently bare).
 >
-> **WHY**: `const` bindings can only grant read-only access. If you need mutation, declare `player` with `let` instead. (Trying to write `foo(player.lend)` here would produce a compile error: "cannot lend a const binding.")
+> **WHY**: `const` bindings can only grant read-only access. If `foo`'s signature instead declared `lend` (mutable borrow), passing this `const` binding would produce a compile error: "cannot lend a const binding."
 
 Same wording reused wherever this concept surfaces — compiler diagnostics, hover tooltips, spec examples. One canonical explanation per concept.
 
@@ -233,4 +258,4 @@ It also depends on IDE quality. The hints aren't a nice-to-have — they're the 
 - [`docs/reference/REF-ide-hints.md`](../../docs/reference/REF-ide-hints.md) (the protocol spec — v0.2 LSP implementation target)
 - [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) (banned-jargon list for user-facing diagnostics, distinct from this internal-vocabulary file)
 - [`.claude/rules/vocabulary.md`](vocabulary.md) (official Yinz user-facing terms)
-- [`.claude/graveyard.md`](../graveyard.md) Entry 2 (inverse anti-pattern: required explicit annotation at call sites)
+- [`.claude/graveyard.md`](../graveyard.md) "Requiring Explicit Ownership Annotation at Call Sites" (inverse anti-pattern: required explicit annotation at call sites)

@@ -43,6 +43,26 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 ---
 
+## Rules Files
+
+| File | Load when |
+|------|-----------|
+| [`.claude/rules/non-oop.md`](.claude/rules/non-oop.md) | **LOAD FIRST** for any feature touching shapes/methods/dispatch/inheritance/contracts. Yinz is NOT object-oriented — data shapes + standalone functions + UFCS dot-call sugar. Drift back into OOP patterns is the most common modeling mistake. |
+| [`.claude/rules/dot-postfix.md`](.claude/rules/dot-postfix.md) | Designing any syntax using dot-postfix (`value.x` vs `value.x()`). Parens for actions, no parens for access. |
+| [`.claude/rules/vocabulary.md`](.claude/rules/vocabulary.md) | Any docs work — authoritative reference for Yinz user-facing terms (shape, value, map, options, etc.), the capital-letter-=-type rule, module/type case distinctions, and the renamed-concepts table |
+| [`.claude/rules/inference.md`](.claude/rules/inference.md) | Designing IDE behavior, ownership UI, type-inference UI, any teaching surface where the compiler figures things out automatically |
+| [`.claude/rules/auto-promotion.md`](.claude/rules/auto-promotion.md) | Designing any new feature, stdlib type, or compiler optimization — mandates auto-promotion analysis (silent codegen + muted hint + Tier 3 lint) when a stricter/faster form fits. The "fast by design even for inexperienced developers" pattern. |
+| [`.claude/rules/stdlib-design.md`](.claude/rules/stdlib-design.md) | Designing or reviewing any stdlib module — six rules: pure-named methods are pure, no parallel APIs, no platform-default config, bounded queues, receiver-first args, codegen serialization. |
+| [`.claude/rules/feature-registry.md`](.claude/rules/feature-registry.md) | Adding any new keyword, jargon entry, primitive method, type constant, deferred feature, diagnostic template, or muted-hint domain — all go in [`registry/features.toml`](registry/features.toml) first |
+| [`.claude/rules/plan-invariants.md`](.claude/rules/plan-invariants.md) | Writing or reviewing milestone plans (M4 onward must include the 7-subsection Invariants block; v0.2-M2+ plans also require `### Feature Registry Entries`) |
+| [`.claude/rules/spec-writing.md`](.claude/rules/spec-writing.md) | Writing or editing `docs/reference/REF-*.md` language-spec files |
+| [`.claude/rules/language-design.md`](.claude/rules/language-design.md) | Making or reviewing language design decisions |
+| [`.claude/rules/docs-checklist.md`](.claude/rules/docs-checklist.md) | Adding new `docs/internal/implementation/IMP-*.md` design docs, `docs/internal/scratchpad/SCRATCH-*.md` future-list ideas, or `docs/reference/REF-*.md` spec sections |
+| [`.claude/rules/examples-structure.md`](.claude/rules/examples-structure.md) | Adding, renaming, or restructuring anything under `examples/` — flat layout, Pittsburgh-themed folder names, no nested workspaces |
+| [`.claude/rules/authoritative-derivation.md`](.claude/rules/authoritative-derivation.md) | Designing or reviewing any compiler pass/guard/codegen path that consumes a derived analysis result (crossing/suspend sets, ABI/aliasing predicates, admission gates) — or anywhere two+ code paths must agree on the same computed answer. Thread the one authoritative source; never re-derive an "equivalent" twin. Design-time guard for the twin-computation-drift class that shipped silent miscompiles across M3a/M3d/M3e/M3g. |
+
+---
+
 ## When Working on This Project
 
 - **Design docs (`docs/internal/implementation/IMP-*.md`) are the GOVERNING source of truth — read them before planning AND keep them open while executing.** `docs/internal/implementation/` (especially `docs/internal/scratchpad/SCRATCH-future-*.md` for end-state vision like [`docs/internal/implementation/IMP-no-function-coloring.md`](docs/internal/implementation/IMP-no-function-coloring.md)) defines what the language IS; a plan is just a route to that destination, never an override of it. Mandatory:
@@ -52,8 +72,8 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 - **Yinz is NOT object-oriented.** Data shapes hold fields + contract signatures; methods are standalone functions; `value.method()` is parser-level sugar for `method(value)` (UFCS — both call forms work). NO methods inside shape declarations; NO `override` keyword; `extends` is data-only inheritance. See [`.claude/rules/non-oop.md`](.claude/rules/non-oop.md) for the full model — this is the most common modeling mistake to drift back into. Locked r10–r13 (2026-05-16).
 - **Every milestone plan MUST grow the canonical demo project + error gallery.** Per [`.claude/rules/plan-invariants.md`](.claude/rules/plan-invariants.md) `### Demo & Error Gallery` subsection: each phase that adds executable surface MUST extend `examples/pirates-roster/entrypoint.ynz` with the new feature in context AND extend `examples/primantis-orders/m{N}_errors.ynz` with intentional triggers for every new compile error class. This is how Patrick reviews the language UX after each phase — without it, features ship and never get hands-on validation. The `pirates-roster/` project covers EVERY v0.1 language feature (M1–M8) in one growing demo; stdlib modules (v0.5+) get their own per-module example projects under `examples/<themed-name>/` (use the SINGLE-ENTRY layout — mirror `examples/pirates-roster/`'s shape, one yinz.toml + one entrypoint.ynz + plain subfolders, Pittsburgh-themed folder name per [`.claude/rules/examples-structure.md`](.claude/rules/examples-structure.md)).
 - **Project layout has two locked shapes (per [`examples/README.md`](examples/README.md))**: single-entry (`yinz.toml` with one `entry = "..."`, code in plain subfolders, used by `examples/pirates-roster/` and all stdlib module examples — the ~95% case) and multi-entry (one `yinz.toml` with `[entries]` table, ships under `ships/`, shared code in plain folders — v0.22 feature, previewed in `examples/stadium-fleet/`). When in doubt, single-entry. The `[entries]` multi-ship shape is opt-in for projects that genuinely have N co-shipped binaries.
-- Check every proposed language feature against all 12 golden rules before suggesting it
-- Always use Yinz terms — see [`.claude/rules/naming.md`](.claude/rules/naming.md) for the full reference
+- Check every proposed language feature against all golden rules before suggesting it
+- Always use Yinz terms — see [`.claude/rules/vocabulary.md`](.claude/rules/vocabulary.md) for the full reference
 - Language-spec files (`docs/reference/REF-*.md`) are written for a HS grad — short sections, example-heavy, plain English
 - No method chaining in code examples; step-by-step with named variables
 - Living design decisions go in the relevant `docs/internal/implementation/IMP-*.md` file (WHY captured); one-time locked calls get their own `docs/internal/decisions/ADR-*.md`

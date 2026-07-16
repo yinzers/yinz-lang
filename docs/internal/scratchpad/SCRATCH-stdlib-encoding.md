@@ -59,7 +59,7 @@ Per [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md):
 
 ## Illustrative API (PROPOSED — not yet implemented)
 
-Dot-first, self-documenting, module name lowercase per [`.claude/rules/naming.md`](../../../.claude/rules/naming.md):
+Dot-first, self-documenting, module name lowercase per [`.claude/rules/vocabulary.md`](../../../.claude/rules/vocabulary.md):
 
 ```
 // ILLUSTRATIVE future syntax — final shape decided at the module's version turn.

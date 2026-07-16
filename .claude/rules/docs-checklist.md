@@ -1,3 +1,21 @@
+---
+name: "docs-checklist"
+description: >
+  Documentation structure rules and checklists for adding a language feature or making a
+  design decision within Yinz's four-bucket docs/ taxonomy (docs/reference/REF-*.md,
+  docs/internal/implementation/IMP-*.md, docs/internal/decisions/ADR-*.md,
+  docs/internal/scratchpad/SCRATCH-*.md).
+tags:
+  - "yinz-compiler"
+  - "docs"
+created_at: "2026-05-12"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Documentation Rules & Checklist
 
 ## Structure
@@ -75,7 +93,7 @@ Every topic gets its own dedicated file. No threshold judgment about "is this ma
 | Locked-but-unbuilt future feature design | `docs/internal/scratchpad/SCRATCH-future-topic.md` |
 | Locked-but-unbuilt stdlib module design (v0.5+) | `docs/internal/scratchpad/SCRATCH-stdlib-module.md` |
 | The 13 golden rules with rationale | [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) |
-| Naming conventions (renamed keywords, casing) | [`.claude/rules/naming.md`](naming.md) |
+| Naming conventions (renamed keywords, casing) | [`.claude/rules/vocabulary.md`](vocabulary.md) |
 | How to write language-spec files | [`.claude/rules/spec-writing.md`](spec-writing.md) |
 | How to make design decisions | [`.claude/rules/language-design.md`](language-design.md) |
 
