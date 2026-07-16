@@ -2,7 +2,7 @@
 name: "v0-3-m6-concurrency-hotfix-audit"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 created_at: "2026-07-09"
-updated_at: "2026-07-10"
+updated_at: "2026-07-16"
 metadata:
   type: "audit"
 ---
@@ -4556,3 +4556,207 @@ Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#phase7-review-minors
   `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md` (frontmatter session-id +
   `updated_at`), `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` (new deferral
   section).
+
+### Phase 8 — Roadmap reconciliation + full-suite gate + release-precondition confirmation (Demo & Error Gallery steps 1-2 DIRECTED-SKIP, Patrick 2026-07-16)
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#8
+
+- **session-id:** `executor-2026-07-16-m6-phase8`
+- **Trigger:** Phase 8 dispatch, last phase of this plan. Patrick directed the conductor to SKIP
+  steps 1-2 (Demo & Error Gallery) this phase and pick them back up separately — a directed human
+  deviation, not a discovered engineering tradeoff, recorded per `no-duct-tape.md`'s four-field
+  discipline as a new Future Requirements item (#25) rather than silently dropped.
+- **Steps 1-2 (Demo & Error Gallery): SKIPPED, directed.** See plan Future Requirements #25 for the
+  full four-field WHAT/WHY/COST/TRIGGER record. TRIGGER: before this plan's completion gate closes,
+  or the next session Patrick asks to pick it back up.
+- **Step 3 (roadmap reconciliation): DONE.** `legacy.milestones` frontmatter already carried
+  `v0-3-m6-concurrency-hotfix` (added 2026-07-04) — confirmed, no change needed. Roadmap's
+  `### Milestone 6` section updated from stub-status prose to reflect actual completion (fix phases
+  0-7 sealed; Phase 8 closing; Demo/Gallery deferral noted inline). M6's row in BOTH Capability
+  Ledger tables updated from "planned (stub)" to "Phase 8 closing — fix phases 0-7 complete"; a new
+  dedicated Sanitizer CI lane row added to both tables, explicitly framed as an ongoing
+  continuous-verification capability (not folded into the general M6 row, per the dispatch's
+  explicit instruction).
+- **Step 4 (durable-home deferral lift, FRAGO 012/015): DONE at the time, but INCOMPLETE — closed
+  by a 2026-07-16 fix-loop round.** The original Phase-8 pass lifted 10 named surviving deferrals
+  from this plan's own Future Requirements into the roadmap's `audit.md` as ten four-field
+  WHAT/WHY/COST/TRIGGER payload entries (each its own `Idempotency-Key:` sentinel), plus
+  owner-tagged pointer rows in both Capability Ledger tables — but MISSED Future-Requirements #20,
+  #21, #22, and #23 entirely. A same-day fix-loop round lifted all four as their own standalone
+  four-field payload entries (#21 getting its own real record rather than staying a dangling
+  cross-reference inside #24's already-lifted entry), bringing the total to **14 named surviving
+  deferrals lifted as fourteen four-field payload entries.** The ten originally lifted:
+  - `#8-fr1` P2-3 closed-send drop-glue leak (owner: M8)
+  - `#8-fr4` bare-channel end-of-stream / channel-close semantics (owner: M8)
+  - `#8-fr5` cooperative preemption real back-edge yield (owner: M7)
+  - `#8-fr6` `background.cpuBound` explicit override (unscoped)
+  - `#8-fr9-fr14` int-literal→`number` coercion, store-site (roadmap-ledger row 441) PAIRED with
+    call-argument-site (Future-Req #14) — one mechanism, both facets now recorded together; row 441
+    still flagged for Patrick's own Gate-4 home call, not silently absorbed into M6/M7
+  - `#8-fr10` dynamic-dispatch × suspension predicate blindness (unscoped, grouped alongside row 441)
+  - `#8-fr11` `fixed<T>` PARAM-iteration backend ICE (unscoped, grouped alongside row 441)
+  - `#8-fr12` conduit-send decimal128 marshalling (unscoped)
+  - `#8-fr13-fr17` never-drop-locals class: per-iteration maybe/union heap-cell loop leak PAIRED
+    with the trampoline staged decimal128 arg-cell leak (unscoped → needs the drop-story milestone)
+  - `#8-fr15-fr16` Phase 1d polish minors: twin-scan consolidation + named decimal128 cell-size
+    const (unscoped, trivial)
+
+  The four closed by this fix-loop round (2026-07-16):
+  - `#8-fr20` general UFCS arg-validation gap + `array.remove` no codegen lowering (unscoped,
+    grouped alongside row 441)
+  - `#8-fr21` narrowed-union background receiver — the durable fix (own record; unscoped, grouped
+    alongside the already-lifted #24 row)
+  - `#8-fr22` call-only large-copy Tier-3 warning — UFCS-receiver teaching parity (unscoped,
+    trivial, teaching-only)
+  - `#8-fr23` non-plain-ident shape receivers/args in background-spawn position — **flagged
+    explicitly for Patrick's own milestone-seal human call, not auto-assigned to any milestone**
+
+  Already-lifted items confirmed present, NOT re-duplicated (grep-before-write idempotency): Future
+  Req #7 (registry triggers-field schema drift, `2026-07-04-v0-3-m6-concurrency-hotfix#7:
+  registry-features-toml-1330`, lifted by the Phase 7 review-minors closeout above), Future-Req #18
+  (decimal128 by-value RETURN ABI defect, roadmap-ledger row 442, lifted 2026-07-10 — now also
+  carries the "LIFTED" cross-reference annotation in plan.md, added by this fix-loop round), Future-
+  Req #19 (`map<number, V>` real-number-KEY silent breakage, roadmap-ledger row 443, lifted
+  2026-07-10 — same annotation fix), and Future-Req #24 (union-narrowing payload extraction,
+  `2026-07-04-v0-3-m6-concurrency-hotfix#24: union-narrowing-payload-extraction`, lifted
+  2026-07-11). Already-resolved items correctly NOT
+  lifted: Future-Req #2 (P1-2 twin type-walkers — fixed in Phase 5b) and #3 (P2-5 recursion-chain
+  leak — fixed in Phase 3b), both "no longer a deferral" per their own entries; Future-Req #8
+  (Capability Ledger section duplication — an out-of-charter doc-hygiene note, not a bug/deferral).
+  Every lifted plan-side Future-Requirements entry (#1, #4, #5, #6, #9, #10, #11, #12, #13, #14,
+  #15, #16, #17) carries its own new "LIFTED to the roadmap's durable store 2026-07-16" cross-
+  reference sentence, per plan-source-of-truth's "cross-reference so a future reader never re-lifts
+  an already-homed item" discipline (mirroring #24's own precedent).
+- **Step 5 (full cumulative gate, minus deferred gallery assertions): DONE, all green.**
+  - `docker compose exec -T dev cargo clippy --workspace -- -D warnings` — clean, zero warnings.
+  - `docker compose exec -T dev cargo test --workspace` — single clean invocation: 100% green,
+    zero `FAILED` occurrences across the entire persisted log (`grep -c FAILED` → 0), every
+    `test result:` line reads `0 failed`. (A second, REDUNDANT concurrent invocation of the same
+    command — an executor verification-methodology mistake, not a real regression — hit the exact
+    pre-documented `v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged` test-isolation
+    flake Phase 7's own review-minors closeout already characterized; killed, and NOT used as
+    evidence either way. The single clean run is the authoritative result.)
+  - **Sanitizer CI job — honest verification, not overclaimed.** `.github/workflows/ci.yml`'s
+    `sanitizers` job (Miri + TSan + ASan, `-p ynz-runtime`) is CONFIRMED PRESENT (direct file read —
+    the job exists with all three sanitizer steps, matching Phase 6b's own build-out). Its
+    constituent commands were already proven genuinely non-vacuous locally during Phase 6b (a
+    synthetic data race through the exact CI-authored TSan invocation produced real
+    `ThreadSanitizer: data race` output, captured then reverted). BUT: `git status -sb` confirms
+    this branch (`feat/v0-3-m6-concurrency-hotfix`) has no upstream configured — it has never been
+    pushed — and `gh run list` / `gh pr list --head feat/v0-3-m6-concurrency-hotfix` confirm zero
+    GitHub Actions runs and zero PRs exist for it. So "confirmed present" is true and verified;
+    "confirmed green in an actual GitHub Actions run" is NOT yet a confirmable fact and is NOT
+    claimed anywhere in this phase's roadmap edits — glossing over that distinction would itself be
+    exactly the doc/reality drift this milestone exists to correct.
+- **Step 6 (release handoff — confirm only, per its own charter, NOT executed): DONE.** Confirmed:
+  all M6 fix-phases (0 through 7, 24 commits) are committed on this branch; full workspace suite +
+  clippy green (this step); sanitizer job present + locally non-vacuous (previous step). NOT yet
+  met: this branch has never been pushed to the remote (no upstream, confirmed via `git status -sb`)
+  and carries zero open PRs (confirmed via `gh pr list`). `Cargo.toml` sits at `0.3.1` — M5's own
+  already-cut tag (`git tag` confirms `v0.3.1` exists at commit `e163d15`) — not yet bumped for M6,
+  which is expected since the version bump is `/release`'s own action, normally applied post-merge.
+  **Conclusion: release preconditions are NOT yet fully met.** The correct next action is `/pr`
+  (open a PR for this branch and merge to `main`), NOT `/release` directly — this phase does not
+  invoke either skill itself, per its own charter, and reports this state back rather than acting on
+  it.
+- **Incidental finding, surfaced not fixed (out of this phase's dispatched scope 3-6, all scoped to
+  M6):** the roadmap's own M5 (`v0-3-m5-auto-soa`) rows still read "phases 0-8 complete — tag
+  pending Patrick's release action" in three places (§Milestone 5, both Capability Ledger tables) —
+  but `git tag` confirms `v0.3.1` was ALREADY cut for M5 (commit `e163d15`, "chore(release): v0.3.1
+  — M5 array-by-value + auto-SoA layout"). This is itself a small instance of the exact doc/reality
+  drift class this milestone exists to catch. Flagged here for the conductor/deviation-judge rather
+  than silently fixed, since correcting M5's own status text falls outside this phase's dispatched
+  steps.
+- **Deviations surfaced (for the deviation-judge → conductor seam, not self-decided):** (1) the
+  directed Demo & Error Gallery skip (Patrick's own instruction — recorded, not adjudicated); (2)
+  the M5 roadmap-status staleness noted above.
+- **Verification:** `cargo clippy --workspace -- -D warnings` clean; `cargo test --workspace`
+  100% green (single clean run, persisted log grep-confirmed zero `FAILED`); `.github/workflows/
+  ci.yml` `sanitizers` job read directly and confirmed present; `git status -sb` / `git tag` / `gh pr
+  list` / `gh run list` used to ground the release-precondition confirmation in actual repo/CI
+  state rather than narration.
+- **Files touched:** `plan.md` (Future-Requirements #25 added; lift-notes appended to Future-Reqs
+  #1, #4, #5, #6, #9, #10, #11, #12, #13, #14, #15, #16, #17; Phase 8 completion note; frontmatter
+  session-id append). `audit.md` (this entry). Cross-plan:
+  `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md` (`### Milestone 6` section
+  rewritten; M6 row + new sanitizer-lane row in both Capability Ledger tables; row 441 pairing note
+  in both tables; six new pointer rows in both tables; M8 row annotation in both tables; frontmatter
+  session-id append), `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` (ten new
+  four-field deferral entries under one "Ledger amendment" session heading). No compiler/runtime
+  code touched this phase — docs/planning-state only. Nothing committed (conductor seals per this
+  plan's own convention).
+
+### Phase 8 fix-loop closure (2026-07-16, `executor-2026-07-16-m6-phase8-fixloop-fr20-23`) — five reviewer findings closed
+Idempotency-Key: 2026-07-04-v0-3-m6-concurrency-hotfix#8-fixloop-fr20-23
+
+A five-reviewer fix-loop round (code-reviewer, docs-consistency, acceptance-verifier,
+graveyard-auditor, doc-auditor shapes) over the Phase 8 diff found ONE real gap and four minors.
+All five closed in this round:
+
+1. **REAL GAP (code-reviewer) — Future Requirements #20, #21, #22, #23 were never lifted to the
+   roadmap's durable store**, despite the Phase 8 completion note's claim that "every surviving
+   M6 Future-Requirements deferral" had been. Confirmed absent by grep-before-write against the
+   roadmap's `audit.md` before writing (idempotency check). All four now lifted:
+   - `#8-fr20` (standard lift — general UFCS arg-validation gap + `array.remove` no codegen
+     lowering).
+   - `#8-fr21` (special handling per the dispatch instruction — the narrowed-union background
+     receiver's OWN durable fix + its give-transferred Call-form union-arg sibling bug — given
+     its own real four-field record rather than staying a dangling cross-reference inside #24's
+     already-lifted entry; grouped alongside #24 since one design pass closes both).
+   - `#8-fr22` (standard lift — call-only large-copy Tier-3 warning UFCS-receiver teaching
+     parity).
+   - `#8-fr23` (special handling per the dispatch instruction — explicitly flagged in its
+     Capability Ledger pointer row for Patrick's own MILESTONE-seal human call, mirroring how
+     row 441 / `#8-fr9-fr14` is flagged for Patrick's Gate-4 call, rather than silently
+     auto-assigned to any milestone).
+
+   Matching Capability Ledger pointer rows added to BOTH duplicate tables in roadmap.md for all
+   four, each carrying an owner tag (or the explicit human-call flag for #23).
+
+2. **Factual mismatch (code-reviewer) — sanitizer-lane bug count.** Both Sanitizer CI lane
+   Capability Ledger rows (both roadmap.md tables) said "~19 real confirmed concurrency bugs";
+   corrected to "~21" to match commit `b52df78`'s own message ("closes ~21 confirmed concurrency
+   bugs") and this same roadmap's Milestone-6 narrative bullet (which already correctly said ~21).
+
+3. **Off-by-one count (code-reviewer) — the "11 named surviving deferrals … ten four-field …
+   payload entries" claim.** Corrected in both this plan's own `plan.md` (Phase 8 completion note)
+   and this `audit.md` (Step 4 entry above): the original Phase-8 pass lifted 10 (not 11) named
+   surviving deferrals as ten four-field payload entries; this fix-loop round's four additions
+   (#20-#23, each standalone) bring the total to **14 named surviving deferrals lifted as fourteen
+   four-field payload entries** — both plan.md and this audit.md now state that number
+   consistently, and it is consistent with the roadmap's own audit.md summary sentence (which
+   correctly said "ten" for its own original batch; the four new entries are appended as their own
+   dated section rather than rewriting that original sentence).
+
+4. **Missing Triage tags (doc-auditor) — 6 existing unscoped Capability Ledger rows + the 4 new
+   fr20-23 rows (10 total) were missing the roadmap's own mandated inline Triage tag.** The
+   existing 6 (`background.cpuBound` override, dynamic-dispatch × suspension-predicate blindness,
+   `fixed<T>` PARAM-iteration ICE, conduit-send decimal128 marshalling, never-drop-locals class,
+   Phase 1d polish minors — all present in BOTH Capability Ledger tables, 12 row-instances total)
+   plus the 4 new fr20-23 rows (in both tables, 8 row-instances) now all carry
+   "**Triage: NEEDS PATRICK'S CALL — not yet triaged.**" — this executor is not Patrick and does
+   not fabricate a BUG-vs-NOT-a-bug verdict; a real human triage pass over these 10 rows is still
+   needed and is flagged in this round's report back to the caller.
+
+5. **Two cosmetic cross-reference fixes (rules-compliance + acceptance-verifier).** The `### Demo
+   & Error Gallery` invariants subsection (plan.md, ~line 3263) gained a one-line pointer to Future
+   Requirements #25 (the directed skip). Future-Req items #18 and #19 (plan.md) — already
+   genuinely lifted to the roadmap 2026-07-10 via roadmap-ledger rows 442/443 — gained the "LIFTED
+   to the roadmap's durable store" cross-reference annotation every other lifted item carries,
+   which they were previously missing despite their content already being durably homed.
+
+**Out of scope, correctly untouched:** the M5 "tag pending" staleness (already surfaced, not
+fixed, in the Step 4 entry above) — left exactly as-is per the dispatch's explicit instruction.
+Nothing else already confirmed correct by the prior round's reviewers was re-touched.
+
+- **Files touched this round:** `plan.md` (Future-Req #18/#19 lift annotations added; Future-Req
+  #20/#21/#22/#23 lift annotations added; `### Demo & Error Gallery` FR#25 pointer added; Phase 8
+  completion note's deferral-count corrected; frontmatter session-id append). `audit.md` (this
+  entry; Step 4 entry above corrected in place). Cross-plan:
+  `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md` (4 new Capability Ledger
+  rows in BOTH tables for fr20/21/22/23; Triage tags added to 6 existing + 4 new unscoped rows in
+  BOTH tables; sanitizer-lane bug-count fixed ~19→~21 in BOTH tables; frontmatter session-id
+  append), `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` (4 new four-field
+  deferral entries + a session-log note). No compiler/runtime code touched — docs/planning-state
+  only. Nothing committed (conductor seals per this plan's own convention). Session-id
+  `executor-2026-07-16-m6-phase8-fixloop-fr20-23` appended to this plan's frontmatter chain in the
+  same action as this entry.

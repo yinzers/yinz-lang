@@ -3,7 +3,7 @@ name: "v0-3-m6-concurrency-hotfix"
 plan-id: "2026-07-04-v0-3-m6-concurrency-hotfix"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11", "executor-2026-07-11-m6-phase4", "executor-2026-07-11-m6-phase4-fixloop1", "executor-2026-07-11-m6-phase4b", "executor-2026-07-11-m6-phase5-seg1", "executor-2026-07-11-m6-phase5-seg2", "executor-2026-07-11-m6-phase5-seg3", "executor-2026-07-11-m6-phase5-frago028", "executor-2026-07-11-m6-phase5b", "executor-2026-07-11-m6-phase5b-nits", "executor-2026-07-11-m6-phase6", "executor-2026-07-11-m6-phase6-fixloop1", "conductor-2026-07-11-m6-phase6", "executor-2026-07-11-m6-phase6-frago029", "executor-2026-07-11-m6-phase6-fixloop2", "executor-2026-07-11-m6-phase6-fixloop3", "executor-2026-07-11-m6-phase6b-seg1", "executor-2026-07-11-m6-phase6b-seg2", "executor-2026-07-11-m6-phase6b-seg3", "executor-2026-07-11-m6-phase6b-seg4", "executor-2026-07-11-m6-phase6b-seg5", "executor-2026-07-11-m6-phase6b-seg6", "executor-2026-07-11-m6-phase6b-fixloop1", "executor-2026-07-11-m6-phase6b-fixloop1-seg2", "executor-2026-07-11-m6-phase6b-fixloop1-seg3", "executor-2026-07-11-m6-phase6b-fixloop1-seg4", "executor-2026-07-11-m6-phase6b-fixloop2", "executor-2026-07-16-m6-phase7", "executor-2026-07-16-m6-phase7-fixloop-jargon", "executor-2026-07-16-m6-phase7-fixloop-grammar", "executor-2026-07-16-m6-phase7-review-minors"]
+session-id: ["plan-producer-2026-07-04-m6", "plan-producer-2026-07-04-m6-amend1", "plan-producer-2026-07-04-m6-amend2", "plan-producer-2026-07-04-m6-amend3", "conductor-2026-07-09-m6-exec", "executor-2026-07-09-m6-phase0", "executor-2026-07-09-m6-phase0b-frago", "executor-2026-07-09-m6-phase1", "executor-2026-07-09-m6-phase1-seg2", "executor-2026-07-09-m6-phase1-seg3", "executor-2026-07-09-m6-phase1-seg4", "executor-2026-07-09-m6-frago004", "executor-2026-07-09-m6-phase1b", "executor-2026-07-09-m6-phase1b-seg2", "executor-2026-07-09-m6-phase1b-seg3", "executor-2026-07-09-m6-phase1b-seg4", "executor-2026-07-09-m6-phase1b-seg7", "conductor-2026-07-10-m6-exec2", "executor-2026-07-10-m6-phase1b-fixloop1", "executor-2026-07-10-m6-frago008-012", "executor-2026-07-10-m6-phase1c-seg1", "executor-2026-07-10-m6-phase1c-seg2", "executor-2026-07-10-m6-phase1c-seg3", "executor-2026-07-10-m6-phase1c-seg4", "executor-2026-07-10-m6-phase1c-seg5", "executor-2026-07-10-m6-phase1c-seg6", "executor-2026-07-10-m6-phase1c-seg7", "executor-2026-07-10-m6-frago015", "executor-2026-07-10-m6-phase1d", "executor-2026-07-10-m6-phase1d-seg2", "executor-2026-07-10-m6-phase1d-seg3", "executor-2026-07-10-m6-phase1d-fixloop1", "executor-2026-07-10-m6-phase1d-fixloop2", "executor-2026-07-10-m6-phase1d-fixloop3", "executor-2026-07-10-m6-phase1d-fixloop3-seg2", "executor-2026-07-10-m6-phase1d-fixloop3-seg3", "executor-2026-07-10-m6-phase1d-fixloop4", "executor-2026-07-10-m6-phase2", "executor-2026-07-10-m6-phase2-fixup", "executor-2026-07-10-m6-store-site-stopgap", "executor-2026-07-10-m6-store-site-stopgap-fixloop1", "executor-2026-07-10-m6-phase3-seg3", "executor-2026-07-10-m6-phase3-fixloop1", "executor-2026-07-10-m6-phase3b-seg1", "executor-2026-07-10-m6-phase3b-seg2", "executor-2026-07-10-m6-phase3b-fixloop1", "executor-2026-07-10-m6-phase3c", "executor-2026-07-10-m6-phase3c-fix1", "executor-2026-07-10-m6-phase3c-fix2", "executor-2026-07-10-m6-phase3c-polish", "m6-fr24-crossplan-lift-2026-07-11", "executor-2026-07-11-m6-phase4", "executor-2026-07-11-m6-phase4-fixloop1", "executor-2026-07-11-m6-phase4b", "executor-2026-07-11-m6-phase5-seg1", "executor-2026-07-11-m6-phase5-seg2", "executor-2026-07-11-m6-phase5-seg3", "executor-2026-07-11-m6-phase5-frago028", "executor-2026-07-11-m6-phase5b", "executor-2026-07-11-m6-phase5b-nits", "executor-2026-07-11-m6-phase6", "executor-2026-07-11-m6-phase6-fixloop1", "conductor-2026-07-11-m6-phase6", "executor-2026-07-11-m6-phase6-frago029", "executor-2026-07-11-m6-phase6-fixloop2", "executor-2026-07-11-m6-phase6-fixloop3", "executor-2026-07-11-m6-phase6b-seg1", "executor-2026-07-11-m6-phase6b-seg2", "executor-2026-07-11-m6-phase6b-seg3", "executor-2026-07-11-m6-phase6b-seg4", "executor-2026-07-11-m6-phase6b-seg5", "executor-2026-07-11-m6-phase6b-seg6", "executor-2026-07-11-m6-phase6b-fixloop1", "executor-2026-07-11-m6-phase6b-fixloop1-seg2", "executor-2026-07-11-m6-phase6b-fixloop1-seg3", "executor-2026-07-11-m6-phase6b-fixloop1-seg4", "executor-2026-07-11-m6-phase6b-fixloop2", "executor-2026-07-16-m6-phase7", "executor-2026-07-16-m6-phase7-fixloop-jargon", "executor-2026-07-16-m6-phase7-fixloop-grammar", "executor-2026-07-16-m6-phase7-review-minors", "executor-2026-07-16-m6-phase8", "executor-2026-07-16-m6-phase8-fixloop-fr20-23"]
 created_at: "2026-07-04"
 updated_at: "2026-07-16"
 metadata:
@@ -2978,6 +2978,67 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
   `audit.md` with all four fields and in the Capability Ledger with its owner tag, not merely
   claimed).
 - **Model tag:** `(coding, standard, medium)`
+- **Completion note (2026-07-16, `executor-2026-07-16-m6-phase8`):** COMPLETE for steps 3-6 —
+  **steps 1-2 (Demo & Error Gallery) SKIPPED on Patrick's direct instruction**, recorded as a proper
+  four-field deferral in this plan's own Future Requirements #25 (NOT silently dropped; triggered
+  before this plan's completion gate closes or on Patrick's next pickup).
+  - **Step 3 (roadmap reconciliation) DONE**: `legacy.milestones` frontmatter already listed
+    `v0-3-m6-concurrency-hotfix` (added 2026-07-04 — confirmed, no change needed). `### Milestone 6`
+    section in `2026-05-21-v0-3-concurrency-perf/roadmap.md` updated from stub-status to reflect
+    actual completion (fix phases 0-7 sealed; Phase 8 closing). M6's fix-list rows updated + a new
+    dedicated Sanitizer CI lane row added to BOTH Capability Ledger tables, explicitly framed as an
+    ongoing continuous-verification capability (not a one-time fix).
+  - **Step 4 (durable-home deferral lift, FRAGO 012/015) DONE, plus a fix-loop closure round
+    (2026-07-16) that closed a real gap**: the original Phase-8 pass lifted 10 named surviving
+    deferrals (#1, #4, #5, #6, #9+#14 paired, #10, #11, #12, #13+#17 paired, #15+#16 paired) into
+    the roadmap's own `audit.md` as ten four-field WHAT/WHY/COST/TRIGGER payload entries — but it
+    MISSED #20, #21, #22, and #23 entirely (never enumerated, never lifted). This fix-loop round
+    closes that gap: #20, #21, #22, #23 are now each lifted as their OWN four-field payload entry
+    (standalone, not paired) — bringing the total to **14 named surviving deferrals lifted as
+    fourteen four-field payload entries**, each guarded by its own `Idempotency-Key:` sentinel, plus
+    owner-tagged pointer rows in BOTH Capability Ledger tables (#23's pointer row explicitly flagged
+    for Patrick's own milestone-seal call rather than auto-assigned, mirroring row 441's Gate-4
+    flagging). #21 receives its own real four-field record (not merely a cross-reference folded
+    into #24's already-lifted entry) per the fix-loop's explicit instruction. Already-lifted items
+    (#7 registry-triggers, #18, #19, #24 union-narrowing) confirmed present and NOT re-duplicated
+    (grep-before-write idempotency) — #18/#19 additionally gained the "LIFTED to the roadmap's
+    durable store" cross-reference annotation they were missing despite being genuinely already
+    homed (2026-07-10). Already-resolved items (#2 P1-2, #3 P2-5 — both fixed in-plan, no longer
+    deferrals) and #8 (doc-hygiene note, not a bug/deferral) correctly NOT lifted. Each lifted
+    plan-side Future-Requirements entry carries its own "LIFTED to the roadmap's durable store"
+    cross-reference note so a future reader never re-lifts an already-homed item.
+  - **Step 5 (full cumulative gate) DONE, minus the deferred gallery assertions**: `docker compose
+    exec -T dev cargo clippy --workspace -- -D warnings` — clean, zero warnings. `docker compose exec
+    -T dev cargo test --workspace` — single clean invocation, 100% green (zero `FAILED` occurrences,
+    every `test result:` line `0 failed`, full log persisted). **Sanitizer CI job verification
+    (honest, not overclaimed)**: `.github/workflows/ci.yml`'s `sanitizers` job (Miri + TSan + ASan,
+    scoped to `-p ynz-runtime`) is CONFIRMED PRESENT by direct file read, and its constituent commands
+    were already proven genuinely non-vacuous locally during Phase 6b (a synthetic data race through
+    the exact CI-authored TSan invocation produced real `ThreadSanitizer: data race` output) — but
+    this milestone's branch (`feat/v0-3-m6-concurrency-hotfix`) has never been pushed to the remote
+    (confirmed via `git status -sb` — no upstream configured; confirmed via `gh run list` — no CI run
+    exists for this branch), so "green in an actual GitHub Actions run" is NOT yet a confirmable live
+    fact and is NOT claimed as one anywhere in this phase's roadmap edits — that confirmation is a
+    `/pr` + merge-time precondition. Overclaiming "confirmed green in CI" here, absent an actual run,
+    would itself be exactly the doc/reality drift this milestone exists to correct — flagged
+    explicitly rather than glossed over.
+  - **Step 6 (release handoff — confirm only, not executed) DONE**: `git status -sb` confirms this
+    branch has no upstream / has never been pushed; `gh pr list --head
+    feat/v0-3-m6-concurrency-hotfix` returns zero PRs. `Cargo.toml` is at `0.3.1` (M5's already-cut
+    tag — `git tag` confirms `v0.3.1` exists, commit `e163d15`), not yet bumped for M6 — expected,
+    since the version bump is `/release`'s own action, normally done post-merge. **Release
+    preconditions are NOT yet met**: this phase closes M6's own plan-side work, but the next required
+    action is `/pr` (open a PR for this branch, merge to `main`) — NOT `/release` directly. This
+    phase does not itself invoke either skill, per its own charter; it only confirms and reports this
+    state.
+  - **Incidental finding, surfaced not fixed (out of this phase's dispatched scope)**: the roadmap's
+    own M5 (`v0-3-m5-auto-soa`) rows still read "phases 0-8 complete — tag pending Patrick's release
+    action" in three places (§Milestone 5, both Capability Ledger tables) — but `git tag` confirms
+    `v0.3.1` was ALREADY cut for M5 (commit `e163d15`, "chore(release): v0.3.1 — M5 array-by-value +
+    auto-SoA layout"). This is itself a small doc/reality drift of the exact class this milestone
+    exists to catch — flagged here for the conductor/deviation-judge rather than silently fixed,
+    since correcting M5's own status text is outside this phase's dispatched steps (3-6, all scoped
+    to M6).
 
 ### 3.4 Coordinating Instructions
 
@@ -3222,6 +3283,10 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
   sweep covers it, since Phase 8 runs last); Phase 4b and 5b are internal correctness fixes with no
   new user-facing surface to demo. Stated explicitly so reviewers know each was considered, not
   skipped.
+- **Directed skip (2026-07-16):** Phase 8 steps 1-2 above (the entrypoint demo section + the
+  `m6_errors.ynz` gallery) were SKIPPED on Patrick's direct instruction rather than executed this
+  phase — see Future Requirements #25 below for the full four-field WHAT/WHY/COST/TRIGGER record
+  and its trigger (before this plan's completion gate closes, or Patrick's next pickup).
 
 ### Feature Registry Entries
 
@@ -3367,7 +3432,11 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
    `value_bits`). WHY deferred: structurally unreachable in production until channel-close semantics
    ship (P2-1's finding — a bare channel never closes today). COST to fix later: small once
    channel-close semantics land — reuses Phase 5's drop-glue fn-ptr mechanism directly. TRIGGER:
-   channel-close semantics ship (see item 4 below).
+   channel-close semantics ship (see item 4 below). **LIFTED to the roadmap's durable store
+   2026-07-16** (owner-tagged M8, alongside item 4 — full four-field payload in roadmap `audit.md`
+   under Idempotency-Key `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr1: p2-3-closed-send-drop-glue`;
+   annotated onto the existing M8 Capability Ledger row in both tables) so it survives this plan's
+   archival — Phase 8's deferral-lift should treat it as already homed, not re-lift it.
 2. **P1-2 — twin type-walkers** (`emit.rs:8276` vs `emit.rs:8364`). **Confirmed DORMANT (Phase 0) —
    un-deferred and FIXED in Phase 5b** per user-directed Mission-scope (FRAGO 011): the exact
    twin-derivation class that shipped silent miscompiles across M3a/M3d/M3e/M3g is unified behind
@@ -3398,15 +3467,30 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
    repro test) was REVERTED per deviation-judge review as landing inside this entry's deferred
    territory; the wake-propagation question is explicitly left for this entry's M8
    channel-close-semantics design pass to resolve properly, not silently fixed piecemeal.
+   **LIFTED to the roadmap's durable store 2026-07-16** (owner-tagged M8, alongside item 1 — full
+   four-field payload in roadmap `audit.md` under Idempotency-Key
+   `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr4: channel-close-end-of-stream`; annotated onto the
+   existing M8 Capability Ledger row in both tables) so it survives this plan's archival — Phase 8's
+   deferral-lift should treat it as already homed, not re-lift it.
 5. **Preemption real back-edge yield** — registry entry `cooperative-preemption-back-edge-yield`
    (Phase 7). WHY deferred: 1190% O0 call-site cost (M5 spike); no offsetting benefit until the
    optimizer pipeline exists. COST to fix later: implementation-sized, folded into M7's scope. TRIGGER:
    M7's optimizer pipeline lands and the cost is re-measured under real LLVM passes.
+   **LIFTED to the roadmap's durable store 2026-07-16** (owner-tagged M7 — full four-field payload
+   in roadmap `audit.md` under Idempotency-Key
+   `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr5: cooperative-preemption-back-edge-yield`; pointer row
+   added to both Capability Ledger tables) so it survives this plan's archival — Phase 8's
+   deferral-lift should treat it as already homed, not re-lift it.
 6. **`background.cpuBound` explicit override** — registry entry (Phase 7). WHY deferred: no real
    workload has yet demonstrated the auto-inference gets CPU-bound routing wrong; building an unused
    override is speculative. COST to fix later: small (naming + one typeck/codegen surface once a real
    need is named). TRIGGER: a real workload where auto-inference misroutes a CPU-bound task, causing
    measurable starvation.
+   **LIFTED to the roadmap's durable store 2026-07-16** (unscoped → needs a milestone — full
+   four-field payload in roadmap `audit.md` under Idempotency-Key
+   `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr6: background-cpubound-override`; pointer row added to
+   both Capability Ledger tables) so it survives this plan's archival — Phase 8's deferral-lift
+   should treat it as already homed, not re-lift it.
 7. **P2-7 — `handle_recv_poll` panic-then-pending hang** (`handle.rs:297-303`, newly surfaced this
    session). **Un-deferred and FIXED in Phase 4b** per user-directed Mission-scope (FRAGO 010): the
    SAME register-before-poll discipline Phase 4 applied to `channel.rs` is mirrored onto the handle
@@ -3447,6 +3531,14 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
    session (expected-type-aware `Expr::IntLit` branch, or typeck-level int→number coercion; its own
    small design + call-site audit). TRIGGER: Gate-4 conversation — Patrick assigns row 441 a home
    (flagged to him explicitly; not auto-claimed by either M6 or M7).
+   **LIFTED to the roadmap's durable store 2026-07-16** — PAIRED with item #14 (both facets of one
+   int→number coercion mechanism) into a single four-field payload in roadmap `audit.md` under
+   Idempotency-Key `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr9-fr14:
+   int-literal-number-coercion-store-and-call-site`; the existing roadmap-ledger row 441 (both
+   Capability Ledger tables) updated to explicitly note it now covers BOTH the store-site (#9) and
+   call-argument-site (#14) facets, still flagged for Patrick's own Gate-4 home call rather than
+   silently absorbed into M6 or M7 — so this survives this plan's archival and Phase 8's
+   deferral-lift should treat it as already homed, not re-lift it.
 10. **Dynamic-dispatch × suspension predicate blindness** (`check.rs` `check_follows_contracts`
     never reads `suspends`; the four suspension predicates — `may_block.rs` call-graph,
     `cpu_admission.rs`, `emit.rs` `collect_callees_in_expr` + `is_direct_suspending_call` — are all
@@ -3461,6 +3553,12 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     lowering ships (the remaining M4 P4 work — owning milestone TBD, flagged to Patrick at Gate-4
     rather than left "someday"). (FRAGO 002 — deferral-with-trigger per the D4/P2-3 precedent, not
     a fix phase.)
+    **LIFTED to the roadmap's durable store 2026-07-16** (grouped with item #11's `fixed<T>` ICE,
+    unscoped → needs a milestone — full four-field payload in roadmap `audit.md` under
+    Idempotency-Key `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr10:
+    dynamic-dispatch-suspension-predicate-blindness`; pointer row added to both Capability Ledger
+    tables, grouped alongside row 441 per the exec instructions) so it survives this plan's archival
+    — Phase 8's deferral-lift should treat it as already homed, not re-lift it.
 11. **Pre-existing backend ICE on `fixed<T>` PARAM iteration** ("cannot iterate fixed array with
     unknown size" — surfaced by Phase 1b segment 1 while constructing the `fixed<T>` escape
     fixture; the fixture's callee deliberately does not iterate its param to stay clear of it).
@@ -3473,6 +3571,12 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     small design pass). **TRIGGER:** the next milestone touching `fixed<T>` codegen/ABI, or a
     real user hitting the ICE on valid-looking code. (FRAGO 005 — recorded as a deferral, not a
     Phase 1b scope-add.)
+    **LIFTED to the roadmap's durable store 2026-07-16** (unscoped → needs a milestone, flagged
+    alongside roadmap-ledger row 441 per the exec instructions rather than silently absorbed — full
+    four-field payload in roadmap `audit.md` under Idempotency-Key
+    `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr11: fixed-t-param-iteration-ice`; pointer row added to
+    both Capability Ledger tables) so it survives this plan's archival — Phase 8's deferral-lift
+    should treat it as already homed, not re-lift it.
 12. **Conduit-send decimal128** (`emit.rs:11809`, surfaced by Phase 1b's fix-loop + boundary review
     alongside the sibling background-spawn/cpu-member defects Phase 1d fixes). **WHAT:** a
     `ptr_to_int` of a stack temp sent as a raw i64 into `mpsc<i64>`; a receiver on another frame
@@ -3491,6 +3595,11 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     **TRIGGER:** `channel<number>`'s heap-copy machinery ships (removing the existing compile
     gate), or a real workload needs `channel<number>` to work rather than be rejected. (FRAGO 009 —
     item B, recorded as a deferral, not a Phase 1d scope-add.)
+    **LIFTED to the roadmap's durable store 2026-07-16** (unscoped → needs a milestone — full
+    four-field payload in roadmap `audit.md` under Idempotency-Key
+    `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr12: conduit-send-decimal128-marshalling`; pointer row
+    added to both Capability Ledger tables) so it survives this plan's archival — Phase 8's
+    deferral-lift should treat it as already homed, not re-lift it.
 13. **Per-iteration heap-cell leak for crossing maybe/union LOOP bindings** (Phase 1c step 3d, confirmed
     by exact-gap Paper-Trace proof — `v0_3_m6_heap_cell_loop_parity.ynz`, alloc=12/free=1, gap exactly
     11 = 5×1 maybe envelope + 3×2 union envelope+payload, predicted before first run, stable 4/4).
@@ -3521,6 +3630,13 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     drop-story milestone that frees crossing locals is the same machinery that will release the
     creator's channel reference at scope exit (`.give`/`.share`/return-escape aware), at which point
     Phase 5's runtime-ABI parity pin gains its E2E sibling.
+    **LIFTED to the roadmap's durable store 2026-07-16** — PAIRED with item #17 (both join the same
+    never-drop-locals class) into a single four-field payload in roadmap `audit.md` under
+    Idempotency-Key `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr13-fr17:
+    never-drop-locals-heap-cell-and-trampoline-leaks`; owner-tagged **unscoped → needs the
+    drop-story milestone** — pointer row added to both Capability Ledger tables — so it survives
+    this plan's archival and Phase 8's deferral-lift should treat it as already homed, not re-lift
+    it.
 14. **Int-literal → `number`-param CALL-SITE coercion gap** (surfaced by Phase 1d segment 2 while
     resolving the cpu-member IntLit sub-case; the sibling call-site facet of item #9's store-site
     ICE — SAME root class, different site). **WHAT:** a bare int literal passed as a CALL ARGUMENT to
@@ -3589,6 +3705,11 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     stopgap `v03_m6_int_lit_number_{let_store,hidden_field_default}_is_teaching_error`, and the
     false-positive sweep in `crates/ynz-driver/tests/v03_m6_number_spawn_boundary.rs`; the WHOLE guard
     must be REMOVED when the coercion ships (it rejects exactly the programs the coercion will accept).
+    **LIFTED to the roadmap's durable store 2026-07-16** — see item #9's lift note (this entry is
+    PAIRED with #9 as the call-argument-site facet of the same one int→number coercion mechanism;
+    same Idempotency-Key `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr9-fr14:
+    int-literal-number-coercion-store-and-call-site`, same roadmap-ledger row 441 update) — Phase 8's
+    deferral-lift should treat it as already homed, not re-lift it.
 15. **`callee_takes_bare_number` / `callee_returns_bare_number` twin-scan consolidation**
     (`emit.rs:18922` / `:18885`-region; code-reviewer polish minor, Phase 1d fix-loop round 1 —
     explicitly "not debt"). **WHAT:** the first-param predicate copies the return-type predicate's
@@ -3598,6 +3719,11 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     the reviewer); consolidating mid-hotfix buys no behavior. **COST to fix later:** trivial
     (~30 min, one extraction + two call-site updates). **TRIGGER:** the next milestone that touches
     either predicate or adds a third bare-number callee probe. (FRAGO 016.)
+    **LIFTED to the roadmap's durable store 2026-07-16** — PAIRED with item #16 (both FRAGO 016
+    Phase 1d polish minors) into a single four-field payload in roadmap `audit.md` under
+    Idempotency-Key `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr15-fr16: phase1d-polish-minors`;
+    pointer row added to both Capability Ledger tables — so it survives this plan's archival and
+    Phase 8's deferral-lift should treat it as already homed, not re-lift it.
 16. **Decimal128 heap-cell size `16` as a named shared const** (alloc site `emit.rs:3459`
     `number_to_heap_cell`; free sites `:9717` trampoline `spike_num_free` and `:15798`
     `BgArgFreeKind::HeapShape { byte_size: 16 }`; code-reviewer polish minor, Phase 1d fix-loop
@@ -3608,6 +3734,9 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     reviewer-named drift path today. **COST to fix later:** trivial (~15 min, one const + three
     substitutions). **TRIGGER:** the next milestone that touches the decimal128 boundary machinery
     (e.g. #12's conduit marshalling pass, which would add a fourth site). (FRAGO 016.)
+    **LIFTED to the roadmap's durable store 2026-07-16** — see item #15's lift note (same
+    Idempotency-Key `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr15-fr16: phase1d-polish-minors`) —
+    Phase 8's deferral-lift should treat it as already homed, not re-lift it.
 17. **Trampoline staged decimal128 arg-cell leak on a blocking-pool task dropped UN-RUN at runtime
     shutdown** (`emit.rs` `build_cpu_trampoline` free site ~:9708-9721 `spike_num_free`; surfaced by
     Phase 1d's D8 mechanism, previously tracked only as a code comment — formalized in fix-loop
@@ -3624,6 +3753,11 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     drop path must be exactly-once between them). **TRIGGER:** the drop story lands, OR a real
     long-lived workload measurably accumulates un-run dropped blocking-pool tasks at shutdown.
     (FRAGO 017.)
+    **LIFTED to the roadmap's durable store 2026-07-16** — see item #13's lift note (this entry is
+    PAIRED with #13 in the same never-drop-locals class; same Idempotency-Key
+    `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr13-fr17: never-drop-locals-heap-cell-and-trampoline-leaks`,
+    owner-tagged **unscoped → needs the drop-story milestone**) — Phase 8's deferral-lift should
+    treat it as already homed, not re-lift it.
 18. **Synchronous decimal128 by-value RETURN garbage** (surfaced by Phase 1d fix-loop round 3's slot
     enumeration; formalized round 4). **WHAT:** a `number` returned BY VALUE from a synchronous user
     function prints nondeterministic garbage — `print(toll(5.0))` where `toll() -> number` returns a
@@ -3642,6 +3776,9 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     flagged to Patrick at Gate-4), or a real user hitting garbage on a valid `-> number` return.
     (FRAGO 019 — deferral formalized from the round-3 deviation surface, per the deviation-judge's
     should-fix; NOT a round-4 scope-add.)
+    **LIFTED to the roadmap's durable store 2026-07-10** (roadmap-ledger row 442 in both Capability
+    Ledger tables, unscoped → needs a milestone) so it survives this plan's archival — Phase 8's
+    deferral-lift should treat it as already homed, not re-lift it.
 19. **`map<number, V>` real-number-literal-KEY silent breakage** (surfaced by Phase 1d fix-loop
     round 3; formalized round 4). **WHAT:** a `map<number, V>` keyed by a decimal literal never
     matches — `m.set(1.5, v)` then `m.get(1.5)` returns `none` (exit 0), because decimal128 keys
@@ -3655,6 +3792,9 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     decimal representations, NaN/negative-zero handling). **TRIGGER:** a real workload needs
     `map<number, V>` with literal keys, or the decimal128 stdlib hashing work lands. (FRAGO 019 —
     deferral formalized from the round-3 deviation surface, per the deviation-judge's should-fix.)
+    **LIFTED to the roadmap's durable store 2026-07-10** (roadmap-ledger row 443 in both Capability
+    Ledger tables, unscoped → needs a milestone) so it survives this plan's archival — Phase 8's
+    deferral-lift should treat it as already homed, not re-lift it.
 20. **General UFCS arg-validation gap + `array.remove` has no codegen lowering** (pre-existing, carried
     unchanged from prior Phase 1d rounds; formalized round 4). **WHAT (two orthogonal sub-items):**
     (a) the general UFCS/collection arg-validation surface does NOT validate the `number`→`int`
@@ -3670,6 +3810,12 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     **TRIGGER:** a real user hits either gap, or the milestone that owns collection-method codegen /
     the int↔number coercion class picks them up alongside #14. (FRAGO 019 — deferral formalized from
     the round-3 deviation surface, per the deviation-judge's should-fix.)
+    **LIFTED to the roadmap's durable store 2026-07-16 (fix-loop closure)** (unscoped → needs a
+    milestone, grouped alongside roadmap-ledger row 441 per Patrick's own flagging discipline — full
+    four-field payload in roadmap `audit.md` under Idempotency-Key
+    `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr20: ufcs-arg-validation-gap-and-array-remove-lowering`;
+    pointer row added to both Capability Ledger tables) so it survives this plan's archival — a later
+    reader should treat it as already homed, not re-lift it.
 21. **Narrowed-union background receiver — the DURABLE fix: correct union-payload extraction so
     it WORKS** (FRAGO 026 rescope — split out of the pre-rescope #21, which conflated this
     fix-introduced, in-charter case with the genuinely-pre-existing non-plain-ident class, now
@@ -3696,6 +3842,15 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     two general surfaces). **TRIGGER:** the milestone that owns
     union-payload extraction (same family as #23's narrowed-receiver half), or a user hits the
     teaching error and needs the working form.
+    **LIFTED to the roadmap's durable store 2026-07-16 (fix-loop closure)** — this entry gets its
+    OWN four-field payload (it is NOT merely a cross-reference folded into #24's already-lifted
+    entry — #24 covers the two NON-concurrency general-union-narrowing siblings; #21 is its own
+    concurrency-adjacent defect: the interim fail-closed rejection + the give-transferred
+    Call-form union-arg no-output sibling) under Idempotency-Key
+    `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr21: narrowed-union-background-receiver-durable-fix`
+    (unscoped → needs a milestone, grouped alongside the already-lifted #24 row since one design
+    pass closes both); pointer row added to both Capability Ledger tables) so it survives this
+    plan's archival — a later reader should treat it as already homed, not re-lift it.
 22. **Call-only large-copy Tier-3 warning — UFCS-receiver teaching parity** (FRAGO 025
     deviation 4; minor, teaching-only, echoed here so it survives plan archival). **WHAT:** the
     background large-copy lint (`check.rs`, `BACKGROUND_LARGE_COPY_BYTES` loop) fires only for
@@ -3704,6 +3859,11 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     already built the spawn-target normalization (`background_spawn_call_form`) the extension
     would reuse. **COST to fix later:** small (<1 session). **TRIGGER:** whichever future phase
     next touches background-spawn UFCS diagnostics.
+    **LIFTED to the roadmap's durable store 2026-07-16 (fix-loop closure)** (unscoped → needs a
+    milestone, trivial teaching-parity-only — full four-field payload in roadmap `audit.md` under
+    Idempotency-Key `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr22: call-only-large-copy-tier3-warning-parity`;
+    pointer row added to both Capability Ledger tables) so it survives this plan's archival — a
+    later reader should treat it as already homed, not re-lift it.
 23. **Non-plain-ident shape receivers/args in background-spawn position — BOTH spawn forms**
     (FRAGO 025 deviation 3; **flagged for the MILESTONE-seal human call**, echoed here so it
     survives plan archival; renumbered from the pre-rescope #21 by FRAGO 026, which split the
@@ -3722,6 +3882,14 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     receivers), ~1 phase. **TRIGGER:** a live UAF is reproduced for a non-plain-ident receiver,
     OR the milestone-seal review (per deviation-judge, route like the R13/R14 signed-risk
     overrides if confirmed live).
+    **LIFTED to the roadmap's durable store 2026-07-16 (fix-loop closure)** — **flagged explicitly
+    for Patrick's own MILESTONE-seal human call, mirroring how roadmap-ledger row 441 / #8-fr9-fr14
+    is flagged for Patrick's Gate-4 home call** (this entry is NOT silently auto-assigned to any
+    milestone) — full four-field payload in roadmap `audit.md` under Idempotency-Key
+    `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr23: non-plain-ident-background-spawn-receivers`;
+    pointer row added to both Capability Ledger tables, itself carrying the same explicit
+    human-call flag rather than a default owner tag. So it survives this plan's archival — a later
+    reader should treat it as already homed, not re-lift it.
 24. **General union-narrowing payload NOT extracted — the narrowed value is still the 16-byte
     `{tag,data}` union envelope (pre-existing; reproduces with NO concurrency involved)**
     (Phase 3c polish round, homed per the deviation-judge should-fix; both surfaces probed live
@@ -3757,3 +3925,25 @@ records the step-5 gen-0-class refinement (pending boundary deviation-judge rati
     needs a milestone, + four-field payload in its `audit.md` under Idempotency-Key
     `2026-07-04-v0-3-m6-concurrency-hotfix#24: union-narrowing-payload-extraction`) so it survives
     this plan's archival — Phase 8's deferral-lift should treat it as already homed, not re-lift it.
+25. **Demo & Error Gallery obligation (plan-invariants) — Phase 8 steps 1-2 SKIPPED on Patrick's
+    direct instruction, 2026-07-16.** **WHAT** is deferred: extending
+    `examples/pirates-roster/entrypoint.ynz` with a `wait x.method()` UFCS-suspension demo section
+    (real Pirate/Ship-domain method, byte-exact golden regeneration) AND creating
+    `examples/primantis-orders/m6_errors.ynz` with intentional triggers for this milestone's new
+    compile-time diagnostics, wired into `crates/ynz-driver/tests/error_galleries.rs` — the full
+    scope of this plan's own Phase 8 steps 1-2, per
+    [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `### Demo & Error
+    Gallery`. **WHY** — this is a directed human deviation, not a discovered engineering tradeoff:
+    Patrick explicitly instructed the conductor at the M6-Phase-8 session (2026-07-16) to skip the
+    demo/gallery steps this phase and pick them back up separately, so the roadmap reconciliation +
+    deferral lift + full-suite gate + release handoff (Phase 8 steps 3-6) could close without
+    waiting on the demo/gallery pass. Recorded here per `no-duct-tape.md`'s four-field discipline so
+    the human-directed skip doesn't silently vanish. **COST to fix later** — a dedicated small pass,
+    scoped exactly as Phase 8 steps 1-2 already specify (~1 phase-sized effort): the entrypoint demo
+    section + golden regeneration, the `m6_errors.ynz` gallery file + its
+    `error_galleries.rs` wiring. **TRIGGER** — before this plan's completion gate closes (i.e.
+    before `git mv` to `done/`), OR the next session Patrick asks to pick it back up — whichever
+    comes first. This is v0.3-M6-specific plan-invariants debt and stays in THIS plan's own Future
+    Requirements (not lifted to the roadmap's durable store — the roadmap's cross-plan-survivable
+    store is reserved for deferrals that must outlive this plan's archival; this one has an
+    in-plan trigger tied to this same plan's own completion gate, so it belongs here).
