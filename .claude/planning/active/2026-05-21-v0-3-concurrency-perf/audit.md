@@ -977,3 +977,19 @@ lockstep):**
 Session-id `executor-2026-07-16-patrick-triage-application` appended to the roadmap's frontmatter
 chain and to both amended plans' frontmatter chains in the same action as this entry. No code
 touched. Nothing committed.
+
+## 2026-07-16 — Deferral: M7 plan status-blockquote narrative history (non-blocking — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#0 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#0: claude-planning-active-2026-07-04-v0-3-m7-optimizer-pipeline-plan-md-15
+
+- **WHAT** — the plan's status blockquote (`.claude/planning/active/2026-07-04-v0-3-m7-optimizer-pipeline/plan.md:15-22`) and audit.md:887's folder-origin claim assert a discrete paused→active "flip" event gated on Gate-4/M6-merge clearing; git log history contradicts this — the frontmatter `status: "active"` and the actual folder location under `active/` date back to the plan's first commit (`de9a60d`, 2026-07-04), predating both the Gate-4 signature that same day and M6's merge by 12 days. The plan was authored as `active`, not transitioned from `paused`.
+- **WHY** — correcting this requires re-verifying the actual authoring timeline and rewriting historical narrative prose across two files (the blockquote and the audit clause) without touching any load-bearing content (no phase, risk, or exit-criteria changes). It is a documentation-accuracy correction (a narrative prose consistency gap), not a durable design change, so fixing it now would be scope creep relative to the plan's own execution.
+- **COST** — ~15 minutes, one executor dispatch reading the git timeline, rewriting the blockquote and the audit note to state the actual history (plan created directly under `active/`, no flip), no reviewer fan-out needed (prose-only, factual correction).
+- **TRIGGER** — the next time this plan.md is amended for any other reason (e.g. a FRAGO, a phase-boundary checkpoint edit), or before this plan reaches its own completion/AAR gate — whichever comes first.
+
+## 2026-07-16 — Deferral: roadmap sibling-fact sweep for M7 plan status (non-blocking — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#0 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#0: claude-planning-active-2026-05-21-v0-3-concurrency-perf-roadmap-md-384
+
+- **WHAT** — the roadmap.md still repeats "plan paused; plan-id `2026-07-04-v0-3-m7-optimizer-pipeline`" / "status: paused" in approximately 10 locations (lines ~384, 439, 446, 508, 515, 519, 529 and nearby — exact numbers may have shifted) within the Capability Ledger sections, contradicting the plan's own corrected "active" status recorded in the plan.md frontmatter and folder location.
+- **WHY** — this is a sibling-fact sweep miss per plan-source-of-truth.md discipline — the fix-loop that corrected plan.md's stale status text never swept the linked roadmap for the same fact. Fixing it now as a piecemeal edit touches a shared document that other in-flight milestone plans also read; batching this correction with any other pending roadmap amendment (rather than a single-purpose edit) avoids re-touching the same file multiple times in quick succession.
+- **COST** — ~20-30 minutes — grep roadmap.md for every instance of the plan-id paired with a "paused" reference, confirm each one, correct each one, verify no other status fields became contradictory in the sweep.
+- **TRIGGER** — the next roadmap.md amendment for any reason (e.g. Phase 8's own roadmap-reconciliation step, which already touches this file to update Capability Ledger tables, is a natural place to fold this fix in), or before M7's own completion/AAR gate — whichever comes first.

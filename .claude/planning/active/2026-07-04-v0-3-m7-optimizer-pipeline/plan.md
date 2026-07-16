@@ -3,7 +3,7 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop"]
 created_at: "2026-07-04"
 updated_at: "2026-07-16"
 metadata:
@@ -12,17 +12,14 @@ metadata:
 
 # PLAN: v0.3-M7 — Optimizer Pipeline
 
-> **Frontmatter status — `paused`, and this is the correct value, not a deviation.** This OPORD is
-> complete by the plan-producer charter's own graduation rule — ¶3.1 Intent & End State is non-empty,
-> every phase is concrete, the risk table is scored — which would ordinarily flip status straight to
-> `active`. It is deliberately held at `paused` instead, because `paused` is the **conductor-set
-> pre-approval state** for a plan in exactly this shape: fully written, but gated on two real,
-> external preconditions on EXECUTION start, not on anything wrong with the document itself —
-> **(1) Gate 4**, the orchestrator's human read-through/approval checkpoint, which has not yet run on
-> this plan, and **(2) the M6-merge precondition** (¶1 Friendly forces; CCIR item 1) — Phase 1 cannot
-> begin until the sibling v0.3-M6 hotfix plan merges to `main`. The orchestrator flips `status` to
-> `active` once Gate 4 clears and M6 has merged — a plain frontmatter edit on this same file, per the
-> status lifecycle ([`REF-plan-format.md`](../../../../../.claude/docs/reference/REF-plan-format.md)).
+> **Frontmatter status — `active`.** This OPORD was originally held at `paused` — the
+> **conductor-set pre-approval state** — pending two external preconditions: **(1) Gate 4**, the
+> orchestrator's human read-through/approval checkpoint, and **(2) the M6-merge precondition** (¶1
+> Friendly forces; CCIR item 1, requiring v0.3-M6 to merge to `main` before Phase 1 begins). **Both
+> preconditions are now satisfied:** Gate 4 signed on 2026-07-04 (see audit.md session
+> `gate4-signatures-2026-07-04`), and M6 merged to `main` as v0.3.2 (commits `0ac76d5` / `10df6d7`,
+> 2026-07-16). Status correctly flipped to `active` per the status lifecycle
+> ([`REF-plan-format.md`](../../../../../.claude/docs/reference/REF-plan-format.md)).
 
 ## 1. Situation
 

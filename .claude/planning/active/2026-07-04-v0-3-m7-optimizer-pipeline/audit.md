@@ -147,11 +147,116 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   text changed. Appended `session-id: "gate4-signatures-2026-07-04"` to the frontmatter chain
   (append-only — all four prior session-ids preserved).
 
+- `executor-2026-07-16-patrick-triage-application` — 2026-07-16 — Applied Patrick's M6-completion
+  triage decisions to this plan via a targeted Future Requirements amendment (no plan-body phase
+  rewrite, no status change — this plan remains in-flight `active` post-Gate-4). M6-completion triage
+  disposition: **fr23** (non-plain-ident background-spawn receivers riding as raw pointers under
+  `OptimizationLevel::None`) was tracked as "latent, not confirmed-live" in the M6 release; under
+  THIS plan's real optimizer pipeline (with LLVM passes enabled), the stack-slot-lifetime shrinkage
+  turns the latent raw-pointer ride into confirmed UAF. This plan's own Phase 2/3 optimizer wiring is
+  the expiry condition on that latent verdict. **Amendment**: added Future Requirements item #9
+  (fr23: non-plain-ident background-spawn-receivers) with full WHAT/WHY/DISPOSITION/TRIGGER, homed to
+  M7 because the optimizer flip is the confirming condition that turns the finding live. The item
+  prescribes an either-or choice: (a) fix the give/copy machinery for field/index/return-materialized
+  spawn receivers early in M7, OR (b) gate and re-run the UAF repro under real optimized pipeline
+  (post Phase 2/3), then route a confirmed-live result as a risk override per the R13/R14 precedent
+  (signed-risk pattern already established in this plan). Appended `session-id:
+  "executor-2026-07-16-patrick-triage-application"` to the frontmatter chain (append-only — all five
+  prior session-ids preserved).
+
+- `executor-2026-07-16-phase0-spike` — 2026-07-16 — Executed **Phase 0 (P0 Spike: inkwell / LLVM
+  PassBuilder feasibility)**. Verdict: **GREEN** (hard-gate STOP-condition satisfied; R3 retired to
+  its residual). Evidence chain:
+  - **Step 1 (API discovery):** verified against the vendored source in the dev container's
+    cargo-registry volume (`inkwell-0.9.0/src/module.rs:1631`) — `Module::run_passes(&self,
+    passes: &str, machine: &TargetMachine, options: PassBuilderOptions) -> Result<(), LLVMString>`,
+    gated `#[llvm_versions(13..)]` (live at the pinned `llvm18-1-prefer-dynamic`). Pipeline string
+    format is `opt -passes=` new-PM syntax (`"default<O2>"` and friends). `PassBuilderOptions`
+    lives at `inkwell-0.9.0/src/passes.rs:1196`; `FunctionValue::run_passes` also exists; legacy
+    `PassManager` is deprecated in-source in favor of this exact API.
+  - **Steps 2–3 (proof):** throwaway scratch binary `scratch/opt-pipeline-spike/` (standalone
+    `[workspace]`, outside the crate tree, same inkwell pin + feature as the workspace) built a
+    module with one function / one alloca / one dead store (42 overwritten by 7 before any load),
+    ran `run_passes("default<O2>", …)`, and asserted on the printed IR: dead store eliminated,
+    alloca promoted (mem2reg), body constant-folded to `ret i64 7` with O2 function attributes
+    inferred — a genuinely-ran pipeline, not a no-op `Ok(())`. Run via
+    `docker compose run --rm dev bash -c "cd scratch/opt-pipeline-spike && cargo run"`; all four
+    assertions passed (llvm-sys 181.3.0 / LLVM 18).
+  - **Step 4 (durable artifact, plan-spike-discipline Facet 2):** the API shape + captured
+    before/after IR persisted as the checked-in note `scratch/opt-pipeline-spike/api-shape.md` —
+    the artifact Phase 3 consumes directly. Kept alongside it as reference: the minimal repro
+    source (`src/main.rs`, `Cargo.toml`). Discarded scaffolding: build output (`target/`,
+    `Cargo.lock`) is gitignored inside the spike dir; nothing entered `crates/`.
+  - The note also records the Phase-3 threading constraint: reuse the authoritative
+    `state_machine::default_target_machine()` for `run_passes` (per
+    `.claude/rules/authoritative-derivation.md`) — surfaced here so Phase 3's executor does not
+    construct a second machine.
+  - Plan↔task sync: this plan's phase text carries no `- [ ]` checkboxes (steps are numbered
+    prose per REF-plan-format's noted convention drift), and this dispatch's tool grant carries no
+    TodoWrite — phase completion is recorded by this session-log entry + the appended session-id;
+    no checkbox/task mismatch exists. Appended `session-id: "executor-2026-07-16-phase0-spike"` to
+    the frontmatter chain (append-only — all six prior session-ids preserved).
+
+- `conductor-2026-07-16-fable-model-override` — 2026-07-16 — **Model-routing decision, not a plan
+  amendment** (execution/dispatch policy, no plan-vs-reality divergence — recorded here per
+  plan-source-of-truth for auditability, not as a FRAGO). Per Patrick's explicit, repeated,
+  in-conversation instruction (three rounds — the conductor pushed back twice, citing the §4
+  alignment-data gap for Fable and R8's signed HIGH residual specifically; Patrick held the
+  instruction each round and confirmed it deliberately on the third), **every dispatch for the
+  remainder of this plan's execution that would otherwise resolve to Opus 4.8 under any
+  `REF-model-selection.md` §3 override (safety-floor, scale=large, security) is instead dispatched
+  as Fable 5 at effort `medium`** — scoped to this plan's execution only, NOT a change to the global
+  `REF-model-selection.md` binding (no §6 re-derivation was run; Fable's alignment/large-context/
+  security-capability data remains ungathered in §4).
+  - **Logged objection (restated once, per the Honesty escalation discipline, not re-litigated):**
+    Phase 6 Step 2 (the back-edge poll-yield codegen transform) carries R8's signed HIGH residual —
+    a silent-miscompile-class risk this repo has been burned by four milestones running
+    (M3a/M3d/M3e/M3g). The safety-floor override exists specifically to route risk=high work to the
+    model with the best MEASURED alignment score; Fable carries no measured alignment score in this
+    binding. Patrick's call, made deliberately, knowing this — not a silent substitution.
+  - Effective for: Phases 1–8 of this plan (Phase 0 already ran on Fable·medium per the standing
+    `coding·high` binding cell, no override needed there). Applies to EVERY model-selection cell for
+    the rest of this execution, including the ones that would otherwise hit Override 1 (safety
+    floor), Override 2 (scale=large — Phases 2, 5, 7), and Override 3 (security, if any reviewer
+    dispatch in this plan's fan-out hits it).
+  - Appended `session-id: "conductor-2026-07-16-fable-model-override"` to the frontmatter chain
+    (append-only — all seven prior session-ids preserved).
+
+- `executor-2026-07-16-phase0-fixloop` — 2026-07-16 — Documentation-hygiene fix-loop dispatch,
+  resolving two confirmed reviewer findings in plan/audit state post-Phase-0 execution (Phase 0
+  itself executed GREEN with no plan-vs-reality divergence; these are documentation-coherence blockers
+  unrelated to Phase 0's technical work). Changes:
+  - **Finding 1 (confirmed by 3 independent reviewers):** The frontmatter `session-id` array carried
+    `"executor-2026-07-16-patrick-triage-application"` orphaned — no matching `audit.md` Session-log
+    entry existed for it, violating plan-source-of-truth.md's rule that session-id and audit narrative
+    are authored together. **Fix:** authored the missing session-log entry for
+    `executor-2026-07-16-patrick-triage-application`, inserted at correct chronological position
+    (after `gate4-signatures-2026-07-04`, before `executor-2026-07-16-phase0-spike`), documenting that
+    session's M6-completion-triage application: added Future Requirements item #9 (fr23: non-plain-ident
+    background-spawn-receivers) with reasoning that Phase 2/3's real optimizer pipeline turns the
+    latent UAF finding into a live, confirmed-risk scenario for M7 to resolve early or gate-and-retry
+    (disposition: either-or choice (a) fix give/copy machinery or (b) gate and re-run repro post-Phase3
+    with risk override per R13/R14 precedent).
+  - **Finding 2 (confirmed by 2 independent reviewers):** The status blockquote (plan.md lines 15–25)
+    still asserted the plan was `paused` pending two preconditions (Gate 4 approval and M6 merge),
+    contradicting the current frontmatter `status: "active"`. Both preconditions have been satisfied:
+    Gate 4 signed on 2026-07-04 per audit entry `gate4-signatures-2026-07-04`, and M6 merged to
+    `main` as v0.3.2 (commits `0ac76d5` / `10df6d7`, 2026-07-16). **Fix:** rewrote the blockquote to
+    state the transition has occurred — both preconditions satisfied, status correctly flipped to
+    `active` — while preserving historical context (why it WAS paused, the two preconditions that
+    gated it, and the exact citations for when each cleared). Rewrite maintains the blockquote's
+    established practice of recording plan-status history in place, not deleting the context.
+  - No FRAGO filed: no plan-vs-reality divergence in either finding — the issues were
+    documentation-consistency gaps between audit.md and plan.md / frontmatter and body text, both
+    corrections to the documentation state itself rather than a response to code/build reality.
+  - Appended `session-id: "executor-2026-07-16-phase0-fixloop"` to the frontmatter chain (append-only
+    — all eight prior session-ids preserved).
+
 ## FRAGO log
 
-(none yet — this plan has not been dispatched for execution; the amendment above is a pre-execution
-authoring correction, not an execution-time deviation. The first FRAGO, if any, will be filed once
-Phase 0 is dispatched and reality diverges from the written plan.)
+(none yet — Phase 0 executed 2026-07-16 with zero plan-vs-reality divergence: the written steps,
+STOP-conditions, and exit criteria matched reality as found, so no FRAGO was needed. The first
+FRAGO, if any, will be filed when a later phase's reality diverges from the written plan.)
 
 ## Context-segment log
 
