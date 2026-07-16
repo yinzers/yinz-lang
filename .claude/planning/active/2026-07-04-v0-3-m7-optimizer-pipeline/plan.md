@@ -3,7 +3,7 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply"]
 created_at: "2026-07-04"
 updated_at: "2026-07-16"
 metadata:
@@ -26,7 +26,10 @@ metadata:
 **Terrain (landscape).** The Yinz compiler (`crates/ynz-codegen`, `crates/ynz-typeck`,
 `crates/ynz-runtime`) emits every code path — arrays, shapes, the concurrency state-machine engine,
 channels, Arc ops — through exactly two `TargetMachine` creation sites
-(`crates/ynz-codegen/src/emit.rs:879`, `crates/ynz-codegen/src/state_machine.rs:755`), both hardcoded
+(`crates/ynz-codegen/src/state_machine.rs:755` — the shared `default_target_machine()` constructor,
+which `emit_artifact`'s default/`None`-triple branch already routes through (`emit.rs:887`) — and the
+explicit-`target_triple` override branch at `crates/ynz-codegen/src/emit.rs:888-905`; citations
+re-anchored per FRAGO 001, audit.md), both hardcoded
 to `OptimizationLevel::None`. This is the ONLY optimization-level configuration point in the entire
 codegen crate (grep-confirmed, roadmap capability-discovery 2026-07-04). Zero LLVM pass-pipeline code
 exists anywhere in the workspace (`run_passes`/`PassBuilderOptions`/`PassManager` — zero hits,
@@ -118,7 +121,7 @@ this is pre-release compiler-internal work, fully git-reversible):
 
 | Risk | Prob | Sev | Initial | Mitigations (bucket) | Residual | Gate |
 |------|------|-----|---------|----------------------|----------|------|
-| **R1 — optimizer flip miscompiles suspension frames / runtime FFI calls** (proven: 6/470 decimal128/EC-crossing SIGSEGVs; unproven: whether `ynz_arc_*`/`ynz_channel_*`/drop-glue calls carry correct LLVM attributes to survive DCE/reordering) — *Phases 1–2, 5* | A | III | HIGH | Committed RED fixture set (the 6 spike fixtures + every sibling Phase 1's sweep finds) gates the build; root-cause-before-fix ordering (**B2 adversarial/RED-repro**, prob −1; proof: failing fixtures committed before any fix lands) | **MEDIUM** (B×III) | recorded |
+| **R1 — optimizer flip miscompiles suspension frames / runtime FFI calls** (proven: 6/470 decimal128/EC-crossing SIGSEGVs (alignment class), AND — per FRAGO 002 — the Phase-1-confirmed false-ownership-attribute class: `emit.rs`'s `declare_function` (`emit.rs:1656-1686`) emits `readonly`/`noalias` from the raw AST ownership modifier instead of consulting typeck's `effective_ownership` analysis, yielding two deterministic optimized-build miscompiles; unproven: whether `ynz_channel_*` (incl. `ynz_channel_share` refcounting, the real cross-task sharing surface — no `ynz_arc_*` symbols are declared/called from `ynz-codegen`, per FRAGO 001)/drop-glue calls carry correct LLVM attributes to survive DCE/reordering) — *Phases 1–2, 5* | A | III | HIGH | Committed RED fixture set (the 6 spike fixtures + every sibling Phase 1's sweep finds — including the two ownership-attribute fixtures `v0_3_m7_p1_bare_param_mutation.ynz` / `v0_3_m7_p1_share_lend_alias.ynz`, FRAGO 002) gates the build; root-cause-before-fix ordering (**B2 adversarial/RED-repro**, prob −1; proof: failing fixtures committed before any fix lands) | **MEDIUM** (B×III) | recorded |
 | **R2 — general hot-loop O0 stack-exhaustion SIGSEGV** (ledger row 439, absorbed by this plan) confounds honest benchmarking and is a live bug independent of SoA — *Phase 4* | A | III | HIGH | Root-cause + eliminate the failure mode (alloca/stack-growth fix + a stress regression fixture) (**B1 eliminate**, prob −2; proof: Phase 4's fixture running past the old ~4.19M-visit crash envelope) | **MEDIUM** (C×III) | recorded |
 | **R3 — inkwell 0.9.0 may not cleanly expose LLVM 18's PassBuilder/`run_passes` surface** (net-new code, zero existing call sites) — *Phase 0* | B | III | MEDIUM | Hard-gate P0 spike with explicit accept/reject STOP-conditions before any durable phase depends on it (**B2 canary/staged**, prob −1; proof: Phase 0's persisted spike verdict) | **MEDIUM** (C×III) | recorded |
 | **R4 — dual `TargetMachine` creation sites drift on pipeline config**, silently mismatching the main path vs. the state-machine path (this roadmap's own recurring authoritative-derivation corpse class — 4 confirmed instances in M4 alone) — *Phase 2* | B | II | HIGH | Thread ONE authoritative constructor (extend `default_target_machine`; delete the second inline construction) — the divergence class cannot exist with one source (**B1 eliminate**, prob −2; proof: grep-verified single construction call site + both consumers threaded from it) | **MEDIUM** (D×II) | recorded |
@@ -231,7 +234,8 @@ per [`.claude/rules/plan-invariants.md`](../../../rules/plan-invariants.md) `## 
    below.
 2. **`authoritative-derivation.md` says** thread one authoritative constructor, never re-derive a
    second; **this plan's model matches exactly, no divergence** — Phase 2 closes R4 by deleting the
-   inline `TargetMachine` construction at `emit.rs:879` and routing it through
+   remaining inline `TargetMachine` construction (the explicit-`target_triple` override branch,
+   `emit.rs:888-905`; re-anchored per FRAGO 001) and routing it through
    `state_machine.rs::default_target_machine`, per the doc's own prescription. Confirmed compliant.
 
 **Milestone-boundary assumption flagged:** M6 owns the concurrency-release audit's correctness
@@ -394,8 +398,12 @@ after 3 and 4.
      **CHECKPOINT** — root-cause hypothesis confirmed with a Paper-Trace and a minimal repro; sibling
      sweep (next steps) not yet started.
   4. Exhaustively grep every `extern "C"` runtime declaration the codegen crate calls into
-     (`ynz_array_*`, `ynz_map_*`, `ynz_channel_*`, `ynz_arc_*`, drop-glue helpers,
-     `ynz_rt_check_preempt`, `ynz_rt_spawn*`) and confirm each carries LLVM attributes correct for its
+     (`ynz_array_*`, `ynz_map_*`, `ynz_channel_*` — including `ynz_channel_share` refcounting
+     (`emit.rs:15880-15886`, `runtime_decls.rs:110-111`), the surface cross-task sharing actually
+     rides; no `ynz_arc_*` symbols are declared or called from `ynz-codegen` (they live unconsumed
+     in `crates/ynz-runtime/src/arc.rs`) — plus drop-glue helpers,
+     `ynz_rt_check_preempt`, `ynz_rt_spawn*`; citation corrected per FRAGO 001) and confirm each
+     carries LLVM attributes correct for its
      REAL side-effect profile (no false `readnone`/`speculatable`/`nofree` on anything with an
      observable effect; correct `noalias`/`nocapture` where the ownership model guarantees it). This is
      the general form of R1 the narrow decimal128 spike only sampled.
@@ -415,19 +423,37 @@ after 3 and 4.
 
 #### Phase 2 — Fix the Root Cause + Thread the Single Authoritative `TargetMachine` Constructor
 
-- **Task + purpose:** Fix exactly what Phase 1 root-caused (attribute corrections and/or frame-handling
-  hardening) and eliminate R4 by extending `state_machine.rs::default_target_machine` into the ONE
-  authoritative constructor both call sites use — never a second, independently-configured
-  `TargetMachine` creation.
+- **Task + purpose:** Fix exactly what Phase 1 root-caused — BOTH confirmed classes: the alignment
+  class AND the false-ownership-attribute class (FRAGO 002) — and eliminate R4 by extending
+  `state_machine.rs::default_target_machine` into the ONE authoritative constructor both call sites
+  use — never a second, independently-configured `TargetMachine` creation.
 - **Steps:**
-  1. Implement the fix Phase 1's evidence points to (attribute corrections on the affected runtime
-     declarations, and/or explicit frame-slot handling that survives the confirmed pass).
+  1. Implement the fix Phase 1's evidence points to, covering both confirmed classes (per FRAGO 002,
+     audit.md, including its Patrick-directed design decision of 2026-07-16):
+     (a) **alignment class** — attribute corrections on the affected sites and/or explicit
+         frame-slot handling that survives the confirmed pass;
+     (b) **false-ownership-attribute class, fixed from BOTH ends:**
+         (i) *codegen* — `declare_function` (`emit.rs:1656-1686`) must consult typeck's
+             `effective_ownership` analysis when emitting `readonly`/`noalias`, never the raw AST
+             ownership modifier (authoritative-derivation: consume the computed answer);
+         (ii) *typeck* — extend the aliasing checker to REJECT, as a compile error, a call passing
+              the same value as both `share` and `lend` (or two aliasing `lend`s) — Patrick's
+              decision per FRAGO 002 (Golden Rule 5: an aliasing violation of the ownership
+              contract is caught at compile time; teaching diagnostic per Golden Rule 11).
+     Note: if the typeck aliasing-rejection work proves large enough to genuinely warrant its own
+     phase, Phase 2's executor surfaces a scope-split proposal through the plan's own
+     over-fat-step / FRAGO mechanism rather than silently absorbing or silently dropping it — the
+     split decision belongs to the deviation-judge → FRAGO seam, not pre-decided here.
   2. Re-run the full RED fixture set from Phase 1; confirm every one now passes optimized.
      **CHECKPOINT** — RED set green; root cause fix committed; pipeline-wiring work not yet started.
   3. Extend `default_target_machine` to accept the pipeline configuration Phase 3 will need (a
      parameter, not a second global), without yet turning optimization on by default (that is Phase 3's
      job — keep this phase's diff scoped to the constructor's SHAPE, not its default value).
-  4. Delete the inline `TargetMachine` construction in `emit.rs:879`; route it through
+  4. Delete the remaining inline `TargetMachine` construction — the explicit-`target_triple`
+     override branch of `emit_artifact` (`emit.rs:888-905`, `OptimizationLevel::None` at
+     `emit.rs:900`). M6's merge already routes the default/`None`-triple branch through
+     `state_machine::default_target_machine()` (`emit.rs:887`), so the override branch is the only
+     survivor (citation re-anchored per FRAGO 001, audit.md). Route it through
      `default_target_machine` instead — grep-verify zero remaining independent construction sites.
   5. Re-run the full pre-existing test suite (830+ tests) to confirm the constructor threading
      introduced no behavior change yet (still O0 by default at this point in the sequence).
@@ -735,7 +761,9 @@ after 3 and 4.
   exhaustive sweep discovers pass GREEN under the real optimized pipeline before Phase 3 flips the
   default — testable via the committed RED fixture set (Phase 1 exit criteria; Phase 2 exit criteria).
 - No new silent-miscompile class survives the milestone: every audited `ynz_array_*`/`ynz_map_*`/
-  `ynz_channel_*`/`ynz_arc_*`/drop-glue/`ynz_rt_check_preempt`/`ynz_rt_spawn*` call site carries LLVM
+  `ynz_channel_*` (incl. `ynz_channel_share` refcounting, the real cross-task sharing surface — no
+  `ynz_arc_*` symbols are declared or called from `ynz-codegen`, per FRAGO 001)/drop-glue/
+  `ynz_rt_check_preempt`/`ynz_rt_spawn*` call site carries LLVM
   attributes correct for its real side-effect profile (Phase 1 step 4), and the full 830+-test
   `ynz-driver` suite plus the Phase 1/2 RED set plus the Phase 4 stress fixture are green TOGETHER
   (Phase 5 step 4) — never proven piecemeal.
