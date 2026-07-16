@@ -4760,3 +4760,51 @@ Nothing else already confirmed correct by the prior round's reviewers was re-tou
   only. Nothing committed (conductor seals per this plan's own convention). Session-id
   `executor-2026-07-16-m6-phase8-fixloop-fr20-23` appended to this plan's frontmatter chain in the
   same action as this entry.
+
+## Cumulative cross-phase completion gate (2026-07-16, conductor)
+
+**Coupling decision: RUN.** Phases 1b/1c/1d/3/3b/4/4b/5/5b/6/6b repeatedly touch the same shared
+files (`runtime.rs`, `channel.rs`, `emit.rs`, `check.rs`) — nowhere near pairwise-disjoint, so the
+fail-safe default-to-run fired (per the coupling heuristic, ambiguity/overlap always routes to RUN,
+never SKIP). Range reviewed: `46bab6d..ab61670` (parent of the earliest phase boundary commit through
+Phase 8's seal) — the plan's first entry into this gate; no prior `Completion-Gate` trailers existed.
+
+Three cross-phase-capable lenses fanned out concurrently over the whole-plan diff:
+
+- **code-reviewer** (reuse/consolidation-only framing, Fable·medium) — **VERDICT: clean.** Hunted
+  specifically for the authoritative-derivation-violation class this project has shipped 4 consecutive
+  milestones running (per `.claude/rules/authoritative-derivation.md`'s own incident history). All four
+  named cross-phase mechanisms (the UFCS suspension classifier threaded P1→1b→1c→1d; the P5b
+  type-walker unification; the P1d int-literal→number rejection guard; the P5 drop-glue choke point)
+  plus six more it found independently (crossing-set producer, ABA generation salt, handle send path,
+  spike-CPU-handle cleanup, P3c spawn-form normalization, poison-recovery) verified as single
+  authoritative sources — no forked re-derivation found. The one real duplication found (a
+  byte-identical waiter registry between `YnzChannel` and `HandleShared`) was already caught and
+  properly four-field-deferred at Phase 4b's own boundary — not a new finding, a confirmed-recorded one.
+- **acceptance-verifier** (§3.1 End State + the roadmap's campaign End State, Sonnet·medium) —
+  **VERDICT: met.** All 11 Key Outcomes (+1b/1c/1d) verified against real code/git history, not plan
+  prose. Outcome 8 (demo/gallery) correctly read as a documented Patrick-directed deferral (FR#25), not
+  an unmet criterion. The roadmap's M6 "Value delivered" sanitizer-lane honesty claim independently
+  re-verified true (branch genuinely unpushed, no CI run yet). 2 non-blocking minors: (a) the roadmap's
+  compressed "dynamic-dispatch coverage check added... mechanically going forward" gloss is slightly
+  optimistic versus FR#10's own accurate four-field record (a pre-existing hard-error backstop + a
+  one-time manual verification, not a new automated check) — the FR#10 record itself is accurate, only
+  the roadmap's one-line summary overstates it; (b) a stray leftover subagent worktree directory
+  (`.claude/worktrees/agent-abba2c8babbd9ea21/`) sits in the repo, unrelated to this plan's deliverable
+  — a repo-hygiene note, not this plan's scope to clean.
+- **deviation-judge** (cross-phase interaction only, Sonnet·medium) — **VERDICT: on-plan.** Checked
+  three named sequencing dependencies for silent invalidation by a later phase: the P1→1b→1c→1d
+  fixture-closure sequence, the P3b/4b/5b shared-region merge-collision sequencing, and Phase 6b's
+  sanitizer-lane scan pre-requisite (must run after the fixed code, not before). All three verified
+  intact by direct file reads — no later phase drifted from or silently reopened an earlier phase's
+  locked decision. 0 unjustified strays, 0 FRAGO candidates.
+
+**Routing:** 0 blockers, 0 FRAGO candidates. The 2 minors above are recorded here rather than routed
+through the full four-field-deferral machinery — both are genuinely trivial (a one-word roadmap gloss
+already correctly detailed in FR#10's own record; a stray directory wholly outside this plan's
+deliverable) and neither represents an unmarked tradeoff or a real future cost. No cross-phase bug
+pattern worth a rule/corpse surfaced — the near-miss the code-reviewer lens specifically hunted for
+(a 5th authoritative-derivation violation) did NOT recur, which is itself worth noting as an AAR
+positive-signal input rather than a lesson to capture.
+
+**Gate resolution: CLEARED.** Proceeding to the AAR (9.1).
