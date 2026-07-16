@@ -23,4 +23,4 @@ _No member plans yet._
 
 ## Standalone plans
 
-- [rules-corpus-cleanup](active/2026-07-11-rules-corpus-cleanup/plan.md) `active`
+_None._

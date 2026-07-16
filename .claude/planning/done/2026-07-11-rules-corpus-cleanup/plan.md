@@ -1,7 +1,7 @@
 ---
 name: "rules-corpus-cleanup"
 plan-id: "2026-07-11-rules-corpus-cleanup"
-status: "active"
+status: "done"
 roadmap-id: null
 session-id: ["3967a266-28a7-4313-88d9-52d2becad7d8", "7db1f615-0a90-4130-8aee-8513add883d8", "04e22a51-80c1-4b67-a886-083784d61bcd"]
 created_at: "2026-07-11"

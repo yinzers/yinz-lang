@@ -49,3 +49,4 @@
 
 - [design-lockdown-from-gemini-review](done/2026-05-14-design-lockdown-from-gemini-review/plan.md) `done`
 - [docs-tree-restructure](done/2026-06-14-docs-tree-restructure/plan.md) `superseded`
+- [rules-corpus-cleanup](done/2026-07-11-rules-corpus-cleanup/plan.md) `done`
