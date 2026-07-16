@@ -247,6 +247,206 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   Class-2-de-dup-adjacent candidate for Phase 4's one-home-marker pass, whose scope is exactly this kind
   of duplicated-table consolidation.
 
+- 04e22a51-80c1-4b67-a886-083784d61bcd — 2026-07-16 — **Phase 3 execution — naming.md → vocabulary.md
+  full merge + parity guard + link repoint (Class-2 de-dup flagship).** Same session-id as the prior
+  Phase 1 review-fan-out / Phase 2 execution / Phase 2 review-fan-out entries above; NOT re-appended to
+  the frontmatter chain (identical rationale — an `[id, id]` duplicate would misrepresent the
+  append-only chain as two distinct sessions). Executed all six steps:
+
+  **(Step 1) Pre-merge grep.** Ran the anchored pattern `[^-]naming\.md)` tree-wide
+  (`grep -rn '[^-]naming\.md)' --include='*.md' .`). Real inbound-link hits, classified:
+  - `CLAUDE.md`:53 and `CLAUDE.md`:77 — TWO occurrences within the ONE enumerated `CLAUDE.md` file
+    (the plan's assumption cited a single line "CLAUDE.md:56"; confirmed via `git show 46bab6d:CLAUDE.md`
+    that both occurrences pre-date this plan's Phase 1/2 work — not new drift, just the plan's shorthand
+    citing one representative line for the file). Both within the enumerated set.
+  - `.claude/rules/docs-checklist.md`:78, `docs/reference/REF-naming.md`:16,
+    `docs/internal/scratchpad/SCRATCH-stdlib-encoding.md`:62, `.claude/rules/vocabulary.md`:163
+    (self-ref) — the remaining four of the enumerated five.
+  - `.claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md` (5 hits) — `done/`
+    archive, confirmed out of scope per plan text ("Historical `done/` plans are not touched").
+  - `.claude/planning/active/2026-07-11-rules-corpus-cleanup/plan.md`:299-300 and `audit.md`:55 — this
+    plan's own prose describing the grep pattern itself in backticks (e.g. `` `](naming.md)` `` as an
+    illustrative example of what the pattern matches) — NOT real markdown links (inside inline code
+    spans, non-rendering), self-referential to the methodology, not inbound references to the deleted
+    file. Confirmed by reading the exact matched lines.
+  **CCIR check: no inbound link found outside the enumerated five + `done/` archive + this plan's own
+  methodology prose. No CCIR fired; proceeded to delete `naming.md`.**
+
+  **(Step 2) Content-parity inventory** (naming.md → vocabulary.md, item by item; ✓ = already present
+  in vocabulary.md pre-merge, judged a deliberate duplicate-removal; → = merged this phase):
+  1. Title "Naming Conventions" → superseded by vocabulary.md's own title (file deleted; no separate
+     content).
+  2. "## Golden Rule 13 — Capital Letter = Type" heading → merged into vocabulary.md's existing
+     "## Capital Letter Rule (Golden Rule 13)" heading (same concept, pre-existing home).
+  3. "Capital letter = type. Everything else = lowercase. This is universal and absolute." → reconciled
+     to one line + link to `REF-golden-rules.md` Rule 13 (which now carries the full canonical statement
+     post-Phase-1 fix, confirmed via `grep -n "13\." docs/reference/REF-golden-rules.md`).
+  4. Code block (Types/Modules/Functions/Variables/Keywords casing examples) → MERGED (naming.md's
+     version was strictly richer than vocabulary.md's condensed bullets — added Functions category with
+     `fetchUser`/`processOrder` examples, Variables category with `let` declarations, and `background`/
+     `follows`/`extends` in the Keywords list) — replaces vocabulary.md's terser bullet form, no
+     append-drift (one coherent block, not both).
+  5. "Scan any line. Capital letter = type. No capital = not a type. Zero ambiguity." → MERGED (kept as
+     closing reinforcement sentence in vocabulary.md's Capital Letter Rule section).
+  6. Module/type same-base-name note (Date/date, Duration/duration bullets) → ✓ already present verbatim
+     in vocabulary.md pre-merge (same 4 bullets) — no content lost, no edit needed.
+  7. `Self`/`self` explanatory sentence ("reserved type keyword meaning 'the implementing type' — used
+     in follows contracts") → MERGED as a new closing sentence in vocabulary.md's Capital Letter Rule
+     section, supplementing the terser Quick Reference table rows that already existed.
+  8. "# Renamed Concepts" heading + intro sentence → ✓ superseded-as-duplicate by vocabulary.md's
+     pre-existing "## Quick Reference" heading + intro paragraph (same normative directive — "never use
+     the traditional/legacy term" — vocabulary.md's is broader-scoped, covering more surfaces).
+  9. Renamed Concepts table, 19 rows, walked individually:
+     - void→nothing ✓ (vocab: "No return value|nothing|void, unit, ()")
+     - null/undefined/None→none ✓ (vocab: "Absent value|none|null, undefined, None, nil")
+     - Optional\<T>→maybe\<T> ✓ (vocab: "Optional/maybe value|maybe\<T>|Optional, Option, nullable")
+     - struct/class/interface/type→shape ✓ term mapping present (vocab row 1), but the WHY-clause
+       ("type is banned because it's overloaded with the generic concept of 'type'") was NOT literally
+       present elsewhere → MERGED as a new sentence in the "shape vs value" concept section.
+     - enum→options ✓ (vocab row 6 + the `options Status {...}` example already in the "options vs
+       union" concept section)
+     - **abstract class→base shape — MISSING entirely from vocabulary.md pre-merge** → MERGED as a new
+       Quick Reference row ("Non-instantiable base declaration | `base shape` | abstract class").
+     - **implements→follows — MISSING as an explicit NOT-term row** (follows was only mentioned
+       parenthetically inside the Self row) → MERGED as a new Quick Reference row ("Contract declaration
+       | `follows` | implements") plus the `shape Player follows Damageable` example folded into the
+       "shape vs value" concept section's new sentence.
+     - Either\<A,B>/A|B→| ✓ (vocab row 7 + the "options vs union" concept section — actually more
+       complete in vocab: cites Patrick's 2026-05-14 lock date + the triple-overload rationale for `or`)
+     - typeof/instanceof/type guards→is ✓ (vocab: "Type narrowing|is|typeof, instanceof, type guards")
+     - fn→function ✓ (vocab: "Function declaration|function|fn, func, def, method")
+     - &T→share (signature-only, no body-level `.share()`) ✓ (vocab row 14 — already the corrected
+       wording Phase 1 established in both files)
+     - &mut T→lend (signature-only) ✓ (vocab row 15)
+     - move→give (signature-only) ✓ (vocab row 16)
+     - .clone()→.copy() (parens) ✓ (vocab row 17)
+     - Result\<T,E>/throws→errors ✓ (vocab row 19)
+     - match/switch→if(x is Type) ✓ (vocab row 20, Type narrowing — same `is` concept)
+     - T[]/Array\<T>→array\<T> ✓ (vocab row 4, Growable list — NOT column doesn't literally list
+       "Array\<T>" but is conceptually the same mapping, judged sufficient dup)
+     - fixed-size array/stack array→fixed\<T> ✓ (vocab row 5, NOT column matches near-verbatim)
+     - HashMap\<K,V>/Map\<K,V>→map\<K,V> ✓ (vocab row 3, Dynamic key-value collection)
+  Vocabulary.md's own pre-existing content (Concept-Level Distinctions, Banned Legacy Terms,
+  Correct/Incorrect Prose Examples, When You're Unsure, Cross-References) had no naming.md counterpart
+  to reconcile against — carried forward unchanged except the self-ref removal (below).
+  **CHECKPOINT — REACHED.** Inventory complete: 4 genuine merge actions identified (casing code-block,
+  closing sentence, Self/self sentence, `type`-banned WHY-clause) + 2 missing-row additions (`base
+  shape`, `follows`) + 1 cross-reference removal (self-ref); every other naming.md item confirmed
+  already present in vocabulary.md as a deliberate duplicate-removal.
+
+  **(Step 3) Merge into vocabulary.md** (`.claude/rules/vocabulary.md`):
+  - Quick Reference table: inserted the two missing rows ("Non-instantiable base declaration|`base
+    shape`|abstract class" and "Contract declaration|`follows`|implements") after the "Enum replacement"
+    row, matching naming.md's original thematic placement.
+  - "shape vs value" concept section: added the `type`-banned WHY-clause + the `base shape`/`follows`
+    examples as a new sentence between the existing prose/UFCS sentences.
+  - "Capital Letter Rule (Golden Rule 13)" section: replaced the intro line + condensed bullets with (a)
+    a one-line restatement + link to `REF-golden-rules.md` Rule 13 (the GR13 reconcile the plan step
+    demands), (b) the richer casing code-block merged from naming.md, (c) the "Scan any line..." closing
+    sentence, (d) the pre-existing module/type distinction bullets (unchanged, already-correct), (e) the
+    new `Self`/`self` clarifying sentence.
+  - Cross-References: removed the `naming.md` self-ref line.
+  No append-drift — every merged item landed in its logical existing section, none appended to the file
+  end.
+
+  **(Step 4) Delete naming.md.** `rm .claude/rules/naming.md`.
+
+  **(Step 5) Repoint inbound links** (all four, plus the two CLAUDE.md occurrences):
+  - `CLAUDE.md`:52 (Rules Files table) — the standalone `naming.md` row was folded into the existing
+    `vocabulary.md` row's description (added "the capital-letter-=-type rule, module/type case
+    distinctions, and the renamed-concepts table") rather than repointed as a second row for the same
+    (now-merged) file — avoids a duplicate table row pointing at the same destination.
+  - `CLAUDE.md`:77 (Yinz-terms bullet) — repointed to `.claude/rules/vocabulary.md`.
+  - `.claude/rules/docs-checklist.md`:78 (What-Goes-Where row) — repointed to `vocabulary.md`.
+  - `docs/reference/REF-naming.md`:16 — repointed to `../../.claude/rules/vocabulary.md`.
+  - `docs/internal/scratchpad/SCRATCH-stdlib-encoding.md`:62 — repointed to
+    `../../../.claude/rules/vocabulary.md`.
+  - `vocabulary.md`:163 self-ref — removed (done as part of Step 3).
+  **CHECKPOINT — REACHED.** naming.md deleted, all inbound links repointed, vocabulary.md carries the
+  merged content.
+
+  **(Step 6) Post-merge parity check.** Walked the Step 2 inventory: every genuine-merge item (4) and
+  missing-row item (2) confirmed present in the post-edit `vocabulary.md` via a full file re-read; every
+  duplicate-removal item (all 19 table rows + module/type note + Renamed-Concepts intro) reconfirmed
+  present pre-existing, none dropped. 100% ticked.
+
+  **Verification (Paper-Trace):**
+  - `ls .claude/rules/naming.md` → "No such file or directory" (confirms deletion).
+  - `grep -rn '[^-]naming\.md)' --include='*.md' .` (post-merge, tree-wide) → only the `done/` archive
+    (untouched, expected) and this plan's own `plan.md`/`audit.md` prose describing the grep pattern
+    (not real links, same classification as the pre-merge grep) — **zero real broken links**.
+  - `grep -n 'naming.md' docs/reference/REF-naming.md` → zero hits (confirms the repoint landed; the
+    file's own filename string doesn't self-match).
+  - `git diff --stat` → 6 files changed: `.claude/rules/docs-checklist.md`,
+    `.claude/rules/naming.md` (deleted, 60 lines removed), `.claude/rules/vocabulary.md` (34
+    insertions/-7 net after table/section edits), `CLAUDE.md`, `docs/internal/scratchpad/
+    SCRATCH-stdlib-encoding.md`, `docs/reference/REF-naming.md` — matches the expected merge + 4-file
+    repoint + CLAUDE.md's 2-occurrence repoint.
+  - `vocabulary.md`'s Capital Letter Rule section re-read: confirms one-line-+-link opening, merged
+    casing code-block, and a single Quick Reference table (no second renamed-concepts table anywhere in
+    the file).
+
+  **Plan↔task sync note:** same constraint as Phases 1–2 — no TodoWrite in this dispatch's tool grant
+  (Read/Write/Edit/Bash only per the executor charter's actual tools for this dispatch), no `- [ ]`
+  checkbox glyphs in this plan (Steps use `1. 2. 3. …` numbering, the same documented pre-existing drift
+  noted in Phases 1–2). Sync runs through `plan.md`'s inline `[DONE]` step markers + `**STATUS:
+  COMPLETE**` phase annotation + `**CHECKPOINT — REACHED**` markers + this audit entry.
+
+  **Deviations surfaced:** none — every edit was either a step the plan's own text enumerated
+  (grep/delete/repoint) or a mechanical parity-guard merge action derived directly from comparing the
+  two files' content (the two missing rows and four merge items were discovered BY the mandated parity
+  inventory itself, not a plan-vs-reality divergence — the plan's Step 2/3 instructions anticipated
+  exactly this kind of gap-finding as the parity guard's job). No FRAGO filed.
+
+  **Recorded decisions (durable-answer calls, no human in the loop):**
+  - CLAUDE.md's naming.md table row was folded into the adjacent vocabulary.md row's description rather
+    than repointed as a duplicate row pointing at the same destination file — avoids a Rules-Files table
+    with two rows for one file.
+  - The `type`-banned WHY-clause and the two missing term-mapping rows were placed in their thematically
+    nearest existing home (Quick Reference table for the rows; "shape vs value" concept section for the
+    WHY-clause + base-shape/follows examples) rather than creating a new subsection — matches the
+    plan's "no append-drift" instruction and the documentation standard's placement-law discipline.
+
+  Phase 3 returns COMPLETE. No checkpoint/handoff file needed — the phase completed in one segment; both
+  planned `**CHECKPOINT**` marks (post-inventory, post-repoint) were reached in-segment, well under the
+  `handoff-phase-<N>.md` triggers (phase is `scale=large` per its Model tag, which IS one of the three
+  checkpoint triggers per REF-plan-format — but the phase's 6 steps completed within one dispatch's
+  context budget without approaching a context wall, so no PARTIAL/checkpoint-file was warranted; had
+  context pressure emerged, Step 5 — after the second CHECKPOINT mark — was the natural segment
+  boundary).
+
+- 2026-07-16 — **Post-Phase-3 content-parity fix** (ad-hoc dispatch, not part of the plan's phase
+  sequence). Phase 3's review fan-out (acceptance-verifier) found the naming.md→vocabulary.md merge's
+  parity inventory mis-graded one row: the deleted `naming.md`'s `` `match` / `switch` on types | `if (x
+  is Type)` | Pattern matching via type narrowing `` row was scored "already covered" by
+  `vocabulary.md`'s existing `Type narrowing | \`is\` | typeof, instanceof, type guards` row, but that
+  row's NOT-column never named `match`/`switch` as a superseded term — only `typeof`/`instanceof`. Fix:
+  extended the same row's NOT-column to `typeof, instanceof, type guards, \`match\`/\`switch\` on
+  types` (single row, no duplicate fork) in `.claude/rules/vocabulary.md`. No other file touched.
+
+- 04e22a51-80c1-4b67-a886-083784d61bcd — 2026-07-16 — **Phase 3 review fan-out — routing log** (conductor
+  entry, no code change). Cheap gates both clean/green (green-check secret-scan pass via gitleaks; a
+  flaky, non-reproducible `v03_m3e_alias_local_name_collision_runs_correctly` integration-test failure on
+  first run, confirmed clean on two independent reruns, structurally unrelated to this docs-only diff —
+  not attributed). All five reviewers (code-reviewer, acceptance-verifier, rules-compliance,
+  deviation-judge, doc-auditor) returned clean/met/on-plan/conformant. The load-bearing GR13-compression
+  negation-diff (Risk #1's B2 guard) was independently run by doc-auditor: word-for-word diff of naming.md's
+  pre-merge "This is universal and absolute" against vocabulary.md's post-merge one-line+link form —
+  confirmed the exceptionless normative force survives via the retained "Scan any line... Zero ambiguity"
+  sentence and REF-golden-rules.md Rule 13's own framing; no negation dropped, no absolute claim inverted.
+  One should-fix (the match/switch→is parity row) was found and fixed same-day (see the ad-hoc dispatch
+  entry above) — re-verified clean via secret-scan re-run post-fix.
+  One accepted minor, not actioned: doc-auditor noted the merge dropped naming.md's explicit relational
+  clause "`Self` (uppercase) = the type of the instance" — a nuance loss, not a content loss (the
+  Self=type/self=instance facts both survive independently in vocabulary.md's Quick Reference table row
+  and the retained "reserved type keyword meaning 'the implementing type'" sentence). Accepted as-is,
+  no action — same disposition class as Phase 1/2's other accepted-minor findings.
+  Also flagged, out of this plan's charter (not actioned): rules-compliance noted `docs/reference/REF-naming.md`
+  (content untouched, only its one inbound link was repointed) still teaches the pre-lock
+  `struct/class/interface→type` mapping and dot-call `.share`/`.lend` fossil syntax Phase 1 fixed
+  everywhere else in the corpus — pre-existing drift, not introduced by this diff, candidate for plan 2 /
+  a fresh audit item.
+
 ## FRAGO log
 (FRAGO delta records append here — see the FRAGO template)
 

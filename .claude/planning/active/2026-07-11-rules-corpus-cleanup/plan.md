@@ -289,13 +289,13 @@ plan plus the audit sidecar.
   examples); confirms the `maybe` reconcile matches `IMP-maybe.md`.
 - **Model tag:** `(docs-edit, high, medium)`.
 
-#### Phase 3 — naming.md → vocabulary.md full merge + parity guard + link repoint
+#### Phase 3 — naming.md → vocabulary.md full merge + parity guard + link repoint — **STATUS: COMPLETE** (session-id: 04e22a51-80c1-4b67-a886-083784d61bcd)
 
 - **Task + purpose:** the Class-2 de-dup flagship. Merge `naming.md` wholesale into `vocabulary.md`,
   delete `naming.md`, repoint its inbound links — guarded by a mechanical content-parity inventory so
   no normative sentence is lost (Risk #1). This supersedes Phase 1's cheap naming.md stop-loss.
 - **Steps:**
-  1. **Pre-merge grep.** Tree-wide grep for markdown LINKS to the deleted `.claude/rules/naming.md` —
+  1. **[DONE] Pre-merge grep.** Tree-wide grep for markdown LINKS to the deleted `.claude/rules/naming.md` —
      use the anchored pattern **`[^-]naming\.md)`** (which matches same-dir `](naming.md)` and
      `](.../rules/naming.md)` links but EXCLUDES the surviving `docs/reference/REF-naming.md`, whose
      `-naming.md` is a suffix collision — verified live at `docs/README.md`:42, `](reference/REF-naming.md)`).
@@ -306,23 +306,30 @@ plan plus the audit sidecar.
      (`SCRATCH-teaching-audit-2026-07-11.md`, `SCRATCH-rules-audit-2026-07-11.md`,
      `SCRATCH-audit-2026-07-11-codegen-miscompiles.md`) are NOT links and are out of scope — the plan
      forbids touching those sources; do not treat them as inbound references.
-  2. **Build the content-parity inventory.** Enumerate every table row, heading, and normative
+     **[VERIFIED — see audit.md session log: the anchored grep's real inbound-link set was exactly the
+     enumerated five (CLAUDE.md ×2 occurrences within one file, docs-checklist.md, REF-naming.md,
+     SCRATCH-stdlib-encoding.md, vocabulary.md self-ref) + the `done/` archive; the only other anchored
+     hits were this plan's own `plan.md`/`audit.md` prose describing the grep pattern in backticks
+     (not real markdown links) — no CCIR fired, nothing outside the enumerated five.]**
+  2. **[DONE] Build the content-parity inventory.** Enumerate every table row, heading, and normative
      sentence of `naming.md` AND `vocabulary.md` into a checklist (artifact lands in the PR / this
      plan's dir). This is the Risk-#1 B2 guard — build it before editing.
-     **CHECKPOINT** — parity inventory complete; every naming.md item mapped to its vocabulary.md
-     destination (merge, or supersede-as-duplicate with the surviving copy named).
-  3. **Merge into vocabulary.md.** Integrate naming.md's casing rule + module/type case distinction +
+     **CHECKPOINT — REACHED.** Parity inventory complete; every naming.md item mapped to its vocabulary.md
+     destination (merge, or supersede-as-duplicate with the surviving copy named). Full inventory recorded
+     in audit.md session log.
+  3. **[DONE] Merge into vocabulary.md.** Integrate naming.md's casing rule + module/type case distinction +
      the corrected (signature-keyword) term mappings into their logical homes in vocabulary.md — no
      append-drift; reconcile the GR13 restatement to one line + link to the canonical
      `REF-golden-rules.md`; de-dup the renamed-concepts table to the single vocabulary.md home.
-  4. **Delete naming.md.** Remove the file (git history is the archive).
-  5. **Repoint inbound links.** Update `CLAUDE.md`:56, `docs-checklist.md`:78 (What-Goes-Where row),
+  4. **[DONE] Delete naming.md.** Remove the file (git history is the archive).
+  5. **[DONE] Repoint inbound links.** Update `CLAUDE.md`:56, `docs-checklist.md`:78 (What-Goes-Where row),
      `REF-naming.md`:16, `SCRATCH-stdlib-encoding.md`:62 to point at `vocabulary.md` (relative
      markdown links). Remove the `vocabulary.md`:163 self-ref.
-     **CHECKPOINT** — naming.md deleted, all inbound links repointed, vocabulary.md carries the merged
+     **CHECKPOINT — REACHED.** naming.md deleted, all inbound links repointed, vocabulary.md carries the merged
      content.
-  6. **Post-merge parity check.** Walk the inventory: confirm every enumerated naming.md item now
+  6. **[DONE] Post-merge parity check.** Walk the inventory: confirm every enumerated naming.md item now
      lives in vocabulary.md (or is a named, deliberate duplicate-removal). Tick each box.
+     **[VERIFIED — see audit.md session log for the fully-ticked inventory.]**
 - **Exit criteria:** `naming.md` absent; tree-wide grep for markdown LINKS to the deleted
   `.claude/rules/naming.md` (the anchored `[^-]naming\.md)` pattern — excludes the surviving
   `REF-naming.md`) returns zero live links (only `done/` archive + git history) — the intent
@@ -330,6 +337,13 @@ plan plus the audit sidecar.
   their prose mentions and are excluded; links to `REF-naming.md` are the expected survivor and remain);
   parity inventory 100% checked; vocabulary.md carries GR13 as
   one-line-+-link and one renamed-concepts table.
+  **[VERIFIED — see audit.md session log for the post-merge grep transcript: `.claude/rules/naming.md`
+  absent from disk; anchored grep tree-wide returns zero real markdown links (only this plan's own
+  plan.md/audit.md prose describing the grep pattern + the `done/` archive, both excluded by the exit
+  criteria's own terms); parity inventory 100% ticked; `vocabulary.md`'s Capital Letter Rule section is
+  one-line-+-link to `REF-golden-rules.md` Rule 13 followed by the merged casing examples, and the
+  Quick Reference table is the single renamed-concepts home (naming.md's table fully absorbed, two
+  previously-missing rows added: `base shape`, `follows`).]**
 - **Reviewer fan-out:** (a) content-parity reviewer — word-for-word negation-diff on trimmed boundary
   sentences + walks the parity inventory (the Risk-#1 blocking guard); (b) documentation-standards
   reviewer — one-home / relative-links / placement-law-4 (no append-drift). Both block.

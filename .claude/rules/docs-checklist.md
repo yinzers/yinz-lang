@@ -75,7 +75,7 @@ Every topic gets its own dedicated file. No threshold judgment about "is this ma
 | Locked-but-unbuilt future feature design | `docs/internal/scratchpad/SCRATCH-future-topic.md` |
 | Locked-but-unbuilt stdlib module design (v0.5+) | `docs/internal/scratchpad/SCRATCH-stdlib-module.md` |
 | The 13 golden rules with rationale | [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) |
-| Naming conventions (renamed keywords, casing) | [`.claude/rules/naming.md`](naming.md) |
+| Naming conventions (renamed keywords, casing) | [`.claude/rules/vocabulary.md`](vocabulary.md) |
 | How to write language-spec files | [`.claude/rules/spec-writing.md`](spec-writing.md) |
 | How to make design decisions | [`.claude/rules/language-design.md`](language-design.md) |
 

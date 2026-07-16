@@ -16,6 +16,8 @@ For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` all
 | Growable list | `array<T>` | Vec, list, dynamic array |
 | Stack-allocated fixed list | `fixed<T>` | static array, stack array, fixed-size array |
 | Enum replacement | `options` | enum, enumeration |
+| Non-instantiable base declaration | `base shape` | abstract class |
+| Contract declaration | `follows` | implements |
 | A-or-B type relationship | `union` (via `\|`) | sum type, variant type, `or` keyword (rejected — see Golden Rule 12 exception) |
 | Optional/maybe value | `maybe<T>` | Optional, Option, nullable |
 | Absent value | `none` | null, undefined, None, nil |
@@ -29,7 +31,7 @@ For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` all
 | Copy a value | `.copy()` (body operation, parens per dot-postfix rule) | clone, deep copy |
 | Freeze to read-only | `.freeze()` (body operation, parens) | (no direct equivalent) |
 | Error type / fallible | `errors` keyword | Result<T, E>, throws, exceptions |
-| Type narrowing | `is` | typeof, instanceof, type guards |
+| Type narrowing | `is` | typeof, instanceof, type guards, `match`/`switch` on types |
 | Async wait point | `wait` | await, async/await |
 | Spawn task | `background` | async, go, spawn, thread |
 | Block compiler safety | `verified { }` | unsafe { }, raw |
@@ -53,6 +55,8 @@ const p: Player = { name: "Patrick", health: 100 }   // creating a value (annota
 ```
 
 When writing prose: "Players" or "a Player value" — never "a Player object" or "a Player instance" or "a Player struct."
+
+One keyword covers every data-structure declaration — `struct`, `class`, `interface`, and `type` all collapse into `shape`. `type` specifically is additionally banned as a declaration keyword because it's overloaded with the generic concept of "type" (see Banned Legacy Terms below). A non-instantiable base declaration is `base shape` (never "abstract class"); a contract declaration is `follows` (never "implements") — e.g. `shape Player follows Damageable`.
 
 Yinz is not object-oriented — see [`.claude/rules/non-oop.md`](non-oop.md). Methods are standalone functions, not bound to shape declarations. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax).
 
@@ -137,18 +141,37 @@ The Yinz compiler bans these legacy terms in user-facing diagnostics via `crates
 
 ## Capital Letter Rule (Golden Rule 13)
 
-Capital letter = type. Everything else = lowercase. This is universal:
+Capital letter = type. Everything else = lowercase — see
+[`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 13 for the
+canonical statement and rationale.
 
-- `Player`, `Warrior`, `Config`, `Request` — types (PascalCase)
-- `player`, `score`, `health` — values (camelCase)
-- `function`, `let`, `const`, `shape`, `options`, `wait` — keywords (lowercase)
-- `file`, `request`, `date`, `math` — modules (lowercase)
+```
+// Types — PascalCase
+Player, Warrior, Config, Request, Response, Date, Duration, Database
+
+// Modules — lowercase
+file.read(), request.get(), date.now(), math.sqrt(), json.parse()
+
+// Functions — lowercase camelCase
+function fetchUser(), function processOrder()
+
+// Variables — lowercase camelCase
+let userName, let playerCount
+
+// Keywords — lowercase
+function, let, const, shape, wait, background, options, follows, extends
+```
+
+Scan any line. Capital letter = type. No capital = not a type. Zero ambiguity.
 
 When module and type share a base name, casing distinguishes them:
 - `Date` = the type returned by `date.now()`
 - `date` = the module
 - `Duration` = the type
 - `duration` = the module
+
+`Self` (capital S) is a reserved type keyword meaning "the implementing type" — used in `follows`
+contracts (see the Quick Reference row above). `self` (lowercase) is the instance.
 
 ---
 
@@ -160,7 +183,6 @@ If a concept doesn't have an official term yet, **ask Patrick before inventing o
 
 ## Cross-References
 
-- [`.claude/rules/naming.md`](naming.md) (capital-letter rule, module/type case distinctions)
 - [`.claude/rules/inference.md`](inference.md) (dual-audience rule for `infer`/`inference` etc.)
 - [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) (banned-jargon source-of-truth for user-facing diagnostics)
 - `crates/ynz-diagnostics/src/banned_jargon.rs` (compile-time enforcement)
