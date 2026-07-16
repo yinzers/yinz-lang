@@ -381,9 +381,11 @@ pub fn div(a: &BigNum, b: &BigNum) -> BigNum {
     let result_exp = a.exponent - b.exponent - extra as i64;
     let result_sign = a.sign ^ b.sign;
 
-    // Check if remainder is zero (for exact half detection)
-    let remainder_zero = remainder.iter().all(|&d| d == 0);
-    let _ = remainder_zero; // used for future exact half detection
+    // The final long-division remainder is the value's tail below the computed
+    // quotient digits — it must reach the rounding as a sticky signal, or a
+    // quotient ending exactly on the half boundary ties-to-even when the true
+    // value is strictly above half.
+    let remainder_nonzero = remainder.iter().any(|&d| d != 0);
 
     let mut bn = BigNum {
         precision: prec,
@@ -393,7 +395,7 @@ pub fn div(a: &BigNum, b: &BigNum) -> BigNum {
         is_infinity: false,
         is_nan: false,
     };
-    bn.round_to_precision();
+    bn.round_to_precision_sticky(remainder_nonzero);
     bn.normalize();
     bn
 }

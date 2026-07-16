@@ -255,14 +255,35 @@ Full workspace suite green; golden 34/34 unchanged, no contended-file movement. 
 ---
 
 #### Phase A2 — decimal128 + bignum numerics correctness (N1–N4)
+
+**STATUS: DONE (2026-07-16)** — all four numerics miscompiles fixed RED→GREEN with Python-decimal
+oracle-verified deterministic vectors (`crates/ynz-numerics/tests/deterministic_vectors.rs`
+`audit_n1_to_n4`, 7 tests: all RED first, reproducing the audit's exact wrong values, then GREEN).
+N1: `align_exponents` now returns a 4-way `TruncatedTail` classification (Exact/BelowHalf/Half/
+AboveHalf) threaded through `add_finite` — a *boolean* sticky (the plan's prescribed shape) is
+provably insufficient on the effective-subtraction path when the borrowed difference already fits
+34 digits (deviation surfaced for the deviation-judge; three oracle-verified vectors lock the
+class). N2: `clamp_to_34_digits_sticky` rewritten as a single-step `round_half_even` reduction
+(the excess-digit count is computed from `coef / 10^34` because `decimal_digits()` saturates at
+34). N4: bignum `div` threads its remainder into new `BigNum::round_to_precision_sticky`.
+N3: `format_bignum` large-value sci branch emits `first.rest E+adj`. Numerics suites green incl.
+Hursley conformance + differential; full workspace green (one pre-existing wall-clock-timing
+integration flake, `v03_m3b_p4_model_a_intended_reorder_parallel_output`, failed under load and
+passes in isolation — unrelated to numerics, surfaced in the return); golden 34/34 ZERO movement;
+no contended file touched; fmt+clippy clean. R2 override carried — NOT closed by this phase.
 - **Task + purpose:** fix the four confirmed numerics miscompiles on Yinz's exact-decimal promise. This
   is the R2 money-floor phase — RED test-vectors are mandatory, not optional.
 - **Steps:**
   1. Write RED deterministic test-vectors (extend `crates/ynz-numerics/tests/deterministic_vectors.rs`)
      reproducing each of N1–N4 with expected exact values — all RED first.
      **CHECKPOINT** — RED vectors committed, all four failing, describing exact expected outputs.
-  2. **N1** `decimal128/ops.rs:274-283` — `align_exponents` third branch drops sticky info: return a
-     sticky flag and thread it into `clamp_to_34_digits_sticky` (`:424`).
+  2. **N1** `decimal128/ops.rs:274-283` — `align_exponents` third branch drops sticky info. Implemented
+     as a 4-way `TruncatedTail{Exact,BelowHalf,Half,AboveHalf}` classification (not a boolean sticky
+     flag) returned by `align_exponents` and threaded through `add_finite` into both
+     `round_tail_to_grid` and `clamp_to_34_digits_sticky` — a boolean is provably insufficient on the
+     unclamped effective-subtraction path, where a borrowed difference already fitting 34 digits needs
+     to distinguish a true half-tie from an above-half tail to round correctly (ratified as
+     **FRAGO 003** — see `audit.md`).
   3. **N2** `decimal128/ops.rs:424-455` — replace `clamp_to_34_digits_sticky`'s digit-by-digit loop
      (mis-rounds) with a single-step `round_half_even` reduction.
      **CHECKPOINT** — N1+N2 GREEN, `align_exponents`/clamp path re-verified against vectors.

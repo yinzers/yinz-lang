@@ -117,6 +117,16 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   `read/write <worktree> only; main checkout and every other worktree: NO access`. Standing lesson
   for all later dispatches: executors NEVER switch the main checkout's branch.
 
+- `2cbdf552-51aa-4528-8621-495bedc3e7b6` — 2026-07-16 — Phase A2 executor dispatch (Fable 5 / medium).
+  N1–N4 fixed RED→GREEN with 7 Python-decimal-oracle-verified vectors (audit_n1_to_n4 in
+  deterministic_vectors.rs); full suite green; goldens 34/34 zero movement (R3 assumption held — N3
+  moved nothing); R2 override carried, not closed. Deviations surfaced: (1) boolean-sticky
+  insufficiency → TruncatedTail 4-way classification (→ FRAGO 003 below); (2) decimal_digits()
+  34-saturation caught mid-implementation (in-scope correctness detail, judged not a divergence);
+  (3) pre-existing M3b wall-clock flake integration.rs:8231 surfaced, correctly left unfixed
+  (→ four-field deferral in the followups stub). This entry backfilled by the conductor in the same
+  round the FRAGO was filed — resolving the rules-compliance blocker (missing seam entry).
+
 ## FRAGO log
 
 ## FRAGO 001 — 2026-07-16 — session-id: session_01CZ3fYLUXaJqfQnaPgUzwBQ
@@ -133,6 +143,19 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   `:837` is `map_grow_str`'s signature (the audit doc cites it correctly). Pure plan-text citation fix;
   the produced work correctly mirrored the real `find_slot`.
 - **Applied by:** re-dispatched executor corrects the citation in plan.md.
+
+## FRAGO 003 — 2026-07-16 — session-id: session_01CZ3fYLUXaJqfQnaPgUzwBQ
+- **Phase:** A2. **Classified:** deviation-judge (agent a-540784f) — JUSTIFIED, risk-neutral-to-risk-LOWERING
+  on the R2 money floor → auto-apply + log, no signature.
+- **Delta:** A2 step 2's prescribed "return a sticky flag [boolean] and thread it into
+  clamp_to_34_digits_sticky" is amended to the implemented reality: a 4-way
+  `TruncatedTail{Exact,BelowHalf,Half,AboveHalf}` classification threaded through the same
+  align_exponents → add_finite → round_tail_to_grid/clamp_to_34_digits_sticky path. Forcing reality:
+  a boolean is provably insufficient on the unclamped effective-subtraction path (no clamp step runs
+  to consume it) — oracle proof: 1E33−0.16 and −0.15 both →…999.8 (tie→even) but −0.14 →…999.9; a
+  first-cut boolean reproduced exactly this 1-ULP wrong-money class. Same function, same threading
+  path, strictly more information; locked by three vectors.
+- **Applied by:** re-dispatched executor rewrites A2 step 2 in plan.md.
 
 ## Context-segment log
 (none yet)

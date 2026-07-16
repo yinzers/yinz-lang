@@ -57,6 +57,18 @@ impl BigNum {
     ///
     /// Time: O(precision) — single truncate pass + at most one additive carry pass. Space: O(1) — mutates in place.
     pub fn round_to_precision(&mut self) {
+        self.round_to_precision_sticky(false);
+    }
+
+    /// Like `round_to_precision`, with an external sticky signal: `sticky` is true
+    /// when the caller knows there are additional non-zero digits below the stored
+    /// digit vector (e.g. a non-zero long-division remainder).  A "half" round digit
+    /// with an all-zero rest is then strictly above half, so it rounds up rather
+    /// than to even.  Dropping this signal loses 1 ULP on exactly-at-the-boundary
+    /// quotients.
+    ///
+    /// Time: O(precision). Space: O(1) — mutates in place.
+    pub fn round_to_precision_sticky(&mut self, sticky: bool) {
         if self.is_special() {
             return;
         }
@@ -78,7 +90,7 @@ impl BigNum {
                 increment = true;
             } else if round_digit == 5 {
                 // Half-even: round to even
-                let rest_nonzero = self.digits[p + 1..].iter().any(|&d| d != 0);
+                let rest_nonzero = sticky || self.digits[p + 1..].iter().any(|&d| d != 0);
                 if rest_nonzero {
                     increment = true;
                 } else {

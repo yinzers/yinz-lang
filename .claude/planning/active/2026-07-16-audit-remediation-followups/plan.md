@@ -35,3 +35,12 @@ Idempotency-Key: 2026-07-16-audit-remediation-two-lane#A1: crates-ynz-runtime-te
   assertions is a deliberate test-design change that would need probe instrumentation.
 - COST: <1 session.
 - TRIGGER: the test flakes red once in CI without a real regression.
+
+## 2026-07-16 — Deferral: M3b wall-clock-race flaky test (non-blocking — deferred by 2026-07-16-audit-remediation-two-lane#A2 at the phase boundary)
+
+Idempotency-Key: 2026-07-16-audit-remediation-two-lane#A2: crates-ynz-driver-tests-integration-rs-8231
+
+- WHAT: v03_m3b_p4_model_a_intended_reorder_parallel_output (crates/ynz-driver/tests/integration.rs:8231) asserts 50ms-vs-100ms wall-clock ordering and flips under parallel-run load; redesign to synchronization-based or sufficiently-separated durations.
+- WHY: the current shape proves real concurrent overlap, which a synchronization-only rewrite might lose — a real test-design tradeoff owned by M3b-era work, not Lane A's bug-remediation scope.
+- COST: small — rework one fixture + two assertions (<1 session).
+- TRIGGER: next CI flake of this test, or the next plan touching M3b auto-parallelization tests.
