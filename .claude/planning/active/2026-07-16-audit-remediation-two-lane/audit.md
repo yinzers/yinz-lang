@@ -127,6 +127,37 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   (→ four-field deferral in the followups stub). This entry backfilled by the conductor in the same
   round the FRAGO was filed — resolving the rules-compliance blocker (missing seam entry).
 
+- `2cbdf552-51aa-4528-8621-495bedc3e7b6` — 2026-07-16 — Phase A3 executor dispatch. F2–F8 landed
+  RED→GREEN. F2: `block_depth` counter mirroring `expr_depth`, cap 256, flat (non-recursive)
+  brace-counting resync on overflow so the fix itself never re-introduces stack growth; new
+  `[[diagnostic_template]]` `StatementNestingTooDeep` added to `registry/features.toml` (registry
+  first); gallery trigger correctly left for Lane B per D3, flagged in Future Requirements (not
+  touched here). F3: `catch_unwind(AssertUnwindSafe)` wraps both `handle_request` and
+  `handle_notification` dispatch in `main_loop`; caught panics logged + answered with an
+  `InternalError` response (requests) or logged only (notifications, no id to answer). F7:
+  `position.rs`'s UTF-8 branch now rejects non-`is_char_boundary` offsets. F4/F5:
+  `parse_toml_string` guards the lone-quote-byte case (no more `1..0` panic); key matching switched
+  from `strip_prefix` to an exact match on the `=`-split, trimmed key. F6: SIGKILL escalation now
+  `killpg(pgid, SIGKILL)`, not bare `child.kill()` — verified via a RED→GREEN grandchild-survival
+  test (RED confirmed by temporarily reverting to `child.kill()` and back). F8: all four
+  `c"".as_ptr()` OOM-fallback sites now `std::process::abort()`, consistent with `ynz_alloc`'s
+  policy; no live-OOM repro test added (see deviation below). Full workspace suite green (133 test
+  binaries, 0 failed); golden 34/34 zero movement; fmt clean; clippy clean (workspace, no
+  `--tests`); all three consumer-mounted binaries (`ynz-watch` via `ynz-driver`, `ynz-driver`,
+  `ynz-lsp`) rebuilt `--release` this session (R9) after rebuilding `ynz-runtime --release` first
+  (the static-lib dependency `ynz-driver`/`ynz-watch`'s build.rs require). Deviations surfaced (not
+  self-adjudicated): (1) F3's plan-text citation named `server.rs:126` **+ `main.rs`**, but `main.rs`
+  needed no edit — the default Rust panic hook already logs to stderr before unwinding, satisfying
+  "log the caught panic" without a custom hook; the actual fix is entirely in `server.rs`'s
+  `main_loop`. (2) F8: severity is INFO (audit's own rating) and reproducing genuine `malloc` NULL
+  under Linux overcommit is unreliable without a privileged `sysctl`/RLIMIT_AS setup this suite
+  doesn't have; no sibling `ynz_alloc`/`ynz_alloc_zeroed` abort-on-OOM site has a live-OOM test
+  either — treated as a mechanical policy-consistency fix (verification.md escape hatch), not a
+  bug-response requiring a Paper-Trace-style repro. (3) A pre-existing 2-warning (unused imports in
+  `code_action.rs`/`semantic_tokens.rs` test modules) surfaced under `cargo test` but not under the
+  project's own `cargo clippy --workspace` invocation (no `--tests`) — pre-existing, untouched by
+  this phase, noted for whoever eventually runs `--all-targets` clippy.
+
 ## FRAGO log
 
 ## FRAGO 001 — 2026-07-16 — session-id: session_01CZ3fYLUXaJqfQnaPgUzwBQ

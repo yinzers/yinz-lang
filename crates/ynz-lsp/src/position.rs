@@ -99,6 +99,17 @@ impl LineTable {
                 if ch > line_text.len() {
                     return None;
                 }
+                // F7 (SCRATCH-audit-2026-07-11-non-concurrency.md): a `positionEncoding:
+                // utf-8` client is trusted to send a byte count, but a buggy or
+                // adversarial client can send a mid-character byte offset. The utf-16
+                // branch below can never land off a char boundary (it walks `chars()`),
+                // so this is the one place a non-boundary offset can escape — and this
+                // offset flows into consumers that slice `&str` (formatting.rs,
+                // completion.rs, semantic_tokens.rs), where a mid-char slice panics and
+                // kills the whole LSP process (F3). Reject it here instead.
+                if !line_text.is_char_boundary(ch) {
+                    return None;
+                }
                 ch
             }
             PositionEncoding::Utf16 => {
@@ -213,6 +224,37 @@ mod tests {
         assert_eq!(
             tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf16),
             pos(0, 1)
+        );
+    }
+
+    // F7 (SCRATCH-audit-2026-07-11-non-concurrency.md): a `positionEncoding: utf-8`
+    // client sending a mid-character byte offset must be rejected (None), never
+    // returned verbatim — a mid-char offset flowing into a `&str` slice elsewhere
+    // (formatting.rs, completion.rs, semantic_tokens.rs) panics and kills the LSP.
+    // "✓" is a 3-byte UTF-8 char at bytes 0..3; character 1 (utf-8 byte-count
+    // encoding) lands at byte 1 — the MIDDLE of that character, not a boundary.
+    #[test]
+    fn mid_char_utf8_offset_rejected() {
+        let t = "✓b";
+        let tbl = LineTable::new(t);
+        assert_eq!(
+            tbl.position_to_byte_offset(t, pos(0, 1), PositionEncoding::Utf8),
+            None,
+            "character 1 lands mid-way through the 3-byte ✓ — must be rejected, not returned as byte 1"
+        );
+        assert_eq!(
+            tbl.position_to_byte_offset(t, pos(0, 2), PositionEncoding::Utf8),
+            None,
+            "character 2 also lands mid-way through ✓ (byte 2 of 3) — must be rejected"
+        );
+        // Sanity: the real char boundaries (0 and 3) still resolve correctly.
+        assert_eq!(
+            tbl.position_to_byte_offset(t, pos(0, 0), PositionEncoding::Utf8),
+            Some(0)
+        );
+        assert_eq!(
+            tbl.position_to_byte_offset(t, pos(0, 3), PositionEncoding::Utf8),
+            Some(3)
         );
     }
 

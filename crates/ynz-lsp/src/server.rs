@@ -126,13 +126,64 @@ fn handshake(
 fn main_loop(connection: &Connection, state: &mut ServerState) {
     for msg in &connection.receiver {
         match msg {
-            Message::Request(req) => handle_request(connection, state, req),
-            Message::Notification(notif) => handle_notification(connection, state, notif),
+            Message::Request(req) => {
+                // F3 (SCRATCH-audit-2026-07-11-non-concurrency.md): the LSP embeds the
+                // entire compiler front-end and runs it on every keystroke over
+                // untrusted buffers, which are peppered with invariant panic!/
+                // unreachable!/unwrap() guards ("compiler bug -> abort is acceptable").
+                // Without isolation, ONE such panic unwinds through this loop and kills
+                // the whole server process — every open document's state gone. Catch it
+                // per-request instead: log it, answer that one request with an error,
+                // and keep serving every other open document.
+                let req_id = req.id.clone();
+                let method = req.method.clone();
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_request(connection, state, req)
+                }));
+                if let Err(payload) = outcome {
+                    let msg = panic_payload_message(&payload);
+                    eprintln!("ynz-lsp: caught panic handling request `{method}`: {msg}");
+                    let response = Response::new_err(
+                        req_id,
+                        lsp_server::ErrorCode::InternalError as i32,
+                        format!("ynz-lsp hit an internal error handling `{method}`: {msg}"),
+                    );
+                    connection.sender.send(Message::Response(response)).ok();
+                }
+            }
+            Message::Notification(notif) => {
+                // Same isolation for notifications — these have no request id / response
+                // to answer, so a caught panic is logged only. Losing one notification's
+                // side effect (e.g. one diagnostics republish) is far better than losing
+                // the whole server.
+                let method = notif.method.clone();
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_notification(connection, state, notif)
+                }));
+                if let Err(payload) = outcome {
+                    let msg = panic_payload_message(&payload);
+                    eprintln!("ynz-lsp: caught panic handling notification `{method}`: {msg}");
+                }
+            }
             Message::Response(_) => {}
         }
         if state.shutdown_requested {
             break;
         }
+    }
+}
+
+/// Best-effort extraction of a human-readable message from a caught panic payload
+/// (`std::panic::catch_unwind`'s `Err` variant). Most panics carry a `&str` or
+/// `String` message; anything else (a custom payload type) falls back to a generic
+/// label rather than failing to log at all.
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
     }
 }
 
@@ -775,4 +826,60 @@ pub fn publish_diagnostics(
     };
     let notif = Notification::new("textDocument/publishDiagnostics".to_string(), params);
     connection.sender.send(Message::Notification(notif)).ok();
+}
+
+#[cfg(test)]
+mod panic_isolation_tests {
+    use super::*;
+
+    #[test]
+    fn panic_payload_message_extracts_str_and_string() {
+        let payload_str: Box<dyn std::any::Any + Send> = Box::new("boom");
+        assert_eq!(panic_payload_message(&payload_str), "boom");
+
+        let payload_string: Box<dyn std::any::Any + Send> = Box::new(String::from("kaboom"));
+        assert_eq!(panic_payload_message(&payload_string), "kaboom");
+
+        let payload_other: Box<dyn std::any::Any + Send> = Box::new(42i32);
+        assert_eq!(
+            panic_payload_message(&payload_other),
+            "<non-string panic payload>"
+        );
+    }
+
+    // F3 (SCRATCH-audit-2026-07-11-non-concurrency.md): proves the ISOLATION MECHANISM
+    // itself — the exact `catch_unwind(AssertUnwindSafe(...))` shape `main_loop` wraps
+    // around `&mut ServerState` — actually catches a panic and leaves the state usable
+    // afterward, rather than proving one specific compiler-internal `unreachable!()`
+    // trigger (the audit cites several: typeck/check.rs:3545/3624/3626,
+    // intrinsics.rs:61/105/114/132, shapes.rs:674 — any one of them, reached via a
+    // hover/completion/etc request over crafted-but-plausible source, would unwind
+    // through `handle_request` exactly like this synthetic panic does).
+    #[test]
+    fn catch_unwind_isolates_a_panic_touching_mutable_state() {
+        let mut state = ServerState::new(crate::capabilities::PositionEncoding::Utf16);
+
+        // Silence the default panic-hook backtrace noise in test output — the panic
+        // is expected and caught, not a real failure.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.shutdown_requested = true; // mutate through the borrow before panicking
+            panic!("synthetic ICE — proves F3's catch_unwind isolates this");
+        }));
+        std::panic::set_hook(previous_hook);
+
+        assert!(
+            outcome.is_err(),
+            "the panic must be CAUGHT here, not propagate out of main_loop"
+        );
+        // The mutation that happened before the panic is still visible — catch_unwind
+        // does not roll back state; AssertUnwindSafe is an assertion the caller makes,
+        // not a guarantee the type system enforces.
+        assert!(state.shutdown_requested);
+        // And the SAME `&mut ServerState` is still usable afterward — proving the
+        // outer loop can keep serving other requests/documents after this one panicked.
+        state.shutdown_requested = false;
+        assert!(!state.shutdown_requested);
+    }
 }

@@ -81,31 +81,43 @@ pub fn load_project_config(root: &Path, diags: &mut DiagnosticBucket) -> Project
 
     for line in text.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
             continue;
         }
-        if let Some(rest) = line.strip_prefix("entry") {
-            if let Some(val) = parse_toml_string(rest) {
-                entry = val;
+        // F5 (SCRATCH-audit-2026-07-11-non-concurrency.md): split on `=` and match the
+        // trimmed KEY exactly, rather than `strip_prefix`-ing the whole line — the old
+        // `line.strip_prefix("entry")` matched `entrypoint_foo = "x"` and
+        // `line.strip_prefix("version")` matched `versionabc = ...` as if they were the
+        // real key, silently mis-parsing any key that merely starts with one of ours.
+        let Some((key_part, value_part)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key_part.trim();
+        match key {
+            "entry" => {
+                if let Some(val) = parse_toml_string(value_part) {
+                    entry = val;
+                }
             }
-        } else if let Some(rest) = line.strip_prefix("name") {
-            if let Some(val) = parse_toml_string(rest) {
-                name = val;
+            "name" => {
+                if let Some(val) = parse_toml_string(value_part) {
+                    name = val;
+                }
             }
-        } else if let Some(rest) = line.strip_prefix("version") {
-            if let Some(val) = parse_toml_string(rest) {
-                version = val;
+            "version" => {
+                if let Some(val) = parse_toml_string(value_part) {
+                    version = val;
+                }
             }
-        } else if !line.starts_with('[') {
-            // Unknown key — warn
-            let key = line.split('=').next().unwrap_or("").trim();
-            if !key.is_empty() {
-                diags.push(Diagnostic::warning(
-                    SourceSpan::new(toml_path.display().to_string(), 0, 0),
-                    format!("Unknown field `{key}` in yinz.toml — ignored."),
-                    "Supported fields: `entry`, `name`, `version`.",
-                    "Unknown fields are ignored for forward-compatibility with future Yinz versions.",
-                ));
+            _ => {
+                if !key.is_empty() {
+                    diags.push(Diagnostic::warning(
+                        SourceSpan::new(toml_path.display().to_string(), 0, 0),
+                        format!("Unknown field `{key}` in yinz.toml — ignored."),
+                        "Supported fields: `entry`, `name`, `version`.",
+                        "Unknown fields are ignored for forward-compatibility with future Yinz versions.",
+                    ));
+                }
             }
         }
     }
@@ -128,7 +140,19 @@ fn parse_toml_string(rest: &str) -> Option<String> {
     let rest = rest
         .trim_start_matches(|c: char| c.is_whitespace() || c == '=')
         .trim();
-    // Strip surrounding quotes (single or double)
+
+    // F4 (SCRATCH-audit-2026-07-11-non-concurrency.md): a lone quote character is an
+    // unterminated/malformed value (`entry = "` trims down to a single `"` byte) —
+    // treat it as invalid rather than falling through to the quote-strip below, where
+    // that single byte satisfies BOTH `starts_with('"')` and `ends_with('"')` and
+    // `&rest[1..rest.len() - 1]` becomes the invalid byte range `1..0` — a panic that
+    // presents a user's yinz.toml typo as a compiler-bug ICE banner.
+    if rest == "\"" || rest == "'" {
+        return None;
+    }
+
+    // Strip surrounding quotes (single or double) — `rest.len() >= 2` is guaranteed
+    // here (the lone-quote case above already returned), so this slice is always valid.
     let inner = if (rest.starts_with('"') && rest.ends_with('"'))
         || (rest.starts_with('\'') && rest.ends_with('\''))
     {
@@ -263,5 +287,88 @@ fn collect_ynz_files(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_toml(dir: &Path, contents: &str) {
+        std::fs::write(dir.join("yinz.toml"), contents).expect("write yinz.toml");
+    }
+
+    // F4 (SCRATCH-audit-2026-07-11-non-concurrency.md): an unterminated quoted value
+    // (`entry = "`) must never panic — it must be treated as an invalid/empty value,
+    // falling back to the default entry.
+    #[test]
+    fn f4_unterminated_double_quote_does_not_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_toml(dir.path(), "entry = \"\n");
+        let mut diags = DiagnosticBucket::new();
+        let cfg = load_project_config(dir.path(), &mut diags);
+        // Malformed value falls back to the default — no panic, which is the
+        // load-bearing assertion (this call itself is the test).
+        assert_eq!(cfg.entry, "entrypoint.ynz");
+    }
+
+    #[test]
+    fn f4_unterminated_single_quote_does_not_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_toml(dir.path(), "entry = '\n");
+        let mut diags = DiagnosticBucket::new();
+        let cfg = load_project_config(dir.path(), &mut diags);
+        assert_eq!(cfg.entry, "entrypoint.ynz");
+    }
+
+    #[test]
+    fn f4_lone_quote_char_value_does_not_panic() {
+        // The narrowest possible repro: `rest` trims down to exactly one quote byte.
+        assert_eq!(parse_toml_string("= \""), None);
+        assert_eq!(parse_toml_string("= '"), None);
+    }
+
+    // F5 (SCRATCH-audit-2026-07-11-non-concurrency.md): a key that merely starts with
+    // a real key name (`entrypoint_foo`, `versionabc`) must NOT be treated as that key
+    // — `strip_prefix`-style prefix matching silently mis-parsed these.
+    #[test]
+    fn f5_prefix_key_is_not_matched_as_entry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_toml(
+            dir.path(),
+            "entrypoint_foo = \"should-not-become-entry.ynz\"\n",
+        );
+        let mut diags = DiagnosticBucket::new();
+        let cfg = load_project_config(dir.path(), &mut diags);
+        assert_eq!(
+            cfg.entry, "entrypoint.ynz",
+            "`entrypoint_foo` must not be parsed as the `entry` key"
+        );
+    }
+
+    #[test]
+    fn f5_prefix_key_is_not_matched_as_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_toml(dir.path(), "versionabc = \"9.9.9\"\n");
+        let mut diags = DiagnosticBucket::new();
+        let cfg = load_project_config(dir.path(), &mut diags);
+        assert_eq!(
+            cfg.version, "0.0.0",
+            "`versionabc` must not be parsed as the `version` key"
+        );
+    }
+
+    #[test]
+    fn f5_exact_key_still_parses_normally() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_toml(
+            dir.path(),
+            "entry = \"main.ynz\"\nname = \"demo\"\nversion = \"1.2.3\"\n",
+        );
+        let mut diags = DiagnosticBucket::new();
+        let cfg = load_project_config(dir.path(), &mut diags);
+        assert_eq!(cfg.entry, "main.ynz");
+        assert_eq!(cfg.name, "demo");
+        assert_eq!(cfg.version, "1.2.3");
     }
 }

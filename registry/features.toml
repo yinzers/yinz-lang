@@ -1672,6 +1672,22 @@ what_template = "`wait` must be followed by a function call."
 what_instead_template = "Write `wait someFn()` to wait for `someFn` to complete."
 why_template = "`wait` schedules a suspension point. It only applies to function calls whose result must be waited for."
 
+# audit-remediation-two-lane Phase A3 (F2, SCRATCH-audit-2026-07-11-non-concurrency.md):
+# deeply nested statements/blocks (if/while/for bodies) had no depth guard, so
+# `parse_block`/`parse_stmt` recursion overflowed the stack and aborted the process
+# with a raw core dump — no diagnostic, bypassing the driver's ICE hook entirely.
+# The parser's expression-depth guard (`expr_depth >= 256`) has no matching registry
+# entry either (it predates this registry's diagnostic_template convention and is not
+# wired through DiagnosticKind); this entry is the canonical text for the new sibling
+# guard, kept in sync by hand with `crates/ynz-parser/src/parser.rs`'s
+# `parse_block_depth_overflow`. Its gallery trigger is gated to Lane B (decision D3) —
+# see Future Requirements in the audit-remediation-two-lane plan.
+[[diagnostic_template]]
+kind_name = "StatementNestingTooDeep"
+what_template = "Nesting too deep (max 256 levels of nested blocks)."
+what_instead_template = "Break this code into smaller functions — Yinz prefers small, focused functions over deeply nested `if`/`while`/`for` bodies anyway (Golden Rule 7)."
+why_template = "The parser uses one stack frame per nested block. At 256 levels we're well past any reasonable code; further nesting would crash the compiler. The limit catches both typos (like a code generator repeating an unclosed brace) and adversarial inputs."
+
 # UnawaitedSleepAsync — RETIRED by v0.3-M2 Phase 6 (transitive inference model).
 # Under the inference model, `sleep` without explicit `wait` is correct: the transitive
 # may-block analysis marks the enclosing function as `suspends` and codegen emits the

@@ -32,6 +32,11 @@ pub struct Parser<'a> {
     pos: usize,
     pub diags: DiagnosticBucket,
     expr_depth: u32,
+    /// F2 (SCRATCH-audit-2026-07-11-non-concurrency.md): mirrors `expr_depth` for
+    /// statement/block recursion (`parse_block` <-> `parse_stmt` via `if`/`while`/`for`
+    /// bodies). Unguarded, this recursion overflows the stack on deeply nested source
+    /// with a raw abort (no diagnostic, bypasses the driver's ICE hook entirely).
+    block_depth: u32,
     /// When `true`, the current token is logically `>` — the first half of a `>>` token
     /// that was split while closing a nested generic type. `peek()` returns `&Token::Gt`
     /// and `advance()` consumes it by clearing this flag (without incrementing `pos`).
@@ -47,6 +52,7 @@ impl<'a> Parser<'a> {
             pos: 0,
             diags: DiagnosticBucket::new(),
             expr_depth: 0,
+            block_depth: 0,
             pending_gt: false,
         }
     }
@@ -1217,13 +1223,22 @@ impl<'a> Parser<'a> {
 
     fn parse_block(&mut self) -> Block {
         let start = self.current_span();
+
+        // F2: cap statement/block nesting at 256 (mirrors the expression-depth guard
+        // below). Checked BEFORE incrementing block_depth / recursing, so a pathological
+        // input never grows the call stack past this point.
+        if self.block_depth >= 256 {
+            return self.parse_block_depth_overflow(start);
+        }
+
+        self.block_depth += 1;
         let mut stmts = Vec::new();
         // Defense-in-depth: 10 000-iteration cap catches any future forward-progress
         // regression before it silently hangs CI. The real forward-progress guarantee
         // is the `pos_before` check below; this cap is a tripwire, not the fix.
         let mut iter_budget = 10_000usize;
 
-        loop {
+        let result = loop {
             debug_assert!(
                 {
                     iter_budget = iter_budget.saturating_sub(1);
@@ -1236,7 +1251,7 @@ impl<'a> Parser<'a> {
                 Token::RBrace => {
                     let end = self.current_span();
                     self.advance(); // consume `}`
-                    return Block {
+                    break Block {
                         stmts,
                         span: SourceSpan::new(self.file, start.start, end.end),
                     };
@@ -1248,7 +1263,7 @@ impl<'a> Parser<'a> {
                         "Add `}` at the end of the function body.",
                         "Every `{` must be matched with a `}`. The compiler reached the end of the file before finding it.",
                     ));
-                    return Block {
+                    break Block {
                         stmts,
                         span: SourceSpan::new(self.file, start.start, self.eof_span().end),
                     };
@@ -1268,6 +1283,50 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+        };
+        self.block_depth -= 1;
+        result
+    }
+
+    /// F2 overflow path: emit the teaching diagnostic once, then resync PAST this
+    /// block's body with a flat (non-recursive) brace-counting scan instead of
+    /// continuing to recurse through `parse_stmt`/`parse_if`/etc. A recursive skip
+    /// would just move the stack overflow from "one frame per nested block" to "one
+    /// frame per skipped nested brace" — the whole point is a flat loop here.
+    fn parse_block_depth_overflow(&mut self, start: SourceSpan) -> Block {
+        let span = self.current_span();
+        let already_reported = self
+            .diags
+            .iter()
+            .any(|d| d.what.starts_with("Nesting too deep"));
+        if !already_reported {
+            self.diags.push(Diagnostic::error(
+                span,
+                "Nesting too deep (max 256 levels of nested blocks).",
+                "Break this code into smaller functions — Yinz prefers small, focused functions over deeply nested `if`/`while`/`for` bodies anyway (Golden Rule 7).",
+                "The parser uses one stack frame per nested block. At 256 levels we're well past any reasonable code; further nesting would crash the compiler. The limit catches both typos (like a code generator repeating an unclosed brace) and adversarial inputs.",
+            ));
+        }
+        let mut depth = 1usize;
+        while depth > 0 && !matches!(self.peek(), Token::Eof) {
+            match self.peek() {
+                Token::LBrace => {
+                    depth += 1;
+                    self.advance();
+                }
+                Token::RBrace => {
+                    depth -= 1;
+                    self.advance();
+                }
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+        let end = self.current_span();
+        Block {
+            stmts: vec![],
+            span: SourceSpan::new(self.file, start.start, end.end),
         }
     }
 

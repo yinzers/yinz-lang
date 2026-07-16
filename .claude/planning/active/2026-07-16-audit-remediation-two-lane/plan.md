@@ -302,6 +302,27 @@ no contended file touched; fmt+clippy clean. R2 override carried — NOT closed 
 ---
 
 #### Phase A3 — Parser / LSP / driver / watch robustness (F2, F3, F4, F5, F6, F7, F8)
+
+**STATUS: DONE (2026-07-16)** — F2–F8 all fixed RED→GREEN in one dispatch (no checkpoint needed).
+F2: `block_depth` counter mirrors `expr_depth` (cap 256), overflow path is a flat non-recursive
+brace-counting resync (never re-introduces the stack-growth bug it's fixing); new
+`StatementNestingTooDeep` `[[diagnostic_template]]` registry entry added first; gallery trigger
+correctly deferred to Lane B per D3 (not touched). F3: `catch_unwind(AssertUnwindSafe)` wraps
+`handle_request`/`handle_notification` dispatch in `main_loop`; caught panics logged + answered with
+`InternalError` (requests) or logged-only (notifications). F7: `position.rs` UTF-8 branch rejects
+non-char-boundary offsets. F4/F5: `parse_toml_string` guards the lone-quote-byte panic; TOML key
+matching is exact (`split_once('=')` + trimmed-key match) instead of `strip_prefix`. F6: SIGKILL
+escalation now `killpg(pgid, SIGKILL)`; RED confirmed by temporarily reverting to `child.kill()` and
+reproducing the grandchild-survives failure, then restoring the fix. F8: all four OOM-fallback sites
+now `std::process::abort()`, matching `ynz_alloc`'s policy (no live-OOM repro test — see deviation
+below). Full workspace suite green (133 binaries, 0 failed); golden 34/34 zero movement; fmt +
+clippy clean; all three consumer-mounted binaries rebuilt `--release` this session (after
+`ynz-runtime --release` first, its build-time static-lib dependency). Deviations surfaced for the
+deviation-judge (not self-adjudicated): F3's citation named `main.rs` but only `server.rs` needed
+editing (default panic hook already logs to stderr); F8 has no live-OOM repro test (INFO severity,
+same as sibling `ynz_alloc` sites, unreliable to force under Linux overcommit — verification.md
+escape hatch, not a bug-response). Full detail in `audit.md` Session log.
+
 - **Task + purpose:** the crash-surface + robustness cluster on untrusted editor/TOML input, plus the
   process-group kill and OOM-policy fixes. Serves the security / error-handling / resource-cleanup
   factors (R7, R9).

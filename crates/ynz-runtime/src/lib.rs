@@ -1552,7 +1552,14 @@ pub unsafe extern "C" fn ynz_string_from_static(ptr: *const u8, len: i64) -> *co
     let size = len as usize + 1; // +1 for null terminator
     let buf = malloc(size) as *mut u8;
     if buf.is_null() {
-        return c"".as_ptr().cast::<u8>();
+        // F8 (SCRATCH-audit-2026-07-11-non-concurrency.md): abort on OOM like every
+        // other allocation site in this runtime (`ynz_alloc`, `ynz_error_new`, map/array
+        // allocs) — Yinz programs cannot recover from OOM. Returning a pointer to a
+        // STATIC empty string here was inconsistent with that policy AND a footgun:
+        // codegen assumes every string pointer this family returns is heap-owned and
+        // freeable, so a caller that later `ynz_free`s (or drops) this "string" would
+        // free a static buffer — undefined behavior.
+        std::process::abort();
     }
     std::ptr::copy_nonoverlapping(ptr, buf, len as usize);
     *buf.add(len as usize) = 0;
@@ -1719,7 +1726,9 @@ pub unsafe extern "C" fn ynz_string_concat(a: *const u8, b: *const u8) -> *const
     let total = a_str.len() + b_str.len() + 1;
     let buf = malloc(total) as *mut u8;
     if buf.is_null() {
-        return c"".as_ptr().cast::<u8>();
+        // F8: abort on OOM — see ynz_string_from_static for the full rationale
+        // (consistent OOM policy across the runtime; no free-of-static hazard).
+        std::process::abort();
     }
     std::ptr::copy_nonoverlapping(a_str.as_ptr(), buf, a_str.len());
     std::ptr::copy_nonoverlapping(b_str.as_ptr(), buf.add(a_str.len()), b_str.len());
@@ -2061,7 +2070,9 @@ pub unsafe extern "C" fn ynz_string_builder_finalize(builder: *mut u8) -> *const
     let len = vec.len();
     let buf = malloc(len) as *mut u8;
     if buf.is_null() {
-        return c"".as_ptr().cast::<u8>();
+        // F8: abort on OOM — see ynz_string_from_static for the full rationale
+        // (consistent OOM policy across the runtime; no free-of-static hazard).
+        std::process::abort();
     }
     std::ptr::copy_nonoverlapping(vec.as_ptr(), buf, len);
     buf as *const u8
@@ -2082,7 +2093,9 @@ fn heap_string_from_str(s: &str) -> *const u8 {
     let len = bytes.len();
     let buf = unsafe { malloc(len + 1) as *mut u8 };
     if buf.is_null() {
-        return c"".as_ptr().cast::<u8>();
+        // F8: abort on OOM — see ynz_string_from_static for the full rationale
+        // (consistent OOM policy across the runtime; no free-of-static hazard).
+        std::process::abort();
     }
     if len > 0 {
         unsafe {
