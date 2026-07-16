@@ -621,6 +621,119 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   **Deviations surfaced:** none new beyond FRAGO 001 below. No other files touched this dispatch beyond
   `docs/reference/REF-naming.md`, `.claude/rules/teaching-surfaces.md`, and this `audit.md`.
 
+- 04e22a51-80c1-4b67-a886-083784d61bcd — 2026-07-16 — **Phase 5 execution — verification sweep
+  (Steps 1-4 only; Step 5 "Open PR" explicitly out of scope for this dispatch per the dispatching
+  conductor's instruction).** Same session-id as the prior Phase 2/3/4 entries above (per the
+  harness-assigned session id matching the existing frontmatter-chain entry); NOT re-appended to the
+  frontmatter chain, same rationale as every prior same-session dispatch in this plan.
+
+  **Ground-truth deferred-check note honored.** Per FRAGO-adjacent Post-Phase-4 LOG 2 (Phase 4's
+  frontmatter check was a structural placeholder, not a real YAML parse, due to no `pip`/`yaml` module
+  on the bare host), this dispatch ran the REAL Docker-backed yaml-parse check per
+  `~/.claude/rules/run-in-docker.md` rather than repeating the structural placeholder or skipping it.
+  Probed `command -v docker` (present) and `docker compose config --services` (this repo's own `dev`
+  service exists) before reaching for a throwaway `python:3-slim` container — rung 1/2 of the priority
+  ladder was available and used; no bare `docker run` needed. Confirmed `pyyaml` present in `dev` via
+  `docker compose run --rm dev python3 -c 'import yaml'` before writing the check script (probe before
+  invoke, per `run-in-docker.md`).
+
+  **(Step 1) Link-integrity grep.**
+  ```
+  $ grep -rn '[^-]naming\.md)' --include='*.md' .
+  .claude/planning/done/2026-05-14-design-lockdown-from-gemini-review/plan.md:106,157,165,172,494  (done/ archive — out of scope, 5 hits)
+  .claude/planning/active/2026-07-11-rules-corpus-cleanup/audit.md:55,268                            (this plan's own methodology prose in backticks — not real links)
+  .claude/planning/active/2026-07-11-rules-corpus-cleanup/plan.md:299,300                            (same — prose describing the grep pattern)
+  ```
+  Zero real broken links — matches Phase 3's own post-merge grep exactly (same two categories:
+  `done/` archive + this plan's own prose). `.claude/rules/naming.md` confirmed absent from disk
+  (`test -f` → not found).
+  A Python resolve-check (`link_re = re.compile(r'\[[^\]]*\]\(([^)]+)\)')`) walked every relative
+  markdown link in all 17 touched files (the full `git diff --stat main...HEAD` file list) and
+  resolved each target against its source file's directory — result: **`ALL RELATIVE LINKS RESOLVE
+  OK`**, zero broken targets, zero absolute (`~`/`/`-leading) link targets found.
+  Targeted grep `grep -n '](~/.claude\|](/tmp' <touched files>` → **zero hits** (exit code 1/no
+  match). The touched files' bare mentions of `~/.claude` (`docs-checklist.md`, `plan-invariants.md`,
+  `CLAUDE.md`, `vue-website.md` ×2) are all plain backtick prose, not markdown links — correct per the
+  named-not-linked / home-absolute-link-ban convention. No `/tmp` mentions found in any touched file.
+
+  **(Step 2) No-`paths:` check.**
+  ```
+  $ grep -ln '^paths:' <all 17 touched files>
+  .claude/rules/vue-website.md
+  ```
+  Exactly one hit, matching Risk #6's exit criterion exactly. Cross-checked tree-wide
+  (`grep -rl '^paths:' .claude/rules/*.md docs/reference/*.md`) — same single result.
+
+  **(Step 3) YAML-valid check (REAL parse, not the Phase-4 structural placeholder).**
+  Wrote `scratch_yaml_check.py` (loaded frontmatter block via a `---\n...\n---\n` regex, parsed with
+  `yaml.safe_load`, checked required-key presence + checked `created_at`/`updated_at` didn't parse as
+  YAML native `date`/`datetime` objects — which would mean the value was unquoted and thus wrongly
+  typed) against the 13 touched rule files + `REF-golden-rules.md` + `REF-naming.md` (15 files;
+  `CLAUDE.md` and `SCRATCH-stdlib-encoding.md` excluded per their documented frontmatter exemptions).
+  Ran via `docker compose run --rm dev python3 scratch_yaml_check.py`. Full output:
+  ```
+  OK .claude/rules/auto-promotion.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/docs-checklist.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/dot-postfix.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/examples-structure.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/inference.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/language-design.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/non-oop.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/plan-invariants.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/spec-writing.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/stdlib-design.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/teaching-surfaces.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/vocabulary.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK .claude/rules/vue-website.md: valid YAML, keys=[paths] -- NOTES: missing keys (name/description/tags/created_at/updated_at/status/author/metadata — expected, deltas-only anomaly per plan assumption); paths: key present = [website/**]
+  OK docs/reference/REF-golden-rules.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+  OK docs/reference/REF-naming.md: valid YAML, keys=[author, created_at, description, metadata, name, status, tags, updated_at]
+
+  === SUMMARY ===
+  ALL VALID
+  ```
+  Zero YAML parse errors; zero date/number scalars mis-typed as bare (all `created_at`/`updated_at`
+  parsed as Python `str`, confirming they're quoted in source, not bare — a bare date would parse as
+  `datetime.date` and trip the script's explicit check, which fired clean). Spot-read three files'
+  raw frontmatter blocks directly (`vue-website.md`, `teaching-surfaces.md`, `REF-naming.md`) —
+  confirmed block-scalar (`>`) usage for multi-line descriptions, every string scalar double-quoted,
+  `vue-website.md`'s single-quoted `paths:` list item is its own documented pre-existing shape
+  (untouched by this plan). `scratch_yaml_check.py` deleted immediately after the run (`git status
+  --short` confirmed clean tree, zero residue).
+
+  **(Step 4) Content-parity sign-off.**
+  Re-read Phase 3's full parity inventory in this file (Step 2's 9 top-level items + 19-row
+  Renamed-Concepts-table walk, plus Step 6's post-merge re-confirmation) end to end: every item is
+  ticked (✓ pre-existing-duplicate or → merged-this-phase), including the post-Phase-3 ad-hoc fix
+  (`match`/`switch`→`is` NOT-column extension) — independently re-verified live via
+  `grep -n "match.*switch" .claude/rules/vocabulary.md` → line 52: `| Type narrowing | \`is\` |
+  typeof, instanceof, type guards, \`match\`/\`switch\` on types |`. Spot-checked five of the claimed
+  merge/addition items directly against the current file (all present, all as recorded): the
+  `base shape` Quick-Reference row (line 37), the `follows` Quick-Reference row (line 38), the
+  `type`-banned WHY-clause (line 77), the `Self`/`self` reserved-keyword sentence (line 193), the GR13
+  one-line+link opening (line 165), and confirmed zero remaining `naming.md` self-references in
+  `vocabulary.md`. Phase 3's own review-fan-out entry records doc-auditor independently ran and signed
+  the Risk-#1 negation-diff guard (GR13 compression boundary sentence — no dropped negation). Parity:
+  **100% ticked, signed.**
+
+  **Step 5 — not executed.** Per this dispatch's explicit instructions, PR-opening is out of scope;
+  the branch is left as-is after this phase's own (uncommitted, pending-conductor-commit) verification
+  work. No commit made by this dispatch (per instruction: "Do NOT commit — that happens separately").
+
+  **Plan↔task sync note:** same constraint as every prior phase in this plan — no TodoWrite in this
+  dispatch's tool grant, no `- [ ]` checkbox glyphs in this plan (Steps use `1. 2. 3. …` numbering).
+  Sync via `plan.md`'s inline `[DONE]` step markers + the phase's STATUS annotation (qualified: Steps
+  1-4 complete, Step 5 explicitly out of scope, not a gap) + this audit entry.
+
+  **Deviations surfaced:** none — every check ran exactly as the plan's own step text specified; the
+  one substantive change from the plan's literal text is upgrading Step 3 from Phase 4's structural
+  placeholder to the real Docker-backed parse, which is not a deviation but the plan's OWN documented
+  intent (Phase 4's audit entry explicitly named this as provisional and pointed forward to Phase 5's
+  Step 3 as the real gate; the dispatch's own task brief also mandated it explicitly). No FRAGO filed.
+
+  **All four checks: GREEN.** Content-parity: SIGNED. Phase 5 (Steps 1-4) returns COMPLETE. Step 5
+  (Open PR) intentionally not executed — reserved for a separate conductor action per this dispatch's
+  explicit scope boundary.
+
 ## FRAGO log
 (FRAGO delta records append here — see the FRAGO template)
 
@@ -654,6 +767,42 @@ correct and the read was non-destructive.
 
 **Classification:** risk-neutral, auto-applied and logged per the plan's FRAGO flow (no destructive
 action; no wrong content shipped; boundary purpose not threatened).
+
+## FRAGO 002 — Phase 5 Step 5 ("Open PR") explicitly deferred to a separate human-gated action (risk-neutral, auto-applied)
+
+**What happened.** Phase 5's plan text (Step 5: "Open PR from the `main`-forked docs-only branch...")
+and its original exit criteria ("PR open against `main`") both assumed PR-opening would happen inside
+this dispatch. The conductor instructed the Phase 5 executor to skip Step 5 entirely, relaying an
+explicit standing instruction from Patrick (given at the top of this overnight run: "stop before PR,
+leave it staged" — see the conductor's own conversation record) that PR-opening is reserved for his own
+review after he wakes up. The executor complied and wrote the exclusion back into `plan.md`'s
+current-truth text (phase header, the Step 5 line, and the exit-criteria line all annotated in place —
+never silently marked "COMPLETE" while hiding the gap), plus a session-log paragraph in this file. This
+FRAGO formalizes that already-reflected decision as a dedicated delta record, per this repo's own
+plan-source-of-truth discipline (a consequential decision — narrowing a phase's committed step list and
+un-meeting the plan's own Key Outcome #7 — needs a matching `## FRAGO NNN` block in the same dispatch
+window it took effect, not only inline prose).
+
+**Why this is classified RISK-NEUTRAL.** deviation-judge adjudicated this as JUSTIFIED (explicit
+human-authority instruction, correctly attributed, not an executor-invented shortcut) and surfaced only
+the missing-formal-record gap, not the decision itself, as the thing needing a fix. The decision moves
+no risk axis: no code changes, no destructive git operation, no work is lost — it is a pure sequencing
+deferral of one administrative step (opening a PR) to a moment when the accountable human is present to
+review the diff himself, which is *more* conservative than opening it unattended, not less. The plan's
+own risk table (¶1) never scored PR-opening as a risk driver in the first place.
+
+**What this changes going forward.** Key Outcome #7 ("PR opened from a main-forked docs-only branch")
+remains genuinely un-met as of this dispatch — `plan.md`'s frontmatter stays `status: "active"`, not
+`"done"`, honestly reflecting that the plan is not yet fully complete. The plan does NOT flip to `done`
+until Patrick reviews the five sealed commits (`b9ab582`, `ff08d80`, `ca60f0b`, `9e4835f`, plus Phase
+5's verification-only commit) and either opens the PR himself or authorizes the conductor to do so in a
+follow-up session. No retroactive action is needed for this FRAGO — it is a formalization of a decision
+already correctly applied, not a reopening of it.
+
+**Classification:** risk-neutral, auto-applied and logged per the plan's FRAGO flow (pure sequencing
+deferral of a non-destructive administrative step to human review; no risk axis moved; already reflected
+in `plan.md`'s current-truth text — this record closes the missing-formal-FRAGO gap deviation-judge
+surfaced during Phase 5's review fan-out).
 
 ## Context-segment log
 (per-segment entries append here — see the execute-plan conductor §3a.1)

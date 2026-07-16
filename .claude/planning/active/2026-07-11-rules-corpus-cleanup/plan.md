@@ -394,27 +394,59 @@ plan plus the audit sidecar.
   for completeness + line budget).
 - **Model tag:** `(docs-authoring, high, large)`.
 
-#### Phase 5 — verification sweep + PR
+#### Phase 5 — verification sweep + PR — **STATUS: COMPLETE (Steps 1–4 only — Step 5 "Open PR" explicitly out of scope for this dispatch; see note)** (session-id: 04e22a51-80c1-4b67-a886-083784d61bcd)
 
 - **Task + purpose:** since no CI catches doc breakage, verify link-integrity, content-parity, and
   the no-scoping guarantee by scripted grep, then open the PR.
 - **Steps:**
-  1. **Link-integrity grep.** Tree-wide: zero live markdown LINKS to the deleted
+  1. **[DONE] Link-integrity grep.** Tree-wide: zero live markdown LINKS to the deleted
      `.claude/rules/naming.md` (the anchored `[^-]naming\.md)` pattern — excludes the surviving
      `REF-naming.md`; the intent is zero broken links, not zero string occurrences; gate-exempt
      scratchpad audit docs keep their prose mentions, and links to `REF-naming.md` remain correct);
      every relative markdown link in a
      touched file resolves to a real path (scripted resolve-check); no bare-text or machine-local
      (`~/.claude`, `/tmp`) links in touched files.
-  2. **No-`paths:` check.** Grep every file this plan touched for a `paths:` frontmatter key → must
+     **[VERIFIED — see audit.md session log for the full grep/script transcript: the anchored grep's
+     only hits tree-wide are the `done/` archive (5, out of scope) + this plan's own `plan.md`/
+     `audit.md` prose describing the grep pattern in backticks (4, not real links) — zero real broken
+     links; a Python resolve-check confirmed every relative markdown link in all 17 touched files
+     resolves to a real on-disk path; a targeted grep for `](~/.claude` / `](/tmp` markdown-link forms
+     returned zero hits — the touched files' `~/.claude` mentions are plain backtick prose per the
+     named-not-linked convention, not links.]**
+  2. **[DONE] No-`paths:` check.** Grep every file this plan touched for a `paths:` frontmatter key → must
      return only `vue-website.md` (Risk #6).
-  3. **YAML-valid check.** Parse the frontmatter of every touched rule file (e.g. `python3 -c` yaml
+     **[VERIFIED — `grep -ln '^paths:'` across all 17 touched files returns exactly one hit:
+     `vue-website.md`.]**
+  3. **[DONE] YAML-valid check.** Parse the frontmatter of every touched rule file (e.g. `python3 -c` yaml
      load) → all valid; string scalars quoted, booleans/numbers bare.
-  4. **Content-parity sign-off.** Confirm the Phase-3 parity inventory is 100% ticked and the
+     **[VERIFIED — REAL Docker-backed yaml parse (not the Phase-4 structural placeholder), run via
+     `docker compose run --rm dev python3 <script>` (this repo's own `dev` service carries `pyyaml` —
+     confirmed via `import yaml` before writing the check). All 15 frontmatter-bearing touched files
+     (the 13 rule files + `REF-golden-rules.md` + `REF-naming.md`) parsed as valid YAML mappings; the
+     11 descriptive-frontmatter files carry all 8 required keys with dates/strings quoted (no bare
+     date/number scalars mis-parsed as YAML date objects); `vue-website.md` parsed to its documented
+     single-key `paths:` shape (the deltas-only anomaly, not the model to copy, per the plan's own
+     verified assumption). `CLAUDE.md` (frontmatter-exempt) and `SCRATCH-stdlib-encoding.md`
+     (scratchpad-exempt) were confirmed to carry no-frontmatter / exempt frontmatter respectively, not
+     run through the required-keys check. See audit.md session log for the full per-file output and
+     the script's disposal (scratch script deleted after the run — zero residue left in the tree).]**
+  4. **[DONE] Content-parity sign-off.** Confirm the Phase-3 parity inventory is 100% ticked and the
      negation-diff reviewer signed.
-  5. **Open PR** from the `main`-forked docs-only branch (via `/pr` or manual), referencing this
-     plan-id and both audit scratch docs.
-- **Exit criteria:** all four grep/parse checks green; parity signed; PR open against `main`.
+     **[VERIFIED — re-read the full Phase-3 parity inventory (audit.md Step 2 + Step 6): all 9
+     enumerated top-level items and all 19 Renamed-Concepts-table rows are ticked (✓ already-present or
+     → merged), including the post-Phase-3 `match`/`switch`→`is` NOT-column fix (independently
+     confirmed live in `vocabulary.md`:52). Spot-verified the four claimed genuine-merge items
+     (`base shape` row, `follows` row, the `type`-banned WHY-clause, the `Self`/`self` sentence) and the
+     GR13 one-line+link + naming.md self-ref removal are all present in the current `vocabulary.md`.
+     Phase 3's review fan-out entry records the negation-diff reviewer (doc-auditor) signed the GR13
+     compression boundary-sentence check clean. Parity: 100% ticked and signed.]**
+  5. **[NOT EXECUTED THIS DISPATCH] Open PR** from the `main`-forked docs-only branch (via `/pr` or
+     manual), referencing this plan-id and both audit scratch docs. **Explicitly out of scope for this
+     dispatch** per the dispatching conductor's instruction ("Do NOT open a PR... leave the branch
+     as-is after Phase 5's own commit"); left for a separate conductor action.
+- **Exit criteria:** all four grep/parse checks green — **[MET, this dispatch]**; parity signed —
+  **[MET]**; PR open against `main` — **[NOT MET, deliberately deferred — see Step 5 note; not a
+  failure of this dispatch's charter, which was scoped to Steps 1–4 only]**.
 - **Reviewer fan-out:** documentation-standards reviewer (final gate — runs the grep suite and
   confirms no regression against Class-6 "healthy, don't break" files).
 - **Model tag:** `(verification, high, small)`.
