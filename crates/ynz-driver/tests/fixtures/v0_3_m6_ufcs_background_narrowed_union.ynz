@@ -1,0 +1,68 @@
+// v0.3-M6 Phase 3c fix-loop round 2 (FRAGO 026): narrowed-union background receiver
+// must be FAIL-CLOSED REJECTED — both spawn forms.
+// Correct behavior: `background fig.haul()` (statement form) and
+// `let h = background shp.mend()` (handle form) on a union binding narrowed to a shape
+// variant inside an `is` arm are deterministic teaching COMPILE ERRORS (one per spawn),
+// exit non-zero, no binary produced.
+// Pre-fix failure (the confirmed CWE-125, security/critical-path IR-reproduced): the
+// round-1 narrowing-aware shape predicate routed the narrowed receiver into codegen's
+// `Type::Shape` heap-upgrade arm, which loads `sizeof(shape)` bytes (>= 64, field-padded)
+// from the 16-byte `{tag, data}` union storage — a 48+ byte out-of-bounds read. The
+// program compiled clean and ran, printing garbage (the live probe printed `0` for a
+// `radius: 5.0` float field).
+// Fields are `int` (not `float`): a reader copying this example should not also hit the
+// SEPARATE pre-existing global `float.toString` bug (prints 0.0) — kept copy-safe.
+
+shape Circle {
+  radius: int
+}
+
+shape Square {
+  side: int
+}
+
+shape Figure = Circle | Square
+
+function haul(give self: Circle) -> nothing {
+  wait sleep(20)
+  print(self.radius.toString())
+}
+
+function mend(give self: Square) -> nothing {
+  wait sleep(20)
+  print(self.side.toString())
+}
+
+function spawnStatementForm() -> nothing {
+  let c: Circle = { radius: 5 }
+  let fig: Figure = c
+  if (fig) {
+    is Circle => {
+      background fig.haul()
+    }
+    is Square => {
+      print(`square`)
+    }
+  }
+  wait sleep(120)
+}
+
+function spawnHandleForm() -> nothing {
+  let s: Square = { side: 2 }
+  let shp: Figure = s
+  if (shp) {
+    is Square => {
+      let h = background shp.mend()
+    }
+    is Circle => {
+      print(`circle`)
+    }
+  }
+  wait sleep(120)
+}
+
+function entrypoint() -> nothing {
+  spawnStatementForm()
+  spawnHandleForm()
+  print(`done`)
+}

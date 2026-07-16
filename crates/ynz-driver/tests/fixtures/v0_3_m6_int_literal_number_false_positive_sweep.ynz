@@ -1,0 +1,54 @@
+// WHY: false-positive guard for the int-literal→number gate COMPLETION sweep —
+// every neighboring form that must stay UNTOUCHED: decimal literals into number
+// slots, number idents, int literals into int slots (call args, collection
+// elems/keys/values, fields, index assigns, returns, match arms). Compiles and
+// runs clean; any gate diagnostic here is a false positive.
+//
+// NOTE: `toll` deliberately returns `nothing` — a `number` returned BY VALUE
+// from a synchronous user fn prints nondeterministic garbage (a PRE-EXISTING
+// decimal128 by-value-return defect surfaced during this sweep, out of the
+// gate's scope) — the false-positive cases here are the ARG slots, which do
+// not depend on the return path.
+shape Order {
+  total: number
+  count: int
+}
+
+function toll(amount: number) -> nothing {
+  print(`toll-ok`)
+}
+
+function addTo(n: int, m: int) -> int {
+  return n + m
+}
+
+function five() -> int {
+  return 5
+}
+
+function entrypoint() -> nothing {
+  let x: number = 5.0
+  print(x)
+  toll(5.0)
+  toll(x)
+  print(addTo(5, 2))
+  let nums: array<int> = [1, 2]
+  nums.add(5)
+  print(nums.count())
+  nums[0] = 5
+  let got = nums.get(0)
+  print(got.or(9))
+  print(nums.contains(5))
+  let o: Order = { total: 5.0, count: 5 }
+  print(o.count)
+  print(five())
+  let tags: map<string, int> = {`a`: 5}
+  tags.set(`b`, 5)
+  let t = tags.get(`b`)
+  print(t.or(0))
+  let k: int = 5
+  if (k) {
+    5 => { print(`match-int-ok`) }
+    else => { print(`no`) }
+  }
+}

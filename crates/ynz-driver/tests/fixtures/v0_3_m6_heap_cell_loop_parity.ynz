@@ -1,0 +1,68 @@
+// v0.3-M6 Phase 1c step 3d — heap-cell LOOP alloc=free parity probe (FRAGO 013's
+// carried open recon: heap-cell ownership/free semantics in loops, resolved not
+// assumed). A crossing `maybe` binding and a crossing `union` binding are re-bound
+// PER ITERATION inside loops, each passed to a suspending callee — so each iteration
+// runs the bind-time heap-cell promotion (`maybe_to_heap_cell` / `union_to_heap_cell`)
+// and orphans the previous iteration's cell(s).
+//
+// Accounting (the integration test pins alloc = free + 11 exactly):
+//   +5  maybe loop, 5 iterations  — 1 envelope cell per `let m` promotion
+//                                   (maybe<int>: non-shape payload, no payload cell)
+//   +6  union loop, 3 iterations  — 2 cells per `let fig` promotion (the {tag,data}
+//                                   envelope + the Square payload deep-copy)
+//   ±0  task/child frames         — every `wait` child frame and the entrypoint's own
+//                                   frame are ynz_alloc'd AND freed (balanced; free>0
+//                                   is the probe's non-vacuity signal)
+// The +11 gap is the never-drop-locals design (M5 P3/FRAGO 009 exact-gap semantics)
+// surfacing through this phase's NEW bind-time promotion sites: cells are held until
+// process exit, so a LOOP leaks per-iteration. Verdict recorded + surfaced by Phase 1c
+// step 3d; a change in the gap = a new leak class or a landed drop story.
+
+shape Circle {
+  radius: float
+}
+
+shape Square {
+  side: float
+}
+
+shape Figure = Circle | Square
+
+function pick(m: maybe<int>) -> int {
+  wait sleep(2)
+  return m.or(0)
+}
+
+function describe(figure: Figure) -> string {
+  wait sleep(2)
+  if (figure) {
+    is Circle => {
+      return `circle`
+    }
+    is Square => {
+      return `square`
+    }
+  }
+  return `unknown`
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  let total: int = 0
+  let i: int = 0
+  while (i < 5) {
+    let m: maybe<int> = `40`.toInt()
+    const v = wait pick(m)
+    total = total + v
+    i = i + 1
+  }
+  print(total.toString())
+  let j: int = 0
+  while (j < 3) {
+    let s: Square = { side: 2.0 }
+    let fig: Figure = s
+    const label = wait describe(fig)
+    print(label)
+    j = j + 1
+  }
+}

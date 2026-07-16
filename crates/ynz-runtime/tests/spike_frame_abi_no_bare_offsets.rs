@@ -95,6 +95,14 @@ const SCAN_TARGETS: &[ScanTarget] = &[
 //      `FRAME_OFFSET_RETURN_SLOT` as appropriate — do NOT relax this list.
 /// Time: O(n * p)  Space: O(v)  where n = total bytes of all scanned source files, p = patterns per target class (constant = 5), v = violation count found.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "pure static-analysis grep/shape-scan over checked-in source-file text — no unsafe \
+              or concurrency surface for Miri to exercise. Needs real fs::read_to_string, which \
+              Miri's default isolation blocks (`open` not available when isolation is enabled; \
+              see https://github.com/rust-lang/miri#isolation). Same disposition as \
+              no_blocking_in_conduit_path.rs's conduit_runtime_path_has_zero_synchronous_blocking_calls."
+)]
 fn no_bare_spike_frame_offset_literals() {
     let crate_dir = env!("CARGO_MANIFEST_DIR");
     let mut violations: Vec<String> = Vec::new();
@@ -273,6 +281,11 @@ fn emit_something(frame_ptr: PointerValue) {
 //      non-header uses of the literal `8`/`16` text this test must NOT flag).
 /// Time: O(n) where n = total bytes of the two scanned source files. Space: O(v) where v = violation count.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "same fs::read_to_string isolation limitation as no_bare_spike_frame_offset_literals \
+              above — pure source-text scan, no unsafe/concurrency surface for Miri to exercise."
+)]
 fn no_bare_general_frame_header_offset_in_codegen_gep() {
     let codegen_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ynz-codegen/src");
     let mut violations: Vec<String> = Vec::new();

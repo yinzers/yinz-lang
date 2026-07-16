@@ -14,6 +14,35 @@ services:
       - cargo-registry:/home/ubuntu/.cargo/registry
     working_dir: /work
     command: ["sleep", "infinity"]
+    # ThreadSanitizer (v0.3-M6 Phase 6b) tries to lower its own ASLR entropy via
+    # personality(ADDR_NO_RANDOMIZE) on every run — Docker's default seccomp profile denies
+    # that EXACT syscall+argument combination, which aborts EVERY TSan-instrumented binary
+    # with "FATAL: ThreadSanitizer: encountered an incompatible memory layout but was unable
+    # to disable ASLR" before any test runs. `./docker/tsan-seccomp.json` is Docker's own
+    # default profile (github.com/moby/profiles/seccomp/default.json — the file `daemon/
+    # seccomp_linux.go` actually loads) with exactly ONE line added: an `SCMP_ACT_ALLOW`
+    # rule for `personality` with arg value 262144 (0x40000 == ADDR_NO_RANDOMIZE) — the
+    # default profile already allow-lists `personality` for 5 OTHER argument values (0, 8,
+    # 131072, 131080, 0xffffffff) but not this one, which is why TSan specifically (and
+    # only) needs this addition. `security_opt: seccomp:unconfined` (Docker's own +
+    # LLVM/Clang sanitizer docs' quick-fix) was replaced by this narrower profile (M6
+    # Phase 6b fix-loop) — `unconfined` disabled Docker's ENTIRE default filter (~40
+    # blocked syscalls including mount, pivot_root, keyctl, init_module, kexec_load,
+    # perf_event_open, userfaultfd, unrestricted clone/unshare), a needlessly wide attack
+    # surface for a container that routinely runs untrusted crates.io build scripts/
+    # proc-macros. This narrower profile was verified live against a real TSan run
+    # (verified live during this phase's fix-loop round, twice: once catching a real
+    # container-drift gap, once as part of the final full-suite re-verification) — not
+    # assumed correct from profile inspection alone.
+    # `cap_add: SYS_PTRACE` is NOT needed for personality(2) specifically (not gated by
+    # CAP_SYS_PTRACE at all) — it is required for TSan's symbolizer, which reads
+    # /proc/<pid>/maps and /proc/<pid>/stat of OTHER processes for stack traces; ptrace
+    # capability governs that /proc access. Kept, now with a reason recorded here instead
+    # of an unexplained line.
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:./docker/tsan-seccomp.json
 
 volumes:
   cargo-registry:

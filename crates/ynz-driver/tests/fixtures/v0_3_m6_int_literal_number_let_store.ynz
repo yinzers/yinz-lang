@@ -1,0 +1,13 @@
+// WHY: int literal stored into a `let`-binding with a `number` annotation
+// (`let x: number = 5`). The hinted infer silently types the int literal `number`,
+// so `types_compatible(number, number)` ADMITTED it — then codegen ICE'd storing a
+// raw i64 into the decimal128 pointer slot. Pre-fix RED signature (probe-confirmed
+// against the pre-fix tree): the "Yinz compiler bug" ICE banner, panic
+// `Found IntValue "i64 5" but expected PointerValue variant` at emit.rs (store path).
+// v0.3-M6 store-site stopgap: the shared int-literal→`number` gate now REJECTS this
+// with a clean teaching error (`NumberSlotRole::StoreBinding`). The int→number
+// COERCION stays deferred to 2026-07-04-v0-3-hotfix-int-literal-number.
+function entrypoint() -> nothing {
+  let x: number = 5
+  print(x)
+}

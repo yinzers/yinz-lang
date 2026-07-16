@@ -1,0 +1,30 @@
+// v0.3-M6 Phase 1d RED fixture (FRAGO 009 defect A, CPU spawn arm): a decimal128
+// (`number`) argument to a `background`-spawned NON-suspending callee routes through
+// `ynz_rt_spawn_blocking` (CPU blocking pool). Correct behavior: the task reads the
+// value the spawner staged — prints 2.5, exits 0. The callee busy-loops before
+// reading `n` and the spawner suspends right after the spawn, so the spawner's
+// resume-fn stack is dead by the time the task reads — the UAF window is open on
+// every run, not timing-luck (a spawn-then-immediately-read shape printed the
+// correct value pre-fix because the dead alloca had not been clobbered yet).
+// Pre-fix failure (the documented UAF; probe-confirmed 3/3 deterministic on the
+// pre-fix tree at 759bd9b, matching the FRAGO 009 fable-probe signature on
+// 47abd29): `prepare_bg_arg_for_ctx` has no `Number` arm, so the arg falls through
+// by-pointer (`BgArgFreeKind::None`) — the ctx stages ptr_to_int of a
+// SPAWNER-STACK i128 temp; the spawner suspends, its stack dies, and the task
+// dereferences the dangling pointer — prints 0.000... instead of 2.5.
+
+function report(n: number) -> nothing {
+  let total = 0
+  let i = 0
+  while (i < 3000000) {
+    total = total + i
+    i = i + 1
+  }
+  print(n.toString())
+}
+
+function entrypoint() -> nothing {
+  let x: number = 2.5
+  background report(x)
+  wait sleep(60)
+}

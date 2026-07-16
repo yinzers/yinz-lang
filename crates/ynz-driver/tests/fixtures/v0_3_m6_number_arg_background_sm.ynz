@@ -1,0 +1,25 @@
+// v0.3-M6 Phase 1d RED fixture (FRAGO 009 defect A, SM spawn arm): a decimal128
+// (`number`) argument to a `background`-spawned SUSPENDING callee routes through
+// `ynz_rt_spawn` (state-machine I/O pool). Correct behavior: the resumed task reads
+// the value the spawner staged — prints 4.5, exits 0.
+// The spawner suspends right after the spawn (keeping the runtime alive past the
+// child's sleep — a bare fire-and-forget last statement gets CANCELLED at runtime
+// shutdown and never reads at all) while its resume-fn stack dies at the wait,
+// holding the UAF window open deterministically.
+// Pre-fix failure (the documented UAF; probe-confirmed 3/3 deterministic on the
+// pre-fix tree at 759bd9b, matching the FRAGO 009 fable-probe signature on
+// 47abd29): the same missing `Number` arm in `prepare_bg_arg_for_ctx` stages
+// ptr_to_int of a SPAWNER-STACK i128 temp into the child frame's local slot; the
+// resume fn's number-param read (`sm_number_param_set` indirection) dereferences the
+// dangling pointer after the spawner's stack died — prints 0.000... instead of 4.5.
+
+function fetchNum(n: number) -> nothing {
+  wait sleep(5)
+  print(n.toString())
+}
+
+function entrypoint() -> nothing {
+  let x: number = 4.5
+  background fetchNum(x)
+  wait sleep(60)
+}

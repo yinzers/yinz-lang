@@ -1,0 +1,11 @@
+// WHY: NEGATIVE int literal into a CONCRETE `number` param of a generic fn
+// (`tag(`x`, -5)`) — `-IntLit` types `int` and the unify mismatch is discarded.
+// Pre-fix: codegen ICE panic (`call i128 @tag_string(ptr, i64 -5)`).
+function tag<T>(v: T, amount: number) -> number {
+  return amount
+}
+
+function entrypoint() -> nothing {
+  let got = tag(`x`, -5)
+  print(got)
+}

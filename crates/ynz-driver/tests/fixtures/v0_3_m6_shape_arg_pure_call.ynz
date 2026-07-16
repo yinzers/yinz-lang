@@ -1,0 +1,28 @@
+// v0.3-M6 Phase 1b RED fixture (FRAGO 004): pure-`Call` shape-arg use-after-free.
+// Correct behavior: `ship` is passed by pointer to the suspending callee `crew`, which
+// reads `self.cargo` AFTER its own suspend point — so `ship` crosses the suspension and
+// must be frame-embedded (shape_embed) in `entrypoint`'s heap frame. Prints 7, exits 0.
+// Pre-fix failure (the documented UAF): `locals_crossing_wait` is a lexical
+// read-AFTER-suspension scan that never flags a shape read only AT the suspending
+// statement (as a call argument) → `ship` gets a plain stack alloca in the parent
+// resume fn; the child frame stores a ptrtoint of that stack address; the parent
+// returns Pending, its stack dies, and the child resumes on a dangling `self` —
+// silent NONDETERMINISTIC garbage across runs (observed pre-fix: 13-15 digit
+// pointer-like values, different every run).
+
+shape Ship {
+  name: string
+  cargo: int
+}
+
+function crew(share self: Ship) -> int {
+  wait sleep(10)
+  return self.cargo
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  const ship: Ship = { name: `Mon`, cargo: 7 }
+  const c = wait crew(ship)
+  print(c.toString())
+}

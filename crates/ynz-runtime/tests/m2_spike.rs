@@ -17,6 +17,30 @@ use ynz_runtime::runtime::{
     ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn_blocking_joinable, YnzCpuResult,
 };
 
+// WHY (M6 Phase 6b): Miri's interpreted execution carries real, measured wall-clock
+// overhead (`Instant::now()` reflects real host time even under Miri's default
+// isolation — only `SystemTime`'s REALTIME clock query is isolation-blocked, not
+// `Instant`'s MONOTONIC one). Every tight ms-scale upper-bound budget in this file
+// was tuned for native speed and fails under that overhead — confirmed live: a
+// straight-line, no-suspend branch (contract #3's b=false path, no sleep at all)
+// still measured 8ms against a native <5ms budget, proving this is general
+// interpreter overhead, not a concurrency-specific artifact (that class is
+// separately triaged via `#[cfg_attr(miri, ignore)]` where the timing IS the point
+// — contract #1, `sleep_eight_concurrent_share_threads`). Where the timing budget
+// is a secondary guard around a correctness assertion this crate's actual UB/leak
+// coverage cares about (ordering, return values, no-skipped-iterations), widen the
+// upper bound under Miri instead of dropping the whole test — preserves Miri's real
+// value (the state-machine/frame code still gets fully exercised and UB-checked)
+// while accommodating its documented timing unsuitability
+// (https://github.com/rust-lang/miri#threads-and-concurrency).
+fn miri_budget(native: Duration, under_miri: Duration) -> Duration {
+    if cfg!(miri) {
+        under_miri
+    } else {
+        native
+    }
+}
+
 // ── Test serialization ────────────────────────────────────────────────────────
 //
 // Each test that needs a runtime builds its own multi-thread Tokio runtime with
@@ -166,6 +190,25 @@ impl Future for FnFetchEvent {
 // proving is that the completion time stays in [80ms, 150ms] proving cooperative
 // scheduling (not 800ms which would indicate serialized sequential execution of
 // 100ms waits).
+//
+// Miri-incompatible (M6 Phase 6b): same wall-clock CONCURRENCY-TIMING class as
+// `sleep_eight_concurrent_share_threads` in tests/m2_runtime.rs — Miri's threading
+// model does not give genuinely-parallel tasks native-speed wall-clock overlap, so
+// 8 concurrently-scheduled 100ms sleeps measured 792.75ms under Miri (interpreter
+// overhead on tasks that ARE running concurrently, not a serialization regression;
+// a real sequential-execution bug would need ~800ms across ALL 8 waits stacked,
+// which is exactly what was measured, but every other single-wait timing-bounded
+// contract in this file passes cleanly under Miri — only the eight-way-concurrent
+// one is affected, matching Miri's documented "not a great tool to test timing
+// behavior" limitation for concurrent workloads
+// (https://github.com/rust-lang/miri#threads-and-concurrency)). Behavior stays
+// covered by the ordinary `cargo test`/`cargo nextest` lane at native speed.
+#[cfg_attr(
+    miri,
+    ignore = "wall-clock 8-way concurrency timing assertion — Miri's interpreter \
+              overhead defeats native-speed overlap measurement, not a real bug; \
+              see comment above"
+)]
 #[test]
 fn contract_1_single_wait_suspension_resume() {
     with_runtime(|rt| {
@@ -216,6 +259,19 @@ impl Future for FetchEventWrapper {
 static CHAIN_MID_TIME: AtomicI64 = AtomicI64::new(0);
 static CHAIN_END_TIME: AtomicI64 = AtomicI64::new(0);
 
+// WHY: only ever compared to each other (`mid < end`) — a monotonic clock is the
+// correct tool for that, never wall-clock epoch time. `Instant` is what
+// `Duration`/`Instant`-based ordering needs; `SystemTime::now()` (which this
+// replaced, M6 Phase 6b) additionally hard-panics under Miri's default isolation
+// (`clock_gettime` with REALTIME clocks is a blocked syscall) and is NOT
+// guaranteed monotonic on real systems either (NTP/manual clock adjustments can
+// step it backward), so it was never the right tool even outside Miri.
+static CHAIN_EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+fn chain_now_ns() -> i64 {
+    CHAIN_EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as i64
+}
+
 struct FnChain {
     resume_point: i32,
     sleep_handle: Option<Pin<Box<Sleep>>>,
@@ -254,12 +310,8 @@ impl Future for FnChain {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(()) => {
                             self.sleep_handle = None;
-                            // Record mid event as nanoseconds since CHAIN_START_NS epoch.
-                            let now_ns = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_nanos() as i64;
-                            CHAIN_MID_TIME.store(now_ns, Ordering::SeqCst);
+                            // Record mid event as nanoseconds since CHAIN_EPOCH (monotonic).
+                            CHAIN_MID_TIME.store(chain_now_ns(), Ordering::SeqCst);
                             self.resume_point = 2;
                         }
                     }
@@ -275,11 +327,7 @@ impl Future for FnChain {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(()) => {
                             self.sleep_handle = None;
-                            let now_ns = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_nanos() as i64;
-                            CHAIN_END_TIME.store(now_ns, Ordering::SeqCst);
+                            CHAIN_END_TIME.store(chain_now_ns(), Ordering::SeqCst);
                             self.resume_point = 4;
                         }
                     }
@@ -315,8 +363,8 @@ fn contract_2_multi_wait_sequential() {
             "completed too fast ({elapsed:?}); 2×50ms waits should take ≥95ms"
         );
         assert!(
-            elapsed < Duration::from_millis(150),
-            "elapsed {elapsed:?} exceeds 150ms budget"
+            elapsed < miri_budget(Duration::from_millis(150), Duration::from_millis(3000)),
+            "elapsed {elapsed:?} exceeds budget"
         );
     });
 }
@@ -409,8 +457,8 @@ fn contract_3_wait_inside_if() {
             "b=true completed too fast ({elapsed_true:?})"
         );
         assert!(
-            elapsed_true < Duration::from_millis(150),
-            "b=true elapsed {elapsed_true:?} > 150ms budget"
+            elapsed_true < miri_budget(Duration::from_millis(150), Duration::from_millis(3000)),
+            "b=true elapsed {elapsed_true:?} exceeds budget"
         );
 
         // b=false: should complete in <5ms.
@@ -421,8 +469,8 @@ fn contract_3_wait_inside_if() {
         let elapsed_false = start.elapsed();
         eprintln!("contract_3 b=false: elapsed={elapsed_false:?}");
         assert!(
-            elapsed_false < Duration::from_millis(5),
-            "b=false took {elapsed_false:?} — should be <5ms (no wait)"
+            elapsed_false < miri_budget(Duration::from_millis(5), Duration::from_millis(500)),
+            "b=false took {elapsed_false:?} — should be near-instant (no wait)"
         );
     });
 }
@@ -639,8 +687,8 @@ fn contract_4a_worker_thread_sync_bridge() {
             "4a completed too fast ({elapsed:?})"
         );
         assert!(
-            elapsed < Duration::from_millis(200),
-            "4a elapsed {elapsed:?} > 200ms budget"
+            elapsed < miri_budget(Duration::from_millis(200), Duration::from_millis(3000)),
+            "4a elapsed {elapsed:?} exceeds budget"
         );
     });
 }
@@ -676,8 +724,8 @@ fn contract_4b_spawn_blocking_pool_sync_bridge() {
             "4b completed too fast ({elapsed:?})"
         );
         assert!(
-            elapsed < Duration::from_millis(200),
-            "4b elapsed {elapsed:?} > 200ms budget"
+            elapsed < miri_budget(Duration::from_millis(200), Duration::from_millis(3000)),
+            "4b elapsed {elapsed:?} exceeds budget"
         );
     });
 }
@@ -772,8 +820,8 @@ fn contract_4d_state_machine_inside_state_machine_sync_bridge() {
             "4d completed suspiciously fast ({elapsed:?}); inner sleep may not have fired"
         );
         assert!(
-            elapsed < Duration::from_millis(150),
-            "4d elapsed {elapsed:?} > 150ms — possible deadlock or wrong sync bridge"
+            elapsed < miri_budget(Duration::from_millis(150), Duration::from_millis(3000)),
+            "4d elapsed {elapsed:?} — possible deadlock or wrong sync bridge"
         );
     });
 }
@@ -1076,8 +1124,8 @@ fn contract_7_wait_in_loop() {
             "loop completed too fast ({elapsed:?}); some iterations may have been skipped"
         );
         assert!(
-            elapsed < Duration::from_millis(150),
-            "loop elapsed {elapsed:?} > 150ms budget"
+            elapsed < miri_budget(Duration::from_millis(150), Duration::from_millis(3000)),
+            "loop elapsed {elapsed:?} exceeds budget"
         );
     });
 }
@@ -1843,7 +1891,21 @@ fn frame_size_measurement_all_fixtures() {
 //
 // Threshold: ≤ 1% of a 100ms wait = ≤ 1000µs absolute.
 // Compares ynz_rt_run_entrypoint_spike vs direct future polling.
-
+//
+// Miri-incompatible (M6 Phase 6b): unlike the other timing-budget contracts in
+// this file, this test's ENTIRE purpose is a sub-millisecond overhead-RATIO
+// measurement between two code paths — there is no correctness assertion to
+// preserve by widening a threshold (see `miri_budget` above for the contracts
+// where that applies). Under Miri's interpreted execution the absolute overhead
+// of the interpreter itself dwarfs the microsecond-scale difference being
+// measured, so the ratio is pure noise, not a real regression signal. Behavior
+// stays covered by the ordinary `cargo test`/`cargo nextest` lane at native speed.
+#[cfg_attr(
+    miri,
+    ignore = "sub-millisecond overhead-ratio benchmark — Miri's interpreter \
+              overhead dwarfs the measurement itself, not a real bug; see \
+              comment above"
+)]
 #[test]
 fn sync_bridge_overhead_measurement() {
     with_runtime(|rt| {
@@ -1919,7 +1981,7 @@ fn spawn_after_shutdown_returns_null() {
     // Serialise against other tests that touch the global RUNTIME (init/shutdown share it).
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    extern "C" fn never_runs(_ctx: *mut u8) -> YnzCpuResult {
+    extern "C-unwind" fn never_runs(_ctx: *mut u8) -> YnzCpuResult {
         YnzCpuResult([1, 0])
     }
 

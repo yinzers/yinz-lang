@@ -1,0 +1,35 @@
+// v0.3-M6 Phase 1b fix-loop RED fixture (FRAGO 006 / signed R14): number-arg UAF through
+// the FUSED (mixed CPU+I/O) group path — `emit_fused_group_spawn_poll`'s I/O-member init,
+// which delegates to the SAME `emit_io_member_init` as the pure-I/O independent-group path.
+// Admission (cpu_admission::admitted_fused_group): host has no params, no pre-group
+// statement suspends, `crunch`/`fetchNum` are adjacent direct ident calls with one
+// scalar/Ident arg each, one CPU member (does_real_work loop) + one Suspending member.
+// Correct behavior: `fetchNum` reads its decimal128 arg AFTER its own suspend point, so
+// the staged value must live in the surviving composed heap frame.
+// crunch(1) = sum(0..50) + 1 = 1226. Prints 1226 then 4.5, exits 0.
+// Pre-fix failure (the documented UAF): `emit_io_member_init` stages ptr_to_int of a
+// dying resume-fn stack temp for `x`; the resumed child reads freed memory — garbage
+// instead of 4.5.
+
+function crunch(n: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return total + n
+}
+
+function fetchNum(m: number) -> number {
+  wait sleep(0)
+  return m
+}
+
+function entrypoint() -> nothing {
+  let x: number = 4.5
+  let a = crunch(1)
+  let b = fetchNum(x)
+  print(a.toString())
+  print(b.toString())
+}

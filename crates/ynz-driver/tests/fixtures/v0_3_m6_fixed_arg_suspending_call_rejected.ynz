@@ -1,0 +1,27 @@
+// v0.3-M6 Phase 1b RED fixture (FRAGO 004): `fixed<int>` passed to a suspending callee.
+// Correct behavior: a `fixed<T>` value escaping by pointer into a suspending callee
+// crosses that suspension exactly like a `fixed<T>` read after a `wait` — and fixed
+// arrays cannot yet be frame-backed (they are stack-allocated `[N x i64]` allocas), so
+// the established UnsupportedCrossingLocalType teaching error must fire at COMPILE time
+// (exit != 0, "cannot yet cross a `wait`", suggest `array<T>`).
+// Pre-fix failure: the escape-through-a-callee-frame is invisible to the lexical
+// read-after scan, so this compiles and runs (exit 0) — the callee holds a dangling
+// pointer to the caller's freed stack array after Pending (the same silent-UAF class
+// as the shape-arg twin; conservative classification closes it at the boundary whether
+// or not the callee reads the array, because the read is invisible across the function
+// boundary).
+// NOTE: the callee deliberately does not iterate `nums` — iterating a `fixed<T>` PARAM
+// is a separate pre-existing backend limitation ("cannot iterate fixed array with
+// unknown size"), orthogonal to this fixture's crossing-classification contract.
+
+function total(share nums: fixed<int>) -> int {
+  wait sleep(10)
+  return 9
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  let nums: fixed<int> = [2, 3, 4]
+  const t = wait total(nums)
+  print(t.toString())
+}

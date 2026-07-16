@@ -1,0 +1,11 @@
+// WHY: int literal as the BRACKET key of a `map<number, string>`
+// (`names[5] = ...` / `names[5]`) — index exprs are inferred with an
+// unconditional `int` hint and never checked against the map's key type.
+// Pre-fix: SILENT type corruption (prints `a`, exit 0), same bit-identity
+// class as the method-key slot. Must be the teaching error.
+function entrypoint() -> nothing {
+  let names: map<number, string> = {}
+  names[5] = `a`
+  let got = names[5]
+  print(got.or(`none`))
+}

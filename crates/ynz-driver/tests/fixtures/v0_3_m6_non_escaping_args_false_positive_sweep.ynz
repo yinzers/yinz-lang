@@ -1,0 +1,89 @@
+// v0.3-M6 Phase 1b fix-loop: committed FALSE-POSITIVE sweep (Phase 1b step 4's sweep,
+// previously run only on gitignored probe files — locked into the suite here).
+// Extended by Phase 1c step 5 with the maybe / union / anonymous-aggregate halves.
+// Correct behavior: a `number`, `fixed<int>`, `maybe<int>`, union, and anonymous
+// struct-literal arg passed to NON-suspending callees, consumed entirely BEFORE the
+// host's suspension, must be untouched by the escape-to-suspending-callee classifier
+// (Phase 1b) AND by the Phase 1c bind-time heap-cell promotion machinery: the number
+// is NOT wrongly frame-backed (still computes 3.5), the fixed<int> does NOT trip the
+// Check 2b UnsupportedCrossingLocalType rejection, the maybe/union are NOT wrongly
+// heap-cell-promoted or rejected (Check 2 / Check 2b skips key on arg-escape-ONLY
+// names — these never arg-escape), and the anonymous literal is NOT routed through
+// value_to_stable_bits (that routing keys on SUSPENDING calls only).
+// Prints 3.5, 9, 40, square, 6 — exits 0.
+// A wrong-widening failure mode: any arg classified as escaping-to-suspending-callee →
+// needless frame-backing/heap promotion (wrong IR, possible garbage), a compile-time
+// rejection (exit != 0), or a spurious per-binding heap cell (visible in IR / alloc
+// counts).
+// LAYOUT NOTES (deliberate, load-bearing — both verified while authoring):
+// 1. All locals are declared AND consumed before the `wait`: the pre-existing BASE
+//    read-after-suspension scan flags a fixed<T>/maybe read appearing after ANY earlier
+//    suspension regardless of declaration position (pre-existing v0.3.x behavior,
+//    reproduced on the pre-Phase-1b tree — NOT this classifier), so declare-after-wait
+//    shapes cannot host this sweep.
+// 2. Every pair of pure calls is separated by a plain statement so no two are
+//    adjacent — two adjacent non-suspending CPU-ABI calls form an M3d CPU spike pair
+//    whose join IS a genuine suspension point, making the args TRUE crossings.
+
+shape Circle {
+  radius: float
+}
+
+shape Square {
+  side: float
+}
+
+shape Figure = Circle | Square
+
+shape Ship {
+  name: string
+  cargo: int
+}
+
+function bump(n: number) -> number {
+  return n + 1.0
+}
+
+function headroom(share nums: fixed<int>) -> int {
+  return 9
+}
+
+function firstOr(m: maybe<int>) -> int {
+  return m.or(0)
+}
+
+function tagOf(figure: Figure) -> string {
+  if (figure) {
+    is Circle => {
+      return `circle`
+    }
+    is Square => {
+      return `square`
+    }
+  }
+  return `unknown`
+}
+
+function crewOf(ship: Ship) -> int {
+  return ship.cargo
+}
+
+function entrypoint() -> nothing {
+  let x: number = 2.5
+  const b = bump(x)
+  let nums: fixed<int> = [2, 3, 4]
+  const h = headroom(nums)
+  let m: maybe<int> = `40`.toInt()
+  const mv = firstOr(m)
+  let s: Square = { side: 3.0 }
+  let f: Figure = s
+  const t = tagOf(f)
+  let sep: int = 1
+  const av = crewOf({ name: `tug`, cargo: 6 })
+  wait sleep(sep)
+  print(b.toString())
+  print(h.toString())
+  print(mv.toString())
+  print(t)
+  print(av.toString())
+}

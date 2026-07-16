@@ -3,9 +3,9 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application"]
 created_at: "2026-07-04"
-updated_at: "2026-07-04"
+updated_at: "2026-07-16"
 metadata:
   type: "plan"
 ---
@@ -956,6 +956,24 @@ after 3 and 4.
    `cpu_admission.rs`'s classification boundary. **TRIGGER:** a real, reproduced starvation incident
    traced to a non-SM CPU-bound function that admission misclassified, or the next milestone
    revisiting `cpu_admission.rs`/scheduler design.
+9. **Patrick-directed addition 2026-07-16 (M6 completion triage)** — **fr23: non-plain-ident
+   background-spawn receivers ride as raw pointers today** (roadmap Capability Ledger row,
+   Idempotency-Key
+   `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr23: non-plain-ident-background-spawn-receivers`).
+   **WHAT:** `background fleet.flagship.haul()` / `ships[0].haul()` / `background
+   haul(fleet.flagship)` — field/index/return-materialized `background`-spawn receivers heap-upgrade
+   as raw pointers, gated only on `Expr::Ident`/explicit `.copy()`. **WHY this is homed to M7, not
+   left at the prior "latent, not confirmed-live" verdict:** that verdict was gathered under
+   `OptimizationLevel::None`, where LLVM keeps stack slots alive artificially long; THIS plan's
+   optimizer pipeline shrinks/reuses stack-slot lifetimes — the exact conditions that turn a latent
+   raw-pointer ride into a live UAF. This plan's own optimizer flip is the expiry condition on the
+   prior verdict. **DISPOSITION — M7 must do ONE of:** (a) fix the give/copy machinery for
+   field/index/return-materialized spawn receivers as an early phase, OR (b) gate: re-run the UAF
+   repro (the three call shapes above) under the real optimized pipeline (post Phase 2/3 wiring) and
+   route a confirmed-live result like the R13/R14 signed-risk overrides. **TRIGGER:** this plan's own
+   Phase 2/3 optimizer-pipeline wiring landing — at that point the repro becomes runnable under real
+   optimization and (b) is executable. This entry is the tracking record; the plan's next
+   amendment/review cycle should fold it into a real phase.
 
 ## Roadmap Reconciliation (executed at Phase 8; recorded here so the executor has zero ambiguity)
 

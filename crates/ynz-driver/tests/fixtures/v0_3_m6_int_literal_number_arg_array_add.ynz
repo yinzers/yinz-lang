@@ -1,0 +1,9 @@
+// WHY: int literal into `array<number>.add(5)` — builtin method args were never
+// type-checked and codegen pushes by the ARG's own type. Pre-fix: raw i64 5 stored
+// where a decimal128 pointer belongs — SEGFAULT (exit 139) when the element is read.
+function entrypoint() -> nothing {
+  let prices: array<number> = [1.5]
+  prices.add(5)
+  let got = prices.get(1)
+  print(got.or(0.0))
+}

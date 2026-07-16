@@ -1,0 +1,17 @@
+// WHY: NEGATIVE int literal into a `number` param through the UFCS dot-call
+// (`p.scale(-5)`) — `-IntLit` is a UnaryOp, so it types `int` and the UFCS arm
+// has no general mismatch backstop. Pre-fix: LLVM verifier ICE
+// (`call ptr @scale(ptr, i64 -5)`). The gate's `-IntLit` arm must fire.
+shape Player {
+  score: number
+}
+
+function scale(share self: Player, factor: number) -> number {
+  return factor
+}
+
+function entrypoint() -> nothing {
+  let p: Player = { score: 1.5 }
+  let got = p.scale(-5)
+  print(got)
+}

@@ -10,6 +10,14 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Least-privilege GITHUB_TOKEN for every job in this workflow (fix-loop round, M6 Phase
+# 6b): neither `build-and-test` nor the new `sanitizers` job needs anything beyond
+# read-only repo access (checkout + actions/cache read/write on the cache API, which
+# does not require the `contents` write scope) — no PR comments, no releases, no pushes.
+# Workflow-level so it covers both jobs without duplicating the block per-job.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: Build and test (${{ matrix.os }})
@@ -83,3 +91,74 @@ jobs:
 
       - name: Verify --version
         run: ./target/release/ynz --version
+
+  sanitizers:
+    name: Sanitizer lane (Miri / TSan / ASan) — ynz-runtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly (rust-src + miri)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, miri
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-sanitizers-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # Sanitizer stack traces are unreadable raw addresses without a symbolizer on PATH
+      # (confirmed locally, M6 Phase 6b — the dev container needed ASAN_SYMBOLIZER_PATH
+      # pointed at llvm-symbolizer-18 explicitly). Best-effort: install whatever llvm
+      # package the runner's apt repo has and probe for the binary under either name.
+      - name: Install llvm-symbolizer (readable sanitizer stack traces)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm
+          SYMBOLIZER="$(command -v llvm-symbolizer-18 || command -v llvm-symbolizer || true)"
+          echo "Resolved symbolizer: ${SYMBOLIZER:-<none found>}"
+          echo "ASAN_SYMBOLIZER_PATH=$SYMBOLIZER" >> "$GITHUB_ENV"
+          echo "TSAN_SYMBOLIZER_PATH=$SYMBOLIZER" >> "$GITHUB_ENV"
+
+      # Miri — whole-crate, single atomic invocation, zero MIRIFLAGS. Confirmed-working
+      # invocation, M6 Phase 6b (lib + all 6 integration-test files all pass; the 3 files
+      # with fs::read_to_string source-text audits and the pure wall-clock/ns-per-call
+      # benchmarks are individually `#[cfg_attr(miri, ignore = "...")]`-gated in source with
+      # cited reasons — nothing is silently skipped here).
+      - name: Miri (ynz-runtime, whole crate)
+        run: cargo +nightly miri test -p ynz-runtime
+
+      # ThreadSanitizer — confirmed-working invocation, M6 Phase 6b. `--lib --tests` (no
+      # `--doc`) because rustdoc's own driver doesn't forward `-Zsanitizer` the same way
+      # `cargo test` does and errors with an ABI-mismatch against several dependency crates
+      # (a documented rustc/rustdoc limitation, not a finding in our code) — moot in
+      # practice since ynz-runtime ships zero actual doctests.
+      #
+      # NOTE (assumption flagged for the first real run to confirm): the local dev
+      # container needed `cap_add: SYS_PTRACE` + `security_opt: seccomp:unconfined` for
+      # TSan to run at all (Docker's default seccomp profile denies TSan's own
+      # `personality(ADDR_NO_RANDOMIZE)` self-call — see docker-compose.yml). GitHub-hosted
+      # runners are unrestricted VMs, not seccomp-locked containers, so this step is not
+      # expected to need an equivalent workaround — but that could not be exercised from
+      # this milestone's own dev sandbox (no bare, non-containerized Rust toolchain
+      # available to probe against). If this step ever aborts with the same "unable to
+      # disable ASLR (perhaps sandboxing is enabled?)" error, that is the tell to
+      # investigate a runner-level seccomp/ptrace restriction.
+      - name: ThreadSanitizer (ynz-runtime, lib + integration tests, excl. doctests)
+        run: |
+          RUSTFLAGS='-Zsanitizer=thread' cargo +nightly test -p ynz-runtime \
+            --target x86_64-unknown-linux-gnu -Zbuild-std --lib --tests
+
+      # AddressSanitizer — confirmed-working invocation, M6 Phase 6b. `--doc` is excluded
+      # here too for parity/consistency with the TSan lane above, even though ASan's own
+      # doctest run was independently confirmed clean locally (0 doctests either way, so
+      # this is moot in practice).
+      - name: AddressSanitizer (ynz-runtime, lib + integration tests, excl. doctests)
+        run: |
+          RUSTFLAGS='-Zsanitizer=address' cargo +nightly test -p ynz-runtime \
+            --target x86_64-unknown-linux-gnu -Zbuild-std --lib --tests

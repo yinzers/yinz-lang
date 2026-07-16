@@ -1,0 +1,11 @@
+// WHY: int literal into a `number`-typed shape field at construction
+// (`{ total: 5 }`) — the hinted infer types the IntLit as number, so the field
+// mismatch check never fires. Pre-fix: codegen ICE panic.
+shape Order {
+  total: number
+}
+
+function entrypoint() -> nothing {
+  let o: Order = { total: 5 }
+  print(o.total)
+}

@@ -1321,6 +1321,16 @@ ships_in = "v2+"
 design_doc = "docs/reference/REF-mvp-scope.md"
 triggers = "Writing `gpu` as an identifier (not yet a reserved keyword)"
 
+# --- `background.cpuBound` explicit override (docs/internal/implementation/IMP-no-function-coloring.md
+# "Scheduler Preemption Model" — v0.3-M6 Phase 7 docs/registry honesty sweep, Future Requirements #6) ---
+[[deferred_language_feature]]
+name = "background.cpuBound"
+substitute = "CPU-bound task routing is auto-inferred today: the compiler's whole-program may-block analysis already determines which functions can suspend, and a task whose call graph contains zero may-block calls is routed to the blocking thread pool automatically — no override syntax needed for the common case. The IDE muted hint at the spawn site shows the routing decision regardless of which pool gets picked."
+why = "IMP-no-function-coloring.md's Scheduler Preemption Model section specs `background.cpuBound process(data)` as the explicit override for when the compiler's automatic routing gets CPU-bound routing wrong (final naming TBD) — but per auto-promotion.md's override-direction checklist, a force-the-other-pick override is built only once a real use case demonstrates the auto-pick failing; building an unused override form now, with no such workload named, is speculative (YAGNI) ahead of that evidence. This entry is a documentation-honesty fix, not a code fix — the doc previously read as if the override already existed."
+ships_in = "TBD — pending a real workload demonstrating the automatic routing gets it wrong"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+triggers = "A real workload where CPU-bound auto-inference misroutes a task to the I/O scheduler, causing measurable starvation."
+
 # --- `--kernel` flag — no-runtime mode (docs/internal/implementation/IMP-no-runtime-mode.md) ---
 [[deferred_tooling_feature]]
 name = "--kernel"
@@ -1481,6 +1491,20 @@ why = "The graphical execution-plan view (DAG + timeline overlay in the editor p
 ships_in = "v0.4+ (pending LSP custom notification design + VSCode panel scaffold)"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "Patrick explicitly schedules the IDE graphical view milestone AND the LSP custom-notification protocol for client-side panels is designed."
+
+# --- Real back-edge cooperative-preemption yield (docs/internal/implementation/IMP-no-function-coloring.md
+# "Scheduler Preemption Model" — v0.3-M6 Phase 7 docs/registry honesty sweep, Future Requirements #5).
+# The 2026-07-04 concurrency-release audit found the design doc's "locked" preemption-mechanism
+# claim overstated reality (codegen emits the back-edge call site; the checkpoint itself is a
+# documented no-op) with no matching registry entry — the exact undocumented-deferral shape
+# no-duct-tape.md bans. This entry closes that gap. ---
+[[deferred_tooling_feature]]
+name = "cooperative-preemption-back-edge-yield"
+substitute = "Every loop back-edge already carries a call to the preemption checkpoint (`ynz_rt_check_preempt`, emitted by `emit_loop_preempt` in crates/ynz-codegen/src/emit.rs) — the call site is real, correctly-positioned code shipped in v0.3-M1. The checkpoint function itself (crates/ynz-runtime/src/runtime.rs) is presently a documented no-op stub: it never actually yields to another task. There is no user-facing action to take today; no Yinz program can opt into real preemption yet. A tight, loop-free, CPU-bound recursive function (e.g. naive fib) is NOT preempted — the exact starvation class this design exists to prevent (Go's pre-1.14 cooperative-only scheduler) is live for that specific case until the real yield ships."
+why = "v0.3-M1's P1 GATE spike measured 1190% overhead inserting a preempt check at every call site (fib(30), release mode, -O0 — no optimizer passes run) against a 5% threshold; the roadmap pre-authorized shipping loop-back-edge call sites only (a true no-op stub) and deferring the real yield, but that relaxation was never written back to this design doc or given a registry entry until this sweep. Yinz is pre-1.0 with zero public users, so the risk of the gap being live in the interim is accepted rather than shipping a rushed fix against O0-tier cost evidence — the real fix belongs in v0.3-M7, where the optimizer pipeline exists to re-measure the cost honestly (inlining and other passes change the per-call overhead the O0 spike cannot represent)."
+ships_in = "v0.3-M7 (optimizer milestone) — re-measured under a real LLVM pass pipeline"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+triggers = "M7's optimizer pipeline lands and back-edge preemption cost is re-measured under real LLVM passes, OR a real workload demonstrates starvation before then."
 
 # ---------------------------------------------------------------------------
 # [[deferred_stdlib_api]] — RESERVED, zero entries in M1.

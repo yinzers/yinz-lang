@@ -1,0 +1,10 @@
+// WHY: `return 5` from a `-> number` function — the hinted return infer types
+// the IntLit as number, silently passing typeck. Pre-fix: LLVM verifier ICE
+// (`ret i64 5` where the function returns a decimal128 pointer).
+function toll() -> number {
+  return 5
+}
+
+function entrypoint() -> nothing {
+  print(toll())
+}

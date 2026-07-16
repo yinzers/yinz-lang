@@ -204,15 +204,15 @@ fn corpus_produces_deterministic_output_across_runs() {
             })
             .unwrap_or(false);
 
-        if !is_timing_fixture {
-            if run1_out != run2_out || run1_err != run2_err || run1_code != run2_code {
-                failures.push(format!(
-                    "NON-DETERMINISTIC: {:?}\n  run1 stdout: {:?}\n  run2 stdout: {:?}\n  run1 exit: {run1_code}, run2 exit: {run2_code}",
-                    path.file_name().unwrap_or_default(),
-                    &run1_out[..run1_out.len().min(200)],
-                    &run2_out[..run2_out.len().min(200)],
-                ));
-            }
+        if !is_timing_fixture
+            && (run1_out != run2_out || run1_err != run2_err || run1_code != run2_code)
+        {
+            failures.push(format!(
+                "NON-DETERMINISTIC: {:?}\n  run1 stdout: {:?}\n  run2 stdout: {:?}\n  run1 exit: {run1_code}, run2 exit: {run2_code}",
+                path.file_name().unwrap_or_default(),
+                &run1_out[..run1_out.len().min(200)],
+                &run2_out[..run2_out.len().min(200)],
+            ));
         }
     }
 

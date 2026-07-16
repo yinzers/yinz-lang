@@ -21,6 +21,7 @@ use ynz_runtime::runtime::{
     ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_init, ynz_rt_run_entrypoint,
     ynz_rt_shutdown, ynz_rt_spawn,
 };
+use ynz_runtime::ynz_alloc_zeroed;
 
 // ── Test serialization ────────────────────────────────────────────────────────
 //
@@ -222,6 +223,26 @@ fn sleep_poll_suspend_and_resume() {
 // is that the thread pool shares threads across tasks rather than serialising them.
 // On a machine with < 8 cores, sequential execution would take >800ms; concurrent
 // execution finishes in ~100ms regardless of core count because threads are released.
+//
+// Miri-incompatible (M6 Phase 6b): this is a wall-clock CONCURRENCY-TIMING assertion,
+// exactly the class Miri's own docs name as unreliable under its interpreter — Miri's
+// threading model does not give genuinely-parallel tasks native-speed wall-clock
+// overlap, so 8 concurrently-scheduled 100ms sleeps measured 783ms under Miri (would
+// need >800ms to indicate a real serialization bug; 783ms is consistent with
+// interpreter overhead on tasks that ARE running concurrently, not a regression).
+// Confirmed via live experiment, not asserted: every OTHER timing-bounded test in this
+// file (single-sleep elapsed-time bounds) passes cleanly under Miri — only the
+// EIGHT-WAY-CONCURRENT timing assertion is affected, matching Miri's documented
+// "not a great tool to test timing behavior" limitation for concurrent workloads
+// (https://github.com/rust-lang/miri#threads-and-concurrency), not a Stacked-Borrows/
+// leak finding. Behavior stays covered by the ordinary `cargo test`/`cargo nextest`
+// lane at native speed.
+#[cfg_attr(
+    miri,
+    ignore = "wall-clock 8-way concurrency timing assertion — Miri's interpreter \
+              overhead defeats native-speed overlap measurement, not a real bug; \
+              see comment above"
+)]
 #[test]
 fn sleep_eight_concurrent_share_threads() {
     with_private_runtime(|rt| {
@@ -272,7 +293,6 @@ fn sleep_eight_concurrent_share_threads() {
 /// | 8      | sleep_handle   |
 /// | 16     | return_val_lo  | ← SyncStateFnFuture::poll reads i64 here → truncates to i32
 /// | 24     | return_val_hi  | (unused by this test)
-#[repr(C)]
 struct SyncValueSm {
     resume_point: i32,
     _padding: i32,
@@ -482,7 +502,19 @@ unsafe extern "C-unwind" fn signal_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut
     // SAFETY: waker_ctx was cast from &mut Context<'_>; valid for call duration.
     let cx = &mut *(waker_ctx as *mut Context<'_>);
     match Pin::new(sm).poll(cx) {
-        Poll::Ready(()) => 0,
+        Poll::Ready(()) => {
+            // SignalSm embeds real Rust-typed fields (`inner: Box<TestStateMachine>`,
+            // `tx: Sender<()>`) alongside the raw frame header — but the runtime's
+            // generic frame-free path (`SpawnStateFnFuture::drop` -> `ynz_free`) only
+            // reclaims the raw byte buffer; it never runs a Rust destructor for typed
+            // frame content (real production frames store owned heap data as `i64`
+            // bit-pattern slots + `arg_drop_descs`, not literal embedded Rust types).
+            // Run SignalSm's own destructor explicitly, in place, before returning
+            // Ready — confirmed via Miri (M6 Phase 6b) that skipping this leaked the
+            // embedded TestStateMachine box every time this test ran.
+            std::ptr::drop_in_place(frame_ptr as *mut SignalSm);
+            0
+        }
         Poll::Pending => 1,
     }
 }
@@ -506,23 +538,48 @@ fn rt_spawn_drives_state_machine_on_io_pool() {
     // ynz_rt_spawn is fire-and-forget at the C-ABI level; signal completion via channel.
     let (tx, rx) = std::sync::mpsc::channel::<()>();
 
-    // Heap-allocate the SignalSm frame. ynz_rt_spawn takes ownership of frame_ptr.
-    // The frame leaks after the task completes (Phase 2 wires dealloc via resume_fn).
-    let mut sm = Box::new(SignalSm {
-        resume_point: 0,
-        _padding: 0,
-        sleep_handle: std::ptr::null_mut(),
-        _return_slot_lo: 0,
-        _return_slot_hi: 0,
-        inner: TestStateMachine::new(100),
-        tx,
-        sent: false,
-    });
-    let frame_ptr = sm.as_mut() as *mut SignalSm as *mut u8;
+    // Allocate the SignalSm frame via the runtime's OWN C-heap allocator
+    // (`ynz_alloc_zeroed`), NOT `Box::new` — confirmed via Miri (M6 Phase 6b), two
+    // distinct bugs, both from using Rust's allocator for a frame the runtime's
+    // generic drop-glue (`SpawnStateFnFuture::drop`) unconditionally frees via
+    // `ynz_free` (C `free`) once the task completes or is cancelled:
+    //   1. Stacked-Borrows UB: `Box::new(..).as_mut()` + `mem::forget` retagged the
+    //      pointee Unique on the forget call, invalidating the reborrow `.as_mut()`
+    //      returned — `signal_sm_resume`'s later `&mut *(frame_ptr as *mut SignalSm)`
+    //      found no matching tag on the borrow stack.
+    //   2. Allocator-mismatch UB: even after fixing (1) with `Box::into_raw`, the
+    //      frame was still Rust-heap memory; `SpawnStateFnFuture::drop`'s `ynz_free`
+    //      deallocates via the C allocator, and freeing Rust-heap memory with a C
+    //      heap deallocation operation is its own distinct UB Miri flags separately.
+    // Both are the same underlying lesson as the production ctx-copy fix earlier in
+    // this phase (`crates/ynz-runtime/src/runtime.rs`): a frame the generic
+    // `ynz_free`-based drop-glue will reclaim MUST be allocated via `ynz_alloc`/
+    // `ynz_alloc_zeroed`, never Rust's global allocator.
     let frame_size = std::mem::size_of::<SignalSm>() as i64;
-
-    // Transfer ownership into ynz_rt_spawn — do NOT drop sm after this.
-    std::mem::forget(sm);
+    let frame_ptr = unsafe { ynz_alloc_zeroed(frame_size as usize) } as *mut SignalSm;
+    assert!(
+        !frame_ptr.is_null(),
+        "ynz_alloc_zeroed must not return null"
+    );
+    // SAFETY: frame_ptr is fresh, zeroed, correctly-sized, and uninitialized —
+    // placement-write is the correct way to construct a Rust value into raw bytes
+    // the runtime allocator (not Rust's global allocator) owns.
+    unsafe {
+        std::ptr::write(
+            frame_ptr,
+            SignalSm {
+                resume_point: 0,
+                _padding: 0,
+                sleep_handle: std::ptr::null_mut(),
+                _return_slot_lo: 0,
+                _return_slot_hi: 0,
+                inner: TestStateMachine::new(100),
+                tx,
+                sent: false,
+            },
+        );
+    }
+    let frame_ptr = frame_ptr as *mut u8;
 
     // SAFETY: frame_ptr valid for frame_size bytes; signal_sm_resume valid; ownership transferred.
     // -1 = no recursion slot (this test fixture is not a recursive SM).

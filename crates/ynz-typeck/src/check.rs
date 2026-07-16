@@ -8,9 +8,9 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
     builtins::{
-        array_method_is_mutating, array_method_return, fixed_method_is_mutating,
-        fixed_method_return, map_method_is_mutating, map_method_return, maybe_method_return,
-        sensitive_method_return, string_method_return,
+        array_method_is_mutating, array_method_return, collection_method_arg_slots,
+        fixed_method_is_mutating, fixed_method_return, map_method_is_mutating, map_method_return,
+        maybe_method_return, sensitive_method_return, string_method_return,
     },
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
@@ -461,6 +461,46 @@ impl<'b> Checker<'b> {
                     for field in &s.fields {
                         self.collect_referenced_names_in_ast_type(&field.ty, &type_params);
                     }
+                    // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): a hidden
+                    // field with an int-literal default against a `number` type
+                    // (`hidden cache: number = 5`) is never typechecked here otherwise,
+                    // and codegen ICEs lowering the raw i64 into the decimal128 pointer
+                    // slot (emit.rs hidden-default store). Only hidden-field defaults are
+                    // lowered as defaults (non-hidden fields must be provided at
+                    // construction, so their default expr is dead), so the gate matches
+                    // that scope. Route through the SAME shared teaching gate as every
+                    // other int-literal→`number` slot (authoritative-derivation: one gate,
+                    // no per-slot twin). Coercion stays deferred to the stub plan.
+                    for field in &s.fields {
+                        if !field.is_hidden {
+                            continue;
+                        }
+                        let Some(default_expr) = &field.default else {
+                            continue;
+                        };
+                        // Guard on the RAW AST type before resolving through
+                        // ast_type_to_type. This arm runs with an empty
+                        // type_param_scope (it is only populated in
+                        // check_generic_function_body), so resolving a
+                        // type-param-typed field (`hidden buffer: array<T>`) would
+                        // emit a spurious "T is not a known type" diagnostic — the
+                        // exact trap the diagnostic-free walker above deliberately
+                        // avoids. `number` is banned from aliasing, so a `number`
+                        // slot is ALWAYS the literal AstType::Number here; matching
+                        // it directly resolves and fires the gate only for a bare
+                        // `number` annotation, never walking a generic param. The
+                        // gate already fires only on bare Type::Number (so `maybe
+                        // number` etc. fall through), so this loses nothing.
+                        if !matches!(&field.ty, AstType::Number { .. }) {
+                            continue;
+                        }
+                        let field_ty = self.ast_type_to_type(&field.ty);
+                        self.reject_int_literal_number_slot(
+                            NumberSlotRole::Field { name: &field.name },
+                            &field_ty,
+                            default_expr,
+                        );
+                    }
                     // Union type alias RHS: `shape PghEvent = SouthSideEvent | StripeDistrictEvent`.
                     // alias_ty is the raw AstType (Union) written in source. Because the check
                     // pass never enters ShapeDecl bodies, these member names are otherwise
@@ -700,8 +740,18 @@ impl<'b> Checker<'b> {
         // (Golden Rule 7). Keeping each suspending call on its own statement also means
         // M3b's auto-parallelization of independent statements works naturally: two
         // `let a = wait fa()` / `let b = wait fb()` lines get parallelized automatically.
+        self.check_stmts(&f.body.stmts);
+        self.scope.pop();
+
+        // Check 3 runs AFTER check_stmts (v0.3-M6 P1-1 site 9 reorder, mirroring checks
+        // 1a–1c below): the UFCS arm of the sub-expression walker reads receiver types
+        // from `self.expr_types`, which check_stmts populates.
         if !self.kernel_mode && is_suspending_fn {
-            let violations = suspending_calls_in_subexpr_position(&f.body.stmts, &suspending_fns);
+            let violations = suspending_calls_in_subexpr_position(
+                &f.body.stmts,
+                &suspending_fns,
+                &self.expr_types,
+            );
             for (span, callee_name) in violations {
                 self.diags.push(Diagnostic::error(
                     span,
@@ -717,9 +767,6 @@ impl<'b> Checker<'b> {
                 ));
             }
         }
-
-        self.check_stmts(&f.body.stmts);
-        self.scope.pop();
 
         // Checks 1a–1c (run after check_stmts so expr_types is populated — needed for
         // type lookups on identifiers in the for-loop iterator position):
@@ -801,13 +848,49 @@ impl<'b> Checker<'b> {
         // Full recursive aggregate frame-embedding ships in a later milestone.
         if !self.kernel_mode && (has_explicit_waits || is_suspending_fn) {
             let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
-            let crossings = crossing_local_names(
+            // Provenance-aware call (v0.3-M6 Phase 1c): Check 2/2b need to know which
+            // crossing names are arg-escape-only (handled by bind-time heap-cell
+            // promotion) vs lexically crossing (read-after-wait — still rejected for
+            // maybe/union). Same ONE producer as codegen's frame layout; only the
+            // provenance is consumed in addition (authoritative-derivation.md).
+            let CrossingNames {
+                names: crossings,
+                arg_escape_only,
+            } = crossing_local_names_with_provenance(
                 &f.body.stmts,
                 &param_names_ref,
                 &suspending_fns,
+                &std::collections::HashSet::new(),
                 &self.expr_types,
             );
             for crossing_name in &crossings {
+                // v0.3-M6 Phase 1c step 3c (FRAGO 014 ITEM 2): a union-ANNOTATED local
+                // whose ONLY crossing provenance is arg-escape is bind-time promoted to
+                // counted heap cells (envelope + tag-resolved payload deep-copy via
+                // `union_to_heap_cell`) — nothing is frame-embedded, so the nested-shape
+                // limitation this check guards cannot apply. Its RHS resolves to the
+                // CONCRETE variant shape (`let fig: Figure = s` types as `Square`),
+                // which is exactly why this check would otherwise fire on it. Lexical
+                // (read-after-wait) union crossings never enter `arg_escape_only` and
+                // stay subject to this check. Mirrored in
+                // `suspension_guards_fire_for_fn` (the M3d decline probe — both touch
+                // points or the verdicts drift).
+                // A nested-shape variant payload is safe under this flat one-level ABI-size
+                // memcpy: since v0.3-M5 P2, `store_field` (emit.rs ~20154) heap-cells EVERY
+                // shape-typed field store, so a nested-shape field is already a pointer to a
+                // counted HEAP cell (not a stack sub-struct) at construction time — there is
+                // no stack sub-struct left for the one-level promotion to miss (v0.3-M6 Phase
+                // 1c verification probe; refutes a stale pre-M5 code-review premise that
+                // assumed inline stack sub-structs).
+                if arg_escape_only.contains(crossing_name.as_str()) {
+                    let ann_is_union =
+                        find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
+                            .and_then(|ast_ty| self.resolve_type_for_guard(&ast_ty))
+                            .is_some_and(|ty| matches!(ty, Type::Union { .. }));
+                    if ann_is_union {
+                        continue;
+                    }
+                }
                 // Look up the typeck-resolved type now that expr_types is populated.
                 // For let-defined crossing locals, find_crossing_local_typeck_type_in_map
                 // returns the RHS expression type. For for-loop vars (no Stmt::Let),
@@ -924,6 +1007,24 @@ impl<'b> Checker<'b> {
                         })
                     })
                     .cloned();
+                // v0.3-M6 Phase 1c (FRAGOs 013/014): a `maybe` or `union` local whose
+                // ONLY crossing provenance is the arg-escape collector is legal — codegen
+                // promotes the binding to a counted heap cell at bind time
+                // (`maybe_to_heap_cell` / `union_to_heap_cell`), so the pointer the
+                // callee holds across its own suspension targets surviving heap, not the
+                // dead resume-fn stack. Lexical (read-after-wait) crossings are collected
+                // BEFORE the arg-escape pass and therefore never appear in
+                // `arg_escape_only` — they stay rejected here, because the promotion does
+                // not make the parent's own post-wait reload safe. The union skip keys on
+                // the ANNOTATION resolving to Union (step 3c): the union-ctor arm that
+                // performs the promotion keys on that same annotation, and the RHS types
+                // as the concrete variant shape.
+                if arg_escape_only.contains(crossing_name.as_str())
+                    && (matches!(effective_ty, Some(Type::Maybe { .. }))
+                        || matches!(ann_ty, Some(Type::Union { .. })))
+                {
+                    continue;
+                }
                 if let Some(ty) = effective_ty {
                     let ty_display = type_name(&ty);
                     let (what_instead, why) = match &ty {
@@ -1284,12 +1385,20 @@ impl<'b> Checker<'b> {
                     // infer `.copy` (caller keeps original, task gets its own copy). Only infer
                     // `.give` when we can prove the binding is NOT read in any remaining statement.
                     if let Expr::Background(inner, _) = expr {
-                        if let Expr::Call(call) = inner.as_ref() {
+                        // Normalize the spawn target to its Call-form argument list via
+                        // the ONE spawn-site normalization both `background` forms
+                        // consume (`background_spawn_call_form` — the typeck twin of
+                        // codegen's `synthesize_ufcs_call_expr`; the full UAF rationale
+                        // lives on the helper).
+                        let bg_args: Option<Vec<&Expr>> = self
+                            .background_spawn_call_form(inner.as_ref())
+                            .map(|(_, args)| args);
+                        if let Some(bg_args) = bg_args {
                             let remaining = &stmts[i + 1..];
                             // Only infer for plain Expr::Ident args — explicit .give/.copy()
                             // postfix args are handled by the postfix-op path; explicit wins.
                             let mut gives: Vec<String> = Vec::new();
-                            for arg in &call.args {
+                            for arg in bg_args {
                                 if let Expr::Ident(name, span) = arg {
                                     // v0.3-M4: a channel argument is SHARED with the task
                                     // (refcounted alias) — both sides must operate on the
@@ -1459,6 +1568,37 @@ impl<'b> Checker<'b> {
         let annotated_ty = annotation.map(|t| self.ast_type_to_type(t));
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
 
+        // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): `let x: number = 5`
+        // hints the int literal to `number`, so `types_compatible(number, number)`
+        // admits it — then codegen ICEs storing a raw i64 into the decimal128 pointer
+        // slot (the store-site #9 class). Route it through the SAME shared teaching
+        // gate as every other int-literal→`number` slot (authoritative-derivation: one
+        // gate, no per-slot twin). The int→number COERCION stays deferred to the
+        // 2026-07-04-v0-3-hotfix-int-literal-number stub plan — this rejects, not coerces.
+        if let Some(ann_ty) = &annotated_ty {
+            if self.reject_int_literal_number_slot(
+                NumberSlotRole::StoreBinding { name },
+                ann_ty,
+                value,
+            ) {
+                // Bind the name at the annotated `number` type so later uses don't
+                // cascade into spurious unknown-variable diagnostics.
+                self.scope.insert(
+                    name.to_string(),
+                    ScopeEntry {
+                        ty: ann_ty.clone(),
+                        is_const,
+                        is_param: false,
+                        param_ownership: None,
+                        is_loop_var: false,
+                        is_consumed: false,
+                        defined_at: name_span.clone(),
+                    },
+                );
+                return;
+            }
+        }
+
         // M7 P3c: range values are first-class — no restriction on storage.
         // (The M3 restriction is removed here.)
 
@@ -1520,6 +1660,108 @@ impl<'b> Checker<'b> {
         );
     }
 
+    /// Normalize a `background` spawn target to its Call-form (callee ident, argument
+    /// list): a plain call contributes its callee + args as-is; a shape-receiver method
+    /// call (UFCS) contributes the method name + `[receiver, ...args]` — the typeck twin
+    /// of codegen's `synthesize_ufcs_call_expr` spawn-site normalization
+    /// (`background ship.haul()` IS `background haul(ship)`; never a second
+    /// normalization scheme). BOTH spawn forms consume this one helper: the statement
+    /// form's give/copy inference (`check_stmts`) and the handle form's ownership
+    /// pre-record + callee resolution (`check_background_handle_spawn`). Without the
+    /// receiver in the argument list its ident span never enters
+    /// `background_arg_inferred_ownership`, codegen's Shape heap-upgrade gate skips it,
+    /// and the spawned task reads the receiver through a raw pointer into the spawner's
+    /// dead resume-fn stack frame once the spawner suspends — a use-after-free
+    /// (M6 Phase 3c: FRAGO 024 statement form; FRAGO 025 handle form). The receiver's
+    /// shape test reads the narrowing-aware `binding_ty_narrowed` — never a raw
+    /// `scope.lookup`. A union receiver narrowed to a shape variant (its shape-ness
+    /// comes from the `union_narrowed` overlay, the same overlay `binding_ty_narrowed`
+    /// reads) is FAIL-CLOSED REJECTED with a teaching error here (FRAGO 026): the
+    /// binding still holds the 16-byte `{tag, data}` union storage, so codegen's Shape
+    /// heap-upgrade would `load` `sizeof(shape)` bytes from it — a confirmed
+    /// out-of-bounds read (CWE-125), 48+ bytes past the storage for every variant.
+    /// The durable fix (extracting the variant's payload via `union_to_heap_cell`) is
+    /// deferred as Future Requirements #21; until it lands, the spawn is a
+    /// deterministic compile error, never a silent OOB (the Check 2b / FRAGO 005
+    /// precedent: un-embeddable crossings teach, never ship silently wrong).
+    /// Non-shape receivers (conduit/intrinsic method calls) are not UFCS function
+    /// calls — the same exclusion codegen's normalization applies. Returns `None` for
+    /// non-call targets, non-UFCS method calls, and the rejected narrowed-union case;
+    /// the callee ident is `None` for a non-ident `Call` callee.
+    fn background_spawn_call_form<'e>(
+        &mut self,
+        inner: &'e Expr,
+    ) -> Option<(Option<&'e str>, Vec<&'e Expr>)> {
+        match inner {
+            Expr::Call(call) => {
+                let callee = match &call.callee {
+                    Expr::Ident(n, _) => Some(n.as_str()),
+                    _ => None,
+                };
+                Some((callee, call.args.iter().collect()))
+            }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                let Expr::Ident(rname, rspan) = receiver.as_ref() else {
+                    return None;
+                };
+                let Some(Type::Shape { name: variant }) = self.binding_ty_narrowed(rname) else {
+                    return None;
+                };
+                // FRAGO 026: the receiver's shape-ness comes from union-narrowing
+                // (the binding is in the `union_narrowed` overlay — the exact source
+                // `binding_ty_narrowed` read above), so the value is still the union's
+                // storage, not the shape. Fail closed with a teaching error instead of
+                // letting codegen's Shape heap-upgrade over-read it. NOTE: the
+                // WHAT-INSTEAD deliberately steers to spawning on the original
+                // shape-typed binding at the value's CREATION site (before the union
+                // store) AND explicitly warns against re-binding the narrowed value:
+                // probed live, `let inner: Circle = fig` copies the union storage
+                // into a shape-sized binding — an OOB read that SIGSEGVs on a
+                // pointer-field read, one binding over (Future Requirements #24).
+                if self.union_narrowed.contains_key(rname) {
+                    self.diags.push(Diagnostic::error(
+                        rspan.clone(),
+                        format!(
+                            "a union value narrowed to `{variant}` cannot yet be used \
+                             as a `background` receiver."
+                        ),
+                        format!(
+                            "Start the background task where the `{variant}` value is \
+                             created, before it is stored into the union — call \
+                             `background <binding>.{method}()` on the original \
+                             `{variant}`-typed binding at that point. Do not copy \
+                             `{rname}` into a new `{variant}`-typed binding here (for \
+                             example, `let inner: {variant} = {rname}`): inside this \
+                             `is` arm `{rname}` is still the union, so the new binding \
+                             would hold the union's storage, not a `{variant}` value."
+                        ),
+                        format!(
+                            "Inside an `is {variant}` arm, `{rname}` still holds the \
+                             whole union — which variant it is plus that variant's \
+                             data — not a standalone `{variant}` value. The compiler \
+                             cannot yet copy the variant's data out of a union to hand \
+                             the background task its own `{variant}`, so it stops here \
+                             instead of starting the task with wrong or unsafe data."
+                        ),
+                    ));
+                    return None;
+                }
+                Some((
+                    Some(method.as_str()),
+                    std::iter::once(receiver.as_ref())
+                        .chain(args.iter())
+                        .collect(),
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// v0.3-M4 Phase 2: typecheck `let h = background fn(...)` and compute the handle type.
     ///
     /// Runs the standard `Expr::Background` checks (kernel gate, must-wrap-a-call, borrow
@@ -1557,9 +1799,16 @@ impl<'b> Checker<'b> {
         // Pre-record inferred ownership for plain-ident args BEFORE the Background arm's
         // large-copy warning reads it: channels are SHARED (refcounted alias — both sides
         // must operate on the same bounded buffer); everything else defaults to Copy (safe
-        // direction — the caller keeps its original).
-        if let Expr::Call(call) = inner {
-            for arg in &call.args {
+        // direction — the caller keeps its original). The spawn target is normalized to
+        // its Call-form first (`background_spawn_call_form` — the one normalization both
+        // spawn forms consume), so a UFCS shape receiver registers exactly like a
+        // Call-form arg: its span entering `background_arg_inferred_ownership` is what
+        // gates codegen's Shape heap-upgrade. Without it the receiver rides into the
+        // task as a raw pointer to the spawner's dead resume-fn frame — the FRAGO 025
+        // handle-form twin of the FRAGO 024 statement-form use-after-free.
+        let call_form = self.background_spawn_call_form(inner);
+        if let Some((_, args)) = &call_form {
+            for &arg in args {
                 if let Expr::Ident(n, span) = arg {
                     let is_channel = self
                         .scope
@@ -1579,16 +1828,16 @@ impl<'b> Checker<'b> {
         // large-copy warnings). Its Type::Nothing result is replaced below.
         let _ = self.infer_expr(full_value, None);
 
-        // Resolve the spawned callee's signature for the handle type.
-        let callee_name = match inner {
-            Expr::Call(call) => match &call.callee {
-                Expr::Ident(n, _) => Some(n.clone()),
-                _ => None,
-            },
-            _ => None,
-        };
+        // Resolve the spawned callee's signature for the handle type — from the SAME
+        // Call-form normalization (a UFCS spawn's callee is the method name: `haul` in
+        // `let h = background barge.haul()`).
+        let callee_name = call_form.and_then(|(callee, _)| callee.map(str::to_string));
         let Some(callee_name) = callee_name else {
-            // Non-call / non-ident callee — already diagnosed by the Background arm.
+            // No user-defined callee to derive a handle type from: a non-call target
+            // (the Background arm's must-wrap-a-call error already fired), a non-ident
+            // `Call` callee, or a non-UFCS method call (a non-shape receiver — a
+            // conduit/intrinsic method is not a user function). The binding stays
+            // `Type::Error` so later uses of the handle do not cascade.
             return Type::Error;
         };
         let Some((suspends, ret, params)) = self
@@ -1824,6 +2073,17 @@ impl<'b> Checker<'b> {
             match &arm.pattern.kind {
                 MatchPatternKind::Value(pat_expr) => {
                     let pat_ty = self.infer_expr(pat_expr, Some(&scrutinee_ty));
+                    // Int literal as an arm pattern against a `number`
+                    // scrutinee — the hinted infer silently types it `number`
+                    // and the LLVM verifier rejects the raw-i64
+                    // `ynz_decimal_compare` operand at codegen (#14).
+                    if self.reject_int_literal_number_slot(
+                        NumberSlotRole::MatchArm,
+                        &scrutinee_ty,
+                        pat_expr,
+                    ) {
+                        continue;
+                    }
                     if pat_ty != Type::Error
                         && scrutinee_ty != Type::Error
                         && pat_ty != scrutinee_ty
@@ -2092,6 +2352,12 @@ impl<'b> Checker<'b> {
             }
             (Some(expr), ret) => {
                 let val_ty = self.infer_expr(expr, Some(ret));
+                // Int literal returned from a `-> number` function — the hinted
+                // infer silently types it `number` and the LLVM verifier rejects
+                // the raw-i64 ret at codegen (Future-Req #14, shared gate).
+                if self.reject_int_literal_number_slot(NumberSlotRole::Return, ret, expr) {
+                    return;
+                }
                 if val_ty != Type::Error && *ret != Type::Error && !types_compatible(ret, &val_ty) {
                     // M7 P3a: in an errors-capable function, returning the inner success
                     // type is valid (the auto-propagation machinery wraps it at codegen).
@@ -2281,6 +2547,7 @@ impl<'b> Checker<'b> {
                             Some(receiver),
                             method,
                             method_span,
+                            args,
                         )
                     }
                 } else {
@@ -2292,6 +2559,7 @@ impl<'b> Checker<'b> {
                         Some(receiver),
                         method,
                         method_span,
+                        args,
                     )
                 }
             }
@@ -2378,7 +2646,21 @@ impl<'b> Checker<'b> {
                     Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => Type::Maybe {
                         inner: elem.clone(),
                     },
-                    Type::BuiltinMap { val, .. } => Type::Maybe { inner: val.clone() },
+                    Type::BuiltinMap { key, val } => {
+                        // Int literal as a `number` bracket key (`names[5]` on a
+                        // `map<number, V>`) — the index is inferred with an
+                        // unconditional `int` hint and never checked against the
+                        // key type (silent bit-identity corruption; #14).
+                        self.reject_int_literal_number_slot(
+                            NumberSlotRole::Collection {
+                                container: "map",
+                                noun: "key",
+                            },
+                            key.as_ref(),
+                            index,
+                        );
+                        Type::Maybe { inner: val.clone() }
+                    }
                     // M7 P3b: string bracket access desugars to .get(n) → maybe<string>
                     Type::String => Type::Maybe {
                         inner: Box::new(Type::String),
@@ -2690,10 +2972,32 @@ impl<'b> Checker<'b> {
         ty
     }
 
+    /// Narrowing-aware plain-ident binding type: the union `is`-arm overlay
+    /// (`union_narrowed`) wins over the raw scope entry. This is the ONE
+    /// narrowing-aware, side-effect-free read for "what type does this binding have
+    /// right here" — the background spawn-site shape-receiver predicate
+    /// (`background_spawn_call_form`) consumes it, and `resolve_ident`'s narrowing head
+    /// delegates its overlay branch to it — so no reader can drift back to a raw
+    /// `scope.lookup` twin. FRAGO 025 deviation 2: the raw read returned the
+    /// un-narrowed union for a receiver narrowed to a shape variant, skipping the
+    /// spawn heap-upgrade — the same UAF one subcase over.
+    fn binding_ty_narrowed(&self, name: &str) -> Option<Type> {
+        self.union_narrowed
+            .get(name)
+            .cloned()
+            .or_else(|| self.scope.lookup(name).map(|e| e.ty.clone()))
+    }
+
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
-        // M6: if inside a union `is` arm, the binding may be narrowed to a specific variant.
-        if let Some(narrowed_ty) = self.union_narrowed.get(name).cloned() {
-            return narrowed_ty;
+        // M6: if inside a union `is` arm, the binding is narrowed to a specific variant.
+        // The overlay branch reads through `binding_ty_narrowed` (the one narrowing-aware
+        // source); only the narrowed case returns here — the un-narrowed path continues
+        // below to the side-effecting scope checks (use-after-give, ErrorsCapable
+        // narrowing) the overlay window bypasses.
+        if self.union_narrowed.contains_key(name) {
+            if let Some(narrowed_ty) = self.binding_ty_narrowed(name) {
+                return narrowed_ty;
+            }
         }
         if let Some(entry) = self.scope.lookup(name) {
             if entry.is_consumed {
@@ -3723,6 +4027,121 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// v0.3-M6 (Phase 1d boundary review; extended to ALL call forms in fix-loop
+    /// round 2, to EVERY `number`-typed slot in round 3, and to the
+    /// `errors`-wrapped return `-> number errors` in round 4): an int literal (or
+    /// `-IntLit`) where a `number` is expected type-checks (via the literal-hint
+    /// rule, or by a path that never checks the slot at all), but codegen has no
+    /// int→number conversion yet — the compiled code would carry a raw i64 where
+    /// a pointer-typed decimal128 belongs (an LLVM verifier reject or internal
+    /// panic surfaced as "compiler bug" on valid code, a segfault, or a silently
+    /// wrong bit-identity compare). Reject with a teaching error until the one
+    /// int→number coercion ships for BOTH the store site and the call/slot sites
+    /// (Future-Req #9/#14, routed to the int-literal-number hotfix plan).
+    /// Mirrors the `channel<number>` gate: a clean compile error, never an ICE.
+    ///
+    /// The ONE gate shared by every slot the class reaches — the call forms
+    /// (plain `f(5)` in `check_user_fn_call`, UFCS `p.f(5)` in
+    /// `check_method_call`'s shape/UFCS arm, generic `f<T>(5, ...)` post-loop in
+    /// `check_generic_fn_call`, built-in collection method args via the
+    /// `collection_method_arg_slots` position table) AND the construction /
+    /// statement slots (shape fields, array/fixed/map literal elements, index
+    /// and bracket assigns, map bracket keys, `return`, multi-case-if arm
+    /// patterns) — so all render byte-identical core diagnostics per
+    /// non-oop.md's identical-diagnostics-between-call-forms convention
+    /// (authoritative-derivation: one gate, never per-slot twins). The store
+    /// sites are ALSO gated now (v0.3-M6 store-site stopgap): the local binding
+    /// (`let x: number = 5`, via `NumberSlotRole::StoreBinding` in `check_let`)
+    /// AND the declaration-site hidden-field default (`hidden f: number = 5`, via
+    /// `NumberSlotRole::Field` in the `ShapeDecl` arm of `check_module`) both
+    /// route through this SAME gate and emit a teaching error instead of the raw
+    /// codegen ICE they produced before. The int→number COERCION (which would
+    /// route the raw i64 into the decimal128 slot rather than rejecting it)
+    /// remains deferred to the 2026-07-04-v0-3-hotfix-int-literal-number stub
+    /// plan — this stopgap uniformly REJECTS every facet; coercion replaces the
+    /// rejection later. Rejection is now consistent across all slots.
+    ///
+    /// Returns `true` when the diagnostic fired (the caller skips further
+    /// checks for this argument).
+    fn reject_int_literal_number_arg(
+        &mut self,
+        name: &str,
+        expected_ty: &Type,
+        arg: &Expr,
+    ) -> bool {
+        self.reject_int_literal_number_slot(NumberSlotRole::CallArg { name }, expected_ty, arg)
+    }
+
+    /// The role-parameterized body of the int-literal→`number` gate: fires on a
+    /// bare `IntLit` OR a negated one (`-5` — a `UnaryOp{Neg, IntLit}`, which
+    /// always types `int` because the hint is not propagated into unary ops).
+    /// The role varies ONLY the diagnostic's subject and the WHAT-INSTEAD
+    /// closing clause; the core WHAT/WHY text stays byte-identical across every
+    /// slot, mirroring the identical-diagnostics-between-call-forms convention.
+    fn reject_int_literal_number_slot(
+        &mut self,
+        role: NumberSlotRole<'_>,
+        expected_ty: &Type,
+        arg: &Expr,
+    ) -> bool {
+        // A `-> number errors` return type carries the `number` inside an
+        // `ErrorsCapable` wrapper, so `matches!(_, Type::Number)` is false
+        // through it and an int-literal return would fall through to the
+        // generic mismatch instead of this teaching error. Unwrap the wrapper
+        // so the errors-return slot routes through the SAME gate — one
+        // authoritative check, not a second parallel one (authoritative-derivation).
+        let expected_ty = match expected_ty {
+            Type::ErrorsCapable { inner } => inner.as_ref(),
+            other => other,
+        };
+        if !matches!(expected_ty, Type::Number { .. }) {
+            return false;
+        }
+        let lit = match arg {
+            Expr::IntLit(n, _) => n.to_string(),
+            Expr::UnaryOp {
+                op: ynz_ast::nodes::UnaryOpKind::Neg,
+                operand,
+                ..
+            } => match operand.as_ref() {
+                Expr::IntLit(n, _) => format!("-{n}"),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        let (subject, noun, call_name) = match role {
+            NumberSlotRole::CallArg { name } => (format!("`{name}`"), "parameter", Some(name)),
+            NumberSlotRole::Field { name } => (format!("Field `{name}`"), "field", None),
+            NumberSlotRole::Collection { container, noun } => {
+                (format!("This {container}"), noun, None)
+            }
+            NumberSlotRole::Return => ("`return`".to_string(), "return value", None),
+            NumberSlotRole::MatchArm => ("This arm pattern".to_string(), "match pattern", None),
+            NumberSlotRole::StoreBinding { name } => (format!("`{name}`"), "variable", None),
+        };
+        let variable_use = match call_name {
+            Some(name) => format!(" then `{name}(amount)`"),
+            None => String::new(),
+        };
+        self.diags.push(Diagnostic::error(
+            arg.span().clone(),
+            format!(
+                "{subject} expects a `number` here, but `{lit}` is an int literal — \
+                 passing an int literal to a `number` {noun} is not supported yet."
+            ),
+            format!(
+                "Write it as a decimal literal: `{lit}.0`. A decimal literal is \
+                 already a `number`, so no conversion is needed. A `number`-typed \
+                 variable works too: `let amount: number = {lit}.0`{variable_use}."
+            ),
+            "The compiler does not yet convert an int literal to a `number` \
+             automatically. An `int` and a `number` are stored in different formats \
+             (a `number` is a 34-digit decimal), so the conversion needs its own \
+             compile step, which ships in a later milestone.",
+        ));
+        true
+    }
+
     fn check_user_fn_call(
         &mut self,
         call: &CallExpr,
@@ -3750,6 +4169,10 @@ impl<'b> Checker<'b> {
         for (i, (arg, (_, expected_ty))) in call.args.iter().zip(params.iter()).enumerate() {
             let ownership = ownerships.get(i).and_then(|o| o.as_ref());
             let actual_ty = self.infer_expr(arg, Some(expected_ty));
+
+            if self.reject_int_literal_number_arg(name, expected_ty, arg) {
+                continue;
+            }
 
             // Ownership enforcement on direct identifier arguments.
             if let Some(binding_name) = simple_ident_name(arg) {
@@ -4062,6 +4485,7 @@ impl<'b> Checker<'b> {
         for (i, (arg, (_, param_ty))) in call.args.iter().zip(non_self_params.iter()).enumerate() {
             let actual = self.infer_expr(arg, None);
             arg_types.push(actual.clone());
+
             if actual != Type::Error {
                 let _ = unify_param(param_ty, &actual, &mut subst);
             }
@@ -4070,6 +4494,21 @@ impl<'b> Checker<'b> {
             if let Some(binding_name) = simple_ident_name(arg) {
                 self.check_arg_ownership(binding_name, ownership, name, arg.span());
             }
+        }
+
+        // Int literal into a `number` param of a generic fn — CONCRETE
+        // (`tag(`x`, 5)` with a declared `number` param), EXPLICIT
+        // (`pass<number>(5)`), or SIBLING-BOUND (`pick(price, 5)` where T =
+        // number from arg 0). One post-loop pass over the SUBSTITUTED param
+        // types catches all three via the same shared gate (Future-Req #14):
+        // an unresolved TypeParam stays a TypeParam and never matches
+        // `Number`, so partial substitutions cannot false-fire. (The
+        // `unify_param` mismatch above is deliberately discarded — generic
+        // inference tolerates partial unification — so without this gate the
+        // program passes typeck silently and ICEs at codegen.)
+        for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params.iter()) {
+            let resolved = apply_substitution(param_ty, &subst);
+            self.reject_int_literal_number_arg(name, &resolved, arg);
         }
 
         // Verify all type params were resolved — emit one consolidated error if multiple are missing.
@@ -4182,6 +4621,7 @@ impl<'b> Checker<'b> {
         receiver_expr: Option<&Expr>,
         method: &str,
         method_span: &SourceSpan,
+        args: &[Expr],
     ) -> Type {
         if *receiver_ty == Type::Error {
             return Type::Error;
@@ -4208,6 +4648,20 @@ impl<'b> Checker<'b> {
         // Primitive intrinsic methods (M2/M3 — toString, toFloat, etc.)
         if let Some(ret_ty) = self.intrinsics.lookup_method(receiver_ty, method) {
             return ret_ty;
+        }
+
+        // Int literal (or `-IntLit`) into a `number`-typed elem/key/value slot
+        // of a built-in collection method — these args are inferred hint-free
+        // upstream and the builtin arms check nothing, so without this gate the
+        // program passes typeck and miscompiles (raw i64 bits where a decimal128
+        // pointer belongs: `array<number>.add(5)` segfaults; `.contains(5)` is
+        // silently wrong). ONE authoritative position table
+        // (`collection_method_arg_slots`) + the ONE shared gate — no per-arm
+        // twins (authoritative-derivation, Future-Req #14).
+        for (pos, slot_ty) in collection_method_arg_slots(receiver_ty, method) {
+            if let Some(arg) = args.get(pos) {
+                self.reject_int_literal_number_arg(method, &slot_ty, arg);
+            }
         }
 
         // M5 P3b: built-in collection method dispatch.
@@ -4375,6 +4829,17 @@ impl<'b> Checker<'b> {
                                     recv_expr.span(),
                                 );
                             }
+                        }
+                        // Int literal into a `number` param through the UFCS
+                        // dot-call form (`p.f(5)` — sugar for `f(p, 5)`): the
+                        // non-receiver args were inferred with no hint upstream,
+                        // so without this gate the program passes typeck and
+                        // ICEs at codegen. Same shared gate as the plain call
+                        // form so both render byte-identical diagnostics per
+                        // non-oop.md's dual-style convention (Future-Req #14).
+                        // Receiver is the first param; args map to params[1..].
+                        for (arg, (_, expected_ty)) in args.iter().zip(sig.params.iter().skip(1)) {
+                            self.reject_int_literal_number_arg(method, expected_ty, arg);
                         }
                         // Kernel-mode rejection for UFCS suspending method calls. The
                         // bare call-dispatch arm guards `Expr::Call name =>` at the call site;
@@ -5412,6 +5877,19 @@ impl<'b> Checker<'b> {
             let val = val.as_ref().clone();
             for f in fields {
                 let actual = self.infer_expr(&f.value, Some(&val));
+                // Int literal as a `number` map value through the identifier-key
+                // struct-lit form — the hinted infer silently types it `number`
+                // and ICEs at codegen (Future-Req #14, shared gate).
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "value",
+                    },
+                    &val,
+                    &f.value,
+                ) {
+                    continue;
+                }
                 if actual != Type::Error && val != Type::Error && actual != val {
                     self.diags.push(Diagnostic::error(
                         f.value.span().clone(),
@@ -5636,6 +6114,18 @@ impl<'b> Checker<'b> {
                 Some(field_def) => {
                     let expected = field_def.ty.clone();
                     let actual = self.infer_expr(&lit_field.value, Some(&expected));
+                    // Int literal into a `number`-typed field at construction —
+                    // the hinted infer silently types it `number` and ICEs at
+                    // codegen (Future-Req #14, shared gate).
+                    if self.reject_int_literal_number_slot(
+                        NumberSlotRole::Field {
+                            name: &lit_field.name,
+                        },
+                        &expected,
+                        &lit_field.value,
+                    ) {
+                        continue;
+                    }
                     if actual != Type::Error
                         && expected != Type::Error
                         && !types_compatible(&actual, &expected)
@@ -5795,6 +6285,16 @@ impl<'b> Checker<'b> {
         let field_ty = self.infer_field_access(receiver, field, field_span);
         let value_ty = self.infer_expr(value, Some(&field_ty));
 
+        // Int literal assigned to a `number`-typed field — the hinted infer
+        // silently types it `number` and ICEs at codegen (Future-Req #14).
+        if self.reject_int_literal_number_slot(
+            NumberSlotRole::Field { name: field },
+            &field_ty,
+            value,
+        ) {
+            return;
+        }
+
         if field_ty != Type::Error && value_ty != Type::Error && field_ty != value_ty {
             self.diags.push(Diagnostic::error(
                 span.clone(),
@@ -5870,6 +6370,20 @@ impl<'b> Checker<'b> {
         let mut elem_ty = hint_elem.clone().unwrap_or(Type::Error);
         for (i, elem) in elements.iter().enumerate() {
             let ty = self.infer_expr(elem, hint_elem.as_ref());
+            // Int literal as a `number` collection-literal element — the hinted
+            // infer silently types it `number` and ICEs at codegen (#14).
+            if let Some(h) = hint_elem.as_ref() {
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: if is_fixed { "fixed array" } else { "array" },
+                        noun: "element",
+                    },
+                    h,
+                    elem,
+                ) {
+                    continue;
+                }
+            }
             if i == 0 && elem_ty == Type::Error {
                 elem_ty = ty.clone();
             } else if ty != Type::Error && elem_ty != Type::Error && ty != elem_ty {
@@ -5955,6 +6469,18 @@ impl<'b> Checker<'b> {
             Type::BuiltinArray { elem } => {
                 let expected = elem.as_ref().clone();
                 let val_ty = self.infer_expr(value, Some(&expected));
+                // Int literal index-assigned into a `number` element — the
+                // hinted infer silently types it `number`, ICE at codegen (#14).
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "array",
+                        noun: "element",
+                    },
+                    &expected,
+                    value,
+                ) {
+                    return;
+                }
                 if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -5971,6 +6497,16 @@ impl<'b> Checker<'b> {
             Type::BuiltinFixed { elem, .. } => {
                 let expected = elem.as_ref().clone();
                 let val_ty = self.infer_expr(value, Some(&expected));
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "fixed array",
+                        noun: "element",
+                    },
+                    &expected,
+                    value,
+                ) {
+                    return;
+                }
                 if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -5984,9 +6520,35 @@ impl<'b> Checker<'b> {
                     ));
                 }
             }
-            Type::BuiltinMap { val: map_val, .. } => {
+            Type::BuiltinMap {
+                key: map_key,
+                val: map_val,
+            } => {
                 let expected = map_val.as_ref().clone();
                 let val_ty = self.infer_expr(value, Some(&expected));
+                // Int literal as a `number` bracket KEY (`names[5] = ...` on a
+                // `map<number, V>`) — the index expr is inferred with an
+                // unconditional `int` hint and never checked against the map's
+                // key type, so raw i64 bits land where a decimal128 pointer
+                // belongs (silent bit-identity corruption; Future-Req #14).
+                self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "key",
+                    },
+                    map_key.as_ref(),
+                    index,
+                );
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "value",
+                    },
+                    &expected,
+                    value,
+                ) {
+                    return;
+                }
                 if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -6037,6 +6599,31 @@ impl<'b> Checker<'b> {
         for (key_expr, val_expr) in entries {
             let k = self.infer_expr(key_expr, hint_key.as_ref());
             let v = self.infer_expr(val_expr, hint_val.as_ref());
+
+            // Int literal as a `number` map-literal key/value — the hinted
+            // infer silently types it `number` and ICEs at codegen (#14).
+            if let Some(hk) = hint_key.as_ref() {
+                self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "key",
+                    },
+                    hk,
+                    key_expr,
+                );
+            }
+            if let Some(hv) = hint_val.as_ref() {
+                if self.reject_int_literal_number_slot(
+                    NumberSlotRole::Collection {
+                        container: "map",
+                        noun: "value",
+                    },
+                    hv,
+                    val_expr,
+                ) {
+                    continue;
+                }
+            }
 
             if key_ty == Type::Error {
                 key_ty = k.clone();
@@ -6607,6 +7194,40 @@ pub fn expr_is_conduit_suspend(expr: &Expr, expr_types: &HashMap<(usize, usize),
     crate::suspension_source::channel_method_suspends(receiver_is_conduit, method)
 }
 
+/// v0.3-M6 P1-1: true when `expr` is a UFCS suspending method call at its ROOT —
+/// `value.method(args)` (optionally under an explicit `wait`) where the receiver's
+/// typeck-resolved type is a shape and the function named `method` transitively suspends.
+///
+/// Classification threads the ONE authoritative
+/// [`crate::suspension_source::ufcs_method_call_suspends`] arm — never a second name-keyed
+/// derivation. Unlike the conduit predicate, the receiver is NOT restricted to a plain
+/// identifier: any shape-typed receiver expression is legal UFCS.
+///
+/// `suspends` is the consumer's transitive suspend lookup (codegen closes over its
+/// `suspend_set`; typeck closes over its `suspending_fns` set).
+pub fn expr_is_ufcs_suspending_call(
+    expr: &Expr,
+    expr_types: &HashMap<(usize, usize), Type>,
+    suspends: &dyn Fn(&str) -> bool,
+) -> bool {
+    let inner = match expr {
+        Expr::Wait(inner, _) => inner.as_ref(),
+        other => other,
+    };
+    let Expr::MethodCall {
+        receiver, method, ..
+    } = inner
+    else {
+        return false;
+    };
+    let rspan = receiver.span();
+    let receiver_is_shape = matches!(
+        expr_types.get(&(rspan.start, rspan.end)),
+        Some(Type::Shape { .. })
+    );
+    crate::suspension_source::ufcs_method_call_suspends(receiver_is_shape, method, suspends)
+}
+
 /// v0.3-M4 Phase 2: true when `stmt` is a suspending conduit-method statement — a bare
 /// `ch.send(v)` / `ch.receive()` expression statement or a `let x = ch.receive()` binding.
 pub fn stmt_is_conduit_suspend(stmt: &Stmt, expr_types: &HashMap<(usize, usize), Type>) -> bool {
@@ -6778,8 +7399,12 @@ pub(crate) fn find_for_loop_var_type_in_stmts(
 /// annotation AST type (the `ty` field), if any.
 ///
 /// Used by Check 2b (UnsupportedCrossingLocalType) to read the annotation type of a
-/// crossing local without going through the mutating `ast_type_to_type` path.
-fn find_let_annotation_type_in_stmts(stmts: &[Stmt], target: &str) -> Option<AstType> {
+/// crossing local without going through the mutating `ast_type_to_type` path, and by
+/// codegen's crossing-local classification loop (v0.3-M6 Phase 1c step 3c) to apply
+/// the union annotation override — the ONE annotation finder for both consumers, so
+/// the guards and the classifier can never scan differently
+/// (authoritative-derivation.md).
+pub fn find_let_annotation_type_in_stmts(stmts: &[Stmt], target: &str) -> Option<AstType> {
     for stmt in stmts {
         match stmt {
             Stmt::Let { name, ty, .. } if name == target => {
@@ -7516,6 +8141,46 @@ pub fn crossing_local_names_with_cpu_spike(
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
 ) -> Vec<String> {
+    crossing_local_names_with_provenance(stmts, param_names, suspending, cpu_supported, expr_types)
+        .names
+}
+
+/// Crossing-local names plus provenance (v0.3-M6 Phase 1c, FRAGOs 013/014).
+///
+/// `arg_escape_only` is the subset of `names` whose SOLE crossing evidence is the
+/// arg-escape collector ([`collect_aggregate_args_to_suspending_calls`]): the value is
+/// passed by pointer as an argument / UFCS receiver to a suspending callee, but is never
+/// read after a suspension lexically, is not a conduit, and is not a for-loop synthetic.
+/// Check 2/2b (and the M3d decline-to-promote probe that mirrors them) consume this to
+/// permit types whose arg-escape crossing is handled by bind-time heap-cell promotion
+/// (`maybe`, and `union` from Phase 1c step 3c) while still rejecting the same types when
+/// they lexically cross a `wait` — a read-after-wait reload the promotion does not cover.
+///
+/// The split is by construction, not by a second scan: a lexically-crossing name enters
+/// the dedupe set BEFORE the arg-escape collector runs (so it can never land in the
+/// arg-escape slice), and for-loop synthetics are appended after the snapshot window
+/// closes. One producer, provenance threaded to every consumer — never a re-derived twin
+/// (authoritative-derivation.md).
+pub struct CrossingNames {
+    /// Sorted, deduplicated crossing-local names — byte-identical to what
+    /// [`crossing_local_names_with_cpu_spike`] returns for the same inputs.
+    pub names: Vec<String>,
+    /// Names whose only crossing provenance is the arg-escape collector.
+    pub arg_escape_only: std::collections::HashSet<String>,
+}
+
+/// Provenance-returning core behind [`crossing_local_names`] /
+/// [`crossing_local_names_with_cpu_spike`] — the ONE producer of the crossing set.
+///
+/// Time: O(N log N) where N = AST nodes (one crossing scan + a final name sort)  Space: O(C)
+/// where C = crossing local names collected
+pub fn crossing_local_names_with_provenance(
+    stmts: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> CrossingNames {
     let crossings = locals_crossing_wait(stmts, param_names, suspending, cpu_supported, expr_types);
     let mut seen = std::collections::HashSet::new();
     let mut names: Vec<String> = crossings
@@ -7535,6 +8200,31 @@ pub fn crossing_local_names_with_cpu_spike(
     // read appears lexically after the suspension (the natural read-after-suspension scan
     // above would miss exactly that case).
     collect_conduit_locals(stmts, param_names, expr_types, &mut seen, &mut names);
+    // v0.3-M6 Phase 1b/1c (FRAGOs 004/005/006/007/013): a shape / fixed<T> / number /
+    // maybe value passed BY POINTER as an argument (or UFCS receiver) to a suspending
+    // callee crosses that callee's suspension even when no read appears lexically after
+    // it — the callee holds the pointer in its own frame and reads it after its own
+    // suspend point, while the parent's resume fn returns Pending and its stack (holding
+    // the staged value) dies. Marking the local crossing routes a shape into the existing
+    // frame-embed machinery, a fixed<T> into the existing Check 2b teaching error, a
+    // number (decimal128) into the existing 2-slot frame-backing, and a maybe into
+    // bind-time promotion to a counted heap cell (its alloca then holds a stable heap
+    // pointer, so the default pointer flush stays correct across suspension).
+    //
+    // Everything this collector appends is, by construction, crossing ONLY via
+    // arg-escape: lexical crossings are already in `seen` (collected above), so the
+    // snapshot window below IS the provenance split — no second scan.
+    let before_arg_escape = names.len();
+    collect_aggregate_args_to_suspending_calls(
+        stmts,
+        param_names,
+        suspending,
+        expr_types,
+        &mut seen,
+        &mut names,
+    );
+    let arg_escape_only: std::collections::HashSet<String> =
+        names[before_arg_escape..].iter().cloned().collect();
     // Collect synthetic frame slots for for-loops whose bodies contain a suspension.
     // For-loop iteration requires an internal index counter that must survive suspension;
     // giving it a named frame slot (prefixed `__ynz_for_idx_`) integrates it with the
@@ -7545,7 +8235,10 @@ pub fn crossing_local_names_with_cpu_spike(
     // bodies), so it is never a suspension point and needs no synthetic iteration slot.
     collect_for_loop_synthetic_crossings(stmts, suspending, &mut seen, &mut names, expr_types);
     names.sort();
-    names
+    CrossingNames {
+        names,
+        arg_escape_only,
+    }
 }
 
 /// v0.3-M4: recursively collect every local whose binding type is a conduit
@@ -7589,6 +8282,293 @@ fn collect_conduit_locals(
             }
             _ => {}
         }
+    }
+}
+
+/// v0.3-M6 Phase 1b: recursively collect every LET-bound local of stack-backed type
+/// (`shape` / `fixed<T>` / decimal128 `number`) that is passed as an argument — or UFCS
+/// receiver — to a suspending call, into the crossing-name set.
+///
+/// The arg is staged by pointer (`value_to_i64_bits` stores a `ptr_to_int` of the value
+/// pointer into the child frame), so the callee reads it AFTER its own suspend point:
+/// the value crosses the suspension through the CALLEE's frame, which the lexical
+/// read-after-suspension scan cannot see. This is a SOUND over-approximation in the same
+/// register as [`collect_conduit_locals`]: a shape arg to a suspending callee that never
+/// actually suspends before the read is merely frame-backed unnecessarily.
+///
+/// Exclusions (each deliberate):
+///   - Parameters — they already have frame slots (stable heap storage).
+///   - `Expr::Background` subtrees — background args are independently staged (safe).
+///   - Non-`Ident` args (literals, field accesses, index accesses) — no name to mark;
+///     recorded as a residual to probe, not silently widened here.
+///   - For-loop vars — not LET-bound (`find_crossing_local_typeck_type_in_map` returns
+///     `None`); loop-var-as-arg is a recorded residual with its own frame-slot hazards.
+///
+/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth
+fn collect_aggregate_args_to_suspending_calls(
+    stmts_topmost: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    collect_aggregate_args_in_stmts(
+        stmts_topmost,
+        stmts_topmost,
+        param_names,
+        suspending,
+        expr_types,
+        seen,
+        names,
+    );
+}
+
+/// Statement-level walker for [`collect_aggregate_args_to_suspending_calls`].
+/// `stmts_topmost` is threaded unchanged for the LET-bound lookup.
+///
+/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth
+fn collect_aggregate_args_in_stmts(
+    stmts: &[Stmt],
+    stmts_topmost: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    let walk_block =
+        |block: &Block, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
+            collect_aggregate_args_in_stmts(
+                &block.stmts,
+                stmts_topmost,
+                param_names,
+                suspending,
+                expr_types,
+                seen,
+                names,
+            );
+        };
+    let walk_expr =
+        |e: &Expr, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
+            collect_aggregate_args_in_expr(
+                e,
+                stmts_topmost,
+                param_names,
+                suspending,
+                expr_types,
+                seen,
+                names,
+            );
+        };
+    for stmt in stmts {
+        match stmt {
+            Stmt::Expr(e) => walk_expr(e, seen, names),
+            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => walk_expr(value, seen, names),
+            Stmt::If { cond, body, .. } | Stmt::While { cond, body, .. } => {
+                walk_expr(cond, seen, names);
+                walk_block(body, seen, names);
+            }
+            Stmt::For { iter, body, .. } => {
+                walk_expr(iter, seen, names);
+                walk_block(body, seen, names);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
+                walk_expr(scrutinee, seen, names);
+                for arm in arms {
+                    walk_block(&arm.body, seen, names);
+                }
+                if let Some(eb) = else_arm {
+                    walk_block(eb, seen, names);
+                }
+            }
+            Stmt::Return { value, .. } => {
+                if let Some(v) = value {
+                    walk_expr(v, seen, names);
+                }
+            }
+            Stmt::FieldAssign { target, value, .. } => {
+                walk_expr(target, seen, names);
+                walk_expr(value, seen, names);
+            }
+            Stmt::IndexAssign {
+                receiver,
+                index,
+                value,
+                ..
+            } => {
+                walk_expr(receiver, seen, names);
+                walk_expr(index, seen, names);
+                walk_expr(value, seen, names);
+            }
+        }
+    }
+}
+
+/// Expression-level walker for [`collect_aggregate_args_to_suspending_calls`]: find every
+/// suspending call (bare `Call` via [`is_suspending_call`], UFCS `MethodCall` via the ONE
+/// authoritative [`expr_is_ufcs_suspending_call`] arm) and mark its aggregate `Ident`
+/// args as crossing. Recurses into subexpressions so nested calls are covered; does NOT
+/// recurse into `Expr::Background` (separately-staged, safe).
+///
+/// Time: O(N) where N = expression nodes  Space: O(D) recursion depth
+fn collect_aggregate_args_in_expr(
+    expr: &Expr,
+    stmts_topmost: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    let walk = |e: &Expr, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
+        collect_aggregate_args_in_expr(
+            e,
+            stmts_topmost,
+            param_names,
+            suspending,
+            expr_types,
+            seen,
+            names,
+        );
+    };
+    match expr {
+        Expr::Wait(inner, _) => walk(inner, seen, names),
+        // Background args are independently staged by the spawn path — safe, and
+        // deliberately NOT a crossing source (matching the pre-fix passing fixture).
+        Expr::Background(_, _) => {}
+        Expr::Call(c) => {
+            if is_suspending_call(c, suspending) {
+                for arg in &c.args {
+                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, seen, names);
+                }
+            }
+            walk(&c.callee, seen, names);
+            for arg in &c.args {
+                walk(arg, seen, names);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            if expr_is_ufcs_suspending_call(expr, expr_types, &|n| suspending.contains(n)) {
+                // UFCS: the receiver is arg 0 of the desugared call.
+                mark_aggregate_arg(
+                    receiver,
+                    stmts_topmost,
+                    param_names,
+                    expr_types,
+                    seen,
+                    names,
+                );
+                for arg in args {
+                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, seen, names);
+                }
+            }
+            walk(receiver, seen, names);
+            for arg in args {
+                walk(arg, seen, names);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            walk(lhs, seen, names);
+            walk(rhs, seen, names);
+        }
+        Expr::UnaryOp { operand, .. } => walk(operand, seen, names),
+        Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
+            walk(receiver, seen, names);
+        }
+        Expr::StructLit { fields, .. } => {
+            for field in fields {
+                walk(&field.value, seen, names);
+            }
+        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
+            walk(receiver, seen, names);
+            walk(index, seen, names);
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for el in elements {
+                walk(el, seen, names);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                walk(k, seen, names);
+                walk(v, seen, names);
+            }
+        }
+        Expr::Is { expr: inner, .. } => walk(inner, seen, names),
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                    walk(e, seen, names);
+                }
+            }
+        }
+        // Leaf nodes — no calls.
+        Expr::Ident(_, _)
+        | Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => {}
+    }
+}
+
+/// Mark `arg` as a crossing local when it is a LET-bound `Ident` of stack-backed type —
+/// `shape` / `fixed<T>` (aggregates staged by pointer), `number` with precision ≤ 34
+/// (decimal128: the arg-staging path copies the i128 bits into a resume-fn stack temp and
+/// stages a pointer to it — the same dying-stack class, FRAGOs 006/007 / signed R14), or
+/// `maybe<T>` (v0.3-M6 Phase 1c / FRAGO 013: the alloca points at a {flag,payload}
+/// envelope on the resume fn's stack; marking it crossing routes the binding into
+/// bind-time promotion to a counted heap cell, giving the default pointer flush a stable
+/// heap pointee), or a `union` (v0.3-M6 Phase 1c step 3c / FRAGO 014: bind-time
+/// promotion via `union_to_heap_cell`; the codegen classification loop overrides the
+/// RHS variant type with the resolved Union ANNOTATION so the binding never lands in
+/// the shape-embed path — this widen and that override are load-bearing coupled).
+/// Bignum (`number` with precision > 34) is deliberately excluded: its slot stores a
+/// pointer to a heap-resident decimal string (stable across suspension).
+/// The candidate filter for [`collect_aggregate_args_to_suspending_calls`].
+fn mark_aggregate_arg(
+    arg: &Expr,
+    stmts_topmost: &[Stmt],
+    param_names: &[&str],
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut std::collections::HashSet<String>,
+    names: &mut Vec<String>,
+) {
+    let Expr::Ident(name, span) = arg else {
+        return;
+    };
+    if param_names.contains(&name.as_str()) {
+        return;
+    }
+    let arg_ty = expr_types.get(&(span.start, span.end));
+    let is_stack_backed_aggregate = matches!(
+        arg_ty,
+        Some(
+            Type::Shape { .. }
+                | Type::BuiltinFixed { .. }
+                | Type::Maybe { .. }
+                | Type::Union { .. }
+        )
+    ) || matches!(
+        arg_ty,
+        Some(Type::Number { precision }) if *precision <= 34
+    );
+    if is_stack_backed_aggregate
+        && find_crossing_local_typeck_type_in_map(stmts_topmost, name, expr_types).is_some()
+        && seen.insert(name.clone())
+    {
+        names.push(name.clone());
     }
 }
 
@@ -8819,9 +9799,10 @@ struct SubExprSuspendViolation {
 pub(crate) fn suspending_calls_in_subexpr_position(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
 ) -> Vec<(SourceSpan, String)> {
     let mut out = Vec::new();
-    collect_subexpr_violations_in_stmts(stmts, suspending, &mut out);
+    collect_subexpr_violations_in_stmts(stmts, suspending, expr_types, &mut out);
     out.into_iter().map(|v| (v.span, v.callee_name)).collect()
 }
 
@@ -8877,7 +9858,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
     }
 
     // Suspending call in a sub-expression position.
-    if !suspending_calls_in_subexpr_position(&f.body.stmts, suspending_fns).is_empty() {
+    if !suspending_calls_in_subexpr_position(&f.body.stmts, suspending_fns, expr_types).is_empty() {
         return true;
     }
 
@@ -8895,12 +9876,37 @@ pub(crate) fn suspension_guards_fire_for_fn(
     }
 
     // Crossing-local guards (nested-shape, UnsupportedCrossingLocalType, shadow).
+    // Provenance-aware (v0.3-M6 Phase 1c): the probe must mirror Check 2's
+    // arg-escape-only union skip AND Check 2b's arg-escape-only maybe/union skips
+    // below, or it would decline CPU promotion for hosts the real checker accepts —
+    // the silent-envelope-narrowing drift class. Same ONE producer as
+    // `check_function` (authoritative-derivation.md).
     let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
-    let crossings =
-        crossing_local_names(&f.body.stmts, &param_names_ref, suspending_fns, expr_types);
+    let CrossingNames {
+        names: crossings,
+        arg_escape_only,
+    } = crossing_local_names_with_provenance(
+        &f.body.stmts,
+        &param_names_ref,
+        suspending_fns,
+        &std::collections::HashSet::new(),
+        expr_types,
+    );
 
     for crossing_name in &crossings {
-        // Nested-shape crossing.
+        // Annotation type, resolved through union aliases — computed up front because
+        // BOTH guards below consume it: the nested-shape guard's union skip and the
+        // UnsupportedCrossingLocalType guard's [ann, rhs, for_var] preference order.
+        let ann_ty = find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
+            .and_then(|ast_ty| resolve_type_for_guard_free(&ast_ty, union_aliases));
+        // Arg-escape-only union: bind-time promotion (`union_to_heap_cell`) handles the
+        // crossing — mirrors Check 2's AND Check 2b's union skips exactly (step 3c).
+        let arg_escape_union_ok = arg_escape_only.contains(crossing_name.as_str())
+            && matches!(ann_ty, Some(Type::Union { .. }));
+
+        // Nested-shape crossing (skipped for the arg-escape-only union case, exactly
+        // as Check 2 skips it: nothing is frame-embedded for a promoted union, and the
+        // RHS of a union-annotated let types as the concrete variant shape).
         let resolved_ty = find_crossing_local_typeck_type_in_map(
             &f.body.stmts,
             crossing_name.as_str(),
@@ -8918,7 +9924,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
                         .iter()
                         .any(|field| matches!(&field.ty, Type::Shape { .. }))
                 });
-            if has_nested_shape {
+            if has_nested_shape && !arg_escape_union_ok {
                 return true;
             }
         }
@@ -8929,12 +9935,13 @@ pub(crate) fn suspension_guards_fire_for_fn(
             crossing_name.as_str(),
             expr_types,
         );
-        let ann_ty = find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
-            .and_then(|ast_ty| resolve_type_for_guard_free(&ast_ty, union_aliases));
         let for_var_ty =
             find_for_loop_var_type_in_stmts(&f.body.stmts, crossing_name.as_str(), expr_types);
-        let unsupported = [&ann_ty, &rhs_ty, &for_var_ty].iter().any(|opt| {
-            opt.as_ref().is_some_and(|ty| {
+        // Same first-match preference order ([ann, rhs, for_var]) and the same
+        // arg-escape-only `maybe`/`union` skips as Check 2b — the two verdicts must
+        // agree exactly (see the provenance comment above the crossing collection).
+        let effective_ty = [&ann_ty, &rhs_ty, &for_var_ty].iter().find_map(|opt| {
+            opt.as_ref().filter(|ty| {
                 matches!(
                     ty,
                     Type::Union { .. }
@@ -8945,7 +9952,9 @@ pub(crate) fn suspension_guards_fire_for_fn(
                 )
             })
         });
-        if unsupported {
+        let arg_escape_maybe_ok = arg_escape_only.contains(crossing_name.as_str())
+            && matches!(effective_ty, Some(Type::Maybe { .. }));
+        if effective_ty.is_some() && !arg_escape_maybe_ok && !arg_escape_union_ok {
             return true;
         }
 
@@ -9030,16 +10039,47 @@ fn resolve_type_for_guard_free(
 fn collect_subexpr_violations_in_stmts(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
     out: &mut Vec<SubExprSuspendViolation>,
 ) {
     for stmt in stmts {
-        collect_subexpr_violations_in_stmt(stmt, suspending, out);
+        collect_subexpr_violations_in_stmt(stmt, suspending, expr_types, out);
+    }
+}
+
+/// v0.3-M6 P1-1 (site 9): true when `e` is a ROOT UFCS suspending method call —
+/// the direct-statement Safe forms (`x.method()`, `let v = x.method()`,
+/// `return x.method()`, each with or without `wait`) mirror the Call-form arms below.
+/// Classified via the ONE authoritative `ufcs_method_call_suspends` arm through the
+/// shared helper (which unwraps a leading `Expr::Wait`), never a second derivation.
+fn is_root_ufcs_suspending(
+    e: &Expr,
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> bool {
+    expr_is_ufcs_suspending_call(e, expr_types, &|n| suspending.contains(n))
+}
+
+/// Scan a Safe-form UFCS method call's receiver + args for NESTED violations
+/// (the root call itself is a legal direct-statement suspension form).
+fn scan_ufcs_operands(
+    e: &Expr,
+    suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    out: &mut Vec<SubExprSuspendViolation>,
+) {
+    if let Expr::MethodCall { receiver, args, .. } = e {
+        collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
+        for arg in args {
+            collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
+        }
     }
 }
 
 fn collect_subexpr_violations_in_stmt(
     stmt: &Stmt,
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
     out: &mut Vec<SubExprSuspendViolation>,
 ) {
     match stmt {
@@ -9047,8 +10087,14 @@ fn collect_subexpr_violations_in_stmt(
         Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => {
             // Allowed. But check the arguments for nested suspending calls.
             for arg in &c.args {
-                collect_subexpr_violations_in_expr(arg, suspending, out);
+                collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
             }
+        }
+        // Direct-statement UFCS call: `x.method()` — Safe (site 9 UFCS parity).
+        Stmt::Expr(e @ Expr::MethodCall { .. })
+            if is_root_ufcs_suspending(e, suspending, expr_types) =>
+        {
+            scan_ufcs_operands(e, suspending, expr_types, out);
         }
         // Direct-statement wait-of-call: `wait foo()` — the whole expression is Wait(Call). Safe.
         Stmt::Expr(Expr::Wait(inner, _)) => {
@@ -9056,15 +10102,21 @@ fn collect_subexpr_violations_in_stmt(
                 Expr::Call(c) if is_suspending_call(c, suspending) => {
                     // Allowed. Check args.
                     for arg in &c.args {
-                        collect_subexpr_violations_in_expr(arg, suspending, out);
+                        collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                     }
                 }
+                // `wait x.method()` — Safe (site 9 UFCS parity).
+                e @ Expr::MethodCall { .. }
+                    if is_root_ufcs_suspending(e, suspending, expr_types) =>
+                {
+                    scan_ufcs_operands(e, suspending, expr_types, out);
+                }
                 // `wait expr` where inner is not a direct call — scan inner for violations.
-                other => collect_subexpr_violations_in_expr(other, suspending, out),
+                other => collect_subexpr_violations_in_expr(other, suspending, expr_types, out),
             }
         }
         // Non-wait bare expression: scan for nested suspending calls.
-        Stmt::Expr(expr) => collect_subexpr_violations_in_expr(expr, suspending, out),
+        Stmt::Expr(expr) => collect_subexpr_violations_in_expr(expr, suspending, expr_types, out),
 
         // `let x = foo()` — the whole RHS IS the call. Safe.
         Stmt::Let {
@@ -9072,8 +10124,15 @@ fn collect_subexpr_violations_in_stmt(
             ..
         } if is_suspending_call(c, suspending) => {
             for arg in &c.args {
-                collect_subexpr_violations_in_expr(arg, suspending, out);
+                collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
             }
+        }
+        // `let v = x.method()` — Safe (site 9 UFCS parity).
+        Stmt::Let {
+            value: e @ Expr::MethodCall { .. },
+            ..
+        } if is_root_ufcs_suspending(e, suspending, expr_types) => {
+            scan_ufcs_operands(e, suspending, expr_types, out);
         }
         // `let x = wait foo()` — Safe.
         Stmt::Let {
@@ -9082,14 +10141,18 @@ fn collect_subexpr_violations_in_stmt(
         } => match inner.as_ref() {
             Expr::Call(c) if is_suspending_call(c, suspending) => {
                 for arg in &c.args {
-                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                    collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                 }
             }
-            other => collect_subexpr_violations_in_expr(other, suspending, out),
+            // `let v = wait x.method()` — Safe (site 9 UFCS parity).
+            e @ Expr::MethodCall { .. } if is_root_ufcs_suspending(e, suspending, expr_types) => {
+                scan_ufcs_operands(e, suspending, expr_types, out);
+            }
+            other => collect_subexpr_violations_in_expr(other, suspending, expr_types, out),
         },
         // `let x = <complex expr>` — scan the RHS.
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
-            collect_subexpr_violations_in_expr(value, suspending, out);
+            collect_subexpr_violations_in_expr(value, suspending, expr_types, out);
         }
 
         // `return foo()` — Safe.
@@ -9098,8 +10161,15 @@ fn collect_subexpr_violations_in_stmt(
             ..
         } if is_suspending_call(c, suspending) => {
             for arg in &c.args {
-                collect_subexpr_violations_in_expr(arg, suspending, out);
+                collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
             }
+        }
+        // `return x.method()` — Safe (site 9 UFCS parity).
+        Stmt::Return {
+            value: Some(e @ Expr::MethodCall { .. }),
+            ..
+        } if is_root_ufcs_suspending(e, suspending, expr_types) => {
+            scan_ufcs_operands(e, suspending, expr_types, out);
         }
         // `return wait foo()` — Safe.
         Stmt::Return {
@@ -9108,30 +10178,34 @@ fn collect_subexpr_violations_in_stmt(
         } => match inner.as_ref() {
             Expr::Call(c) if is_suspending_call(c, suspending) => {
                 for arg in &c.args {
-                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                    collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                 }
             }
-            other => collect_subexpr_violations_in_expr(other, suspending, out),
+            // `return wait x.method()` — Safe (site 9 UFCS parity).
+            e @ Expr::MethodCall { .. } if is_root_ufcs_suspending(e, suspending, expr_types) => {
+                scan_ufcs_operands(e, suspending, expr_types, out);
+            }
+            other => collect_subexpr_violations_in_expr(other, suspending, expr_types, out),
         },
         // `return <complex>` — scan.
         Stmt::Return {
             value: Some(expr), ..
         } => {
-            collect_subexpr_violations_in_expr(expr, suspending, out);
+            collect_subexpr_violations_in_expr(expr, suspending, expr_types, out);
         }
         Stmt::Return { value: None, .. } => {}
 
         // Control flow — recurse into bodies.
         Stmt::If { cond, body, .. } => {
-            collect_subexpr_violations_in_expr(cond, suspending, out);
-            collect_subexpr_violations_in_stmts(&body.stmts, suspending, out);
+            collect_subexpr_violations_in_expr(cond, suspending, expr_types, out);
+            collect_subexpr_violations_in_stmts(&body.stmts, suspending, expr_types, out);
         }
         Stmt::While { cond, body, .. }
         | Stmt::For {
             iter: cond, body, ..
         } => {
-            collect_subexpr_violations_in_expr(cond, suspending, out);
-            collect_subexpr_violations_in_stmts(&body.stmts, suspending, out);
+            collect_subexpr_violations_in_expr(cond, suspending, expr_types, out);
+            collect_subexpr_violations_in_stmts(&body.stmts, suspending, expr_types, out);
         }
         Stmt::Match {
             scrutinee,
@@ -9139,17 +10213,17 @@ fn collect_subexpr_violations_in_stmt(
             else_arm,
             ..
         } => {
-            collect_subexpr_violations_in_expr(scrutinee, suspending, out);
+            collect_subexpr_violations_in_expr(scrutinee, suspending, expr_types, out);
             for arm in arms {
-                collect_subexpr_violations_in_stmts(&arm.body.stmts, suspending, out);
+                collect_subexpr_violations_in_stmts(&arm.body.stmts, suspending, expr_types, out);
             }
             if let Some(b) = else_arm {
-                collect_subexpr_violations_in_stmts(&b.stmts, suspending, out);
+                collect_subexpr_violations_in_stmts(&b.stmts, suspending, expr_types, out);
             }
         }
         Stmt::FieldAssign { target, value, .. } => {
-            collect_subexpr_violations_in_expr(target, suspending, out);
-            collect_subexpr_violations_in_expr(value, suspending, out);
+            collect_subexpr_violations_in_expr(target, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(value, suspending, expr_types, out);
         }
         Stmt::IndexAssign {
             receiver,
@@ -9157,9 +10231,9 @@ fn collect_subexpr_violations_in_stmt(
             value,
             ..
         } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out);
-            collect_subexpr_violations_in_expr(index, suspending, out);
-            collect_subexpr_violations_in_expr(value, suspending, out);
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(index, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(value, suspending, expr_types, out);
         }
     }
 }
@@ -9171,6 +10245,7 @@ fn collect_subexpr_violations_in_stmt(
 fn collect_subexpr_violations_in_expr(
     expr: &Expr,
     suspending: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
     out: &mut Vec<SubExprSuspendViolation>,
 ) {
     match expr {
@@ -9188,13 +10263,15 @@ fn collect_subexpr_violations_in_expr(
                 }
             }
             // Not suspending — but its arguments might be.
-            collect_subexpr_violations_in_expr(&c.callee, suspending, out);
+            collect_subexpr_violations_in_expr(&c.callee, suspending, expr_types, out);
             for arg in &c.args {
-                collect_subexpr_violations_in_expr(arg, suspending, out);
+                collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
             }
         }
         // `wait expr` in sub-expression position: the inner is already inside the larger expr.
-        Expr::Wait(inner, _) => collect_subexpr_violations_in_expr(inner, suspending, out),
+        Expr::Wait(inner, _) => {
+            collect_subexpr_violations_in_expr(inner, suspending, expr_types, out)
+        }
         // `background foo(a, b)`: the spawn target (`foo`) becomes its own state machine
         // and is a call-graph cut for suspension propagation.  BUT the arguments `a` and `b`
         // evaluate in the CALLING context before the spawn — exactly like the non-background
@@ -9208,66 +10285,86 @@ fn collect_subexpr_violations_in_expr(
             Expr::Call(c) => {
                 // Direct-spawn callee is a graph cut — skip `c.callee`. Scan args only.
                 for arg in &c.args {
-                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                    collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                 }
             }
             Expr::MethodCall { receiver, args, .. } => {
                 // Same reasoning: receiver + args evaluate in the caller.
-                collect_subexpr_violations_in_expr(receiver, suspending, out);
+                collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
                 for arg in args {
-                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                    collect_subexpr_violations_in_expr(arg, suspending, expr_types, out);
                 }
             }
             // Unexpected inner shape (rare — background is statement-position-only in M2).
             // Recurse conservatively to catch any nested violations.
-            other => collect_subexpr_violations_in_expr(other, suspending, out),
+            other => collect_subexpr_violations_in_expr(other, suspending, expr_types, out),
         },
         Expr::BinOp { lhs, rhs, .. } => {
-            collect_subexpr_violations_in_expr(lhs, suspending, out);
-            collect_subexpr_violations_in_expr(rhs, suspending, out);
+            collect_subexpr_violations_in_expr(lhs, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(rhs, suspending, expr_types, out);
         }
         Expr::UnaryOp { operand, .. } => {
-            collect_subexpr_violations_in_expr(operand, suspending, out)
+            collect_subexpr_violations_in_expr(operand, suspending, expr_types, out)
         }
-        Expr::MethodCall { receiver, args, .. } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out);
+        Expr::MethodCall {
+            receiver,
+            method,
+            method_span,
+            args,
+            ..
+        } => {
+            // v0.3-M6 P1-1 (site 9): a UFCS suspending call in sub-expression position is
+            // the SAME violation as its Call-form twin — classified via the ONE
+            // authoritative `ufcs_method_call_suspends` arm through the shared helper.
+            // One error per call site; no operand recursion after reporting (mirrors the
+            // Call arm above).
+            if expr_is_ufcs_suspending_call(expr, expr_types, &|n| suspending.contains(n)) {
+                out.push(SubExprSuspendViolation {
+                    span: method_span.clone(),
+                    callee_name: method.clone(),
+                });
+                return;
+            }
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
             for a in args {
-                collect_subexpr_violations_in_expr(a, suspending, out);
+                collect_subexpr_violations_in_expr(a, suspending, expr_types, out);
             }
         }
         Expr::FieldAccess { receiver, .. } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out)
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out)
         }
         Expr::IndexAccess {
             receiver, index, ..
         } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out);
-            collect_subexpr_violations_in_expr(index, suspending, out);
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out);
+            collect_subexpr_violations_in_expr(index, suspending, expr_types, out);
         }
         Expr::StructLit { fields, .. } => {
             for f in fields {
-                collect_subexpr_violations_in_expr(&f.value, suspending, out);
+                collect_subexpr_violations_in_expr(&f.value, suspending, expr_types, out);
             }
         }
         Expr::ArrayLit { elements, .. } => {
             for e in elements {
-                collect_subexpr_violations_in_expr(e, suspending, out);
+                collect_subexpr_violations_in_expr(e, suspending, expr_types, out);
             }
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                collect_subexpr_violations_in_expr(k, suspending, out);
-                collect_subexpr_violations_in_expr(v, suspending, out);
+                collect_subexpr_violations_in_expr(k, suspending, expr_types, out);
+                collect_subexpr_violations_in_expr(v, suspending, expr_types, out);
             }
         }
         Expr::PostfixOp { receiver, .. } => {
-            collect_subexpr_violations_in_expr(receiver, suspending, out)
+            collect_subexpr_violations_in_expr(receiver, suspending, expr_types, out)
         }
-        Expr::Is { expr: inner, .. } => collect_subexpr_violations_in_expr(inner, suspending, out),
+        Expr::Is { expr: inner, .. } => {
+            collect_subexpr_violations_in_expr(inner, suspending, expr_types, out)
+        }
         Expr::InterpolatedString(parts, _) => {
             for p in parts {
                 if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
-                    collect_subexpr_violations_in_expr(e, suspending, out);
+                    collect_subexpr_violations_in_expr(e, suspending, expr_types, out);
                 }
             }
         }
@@ -9683,6 +10780,35 @@ fn levenshtein(a: &str, b: &str) -> usize {
 ///
 /// Used for ownership checking: ownership enforcement only applies to direct
 /// binding references, not to computed expressions like `foo()` or `a + b`.
+/// Where an int literal met a `number`-typed slot — consumed by
+/// `reject_int_literal_number_slot`. The role varies ONLY the diagnostic's
+/// subject and the WHAT-INSTEAD closing clause; the core WHAT/WHY text stays
+/// byte-identical across every slot (non-oop.md's
+/// identical-diagnostics-between-call-forms convention, lifted to all slots).
+enum NumberSlotRole<'a> {
+    /// A call argument — plain `f(5)`, UFCS `p.f(5)`, generic `f<T>(5, ...)`,
+    /// or a built-in collection method arg. `name` = the function/method name.
+    CallArg { name: &'a str },
+    /// A shape field at construction (`{ total: 5 }`) or assignment
+    /// (`o.total = 5`). `name` = the field name.
+    Field { name: &'a str },
+    /// A collection literal element / index-assign / bracket slot.
+    /// `container` = "array" | "fixed array" | "map";
+    /// `noun` = "element" | "key" | "value".
+    Collection { container: &'a str, noun: &'a str },
+    /// `return 5` from a `-> number` function.
+    Return,
+    /// A multi-case-if arm value pattern against a `number` scrutinee.
+    MatchArm,
+    /// A `let`/`const` binding store site with a `number` annotation
+    /// (`let x: number = 5`). `name` = the binding name. v0.3-M6 store-site
+    /// stopgap: typeck previously admitted this (the hinted int literal types
+    /// `number`) and codegen ICE'd storing a raw i64 into the decimal128 pointer
+    /// slot; the gate now rejects it with a teaching error. The int→number
+    /// COERCION remains deferred (2026-07-04-v0-3-hotfix-int-literal-number).
+    StoreBinding { name: &'a str },
+}
+
 fn simple_ident_name(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Ident(name, _) => Some(name.as_str()),

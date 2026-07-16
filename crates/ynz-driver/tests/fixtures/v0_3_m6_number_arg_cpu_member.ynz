@@ -1,0 +1,40 @@
+// v0.3-M6 Phase 1d RED fixture (FRAGO 009 defect C, pure-CPU spike group): a
+// decimal128 (`number`) argument into a CPU-member spawn (`emit_cpu_member_spawn`,
+// auto-parallelized independent statements — M3d). Admission: entrypoint hosts
+// exactly ONE cpu group; `heavyGrow`/`heavyShrink` are distinct direct ident calls,
+// one Ident arg each, both does_real_work (while loop). Correct behavior: each
+// member's decimal128 arg crosses the blocking-pool boundary intact — prints 2.5
+// then 4.5, exits 0.
+// Pre-fix failure (the documented ICE, fable-probe-confirmed 3/3 on HEAD 47abd29):
+// `emit_cpu_member_spawn` build_load(i64)s the member's local slot and the shared
+// trampoline passes that i64 where the compiled callee expects its pointer-typed
+// number param — LLVM verifier failure surfaced as "compiler bug" on valid code.
+
+function heavyGrow(n: number) -> number {
+  let total = 0
+  let i = 0
+  while (i < 50) {
+    total = total + i
+    i = i + 1
+  }
+  return n
+}
+
+function heavyShrink(m: number) -> number {
+  let total = 0
+  let i = 0
+  while (i < 40) {
+    total = total + i
+    i = i + 1
+  }
+  return m
+}
+
+function entrypoint() -> nothing {
+  let x: number = 2.5
+  let y: number = 4.5
+  let a = heavyGrow(x)
+  let b = heavyShrink(y)
+  print(a.toString())
+  print(b.toString())
+}

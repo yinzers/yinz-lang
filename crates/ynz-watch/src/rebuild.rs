@@ -139,8 +139,8 @@ pub fn rebuild_one(
 /// system linker (cc/ld) to produce an executable — mirrors the existing build pipeline.
 ///
 /// Failure modes:
-/// - linker not found → `WatchError::CodegenWrite`
-/// - linker exits non-zero → `WatchError::CodegenWrite` with stderr
+/// - linker not found / could not invoke → `WatchError::CodegenWrite`
+/// - linker exits non-zero → `WatchError::LinkFailed` with captured stderr
 /// - write to temp .o fails → `WatchError::CodegenWrite`
 ///
 /// Time: O(1) compile + O(n) link where n = object size. Space: O(n).
@@ -179,13 +179,22 @@ fn write_binary(object_bytes: &[u8], binary_path: &Path) -> Result<()> {
         .copied()
         .unwrap_or("cc");
 
-    let status = Command::new(linker)
+    let output = Command::new(linker)
         .arg("-no-pie") // LLVM emits non-PIC relocations; -no-pie matches (mirrors ynz build)
         .arg("-o")
         .arg(binary_path)
         .arg(&obj_path)
         .arg(rt_tmp.path()) // runtime library: ynz_string_*, ynz_siphash_*, etc.
-        .status()
+        // Tokio runtime (embedded in the runtime library) requires:
+        //   -lpthread  — OS thread spawning
+        //   -ldl       — dynamic loading on some platforms
+        //   -lm        — math functions (f64::powf etc.)
+        //   -lrt       — clock_gettime on older glibc (no-op on modern Linux)
+        .arg("-lpthread")
+        .arg("-ldl")
+        .arg("-lm")
+        .arg("-lrt")
+        .output()
         .map_err(|e| WatchError::CodegenWrite {
             path: binary_path.to_path_buf(),
             reason: format!("could not invoke linker `{linker}`: {e}"),
@@ -195,10 +204,11 @@ fn write_binary(object_bytes: &[u8], binary_path: &Path) -> Result<()> {
     // Remove object file regardless of link outcome.
     let _ = fs::remove_file(&obj_path);
 
-    if !status.success() {
-        return Err(WatchError::CodegenWrite {
+    if !output.status.success() {
+        return Err(WatchError::LinkFailed {
             path: binary_path.to_path_buf(),
-            reason: format!("linker exited with status {status}"),
+            status: output.status.to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         });
     }
 

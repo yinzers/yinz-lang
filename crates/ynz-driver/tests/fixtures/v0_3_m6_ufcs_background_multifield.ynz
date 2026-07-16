@@ -1,0 +1,24 @@
+// v0.3-M6 Phase 3c sibling coverage: give-transferred UFCS receiver whose spawned task
+// reads PAST the first field after its own suspension. Locks the WHOLE-struct heap
+// upgrade: pre-fix (FRAGO 024) the receiver rode into the task as a raw pointer to the
+// entrypoint's dead resume-fn stack frame, so every field — not just the first — read
+// freed stack. Deterministic ordering: the task prints at ~+20ms, the entrypoint prints
+// at ~+120ms — stdout is exactly "Mon\n42\ndone\n", exit 0.
+
+shape Barge {
+  name: string
+  tonnage: int
+}
+
+function haul(give self: Barge) -> nothing {
+  wait sleep(20)
+  print(self.name)
+  print(self.tonnage.toString())
+}
+
+function entrypoint() -> nothing {
+  let barge: Barge = { name: `Mon`, tonnage: 42 }
+  background barge.haul()
+  wait sleep(120)
+  print(`done`)
+}

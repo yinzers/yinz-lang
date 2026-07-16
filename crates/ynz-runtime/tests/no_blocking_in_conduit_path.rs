@@ -56,6 +56,15 @@ fn production_lines(contents: &str) -> impl Iterator<Item = (usize, &str)> {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "pure static-analysis grep-audit over source-file text — no unsafe/concurrency \
+              surface for Miri to exercise, and it needs real fs::read_to_string, which Miri's \
+              default isolation blocks (`open` not available when isolation is enabled; see \
+              https://github.com/rust-lang/miri#isolation). Real coverage of the conduit path's \
+              actual runtime behavior comes from m2_runtime.rs / m2_spike.rs, which DO run under \
+              Miri; this file only checks the checked-in source text."
+)]
 fn conduit_runtime_path_has_zero_synchronous_blocking_calls() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let mut offenders: Vec<String> = Vec::new();
@@ -91,6 +100,12 @@ fn conduit_runtime_path_has_zero_synchronous_blocking_calls() {
 /// file move or an accidental leading `#[cfg(test)]` must not let the audit silently pass
 /// over nothing.
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "same fs::read_to_string isolation limitation as \
+              conduit_runtime_path_has_zero_synchronous_blocking_calls above — this is the guard-\
+              the-guard test for that same pure-text audit, not a runtime/concurrency check."
+)]
 fn conduit_audit_scans_real_production_code() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     for module in CONDUIT_MODULES {

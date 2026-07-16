@@ -1,0 +1,8 @@
+// WHY: int literal into `fixed<number>.set(i, 5)` elem slot — same unchecked
+// builtin-arg class as the array arm. Pre-fix: silent type corruption.
+function entrypoint() -> nothing {
+  let prices: fixed<number> = [1.5, 2.5]
+  prices.set(0, 5)
+  let got = prices.get(0)
+  print(got.or(0.0))
+}

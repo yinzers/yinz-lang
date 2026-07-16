@@ -938,10 +938,10 @@ pub(crate) fn compute_cpu_promotions(
         // reasons) is v0.3-M3g Phase 2's extension: it can STILL be a candidate when it hosts
         // its own CPU group, because promoting it costs nothing extra at the typeck layer (it
         // was already going to be a state machine) and the guard-probe below (E6) still checks
-        // its own CPU-join crossings before admitting it into `candidates`. This lift is
-        // structurally inert for codegen today: `admitted_cpu_group`'s Phase-2 temporary
-        // co-resident-suspension decline keeps every such host's group from actually firing
-        // until Phase 3.
+        // its own CPU-join crossings before admitting it into `candidates`. This lift is LIVE
+        // at codegen: the v0.3-M3g Phase 3 admission flip removed the co-resident-suspension
+        // decline in BOTH of `admitted_cpu_group`'s arms (top-level and nested — see
+        // cpu_admission.rs), so a `base_suspends` host's admitted group DOES fire.
         if cyclic_members.contains(&f.name) {
             continue;
         }

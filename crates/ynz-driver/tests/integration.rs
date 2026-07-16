@@ -672,6 +672,10 @@ fn m3_return_value_in_nothing_fn_produces_diagnostic() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_return_value_in_nothing.ynz"));
     assert_ne!(code, 0, "return value in nothing fn must exit non-zero");
     assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("return") && stderr.contains("nothing"),
+        "diagnostic must name the return-in-`nothing` contradiction, got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -2269,14 +2273,18 @@ fn v03_m3e_namespace_import_suspending_rejects_cleanly() {
 fn v03_m3e_alias_local_name_collision_runs_correctly() {
     // WHY: regression lock for alias-import dispatch correctness under name collision.
     // When an imported suspending callee (`compute`) is aliased as `doWork` AND a local
-    // function named `doWork` also exists, `background doWork()` must dispatch to the
-    // IMPORTED callee. The imported callee prints "IMPORTED-OK"; the local prints "LOCAL-BUG".
+    // function named `doWork` also exists (same signature — name, not arity, is what
+    // dispatch must resolve), `background doWork(done)` must dispatch to the IMPORTED
+    // callee. The imported callee prints "IMPORTED-OK"; the local prints "LOCAL-BUG".
     // Any wrong dispatch (local wins) produces "LOCAL-BUG". Any frame under-sizing (local's
     // 32-byte frame used instead of imported callee's 72+ byte frame with 4 crossing-locals)
     // causes heap corruption that prevents "IMPORTED-OK" from printing. Three concurrent
     // spawns amplify both dispatch and frame-sizing bugs. This test is diagnostic: it fails
     // specifically on dispatch-wrong (Finding 2) and on frame-sizing-wrong (Finding 1).
     // Reverting original_name resolution → "LOCAL-BUG" appears or exit non-zero.
+    // Synchronization (M6 FRAGO 008): the fixture uses a channel barrier — each task sends
+    // after printing; the parent receives 3× before "main-done" — so all three sentinel
+    // lines are a deterministic happens-before consequence, never a shutdown-timing margin.
     let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_alias_local_name_collision"));
     assert_eq!(
         code, 0,
@@ -2294,16 +2302,16 @@ fn v03_m3e_alias_local_name_collision_runs_correctly() {
     );
     assert!(
         stdout.contains("main-done"),
-        "alias-local-name collision: main thread must reach print after sleep; stdout:\n{stdout}"
+        "alias-local-name collision: main thread must reach print after the 3-receive barrier; stdout:\n{stdout}"
     );
-    // Three background spawns → at least one IMPORTED-OK line (runtime-shutdown timing
-    // means some tasks may print after the process exits — the key invariant is that the
-    // imported callee was dispatched, not the local function).
+    // Three background spawns, each completing a channel send the parent receives BEFORE
+    // printing "main-done" → exactly three IMPORTED-OK lines, deterministically. No
+    // shutdown-timing tolerance: the barrier makes completion a happens-before edge.
     let imported_ok_count = stdout.matches("IMPORTED-OK").count();
-    assert!(
-        imported_ok_count >= 1,
-        "alias-local-name collision: expected at least 1 IMPORTED-OK line from 3 spawns; \
-         got {imported_ok_count}; stdout:\n{stdout}"
+    assert_eq!(
+        imported_ok_count, 3,
+        "alias-local-name collision: expected exactly 3 IMPORTED-OK lines from 3 spawns \
+         (channel barrier guarantees all complete before main-done); stdout:\n{stdout}"
     );
 }
 
@@ -10669,6 +10677,46 @@ fn m5_p3_e8_parity_gate() {
          a drop story landed (update the accounting + the step-4 verdict); any \
          other drift = investigate before touching this pin. alloc={alloc} \
          free={free}"
+    );
+}
+
+#[test]
+fn v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak() {
+    // WHY: v0.3-M6 Phase 1c step 3d — the heap-cell LOOP parity verdict, resolved (not
+    // assumed) per FRAGO 013's carried open recon. A crossing `maybe`/`union` binding
+    // re-bound PER ITERATION runs the bind-time heap-cell promotion each pass and
+    // orphans the prior iteration's cell(s); cells are never freed (the M5 P3/FRAGO 009
+    // never-drop-locals exact-gap semantics, now surfacing through Phase 1c's NEW
+    // promotion sites). Paper-Trace (predicted BEFORE first run; observed matched
+    // exactly, stable across repeated runs):
+    //   +5  maybe loop, 5 iterations — 1 envelope cell per promotion (non-shape payload)
+    //   +6  union loop, 3 iterations — 2 cells per promotion (envelope + Square payload)
+    //   ±0  frames — the composed task frame is alloc'd AND freed (free=1 observed;
+    //       free>0 keeps the probe non-vacuous: the suspension machinery genuinely ran)
+    // The stdout assertion (200 = 5×40; `square`×3) proves each iteration's binding
+    // survived its suspension — the gap measures real crossing promotions, not dead
+    // code. A larger gap = a NEW leak class; free growing by 11 = a drop story landed
+    // (update this pin + the step-3d verdict record); any other drift = investigate.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m6_heap_cell_loop_parity.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "200\nsquare\nsquare\nsquare\n");
+    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m6_heap_cell_loop_parity.ynz");
+    assert!(
+        alloc > 0,
+        "VISIBILITY FAILURE: alloc=0 on a heap-cell-promoting fixture — the counter \
+         cannot see the promotion cells; the parity verdict is VACUOUS"
+    );
+    assert!(
+        free > 0,
+        "NON-VACUITY FAILURE: free=0 — no frame ever balanced, so the suspension \
+         machinery this probe depends on did not run; alloc={alloc}"
+    );
+    assert_eq!(
+        alloc,
+        free + 11,
+        "heap-cell loop parity drifted: expected alloc = free + 11 (5 maybe envelope \
+         cells + 3×2 union cells, per-iteration bind-time promotions held to process \
+         exit). alloc={alloc} free={free}"
     );
 }
 

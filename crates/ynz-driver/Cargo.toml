@@ -24,6 +24,11 @@ ynz-codegen     = { workspace = true }
 ynz-fmt         = { workspace = true }
 ynz-watch       = { workspace = true }
 
+# Signal-name lookup for `ynz run`'s signal-terminated-child report (Unix only —
+# ExitStatusExt::signal() is a Unix-only API; see run.rs for the Windows fallback).
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["signal"] }
+
 [dev-dependencies]
 insta      = { workspace = true }
 assert_cmd = { workspace = true }

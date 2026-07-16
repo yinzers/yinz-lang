@@ -38,6 +38,108 @@ use tokio::time::Sleep;
 // SAFETY: `Mutex<Option<Runtime>>` is `Send + Sync`.
 static RUNTIME: OnceLock<Mutex<Option<tokio::runtime::Runtime>>> = OnceLock::new();
 
+// Count of blocking-pool tasks that have been handed to `handle.spawn_blocking` but have
+// not yet finished running. `ynz_rt_shutdown` drains this to zero BEFORE calling Tokio's
+// `shutdown_timeout`, closing a confirmed task-loss race: Tokio's own doc comment on
+// `spawn_blocking` says such tasks are scheduled as "non-mandatory, meaning they may not
+// get executed in case of runtime shutdown" — any task still sitting in the blocking
+// pool's internal queue (handed off but not yet popped by a worker thread) at the exact
+// instant `shutdown_timeout` flips the pool's shutdown flag is silently CANCELLED without
+// ever running its closure, even though `ynz_rt_shutdown`'s own contract promises
+// in-flight tasks up to `timeout_ms` to finish. Confirmed live under ThreadSanitizer (M6
+// Phase 6b): 100 rapid-fire `ynz_rt_spawn_blocking` calls immediately followed by
+// `ynz_rt_shutdown()` lost up to 20% of tasks across repeated runs — no error, no log,
+// simply never executed (see `PendingBlockingGuard` below for the increment/decrement
+// discipline; see `ynz_rt_shutdown` for the drain-wait).
+static PENDING_BLOCKING_TASKS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+// Set to `true` by `ynz_rt_shutdown` as its very FIRST action (before it even locks
+// `RUNTIME`), reset to `false` by `ynz_rt_init` (test-harness reuse across an
+// init/shutdown/init cycle — mirrors `RUNTIME`'s own re-populate-after-shutdown
+// contract). This closes a SECOND race the plain drain-loop-then-shutdown_timeout
+// sequence did not: `PENDING_BLOCKING_TASKS` draining to zero is a SNAPSHOT, not a
+// lock — nothing stops a task still executing inside the runtime (e.g. a
+// fire-and-forget task `ynz_rt_shutdown` itself promises time to finish) from calling
+// `ynz_rt_spawn_blocking`/`_joinable` in the exact window AFTER the drain loop
+// observes zero and BEFORE `shutdown_timeout` begins tearing the pool down — both
+// spawn entry points resolve their Tokio `Handle` via `Handle::try_current()`, which
+// succeeds purely from Tokio's own thread-local task context and is completely
+// independent of the `RUNTIME` mutex `ynz_rt_shutdown` already emptied. A new task
+// admitted in that window re-opens the EXACT silent-task-loss bug
+// `PENDING_BLOCKING_TASKS` was built to close. See `PendingBlockingGuard::try_new`
+// for the increment-then-check protocol that closes this window, and
+// `m6_shutdown_admission_race.rs` for the regression test.
+static SHUTDOWN_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// RAII guard: increments `PENDING_BLOCKING_TASKS` when successfully admitted, decrements
+/// on drop. Constructed on the SPAWNING thread via `try_new()` (before
+/// `handle.spawn_blocking` is even called), then moved into the closure — and dropped at
+/// the closure's FIRST line (see `drop(_pending)` in `ynz_rt_spawn_blocking` and
+/// `ynz_rt_spawn_blocking_joinable`), not at the closure's end. This means the count
+/// covers only the "queued, not yet STARTED" window — the actual vulnerability window for
+/// Tokio's non-mandatory `spawn_blocking` cancellation — and deliberately does NOT extend
+/// across the task body's own execution time; holding it for the whole closure lifetime
+/// was tried and reverted (M6 Phase 6b fix-loop) because it starved `shutdown_timeout`'s
+/// own remaining budget on long-running task bodies (see the `drop(_pending)` call sites'
+/// doc comments for the confirmed regression). Decrements on every exit path — normal
+/// return AND unwind (`std::panic::resume_unwind`, used by
+/// `ynz_rt_spawn_blocking_joinable`) — because Rust runs `Drop` for live locals on both
+/// paths.
+struct PendingBlockingGuard;
+
+impl PendingBlockingGuard {
+    /// Attempts to register a new pending blocking task. Returns `None` if
+    /// `ynz_rt_shutdown` has already begun — the caller MUST NOT spawn the task in that
+    /// case (log + discard, matching the existing "called after ynz_rt_shutdown"
+    /// behavior for the other admission failure modes). Call from the SPAWNING thread,
+    /// immediately before `handle.spawn_blocking`; on `Some`, move the returned guard
+    /// INTO the closure so it decrements when the closure exits.
+    ///
+    /// # Race-closing protocol — increment-then-check, never check-then-increment
+    /// A naive "check `SHUTDOWN_STARTED`, then increment only if false" ordering
+    /// reopens the exact TOCTOU this guard exists to close: a task could observe
+    /// `SHUTDOWN_STARTED == false`, then `ynz_rt_shutdown`'s drain loop could observe
+    /// `PENDING_BLOCKING_TASKS == 0` (the increment hasn't happened yet) and proceed
+    /// straight into `shutdown_timeout` — racing the task's later increment + spawn.
+    ///
+    /// This ALWAYS increments first (advertising intent to spawn) and only THEN checks
+    /// the flag. Both atomics use `SeqCst`, which gives every `SeqCst` operation across
+    /// every thread one single global total order consistent with each thread's own
+    /// program order. Let `I` = this increment, `F_write` = `ynz_rt_shutdown`'s flag
+    /// store, `F_read` = this function's flag load, and `C_read` = any iteration of the
+    /// drain loop's counter load:
+    /// - If `I` precedes `F_write` in the total order: `F_write` precedes every
+    ///   `C_read` in program order (the store is the drain loop's first line), so
+    ///   `I` precedes every `C_read` too — the drain loop cannot observe zero (and so
+    ///   cannot proceed to `shutdown_timeout`) until this task's guard drops, whether
+    ///   `F_read` (which follows `I` in program order) lands before or after `F_write`.
+    ///   Either way the task is safely admitted or safely told to retreat before it is
+    ///   ever handed to Tokio.
+    /// - If `F_write` precedes `I`: then `F_write` precedes `I` precedes `F_read` (the
+    ///   latter by program order), so `F_read` observes `true` — the increment is
+    ///   undone immediately and the caller discards the task, which is therefore NEVER
+    ///   handed to Tokio and can never become the silently-cancelled non-mandatory task
+    ///   this whole mechanism exists to prevent.
+    fn try_new() -> Option<Self> {
+        PENDING_BLOCKING_TASKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if SHUTDOWN_STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+            // Undo the advertisement — shutdown has already been signaled, so this task
+            // must never reach `handle.spawn_blocking`.
+            PENDING_BLOCKING_TASKS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            None
+        } else {
+            Some(Self)
+        }
+    }
+}
+
+impl Drop for PendingBlockingGuard {
+    fn drop(&mut self) {
+        PENDING_BLOCKING_TASKS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 // General SM frame-header offsets (`FRAME_OFFSET_SLEEP_HANDLE`, `FRAME_OFFSET_RETURN_SLOT`) and
 // the spike-frame layout contract all live in `ynz-abi` (a dependency-free crate) so codegen and
 // the runtime read the identical values without codegen depending on the runtime's tokio tree.
@@ -102,9 +204,18 @@ fn decode_spike_discriminator(disc: u32) -> Option<usize> {
 /// Starts OS threads. No I/O until a task is spawned.
 #[no_mangle]
 pub extern "C" fn ynz_rt_init() {
-    // Latch the alloc-counter flag once here so per-alloc cost is a cheap atomic load.
-    // The env var read (lock + heap + UTF-8 scan) happens only once at program start.
+    // Latch both test-only env flags once here so their hot-path gates are cheap
+    // atomic loads: the alloc counter (per-alloc gate) and the recursion-drop skip
+    // (per-task-drop gate). Each env var read (lock + heap + UTF-8 scan) happens
+    // only once at program start.
     crate::init_alloc_counter_flag();
+    crate::init_skip_recursion_drop_flag();
+
+    // Re-arm blocking-task admission for a fresh init/shutdown/init cycle (test-harness
+    // reuse — mirrors `RUNTIME`'s own re-populate-after-shutdown contract). Without this
+    // reset, every `ynz_rt_spawn_blocking`/`_joinable` call after the FIRST shutdown in a
+    // process would be permanently rejected by `PendingBlockingGuard::try_new`.
+    SHUTDOWN_STARTED.store(false, std::sync::atomic::Ordering::SeqCst);
 
     let mutex = RUNTIME.get_or_init(|| Mutex::new(None));
     let mut lock = mutex.lock().expect("ynz_rt_init: mutex poisoned");
@@ -117,8 +228,8 @@ pub extern "C" fn ynz_rt_init() {
         *lock = Some(rt);
     }
     // If already initialised (e.g., double-init in the same program or after shutdown
-    // in a test harness that re-calls init), this is a no-op. The alloc-counter flag
-    // call above is idempotent: re-reading the same env var produces the same value.
+    // in a test harness that re-calls init), this is a no-op. The two flag calls
+    // above are idempotent: re-reading the same env vars produces the same values.
 }
 
 /// RAII guard that frees the heap frame when dropped (normal return AND unwind).
@@ -145,10 +256,10 @@ unsafe impl Send for FrameDropGuard {}
 impl Drop for FrameDropGuard {
     fn drop(&mut self) {
         if !self.ptr.is_null() && self.len > 0 {
-            // SAFETY: ptr was allocated with Box<[u8]>::into_raw. This drop runs exactly
-            // once per FrameDropGuard value (captured by value into the closure).
-            let slice = unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) };
-            let _ = unsafe { Box::from_raw(slice as *mut [u8]) };
+            // SAFETY: ptr was allocated with `crate::ynz_alloc` (libc malloc — see the two
+            // construction sites above). This drop runs exactly once per FrameDropGuard
+            // value (captured by value into the closure).
+            unsafe { crate::ynz_free(self.ptr, self.len) };
             #[cfg(test)]
             if let Some(probe) = &self.free_probe {
                 probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -175,14 +286,53 @@ pub(crate) fn arm_ctx_free_probe(arc: std::sync::Arc<std::sync::atomic::AtomicUs
     CTX_FREE_PROBE.with(|p| *p.borrow_mut() = Some(arc));
 }
 
+/// Copies `ctx_size` bytes from `ctx_ptr` onto the heap, returning `(ptr, len)` —
+/// `(null, 0)` when `ctx_size <= 0` or `ctx_ptr` is null. Shared by `ynz_rt_spawn_blocking`
+/// and `ynz_rt_spawn_blocking_joinable` (per authoritative-derivation.md — one source, not
+/// two parallel derivations of the same ctx-copy logic).
+///
+/// Goes through `crate::ynz_alloc` (the ONE authoritative heap-allocation choke point —
+/// same path frame/shape heap allocations use), NOT a `Vec<u8>`/`Box<[u8]>`. Two confirmed
+/// bugs, live under Miri (M6 Phase 6b), in the prior `Box<[u8]>` form used independently at
+/// both call sites:
+///   1. `.as_mut_ptr()` then `mem::forget(buf)` retags the allocation Unique at the
+///      `forget` call, invalidating the raw pointer captured beforehand (Stacked
+///      Borrows) — `Box::into_raw` alone doesn't fully avoid this either once a second
+///      call site copy-pastes the pattern; going through libc `malloc` (`ynz_alloc`)
+///      sidesteps Box's aliasing model entirely.
+///   2. `Vec<u8>`'s allocator only guarantees 1-byte (`u8`) alignment, but the ctx bytes
+///      are read back through typed pointers (e.g. `*const i64`) by the caller's
+///      `fn_ptr` — an alignment-8 read off an alignment-1 allocation is UB. `malloc`
+///      (via `ynz_alloc`) guarantees max_align_t alignment, satisfying any field type
+///      the ctx struct can contain.
+///
+/// # Safety
+/// `ctx_ptr` must point to at least `ctx_size` valid bytes for the duration of this call
+/// (same contract both callers already document). Ownership of those bytes is NOT
+/// transferred; a copy is made onto the heap.
+unsafe fn copy_ctx_to_heap(ctx_ptr: *mut u8, ctx_size: i64) -> (*mut u8, usize) {
+    if ctx_size > 0 && !ctx_ptr.is_null() {
+        let len = ctx_size as usize;
+        // SAFETY: caller guarantees ctx_ptr is valid for ctx_size bytes; forwarded from
+        // this function's own safety contract.
+        let raw = crate::ynz_alloc(len);
+        std::ptr::copy_nonoverlapping(ctx_ptr, raw, len);
+        (raw, len)
+    } else {
+        (std::ptr::null_mut(), 0)
+    }
+}
+
 /// Schedule a function on the blocking thread pool.
 ///
 /// # Flow
-/// 1. Copy `ctx_size` bytes from `ctx_ptr` to a heap-allocated buffer.
-/// 2. Transfer ownership of the heap buffer into the closure via a RAII drop guard.
-/// 3. Wrap `fn_ptr(ctx_heap)` in `catch_unwind` — the guard's `Drop` runs on both
+/// 1. Attempt admission via `PendingBlockingGuard::try_new` — rejects (no-op discard) if
+///    `ynz_rt_shutdown` has already begun, closing the shutdown-admission TOCTOU race.
+/// 2. Copy `ctx_size` bytes from `ctx_ptr` to a heap-allocated buffer.
+/// 3. Transfer ownership of the heap buffer into the closure via a RAII drop guard.
+/// 4. Wrap `fn_ptr(ctx_heap)` in `catch_unwind` — the guard's `Drop` runs on both
 ///    the happy path and on unwind, so ctx is freed in both cases.
-/// 4. Call `spawn_blocking` — returns immediately; the caller continues.
+/// 5. Call `spawn_blocking` — returns immediately; the caller continues.
 ///
 /// # Cache-line alignment note (forward-design for M4)
 /// `ctx_ptr` is 64 bytes per cache line on x86_64 and ARM64. In v0.3-M1 there is no
@@ -199,13 +349,15 @@ pub(crate) fn arm_ctx_free_probe(arc: std::sync::Arc<std::sync::atomic::AtomicUs
 /// - If the background task panics: caught, logged via `eprintln!`, discarded.
 ///   Program continues normally.
 /// - If `ctx_size` == 0 or `ctx_ptr` is null: `fn_ptr(null)` is called.
+/// - If `ynz_rt_shutdown` has already begun (admission closed): logs a warning, the task
+///   is discarded WITHOUT being allocated or handed to Tokio.
 ///
 /// # Side effects
 /// Time: O(n) where n = ctx_size bytes (the heap ctx copy)  Space: O(n) (heap ctx buffer).
 /// Spawns a Tokio blocking task; heap-allocates `ctx_size` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_rt_spawn_blocking(
-    fn_ptr: extern "C" fn(*mut u8),
+    fn_ptr: extern "C-unwind" fn(*mut u8),
     ctx_ptr: *mut u8,
     ctx_size: i64,
 ) {
@@ -234,18 +386,23 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
         }
     };
 
-    // Copy the context bytes onto the heap so they outlive this stack frame.
-    let (ctx_heap_ptr, ctx_heap_len): (*mut u8, usize) = if ctx_size > 0 && !ctx_ptr.is_null() {
-        // SAFETY: caller guarantees ctx_ptr is valid for ctx_size bytes.
-        let len = ctx_size as usize;
-        let mut buf: Box<[u8]> = vec![0u8; len].into_boxed_slice();
-        std::ptr::copy_nonoverlapping(ctx_ptr, buf.as_mut_ptr(), len);
-        let raw = buf.as_mut_ptr();
-        std::mem::forget(buf); // ownership moves into CtxDropGuard below
-        (raw, len)
-    } else {
-        (std::ptr::null_mut(), 0)
+    // Admission check BEFORE the ctx heap copy — see `PendingBlockingGuard::try_new` for
+    // the increment-then-check protocol that closes the shutdown-admission TOCTOU race
+    // (a task admitted after `ynz_rt_shutdown` has begun draining would be silently
+    // cancelled by Tokio's non-mandatory `spawn_blocking` semantics; see
+    // `SHUTDOWN_STARTED`'s doc comment). Checking here — before allocating the ctx copy —
+    // means a rejected task never allocates anything that would need to be freed.
+    let Some(_pending) = PendingBlockingGuard::try_new() else {
+        eprintln!(
+            "ynz runtime: ynz_rt_spawn_blocking called after ynz_rt_shutdown began — task discarded"
+        );
+        return;
     };
+
+    // Copy the context bytes onto the heap so they outlive this stack frame.
+    // SAFETY: caller guarantees ctx_ptr is valid for ctx_size bytes (this function's own
+    // safety contract, forwarded to `copy_ctx_to_heap`).
+    let (ctx_heap_ptr, ctx_heap_len) = copy_ctx_to_heap(ctx_ptr, ctx_size);
 
     // Create the RAII guard BEFORE the closure so it's captured (not the raw *mut u8).
     // FrameDropGuard: Send is impl'd; the closure becomes Send too.
@@ -257,7 +414,32 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
     };
 
     handle.spawn_blocking(move || {
-        // Guard is captured — frees ctx on both return and unwind.
+        // Drop `_pending` FIRST, before touching ctx or calling `fn_ptr` — the closure
+        // has now been popped off the blocking pool's internal queue and started running,
+        // which per `PENDING_BLOCKING_TASKS`'s doc comment makes it immune to Tokio's
+        // non-mandatory queued-task cancellation ("once a task has started, the worker
+        // loop always runs it to completion regardless of the shutdown flag"). Holding
+        // the guard until the WHOLE closure (including `fn_ptr`'s body) finishes over-
+        // extends `ynz_rt_shutdown`'s drain-loop wait far past the actual vulnerability
+        // window: a long-running task body (e.g. a multi-hundred-ms CPU burn) would keep
+        // `PENDING_BLOCKING_TASKS` elevated for its own execution time, and — after the
+        // drain/shutdown_timeout budget-sharing fix — that starves `shutdown_timeout`'s
+        // OWN remaining budget down to near-zero, cutting off the async state-machine
+        // Drop-chain cleanup that budget is separately needed for (confirmed live: this
+        // exact starvation reproduced as a frame alloc/free parity regression in
+        // `v03_m6_recursive_spike_cancel.rs::recursive_spike_cancellation_frame_alloc_free_parity`
+        // once the shared-deadline fix landed). Dropping here narrows the drain loop back
+        // to its documented low-single-digit-millisecond queue-pickup wait; the task's own
+        // completion is `shutdown_timeout`'s concern via its own remaining-budget wait.
+        // This narrower drop point relies on `shutdown_timeout`'s one remaining-budget
+        // wait genuinely covering both the outstanding-blocking-task concern and the
+        // async-task Drop-chain-cleanup concern without one starving the other inside
+        // Tokio's own internals — see the Tokio-source citation on the
+        // `rt.shutdown_timeout(remaining)` call in `ynz_rt_shutdown`, below, for the
+        // confirmed mechanism.
+        drop(_pending);
+
+        // Guards are captured — free ctx on both return and unwind.
         let ctx_ptr_for_call = ctx_guard.ptr;
         let _guard = ctx_guard;
 
@@ -301,25 +483,48 @@ pub extern "C" fn ynz_rt_check_preempt() {
 /// Shut down the Tokio runtime, draining in-flight background tasks.
 ///
 /// # Flow
-/// 1. Lock the runtime mutex and take ownership via `Option::take`.
-/// 2. Call `shutdown_timeout(5s)` — tasks get 5 seconds to finish; any remaining
-///    are dropped (Tokio semantics per `tokio::runtime::Runtime::shutdown_timeout`).
-/// 3. If ynz_rt_init was never called, or shutdown was already called, this is a no-op.
+/// 1. Close blocking-task admission (`SHUTDOWN_STARTED`) — see its doc comment for the
+///    increment-then-check protocol this enables in `PendingBlockingGuard::try_new`.
+/// 2. Lock the runtime mutex and take ownership via `Option::take`.
+/// 3. Drain `PENDING_BLOCKING_TASKS` to zero, then call `shutdown_timeout` with
+///    whatever budget remains — tasks get up to `timeout_ms` (5s by default) TOTAL to
+///    finish across both phases combined, not `timeout_ms` for each phase separately;
+///    any remaining are dropped (Tokio semantics per
+///    `tokio::runtime::Runtime::shutdown_timeout`).
+/// 4. If ynz_rt_init was never called, or shutdown was already called, this is a no-op.
 ///
 /// # Side effects
-/// Joins OS threads. Blocks for up to 5 seconds if background tasks are still running.
+/// Joins OS threads. Blocks for up to `timeout_ms` (5s by default) TOTAL if background
+/// tasks are still running — this is one shared budget across the drain-wait and
+/// `shutdown_timeout` phases combined, never `timeout_ms` for each phase separately.
 ///
 /// When `YNZ_ALLOC_COUNTER_OUTPUT` env var is set to a file path, writes final alloc/free
 /// counts to that file (one "alloc=N\nfree=M\n" pair). Used by the composed-single-alloc
 /// proof in integration tests: the test sets the env var, runs the fixture, reads the file.
 #[no_mangle]
 pub extern "C" fn ynz_rt_shutdown() {
+    // Close admission FIRST, before anything else in this function — see
+    // `SHUTDOWN_STARTED`'s doc comment and `PendingBlockingGuard::try_new`'s SeqCst
+    // total-order proof for why this exact placement (before the drain loop even reads
+    // `PENDING_BLOCKING_TASKS` for the first time) is what closes the shutdown-admission
+    // TOCTOU race rather than merely narrowing it.
+    SHUTDOWN_STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+
     let Some(guard) = RUNTIME.get() else { return };
-    let mut lock = match guard.lock() {
-        Ok(l) => l,
-        Err(e) => e.into_inner(), // still usable after poisoning
-    };
-    if let Some(rt) = lock.take() {
+    // Take ownership of the Runtime and RELEASE the lock before shutdown_timeout —
+    // mirrors the ynz_rt_run_entrypoint pattern (:1052-1062). Holding the mutex across
+    // the up-to-5s drain would block any concurrent ynz_rt_spawn_blocking / ynz_rt_spawn
+    // caller (they also lock RUNTIME on their fallback path) for the full drain window
+    // instead of failing fast with "called after ynz_rt_shutdown" the instant the Option
+    // goes to None.
+    let rt = {
+        let mut lock = match guard.lock() {
+            Ok(l) => l,
+            Err(e) => e.into_inner(), // still usable after poisoning
+        };
+        lock.take()
+    }; // mutex released here — before shutdown_timeout
+    if let Some(rt) = rt {
         // `shutdown_timeout` requires owned `Runtime`, which we now have.
         // test-only: `YNZ_SHUTDOWN_TIMEOUT_MS` lets tests shorten the shutdown drain
         // window to trigger cancellation faster. Production default is 5000ms (5s),
@@ -330,14 +535,68 @@ pub extern "C" fn ynz_rt_shutdown() {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(5000); // production default: 5s
-                              // shutdown_timeout signals worker tasks and waits up to `timeout_ms` for
-                              // async-worker task drains. It joins the blocking pool (empty here), but
-                              // async workers complete via waker/signal — 50ms is wall-clock margin for
-                              // task drain, not a thread join. Drops all futures (running their Drop impls)
-                              // on the worker threads before returning.
-        rt.shutdown_timeout(Duration::from_millis(timeout_ms));
+
+        // ONE deadline shared by both the drain-wait and shutdown_timeout phases below —
+        // NOT a fresh timeout_ms window for each. Computing a single deadline up front
+        // and passing the REMAINING budget to shutdown_timeout is what makes worst-case
+        // total shutdown time match the documented `timeout_ms` bound (previously this
+        // gave the drain loop a full timeout_ms window AND THEN gave shutdown_timeout
+        // another full timeout_ms window, so worst-case shutdown was 2x timeout_ms —
+        // 10s at the 5s default — contradicting the "up to 5 seconds" docstring above).
+        let shutdown_deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+
+        // Drain PENDING_BLOCKING_TASKS to zero BEFORE calling shutdown_timeout — see
+        // PENDING_BLOCKING_TASKS's doc comment above for the confirmed-under-TSan race
+        // this closes (Tokio's non-mandatory spawn_blocking silently drops any task still
+        // queued, not yet popped by a worker thread, at the instant shutdown begins). Once
+        // a task has started, the worker loop always runs it to completion regardless of
+        // the shutdown flag, so draining to zero here guarantees no task is ever dropped
+        // unrun. Bounded by `shutdown_deadline`; in the well-behaved case (the
+        // overwhelmingly common one) this resolves in low-single-digit milliseconds since
+        // it only waits for OS thread pickup, not full task completion under load.
+        while PENDING_BLOCKING_TASKS.load(std::sync::atomic::Ordering::SeqCst) > 0
+            && std::time::Instant::now() < shutdown_deadline
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        // shutdown_timeout signals worker tasks and waits up to the REMAINING budget
+        // (shutdown_deadline minus whatever the drain loop above already consumed — zero
+        // if the deadline already passed) for async-worker task drains. It joins the
+        // blocking pool (drained above), but async workers complete via waker/signal.
+        // Drops all futures (running their Drop impls) on the worker threads before
+        // returning.
+        //
+        // CONFIRMED against Tokio's own vendored source (tokio 1.52.3, pinned by
+        // Cargo.lock; read at
+        // ~/.cargo/registry/src/index.crates.io-*/tokio-1.52.3/src/runtime/): this one
+        // `remaining` budget genuinely covers BOTH concerns the early `drop(_pending)`
+        // fix above depends on — waiting for outstanding blocking-pool OS threads AND
+        // waiting for async-task Drop-chain cleanup — with no internal starvation of one
+        // by the other. `Runtime::shutdown_timeout` (runtime/runtime.rs:449) does exactly
+        // two things: `self.handle.inner.shutdown()` (non-blocking — just flips a
+        // close/shutdown flag so every worker's poll loop notices and unwinds) followed by
+        // `self.blocking_pool.shutdown(Some(duration))` (blocking/pool.rs:244), which is
+        // the ONLY call that consumes `duration`. Critically, the multi-thread scheduler's
+        // own async-worker OS threads are THEMSELVES spawned through that same blocking
+        // pool (`Launch::launch` → `runtime::spawn_blocking(|| run(worker))`,
+        // scheduler/multi_thread/worker.rs:501) and tracked in the exact same
+        // `worker_threads: HashMap<usize, thread::JoinHandle<()>>` that
+        // `BlockingPool::shutdown` takes and joins (blocking/pool.rs:118, :259, :425). Each
+        // worker's `run(worker)` body performs the async Drop-chain cleanup (cancelling and
+        // dropping owned tasks via `pre_shutdown`/`shutdown_core`, worker.rs:1278-1303)
+        // BEFORE it returns and its blocking-pool thread handle is joinable — so
+        // `blocking_pool.shutdown(Some(duration))`'s single `shutdown_rx.wait(timeout)`
+        // (blocking/shutdown.rs:37) blocks on the SAME shared clock for outstanding
+        // `spawn_blocking` tasks (ours) and for async-worker shutdown/cleanup to finish.
+        // There is no second, independently-exhaustible sub-budget for either side to
+        // starve the other inside this one call. (Version-specific: this is an
+        // implementation detail of tokio 1.52.3, not a documented public contract — if
+        // `tokio` is ever upgraded, re-check this reasoning against the new source rather
+        // than assuming it still holds.)
+        let remaining = shutdown_deadline.saturating_duration_since(std::time::Instant::now());
+        rt.shutdown_timeout(remaining);
     }
-    // `lock` drops here, releasing the mutex.
 
     // Dump alloc counts AFTER shutdown so all Drop impls (including SpawnStateFnFuture::Drop
     // which calls ynz_free) have run. Writing before shutdown would give stale counts on
@@ -346,7 +605,15 @@ pub extern "C" fn ynz_rt_shutdown() {
         if !output_path.is_empty() {
             let alloc_count = crate::ynz_alloc_count();
             let free_count = crate::ynz_free_count();
-            let content = format!("alloc={alloc_count}\nfree={free_count}\n");
+            let handle_alloc_count = crate::ynz_handle_alloc_count();
+            let handle_free_count = crate::ynz_handle_free_count();
+            // The handle_* lines come AFTER the alloc=/free= lines: existing prefix-parsers
+            // take the FIRST line matching starts_with("alloc")/starts_with("free"), and
+            // neither "handle_alloc" nor "handle_free" matches those prefixes.
+            let content = format!(
+                "alloc={alloc_count}\nfree={free_count}\n\
+                 handle_alloc={handle_alloc_count}\nhandle_free={handle_free_count}\n"
+            );
             // Best-effort write: ignore errors (the alloc counter is test-only).
             let _ = std::fs::write(&output_path, content);
         }
@@ -408,6 +675,15 @@ struct SyncStateFnFuture {
     // Suppressed until Phase 2 wires the dealloc path.
     #[allow(dead_code)]
     frame_size: i64,
+    /// This drive's caller-generation stamp (v0.3-M6 P3-1), minted at construction from the
+    /// ONE global counter (`channel::next_caller_generation`) — the same scheme as
+    /// `SpawnStateFnFuture::task_gen` and `YnzTaskHandle::send_gen`, so every production
+    /// caller identity is stamped NONZERO and the `(caller_token, caller_generation)`
+    /// keying is uniform across ALL producers (no unprotected generation-0 class). A sync
+    /// drive is immortal by construction — `block_on` runs it to completion and nothing
+    /// ever cancels it — so no Drop purge exists for this generation; the stamp's job is
+    /// that two sequential sync drives at a reused frame address can never share a key.
+    task_gen: u64,
 }
 
 // SAFETY: SyncStateFnFuture is driven to completion by a single block_on call; ownership
@@ -421,6 +697,13 @@ impl Future for SyncStateFnFuture {
         // Cast Context to *mut u8 — the locked waker_ctx ABI: type-erased pointer to
         // &mut Context<'_>. The resume_fn casts back on the other side.
         let waker_ctx = cx as *mut Context<'_> as *mut u8;
+        // Publish this drive's generation for the duration of the resume-fn call (the same
+        // discipline as SpawnStateFnFuture::poll): any ynz_channel_send_poll the state
+        // machine reaches keys its suspended send by (frame token, THIS generation) — the
+        // P3-1 ABA salt, uniform across every producer. RAII: restores the previous value
+        // even if resume_fn unwinds; nesting-safe for a sync drive re-entered from inside
+        // a Tokio worker/blocking-pool thread.
+        let _task_gen_guard = crate::channel::TaskGenGuard::enter(self.task_gen);
         // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
         // frame_ptr is valid for frame_size bytes (caller guarantee).
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
@@ -498,6 +781,11 @@ pub(crate) struct SpawnStateFnFuture {
     pub(crate) arg_drop_ptr: *const BgArgDropEntry,
     /// Number of entries at `arg_drop_ptr`. 0 when `arg_drop_ptr` is null.
     pub(crate) arg_drop_count: usize,
+    /// This task's caller-generation stamp (v0.3-M6 P3-1), minted once at construction from
+    /// the ONE global counter (`channel::next_caller_generation`). Published to the channel
+    /// module via a thread-local while `poll` runs (so every frame token this task mints
+    /// carries it), and used by `Drop`'s kind-2 arm to purge the task's suspended sends.
+    pub(crate) task_gen: u64,
 }
 
 impl SpawnStateFnFuture {
@@ -510,18 +798,18 @@ impl SpawnStateFnFuture {
         resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
         frame_ptr: *mut u8,
         frame_size: i64,
-        rec_slot: *mut u8,
+        recursion_slot_offset: i64,
         arg_drop_ptr: *const BgArgDropEntry,
         arg_drop_count: i64,
     ) -> Self {
-        let _ = rec_slot; // tested via recursion_slot_offset=-1 path
         Self {
             resume_fn,
             frame_ptr,
             frame_size,
-            recursion_slot_offset: -1,
+            recursion_slot_offset,
             arg_drop_ptr,
             arg_drop_count: arg_drop_count as usize,
+            task_gen: crate::channel::next_caller_generation(),
         }
     }
 }
@@ -542,7 +830,10 @@ unsafe impl Send for SpawnStateFnFuture {}
 /// task (it runs to completion; results are discarded). Null slots are skipped — they were
 /// either never spawned or already consumed by a Ready poll.
 ///
-/// Called from `SpawnStateFnFuture::drop` on cancellation. Extracted as a `pub(crate)` helper
+/// Called from `SpawnStateFnFuture::drop` on cancellation, at BOTH frame grains: on the
+/// root frame (drop step 1.5) and on each recursion-chain child frame inside the chain
+/// walk (drop step 3) — the ONE authoritative cleanup path for spike CPU handles; never
+/// duplicate this logic at a call site. Extracted as a `pub(crate)` helper
 /// so the discriminator + handle-free logic can be tested independently without constructing
 /// a full `SpawnStateFnFuture` (which requires live resume-fn scaffolding).
 ///
@@ -584,6 +875,9 @@ impl Drop for SpawnStateFnFuture {
     /// 2. Heap arg-copies: read each entry in `arg_drop_descs`, recover the pointer from the
     ///    frame slot, and free it — BEFORE freeing the frame (avoids use-after-free on the slots).
     /// 3. Recursion-chain child frames (for self-recursive SM functions — walks the chain).
+    ///    Each child's sleep handle AND spike CPU handles (via the same
+    ///    `cleanup_spike_cpu_handles` choke point step 1.5 uses on the root) are freed
+    ///    before the child frame itself.
     /// 4. The arg-drop descriptor array itself (freed via `ynz_free`, same allocator as codegen).
     /// 5. The root frame (freed last, after all frame-resident pointers have been read).
     ///
@@ -636,8 +930,13 @@ impl Drop for SpawnStateFnFuture {
                         2 => {
                             // v0.3-M4 SharedChannel: the task's refcounted reference to a
                             // channel it was handed (`ynz_channel_share` at the spawn site).
-                            // Releasing exactly one reference here keeps alloc=free balanced
-                            // on every task exit path, including cancellation.
+                            // v0.3-M6 P2-2: purge THIS task's suspended sends BEFORE releasing
+                            // the reference — a cancelled sender's orphaned pending_sends
+                            // entry is both a leak and the P3-1 ABA precondition. Idempotent:
+                            // an already-resolved/absent entry is a safe no-op. Then release
+                            // exactly one reference, keeping alloc=free balanced on every
+                            // task exit path, including cancellation.
+                            crate::channel::purge_pending_sends(heap_ptr, self.task_gen);
                             crate::channel::ynz_channel_free(heap_ptr);
                         }
                         _ => {
@@ -651,12 +950,11 @@ impl Drop for SpawnStateFnFuture {
             //
             // test-only: `YNZ_SKIP_RECURSION_DROP` bypasses the chain walk so the
             // negative-control test can verify a measurable leak without this code.
-            // Production runs never set this env var; the unwrap_or(false) default
-            // means the walk always runs in production.
-            let skip_recursion_drop = std::env::var("YNZ_SKIP_RECURSION_DROP")
-                .map(|v| !v.is_empty())
-                .unwrap_or(false); // production default: run the chain walk
-            if self.recursion_slot_offset >= 0 && !skip_recursion_drop {
+            // Production runs never set this env var; the latched `false` default
+            // means the walk always runs in production. The flag is a once-latched
+            // atomic (see `init_skip_recursion_drop_flag`), not a per-drop env read:
+            // this drop runs on every task completion/cancellation — a hot path.
+            if self.recursion_slot_offset >= 0 && !crate::skip_recursion_drop() {
                 // SAFETY: frame_ptr is valid; recursion_slot_offset is within the frame.
                 let rec_slot =
                     self.frame_ptr.add(self.recursion_slot_offset as usize) as *const *mut u8;
@@ -669,6 +967,13 @@ impl Drop for SpawnStateFnFuture {
                     if !child_handle.is_null() {
                         drop(Box::from_raw(child_handle as *mut Pin<Box<Sleep>>));
                     }
+                    // Free the child's spike CPU handles through the SAME choke point the
+                    // root frame uses (step 1.5) — a chain child cancelled while parked at
+                    // its CPU join owns live boxed CpuJoinHandles in its frame handle slots.
+                    // SAFETY: child_ptr was allocated by ynz_alloc_zeroed(frame_size) with
+                    // the same layout as the root (self-recursion, same function); a
+                    // non-spike child's zeroed discriminator decodes None and is untouched.
+                    cleanup_spike_cpu_handles(child_ptr);
                     // Read grandchild pointer BEFORE freeing child (use-after-free guard).
                     let grandchild_slot =
                         child_ptr.add(self.recursion_slot_offset as usize) as *const *mut u8;
@@ -699,6 +1004,12 @@ impl Future for SpawnStateFnFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let waker_ctx = cx as *mut Context<'_> as *mut u8;
+        // Publish this task's generation for the duration of the resume-fn call: any
+        // ynz_channel_send_poll the state machine reaches keys its suspended send by
+        // (frame token, THIS generation) — the P3-1 ABA salt, with the extern-C send ABI
+        // unchanged. RAII: restores the previous value even if resume_fn unwinds; re-set
+        // from the future's own field at every poll, so work-stealing is safe.
+        let _task_gen_guard = crate::channel::TaskGenGuard::enter(self.task_gen);
         // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
         // frame_ptr is valid for frame_size bytes (caller guarantee).
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
@@ -768,6 +1079,7 @@ pub unsafe extern "C" fn ynz_rt_spawn(
         recursion_slot_offset,
         arg_drop_ptr,
         arg_drop_count: arg_drop_count as usize,
+        task_gen: crate::channel::next_caller_generation(),
     };
     let _ = spawn_on_runtime(future, "ynz_rt_spawn");
 }
@@ -973,6 +1285,7 @@ pub unsafe extern "C-unwind" fn ynz_rt_run_entrypoint(
             resume_fn,
             frame_ptr,
             frame_size,
+            task_gen: crate::channel::next_caller_generation(),
         };
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
@@ -1081,6 +1394,7 @@ impl CpuJoinHandle {
     /// reference, which would let them call `.abort()` independently of the slot-null
     /// protocol that prevents double-frees.
     pub(crate) fn new(h: tokio::task::JoinHandle<YnzCpuResult>) -> Self {
+        crate::handle_counter_record_alloc();
         CpuJoinHandle {
             inner: h,
             #[cfg(test)]
@@ -1099,9 +1413,14 @@ impl CpuJoinHandle {
     }
 }
 
-#[cfg(test)]
 impl Drop for CpuJoinHandle {
+    /// Every handle-free path — Ready poll (`ynz_rt_join_poll`), detach free
+    /// (`ynz_rt_join_handle_free`), and cancellation cleanup (`cleanup_spike_cpu_handles`)
+    /// — destroys the handle VALUE via `Box::from_raw` + drop, so this `Drop` is the one
+    /// choke point that observes them all for the env-gated handle parity counter.
     fn drop(&mut self) {
+        crate::handle_counter_record_free();
+        #[cfg(test)]
         if let Some(probe) = &self.probe {
             probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -1111,20 +1430,24 @@ impl Drop for CpuJoinHandle {
 /// Schedule a pure-CPU function on the blocking thread pool and return a joinable handle.
 ///
 /// # Flow
-/// 1. Copy `ctx_size` bytes from `ctx_ptr` to a heap buffer (RAII via `FrameDropGuard`).
+/// 1. Attempt admission via `PendingBlockingGuard::try_new` — rejects (returns null,
+///    allocates nothing) if `ynz_rt_shutdown` has already begun, closing the
+///    shutdown-admission TOCTOU race.
+/// 2. Copy `ctx_size` bytes from `ctx_ptr` to a heap buffer (RAII via `FrameDropGuard`).
 ///    The child owns its ctx copy; the parent frame may be dropped at any time without
 ///    dangling the child's args (the UAF-on-cancellation fix from Research Finding 3).
-/// 2. Spawn via `Handle::spawn_blocking(closure)`. The closure calls `fn_ptr(ctx_heap_ptr)`
+/// 3. Spawn via `Handle::spawn_blocking(closure)`. The closure calls `fn_ptr(ctx_heap_ptr)`
 ///    and returns the `YnzCpuResult`. `spawn_blocking` is non-async: the CPU work runs on
 ///    a dedicated blocking-pool OS thread, not on an I/O event-loop thread.
-/// 3. Box the `JoinHandle<YnzCpuResult>` — gives it a stable heap address for the frame
+/// 4. Box the `JoinHandle<YnzCpuResult>` — gives it a stable heap address for the frame
 ///    handle slot. Return the box pointer as `*mut u8`.
 ///
 /// # Failure modes
 /// - `ynz_rt_init` was never called: logs a warning, returns null. Caller must treat null
 ///   as "run inline sequentially" (codegen always runs after ynz_rt_init in generated main;
 ///   null only occurs in hand-written misuse). Polling a null handle aborts with a message.
-/// - `ynz_rt_shutdown` was already called: logs a warning, returns null.
+/// - `ynz_rt_shutdown` was already called (or has already begun draining): logs a
+///   warning, returns null. Nothing is allocated on this path.
 /// - The CPU closure panics: caught by the JoinHandle as `JoinError::is_panic()`.
 ///   `ynz_rt_join_poll` re-raises via `resume_unwind` so the parent's panic handler takes over —
 ///   matching the observable behavior of sequential execution on the same panicking callee.
@@ -1144,7 +1467,7 @@ impl Drop for CpuJoinHandle {
 /// - `fn_ptr` must be safe to call with a single `*mut u8` argument on a blocking-pool thread.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
-    fn_ptr: extern "C" fn(*mut u8) -> YnzCpuResult,
+    fn_ptr: extern "C-unwind" fn(*mut u8) -> YnzCpuResult,
     ctx_ptr: *mut u8,
     ctx_size: i64,
 ) -> *mut u8 {
@@ -1174,21 +1497,23 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
         }
     };
 
+    // Admission check BEFORE the ctx heap copy — see `PendingBlockingGuard::try_new` for
+    // the increment-then-check protocol that closes the shutdown-admission TOCTOU race
+    // (same rationale as `ynz_rt_spawn_blocking`, above). Checking here means a rejected
+    // task never allocates the ctx copy or the `Box<CpuJoinHandle>`.
+    let Some(_pending) = PendingBlockingGuard::try_new() else {
+        eprintln!(
+            "ynz runtime: ynz_rt_spawn_blocking_joinable called after ynz_rt_shutdown began — handle is null"
+        );
+        return std::ptr::null_mut();
+    };
+
     // Copy ctx bytes to the heap. The FrameDropGuard moves into the closure so it
     // runs on both normal return and panic unwind — preventing a ctx leak if the
     // child panics before fn_ptr returns.
-    let (ctx_heap_ptr, ctx_heap_len): (*mut u8, usize) = if ctx_size > 0 && !ctx_ptr.is_null() {
-        let len = ctx_size as usize;
-        let mut buf: Box<[u8]> = vec![0u8; len].into_boxed_slice();
-        // SAFETY: ctx_ptr is valid for ctx_size bytes (caller guarantee). The source and
-        // destination are non-overlapping (heap allocation vs caller's stack/frame).
-        std::ptr::copy_nonoverlapping(ctx_ptr, buf.as_mut_ptr(), len);
-        let raw = buf.as_mut_ptr();
-        std::mem::forget(buf); // ownership moves into FrameDropGuard below
-        (raw, len)
-    } else {
-        (std::ptr::null_mut(), 0)
-    };
+    // SAFETY: ctx_ptr is valid for ctx_size bytes (this function's own safety contract,
+    // forwarded to `copy_ctx_to_heap`).
+    let (ctx_heap_ptr, ctx_heap_len) = copy_ctx_to_heap(ctx_ptr, ctx_size);
 
     let ctx_guard = FrameDropGuard {
         ptr: ctx_heap_ptr,
@@ -1202,18 +1527,32 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
     // Spawn on the blocking pool. The closure is Send because FrameDropGuard: Send.
     // spawn_blocking returns a JoinHandle<YnzCpuResult> immediately (non-async).
     //
-    // WHY the inner catch_unwind around fn_ptr: `fn_ptr` is `extern "C" fn`, and a panic
-    // crossing an `extern "C"` boundary aborts the process (Rust RFC 2945) before Tokio's
-    // own task-harness catch_unwind can form a JoinError. Capturing the unwind here, then
-    // re-raising it as a native Rust panic INSIDE the closure body (after the C boundary),
-    // lets Tokio's harness catch it and surface it as `JoinError::is_panic()` at the
-    // JoinHandle. That makes ynz_rt_join_poll's Ready(Err(panic)) → resume_unwind branch
-    // reachable at the JoinHandle boundary. (End-to-end propagation all the way back to the
-    // user's panic handler additionally requires the SM resume functions that CALL
-    // ynz_rt_join_poll to be emitted as `extern "C-unwind"`; that codegen ABI flip lands in
-    // a later phase. Phase 1 hardens the runtime side of the contract.) Mirrors the
+    // WHY the inner catch_unwind around fn_ptr: even with `fn_ptr` correctly typed
+    // `extern "C-unwind"` (M6 Phase 6b fix — was `extern "C"`, which is UB to invoke a
+    // Rust-ABI/unwind-capable callee through: Miri caught this live as "calling a function
+    // with calling convention Rust using calling convention C" once a real Miri run reached
+    // a test that panics inside `fn_ptr`), Tokio's own task-harness catch_unwind boundary
+    // sits OUTSIDE `spawn_blocking`'s closure, not around this specific call — capturing the
+    // unwind here, then re-raising it as a native Rust panic, lets Tokio's harness catch it
+    // and surface it as `JoinError::is_panic()` at the JoinHandle. That makes
+    // ynz_rt_join_poll's Ready(Err(panic)) → resume_unwind branch reachable at the JoinHandle
+    // boundary. (End-to-end propagation all the way back to the user's panic handler
+    // additionally requires the SM resume functions that CALL ynz_rt_join_poll to be emitted
+    // as `extern "C-unwind"`; that codegen ABI flip lands in a later phase.) Mirrors the
     // catch_unwind in ynz_rt_spawn_blocking.
+    // See PendingBlockingGuard's doc comment (ynz_rt_spawn_blocking, above) — same
+    // confirmed-under-TSan task-loss race applies here; the guard must survive the
+    // `resume_unwind` panic path below, which it does since Drop still runs on unwind.
     let join_handle = handle.spawn_blocking(move || {
+        // Drop `_pending` FIRST — see the identical rationale in `ynz_rt_spawn_blocking`,
+        // above. This is exactly the mechanism the recursion-chain spike-cancellation
+        // fixture exercises: a chain child's two `burn()` calls are joinable spawn_blocking
+        // tasks running ~600ms each, and holding `_pending` for their whole body starved
+        // `ynz_rt_shutdown`'s `shutdown_timeout` phase of its own remaining budget.
+        // See the Tokio-source citation on the `rt.shutdown_timeout(remaining)` call in
+        // `ynz_rt_shutdown`, above, for the confirmed mechanism this early drop relies on.
+        drop(_pending);
+
         let ctx_for_call = ctx_guard.ptr;
         let _guard = ctx_guard; // freed on normal return and on unwind
 
@@ -1246,9 +1585,11 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
 /// 5. On `Ready(Ok(result))`: write 16 bytes to `result_out` (the frame result slot),
 ///    drop the `Box<CpuJoinHandle>`, return 0 (Ready).
 /// 6. On `Ready(Err(join_err))` where `join_err.is_panic()`: the child panicked.
-///    Re-raise via `resume_unwind` so the parent's panic handler fires — matching
-///    the observable behavior of sequential execution on a panicking callee.
-///    (Other JoinError variants — like abort — are treated as panics for the same reason.)
+///    Drop the `Box<CpuJoinHandle>` (the JoinError already carries the panic payload
+///    independently of the box), then re-raise via `resume_unwind` so the parent's
+///    panic handler fires — matching the observable behavior of sequential execution
+///    on a panicking callee. (Other JoinError variants — like abort — are treated as
+///    panics for the same reason, and free the box the same way before panicking.)
 ///
 /// # Result layout in `result_out`
 /// Writes exactly 16 bytes: `[lo: i64, hi: i64]` in little-endian host byte order.
@@ -1261,8 +1602,10 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
 ///   diagnostic as sequential execution of the panicking callee.
 ///
 /// # Side effects
-/// Time: O(1)  Space: O(1) — one poll, writes ≤16 bytes, no loop; frees one box on Ready.
-/// On Ready: frees the `Box<CpuJoinHandle>` heap allocation (the JoinHandle is dropped,
+/// Time: O(1)  Space: O(1) — one poll, writes ≤16 bytes, no loop; frees one box on Ready
+/// (success OR panic/abort — see item 6 above; confirmed via Miri, M6 Phase 6b, that the
+/// panic/abort arms must free the box too, not just the success arm).
+/// On Ready(Ok): frees the `Box<CpuJoinHandle>` heap allocation (the JoinHandle is dropped,
 /// detaching the blocking thread if it hasn't already finished). Writes 16 bytes to `result_out`.
 ///
 /// # Safety
@@ -1326,26 +1669,54 @@ pub unsafe extern "C-unwind" fn ynz_rt_join_poll(
             0i32
         }
         Poll::Ready(Err(join_err)) => {
-            // Child panicked (or was aborted — treated identically for sequential-parity).
-            // Re-raise via resume_unwind so the parent's panic handler takes over,
-            // matching the observable behavior of sequential execution on a panicking callee.
-            //
-            // Box ownership on this path: the JoinHandle inside the Box is already exhausted
-            // by the JoinError extraction (the result was consumed), so there is no
-            // double-free risk. The Box itself is not freed here, because resume_unwind
-            // unwinds through this call frame before any local cleanup could run. The leak
-            // is bounded — at most one Box per panicking child — and a panicking child means
-            // the program is terminating anyway, so the bounded leak never accumulates. The
-            // frame-cancellation path (`cleanup_spike_cpu_handles`, reached from
-            // `SpawnStateFnFuture::drop` via the frame discriminator) reclaims any non-null
-            // handle slot a frame still owns when its task is dropped; that path is what frees
-            // handles on the non-panic cancellation route.
-            if join_err.is_panic() {
-                std::panic::resume_unwind(join_err.into_panic());
+            // Child panicked (real user-code panic) or was aborted (Tokio-internal
+            // cancellation — see the `is_panic == false` arm below for how that actually
+            // arises). The two arms free the Box differently; see each arm's own comment
+            // for why they are NOT symmetric despite both ending in a loud failure.
+            let is_panic = join_err.is_panic();
+            if is_panic {
+                // Box ownership on this path: the JoinHandle inside the Box is already
+                // exhausted by the JoinError extraction (the result was consumed), so there
+                // is no double-free risk in freeing it now. Free the Box BEFORE unwinding —
+                // confirmed via Miri (M6 Phase 6b) that leaving it for "the program is
+                // terminating anyway" was a real, unbounded leak: resume_unwind's payload
+                // can be (and, in this crate's own tests, is) caught by an ancestor
+                // catch_unwind rather than crashing the process, so any long-running
+                // process that catches a CPU-child panic would leak one CpuJoinHandle
+                // (plus the tokio task allocation it references) per occurrence, not just
+                // "at most one, ever." Extracting the panic payload first and freeing the
+                // Box before calling resume_unwind closes that leak without changing the
+                // observable re-raise behavior. This arm fires on a genuine user-code panic,
+                // which can happen at ANY point during normal (non-shutdown) execution, so
+                // the "program is terminating anyway" excuse was genuinely false here.
+                let payload = join_err.into_panic();
+                drop(Box::from_raw(handle_ptr as *mut CpuJoinHandle));
+                std::panic::resume_unwind(payload);
             } else {
-                // Abort (non-panic cancellation via JoinHandle::abort). Treat as a panic
-                // with a clear message so the parent sees a loud failure rather than a
-                // silent wrong value.
+                // Abort (non-panic cancellation). `CpuJoinHandle`'s inner JoinHandle is
+                // never explicitly `.abort()`'d anywhere in this crate (verified: no
+                // `.abort()` call site exists on any `CpuJoinHandle`) — the ONLY way this
+                // arm is reachable is Tokio's OWN internal blocking-pool cancellation of a
+                // still-queued task during `ynz_rt_shutdown`'s `rt.shutdown_timeout()` (see
+                // `PENDING_BLOCKING_TASKS`'s doc comment above). That means, unlike the
+                // is_panic arm, this arm is reachable ONLY while the runtime is actively
+                // tearing itself down — "the program is terminating anyway" is actually TRUE
+                // here, so the Box is deliberately NOT freed (same leak-but-safe choice this
+                // function made before M6 Phase 6b, restored here after a real regression).
+                //
+                // Freeing the Box here — dropping the inner JoinHandle — was tried during
+                // M6 Phase 6b (by analogy with the is_panic arm above, without its own
+                // confirmed-leak repro) and caused a live, reproducible crash: freeing the
+                // JoinHandle for a task Tokio's own shutdown machinery just cancelled races
+                // with that same shutdown machinery's concurrent teardown of the task's
+                // shared internal state, corrupting Tokio's own task bookkeeping (observed
+                // as a misaligned-pointer abort inside `tokio::runtime::task::core::Core`'s
+                // atomic accessor, on the `ynz-driver` integration test
+                // `v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged`,
+                // reproducible within ~1-20 runs; 100+ runs clean once the free was removed
+                // again). Leaving this leaked (bounded to at most once per detached
+                // background CPU child that loses the shutdown race, never accumulating
+                // since the process is already exiting) is the correct, verified tradeoff.
                 panic!("ynz runtime: CPU child task was aborted before it could produce a result");
             }
         }

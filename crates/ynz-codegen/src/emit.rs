@@ -29,6 +29,7 @@ use ynz_ast::nodes::{
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
     build_effective_suspend_set, crossing_local_names_with_cpu_spike,
+    find_let_annotation_type_in_stmts,
     independence::{partition_independent_groups, IndependentGroup},
     is_base_suspension_intrinsic, type_attached_const_type, GenericFnTable, MonomorphizationTable,
     ShapeTable, SignatureTable, Type, TypedModule,
@@ -250,7 +251,7 @@ pub fn build_frame_layouts_with_resolver(
     for item in &typed.module.items {
         let Item::Function(f) = item else { continue };
         if f.generics.is_empty() && suspend_set.contains(&f.name) {
-            let callees = collect_suspending_callees(&f.body, suspend_set);
+            let callees = collect_suspending_callees(&f.body, suspend_set, &typed.expr_types);
             direct_children.insert(f.name.clone(), callees);
         }
     }
@@ -544,40 +545,43 @@ fn cpu_slot_reserve_slots(layout: &FrameLayout) -> usize {
 fn collect_suspending_callees(
     block: &ynz_ast::nodes::Block,
     suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> Vec<String> {
     let mut callees: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    collect_callees_in_block(block, suspend_set, &mut callees, &mut seen);
+    collect_callees_in_block(block, suspend_set, expr_types, &mut callees, &mut seen);
     callees
 }
 
 fn collect_callees_in_block(
     block: &ynz_ast::nodes::Block,
     suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     out: &mut Vec<String>,
     seen: &mut HashSet<String>,
 ) {
     for stmt in &block.stmts {
-        collect_callees_in_stmt(stmt, suspend_set, out, seen);
+        collect_callees_in_stmt(stmt, suspend_set, expr_types, out, seen);
     }
 }
 
 fn collect_callees_in_stmt(
     stmt: &Stmt,
     suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     out: &mut Vec<String>,
     seen: &mut HashSet<String>,
 ) {
     match stmt {
         Stmt::Expr(e) | Stmt::Return { value: Some(e), .. } => {
-            collect_callees_in_expr(e, suspend_set, out, seen)
+            collect_callees_in_expr(e, suspend_set, expr_types, out, seen)
         }
         Stmt::Let { value: e, .. } | Stmt::Assign { value: e, .. } => {
-            collect_callees_in_expr(e, suspend_set, out, seen)
+            collect_callees_in_expr(e, suspend_set, expr_types, out, seen)
         }
         Stmt::FieldAssign { target, value, .. } => {
-            collect_callees_in_expr(target, suspend_set, out, seen);
-            collect_callees_in_expr(value, suspend_set, out, seen);
+            collect_callees_in_expr(target, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(value, suspend_set, expr_types, out, seen);
         }
         Stmt::IndexAssign {
             receiver,
@@ -585,21 +589,21 @@ fn collect_callees_in_stmt(
             value,
             ..
         } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen);
-            collect_callees_in_expr(index, suspend_set, out, seen);
-            collect_callees_in_expr(value, suspend_set, out, seen);
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(index, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(value, suspend_set, expr_types, out, seen);
         }
         Stmt::If { cond, body, .. } => {
-            collect_callees_in_expr(cond, suspend_set, out, seen);
-            collect_callees_in_block(body, suspend_set, out, seen);
+            collect_callees_in_expr(cond, suspend_set, expr_types, out, seen);
+            collect_callees_in_block(body, suspend_set, expr_types, out, seen);
         }
         Stmt::While { cond, body, .. } => {
-            collect_callees_in_expr(cond, suspend_set, out, seen);
-            collect_callees_in_block(body, suspend_set, out, seen);
+            collect_callees_in_expr(cond, suspend_set, expr_types, out, seen);
+            collect_callees_in_block(body, suspend_set, expr_types, out, seen);
         }
         Stmt::For { iter, body, .. } => {
-            collect_callees_in_expr(iter, suspend_set, out, seen);
-            collect_callees_in_block(body, suspend_set, out, seen);
+            collect_callees_in_expr(iter, suspend_set, expr_types, out, seen);
+            collect_callees_in_block(body, suspend_set, expr_types, out, seen);
         }
         Stmt::Match {
             scrutinee,
@@ -607,12 +611,12 @@ fn collect_callees_in_stmt(
             else_arm,
             ..
         } => {
-            collect_callees_in_expr(scrutinee, suspend_set, out, seen);
+            collect_callees_in_expr(scrutinee, suspend_set, expr_types, out, seen);
             for arm in arms {
-                collect_callees_in_block(&arm.body, suspend_set, out, seen);
+                collect_callees_in_block(&arm.body, suspend_set, expr_types, out, seen);
             }
             if let Some(b) = else_arm {
-                collect_callees_in_block(b, suspend_set, out, seen);
+                collect_callees_in_block(b, suspend_set, expr_types, out, seen);
             }
         }
         Stmt::Return { value: None, .. } => {}
@@ -622,76 +626,93 @@ fn collect_callees_in_stmt(
 fn collect_callees_in_expr(
     expr: &Expr,
     suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     out: &mut Vec<String>,
     seen: &mut HashSet<String>,
 ) {
     match expr {
         Expr::Call(c) => {
             if let Expr::Ident(name, _) = &c.callee {
-                if suspend_set.contains(name.as_str())
-                    && !is_base_suspension_intrinsic(name.as_str())
-                    && seen.insert(name.clone())
-                {
+                if is_suspending_member(suspend_set, name.as_str()) && seen.insert(name.clone()) {
                     out.push(name.clone());
                 }
             }
             // Recurse into args
             for arg in &c.args {
-                collect_callees_in_expr(arg, suspend_set, out, seen);
+                collect_callees_in_expr(arg, suspend_set, expr_types, out, seen);
             }
         }
-        Expr::Wait(inner, _) => collect_callees_in_expr(inner, suspend_set, out, seen),
+        Expr::Wait(inner, _) => collect_callees_in_expr(inner, suspend_set, expr_types, out, seen),
         Expr::Background(inner, _) => {
             // background calls don't embed — they get their own alloc via ynz_rt_spawn.
             let _ = inner;
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            collect_callees_in_expr(lhs, suspend_set, out, seen);
-            collect_callees_in_expr(rhs, suspend_set, out, seen);
+            collect_callees_in_expr(lhs, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(rhs, suspend_set, expr_types, out, seen);
         }
-        Expr::UnaryOp { operand, .. } => collect_callees_in_expr(operand, suspend_set, out, seen),
-        Expr::MethodCall { receiver, args, .. } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen);
+        Expr::UnaryOp { operand, .. } => {
+            collect_callees_in_expr(operand, suspend_set, expr_types, out, seen)
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            // v0.3-M6 P1-1 (site 3): a UFCS suspending call embeds the resolved callee's
+            // sub-frame exactly like its Call-form twin — classified via the ONE
+            // authoritative `ufcs_method_call_suspends` arm through the shared typeck
+            // helper (never a second name-keyed derivation).
+            if ynz_typeck::expr_is_ufcs_suspending_call(expr, expr_types, &|n| {
+                suspend_set.contains(n)
+            }) && seen.insert(method.clone())
+            {
+                out.push(method.clone());
+            }
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen);
             for a in args {
-                collect_callees_in_expr(a, suspend_set, out, seen);
+                collect_callees_in_expr(a, suspend_set, expr_types, out, seen);
             }
         }
         Expr::FieldAccess { receiver, .. } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen)
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen)
         }
         Expr::IndexAccess {
             receiver, index, ..
         } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen);
-            collect_callees_in_expr(index, suspend_set, out, seen);
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen);
+            collect_callees_in_expr(index, suspend_set, expr_types, out, seen);
         }
         Expr::StructLit { fields, .. } => {
             for f in fields {
-                collect_callees_in_expr(&f.value, suspend_set, out, seen);
+                collect_callees_in_expr(&f.value, suspend_set, expr_types, out, seen);
             }
         }
         Expr::ArrayLit { elements, .. } => {
             for e in elements {
-                collect_callees_in_expr(e, suspend_set, out, seen);
+                collect_callees_in_expr(e, suspend_set, expr_types, out, seen);
             }
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                collect_callees_in_expr(k, suspend_set, out, seen);
-                collect_callees_in_expr(v, suspend_set, out, seen);
+                collect_callees_in_expr(k, suspend_set, expr_types, out, seen);
+                collect_callees_in_expr(v, suspend_set, expr_types, out, seen);
             }
         }
         Expr::InterpolatedString(parts, _) => {
             for p in parts {
                 if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
-                    collect_callees_in_expr(e, suspend_set, out, seen);
+                    collect_callees_in_expr(e, suspend_set, expr_types, out, seen);
                 }
             }
         }
         Expr::PostfixOp { receiver, .. } => {
-            collect_callees_in_expr(receiver, suspend_set, out, seen)
+            collect_callees_in_expr(receiver, suspend_set, expr_types, out, seen)
         }
-        Expr::Is { expr: inner, .. } => collect_callees_in_expr(inner, suspend_set, out, seen),
+        Expr::Is { expr: inner, .. } => {
+            collect_callees_in_expr(inner, suspend_set, expr_types, out, seen)
+        }
         // Leaf nodes
         _ => {}
     }
@@ -1490,6 +1511,13 @@ fn lower_generic_function<'ctx>(
         // Generic functions cannot contain `wait` in M2. Use empty caches.
         wait_cache: empty_wait_cache(),
         suspend_set: empty_suspend_set(),
+        // Generic mono functions cannot suspend yet (v0.4 generic+suspension work), so the
+        // genuine-suspend set is empty here too — the block_on-fallback guard
+        // (`sync_call_fallback_is_codegen_bug`) is vacuously off for generic bodies. Safe today:
+        // no generic function in the current language surface can reach a suspension point through
+        // a type parameter (see `ynz-typeck/src/check.rs:4214`). This empty-set assumption is a
+        // v0.4-revisit site alongside the kernel guard deferral documented there.
+        base_suspends: empty_suspend_set(),
         frame_layouts: empty_frame_layouts(),
         imported_fns: empty_imported_fns(),
         sm_frame_ptr: None,
@@ -1499,6 +1527,7 @@ fn lower_generic_function<'ctx>(
         sm_crossing_bool_set: HashSet::new(),
         sm_crossing_slot_indices: Vec::new(),
         sm_crossing_decimal128_set: HashSet::new(),
+        sm_number_param_set: HashSet::new(),
         sm_crossing_float_set: HashSet::new(),
         sm_crossing_errors_capable_set: HashSet::new(),
         sm_crossing_ec_number_set: HashSet::new(),
@@ -1779,7 +1808,16 @@ struct Cg<'ctx, 'g> {
     #[allow(dead_code)]
     wait_cache: &'g WaitCache,
     // v0.3-M2 P7: transitive suspend set — the "is state machine" predicate.
+    // NOTE: in auto-parallel mode this is the WITH-CPU-PROMOTIONS set (genuine may-block ∪
+    // imported-suspending ∪ spike-CPU-host names). For the "is this a genuine async suspension"
+    // question (e.g. the block_on-fallback hard-error guard) use `base_suspends` below, NOT this
+    // set — a CPU-spike host is driven synchronously by the poll-join mechanism, not a block_on.
     suspend_set: &'g SuspendSet,
+    // v0.3-M6 Phase 2 (P4-3): THE authoritative pre-CPU-promotion suspend set (genuine may-block
+    // ∪ imported-suspending, WITHOUT spike-host names). This is the "genuinely async-suspending"
+    // predicate — the one the block_on-fallback hard-error guard keys on, so a CPU-promoted host
+    // driven synchronously at the top level (the designed path) is never mis-flagged.
+    base_suspends: &'g SuspendSet,
     // v0.3-M2 P7: composed-frame layouts for all suspending functions.
     frame_layouts: &'g HashMap<String, FrameLayout>,
     // v0.3-M3b: imported function signatures — needed so helpers that look up
@@ -1809,6 +1847,13 @@ struct Cg<'ctx, 'g> {
     // Set of crossing local names whose type is decimal128 (number with precision ≤ 34).
     // These use 2 frame slots and i128 alloca (not ptr alloca).
     sm_crossing_decimal128_set: HashSet<String>,
+    // Set of resume-fn PARAMETER names whose type is decimal128 (number, precision ≤ 34).
+    // SM param allocas are uniformly i64 holding the staged POINTER bits (not the i128
+    // value), so reading one needs an extra indirection: load i64 → inttoptr → the ptr
+    // into the caller's live frame region (v0.3-M6 FRAGOs 006/007 — load()'s Number arm
+    // would otherwise mis-type the alloca as i128 and decode the pointer bits as a
+    // decimal, the child half of the number-arg UAF).
+    sm_number_param_set: HashSet<String>,
     // Set of crossing local names whose type is float (f64).
     // These use a bitcast (f64 ↔ i64) rather than a raw integer load.
     sm_crossing_float_set: HashSet<String>,
@@ -3170,6 +3215,168 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(owned_env)
     }
 
+    /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
+    /// FRAGOs 006/007/013) — the union sibling of `maybe_to_heap_cell`: clone a
+    /// union value into counted heap cells so a CROSSING binding's pointer
+    /// survives suspension (the resume fn's stack dies on every Pending return).
+    ///
+    /// A union value is an opaque pointer with a NON-uniform repr:
+    ///   - NULL for the `T | nothing` none case (the `is`-none path
+    ///     `build_is_null`s the value directly), or
+    ///   - a pointer to a `{i64 tag, i64 data}` tagged struct whose `data` holds
+    ///     `ptr_to_int` of the payload shape's storage (union-ctor Let arm).
+    ///
+    /// The clone preserves BOTH reprs:
+    ///   - **null → null**: a heap cell pointer is never null, so cloning a none
+    ///     through a cell would flip `is`-none from true to false — the null
+    ///     sentinel IS the none value and must pass through untouched;
+    ///   - **non-null → fresh {tag,data} heap cell**, with the payload
+    ///     deep-copied into its OWN heap cell selected by a tag switch (variant
+    ///     shapes have different ABI sizes, read from the ONE `shape_abi_sizes`
+    ///     source via `shape_abi_size_const`); a non-shape variant's data is
+    ///     self-contained i64 bits (or an already-heap-stable pointer) and
+    ///     copies as-is through the switch default.
+    ///
+    /// BINDING surface only: `value_to_stable_bits` deliberately keeps NO Union
+    /// arm (its KNOWN-HOLE doc — the persist surfaces stay loud-fail-pinned
+    /// until the union ABI gets one authoritative layout), so this helper is
+    /// reachable only from the two binding funnels (`store_binding`'s Union arm
+    /// and the union-ctor Let arm's crossing branch).
+    ///
+    /// Time: O(1) + one memcpy of the selected variant's ABI size  Space: O(1)
+    /// (two heap cells per present value; zero for a none)
+    fn union_to_heap_cell(
+        &self,
+        src: PointerValue<'ctx>,
+        variants: &[Type],
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let union_st = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let pre_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        let copy_bb = self.append_block(&format!("{site}_ucopy"));
+        let cont_bb = self.append_block(&format!("{site}_ucont"));
+        let is_none = self
+            .builder
+            .build_is_null(src, &format!("{site}_is_none"))
+            .map_err(|e| format!("union cell is_null {site}: {e}"))?;
+        self.builder
+            .build_conditional_branch(is_none, cont_bb, copy_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        // Present value: clone the {tag,data} envelope into a counted heap cell.
+        self.builder.position_at_end(copy_bb);
+        let raw = union_st
+            .size_of()
+            .ok_or_else(|| format!("{site}: union envelope size_of unavailable"))?;
+        let env_size = self
+            .builder
+            .build_int_z_extend(raw, self.i64(), &format!("{site}_env_sz"))
+            .map_err(|e| format!("union env size zext {site}: {e}"))?;
+        let cell = self.heap_cell(env_size, &format!("{site}_env"))?;
+        let src_tag_gep = self
+            .builder
+            .build_struct_gep(union_st, src, 0, &format!("{site}_src_tag"))
+            .map_err(|e| format!("{e}"))?;
+        let tag = self
+            .builder
+            .build_load(self.i64(), src_tag_gep, &format!("{site}_tag"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let dst_tag_gep = self
+            .builder
+            .build_struct_gep(union_st, cell, 0, &format!("{site}_dst_tag"))
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_store(dst_tag_gep, tag)
+            .map_err(|e| format!("{e}"))?;
+        let src_data_gep = self
+            .builder
+            .build_struct_gep(union_st, src, 1, &format!("{site}_src_data"))
+            .map_err(|e| format!("{e}"))?;
+        let data = self
+            .builder
+            .build_load(self.i64(), src_data_gep, &format!("{site}_data"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let dst_data_gep = self
+            .builder
+            .build_struct_gep(union_st, cell, 1, &format!("{site}_dst_data"))
+            .map_err(|e| format!("{e}"))?;
+
+        // Tag switch: shape variants deep-copy their payload bytes into an own
+        // heap cell; anything else (default) copies the raw i64 bits.
+        let done_bb = self.append_block(&format!("{site}_udata_done"));
+        let raw_bb = self.append_block(&format!("{site}_udata_raw"));
+        let mut shape_cases: Vec<(u64, String)> = Vec::new();
+        for (i, v) in variants.iter().enumerate() {
+            if let Type::Shape { ref name } = self.resolve_type(v) {
+                shape_cases.push((i as u64, name.clone()));
+            }
+        }
+        let case_blocks: Vec<inkwell::basic_block::BasicBlock<'ctx>> = shape_cases
+            .iter()
+            .map(|(i, _)| self.append_block(&format!("{site}_upay{i}")))
+            .collect();
+        let switch_cases: Vec<(
+            inkwell::values::IntValue<'ctx>,
+            inkwell::basic_block::BasicBlock<'ctx>,
+        )> = shape_cases
+            .iter()
+            .zip(case_blocks.iter())
+            .map(|((i, _), bb)| (self.i64().const_int(*i, false), *bb))
+            .collect();
+        self.builder
+            .build_switch(tag, raw_bb, &switch_cases)
+            .map_err(|e| format!("union cell tag switch {site}: {e}"))?;
+        for ((i, shape_name), case_bb) in shape_cases.iter().zip(case_blocks.iter()) {
+            self.builder.position_at_end(*case_bb);
+            let src_pay = self
+                .builder
+                .build_int_to_ptr(data, self.ptr(), &format!("{site}_src_pay{i}"))
+                .map_err(|e| format!("{e}"))?;
+            let size = self.shape_abi_size_const(shape_name, "union_to_heap_cell")?;
+            let pay_cell = self.heap_cell(size, &format!("{site}_pay{i}"))?;
+            self.builder
+                .build_memcpy(pay_cell, 1, src_pay, 1, size)
+                .map_err(|e| format!("union cell payload memcpy {site}: {e}"))?;
+            let own_bits = self
+                .builder
+                .build_ptr_to_int(pay_cell, self.i64(), &format!("{site}_own_bits{i}"))
+                .map_err(|e| format!("{e}"))?;
+            self.builder
+                .build_store(dst_data_gep, own_bits)
+                .map_err(|e| format!("{e}"))?;
+            self.builder
+                .build_unconditional_branch(done_bb)
+                .map_err(|e| format!("{e}"))?;
+        }
+        self.builder.position_at_end(raw_bb);
+        self.builder
+            .build_store(dst_data_gep, data)
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(done_bb);
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        // Merge: null flows through unchanged; present values yield the cell.
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(self.ptr(), &format!("{site}_ucell"))
+            .map_err(|e| format!("{e}"))?;
+        phi.add_incoming(&[(&cell, done_bb), (&src, pre_bb)]);
+        Ok(phi.as_basic_value().into_pointer_value())
+    }
+
     /// Get-side ownership (v0.3-M5 P2 fix-loop): copy shape bytes INTO the frame
     /// region a pre-wired embed slot points to (SM crossing shape locals, Step
     /// 1b wiring). The variable's owned storage IS its frame region — a plain
@@ -3246,6 +3453,33 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(cell)
     }
 
+    /// Persist-side ownership for a decimal128 (`number`, N ≤ 34) value that
+    /// crosses a concurrency boundary (v0.3-M6 Phase 1d, FRAGO 009 defects A/C).
+    /// A number VALUE in codegen is a POINTER to 16 bytes of i128 storage on the
+    /// producing frame (a hardware-decimal128 stack alloca, or the staged pointer
+    /// bits of an `sm_number_param_set` param). When the value is handed to a
+    /// `background`/cpu-member task that outlives the spawner's frame, those bytes
+    /// are dead by the time the task reads them (UAF / stack-garbage). Copy the
+    /// i128 bits into a counted heap cell and return the cell pointer, so the
+    /// task's pointer survives the spawner's frame return — the ONE mechanism both
+    /// defect A (spawn-arg pre-gate) and defect C (cpu-member spawn) consume
+    /// (authoritative-derivation: no second boundary-crossing derivation).
+    fn number_to_heap_cell(
+        &self,
+        num_ptr: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let cell = self.heap_cell(self.i64().const_int(16, false), site)?;
+        let bits = self
+            .builder
+            .build_load(self.i128(), num_ptr, &format!("{site}_num_ld"))
+            .map_err(|e| format!("number_to_heap_cell load {site}: {e}"))?;
+        self.builder
+            .build_store(cell, bits)
+            .map_err(|e| format!("number_to_heap_cell store {site}: {e}"))?;
+        Ok(cell)
+    }
+
     /// The ONE stable-bits marshalling point for persist surfaces (v0.3-M5 P2
     /// fix rounds 2–3; generalized from the round-2 map-only form).
     ///
@@ -3316,7 +3550,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// diagnostic (feature-registry + gallery obligations) — FRAGO-grade plan
     /// surface, surfaced to the deviation-judge, deliberately NOT built as a
     /// sweep ride-along. Owned by the fix-round deviation record until the
-    /// union ABI gets one authoritative layout.
+    /// union ABI gets one authoritative layout. NOTE (v0.3-M6 Phase 1c step
+    /// 3c): the BINDING surface now has its own null-preserving heap promotion
+    /// (`union_to_heap_cell`, reachable only from the two binding funnels) —
+    /// that does NOT close this hole and deliberately adds NO Union arm here:
+    /// an arm would silently widen the persist surfaces past the pins above.
     fn value_to_stable_bits(
         &self,
         val: BasicValueEnum<'ctx>,
@@ -3868,6 +4106,7 @@ fn lower_function<'ctx, 'g>(
         bg_uid: 0,
         wait_cache,
         suspend_set,
+        base_suspends,
         frame_layouts,
         imported_fns,
         sm_frame_ptr: None,
@@ -3877,6 +4116,7 @@ fn lower_function<'ctx, 'g>(
         sm_crossing_bool_set: HashSet::new(),
         sm_crossing_slot_indices: Vec::new(),
         sm_crossing_decimal128_set: HashSet::new(),
+        sm_number_param_set: HashSet::new(),
         sm_crossing_float_set: HashSet::new(),
         sm_crossing_errors_capable_set: HashSet::new(),
         sm_crossing_ec_number_set: HashSet::new(),
@@ -4366,6 +4606,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         bg_uid: 0,
         wait_cache,
         suspend_set,
+        base_suspends,
         frame_layouts,
         imported_fns,
         sm_frame_ptr: Some(frame_param),
@@ -4375,6 +4616,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_bool_set: HashSet::new(),   // populated during alloca creation below
         sm_crossing_slot_indices: crossing_slot_indices.clone(),
         sm_crossing_decimal128_set: HashSet::new(), // populated during alloca creation below
+        sm_number_param_set: HashSet::new(),        // populated during param alloca creation below
         sm_crossing_float_set: HashSet::new(),      // populated during alloca creation below
         sm_crossing_errors_capable_set: HashSet::new(), // populated during alloca creation below
         sm_crossing_shape_embed_set: HashSet::new(), // populated during alloca creation below
@@ -4412,7 +4654,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Both parameters AND crossing locals get i64 allocas here; each is loaded from its
     // frame slot at the start of every continuation state block.
     cg_resume.builder.position_at_end(resume_entry);
-    for pname in &param_names {
+    for (pidx, pname) in param_names.iter().enumerate() {
         // Alloca sized to i64 (the frame slot width). The actual LLVM type is i64.
         let alloca = cg_resume
             .builder
@@ -4420,6 +4662,13 @@ fn lower_function_with_waits<'ctx, 'g>(
             .map_err(|e| format!("sm param alloca: {e}"))?;
         // Register in locals map — state blocks load from these allocas.
         cg_resume.locals.insert(pname.clone(), alloca);
+        // Record decimal128 params: their i64 alloca holds staged POINTER bits, so
+        // load()'s Number arm must add an indirection instead of mis-typing the alloca
+        // as i128 (v0.3-M6 FRAGOs 006/007 — child half of the number-arg UAF).
+        let param_ty = ast_type_to_typeck_type(&f.params[pidx].ty, shape_table);
+        if matches!(&param_ty, Type::Number { precision } if *precision <= 34) {
+            cg_resume.sm_number_param_set.insert(pname.clone());
+        }
     }
     // Crossing locals also get allocas in sm_entry so lower_stmt can reuse them.
     // LLVM SSA requires allocas to dominate all uses — sm_entry dominates all state
@@ -4437,6 +4686,10 @@ fn lower_function_with_waits<'ctx, 'g>(
     //                        (frame-embed, not heap-promotion); bytes live directly in
     //                        the frame — no separate allocation needed
     //   string/array/map   → ptr alloca; pointer already lives on the heap (stable)
+    //   maybe/union        → ptr alloca; bind-time promotion to a counted heap cell
+    //                        (v0.3-M6 Phase 1c) makes the pointee heap-stable; a
+    //                        union ANNOTATION overrides the RHS variant type so the
+    //                        binding never lands in shape-embed (Decision 12)
     {
         let mut scalar_set: HashSet<String> = HashSet::new();
         let mut bool_set: HashSet<String> = HashSet::new();
@@ -4454,6 +4707,14 @@ fn lower_function_with_waits<'ctx, 'g>(
             // Resolve the typeck type (catches inferred types like number).
             let crossing_ty = crossing_local_type_from_body(&f.body, cname.as_str(), &cg_resume);
             // Cross-check against typeck expr_types for decimal128 (annotation may miss inferred).
+            //
+            // Both calls route through the ONE authoritative walker
+            // (`find_let_typeck_type_in_stmts`): `crossing_local_type_from_body` above
+            // delegates to it via the substitution wrapper `find_let_type_in_stmts`; this
+            // second call reads it directly (unsubstituted). `type_subst` is always empty
+            // on this call path (`lower_function_with_waits` never runs for a generic
+            // function), so this is a cheap, correct no-op cross-check today — and a real,
+            // still-correct substituted-vs-raw comparison the day that changes.
             let crossing_ty = {
                 let typeck_ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
                 match typeck_ty {
@@ -4461,6 +4722,20 @@ fn lower_function_with_waits<'ctx, 'g>(
                     _ => crossing_ty,
                 }
             };
+            // Union annotation override (v0.3-M6 Phase 1c step 3c, Decision 12): a
+            // union-ANNOTATED crossing local's RHS types as the CONCRETE variant shape
+            // (`let fig: Figure = s` types as `Square`), which would misclassify the
+            // binding into `shape_embed_set` — but its storage is the union {tag,data}
+            // heap cell (bind-time promotion in the union-ctor Let arm), never
+            // embeddable shape bytes. Resolve the Let's annotation through the SAME
+            // finder the typeck guards use and the SAME resolver the union-ctor arm
+            // uses (`ast_type_to_typeck_type` — one source, no twin); a Union
+            // annotation routes the binding to the pointer-alloca strategy (the
+            // default arm below), same as maybe.
+            let crossing_ty = find_let_annotation_type_in_stmts(&f.body.stmts, cname.as_str())
+                .map(|ast_ann| ast_type_to_typeck_type(&ast_ann, cg_resume.shape_table))
+                .filter(|ty| matches!(ty, Type::Union { .. }))
+                .unwrap_or(crossing_ty);
 
             // Classify the crossing local so flush/reload know which strategy to use.
             // Bool is separate from Int: both get 1 frame slot, but Bool's alloca is i1
@@ -4520,6 +4795,8 @@ fn lower_function_with_waits<'ctx, 'g>(
             //                      frame's slot region (see Step 1b below); bytes are
             //                      stored directly in the frame — no separate heap alloc
             //   string/array/map → ptr alloca; pointer already lives on the heap (stable)
+            //   maybe/union      → ptr alloca; bind-time heap-cell promotion makes the
+            //                      pointee stable (v0.3-M6 Phase 1c)
             let llvm_ty: inkwell::types::BasicTypeEnum<'ctx> = match &crossing_ty {
                 Type::Int => cg_resume.i64().into(),
                 // Bool keeps its natural i1 alloca; flush/reload convert at the frame boundary.
@@ -5125,9 +5402,7 @@ fn count_suspension_expr(
         // Direct call to a suspending user-defined fn (without explicit `wait`) = 1 suspension point.
         Expr::Call(c) => {
             if let Expr::Ident(name, _) = &c.callee {
-                if suspend_set.contains(name.as_str())
-                    && !is_base_suspension_intrinsic(name.as_str())
-                {
+                if is_suspending_member(suspend_set, name.as_str()) {
                     // This suspending call needs a poll-loop state.
                     return 1 + c
                         .args
@@ -5151,7 +5426,17 @@ fn count_suspension_expr(
             // `h.send(v)` / `h.receive()`) consumes ONE continuation state — classified via
             // the authoritative `channel_method_suspends` (through the shared typeck
             // predicate), exactly matching the states `lower_sm_stmt_with_wait` consumes.
-            let own = usize::from(ynz_typeck::expr_is_conduit_suspend(expr, expr_types));
+            // v0.3-M6 P1-1 (site 5): a UFCS suspending call (`ship.tally()`) consumes ONE
+            // poll-loop state exactly like its Call-form twin — the ONE authoritative
+            // `ufcs_method_call_suspends` arm, through the shared helper. (The Wait arm
+            // above returns 1 without recursing, so `wait x.method()` is never
+            // double-counted.)
+            let own = usize::from(
+                ynz_typeck::expr_is_conduit_suspend(expr, expr_types)
+                    || ynz_typeck::expr_is_ufcs_suspending_call(expr, expr_types, &|n| {
+                        suspend_set.contains(n)
+                    }),
+            );
             own + count_suspension_expr(receiver, suspend_set, expr_types)
                 + args
                     .iter()
@@ -5174,7 +5459,7 @@ fn count_suspension_expr(
 /// (authoritative-derivation: never a per-site re-derived disjunct).
 fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
     stmt_contains_wait(stmt)
-        || stmt_contains_suspending_call(stmt, cg.suspend_set)
+        || stmt_contains_suspending_call(stmt, cg.suspend_set, &cg.typed.expr_types)
         || ynz_typeck::stmt_contains_conduit_suspend(stmt, &cg.typed.expr_types)
 }
 
@@ -5183,10 +5468,14 @@ fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
 /// Used alongside `stmt_contains_wait` to detect suspension points that don't have an
 /// explicit `wait` token (transitive case). Background expressions are excluded because
 /// they spawn independently and don't suspend the current function.
-fn stmt_contains_suspending_call(stmt: &Stmt, suspend_set: &SuspendSet) -> bool {
+fn stmt_contains_suspending_call(
+    stmt: &Stmt,
+    suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
+) -> bool {
     // Delegates to the typeck admission module so codegen's spike gate and the `parallel_groups`
     // inlay-hint pass read one definition of "contains a suspending call".
-    ynz_typeck::cpu_admission::stmt_contains_suspending_call_deep(stmt, suspend_set)
+    ynz_typeck::cpu_admission::stmt_contains_suspending_call_deep(stmt, suspend_set, expr_types)
 }
 
 /// Reload parameters and crossing locals from their frame slots into allocas.
@@ -6345,7 +6634,9 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         }
 
         // `wait suspendingCallee(args)` — explicit wait on a user SM call.
-        Stmt::Expr(Expr::Wait(inner, _)) if is_direct_suspending_call(inner, cg.suspend_set) => {
+        Stmt::Expr(Expr::Wait(inner, _))
+            if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) =>
+        {
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -6363,7 +6654,9 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
 
         // Direct call to suspending callee without explicit `wait` (transitive case).
         // No explicit `wait` token — the inference model drives inline-poll-and-yield.
-        Stmt::Expr(inner) if is_direct_suspending_call(inner, cg.suspend_set) => {
+        Stmt::Expr(inner)
+            if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) =>
+        {
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -6429,7 +6722,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
             name,
             value: Expr::Wait(inner, _),
             ..
-        } if is_direct_suspending_call(inner, cg.suspend_set) => {
+        } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
@@ -6461,7 +6754,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         // `let name = suspendingCallee(args)` — no explicit `wait`, bind the return value.
         Stmt::Let {
             name, value: inner, ..
-        } if is_direct_suspending_call(inner, cg.suspend_set) => {
+        } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
             let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
@@ -6537,7 +6830,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         // `return suspendingCallee(args)` from a SM function — inline-poll + store return + Ready.
         Stmt::Return {
             value: Some(inner), ..
-        } if is_direct_suspending_call(inner, cg.suspend_set) => {
+        } if is_direct_suspending_call(inner, cg.suspend_set, &cg.typed.expr_types) => {
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -7478,14 +7771,13 @@ fn lower_sm_match<'ctx, 'g>(
         // fires; the plain `lower_stmt` path below has none. The arm body is itself a
         // straight-line block, so a direct group there is detected with
         // `stmt_block_has_direct_cpu_group`.
-        let arm_routes_to_sm = function_contains_wait(&arm.body)
-            || arm
-                .body
-                .stmts
-                .iter()
-                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set))
-            || (cg.m3d_spike
-                && stmt_block_has_direct_cpu_group(&arm.body.stmts, cg.suspend_set, cg.typed));
+        let arm_routes_to_sm =
+            function_contains_wait(&arm.body)
+                || arm.body.stmts.iter().any(|s| {
+                    stmt_contains_suspending_call(s, cg.suspend_set, &cg.typed.expr_types)
+                })
+                || (cg.m3d_spike
+                    && stmt_block_has_direct_cpu_group(&arm.body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
         cg.sm_scope_depth += 1;
         if arm_routes_to_sm {
@@ -7531,7 +7823,7 @@ fn lower_sm_match<'ctx, 'g>(
             || else_body
                 .stmts
                 .iter()
-                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set))
+                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set, &cg.typed.expr_types))
             || (cg.m3d_spike
                 && stmt_block_has_direct_cpu_group(&else_body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
@@ -7669,12 +7961,17 @@ fn load_sm_return_value_typed<'ctx>(
 /// Used to pass the callee name to `bind_sm_result_and_flush` so it can detect
 /// `-> number errors` wide-EC returns and apply copy-on-bind.
 fn callee_name_from_call_expr(expr: &Expr) -> Option<&str> {
-    if let Expr::Call(c) = expr {
-        if let Expr::Ident(name, _) = &c.callee {
-            return Some(name.as_str());
-        }
+    match expr {
+        Expr::Call(c) => match &c.callee {
+            Expr::Ident(name, _) => Some(name.as_str()),
+            _ => None,
+        },
+        // v0.3-M6 P1-1 (site 7): UFCS identity — the resolved callee of
+        // `value.method(args)` IS the function named `method` (typeck enforces the
+        // first-parameter match), so the same name feeds the EC-return detection.
+        Expr::MethodCall { method, .. } => Some(method.as_str()),
+        _ => None,
     }
-    None
 }
 
 /// Bind a suspending call's return value to a named local alloca.
@@ -8273,6 +8570,17 @@ fn crossing_local_total_slots(
 /// have no Stmt::Let) get their correct 2-slot width in crossing_local_total_slots and
 /// crossing_slot_indices — without it, a `number` loop var is assigned 1 slot and the
 /// flush/reload writes out of bounds into the next local's slot region.
+///
+/// v0.3-M6 P1-2 (FRAGO 011): this is the ONE authoritative body-walk for "what type does
+/// crossing local `target` have?" — every consumer that needs the type-param-substituted
+/// view (`find_let_type_in_stmts`, called only where a live `Cg` with `type_subst` is in
+/// scope) delegates to THIS walker and layers `Cg::resolve_type` on the returned `Type`
+/// as a pure post-processing step, rather than re-implementing the traversal a second
+/// time. Per `.claude/rules/authoritative-derivation.md`: thread the one derivation, never
+/// fork a second independently-maintained walker. Applying the substitution once to the
+/// final selected type (instead of mid-walk, per recursive level) is behavior-preserving —
+/// `resolve_type` is a pure, structurally-homomorphic function of the raw `Type` value
+/// found, so it does not matter whether it runs before or after the type is selected.
 fn find_let_typeck_type_in_stmts(
     stmts: &[Stmt],
     target: &str,
@@ -8361,67 +8669,22 @@ fn crossing_local_type_from_body<'ctx>(
     find_let_type_in_stmts(&body.stmts, target, cg).unwrap_or(Type::Int)
 }
 
+/// The type-param-substituted view of `find_let_typeck_type_in_stmts` — for a crossing
+/// local declared inside a monomorphized (generic) function body, applies the current
+/// `Cg::type_subst` to the raw typeck type so a `TypeParam`/`Generic`/`BuiltinArray`/
+/// `BuiltinFixed`/`Maybe` resolves to its concrete instantiated type.
+///
+/// Per `.claude/rules/authoritative-derivation.md`, this delegates its entire traversal
+/// to `find_let_typeck_type_in_stmts` — the ONE authoritative walker — and applies the
+/// substitution once, to the final selected type, rather than re-walking the statement
+/// tree. `type_subst` is empty on every reachable call path today (every current call
+/// site constructs its `Cg` with `type_subst: HashMap::new()`, since
+/// `lower_function_with_waits` is only ever invoked for `f.generics.is_empty()`
+/// functions), so the substitution step is a no-op unless that changes — worth stating
+/// explicitly, since a second, independently-maintained traversal here is exactly the
+/// twin-derivation shape that has caused silent miscompiles in this codebase's history.
 fn find_let_type_in_stmts<'ctx>(stmts: &[Stmt], target: &str, cg: &Cg<'ctx, '_>) -> Option<Type> {
-    for stmt in stmts {
-        match stmt {
-            Stmt::Let { name, value, .. } if name == target => {
-                return Some(cg.expr_type(value));
-            }
-            // For-loop variable: the loop var is bound by the iteration mechanism, not via
-            // Stmt::Let, so the Stmt::Let arm above never fires. Derive the element type
-            // directly from the iterator expression's collection type so the type classifier
-            // picks the correct alloca (i1 for bool, f64 for float, i64 for int, i128 for
-            // decimal128, {i64,i64} struct for MapEntry).
-            Stmt::For {
-                var, iter, body, ..
-            } if var == target => {
-                let iter_ty = cg.expr_type(iter);
-                let elem_ty = match iter_ty {
-                    Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => Some(*elem),
-                    // Range element is always Int.
-                    Type::Range { .. } => Some(Type::Int),
-                    // Map iteration: the loop var is a MapEntry<K,V> struct. Returning
-                    // the real type here ensures UnsupportedCrossingLocalType is triggered
-                    // by codegen's classifier for names that reach flush_for_loop_var.
-                    Type::BuiltinMap { key, val } => Some(Type::MapEntry { key, val }),
-                    _ => None,
-                };
-                if let Some(t) = elem_ty {
-                    return Some(t);
-                }
-                // Recurse into body for declarations with the same name.
-                if let Some(t) = find_let_type_in_stmts(&body.stmts, target, cg) {
-                    return Some(t);
-                }
-            }
-            Stmt::If { body, .. } => {
-                if let Some(t) = find_let_type_in_stmts(&body.stmts, target, cg) {
-                    return Some(t);
-                }
-            }
-            // Mirror the same recursion as find_let_typeck_type_in_stmts: crossing locals
-            // declared inside loop/match bodies must be found for correct type classification.
-            Stmt::While { body, .. } | Stmt::For { body, .. } => {
-                if let Some(t) = find_let_type_in_stmts(&body.stmts, target, cg) {
-                    return Some(t);
-                }
-            }
-            Stmt::Match { arms, else_arm, .. } => {
-                for arm in arms {
-                    if let Some(t) = find_let_type_in_stmts(&arm.body.stmts, target, cg) {
-                        return Some(t);
-                    }
-                }
-                if let Some(eb) = else_arm {
-                    if let Some(t) = find_let_type_in_stmts(&eb.stmts, target, cg) {
-                        return Some(t);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    find_let_typeck_type_in_stmts(stmts, target, cg.typed).map(|ty| cg.resolve_type(&ty))
 }
 
 /// True when `expr` is a `sleep(...)` call (the yielding non-blocking sleep intrinsic).
@@ -8429,15 +8692,63 @@ fn is_sleep_call(expr: &Expr) -> bool {
     matches!(expr, Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleep"))
 }
 
+/// The ONE authoritative "does this call name genuinely suspend?" formula: a name present in the
+/// provided suspend set that is NOT itself a base suspension intrinsic (those have their own
+/// `lower_expr` arms and are not user state-machine wrappers).
+///
+/// This is the single home of the membership formula so it is never re-derived. Every consumer
+/// keys it on ITS OWN set — the router keys it on the with-promotions `Cg::suspend_set`, the
+/// block_on-fallback guard keys it on the pre-promotion `Cg::base_suspends` — so the SET each
+/// consumer passes stays the intentional difference while the FORMULA stays single-source (per
+/// `.claude/rules/authoritative-derivation.md`: thread the one predicate, never a second twin).
+fn is_suspending_member(set: &SuspendSet, name: &str) -> bool {
+    set.contains(name) && !is_base_suspension_intrinsic(name)
+}
+
 /// True when `expr` is a direct call to a user-defined suspending function (not a may-block intrinsic).
-fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
+///
+/// v0.3-M6 P1-1 (site 4): also recognizes the UFCS twin — `value.method(args)` on a
+/// shape-typed receiver whose resolved callee suspends — classified via the ONE
+/// authoritative `ufcs_method_call_suspends` arm through the shared typeck helper
+/// (never a second name-keyed derivation).
+fn is_direct_suspending_call(
+    expr: &Expr,
+    suspend_set: &SuspendSet,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
+) -> bool {
     if let Expr::Call(c) = expr {
         if let Expr::Ident(name, _) = &c.callee {
-            return suspend_set.contains(name.as_str())
-                && !is_base_suspension_intrinsic(name.as_str());
+            return is_suspending_member(suspend_set, name.as_str());
         }
+        return false;
     }
-    false
+    ynz_typeck::expr_is_ufcs_suspending_call(expr, expr_types, &|n| suspend_set.contains(n))
+}
+
+/// True when reaching the SYNCHRONOUS call fallback (the `block_on`-driven wrapper path in
+/// `lower_expr`'s `Expr::Call` arm) with `callee_name` is a codegen bug rather than a legal drive.
+///
+/// The synchronous fallback drives a callee's state machine to completion via `RUNTIME.block_on`
+/// inside the callee's wrapper. That is only sound for a NON-suspending callee: a suspending callee
+/// must instead be driven by inline poll-and-yield (`lower_sm_stmt_with_wait`) so the enclosing
+/// state machine keeps a single runtime, never a nested `block_on` from inside a Tokio worker
+/// thread. Post-v0.3-M6 P1-1 the may-block classification routes every suspending call (plain AND
+/// UFCS) through the inline-poll path, so a suspending callee reaching this fallback means the
+/// caller was silently mis-classified as non-suspending — the exact deadlock/panic
+/// `ynz-runtime`'s entrypoint-driver invariant forbids.
+///
+/// Shares the ONE authoritative membership formula with the call router via `is_suspending_member`
+/// (never a second name-keyed derivation): a name in the GENUINE suspend set that is not itself a
+/// base suspension intrinsic (those have their own `lower_expr` arms and are not user state-machine
+/// wrappers). This guard differs from the router ONLY in the set it passes — the formula is identical
+/// because both call the same helper.
+///
+/// `genuine_suspend_set` MUST be the pre-CPU-promotion set (`Cg::base_suspends`), never the
+/// with-promotions `Cg::suspend_set`: a CPU-spike host is added to the latter in auto-parallel mode
+/// but is driven synchronously by the poll-join mechanism, not a block_on async drive, so it is not
+/// a block_on escape-hatch case.
+fn sync_call_fallback_is_codegen_bug(callee_name: &str, genuine_suspend_set: &SuspendSet) -> bool {
+    is_suspending_member(genuine_suspend_set, callee_name)
 }
 
 // The CPU-parallel join helpers fire for any function the typeck `cpu_promotion_query` promotes
@@ -8721,8 +9032,13 @@ fn spike_cpu_candidates(
     // When the authority declines (`None`), the whole function lowers sequentially, byte-
     // identical to `--no-auto-parallel`. When it admits, this function maps the admitted group
     // to its representative (first) callee — an EXTRACTION step, not a re-decision.
-    let group = ynz_typeck::cpu_admission::admitted_cpu_group(f, suspend_set, &supported)?;
-    spike_group_representative_callee(f, &group, suspend_set, &supported)
+    let group = ynz_typeck::cpu_admission::admitted_cpu_group(
+        f,
+        suspend_set,
+        &supported,
+        &typed.expr_types,
+    )?;
+    spike_group_representative_callee(f, &group, suspend_set, &supported, &typed.expr_types)
 }
 
 /// The admitted FUSED (mixed CPU+I/O) top-level group for `f`, or `None` — v0.3-M3g Phase 3.
@@ -8741,7 +9057,7 @@ fn fused_admitted_group(
     suspend_set: &SuspendSet,
 ) -> Option<ynz_typeck::cpu_admission::AdmittedFusedGroup> {
     let supported = cpu_supported_callees(typed);
-    ynz_typeck::cpu_admission::admitted_fused_group(f, suspend_set, &supported)
+    ynz_typeck::cpu_admission::admitted_fused_group(f, suspend_set, &supported, &typed.expr_types)
 }
 
 /// Map an admitted CPU group to its representative (first) callee name by navigating the group's
@@ -8756,13 +9072,14 @@ fn spike_group_representative_callee(
     group: &ynz_typeck::cpu_admission::AdmittedCpuGroup,
     suspend_set: &SuspendSet,
     supported: &std::collections::HashSet<String>,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> Option<String> {
     let mut block: &[Stmt] = &f.body.stmts;
     for step in &group.block_path {
         let stmt = block.get(step.stmt_index)?;
         block = *spike_nested_blocks(stmt).get(step.block_index)?;
     }
-    spike_pair_in_block(block, suspend_set, supported)
+    spike_pair_in_block(block, suspend_set, supported, expr_types)
 }
 
 /// Find the first admissible adjacent CPU pair in a single straight-line statement list and
@@ -8778,8 +9095,14 @@ fn spike_pair_in_block(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> Option<String> {
-    ynz_typeck::cpu_admission::pair_representative_callee(stmts, suspend_set, cpu_supported_callees)
+    ynz_typeck::cpu_admission::pair_representative_callee(
+        stmts,
+        suspend_set,
+        cpu_supported_callees,
+        expr_types,
+    )
 }
 
 /// The statement indices of the single admissible CPU group in one straight-line block, or
@@ -8807,8 +9130,14 @@ fn spike_cpu_group_member_indices(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> Option<Vec<usize>> {
-    ynz_typeck::cpu_admission::cpu_group_member_indices(stmts, suspend_set, cpu_supported_callees)
+    ynz_typeck::cpu_admission::cpu_group_member_indices(
+        stmts,
+        suspend_set,
+        cpu_supported_callees,
+        expr_types,
+    )
 }
 
 /// The nested straight-line blocks (`if`/`match` arm bodies) reachable directly inside `stmts`,
@@ -8836,11 +9165,13 @@ fn count_cpu_groups_all_depths(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
+    expr_types: &ynz_typeck::cpu_admission::ExprTypes,
 ) -> usize {
     ynz_typeck::cpu_admission::count_cpu_groups_all_depths(
         stmts,
         suspend_set,
         cpu_supported_callees,
+        expr_types,
     )
 }
 
@@ -8861,20 +9192,23 @@ fn spike_cpu_group_member_count(
         stmts: &[Stmt],
         suspend_set: &SuspendSet,
         supported: &std::collections::HashSet<String>,
+        expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     ) -> Option<usize> {
-        if let Some(members) = spike_cpu_group_member_indices(stmts, suspend_set, supported) {
+        if let Some(members) =
+            spike_cpu_group_member_indices(stmts, suspend_set, supported, expr_types)
+        {
             return Some(members.len());
         }
         for stmt in stmts {
             for block in spike_nested_blocks(stmt) {
-                if let Some(n) = group_size_in_block(block, suspend_set, supported) {
+                if let Some(n) = group_size_in_block(block, suspend_set, supported, expr_types) {
                     return Some(n);
                 }
             }
         }
         None
     }
-    group_size_in_block(&f.body.stmts, suspend_set, &supported).unwrap_or(0)
+    group_size_in_block(&f.body.stmts, suspend_set, &supported, &typed.expr_types).unwrap_or(0)
 }
 
 /// True when a statement (an `if`/`match` arm) directly contains an admissible CPU group at any
@@ -8891,7 +9225,7 @@ fn spike_cpu_group_member_count(
 fn stmt_contains_cpu_group(stmt: &Stmt, suspend_set: &SuspendSet, typed: &TypedModule) -> bool {
     let supported = cpu_supported_callees(typed);
     for block in spike_nested_blocks(stmt) {
-        if count_cpu_groups_all_depths(block, suspend_set, &supported) > 0 {
+        if count_cpu_groups_all_depths(block, suspend_set, &supported, &typed.expr_types) > 0 {
             return true;
         }
     }
@@ -8909,7 +9243,7 @@ fn stmt_block_has_direct_cpu_group(
     typed: &TypedModule,
 ) -> bool {
     let supported = cpu_supported_callees(typed);
-    spike_pair_in_block(stmts, suspend_set, &supported).is_some()
+    spike_pair_in_block(stmts, suspend_set, &supported, &typed.expr_types).is_some()
 }
 
 /// Of the functions typeck promoted, the subset codegen will actually spike-HOST in this
@@ -9026,8 +9360,10 @@ fn spike_cpu_group_result_names(
         stmts: &[Stmt],
         suspend_set: &SuspendSet,
         supported: &std::collections::HashSet<String>,
+        expr_types: &ynz_typeck::cpu_admission::ExprTypes,
     ) -> Vec<String> {
-        if let Some(member_indices) = spike_cpu_group_member_indices(stmts, suspend_set, supported)
+        if let Some(member_indices) =
+            spike_cpu_group_member_indices(stmts, suspend_set, supported, expr_types)
         {
             return member_indices
                 .iter()
@@ -9039,7 +9375,7 @@ fn spike_cpu_group_result_names(
         }
         for stmt in stmts {
             for block in spike_nested_blocks(stmt) {
-                let names = names_in_block(block, suspend_set, supported);
+                let names = names_in_block(block, suspend_set, supported, expr_types);
                 if !names.is_empty() {
                     return names;
                 }
@@ -9047,7 +9383,7 @@ fn spike_cpu_group_result_names(
         }
         Vec::new()
     }
-    names_in_block(stmts, suspend_set, &supported)
+    names_in_block(stmts, suspend_set, &supported, &typed.expr_types)
 }
 
 /// Extract the single CPU group from `stmts`, returning `(pre_stmts, group_stmts, post_stmts)`.
@@ -9071,7 +9407,8 @@ fn spike_extract_cpu_group<'s>(
     // (`count_cpu_groups_all_depths` → `spike_pair_in_block`), the Step-1c pre-alloc set
     // (`spike_cpu_group_result_names`), and this extraction all agree member-for-member.
     let supported = cpu_supported_callees(typed);
-    let member_indices = spike_cpu_group_member_indices(stmts, suspend_set, &supported)?;
+    let member_indices =
+        spike_cpu_group_member_indices(stmts, suspend_set, &supported, &typed.expr_types)?;
     let first_idx = member_indices[0];
     let last_idx = member_indices[member_indices.len() - 1];
 
@@ -9254,13 +9591,38 @@ fn build_cpu_trampoline<'ctx, 'g>(
         .map_err(|e| format!("trampoline load arg {trampoline_name}: {e}"))?
         .into_int_value();
 
-    // Call the compiled callee(arg_val).
+    // v0.3-M6 Phase 1d (FRAGO 009 defect C): for a bare-`number` callee the ctx
+    // word holds a POINTER (as i64) to a 16-byte heap cell that `emit_cpu_member_
+    // spawn` staged (the decimal128 ABI is by-pointer); reconstruct the pointer and
+    // pass IT to the callee. For every other callee the ctx word IS the i64 value.
+    // The SAME `callee_takes_bare_number` predicate keys both sides (authoritative-
+    // derivation). The cell is freed AFTER result packing below — never before —
+    // because an identity callee (`return n`) may return this very pointer, and
+    // packing must read the i128 out of the return pointer first.
+    let takes_number = callee_takes_bare_number(cg.typed, cg.imported_fns, callee);
+    let (call_arg, arg_cell): (
+        inkwell::values::BasicMetadataValueEnum<'ctx>,
+        Option<PointerValue<'ctx>>,
+    ) = if takes_number {
+        let cell = tramp_builder
+            .build_int_to_ptr(
+                arg_val,
+                ctx.ptr_type(AddressSpace::default()),
+                "spike_num_arg_ptr",
+            )
+            .map_err(|e| format!("trampoline num arg inttoptr {trampoline_name}: {e}"))?;
+        (cell.into(), Some(cell))
+    } else {
+        (arg_val.into(), None)
+    };
+
+    // Call the compiled callee(call_arg).
     let callee_fn = cg
         .module
         .get_function(callee)
         .ok_or_else(|| format!("spike: callee `{callee}` not declared"))?;
     let call_result = tramp_builder
-        .build_call(callee_fn, &[arg_val.into()], "spike_call")
+        .build_call(callee_fn, &[call_arg], "spike_call")
         .map_err(|e| format!("trampoline call {trampoline_name}: {e}"))?
         .try_as_basic_value()
         .basic()
@@ -9368,6 +9730,22 @@ fn build_cpu_trampoline<'ctx, 'g>(
         .map_err(|e| format!("trampoline insert w1 {trampoline_name}: {e}"))?
         .into_struct_value();
 
+    // FRAGO 009 defect C: free the staged decimal128 arg cell now — AFTER packing
+    // copied the i128 out of any return pointer that may alias it. One alloc (spawn
+    // site) / one free (here). A blocking-pool task dropped un-run at runtime
+    // shutdown leaks this cell (process-exit-only, same class as the shipped
+    // never-drop-locals semantics — tracked as v0.3-M6 Future-Req #17, deferred to
+    // the drop-story milestone).
+    if let Some(cell) = arg_cell {
+        tramp_builder
+            .build_call(
+                cg.rt.ynz_free,
+                &[cell.into(), i64_ty.const_int(16, false).into()],
+                "spike_num_free",
+            )
+            .map_err(|e| format!("trampoline num free {trampoline_name}: {e}"))?;
+    }
+
     tramp_builder
         .build_return(Some(&packed))
         .map_err(|e| format!("trampoline ret {trampoline_name}: {e}"))?;
@@ -9391,6 +9769,7 @@ fn emit_cpu_member_spawn<'ctx, 'g>(
     member_noun: &str,
     idx: usize,
     args: &[Expr],
+    callee: &str,
     trampoline_fn: FunctionValue<'ctx>,
     handle_offset: u64,
     frame_ptr: PointerValue<'ctx>,
@@ -9398,7 +9777,51 @@ fn emit_cpu_member_spawn<'ctx, 'g>(
     let ctx = cg.ctx;
     let i64_ty = ctx.i64_type();
 
+    // v0.3-M6 Phase 1d (FRAGO 009 defect C): when the callee takes a bare
+    // decimal128 (`number`, N ≤ 34) param, the ctx word must carry a POINTER to a
+    // 16-byte heap cell (the number ABI is by-pointer), staged here and freed by
+    // the trampoline after result packing. The SAME `callee_takes_bare_number`
+    // predicate steers `build_cpu_trampoline`'s reconstruction (authoritative-
+    // derivation — the two sides cannot disagree).
+    let takes_number = callee_takes_bare_number(cg.typed, cg.imported_fns, callee);
+
     let arg_llvm = match args.first() {
+        // Ident number arg: read via the authoritative load path (`lower_expr` →
+        // `load()`'s Number arm returns a pointer to the i128 storage for both a
+        // hardware-decimal128 local AND an `sm_number_param_set` pointer-bits
+        // param), heap-copy the bits so the pointee survives the spawner's frame,
+        // and stage the cell pointer as the ctx word.
+        Some(arg @ Expr::Ident(..)) if takes_number => {
+            let num_ptr = lower_expr(cg, arg)?.into_pointer_value();
+            let cell = cg.number_to_heap_cell(num_ptr, &format!("{name_prefix}_num_{idx}"))?;
+            cg.builder
+                .build_ptr_to_int(cell, i64_ty, &format!("{name_prefix}_num_bits_{idx}"))
+                .map_err(|e| format!("{name_prefix} num ptr_to_int {idx}: {e}"))?
+        }
+        // Int-literal to a `number` param: a PRE-EXISTING general codegen gap that
+        // ICEs even in a plain synchronous call (`lower_expr(IntLit)` yields an i64;
+        // no call site coerces int→number) — orthogonal to FRAGO 009's decimal128-
+        // across-a-concurrency-boundary charter, and deliberately NOT fixed only at
+        // this boundary (that would make `background f(5)` work while `f(5)` stays
+        // broken; Future-Req #14). The user-facing rejection is typeck's shared
+        // int-literal-to-`number` slot gate `reject_int_literal_number_slot`
+        // (with the thin `reject_int_literal_number_arg` call-arg wrapper), which
+        // is COMPLETE for the `IntLit` / `-IntLit` → `number` argument /
+        // construction / statement class — every call form (plain `f(5)`, UFCS
+        // `p.f(5)`, generic `f<T>(5, ...)`), collection-element slot, struct /
+        // array / fixed / map literal, index / field assignment, `return`, and
+        // match-arm pattern — with only the store-site `let x: number = 5` (#9,
+        // signed-stub territory) excepted. This arm is an unreachable internal
+        // backstop so a typeck regression can never stage a raw int the
+        // number-typed trampoline would `int_to_ptr` into an invalid pointer.
+        Some(Expr::IntLit(_, span)) if takes_number => {
+            return Err(format!(
+                "internal: int-literal argument to a `number`-param CPU member reached \
+                 codegen ({name_prefix} member {idx}, source offsets {}..{}) — typeck's \
+                 int-literal-to-number call-site gate should have rejected this program",
+                span.start, span.end
+            ));
+        }
         Some(Expr::IntLit(n, _)) => i64_ty.const_int(*n as u64, true),
         Some(Expr::Ident(name, span)) => {
             let local_ptr =
@@ -9654,10 +10077,11 @@ fn emit_io_member_init<'ctx, 'g>(
         .map(|l| l.n_locals)
         .unwrap_or(call_args.len());
     for (idx, arg) in call_args.iter().enumerate().take(child_n_locals) {
-        let arg_val = lower_expr(cg, arg)?;
-        let arg_ty = cg.expr_type(arg);
-        let bits = cg
-            .to_i64_bits(arg_val, &arg_ty)
+        // Route through the ONE staging rule (authoritative-derivation): a decimal128
+        // crossing local stages a GEP into the PARENT frame's 2-slot region, never a
+        // ptr_to_int of a dying resume-fn stack temp (the FRAGO 006/007 arg UAF —
+        // this was the third staging loop, missed by the initial two-loop conversion).
+        let bits = stage_suspending_call_arg_bits(cg, arg, frame_ptr)
             .map_err(|e| format!("{arg_bits_label}: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
@@ -9933,6 +10357,7 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
             "child",
             idx,
             &child.args,
+            &child.callee,
             trampoline_fns[idx],
             handle_offsets[idx],
             frame_ptr,
@@ -10659,6 +11084,7 @@ fn emit_fused_group_spawn_poll<'ctx, 'g>(
             "cpu member",
             idx,
             &child.args,
+            &child.callee,
             trampoline_fns[idx],
             handle_offsets[idx],
             frame_ptr,
@@ -10917,14 +11343,31 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     let ctx = cg.ctx;
 
-    // Extract callee name and args from the call expression.
-    let Expr::Call(c) = call_expr else {
-        return Err("emit_suspending_call_inline_poll: not a Call expression".to_string());
-    };
-    let callee_name = if let Expr::Ident(name, _) = &c.callee {
-        name.clone()
-    } else {
-        return Err("emit_suspending_call_inline_poll: callee is not an Ident".to_string());
+    // Extract callee name and args from the call expression. v0.3-M6 P1-1 (site 6):
+    // the UFCS form is handled by the parse-sugar identity — `value.method(args)` IS
+    // `method(value, args)`, so the receiver becomes argument 0 and the resolved callee
+    // is the function named `method` (typeck enforced the first-parameter match).
+    let (callee_name, arg_exprs): (String, Vec<&Expr>) = match call_expr {
+        Expr::Call(c) => {
+            let Expr::Ident(name, _) = &c.callee else {
+                return Err("emit_suspending_call_inline_poll: callee is not an Ident".to_string());
+            };
+            (name.clone(), c.args.iter().collect())
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            let mut v: Vec<&Expr> = Vec::with_capacity(args.len() + 1);
+            v.push(receiver.as_ref());
+            v.extend(args.iter());
+            (method.clone(), v)
+        }
+        _ => {
+            return Err("emit_suspending_call_inline_poll: not a call expression".to_string());
+        }
     };
 
     // Find the child frame offset in the parent's frame layout.
@@ -10947,7 +11390,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         // Heap-box path for recursive/cyclic SM calls.
         return emit_suspending_call_heap_boxed(
             cg,
-            c,
+            &arg_exprs,
             &callee_name,
             state_blocks,
             pending_block,
@@ -11001,12 +11444,9 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     let child_frame_layout = cg.frame_layouts.get(&callee_name);
     let child_n_locals = child_frame_layout
         .map(|l| l.n_locals)
-        .unwrap_or(c.args.len());
-    for (idx, arg) in c.args.iter().enumerate().take(child_n_locals) {
-        let arg_val = lower_expr(cg, arg)?;
-        let arg_ty = cg.expr_type(arg);
-        let bits = cg
-            .to_i64_bits(arg_val, &arg_ty)
+        .unwrap_or(arg_exprs.len());
+    for (idx, arg) in arg_exprs.iter().copied().enumerate().take(child_n_locals) {
+        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
             .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
@@ -11140,6 +11580,90 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     }
 }
 
+/// Stage one argument's i64 frame-slot bits for a suspending callee — the SINGLE staging
+/// rule shared by ALL child-frame arg-staging loops, per authoritative-derivation:
+/// the embedded-frame path (`emit_suspending_call_inline_poll`), the heap-boxed
+/// recursive path (`emit_suspending_call_heap_boxed`), and the auto-parallelized
+/// I/O-group path (`emit_io_member_init`, serving both `emit_independent_group_poll`
+/// and `emit_fused_group_spawn_poll`).
+///
+/// Default: lower the arg and marshal via `to_i64_bits`. Two exceptions:
+///
+/// 1. A LET-bound decimal128 crossing local (member of `sm_crossing_decimal128_set`):
+///    lowering it would copy the i128 bits into a FRESH resume-fn STACK alloca
+///    (`load()`'s Number arm) and stage `ptr_to_int(temp)` into the child frame; the
+///    parent returns Pending, its stack dies, and the resumed child dereferences the
+///    dangling temp (the pre-existing v0.3.0 arg UAF — FRAGOs 006/007, signed R14).
+///    Instead, stage a GEP into the PARENT frame's 2-slot decimal128 region for that
+///    crossing local: the composed frame is heap-resident and outlives the suspension,
+///    and `flush_crossing_local_if_needed` (which runs after every non-wait statement)
+///    keeps those slots current, so the child reads live bytes.
+/// 2. An ANONYMOUS aggregate literal (`wait crew({ ... })` — v0.3-M6 Phase 1c, same
+///    FRAGO 006/007 class): it has no LET name for the crossing classifier to anchor
+///    on, and its lowered value is a dying stack temp (`lower_struct_lit`), so staging
+///    its raw pointer bits reproduces the UAF for an UNNAMED temporary (fixture
+///    `v0_3_m6_anon_struct_arg_pure_call.ynz`: 4240380 vs 7). Route it through
+///    `value_to_stable_bits` — the ONE stable-bits marshalling point — so the staged
+///    bits point at a counted heap cell that survives the parent's suspension.
+///    Scope-minimal: `StructLit` only; other non-Ident temp forms stay recorded
+///    residuals (Phase 1c plan text).
+///
+/// Time: O(1) per arg beyond `lower_expr`  Space: O(1)
+fn stage_suspending_call_arg_bits<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &Expr,
+    parent_frame: PointerValue<'ctx>,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let ctx = cg.ctx;
+    if let Expr::Ident(name, _) = arg {
+        if cg.sm_crossing_decimal128_set.contains(name.as_str()) {
+            let pos = cg
+                .sm_crossing_names
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .position(|n| n == name)
+                .ok_or_else(|| {
+                    format!(
+                        "sm arg staging: decimal128 crossing local `{name}` not in \
+                         sm_crossing_names"
+                    )
+                })?;
+            let slot_idx = cg.sm_crossing_slot_indices[pos];
+            let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START
+                + (slot_idx as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+            let region_ptr = unsafe {
+                cg.builder
+                    .build_gep(
+                        ctx.i8_type(),
+                        parent_frame,
+                        &[ctx.i64_type().const_int(byte_offset, false)],
+                        &format!("{name}_dec_frame_region"),
+                    )
+                    .map_err(|e| format!("sm arg staging dec GEP {name}: {e}"))?
+            };
+            return cg
+                .builder
+                .build_ptr_to_int(
+                    region_ptr,
+                    ctx.i64_type(),
+                    &format!("{name}_dec_frame_bits"),
+                )
+                .map_err(|e| format!("sm arg staging dec ptr_to_int {name}: {e}"));
+        }
+    }
+    if matches!(arg, Expr::StructLit { .. }) {
+        // Exception 2 (doc above): anonymous aggregate — stage from a counted heap
+        // cell via the one stable-bits marshalling point, never the dying stack temp.
+        let arg_val = lower_expr(cg, arg)?;
+        let arg_ty = cg.expr_type(arg);
+        return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
+    }
+    let arg_val = lower_expr(cg, arg)?;
+    let arg_ty = cg.expr_type(arg);
+    cg.to_i64_bits(arg_val, &arg_ty)
+}
+
 /// Emit inline-poll-and-yield for a RECURSIVE suspending call (recursion/cycle edge).
 ///
 /// For recursive calls, the child frame cannot be embedded (infinite size). Instead:
@@ -11164,7 +11688,10 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 #[allow(clippy::too_many_arguments)]
 fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     cg: &mut Cg<'ctx, 'g>,
-    c: &ynz_ast::nodes::CallExpr,
+    // The callee's argument expressions in callee-parameter order. For the UFCS form the
+    // caller already prepended the receiver as argument 0 (v0.3-M6 P1-1 site 6), so this
+    // slice view serves both call forms without a second extraction.
+    args: &[&Expr],
     callee_name: &str,
     state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
     pending_block: inkwell::basic_block::BasicBlock<'ctx>,
@@ -11210,7 +11737,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
         .frame_layouts
         .get(callee_name)
         .map(|l| l.n_locals)
-        .unwrap_or(c.args.len());
+        .unwrap_or(args.len());
 
     // Heap-allocate the child frame.
     let child_frame = state_machine::alloc_frame(ctx, &cg.builder, cg.rt, child_frame_size)?;
@@ -11233,11 +11760,8 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     }
 
     // Write call arguments.
-    for (idx, arg) in c.args.iter().enumerate().take(child_n_locals) {
-        let arg_val = lower_expr(cg, arg)?;
-        let arg_ty = cg.expr_type(arg);
-        let bits = cg
-            .to_i64_bits(arg_val, &arg_ty)
+    for (idx, arg) in args.iter().copied().enumerate().take(child_n_locals) {
+        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
             .map_err(|e| format!("rec arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
@@ -11430,9 +11954,13 @@ fn lower_let_background_handle<'ctx>(
     name: &str,
     bg_inner: &Expr,
 ) -> Result<(), String> {
-    let call = match bg_inner {
-        Expr::Call(c) => c,
-        other => {
+    // Shape-receiver MethodCall spawns normalize to the Call-form twin (UFCS identity,
+    // v0.3-M6 P1-1 site 8) — same normalization as `lower_expr_background`.
+    let synthesized = synthesize_ufcs_call_expr(cg, bg_inner);
+    let call = match (bg_inner, synthesized.as_ref()) {
+        (Expr::Call(c), _) => c,
+        (_, Some(c)) => c,
+        (other, None) => {
             // Typeck already emitted the must-wrap-a-call error; keep codegen total.
             let _ = lower_expr(cg, other)?;
             return Ok(());
@@ -12496,14 +13024,39 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                                 cg.builder
                                     .build_store(data_gep, ptr_as_i64)
                                     .map_err(|e| format!("{e}"))?;
-                                let outer_slot = cg
-                                    .builder
-                                    .build_alloca(cg.ptr(), name)
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.builder
-                                    .build_store(outer_slot, union_slot)
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.locals.insert(name.clone(), outer_slot);
+                                // v0.3-M6 Phase 1c step 3c (FRAGOs 006/007/013): a
+                                // CROSSING union binding must not keep the STACK tagged
+                                // struct — the resume fn's stack dies on every Pending
+                                // return, so a suspending callee's tag read dangles
+                                // (fixture `v0_3_m6_union_arg_pure_call.ynz`: `circle`
+                                // vs `square`). Promote envelope + payload to counted
+                                // heap cells and store the cell into the PRE-CREATED
+                                // sm_entry crossing alloca — never a fresh `outer_slot`,
+                                // which would orphan the alloca the flush/reload
+                                // machinery reads (and, being created in a state block,
+                                // would violate LLVM SSA dominance across states).
+                                let is_sm_crossing = cg
+                                    .sm_crossing_names
+                                    .as_ref()
+                                    .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
+                                if is_sm_crossing {
+                                    let cell = cg.union_to_heap_cell(union_slot, variants, name)?;
+                                    let slot = *cg.locals.get(name.as_str()).ok_or_else(|| {
+                                        format!("sm crossing alloca for `{name}` missing in entry")
+                                    })?;
+                                    cg.builder
+                                        .build_store(slot, cell)
+                                        .map_err(|e| format!("{e}"))?;
+                                } else {
+                                    let outer_slot = cg
+                                        .builder
+                                        .build_alloca(cg.ptr(), name)
+                                        .map_err(|e| format!("{e}"))?;
+                                    cg.builder
+                                        .build_store(outer_slot, union_slot)
+                                        .map_err(|e| format!("{e}"))?;
+                                    cg.locals.insert(name.clone(), outer_slot);
+                                }
                                 break 'union_ctor true;
                             }
                         }
@@ -14096,6 +14649,66 @@ fn extract_range_bounds<'ctx>(
     }
 }
 
+/// Synthesize (memoized per element type) the `channel<T>` element drop-glue function and
+/// return it as the pointer value for `ynz_channel_create`'s glue parameter (v0.3-M6 P2-4).
+///
+/// The glue is registered ONCE at construction — the single authoritative element-drop choke
+/// point (authoritative-derivation.md); the runtime's `YnzChannel::drop` invokes it on each
+/// residual buffered element / suspended-send payload at last-ref teardown. Typeck
+/// (`check_channel_construction`) admits only int/float/bool/string/array/map element types,
+/// so exactly TWO non-null arms exist:
+///   - `array<T>` → `void glue(i64 bits) { ynz_array_drop(bits as ptr) }`
+///   - `map<K,V>` → `void glue(i64 bits) { ynz_map_drop(bits as ptr) }`
+///
+/// int/float/bool are value bits (nothing to drop) and `string` is DELIBERATELY glue-less
+/// (raw-malloc'd immortal bytes, invisible to the alloc counter — freeing would be unsound):
+/// all pass null. A shape arm would be dead code (typeck rejects shape elements) — none exists.
+fn channel_drop_glue<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+) -> Result<PointerValue<'ctx>, String> {
+    let elem = match cg.expr_type(expr) {
+        // resolve_type doesn't recurse into BuiltinChannel, so substitute the element
+        // explicitly (a `channel<array<T>>` inside a generic fn must mangle concretely).
+        Type::BuiltinChannel { elem } => cg.resolve_type(&elem),
+        other => {
+            return Err(format!(
+                "channel construction: expression typed {other:?}, expected a channel type"
+            ))
+        }
+    };
+    let drop_fn = match &elem {
+        Type::BuiltinArray { .. } => cg.rt.ynz_array_drop,
+        Type::BuiltinMap { .. } => cg.rt.ynz_map_drop,
+        _ => return Ok(cg.ptr().const_null()),
+    };
+    let name = format!("ynz_chan_drop_glue_{}", mangle_type(&elem));
+    let glue_fn = match cg.module.get_function(&name) {
+        Some(f) => f,
+        None => {
+            let fn_ty = cg.ctx.void_type().fn_type(&[cg.i64().into()], false);
+            let f = cg.module.add_function(&name, fn_ty, None);
+            let entry = cg.ctx.append_basic_block(f, "entry");
+            // A fresh builder leaves the caller's insertion point untouched (the
+            // build_cpu_trampoline precedent) — glue is synthesized mid-lower_expr.
+            let b = cg.ctx.create_builder();
+            b.position_at_end(entry);
+            let bits = f
+                .get_nth_param(0)
+                .ok_or_else(|| format!("{name}: missing bits param"))?
+                .into_int_value();
+            let elem_ptr = b
+                .build_int_to_ptr(bits, cg.ptr(), "elem_ptr")
+                .map_err(|e| format!("{name}: {e}"))?;
+            b.build_call(drop_fn, &[elem_ptr.into()], "")
+                .map_err(|e| format!("{name}: {e}"))?;
+            b.build_return(None).map_err(|e| format!("{name}: {e}"))?;
+            f
+        }
+    };
+    Ok(glue_fn.as_global_value().as_pointer_value())
+}
+
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
     match expr {
         Expr::IntLit(n, _) => Ok(cg.i64().const_int(*n as u64, true).into()),
@@ -14392,9 +15005,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             .const_int(ynz_typeck::DEFAULT_CHANNEL_CAPACITY as u64, false),
                         _ => lower_expr(cg, &call.args[0])?.into_int_value(),
                     };
+                    // v0.3-M6 P2-4: register the per-element-type drop glue at the ONE
+                    // construction choke point (null for primitive/string element types).
+                    let glue = channel_drop_glue(cg, expr)?;
                     let chan = cg
                         .builder
-                        .build_call(cg.rt.ynz_channel_create, &[capacity.into()], "channel_new")
+                        .build_call(
+                            cg.rt.ynz_channel_create,
+                            &[capacity.into(), glue.into()],
+                            "channel_new",
+                        )
                         .map_err(|e| format!("channel construction: {e}"))?
                         .try_as_basic_value()
                         .basic()
@@ -14536,6 +15156,36 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     lower_errors_capable_call_result(cg, final_result, "__testFallibleAsync")
                 }
                 name => {
+                    // v0.3-M6 Phase 2 (P4-3): hard-error guard closing the block_on escape hatch.
+                    // A suspending callee reaching this SYNCHRONOUS fallback would drive its state
+                    // machine via `RUNTIME.block_on` inside the callee's wrapper. Post-P1-1 the
+                    // may-block classification routes every suspending call through the inline
+                    // poll-and-yield path (`lower_sm_stmt_with_wait`), so a suspending callee here
+                    // means the caller was silently mis-classified as non-suspending — a codegen
+                    // bug that deadlocks or panics per `ynz-runtime`'s entrypoint-driver invariant.
+                    // Keyed on `base_suspends` (the genuine may-block set), NOT `suspend_set`: in
+                    // auto-parallel mode `suspend_set` also carries CPU-spike-host names, and a CPU
+                    // host is driven synchronously by the poll-join mechanism at the top level (the
+                    // designed path), never a block_on async drive — so it must not trip this guard.
+                    // Mirrors the sibling recursive-path hard error in
+                    // `emit_suspending_call_heap_boxed`.
+                    if sync_call_fallback_is_codegen_bug(name, cg.base_suspends) {
+                        return Err(format!(
+                            "codegen bug: suspending callee `{name}` reached the synchronous call \
+                             fallback — a suspending call must be driven by inline poll-and-yield, \
+                             not a block_on wrapper drive. \
+                             WHAT: the caller was not classified as a state machine but reaches a \
+                             suspending call. \
+                             WHAT INSTEAD: wrap the call in a `wait`/`background` context so the \
+                             caller becomes a state machine, or file a compiler bug if the caller \
+                             looks correctly classified. \
+                             WHY: a synchronous block_on drive from inside the async runtime \
+                             deadlocks or panics (ynz-runtime's entrypoint-driver invariant). \
+                             The may-block classification should have routed this through \
+                             lower_sm_stmt_with_wait before codegen."
+                        ));
+                    }
+
                     // Prefer the direct name. If not found, check for an aliased import
                     // (`import { getValue as fetchVal }`) — the LLVM module declares the
                     // function under the original exported name, not the local alias.
@@ -14556,12 +15206,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             .unwrap_or_else(|| name.to_string())
                     };
 
-                    // v0.3-M2 P7: suspending calls inside SM resume bodies are handled by
-                    // lower_sm_stmt_with_wait (inline-poll-and-yield) BEFORE reaching lower_expr.
-                    // If a suspending call reaches here, the caller is a non-SM function calling
-                    // a suspending wrapper — invoke the wrapper fn directly (it drives the SM
-                    // internally via RUNTIME.block_on). This path should only be reached from
-                    // non-SM callers; SM callers route through lower_sm_stmt_with_wait instead.
+                    // The direct wrapper-fn invocation below serves ONLY callees that do not
+                    // genuinely suspend: plain non-suspending functions, and CPU-spike hosts
+                    // (present in `suspend_set` under auto-parallel promotion but driven
+                    // synchronously by the poll-join mechanism, not a block_on async drive). A
+                    // genuinely-suspending callee never reaches this invoke — the
+                    // `sync_call_fallback_is_codegen_bug` guard above errors it out first, because
+                    // a suspending call must be driven by inline poll-and-yield
+                    // (`lower_sm_stmt_with_wait`), never a nested block_on from inside a runtime
+                    // worker thread. Suspending calls inside SM resume bodies are likewise routed
+                    // through `lower_sm_stmt_with_wait` before ever reaching `lower_expr`.
                     //
                     // Per AC 9: no ynz_rt_run_entrypoint inside any ynz_sm_*_resume.
                     // The program-entry driver lives in the WRAPPER function only; this path
@@ -15257,6 +15911,29 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
     }
 
+    // v0.3-M6 Phase 1d (FRAGO 009 defect A): a decimal128 (`number`, N ≤ 34) arg
+    // ALWAYS needs stabilization — an UNCONDITIONAL pre-gate, independent of
+    // give/copy inference (mirroring the MapEntry pre-gate above), because the
+    // value is a POINTER to per-site i128 storage on the spawner's frame — a
+    // hardware-decimal128 stack alloca or the staged pointer bits of an SM number
+    // param — regardless of whether the ident lands in
+    // `background_arg_inferred_ownership`. That storage dies with the spawner's
+    // frame; the task (CPU-spawn arm via `ynz_rt_spawn_blocking`, or SM-spawn arm
+    // via `ynz_rt_spawn`) reads dangling bits after the spawner returns/suspends
+    // (probe: deterministic `0.000...` vs `2.5`). Copy the i128 into a counted
+    // heap cell via the ONE `number_to_heap_cell` mechanism the cpu-member path
+    // also consumes (authoritative-derivation). The 16-byte cell rides the free
+    // ladder's `HeapShape` protocol — closure-body `emit_bg_arg_frees` (CPU arm)
+    // and `BgArgDropEntry` kind-0 (SM arm) both free it exactly once. The SM
+    // child-side read is unchanged: `load()`'s `sm_number_param_set` indirection
+    // now derefs the heap cell instead of the dead stack temp. N > 34 (bignum, a
+    // heap/global string pointer that already survives the frame) is deliberately
+    // out of scope — it falls through to the by-pointer default arm below.
+    if matches!(cg.resolve_type(ty), Type::Number { precision } if precision <= 34) {
+        let cell = cg.number_to_heap_cell(val.into_pointer_value(), "bg_number")?;
+        return Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+    }
+
     let is_heap_arg = match arg {
         ynz_ast::nodes::Expr::Ident(_, s) => {
             // Plain ident: any inferred Give or Copy ownership gets the heap fix.
@@ -15565,6 +16242,43 @@ fn emit_bg_arg_frees<'ctx>(
 /// `CtxDropGuard`. The `CtxDropGuard` frees the COPY on both normal return and panic path.
 /// The caller-side alloca is reclaimed at function exit — no explicit free needed.
 ///
+/// v0.3-M6 P1-1 (site 8): normalize a SHAPE-receiver UFCS spawn target to its Call-form
+/// twin at the spawn-lowering entry — `background value.method(args)` IS
+/// `background method(value, args)` (parse-sugar identity; typeck enforced the
+/// first-parameter match). Sub-expression spans are preserved verbatim so
+/// `cg.expr_type(arg)` still resolves every argument (including the receiver, now
+/// argument 0). Non-shape receivers (conduit/intrinsic method calls) return `None` and
+/// keep the pre-existing fallback behavior — they are not UFCS function calls.
+fn synthesize_ufcs_call_expr(cg: &Cg<'_, '_>, inner: &Expr) -> Option<ynz_ast::nodes::CallExpr> {
+    let Expr::MethodCall {
+        receiver,
+        method,
+        method_span,
+        args,
+        span,
+    } = inner
+    else {
+        return None;
+    };
+    let rspan = receiver.span();
+    let receiver_is_shape = matches!(
+        cg.typed.expr_types.get(&(rspan.start, rspan.end)),
+        Some(Type::Shape { .. })
+    );
+    if !receiver_is_shape {
+        return None;
+    }
+    let mut call_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);
+    call_args.push((**receiver).clone());
+    call_args.extend(args.iter().cloned());
+    Some(ynz_ast::nodes::CallExpr {
+        callee: Expr::Ident(method.clone(), method_span.clone()),
+        type_args: None,
+        args: call_args,
+        span: span.clone(),
+    })
+}
+
 /// Call-site preempt insertion deferred to M2 per P1 GATE measurement.
 fn lower_expr_background<'ctx>(
     cg: &mut Cg<'ctx, '_>,
@@ -15572,9 +16286,12 @@ fn lower_expr_background<'ctx>(
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     use inkwell::values::BasicMetadataValueEnum;
 
-    // background must wrap a Call — typeck already enforces this.
-    let call = match inner {
-        ynz_ast::nodes::Expr::Call(c) => c,
+    // background must wrap a Call — typeck already enforces this. A shape-receiver
+    // MethodCall is normalized to its Call-form twin first (UFCS identity, site 8).
+    let synthesized = synthesize_ufcs_call_expr(cg, inner);
+    let call = match (inner, synthesized.as_ref()) {
+        (ynz_ast::nodes::Expr::Call(c), _) => c,
+        (_, Some(c)) => c,
         _ => {
             // Typeck already emitted an error. Fall back to sequential execution.
             let _ = lower_expr(cg, inner)?;
@@ -18329,6 +19046,42 @@ fn callee_returns_bare_number(
     )
 }
 
+/// True when the named function's FIRST parameter is a bare decimal128 (`number`,
+/// N ≤ 34) — the first-param twin of `callee_returns_bare_number` (v0.3-M6 Phase
+/// 1d, FRAGO 009 defect C). A cpu-member spawn stages an 8-byte ctx word and the
+/// shared trampoline passes it to the compiled callee; for a number-param callee
+/// the number ABI is a POINTER, so the ctx word must carry a heap-cell pointer
+/// (not the raw i128 low bits) and the trampoline must reconstruct that pointer.
+/// This ONE predicate is consumed by BOTH the spawn site (`emit_cpu_member_spawn`)
+/// and the trampoline (`build_cpu_trampoline`) so the two sides cannot drift on
+/// "does this callee take a bare number?" (authoritative-derivation).
+fn callee_takes_bare_number(
+    typed: &TypedModule,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    fn_name: &str,
+) -> bool {
+    let local = typed.module.items.iter().any(|item| {
+        if let ynz_ast::nodes::Item::Function(f) = item {
+            f.name == fn_name
+                && matches!(
+                    f.params.first().map(|p| &p.ty),
+                    Some(ynz_ast::nodes::Type::Number { precision }) if *precision <= 34
+                )
+        } else {
+            false
+        }
+    });
+    if local {
+        return true;
+    }
+    imported_fns.get(fn_name).is_some_and(|sig| {
+        matches!(
+            sig.params.first().map(|(_, t)| t),
+            Some(ynz_typeck::types::Type::Number { precision }) if *precision <= 34
+        )
+    })
+}
+
 /// True when the named function has `errors_capable = true`, checking both local
 /// module items and the imported function table for cross-module callees.
 fn is_errors_capable_fn(
@@ -19610,27 +20363,73 @@ fn store<'ctx>(
 /// (`store_field`, counted heap cell) and map value inserts
 /// (`value_to_stable_bits`, counted heap cell). See
 /// `array_elem_out_buffer`'s ownership contract for the full boundary.
+///
+/// CROSSING maybe bindings promote to a COUNTED HEAP CELL instead of the
+/// entry-block owned region (v0.3-M6 Phase 1c, FRAGOs 006/007/013): a crossing
+/// local's frame slot persists the envelope POINTER across suspension, but the
+/// resume fn's stack — where `maybe_to_owned`'s entry-block region lives — is
+/// destroyed every time the parent returns Pending, so a suspending callee
+/// reading its maybe arg after its own suspend point dereferenced a dangling
+/// envelope (nondeterministic pointer garbage; fixture
+/// `v0_3_m6_maybe_arg_pure_call.ynz`). The heap cell satisfies the default
+/// flush arm's stable-pointer contract. Crossing membership reads
+/// `sm_crossing_names` — the one authoritative crossing set threaded from
+/// typeck (authoritative-derivation: no second classification path).
+///
+/// `name` is the BINDING name (both callers are the `let` / assign arms) — it
+/// keys the crossing-set lookup and names the emitted LLVM values.
 fn store_binding<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
     slot: PointerValue<'ctx>,
-    site: &str,
+    name: &str,
 ) -> Result<(), String> {
     match cg.resolve_type(ty) {
-        Type::Shape { ref name } => {
-            let owned = cg.shape_bytes_to_owned(val.into_pointer_value(), name, site)?;
+        Type::Shape {
+            name: ref shape_name,
+        } => {
+            let owned = cg.shape_bytes_to_owned(val.into_pointer_value(), shape_name, name)?;
             cg.builder
                 .build_store(slot, owned)
-                .map_err(|e| format!("store_binding shape {site}: {e}"))?;
+                .map_err(|e| format!("store_binding shape {name}: {e}"))?;
             Ok(())
         }
         Type::Maybe { ref inner } => {
-            let owned = cg.maybe_to_owned(val.into_pointer_value(), inner, site)?;
+            let is_crossing = cg
+                .sm_crossing_names
+                .as_deref()
+                .is_some_and(|v| v.iter().any(|n| n == name));
+            let owned = if is_crossing {
+                cg.maybe_to_heap_cell(val.into_pointer_value(), inner, name)?
+            } else {
+                cg.maybe_to_owned(val.into_pointer_value(), inner, name)?
+            };
             cg.builder
                 .build_store(slot, owned)
-                .map_err(|e| format!("store_binding maybe {site}: {e}"))?;
+                .map_err(|e| format!("store_binding maybe {name}: {e}"))?;
             Ok(())
+        }
+        // v0.3-M6 Phase 1c step 3c: a CROSSING union binding promotes to counted
+        // heap cells — same stable-pointer contract as the maybe arm above; see
+        // `union_to_heap_cell` for the null-preserving envelope + payload clone.
+        // A non-crossing union stores its pointer exactly as the default arm
+        // always did (byte-identical outside SM crossing contexts —
+        // `sm_crossing_names` is None there by construction).
+        Type::Union { ref variants } => {
+            let is_crossing = cg
+                .sm_crossing_names
+                .as_deref()
+                .is_some_and(|v| v.iter().any(|n| n == name));
+            if is_crossing {
+                let cell = cg.union_to_heap_cell(val.into_pointer_value(), variants, name)?;
+                cg.builder
+                    .build_store(slot, cell)
+                    .map_err(|e| format!("store_binding union {name}: {e}"))?;
+                Ok(())
+            } else {
+                store(cg, val, ty, slot)
+            }
         }
         _ => store(cg, val, ty, slot),
     }
@@ -19704,6 +20503,22 @@ fn load<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, String> {
     match ty {
         Type::Number { precision } if *precision <= 34 => {
+            // SM resume-fn PARAM: the i64 alloca holds staged pointer bits (the caller
+            // staged a pointer to 16 live frame-resident bytes). Load the bits and
+            // return the pointer itself — no copy; the pointee (the caller's composed
+            // heap frame region) outlives this child (v0.3-M6 FRAGOs 006/007).
+            if cg.sm_number_param_set.contains(name) {
+                let ptr_bits = cg
+                    .builder
+                    .build_load(cg.i64(), slot, &format!("{name}_dec_ptr_bits"))
+                    .map_err(|e| format!("{e}"))?
+                    .into_int_value();
+                let dec_ptr = cg
+                    .builder
+                    .build_int_to_ptr(ptr_bits, cg.ptr(), &format!("{name}_dec_ptr"))
+                    .map_err(|e| format!("{e}"))?;
+                return Ok(dec_ptr.into());
+            }
             // Hardware decimal128: load i128 bits from slot, copy into fresh alloca, return ptr.
             let bits = cg
                 .builder
@@ -19909,6 +20724,12 @@ mod tests {
     }
     fn empty_suspend() -> HashSet<String> {
         HashSet::new()
+    }
+
+    /// Empty expr-types map — these unit fixtures exercise Call-based groups only, so the
+    /// UFCS arm (which needs shape receiver types) never fires and an empty map is exact.
+    fn no_types() -> ynz_typeck::cpu_admission::ExprTypes {
+        std::collections::HashMap::new()
     }
 
     /// A bare FrameLayout carrying only the CPU slots under test. The other fields are
@@ -20480,12 +21301,12 @@ mod tests {
         // Adjacent pair → admitted (representative = first callee).
         let pair = vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
         assert_eq!(
-            spike_pair_in_block(&pair, &susp, &cpu),
+            spike_pair_in_block(&pair, &susp, &cpu, &no_types()),
             Some("score".to_string())
         );
         // Single call → no pair → declined.
         let single = vec![cpu_call_let("lo", "score")];
-        assert_eq!(spike_pair_in_block(&single, &susp, &cpu), None);
+        assert_eq!(spike_pair_in_block(&single, &susp, &cpu, &no_types()), None);
     }
 
     // WHY: the single-group constraint (admit IFF exactly one group across all depths) is what
@@ -20503,17 +21324,23 @@ mod tests {
 
         // One top-level group.
         let top_only = pair();
-        assert_eq!(count_cpu_groups_all_depths(&top_only, &susp, &cpu), 1);
+        assert_eq!(
+            count_cpu_groups_all_depths(&top_only, &susp, &cpu, &no_types()),
+            1
+        );
 
         // One group nested inside an `if` arm.
         let nested_only = vec![if_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&nested_only, &susp, &cpu), 1);
+        assert_eq!(
+            count_cpu_groups_all_depths(&nested_only, &susp, &cpu, &no_types()),
+            1
+        );
 
         // A top-level group THEN a nested group → 2 (multi-group, declines entirely).
         let mut top_then_nested = pair();
         top_then_nested.push(if_stmt(pair()));
         assert_eq!(
-            count_cpu_groups_all_depths(&top_then_nested, &susp, &cpu),
+            count_cpu_groups_all_depths(&top_then_nested, &susp, &cpu, &no_types()),
             2
         );
 
@@ -20522,17 +21349,23 @@ mod tests {
         let mut nested_then_top = vec![if_stmt(pair())];
         nested_then_top.extend(pair());
         assert_eq!(
-            count_cpu_groups_all_depths(&nested_then_top, &susp, &cpu),
+            count_cpu_groups_all_depths(&nested_then_top, &susp, &cpu, &no_types()),
             2
         );
 
         // Two nested groups (two separate `if` arms) → 2.
         let two_nested = vec![if_stmt(pair()), if_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&two_nested, &susp, &cpu), 2);
+        assert_eq!(
+            count_cpu_groups_all_depths(&two_nested, &susp, &cpu, &no_types()),
+            2
+        );
 
         // Nested inside a matching arm also counts.
         let nested_match = vec![match_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&nested_match, &susp, &cpu), 1);
+        assert_eq!(
+            count_cpu_groups_all_depths(&nested_match, &susp, &cpu, &no_types()),
+            1
+        );
     }
 
     // WHY: neither a `for` nor a `while` body is a spike-hosting site (`spike_nested_blocks`
@@ -20549,9 +21382,15 @@ mod tests {
         let susp = empty_suspend();
         let pair = || vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
         let for_group = vec![for_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&for_group, &susp, &cpu), 0);
+        assert_eq!(
+            count_cpu_groups_all_depths(&for_group, &susp, &cpu, &no_types()),
+            0
+        );
         let while_group = vec![while_stmt(pair())];
-        assert_eq!(count_cpu_groups_all_depths(&while_group, &susp, &cpu), 0);
+        assert_eq!(
+            count_cpu_groups_all_depths(&while_group, &susp, &cpu, &no_types()),
+            0
+        );
     }
 
     // WHY: when a group lives one level inside an `if`/`match` arm,
@@ -20568,27 +21407,27 @@ mod tests {
 
         let nested_if = vec![if_stmt(pair())];
         assert_eq!(
-            nested_group_representative_callee(&nested_if, &susp, &cpu),
+            nested_group_representative_callee(&nested_if, &susp, &cpu, &no_types()),
             Some("score".to_string())
         );
 
         let nested_match = vec![match_stmt(pair())];
         assert_eq!(
-            nested_group_representative_callee(&nested_match, &susp, &cpu),
+            nested_group_representative_callee(&nested_match, &susp, &cpu, &no_types()),
             Some("score".to_string())
         );
 
         // A group in a `for` body is NOT a hosting site → None.
         let nested_for = vec![for_stmt(pair())];
         assert_eq!(
-            nested_group_representative_callee(&nested_for, &susp, &cpu),
+            nested_group_representative_callee(&nested_for, &susp, &cpu, &no_types()),
             None
         );
 
         // A group in a `while` body is NOT a hosting site → None.
         let nested_while = vec![while_stmt(pair())];
         assert_eq!(
-            nested_group_representative_callee(&nested_while, &susp, &cpu),
+            nested_group_representative_callee(&nested_while, &susp, &cpu, &no_types()),
             None
         );
     }
@@ -20649,6 +21488,47 @@ mod tests {
         assert!(
             function_contains_wait(&block),
             "block containing an if-nested Expr::Wait must return true"
+        );
+    }
+
+    // v0.3-M6 Phase 2 (P4-3): RED fixture for the block_on-fallback hard-error guard.
+    //
+    // The guarded path (`lower_expr`'s `Expr::Call` synchronous fallback) is UNREACHABLE from real
+    // Yinz source post-Phase-1: the may-block classification routes every suspending call through
+    // the inline poll-and-yield path (`lower_sm_stmt_with_wait`), so no real program reaches the
+    // synchronous `block_on` wrapper drive with a suspending callee. This test therefore constructs
+    // the deliberately-miscategorized condition at the internal level — a caller reaching the
+    // fallback with a callee that IS in the effective suspend set — and asserts the guard's firing
+    // predicate (`sync_call_fallback_is_codegen_bug`, the exact boolean that gates the hard-error
+    // `return Err`) fires, while normal non-suspending call paths and base suspension intrinsics
+    // do NOT trip it (the in-unit false-positive check).
+    #[test]
+    fn suspending_callee_trips_block_on_fallback_guard() {
+        use super::sync_call_fallback_is_codegen_bug;
+
+        // RED: a suspending callee reaching the synchronous block_on fallback is a codegen bug.
+        let mut suspend_set: HashSet<String> = HashSet::new();
+        suspend_set.insert("fetchData".to_string());
+        assert!(
+            sync_call_fallback_is_codegen_bug("fetchData", &suspend_set),
+            "a suspending callee reaching the block_on sync fallback must be flagged a codegen bug"
+        );
+
+        // False-positive guard: a normal non-suspending callee (the `wait fn()` / UFCS path over a
+        // purely CPU-bound helper) must NOT trip the guard.
+        assert!(
+            !sync_call_fallback_is_codegen_bug("cpuHelper", &suspend_set),
+            "a non-suspending callee must not trip the block_on fallback guard"
+        );
+
+        // A base suspension intrinsic (`sleep`) is handled by its own `lower_expr` arm and is not a
+        // user state-machine wrapper — it must be excluded even when name-present, via the shared
+        // `is_suspending_member` helper's `!is_base_suspension_intrinsic` exclusion.
+        let mut with_sleep: HashSet<String> = HashSet::new();
+        with_sleep.insert("sleep".to_string());
+        assert!(
+            !sync_call_fallback_is_codegen_bug("sleep", &with_sleep),
+            "a base suspension intrinsic must be excluded from the block_on fallback guard"
         );
     }
 }

@@ -1,0 +1,32 @@
+// v0.3-M6 Phase 3c fix-loop (FRAGO 025 deviation 1): HANDLE-form UFCS-receiver UAF.
+// Correct behavior: `let h = background barge.haul()` spawns `haul(barge)` exactly like
+// the statement form — the give-transferred shape receiver is heap-upgraded, so the task
+// reads BOTH receiver fields intact after its own suspension (strictly after the
+// spawner's resume-fn frame dies at `wait sleep(120)`). Deterministic ordering: the task
+// prints at ~+20ms, the entrypoint prints at ~+120ms — stdout is exactly
+// "Mon\n7\ndone\n", exit 0.
+// Pre-fix failure (security-reproduced, FRAGO 025): `check_background_handle_spawn`
+// registered ownership / resolved the callee for `Expr::Call` inners only — the
+// MethodCall receiver's span never entered `background_arg_inferred_ownership`, codegen's
+// Shape heap-upgrade gate skipped it, and the task read the receiver through a raw
+// pointer into the spawner's dead resume-fn stack frame (empty `self.name`,
+// nondeterministic zero-output heap corruption) while the program compiled clean with
+// zero diagnostics.
+
+shape Barge {
+  name: string
+  tonnage: int
+}
+
+function haul(give self: Barge) -> nothing {
+  wait sleep(20)
+  print(self.name)
+  print(self.tonnage.toString())
+}
+
+function entrypoint() -> nothing {
+  let barge: Barge = { name: `Mon`, tonnage: 7 }
+  let h = background barge.haul()
+  wait sleep(120)
+  print(`done`)
+}

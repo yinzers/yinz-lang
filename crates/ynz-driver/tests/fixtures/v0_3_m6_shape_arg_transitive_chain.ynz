@@ -1,0 +1,32 @@
+// v0.3-M6 Phase 1b RED fixture (FRAGO 004): shape-arg UAF via AUTO-INSERTED transitive
+// suspension + a param-passthrough chain (no explicit `wait` at the arg-passing sites).
+// Correct behavior: `tally` suspends transitively (bare `crew(s)` call), so the bare
+// `tally(ship)` call in `entrypoint` is an auto-inserted suspension point; `ship` escapes
+// by pointer through `tally`'s param slot into `crew`, which reads it after its own
+// suspend. With `ship` frame-embedded in `entrypoint`'s heap frame the whole pointer
+// chain survives Pending. Prints 8, exits 0.
+// Pre-fix failure: same dangling-stack-pointer UAF as the pure-`Call` twin — `ship` is
+// staged in `entrypoint`'s resume-fn stack alloca and the resumed chain reads freed
+// stack (nondeterministic garbage).
+
+shape Ship {
+  name: string
+  cargo: int
+}
+
+function crew(share self: Ship) -> int {
+  wait sleep(10)
+  return self.cargo
+}
+
+function tally(share s: Ship) -> int {
+  const c = crew(s)
+  return c + 1
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  const ship: Ship = { name: `Mon`, cargo: 7 }
+  const t = tally(ship)
+  print(t.toString())
+}

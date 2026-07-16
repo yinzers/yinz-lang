@@ -1,0 +1,21 @@
+// v0.3-M6 Phase 1b RED fixture (FRAGO 006 / signed R14): number-arg use-after-free.
+// Correct behavior: `x` (decimal128) is passed to the suspending callee `grow`, which
+// reads it AFTER its own suspend point — so the staged value must live in the surviving
+// composed heap frame. Prints 2.5, exits 0.
+// Pre-fix failure (the documented UAF): the parent's arg-staging lowers `x` via `load`,
+// which copies the i128 bits into a FRESH resume-fn STACK alloca and stages
+// ptr_to_int(temp) into the child frame (value_to_i64_bits' by-pointer arm). The parent
+// returns Pending, its stack dies, and the resumed child dereferences the dangling temp —
+// deterministic 0.000... (freed/zeroed memory), probe-confirmed on the pre-fix tree.
+
+function grow(n: number) -> number {
+  wait sleep(10)
+  return n
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  let x: number = 2.5
+  const y = wait grow(x)
+  print(y.toString())
+}

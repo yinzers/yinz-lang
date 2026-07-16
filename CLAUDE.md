@@ -94,6 +94,17 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 All compiler build / test / fixture work runs inside this container. The bind mount `.:/work` makes
 `target/` host-readable (uid 1000 / patrick) so `trading-v4` can mount `target/release`.
 
+**`target/release` is a live consumer mount, not a release-only artifact.** External projects
+(`trading-v4`, `backfillMarketData`, etc.) mount `../ynz/target/release` read-only and run whatever
+binary is currently sitting there — continuously, at dev time, not just after a tagged `/release`.
+**Any fix to `ynz-driver` / `ynz-watch` / `ynz-lsp` that needs to reach one of those consumer
+projects must be rebuilt with `--release`, in the SAME session as the fix** — a `cargo build`
+(debug) proves the code compiles and runs, but it does NOT update the binary those mounts actually
+read. Forgetting the `--release` rebuild reproduces the exact bug you just "fixed" the moment the
+consumer project re-runs it. See CHANGELOG/git history around 2026-07-06 for the incident this
+note was added from (a `ynz-watch` linker fix verified against `target/debug`, shipped, and still
+reproduced in `backfillMarketData` because `target/release` was stale).
+
 ```bash
 # Start the dev container (background)
 docker compose up -d dev

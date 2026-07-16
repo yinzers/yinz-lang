@@ -957,7 +957,12 @@ fn admitted_group_for(
         ynz_ast::nodes::Item::Function(f) if f.name == fn_name => Some(f),
         _ => None,
     })?;
-    admitted_cpu_group(f, &effective_suspends, &supported)
+    admitted_cpu_group(
+        f,
+        &effective_suspends,
+        &supported,
+        &check_out.typed_module.expr_types,
+    )
 }
 
 const XPIN_FIRE_SOURCE: &str = r#"

@@ -4,7 +4,7 @@ description: "Locks Yinz's no-function-coloring concurrency model: no async/sync
 tags:
   - "yinz-compiler"
 created_at: "2026-05-14"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -55,11 +55,15 @@ Three things Rust gave up that Yinz keeps:
 1. `wait` desugars to a state-machine suspension (stackless coroutines, like Rust's async — low memory, fast spawn, minimal context-switch cost).
 2. The runtime scheduler (in `libynz_rt.a`) drives suspended state machines forward as I/O completes.
 3. `background` spawns a new task onto the scheduler. Tasks are cheap (state-machine memory, no per-task OS stack).
-4. Cross-thread shared state crosses a `background` boundary via auto-inferred `Arc<T>` wrapping. The IDE shows the auto-Arc as a muted hint (cautionary red-tinted styling because reference counting has cost). See [`docs/internal/implementation/IMP-ownership.md`](IMP-ownership.md) for share/lend semantics across thread boundaries.
+4. Cross-thread shared state is DESIGNED to cross a `background` boundary via auto-inferred `Arc<T>` wrapping — **the codegen emission that does this is deferred to v0.4+** (registry entry `auto-arc-codegen-emission`; see the P2-6 disposition note below and the honesty note under "False Sharing Auto-Padding — Locked Pre-v0.3"). Today, a read-only value shared across a `background` boundary crosses safely via the independent-copy path instead (the compiler infers `.copy`, so each task reads its own copy) — correct and race-free, just not the zero-copy Arc-share form. The IDE shows the auto-Arc muted hint (cautionary red-tinted styling because reference counting has cost) for the teaching surface regardless of which path runs underneath. See [`docs/internal/implementation/IMP-ownership.md`](IMP-ownership.md) for share/lend semantics across thread boundaries.
+
+   **P2-6 disposition (v0.3-M6, confirmed no action needed):** the 2026-07-04 concurrency-release audit's P2-6 finding ("auto-Arc unwired") needs no fix this milestone — it is already correctly registry-deferred to v0.4+ via `auto-arc-codegen-emission` (`[[deferred_language_feature]]`) and `auto-arc-cautionary-tint` (`[[deferred_tooling_feature]]`, the hint's red-tint styling), both self-diagnosing their own WHY (the caller/task Arc-sharing topology `IMP-ownership.md` is cited for but does not actually specify). This is a documentation note, not new registry work — re-confirmed against the live `registry/features.toml` entries during the v0.3-M6 Phase 7 docs/registry honesty sweep, so a reviewer does not mistake the pre-existing deferral for a silently-carried-forward gap.
 
 ---
 
 ## FFI annotation requirement
+
+**Design for when `foreign` ships (v2+ — see [`docs/reference/REF-ffi.md`](../../reference/REF-ffi.md) and its `[[deferred_language_feature]]` registry entry). No `foreign` keyword exists in the compiler today**, so nothing below runs yet — it is the locked plan for the may-block analysis to extend cleanly onto FFI boundaries once they exist.
 
 The compiler can analyze pure Yinz code. It CANNOT analyze C code linked via FFI — we can't know whether `printf` blocks without knowing what's behind it. So FFI boundaries must declare `may-block` explicitly:
 
@@ -213,7 +217,13 @@ When the compiler detects that a `shape` type crosses a thread boundary at a `ba
 
 ## Scheduler Preemption Model — Locked Pre-v0.2
 
-Yinz uses **compile-time-assisted safe-point preemption**: the compiler inserts preemption check points at function call sites and loop back-edges. The runtime checks these points for "should I yield to another task" without needing async signal-handler infrastructure.
+Yinz uses **compile-time-assisted safe-point preemption**: the compiler inserts preemption check points at function call sites and loop back-edges. The runtime checks these points for "should I yield to another task" without needing async signal-handler infrastructure. **This is the INTENT this model locks in — the starvation guarantee below is what the design commits to delivering, not a description of what runs today.** See the implementation-status note immediately below for the honest gap between the two.
+
+### Implementation status (corrected v0.3-M6 — was previously undocumented as a gap)
+
+**The mechanism is a stub today; only the call-site plumbing is real.** The compiler already emits a call to the preemption checkpoint at every loop back-edge (`emit_loop_preempt`, `crates/ynz-codegen/src/emit.rs`) — that half of "the compiler inserts preemption check points" above is genuinely shipped, correctly-positioned code. But the checkpoint function itself it calls, `ynz_rt_check_preempt` (`crates/ynz-runtime/src/runtime.rs`), is a documented v0.3-M1 no-op stub: it never actually yields to another task. **Function call-site checks (the other half of the sentence above) were never implemented at all** — they were scoped for M1, gated behind a perf spike, and deferred (see below) with the loop-back-edge stub shipping alone so every call site would exist from day one. Net effect: a tight, loop-free, CPU-bound recursive function is not preempted by anything today — the exact Go pre-1.14 starvation class this model exists to prevent is live for that narrow shape until real back-edge yield ships.
+
+Real back-edge yield ships in **v0.3-M7** (the optimizer milestone), with call-site preemption cost **re-measured under a real LLVM pass pipeline**: the 1190% overhead that pre-authorized deferring call-site checks (v0.3-M1's P1 GATE spike, `fib(30)`) was measured at `-O0`, where nothing inlines — the wrong tier of evidence for a final cost/benefit call once an optimizer exists. Tracked as registry entry [`cooperative-preemption-back-edge-yield`](../../../registry/features.toml) (`[[deferred_tooling_feature]]`); this gap was found undocumented — a real relaxation the roadmap had pre-authorized but never written back to this doc or the registry — by the 2026-07-04 concurrency-release audit and closed by the v0.3-M6 docs/registry honesty sweep (Phase 7).
 
 ### Why decided pre-v0.2
 
@@ -233,7 +243,7 @@ Compile-time safe-point insertion fits Yinz better:
 
 ### Time quantum and CPU-bound task routing
 
-The maximum uninterrupted CPU time before a preemption check fires is configured per-runtime (default ~10ms — short enough to feel responsive, long enough that hot loops don't pay constant context-switch cost).
+The maximum uninterrupted CPU time before a preemption check fires is configured per-runtime (default ~10ms — short enough to feel responsive, long enough that hot loops don't pay constant context-switch cost). **This quantum is a target for the real mechanism, not something enforced today** — per the implementation-status note above, today's checkpoint is a no-op, so no quantum is actually measured or enforced yet; it becomes live alongside the real back-edge yield (v0.3-M7).
 
 **CPU-bound task routing is auto-inferred** (per [`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)). The compiler's whole-program may-block analysis already determines which functions can suspend. Tasks whose call graph contains zero may-block calls are purely CPU-bound — the compiler routes them to a separate blocking thread pool, off the I/O event-loop threads. This avoids the Tokio failure mode where CPU work on the I/O scheduler starves I/O completions.
 
@@ -244,7 +254,7 @@ background processOrder(order)        // muted: // routed to I/O pool — calls 
 background calculateRisk(positions)   // muted: // routed to CPU pool — no may-block calls in call graph
 ```
 
-**Explicit override** (per the auto-promotion rule's "force-the-other-pick" direction): if the auto-inference gets it wrong — e.g., a function that doesn't call any I/O but does heavy parsing/encryption/encoding the compiler can't see is dominant — the user can force routing with `background.cpuBound process(data)` (final naming TBD). The explicit form is rare; the auto-inference handles the common case.
+**Explicit override — spec'd, NOT implemented** (per the auto-promotion rule's "force-the-other-pick" direction): if the auto-inference gets it wrong — e.g., a function that doesn't call any I/O but does heavy parsing/encryption/encoding the compiler can't see is dominant — the design calls for the user to force routing with `background.cpuBound process(data)` (final naming TBD). No such syntax exists in the compiler today; there is no way to override the auto-inferred routing decision above. Per `auto-promotion.md`'s override-direction checklist, building this form is deliberately deferred until a real workload demonstrates the auto-inference getting CPU-bound routing wrong — an unused override built ahead of that evidence is speculative (YAGNI). Tracked as registry entry [`background.cpuBound`](../../../registry/features.toml) (`[[deferred_language_feature]]`).
 
 ### Cross-references
 
@@ -310,10 +320,10 @@ There are two sleep intrinsics, distinguished by what they do to the OS thread:
 
 | Context | Wrong choice | Diagnostic |
 |---|---|---|
-| **`--kernel` mode** | `wait sleep(ms)` (no scheduler to yield to) | **COMPILE ERROR** — `KernelModeRejectsWait`, with WHAT-INSTEAD redirecting to `sleepBlocking(ms)` (pauses without a scheduler). Ships when `--kernel` is wired to emit (post-v0.3; reserved in the registry, 0 code sites today). See [`docs/internal/implementation/IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md). |
+| **`--kernel` mode** | `wait sleep(ms)` (no scheduler to yield to) | **COMPILE ERROR** — `KernelModeRejectsWait`. **SHIPPED and confirmed live** (v0.3-M1, re-verified v0.3-M6): the `Expr::Wait` arm (`crates/ynz-typeck/src/check.rs:2726-2732`) rejects `wait <anything>` before recursing into the callee, so `wait sleep(ms)` produces exactly this diagnostic, with WHAT-INSTEAD "Remove the keyword or build without `--kernel`." A bare `sleep(ms)` with no `wait` (a separate, also-live arm, `check.rs:3108-3118`) gets the more specific WHAT-INSTEAD "Use `sleepBlocking` for blocking sleep." The same kernel-mode-suspension rejection also covers every bare auto-suspending user-function call (`check.rs:3234-3241`) and its UFCS dot-call form (`check.rs:4849-4857`) — under the no-coloring model, ALL suspending calls, not just explicit `wait`, are rejected under `--kernel`. See [`docs/internal/implementation/IMP-no-runtime-mode.md`](IMP-no-runtime-mode.md). |
 | **Normal mode** | `sleepBlocking(ms)` (holds a thread idle when a scheduler is available) | **Tier 3 lint** `prefer-yielding-sleep` (suggestion, dismissable — NOT an error) → use `wait sleep(ms)`. **SHIPPED v0.3-M4** (rides the `[[lint_rule]]` infra built there, kernel-gated off; M4's `background` handle-form also removed the last legit non-kernel blocking-sleep use — the keepalive pattern — so the lint stops nagging a valid case). Must be a suggestion, not an error: rare legit uses exist + respect explicit intent ([`.claude/rules/auto-promotion.md`](../../../.claude/rules/auto-promotion.md)). |
 
-Execution was tracked in [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md) ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope); the normal-mode lint shipped in v0.3-M4 (the `--kernel` compile-error row above remains reserved, post-v0.3).
+Execution was tracked in [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md) ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope); the normal-mode lint shipped in v0.3-M4, and the `--kernel` compile-error row above is likewise live (corrected v0.3-M6 — it previously read as still-reserved; direct read of `check.rs` this session confirmed the rejection arms are shipped, not pending).
 
 ---
 

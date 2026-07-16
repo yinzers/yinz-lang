@@ -47,7 +47,14 @@ fn io_hint_lines(db: &CompilerDb, sf: SourceFile) -> HashSet<usize> {
 
 /// Rebuild the inputs the admission gate needs (effective suspend set + supported callees) the
 /// same way the inlay pass does, so this test reads the exact decision the pass reads.
-fn admission_inputs(db: &CompilerDb, sf: SourceFile) -> (SuspendSet, HashSet<String>) {
+fn admission_inputs(
+    db: &CompilerDb,
+    sf: SourceFile,
+) -> (
+    SuspendSet,
+    HashSet<String>,
+    ynz_typeck::cpu_admission::ExprTypes,
+) {
     let sig_output = module_signatures_query(db, sf);
     let check_out = check_query(db, sf);
     let effective_suspends =
@@ -59,7 +66,8 @@ fn admission_inputs(db: &CompilerDb, sf: SourceFile) -> (SuspendSet, HashSet<Str
         .filter(|(_, sig)| ynz_typeck::independence::cpu_result_abi_supports(&sig.ret))
         .map(|(name, _)| name.clone())
         .collect();
-    (effective_suspends, supported)
+    let expr_types = check_out.typed_module.expr_types.clone();
+    (effective_suspends, supported, expr_types)
 }
 
 const FIB: &str = "\
@@ -90,7 +98,7 @@ fn clean_cpu_group_hint_fires_and_matches_admission() {
 
     // The hint set must equal the admission decision.
     let parse = ynz_parser::parse_query(&db, sf);
-    let (suspends, supported) = admission_inputs(&db, sf);
+    let (suspends, supported, expr_types) = admission_inputs(&db, sf);
     let entry = parse
         .module
         .items
@@ -101,7 +109,7 @@ fn clean_cpu_group_hint_fires_and_matches_admission() {
         })
         .expect("entrypoint present");
     assert!(
-        admitted_cpu_group(entry, &suspends, &supported).is_some(),
+        admitted_cpu_group(entry, &suspends, &supported, &expr_types).is_some(),
         "admission gate must admit the clean group (binary spawns it)"
     );
 }
@@ -124,7 +132,7 @@ fn two_cpu_groups_decline_emits_no_hint() {
     );
 
     let parse = ynz_parser::parse_query(&db, sf);
-    let (suspends, supported) = admission_inputs(&db, sf);
+    let (suspends, supported, expr_types) = admission_inputs(&db, sf);
     let entry = parse
         .module
         .items
@@ -135,7 +143,7 @@ fn two_cpu_groups_decline_emits_no_hint() {
         })
         .expect("entrypoint present");
     assert!(
-        admitted_cpu_group(entry, &suspends, &supported).is_none(),
+        admitted_cpu_group(entry, &suspends, &supported, &expr_types).is_none(),
         "admission gate must DECLINE a two-group function (no spawn → no hint)"
     );
 }
@@ -156,7 +164,7 @@ fn param_read_after_join_declines_emits_no_hint() {
     );
 
     let parse = ynz_parser::parse_query(&db, sf);
-    let (suspends, supported) = admission_inputs(&db, sf);
+    let (suspends, supported, expr_types) = admission_inputs(&db, sf);
     let host = parse
         .module
         .items
@@ -167,7 +175,7 @@ fn param_read_after_join_declines_emits_no_hint() {
         })
         .expect("host present");
     assert!(
-        admitted_cpu_group(host, &suspends, &supported).is_none(),
+        admitted_cpu_group(host, &suspends, &supported, &expr_types).is_none(),
         "admission gate must DECLINE a post-join param read"
     );
 }
@@ -285,7 +293,7 @@ fn mixed_fused_group_hint_tags_cpu_and_io_members_and_matches_admission() {
     );
 
     let parse = ynz_parser::parse_query(&db, sf);
-    let (suspends, supported) = admission_inputs(&db, sf);
+    let (suspends, supported, expr_types) = admission_inputs(&db, sf);
     let entry = parse
         .module
         .items
@@ -295,7 +303,7 @@ fn mixed_fused_group_hint_tags_cpu_and_io_members_and_matches_admission() {
             _ => None,
         })
         .expect("entrypoint present");
-    let fused = admitted_fused_group(entry, &suspends, &supported)
+    let fused = admitted_fused_group(entry, &suspends, &supported, &expr_types)
         .expect("admission gate must admit the mixed group (binary fuses it)");
     assert_eq!(
         fused.members.len(),
@@ -340,7 +348,7 @@ function entrypoint() -> nothing {
     );
 
     let parse = ynz_parser::parse_query(&db, sf);
-    let (suspends, supported) = admission_inputs(&db, sf);
+    let (suspends, supported, expr_types) = admission_inputs(&db, sf);
     let entry = parse
         .module
         .items
@@ -351,7 +359,7 @@ function entrypoint() -> nothing {
         })
         .expect("entrypoint present");
     assert!(
-        admitted_fused_group(entry, &suspends, &supported).is_none(),
+        admitted_fused_group(entry, &suspends, &supported, &expr_types).is_none(),
         "admission gate must decline a member with a non-scalar argument"
     );
 }
@@ -390,7 +398,7 @@ function run(flag: bool) -> nothing {
     // No top-level fused (or CPU) group exists — both suspending calls are nested inside `if`, so
     // this exercises the ordinary `else` arm of the suspending-function branch, not the fused arm.
     let parse = ynz_parser::parse_query(&db, sf);
-    let (suspends, supported) = admission_inputs(&db, sf);
+    let (suspends, supported, expr_types) = admission_inputs(&db, sf);
     let entry = parse
         .module
         .items
@@ -401,7 +409,7 @@ function run(flag: bool) -> nothing {
         })
         .expect("run present");
     assert!(
-        admitted_fused_group(entry, &suspends, &supported).is_none(),
+        admitted_fused_group(entry, &suspends, &supported, &expr_types).is_none(),
         "the two suspending calls are nested inside `if`, not top-level — no fused group should admit"
     );
 
@@ -477,7 +485,7 @@ function entrypoint() -> nothing {
     let (db, sf) = single_file(src);
 
     let parse = ynz_parser::parse_query(&db, sf);
-    let (suspends, supported) = admission_inputs(&db, sf);
+    let (suspends, supported, expr_types) = admission_inputs(&db, sf);
     let pure_helper = parse
         .module
         .items
@@ -488,7 +496,7 @@ function entrypoint() -> nothing {
         })
         .expect("pureHelper present");
     assert!(
-        admitted_cpu_group(pure_helper, &suspends, &supported).is_some(),
+        admitted_cpu_group(pure_helper, &suspends, &supported, &expr_types).is_some(),
         "sanity: pureHelper must be a genuine, self-admitting CPU-group host for this test to \
          actually exercise the spike_hosts union"
     );
@@ -510,7 +518,7 @@ function entrypoint() -> nothing {
     let mut suspends_with_promotions = suspends.clone();
     suspends_with_promotions.insert("pureHelper".to_string());
     assert!(
-        admitted_fused_group(entry, &suspends_with_promotions, &supported).is_none(),
+        admitted_fused_group(entry, &suspends_with_promotions, &supported, &expr_types).is_none(),
         "codegen's real (unioned) suspend set must classify BOTH `pureHelper` and `ioWork` as \
          Suspending (pureHelper is a spike host) — not mixed, so the fused group must decline"
     );
@@ -518,7 +526,7 @@ function entrypoint() -> nothing {
     // The narrow, pre-fix set would have wrongly admitted a mixed group here — confirm that
     // divergence is real (documents WHY the fix is needed, doesn't re-test the fix itself).
     assert!(
-        admitted_fused_group(entry, &suspends, &supported).is_some(),
+        admitted_fused_group(entry, &suspends, &supported, &expr_types).is_some(),
         "sanity: the narrow effective-suspends set must (wrongly) classify pureHelper as Cpu, \
          admitting a mixed group — this is the exact divergence the fix closes"
     );
