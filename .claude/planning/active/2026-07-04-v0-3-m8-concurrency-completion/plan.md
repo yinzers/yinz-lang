@@ -3,9 +3,9 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application"]
 created_at: "2026-07-04"
-updated_at: "2026-07-04"
+updated_at: "2026-07-16"
 metadata:
   type: "plan"
 ---
@@ -1147,3 +1147,22 @@ pattern. Considered and declined.
    small (a `fixtures/fuzz-corpus/` directory + a replay test harness, per Phase 8's design note).
    **TRIGGER:** Phase 8's own execution; this entry tracks that the design note gets written, not a
    separate task.
+7. **Patrick-directed addition 2026-07-16 (M6 completion triage)** — two items assigned to this
+   milestone by Patrick's own triage of the M6 completion review:
+   (1) **fr12 — `channel<number>` decimal128 send/recv marshalling design** (roadmap Capability
+   Ledger row, Idempotency-Key
+   `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr12: conduit-send-decimal128-marshalling`) is assigned
+   to THIS milestone so it rides the same design pass as channel close-semantics — one design head
+   for both. Not a bug today (compile-gated, unreachable); the assignment is a sequencing decision,
+   not a correctness fix.
+   (2) **fr13-fr17 — the never-drop-locals leak class** (per-iteration maybe/union heap-cell loop
+   leak + the shutdown-dropped trampoline staged decimal128 arg-cell leak; Idempotency-Key
+   `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr13-fr17: never-drop-locals-heap-cell-and-trampoline-leaks`)
+   is a named DESIGN INPUT to this plan's scope-drop cancellation model. Its root cause is the
+   compiler-wide missing scope-exit drop-insertion pass
+   (`docs/internal/scratchpad/SCRATCH-audit-2026-07-11-memory-safety.md`, finding M1 CRITICAL: no
+   drop-insertion pass exists at all — these two leaks are symptoms of that gap, not independent
+   bugs). The scope-drop design must not be finalized blind to this class. Whether the drop-story
+   work itself lands in M8 or its own milestone is a plan-review question to resolve at M8's
+   plan-review gate — this entry does not pre-decide that; it only ensures the design account for
+   the class.

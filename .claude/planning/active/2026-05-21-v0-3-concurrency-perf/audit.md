@@ -930,3 +930,50 @@ deferrals lifted as fourteen four-field payload entries** — the M6 plan's own 
 misstated it as "11 … ten"). No code touched. Nothing committed. Session-id
 `executor-2026-07-16-m6-phase8-fixloop-fr20-23` appended to the roadmap's frontmatter chain in the
 same action as this entry.
+
+## 2026-07-16 — Patrick's signed triage verdicts applied to the ten "NEEDS PATRICK'S CALL" Capability Ledger rows (human-directed amendment, not an executor decision)
+
+Patrick made the triage calls on all ten Capability Ledger rows that had carried "**Triage: NEEDS
+PATRICK'S CALL — not yet triaged.**" since the M6 completion review, based on a conductor analysis
+of which rows interact with M7 (optimizer pipeline) and M8 (concurrency completion). This entry
+records the application of those signed verdicts — the triage judgment itself is Patrick's, not
+this executor's.
+
+**Verdicts applied (both duplicate Capability Ledger tables, rows ~451-460 and ~520-529, kept in
+lockstep):**
+
+1. **fr23 — non-plain-ident background-spawn receivers** (Idempotency-Key `#8-fr23`): **BUG —
+   M7-gated.** The prior "latent, not confirmed-live" verdict was gathered under
+   `OptimizationLevel::None`; M7's optimizer pipeline shrinks/reuses stack-slot lifetimes — the
+   exact conditions that turn the latent raw-pointer ride into a live UAF. Owning milestone
+   reassigned from "flagged for Patrick's own MILESTONE-seal call, NOT auto-assigned" to **M7**
+   (`v0-3-m7-optimizer-pipeline`), Status → "scheduled — assigned to M7."
+2. **fr12 — conduit-send decimal128 marshalling** (`#8-fr12`): **NOT-a-bug today**
+   (compile-gated, unreachable) — assigned to **M8** so the send/recv marshalling design rides the
+   same design pass as the channel close-semantics redesign. Owning milestone → **M8**
+   (`v0-3-m8-concurrency-completion`), Status → "scheduled — assigned to M8."
+3. **fr13-fr17 — never-drop-locals class** (`#8-fr13-fr17`): **BUG (leak class)** — root cause is
+   the missing scope-exit drop-insertion pass
+   (`docs/internal/scratchpad/SCRATCH-audit-2026-07-11-memory-safety.md` finding M1 CRITICAL).
+   Owning milestone stays the drop-story TBD; M8's scope-drop cancellation design is now required to
+   treat this class as a named input.
+4. **The other 7 rows** — fr6 (`background.cpuBound` override), fr10 (dynamic-dispatch × suspension
+   predicate blindness), fr11 (`fixed<T>` PARAM iteration ICE), fr15-fr16 (Phase 1d polish minors),
+   fr20 (UFCS arg-validation gap + `array.remove` lowering), fr21 (narrowed-union background
+   receiver durable fix), fr22 (call-only large-copy Tier-3 warning parity): **defer per existing
+   TRIGGER — no M7/M8 interaction; not release-blocking.**
+
+**Plan amendments (both under Future Requirements / Revisit, marked as Patrick-directed additions
+2026-07-16):**
+
+- `2026-07-04-v0-3-m7-optimizer-pipeline/plan.md` — new Future Requirements item #9 tracking fr23:
+  the UAF-repro-under-optimized-pipeline gate/fix obligation, with the three repro call shapes and
+  the trigger (this plan's own Phase 2/3 optimizer wiring landing).
+- `2026-07-04-v0-3-m8-concurrency-completion/plan.md` — new Future Requirements item #7 tracking
+  (1) fr12's marshalling-design assignment and (2) fr13-fr17 as a named design input to the
+  scope-drop cancellation model, with the drop-story-milestone question left open for M8's own
+  plan-review gate.
+
+Session-id `executor-2026-07-16-patrick-triage-application` appended to the roadmap's frontmatter
+chain and to both amended plans' frontmatter chains in the same action as this entry. No code
+touched. Nothing committed.
