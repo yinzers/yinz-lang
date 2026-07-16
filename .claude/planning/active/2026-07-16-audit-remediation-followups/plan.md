@@ -44,3 +44,21 @@ Idempotency-Key: 2026-07-16-audit-remediation-two-lane#A2: crates-ynz-driver-tes
 - WHY: the current shape proves real concurrent overlap, which a synchronization-only rewrite might lose — a real test-design tradeoff owned by M3b-era work, not Lane A's bug-remediation scope.
 - COST: small — rework one fixture + two assertions (<1 session).
 - TRIGGER: next CI flake of this test, or the next plan touching M3b auto-parallelization tests.
+
+## 2026-07-16 — Deferral: contention-sensitive stdout-race test class (non-blocking — deferred by 2026-07-16-audit-remediation-two-lane#A3 at the phase boundary)
+
+Idempotency-Key: 2026-07-16-audit-remediation-two-lane#A3: crates-ynz-driver-tests-integration-rs-7346
+
+- WHAT: v03_m3g_background_fused_group_detach (integration.rs:7346) + v0_3_m4_p3_cross_copy_safe_and_byte_identical + v0_3_m4_p3_cross_give_generic_not_over_rejected all assert exact stdout while detached/parallel tasks can interleave under CPU contention (reproduced 18/20 under forced load; pass in isolation); redesign the class (sync-based output capture or per-stream separation).
+- WHY: the racy shape is what proves real concurrent overlap — a redesign needs care not to lose the property under test; owned by M3b/M3g-era work, not Lane A remediation.
+- COST: ~1 session for the class.
+- TRIGGER: next CI flake of any of the three, or the next plan touching auto-parallelization tests.
+
+## 2026-07-16 — Deferral: LSP caught-panic state-consistency + message redaction (non-blocking — deferred by 2026-07-16-audit-remediation-two-lane#A3 at the phase boundary)
+
+Idempotency-Key: 2026-07-16-audit-remediation-two-lane#A3: crates-ynz-lsp-src-server-rs-150
+
+- WHAT: (a) a caught mid-loop panic in multi-file ops (did_rename_files) can leave db/open_documents/disk partially patched for the session (pre-F3: process crash + client restart self-healed); (b) caught-panic messages round-trip unredacted into JSON-RPC error responses.
+- WHY: single-tenant LSP (developer's own editor+files); restart recovers; a transactional rollback for multi-file ops is a real design pass, not a fix-round rider.
+- COST: ~1 session (op-scoped rollback or re-index-on-caught-panic; message scrub).
+- TRIGGER: first field report of post-panic LSP inconsistency, or the LSP gaining multi-client/remote surface.

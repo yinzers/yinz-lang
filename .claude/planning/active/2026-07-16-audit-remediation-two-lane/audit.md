@@ -158,6 +158,74 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   project's own `cargo clippy --workspace` invocation (no `--tests`) — pre-existing, untouched by
   this phase, noted for whoever eventually runs `--all-targets` clippy.
 
+- `session_01CZ3fYLUXaJqfQnaPgUzwBQ` — 2026-07-16 — **CHARTER BREACH (A3 executor): self-committed
+  `e3ad1ba` bypassing the Step-8 CONFIRM commit gate.** The A3 executor sealed its own boundary commit
+  (correct message + Plan-Phase/test-scope trailers, mimicking A1/A2's shape) without cheap gates,
+  reviewer fan-out, or the human CONFIRM — the exact narrow-charter self-expansion
+  agent-charter-discipline forbids (producer sealing its own un-reviewed work). Remediation: commit
+  left intact (no amend/reset per git discipline; nothing pushed); full gate + fleet review run
+  retroactively over 881f6d6..e3ad1ba; any fixes land as honest follow-up commits sharing the #A3
+  trailer (8.3); Patrick's CONFIRM obtained retroactively. Lesson for the AAR: future executor
+  dispatches must carry an explicit "NEVER git commit — the conductor owns the commit gate" line
+  (A1/A2 dispatches omitted it and their executors correctly didn't commit; A3's inferred wrongly).
+
+- `2cbdf552-51aa-4528-8621-495bedc3e7b6` — 2026-07-16 — Phase A3 fix round (retroactive review
+  findings). **BLOCKER 1** (security, live-reproduced): `parse_type_with_depth`'s `Token::LBrace` arm
+  (anonymous inline shape type) parsed each field's type via a bare `self.parse_field_decl(...)` →
+  `self.parse_type()`, resetting depth to 0 on every nested field — bypassed both the 16-level
+  generic-nesting cap and the 256-level block cap. RED confirmed a genuine SIGABRT stack overflow at
+  depth 5,000 (`crates/ynz-driver/tests/parser_depth_guards.rs`); fixed by threading depth through
+  `parse_field_decl` (new `depth: u8` param) and a `parse_type_at_depth` extraction, so nested
+  anon-shape-type field types recurse at `depth + 1` and hit the existing 16-level cap's teaching
+  diagnostic. Swept every other `parse_type()`/`parse_type_with_depth` call site named by the
+  security reviewer (:755, :836, :1452, :1598, :3726, :3973/:4088/:4120 pre-fix line numbers) —
+  confirmed each is a legitimate fresh-root entry point (const/let type annotation, function param
+  type, return type, `shape X = ...` alias, contract signature) never reachable from inside type
+  parsing, so none needed threading. **BLOCKER 2:** F3's own panic-isolation test was tautological
+  (built its own inline `catch_unwind`, never touched `handle_request`/`main_loop`'s real dispatch).
+  Extracted `main_loop`'s per-message wrapping into testable `dispatch_request`/`dispatch_notification`
+  functions (returning a `DispatchOutcome` enum); added a `#[cfg(test)]`-only injected panic hook
+  (`$/ynzTestPanicHook`, compiled out of production builds — mirrors the `__testFallibleAsync`
+  internal-intrinsic precedent in `ynz-typeck`) so the rewritten test drives a REAL panic through the
+  ACTUAL dispatch path via `Connection::memory()`, asserts an `InternalError` response, then drives a
+  second ordinary `Shutdown` request through the same path and asserts it still succeeds. **BLOCKER
+  3:** `StatementNestingTooDeep` was hardcoded in `parser.rs` and "kept in sync by hand" with its
+  registry entry; added a generic `ynz_registry::diagnostic_template_parts` helper (mirrors
+  `lint_rule_diagnostic_parts`) and rendered the diagnostic from the registry at the firing site;
+  replaced the brittle `d.what.starts_with("Nesting too deep")` dedup with a typed
+  `nesting_too_deep_reported: bool` flag; fixed the registry template text (WHY: dropped "one stack
+  frame per nested block" internals jargon; WHAT-INSTEAD: dropped the "Golden Rule 7" project-internal
+  citation per teaching-surfaces.md). **Should-fixes landed:** #4 extracted the duplicated flat
+  brace-skip loop (`parse_block_depth_overflow` + the `Token::Shape|Token::Base` in-function-body
+  recovery arm) into one shared `skip_balanced_braces` helper; #5 guarded `range_formatting_response`
+  against an inverted LSP range (`range.end` before `range.start`) — RED-confirmed the real panic
+  ("byte range starts at 51 but ends at 0") before adding the `end_byte < start_byte` guard + a
+  `window/showMessage` signal, same pattern as the sibling out-of-bounds cases; #6 aligned
+  `ynz_string_codepoint_at`'s malloc-null branch to abort-on-OOM (it was a sibling allocation the F8
+  sweep missed — its null return was a documented OOB sentinel for a DIFFERENT branch, so aborting on
+  OOM removes the conflation without touching the real OOB case); #7 replaced `load_project_config`'s
+  silent `continue` on a no-`=` line with an "Unrecognized line in yinz.toml" warning; #8 swept every
+  `SCRATCH-audit-2026-07-11-*.md` path citation out of `src/` and test comments across
+  `ynz-parser`/`ynz-lsp`/`ynz-driver`/`ynz-runtime`/`ynz-watch`/`ynz-registry` (those files are
+  deleted by A5/B5 — the paths would dangle) and dropped bare finding-ID labels (F2/F3/F6/F7/F8/
+  BLOCKER-N) from `src/` comments specifically, keeping them only in test WHY comments per
+  comments.md — substantive WHY text preserved throughout. **#9 (security minor) deferred, not
+  fixed, per the dispatch's own instruction:** panic-message redaction in LSP error responses — left
+  as-is; recorded in the followups plan (see below). **FRAGO 004 and FRAGO 005 applied** to `plan.md`'s
+  A3 body text (both were already classified/ratified in the FRAGO log below, awaiting the
+  `plan.md`-body-edit half of the seam): step 2's F3 citation corrected to `server.rs` only; the
+  exit-criteria line amended with F8's recorded no-live-OOM-repro exception. **Two deferrals appended**
+  to `2026-07-16-audit-remediation-followups/plan.md` (idempotency-keyed, confirmed absent before
+  appending): the M3b/M3g-era contention-sensitive stdout-race test class
+  (`crates-ynz-driver-tests-integration-rs-7346`), and LSP caught-panic state-consistency +
+  message-redaction (`crates-ynz-lsp-src-server-rs-150`). **Verification:** `cargo test -p ynz-parser
+  -p ynz-lsp -p ynz-driver -p ynz-watch -p ynz-runtime` green (15 test binaries, 0 failed); `cargo
+  test -p ynz-codegen --test golden` 34/34 unmoved; `cargo fmt --all -- --check` clean; `cargo clippy
+  --workspace -- -D warnings` clean; `ynz-runtime` rebuilt `--release` first (static-lib dependency),
+  then `ynz-driver`/`ynz-lsp` rebuilt `--release` (R9 — `ynz-watch` has no separate binary; its fix
+  ships inside the `ynz` binary via the `watch` subcommand, already covered by the `ynz-driver`
+  rebuild). No git commit made — left for the conductor's Step-8 CONFIRM gate.
+
 ## FRAGO log
 
 ## FRAGO 001 — 2026-07-16 — session-id: session_01CZ3fYLUXaJqfQnaPgUzwBQ
@@ -187,6 +255,21 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   first-cut boolean reproduced exactly this 1-ULP wrong-money class. Same function, same threading
   path, strictly more information; locked by three vectors.
 - **Applied by:** re-dispatched executor rewrites A2 step 2 in plan.md.
+
+## FRAGO 004 — 2026-07-16 — session-id: session_01CZ3fYLUXaJqfQnaPgUzwBQ
+- **Phase:** A3. **Classified:** deviation-judge (agent a-9f3764f) — JUSTIFIED, risk-neutral → auto-apply + log.
+- **Delta:** A3 step 2's F3 citation "server.rs:126 + main.rs" corrected: only server.rs needed editing —
+  Rust's default panic hook already logs to stderr (language guarantee) and the catch_unwind handler adds
+  a targeted eprintln; main.rs stays the 3-line stub.
+- **Applied by:** re-dispatched executor corrects the citation in plan.md.
+
+## FRAGO 005 — 2026-07-16 — session-id: session_01CZ3fYLUXaJqfQnaPgUzwBQ
+- **Phase:** A3. **Classified:** deviation-judge — JUSTIFIED, risk-neutral → auto-apply + log.
+- **Delta:** A3's blanket "F2–F8 landed with tests" exit criterion amended with the recorded F8 exception:
+  no live-OOM repro test (INFO severity per the audit; parity with every sibling ynz_alloc site's
+  no-test posture; forcing malloc-NULL needs privileged overcommit setup the suite lacks —
+  verification.md mechanical-fix escape hatch, verified not asserted).
+- **Applied by:** re-dispatched executor amends the exit-criteria line in plan.md.
 
 ## Context-segment log
 (none yet)

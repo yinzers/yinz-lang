@@ -203,13 +203,13 @@ fn kill_gracefully_impl(child: &mut Child, grace_ms: u64) {
         }
     }
 
-    // Grace period expired or not provided — SIGKILL. F6 (SCRATCH-audit-2026-07-11-
-    // non-concurrency.md): escalate with `killpg` (mirroring the SIGTERM call above),
-    // not a bare `child.kill()` — that only signals the direct child PID, not the
-    // process group. A child that ignores SIGTERM AND has spawned grandchildren would
-    // leak those grandchildren on this path even though the doc comment above (and
-    // `ChildHandle`'s own struct-level invariant) claims the group-kill invariant holds
-    // for the whole kill_gracefully lifecycle, not just the SIGTERM half of it.
+    // Grace period expired or not provided — SIGKILL. Escalate with `killpg`
+    // (mirroring the SIGTERM call above), not a bare `child.kill()` — that only signals
+    // the direct child PID, not the process group. A child that ignores SIGTERM AND has
+    // spawned grandchildren would leak those grandchildren on this path even though the
+    // doc comment above (and `ChildHandle`'s own struct-level invariant) claims the
+    // group-kill invariant holds for the whole kill_gracefully lifecycle, not just the
+    // SIGTERM half of it.
     if let Err(e) = killpg(pgid, Signal::SIGKILL) {
         if e != nix::errno::Errno::ESRCH {
             eprintln!("ynz watch: could not send SIGKILL to child group: {e}");

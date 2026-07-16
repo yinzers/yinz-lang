@@ -84,12 +84,24 @@ pub fn load_project_config(root: &Path, diags: &mut DiagnosticBucket) -> Project
         if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
             continue;
         }
-        // F5 (SCRATCH-audit-2026-07-11-non-concurrency.md): split on `=` and match the
-        // trimmed KEY exactly, rather than `strip_prefix`-ing the whole line — the old
-        // `line.strip_prefix("entry")` matched `entrypoint_foo = "x"` and
-        // `line.strip_prefix("version")` matched `versionabc = ...` as if they were the
-        // real key, silently mis-parsing any key that merely starts with one of ours.
+        // Split on `=` and match the trimmed KEY exactly, rather than
+        // `strip_prefix`-ing the whole line — `line.strip_prefix("entry")` would match
+        // `entrypoint_foo = "x"` and `line.strip_prefix("version")` would match
+        // `versionabc = ...` as if they were the real key, silently mis-parsing any key
+        // that merely starts with one of ours.
         let Some((key_part, value_part)) = line.split_once('=') else {
+            // A line with no `=` at all (garbage text, a malformed entry, a typo
+            // missing the `=`) used to be silently skipped here with zero signal —
+            // surface it instead of dropping it on the floor, mirroring the
+            // "Unknown field" warning below for the sibling malformed-input case.
+            diags.push(Diagnostic::warning(
+                SourceSpan::new(toml_path.display().to_string(), 0, 0),
+                format!("Unrecognized line in yinz.toml: `{line}` — ignored."),
+                "Fields use `key = \"value\"` — for example `entry = \"entrypoint.ynz\"`.",
+                "This line has no `=`, so it isn't a recognizable `key = value` field. \
+                 It's ignored rather than treated as an error, since a future Yinz version \
+                 may use a different line shape here.",
+            ));
             continue;
         };
         let key = key_part.trim();
@@ -141,12 +153,12 @@ fn parse_toml_string(rest: &str) -> Option<String> {
         .trim_start_matches(|c: char| c.is_whitespace() || c == '=')
         .trim();
 
-    // F4 (SCRATCH-audit-2026-07-11-non-concurrency.md): a lone quote character is an
-    // unterminated/malformed value (`entry = "` trims down to a single `"` byte) —
-    // treat it as invalid rather than falling through to the quote-strip below, where
-    // that single byte satisfies BOTH `starts_with('"')` and `ends_with('"')` and
-    // `&rest[1..rest.len() - 1]` becomes the invalid byte range `1..0` — a panic that
-    // presents a user's yinz.toml typo as a compiler-bug ICE banner.
+    // A lone quote character is an unterminated/malformed value (`entry = "` trims
+    // down to a single `"` byte) — treat it as invalid rather than falling through to
+    // the quote-strip below, where that single byte satisfies BOTH `starts_with('"')`
+    // and `ends_with('"')` and `&rest[1..rest.len() - 1]` becomes the invalid byte
+    // range `1..0` — a panic that presents a user's yinz.toml typo as a compiler-bug
+    // ICE banner.
     if rest == "\"" || rest == "'" {
         return None;
     }
@@ -298,9 +310,8 @@ mod tests {
         std::fs::write(dir.join("yinz.toml"), contents).expect("write yinz.toml");
     }
 
-    // F4 (SCRATCH-audit-2026-07-11-non-concurrency.md): an unterminated quoted value
-    // (`entry = "`) must never panic — it must be treated as an invalid/empty value,
-    // falling back to the default entry.
+    // F4: an unterminated quoted value (`entry = "`) must never panic — it must be
+    // treated as an invalid/empty value, falling back to the default entry.
     #[test]
     fn f4_unterminated_double_quote_does_not_panic() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -328,9 +339,9 @@ mod tests {
         assert_eq!(parse_toml_string("= '"), None);
     }
 
-    // F5 (SCRATCH-audit-2026-07-11-non-concurrency.md): a key that merely starts with
-    // a real key name (`entrypoint_foo`, `versionabc`) must NOT be treated as that key
-    // — `strip_prefix`-style prefix matching silently mis-parsed these.
+    // F5: a key that merely starts with a real key name (`entrypoint_foo`, `versionabc`)
+    // must NOT be treated as that key — `strip_prefix`-style prefix matching silently
+    // mis-parsed these.
     #[test]
     fn f5_prefix_key_is_not_matched_as_entry() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -370,5 +381,27 @@ mod tests {
         assert_eq!(cfg.entry, "main.ynz");
         assert_eq!(cfg.name, "demo");
         assert_eq!(cfg.version, "1.2.3");
+    }
+
+    // A line with no `=` at all used to be silently skipped with zero signal — it must
+    // now surface a warning (falling back to defaults, same as any other malformed
+    // field).
+    #[test]
+    fn a_line_with_no_equals_sign_emits_a_warning() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_toml(dir.path(), "this is not a valid toml line\n");
+        let mut diags = DiagnosticBucket::new();
+        let cfg = load_project_config(dir.path(), &mut diags);
+        assert_eq!(
+            cfg.entry, "entrypoint.ynz",
+            "malformed line falls back to defaults"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.what.contains("Unrecognized line in yinz.toml")),
+            "expected an 'Unrecognized line' warning, got: {:?}",
+            diags.iter().map(|d| &d.what).collect::<Vec<_>>()
+        );
     }
 }

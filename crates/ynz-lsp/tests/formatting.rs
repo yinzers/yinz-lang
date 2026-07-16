@@ -193,6 +193,42 @@ fn test_range_formatting_parse_error_returns_empty_vec() {
     );
 }
 
+#[test]
+fn test_range_formatting_inverted_range_returns_empty_vec_and_show_message() {
+    // WHY (SHOULD-FIX #5, sibling of F7): a client can send an inverted range
+    // (`range.end` before `range.start` — malformed input, or stale offsets racing a
+    // concurrent edit). `source[start_byte..end_byte]` would panic on that; the guard
+    // must reject it explicitly instead — no panic, an empty edit vec, and a visible
+    // `window/showMessage` signal, same pattern as the other out-of-bounds cases.
+    // NOTE: source must be NON-canonical (`formatted_source != source`) — a canonical
+    // source short-circuits at the "already canonical" check before ever reaching the
+    // byte-slice this guard protects, silently passing without exercising the bug.
+    let src = "function entrypoint() -> nothing {\n  let x   =  42\n}\n";
+    let (state, uri) = state_single("/tmp/ynz_fmt_range_inverted.ynz", src);
+    let range = Range {
+        start: Position {
+            line: 2,
+            character: 0,
+        },
+        end: Position {
+            line: 0,
+            character: 0,
+        },
+    };
+    let (sender, receiver) = spy_sender();
+    // Must not panic.
+    let edits = range_formatting_response(&state, &uri, range, &sender);
+    assert!(
+        edits.is_empty(),
+        "an inverted range must produce zero edits, not a panic"
+    );
+    let notifications = drain_notifications(&receiver);
+    assert!(
+        notifications.contains(&"window/showMessage".to_string()),
+        "expected a window/showMessage notification for the rejected inverted range, got: {notifications:?}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Performance
 // ─────────────────────────────────────────────────────────────────────────────

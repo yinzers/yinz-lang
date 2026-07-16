@@ -332,9 +332,10 @@ escape hatch, not a bug-response). Full detail in `audit.md` Session log.
      `[[diagnostic_template]]` registry entry (see `### Feature Registry Entries`). **New error class →
      its gallery trigger is GATED to Lane B (decision D3) — flag the debt in ¶ Future Requirements.**
      **CHECKPOINT** — F2 depth-cap + diagnostic landed, RED deep-nest test now GREEN with a message.
-  2. **F3** `ynz-lsp/src/server.rs:126` + `main.rs` — wrap each request/notification handler in
+  2. **F3** `ynz-lsp/src/server.rs:126` — wrap each request/notification handler in
      `catch_unwind(AssertUnwindSafe)` so one ICE returns an error instead of killing the LSP; log the
-     caught panic (observability).
+     caught panic (observability). **(FRAGO 004, `audit.md`: only `server.rs` needs editing — Rust's
+     default panic hook already logs to stderr, so `main.rs` stays the 3-line stub.)**
   3. **F7** `ynz-lsp/src/position.rs:96-103` — reject non-`is_char_boundary` positions (per decision D4;
      also covered by F3's catch_unwind).
      **CHECKPOINT** — LSP survives an injected handler panic + a mid-codepoint position; server stays up.
@@ -347,10 +348,13 @@ escape hatch, not a bug-response). Full detail in `audit.md` Session log.
      decision D5. **Author it so Lane B's M1 drop pass can never free a static buffer** — record the
      M1/M2/F8 coordination note in Phase B3's text (done there).
      **CHECKPOINT** — driver/watch/runtime fixes GREEN; `--release` rebuild of ynz-watch confirmed.
-- **Exit criteria:** F2–F8 landed with tests; F2's diagnostic-template registry entry added; **all three
-  consumer-mounted binaries rebuilt `--release` this session** — `ynz-watch` (F6), `ynz-driver` (F4/F5),
-  and `ynz-lsp` (F3/F7) — so every fix reaches `target/release` (R9; CLAUDE.md 2026-07-06); full suite
-  green; golden.rs zero movement.
+- **Exit criteria:** F2–F8 landed with tests — **except F8, which per FRAGO 005 (`audit.md`) carries a
+  recorded no-live-OOM-repro exception (INFO severity; parity with every sibling `ynz_alloc` site's
+  no-test posture; forcing a malloc-NULL failure needs privileged overcommit setup the suite lacks —
+  verification.md mechanical-fix escape hatch, verified not asserted)**; F2's diagnostic-template
+  registry entry added; **all three consumer-mounted binaries rebuilt `--release` this session** —
+  `ynz-watch` (F6), `ynz-driver` (F4/F5), and `ynz-lsp` (F3/F7) — so every fix reaches `target/release`
+  (R9; CLAUDE.md 2026-07-06); full suite green; golden.rs zero movement.
 - **Reviewer fan-out:** code-reviewer + security (untrusted-input surface) + test-quality + rules-compliance.
 - **Model tag:** `(coding, standard, medium)`
 

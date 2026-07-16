@@ -1552,10 +1552,10 @@ pub unsafe extern "C" fn ynz_string_from_static(ptr: *const u8, len: i64) -> *co
     let size = len as usize + 1; // +1 for null terminator
     let buf = malloc(size) as *mut u8;
     if buf.is_null() {
-        // F8 (SCRATCH-audit-2026-07-11-non-concurrency.md): abort on OOM like every
-        // other allocation site in this runtime (`ynz_alloc`, `ynz_error_new`, map/array
-        // allocs) — Yinz programs cannot recover from OOM. Returning a pointer to a
-        // STATIC empty string here was inconsistent with that policy AND a footgun:
+        // Abort on OOM like every other allocation site in this runtime (`ynz_alloc`,
+        // `ynz_error_new`, map/array allocs) — Yinz programs cannot recover from OOM.
+        // Returning a pointer to a STATIC empty string here was inconsistent with that
+        // policy AND a footgun:
         // codegen assumes every string pointer this family returns is heap-owned and
         // freeable, so a caller that later `ynz_free`s (or drops) this "string" would
         // free a static buffer — undefined behavior.
@@ -1726,7 +1726,7 @@ pub unsafe extern "C" fn ynz_string_concat(a: *const u8, b: *const u8) -> *const
     let total = a_str.len() + b_str.len() + 1;
     let buf = malloc(total) as *mut u8;
     if buf.is_null() {
-        // F8: abort on OOM — see ynz_string_from_static for the full rationale
+        // Abort on OOM — see ynz_string_from_static for the full rationale
         // (consistent OOM policy across the runtime; no free-of-static hazard).
         std::process::abort();
     }
@@ -1780,7 +1780,16 @@ pub unsafe extern "C" fn ynz_string_codepoint_at(s: *const u8, n: i64) -> *const
             let len = encoded.len();
             let heap = malloc(len + 1) as *mut u8;
             if heap.is_null() {
-                return std::ptr::null();
+                // Abort on OOM — see ynz_string_from_static for the full rationale
+                // (consistent OOM policy across the runtime; no free-of-static hazard).
+                // This site was a sibling allocation the runtime's original OOM-policy
+                // sweep missed: it silently returned null on malloc failure, which is a
+                // documented sentinel for a DIFFERENT case (the `None` arm above, `n`
+                // out of bounds) — conflating the two would make an out-of-memory
+                // failure indistinguishable from a normal out-of-bounds index to every
+                // caller. Aborting removes the conflation without touching the real OOB
+                // sentinel.
+                std::process::abort();
             }
             std::ptr::copy_nonoverlapping(encoded.as_ptr(), heap, len);
             *heap.add(len) = 0;
@@ -2070,7 +2079,7 @@ pub unsafe extern "C" fn ynz_string_builder_finalize(builder: *mut u8) -> *const
     let len = vec.len();
     let buf = malloc(len) as *mut u8;
     if buf.is_null() {
-        // F8: abort on OOM — see ynz_string_from_static for the full rationale
+        // Abort on OOM — see ynz_string_from_static for the full rationale
         // (consistent OOM policy across the runtime; no free-of-static hazard).
         std::process::abort();
     }
@@ -2093,7 +2102,7 @@ fn heap_string_from_str(s: &str) -> *const u8 {
     let len = bytes.len();
     let buf = unsafe { malloc(len + 1) as *mut u8 };
     if buf.is_null() {
-        // F8: abort on OOM — see ynz_string_from_static for the full rationale
+        // Abort on OOM — see ynz_string_from_static for the full rationale
         // (consistent OOM policy across the runtime; no free-of-static hazard).
         std::process::abort();
     }

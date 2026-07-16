@@ -100,6 +100,30 @@ pub fn diagnostic_template_lookup(kind_name: &str) -> Option<&'static Diagnostic
         .find(|e| e.kind_name == kind_name)
 }
 
+/// Render the three diagnostic parts (WHAT, WHAT-INSTEAD, WHY) for a `[[diagnostic_template]]`
+/// entry, with `{placeholder}` substitution from `vars`.
+///
+/// Mirrors [`lint_rule_diagnostic_parts`] for the `[[diagnostic_template]]` table: a firing
+/// site calls this with the entry's `kind_name` plus its per-site vars and gets the canonical
+/// teaching text back, so the text has exactly one home (the TOML entry) instead of a
+/// hand-duplicated copy at the call site (`StatementNestingTooDeep` was hardcoded in
+/// `ynz-parser` and "kept in sync by hand" with this entry before this helper existed).
+///
+/// Returns `None` when no `[[diagnostic_template]]` entry exists for `kind_name`.
+/// Panics (via [`render_template`]) on an unknown `{placeholder}` key — a template/firing-site
+/// mismatch is a compiler bug, not a user error.
+pub fn diagnostic_template_parts(
+    kind_name: &str,
+    vars: &std::collections::HashMap<&str, &str>,
+) -> Option<(String, String, String)> {
+    let entry = diagnostic_template_lookup(kind_name)?;
+    Some((
+        render_template(entry.what_template, vars),
+        render_template(entry.what_instead_template, vars),
+        render_template(entry.why_template, vars),
+    ))
+}
+
 pub fn lint_rules() -> impl Iterator<Item = &'static LintRuleEntry> {
     LINT_RULES.iter()
 }

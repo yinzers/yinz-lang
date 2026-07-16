@@ -170,6 +170,20 @@ pub fn range_formatting_response(
         }
     };
 
+    // SHOULD-FIX #5 (sibling of F7's fix): a client can send an inverted range
+    // (`range.end` before `range.start`) — malformed input, or stale offsets racing a
+    // concurrent edit. `source[start_byte..end_byte]` below would panic on that (slice
+    // index starts at X but ends at Y < X); reject it explicitly instead of relying on
+    // `catch_unwind` to contain a panic that shouldn't fire at all.
+    if end_byte < start_byte {
+        show_message(
+            sender,
+            MessageType::INFO,
+            "ynz-fmt: range formatting: the selection's end is before its start — try reloading the file.",
+        );
+        return Vec::new();
+    }
+
     // Format the whole file — the Yinz grammar is file-scoped, so partial
     // formatting is always a full-file pass.
     let formatted_source = match ynz_fmt::format(source) {

@@ -117,12 +117,12 @@ fn spawn_kill_respawn_via_child_handle() {
     drop(second);
 }
 
-// F6 (SCRATCH-audit-2026-07-11-non-concurrency.md): the SIGKILL escalation path in
-// `kill_gracefully_impl` must hit the WHOLE process group (`killpg`), not just the
-// direct child (`child.kill()`). Before the fix, a child that ignores SIGTERM AND has
-// spawned a grandchild that also ignores SIGTERM would leak that grandchild once the
-// grace period expired and escalation fired — the doc comment's group-kill invariant
-// held for the SIGTERM half only, silently breaking for the SIGKILL half.
+// F6: the SIGKILL escalation path in `kill_gracefully_impl` must hit the WHOLE process
+// group (`killpg`), not just the direct child (`child.kill()`). Before the fix, a child
+// that ignores SIGTERM AND has spawned a grandchild that also ignores SIGTERM would
+// leak that grandchild once the grace period expired and escalation fired — the doc
+// comment's group-kill invariant held for the SIGTERM half only, silently breaking for
+// the SIGKILL half.
 //
 // This test spawns `/bin/sh -c '...'` (the direct child, `setsid`'d by ChildHandle) that
 // itself traps SIGTERM AND backgrounds a subshell grandchild that ALSO traps SIGTERM —

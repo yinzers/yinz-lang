@@ -99,14 +99,15 @@ impl LineTable {
                 if ch > line_text.len() {
                     return None;
                 }
-                // F7 (SCRATCH-audit-2026-07-11-non-concurrency.md): a `positionEncoding:
-                // utf-8` client is trusted to send a byte count, but a buggy or
-                // adversarial client can send a mid-character byte offset. The utf-16
-                // branch below can never land off a char boundary (it walks `chars()`),
-                // so this is the one place a non-boundary offset can escape — and this
-                // offset flows into consumers that slice `&str` (formatting.rs,
-                // completion.rs, semantic_tokens.rs), where a mid-char slice panics and
-                // kills the whole LSP process (F3). Reject it here instead.
+                // A `positionEncoding: utf-8` client is trusted to send a byte count,
+                // but a buggy or adversarial client can send a mid-character byte
+                // offset. The utf-16 branch below can never land off a char boundary
+                // (it walks `chars()`), so this is the one place a non-boundary offset
+                // can escape — and this offset flows into consumers that slice `&str`
+                // (formatting.rs, completion.rs, semantic_tokens.rs), where a mid-char
+                // slice panics — the per-request isolation wrapper would catch it as an
+                // InternalError, but reject it here so the failure mode stays explicit
+                // and no request is burned on an avoidable panic.
                 if !line_text.is_char_boundary(ch) {
                     return None;
                 }
@@ -227,12 +228,14 @@ mod tests {
         );
     }
 
-    // F7 (SCRATCH-audit-2026-07-11-non-concurrency.md): a `positionEncoding: utf-8`
-    // client sending a mid-character byte offset must be rejected (None), never
-    // returned verbatim — a mid-char offset flowing into a `&str` slice elsewhere
-    // (formatting.rs, completion.rs, semantic_tokens.rs) panics and kills the LSP.
-    // "✓" is a 3-byte UTF-8 char at bytes 0..3; character 1 (utf-8 byte-count
-    // encoding) lands at byte 1 — the MIDDLE of that character, not a boundary.
+    // F7: a `positionEncoding: utf-8` client sending a mid-character byte offset must
+    // be rejected (None), never returned verbatim — a mid-char offset flowing into a
+    // `&str` slice elsewhere (formatting.rs, completion.rs, semantic_tokens.rs) would
+    // otherwise panic (caught as an InternalError by the per-request isolation wrapper,
+    // but rejecting it here keeps the failure mode explicit instead of burning a
+    // request on an avoidable panic). "✓" is a 3-byte UTF-8 char at bytes 0..3;
+    // character 1 (utf-8 byte-count encoding) lands at byte 1 — the MIDDLE of that
+    // character, not a boundary.
     #[test]
     fn mid_char_utf8_offset_rejected() {
         let t = "✓b";
