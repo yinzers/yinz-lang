@@ -1,0 +1,22 @@
+// RED fixture (v0.3-M7 Phase 1): the SAME value passed as both a `share` and a `lend`
+// argument in one call — typeck accepts the aliasing call with no diagnostic, while
+// codegen's `declare_function` claims `noalias` on BOTH parameters. The claim is false
+// for this call: under an optimizing pipeline the `src.value` load is hoisted past the
+// aliased `dst.value = 5` store (they "cannot" alias per the attribute), so the read
+// returns the stale pre-call value (prints 1 instead of 5).
+//
+// Expected (semantic / O0) output: 5
+shape Box {
+  value: int
+}
+
+function relay(share src: Box, lend dst: Box) -> nothing {
+  dst.value = 5
+  dst.value = src.value
+}
+
+function entrypoint() -> nothing {
+  let h: Box = { value: 1 }
+  relay(h, h)
+  print(h.value.toString())
+}
