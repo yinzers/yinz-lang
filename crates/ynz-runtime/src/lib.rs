@@ -680,8 +680,13 @@ pub struct YnzMap {
 }
 
 /// THE value-slot address derivation: `vals + idx * elem_size`. Every read and
-/// write of a value cell routes through this one helper (authoritative-derivation
-/// — no second `vals.add(...)` arithmetic anywhere in the map runtime).
+/// write of a value cell against the map's OWN `vals` field routes through this
+/// one helper (authoritative-derivation — no second derivation of the
+/// value-slot address against the map's own `vals` field). `map_grow_int` /
+/// `map_grow_str` compute raw destination addresses into a NEW, not-yet-installed
+/// `vals` buffer during growth — that's a different field, not a second
+/// derivation of this one, and `val_slot` can't address a buffer that isn't
+/// installed on the map yet.
 unsafe fn val_slot(map: *const YnzMap, idx: usize) -> *mut u8 {
     (*map).vals.add(idx * (*map).elem_size as usize)
 }
@@ -731,10 +736,22 @@ pub unsafe extern "C" fn ynz_map_new(elem_size: i64) -> *mut YnzMap {
     map_alloc(INITIAL_MAP_CAPACITY, elem_size)
 }
 
-unsafe fn find_slot(map: *const YnzMap, hash: u64, key: i64) -> Option<usize> {
-    let cap = (*map).capacity as usize;
+/// THE bucket-math derivation shared by `find_slot` and `find_slot_str`: the h2
+/// control byte and starting probe index, both derived from the same hash under
+/// the same capacity. Authoritative-derivation choke point (per
+/// `.claude/rules/authoritative-derivation.md`) — both probes call this ONE
+/// helper instead of hand-duplicating the `hash & 0x7f` / `(hash >> 7) & (cap-1)`
+/// arithmetic, so the two probes can never silently drift apart.
+#[inline(always)]
+fn h2_and_start(hash: u64, cap: usize) -> (u8, usize) {
     let h2 = (hash & 0x7f) as u8;
     let start = (hash >> 7) as usize & (cap - 1);
+    (h2, start)
+}
+
+unsafe fn find_slot(map: *const YnzMap, hash: u64, key: i64) -> Option<usize> {
+    let cap = (*map).capacity as usize;
+    let (h2, start) = h2_and_start(hash, cap);
     let mut idx = start;
     loop {
         let ctrl = *(*map).ctrl.add(idx);
@@ -751,9 +768,38 @@ unsafe fn find_slot(map: *const YnzMap, hash: u64, key: i64) -> Option<usize> {
     }
 }
 
+/// THE string-key slot probe: hash-bucket probing with CONTENT equality
+/// (`cstr_eq_raw`) at candidate slots. Mirrors `find_slot`'s structure exactly —
+/// same h2 filter, same wraparound, same `CTRL_EMPTY` termination — differing only
+/// in the key comparison (stored pointers compared by string content, since equal
+/// content always produces an equal `ynz_siphash_str` hash and therefore an equal
+/// h2). Every string-key lookup (`ynz_map_get_str`, `ynz_map_set_str`'s overwrite
+/// check, `ynz_map_iter_get_str`) routes through this one helper — no second scan
+/// (authoritative-derivation).
+///
+/// Time: O(1) expected, O(cap) worst case. Space: O(1).
+unsafe fn find_slot_str(map: *const YnzMap, hash: u64, key: *const u8) -> Option<usize> {
+    let cap = (*map).capacity as usize;
+    let (h2, start) = h2_and_start(hash, cap);
+    let mut idx = start;
+    loop {
+        let ctrl = *(*map).ctrl.add(idx);
+        if ctrl == CTRL_EMPTY {
+            return None;
+        }
+        if ctrl == h2 && cstr_eq_raw(*(*map).keys.add(idx) as *const u8, key) {
+            return Some(idx);
+        }
+        idx = (idx + 1) & (cap - 1);
+        if idx == start {
+            return None;
+        }
+    }
+}
+
 unsafe fn find_insert_slot(map: *const YnzMap, hash: u64) -> usize {
     let cap = (*map).capacity as usize;
-    let mut idx = (hash >> 7) as usize & (cap - 1);
+    let (_h2, mut idx) = h2_and_start(hash, cap);
     let mut probes = 0usize;
     loop {
         let ctrl = *(*map).ctrl.add(idx);
@@ -806,8 +852,7 @@ unsafe fn map_grow_int(map: *mut YnzMap) {
         }
         let k = *(*map).keys.add(i);
         let hash = ynz_siphash_i64(k);
-        let h2 = (hash & 0x7f) as u8;
-        let mut idx = (hash >> 7) as usize & (new_cap as usize - 1);
+        let (h2, mut idx) = h2_and_start(hash, new_cap as usize);
         while *new_ctrl.add(idx) != CTRL_EMPTY {
             idx = (idx + 1) & (new_cap as usize - 1);
         }
@@ -850,8 +895,7 @@ unsafe fn map_grow_str(map: *mut YnzMap) {
         }
         let k = *(*map).keys.add(i);
         let hash = ynz_siphash_str(k as *const u8);
-        let h2 = (hash & 0x7f) as u8;
-        let mut idx = (hash >> 7) as usize & (new_cap as usize - 1);
+        let (h2, mut idx) = h2_and_start(hash, new_cap as usize);
         while *new_ctrl.add(idx) != CTRL_EMPTY {
             idx = (idx + 1) & (new_cap as usize - 1);
         }
@@ -943,20 +987,17 @@ pub unsafe extern "C" fn ynz_map_get(map: *const YnzMap, key: i64, out: *mut u8)
 #[no_mangle]
 pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out: *mut u8) -> i64 {
     let elem_size = (*map).elem_size;
-    let cap = (*map).capacity as usize;
-    for i in 0..cap {
-        let ctrl = *(*map).ctrl.add(i);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
-            continue;
+    let hash = ynz_siphash_str(key);
+    match find_slot_str(map, hash, key) {
+        Some(idx) => {
+            std::ptr::copy_nonoverlapping(val_slot(map, idx), out, elem_size as usize);
+            1
         }
-        let stored_ptr = *(*map).keys.add(i) as *const u8;
-        if cstr_eq_raw(stored_ptr, key) {
-            std::ptr::copy_nonoverlapping(val_slot(map, i), out, elem_size as usize);
-            return 1;
+        None => {
+            std::ptr::write_bytes(out, 0, elem_size as usize);
+            0
         }
     }
-    std::ptr::write_bytes(out, 0, elem_size as usize);
-    0
 }
 
 /// Set a key-value pair with an i64 key: copies `elem_size` bytes from `src` into
@@ -982,7 +1023,7 @@ pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, src: *const u8)
         std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
         return;
     }
-    let h2 = (hash & 0x7f) as u8;
+    let (h2, _) = h2_and_start(hash, (*map).capacity as usize);
     let idx = find_insert_slot(map, hash);
     *(*map).ctrl.add(idx) = h2;
     *(*map).keys.add(idx) = key;
@@ -1008,34 +1049,13 @@ pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, src: 
         map_grow_str(map);
     }
     let elem_size = (*map).elem_size;
-    let cap = (*map).capacity as usize;
-    for i in 0..cap {
-        let ctrl = *(*map).ctrl.add(i);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
-            continue;
-        }
-        let stored = *(*map).keys.add(i) as *const u8;
-        if cstr_eq_raw(stored, key) {
-            std::ptr::copy_nonoverlapping(src, val_slot(map, i), elem_size as usize);
-            return;
-        }
-    }
     let hash = ynz_siphash_str(key);
-    let h2 = (hash & 0x7f) as u8;
-    let mut idx = (hash >> 7) as usize & (cap - 1);
-    let mut probes = 0usize;
-    while *(*map).ctrl.add(idx) != CTRL_EMPTY && *(*map).ctrl.add(idx) != CTRL_DELETED {
-        probes += 1;
-        if probes >= cap {
-            eprintln!(
-                "RUNTIME ERROR: Map full and unable to grow. \
-                      This should be impossible — please file a compiler bug with \
-                      the program that triggered it."
-            );
-            std::process::abort();
-        }
-        idx = (idx + 1) & (cap - 1);
+    if let Some(idx) = find_slot_str(map, hash, key) {
+        std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
+        return;
     }
+    let (h2, _) = h2_and_start(hash, (*map).capacity as usize);
+    let idx = find_insert_slot(map, hash);
     *(*map).ctrl.add(idx) = h2;
     *(*map).keys.add(idx) = key as i64;
     std::ptr::copy_nonoverlapping(src, val_slot(map, idx), elem_size as usize);
@@ -1098,10 +1118,17 @@ pub unsafe extern "C" fn ynz_map_iter_get(
 /// the key POINTER (cast to i64) into `key_out`, copies `elem_size` value bytes
 /// into `val_out`, and returns the has-flag.
 ///
-/// The slot scan compares stored key bits by pointer IDENTITY (`keys[i] == key_ptr`)
-/// — the insertion-order buffer records the exact pointer stored in the slot, so
-/// identity is sufficient AND cheaper than a content compare. Do NOT switch this
-/// to `cstr_eq_raw`.
+/// The slot lookup DELEGATES to `find_slot_str` (one string-key probe choke
+/// point, no second derivation of the scan logic — same contract as
+/// `ynz_map_iter_get`'s delegation to `ynz_map_get`). Content-hash probing finds
+/// the same slot the recorded pointer lives in: `ynz_map_set_str` deduplicates by
+/// content, so exactly one slot holds this key's content — the one whose pointer
+/// the insertion-order buffer recorded.
+///
+/// (Deliberately supersedes the 2026-07-03 "do NOT switch to cstr_eq_raw" guard —
+/// that directive was scoped to the full-scan world where pointer-identity was
+/// load-bearing; content-dedup on insert now guarantees slot uniqueness, locked
+/// by tests/map_str_hash_probe.rs.)
 ///
 /// # Safety
 /// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
@@ -1123,21 +1150,20 @@ pub unsafe extern "C" fn ynz_map_iter_get_str(
         return 0;
     }
     let key_ptr = *(*map).insert_order.add(pos as usize);
-    let cap = (*map).capacity as usize;
-    for i in 0..cap {
-        let ctrl = *(*map).ctrl.add(i);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
-            continue;
-        }
-        if *(*map).keys.add(i) == key_ptr {
-            std::ptr::copy_nonoverlapping(val_slot(map, i), val_out, elem_size as usize);
+    let key = key_ptr as *const u8;
+    let hash = ynz_siphash_str(key);
+    match find_slot_str(map, hash, key) {
+        Some(idx) => {
+            std::ptr::copy_nonoverlapping(val_slot(map, idx), val_out, elem_size as usize);
             *key_out = key_ptr;
-            return 1;
+            1
+        }
+        None => {
+            *key_out = 0;
+            std::ptr::write_bytes(val_out, 0, elem_size as usize);
+            0
         }
     }
-    *key_out = 0;
-    std::ptr::write_bytes(val_out, 0, elem_size as usize);
-    0
 }
 
 /// Free all memory associated with the map: five counted `ynz_free` calls with the

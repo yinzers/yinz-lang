@@ -22,4 +22,5 @@ _No member plans yet._
 
 ## Standalone plans
 
-- [rules-corpus-cleanup](active/2026-07-11-rules-corpus-cleanup/plan.md) `active`
+- [audit-remediation-followups](active/2026-07-16-audit-remediation-followups/plan.md) `stub`
+- [audit-remediation-two-lane](active/2026-07-16-audit-remediation-two-lane/plan.md) `active`
