@@ -276,7 +276,7 @@ The Bouncer + compile diagnostics catch these:
 
 - [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 1 (dot-first, satisfied by UFCS), Rule 4 (compiler does hard work), Rule 8 (zero-cost abstractions — UFCS is parse-time sugar), Rule 12 (human-readable over jargon)
 - [`.claude/rules/dot-postfix.md`](dot-postfix.md) (parens-for-actions / no-parens-for-access — applies to method-call syntax)
-- [`.claude/rules/inference.md`](inference.md) (call-site ownership inference for implicit `.share()` / `.lend()` / `.give()` at every call site)
+- [`.claude/rules/inference.md`](inference.md) (call-site ownership inference for `share` / `lend` / `give` — signature-only keywords, no body-level call-site syntax, at every call site)
 - [`.claude/rules/vocabulary.md`](vocabulary.md) (Yinz user-facing terms — non-OOP framing in error messages)
 - [`docs/internal/implementation/IMP-type-system.md`](../../docs/internal/implementation/IMP-type-system.md) (shapes, extends, follows, dynamic — the full type system spec)
 - [`docs/internal/implementation/IMP-ownership.md`](../../docs/internal/implementation/IMP-ownership.md) (ownership modifiers — declared at signatures, inferred at call sites)

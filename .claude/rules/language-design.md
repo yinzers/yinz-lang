@@ -6,7 +6,7 @@ Rules for making and reviewing language design decisions.
 
 ## Before Adding Anything New
 
-Check every proposed feature against all 12 golden rules (in [`CLAUDE.md`](../../CLAUDE.md)). If it violates any rule, don't add it. If there's tension between two rules, the lower-numbered rule wins.
+Check every proposed feature against all golden rules (in [`CLAUDE.md`](../../CLAUDE.md)). If it violates any rule, don't add it. If there's tension between two rules, the lower-numbered rule wins.
 
 ---
 
@@ -67,7 +67,7 @@ See [`docs/reference/REF-teaching-mission.md`](../../docs/reference/REF-teaching
 
 ## Documenting Decisions
 
-Every decision goes in `/docs/README.md` with:
+Every decision goes in its `docs/internal/implementation/IMP-<feature>.md` file (create it if it doesn't exist) per [`.claude/rules/docs-checklist.md`](docs-checklist.md), with:
 1. What was decided
 2. Alternatives that were considered
 3. Which golden rule(s) drove the decision and why

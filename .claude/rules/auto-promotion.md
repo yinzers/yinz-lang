@@ -97,7 +97,7 @@ When M4 implements map syntax, BOTH override forms must be designed together wit
 
 **Static dispatch on `follows`** ([`docs/internal/implementation/IMP-type-system.md`](../../docs/internal/implementation/IMP-type-system.md)): auto-picks static when concrete type is known. Override form: `dynamic Foo` for the case where the user explicitly wants runtime-lookup dispatch on a stored value. The reverse (force static when type is unknown) is impossible — the compiler can't manufacture knowledge it doesn't have.
 
-**Auto-Arc cross-thread** ([`docs/internal/implementation/IMP-no-function-coloring.md`](../../docs/internal/implementation/IMP-no-function-coloring.md)): auto-wraps in Arc when value crosses thread boundary. Override form: `.give` or `.copy` at the spawn site to avoid Arc. The reverse (force Arc when no boundary crossing) doesn't make sense — Arc has cost, and if the compiler doesn't need it, manufacturing it would be pointless.
+**Auto-Arc cross-thread** ([`docs/internal/implementation/IMP-no-function-coloring.md`](../../docs/internal/implementation/IMP-no-function-coloring.md)): auto-wraps in Arc when value crosses thread boundary. Override form: pass the value as a `give` parameter (transfers ownership instead of sharing) or call `.copy()` on it before the spawn, to avoid Arc. The reverse (force Arc when no boundary crossing) doesn't make sense — Arc has cost, and if the compiler doesn't need it, manufacturing it would be pointless.
 
 ### Examples — both directions handled by existing syntax
 

@@ -32,7 +32,7 @@ Every spec file follows this order:
 - "You" — not "the developer" or "the programmer."
 - Define any technical term immediately when you use it.
 - Don't say "unlike Rust" or "like TypeScript" — explain it fresh.
-- Don't explain WHY a design decision was made in the spec — that belongs in `/docs/README.md`. Spec files just show how to use it.
+- Don't explain WHY a design decision was made in the spec — that belongs in the feature's `docs/internal/implementation/IMP-<feature>.md` file (per [`.claude/rules/docs-checklist.md`](docs-checklist.md)). Spec files just show how to use it.
 
 ---
 

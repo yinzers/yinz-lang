@@ -86,7 +86,7 @@ Concretely: when writing an example, only use:
 - Operations locked in the current milestone's plan (M4: shapes, methods via UFCS, ownership, `.copy()`, `.freeze()`, `extends`, `follows`, `dynamic`, type-attached constants)
 - The exact operations defined inline in the same example
 
-If a new API name appears in your example, check it's real before saving. Cross-reference `crates/ynz-typeck/src/intrinsics.rs` for the M2 primitive intrinsic table.
+If a new API name appears in your example, check it's real before saving. Cross-reference [`registry/features.toml`](../../registry/features.toml) `[[primitive_intrinsic]]` for the primitive intrinsic table (the SSOT — `crates/ynz-typeck/src/intrinsics.rs` is generated from it, not the source of truth).
 
 ---
 
@@ -97,4 +97,4 @@ If a new API name appears in your example, check it's real before saving. Cross-
 - [`.claude/rules/vocabulary.md`](vocabulary.md) (Yinz user-facing terms — field vs method vocabulary)
 - [`.claude/rules/spec-writing.md`](spec-writing.md) (examples must be runnable Yinz; aligns with the real-operations rule above)
 - [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 2 (self-documenting syntax) — this rule operationalizes Rule 2 for dot-postfix
-- `crates/ynz-typeck/src/intrinsics.rs` (M2 primitive intrinsic table — source of truth for which dot-postfix methods exist on primitives)
+- [`registry/features.toml`](../../registry/features.toml) `[[primitive_intrinsic]]` (source of truth for which dot-postfix methods exist on primitives; `crates/ynz-typeck/src/intrinsics.rs` is generated from it)

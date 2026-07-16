@@ -49,10 +49,10 @@ Always use Yinz terms. Never use the traditional term in spec files or user-faci
 | `Either<A, B>` / `A \| B` (TS union) | `\|` | `shape Result = Success \| Failure` — Yinz keeps `\|` for unions; one exception to "prefer words over symbols" (see Golden Rule 12 expanded version). |
 | `typeof` / `instanceof` / type guards | `is` | `if (shape is Circle)` |
 | `fn` | `function` | Always spell it out |
-| `&T` (shared reference) | `.share` | Dot modifier on value |
-| `&mut T` (mutable reference) | `.lend` | Dot modifier on value |
-| `move` / transfer ownership | `.give` | Dot modifier on value |
-| `.clone()` | `.copy` | Dot modifier on value |
+| `&T` (shared reference) | `share` keyword (signature only) | Compiler-inferred at call sites; NO body-level `.share()` syntax |
+| `&mut T` (mutable reference) | `lend` keyword (signature only) | Compiler-inferred at call sites; NO body-level `.lend()` syntax |
+| `move` / transfer ownership | `give` keyword (signature only) | Compiler-inferred at call sites; NO body-level `.give()` syntax |
+| `.clone()` | `.copy()` | Body operation, parens per dot-postfix rule |
 | `Result<T, E>` / `throws` | `errors` keyword | `-> string errors` |
 | `match` / `switch` on types | `if (x is Type)` | Pattern matching via type narrowing |
 | `T[]` / `Array<T>` | `array<T>` | Growable, heap-allocated |

@@ -103,11 +103,13 @@ User could have typed the explicit form IN A SPECIFIC POSITION but didn't. The m
 
 ```ynz
 let i = 4                              // muted `: int` between `i` and `=`
-foo(player)                            // muted `.share` after `player`
 let queue = channel<Order>()           // muted `64` INSIDE the empty parens
 db.fetch("users")                      // muted `wait` BEFORE the call
 arena scratch { let temp = array<int>() }   // muted `.in(scratch)` after the constructor
 ```
+
+(Ownership at call sites is NOT an Addition-category example — see the Domains table above: it is
+Informational, because there is no body-level syntax to insert.)
 
 Zero source-vs-render ambiguity. Click-to-make-explicit is trivial — the muted bytes get inserted at the position they're rendered. Visibility is passive (you see the info while reading the file; no hover needed).
 
@@ -174,7 +176,7 @@ If a domain seems to fit multiple categories, the test in "Test for which catego
 Two visual tiers of muted text:
 
 - **Neutral muted (gray)**: benign inference — type inference, lifetime inference, allocator inference. Hover-tooltip explains what and why.
-- **Cautionary muted (red-tinted)**: inference involving mutation, ownership transfer, or thread crossing. Examples: `.lend` on a `let` binding, `.give`, auto-`Arc` for cross-thread shared state. Same hover format; visual styling flags the higher-stakes inference.
+- **Cautionary muted (red-tinted)**: inference involving mutation, ownership transfer, or thread crossing. Examples: `lend` on a `let` binding, `give`, auto-`Arc` for cross-thread shared state. Same hover format; visual styling flags the higher-stakes inference.
 
 **Compile errors are NOT muted hints.** Errors use standard error styling (red squiggly + diagnostic in error panel). The two styles are separate — never collapse them.
 
@@ -188,13 +190,13 @@ Every muted hint, on hover, gives a three-part explanation matching Golden Rule 
 - **WHAT INSTEAD** the developer could write to make it explicit
 - **WHY** the compiler chose this (with the contextual reason — not generic, tied to THIS call site)
 
-Canonical example — hovering muted `.share` on a call passing a `const player`:
+Canonical example — hovering the muted `share` hint on a call passing a `const player`:
 
-> **WHAT**: This is inferred as `.share` because `player` is declared `const`. The function gets read-only access; you keep ownership.
+> **WHAT**: This is inferred as `share` because `player` is declared `const`. The function gets read-only access; you keep ownership.
 >
-> **WHAT INSTEAD**: You could write `foo(player.share)` to make it explicit. The behavior is identical.
+> **WHAT INSTEAD**: Nothing to type here — `share` is a signature-only keyword with no body-level call-site syntax (Informational category, per the Domains table above). Click jumps to `foo`'s signature, where the `share` keyword is written (or can be made explicit if the signature is currently bare).
 >
-> **WHY**: `const` bindings can only grant read-only access. If you need mutation, declare `player` with `let` instead. (Trying to write `foo(player.lend)` here would produce a compile error: "cannot lend a const binding.")
+> **WHY**: `const` bindings can only grant read-only access. If `foo`'s signature instead declared `lend` (mutable borrow), passing this `const` binding would produce a compile error: "cannot lend a const binding."
 
 Same wording reused wherever this concept surfaces — compiler diagnostics, hover tooltips, spec examples. One canonical explanation per concept.
 

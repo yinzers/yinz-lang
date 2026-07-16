@@ -49,10 +49,10 @@ What memory-safety, type-safety, and ownership guarantees must hold after this m
 
 **Examples (for M4 types + ownership)**:
 - `const` bindings cannot be reassigned
-- `const` bindings cannot be lent for mutation (`.lend` rejected at compile time)
-- `const` bindings cannot be given away (`.give` rejected at compile time)
+- `const` bindings cannot be lent for mutation (a `lend` parameter rejects a `const` argument at compile time)
+- `const` bindings cannot be given away (a `give` parameter rejects a `const` argument at compile time)
 - `const` bindings cannot have their fields mutated
-- A `.give`'d value cannot be used afterward (use-after-give caught at compile time)
+- A value passed to a `give` parameter cannot be used afterward (use-after-give caught at compile time)
 
 **NOT examples** (too vague):
 - "Memory is safe" — what does that mean? How would you test it?
@@ -87,7 +87,7 @@ What new diagnostics or IDE-hint patterns does this milestone introduce, and do 
 
 **Examples (for M4)**:
 - Diagnostics for cannot-lend-const, cannot-give-const, cannot-mutate-field-of-const all follow WHAT/WHAT-INSTEAD/WHY format
-- IDE muted hint for `.share`/`.lend` at call sites is implemented (or scheduled with explicit cross-reference)
+- IDE muted hint for `share`/`lend` at call sites is implemented (or scheduled with explicit cross-reference)
 - No new banned-jargon words slip into user-facing errors (audited by `tests/jargon_audit.rs`)
 
 ### `### Runtime Dependencies`

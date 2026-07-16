@@ -94,16 +94,17 @@ This applies to:
 
 ---
 
-## Rule 4: Bounded by Default — Unbounded Requires Explicit Opt-In
+## Rule 4: Bounded Always — Explicit Capacity or the Locked Default (64); No Unbounded Constructor
 
-**The rule**: stdlib types that hold collections of unknown future size (queues, channels, mailboxes, retry buffers) are bounded by construction. Unbounded behavior requires explicit opt-in with a name that surfaces the danger.
+**The rule**: stdlib types that hold collections of unknown future size (queues, channels, mailboxes, retry buffers) are bounded always. There is no unbounded constructor — capacity is either passed explicitly or falls back to the registry-locked default (**64**, `channel_capacity` domain in [`registry/features.toml`](../../registry/features.toml)).
 
 **Why this rule exists**: Erlang mailboxes (unbounded by design) → cascading node failures in production telecom systems for 30+ years (mitigated only in OTP 19 with `max_heap_size`, still reactive not preventive). Rust's `tokio::mpsc::unbounded_channel` exists as a permanent footgun. Node.js streams pre-streams2 had unbounded buffering by default. The pattern: unbounded queues hide backpressure, producer outpaces consumer, memory exhausts, OOM kill.
 
-For Yinz's eventual channel/queue stdlib (v0.2 concurrency primitives or whenever it lands):
-- `channel<T>(capacity: int)` — bounded, the only constructor.
-- For "I really want unbounded": `channel<T>(capacity: int.max)` with a comment explaining why.
-- No `unboundedChannel()`, no convenience constructor that hides the cost.
+For Yinz's channel/queue stdlib:
+- `channel<T>()` — bounded at the locked default capacity (64, per the registry's `channel_capacity` domain).
+- `channel<T>(capacity: int)` — bounded at an explicit capacity.
+- For "I really want a very large buffer": `channel<T>(capacity: int.max)` with a comment explaining why — still a bounded constructor, just a large explicit number.
+- No `unboundedChannel()`, no convenience constructor that hides the cost, and no unbounded default.
 
 ---
 
