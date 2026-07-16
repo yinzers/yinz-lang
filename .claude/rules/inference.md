@@ -1,3 +1,22 @@
+---
+name: "inference"
+description: >
+  How Yinz handles the work the compiler can figure out automatically vs. what the developer
+  types — the muted-hint IDE protocol, its three placement categories (Addition/Replacement/
+  Informational), the hover tooltip format, and the dual-audience infer/inference vocabulary
+  split (banned user-facing, correct in this rules corpus).
+tags:
+  - "yinz-compiler"
+  - "ide"
+  - "teaching"
+created_at: "2026-05-14"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Inference Rule — Compiler Infers, IDE Teaches
 
 This file governs how Yinz handles the work the compiler can figure out automatically vs. what the developer types.
@@ -6,7 +25,7 @@ This file governs how Yinz handles the work the compiler can figure out automati
 
 ## Dual-Audience Disclaimer (READ FIRST)
 
-This rule file uses the words `infer`, `inferred`, and `inference` deliberately. **These words are banned in user-facing compiler diagnostics** per `crates/ynz-diagnostics/src/banned_jargon.rs` and [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) — those audiences need plain-English replacements ("figure out automatically", "the compiler can tell").
+This rule file uses the words `infer`, `inferred`, and `inference` deliberately. **These words are banned in user-facing compiler diagnostics** per [`registry/features.toml`](../../registry/features.toml) `[[banned_jargon]]` entries (the SSOT — `crates/ynz-diagnostics/src/banned_jargon.rs` is a thin generated adapter over it, not the source itself) and [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) — those audiences need plain-English replacements ("figure out automatically", "the compiler can tell").
 
 The divergence is intentional and load-bearing:
 
@@ -82,9 +101,9 @@ When the explicit form has no typeable syntax, the muted-hint protocol does NOT 
 
 ### Rule of thumb
 
-Compiler made a decision the user could have made themselves in source → both surfaces. Compiler made a decision with no equivalent user-typeable form → Tier 3 lint only.
-
-See [`docs/internal/implementation/IMP-collections.md`](../../docs/internal/implementation/IMP-collections.md) "Auto-promotion: `array<T>` → `fixed<T>`" section for the canonical hybrid-model rationale.
+The typeability criterion above is [`auto-promotion.md`](auto-promotion.md)'s Pattern table
+(Surface | Applies when) — this file's job is which IDE surface renders it, not re-deriving the
+criterion. See [`docs/internal/implementation/IMP-collections.md`](../../docs/internal/implementation/IMP-collections.md) "Auto-promotion: `array<T>` → `fixed<T>`" section for the canonical hybrid-model rationale.
 
 ---
 

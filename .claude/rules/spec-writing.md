@@ -1,3 +1,20 @@
+---
+name: "spec-writing"
+description: >
+  Tone, structure, audience, and code-example rules for the user-facing docs/reference/REF-*.md
+  language-spec files — written for a developer who just graduated high school, knows
+  JavaScript, and has never done systems programming.
+tags:
+  - "yinz-compiler"
+  - "docs"
+created_at: "2026-05-12"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Spec Writing Rules (docs/reference/REF-*.md language-spec files)
 
 Rules for writing and editing the **user-facing language spec** files, which live at `docs/reference/REF-*.md` under the global `docs/` taxonomy (migrated 2026-07-01 from the old `/spec/` directory — same audience and rules, new location). Not every `docs/reference/REF-*.md` file is a language-spec file (some are cross-cutting compiler principles like `REF-golden-rules.md`) — this rule applies to the ones documenting a language feature for end users (collections, ownership, control-flow, etc.).

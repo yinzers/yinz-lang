@@ -1,3 +1,21 @@
+---
+name: "dot-postfix"
+description: >
+  Parens-for-actions, no-parens-for-access — the dot-postfix syntax convention that
+  distinguishes field/constant access (value.name) from function calls and transformations
+  (value.name()), plus the examples-must-use-real-operations discipline for spec/design/plan
+  files.
+tags:
+  - "yinz-compiler"
+  - "syntax"
+created_at: "2026-05-16"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Dot-Postfix Rule — Parens for Actions, No Parens for Access
 
 Loaded when designing any new syntax that uses dot-postfix (`value.something`) or when writing examples in spec/design docs. Apply alongside [`.claude/rules/non-oop.md`](non-oop.md) (UFCS context) and [`.claude/rules/inference.md`](inference.md) (call-site modifier inference).

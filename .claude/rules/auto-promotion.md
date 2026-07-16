@@ -1,3 +1,20 @@
+---
+name: "auto-promotion"
+description: >
+  The compiler-picks-the-stricter/faster-form pattern — codegen auto-promotion, muted IDE
+  hints, and Tier 3 lint suggestions, when each surface applies, and the override-pattern
+  checklist (force-the-auto-pick / force-the-other-pick) every new feature must answer.
+tags:
+  - "yinz-compiler"
+  - "performance"
+created_at: "2026-05-15"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Auto-Promotion Rule — Compiler Picks the Stricter/Faster Form
 
 This rule captures Yinz's load-bearing commitment to "fast by design even for inexperienced developers." Whenever the compiler can prove a stricter or faster form of code fits the user's actual usage, it picks that form automatically AND surfaces the choice through teaching surfaces so the user learns over time.

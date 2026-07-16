@@ -1,3 +1,21 @@
+---
+name: "vocabulary"
+description: >
+  The authoritative reference for Yinz user-facing terminology — the Quick Reference
+  term-mapping table, concept-level distinctions (shape vs value vs map, array vs fixed,
+  options vs union, maybe<T>), banned legacy terms, the Capital Letter Rule (GR13), the
+  constants-naming ruling, and import-path syntax.
+tags:
+  - "yinz-compiler"
+  - "vocabulary"
+created_at: "2026-05-14"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Yinz Vocabulary — Official Terms
 
 This is the authoritative reference for Yinz user-facing terminology. **All user-facing docs (`docs/reference/REF-*.md`), design docs (`docs/internal/implementation/IMP-*.md`), compiler diagnostics, and Claude-chat output use these terms.** Never use legacy terms from other languages.
@@ -95,7 +113,9 @@ For errors-that-the-caller-must-handle, use the `errors` keyword instead: `funct
 
 ## Banned Legacy Terms (Compile Error When Possible)
 
-The Yinz compiler bans these legacy terms in user-facing diagnostics via `crates/ynz-diagnostics/src/banned_jargon.rs`. The replacement diagnostic uses three-part WHAT/WHAT-INSTEAD/WHY format.
+The Yinz compiler bans these legacy terms in user-facing diagnostics. The source of truth is
+[`registry/features.toml`](../../registry/features.toml) `[[banned_jargon]]` — `crates/ynz-diagnostics/src/banned_jargon.rs`
+is a thin generated adapter over it, not a second source. The replacement diagnostic uses three-part WHAT/WHAT-INSTEAD/WHY format.
 
 | Banned word | Replacement (in user-facing text) |
 |---|---|
@@ -173,6 +193,30 @@ When module and type share a base name, casing distinguishes them:
 `Self` (capital S) is a reserved type keyword meaning "the implementing type" — used in `follows`
 contracts (see the Quick Reference row above). `self` (lowercase) is the instance.
 
+### Constants
+
+Constants are camelCase, same as any other variable: `const maxHealth = 100`, never
+`const MAX_HEALTH = 100`. GR13 ("capital letter = type") is absolute and has no constants exception —
+SCREAMING_SNAKE is not a Yinz convention at any binding kind. If a future design genuinely needs a
+distinct constants style, it is ratified here, in this file, first — never introduced silently by a
+diagnostic example or a spec snippet (see [`teaching-surfaces.md`](teaching-surfaces.md)'s naming
+conventions for the teaching-surface side of this ruling).
+
+---
+
+## Import Paths
+
+Import paths are backtick-quoted strings, written relative to the project root, with no `.ynz` suffix:
+
+```ynz
+import { Player } from `services/player`
+```
+
+Backtick strings are the one string form Yinz recognizes for this position — a double-quoted path
+(`from "services/player"`) is not accepted. Project-root-relative means the path never starts with `./`
+or `../`; it reads the same from any file in the project. The `.ynz` extension is implied — never write
+`services/player.ynz`.
+
 ---
 
 ## When You're Unsure
@@ -184,5 +228,6 @@ If a concept doesn't have an official term yet, **ask Patrick before inventing o
 ## Cross-References
 
 - [`.claude/rules/inference.md`](inference.md) (dual-audience rule for `infer`/`inference` etc.)
+- [`.claude/rules/teaching-surfaces.md`](teaching-surfaces.md) (the checklist gating every user-facing diagnostic/hover/lint string — cites this file's Banned Legacy Terms table and Constants ruling)
 - [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) (banned-jargon source-of-truth for user-facing diagnostics)
-- `crates/ynz-diagnostics/src/banned_jargon.rs` (compile-time enforcement)
+- [`registry/features.toml`](../../registry/features.toml) `[[banned_jargon]]` (the actual SSOT; `crates/ynz-diagnostics/src/banned_jargon.rs` is a generated thin adapter over it, not a second source)

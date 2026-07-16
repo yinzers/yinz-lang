@@ -1,3 +1,19 @@
+---
+name: "examples-structure"
+description: >
+  How examples/ is organized and how new demos get added — flat layout, Pittsburgh-themed
+  folder names, the project-vs-gallery split, and the not-a-workspace constraint.
+tags:
+  - "yinz-compiler"
+  - "examples"
+created_at: "2026-05-20"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Examples Structure Rule
 
 How `examples/` is organized and how new demos get added. This rule is **load-bearing** — it stops `examples/` from drifting back into a flat dump of unrelated demos.

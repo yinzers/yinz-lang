@@ -1,3 +1,21 @@
+---
+name: "stdlib-design"
+description: >
+  The eight rules every Yinz stdlib module must follow — pure-named methods stay pure, no
+  parallel APIs, no platform-default config, bounded-always collections, receiver-first
+  argument order, codegen (not reflection) serialization, linear-time NFA regex, and
+  SIMD-accelerated byte-touching operations.
+tags:
+  - "yinz-compiler"
+  - "stdlib"
+created_at: "2026-05-15"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Stdlib Design Rules
 
 Rules every Yinz stdlib module must follow. Distinct from [`.claude/rules/language-design.md`](language-design.md) (which covers language features) — this file covers stdlib API contracts.

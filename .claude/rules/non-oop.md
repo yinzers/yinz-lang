@@ -1,3 +1,21 @@
+---
+name: "non-oop"
+description: >
+  Yinz is not object-oriented. Shapes hold data; methods are standalone functions;
+  value.method() is parser-level UFCS sugar for method(value). The canonical model — call
+  syntax, inheritance, contracts, the diagnostic format — plus the Banned Anti-Patterns table
+  (the one home for OOP-drift signals other rules point to instead of restating).
+tags:
+  - "yinz-compiler"
+  - "language-design"
+created_at: "2026-05-16"
+updated_at: "2026-07-16"
+status: "active"
+author: "patrick"
+metadata:
+  type: "rule"
+---
+
 # Non-OOP Model — Data Shapes + Standalone Functions + UFCS
 
 > **Yinz is not object-oriented. Shapes hold data; methods are standalone functions; `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax). Both call forms are legal and equivalent.**

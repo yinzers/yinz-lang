@@ -349,12 +349,14 @@ plan plus the audit sidecar.
   reviewer — one-home / relative-links / placement-law-4 (no append-drift). Both block.
 - **Model tag:** `(docs-merge, high, large)`.
 
-#### Phase 4 — gap-rule authoring + frontmatter/conformance pass
+#### Phase 4 — gap-rule authoring + frontmatter/conformance pass — **STATUS: COMPLETE** (session-id: 04e22a51-80c1-4b67-a886-083784d61bcd)
 
 - **Task + purpose:** author the three missing rules and bring every file this plan touched to the
   global documentation standard (descriptive frontmatter, wording force-matching, one-home markers).
 - **Steps:**
-  1. **Teaching-surfaces rule.** Author `.claude/rules/teaching-surfaces.md` to teaching audit §H2.7:
+  1. **[DONE] Teaching-surfaces rule.** Authored — 98 lines, within budget, found §H2.7 at the
+     untracked `docs/internal/scratchpad/SCRATCH-teaching-audit-2026-07-11.md` in the main checkout
+     (see Plan↔task sync note in audit.md). Author `.claude/rules/teaching-surfaces.md` to teaching audit §H2.7:
      the three-slot test (WHAT states the problem; WHAT-INSTEAD is copyable/actionable; WHY is
      contextual, non-circular, cites no internals), the audience test (18-yo JS dev, no Googling),
      the banned-vocab pointer, naming conventions inside examples (camelCase, `.copy()` parens, no
@@ -366,25 +368,27 @@ plan plus the audit sidecar.
      not a hard cap: if §H2.7 cannot fit within it, surface the budget-vs-completeness tradeoff per
      the §3.4 CCIR (never silently overrun or silently cut a §H2.7 item) (Risk #5). This is the
      artifact plan 2 depends on.
-     **CHECKPOINT** — teaching-surfaces.md drafted within budget; §H2.7 checklist items all present.
-  2. **Constants-naming ruling.** Add the paragraph to the merged `vocabulary.md`: constants are
-     camelCase (`const maxHealth = 100`); GR13 "capital = type" stays absolute — no SCREAMING_SNAKE
-     exception. (Parser diagnostics teaching `MAX_HEALTH` are plan-2 scope; this plan writes only the
-     ruling.)
-  3. **Import-path canon.** Add a short section to the merged `vocabulary.md` (the natural home for
-     "how Yinz spells X"): import paths are backtick-quoted, project-root-relative, no `.ynz` suffix.
-     (The parser's stray double-quote acceptance is plan-2 / compiler scope.) Record the home choice.
-     **CHECKPOINT** — all three gap rules authored and placed in their one home.
-  4. **Frontmatter + conformance pass.** Add global-standard descriptive YAML frontmatter to every
-     rewritten/new rule file (name + block-scalar description + tags + created_at/updated_at/status/
-     author/metadata; every string scalar double-quoted, booleans/numbers bare) — **NO `paths:` key**
-     on any file (vue-website.md untouched). Re-grade inflated MUST/NEVER on judgment-tier sentences
-     to reasoned-soft phrasing (REF-wording, named-not-linked). Add one-home markers where a rule now
-     points instead of restating (Class 2.2/2.3/2.4/2.5 de-dups: GR13, non-OOP drift-signals,
-     auto-promotion criterion, banned-jargon → registry).
-- **Exit criteria:** three new/consolidated rules exist in one home each; teaching-surfaces.md within
-  budget; every touched rule file opens with valid descriptive frontmatter and zero `paths:` keys
-  (except vue-website.md); duplicated tables reduced to one home + pointers.
+     **CHECKPOINT — REACHED.**
+  2. **[DONE] Constants-naming ruling.** Added `### Constants` subsection to `vocabulary.md`: constants
+     camelCase (`const maxHealth = 100`); GR13 stays absolute — no SCREAMING_SNAKE exception.
+  3. **[DONE] Import-path canon.** Added `## Import Paths` section to `vocabulary.md`: backtick-quoted,
+     project-root-relative, no `.ynz` suffix, with a runnable example.
+     **CHECKPOINT — REACHED.** All three gap rules authored and placed in their one home.
+  4. **[DONE] Frontmatter + conformance pass.** Added global-standard frontmatter to all 13 files
+     needing it (`teaching-surfaces.md` authored with it; the other 12 via Edit) — created_at
+     git-log-verified per file, updated_at "2026-07-16". `REF-golden-rules.md` already valid (bumped
+     Phase 1); `REF-naming.md`'s stale updated_at bumped. `vue-website.md`/`CLAUDE.md`/
+     `SCRATCH-stdlib-encoding.md` left untouched per their exemptions. MUST/NEVER sweep: all hits in
+     the 13 files verified as true gates — no re-grading needed. One-home markers landed for all four
+     named de-dups (GR13 — already done Phase 3; non-OOP drift-signals — `language-design.md` now
+     points at `non-oop.md`'s Banned Anti-Patterns; auto-promotion criterion — `inference.md`'s "Rule
+     of thumb" now points at `auto-promotion.md`'s Pattern table; banned-jargon → registry —
+     `vocabulary.md` repointed from `banned_jargon.rs` to `registry/features.toml` as SSOT).
+- **Exit criteria:** three new/consolidated rules exist in one home each — **[MET]**. teaching-surfaces.md
+  within budget (98/120 lines) — **[MET]**. Every touched rule file opens with valid descriptive
+  frontmatter and zero `paths:` keys (except vue-website.md) — **[VERIFIED: all 14 frontmatter-bearing
+  files pass a 2-dashes + all-8-keys structural check; tree-wide `paths:` grep returns only
+  vue-website.md]**. Duplicated tables reduced to one home + pointers — **[MET]**.
 - **Reviewer fan-out:** documentation-standards reviewer (frontmatter validity, wording
   force-matching, one-home law); teaching-content reviewer (grades teaching-surfaces.md against §H2.7
   for completeness + line budget).
