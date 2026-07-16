@@ -1,5 +1,75 @@
 # Changelog
 
+## [0.3.2] — 2026-07-16 — M6: Concurrency Hotfix
+
+Commit range: v0.3.1..v0.3.2.
+
+### What ships
+
+Every confirmed concurrency bug from the 2026-07-04 concurrency release audit is fixed —
+plus ~21 more that the new sanitizer lane found in its own adversarial run. This is the
+first of three audit-response milestones (M6 → M7 → M8): M6 is the correctness-hotfix
+half; the optimizer pipeline (M7) and the channel-semantics completion (M8) follow.
+
+The headline: `wait x.method()` (UFCS method-call form) now actually suspends. Before
+this release it silently ran synchronously — classified as a plain call at every one of
+nine predicate sites, all of which now thread through one authoritative signature
+resolution. Alongside it, an entire class of pre-existing argument frame-backing
+use-after-frees is closed: shape, `fixed<T>`, `number`, `maybe`, `union`, and
+anonymous-aggregate arguments to suspending callees no longer ride dying stack allocas
+across suspension.
+
+### Fixed
+
+- UFCS suspension invisibility — `wait x.method()` classified and lowered as a real
+  suspension across all 9 predicate sites, threaded from one authoritative resolution
+- Argument frame-backing UAFs across suspension: shape/`fixed<T>`/`number` (P1b),
+  `maybe`/`union`/anonymous aggregates (P1c), decimal128 background-spawn and cpu-member
+  siblings (P1d)
+- Near-compiler-wide int-literal→`number` rejection guard (~27 slots) — a bare int
+  literal in a `number` slot now gets a teaching error instead of an ICE, segfault, or
+  silent miscompare
+- `pending_sends` send-cancel ABA race + orphan leak, closed across both token producers
+  with generation-salted tokens
+- Recursion-chain spike CPU-handle cancellation leak
+- Background UFCS-receiver use-after-free (both spawn forms) + fail-closed rejection of
+  the narrowed-union receiver form (interim teaching error; the working form is a tracked
+  roadmap item)
+- `ynz_channel_recv_poll` lost-wakeup window (register-before-poll) and
+  `ynz_handle_recv_poll` panic-then-Pending hang
+- Buffered-channel heap-element leak, freed at channel drop via a single
+  codegen-registered drop-glue choke point
+- `ynz_rt_shutdown` no longer holds the runtime mutex across its drain window; `ynz run`
+  reports a signal-terminated child by name instead of masking it as exit code 1
+
+### Added
+
+- `block_on`-fallback compile-time hard-error guard — the sync-bridge regression class
+  (the v0.3-M2 HALT corpse) is now structurally unreachable
+- Miri / ThreadSanitizer / AddressSanitizer CI lane on `ynz-runtime` — a standing
+  continuous-verification capability, not a one-time sweep; its own adversarial run
+  found and closed ~21 confirmed concurrency bugs before this release
+
+### Changed
+
+- Twin type-walkers in codegen unified behind one authoritative resolution
+- Docs/registry honesty sweep: the scheduler-preemption mechanism is documented as a
+  stub (real back-edge yield ships with M7), `background.cpuBound` is registered as
+  deferred rather than implied-shipping, the bare-channel receive-forever footgun is
+  documented loudly, and FFI/`KernelModeRejectsWait` doc tense now matches reality
+- Rules corpus cleanup (PR #81): contradictions fixed in always-loaded rules,
+  `naming.md` merged into `vocabulary.md`, stale paths swept
+
+### Deferred (tracked, not silent)
+
+Fourteen surviving deferrals lifted to the roadmap's durable store with full
+WHAT/WHY/COST/TRIGGER records and owner-tagged Capability Ledger rows — including the
+non-plain-ident background-spawn receiver gap (assigned to M7: its "latent, not live"
+verdict was measured under O0 and the optimizer pipeline is the expiry condition), and
+`channel<number>` marshalling (assigned to M8's channel-semantics design pass). The
+Demo & Error Gallery obligation for M6 is deferred by explicit decision, triggered
+before the next milestone pickup.
+
 ## [0.3.1] — 2026-07-04 — M5: Array-By-Value Element Storage + Auto-SoA Layout
 
 Commit range: v0.3.0..v0.3.1.
