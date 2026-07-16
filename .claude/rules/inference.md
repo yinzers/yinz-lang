@@ -40,9 +40,13 @@ Each row shows the muted text the IDE renders directly inline. The text is infor
 | Ownership at call sites | `foo(player)` where `player` is `const` and signature is `share` | `share (read-only — matches foo's signature)` after `player` — shows the modifier AND why this one was picked. **Informational category** (no body-level syntax to insert — call-site ownership modifiers don't exist as Yinz source; only signatures carry the modifier; the muted hint is purely teaching). Click jumps to foo's signature. |
 | Ownership at call sites — mutation | `bar(player)` where `player` is `let` and signature is `lend` | `lend (function will mutate — see bar's signature)` after `player` — same pattern, cautionary styling. **Informational category** (same rationale as above). |
 | Wait points on I/O | `db.fetch("users")` | `wait (db.fetch may suspend on I/O)` before the call — shows the keyword AND why suspension happens here |
+| Background routing | `background process(order)` | `// routed to I/O pool — calls sleep (may suspend)` — shows which thread pool the spawn routes to. **Informational category** (a scheduler decision, no typeable source form). Reads the same suspend-analysis flag that drives the actual codegen routing, so the hint and the binary always agree. |
+| Parallel groups | `let hits = crunchStat(2)` | `// runs at the same time as line 12 — separate core` — shows which other statement this one overlaps with. **Informational category** (the independence analysis that drives the actual parallel execution, no typeable source form). |
 | Lifetimes | always inferred (only shown on user request) | `'request_scope` — shows the lifetime; on request because lifetime hints are usually noise |
 | Allocators | `let temp: array<int> = []` inside `arena scratch { ... }` | `.in(scratch) — current arena` after the constructor — shows the allocator AND that it's the active scope's arena |
-| Copy points (trivially-copyable types) | implicit copy at a call site, e.g., passing `let n: int` to two functions | `.copy (8 bytes, trivially copyable)` — shows the action AND why it's free |
+| Channel capacity | `let ch: channel<int> = channel<int>()` | `64` — shows the locked default capacity the compiler fills into the empty constructor parens. **Addition category** (click inserts the literal `64` as an explicit argument). |
+| Copy points (trivially-copyable types) | implicit copy at a call site, e.g., passing `let n: int` to two functions | `.copy() (8 bytes, trivially copyable)` — shows the action AND why it's free |
+| Auto-Arc across `background` boundaries | `background render(scene)` | `// shared by reference count across tasks — read-only` — shows where a read-only value crossing a `background` boundary is reference-counted instead of deep-copied. **Informational category** (a codegen choice, no typeable source form — call `.copy()` for an independent copy instead). |
 | `array<T>` → `fixed<T>` promotion | `let nums: array<int> = [1, 2, 3]` (never grown) | `// promoted to fixed<int, 3> — never grown` after the binding; click rewrites annotation to `fixed<int>` |
 | `let` → `const` (binding never reassigned/mutated/lent) | `let count = 5` (never written after) | `// effectively const — never reassigned` after the binding; click rewrites `let` to `const` |
 
@@ -235,4 +239,4 @@ It also depends on IDE quality. The hints aren't a nice-to-have — they're the 
 - [`docs/reference/REF-ide-hints.md`](../../docs/reference/REF-ide-hints.md) (the protocol spec — v0.2 LSP implementation target)
 - [`docs/reference/REF-compiler-errors.md`](../../docs/reference/REF-compiler-errors.md) (banned-jargon list for user-facing diagnostics, distinct from this internal-vocabulary file)
 - [`.claude/rules/vocabulary.md`](vocabulary.md) (official Yinz user-facing terms)
-- [`.claude/graveyard.md`](../graveyard.md) Entry 2 (inverse anti-pattern: required explicit annotation at call sites)
+- [`.claude/graveyard.md`](../graveyard.md) "Requiring Explicit Ownership Annotation at Call Sites" (inverse anti-pattern: required explicit annotation at call sites)

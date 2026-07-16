@@ -41,7 +41,7 @@ Every spec file follows this order:
 - Use realistic names: `Player`, `User`, `score`, `health` — not `foo`, `bar`, `x`, `y`
 - Show the compiler error message when demonstrating mistakes
 - No method chaining — step-by-step, one operation per line with a named variable
-- Arrow functions only inside method calls (`.where()`, `.map()`, etc.) — never as standalone functions
+- Arrow functions only inside method calls (`.filter()`, `.map()`, etc.) — never as standalone functions
 
 ---
 
@@ -52,7 +52,7 @@ When showing a mistake, always include the error message the compiler would show
 ```
 rgb.add(50)
 // COMPILE ERROR: Cannot add to a fixed array.
-// fixed[number] is size-locked. Use array[number] if it needs to grow.
+// fixed<number> is size-locked. Use array<number> if it needs to grow.
 ```
 
 ---
@@ -62,5 +62,5 @@ rgb.add(50)
 - No implementation details (how the compiler works internally)
 - No performance benchmarks (until there are real numbers)
 - No comparisons to other languages in the main flow
-- No unresolved design questions — move those to `/docs/internal/scratchpad/SCRATCH-open-questions.md`
-- No TODO comments — open questions live in the design folder
+- No unresolved design questions — move those to `docs/internal/scratchpad/SCRATCH-open-questions.md`
+- No TODO comments — open questions live in `docs/internal/scratchpad/`

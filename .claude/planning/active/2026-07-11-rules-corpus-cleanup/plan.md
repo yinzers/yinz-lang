@@ -238,39 +238,53 @@ plan plus the audit sidecar.
   plan-invariants Step 7.
 - **Model tag:** `(docs-edit, high, small)`.
 
-#### Phase 2 — Class-3 stale-path + banned-syntax sweep
+#### Phase 2 — Class-3 stale-path + banned-syntax sweep — **STATUS: COMPLETE** (session-id: 04e22a51-80c1-4b67-a886-083784d61bcd)
 
 - **Task + purpose:** one mechanical sweep of migration-fossil paths, won't-compile examples, and the
   stale inference domains table. The CLAUDE.md migration note is the map.
 - **Steps:**
-  1. **Stale migration paths (3.1).** Sweep `vocabulary.md`:1 (`spec/`, `design/`),
+  1. **[DONE] Stale migration paths (3.1).** Sweep `vocabulary.md`:1 (`spec/`, `design/`),
      `plan-invariants.md` (`/design/`, `design/future/`), `language-design.md` §Spec Updates
      (`/spec/`), `spec-writing.md` ("the design folder"), `stdlib-design.md` Rule 7
      (`design/stdlib/regex.md` → `docs/internal/scratchpad/SCRATCH-stdlib-*.md`) and its dead pathless
      `lockin-*.md` citations (remove or repoint to real files — relative markdown links only).
-  2. **Banned-syntax examples (3.2).** In `spec-writing.md`: `fixed[number]`/`array[number]` →
+  2. **[DONE] Banned-syntax examples (3.2).** In `spec-writing.md`: `fixed[number]`/`array[number]` →
      `fixed<number>`/`array<number>` (square-bracket generics are parser-banned); nonexistent
      `.where()` → `.filter()` (real registry op).
      **CHECKPOINT** — no rule file cites a pre-migration path or a won't-compile example; tree
-     consistent.
-  3. **maybe reconcile (3.3).** Read `IMP-maybe.md`:150. Apply the resolution: code examples always
-     `maybe<T>`; prose may say "a maybe int"; rule tables show `maybe<T>`. Update `IMP-maybe.md`
-     wording only if needed for the three surfaces to agree. If a deeper conflict surfaces, STOP and
-     raise a plan question (design-doc-wins) — do not overwrite. (Patrick confirms the resolution at
-     plan approval.)
-  4. **inference.md domains table refresh (3.4).** Add the four shipped domains
+     consistent. **[REACHED]**
+  3. **[DONE] maybe reconcile (3.3).** Read `IMP-maybe.md`:150. Applied the resolution: code examples
+     always `maybe<T>`; prose may say "a maybe int"; rule tables show `maybe<T>`. `IMP-maybe.md`
+     itself required no wording change — its own text already states the split cleanly ("`maybe T`
+     (user) and `maybe<T>` (since M5 syntax-lock) terminology," and its own body uses `maybe<T>` in
+     every table/code context and reserves "`maybe T`" for prose sentences only) — **no CCIR fired,
+     no deeper conflict found.** (Patrick confirms the resolution at plan approval.)
+  4. **[DONE] inference.md domains table refresh (3.4).** Added the four shipped domains
      (`background_routing`, `parallel_groups`, `channel_capacity`, `auto_arc`) to the "Domains This
-     Applies To" table (registry has 13 total); fix the `.copy (8 bytes, trivially copyable)` jargon
-     example (teaching audit E5) in whichever file survives. Integrate in place — no append-drift.
-  5. **Remaining Class-3 nits.** `examples-structure.md` gallery phrasing → open-ended ("one file per
-     milestone"); `vue-website.md` `/tmp/yinz-design/.../shared.css` SSOT → the `@theme` block as
-     declared SSOT, and its `~/.claude` refs become named-not-linked; graveyard citations by number
-     (plan-invariants "Entries 1,3,4", inference "Entry 2") → cite-by-title.
+     Applies To" table (registry has 13 total, verified via `grep -c '\[\[muted_hint_domain\]\]'
+     registry/features.toml`); fixed the `.copy (8 bytes, trivially copyable)` jargon example
+     (teaching audit E5) to `.copy() (8 bytes, trivially copyable)` in `inference.md` (the surviving
+     file — `naming.md` never carried this example) plus a second bare-`.copy` mention in the new
+     auto_arc row's hover-style prose. Integrated in place — no append-drift.
+  5. **[DONE] Remaining Class-3 nits.** `examples-structure.md` gallery phrasing → open-ended ("one
+     file per milestone, growing as new milestones ship"); `vue-website.md` `/tmp/yinz-design/.../
+     shared.css` SSOT → the `@theme` block declared as the live SSOT (the prototype file reframed as
+     a one-time historical seed, both at its Tailwind-tokens section and its Cross-References entry);
+     its `~/.claude` refs were already plain backtick prose, not markdown links — no change needed
+     (already compliant with the named-not-linked convention). Graveyard citations by number
+     (plan-invariants "Entries 1,3,4" ×2 sites incl. Cross-References, inference "Entry 2") →
+     cite-by-title, titles verified byte-exact against `.claude/graveyard.md`'s actual `##` headings.
      **CHECKPOINT** — Class-3 sweep complete; `maybe` reconcile applied consistently across rule
-     tables and IMP-maybe.md.
+     tables and IMP-maybe.md. **[REACHED — phase completed in one segment, no PARTIAL/handoff
+     needed.]**
 - **Exit criteria:** tree-wide grep for `spec/`, `/design/`, `design/future/`, `design/stdlib/`,
   `fixed[`, `.where(`, `/tmp/yinz-design`, and graveyard "Entry <N>" citations returns zero live hits
   in touched files; `maybe T` remains only as prose, `maybe<T>` in every code example and table.
+  **[VERIFIED — see audit.md session log for the grep transcript; the only remaining `spec/`/`design/`
+  hits tree-wide in `.claude/rules/` are deliberate historical "(formerly `/spec/`)"/"(formerly
+  `/design/`)" migration notes (already in that form pre-Phase-2, in files this phase's step list
+  never named) plus generic "spec/design docs" prose shorthand in `dot-postfix.md` — neither is a
+  stale live-path reference.]**
 - **Reviewer fan-out:** documentation-standards reviewer (relative-links + no-stale-path + real-ops
   examples); confirms the `maybe` reconcile matches `IMP-maybe.md`.
 - **Model tag:** `(docs-edit, high, medium)`.

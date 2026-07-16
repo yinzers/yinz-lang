@@ -1,6 +1,6 @@
 # Yinz Vocabulary — Official Terms
 
-This is the authoritative reference for Yinz user-facing terminology. **All user-facing docs (`spec/`), design docs (`design/`), compiler diagnostics, and Claude-chat output use these terms.** Never use legacy terms from other languages.
+This is the authoritative reference for Yinz user-facing terminology. **All user-facing docs (`docs/reference/REF-*.md`), design docs (`docs/internal/implementation/IMP-*.md`), compiler diagnostics, and Claude-chat output use these terms.** Never use legacy terms from other languages.
 
 For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` allowed in design docs but banned in compiler errors), see [`.claude/rules/inference.md`](inference.md).
 
@@ -17,7 +17,7 @@ For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` all
 | Stack-allocated fixed list | `fixed<T>` | static array, stack array, fixed-size array |
 | Enum replacement | `options` | enum, enumeration |
 | A-or-B type relationship | `union` (via `\|`) | sum type, variant type, `or` keyword (rejected — see Golden Rule 12 exception) |
-| Optional/maybe value | `maybe T` | Optional, Option, nullable |
+| Optional/maybe value | `maybe<T>` | Optional, Option, nullable |
 | Absent value | `none` | null, undefined, None, nil |
 | No return value | `nothing` | void, unit, () |
 | Function declaration | `function` | fn, func, def, method |
@@ -81,9 +81,9 @@ JavaScript conflates these (an "object" is both `{ name: "x" }` (record) and `{ 
 - `options Status { active, inactive, banned }` — replaces `enum`. A finite set of named constants.
 - `union` is the concept; **`|` is the syntax**: `shape Result = Success | Failure`. Yinz keeps `|` from TypeScript (locked by Patrick 2026-05-14). The `or` keyword was considered but rejected because it's triple-overloaded (boolean operator + union syntax + prose word). See [`docs/reference/REF-golden-rules.md`](../../docs/reference/REF-golden-rules.md) Rule 12 expanded version for the full rationale.
 
-### `maybe T`
+### `maybe<T>`
 
-`maybe T` is sugar for `T | none`. Use when "no value" is a normal possibility (a query that might not match; a parsed value that might fail).
+`maybe<T>` is sugar for `T | none` (spoken/written as "a maybe T" or "a maybe int" in prose). Use when "no value" is a normal possibility (a query that might not match; a parsed value that might fail).
 
 For errors-that-the-caller-must-handle, use the `errors` keyword instead: `function readFile() -> string errors`.
 
@@ -105,7 +105,7 @@ The Yinz compiler bans these legacy terms in user-facing diagnostics via `crates
 | `fn` | `function` |
 | `infer` / `inference` | "figure out automatically", "the compiler can tell" |
 | `Result` | `errors` keyword |
-| `Option` / `Optional` | `maybe T` |
+| `Option` / `Optional` | `maybe<T>` |
 
 **M7 additions (2026-05-18):** `monad`, `lift`, `wrap` (bare `wrap` and `unwrap` — M5/M6 already banned `unwrap`); `Result`, `Option`, `Either`, `exception`, `try`, `catch`, `throw`, `UTF-16`. These must not appear in any user-facing diagnostic. They belong to the technical-programmer jargon world Yinz's users are NOT expected to know.
 

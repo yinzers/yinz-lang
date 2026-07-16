@@ -142,7 +142,7 @@ Python `re` and Ruby `=~` are still backtracking engines. Production services th
 
 **Implementation**: when v0.14 designs the regex module, the locked target is RE2 or a Yinz-native NFA implementation matching RE2's semantics (linear-time guarantee, no backtracking-required features). Lock this as the v0.14 design's first principle.
 
-This rule should be cross-referenced into a future `design/stdlib/regex.md` when written. Until then, it lives here to prevent the v0.14 designer from defaulting to PCRE-style features out of habit.
+This rule should be cross-referenced into a future `docs/internal/scratchpad/SCRATCH-stdlib-regex.md` when written. Until then, it lives here to prevent the v0.14 designer from defaulting to PCRE-style features out of habit.
 
 ---
 
@@ -181,5 +181,3 @@ This rule should be cross-referenced into the v0.8 (`json`), v0.14 (`regex`), an
 - [`docs/internal/decisions/ADR-versioning.md`](../../docs/internal/decisions/ADR-versioning.md) (no-backwards-compat-pre-v1.0; this rule is the operational corollary)
 - [`docs/internal/implementation/IMP-strings.md`](../../docs/internal/implementation/IMP-strings.md) (Rule 3 — UTF-8 default cited there)
 - [`docs/internal/scratchpad/SCRATCH-stdlib-data.md`](../../docs/internal/scratchpad/SCRATCH-stdlib-data.md) (where Rule 6 — codegen serialization — lands when JSON v0.8 is designed; currently a stub)
-- `lockin-stdlib-and-syntax.md` Findings #5 (Java URL.equals), #14 (Go encoding/json), #30 (Java NIO/IO duality)
-- `lockin-build-and-crossplat.md` Finding #8 (Python encoding default)

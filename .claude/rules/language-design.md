@@ -84,4 +84,4 @@ Unresolved design questions go in `/docs/internal/scratchpad/SCRATCH-open-questi
 
 ## Spec Updates
 
-When a decision is made, update the relevant `/spec/` file immediately. Spec files are the user-facing truth — they should never be out of date with the decisions log.
+When a decision is made, update the relevant `docs/reference/REF-*.md` file immediately. Spec files are the user-facing truth — they should never be out of date with the decisions log.

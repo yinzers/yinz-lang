@@ -35,7 +35,7 @@ Both project examples MUST have a [`README.md`](../../README.md) at the project 
 
 Loose `.ynz` files exercising specific compiler/tool behavior. Not Yinz projects. Examples:
 
-- **`primantis-orders/`** — per-milestone compile-error gallery (one file per M1-M8 + v0.2-M1-M3).
+- **`primantis-orders/`** — per-milestone compile-error gallery (one file per milestone, growing as new milestones ship).
 - **`burgh-poem/`** — formatter input demo (`messy.ynz`).
 - **`incline-watcher/`** — `ynz watch` file-watcher demonstration (v0.2-M4). Themed as the Duquesne Incline tracking its elevation.
 

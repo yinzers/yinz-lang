@@ -152,6 +152,101 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   the illustration of banned phrasing — doc-auditor judged this defensible to leave (it illustrates
   prohibited spec language, not live syntax) and optional to sharpen. Accepted as-is, no action.
 
+- 04e22a51-80c1-4b67-a886-083784d61bcd — 2026-07-16 — **Phase 2 execution — Class-3 stale-path +
+  banned-syntax sweep.** Same session-id as the Phase 1 review-fan-out dispatch above; NOT re-appended
+  to the frontmatter chain (identical rationale as the round-2/round-3 revision-pass entries — an
+  `[id, id]` duplicate would misrepresent the append-only chain as two distinct sessions). Executed all
+  five steps:
+  (3.1) Stale migration paths — `vocabulary.md`:3 (`spec/`/`design/` → `docs/reference/REF-*.md`/
+  `docs/internal/implementation/IMP-*.md`); `plan-invariants.md` (two sites: `/design/` docs →
+  `docs/internal/implementation/IMP-*.md`, `design/future/` → `docs/internal/scratchpad/
+  SCRATCH-future-*.md`; and `/design/` truly-has-no-file → `docs/internal/implementation/`);
+  `language-design.md` §Spec Updates (`/spec/` → `docs/reference/REF-*.md`); `spec-writing.md`
+  ("open questions live in the design folder" → "live in `docs/internal/scratchpad/`");
+  `stdlib-design.md` Rule 7 (`design/stdlib/regex.md` → `docs/internal/scratchpad/
+  SCRATCH-stdlib-regex.md`) and removed its two dead pathless `lockin-*.md` Cross-Reference citations
+  (confirmed via `find . -iname "lockin*"` returning nothing anywhere in the repo — no real file to
+  repoint to; the findings they cited, Java `URL.equals()` / Go `encoding/json` / Python encoding
+  default, are already described inline in Rules 1/3/6's own bodies, so no content was lost).
+  (3.2) Banned-syntax examples — `spec-writing.md`: `fixed[number]`/`array[number]` →
+  `fixed<number>`/`array<number>` in the Compiler Error Format example; `.where()` → `.filter()` in
+  Code Examples (verified `.filter()` is a real registry op via `grep -n '"filter"' registry/
+  features.toml`).
+  (3.3) maybe reconcile — read `IMP-maybe.md`:150 plus its full LLVM Lowering / flow-sensitive-`.value`
+  sections; confirmed the file's own text already resolves the split cleanly ("`maybe T` (user) and
+  `maybe<T>` (since M5 syntax-lock) terminology") and its own body already uses `maybe<T>` consistently
+  everywhere except free prose — **no CCIR fired; no wording edit needed in `IMP-maybe.md`.** Applied
+  the resolution to the rule corpus: `vocabulary.md` Quick Reference table row, Banned Legacy Terms
+  table row, and the `### maybe T` → `### maybe<T>` section heading + its definitional first sentence
+  (all table/heading/definition contexts, per the resolution's "rule tables show `maybe<T>`" clause);
+  left `vocabulary.md`'s "✅ Correct: `maybe User`" prose example untouched (free prose, per the
+  resolution's "prose may say 'a maybe int'" clause). `naming.md`'s equivalent table row also fixed
+  (`maybe T` → `maybe<T>`) since Phase 2's exit criteria is tree-wide and `naming.md` is still live
+  until Phase 3 deletes it — same cheap-exposure-window-closing logic Phase 1 already applied to that
+  file.
+  (3.4) inference.md domains table refresh — added four rows (`background_routing`, `parallel_groups`,
+  `channel_capacity`, `auto_arc`) sourced verbatim from their `registry/features.toml`
+  `[[muted_hint_domain]]` entries (description/example_source/example_hint_rendered), placed near their
+  thematically-related existing rows; verified the registry carries exactly 13 `[[muted_hint_domain]]`
+  entries total (`grep -c`) and all 13 now have a corresponding Domains-table row. Fixed the teaching
+  audit E5 jargon example: `.copy (8 bytes, trivially copyable)` → `.copy() (8 bytes, trivially
+  copyable)` in the Copy-points row, plus a second bare-`.copy` mention inside the new auto_arc row's
+  own prose ("pass `.copy`" → "call `.copy()`") — both now match `dot-postfix.md`'s parens-for-actions
+  rule. Confirmed via `grep -rn '\.copy\b' .claude/rules/*.md | grep -v '\.copy()'` returning zero hits.
+  (3.5) Remaining Class-3 nits — `examples-structure.md` gallery phrasing → open-ended ("one file per
+  milestone, growing as new milestones ship"), replacing the closed `M1-M8 + v0.2-M1-M3` enumeration
+  that would go stale every future milestone. `vue-website.md`: the Tailwind-tokens section's "Source
+  of truth is the prototype `shared.css`" reframed to declare the `app/assets/css/tailwind.css`
+  `@theme` block as the live SSOT, with the prototype file named as a one-time historical seed (not an
+  ongoing reference); the Cross-References `/tmp/yinz-design/yinz/project/shared.css` entry rewritten
+  the same way, explicitly flagging the old path as machine-local scratch, not a live reference. Its
+  two `~/.claude/rules/*.md` mentions were checked and found already plain backtick prose (not markdown
+  links) — already compliant with the named-not-linked convention; no edit needed. Graveyard citations
+  by number → cite-by-title: `plan-invariants.md`'s three Enforcement-section bullets (Entry 1/3/4) and
+  its Cross-References line (Entries 1, 3, 4) → the four graveyard entries' exact `##` heading text,
+  byte-verified against `.claude/graveyard.md` ("Const Deep-Immutability Invariant Unstated in
+  Milestone Plans", "M4+ Milestone Plans Missing the 5-Subsection Invariants Structure", "Language or
+  Stdlib Features Without Runtime + Kernel-Mode Declaration"); `inference.md`'s Entry 2 →
+  "Requiring Explicit Ownership Annotation at Call Sites".
+  **Verification (Paper-Trace):** re-ran the full exit-criteria grep suite across `.claude/rules/`
+  after all edits — `spec/`, `/design/`, `design/future/`, `design/stdlib/`, `fixed[`, `.where(`,
+  `/tmp/yinz-design`, and `Entry [0-9]` all return zero live hits in the six files this phase's step
+  list named plus `naming.md` (the tree-wide-scoped `maybe` fix); the only remaining `spec/`/`design/`
+  substring hits anywhere in `.claude/rules/` are (a) `docs-checklist.md`'s and `vocabulary.md`'s own
+  deliberate "(formerly `/spec/`)"/"(formerly `/design/`)" historical migration notes — not stale live
+  references, and (b) `dot-postfix.md`'s generic "spec/design docs" / "spec/design/plan/rule file"
+  shorthand prose, which never claimed to be a literal directory path. `maybe T` (bare, no angle
+  brackets) now appears in `.claude/rules/` exactly once, in `vocabulary.md`'s own definitional
+  sentence, explicitly framed as the prose/spoken form — matching the resolution.
+  **Plan↔task sync note:** same constraint as Phase 1 — no TodoWrite in this dispatch's tool grant, no
+  `- [ ]` checkbox glyphs in this plan (Steps use `1. 2. 3. …` numbering, a documented pre-existing
+  drift from the checkbox convention). Sync runs through `plan.md`'s inline `[DONE]` step markers +
+  `**STATUS: COMPLETE**` phase annotation + this audit entry.
+  **Deviations surfaced:** none — every edit was a mechanical Class-3 correction the plan's own step
+  list enumerated; no plan-vs-reality divergence found. No FRAGO filed.
+  Phase 2 returns COMPLETE. No checkpoint/handoff file needed — the phase completed in one segment (all
+  five steps landed, both planned CHECKPOINT marks reached in-segment, Model tag scale=medium, well
+  under any checkpoint trigger).
+
+- 04e22a51-80c1-4b67-a886-083784d61bcd — 2026-07-16 — **Phase 2 review fan-out — routing log** (conductor
+  entry, no code change). Cheap gates (green-check, graveyard-auditor) both clean/green. All five
+  reviewers (code-reviewer, acceptance-verifier, rules-compliance, deviation-judge, doc-auditor) returned
+  clean/met/on-plan/conformant — zero blockers. Two non-blocking findings routed:
+  (1) doc-auditor flagged `maybe T` (bare, no angle brackets) still appearing as a live code-signature form
+  in the broader `docs/` knowledge tree — `docs/internal/implementation/IMP-errors.md:30` (should-fix,
+  won't-compile form) and a minor cluster (`IMP-collections.md`, `IMP-ownership.md`, `REF-linting.md`,
+  `REF-compiler-errors.md`, `docs/README.md`). This is explicitly OUT OF THIS PLAN'S CHARTER — Design-Doc
+  Alignment's Boundary assumptions + Human decision 5 both state the `maybe` reconcile is corpus-scoped,
+  "not blind-sweep" across `docs/`. Not actioned; flagged here as a real finding for a future docs-tree
+  pass (possibly plan 2 / teaching-remediation scope, or a fresh audit item) — same disposition as Phase
+  2's own out-of-scope finding already logged in its execution entry above.
+  (2) code-reviewer noted `docs/reference/REF-golden-rules.md`'s Rule 11 hover example and
+  `.claude/rules/inference.md`'s Hover Tooltip Format example are near-identical but not byte-identical
+  (a pre-existing duplicate-home condition, not introduced or worsened by this diff — Golden Rule 11 itself
+  wants "one canonical explanation per concept, reused verbatim"). Not actioned this phase; noted as a
+  Class-2-de-dup-adjacent candidate for Phase 4's one-home-marker pass, whose scope is exactly this kind
+  of duplicated-table consolidation.
+
 ## FRAGO log
 (FRAGO delta records append here — see the FRAGO template)
 

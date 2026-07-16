@@ -41,7 +41,7 @@ Always use Yinz terms. Never use the traditional term in spec files or user-faci
 |---|---|---|
 | `void` | `nothing` | Functions that don't return use `-> nothing` |
 | `null` / `undefined` / `None` | `none` | The built-in absent value |
-| `Optional<T>` | `maybe T` | Sugar for `T \| none` — interchangeable |
+| `Optional<T>` | `maybe<T>` | Sugar for `T \| none` — interchangeable |
 | `struct` / `class` / `interface` / `type` | `shape` | One keyword for all data structures. `type` is banned because it's overloaded with the generic concept of "type." |
 | `enum` | `options` | `options Status { active, inactive, banned }` |
 | `abstract class` | `base shape` | Cannot be instantiated directly |
