@@ -242,7 +242,7 @@ fn check_query_cycle_initial(
             cross_thread_padded_shapes: std::collections::HashSet::new(),
         },
         mono_table: crate::generics::MonomorphizationTable {
-            entries: std::collections::HashMap::new(),
+            entries: std::collections::BTreeMap::new(),
         },
         diagnostics: DiagnosticBucket::new(),
         suspends_set: std::collections::HashSet::new(),

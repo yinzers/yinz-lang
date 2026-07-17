@@ -23,35 +23,46 @@ pub fn emit_vtable_globals<'ctx>(
     let ptr = module.get_context().ptr_type(AddressSpace::default());
     let mut vtables = HashMap::new();
 
-    for (shape_name, shape_def) in &shape_table.shapes {
-        for contract_name in &shape_def.follows {
-            let Some(contract_def) = shape_table.get(contract_name) else {
-                continue;
-            };
+    // Iterate in sorted (shape_name, contract_name) order: this loop's iteration order is
+    // GLOBAL EMISSION ORDER for the vtable globals in the module's IR text, and
+    // `shape_table.shapes` is a per-process-seeded HashMap — unsorted iteration made any
+    // ≥2-vtable module's binary/IR flap run-to-run (v0.3-M7 R10 determinism fix, FRAGO 013;
+    // DCE-masked in optimized builds, live under `--no-optimize`; the imported-fns twin
+    // lives in emit.rs Pass 0.25, the mono-table twin in typeck's BTreeMap).
+    let mut pairs: Vec<(&String, &String)> = shape_table
+        .shapes
+        .iter()
+        .flat_map(|(shape_name, shape_def)| shape_def.follows.iter().map(move |c| (shape_name, c)))
+        .collect();
+    pairs.sort();
 
-            // Build the array of function pointers — one per contract method slot.
-            let fn_ptrs: Vec<_> = contract_def
-                .contract_sigs
-                .iter()
-                .map(|sig| {
-                    module
-                        .get_function(&sig.name)
-                        .map(|f| f.as_global_value().as_pointer_value())
-                        .unwrap_or_else(|| ptr.const_null())
-                })
-                .collect();
+    for (shape_name, contract_name) in pairs {
+        let Some(contract_def) = shape_table.get(contract_name) else {
+            continue;
+        };
 
-            let arr_ty = ptr.array_type(fn_ptrs.len() as u32);
-            let arr_val = ptr.const_array(&fn_ptrs);
+        // Build the array of function pointers — one per contract method slot.
+        let fn_ptrs: Vec<_> = contract_def
+            .contract_sigs
+            .iter()
+            .map(|sig| {
+                module
+                    .get_function(&sig.name)
+                    .map(|f| f.as_global_value().as_pointer_value())
+                    .unwrap_or_else(|| ptr.const_null())
+            })
+            .collect();
 
-            let vtable_name = format!("vtable_{}_{}", shape_name, contract_name);
-            let g = module.add_global(arr_ty, Some(AddressSpace::default()), &vtable_name);
-            g.set_initializer(&arr_val);
-            g.set_constant(true);
-            g.set_linkage(inkwell::module::Linkage::Private);
+        let arr_ty = ptr.array_type(fn_ptrs.len() as u32);
+        let arr_val = ptr.const_array(&fn_ptrs);
 
-            vtables.insert((shape_name.clone(), contract_name.clone()), g);
-        }
+        let vtable_name = format!("vtable_{}_{}", shape_name, contract_name);
+        let g = module.add_global(arr_ty, Some(AddressSpace::default()), &vtable_name);
+        g.set_initializer(&arr_val);
+        g.set_constant(true);
+        g.set_linkage(inkwell::module::Linkage::Private);
+
+        vtables.insert((shape_name.clone(), contract_name.clone()), g);
     }
 
     vtables

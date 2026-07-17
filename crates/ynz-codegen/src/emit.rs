@@ -1119,7 +1119,14 @@ fn build_module<'ctx, 'g>(
     // For suspending imported functions: the SM inline-poll mechanism calls the callee's
     // RESUME FUNCTION (`ynz_sm_<name>_resume`), not the outer wrapper. Both declarations
     // are emitted here — the wrapper for non-SM callers, the resume fn for SM callers.
-    for (local_name, sig) in imported_fns {
+    // Iterate in sorted order: this loop's iteration order is DECLARATION EMISSION ORDER
+    // in the module's IR text, and `imported_fns` is a per-process-seeded HashMap — unsorted
+    // iteration made multi-file `--emit-ir` output flap run-to-run (v0.3-M7 R10 determinism
+    // fix; the mono-table twin lives in typeck's MonomorphizationTable as a BTreeMap).
+    let mut imported_fns_ordered: Vec<(&String, &ynz_typeck::signatures::FunctionSig)> =
+        imported_fns.iter().collect();
+    imported_fns_ordered.sort_by_key(|(local_name, _)| local_name.as_str());
+    for (local_name, sig) in imported_fns_ordered {
         // Use the exported symbol name for the LLVM declaration. When the import is aliased
         // (`import { getValue as fetchVal }`), the exporting module compiled and exported
         // `getValue` — the LLVM external declaration must use that name so the linker

@@ -3,7 +3,7 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround"]
 created_at: "2026-07-04"
 updated_at: "2026-07-17"
 metadata:
@@ -593,14 +593,20 @@ after 3 and 4.
      Phase-3 interim golden regeneration predates the R9 ABI fix — those goldens are provisional
      (F1-tainted); this phase's post-fix regeneration is the authoritative one.
   2. Regenerate `examples/pirates-roster/expected_stdout.txt` via its own
-     `expected_stdout.txt.regenerate.sh` — confirm the stdout content is IDENTICAL to the pre-M7
-     baseline (the optimizer must not change observable program behavior; if stdout differs, that is a
-     correctness bug, not an expected regeneration — halt and investigate before accepting).
+     `expected_stdout.txt.regenerate.sh` — confirm the stdout content is byte-identical to the pre-M7
+     baseline modulo the documented M2 scheduler-race ordering window (integration.rs:2596-2658,
+     pre-existing, optimizer-independent — A/B-probed in both modes; wording amended per judge-ratified
+     D-P5.1, FRAGO 013). Any divergence outside that window is a correctness bug, not an expected
+     regeneration — halt and investigate before accepting.
      **CHECKPOINT** — first-pass regeneration complete; stability proof (next steps) not yet run.
   3. Re-run golden generation a SECOND independent time (fresh process invocation, not a repeated
      assertion inside one run) and diff against the first regeneration — every byte must match. This
      is the stability proof this plan's Safety invariant requires, closing the gap the M4 audit's
-     unenforced "stable across 5 runs" claim left open.
+     unenforced "stable across 5 runs" claim left open. Methodology note (FRAGO 013): the 2-run
+     stability proof is TRANSITIVE — each independent fresh-process run byte-asserts against the
+     committed golden set, so run 1 == committed and run 2 == committed together prove
+     run 1 == run 2 by transitivity; no direct run-to-run diff artifact is required beyond the two
+     independent green runs against the same committed set.
   4. Run the FULL pre-existing test suite (830+ tests), the Phase 1/2 RED set, and the Phase 4 stress
      fixture together — one combined green run. Reviewer glance required: Rust-runtime decimal reads
      must not assume 16-alignment of frame-interior i128 slots (Phase 2 lowered those claims to
@@ -612,8 +618,9 @@ after 3 and 4.
      **CHECKPOINT** — full suite + stability proof + cross-implementation matrix all green; ready for
      documentation/demo sign-off.
 - **Exit criteria:** all goldens regenerated and stable across 2 independent runs; `pirates-roster`
-  stdout byte-identical to pre-M7 baseline; full suite green; cross-implementation matrix covers the
-  new `--no-optimize` axis.
+  stdout byte-identical to the pre-M7 baseline modulo the documented M2 scheduler-race ordering window
+  (integration.rs:2596-2658, pre-existing, optimizer-independent — A/B-probed in both modes; FRAGO
+  013); full suite green; cross-implementation matrix covers the new `--no-optimize` axis.
 - **Reviewer fan-out:** code-reviewer; test-quality (does the stability proof actually re-invoke a
   fresh process, not just re-assert the same run); adversarial gate-checker (the cross-implementation
   matrix's new axis).
@@ -938,8 +945,10 @@ after 3 and 4.
 
 - **The `examples/pirates-roster/entrypoint.ynz` byte-exact golden staying GREEN under the new pipeline
   IS this milestone's demo obligation** — Phase 5 step 2 regenerates and byte-diffs
-  `expected_stdout.txt` against the pre-M7 baseline; any divergence is treated as a correctness bug, not
-  an expected regeneration (Phase 5's own exit criteria). **No new demo section is required**: this
+  `expected_stdout.txt` against the pre-M7 baseline; any divergence outside the documented M2
+  scheduler-race ordering window (integration.rs:2596-2658, pre-existing, optimizer-independent —
+  FRAGO 013) is treated as a correctness bug, not an expected regeneration (Phase 5's own exit
+  criteria). **No new demo section is required**: this
   milestone changes the compiler's BACKEND, not the language surface — there is no new syntax/feature
   for `pirates-roster` to demonstrate in context.
 - **ONE new compile-error class SHIPPED (Phase 2, FRAGO 002 — reconciled here per FRAGO 004): the
@@ -1151,6 +1160,20 @@ after 3 and 4.
     ~0.5 session riding the `abi_return_type` pattern already in place. **TRIGGER:** the next
     milestone touching cross-module ABI/declaration codegen, OR the first real cross-module
     bare-`number` param call site a user hits (it will fail loud, pointing here).
+13. **Pre-existing test-target clippy debt** (FRAGO 013 disposition (5); supersedes the orphaned M6
+    note at
+    [`2026-07-04-v0-3-m6-concurrency-hotfix/plan.md:2012-2019`](../../done/2026-07-04-v0-3-m6-concurrency-hotfix/plan.md)
+    — that note flagged the `--all-targets`-only findings "for the conductor to route to a backlog
+    item" and no backlog item was ever created; THIS entry is that item, and the M6 plan is not
+    edited) — **WHAT:** test-target lint debt across crates, outside every declared gate (CI runs
+    clippy WITHOUT `--tests`/`--all-targets`): ~25 `ynz-typeck --tests` sites (stash-probe-proven
+    pre-existing at clean HEAD), plus the `--all-targets` sightings in ynz-numerics/ynz-watch/ynz-fmt
+    tests and the M6-noted ynz-parser (`clippy::len_zero` ×8) / ynz-typeck `independence.rs`
+    (`unused_variables` ×5) findings. **WHY:** pre-existing, zero behavior impact, and fixing mid-M7
+    widens scope for no correctness gain — the declared gate (`cargo clippy --workspace -- -D
+    warnings`, no `--tests`) is clean throughout. **COST:** ~half a session, mechanical sweep.
+    **TRIGGER:** the first CI change adding `--tests`/`--all-targets` to the clippy gate, or the
+    next test-infra milestone.
 
 ## Roadmap Reconciliation (executed at Phase 8; recorded here so the executor has zero ambiguity)
 

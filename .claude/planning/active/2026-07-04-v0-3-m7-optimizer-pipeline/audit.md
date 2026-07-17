@@ -1377,6 +1377,177 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   ynz-codegen + ynz-driver. Session-id appended to plan.md frontmatter same dispatch. NO commits
   (per dispatch).
 
+- `executor-2026-07-17-phase5-determinism-goldens` — 2026-07-17 — **Phase 5 segment 1 (Steps 0–2,
+  planner CHECKPOINT after Step 2 honored; STATUS: PARTIAL, resume at `phase-5/step-3`,
+  handoff-phase-5.md written).**
+  - **Step 0 (FRAGO 006 / R10) — Paper-Trace:**
+    - **Observed** — 10 independent `ynz build --emit-ir` runs of `examples/pirates-roster` at
+      HEAD `743d0af` (dev container, fresh debug build): binary flaps between exactly 2 hashes
+      (`6f4add7f…` ×6 / `10e57238…` ×4); IR text shows 3 variants.
+    - **Expected** — Safety invariant: repeated builds on the same input → byte-identical output.
+    - **Residual** — variant `.ll` diffs isolate exactly two divergence classes: (a) definition
+      ORDER of the two `identity<T>` monomorphizations (`identity_int` ↔ `identity_string`)
+      swaps → object bytes differ → THE two-hash binary flap; (b) declaration order of imported
+      wrapper/`ynz_sm_*_resume` declares swaps → IR-text-only flap (binaries identical across
+      differing declare orders — proven by run1/run2 sharing a binary hash with different IR).
+    - **Hypothesis (CONFIRMED)** — per-process-seeded `HashMap` iteration reaching emission
+      order: (a) `MonomorphizationTable.entries: HashMap<MonoKey, MonoSignature>`
+      (`ynz-typeck/src/generics.rs:98`) iterated by codegen Pass 1.5/2.5
+      (`ynz-codegen/src/emit.rs:1277/1339`); (b) the imported-fn declaration loop
+      (`emit.rs:1122`) iterating `imported_fns: HashMap`. FRAGO 006's emission-order suspicion
+      confirmed with evidence, not assumed. (`load_project` was ruled out — already sorts,
+      `load.rs:178`.)
+    - **Evidence path** — `generics.rs:98`, `emit.rs:1277/1339/19200/1122`; variant `.ll` diffs
+      (this session, scratchpad).
+    - **Fix (authoritative source)** — (a) `entries` → `BTreeMap` (+ `Ord` derived on `Type`
+      (types.rs) and `MonoKey`; doc comments forbid reverting and forbid semantic meaning on the
+      derived order); also fixes `emit.rs:19200`'s nondeterministic first-match-by-name mono
+      fallback. (b) sorted iteration at the one order-sensitive imported-fns consumer
+      (`emit.rs:1122`) — recorded decision: the 29-signature-site `HashMap→BTreeMap` cascade
+      across 3 crates was out of proportion when every other consumer is order-insensitive
+      lookup; the loop carries a WHY comment naming it the declaration-emission-order point.
+    - **Regression check (committed as test)** — `ynz-driver/tests/build_determinism.rs`: 6
+      INDEPENDENT process spawns (fresh hash seed each — in-process repetition would prove
+      nothing) building a tempdir copy of pirates-roster; asserts byte-identical binary AND
+      `--emit-ir` text. GREEN. Post-fix 10-run probe: 10/10 identical (binary `6f4add7f…`,
+      IR `e165a28e…`).
+  - **Step 1 —** `cargo test -p ynz-codegen --test golden` → 34/34 against COMMITTED goldens
+    with the Step-0 fix in tree; zero diffs to review — the R9/Phase-4 fix rounds had already
+    superseded the Phase-3 provisional set, and this run byte-confirms it as the authoritative
+    post-fix regeneration (FRAGO 007 discharged as a no-op regeneration).
+  - **Step 2 —** regenerate.sh run in container; diff vs the committed pre-M7 baseline (last
+    touched `ebca94e`, M5-era) is a PURE PERMUTATION (sorted-diff empty) of `<pirate>: done`
+    lines wholly inside the M2 Tokio-scheduling window `integration.rs:2596-2656` relaxed to
+    presence-not-order pre-M7; probes (3× default, 2× `--no-optimize`) flap order run-to-run in
+    BOTH modes → scheduler race, NOT optimizer behavior change; deterministic prefix + tail
+    byte-identical. Committed baseline restored (no churn);
+    `integration examples_basics_runs_end_to_end` green. CCIR-5 halt not triggered; surfaced as
+    deviation D-P5.1 below.
+  - **Receipts (dev container):** `build_determinism` 1/1; golden 34/34; `cargo test -p
+    ynz-codegen` all suites green; `generics_typeck` 27/27; pirates integration green;
+    `cargo fmt --all -- --check` clean; clippy clean on `-p ynz-codegen -p ynz-driver --tests`
+    and on every touched file. Full workspace suite NOT run (Step 4, next segment).
+  - **Deviations surfaced (for the deviation-judge — none decided here):** (D-P5.1) Phase 5
+    Step 2 text demands stdout IDENTICAL to baseline; reality: identical modulo the
+    pre-existing, documented, optimizer-independent M2 scheduler-race window (evidence above) —
+    handled by restoring the committed baseline. (D-P5.2) pre-existing lint debt:
+    `cargo clippy -p ynz-typeck --tests -- -D warnings` fails at clean HEAD (~25 sites: unused
+    test vars/imports, non-snake-case M7 test names — stash-probe proven pre-existing); prior
+    phase receipts scoped clippy to codegen+driver; not fixed (out of dispatched scope).
+  - Plan↔task sync: numbered-prose steps (Phase-0/1/2 precedent, no `- [ ]` checkboxes / no
+    TodoWrite) — Steps 0–2 complete, Steps 3–5 open (phase stays open); recorded by this entry +
+    the appended session-id `executor-2026-07-17-phase5-determinism-goldens` (append-only).
+    Checkpoint honored at the planner's post-Step-2 mark on a green-building tree;
+    `handoff-phase-5.md` written (replace-in-place relay). NO commits (per dispatch).
+
+- `executor-2026-07-17-phase5-stability-matrix` — 2026-07-17 — **Phase 5 segment 2 (Steps 3–5,
+  resumed from handoff at `phase-5/step-3`; PHASE COMPLETE, STATUS: DONE; handoff-phase-5.md
+  deleted as final act).** Inherited segment-1 receipts trusted per handoff (Step 0 determinism
+  fix + build_determinism green; Step 1 golden run #1 34/34; Step 2 baseline restored) — only
+  new work verified.
+  - **Step 3 (R7 gate / R10 proof) —** SECOND independent golden run, fresh process
+    (`docker compose exec` → fresh cargo test process): `cargo test -p ynz-codegen --test
+    golden` → **34/34, 0 failed**, zero golden files modified in git status. The suite asserts
+    byte-equality against the COMMITTED golden bytes, so run #2 green IS the byte-diff proof
+    vs run #1 (segment 1's 34/34 against the same committed set). 2-independent-run stability
+    proof discharged: R7's B2 engineered-guard gate paid; R10's fix proven at the gate the
+    Safety invariant names. Receipts: run #1 = segment-1 entry above; run #2 = this dispatch.
+  - **Step 4 (combined green run) —** `cargo test --workspace` in container: **2397 passed /
+    0 failed / 8 ignored** across all suites (aggregate awk over every `test result` line;
+    zero non-ok suite results). Named receipts inside the same tree state:
+    `optimizer_red_gate` **10/10** (the Phase-1 RED gate, permanent-green convention),
+    `hot_loop_stack_stress` **2/2** (Phase 4 stress fixture), `fr23_uaf_planned_red`
+    0 passed / **2 ignored** (FRAGO 011/012 planned-RED locks, unchanged). The 8 ignored are
+    the documented planned-RED/ignored set — no new ignores introduced.
+    **FRAGO-004 decimal-alignment glance:** delta since the Phase-3 commit (`3e3bf6c..HEAD`
+    + working diff) touches ZERO `crates/ynz-runtime` files and contains ZERO
+    decimal/i128/align mentions (grep receipts this dispatch) → no Rust-runtime decimal read
+    path touched since the Phase-3 segment receipts; those receipts stand, no re-glance
+    required (the step's own conditional satisfied on the confirm-the-delta arm).
+  - **Step 5 (cross-impl matrix extension) —** `crates/ynz-driver/tests/cross_impl_consistency.rs`:
+    `run_ynz_mode` generalized to both mode axes (`YNZ_NO_AUTO_PARALLEL` × `YNZ_NO_OPTIMIZE` —
+    the run subcommand reads both through the salsa barrier; `pipeline_config_from_env`,
+    state_machine.rs:879). `corpus_byte_identical_across_auto_parallel_modes` extended into
+    `corpus_byte_identical_across_mode_matrix`: full 2×2 matrix ({parallel, sequential} ×
+    {optimized, no-optimize}), three variant corners each compared pairwise against the
+    default (parallel+optimized) baseline — stdout/stderr/exit-code byte-identical, suspension
+    fixtures (v0_3_m2_* wait/state-machine) included in the corpus. Strictly STRONGER than the
+    old 2-mode assertion (old axis is the sequential+optimized corner). SoA-lint stderr skip
+    TIGHTENED, not widened: now applies only to sequential variants (SoA admission is
+    auto-parallel-gated, not optimizer-gated — the parallel+no-optimize corner must and does
+    match baseline stderr). fr23 fixtures remain excluded, ratchet comments preserved verbatim
+    (FRAGO 012 — not re-included). Receipt: `cross_impl_consistency` **2/2 green** (matrix
+    corner 500.9s — genuinely running 4 corpus sweeps), post-edit dedicated run;
+    `cargo fmt --all -- --check` clean; `clippy -p ynz-driver --tests -- -D warnings` clean.
+  - **Exit criteria (whole phase) — ALL MET:** goldens stable across 2 independent runs ✓
+    (Steps 1+3); pirates-roster stdout byte-identical to pre-M7 baseline ✓ (segment 1, Step 2,
+    modulo surfaced D-P5.1); full suite green ✓ (2397/0/8); cross-impl matrix covers the
+    `--no-optimize` axis ✓ (Step 5); Step 0 Paper-Traced ✓ (segment 1).
+  - **Deviations surfaced this segment:** none new. Segment 1's D-P5.1 (Step-2 scheduler-race
+    window) and D-P5.2 (pre-existing ynz-typeck test-target clippy debt) remain open for the
+    deviation-judge — not adjudicated here.
+  - **Recorded decisions:** (1) test renamed `corpus_byte_identical_across_auto_parallel_modes`
+    → `corpus_byte_identical_across_mode_matrix` — the old name would misdescribe a 2-axis
+    matrix; assertion surface strictly grew, nothing weakened. (2) pairwise-vs-baseline
+    comparison (3 comparisons/file, transitively all-pairs) over all-pairs (6/file) — same
+    guarantee, half the runtime on an already-500s sweep. (3) sequential-only scoping of the
+    SoA stderr skip (evidence: soa.rs gate #2 is auto-parallel-gated).
+  - Plan↔task sync: numbered-prose steps (Phase-0/1/2 precedent, no `- [ ]` checkboxes / no
+    TodoWrite) — Steps 3–5 complete this segment; with segment 1's Steps 0–2, ALL Phase 5
+    steps closed → phase complete (final `DONE`, planner's post-Step-5 CHECKPOINT =
+    phase-complete mark). Session-id `executor-2026-07-17-phase5-stability-matrix` appended to
+    plan.md frontmatter same action as this entry (append-only). `handoff-phase-5.md` DELETED
+    as this dispatch's final act (phase-completing executor, sole owner). NO commits (per
+    dispatch).
+
+- `executor-2026-07-17-frago013-fixround` — 2026-07-17 — **FRAGO 013 fix round (Phase 5 fleet
+  blocker + wording/deferral dispositions; all five applied this dispatch).**
+  - **(1) BLOCKER — vtable emission determinism (vtable.rs).** `emit_vtable_globals`
+    (crates/ynz-codegen/src/vtable.rs) now flattens `shape_table.shapes` into
+    (shape_name, contract_name) pairs and sorts before `add_global` — identical R10 pattern to
+    emit.rs Pass 0.25's imported_fns fix; WHY comment cites R10/FRAGO 013 and names the
+    DCE-masking (`--no-optimize`-live) character. New determinism leg: committed fixture
+    `crates/ynz-driver/tests/fixtures/v0_3_m7_r10_multi_vtable.ynz` (3 shapes × 3 contracts →
+    3 vtables, distinct method names so no UFCS-overload LLVM-name collision), built RUNS=6
+    independent processes under `--no-optimize` in build_determinism.rs
+    (`multi_vtable_no_optimize_build_is_deterministic_across_independent_processes`),
+    binary+IR byte-equality via a shared `assert_independent_builds_identical` helper (both
+    legs now use it).
+    **Probe receipt (mutation proof):** sort scratch-reverted to the original unsorted
+    HashMap iteration → new leg **FAILED at run 2** ("binary bytes differ from run 1",
+    fingerprints `8fac969f…` vs `c1199b63…`, len 15890272 — the exact flap class); fix
+    restored from snapshot → both legs green; vtable.rs byte-identical to the fixed version
+    post-restore (sha256 `f82215e3e15b914e1acb948bbae0f062e4b0d47725fa1e5a0bd5483545361523`
+    pre-probe == post-restore; a subsequent `cargo fmt` pass then applied a whitespace-only
+    reformat, and both legs re-ran green on the final shipped bytes).
+  - **(2) Comment math** — build_determinism.rs doc comment now states the JOINT binary∧IR
+    bound is the operative guard and gives the honest 60/40-derived single-axis figure:
+    P(all 6 runs one ordering) = 0.6^6 + 0.4^6 ≈ 5.1% (conservative per-leg ceiling), replacing
+    the uniform-assumption "< 4%" line.
+  - **(3) D-P5.1 wording (judge-ratified)** — plan.md Phase 5 Step 2 + exit criteria + the
+    Demo & Error Gallery sibling now read "byte-identical to the pre-M7 baseline modulo the
+    documented M2 scheduler-race ordering window (integration.rs:2596-2658, pre-existing,
+    optimizer-independent — A/B-probed in both modes)", citing FRAGO 013 (sibling sweep: grep
+    "pre-M7 baseline" — all three occurrences amended).
+  - **(4) Step 3 methodology note** — plan.md Phase 5 Step 3 now records the transitive
+    proof shape (each independent fresh-process run byte-asserts against the committed golden
+    set; run1 == run2 by transitivity), citing FRAGO 013.
+  - **(5) FR #13** — Future Requirements #13 appended: four-field deferral for the
+    pre-existing test-target clippy debt (~25 ynz-typeck --tests sites stash-probe-proven at
+    clean HEAD + --all-targets sightings in ynz-numerics/ynz-watch/ynz-fmt + the M6-noted
+    ynz-parser/independence.rs findings), explicitly superseding the orphaned M6 note
+    (2026-07-04-v0-3-m6-concurrency-hotfix/plan.md:2012-2019 — referenced, M6 plan not
+    edited). WHAT/WHY/COST/TRIGGER per FRAGO 013's recorded text.
+  - **Verification receipts:** `cargo test -p ynz-driver --test build_determinism` → **2/2
+    green** (both legs, final tree); `cargo test -p ynz-codegen` → all suites green
+    (14+1+2+9+34+1 passed, 0 failed); `cargo fmt -p ynz-codegen -p ynz-driver -- --check`
+    clean; `cargo clippy -p ynz-codegen -p ynz-driver -- -D warnings` clean (declared gate
+    scope, no --tests). NO commits (per dispatch).
+  - Plan↔task sync: no plan checkboxes owned by this fix round (FRAGO-disposition dispatch,
+    numbered-prose phase convention); session-id
+    `executor-2026-07-17-frago013-fixround` appended to plan.md frontmatter in the same
+    action as this entry (append-only).
+
 ## FRAGO log
 
 ### FRAGO 001 — 2026-07-16 — session-id: `conductor-2026-07-16-phase1-review`
@@ -1703,6 +1874,38 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   have fired; feeding the AAR alongside the checkpoint-escalation as evidence for the mechanical
   dispatch-seam backstop already routed to the roadmap ledger.
 
+### FRAGO 013 — 2026-07-17 — session-id: `conductor-2026-07-16-phase2-dispatch`
+
+- **Trigger.** Phase 5 fleet: graveyard clean / acceptance MET / test-quality 3 minors /
+  deviation-judge on-plan (1 FRAGO candidate D-P5.1; D-P5.2 → merge to one FR deferral) /
+  code-reviewer **1 blocker + 1 minor**: `emit_vtable_globals` (vtable.rs:26, Pass 1.6) iterates
+  `shape_table.shapes: HashMap` per-process-seeded — the SAME unordered-iteration-reaching-emission
+  class Step 0 fixed, missed because it is DCE-masked in optimized builds; empirically reproduced
+  (8/8 vtable-order flap, 6/6 distinct binary hashes, --no-optimize, ≥2-vtable module). The
+  Safety invariant's reproducible-build guarantee is tier-unscoped and --no-optimize is a shipped
+  escape hatch → fix now (10-line sorted iteration), not a deferral.
+- **Classification.** Risk-neutral in aggregate (the blocker fix is the same R10 mitigation
+  mechanism extended to a third consumer — same MEDIUM bucket; remainder is wording/deferral
+  routing). Auto-apply + log.
+- **Disposition (one executor dispatch).** (1) BLOCKER: sort `emit_vtable_globals` iteration by
+  (shape_name, contract_name) — identical pattern to the imported_fns fix; correct the audit's
+  false "every other consumer is order-insensitive" rationale where quoted in plan/audit text
+  going forward (this FRAGO is the correction of record); extend determinism coverage with a
+  ≥2-vtable fixture leg in build_determinism.rs so the class is locked where DCE can't mask it
+  (--no-optimize build). (2) Comment math in build_determinism.rs: state the joint binary∧IR
+  bound (adequately powered) and the honest 60/40-derived single-axis figure (~5.1%). (3) D-P5.1
+  wording amendment (judge-ratified): Phase 5 Step 2 exit text → "byte-identical modulo the
+  documented M2 scheduler-race ordering window (integration.rs:2596-2658, pre-existing,
+  optimizer-independent — A/B-probed both modes)". (4) Step 3 methodology note: record the
+  transitive two-independent-runs-vs-committed-set proof shape in the step text. (5) FR #13: one
+  four-field deferral for the pre-existing test-target clippy debt (~25 ynz-typeck sites + the
+  green-check --all-targets sightings), explicitly superseding the orphaned M6 plan note
+  (2026-07-04-v0-3-m6-concurrency-hotfix plan.md:2012-2019) — WHAT: test-target lint debt across
+  crates, outside every declared gate (CI runs clippy without --tests); WHY: pre-existing, zero
+  behavior impact, fixing mid-M7 widens scope for no correctness gain; COST: ~half a session
+  mechanical sweep; TRIGGER: the first CI change adding --tests/--all-targets to the clippy gate,
+  or the next test-infra milestone.
+
 ## Context-segment log
 
 - 2026-07-16 — Phase 1, segment 1.
@@ -1752,5 +1955,24 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   - checkpoint reason: N/A — phase completed this segment (Steps 4b/4c/5; the post-4c
     CHECKPOINT mark was passed — noted for the reviewer fan-out per the Phase-2 precedent)
   - canonical resume-at pointer: phase-3 complete (no further steps)
+  - segment verdict: DONE
+
+- 2026-07-17 — Phase 5, segment 1.
+  Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#5-segment-1
+  - segment number: 1
+  - session-id: executor-2026-07-17-phase5-determinism-goldens
+  - subagent_tokens actual: 231560
+  - checkpoint reason: planned mark (post-Step-2 CHECKPOINT honored)
+  - canonical resume-at pointer: phase-5/step-3
+  - segment verdict: STATUS: PARTIAL
+
+- 2026-07-17 — Phase 5, segment 2.
+  Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#5-segment-2
+  - segment number: 2
+  - session-id: executor-2026-07-17-phase5-stability-matrix
+  - subagent_tokens actual: 175144
+  - checkpoint reason: N/A — phase completed this segment (Steps 3-5; handoff deleted as
+    final act)
+  - canonical resume-at pointer: phase-5 complete (no further steps)
   - segment verdict: DONE
   - segment verdict: STATUS: DONE
