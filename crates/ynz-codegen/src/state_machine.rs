@@ -50,7 +50,7 @@ use inkwell::{
     context::Context,
     module::Module,
     targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine},
-    values::{FunctionValue, PointerValue},
+    values::{BasicValue, FunctionValue, PointerValue},
     AddressSpace, OptimizationLevel,
 };
 
@@ -309,6 +309,64 @@ pub fn load_return_value_f64<'ctx>(
     Ok(f_val)
 }
 
+/// The strongest alignment ANY frame-interior i128 slot can honestly claim.
+///
+/// The composed state-machine frame is a raw `ynz_alloc_zeroed` (malloc) block laid
+/// out at 8-byte slot granularity (`build_frame_layouts`): the return slot sits at
+/// byte offset 16 and the `number errors` staging slot at an arbitrary 8-multiple
+/// offset, so a 16-byte i128 slot is guaranteed 8-aligned — and no more. Without an
+/// explicit claim, LLVM defaults an i128 load/store to the type's ABI alignment
+/// (datalayout `i128:128` → `align 16`); optimized X86 ISel honors that claim,
+/// selects `movaps` (alignment-requiring), and faults on an odd-multiple-of-8 slot —
+/// the v0.3-M7 Phase-1 root-caused SIGSEGV class (plan
+/// `2026-07-04-v0-3-m7-optimizer-pipeline`, audit.md Phase-1 Paper-Trace). Every
+/// i128 load/store whose pointer is a frame byte-offset GEP — or an EC ok-word that
+/// points at such a slot — MUST claim exactly this alignment. Backend `-O0` happens
+/// to lower i128 memory ops alignment-indifferently (movq pairs), which is the only
+/// reason the false claim ever looked green.
+pub const FRAME_I128_SLOT_ALIGN: u32 = 8;
+
+/// Claim [`FRAME_I128_SLOT_ALIGN`] on a frame-interior i128 load/store instruction.
+///
+/// # Side effects
+///
+/// Mutates the instruction's alignment metadata; no IR is added or removed.
+pub fn claim_frame_i128_align(inst: inkwell::values::InstructionValue<'_>) -> Result<(), String> {
+    inst.set_alignment(FRAME_I128_SLOT_ALIGN)
+        .map_err(|e| format!("set i128 frame-slot alignment: {e}"))
+}
+
+/// Claim the correct alignment on an i128 memory op whose SOURCE pointer has
+/// ARBITRARY provenance (it may or may not be frame-interior).
+///
+/// Keeps LLVM's ABI `align 16` only when `source` is the direct result of an
+/// `alloca` that itself carries alignment >= 16 — the one provenance test that is
+/// airtight (an alloca's own alignment IS the address guarantee). Every other
+/// provenance (frame byte-offset GEPs, SM staged-param pointers, values laundered
+/// through phi/select/calls) downgrades to the [`FRAME_I128_SLOT_ALIGN`] floor via
+/// [`claim_frame_i128_align`]. A false negative here only costs an unaligned-tolerant
+/// lowering; a false positive would be the v0.3-M7 Phase-1 SIGSEGV class — so the
+/// test stays deliberately narrow.
+///
+/// # Side effects
+///
+/// May mutate `inst`'s alignment metadata; no IR is added or removed.
+pub fn claim_i128_align_by_provenance<'ctx>(
+    inst: inkwell::values::InstructionValue<'ctx>,
+    source: PointerValue<'ctx>,
+) -> Result<(), String> {
+    let is_16_aligned_alloca = source
+        .as_instruction()
+        .filter(|def| def.get_opcode() == inkwell::values::InstructionOpcode::Alloca)
+        .and_then(|def| def.get_alignment().ok())
+        .is_some_and(|align| align >= 16);
+    if is_16_aligned_alloca {
+        // ABI `align 16` is provably honest: the address is a >=16-aligned alloca.
+        return Ok(());
+    }
+    claim_frame_i128_align(inst)
+}
+
 /// Store a decimal128 (i128) return value in the 16-byte return slot at offset 16.
 ///
 /// The i128 exactly fills the 16-byte slot. It is stored as a single i128 load rather
@@ -325,16 +383,19 @@ pub fn store_return_value_i128<'ctx>(
     value: inkwell::values::IntValue<'ctx>,
 ) -> Result<(), String> {
     let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
-    builder
+    let st = builder
         .build_store(slot, value)
         .map_err(|e| format!("store_return_value_i128: {e}"))?;
+    // The return slot is only 8-aligned (frame-interior) — claim that, not ABI 16.
+    claim_frame_i128_align(st)?;
     Ok(())
 }
 
 /// Load the decimal128 (i128) return value from the 16-byte return slot at offset 16.
 ///
 /// The inverse of `store_return_value_i128`. The slot is 16 bytes = exactly the size
-/// of an i128, so this is a direct aligned load — no GEP arithmetic needed.
+/// of an i128, so this is a direct load with no GEP arithmetic — but only 8-aligned
+/// (see [`FRAME_I128_SLOT_ALIGN`]), which the load claims explicitly.
 ///
 /// # Side effects
 ///
@@ -350,6 +411,11 @@ pub fn load_return_value_i128<'ctx>(
         .build_load(ctx.i128_type(), slot, name)
         .map_err(|e| format!("load_return_value_i128: {e}"))?
         .into_int_value();
+    // The return slot is only 8-aligned (frame-interior) — claim that, not ABI 16.
+    let inst = v
+        .as_instruction_value()
+        .ok_or("load_return_value_i128: load has no instruction value")?;
+    claim_frame_i128_align(inst)?;
     Ok(v)
 }
 
@@ -733,7 +799,43 @@ pub fn emit_sleep_poll_branch<'ctx>(
     Ok(())
 }
 
-/// Construct the default LLVM `TargetMachine` used for x86 codegen and frame-layout queries.
+/// Backend pipeline configuration for [`default_target_machine`] (v0.3-M7 Phase 2).
+///
+/// Phase 2 introduces the SHAPE only: every constructor call site threads a config
+/// explicitly, but the sole in-tree value is [`PipelineConfig::o0`] — the default
+/// behavior is unchanged (still `OptimizationLevel::None`). Phase 3 wires the real
+/// LLVM pass pipeline and flips the default THROUGH this one parameter; it never
+/// grows a second, independently-configured `TargetMachine` construction (risk R4 —
+/// the authoritative-derivation twin-drift class this single constructor eliminates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineConfig {
+    /// Backend (ISel / regalloc / scheduling) optimization level for the machine.
+    /// Drives BACKEND passes only — the mid-end IR pipeline (`run_passes`) is a
+    /// separate Phase 3 surface that will ride this same config.
+    pub opt_level: OptimizationLevel,
+}
+
+impl PipelineConfig {
+    /// Today's default tier: no backend optimization (`OptimizationLevel::None`).
+    ///
+    /// Phase 3 owns flipping the shipped default — every Phase 2 call site uses this
+    /// constructor so the flip is a one-definition change, not a call-site hunt.
+    pub fn o0() -> Self {
+        PipelineConfig {
+            opt_level: OptimizationLevel::None,
+        }
+    }
+}
+
+/// Construct THE LLVM `TargetMachine` — the single authoritative constructor for the
+/// whole crate (v0.3-M7 Phase 2 closes risk R4: exactly ONE `create_target_machine`
+/// call site exists, here).
+///
+/// `target_triple` is `None` for the host default triple (the normal `ynz build`
+/// path and the frame-layout sizing query) or `Some(triple)` for an explicit
+/// cross-compilation/test override — the former `emit_artifact` inline override
+/// branch now routes through here too, so the two paths can never drift on
+/// CPU/features/reloc/code-model/opt-level.
 ///
 /// Both `emit_artifact` and `frame_layouts_query` must use this single constructor so their
 /// data-layout strings are byte-identical. A divergent data-layout string between the emitter
@@ -741,10 +843,16 @@ pub fn emit_sleep_poll_branch<'ctx>(
 /// silent frame mis-sizing (Guard G1 — see design/future/cross-module-frame-serialization.md).
 ///
 /// Always initializes x86 targets before creating the machine. Callers that already initialize
-/// x86 (e.g. `emit_artifact`) may call it redundantly — double-init is a no-op per LLVM.
-pub fn default_target_machine() -> Result<TargetMachine, String> {
+/// x86 may call it redundantly — double-init is a no-op per LLVM.
+pub fn default_target_machine(
+    target_triple: Option<&str>,
+    config: PipelineConfig,
+) -> Result<TargetMachine, String> {
     Target::initialize_x86(&InitializationConfig::default());
-    let triple = TargetMachine::get_default_triple();
+    let triple = match target_triple {
+        None => TargetMachine::get_default_triple(),
+        Some(t) => inkwell::targets::TargetTriple::create(t),
+    };
     let target = Target::from_triple(&triple)
         .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
     target
@@ -752,7 +860,7 @@ pub fn default_target_machine() -> Result<TargetMachine, String> {
             &triple,
             "generic",
             "",
-            OptimizationLevel::None,
+            config.opt_level,
             RelocMode::Default,
             CodeModel::Default,
         )

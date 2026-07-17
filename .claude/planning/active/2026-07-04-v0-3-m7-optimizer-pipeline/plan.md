@@ -3,7 +3,7 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing"]
 created_at: "2026-07-04"
 updated_at: "2026-07-16"
 metadata:
@@ -121,7 +121,7 @@ this is pre-release compiler-internal work, fully git-reversible):
 
 | Risk | Prob | Sev | Initial | Mitigations (bucket) | Residual | Gate |
 |------|------|-----|---------|----------------------|----------|------|
-| **R1 — optimizer flip miscompiles suspension frames / runtime FFI calls** (proven: 6/470 decimal128/EC-crossing SIGSEGVs (alignment class), AND — per FRAGO 002 — the Phase-1-confirmed false-ownership-attribute class: `emit.rs`'s `declare_function` (`emit.rs:1656-1686`) emits `readonly`/`noalias` from the raw AST ownership modifier instead of consulting typeck's `effective_ownership` analysis, yielding two deterministic optimized-build miscompiles; unproven: whether `ynz_channel_*` (incl. `ynz_channel_share` refcounting, the real cross-task sharing surface — no `ynz_arc_*` symbols are declared/called from `ynz-codegen`, per FRAGO 001)/drop-glue calls carry correct LLVM attributes to survive DCE/reordering) — *Phases 1–2, 5* | A | III | HIGH | Committed RED fixture set (the 6 spike fixtures + every sibling Phase 1's sweep finds — including the two ownership-attribute fixtures `v0_3_m7_p1_bare_param_mutation.ynz` / `v0_3_m7_p1_share_lend_alias.ynz`, FRAGO 002) gates the build; root-cause-before-fix ordering (**B2 adversarial/RED-repro**, prob −1; proof: failing fixtures committed before any fix lands) | **MEDIUM** (B×III) | recorded |
+| **R1 — optimizer flip miscompiles suspension frames / runtime FFI calls** (proven: 6/470 decimal128/EC-crossing SIGSEGVs (alignment class — 11 confirmed source sites per Phase 2's IR pointer-provenance audit, beyond the 3 Phase-1 anchors; FRAGO 004), AND — per FRAGO 002 — the Phase-1-confirmed false-ownership-attribute class: `emit.rs`'s `declare_function` (`emit.rs:1656-1686`) emits `readonly`/`noalias` from the raw AST ownership modifier instead of consulting typeck's `effective_ownership` analysis, yielding two deterministic optimized-build miscompiles; unproven: whether `ynz_channel_*` (incl. `ynz_channel_share` refcounting, the real cross-task sharing surface — no `ynz_arc_*` symbols are declared/called from `ynz-codegen`, per FRAGO 001)/drop-glue calls carry correct LLVM attributes to survive DCE/reordering) — *Phases 1–2, 5* | A | III | HIGH | Committed RED fixture set (the 6 spike fixtures + every sibling Phase 1's sweep finds — including the two ownership-attribute fixtures `v0_3_m7_p1_bare_param_mutation.ynz` / `v0_3_m7_p1_share_lend_alias.ynz`, FRAGO 002) gates the build; root-cause-before-fix ordering (**B2 adversarial/RED-repro**, prob −1; proof: failing fixtures committed before any fix lands) | **MEDIUM** (B×III) | recorded |
 | **R2 — general hot-loop O0 stack-exhaustion SIGSEGV** (ledger row 439, absorbed by this plan) confounds honest benchmarking and is a live bug independent of SoA — *Phase 4* | A | III | HIGH | Root-cause + eliminate the failure mode (alloca/stack-growth fix + a stress regression fixture) (**B1 eliminate**, prob −2; proof: Phase 4's fixture running past the old ~4.19M-visit crash envelope) | **MEDIUM** (C×III) | recorded |
 | **R3 — inkwell 0.9.0 may not cleanly expose LLVM 18's PassBuilder/`run_passes` surface** (net-new code, zero existing call sites) — *Phase 0* | B | III | MEDIUM | Hard-gate P0 spike with explicit accept/reject STOP-conditions before any durable phase depends on it (**B2 canary/staged**, prob −1; proof: Phase 0's persisted spike verdict) | **MEDIUM** (C×III) | recorded |
 | **R4 — dual `TargetMachine` creation sites drift on pipeline config**, silently mismatching the main path vs. the state-machine path (this roadmap's own recurring authoritative-derivation corpse class — 4 confirmed instances in M4 alone) — *Phase 2* | B | II | HIGH | Thread ONE authoritative constructor (extend `default_target_machine`; delete the second inline construction) — the divergence class cannot exist with one source (**B1 eliminate**, prob −2; proof: grep-verified single construction call site + both consumers threaded from it) | **MEDIUM** (D×II) | recorded |
@@ -431,7 +431,10 @@ after 3 and 4.
   1. Implement the fix Phase 1's evidence points to, covering both confirmed classes (per FRAGO 002,
      audit.md, including its Patrick-directed design decision of 2026-07-16):
      (a) **alignment class** — attribute corrections on the affected sites and/or explicit
-         frame-slot handling that survives the confirmed pass;
+         frame-slot handling that survives the confirmed pass; the affected-site list is **11
+         confirmed source sites** (Phase 2's IR pointer-provenance audit — the SM staged-param
+         pointer path makes arbitrary-provenance number pointers 8-aligned-capable, so the class
+         extends beyond the 3 Phase-1 anchors; citation updated per FRAGO 004);
      (b) **false-ownership-attribute class, fixed from BOTH ends:**
          (i) *codegen* — `declare_function` (`emit.rs:1656-1686`) must consult typeck's
              `effective_ownership` analysis when emitting `readonly`/`noalias`, never the raw AST
@@ -444,7 +447,13 @@ after 3 and 4.
      phase, Phase 2's executor surfaces a scope-split proposal through the plan's own
      over-fat-step / FRAGO mechanism rather than silently absorbing or silently dropping it — the
      split decision belongs to the deviation-judge → FRAGO seam, not pre-decided here.
-  2. Re-run the full RED fixture set from Phase 1; confirm every one now passes optimized.
+  2. Re-run the full RED fixture set from Phase 1; confirm the gate is fully green (per the FRAGO 002
+     reshape, reconciled by FRAGO 004): the 5 differential fixtures (4 alignment +
+     `bare_param_mutation`) PASS optimized, and the alias fixture — which FRAGO 002's decision makes
+     uncompilable by design — is a compile-rejection lock
+     (`red_opt_share_lend_alias_rejected_at_compile_time`, locking the rejection + its teaching
+     phrases; a differential optimized run is structurally impossible for a program that no longer
+     compiles).
      **CHECKPOINT** — RED set green; root cause fix committed; pipeline-wiring work not yet started.
   3. Extend `default_target_machine` to accept the pipeline configuration Phase 3 will need (a
      parameter, not a second global), without yet turning optimization on by default (that is Phase 3's
@@ -484,7 +493,9 @@ after 3 and 4.
   4. Measure `ynz build --release` wall-clock on `examples/pirates-roster/` before/after this phase;
      confirm the <10% increase budget (existing roadmap risk) — this is R5's mitigation proof.
   5. Run the full pre-existing test suite (830+ tests) plus Phase 1/2's RED set under the NOW-DEFAULT
-     optimized pipeline; every one must be green.
+     optimized pipeline; every one must be green. Reviewer glance required: Rust-runtime decimal
+     reads must not assume 16-alignment of frame-interior i128 slots (Phase 2 lowered those claims
+     to align 8).
      **CHECKPOINT** — default pipeline live, compile-time budget proven, full suite green.
 - **Exit criteria:** `ynz build` optimizes by default; `--no-optimize` proven to reproduce the exact old
   O0 output byte-for-byte; compile-time budget met; full suite green.
@@ -540,7 +551,9 @@ after 3 and 4.
      is the stability proof this plan's Safety invariant requires, closing the gap the M4 audit's
      unenforced "stable across 5 runs" claim left open.
   4. Run the FULL pre-existing test suite (830+ tests), the Phase 1/2 RED set, and the Phase 4 stress
-     fixture together — one combined green run.
+     fixture together — one combined green run. Reviewer glance required: Rust-runtime decimal reads
+     must not assume 16-alignment of frame-interior i128 slots (Phase 2 lowered those claims to
+     align 8).
   5. Run the existing cross-implementation consistency harness
      (`crates/ynz-driver/tests/cross_impl_consistency.rs`, `--no-auto-parallel` vs. default) under the
      new pipeline — confirm identical stdout/stderr/exit-code, now ALSO across `--no-optimize` vs.
@@ -798,13 +811,22 @@ after 3 and 4.
 
 ### Teaching
 
-- No new user-facing diagnostic class is anticipated from wiring the optimizer pipeline itself
-  (Phases 0–3, 5, 7 are backend/tooling work with no new parse/typeck-visible surface). `--no-optimize`'s
-  CLI help text follows the existing `--no-auto-parallel` precedent's shape (mirrored, not reinvented —
-  Phase 3 step 2).
-- If Phase 1's sweep or Phase 4's fix unexpectedly surfaces a genuinely new compile-error class, it
-  follows the WHAT/WHAT-INSTEAD/WHY format per Golden Rule 11 and earns a gallery entry (see Demo &
-  Error Gallery below) — named as a live possibility per the CCIR above, never assumed away.
+- **Phase 2 shipped exactly ONE new user-facing compile-error class** (FRAGO 002, reconciled here per
+  FRAGO 004): the aliasing-call rejection — a call passing the same value (or overlapping pieces of
+  one value) into two parameter positions where at least one can modify it is a compile error.
+  Testable assertions: the diagnostic follows WHAT/WHAT-INSTEAD/WHY per Golden Rule 11 (WHAT names
+  both positions and their meanings, including whole-vs-part overlap; WHAT-INSTEAD offers a copyable
+  `.copy()` fix; WHY is contextual and jargon-free — no "alias"/"borrow"/"noalias" in user-facing
+  text), locked by `crates/ynz-typeck/tests/aliasing_call_rejection.rs`'s teaching-shape test and
+  `crates/ynz-driver/tests/error_galleries.rs`'s key-phrase assertions. No other new diagnostic class
+  has shipped from Phases 0–2; the remaining optimizer-pipeline wiring (Phases 3, 5, 7) is
+  backend/tooling work with no new parse/typeck-visible surface. `--no-optimize`'s CLI help text
+  follows the existing `--no-auto-parallel` precedent's shape (mirrored, not reinvented — Phase 3
+  step 2).
+- If Phase 4's fix or a later phase unexpectedly surfaces a FURTHER genuinely new compile-error
+  class, it follows the same WHAT/WHAT-INSTEAD/WHY format per Golden Rule 11 and earns a gallery
+  entry (see Demo & Error Gallery below) — named as a live possibility per the CCIR above, never
+  assumed away.
 - Phase 6 rewrites [`IMP-no-function-coloring.md`](../../../../docs/internal/implementation/IMP-no-function-coloring.md)'s
   "Scheduler Preemption Model" section to state the TRUE, three-part shipped architecture — (a)
   SM-function back-edge codegen poll-yield (new), (b) non-SM CPU-bound blocking-pool routing (already
@@ -854,14 +876,17 @@ after 3 and 4.
   an expected regeneration (Phase 5's own exit criteria). **No new demo section is required**: this
   milestone changes the compiler's BACKEND, not the language surface — there is no new syntax/feature
   for `pirates-roster` to demonstrate in context.
-- **No new compile-error class is anticipated to ship from this milestone — stated explicitly, per the
-  M5 precedent of an explicit recorded "zero new classes" note rather than silence.** Phases 0–3, 5, 7
-  are backend/tooling work with no new diagnostic surface; Phase 4's fix removes a crash rather than
-  adding an error class; Phase 6 either ships a runtime behavior change (no new diagnostic) or records a
-  registry deferral (not a diagnostic). **Therefore `examples/primantis-orders/` needs no new
-  `m7_errors.ynz` gallery file.** If Phase 1's sweep or Phase 4's fix unexpectedly surfaces a genuinely
-  new user-facing error class, that becomes a live CCIR (¶3.4) and a gallery file is authored at that
-  point — the same "recorded note if zero new classes ship" pattern the M5 plan set precedent for.
+- **ONE new compile-error class SHIPPED (Phase 2, FRAGO 002 — reconciled here per FRAGO 004): the
+  aliasing-call rejection.** Its gallery obligation is met: `examples/primantis-orders/v0_3_m7_errors.ynz`
+  exists with 3 intentional triggers (`share`+`lend` same value; `lend`+`lend` same value;
+  whole-vs-part overlap), each carrying a `// WHY:` comment naming the diagnostic class, locked by
+  `crates/ynz-driver/tests/error_galleries.rs::v0_3_m7_gallery_fires_expected_diagnostics`
+  (diagnostic-count + key-phrase assertions — the established gallery convention). The remaining
+  phases stay diagnostic-free as originally scoped: Phases 3, 5, 7 are backend/tooling work with no
+  new diagnostic surface; Phase 4's fix removes a crash rather than adding an error class; Phase 6
+  either ships a runtime behavior change (no new diagnostic) or records a registry deferral (not a
+  diagnostic). If a FURTHER genuinely new user-facing error class surfaces, that becomes a live CCIR
+  (¶3.4) and extends the same gallery file — the pattern this milestone has now exercised for real.
 
 ### Feature Registry Entries
 
@@ -876,7 +901,11 @@ after 3 and 4.
   explicitly so reviewers know it was considered, not forgotten.
 - **Explicitly none** for the rest: no new keywords, banned_declaration_keywords, banned_jargon,
   primitive_intrinsics, type_attached_constants, diagnostic_templates, or muted_hint_domain entries —
-  this milestone's work is entirely backend/codegen-tier with no new language surface.
+  the milestone's remaining work is backend/codegen-tier; the ONE new language-surface item shipped
+  (Phase 2's aliasing-call compile rejection, FRAGO 002/004) needs none of these entry kinds — its
+  message is per-site dynamic (names/modifiers/paths interpolated), which stays in code per the
+  feature-registry carve-out precedent ([`registry/features.toml`](../../../../registry/features.toml):1700-1705,
+  the can't-infer-suspension per-site-dynamic note).
 
 ## 4. Sustainment
 

@@ -475,6 +475,225 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
     aliasing decision was applied as recorded, not re-litigated. These edits await sealing in this
     phase boundary's Step-8 commit per FRAGO 003's disposition (3).
 
+- `conductor-2026-07-16-phase2-dispatch` — 2026-07-16 — Cold-resume + Phase 2 kickoff conductor
+  session. Step-0 reconcile: Phase 0 sealed green (`7b51713`, Plan-Phase #0), Phase 1 sealed green
+  (`7f4f511`, Plan-Phase #1; `50c3356` RED-gate self-commit covered by FRAGO 003's retroactive
+  review). No handoff files; tree clean except two unrelated `SCRATCH-*audit*` files (preflight,
+  known-not-mine). Resume point: Phase 2. Model policy re-confirmed by Patrick this session:
+  **fable / executor-medium for all executor dispatches** (standing override of per-phase
+  select-model table-reads, per the existing `conductor-2026-07-16-fable-model-override` record;
+  exception only for trivial one-line fixes). Radar noted: Future Requirements #9 (fr23)
+  disposition (b) gate becomes runnable at the Phase 3 boundary — to be surfaced there.
+
+- `executor-2026-07-16-phase2-fix-constructor` — 2026-07-16 — Executed **Phase 2, ALL steps
+  (1–5), phase complete** in one window (recorded decision below on proceeding past the Step-2
+  CHECKPOINT mark). **NO commits made** (FRAGO 003 disposition (2) — everything awaits the
+  conductor's Step-8 gate; working tree carries the full diff). Evidence chain:
+  - **Step 1a (alignment class):** every `load i128`/`store i128` whose pointer can be a
+    frame-interior (8-aligned) address now claims `align 8` explicitly, via the new shared
+    helper `state_machine::claim_frame_i128_align` + `FRAME_I128_SLOT_ALIGN = 8` (doc comment
+    carries the Phase-1 Paper-Trace rationale). 11 code sites annotated: `state_machine.rs`
+    `store_return_value_i128`/`load_return_value_i128` (frame return slot); `emit.rs`
+    wrap_ec_i128 (~5158), crossing-flush ec_num dec_ptr (~6363), bind_sm_result cob (~8189),
+    copy-on-bind cob (~8469), num_err staging store (~14385), num_err_i128 load (~14377),
+    sm_ret_dec_load (~14502), ec_result cob (~19288), `number_to_heap_cell` (~3501),
+    `store()` dec_bits (~20369), `dec_field_bits` (~20537). The last five were found by an
+    IR provenance audit BEYOND the two Phase-1-cited sites: the SM number-PARAM path stages a
+    pointer INTO the caller's composed frame (`load()`'s `sm_number_param_set` branch), so any
+    ptr-to-i128 of arbitrary provenance can be 8-aligned — every such dereference claims the
+    floor. Verification receipt (tree = this working tree): emitted IR for
+    `v0_3_m3a_p1_ec_crossing_local_propagated_number.ynz` re-audited by pointer-provenance
+    script — every remaining `i128 … align 16` op traces to `alloca` (13) or fresh
+    `ynz_alloc(16)` heap cells (2), both genuinely 16-aligned (malloc fundamental-alignment
+    contract); zero frame-interior align-16 claims remain.
+  - **Step 1b(i) (codegen end):** typeck's `EffectiveOwnershipReport` is now threaded
+    `CheckOutput` → `codegen_query` → `emit_artifact` → `build_module` → `declare_function`
+    (new `effective_ownership` field/param). `declare_function` consults ONLY the effective
+    answer: `Reads` → `readonly`+`noalias`; `Writes` → `noalias` (exclusivity now enforced by
+    the Step-1b(ii) rejection); `Unknown` → NO attributes (conservative degrade); declared
+    `give` → none. The raw-AST `unwrap_or(Share)` default is gone.
+  - **Step 1b(ii) (typeck end):** new aliasing-call rejection —
+    `effective_ownership::find_aliasing_call_violations` (module walk; place-paths =
+    identifier + field chains; overlap = prefix; write-capable = declared `lend`/`give` OR
+    effective `Writes`/`Unknown`; scalar int/float/bool params exempt; UFCS receiver = arg 0;
+    builtins skipped) + diagnostic in `check_query` (WHAT names both positions and their
+    meanings incl. whole-vs-part "`order.slip` is part of `order`"; WHAT-INSTEAD offers
+    `.copy()`; WHY is contextual, jargon-free — no "alias"/"borrow"/"noalias" in user text).
+    NOT absorbed as over-fat: the checker + wiring + tests landed comfortably in-phase
+    (~350 LOC) — no scope-split proposal needed.
+  - **Step 2 (RED gate):** `optimizer_red_gate` now **6/6 green and un-`#[ignore]`d** (runs in
+    the default suite). 4 alignment fixtures + `bare_param_mutation` pass the differential
+    O0-vs-optimized harness; `share_lend_alias` is reshaped (test-ratchet marker in-file) into
+    `red_opt_share_lend_alias_rejected_at_compile_time` — the FRAGO-002-decided resolution makes
+    the differential shape structurally impossible (the program no longer compiles), so the
+    test now locks the compile rejection + its teaching phrases. Receipt:
+    `docker compose run --rm dev cargo test -p ynz-driver --test optimizer_red_gate` →
+    6 passed / 0 failed.
+  - **Step 3 (constructor shape):** `default_target_machine(target_triple: Option<&str>,
+    config: PipelineConfig)` — new `PipelineConfig { opt_level }` with sole in-tree value
+    `PipelineConfig::o0()` (default NOT flipped; Phase 3's job, through this one parameter).
+  - **Step 4 (single construction site):** the `emit_artifact` explicit-`target_triple` inline
+    override branch (`emit.rs:888-905`, `OptimizationLevel::None` at `:900`) is DELETED; both
+    triple paths route through the one constructor. Receipt:
+    `grep -rn create_target_machine crates/ynz-codegen/src/` → exactly ONE call site
+    (`state_machine.rs`, inside `default_target_machine`); the other 2 hits are comments.
+    Also migrated: `queries.rs` frame-layout sizing caller (Guard G1 intact — same
+    constructor, same data layout) and the `false_sharing_padding.rs` test caller.
+  - **Step 5 (full suite):** `cargo test --workspace` → **133 suites, 0 failures, exit 0**;
+    `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all -- --check` clean;
+    `cargo build --workspace --release` green. **No default behavior change:** every
+    object-byte SHA-256 golden passed UNCHANGED (align-8 claims don't alter -O0 lowering;
+    no golden fixture's attributes moved). ONE IR-text insta snapshot intentionally
+    regenerated (`golden__m2_smoke_ir.snap`): single-line delta, `%dec_bits = load i128, ptr
+    %dadd` now `align 8` — the honest-claim change itself, not a behavior change.
+  - **Demo & Error Gallery:** new gallery `examples/primantis-orders/v0_3_m7_errors.ynz`
+    (3 triggers with `// WHY:` comments: share+lend same value, lend+lend same value,
+    whole-vs-part overlap) + `error_galleries.rs::v0_3_m7_gallery_fires_expected_diagnostics`
+    (count 3–5 + key phrases) + README row. New typeck test file
+    `crates/ynz-typeck/tests/aliasing_call_rejection.rs` (9 tests: rejections, accepted
+    read-read + distinct-value + scalar boundaries, UFCS parity, teaching-shape lock).
+  - **Recorded decisions (durable, reasons on the record):** (1) effective `Unknown` treated as
+    write-capable in the aliasing check — the same conservative reading the independence
+    analysis gives the lattice's middle (one lattice, one convention); cost: a rare
+    cross-module same-value call whose callee is genuinely read-only but unanalyzable gets
+    rejected — Golden Rule 5 side of the tradeoff. (2) `Unknown` → zero LLVM attributes in
+    `declare_function` (claim nothing you can't prove). (3) NO `[[diagnostic_template]]`
+    registry entry: the message is per-site dynamic (names, modifiers, paths interpolated),
+    matching the sibling transitive-share-violation diagnostic's in-code precedent;
+    feature-registry.md reserves templates for reusable canonical `DiagnosticKind` text.
+    (4) Proceeded past the Step-2 CHECKPOINT mark to phase completion in one window: the
+    dispatch conditioned checkpointing on approaching context limits ("if you approach context
+    limits, checkpoint"), ample window remained after Step 2, and Steps 3–5 were small; no
+    `handoff-phase-2.md` was ever needed (none written, none to delete). (5) `ynz_alloc(16)`
+    heap i128 ops keep ABI `align 16` — malloc's fundamental-alignment contract on supported
+    targets, confirmed by the provenance audit + green backend-O2 differential runs.
+    (6) Typeck-side scalar exemption tests `Int|Float|Bool` on the resolved param type — a
+    deliberate small mirror of codegen's `is_ptr_param` scalar arm, documented at the site.
+  - **Deviations surfaced (for the deviation-judge — not decided here):** (1) plan
+    `## Invariants` sections are now STALE against FRAGO 002: `### Teaching` + `### Demo &
+    Error Gallery` still assert "no new compile-error class … no new gallery file", and
+    `### Feature Registry Entries` still says "explicitly none … no diagnostic_templates" —
+    the aliasing rejection IS a new user-facing error class (gallery + tests shipped per the
+    dispatch's exit criteria); the invariants text needs a FRAGO-ratified rewrite (not
+    self-applied). (2) Phase 2 Step 2's "every one must now PASS optimized" is literally
+    unsatisfiable for `v0_3_m7_p1_share_lend_alias.ynz` under FRAGO 002's own decision (it no
+    longer compiles) — resolved as the reshaped compile-rejection test; flagged in case the
+    seam reads "PASS optimized" literally. (3) The alignment fix required 11 sites, not just
+    the 3 cited anchors (`emit.rs:8189`/`:8469`, `state_machine.rs:565-579`) — the SM
+    staged-param pointer path (evidence: `emit.rs` `load()` `sm_number_param_set` branch,
+    "staged a pointer to 16 live frame-resident bytes") makes arbitrary-provenance number
+    pointers 8-aligned-capable; scope stayed within "attribute corrections on the affected
+    sites" but the affected-site list is larger than the plan text names. (4) Runtime-side
+    note (out of Phase-2 scope, surfaced for the radar): Rust runtime functions receiving
+    decimal pointers must not assume 16-alignment either (e.g. a future `ptr.cast::<i128>()
+    .read()`); today's byte-copy reads are fine — worth a Phase 3/5 reviewer glance, no IR
+    claim involved.
+  - Plan↔task sync: numbered-prose steps (Phase-0/1 precedent, no `- [ ]` checkboxes), no
+    TodoWrite in this dispatch — Phase 2 steps 1–5 all complete (done↔done; no steps remain
+    open); completion recorded by this entry + the appended session-id
+    `executor-2026-07-16-phase2-fix-constructor` (append-only — all thirteen prior session-ids
+    preserved). No handoff file exists for this phase (completed in one window). These edits
+    await sealing in the phase boundary's Step-8 commit per FRAGO 003's disposition (2)/(3).
+
+- `executor-2026-07-16-phase2-frago004-reconcile` — 2026-07-16 — **FRAGO 004 disposition executor +
+  Phase 2 review-round fixes (test-quality should-fix, code-reviewer perf note, §6.1 deferral
+  routing).** Applied FRAGO 004 as recorded, no re-litigation. **NO commits made** (FRAGO 003
+  disposition (2) — everything awaits the conductor's Step-8 gate).
+  - **FRAGO 004 plan.md edits (all five, applied exactly):** (a) `### Teaching` + `### Demo & Error
+    Gallery` rewritten to shipped reality — ONE new compile-error class (aliasing-call rejection,
+    FRAGO 002, WHAT/WHAT-INSTEAD/WHY conformant) + the `v0_3_m7_errors.ynz` gallery and its
+    `error_galleries.rs` lock, testable-assertion style kept; (b) `### Feature Registry Entries` —
+    ONLY the "entirely backend/codegen-tier with no new language surface" framing sentence corrected;
+    the "no diagnostic_templates" sub-claim retained (per-site dynamic carve-out,
+    `registry/features.toml:1700-1705` precedent); (c) Phase 2 Step 2 amended to the FRAGO-002
+    reshape — 5 fixtures pass optimized, alias fixture is the compile-rejection lock
+    `red_opt_share_lend_alias_rejected_at_compile_time`; (d) alignment-class citation updated in
+    BOTH the ¶1 R1 row and Phase 2 Step 1(a): 11 confirmed source sites via the IR
+    pointer-provenance audit, beyond the 3 Phase-1 anchors; (e) one-line Rust-runtime
+    decimal-alignment reviewer-glance pointer added to Phase 3 Step 5 AND Phase 5 Step 4.
+  - **Test-quality should-fix:** new test
+    `same_value_into_two_bare_mutating_params_is_rejected` in
+    `crates/ynz-typeck/tests/aliasing_call_rejection.rs` — TWO BARE (inferred-lend / effective
+    `Writes`) params aliasing the same value, no declared `lend` on either; rejected. Receipt:
+    `cargo test -p ynz-typeck --test aliasing_call_rejection` → 10 passed / 0 failed.
+  - **Code-reviewer perf refinement (SHIPPED, provenance test airtight):** new
+    `state_machine::claim_i128_align_by_provenance(inst, source_ptr)` — keeps ABI `align 16` ONLY
+    when the source pointer is the direct result of an `alloca` carrying alignment >= 16 (an
+    alloca's own alignment IS the address guarantee — no guess involved); every other provenance
+    (GEPs, staged params, phi/select/call-laundered pointers) still downgrades to the
+    `FRAME_I128_SLOT_ALIGN` floor via `claim_frame_i128_align`. Threaded at exactly the two
+    blanket sites: `store` dec_bits (`emit.rs` ~20384) and `store_field` dec_field_bits
+    (`emit.rs` ~20560). `golden__m2_smoke_ir.snap` intentionally regenerated (single-line delta:
+    `%dec_bits = load i128, ptr %dadd` back to `align 16` — `%dadd` IS a direct
+    `alloca i128, align 16`, so the honest claim is 16 there). Receipts:
+    `cargo test -p ynz-codegen` → all suites green (34-test golden suite incl. the regenerated
+    snap); `cargo test -p ynz-driver --test optimizer_red_gate` → 6 passed / 0 failed (the
+    alignment class stays locked — the narrowing resurrects nothing);
+    `cargo fmt --all -- --check` clean; `cargo clippy -p ynz-typeck -p ynz-codegen -- -D warnings`
+    clean.
+  - **§6.1 deferral routed to the roadmap's durable home:** four-field deferral (WHAT/WHY/COST/
+    TRIGGER) for the `v0_3_m4_p3_cross_give_generic_not_over_rejected` flake
+    (`ynz_run_with_alloc_counter` build-state race under full-suite parallelism,
+    `crates/ynz-driver/tests/integration.rs:5276`) appended to
+    `2026-05-21-v0-3-concurrency-perf/audit.md` under Idempotency-Key
+    `2026-07-04-v0-3-m7-optimizer-pipeline#2: crates-ynz-driver-tests-integration-rs-5276`
+    (grep-checked ABSENT before writing). NO Capability Ledger row — nit-path deferral, per the
+    dispatch.
+  - **Deviations surfaced:** none — plan text and reality agree post-FRAGO-004; the perf
+    refinement shipped within its stated bound (airtight provenance test found, no guess shipped).
+  - Plan↔task sync: numbered-prose steps (Phase-0/1/2 precedent, no `- [ ]` checkboxes), no
+    TodoWrite in this dispatch; completion recorded by this entry + the appended session-id
+    `executor-2026-07-16-phase2-frago004-reconcile` (append-only — all fourteen prior session-ids
+    preserved). These edits await sealing in the phase boundary's Step-8 commit per FRAGO 003.
+
+- `executor-2026-07-16-phase2-fixloop-timing` — 2026-07-16 — **Phase 2 fix-loop: green-check RED
+  on two `m2_state_machine_integration` timing tests — verified, root-caused PRE-EXISTING
+  contention marginality, fixed the test bound (not the compiler).** **NO commits made** (FRAGO
+  003 disposition (2) — awaits the conductor's Step-8 gate).
+  - **Paper-Trace:**
+    - **Observed** — `background_from_suspending_entrypoint_runs_concurrently` (:212) and
+      `background_direct_spawn_of_suspending_fn_still_runs` (:685) failed green-check at
+      ~5.5–5.9s elapsed vs a 5s limit, full-suite parallel run. Re-measured this dispatch,
+      dev container, uncontended: working-tree fixture wall (`ynz run`, compile + execute)
+      10 samples 501–561ms (mean ~521ms); clean-HEAD binary 10 samples 500–594ms (mean ~529ms).
+      Both tests isolated, 5x each: 10/10 pass, 0.7–1.3s harness-inclusive. 18-way parallel
+      self-contention: HEAD 1426–1547ms max-wall, working tree 1292–1452ms — statistically
+      identical.
+    - **Expected** — fixture completes well under 5s: program runtime is ~150ms of sleeps
+      (worker 50ms + main 100ms); the rest is debug-compiler compile time (~0.4s uncontended).
+    - **Residual** — the ~5.5–5.9s green-check timings are a ~10x stretch of a ~0.55s process,
+      attributable to full-suite contention (concurrent rustc builds + dozens of parallel
+      fixture compiles), not to any code delta. The fix-round delta
+      (`claim_i128_align_by_provenance`) is timing-innocent: working tree and clean HEAD are
+      indistinguishable both uncontended and contended (stash/rebuild/re-time bisect; stash pop
+      verified byte-identical — `git status`/`git diff` sha256 fingerprints matched pre-stash).
+    - **Hypothesis (confirmed)** — PRE-EXISTING marginality: these two tests were the ONLY ones
+      in the file with a nonstandard 5s bound (`run_fixture_with_timeout(_, 5)`); every other
+      test uses the 10s `run_fixture` default. Under identical contention, 5s trips and 10s
+      does not — which is exactly why the full-suite RED hit precisely these two of 133. The
+      earlier 133/133-green run on the near-identical tree drew luckier scheduling.
+    - **Evidence path** — `crates/ynz-driver/tests/m2_state_machine_integration.rs:66-93`
+      (`run_fixture_with_timeout`): the "timeout" is a POST-HOC elapsed assert after
+      `Command::output()` returns — it never kills the process, so a true Bug C deadlock blocks
+      `.output()` forever at ANY bound; the 5s value added zero deadlock protection over 10s,
+      it only failed slow-but-terminating runs. The concurrency proof is the stdout ordering
+      assert (`worker done` before `main done`, :228-233), untouched.
+  - **Fix (smallest correct):** both call sites moved to the file-default 10s bound
+    (`run_fixture("v0_3_m2_background_from_sm.ynz")`), with a comment at :212's test naming the
+    investigation, what the bound actually protects (slow-but-terminating only), and that the
+    ordering assert carries the concurrency proof. Zero compiler edits, zero other test edits,
+    both stdout/ordering assertions unchanged.
+  - **Receipts:** `cargo test -q -p ynz-driver --test m2_state_machine_integration background_`
+    → 4 passed / 0 failed; full file default parallelism → 31 passed / 0 failed (3.96s);
+    `cargo fmt --all -- --check` clean; `cargo clippy -p ynz-driver --tests -- -D warnings`
+    clean (all in the dev container against the working tree).
+  - **Deviations surfaced:** none — the plan prescribes no bound for these M2-era tests; this is
+    a test-design fix inside the dispatched fix-loop scope, no plan text touched, no FRAGO
+    needed (no procedural-doc or plan-body edit in this diff).
+  - Plan↔task sync: numbered-prose steps (Phase-0/1/2 precedent, no `- [ ]` checkboxes); fix-loop
+    completion recorded by this entry + the appended session-id
+    `executor-2026-07-16-phase2-fixloop-timing` (append-only — all fifteen prior ids preserved).
+
 ## FRAGO log
 
 ### FRAGO 001 — 2026-07-16 — session-id: `conductor-2026-07-16-phase1-review`
@@ -579,6 +798,38 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   boundary commit at Step 8 (a documentation/plan-seam commit, since the code itself already landed
   in `50c3356` without the trailer — an acknowledged irregularity, not repeated going forward).
 
+### FRAGO 004 — 2026-07-16 — session-id: `conductor-2026-07-16-phase2-dispatch`
+
+- **Trigger.** Phase 2 reviewer fleet (green-check green / graveyard clean / code-reviewer clean /
+  acceptance-verifier MET / rules-compliance 1 should-fix / test-quality 1 should-fix /
+  deviation-judge 0 blockers, FRAGO-candidate bundle). deviation-judge classified the plan-text
+  staleness FRAGO 002 left behind as JUSTIFIED and risk-neutral: the Invariants sections still
+  assert "no new compile-error class / no new gallery file / entirely backend, no new language
+  surface," all falsified by the ratified aliasing-rejection diagnostic + shipped
+  `v0_3_m7_errors.ynz` gallery. Also bundled per the judge's disposition: Phase 2 Step 2's
+  now-unsatisfiable literal wording; the 3→11 alignment-site citation completeness note; and a
+  plan-text anchor for the Rust-runtime decimal-alignment radar note (Phase 3/5 glance), which
+  otherwise lives only in a session-log entry.
+- **Classification.** Risk-neutral (pure prose reconciliation of consequences already adjudicated
+  and risk-scored under FRAGO 002 — no new mechanism, no re-score above any accepted residual).
+  Auto-apply + log, no signature.
+- **Disposition.** Re-dispatched executor to: (a) rewrite `### Teaching` + `### Demo & Error
+  Gallery` to state the shipped reality (new compile-error class, gallery file exists); (b) in
+  `### Feature Registry Entries`, correct ONLY the "entirely backend/codegen-tier with no new
+  language surface" framing sentence — the "no diagnostic_templates" sub-claim stays, it remains
+  correct per the per-site-dynamic carve-out; (c) amend Phase 2 Step 2's wording to reflect the
+  FRAGO-002 reshape (alias fixture = compile-rejection lock); (d) update the alignment-class
+  citation note to reflect the 11 confirmed sites; (e) add a one-line Rust-runtime
+  decimal-alignment pointer into Phase 3 and Phase 5's step text. Non-FRAGO items riding the same
+  dispatch (fix-now should-fixes, not plan amendments): the missing two-bare-inferred-lends
+  aliasing test (test-quality) and the narrow-the-align-8-downgrade perf refinement
+  (code-reviewer, surface-if-risky). The pre-existing integration flake
+  (`ynz_run_with_alloc_counter` build-state race, NOT this phase's diff) routes to the §6.1
+  durable home as a four-field deferral in the roadmap's audit.md. **Process note carried
+  forward (deviation-judge should-fix):** a planner-placed CHECKPOINT mark is honored by default —
+  executor discretion is stopping EARLIER, never skipping; every subsequent dispatch prompt states
+  this explicitly.
+
 ## Context-segment log
 
 - 2026-07-16 — Phase 1, segment 1.
@@ -599,4 +850,14 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   - checkpoint reason: N/A — phase completed this segment (resumed from segment 1's checkpoint,
     ran Steps 4-6 through to phase DONE)
   - canonical resume-at pointer: phase-1 complete (no further steps)
+
+- 2026-07-16 — Phase 2, segment 1.
+  Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#2-segment-1
+  - segment number: 1
+  - session-id: executor-2026-07-16-phase2-fix-constructor
+  - subagent_tokens actual: 332699
+  - checkpoint reason: N/A — phase completed this segment (Steps 1-5 in one window; the authored
+    CHECKPOINT marks were passed with ample context remaining, no handoff file created)
+  - canonical resume-at pointer: phase-2 complete (no further steps)
+  - segment verdict: DONE
   - segment verdict: STATUS: DONE

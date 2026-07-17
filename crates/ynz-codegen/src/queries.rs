@@ -189,7 +189,10 @@ pub fn frame_layouts_query(
         // because `emit_artifact` constructs the same target machine via `?` and errors
         // first for the same module — `codegen_query` skips emission on errors, so the
         // empty layout map here is never observed as a live wrong value.
-        let machine = match state_machine::default_target_machine() {
+        let machine = match state_machine::default_target_machine(
+            None,
+            state_machine::PipelineConfig::o0(),
+        ) {
             Ok(m) => m,
             Err(_) => return Arc::new(HashMap::new()),
         };
@@ -412,6 +415,7 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         &layouts_arc,
         &spike_hosts,
         &layout,
+        &check.effective_ownership,
     ) {
         Ok(artifact) => Arc::new(CodegenOutput {
             artifact,

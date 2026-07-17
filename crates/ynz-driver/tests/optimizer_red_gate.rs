@@ -4,12 +4,11 @@
 // crashing) once the IR/backend is optimized — exactly what v0.3-M7 Phase 3 will turn on
 // by default.
 //
-// Every test is `#[ignore]`d and currently FAILS when run: this is a planned RED set
-// (documented, locked by these failing tests, never shipping alone — the no-duct-tape
-// legitimate inverse). Phase 2 fixes the root causes and re-runs this gate with
-// `cargo test -p ynz-driver --test optimizer_red_gate -- --ignored`; every test must pass
-// before the `#[ignore]` marks come off. Do NOT weaken an assertion or widen a timeout to
-// force green — a red here is a real miscompile.
+// Phase 1 committed this file as a planned RED set (`#[ignore]`d, failing — the
+// no-duct-tape legitimate inverse). v0.3-M7 Phase 2 fixed both root-cause classes and
+// removed the `#[ignore]` marks: the gate now runs in the default suite as a permanent
+// regression lock. Do NOT weaken an assertion or widen a timeout to force green — a red
+// here is a real miscompile.
 //
 // Two confirmed root-cause classes are locked (evidence: plan
 // `2026-07-04-v0-3-m7-optimizer-pipeline`, audit.md Phase-1 session-log entries):
@@ -26,8 +25,10 @@
 //    bare params to `share`, and never consults typeck's `effective_ownership` analysis
 //    (the authoritative answer — computed but unconsumed downstream). Two manifestations:
 //    a bare param the body mutates gets a false `readonly` (the store is UB and gets
-//    deleted), and an aliasing share+lend call — which typeck accepts — falsifies
-//    `noalias` on both params (the read gets hoisted past the aliased store).
+//    deleted), and an aliasing share+lend call — which typeck ACCEPTED at the time —
+//    falsified `noalias` on both params (the read got hoisted past the aliased store).
+//    Phase 2 closed the class from both ends: `declare_function` now consumes
+//    `effective_ownership`, and typeck rejects the aliasing call outright (FRAGO 002).
 //
 // Harness: differential O0-vs-optimized. Each fixture is built normally (`ynz build
 // --emit-ir`, backend -O0 today) and its run output is the correctness anchor; the SAME
@@ -38,7 +39,7 @@
 //
 // Requires the LLVM 18 CLI tools (`opt-18`, `llc-18`, `clang-18`) — run inside the dev
 // container (`docker compose run --rm dev cargo test -p ynz-driver --test
-// optimizer_red_gate -- --ignored`).
+// optimizer_red_gate`).
 
 use std::{
     path::PathBuf,
@@ -259,7 +260,6 @@ fn assert_o0_and_optimized_agree(fixture_name: &str, stage: OptStage) {
 // project the single-file differential harness does not cover.)
 
 #[test]
-#[ignore = "RED until v0.3-M7 Phase 2 fixes the false i128 alignment claims (SIGSEGV via movaps on 8-aligned frame slots)"]
 fn red_opt_alignment_ec_crossing_local_propagated_number() {
     // WHY: the bisected primary repro — an EC-crossing decimal128 local propagated across
     // a wait; optimized ISel selects movaps against an 8-aligned frame slot and faults.
@@ -270,7 +270,6 @@ fn red_opt_alignment_ec_crossing_local_propagated_number() {
 }
 
 #[test]
-#[ignore = "RED until v0.3-M7 Phase 2 fixes the false i128 alignment claims (SIGSEGV via movaps on 8-aligned frame slots)"]
 fn red_opt_alignment_parallel_number_ec_inline_collect() {
     // WHY: the inline-poll parallel number+EC collection — same alignment class through
     // the parallel-group staging path.
@@ -281,7 +280,6 @@ fn red_opt_alignment_parallel_number_ec_inline_collect() {
 }
 
 #[test]
-#[ignore = "RED until v0.3-M7 Phase 2 fixes the false i128 alignment claims (SIGSEGV via movaps on 8-aligned frame slots)"]
 fn red_opt_alignment_danger_mixed_number_declines() {
     // WHY: the mixed CPU+I/O group with a decimal128 CPU child — same alignment class
     // through the CPU-trampoline i128 packing path.
@@ -292,7 +290,6 @@ fn red_opt_alignment_danger_mixed_number_declines() {
 }
 
 #[test]
-#[ignore = "RED until v0.3-M7 Phase 2 fixes the false i128 alignment claims (SIGSEGV via movaps on 8-aligned frame slots)"]
 fn red_opt_alignment_ec_three_bindings() {
     // WHY: three live bindings of the same `-> number errors` callee — same alignment
     // class through the per-binding stable-storage copies.
@@ -302,7 +299,6 @@ fn red_opt_alignment_ec_three_bindings() {
 // ── Class 2: false ownership attributes from `declare_function` ──────────────────────
 
 #[test]
-#[ignore = "RED until v0.3-M7 Phase 2 makes codegen consume typeck's effective_ownership instead of defaulting bare params to share/readonly"]
 fn red_opt_bare_param_mutation_dropped() {
     // WHY: a bare param the body mutates is declared `readonly` (codegen defaults
     // ownership None → Share and never reads typeck's effective-ownership answer); the
@@ -314,14 +310,46 @@ fn red_opt_bare_param_mutation_dropped() {
     );
 }
 
+// test-ratchet: v0.3-M7 Phase 2 / FRAGO 002 — the anticipated resolution for this class
+// (the original #[ignore] message named both options: "attribute fix or typeck rejection")
+// was decided by Patrick as TYPECK REJECTION, so the differential O0-vs-optimized shape is
+// structurally impossible now: the program no longer compiles. The test is reshaped (not
+// weakened) to lock the rejection + its teaching diagnostic instead.
 #[test]
-#[ignore = "RED until v0.3-M7 Phase 2 resolves the false noalias claim on aliasing share+lend calls (attribute fix or typeck rejection — Phase 2 design decision)"]
-fn red_opt_share_lend_alias_stale_read() {
-    // WHY: typeck accepts the same value passed as `share` + `lend` in one call while
-    // codegen claims `noalias` on both params; the optimizer hoists the share-side read
-    // past the aliased lend-side store (O0 prints 5; optimized prints 1).
-    assert_o0_and_optimized_agree(
-        "v0_3_m7_p1_share_lend_alias.ynz",
-        OptStage::MidEndAndBackend,
+fn red_opt_share_lend_alias_rejected_at_compile_time() {
+    // WHY: the Phase-2 resolution for this class (FRAGO 002, Patrick-directed
+    // 2026-07-16) is typeck REJECTION, not an attribute downgrade: a call passing the
+    // same value as both `share` and `lend` violates the ownership contract (`lend` =
+    // exclusive mutable access), so the miscompile this fixture originally exploited
+    // (share-side read hoisted past the aliased lend-side store under false `noalias`)
+    // is now unreachable — the program never compiles. This test locks the rejection
+    // AND its teaching shape; if it starts compiling again, the gate is red again.
+    let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
+    let src = fixture("v0_3_m7_p1_share_lend_alias.ynz");
+    let isolated_src = tmp.path().join(src.file_name().expect("fixture filename"));
+    std::fs::copy(&src, &isolated_src).expect("failed to copy fixture into tmpdir");
+
+    let build_out = Command::new(ynz_binary())
+        .args(["build", isolated_src.to_str().unwrap()])
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("failed to spawn ynz build");
+    assert!(
+        !build_out.status.success(),
+        "aliasing share+lend call must be a compile error (FRAGO 002), but the build \
+         succeeded — the typeck aliasing rejection has regressed"
     );
+    let stderr = String::from_utf8_lossy(&build_out.stderr);
+    for phrase in [
+        "passed to `relay` twice in the same call",
+        "`share` (a read-only view)",
+        "`lend` (the function modifies it)",
+        ".copy()",
+    ] {
+        assert!(
+            stderr.contains(phrase),
+            "aliasing rejection diagnostic must contain {phrase:?} (teaching shape, \
+             Golden Rule 11); got:\n{stderr}"
+        );
+    }
 }

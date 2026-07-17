@@ -18,10 +18,13 @@ use inkwell::{
     basic_block::BasicBlock,
     context::Context,
     module::Module,
-    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple},
+    targets::FileType,
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
-    values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
-    AddressSpace, IntPredicate, OptimizationLevel,
+    values::{
+        BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+        PointerValue,
+    },
+    AddressSpace, IntPredicate,
 };
 use ynz_ast::nodes::{
     BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt, UnaryOpKind,
@@ -874,38 +877,29 @@ pub fn emit_artifact(
     // (shape-type emission + padded-alloca alignment); ZERO consumers of
     // `layout.arrays` exist until Phase 5's SoA lowering lands.
     layout: &ynz_typeck::soa::LayoutDecisions,
+    // The transitive effective-ownership fixpoint from `check_query` (v0.3-M7 Phase 2,
+    // FRAGO 002). `declare_function` consults THIS — never the raw AST ownership
+    // modifier — when emitting `readonly`/`noalias` parameter attributes
+    // (authoritative-derivation: consume the computed answer downstream).
+    effective_ownership: &ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<CompiledArtifact, String> {
     let context = Context::create();
     let module_id = module_identifier(source_path);
     let module = context.create_module(&module_id);
 
-    // Use the shared target-machine constructor for the default triple (Guard G1: same
-    // triple/CPU/data-layout as frame_layouts_query — byte-identical shape ABI sizes
-    // between the emitter and the query). For explicit target_triple overrides (cross-
-    // compilation and tests), construct the machine from the supplied triple directly.
-    let machine = match target_triple {
-        None => crate::state_machine::default_target_machine()?,
-        Some(t) => {
-            // Override-branch init: default_target_machine() handles it for the None branch.
-            Target::initialize_x86(&InitializationConfig::default());
-            let triple = TargetTriple::create(t);
-            module.set_triple(&triple);
-            let target = Target::from_triple(&triple)
-                .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
-            target
-                .create_target_machine(
-                    &triple,
-                    "generic",
-                    "",
-                    OptimizationLevel::None,
-                    RelocMode::Default,
-                    CodeModel::Default,
-                )
-                .ok_or_else(|| "LLVM: failed to create target machine".to_string())?
-        }
-    };
-    // Always set triple and data-layout from the machine (the shared constructor uses the
-    // default triple; the override branch already set the triple above).
+    // THE one authoritative target-machine constructor (v0.3-M7 Phase 2, risk R4):
+    // both the default-triple path (Guard G1: same triple/CPU/data-layout as
+    // frame_layouts_query — byte-identical shape ABI sizes between the emitter and
+    // the query) and the explicit target_triple override (cross-compilation and
+    // tests) route through `state_machine::default_target_machine` — never a second
+    // inline `create_target_machine` that could drift on pipeline config.
+    // `PipelineConfig::o0()` keeps today's default behavior; Phase 3 flips the tier
+    // through this parameter.
+    let machine = crate::state_machine::default_target_machine(
+        target_triple,
+        crate::state_machine::PipelineConfig::o0(),
+    )?;
+    // Always set triple and data-layout from the machine (covers both triple paths).
     module.set_triple(&machine.get_triple());
     module.set_data_layout(&machine.get_target_data().get_data_layout());
 
@@ -962,6 +956,7 @@ pub fn emit_artifact(
         no_auto_parallel,
         m3d_spike,
         layout,
+        effective_ownership,
     )?;
 
     module
@@ -1031,6 +1026,7 @@ fn build_module<'ctx, 'g>(
     no_auto_parallel: bool,
     m3d_spike: bool,
     layout: &'g ynz_typeck::soa::LayoutDecisions,
+    effective_ownership: &'g ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<(), String> {
     // E5 compile-time-adjacent link (should-fix, cumulative M3g review): cross-check codegen's
     // AST-level CPU-ABI-support gate against typeck's resolved-level gate for every function in
@@ -1257,7 +1253,7 @@ fn build_module<'ctx, 'g>(
     for item in &typed.module.items {
         match item {
             Item::Function(f) if f.generics.is_empty() => {
-                declare_function(ctx, module, f, shape_table)?
+                declare_function(ctx, module, f, shape_table, effective_ownership)?
             }
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -1613,16 +1609,30 @@ fn llvm_param_types<'ctx>(
 
 /// Forward-declare a function in the LLVM module (signature only, no body).
 ///
-/// Also attaches LLVM `readonly` and `noalias` attributes to pointer parameters
-/// based on the declared ownership modifier:
-/// - `share` / inferred (None) → `readonly` + `noalias`
-/// - `lend` → `noalias` only
-/// - `give` → no attributes (callee owns the data, may mutate)
+/// Also attaches LLVM `readonly` and `noalias` attributes to pointer parameters,
+/// consulting typeck's EFFECTIVE-ownership analysis — never the raw AST modifier
+/// (v0.3-M7 Phase 2, FRAGO 002; authoritative-derivation: consume the computed
+/// answer). The raw-AST version defaulted bare params to `share` and emitted a
+/// FALSE `readonly` on a bare param the body mutates — the optimizer deletes the
+/// "impossible" store (RED fixture `v0_3_m7_p1_bare_param_mutation.ynz`).
+///
+/// - effective `Reads` (declared `share`, or a bare param proven read-only) →
+///   `readonly` + `noalias`. Read-read overlap between arguments is explicitly
+///   permitted by LLVM's `noalias` semantics, so the pair is honest even when the
+///   same value is passed to two read-only positions.
+/// - effective `Writes` (declared `lend`, or a bare param the body mutates) →
+///   `noalias` only. The exclusivity `noalias` asserts is enforced at every call
+///   site by typeck's aliasing-call rejection (same FRAGO): a call passing
+///   overlapping values where any position is write-capable is a compile error.
+/// - effective `Unknown` → NO attributes. The analysis cannot prove read-only, so
+///   any claim would be hope, not knowledge — degrade to conservative.
+/// - declared `give` → no attributes (callee owns the data, may mutate or free).
 fn declare_function<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
     f: &FunctionDecl,
     shape_table: &ShapeTable,
+    effective_ownership: &ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<(), String> {
     let params = llvm_param_types(ctx, f, shape_table);
     let fn_ty = if f.name == "entrypoint" {
@@ -1660,12 +1670,16 @@ fn declare_function<'ctx>(
         if !is_ptr_param(&param.ty, shape_table) {
             continue;
         }
-        let ownership = param
-            .ownership
-            .as_ref()
-            .unwrap_or(&OwnershipModifier::Share);
-        match ownership {
-            OwnershipModifier::Share => {
+        // `give` transfers ownership — the callee may mutate or free; no claims.
+        if param.ownership == Some(OwnershipModifier::Give) {
+            continue;
+        }
+        // Consult the authoritative effective-ownership answer (see doc comment).
+        // A declared `share` that reaches `Writes` is already a typeck compile error
+        // (transitive share violation), so declared modifiers never contradict the
+        // effective answer in a program that reaches codegen.
+        match effective_ownership.ownership_of(&f.name, i) {
+            ynz_typeck::EffectiveOwnership::Reads => {
                 fn_val.add_attribute(
                     AttributeLoc::Param(i as u32),
                     ctx.create_enum_attribute(readonly_kind, 0),
@@ -1675,13 +1689,14 @@ fn declare_function<'ctx>(
                     ctx.create_enum_attribute(noalias_kind, 0),
                 );
             }
-            OwnershipModifier::Lend => {
+            ynz_typeck::EffectiveOwnership::Writes => {
                 fn_val.add_attribute(
                     AttributeLoc::Param(i as u32),
                     ctx.create_enum_attribute(noalias_kind, 0),
                 );
             }
-            OwnershipModifier::Give => {}
+            // Cannot prove read-only or exclusive — claim nothing (conservative).
+            ynz_typeck::EffectiveOwnership::Unknown => {}
         }
     }
 
@@ -3474,6 +3489,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .builder
             .build_load(self.i128(), num_ptr, &format!("{site}_num_ld"))
             .map_err(|e| format!("number_to_heap_cell load {site}: {e}"))?;
+        // A number value pointer's provenance is either a 16-aligned alloca/heap cell
+        // OR an 8-aligned frame-interior address (an SM staged-param pointer or an EC
+        // staging slot) — claim the guaranteed floor, never ABI 16.
+        state_machine::claim_frame_i128_align(
+            bits.as_instruction_value()
+                .ok_or_else(|| format!("number_to_heap_cell load {site}: no instruction value"))?,
+        )?;
         self.builder
             .build_store(cell, bits)
             .map_err(|e| format!("number_to_heap_cell store {site}: {e}"))?;
@@ -5158,6 +5180,12 @@ fn lower_function_with_waits<'ctx, 'g>(
                 .build_load(ctx.i128_type(), staging_ptr, "wrap_ec_i128")
                 .map_err(|e| format!("ec wrapper load i128: {e}"))?
                 .into_int_value();
+            // Staging slot is frame-interior: only 8-aligned — claim that, not ABI 16.
+            state_machine::claim_frame_i128_align(
+                i128_val
+                    .as_instruction_value()
+                    .ok_or("ec wrapper load i128: no instruction value")?,
+            )?;
             let heap_ptr = builder
                 .build_call(
                     rt.ynz_alloc,
@@ -6363,6 +6391,11 @@ fn flush_var_slot_to_frame<'ctx>(
                 .build_load(ctx.i128_type(), dec_ptr, &format!("{name}_flush_i128"))
                 .map_err(|e| format!("crossing flush ec_num load i128 {name}: {e}"))?
                 .into_int_value();
+            // The ok-word points at the callee's frame-interior staging slot: only
+            // 8-aligned — claim that, not ABI 16.
+            state_machine::claim_frame_i128_align(i128_val.as_instruction_value().ok_or_else(
+                || format!("crossing flush ec_num load i128 {name}: no instruction value"),
+            )?)?;
             let lo = cg
                 .builder
                 .build_int_truncate(i128_val, ctx.i64_type(), &format!("{name}_flush_lo"))
@@ -8189,6 +8222,12 @@ fn bind_sm_result_and_flush<'ctx>(
                         .build_load(cg.ctx.i128_type(), staging_ptr, &format!("{name}_cob_i128"))
                         .map_err(|e| format!("bind_sm_result ec_num load i128 {name}: {e}"))?
                         .into_int_value();
+                    // Staging slot is frame-interior: only 8-aligned — claim that.
+                    state_machine::claim_frame_i128_align(
+                        i128_val.as_instruction_value().ok_or_else(|| {
+                            format!("bind_sm_result ec_num load i128 {name}: no instruction value")
+                        })?,
+                    )?;
                     cg.builder
                         .build_store(i128_alloca, i128_val)
                         .map_err(|e| format!("bind_sm_result ec_num store i128 {name}: {e}"))?;
@@ -8469,6 +8508,12 @@ fn bind_sm_result_and_flush<'ctx>(
                     .build_load(cg.ctx.i128_type(), staging_ptr, &format!("{name}_cob_i128"))
                     .map_err(|e| format!("copy-on-bind load i128 {name}: {e}"))?
                     .into_int_value();
+                // Staging slot is frame-interior: only 8-aligned — claim that.
+                state_machine::claim_frame_i128_align(
+                    i128_val.as_instruction_value().ok_or_else(|| {
+                        format!("copy-on-bind load i128 {name}: no instruction value")
+                    })?,
+                )?;
                 cg.builder
                     .build_store(binding_alloca, i128_val)
                     .map_err(|e| format!("copy-on-bind store {name}: {e}"))?;
@@ -14381,11 +14426,24 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                     )
                                                     .map_err(|e| format!("num err i128 load: {e}"))?
                                                     .into_int_value();
-                                                cg.builder
+                                                // The value pointer may be an SM
+                                                // staged-param pointer into the
+                                                // caller's frame (8-aligned) —
+                                                // claim the floor, never ABI 16.
+                                                state_machine::claim_frame_i128_align(
+                                                    i128_val.as_instruction_value().ok_or(
+                                                        "num err i128 load: no instruction value",
+                                                    )?,
+                                                )?;
+                                                let st = cg
+                                                    .builder
                                                     .build_store(staging_ptr, i128_val)
                                                     .map_err(|e| {
                                                         format!("num err staging store: {e}")
                                                     })?;
+                                                // Staging slot is frame-interior:
+                                                // only 8-aligned — claim that.
+                                                state_machine::claim_frame_i128_align(st)?;
                                                 // The EC ok-word is the staging slot address as i64.
                                                 cg.builder
                                                     .build_ptr_to_int(
@@ -14502,6 +14560,14 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 .build_load(cg.ctx.i128_type(), ptr_v, "sm_ret_dec_load")
                                 .map_err(|e| format!("sm ret number i128 load: {e}"))?
                                 .into_int_value();
+                            // For an SM number PARAM the value pointer is staged bits
+                            // pointing into the caller's frame (8-aligned) — claim the
+                            // guaranteed floor, never ABI 16.
+                            state_machine::claim_frame_i128_align(
+                                i128_val
+                                    .as_instruction_value()
+                                    .ok_or("sm ret number i128 load: no instruction value")?,
+                            )?;
                             state_machine::store_return_value_i128(
                                 cg.ctx,
                                 &cg.builder,
@@ -19288,6 +19354,11 @@ fn lower_errors_capable_call_result<'ctx>(
             .build_load(cg.ctx.i128_type(), dec_ptr, "ec_cob_i128")
             .map_err(|e| format!("ec_result cob load i128 {callee_name}: {e}"))?
             .into_int_value();
+        // The ok-word points at the callee's frame-interior staging slot: only
+        // 8-aligned — claim that, not ABI 16.
+        state_machine::claim_frame_i128_align(i128_val.as_instruction_value().ok_or_else(
+            || format!("ec_result cob load i128 {callee_name}: no instruction value"),
+        )?)?;
         cg.builder
             .build_store(binding_alloca, i128_val)
             .map_err(|e| format!("ec_result cob store {callee_name}: {e}"))?;
@@ -20308,6 +20379,14 @@ fn store<'ctx>(
                 .builder
                 .build_load(cg.i128(), val.into_pointer_value(), "dec_bits")
                 .map_err(|e| format!("{e}"))?;
+            // The value pointer may be an 8-aligned frame-interior address (SM staged
+            // param / EC staging slot) — claim the guaranteed floor unless the source
+            // is provably a >=16-aligned alloca (the one airtight ABI-16 provenance).
+            state_machine::claim_i128_align_by_provenance(
+                bits.as_instruction_value()
+                    .ok_or("store dec_bits load: no instruction value")?,
+                val.into_pointer_value(),
+            )?;
             cg.builder
                 .build_store(slot, bits)
                 .map_err(|e| format!("{e}"))?;
@@ -20476,6 +20555,12 @@ fn store_field<'ctx>(
                 .builder
                 .build_load(cg.i128(), val.into_pointer_value(), "dec_field_bits")
                 .map_err(|e| format!("{e}"))?;
+            // Same provenance-narrowed claim rationale as `store`'s dec_bits load above.
+            state_machine::claim_i128_align_by_provenance(
+                bits.as_instruction_value()
+                    .ok_or("dec_field_bits load: no instruction value")?,
+                val.into_pointer_value(),
+            )?;
             cg.builder
                 .build_store(field_ptr, bits)
                 .map_err(|e| format!("{e}"))?;

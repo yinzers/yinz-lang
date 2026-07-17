@@ -935,6 +935,380 @@ fn first_write_site_in_expr(
     }
 }
 
+// ── Aliasing-call rejection (v0.3-M7 Phase 2, FRAGO 002) ─────────────────────
+//
+// A call that passes the SAME value (or two overlapping pieces of one value, e.g.
+// `player` and `player.pet`) into two parameter positions where at least one position
+// can modify the value is a genuine violation of the ownership contract: `lend` means
+// exclusive mutable access for the duration of the call, so no other live view of the
+// value may exist. Typeck previously ACCEPTED such calls while codegen claimed LLVM
+// `noalias` on both parameters — a false claim the optimizer exploits into a silent
+// miscompile (RED fixture `v0_3_m7_p1_share_lend_alias.ynz`). Patrick's decision
+// (FRAGO 002, 2026-07-16): reject at compile time (Golden Rule 5), with a teaching
+// diagnostic (Golden Rule 11) — rather than merely dropping the attribute, which would
+// leave typeck's unsoundness in place.
+//
+// Write-capability convention: a position counts as write-capable when its declared
+// modifier is `lend`/`give`, OR its effective ownership is `Writes` (a bare param the
+// body provably mutates — the inferred `lend`), OR `Unknown` (cannot prove read-only).
+// Treating `Unknown` as "might write" is the SAME conservative convention the
+// independence analysis uses (module doc, "The lattice") — one lattice, one reading.
+// Only proven-`Reads` positions may share a value in one call (read-read overlap is
+// harmless and LLVM's `noalias` explicitly permits it).
+//
+// Scope: place-paths (an identifier or a field path rooted at one). In Yinz's ownership
+// model these are the only source-expressible aliases at a call site — there are no
+// reference bindings, so two DISTINCT roots never denote the same value. Index accesses
+// (`a[i]`) produce element copies/handles through the collection API and are out of this
+// check's scope. Scalar-typed parameters (int/float/bool) pass by value and cannot
+// alias — they are skipped.
+
+/// How one argument position of a flagged call relates to the shared value —
+/// used to render the teaching diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AliasArgKind {
+    /// Declared `share` — a read-only view.
+    DeclaredShare,
+    /// Declared `lend` — the function modifies the value.
+    DeclaredLend,
+    /// Declared `give` — ownership moves into the function.
+    DeclaredGive,
+    /// Bare parameter the body provably mutates (effective ownership `Writes`).
+    InferredWrite,
+    /// Bare parameter proven read-only on every path (effective ownership `Reads`).
+    InferredRead,
+    /// Bare parameter the analysis cannot prove read-only (effective ownership
+    /// `Unknown`) — treated as write-capable, same as the independence analysis.
+    Unverifiable,
+}
+
+impl AliasArgKind {
+    /// True when this position can modify (or take over) the value during the call.
+    pub fn write_capable(self) -> bool {
+        !matches!(
+            self,
+            AliasArgKind::DeclaredShare | AliasArgKind::InferredRead
+        )
+    }
+
+    /// Plain-English rendering for the diagnostic (no compiler jargon).
+    pub fn describe(self) -> &'static str {
+        match self {
+            AliasArgKind::DeclaredShare => "`share` (a read-only view)",
+            AliasArgKind::DeclaredLend => "`lend` (the function modifies it)",
+            AliasArgKind::DeclaredGive => "`give` (ownership moves into the function)",
+            AliasArgKind::InferredWrite => "a parameter the function modifies",
+            AliasArgKind::InferredRead => "a read-only parameter",
+            AliasArgKind::Unverifiable => "a parameter the compiler cannot prove stays read-only",
+        }
+    }
+}
+
+/// One rejected aliasing call: the same value reaches two parameters of one call and
+/// at least one of the two positions can modify it.
+#[derive(Debug, Clone)]
+pub struct AliasingCallViolation {
+    /// Rendered place-path of the FIRST overlapping argument (e.g. `player`).
+    pub first_path: String,
+    /// Rendered place-path of the SECOND overlapping argument (e.g. `player.pet`).
+    pub second_path: String,
+    /// The callee whose call is rejected.
+    pub callee_name: String,
+    /// How the first overlapping position treats the value.
+    pub first_kind: AliasArgKind,
+    /// How the second overlapping position treats the value.
+    pub second_kind: AliasArgKind,
+    /// Span of the second overlapping argument (the point of the conflict).
+    pub span: SourceSpan,
+}
+
+/// Find every call in the module that passes overlapping place-paths into two
+/// parameter positions of one call where at least one position is write-capable.
+///
+/// `sigs` is the LOCAL signature map (name → sig); `imported_sigs` the cross-module
+/// one — both consulted so imported callees are held to the same rule their own unit's
+/// codegen relies on. Callee names with no signature entry (built-in methods,
+/// intrinsics) are skipped — built-in receiver aliasing is governed by the collection
+/// API's own rules, not by user-function ownership modifiers.
+///
+/// Time: O(S · A²) where S = call sites, A = arguments per call (A is tiny).
+pub fn find_aliasing_call_violations(
+    module: &Module,
+    report: &EffectiveOwnershipReport,
+    sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    imported_sigs: &HashMap<String, crate::signatures::FunctionSig>,
+) -> Vec<AliasingCallViolation> {
+    let mut out = Vec::new();
+    for f in local_functions(module) {
+        collect_aliasing_in_block(&f.body, report, sigs, imported_sigs, &mut out);
+    }
+    out
+}
+
+/// A place-path: the root identifier plus any field chain (`player.pet.name` →
+/// `["player", "pet", "name"]`). `None` for any expression that produces a fresh
+/// value (literals, calls, operators) — fresh values cannot alias anything.
+fn place_path(e: &Expr) -> Option<Vec<String>> {
+    match e {
+        Expr::Ident(n, _) => Some(vec![n.clone()]),
+        Expr::SelfValue { .. } => Some(vec!["self".to_string()]),
+        Expr::FieldAccess {
+            receiver, field, ..
+        } => {
+            let mut p = place_path(receiver)?;
+            p.push(field.clone());
+            Some(p)
+        }
+        _ => None,
+    }
+}
+
+/// Two place-paths overlap when one is a prefix of the other (same value, or one
+/// argument is a piece of the other).
+fn paths_overlap(a: &[String], b: &[String]) -> bool {
+    let n = a.len().min(b.len());
+    a[..n] == b[..n]
+}
+
+fn render_path(p: &[String]) -> String {
+    p.join(".")
+}
+
+/// Classify how parameter `index` of callee `name` treats its value.
+///
+/// Returns `None` for scalar-typed parameters (int/float/bool pass by value — no
+/// aliasing possible) and for callees with no known signature.
+fn alias_arg_kind(
+    name: &str,
+    index: usize,
+    report: &EffectiveOwnershipReport,
+    sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    imported_sigs: &HashMap<String, crate::signatures::FunctionSig>,
+) -> Option<AliasArgKind> {
+    let sig = sigs.get(name).or_else(|| imported_sigs.get(name))?;
+    let (_, param_ty) = sig.params.get(index)?;
+    if matches!(
+        param_ty,
+        crate::types::Type::Int | crate::types::Type::Float | crate::types::Type::Bool
+    ) {
+        return None;
+    }
+    let declared = sig.param_ownerships.get(index).cloned().flatten();
+    Some(match declared {
+        Some(OwnershipModifier::Share) => AliasArgKind::DeclaredShare,
+        Some(OwnershipModifier::Lend) => AliasArgKind::DeclaredLend,
+        Some(OwnershipModifier::Give) => AliasArgKind::DeclaredGive,
+        None => match report.ownership_of(name, index) {
+            EffectiveOwnership::Reads => AliasArgKind::InferredRead,
+            EffectiveOwnership::Writes => AliasArgKind::InferredWrite,
+            EffectiveOwnership::Unknown => AliasArgKind::Unverifiable,
+        },
+    })
+}
+
+/// Check one call's argument list (already normalized: UFCS receiver prepended) for
+/// overlapping place-paths with a write-capable side.
+fn check_call_args_for_aliasing(
+    callee_name: &str,
+    args: &[&Expr],
+    report: &EffectiveOwnershipReport,
+    sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    imported_sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    out: &mut Vec<AliasingCallViolation>,
+) {
+    // Resolve each argument to (index, path, kind); skip fresh values and scalars.
+    let mut places: Vec<(usize, Vec<String>, AliasArgKind)> = Vec::new();
+    for (i, arg) in args.iter().enumerate() {
+        let Some(path) = place_path(arg) else {
+            continue;
+        };
+        let Some(kind) = alias_arg_kind(callee_name, i, report, sigs, imported_sigs) else {
+            continue;
+        };
+        places.push((i, path, kind));
+    }
+    for a in 0..places.len() {
+        for b in (a + 1)..places.len() {
+            let (_, pa, ka) = &places[a];
+            let (bi, pb, kb) = &places[b];
+            if paths_overlap(pa, pb) && (ka.write_capable() || kb.write_capable()) {
+                out.push(AliasingCallViolation {
+                    first_path: render_path(pa),
+                    second_path: render_path(pb),
+                    callee_name: callee_name.to_string(),
+                    first_kind: *ka,
+                    second_kind: *kb,
+                    span: args[*bi].span().clone(),
+                });
+                // One report per call is enough teaching; stop at the first pair.
+                return;
+            }
+        }
+    }
+}
+
+fn collect_aliasing_in_block(
+    block: &Block,
+    report: &EffectiveOwnershipReport,
+    sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    imported_sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    out: &mut Vec<AliasingCallViolation>,
+) {
+    for stmt in &block.stmts {
+        collect_aliasing_in_stmt(stmt, report, sigs, imported_sigs, out);
+    }
+}
+
+fn collect_aliasing_in_stmt(
+    stmt: &Stmt,
+    report: &EffectiveOwnershipReport,
+    sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    imported_sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    out: &mut Vec<AliasingCallViolation>,
+) {
+    match stmt {
+        Stmt::Expr(e) => collect_aliasing_in_expr(e, report, sigs, imported_sigs, out),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+            collect_aliasing_in_expr(value, report, sigs, imported_sigs, out)
+        }
+        Stmt::Return { value, .. } => {
+            if let Some(v) = value {
+                collect_aliasing_in_expr(v, report, sigs, imported_sigs, out);
+            }
+        }
+        Stmt::FieldAssign { target, value, .. } => {
+            collect_aliasing_in_expr(target, report, sigs, imported_sigs, out);
+            collect_aliasing_in_expr(value, report, sigs, imported_sigs, out);
+        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            collect_aliasing_in_expr(receiver, report, sigs, imported_sigs, out);
+            collect_aliasing_in_expr(index, report, sigs, imported_sigs, out);
+            collect_aliasing_in_expr(value, report, sigs, imported_sigs, out);
+        }
+        Stmt::If { cond, body, .. } | Stmt::While { cond, body, .. } => {
+            collect_aliasing_in_expr(cond, report, sigs, imported_sigs, out);
+            collect_aliasing_in_block(body, report, sigs, imported_sigs, out);
+        }
+        Stmt::For { iter, body, .. } => {
+            collect_aliasing_in_expr(iter, report, sigs, imported_sigs, out);
+            collect_aliasing_in_block(body, report, sigs, imported_sigs, out);
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            collect_aliasing_in_expr(scrutinee, report, sigs, imported_sigs, out);
+            for arm in arms {
+                collect_aliasing_in_block(&arm.body, report, sigs, imported_sigs, out);
+            }
+            if let Some(b) = else_arm {
+                collect_aliasing_in_block(b, report, sigs, imported_sigs, out);
+            }
+        }
+    }
+}
+
+fn collect_aliasing_in_expr(
+    expr: &Expr,
+    report: &EffectiveOwnershipReport,
+    sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    imported_sigs: &HashMap<String, crate::signatures::FunctionSig>,
+    out: &mut Vec<AliasingCallViolation>,
+) {
+    match expr {
+        Expr::Call(c) => {
+            if let Expr::Ident(name, _) = &c.callee {
+                let arg_refs: Vec<&Expr> = c.args.iter().collect();
+                check_call_args_for_aliasing(name, &arg_refs, report, sigs, imported_sigs, out);
+            }
+            collect_aliasing_in_expr(&c.callee, report, sigs, imported_sigs, out);
+            for a in &c.args {
+                collect_aliasing_in_expr(a, report, sigs, imported_sigs, out);
+            }
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            // UFCS: `value.f(a)` is `f(value, a)` — receiver is argument 0. Built-in
+            // methods have no signature entry and are skipped inside the checker.
+            let mut arg_refs: Vec<&Expr> = Vec::with_capacity(args.len() + 1);
+            arg_refs.push(receiver);
+            arg_refs.extend(args.iter());
+            check_call_args_for_aliasing(method, &arg_refs, report, sigs, imported_sigs, out);
+            collect_aliasing_in_expr(receiver, report, sigs, imported_sigs, out);
+            for a in args {
+                collect_aliasing_in_expr(a, report, sigs, imported_sigs, out);
+            }
+        }
+        Expr::Background(inner, _) | Expr::Wait(inner, _) => {
+            collect_aliasing_in_expr(inner, report, sigs, imported_sigs, out)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_aliasing_in_expr(lhs, report, sigs, imported_sigs, out);
+            collect_aliasing_in_expr(rhs, report, sigs, imported_sigs, out);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            collect_aliasing_in_expr(operand, report, sigs, imported_sigs, out)
+        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
+            collect_aliasing_in_expr(receiver, report, sigs, imported_sigs, out);
+            collect_aliasing_in_expr(index, report, sigs, imported_sigs, out);
+        }
+        Expr::FieldAccess { receiver, .. } => {
+            collect_aliasing_in_expr(receiver, report, sigs, imported_sigs, out)
+        }
+        Expr::StructLit { fields, .. } => {
+            for f in fields {
+                collect_aliasing_in_expr(&f.value, report, sigs, imported_sigs, out);
+            }
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for e in elements {
+                collect_aliasing_in_expr(e, report, sigs, imported_sigs, out);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                collect_aliasing_in_expr(k, report, sigs, imported_sigs, out);
+                collect_aliasing_in_expr(v, report, sigs, imported_sigs, out);
+            }
+        }
+        Expr::Is { expr: inner, .. } => {
+            collect_aliasing_in_expr(inner, report, sigs, imported_sigs, out)
+        }
+        Expr::InterpolatedString(parts, _) => {
+            for p in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                    collect_aliasing_in_expr(e, report, sigs, imported_sigs, out);
+                }
+            }
+        }
+        Expr::PostfixOp { receiver, .. } => {
+            collect_aliasing_in_expr(receiver, report, sigs, imported_sigs, out)
+        }
+        Expr::Ident(..)
+        | Expr::IntLit(..)
+        | Expr::NumberLit(..)
+        | Expr::BoolLit(..)
+        | Expr::StringLit(..)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(..) => {}
+    }
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -993,3 +993,19 @@ Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#0: claude-planning-active
 - **WHY** — this is a sibling-fact sweep miss per plan-source-of-truth.md discipline — the fix-loop that corrected plan.md's stale status text never swept the linked roadmap for the same fact. Fixing it now as a piecemeal edit touches a shared document that other in-flight milestone plans also read; batching this correction with any other pending roadmap amendment (rather than a single-purpose edit) avoids re-touching the same file multiple times in quick succession.
 - **COST** — ~20-30 minutes — grep roadmap.md for every instance of the plan-id paired with a "paused" reference, confirm each one, correct each one, verify no other status fields became contradictory in the sweep.
 - **TRIGGER** — the next roadmap.md amendment for any reason (e.g. Phase 8's own roadmap-reconciliation step, which already touches this file to update Capability Ledger tables, is a natural place to fold this fix in), or before M7's own completion/AAR gate — whichever comes first.
+
+## 2026-07-16 — Deferral: integration-test build-state race under parallelism (non-blocking — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#2 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#2: crates-ynz-driver-tests-integration-rs-5276
+
+- **WHAT** — `v0_3_m4_p3_cross_give_generic_not_over_rejected` flakes under full-suite parallelism. Race mechanism: the `ynz_run_with_alloc_counter` helper (`crates/ynz-driver/tests/integration.rs:5276`) invokes `ynz run` — an in-place build — so tests routing through it race shared build state (the same target/build artifacts) against parallel sibling tests doing the same, producing intermittent failures that vanish under serial runs.
+- **WHY** — pre-existing harness issue untouched by M7 Phase 2's diff (the flake predates the phase and its mechanism involves no code the phase changed); fixing shared-build-state isolation is test-infra work outside this plan's codegen charter.
+- **COST** — ~half a session: per-test temp-dir isolation for the alloc-counter helper, mirroring the TempDir pattern `optimizer_red_gate.rs` already uses.
+- **TRIGGER** — the flake recurring in CI, or the next milestone touching ynz-driver's integration harness.
+
+## 2026-07-16 — Deferral: run_fixture_with_timeout has no process-kill — a true hang blocks CI at any bound (non-blocking — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#2 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#2: crates-ynz-driver-tests-m2-state-machine-integration-rs-66
+
+- **WHAT** — the m2_state_machine_integration test helper's "timeout" is a post-hoc elapsed assertion after a blocking `Command::output()`; no spawn+poll+kill exists, so a genuine deadlock regression hangs the suite/CI indefinitely rather than failing — zero protection against exactly the Bug-C hang class those tests guard.
+- **WHY** — pre-existing test-infra design untouched by M7 Phase 2's diff (which only re-based two outlier bounds onto the file default); building real timeout+kill plumbing is harness work outside M7's codegen charter.
+- **COST** — ~half a session: wrap `Command::spawn()` in a poll-with-deadline loop (wait-timeout pattern) + kill-on-expiry in the shared helper; all 31 call sites inherit it.
+- **TRIGGER** — the next milestone touching ynz-driver's integration/test harness, or the first CI hang traced to a fixture that never terminated.

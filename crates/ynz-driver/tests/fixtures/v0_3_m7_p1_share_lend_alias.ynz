@@ -1,11 +1,12 @@
-// RED fixture (v0.3-M7 Phase 1): the SAME value passed as both a `share` and a `lend`
-// argument in one call — typeck accepts the aliasing call with no diagnostic, while
-// codegen's `declare_function` claims `noalias` on BOTH parameters. The claim is false
-// for this call: under an optimizing pipeline the `src.value` load is hoisted past the
-// aliased `dst.value = 5` store (they "cannot" alias per the attribute), so the read
-// returns the stale pre-call value (prints 1 instead of 5).
+// Compile-rejection fixture (v0.3-M7 Phase 1 RED → Phase 2 resolution, FRAGO 002):
+// the SAME value passed as both a `share` and a `lend` argument in one call. Phase 1
+// committed this as a RED miscompile repro (typeck accepted the call while codegen
+// claimed `noalias` on both parameters; the optimizer hoisted the `src.value` read past
+// the aliased `dst.value = 5` store — printed 1 instead of 5). Phase 2's decided fix is
+// typeck REJECTION: `lend` means exclusive mutable access, so this call is an ownership-
+// contract violation caught at compile time (Golden Rule 5).
 //
-// Expected (semantic / O0) output: 5
+// Expected: COMPILE ERROR — "`h` is passed to `relay` twice in the same call".
 shape Box {
   value: int
 }
