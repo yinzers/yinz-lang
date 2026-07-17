@@ -799,32 +799,122 @@ pub fn emit_sleep_poll_branch<'ctx>(
     Ok(())
 }
 
-/// Backend pipeline configuration for [`default_target_machine`] (v0.3-M7 Phase 2).
+/// Pipeline configuration for [`default_target_machine`] and
+/// [`run_mid_end_pipeline`] (v0.3-M7 Phases 2–3).
 ///
-/// Phase 2 introduces the SHAPE only: every constructor call site threads a config
-/// explicitly, but the sole in-tree value is [`PipelineConfig::o0`] — the default
-/// behavior is unchanged (still `OptimizationLevel::None`). Phase 3 wires the real
-/// LLVM pass pipeline and flips the default THROUGH this one parameter; it never
-/// grows a second, independently-configured `TargetMachine` construction (risk R4 —
-/// the authoritative-derivation twin-drift class this single constructor eliminates).
+/// One config drives BOTH optimization stages so they can never disagree on tier:
+/// the backend level passed to `create_target_machine` (ISel / regalloc /
+/// scheduling) and the mid-end new-PM pipeline string derived by
+/// [`PipelineConfig::mid_end_pipeline`] (mem2reg / SROA / DCE / inlining via
+/// `Module::run_passes`). It is threaded through the ONE authoritative constructor;
+/// it never grows a second, independently-configured `TargetMachine` construction
+/// (risk R4 — the authoritative-derivation twin-drift class the single constructor
+/// eliminates).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PipelineConfig {
     /// Backend (ISel / regalloc / scheduling) optimization level for the machine.
-    /// Drives BACKEND passes only — the mid-end IR pipeline (`run_passes`) is a
-    /// separate Phase 3 surface that will ride this same config.
+    /// The mid-end IR pipeline rides this same field via
+    /// [`PipelineConfig::mid_end_pipeline`] — one tier knob, two stages.
     pub opt_level: OptimizationLevel,
 }
 
 impl PipelineConfig {
-    /// Today's default tier: no backend optimization (`OptimizationLevel::None`).
-    ///
-    /// Phase 3 owns flipping the shipped default — every Phase 2 call site uses this
-    /// constructor so the flip is a one-definition change, not a call-site hunt.
+    /// The escape-hatch tier: no backend optimization, no mid-end pipeline —
+    /// byte-for-byte the pre-v0.3-M7 `ynz build` behavior. Selected by
+    /// `ynz build --no-optimize` (via `YNZ_NO_OPTIMIZE=1`).
     pub fn o0() -> Self {
         PipelineConfig {
             opt_level: OptimizationLevel::None,
         }
     }
+
+    /// The shipped default tier (v0.3-M7 Phase 3): backend `-O2`
+    /// (`OptimizationLevel::Default`) + mid-end `default<O2>`.
+    ///
+    /// Recorded tier choice: `default<O2>` over `Os`/`O1`. NO tier met the
+    /// roadmap's original <10% wall-clock budget on `examples/pirates-roster/`
+    /// (O2 +137%, Os +126%, O1 +122% over the 320ms O0 baseline); the budget was
+    /// renegotiated to an absolute ~+400ms / ~2.2x frame (Patrick-signed FRAGO 008,
+    /// plan 2026-07-04-v0-3-m7-optimizer-pipeline audit.md). O2 ships within that
+    /// frame because Os saves only ~5% compile time and O1's inlining masks the
+    /// R9 UB class.
+    pub fn optimized() -> Self {
+        PipelineConfig {
+            opt_level: OptimizationLevel::Default,
+        }
+    }
+
+    /// The new-PM pipeline string for the mid-end stage, in `opt -passes=` syntax
+    /// (the exact API shape the Phase 0 spike proved against inkwell 0.9.0 —
+    /// `scratch/opt-pipeline-spike/api-shape.md`). `None` means "skip `run_passes`
+    /// entirely" — the O0 escape hatch must reproduce the pre-M7 artifact
+    /// byte-for-byte, and even `default<O0>` is not a guaranteed no-op.
+    pub fn mid_end_pipeline(&self) -> Option<&'static str> {
+        match self.opt_level {
+            OptimizationLevel::None => None,
+            _ => Some("default<O2>"),
+        }
+    }
+}
+
+/// Resolve the pipeline tier from the process environment — the single authoritative
+/// reader every emission path consults (mirrors `ynz_typeck::no_auto_parallel_env` /
+/// `soa_force_env`: main.rs sets the vars BEFORE the first salsa call, this helper is
+/// the one predicate).
+///
+/// Precedence (highest first):
+/// 1. `YNZ_NO_OPTIMIZE=1` — set by the user-facing `ynz build --no-optimize` flag;
+///    explicit user intent outranks the harness hint (the same subordination
+///    `YNZ_SOA_FORCE` documents against `--no-auto-parallel`).
+/// 2. `YNZ_OPT_FORCE` — dev/bench-only harness override (v0.3-M7 Phase 7's A/B
+///    benchmark rides it), never a shipped user surface. Accepted values:
+///    `0`/`o0`/`none` force the O0 tier; `2`/`o2`/`default` force the optimized
+///    tier; anything else is ignored (dev-only surface — fail open to the default).
+/// 3. Default: [`PipelineConfig::optimized`] — `ynz build` optimizes by default.
+///
+/// Latent hazard (same class as the documented `YNZ_NO_AUTO_PARALLEL` note in
+/// `emit.rs`): long-lived `ynz watch` / LSP processes would not invalidate memoized
+/// codegen when these vars change between rebuilds — salsa has no env visibility.
+/// Same deferral, same trigger (`ynz watch --no-optimize` or LSP codegen).
+pub fn pipeline_config_from_env() -> PipelineConfig {
+    if std::env::var("YNZ_NO_OPTIMIZE").is_ok_and(|v| v == "1") {
+        return PipelineConfig::o0();
+    }
+    match std::env::var("YNZ_OPT_FORCE").as_deref() {
+        Ok("0") | Ok("o0") | Ok("none") => PipelineConfig::o0(),
+        Ok("2") | Ok("o2") | Ok("default") => PipelineConfig::optimized(),
+        _ => PipelineConfig::optimized(),
+    }
+}
+
+/// Run the mid-end LLVM pass pipeline over `module` per `config` — the sibling of
+/// [`default_target_machine`] (v0.3-M7 Phase 3), consuming the API shape the Phase 0
+/// spike recorded (`scratch/opt-pipeline-spike/api-shape.md`): inkwell 0.9.0's
+/// `Module::run_passes(passes, &TargetMachine, PassBuilderOptions)`.
+///
+/// Call AFTER IR emission + `module.verify()` and BEFORE object emission
+/// (`write_to_memory_buffer`). A no-op at the O0 tier (`mid_end_pipeline() == None`)
+/// so the `--no-optimize` escape hatch reproduces the pre-M7 pipeline exactly.
+pub fn run_mid_end_pipeline(
+    module: &Module,
+    machine: &TargetMachine,
+    config: PipelineConfig,
+) -> Result<(), String> {
+    let Some(passes) = config.mid_end_pipeline() else {
+        return Ok(());
+    };
+    module
+        .run_passes(
+            passes,
+            machine,
+            inkwell::passes::PassBuilderOptions::create(),
+        )
+        .map_err(|e| {
+            format!(
+                "LLVM: mid-end pass pipeline `{passes}` failed: {}",
+                e.to_string()
+            )
+        })
 }
 
 /// Construct THE LLVM `TargetMachine` — the single authoritative constructor for the

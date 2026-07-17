@@ -3,9 +3,9 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup"]
 created_at: "2026-07-04"
-updated_at: "2026-07-16"
+updated_at: "2026-07-17"
 metadata:
   type: "plan"
 ---
@@ -125,10 +125,12 @@ this is pre-release compiler-internal work, fully git-reversible):
 | **R2 — general hot-loop O0 stack-exhaustion SIGSEGV** (ledger row 439, absorbed by this plan) confounds honest benchmarking and is a live bug independent of SoA — *Phase 4* | A | III | HIGH | Root-cause + eliminate the failure mode (alloca/stack-growth fix + a stress regression fixture) (**B1 eliminate**, prob −2; proof: Phase 4's fixture running past the old ~4.19M-visit crash envelope) | **MEDIUM** (C×III) | recorded |
 | **R3 — inkwell 0.9.0 may not cleanly expose LLVM 18's PassBuilder/`run_passes` surface** (net-new code, zero existing call sites) — *Phase 0* | B | III | MEDIUM | Hard-gate P0 spike with explicit accept/reject STOP-conditions before any durable phase depends on it (**B2 canary/staged**, prob −1; proof: Phase 0's persisted spike verdict) | **MEDIUM** (C×III) | recorded |
 | **R4 — dual `TargetMachine` creation sites drift on pipeline config**, silently mismatching the main path vs. the state-machine path (this roadmap's own recurring authoritative-derivation corpse class — 4 confirmed instances in M4 alone) — *Phase 2* | B | II | HIGH | Thread ONE authoritative constructor (extend `default_target_machine`; delete the second inline construction) — the divergence class cannot exist with one source (**B1 eliminate**, prob −2; proof: grep-verified single construction call site + both consumers threaded from it) | **MEDIUM** (D×II) | recorded |
-| **R5 — LLVM passes regress `ynz build` compile-time** beyond the roadmap's existing <10% wall-clock budget on `pirates-roster` — *Phase 3* | C | III | MEDIUM | Measured wall-clock gate before the default tier ships (**B2 canary w/ auto-reject**, prob −1; proof: committed before/after timing in Phase 3's exit criteria) | **LOW** (D×III) | pass |
+| **R5 — LLVM passes regress `ynz build` compile-time** beyond the accepted budget on `pirates-roster` — budget REBASED per Patrick-signed FRAGO 008 to the ABSOLUTE frame: measured 320ms → ~720-760ms (~+400ms, ~2.2x) at `default<O2>` on the pirates-roster demo scale, accepted; the pre-measurement <10% percentage figure is superseded (small-denominator artifact, per the FRAGO) — *Phase 3* | C | III | MEDIUM | Measured wall-clock gate before the default tier ships (**B2 canary w/ auto-reject**, prob −1) — the canary FIRED (no tier meets <10%: O2 +137%, Os +126%, O1 +122%, `executor-2026-07-17-phase3-tier-measurement`), was escalated to the human, and the budget was renegotiated on the record (FRAGO 008) — a recorded renegotiation, not gaming; proof: the committed tier-measurement numbers + the Patrick-signed accepted absolute budget | **LOW** (D×III) | pass |
 | **R6 — preemption call-site checks reintroduce the 1190% overhead** measured previously at O0 (wrong-tier evidence) if added blindly — *Phase 6* (call-site checks are, like back-edge checks, codegen-emitted poll-yield sites — never runtime-implicit magic; this risk is about the OVERHEAD of emitting them, orthogonal to R8's frame-layout-correctness hazard for the back-edge mechanism itself) | C | III | MEDIUM | Ship call-site checks ONLY if a fresh O2 measurement clears a pre-registered threshold; otherwise the four-field deferral is the only path — the bad outcome cannot ship (**B1 eliminate via measurement-gated decision**, prob −2; proof: Phase 6's committed O2 measurement + explicit accept/reject line) | **LOW** (E×III) | pass |
 | **R7 — optimizer/golden non-determinism** (LLVM pass-ordering or other codegen non-determinism could break the byte-identical 2-run golden-regeneration gate) — *Phase 5* | C | III | MEDIUM | The Phase 5 two-independent-run gate itself (**B2 engineered guard**, probability, −1; proof: golden regeneration re-run a second independent time, byte-diffed against the first — Phase 5 step 3) | **LOW** (D×III) | pass |
 | **R8 — the back-edge poll-yield codegen transform introduces a NEW frame-layout/crossing-local suspension hazard** (turning a qualifying loop back edge INSIDE a state-machine function into a new poll-yield suspension point — store `resume_point`, flush crossing locals, return `Pending` — is net-new codegen logic in the same silent-miscompile family as R1, and this repo's four-milestone twin-derivation/frame history: M3a/M3d/M3e/M3g, per [`authoritative-derivation.md`](../../../rules/authoritative-derivation.md)) — *Phase 6* | B | II | HIGH | Adversarial/RED-repro fixtures: loop-crossing-local suspension fixtures (the SM-positive case AND the non-SM residual case) authored and committed BEFORE the transform lands, gating the build (**B2 adversarial/RED-repro**, probability, −1; proof: failing fixtures committed pre-implementation, Phase 6 Steps 1 & 3) — re-lookup(C, II) = **HIGH, unchanged** (Critical severity does not clear High until probability reaches D; no second honestly-provable catalog mitigation applies — full work-shown in the RISK OVERRIDE block immediately below) | **HIGH** (C×II) | **BLOCKED — unsigned RISK OVERRIDE below** |
+| **R9 — dangling-stack-return ABI miscompile class** (proven, deterministic: `ret ptr` to the callee's OWN alloca on `maybe<T>`/`number` returns — `emit.rs:2213-2223` / `:5292-5320`'s own "copy-and-forget ABI" comment; UB, garbage+hang under O2; confirmed THIRD O0-reliant class, structurally undiscoverable by Phase 1's attribute/alignment sweep because manifestation is inlining-dependent; FRAGO 005) — *Phase 3 (extended)* | A | III | HIGH | Committed RED fixture gating the fix (`v0_3_m7_p3_dangling_stack_return.ynz` + the `optimizer_red_gate` Class-3 test); root-cause-before-fix ordering (**B2 adversarial/RED-repro**, prob −1; proof: failing fixture + gate test committed before the fix lands) | **MEDIUM** (B×III) | recorded |
+| **R10 — pre-existing multi-file build nondeterminism** (proven at clean HEAD/O0: `pirates-roster` object files flap between exactly two hashes — git-stash probe proof, orthogonal to the optimizer; breaks the reproducible-build Safety invariant AND R7's Phase-5 byte-identical 2-run gate mechanism; FRAGO 006) — *Phase 5 (Step 0)* | A | III | HIGH | Root-cause + eliminate the nondeterminism source before Phase 5 Step 3's gate runs, plus a determinism regression check (**B1 eliminate**, prob −2; proof: Phase 5 Step 0's committed determinism check green) | **MEDIUM** (C×III) | recorded |
 
 R8's residual lands HIGH and, per the frozen risk-engine catalog's available patterns, cannot be
 honestly mitigated further at plan-authoring time (see the RISK OVERRIDE block immediately below —
@@ -268,9 +270,11 @@ and the language's "Rust-level performance" positioning can be pursued on real n
 
 ### 3.1 Intent & End State
 
-**Purpose.** Turn on real optimization safely: root-cause the ONE proven hazard (the spike's decimal128
-SIGSEGVs) before any durable phase depends on an unverified theory about it, sweep exhaustively for
-undiscovered siblings, and close the two adjacent bugs (the O0 stack-exhaustion ceiling, and honest
+**Purpose.** Turn on real optimization safely: root-cause the ONE hazard proven at authoring time (the
+spike's decimal128 SIGSEGVs) before any durable phase depends on an unverified theory about it, sweep
+exhaustively for undiscovered siblings (execution has since confirmed two more O0-reliant miscompile
+classes: the false-ownership-attribute class, R1/FRAGO 002, and the dangling-stack-return ABI class,
+R9/FRAGO 005), and close the two adjacent bugs (the O0 stack-exhaustion ceiling, and honest
 benchmark integrity) that would otherwise corrupt every measurement this milestone produces.
 
 **Key outcomes:**
@@ -278,7 +282,9 @@ benchmark integrity) that would otherwise corrupt every measurement this milesto
    documented escape hatch back to the old O0 behavior (mirrors `--no-auto-parallel`'s exact CLI/env
    threading pattern).
 2. Every suspension/concurrency fixture — the full `ynz-driver` + `ynz-codegen` test suite (830+ tests
-   pre-existing), the 6 spike-failing fixtures, and every sibling Phase 1's sweep finds — is GREEN under
+   pre-existing), the 6 spike-failing fixtures, every sibling Phase 1's sweep finds, and the
+   Phase-3-discovered dangling-stack-return fixture (`v0_3_m7_p3_dangling_stack_return.ynz`,
+   R9/FRAGO 005) — is GREEN under
    the new pipeline, proven by re-run, not asserted from the spike alone.
 3. Real back-edge preemption ships as a NEW codegen poll-yield transform for state-machine functions
    (today only the CALL SITES exist at back edges — they target a documented no-op stub, so runtime
@@ -313,8 +319,11 @@ and shipping row 443, with rows 438/440/441/442 explicitly left unabsorbed and r
 Reconciliation, Phase 8).
 
 **Disciplined-initiative guidance.** When a literal step and reality diverge — inkwell 0.9.0 genuinely
-can't expose `run_passes` cleanly, or the Phase 1 sweep finds a THIRD O0-reliant path nobody
-anticipated, or a golden fails to stabilize across repeated runs — the fallback is the Purpose above:
+can't expose `run_passes` cleanly, or a sweep or later phase finds a THIRD O0-reliant path nobody
+anticipated (this materialized: Phase 3's dangling-stack-return class, handled per this exact
+discipline as R9/FRAGO 005), or a golden fails to stabilize across repeated runs (this also
+materialized: the pre-existing multi-file nondeterminism, R10/FRAGO 006, surfaced and risk-rowed
+rather than silently absorbed) — the fallback is the Purpose above:
 **root-cause before fix, prove before ship, never paper over a suspension-frame or runtime-FFI-call
 correctness question with a hopeful guess.** Any newly-discovered O0-reliance is a NEW risk row (surface
 it), never a silent in-place patch. When genuinely uncertain whether a finding is in-scope for this
@@ -335,10 +344,13 @@ assumption (does `inkwell` 0.9.0 expose enough LLVM 18 PassBuilder surface) befo
 depends on it. **Phase 1** root-causes the spike's actual failure mechanism and exhaustively sweeps for
 siblings — producing a committed RED fixture set, not a fix. **Phase 2** fixes what Phase 1 found and
 threads the single authoritative `TargetMachine` constructor (closing R4). **Phase 3** wires the real
-pass pipeline through that one constructor, with the `--no-optimize` escape hatch. **Phase 4** fixes the
+pass pipeline through that one constructor, with the `--no-optimize` escape hatch — extended (FRAGO
+005) to also land the R9 dangling-stack-return return-ABI fix and green its Class-3 RED gate before
+the phase's exit criteria can be claimed. **Phase 4** fixes the
 absorbed O0 stack-exhaustion bug (row 439) — root-caused independently of the optimizer question, but
 its own Step 1 re-confirms the crash under Phase 3's now-live pipeline, so it is hard-sequenced AFTER
-Phase 3, never before or in parallel. **Phase 5** regenerates every invalidated golden and re-runs the
+Phase 3, never before or in parallel. **Phase 5** first eliminates the pre-existing multi-file build
+nondeterminism (Step 0, R10/FRAGO 006), then regenerates every invalidated golden and re-runs the
 full suite — the proof phase for outcomes 2 and 6. **Phase 6** resolves the preemption honesty question
 (real call-site checks or a proper deferral). **Phase 7** builds the two benchmark suites (A/B,
 Rust-comparison) now that rows R1/R2 are closed. **Phase 8** closes the loop on documentation, registry,
@@ -484,21 +496,52 @@ after 3 and 4.
   1. Using Phase 0's recorded API shape, implement the real pass-pipeline call inside
      `default_target_machine` (or a sibling function it calls), defaulting to a real optimizing tier
      (target: LLVM's `default<O2>`-equivalent, or `Os` if compile-time budget demands it — pick ONE,
-     record the choice and why).
+     record the choice and why). *Tier choice — FINAL per FRAGO 008 (closes this step's "pick ONE"):*
+     **`default<O2>`.** Why: the Os/O1 measurement (`executor-2026-07-17-phase3-tier-measurement` in
+     audit.md) showed no tier meets the old <10% figure and the tiers sit within ~7% of each other —
+     Os buys only ~5% vs O2 for a smaller optimization surface, and O1 MASKS the R9
+     dangling-stack-return manifestation via inlining (correct-looking output over unchanged UB),
+     making it hazardous as a default. The compile-time cost is accepted under FRAGO 008's
+     Patrick-signed absolute budget.
   2. Add a `--no-optimize` CLI flag to `ynz build`, threaded through the salsa barrier via an env var —
      mirror `--no-auto-parallel`'s exact existing pattern in `crates/ynz-driver/src/main.rs` (same
      plumbing shape, new name).
   3. Add a `YNZ_OPT_FORCE` env override for the benchmark harness (Phase 7), mirroring `YNZ_SOA_FORCE`'s
      precedent — dev/test-only, never a shipped user surface.
-  4. Measure `ynz build --release` wall-clock on `examples/pirates-roster/` before/after this phase;
-     confirm the <10% increase budget (existing roadmap risk) — this is R5's mitigation proof.
+  4. Measure `ynz build --release` wall-clock on `examples/pirates-roster/` before/after this phase —
+     this is R5's mitigation proof. DONE (FRAGO 008): the measurement is complete
+     (`executor-2026-07-17-phase3-tier-measurement` in audit.md — O0 median 320ms; `default<O2>`
+     ~720-760ms; Os/O1 within ~7% of O2); this step now records the ACCEPTED numbers under the
+     Patrick-signed absolute budget (~+400ms on the pirates-roster demo scale, FRAGO 008) rather
+     than gating on the superseded <10% percentage figure.
+  4b. Implement the return-ABI fix for the dangling-stack-return class (R9/FRAGO 005): eliminate
+     ret-of-own-alloca on `maybe<T>`/`number` returns (`emit.rs:2213-2223` / `:5292-5320`) via a
+     caller-provided out-slot/sret or a by-value return — the fix executor picks the evidenced shape,
+     reusing the existing authoritative frame/ABI machinery per
+     [`authoritative-derivation.md`](../../../rules/authoritative-derivation.md), never a parallel
+     second path.
+  4c. Un-ignore the Class-3 RED test (`optimizer_red_gate`, `v0_3_m7_p3_dangling_stack_return.ynz`)
+     and green the full RED gate including it.
+     **CHECKPOINT** — return-ABI fix landed; full RED gate (incl. Class 3) green; Step 5's full-suite
+     run not yet done.
   5. Run the full pre-existing test suite (830+ tests) plus Phase 1/2's RED set under the NOW-DEFAULT
      optimized pipeline; every one must be green. Reviewer glance required: Rust-runtime decimal
      reads must not assume 16-alignment of frame-interior i128 slots (Phase 2 lowered those claims
      to align 8).
-     **CHECKPOINT** — default pipeline live, compile-time budget proven, full suite green.
-- **Exit criteria:** `ynz build` optimizes by default; `--no-optimize` proven to reproduce the exact old
-  O0 output byte-for-byte; compile-time budget met; full suite green.
+     **CHECKPOINT** — default pipeline live, compile-time numbers recorded under the FRAGO-008
+     rebased budget, full suite green.
+- **Exit criteria:** `ynz build` optimizes by default at `default<O2>` (FRAGO 008); `--no-optimize`
+  proven to reproduce the exact old
+  O0 output byte-for-byte; compile-time numbers recorded and within the FRAGO-008 rebased absolute
+  budget; full suite green; Class-3 RED test green and
+  un-ignored (R9); the ret-of-own-alloca class is verified at BOTH layers it needs (FRAGO 010):
+  (a) static IR scan clean for the direct `ret ptr <own-alloca>` shapes the scan can structurally
+  see — `audit_ret_alloca.py` (SSA-rename tracing: gep/bitcast, not through-memory loads) re-run
+  post-fix over 12 freshly emitted `--no-optimize --emit-ir` .ll files incl. the multi-module
+  pirates-roster `bin.ll`: AUDIT CLEAN (receipt: audit.md `executor-2026-07-17-frago010-cleanup`);
+  AND (b) the differential O0-vs-optimized RED gate (`optimizer_red_gate`, 10 tests) as the
+  AUTHORITATIVE lock for the laundered int-embedded shapes (ptr_to_int payload bits riding maybe
+  envelopes / EC ok-words) the static scan structurally cannot see.
 - **Reviewer fan-out:** code-reviewer; design-doc-alignment reviewer (the CLI-flag pattern vs.
   `--no-auto-parallel` precedent); adversarial gate-checker (does `--no-optimize` genuinely reproduce
   old behavior, or does it silently differ).
@@ -538,9 +581,16 @@ after 3 and 4.
 - **Task + purpose:** Prove Key Outcomes 2 and 6 — every golden regenerated, every fixture green,
   stability proven across repeated runs (not a single-commit claim).
 - **Steps:**
+  0. (Step 0, inserted per FRAGO 006 — runs BEFORE Step 1.) Root-cause and fix the pre-existing
+     multi-file build nondeterminism (R10). Evidence: `pirates-roster` object files flap between
+     exactly two hashes, reproduced at clean HEAD/O0 — see the audit.md phase3 entry (git-stash probe
+     proof). Suspect: emission-order nondeterminism in multi-file emission — confirm with evidence,
+     never assume. Add a determinism regression check.
   1. Regenerate every `crates/ynz-codegen/tests/golden.rs` IR-text and object-SHA-256 snapshot under
      the new default pipeline (the file's own doc comment states it auto-regenerates on first run —
-     use that mechanism, review every diff by hand, do not blind-accept).
+     use that mechanism, review every diff by hand, do not blind-accept). Note (FRAGO 007): the
+     Phase-3 interim golden regeneration predates the R9 ABI fix — those goldens are provisional
+     (F1-tainted); this phase's post-fix regeneration is the authoritative one.
   2. Regenerate `examples/pirates-roster/expected_stdout.txt` via its own
      `expected_stdout.txt.regenerate.sh` — confirm the stdout content is IDENTICAL to the pre-M7
      baseline (the optimizer must not change observable program behavior; if stdout differs, that is a
@@ -730,6 +780,10 @@ after 3 and 4.
      added at Phase 6 authoring time).
   4. CHANGELOG entry for the milestone; confirm no stray references to "compiles at O0" survive in any
      doc this milestone's grep sweep touches.
+  5. Carry the FRAGO-008-rebased compile-time budget into the roadmap's own budget text (the roadmap
+     still states the <10% figure): restate it as the Patrick-signed absolute frame (measured 320ms →
+     ~720-760ms, ~+400ms / ~2.2x at pirates-roster demo scale, at `default<O2>`), citing FRAGO 008, so
+     plan and roadmap agree.
 - **Exit criteria:** roadmap and registry reflect the true post-M7 state; no unreconciled ledger rows.
 - **Reviewer fan-out:** docs-consistency reviewer; design-doc-alignment reviewer (final check that
   nothing in this plan's execution silently contradicted a cited design doc without being surfaced).
@@ -753,9 +807,10 @@ after 3 and 4.
   2. Phase 0 returns a RED spike verdict (inkwell 0.9.0 cannot expose a usable pass-pipeline entry
      point) — halt for re-design (an inkwell version bump or a raw-`llvm-sys` escape hatch is itself a
      new decision requiring its own review, not a quiet substitution).
-  3. Any newly-discovered O0-reliant path during Phase 1's sweep beyond the two known comments — each
-     gets its own RED fixture and risk-row treatment before Phase 2 attempts a fix; never fixed
-     silently alongside the known cases.
+  3. Any newly-discovered O0-reliant path — during Phase 1's sweep beyond the two known comments, OR
+     in any later phase (discovery is not confined to Phase 1: the Phase-3 dangling-stack-return
+     class, R9/FRAGO 005, fired exactly this CCIR) — each gets its own RED fixture and risk-row
+     treatment before a fix is attempted; never fixed silently alongside the known cases.
   4. Any NEW risk scoring HIGH/EX-HIGH during execution — surfaced unsigned, per the risk engine's
      override gate; never self-signed by an executor.
   5. Any golden or fixture that fails to stabilize across the Phase 5 repeated-run proof — this is a
@@ -773,6 +828,10 @@ after 3 and 4.
 - The spike's 6 failing fixtures (decimal128/EC-crossing paths) AND every sibling fixture Phase 1's
   exhaustive sweep discovers pass GREEN under the real optimized pipeline before Phase 3 flips the
   default — testable via the committed RED fixture set (Phase 1 exit criteria; Phase 2 exit criteria).
+  The Phase-3-discovered dangling-stack-return fixture (`v0_3_m7_p3_dangling_stack_return.ynz`,
+  R9/FRAGO 005) joins this set and passes GREEN (un-ignored) within Phase 3 itself (Steps 4b/4c)
+  before Phase 3's exit criteria are claimed — inlining-dependent manifestation made it structurally
+  undiscoverable by Phase 1's sweep.
 - No new silent-miscompile class survives the milestone: every audited `ynz_array_*`/`ynz_map_*`/
   `ynz_channel_*` (incl. `ynz_channel_share` refcounting, the real cross-task sharing surface — no
   `ynz_arc_*` symbols are declared or called from `ynz-codegen`, per FRAGO 001)/drop-glue/
@@ -787,7 +846,9 @@ after 3 and 4.
   wait/background/EC suspension paths, not just the happy path.
 - Reproducible-build invariant: two independent, fresh-process golden-regeneration runs on identical
   input produce byte-identical output (Phase 5 step 3) — closing the M4 audit's unenforced "stable
-  across 5 runs" gap (R7 below covers the risk this invariant is proving down to LOW).
+  across 5 runs" gap (R7 covers the optimizer-introduced side of this risk; R10/FRAGO 006 covers the
+  pre-existing multi-file nondeterminism, which Phase 5 Step 0 must root-cause and eliminate BEFORE
+  this gate can honestly run).
 - Exactly ONE `TargetMachine` construction call site exists in the crate after Phase 2 (grep-verified,
   Phase 2 exit criteria) — the R4 dual-constructor drift class cannot exist with a single source.
 
@@ -804,10 +865,14 @@ after 3 and 4.
   difference between `--no-optimize` and default-optimized binaries, proven by an IR-content gate
   (Phase 7 step 2) confirming the pass pipeline actually ran — not asserted from a silent no-op. The
   actual magnitude reported is whatever Phase 7 measures, honestly, with no pre-committed number.
-- Compile-time budget: `ynz build --release` wall-clock on `pirates-roster` stays within the existing
-  <10% roadmap budget (Phase 3 step 4, R5's mitigation proof).
+- Compile-time budget: `ynz build --release` wall-clock on `pirates-roster` stays within the
+  Patrick-signed ABSOLUTE budget rebased by FRAGO 008 — measured 320ms → ~720-760ms (~+400ms, ~2.2x)
+  at `default<O2>` on the pirates-roster demo scale, accepted; the earlier <10% percentage figure is
+  superseded (small-denominator artifact) (Phase 3 step 4, R5's mitigation proof).
 - Golden-stability doubles as a determinism guarantee: the pass pipeline must not introduce
-  nondeterministic codegen ordering that would break the byte-identical 2-independent-run gate (R7).
+  nondeterministic codegen ordering that would break the byte-identical 2-independent-run gate (R7);
+  the pre-existing multi-file nondeterminism (R10/FRAGO 006) is eliminated at Phase 5 Step 0 so the
+  gate measures the pipeline, not the pre-existing flap.
 
 ### Teaching
 
@@ -1028,6 +1093,44 @@ after 3 and 4.
    Phase 2/3 optimizer-pipeline wiring landing — at that point the repro becomes runnable under real
    optimization and (b) is executable. This entry is the tracking record; the plan's next
    amendment/review cycle should fold it into a real phase.
+10. **N1: `fixed<T>` function returns are broken at BOTH tiers** (Phase 3 Step-4b sweep finding,
+    FRAGO 009 disposition (5)) — **WHAT:** a `-> fixed<T>` return loses its size through the return
+    (probe prints `0,0` for `[7,8,9].get(0)/.get(2)` after return), identically at O0 and optimized —
+    tier-identical, so NOT an R9/CCIR-3 O0-reliant differential class; likely size-loss through the
+    pointer-returning ABI (`fixed<T>` is the one known remaining pointer-returning case the Step-5 IR
+    audit's scope-honesty note names). **WHY not absorbed here:** pre-existing at both tiers and
+    orthogonal to this plan's optimizer-flip charter (no O0-vs-opt divergence to gate); it needs its
+    own risk-row/ABI decision (by-value vs sized-header return), not a ride-along fix inside an R9
+    fix round. **COST:** ~0.5-1 session — a sized `fixed<T>` return ABI (mirror `abi_return_type`'s
+    by-value discipline or return a sized heap copy) + a differential/both-tier fixture. **TRIGGER:**
+    the milestone that owns return-ABI completion (natural sibling of the roadmap's decimal128
+    return-ABI row, now largely absorbed by this plan's `abi_return_type`), OR a real user returning
+    `fixed<T>` from a function.
+11. **N2: number-LITERAL argument to a direct suspending call stages zero** (Phase 3 Step-4b sweep
+    finding, FRAGO 009 disposition (5)) — **WHAT:** `priceParam(3.5)` where `priceParam` is a direct
+    SUSPENDING callee stages `0.000…` for the literal arg at BOTH tiers; annotated-binding args
+    (`let p: number = 7.0; priceParam(p)`) work. PROVEN pre-existing: identical wrong output from the
+    pre-fix `target/release/ynz` at O0 — orthogonal to R9 (not O0-reliant, no optimizer dependence).
+    **WHY not absorbed here:** a literal-staging bug in the SM param path, not a return-ABI or
+    optimizer-flip defect; same family as (but distinct from) the roadmap's int-literal→`number`
+    coercion row (this one is a DECIMAL literal, already type-legal, staged wrong). **COST:** ~0.5
+    session — route the literal through the same alloca-backed staging the annotated-binding path
+    uses + a both-tier fixture. **TRIGGER:** the next milestone touching SM param staging or
+    numeric-literal codegen (natural co-fix with roadmap ledger row 441's coercion work), OR a real
+    user hitting a zeroed literal arg.
+12. **N3: cross-module bare-`number` PARAMS mismatch (i128 declared vs ptr passed)** (Phase 3
+    Step-4b sweep finding, FRAGO 009 disposition (5)) — **WHAT:** the importer's Pass 0.25
+    declaration gives a bare `number` PARAM type `i128` while local callers pass `ptr` — pre-existing,
+    and it fails LOUD at LLVM verify ("Call parameter type does not match function signature"), so no
+    silent wrong value ships. The RETURN half of this exact twin-drift is now unified by this plan's
+    ONE authoritative `abi_return_type` producer (Step 4b consumed by all three declaration sites);
+    the PARAM half is the cheap, symmetric continuation — an `abi_param_type`-shaped single producer
+    consumed by the same three sites. **WHY not absorbed here:** fails loud (no correctness exposure),
+    pre-existing, and out of the R9 fix-round's blocker scope; it deserves the same
+    authoritative-derivation treatment as the return half rather than a spot patch. **COST:** small —
+    ~0.5 session riding the `abi_return_type` pattern already in place. **TRIGGER:** the next
+    milestone touching cross-module ABI/declaration codegen, OR the first real cross-module
+    bare-`number` param call site a user hits (it will fail loud, pointing here).
 
 ## Roadmap Reconciliation (executed at Phase 8; recorded here so the executor has zero ambiguity)
 

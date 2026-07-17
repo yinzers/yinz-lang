@@ -7343,11 +7343,32 @@ fn v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged() {
             "run {run_idx}: main must always exit 0 regardless of background-task timing; \
              stderr:\n{stderr}"
         );
-        assert_eq!(
-            stdout.trim(),
-            "main-done",
-            "run {run_idx}: main thread's own output must be unaffected by the detached \
-             background task's timing; stdout:\n{stdout}"
+        // Two documented-legal regimes of the detached task's shutdown race (the sibling
+        // `..._completes_before_exit_no_leak` test below pins the COMPLETED regime
+        // deterministically with a 10x head start): (a) ABORTED — the task dies at
+        // shutdown drain and only main's own `main-done` lands; (b) COMPLETED — under
+        // load (e.g. full-suite CPU contention) the detached task legitimately finishes
+        // during shutdown drain and its fused-group completion marker (`1229`, a + b)
+        // lands too, in either order relative to `main-done`. Both are correct; the
+        // previous exact `main-done` assertion pinned regime (a) alone and flaked
+        // whenever (b) occurred. Anything beyond these two line sets is a real output
+        // corruption and still fails.
+        let lines: Vec<&str> = stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        let aborted_regime = lines == ["main-done"];
+        let completed_regime = lines == ["1229", "main-done"] || lines == ["main-done", "1229"];
+        // test-ratchet: widened from the exact `main-done` pin per FRAGO 009 (plan
+        // 2026-07-04-v0-3-m7-optimizer-pipeline) — the old assertion pinned one regime of a
+        // two-regime documented race; the sibling test below proves the other regime legal.
+        assert!(
+            aborted_regime || completed_regime,
+            "run {run_idx}: stdout must match one of the two documented-legal regimes of \
+             the detached-task shutdown race (aborted: exactly `main-done`; completed: \
+             `main-done` plus the fused group's `1229` completion marker) — anything else \
+             is a real output corruption; stdout:\n{stdout}"
         );
         if stderr.contains("panicked") {
             panic_count += 1;

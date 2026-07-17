@@ -1,0 +1,129 @@
+// v0.3-M7 Phase 3 fix round (FRAGO 009, test-quality SF1) — SM-tier companion to
+// the sibling-sweep fixture: the R9 dangling-stack-return shapes placed behind a
+// `wait`, so every return crosses a state-machine wrapper + resume function
+// instead of a plain `ret`.
+//
+// Members locked (5-7 of the Step-4b sweep, plus the FRAGO-009 maybe<number>
+// payload at the SM tier):
+//   5. SM wrapper `-> number`            (`tallyScore` — wrapper returns i128 by value)
+//   6. SM `-> maybe<T>`                  (`findRank` T=int; `pickFee` T=number — the
+//      resume stores the envelope's VALUE pair in the 16-byte return slot; a wide
+//      payload heap-promotes)
+//   7. SM `-> maybe<T> errors` ok-word   (`rankOrMissing` T=int; `feeOrMissing`
+//      T=number — the ok word carries a heap-promoted envelope cell)
+//
+// Payload-sourcing note (FRAGO 010): the number producers (members 6-7) build their
+// payloads from LOCALLY-COMPUTED number values wrapped through a stack-backed
+// `fixed<number>` literal (the FRAGO-009 member-8 pattern) — never `array<number>.get()`,
+// whose heap-durable element storage would keep this test green even if the Number
+// promotion arm in `maybe_payload_stable_bits` (ynz-codegen/src/emit.rs) reverted.
+// With a stack-sourced payload, the envelope bits are ptr_to_int of resume-frame-local
+// storage unless that arm heap-promotes them — so this lock actually trips on a revert.
+//
+// Structure note: locally-constructed maybe locals in a suspending function are
+// legal only block-scoped (a TOP-LEVEL maybe local is frame-slotted and rejected
+// as an unsupported crossing type — UnsupportedCrossingLocalType), so each
+// producer builds its maybe inside an `if` block and each consumer helper
+// unwraps inside an `if` block. That restriction is orthogonal to the
+// return-ABI class this fixture locks.
+//
+// Differential lock: O0 and default<O2> must agree byte-for-byte; any dangling
+// resume-stack pointer riding the return slot / ok word diverges under
+// optimization.
+
+function tallyScore(start: number) -> number {
+  wait sleep(1)
+  let total = start + 0.25
+  return total
+}
+
+function findRank(idx: int) -> maybe<int> {
+  wait sleep(1)
+  if (idx >= 0) {
+    let ranks: array<int> = [40, 30, 20]
+    let got = ranks.get(idx)
+    return got
+  }
+  return none
+}
+
+function pickFee(idx: int) -> maybe<number> {
+  wait sleep(1)
+  if (idx >= 0) {
+    let seed = 5.25
+    let fee = seed + 0.25
+    let bump = fee + 3.00
+    let fees: fixed<number> = [fee, bump]
+    let got = fees.get(idx)
+    return got
+  }
+  return none
+}
+
+function rankOrMissing(idx: int) -> maybe<int> errors {
+  wait sleep(1)
+  if (idx >= 0) {
+    let ranks: array<int> = [12, 34]
+    let got = ranks.get(idx)
+    return got
+  }
+  return none
+}
+
+function feeOrMissing(idx: int) -> maybe<number> errors {
+  wait sleep(1)
+  if (idx >= 0) {
+    let seed2 = 7.25
+    let fee2 = seed2 + 0.50
+    let bump2 = fee2 + 1.25
+    let fees: fixed<number> = [fee2, bump2]
+    let got = fees.get(idx)
+    return got
+  }
+  return none
+}
+
+function showRank(idx: int) -> nothing {
+  let r = findRank(idx)
+  let rv = r.or(0 - 1)
+  print(rv.toString())
+}
+
+function showFee(idx: int) -> nothing {
+  let f = pickFee(idx)
+  let fv = f.or(0.0)
+  print(fv.toString())
+}
+
+function showRankOrMissing(idx: int) -> nothing {
+  let m = rankOrMissing(idx)
+  if (idx >= 0) {
+    let empty: maybe<int> = none
+    let mv = m.or(empty)
+    let got = mv.or(0)
+    print(got.toString())
+  }
+}
+
+function showFeeOrMissing(idx: int) -> nothing {
+  let n = feeOrMissing(idx)
+  if (idx >= 0) {
+    let empty: maybe<number> = none
+    let nv = n.or(empty)
+    let fee = nv.or(0.0)
+    print(fee.toString())
+  }
+}
+
+function entrypoint() -> nothing {
+  let s = tallyScore(2.25)
+  print(s.toString())
+
+  showRank(1)
+  showRank(9)
+  showFee(0)
+  showRankOrMissing(0)
+  showFeeOrMissing(1)
+
+  print(`done`)
+}

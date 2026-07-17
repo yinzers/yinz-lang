@@ -1009,3 +1009,21 @@ Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#2: crates-ynz-driver-test
 - **WHY** — pre-existing test-infra design untouched by M7 Phase 2's diff (which only re-based two outlier bounds onto the file default); building real timeout+kill plumbing is harness work outside M7's codegen charter.
 - **COST** — ~half a session: wrap `Command::spawn()` in a poll-with-deadline loop (wait-timeout pattern) + kill-on-expiry in the shared helper; all 31 call sites inherit it.
 - **TRIGGER** — the next milestone touching ynz-driver's integration/test harness, or the first CI hang traced to a fixture that never terminated.
+
+## 2026-07-17 — Deferral: dispatch-time CHECKPOINT-mark enforcement backstop (hook-author design — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#3, corpse-recurrence escalation)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#3: checkpoint-mark-enforcement-backstop
+
+- **WHAT** — a mechanical dispatch/write-time check that an executor segment crossing a
+  planner-authored CHECKPOINT mark without checkpointing is caught at the seam, not by a downstream
+  judge. Today the mark's enforcement is prose only: the executor charter's "honor a planner-placed
+  mark" default plus per-dispatch restatements.
+- **WHY** — prose restatement failed twice in one plan (`2026-07-04-v0-3-m7-optimizer-pipeline`):
+  the FRAGO 004 note AND an explicit dispatch restatement were both in-context, and the mark was
+  still passed without a checkpoint in Phase 2 and again in Phase 3 (deviation-judge ruling
+  2026-07-17: the second in-plan recurrence crosses the corpse-recurrence-escalation floor — a
+  lever failure, not a wording problem; a third prose pass would repeat an already-failed
+  intervention).
+- **COST** — a hook-author design session (live-hooks-spec fetch + stdin-JSON smoke test per that
+  charter); never an ad-hoc mid-AAR bolt-on.
+- **TRIGGER** — the next plan execution dispatching a checkpoint-marked phase, or the next
+  recurrence anywhere.

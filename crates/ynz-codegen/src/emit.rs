@@ -893,12 +893,14 @@ pub fn emit_artifact(
     // the query) and the explicit target_triple override (cross-compilation and
     // tests) route through `state_machine::default_target_machine` — never a second
     // inline `create_target_machine` that could drift on pipeline config.
-    // `PipelineConfig::o0()` keeps today's default behavior; Phase 3 flips the tier
-    // through this parameter.
-    let machine = crate::state_machine::default_target_machine(
-        target_triple,
-        crate::state_machine::PipelineConfig::o0(),
-    )?;
+    //
+    // Tier resolution (v0.3-M7 Phase 3): optimized by default; `YNZ_NO_OPTIMIZE=1`
+    // (set by `ynz build --no-optimize` before the first salsa call, same barrier
+    // pattern as YNZ_NO_AUTO_PARALLEL below) selects the exact pre-M7 O0 path;
+    // `YNZ_OPT_FORCE` is the dev/bench harness override. One env read, one config,
+    // driving BOTH the backend level here and the mid-end `run_passes` stage below.
+    let pipeline_config = crate::state_machine::pipeline_config_from_env();
+    let machine = crate::state_machine::default_target_machine(target_triple, pipeline_config)?;
     // Always set triple and data-layout from the machine (covers both triple paths).
     module.set_triple(&machine.get_triple());
     module.set_data_layout(&machine.get_target_data().get_data_layout());
@@ -962,6 +964,13 @@ pub fn emit_artifact(
     module
         .verify()
         .map_err(|e| format!("LLVM module verify failed: {}", e.to_string()))?;
+
+    // Mid-end pipeline (v0.3-M7 Phase 3): after emission + verify, before object
+    // emission — the ordering the Phase 0 spike locked. No-op at the O0 tier, so
+    // `--no-optimize` reproduces the pre-M7 artifact byte-for-byte. `ir_text` is
+    // printed AFTER the passes: `--emit-ir` and the IR goldens show the IR the
+    // object was actually lowered from, never a pre-pipeline draft.
+    crate::state_machine::run_mid_end_pipeline(&module, &machine, pipeline_config)?;
 
     let ir_text = module.print_to_string().to_string();
     let obj_buf = machine
@@ -1130,20 +1139,15 @@ fn build_module<'ctx, 'g>(
                     _ => ptr.into(),
                 })
                 .collect();
-            let fn_ty = match &sig.ret {
-                Type::Nothing => ctx.void_type().fn_type(&param_types, false),
-                Type::Int => ctx.i64_type().fn_type(&param_types, false),
-                Type::Float => ctx.f64_type().fn_type(&param_types, false),
-                Type::Bool => ctx.bool_type().fn_type(&param_types, false),
-                Type::Number { precision } if *precision <= 34 => {
-                    ctx.i128_type().fn_type(&param_types, false)
-                }
-                // Errors-capable functions return `{i64, i64}` — the same ABI as the
-                // errors_result_type struct. Using ptr here produces an ABI mismatch:
-                // the importer reads an i64 where the callee returns a {i64,i64} struct,
-                // silently returning 0 instead of the real value.
-                Type::ErrorsCapable { .. } => errors_result_type(ctx).fn_type(&param_types, false),
-                _ => ptr.fn_type(&param_types, false),
+            // Return ABI from the ONE authoritative mapping (`abi_return_type`) — the
+            // same producer `declare_function` (local defs) and the mono declarations
+            // read, so the importer's declaration can never drift from the exporting
+            // module's definition (v0.3-M7 R9 by-value return ABI; this site already
+            // declared `number` returns as by-value i128 pre-fix, which the local
+            // definition path now matches instead of contradicting).
+            let fn_ty = match abi_return_type(ctx, &shape_types, &sig.ret)? {
+                None => ctx.void_type().fn_type(&param_types, false),
+                Some(t) => t.fn_type(&param_types, false),
             };
             module.add_function(llvm_name, fn_ty, None);
         }
@@ -1252,9 +1256,14 @@ fn build_module<'ctx, 'g>(
     // Pass 1 — forward-declare every non-generic function so vtables and bodies can reference them.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) if f.generics.is_empty() => {
-                declare_function(ctx, module, f, shape_table, effective_ownership)?
-            }
+            Item::Function(f) if f.generics.is_empty() => declare_function(
+                ctx,
+                module,
+                f,
+                shape_table,
+                &shape_types,
+                effective_ownership,
+            )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
             | Item::OptionsDecl(_)
@@ -1276,7 +1285,10 @@ fn build_module<'ctx, 'g>(
                     .unwrap_or_else(|| ctx.i64_type().into())
             })
             .collect();
-        let fn_ty = match llvm_type_for_ctx(ctx, &mono_sig.ret_type) {
+        // Return ABI from the ONE authoritative mapping (`abi_return_type`) — shared
+        // with `declare_function` and the imported-fn declarations (v0.3-M7 R9
+        // by-value return ABI). Params keep `llvm_type_for_ctx` (unchanged ABI).
+        let fn_ty = match abi_return_type(ctx, &shape_types, &mono_sig.ret_type)? {
             Some(ret) => ret.fn_type(&param_llvms, false),
             None => ctx.void_type().fn_type(&param_llvms, false),
         };
@@ -1487,7 +1499,7 @@ fn lower_generic_function<'ctx>(
         typed,
         current_fn: fn_val,
         is_main: false,
-        _current_fn_ret_ty: ret_ty,
+        current_fn_ret_ty: ret_ty,
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -1632,6 +1644,7 @@ fn declare_function<'ctx>(
     module: &Module<'ctx>,
     f: &FunctionDecl,
     shape_table: &ShapeTable,
+    shape_types: &ShapeLlvmTypes<'ctx>,
     effective_ownership: &ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<(), String> {
     let params = llvm_param_types(ctx, f, shape_table);
@@ -1644,14 +1657,13 @@ fn declare_function<'ctx>(
         let result_ty = errors_result_type(ctx);
         result_ty.fn_type(&params, false)
     } else {
-        match &f.return_type {
-            ynz_ast::nodes::Type::Nothing => ctx.void_type().fn_type(&params, false),
-            ynz_ast::nodes::Type::Int => ctx.i64_type().fn_type(&params, false),
-            ynz_ast::nodes::Type::Float => ctx.f64_type().fn_type(&params, false),
-            ynz_ast::nodes::Type::Bool => ctx.bool_type().fn_type(&params, false),
-            _ => ctx
-                .ptr_type(AddressSpace::default())
-                .fn_type(&params, false),
+        // The return ABI comes from the ONE authoritative mapping (`abi_return_type`,
+        // shared with the imported-fn and mono declaration sites) — v0.3-M7 R9:
+        // number/maybe/shape return BY VALUE, never a pointer to a callee alloca.
+        let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+        match abi_return_type(ctx, shape_types, &ret_ty)? {
+            None => ctx.void_type().fn_type(&params, false),
+            Some(t) => t.fn_type(&params, false),
         }
     };
     // `entrypoint` is the Yinz name; the C ABI entry point must be `main` for the linker.
@@ -1720,6 +1732,67 @@ fn errors_result_type(ctx: &Context) -> inkwell::types::StructType<'_> {
     ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
 }
 
+/// The ONE C-ABI return-type mapping for user functions (v0.3-M7 Phase 3, R9/FRAGO 005).
+///
+/// Consumed by ALL THREE declaration sites — local `declare_function`, the imported-fn
+/// forward declarations (Pass 0.25), and the monomorphized-generic declarations
+/// (Pass 1.5) — so the return ABI can never drift between them
+/// (authoritative-derivation: one producer; the pre-fix imported path already declared
+/// `number` returns as by-value `i128` while the local path declared `ptr` — exactly
+/// the twin-drift class this unification closes).
+///
+/// # The dangling-stack-return fix (R9)
+///
+/// Value classes whose payload used to be returned as `ret ptr <callee-own-alloca>`
+/// (the "stack-backed, copy-and-forget ABI" — UB the optimizer legally exploits by
+/// deleting stores to the dying alloca) now return BY VALUE, so callee-owned stack
+/// memory is never the returned storage:
+///
+/// - `number` (N ≤ 34) → `i128` by value (rax:rdx — no memory at all).
+/// - `maybe<T>`        → `{i64, i64}` envelope by value (same registers).
+/// - `Shape`           → the shape's LLVM struct by value (the backend lowers large
+///   aggregates to an implicit sret slot the CALLER owns). Interior shape/maybe
+///   fields are already counted heap cells (`store_field`), so the shallow copy is
+///   complete.
+///
+/// Everything heap-backed (string, array, map, sensitive, bignum) keeps the `ptr`
+/// return. `fixed<T>` and union returns also keep `ptr`: fixed returns are broken at
+/// BOTH tiers today (pre-existing size-loss bug, not an O0-reliant class) and union
+/// read-back after a call is loudly blocked (the documented union KNOWN-HOLE posture)
+/// — neither is silently-wrong-under-optimization, and both are surfaced findings,
+/// not ride-along fixes.
+///
+/// Returns `Ok(None)` for `Nothing` (void).
+fn abi_return_type<'ctx>(
+    ctx: &'ctx Context,
+    shape_types: &ShapeLlvmTypes<'ctx>,
+    ret: &Type,
+) -> Result<Option<BasicTypeEnum<'ctx>>, String> {
+    Ok(match ret {
+        Type::Nothing => None,
+        Type::Int => Some(ctx.i64_type().into()),
+        Type::Float => Some(ctx.f64_type().into()),
+        Type::Bool => Some(ctx.bool_type().into()),
+        Type::Number { precision } if *precision <= 34 => Some(ctx.i128_type().into()),
+        Type::ErrorsCapable { .. } => Some(errors_result_type(ctx).into()),
+        Type::Maybe { .. } => Some(
+            ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
+                .into(),
+        ),
+        Type::Shape { name } => {
+            let struct_ty = shape_types.named.get(name).ok_or_else(|| {
+                format!(
+                    "abi_return_type: no LLVM struct type for shape `{name}` — a \
+                     shape-returning function's return type must resolve to a declared \
+                     shape (is this an unresolved `Self` return?)"
+                )
+            })?;
+            Some((*struct_ty).into())
+        }
+        _ => Some(ctx.ptr_type(AddressSpace::default()).into()),
+    })
+}
+
 /// True when the AST type will be passed as a pointer in LLVM (not a scalar value).
 fn is_ptr_param(ty: &ynz_ast::nodes::Type, shape_table: &ShapeTable) -> bool {
     match ty {
@@ -1777,7 +1850,7 @@ struct Cg<'ctx, 'g> {
     /// True when this function is `main` (affects return type and implicit ret).
     is_main: bool,
     /// Return type of the current function.
-    _current_fn_ret_ty: Type,
+    current_fn_ret_ty: Type,
     locals: HashMap<String, PointerValue<'ctx>>,
     // M4 additions:
     shape_table: &'g ShapeTable,
@@ -3156,62 +3229,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| format!("{e}"))?
             .into_int_value();
 
-        let final_bits = if let Type::Shape { ref name } = self.resolve_type(inner_ty) {
-            let size = self.shape_abi_size_const(name, "maybe_to_owned_dest")?;
-            let has = self
-                .builder
-                .build_int_compare(
-                    IntPredicate::NE,
-                    flag,
-                    self.i64().const_zero(),
-                    &format!("{site}_has_pay"),
-                )
-                .map_err(|e| format!("{e}"))?;
-            let pre_bb = self
-                .builder
-                .get_insert_block()
-                .ok_or_else(|| format!("{site}: builder has no insert block"))?;
-            let copy_bb = self.append_block(&format!("{site}_pay_copy"));
-            let cont_bb = self.append_block(&format!("{site}_pay_cont"));
-            self.builder
-                .build_conditional_branch(has, copy_bb, cont_bb)
-                .map_err(|e| format!("{e}"))?;
-            self.builder.position_at_end(copy_bb);
-            // Payload destination: heap cells allocate INSIDE the guarded block
-            // (no cell burned for a `none`); entry-block allocas are free and
-            // position-independent, so the same acquisition point serves both.
-            let owned_pay = if heap {
-                self.heap_cell(size, &format!("{site}_pay"))?
-            } else {
-                let struct_ty = self.shape_types.get(name).ok_or_else(|| {
-                    format!("maybe_to_owned_dest: LLVM type for `{name}` missing")
-                })?;
-                self.alloca_in_entry_llvm(struct_ty, &format!("{site}_pay_own"))?
-            };
-            let src_pay = self
-                .builder
-                .build_int_to_ptr(bits, self.ptr(), &format!("{site}_src_pay"))
-                .map_err(|e| format!("{e}"))?;
-            self.builder
-                .build_memcpy(owned_pay, 1, src_pay, 1, size)
-                .map_err(|e| format!("maybe_to_owned_dest payload memcpy: {e}"))?;
-            let own_bits = self
-                .builder
-                .build_ptr_to_int(owned_pay, self.i64(), &format!("{site}_own_bits"))
-                .map_err(|e| format!("{e}"))?;
-            self.builder
-                .build_unconditional_branch(cont_bb)
-                .map_err(|e| format!("{e}"))?;
-            self.builder.position_at_end(cont_bb);
-            let phi = self
-                .builder
-                .build_phi(self.i64(), &format!("{site}_final_bits"))
-                .map_err(|e| format!("{e}"))?;
-            phi.add_incoming(&[(&own_bits, copy_bb), (&bits, pre_bb)]);
-            phi.as_basic_value().into_int_value()
-        } else {
-            bits
-        };
+        let final_bits = self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap)?;
 
         let dst_flag_gep = self
             .builder
@@ -3228,6 +3246,216 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_store(dst_val_gep, final_bits)
             .map_err(|e| format!("{e}"))?;
         Ok(owned_env)
+    }
+
+    /// The ONE flag-guarded maybe-PAYLOAD ownership copy (extracted from
+    /// `maybe_to_owned_dest`, v0.3-M7 Phase 3 / R9): given a maybe envelope's
+    /// loaded `flag` and `bits`, return payload bits that are STABLE past the
+    /// producing site. Two inners carry NON-self-contained bits and promote,
+    /// guarded on `flag != 0` so a `none` burns nothing:
+    /// - Shape: the payload pointer is cloned into a counted heap cell
+    ///   (`heap = true`) or an entry-block alloca (`heap = false`).
+    /// - `number` (decimal128, N ≤ 34): the bits are ptr_to_int of a 16-byte
+    ///   i128 STACK slot on the producing frame (FRAGO 009 — the 8th R9
+    ///   member; NOT a self-contained value). A copy that must survive that
+    ///   frame (`heap = true`: by-value returns, persist cells, background
+    ///   crossings) clones the slot via the ONE authoritative
+    ///   `number_to_heap_cell` — never a second promotion path. An in-frame
+    ///   copy (`heap = false`) keeps the pointer: the slot is frame-local
+    ///   (stable against per-site reuse) and outlives the binding.
+    ///
+    /// The remaining inners' bits are self-contained i64 values or
+    /// already-heap-backed pointers (string / array / map) and pass through.
+    ///
+    /// Consumers: `maybe_to_owned_dest` (binding/persist copies) AND the by-value
+    /// return paths (non-SM `-> maybe<T>` return + the SM resume-side maybe return),
+    /// which must promote a wide payload to the heap because the callee's stack —
+    /// where the payload alloca lives — dies at `ret`. One promotion discipline,
+    /// never a return-side twin (authoritative-derivation).
+    fn maybe_payload_stable_bits(
+        &self,
+        flag: inkwell::values::IntValue<'ctx>,
+        bits: inkwell::values::IntValue<'ctx>,
+        inner_ty: &Type,
+        site: &str,
+        heap: bool,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        enum WidePayload {
+            Shape(String),
+            Number,
+        }
+        let wide = match self.resolve_type(inner_ty) {
+            Type::Shape { name } => WidePayload::Shape(name),
+            Type::Number { precision } if precision <= 34 && heap => WidePayload::Number,
+            _ => return Ok(bits),
+        };
+        let has = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                &format!("{site}_has_pay"),
+            )
+            .map_err(|e| format!("{e}"))?;
+        let pre_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        let copy_bb = self.append_block(&format!("{site}_pay_copy"));
+        let cont_bb = self.append_block(&format!("{site}_pay_cont"));
+        self.builder
+            .build_conditional_branch(has, copy_bb, cont_bb)
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(copy_bb);
+        let src_pay = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_src_pay"))
+            .map_err(|e| format!("{e}"))?;
+        let owned_pay = match &wide {
+            WidePayload::Shape(name) => {
+                let size = self.shape_abi_size_const(name, "maybe_payload_stable_bits")?;
+                // Payload destination: heap cells allocate INSIDE the guarded block
+                // (no cell burned for a `none`); entry-block allocas are free and
+                // position-independent, so the same acquisition point serves both.
+                let owned_pay = if heap {
+                    self.heap_cell(size, &format!("{site}_pay"))?
+                } else {
+                    let struct_ty = self.shape_types.get(name).ok_or_else(|| {
+                        format!("maybe_payload_stable_bits: LLVM type for `{name}` missing")
+                    })?;
+                    self.alloca_in_entry_llvm(struct_ty, &format!("{site}_pay_own"))?
+                };
+                self.builder
+                    .build_memcpy(owned_pay, 1, src_pay, 1, size)
+                    .map_err(|e| format!("maybe_payload_stable_bits payload memcpy: {e}"))?;
+                owned_pay
+            }
+            // Number reaches here only with `heap = true` (the match above passes
+            // in-frame copies through) — the one authoritative i128 promotion.
+            WidePayload::Number => self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?,
+        };
+        let own_bits = self
+            .builder
+            .build_ptr_to_int(owned_pay, self.i64(), &format!("{site}_own_bits"))
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(self.i64(), &format!("{site}_final_bits"))
+            .map_err(|e| format!("{e}"))?;
+        phi.add_incoming(&[(&own_bits, copy_bb), (&bits, pre_bb)]);
+        Ok(phi.as_basic_value().into_int_value())
+    }
+
+    /// Load a maybe envelope's `(flag, bits)` pair from its `{i64, i64}` storage.
+    fn load_maybe_env_pair(
+        &self,
+        env_ptr: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let flag_gep = self
+            .builder
+            .build_struct_gep(self.maybe_type(), env_ptr, 0, &format!("{site}_flag_gep"))
+            .map_err(|e| format!("{e}"))?;
+        let flag = self
+            .builder
+            .build_load(self.i64(), flag_gep, &format!("{site}_flag"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let bits_gep = self
+            .builder
+            .build_struct_gep(self.maybe_type(), env_ptr, 1, &format!("{site}_bits_gep"))
+            .map_err(|e| format!("{e}"))?;
+        let bits = self
+            .builder
+            .build_load(self.i64(), bits_gep, &format!("{site}_bits"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        Ok((flag, bits))
+    }
+
+    /// Re-materialize a BY-VALUE user-call result into the internal pointer
+    /// representation the rest of codegen expects (v0.3-M7 Phase 3 / R9).
+    ///
+    /// The R9 return-ABI fix makes user functions return `number` as `i128`,
+    /// `maybe<T>` as `{i64, i64}`, and shapes as their LLVM struct BY VALUE (see
+    /// `abi_return_type`). Internally, codegen still represents those values as
+    /// pointers to storage — so every C-ABI call reception site routes through
+    /// THIS one wrapper: it allocas a CALLER-OWNED slot, stores the returned
+    /// aggregate, and yields the slot pointer. The slot is the caller's own stack —
+    /// exactly the ownership the old callee-alloca ABI faked.
+    ///
+    /// Every other return class passes through untouched.
+    fn wrap_abi_call_result(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        ret_ty: &Type,
+        site: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match self.resolve_type(ret_ty) {
+            Type::Number { precision } if precision <= 34 => {
+                let iv = val.into_int_value();
+                let slot = self
+                    .builder
+                    .build_alloca(self.i128(), &format!("{site}_num_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                // The fresh alloca is ABI-aligned (16) by construction; make the
+                // guarantee explicit so `claim_i128_align_by_provenance` keeps it.
+                if let Some(inst) = slot.as_instruction() {
+                    inst.set_alignment(16)
+                        .map_err(|e| format!("{site}_num_ret align: {e}"))?;
+                }
+                self.builder
+                    .build_store(slot, iv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            Type::Maybe { .. } => {
+                let sv = val.into_struct_value();
+                let slot = self
+                    .builder
+                    .build_alloca(self.maybe_type(), &format!("{site}_maybe_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                self.builder
+                    .build_store(slot, sv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            Type::Shape { ref name } if !name.is_empty() => {
+                let sv = val.into_struct_value();
+                let struct_ty = self.shape_types.get(name).ok_or_else(|| {
+                    format!("wrap_abi_call_result: LLVM type for shape `{name}` missing")
+                })?;
+                let slot = self
+                    .builder
+                    .build_alloca(struct_ty, &format!("{site}_shape_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                // Mirror lower_struct_lit's padded-shape discipline: a false-sharing-
+                // padded shape's stack slot is 64-byte aligned so each field's 64-byte
+                // slot coincides with one cache line.
+                if self.layout.padded_shapes.contains(name) {
+                    if let Some(inst) = slot.as_instruction() {
+                        inst.set_alignment(crate::shape_types::CACHE_LINE_BYTES)
+                            .map_err(|e| format!("align padded ret slot {name}: {e}"))?;
+                    }
+                }
+                self.builder
+                    .build_store(slot, sv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            _ => Ok(val),
+        }
     }
 
     /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
@@ -4112,7 +4340,7 @@ fn lower_function<'ctx, 'g>(
         typed,
         current_fn: fn_val,
         is_main,
-        _current_fn_ret_ty: ret_ty,
+        current_fn_ret_ty: ret_ty,
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -4608,7 +4836,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         typed,
         current_fn: resume_fn,
         is_main: false,
-        _current_fn_ret_ty: Type::Nothing, // resume fn returns i32, not the Yinz type
+        current_fn_ret_ty: Type::Nothing, // resume fn returns i32, not the Yinz type
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -5282,38 +5510,49 @@ fn lower_function_with_waits<'ctx, 'g>(
             }
             Type::Number { precision } if *precision <= 34 => {
                 // Decimal128 (i128): the resume fn stored the full 16-byte i128 value
-                // directly in the 16-byte return slot. The wrapper is declared as ptr-returning;
-                // the non-SM `number` lowering returns a pointer to a caller-local i128 the
-                // caller copies out immediately and never frees (a stack-backed, copy-and-forget
-                // ABI — see the non-SM `addUp`/`combine` lowering: `ret ptr %resultN` where
-                // `%resultN = alloca i128`). The SM wrapper MUST return the same shape so the
-                // single shared caller contract holds for both lowerings. A heap allocation here
-                // would have no owner: no `number` call site frees its returned pointer (the
-                // non-SM ABI taught every caller it is unowned), so a heap block leaks once per
-                // promoted `number` returned out of its function. Mirror the non-SM ABI: copy the
-                // i128 into a wrapper-local stack slot, free the frame, return that slot's
-                // pointer. The pointee lives until this wrapper returns; the caller's copy
-                // happens at the call site before the slot is reused — identical to the non-SM
-                // path. (Freeing inside the wrapper is impossible: the caller's copy is at its
-                // own call site, after this return — a free here would dangle the pointee.)
+                // directly in the 16-byte return slot. v0.3-M7 R9: the wrapper is
+                // declared i128-returning (`abi_return_type`) — load the value and
+                // return it BY VALUE. The old shape (copy into a wrapper-local alloca,
+                // `ret ptr` to it — the "stack-backed, copy-and-forget ABI") was UB the
+                // optimizer legally exploited: stores to the dying alloca were deleted
+                // and callers read garbage out of the dead wrapper frame.
                 let i128_val =
                     state_machine::load_return_value_i128(ctx, &builder, frame_ptr, "ret_i128")?;
-                let ret_slot = builder
-                    .build_alloca(ctx.i128_type(), "ret_dec_slot")
-                    .map_err(|e| format!("ret_dec_slot: {e}"))?;
-                builder
-                    .build_store(ret_slot, i128_val)
-                    .map_err(|e| format!("ret_dec_store: {e}"))?;
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
                 builder
-                    .build_return(Some(&ret_slot))
+                    .build_return(Some(&i128_val))
                     .map_err(|e| format!("wrapper number ret: {e}"))?;
             }
+            Type::Maybe { .. } => {
+                // v0.3-M7 R9: the resume fn stored the maybe envelope's (flag, bits)
+                // pair in the 16-byte return slot (same +0/+8 pair layout as the
+                // errors ABI); rebuild the {i64, i64} envelope and return it BY VALUE —
+                // the wrapper is declared {i64,i64}-returning per `abi_return_type`.
+                let (flag, bits) =
+                    state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                let env_ty =
+                    ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false);
+                let mut env = env_ty.const_zero();
+                env = builder
+                    .build_insert_value(env, flag, 0, "wrap_maybe_flag")
+                    .map_err(|e| format!("wrapper maybe flag insert: {e}"))?
+                    .into_struct_value();
+                env = builder
+                    .build_insert_value(env, bits, 1, "wrap_maybe_bits")
+                    .map_err(|e| format!("wrapper maybe bits insert: {e}"))?
+                    .into_struct_value();
+                builder
+                    .build_return(Some(&env))
+                    .map_err(|e| format!("wrapper maybe ret: {e}"))?;
+            }
+            // Shape stays in the pointer group below only nominally: typeck's
+            // WideValueSuspendingReturn rejects every `-> Shape` suspending function,
+            // so this arm is unreachable for shapes today.
             Type::String
             | Type::Shape { .. }
             | Type::BuiltinArray { .. }
             | Type::BuiltinFixed { .. }
-            | Type::Maybe { .. }
             | Type::BuiltinMap { .. }
             | Type::Union { .. }
             | Type::Sensitive { .. } => {
@@ -7979,6 +8218,34 @@ fn load_sm_return_value_typed<'ctx>(
             let i128_val = state_machine::load_return_value_i128(ctx, &cg.builder, frame_ptr, tag)?;
             Ok(i128_val.into())
         }
+        Some(Type::Maybe { .. }) => {
+            // v0.3-M7 R9: a maybe-returning callee's resume fn stores the envelope's
+            // (flag, bits) VALUE pair in the return slot (+0/+8, the errors pair
+            // layout) — never a pointer into its own dead stack. Rebuild a
+            // CALLER-owned {i64, i64} envelope and hand back its pointer, matching
+            // the representation `lower_expr` produces for a non-SM maybe call.
+            let (flag, bits) =
+                state_machine::load_return_value_errors(ctx, &cg.builder, frame_ptr)?;
+            let env_slot = cg
+                .builder
+                .build_alloca(cg.maybe_type(), &format!("{tag}_maybe_env"))
+                .map_err(|e| format!("{tag} maybe env alloca: {e}"))?;
+            let flag_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env_slot, 0, &format!("{tag}_mflag"))
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(flag_gep, flag)
+                .map_err(|e| format!("{e}"))?;
+            let bits_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env_slot, 1, &format!("{tag}_mbits"))
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(bits_gep, bits)
+                .map_err(|e| format!("{e}"))?;
+            Ok(env_slot.into())
+        }
         _ => {
             // All other types (int, bool, string, shape, array, etc.): load the i64
             // from the return slot (ptr-as-i64 for pointer-family; raw i64 for scalars).
@@ -9712,42 +9979,31 @@ fn build_cpu_trampoline<'ctx, 'g>(
             (bits, i64_ty.const_int(0, false))
         }
         inkwell::values::BasicValueEnum::PointerValue(pv) => {
-            if callee_returns_bare_number(cg.typed, cg.imported_fns, callee) {
-                // number (decimal128): the non-SM ABI returns a POINTER to a
-                // heap-stable 16-byte i128. Dereference it and pack lo/hi so the
-                // result slot holds the raw i128 the join-side i128 load expects.
-                let i128_val = tramp_builder
-                    .build_load(i128_ty, pv, "spike_num_load")
-                    .map_err(|e| format!("trampoline num load {trampoline_name}: {e}"))?
-                    .into_int_value();
-                let lo = tramp_builder
-                    .build_int_truncate(i128_val, i64_ty, "spike_num_lo")
-                    .map_err(|e| format!("trampoline num lo {trampoline_name}: {e}"))?;
-                let hi_shift = tramp_builder
-                    .build_right_shift(
-                        i128_val,
-                        i128_ty.const_int(64, false),
-                        false,
-                        "spike_num_sh",
-                    )
-                    .map_err(|e| format!("trampoline num shift {trampoline_name}: {e}"))?;
-                let hi = tramp_builder
-                    .build_int_truncate(hi_shift, i64_ty, "spike_num_hi")
-                    .map_err(|e| format!("trampoline num hi {trampoline_name}: {e}"))?;
-                (lo, hi)
-            } else {
-                // string/array/map: the returned heap pointer IS the value. Store it
-                // as i64 (ptr_to_int); the heap block outlives the blocking-pool task,
-                // so the parent reads it post-join.
-                let bits = tramp_builder
-                    .build_ptr_to_int(pv, i64_ty, "spike_ptr_to_i")
-                    .map_err(|e| format!("trampoline ptr_to_int {trampoline_name}: {e}"))?;
-                (bits, i64_ty.const_int(0, false))
-            }
+            // string/array/map: the returned heap pointer IS the value. Store it
+            // as i64 (ptr_to_int); the heap block outlives the blocking-pool task,
+            // so the parent reads it post-join. (v0.3-M7 R9: `number` callees no
+            // longer return pointers — they return by-value i128, handled by the
+            // i128 arm above; the old deref-the-copy-and-forget-pointer branch is
+            // gone with the ABI that required it.)
+            let bits = tramp_builder
+                .build_ptr_to_int(pv, i64_ty, "spike_ptr_to_i")
+                .map_err(|e| format!("trampoline ptr_to_int {trampoline_name}: {e}"))?;
+            (bits, i64_ty.const_int(0, false))
         }
         inkwell::values::BasicValueEnum::StructValue(sv) => {
-            // `T errors`: {i64 error word, i64 success word}. Both words must reach
-            // the result slot — dropping field0 would turn an error into a success.
+            // `T errors` {i64 error, i64 success} — or, post-R9, a by-value
+            // `maybe<T>` envelope {i64 flag, i64 bits}: both are the same two-word
+            // pair the 16-byte result slot carries at +0/+8, and the join-side
+            // typed load rebuilds each correctly. Any OTHER aggregate (e.g. a
+            // by-value shape return) has no packing contract here — fail loud
+            // rather than silently truncating it to two words.
+            if sv.get_type() != cpu_result_ty {
+                return Err(format!(
+                    "spike trampoline: callee `{callee}` returns aggregate {:?}, which \
+                     does not fit the two-word CPU result protocol",
+                    sv.get_type()
+                ));
+            }
             let err = tramp_builder
                 .build_extract_value(sv, 0, "spike_ec_err")
                 .map_err(|e| format!("trampoline ec err {trampoline_name}: {e}"))?
@@ -10428,9 +10684,9 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
     // The alloca sits in poll_state (a non-entry block), which is valid because each call
     // to the resume_fn gets a fresh stack frame — poll_state is only ever entered from the
     // SM dispatch switch in sm_entry, so the alloca always dominates its uses in this
-    // invocation. OptimizationLevel::None means mem2reg does not run; the alloca stays
-    // as a stack slot, not an SSA value, so LLVM does not require entry-block placement
-    // for correctness here.
+    // invocation. Dominance is the only placement requirement LLVM imposes on an alloca,
+    // at every pipeline tier: a dominating non-entry alloca is safely promotable (or
+    // simply stays a stack slot) whether or not mem2reg/SROA run.
     let any_pending = cg
         .builder
         .build_alloca(ctx.i32_type(), "spike_any_pending")
@@ -11184,10 +11440,11 @@ fn emit_fused_group_spawn_poll<'ctx, 'g>(
 
     // The alloca sits in poll_state (a non-entry block), which is valid because each call to the
     // resume_fn gets a fresh stack frame — poll_state is only ever entered from the SM dispatch
-    // switch in sm_entry, so the alloca always dominates its uses in this invocation.
-    // OptimizationLevel::None means mem2reg does not run; the alloca stays as a stack slot, not
-    // an SSA value, so LLVM does not require entry-block placement for correctness here (mirrors
-    // `emit_cpu_group_spawn_join`'s identical `spike_any_pending` rationale).
+    // switch in sm_entry, so the alloca always dominates its uses in this invocation. Dominance
+    // is the only placement requirement LLVM imposes on an alloca, at every pipeline tier: a
+    // dominating non-entry alloca is safely promotable (or simply stays a stack slot) whether or
+    // not mem2reg/SROA run (mirrors `emit_cpu_group_spawn_join`'s identical `spike_any_pending`
+    // rationale).
     let any_pending = cg
         .builder
         .build_alloca(ctx.i32_type(), "fused_any_pending")
@@ -13785,24 +14042,24 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
         cg.builder.position_at_end(cond_bb);
 
-        // Call next(&obj) → maybe<T> (stored in a fresh alloca returned as ptr).
-        let maybe_slot_ptr = cg
+        // Call next(&obj) → maybe<T>. v0.3-M7 R9: `next` returns the {i64, i64}
+        // envelope BY VALUE (never a pointer into its own dead frame — the exact
+        // miscompile the Class-3 RED fixture locks: the optimizer deleted the
+        // stores to the callee's dying alloca and this loop never saw `none`).
+        // Extract (has_value, bits) straight from the returned aggregate.
+        let maybe_env = cg
             .builder
             .build_call(next_fn, &[obj_ptr.into()], "uf_next")
             .map_err(|e| format!("{e}"))?
             .try_as_basic_value()
             .basic()
             .ok_or("next() returned void")?
-            .into_pointer_value();
+            .into_struct_value();
 
-        // Check has_value (slot 0).
-        let tag_gep = cg
-            .builder
-            .build_struct_gep(cg.maybe_type(), maybe_slot_ptr, 0, "uf_tag")
-            .map_err(|e| format!("{e}"))?;
+        // Check has_value (field 0).
         let tag = cg
             .builder
-            .build_load(cg.i64(), tag_gep, "uf_tag_v")
+            .build_extract_value(maybe_env, 0, "uf_tag_v")
             .map_err(|e| format!("{e}"))?
             .into_int_value();
         let has = cg
@@ -13814,14 +14071,10 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        // Extract the value (slot 1) and determine its type by looking at the typeck.
-        let val_gep = cg
-            .builder
-            .build_struct_gep(cg.maybe_type(), maybe_slot_ptr, 1, "uf_val")
-            .map_err(|e| format!("{e}"))?;
+        // Extract the value (field 1) and determine its type by looking at the typeck.
         let bits = cg
             .builder
-            .build_load(cg.i64(), val_gep, "uf_bits")
+            .build_extract_value(maybe_env, 1, "uf_bits")
             .map_err(|e| format!("{e}"))?
             .into_int_value();
         // The element type is Int (as the most common case in our fixtures).
@@ -14468,9 +14721,31 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                         .to_string(),
                                                 );
                                             }
-                                            // String, Array, Map, Maybe, Union: all heap-allocated
-                                            // (global literals or ynz_alloc). The pointer survives
-                                            // resume fn return — ptr_to_int is safe.
+                                            // Maybe: the envelope is a per-site STACK alloca
+                                            // (`build_maybe_none` etc.) — it dies with this
+                                            // resume invocation, so its raw pointer must never
+                                            // ride the ok word (v0.3-M7 R9 sibling). Promote
+                                            // envelope + any Shape payload to counted heap
+                                            // cells; the wrapper/caller reads a stable cell.
+                                            Type::Maybe { inner: m_inner } => {
+                                                let cell = cg.maybe_to_heap_cell(
+                                                    ptr,
+                                                    m_inner,
+                                                    "sm_ec_ret",
+                                                )?;
+                                                cg.builder
+                                                    .build_ptr_to_int(
+                                                        cell,
+                                                        cg.ctx.i64_type(),
+                                                        "sm_ec_maybe_ok",
+                                                    )
+                                                    .map_err(|e| {
+                                                        format!("sm_ec_maybe_ok p2i: {e}")
+                                                    })?
+                                            }
+                                            // String, Array, Map, Union: heap-allocated
+                                            // (global literals or ynz_alloc). The pointer
+                                            // survives resume fn return — ptr_to_int is safe.
                                             _ => cg
                                                 .builder
                                                 .build_ptr_to_int(
@@ -14575,10 +14850,36 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 i128_val,
                             )?;
                         }
+                        // Maybe: the envelope is a per-site STACK alloca that dies with
+                        // this resume invocation — storing its raw pointer in the return
+                        // slot dangles by the time the wrapper loads it (v0.3-M7 R9).
+                        // Store the envelope's VALUE instead: the (flag, bits) pair rides
+                        // the 16-byte return slot exactly like the errors {i64,i64} pair
+                        // (same slot+0/+8 layout — `store_return_value_errors` IS the one
+                        // pair-store producer). A wide payload (shape / number) heap-promotes
+                        // first (the shared flag-guarded discipline; heap is mandatory
+                        // because the resume stack dies).
+                        Type::Maybe { ref inner } => {
+                            let env_ptr = val.into_pointer_value();
+                            let (flag, bits) = cg.load_maybe_env_pair(env_ptr, "sm_ret_maybe")?;
+                            let stable_bits = cg.maybe_payload_stable_bits(
+                                flag,
+                                bits,
+                                inner,
+                                "sm_ret_maybe",
+                                true,
+                            )?;
+                            state_machine::store_return_value_errors(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                flag,
+                                stable_bits,
+                            )?;
+                        }
                         Type::String
                         | Type::BuiltinArray { .. }
                         | Type::BuiltinFixed { .. }
-                        | Type::Maybe { .. }
                         | Type::BuiltinMap { .. }
                         | Type::Union { .. }
                         | Type::Sensitive { .. } => {
@@ -14643,9 +14944,40 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
-                let success_bits = cg
-                    .to_i64_bits(val, &val_ty)
-                    .unwrap_or_else(|_| cg.i64().const_int(0, false));
+                // v0.3-M7 Phase 3 / R9 sibling: the EC ok-WORD must never carry a
+                // pointer into the callee's own stack. maybe / shape / number
+                // success values are per-site stack storage (envelope alloca,
+                // struct-lit alloca, i128 alloca) — promote each to a counted heap
+                // cell before packing its address into the ok word (verified live:
+                // `-> maybe<int> errors` / `-> Coin errors` / `-> number errors`
+                // all returned garbage under default<O2> pre-fix). Same
+                // never-drop-cells posture as store_field (FRAGO 009); everything
+                // else is self-contained bits or already heap-backed.
+                let success_bits = match cg.resolve_type(&val_ty) {
+                    Type::Maybe { ref inner } => {
+                        let cell =
+                            cg.maybe_to_heap_cell(val.into_pointer_value(), inner, "ec_ret")?;
+                        cg.builder
+                            .build_ptr_to_int(cell, cg.i64(), "ec_ret_maybe_bits")
+                            .map_err(|e| format!("ec ret maybe bits: {e}"))?
+                    }
+                    Type::Shape { ref name } if !name.is_empty() => {
+                        let cell =
+                            cg.shape_bytes_to_heap_cell(val.into_pointer_value(), name, "ec_ret")?;
+                        cg.builder
+                            .build_ptr_to_int(cell, cg.i64(), "ec_ret_shape_bits")
+                            .map_err(|e| format!("ec ret shape bits: {e}"))?
+                    }
+                    Type::Number { precision } if precision <= 34 => {
+                        let cell = cg.number_to_heap_cell(val.into_pointer_value(), "ec_ret")?;
+                        cg.builder
+                            .build_ptr_to_int(cell, cg.i64(), "ec_ret_num_bits")
+                            .map_err(|e| format!("ec ret num bits: {e}"))?
+                    }
+                    _ => cg
+                        .to_i64_bits(val, &val_ty)
+                        .unwrap_or_else(|_| cg.i64().const_int(0, false)),
+                };
                 let result_ty = errors_result_type(cg.ctx);
                 let mut result = result_ty.const_zero();
                 result = cg
@@ -14673,9 +15005,79 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
         }
         Some(expr) => {
             let val = lower_expr(cg, expr)?;
-            cg.builder
-                .build_return(Some(&val))
-                .map_err(|e| format!("ret: {e}"))?;
+            // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
+            // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
+            // legally miscompiled: stores to the dying alloca get deleted and the
+            // caller reads garbage out of the dead frame). The declared return type
+            // (`abi_return_type`) is i128 / {i64,i64} / the shape struct; load the
+            // VALUE out of the internal pointer representation and return it.
+            match cg.resolve_type(&cg.current_fn_ret_ty.clone()) {
+                Type::Number { precision } if precision <= 34 => {
+                    let ptr_v = val.into_pointer_value();
+                    let i128_val = cg
+                        .builder
+                        .build_load(cg.i128(), ptr_v, "ret_num_val")
+                        .map_err(|e| format!("ret number load: {e}"))?
+                        .into_int_value();
+                    // Provenance may be an 8-aligned frame-interior pointer — claim
+                    // ABI 16 only when the source is provably a >=16-aligned alloca.
+                    state_machine::claim_i128_align_by_provenance(
+                        i128_val
+                            .as_instruction_value()
+                            .ok_or("ret number load: no instruction value")?,
+                        ptr_v,
+                    )?;
+                    cg.builder
+                        .build_return(Some(&i128_val))
+                        .map_err(|e| format!("ret number: {e}"))?;
+                }
+                Type::Maybe { ref inner } => {
+                    let env_ptr = val.into_pointer_value();
+                    let (flag, bits) = cg.load_maybe_env_pair(env_ptr, "ret_maybe")?;
+                    // A wide payload's pointer (shape struct alloca / number i128
+                    // slot) targets the callee's own stack — promote it to a counted
+                    // heap cell (flag-guarded; the shared promotion discipline, never
+                    // a return-side twin). Same never-drop-cells posture as
+                    // store_field (FRAGO 009).
+                    let stable_bits =
+                        cg.maybe_payload_stable_bits(flag, bits, inner, "ret_maybe", true)?;
+                    let mut env = cg.maybe_type().const_zero();
+                    env = cg
+                        .builder
+                        .build_insert_value(env, flag, 0, "ret_maybe_flag")
+                        .map_err(|e| format!("ret maybe flag insert: {e}"))?
+                        .into_struct_value();
+                    env = cg
+                        .builder
+                        .build_insert_value(env, stable_bits, 1, "ret_maybe_bits")
+                        .map_err(|e| format!("ret maybe bits insert: {e}"))?
+                        .into_struct_value();
+                    cg.builder
+                        .build_return(Some(&env))
+                        .map_err(|e| format!("ret maybe: {e}"))?;
+                }
+                Type::Shape { ref name } if !name.is_empty() => {
+                    let ptr_v = val.into_pointer_value();
+                    let struct_ty = cg
+                        .shape_types
+                        .get(name)
+                        .ok_or_else(|| format!("shape return: LLVM type for `{name}` missing"))?;
+                    // Shallow by-value copy is complete: interior shape/maybe fields
+                    // are counted heap cells (store_field), never stack pointers.
+                    let sv = cg
+                        .builder
+                        .build_load(struct_ty, ptr_v, "ret_shape_val")
+                        .map_err(|e| format!("ret shape load: {e}"))?;
+                    cg.builder
+                        .build_return(Some(&sv))
+                        .map_err(|e| format!("ret shape: {e}"))?;
+                }
+                _ => {
+                    cg.builder
+                        .build_return(Some(&val))
+                        .map_err(|e| format!("ret: {e}"))?;
+                }
+            }
         }
     }
     Ok(())
@@ -15319,7 +15721,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     }
 
                     match call_site.try_as_basic_value().basic() {
-                        Some(val) => Ok(val),
+                        // v0.3-M7 R9: number/maybe/shape come back BY VALUE — wrap
+                        // them into a CALLER-owned slot so the internal
+                        // pointer-representation convention holds downstream. The
+                        // call expression's typeck type is the authoritative answer.
+                        Some(val) => {
+                            let ret_ty = cg.expr_type(expr);
+                            cg.wrap_abi_call_result(val, &ret_ty, "call")
+                        }
                         None => Ok(cg.i32().const_int(0, false).into()),
                     }
                 }
@@ -15337,7 +15746,12 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             match &recv_ty {
                 Type::Shape { name } => {
                     let name = name.clone();
-                    lower_ufcs_call(cg, recv_val, &name, method, args)
+                    let raw = lower_ufcs_call(cg, recv_val, &name, method, args)?;
+                    // v0.3-M7 R9: a UFCS call is the same C-ABI invocation as the
+                    // direct-call arm — by-value number/maybe/shape results wrap into
+                    // a caller-owned slot here too (one reception discipline).
+                    let ret_ty = cg.expr_type(expr);
+                    cg.wrap_abi_call_result(raw, &ret_ty, "ufcs")
                 }
                 Type::Dynamic { .. } => {
                     // Dynamic dispatch via vtable — deferred post-P5.
@@ -19080,37 +19494,6 @@ fn lower_maybe_method<'ctx>(
 }
 
 // ── M7 P4a: errors-capable helpers ───────────────────────────────────────────
-
-/// True when the named function returns a bare `number` (decimal128, precision ≤ 34) —
-/// NOT `number errors`. The non-SM `number` ABI returns a POINTER to a heap-stable 16-byte
-/// i128 (see the wrapper at the `Type::Number` arm of the SM wrapper), so a CPU trampoline
-/// must DEREFERENCE that pointer to recover the i128 value before packing it into the result
-/// slot — unlike string/array/map, where the returned pointer IS the value (`ptr_to_int`).
-///
-/// Time: O(n) where n = items in the typed module  Space: O(1)
-fn callee_returns_bare_number(
-    typed: &TypedModule,
-    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
-    fn_name: &str,
-) -> bool {
-    let local = typed.module.items.iter().any(|item| {
-        if let ynz_ast::nodes::Item::Function(f) = item {
-            f.name == fn_name
-                && matches!(
-                    f.return_type,
-                    ynz_ast::nodes::Type::Number { precision } if precision <= 34
-                )
-        } else {
-            false
-        }
-    });
-    if local {
-        return true;
-    }
-    imported_fns.get(fn_name).is_some_and(
-        |sig| matches!(sig.ret, ynz_typeck::types::Type::Number { precision } if precision <= 34),
-    )
-}
 
 /// True when the named function's FIRST parameter is a bare decimal128 (`number`,
 /// N ≤ 34) — the first-param twin of `callee_returns_bare_number` (v0.3-M6 Phase

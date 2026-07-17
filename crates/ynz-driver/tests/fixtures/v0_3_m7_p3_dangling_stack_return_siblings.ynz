@@ -1,0 +1,120 @@
+// v0.3-M7 Phase 3 Step 4b — sibling-sweep fixture for the dangling-stack-return ABI
+// class (R9/FRAGO 005). The class anchor (`v0_3_m7_p3_dangling_stack_return.ynz`)
+// locks the maybe<int> user-iterable member it was discovered on; THIS fixture locks
+// every OTHER member the Step-4b pointer-provenance sweep confirmed live (each one
+// printed garbage or SIGSEGV'd under default<O2> pre-fix while healthy at O0):
+//
+//   1. plain shape return                (`makePlayer` — struct-literal alloca)
+//   2. nested-shape return               (`makeBox` — heap-cell interior field)
+//   3. plain number return               (`addUp` — the documented copy-and-forget i128)
+//   4. maybe<Shape> return via array.get (`firstCoin` — envelope + payload provenance)
+//   5. errors-capable ok-word inners     (`pickMaybe`/`pickCoin`/`pickNumber` — the
+//      ok word carried a pointer to the callee's own alloca)
+//
+// Fixed by the by-value return ABI (`abi_return_type`, ynz-codegen/src/emit.rs):
+// number → i128, maybe<T> → {i64,i64} envelope (Shape payloads heap-promote),
+// shapes → by-value struct, EC ok-words heap-promote wide inners.
+
+shape Player {
+  name: string
+  health: int
+  score: int
+}
+
+shape Point {
+  x: int
+  y: int
+}
+
+shape Box {
+  corner: Point
+  tag: int
+}
+
+shape Coin {
+  value: int
+}
+
+function makePlayer(h: int) -> Player {
+  let p: Player = { name: `pat`, health: h, score: h * 2 }
+  return p
+}
+
+function makeBox() -> Box {
+  let p: Point = { x: 3, y: 4 }
+  let b: Box = { corner: p, tag: 9 }
+  return b
+}
+
+function addUp(a: number, b: number) -> number {
+  let sum = a + b
+  return sum
+}
+
+function firstCoin(coins: array<Coin>) -> maybe<Coin> {
+  let got = coins.get(0)
+  return got
+}
+
+function pickMaybe(want: int) -> maybe<int> errors {
+  if (want > 0) {
+    let arr: array<int> = [11, 22]
+    let got = arr.get(0)
+    return got
+  }
+  return none
+}
+
+function pickCoin(want: int) -> Coin errors {
+  let c: Coin = { value: want }
+  return c
+}
+
+function pickNumber(a: number) -> number errors {
+  let doubled = a + a
+  return doubled
+}
+
+function entrypoint() -> nothing {
+  let a = makePlayer(10)
+  let b = makePlayer(77)
+  print(a.health.toString())
+  print(a.score.toString())
+  print(b.health.toString())
+  print(b.score.toString())
+  print(a.name)
+
+  let box: Box = makeBox()
+  print(box.tag.toString())
+  print(box.corner.x.toString())
+  print(box.corner.y.toString())
+
+  let x = addUp(1.25, 2.25)
+  let y = addUp(10.5, 0.25)
+  print(x.toString())
+  print(y.toString())
+
+  let coins: array<Coin> = [{ value: 25 }, { value: 10 }]
+  let hit = firstCoin(coins)
+  if (hit.exists()) {
+    let c: Coin = hit.value
+    print(c.value.toString())
+  }
+
+  let m = pickMaybe(1)
+  let empty: maybe<int> = none
+  let mv = m.or(empty)
+  let got = mv.or(0)
+  print(got.toString())
+
+  let pc = pickCoin(7)
+  let fallback: Coin = { value: 0 }
+  let cv = pc.or(fallback)
+  print(cv.value.toString())
+
+  let n = pickNumber(1.25)
+  let nv = n.or(0.0)
+  print(nv.toString())
+
+  print(`done`)
+}

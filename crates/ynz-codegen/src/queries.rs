@@ -185,6 +185,14 @@ pub fn frame_layouts_query(
     let shape_abi_sizes: HashMap<String, u64> = {
         // Guard G1: same target machine constructor as emit_artifact.
         //
+        // Pinned at `PipelineConfig::o0()` deliberately (v0.3-M7 Phase 3, recorded
+        // decision): this machine is used ONLY for its data-layout string, and the
+        // data layout is a function of triple/CPU/features — NOT of the optimization
+        // level — so o0 here and the env-resolved tier in emit_artifact yield
+        // byte-identical layout strings (G1 intact). Reading the tier env vars inside
+        // this salsa query would add the documented env-var memo-invalidation hazard
+        // for zero layout effect.
+        //
         // The Err branch returns an empty map rather than propagating. This is sound
         // because `emit_artifact` constructs the same target machine via `?` and errors
         // first for the same module — `codegen_query` skips emission on errors, so the

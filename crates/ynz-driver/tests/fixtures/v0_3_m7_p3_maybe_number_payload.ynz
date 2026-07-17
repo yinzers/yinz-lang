@@ -1,0 +1,59 @@
+// v0.3-M7 Phase 3 fix round (FRAGO 009) RED fixture — the EIGHTH member of the
+// dangling-stack-return class (R9): a `maybe<number>` PAYLOAD.
+//
+// WHY: the Step-4b by-value return ABI returns a maybe envelope's (flag, bits)
+// VALUE pair, but `maybe_payload_stable_bits` (ynz-codegen/src/emit.rs)
+// heap-promoted only Shape payloads. A `number` payload's bits are ptr_to_int
+// of the callee's OWN 16-byte i128 stack slot, which dies at `ret` — the
+// envelope value crosses the call but its payload pointer dangles. At -O0 the
+// bytes happen to survive; under `default<O2>` LLVM legally deletes the stores
+// to the dead slot and the caller reads zeros/garbage (live repro:
+// 3.50/10.75/99.25 at O0, zeros optimized). The pattern is ordinary user code:
+// `fixed<number>.get()` flowing into a `-> maybe<number>` return.
+//
+// Members exercised (both flow through the ONE shared promotion point,
+// `maybe_payload_stable_bits`):
+//   - non-SM `-> maybe<number>` return           (`pickPrice`)
+//   - non-SM `-> maybe<number> errors` ok-word   (`priceOrMissing`)
+
+function pickPrice(idx: int) -> maybe<number> {
+  let prices: fixed<number> = [3.50, 10.75, 99.25]
+  let got = prices.get(idx)
+  return got
+}
+
+function priceOrMissing(idx: int) -> maybe<number> errors {
+  let prices: fixed<number> = [4.25, 6.75]
+  let got = prices.get(idx)
+  return got
+}
+
+function entrypoint() -> nothing {
+  let a = pickPrice(0)
+  if (a.exists()) {
+    let av: number = a.value
+    print(av.toString())
+  }
+  let b = pickPrice(1)
+  if (b.exists()) {
+    let bv: number = b.value
+    print(bv.toString())
+  }
+  let c = pickPrice(2)
+  if (c.exists()) {
+    let cv: number = c.value
+    print(cv.toString())
+  }
+  let missing = pickPrice(9)
+  if (missing.exists()) {
+    print(`unexpected`)
+  }
+
+  let e = priceOrMissing(1)
+  let empty: maybe<number> = none
+  let ev = e.or(empty)
+  let got = ev.or(0.0)
+  print(got.toString())
+
+  print(`done`)
+}
