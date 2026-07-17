@@ -489,8 +489,8 @@ reason = "Rust-specific type name — Yinz uses the `errors` keyword instead"
 
 [[banned_jargon]]
 name = "Option"
-replacement = "`maybe T` — a value that might not be present"
-reason = "Rust-specific type name — Yinz uses `maybe T`"
+replacement = "`maybe<T>` — a value that might not be present"
+reason = "Rust-specific type name — Yinz uses `maybe<T>`"
 
 [[banned_jargon]]
 name = "Either"
@@ -1330,6 +1330,18 @@ why = "IMP-no-function-coloring.md's Scheduler Preemption Model section specs `b
 ships_in = "TBD — pending a real workload demonstrating the automatic routing gets it wrong"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "A real workload where CPU-bound auto-inference misroutes a task to the I/O scheduler, causing measurable starvation."
+
+# --- Function overloading by argument type (2026-07-16 audit-remediation-two-lane, TS2 finding —
+# docs/internal/implementation/IMP-type-system.md previously described this as the shipped `override`
+# replacement; typeck rejects two same-named functions in a file unconditionally, regardless of
+# parameter types) ---
+[[deferred_language_feature]]
+name = "function-overload-by-argument-type"
+substitute = "Give same-purpose functions distinct names (e.g. `attackEntity`/`attackWarrior` instead of two `attack` functions), or use generics (`function process<T>(share item: T)`) to write one function that works across types. `extends` still reuses a parent shape's fields."
+why = "IMP-type-system.md and REF-golden-rules.md described function overloading by argument type as the shipped dispatch mechanism replacing `override` (\"the compiler picks the most specific overload at the call site\") — but the v0.1 typeck function-declaration collision check (crates/ynz-typeck/src/signatures.rs) keys its signature table by function name alone and rejects a second same-named function in the same file unconditionally, regardless of parameter types. This entry is a documentation-honesty fix, not a code fix — the docs previously read as if the mechanism already existed."
+ships_in = "TBD — a dedicated design + build pass is required; not scoped to any milestone today"
+design_doc = "docs/internal/implementation/IMP-type-system.md"
+triggers = "Writing two standalone functions with the same name and different first-parameter types in the same file, expecting the compiler to dispatch by argument type."
 
 # --- `--kernel` flag — no-runtime mode (docs/internal/implementation/IMP-no-runtime-mode.md) ---
 [[deferred_tooling_feature]]

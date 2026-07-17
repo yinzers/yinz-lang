@@ -4,7 +4,7 @@ description: "A shape defines the structure of your data — what fields it has 
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -93,7 +93,7 @@ The IDE recognizes both call forms. Typing `player.` shows autocomplete with all
 
 ## Extending shapes — data-only inheritance
 
-`extends` reuses parent's FIELDS. Behavior comes from standalone functions; the compiler picks the most specific overload at the call site (no `override` keyword needed).
+`extends` reuses parent's FIELDS. Behavior comes from standalone functions — but today, each function name must be **unique in its file**. Give the Warrior-specific behavior its own name instead of reusing the parent's function name:
 
 ```ynz
 shape Entity {
@@ -110,8 +110,9 @@ function takeDamage(lend self: Entity, amount: number) -> nothing {
   self.health = self.health - amount
 }
 
-// Warrior-specific version — armor absorbs damage. Same function name.
-function takeDamage(lend self: Warrior, amount: number) -> nothing {
+// Warrior-specific version — armor absorbs damage. Different name, since
+// Yinz doesn't dispatch two same-named functions by parameter type today.
+function takeWarriorDamage(lend self: Warrior, amount: number) -> nothing {
   self.health = self.health - (amount - self.armor)
 }
 
@@ -122,13 +123,27 @@ const warrior: Warrior = {
   armor: 15
 }
 
-warrior.takeDamage(20)    // calls takeDamage(Warrior) — more specific overload wins
+warrior.takeWarriorDamage(20)
 // Damage applied: 20 - 15 = 5
 ```
 
-Single inheritance only. A shape can `extends` one other shape; behavior is provided by overloaded standalone functions.
+Single inheritance only. A shape can `extends` one other shape; the fields are reused, but each shape's own behavior needs its own function name.
 
-There is no `override` keyword in Yinz — write multiple `function` declarations with the same name and different first-parameter types, and the compiler picks the most specific match. See [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md) for the rationale.
+There is no `override` keyword in Yinz. Writing two `function` declarations with the same name in the same file — even with different first-parameter types — is a compile error:
+
+```ynz
+function takeDamage(lend self: Entity, amount: number) -> nothing {
+  self.health = self.health - amount
+}
+
+function takeDamage(lend self: Warrior, amount: number) -> nothing {
+  self.health = self.health - (amount - self.armor)
+}
+// COMPILE ERROR: A function named `takeDamage` is already defined in this file.
+// Rename one of the two functions — each function in a file must have a unique name.
+```
+
+Dispatching a same-named function by argument type (so `warrior.takeDamage(20)` and `entity.takeDamage(20)` could each call the version written for their own shape) is a planned but not-yet-shipped feature — see [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md) for the eventual model.
 
 ---
 

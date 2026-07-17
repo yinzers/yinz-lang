@@ -4,7 +4,7 @@ description: "Design decisions for Yinz type conversion: dot-method conversions 
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -33,7 +33,7 @@ Conversions that always succeed return the value directly. Conversions that migh
 
 **Safe (always succeed)**: Numeric type widening and narrowing, boolean to string, number to string. The result is always valid.
 
-**Unsafe (might fail)**: String parsing. `"hello".toInt()` has no valid result. Returns `maybe int` — the compiler forces the caller to handle the failure case.
+**Unsafe (might fail)**: String parsing. `"hello".toInt()` has no valid result. Returns `maybe<int>` — the compiler forces the caller to handle the failure case.
 
 **Why this split**: The `maybe` return type is the language's mechanism for expressing "this might not work." Applying it to conversions that can fail is consistent with the same pattern used everywhere else (`.get()`, `.find()`, `.first()`). The compiler enforces handling at the call site rather than letting bad parses produce garbage values silently.
 

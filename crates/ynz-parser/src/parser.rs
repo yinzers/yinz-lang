@@ -3745,7 +3745,21 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::Eq) {
             self.advance(); // consume `=`
             let alias_ty = self.parse_type();
-            let end = self.current_span().start;
+            // Use the END of the LAST CONSUMED token (mirroring the struct-form's `end`
+            // computation below), not `current_span().start` (the START of the NEXT
+            // unconsumed token). Comments are lexed separately as trivia and never appear
+            // in `self.tokens`, so `current_span().start` silently jumps past any comment
+            // sitting between the alias type and the next real token — over-extending this
+            // declaration's span to swallow it. The formatter's union-alias arm reads
+            // `ShapeDecl.span.end` to decide where the declaration's own text ends, and a
+            // swallowed comment falls BEFORE that endpoint, so
+            // `comment_merge::CommentContext::between` never sees it as available for the
+            // next item — the comment is silently dropped, not merely misplaced.
+            let end = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map(|s| s.span.end)
+                .unwrap_or(start);
             return Some(ShapeDecl {
                 name,
                 name_span,

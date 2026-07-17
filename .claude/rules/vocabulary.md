@@ -149,7 +149,7 @@ is a thin generated adapter over it, not a second source. The replacement diagno
 > "The function returns Optional<User> or null."
 
 ✅ **Correct**:
-> "The function returns `maybe User` — either a User or `none`."
+> "The function returns `maybe<User>` — either a User or `none`."
 
 ❌ **Incorrect**:
 > "Async functions must use the async/await keywords."

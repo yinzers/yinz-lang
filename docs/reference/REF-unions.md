@@ -4,7 +4,7 @@ description: "A union type is a value that can be one of several different types
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -128,9 +128,9 @@ Missing a variant is a compile error. The compiler names which ones are missing:
 
 ---
 
-## `maybe T` is a union
+## `maybe<T>` is a union
 
-`maybe string` is the same type as `string | none`. Every `maybe` type is a union. See [Maybe Types](REF-maybe.md).
+`maybe<string>` is the same type as `string | none`. Every `maybe` type is a union. See [Maybe Types](REF-maybe.md).
 
 ---
 

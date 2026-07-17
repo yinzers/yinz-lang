@@ -4,7 +4,7 @@ description: "Design decisions for Yinz's ownership system (share/lend/give sign
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -155,12 +155,12 @@ Cross-references:
 
 ---
 
-## No Direct Array Indexing — `.get(index)` Returns `maybe T`
+## No Direct Array Indexing — `.get(index)` Returns `maybe<T>`
 
-`items[5]` is a compile error. All collection access by index uses `.get(index)` which returns `maybe T`. Collections include `.first()` and `.last()` returning `maybe T`.
+`items[5]` is a compile error. All collection access by index uses `.get(index)` which returns `maybe<T>`. Collections include `.first()` and `.last()` returning `maybe<T>`.
 
 **Why**: Out-of-bounds array access is one of the most common runtime crashes and security vulnerabilities (buffer overflows) in systems languages. If the compiler can enforce safe access universally, there's no reason not to. The cost is slightly more verbose access; the benefit is the elimination of an entire crash category.
 
 **Performance**: In release mode, the compiler eliminates bounds checks it can statically prove are safe (e.g., a `fixed<3>` accessed at index 1 — provably in bounds). Debug mode always bounds-checks. Performance impact is negligible in practice.
 
-**Consistency**: Maps already use `.get(key)` returning `maybe V`. The same pattern applies everywhere. No special case for arrays — one rule, all collections.
+**Consistency**: Maps already use `.get(key)` returning `maybe<V>`. The same pattern applies everywhere. No special case for arrays — one rule, all collections.

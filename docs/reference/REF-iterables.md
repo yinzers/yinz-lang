@@ -4,7 +4,7 @@ description: "for loops work on any type that follows the Iterable contract. Arr
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -35,11 +35,11 @@ Most iterables can never fail mid-step. Some iterables (reading a file, paging t
 
 ```ynz
 shape Iterable<T> {
-  next(lend self) -> maybe T
+  next(lend self) -> maybe<T>
 }
 
 shape FallibleIterable<T> {
-  next(lend self) -> maybe T errors
+  next(lend self) -> maybe<T> errors
 }
 ```
 
@@ -189,7 +189,7 @@ shape CountDown follows Iterable<int> {
   hidden current: int = 0
 }
 
-function next(lend self: CountDown) -> maybe int {
+function next(lend self: CountDown) -> maybe<int> {
   if (self.current > self.end) {
     return none
   }
@@ -209,11 +209,11 @@ If your iteration step can fail (I/O, network), follow the fallible contract ins
 ```ynz
 shape ApiPager<T> follows FallibleIterable<T> {
   baseUrl: string
-  hidden cursor: maybe string = none
+  hidden cursor: maybe<string> = none
   hidden done: boolean = false
 }
 
-function next(lend self: ApiPager<T>) -> maybe T errors {
+function next(lend self: ApiPager<T>) -> maybe<T> errors {
   if (self.done) {
     return none
   }

@@ -23,8 +23,8 @@ Before applying the 13 rules, internalize this: **Yinz is data shapes + standalo
 
 - Shape declarations hold data fields + (optionally) contract method-signature declarations. **NO method implementations inside shapes.**
 - Methods are standalone `function` declarations at file/module level. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax). Both call forms are legal and equivalent.
-- `extends` is **data-only inheritance** — child shape inherits parent's fields; behavior comes from standalone functions; the compiler picks the most specific overload at the call site.
-- **`override` keyword does not exist.** Function overloading by argument type is the dispatch mechanism.
+- `extends` is **data-only inheritance** — child shape inherits parent's fields; behavior comes from standalone functions, each needing its own name (see next bullet).
+- **`override` keyword does not exist.** Function overloading by argument type is the *planned* replacement dispatch mechanism, but is **not yet implemented (v0.1)** — two functions sharing a name in the same file is a compile error today regardless of parameter types; see [`IMP-type-system.md`](../internal/implementation/IMP-type-system.md#no-override-keyword-function-overloading-by-argument-type-is-not-implemented-v01).
 - `follows` is checked by **structural function-signature matching** — a shape follows a contract when standalone functions with matching signatures exist.
 - `dynamic Foo` provides runtime polymorphism via a per-(shape, contract) function-pointer table; static dispatch when concrete type is known.
 
@@ -32,7 +32,7 @@ This is a deliberate alignment with Rust/Go (zero per-instance method storage; o
 
 Locked r10–r13 (2026-05-16). Full discussion: [`.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md`](../../.claude/planning/done/2026-05-15-m4-shapes-functions-ownership/plan.md) Reviewer Disputes rounds 10–13. Canonical rule: [`.claude/rules/non-oop.md`](../../.claude/rules/non-oop.md).
 
-When the 13 rules below mention "method" or "dispatch," apply them with the non-OOP interpretation: methods are functions; dispatch is overload resolution by argument type (plus contract-table lookup for `dynamic Foo`).
+When the 13 rules below mention "method" or "dispatch," apply them with the non-OOP interpretation: methods are functions; today, dispatch is by function name alone (each name unique per file) plus contract-table lookup for `dynamic Foo` — overload resolution by argument type is planned but not yet implemented (v0.1), see [`IMP-type-system.md`](../internal/implementation/IMP-type-system.md#no-override-keyword-function-overloading-by-argument-type-is-not-implemented-v01).
 
 ---
 

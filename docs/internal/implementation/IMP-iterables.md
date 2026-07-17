@@ -4,7 +4,7 @@ description: "Design decisions for Yinz iterables — custom iteration via the '
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -25,15 +25,15 @@ Custom iteration uses the existing `follows` contract system. No special iterato
 
 ---
 
-## `next(lend self) -> maybe T` — Ownership and Maybe
+## `next(lend self) -> maybe<T>` — Ownership and Maybe
 
-The `next` function takes `lend self` (it modifies the iterator's internal state — current position, buffer, etc.) and returns `maybe T` (`none` signals end-of-sequence).
+The `next` function takes `lend self` (it modifies the iterator's internal state — current position, buffer, etc.) and returns `maybe<T>` (`none` signals end-of-sequence).
 
-**Why `maybe T` over a separate sentinel**: `maybe T` is the language's universal way to express "this might not exist." Using it for end-of-sequence is consistent. `none` = no more items = natural English.
+**Why `maybe<T>` over a separate sentinel**: `maybe<T>` is the language's universal way to express "this might not exist." Using it for end-of-sequence is consistent. `none` = no more items = natural English.
 
 **Why `lend self`**: Iterators are stateful by nature — they track a current position. `lend self` is the correct ownership modifier for a function that modifies the iterator value.
 
-Per the non-OOP model ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), `next` is a STANDALONE FUNCTION — not a method inside the iterator shape. The contract declares its bare signature; each iterator's implementation lives as a standalone `function next(lend self: MyIterator) -> maybe T { ... }`.
+Per the non-OOP model ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), `next` is a STANDALONE FUNCTION — not a method inside the iterator shape. The contract declares its bare signature; each iterator's implementation lives as a standalone `function next(lend self: MyIterator) -> maybe<T> { ... }`.
 
 ---
 
@@ -81,11 +81,11 @@ Resolved: two separate contracts. In-memory iteration uses `Iterable<T>`; iterat
 ```ynz
 // Contracts use bare-signature form (no `function` keyword, no body)
 shape Iterable<T> {
-  next(lend self) -> maybe T
+  next(lend self) -> maybe<T>
 }
 
 shape FallibleIterable<T> {
-  next(lend self) -> maybe T errors
+  next(lend self) -> maybe<T> errors
 }
 ```
 
@@ -141,7 +141,7 @@ shape LogSink {
 
 In M7, `terminal.stderr` and `terminal.stdout` follow `LogSink`. The v0.5+ stdlib expands this to file sinks and user-defined sinks.
 
-`.withErrors()` returns `Iterable<maybe T errors>` (NOT `Iterable<Result<T>>`). `Result` is on the banned-jargon list. Each iteration step yields an errors-capable maybe-value; the user inspects it with standard `.failed()` / `.message` / `.or()` machinery. Example:
+`.withErrors()` returns `Iterable<maybe<T> errors>` (NOT `Iterable<Result<T>>`). `Result` is on the banned-jargon list. Each iteration step yields an errors-capable maybe-value; the user inspects it with standard `.failed()` / `.message` / `.or()` machinery. Example:
 
 ```ynz
 for (result in file.lines(path).withErrors()) {
@@ -159,7 +159,7 @@ No new shape is needed — this reuses M7's own errors-capable mechanism uniform
 
 **Why two contracts instead of one with optional `errors`:**
 
-Yinz's `follows` contracts require method signatures to match exactly. There's no language-level mechanism for "this method returns `maybe T` OR `maybe T errors`" — adding one would complicate every `follows` contract for one feature. Two explicit contracts is simpler and matches the user's mental model: "is this iterator infallible or fallible?"
+Yinz's `follows` contracts require method signatures to match exactly. There's no language-level mechanism for "this method returns `maybe<T>` OR `maybe<T> errors`" — adding one would complicate every `follows` contract for one feature. Two explicit contracts is simpler and matches the user's mental model: "is this iterator infallible or fallible?"
 
 **Why not Option A (single contract that always returns `errors`):**
 
@@ -179,7 +179,7 @@ shape CircularBuffer<T> follows Iterable<T> {
   hidden position: int = 0
 }
 
-function next(lend self: CircularBuffer<T>) -> maybe T {
+function next(lend self: CircularBuffer<T>) -> maybe<T> {
   if (self.items.count() == 0) { return none }
   const value = self.items[self.position]
   self.position = (self.position + 1) % self.items.count()
@@ -188,11 +188,11 @@ function next(lend self: CircularBuffer<T>) -> maybe T {
 
 // I/O data — implements the fallible contract.
 shape ApiPager<T> follows FallibleIterable<T> {
-  cursor: maybe string
+  cursor: maybe<string>
   hidden done: boolean = false
 }
 
-function next(lend self: ApiPager<T>) -> maybe T errors {
+function next(lend self: ApiPager<T>) -> maybe<T> errors {
   if (self.done) { return none }
   const response = request.get(self.buildUrl())   // can fail
   self.cursor = response.nextCursor
@@ -226,7 +226,7 @@ for ((k, v) in scores) {
 }
 ```
 
-Both forms desugar identically at codegen — the tuple-destructure form is parser sugar only. `MapIter<K, V>.next()` still returns `maybe MapEntry<K, V>`; the desugar step inserts the field-access bindings before the loop body.
+Both forms desugar identically at codegen — the tuple-destructure form is parser sugar only. `MapIter<K, V>.next()` still returns `maybe<MapEntry<K, V>>`; the desugar step inserts the field-access bindings before the loop body.
 
 ---
 

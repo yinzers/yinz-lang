@@ -4,7 +4,7 @@ description: "The compiler's character as a teacher (Golden Rule 11, docs/refere
 tags:
   - "yinz-compiler"
 created_at: "2026-05-14"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -86,7 +86,7 @@ These words should NEVER appear in user-facing diagnostics. They require CS back
 These are Yinz's chosen names — use them freely:
 
 - `errors`, `errors function`, `errors context` — the language's name for the system
-- `maybe T`, `maybe`, `none` — the optional-value system
+- `maybe<T>`, `maybe`, `none` — the optional-value system
 - `follows`, "follows the X contract" — Yinz's `interface`/`trait` replacement
 - `share` / `lend` / `give` / `copy` / `.freeze` — ownership modifiers
 - `options` — Yinz's `enum` replacement
@@ -228,7 +228,7 @@ Every error that has a corresponding spec section ends with a "See:" line:
 ```
 COMPILE ERROR: Direct index access is not allowed.
 
-  Use .get() — it returns maybe T and handles out-of-bounds safely:
+  Use .get() — it returns maybe<T> and handles out-of-bounds safely:
     let item = items.get(5)
 
   Why: ...

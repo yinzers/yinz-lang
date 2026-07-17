@@ -22,7 +22,7 @@ source $HOME/.cargo/env
 | **M3** | ✅ shipped | `if`/multi-case `if`/`else =>`, `while`, `for (x in range(...))`, early `return`, user-defined functions with params + return types, mutual recursion |
 | **M4** | ✅ shipped | shapes (data + contract signatures), standalone functions taking receivers (UFCS dot-call sugar), ownership (`share`/`lend`/`give` in signatures, inferred at call sites), `.copy()`/`.freeze()`, `extends` (data-only), `follows` contracts, `hidden` fields, `dynamic Foo` runtime polymorphism, M2 catch-up (`int.max`/`int.min`/`number.epsilon`, `.wrappingAdd()`/`.saturatingAdd()`) |
 | **M5** | ✅ shipped | generics (`<T>`), collections (`array<T>`, `fixed<T>`, `map<K,V>`), bracket sugar (`arr[i]`, `m["key"]`) |
-| **M6** | ✅ shipped | `options`, union types (`\|`), `maybe T`, `is` narrowing |
+| **M6** | ✅ shipped | `options`, union types (`\|`), `maybe<T>`, `is` narrowing |
 | **M7** | ✅ shipped | full Unicode strings, interpolation, `errors` keyword + cascades, `Iterable<T>` / `FallibleIterable<T>` |
 | **M8** | ✅ shipped | modules (`import`/`export`), doc comments (`///`), `sensitive`, `wait`/`background` concurrency keywords, bignum `number<N>` for N > 34 |
 

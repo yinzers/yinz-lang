@@ -4,7 +4,7 @@ description: "Every design topic has its own file. This is the index. One line p
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-04"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -29,13 +29,13 @@ Every design topic has its own file. This is the index. One line per topic, link
 
 | Topic | File | What's in it |
 |-------|------|--------------|
-| Type system | [`docs/internal/implementation/IMP-type-system.md`](internal/implementation/IMP-type-system.md) | `shape`, `base`, `extends` (data-only inheritance), `follows` (structural function-signature matching), structural typing, `\|` (unions), `maybe`, `options`, `hidden` (per-field visibility within exported shapes). Removed by r10-r15 (landed): `override` keyword (function overloading by argument type), scalar type aliases (`shape UserId = string` — pure documentation sugar, banned: parameter names + comments do the job). **Supported**: union aliases (`shape Result = Success \| Failure`) — these are real type unions shipped in M6, not scalar sugar. |
+| Type system | [`docs/internal/implementation/IMP-type-system.md`](internal/implementation/IMP-type-system.md) | `shape`, `base`, `extends` (data-only inheritance), `follows` (structural function-signature matching), structural typing, `\|` (unions), `maybe`, `options`, `hidden` (per-field visibility within exported shapes). Removed by r10-r15 (landed): `override` keyword (its planned replacement, function overloading by argument type, is not yet implemented — v0.1 rejects two same-named functions in a file regardless of parameter types; see [`IMP-type-system.md`](internal/implementation/IMP-type-system.md)), scalar type aliases (`shape UserId = string` — pure documentation sugar, banned: parameter names + comments do the job). **Supported**: union aliases (`shape Result = Success \| Failure`) — these are real type unions shipped in M6, not scalar sugar. |
 | Generics | [`docs/internal/implementation/IMP-generics.md`](internal/implementation/IMP-generics.md) | Type generics `<T>`, function generics, `follows` constraints inline, type inference at call sites |
 | Ownership | [`docs/internal/implementation/IMP-ownership.md`](internal/implementation/IMP-ownership.md) | `.share`/`.lend`/`.give`/`.copy`/`.freeze`, no direct array indexing |
 | Collections | [`docs/internal/implementation/IMP-collections.md`](internal/implementation/IMP-collections.md) | `fixed`/`array`/`map`, no chaining, method naming, bracket sugar for `.get()`/`.set()`, string indexing methods |
 | Array element storage (by-value, v0.3-M5) | [`docs/internal/implementation/IMP-collections.md`](internal/implementation/IMP-collections.md#array-element-storage--by-value-inline-v03-m5) | `array<Shape>` elements stored by value inline in the heap buffer (elem_size-aware ABI) — fixes the stack-dangling class the M3a guard masked; one-allocation buffer, copy-on-persist snapshot semantics (with TS-aliasing teaching note), field-wise value `contains`, element-blind drop parity, serialization forward-compat |
 | Auto-SoA layout (v0.3-M5) | [`docs/internal/implementation/IMP-collections.md`](internal/implementation/IMP-collections.md#auto-soa-layout-v03-m5) | Qualifying `array<Shape>` stored as per-field segments in one allocation; admission criteria (provable length > 64, no growth, no escape, ≤2-field union), padding-wins layout authority, kernel-mode gate, Tier 3 lint `array-using-soa-layout`, honest O0/-O2 performance provenance |
-| Maybe / optional values | [`docs/internal/implementation/IMP-maybe.md`](internal/implementation/IMP-maybe.md) | `maybe T` sugar for `T \| none`, LLVM lowering decision table, flow-sensitive `.value` narrowing rules, `none`-inference rules, v0.1 cycle-leak limitation (M5) |
+| Maybe / optional values | [`docs/internal/implementation/IMP-maybe.md`](internal/implementation/IMP-maybe.md) | `maybe<T>` sugar for `T \| none`, LLVM lowering decision table, flow-sensitive `.value` narrowing rules, `none`-inference rules, v0.1 cycle-leak limitation (M5) |
 | Error handling | [`docs/internal/implementation/IMP-errors.md`](internal/implementation/IMP-errors.md) | `errors` keyword, no try/catch, flow-sensitive auto-propagation narrowing |
 | Functions | [`docs/internal/implementation/IMP-functions.md`](internal/implementation/IMP-functions.md) | `function` keyword, `-> nothing`, no tuples, closure syntax |
 | Numeric types | [`docs/internal/implementation/IMP-numeric-types.md`](internal/implementation/IMP-numeric-types.md) | `number`/`float`/`int`, `number<N>` parameterized precision (cap 4096), handwritten impls, overflow methods |
@@ -52,7 +52,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Operators | [`docs/internal/implementation/IMP-operators.md`](internal/implementation/IMP-operators.md) | `follows` contracts, `Self` keyword, `print()` default, `&&`/`\|\|`/`!` symbols, bitwise symbols, no `===` |
 | Sensitive values | [`docs/internal/implementation/IMP-sensitive.md`](internal/implementation/IMP-sensitive.md) | `sensitive` modifier, auto-redact in all output, `.reveal()` explicit opt-in, stripped from release |
 | FFI | [`docs/internal/implementation/IMP-ffi.md`](internal/implementation/IMP-ffi.md) | `foreign` keyword, wrap in safe functions, compiler requires `wait` (DEFERRED to v2+) |
-| Iterables | [`docs/internal/implementation/IMP-iterables.md`](internal/implementation/IMP-iterables.md) | `follows Iterable<T>`, `next()` with `maybe T`, hidden state fields |
+| Iterables | [`docs/internal/implementation/IMP-iterables.md`](internal/implementation/IMP-iterables.md) | `follows Iterable<T>`, `next()` with `maybe<T>`, hidden state fields |
 | GPU dispatch | [`docs/internal/implementation/IMP-gpu.md`](internal/implementation/IMP-gpu.md) | MVP2+ vision: `gpu` call-site keyword, compiler manages CPU/GPU dispatch (DEFERRED to v2+) |
 | Destructuring | [`docs/internal/implementation/IMP-destructuring.md`](internal/implementation/IMP-destructuring.md) | Object only, no array, `as` rename, parameter destructuring |
 | Inline / anonymous shape types | [`docs/internal/implementation/IMP-inline-shape-types.md`](internal/implementation/IMP-inline-shape-types.md) | `{ field: T }` in type-annotation position; structural typing (two identical inline shapes are the same type); canonical-name hoisting implementation; no `hidden` in inline shapes; named shapes remain nominal |

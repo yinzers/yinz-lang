@@ -4,7 +4,7 @@ description: "Design document for compiler and IDE language server implementatio
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -207,10 +207,10 @@ IDE uses this for:
 
 ## No Direct Array Indexing — Safety Rationale
 
-`items[5]` is a compile error. All collection access goes through `.get(index)` which returns `maybe T`.
+`items[5]` is a compile error. All collection access goes through `.get(index)` which returns `maybe<T>`.
 
 **Why**: Out-of-bounds array access is one of the most common causes of runtime crashes and security vulnerabilities (buffer overflows) in systems languages. If the compiler can enforce safe access universally, there's no reason not to. The cost (slightly more verbose access) is far outweighed by the elimination of an entire crash category.
 
 **Performance**: `.get(index)` compiles to a bounds check + conditional. In debug mode, this is always present. In release mode, the compiler eliminates bounds checks it can prove are safe statically (fixed-size arrays with known indices). Critically, Yinz runs its own index-range proof pass before emitting LLVM IR — LLVM's alias analysis fails to eliminate bounds checks for certain index patterns (notably widening-multiply computations like `(a as int) * b`), but Yinz's type-level integer-range tracking can prove these safe at the Yinz IR level before LLVM ever sees them. The performance impact is negligible in practice.
 
-**Consistency**: Maps already use `.get(key)` returning `maybe V`. Same pattern everywhere. No special case for arrays.
+**Consistency**: Maps already use `.get(key)` returning `maybe<V>`. Same pattern everywhere. No special case for arrays.

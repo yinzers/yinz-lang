@@ -62,3 +62,30 @@ Idempotency-Key: 2026-07-16-audit-remediation-two-lane#A3: crates-ynz-lsp-src-se
 - WHY: single-tenant LSP (developer's own editor+files); restart recovers; a transactional rollback for multi-file ops is a real design pass, not a fix-round rider.
 - COST: ~1 session (op-scoped rollback or re-index-on-caught-panic; message scrub).
 - TRIGGER: first field report of post-panic LSP inconsistency, or the LSP gaining multi-client/remote surface.
+
+## 2026-07-16 — Deferral: registry self-referential-shape substitute teaches bare maybe T (non-blocking — deferred by 2026-07-16-audit-remediation-two-lane#A4 at the phase boundary)
+
+Idempotency-Key: 2026-07-16-audit-remediation-two-lane#A4: registry-features-toml-1300
+
+- WHAT: `registry/features.toml` ~line 1300, `[[deferred_language_feature]] self-referential-shape`'s
+  `substitute` field reads bare `` `maybe T` field `` — invalid syntax (parser requires `maybe<T>`);
+  same confirmed bug class as the A4 `maybe<T>` sweep, but this field was outside A4's drawn correction
+  surface (docs/ spec files + the jargon entries the reviewers named).
+- WHY: surfaced only at round-2 review after the fix round closed; fixing it then would have re-opened
+  a third review round for a one-line change (review-round cost exceeds the defect's user impact — it
+  is a deferred-feature record's substitute text, lower-traffic than the banned_jargon diagnostics
+  already fixed).
+- COST: one-line edit + `cargo test -p ynz-registry -p ynz-diagnostics` re-run (<5 min).
+- TRIGGER: the next plan/phase that touches `registry/features.toml`, or the followups plan's execution,
+  whichever first.
+
+## 2026-07-16 — Deferral: docs/README type-system link points at file not section anchor (minor — deferred by 2026-07-16-audit-remediation-two-lane#A4 at the phase boundary)
+
+Idempotency-Key: 2026-07-16-audit-remediation-two-lane#A4: docs-readme-md-32
+
+- WHAT: `docs/README.md:32`'s new `IMP-type-system.md` inline link points at the whole file rather than
+  the `#no-override-keyword-function-overloading-by-argument-type-is-not-implemented-v01` anchor the
+  prose describes. Link resolves; precision nit only.
+- WHY: cosmetic; not worth a review round on its own.
+- COST: one-line edit (<1 min).
+- TRIGGER: next edit to `docs/README.md` or the followups plan's execution.

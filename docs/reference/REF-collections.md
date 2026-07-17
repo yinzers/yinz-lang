@@ -4,7 +4,7 @@ description: "Three ways to hold multiple values."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-04"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -84,12 +84,12 @@ roster[0] = newPlayer   // replace element at index 0
 
 ## Safe access — brackets are sugar for .get()
 
-Reading by index uses brackets, which is shorthand for `.get()`. Both forms return `maybe T` — never a raw value, so you can't accidentally crash on out-of-bounds:
+Reading by index uses brackets, which is shorthand for `.get()`. Both forms return `maybe<T>` — never a raw value, so you can't accidentally crash on out-of-bounds:
 
 ```
 let player = players[3]              // sugar for players.get(3)
 let player = players.get(3)          // same thing, longer form
-// both return: maybe Player
+// both return: maybe<Player>
 
 if (player.exists()) {
   print(player.value.name)
@@ -173,11 +173,11 @@ path[0] = { x: 99.0, y: 2.0 }
 .filter(fn)         // filter — returns new collection where fn returns true
 .sort(fn, order)    // sorted copy — order is asc or desc (see Options)
 .map(fn)            // transform — returns new collection of results
-.get(index)         // item at position → maybe T (safe, returns none if out of bounds)
+.get(index)         // item at position → maybe<T> (safe, returns none if out of bounds)
 .set(index, value)  // replace item at position — runtime error if out of bounds
-.first()            // first item → maybe T
-.last()             // last item → maybe T
-.find(fn)           // first item matching condition → maybe T
+.first()            // first item → maybe<T>
+.last()             // last item → maybe<T>
+.find(fn)           // first item matching condition → maybe<T>
 .count()            // number of items → number
 .unique()           // deduplicated copy
 .limit(n)           // cap to the first N items — returns new collection of at most N
@@ -267,8 +267,8 @@ These mutate in place, which requires dynamic sizing:
 ```
 .add(item)              // add item at end
 .remove(index)          // remove by index
-.removeFirst()          // remove and return first item → maybe T
-.removeLast()           // remove and return last item → maybe T
+.removeFirst()          // remove and return first item → maybe<T>
+.removeLast()           // remove and return last item → maybe<T>
 ```
 
 ---
@@ -288,7 +288,7 @@ for (word in words) {
 Map dot methods:
 
 ```
-.get(key)             // → maybe V (might not exist — see Maybe Types)
+.get(key)             // → maybe<V> (might not exist — see Maybe Types)
 .set(key, value)      // add or update one key
 .update({...})        // add or update multiple keys at once
 .has(key)             // does the key exist? → boolean
@@ -305,7 +305,7 @@ Map dot methods:
 **Bracket sugar works on maps too:**
 
 ```
-scores["alice"]              // sugar for scores.get("alice") → maybe number
+scores["alice"]              // sugar for scores.get("alice") → maybe<number>
 scores["alice"] = 75         // sugar for scores.set("alice", 75)
 ```
 
@@ -339,9 +339,9 @@ There's one rule that determines whether to use `.` or `[]`:
 |--------|--------------|
 | `obj.fieldName` | Field on a type — compile-time known name |
 | `obj.methodName()` | Method on a type or collection |
-| `arr[i]` | Index lookup → `maybe T` (sugar for `.get(i)`) |
-| `m["key"]` | Key lookup → `maybe V` (sugar for `.get(key)`) |
-| `s[i]` | Code point lookup → `maybe string` (sugar for `.get(i)`) |
+| `arr[i]` | Index lookup → `maybe<T>` (sugar for `.get(i)`) |
+| `m["key"]` | Key lookup → `maybe<V>` (sugar for `.get(key)`) |
+| `s[i]` | Code point lookup → `maybe<string>` (sugar for `.get(i)`) |
 
 Types and collections are different concepts. Trying to use brackets on a type, or dot to access a runtime key on a map, both fail:
 

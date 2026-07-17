@@ -197,7 +197,16 @@ COMPILE ERROR: No function `attack` accepts (Building, Enemy, int).
 
 ## How Inheritance Works (Data-Only)
 
-`extends` is for data reuse only. Child shape inherits parent's fields. Behavior comes from standalone functions; the compiler picks the most specific overload at the call site.
+`extends` is for data reuse only. Child shape inherits parent's fields. Behavior comes from standalone functions.
+
+**Function overloading by argument type (the compiler picking the most specific same-named function
+for a given argument type) is NOT implemented in v0.1.** It is tracked as a deferred language feature
+— see the `function-overload-by-argument-type` `[[deferred_language_feature]]` entry in
+[`registry/features.toml`](../../registry/features.toml), and
+[`docs/internal/implementation/IMP-type-system.md`](../../docs/internal/implementation/IMP-type-system.md)'s
+"No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)" section for the
+full correction. **In v0.1, two functions sharing a name in the same file is a compile error no matter
+how their parameter types differ** — give overload-shaped functions distinct names:
 
 ```ynz
 shape Entity {
@@ -214,15 +223,16 @@ function greet(share self: Entity) -> string {
   return "Hello, I am " + self.name
 }
 
-function greet(share self: Warrior) -> string {
+function greetWarrior(share self: Warrior) -> string {
   return "Hello, I am " + self.name + " the warrior, wielding " + self.weapon
 }
 
 const warrior: Warrior = { name: "Aragorn", health: 100, weapon: "sword", armor: 50 }
-warrior.greet()    // calls greet(Warrior) — the more specific match
+warrior.greetWarrior()    // UFCS sugar for greetWarrior(warrior) — distinct name, not an overload
 ```
 
-No `override` keyword exists. No virtual dispatch table. The compiler picks `greet(Warrior)` because Warrior is more specific than Entity.
+No `override` keyword exists. No virtual dispatch table. Until overload-by-argument-type ships, the
+only working polymorphism mechanism in v0.1 is generics (monomorphization).
 
 ---
 
@@ -267,7 +277,7 @@ The compiler emits one shared `takeDamage` function for Player. For `dynamic Dam
 |---|---|
 | Class with methods | Shape (data) + standalone functions (behavior) |
 | Constructor / factory method | Standalone function returning the shape: `function newPlayer(name: string) -> Player { ... }` |
-| `class Child extends Parent { override greet() }` | `shape Child extends Parent { ...new fields... }` + standalone `function greet(share self: Child)` that overloads the parent's |
+| `class Child extends Parent { override greet() }` | `shape Child extends Parent { ...new fields... }` + a standalone function with a distinct name (e.g. `greetChild`) — same-named overload-by-argument-type dispatch is a deferred v0.1 feature, not shipped; see "How Inheritance Works" above |
 | Abstract class | `base shape` — data + contract signatures only; cannot be instantiated; must be extended |
 | Interface / protocol | `shape Contract { ...bare-signature declarations... }` + `follows` on implementing shapes |
 | Virtual method / runtime polymorphism | `dynamic Contract` — fat pointer + per-(shape, contract) function table |

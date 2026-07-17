@@ -43,6 +43,9 @@ metadata:
   - A third active session, `2026-07-11-rules-corpus-cleanup` (docs-only, forks from `main`), owns
     `.claude/rules/*`, `vocabulary.md`, and the `REF-golden-rules.md` count/ordering fix. **Do not
     touch that plan's owned files.** TS2's doc-correction overlaps one of them (see R8) — routed away.
+    **[FRAGO 007]** `2026-07-11-rules-corpus-cleanup` is now done+merged (PR #81) — the contention is
+    lifted; see R8/R11's widened dispositions and the A4 fix-round corrections to `non-oop.md` and
+    `vocabulary.md:152`.
   - All build/test runs go through the dev container: `docker compose run --rm dev cargo test --workspace`
     / `cargo build -p <crate> --release` — **never bare `cargo` on the host** (per CLAUDE.md tech-stack).
   - **`target/release` is a live consumer mount.** `trading-v4` / `backfillMarketData` run whatever
@@ -100,11 +103,10 @@ metadata:
   | R5 | **C1 union-boxing fix wrong ABI** → silent wrong answer / SIGSEGV [Lane B]; today's `classifyRoster` golden *defines but never calls* the consumer (why it shipped) | B | III (dev-stage, gated, reversible) | M | RED integration test that **actually CALLS** the union consumer, blocks build (**B2 prob −1** → C); sequence C1 before/with M1 so the drop pass frees boxed payloads | **M** | pass, record |
   | R6 | **A Lane A fix unexpectedly breaks the demo compile or moves a golden** → fails M7 Phase 5 in the *other* live session | C | III | M | Two blocking **Lane-A-exit** gates: (a) `golden.rs` zero-hash-movement, (b) `examples/pirates-roster/entrypoint.ynz` still-compiles unchanged (**B2 prob −1** → D) | **L** | pass, record |
   | R7 | **Parser/LSP crash surface on untrusted editor input** (F2 deep-nest stack-abort; F3 one ICE kills the whole LSP; F7 UTF-8 boundary panic) — LSP has real consumers | C | III | M | F2 depth-cap 256 + teaching diagnostic (**B1** eliminate unbounded recursion, prob −2 → E); F3 `catch_unwind(AssertUnwindSafe)` per request/notification (**B2** −1); F7 `is_char_boundary` reject (**B1**) | **L** | pass, record |
-  | R8 | **TS2 doc-correction overlaps `rules-corpus-cleanup`-owned/-touched files** — `non-oop.md` carries the same overload claim (owned), and `REF-golden-rules.md` (L26/27/35) *also* carries the claim AND is touched by that plan's count/ordering fix (a second contended file) | C | IV | L | Route the correction to non-owned homes (`IMP-type-system.md`, `REF-types.md`, and the overload lines of `REF-golden-rules.md` — coordinating with rules-corpus-cleanup on that shared file); **flag** the `non-oop.md` overlap + the `REF-golden-rules.md` contention, do not collide (**B1** eliminate the collision) | **L** | pass, flag |
+  | R8 | **TS2 doc-correction overlaps `rules-corpus-cleanup`-owned/-touched files** — `non-oop.md` carries the same overload claim (owned), and `REF-golden-rules.md` (L26/27/35) *also* carries the claim AND is touched by that plan's count/ordering fix (a second contended file) — **[FRAGO 007]** `2026-07-11-rules-corpus-cleanup` is now done+merged (PR #81); the contention basis is lifted | C | IV | L | *Originally: route the correction to non-owned homes only, flag `non-oop.md` + `REF-golden-rules.md` contention, do not collide.* **Widened by FRAGO 007**: `non-oop.md` is corrected in-plan (its "compiler picks the most specific overload" claim + example rewritten to match the corrected v0.1 reality, citing the `function-overload-by-argument-type` deferred-feature entry) | **L** | pass — corrected, was flag |
+  | R11 | **`maybe T`→`maybe<T>` doc-drift correction overlaps `rules-corpus-cleanup`-owned files** (`naming.md`, `vocabulary.md` carry the drift) — **[FRAGO 007]** `2026-07-11-rules-corpus-cleanup` is now done+merged (PR #81); `naming.md` was merged into `vocabulary.md` by that plan | C | IV | L | *Originally: correct only non-owned spec files, flag the `naming.md`/`vocabulary.md` overlap, do not touch them.* **Widened by FRAGO 007**: `vocabulary.md:152`'s "returns `maybe User`" example corrected to `maybe<User>` in-plan; `vocabulary.md:108`'s prose ("a maybe T" / "a maybe int") stays untouched — legitimate prose per IMP-maybe.md:150's prose-vs-syntax split, not a code example | **L** | pass — corrected, was flag |
   | R9 | **Consumer-mounted fixes reach consumers only via a `--release` rebuild** — `ynz-watch` (F6), `ynz-driver` (F4/F5), and `ynz-lsp` (F3/F7) are all mounted via `target/release`; a debug-only build reproduces the bug the moment `backfillMarketData`/`trading-v4` re-runs it | C | III | M | `--release` rebuild of all three binaries in the SAME session as the fix + a killpg escalation test (**B1** — makes the fixes actually reach the mount, prob −2); landed in A3's exit criteria (the executor's slice), not only §3.4 | **L** | pass, record |
   | R10 | **Lane A landing on `main` creates rebase pressure** for the in-flight M7/M8/rules-cleanup branches | C | IV | L | Note only — files barely overlap (runtime/numerics/typeck vs codegen/rules); rebase is mechanical | **L** | note |
-  | R11 | **`maybe T`→`maybe<T>` doc-drift correction overlaps `rules-corpus-cleanup`-owned files** (`naming.md`, `vocabulary.md` carry the drift) | C | IV | L | Correct only the non-owned spec files with a broken *code example* (`REF-{iterables,collections,compiler-errors}.md`, `IMP-{ownership,iterables}.md` + sweep); **`REF-golden-rules.md` is excluded** — its only `maybe T` (L108) is legitimate prose, not a code example, so it stays as-is per IMP-maybe.md:150's prose-vs-syntax split; **flag** the `naming.md`/`vocabulary.md` overlap, do not edit them (**B1** eliminate the collision) | **L** | pass, flag |
-
   **RISK OVERRIDE — accepted residual: HIGH (R1 — gated-exposure window)**
   ```
   Risk:                     Confirmed live compiler miscompiles (M1 unbounded heap leak; C1 union
@@ -361,12 +363,61 @@ escape hatch, not a bug-response). Full detail in `audit.md` Session log.
 ---
 
 #### Phase A4 — fmt trailing-comment + doc-drift corrections (F9, TS2, `maybe<T>`)
+
+**STATUS: DONE (2026-07-16)** — F9 root-caused to `ynz-parser` (not `ynz-fmt` as the plan text
+named): `parse_shape_decl`'s union-alias arm computed its `ShapeDecl.span.end` from
+`current_span().start` (the START of the next unconsumed token), which — because comments are lexed
+separately as trivia and never appear in the parser's token stream — silently over-extended the
+span past any trailing comment sitting before the next real token, swallowing it so
+`comment_merge::CommentContext::between` never saw it as available for the next item. Fixed by
+computing `end` from the END of the last CONSUMED token (mirroring the struct-form's own `end`
+computation two branches down in the same function) — `crates/ynz-parser/src/parser.rs:3744-3762`.
+RED→GREEN: `crates/ynz-fmt/tests/fixtures/comments/union_alias_trailing_comment.{ynz,formatted}` +
+`crates/ynz-fmt/tests/comment_golden.rs::union_alias_trailing_comment` (RED confirmed the comment was
+silently deleted; GREEN after the parser fix). Confirmed live against the real repro
+(`examples/pirates-roster/entrypoint.ynz:666-668`) via `ynz fmt --check`/`--stdin` — read-only, file
+never edited — the Pattern-7 comment block now round-trips byte-identical; the file's other
+pre-existing fmt-canonicality gaps (unrelated spacing/blank-line/array-wrap drift, confirmed present
+before this fix too) are out of this phase's scope. TS2 corrected across all three named homes
+(`IMP-type-system.md`, `REF-types.md`, `REF-golden-rules.md` L26/27/35) plus `docs/README.md`'s stale
+"Removed by r10-r15 (landed)" line found by the exhaustive sweep; added
+`[[deferred_language_feature]] function-overload-by-argument-type` to `registry/features.toml`
+(regenerated `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` to match — required by
+`ynz-tmgrammar`'s drift test). `maybe T`→`maybe<T>` corrected across ~20 non-owned files found by a
+concept-level (not phrasing-level) whole-`docs/`-tree sweep — far more than the five named homes,
+since the drift was systemic (`IMP-{collections,compiler,doc-comments,errors,iterables,ownership,
+sensitive,type-conversion,type-system}.md`, `REF-{collections,compiler-errors,config,doc-comments,
+errors,iterables,linting,mvp-scope,strings,type-conversion,unions,variables}.md`, `docs/README.md`) —
+`REF-golden-rules.md` L108 and genuine spoken-register prose (`REF-maybe.md`, `IMP-maybe.md:35,57`,
+`IMP-unions.md:137`, two "maybe entry" instances in `REF-collections.md`) deliberately left intact.
+`docs/internal/scratchpad/` (exempt sandbox, including the audit's own SCRATCH-audit-*.md source
+docs) swept but not edited. Full workspace suite green (one pre-existing wall-clock-timing
+integration flake, `v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged`, failed under
+full-workspace load and passed in isolation — same class as A2's noted flake, unrelated to this
+phase's changes, surfaced not silenced); golden 34/34 zero movement; no contended file touched;
+fmt+clippy clean. Deviations + weather change surfaced in the executor's return (not
+self-adjudicated) — see `audit.md`.
+
+**Fix round (2026-07-16):** reviewer fleet findings applied — the BLOCKER self-contradiction in
+`IMP-type-system.md`'s pre-correction "Single Inheritance" section (fixed to match its own L77-94
+correction); `maybe T`→`maybe<T>` in `REF-compiler-errors.md:89` and `examples/pirates-roster/README.md`;
+the `Option`/`Optional` banned-jargon registry entries (`maybe T`→`maybe<T>`); FRAGO 007's widened
+`non-oop.md` + `vocabulary.md:152` corrections (contention lifted, `rules-corpus-cleanup` done+merged);
+F9's parser-comment "F9" ticket-label removed; `comment_golden.rs`'s misattributed WHY comment corrected
+to the real parser root cause; `registry/features.toml`'s `substitute` field CS-jargon trim;
+`docs/README.md:32` markdown-link addition; `IMP-type-system.md:92`'s plan-id citation replaced with a
+stable registry-entry citation; frontmatter `updated_at` bumped across the ~21 substantively-edited
+docs files. See `audit.md` for the fix-round session entry.
 - **Task + purpose:** the formatter comment-drop fix and the two confirmed docs-drift corrections
   (overload-dispatch per decision D2; `maybe T` → `maybe<T>` spec-example drift).
 - **Steps:**
-  1. **F9** `ynz-fmt` `walker.rs` union-alias emitter — trailing comments dropped on a union-alias arm;
-     mirror the shape-arm handling. (Repro reads `pirates-roster/entrypoint.ynz:666-668` but does **not**
-     edit it.) Add a fmt idempotency/round-trip test.
+  1. **F9** ~~`ynz-fmt` `walker.rs` union-alias emitter~~ — **[FRAGO 006 correction]** the real defect
+     site is `crates/ynz-parser/src/parser.rs`'s `parse_shape_decl` union-alias arm: its
+     `ShapeDecl.span.end` computation used `current_span().start` (the START of the next unconsumed
+     token) instead of the END of the last consumed one, silently over-extending the span past any
+     trailing comment sitting before the next real token. Fix the parser's span computation to mirror
+     the struct-form arm's own `end` computation. (Repro reads `pirates-roster/entrypoint.ynz:666-668`
+     but does **not** edit it.) Add a fmt idempotency/round-trip test.
   2. **TS2** — the docs claim overload-by-arg-type dispatch works ("compiler picks the most specific
      overload by argument type"); it does not. **Correction surface (three named non-owned homes):**
      `docs/internal/implementation/IMP-type-system.md`, `docs/reference/REF-types.md`, **and
@@ -377,11 +428,13 @@ escape hatch, not a bug-response). Full detail in `audit.md` Session log.
      (grep the concept, not one phrasing — the `REF-golden-rules.md` gap proves the surface was not
      exhaustively swept at authoring); correct every non-owned occurrence found, and flag any
      owned-file occurrence per R8.
-  3. **Owned-file overlaps (do NOT edit; flag per R8):** `.claude/rules/non-oop.md` carries the same
-     overload claim, and `docs/reference/REF-golden-rules.md` is *itself* touched by `rules-corpus-cleanup`
-     (its count/ordering fix) — so REF-golden-rules.md is a **second contended file**: coordinate the
-     TS2 correction with that plan's edit rather than colliding on it. Flag both in the return + Future
-     Requirements.
+  3. **Owned-file overlaps — [FRAGO 007] contention lifted, now corrected in-plan:** `.claude/rules/non-oop.md`
+     carried the same overload claim, and `docs/reference/REF-golden-rules.md` was *itself* touched by
+     `rules-corpus-cleanup` (its count/ordering fix), making it a second contended file. **`2026-07-11-
+     rules-corpus-cleanup` is now done+merged (PR #81)** — correct `non-oop.md`'s overload claim
+     in-plan (mirroring `IMP-type-system.md:77-94`'s correction); `REF-golden-rules.md`'s L26/27/35 were
+     already corrected under R8's original three-named-homes scope now that the file is no longer
+     contended.
   4. Evaluate whether overload-by-arg-type dispatch now warrants a `[[deferred_language_feature]]`
      registry entry (see `### Feature Registry Entries`); add it if the correction reframes the feature
      as formally deferred.
@@ -392,16 +445,19 @@ escape hatch, not a bug-response). Full detail in `audit.md` Session log.
      whole-`docs/`-tree sweep surfaces (grep the concept). **`REF-golden-rules.md` is deliberately NOT
      in this list:** its only `maybe T` (L108, "Optional<T> vs maybe T") is legitimate *prose*
      terminology, not a broken code example — leave it (this is the exact prose-vs-syntax split
-     IMP-maybe.md:150 records and this step's own guard forbids changing). **`rules-corpus-cleanup`
-     owns `naming.md` and `vocabulary.md`, which also carry the drift** — do NOT edit them; flag the
-     overlap per R11. This is a *code-example* fix, never a terminology change.
-- **Exit criteria:** F9 fixed with a round-trip test; TS2 corrected across all non-owned occurrences
-  found by an exhaustive `docs/`-tree sweep (at minimum the three named homes: IMP-type-system.md,
-  REF-types.md, REF-golden-rules.md L26/27/35); deferral recorded; both owned-file overlaps
-  (`non-oop.md`, and REF-golden-rules.md's contention with `rules-corpus-cleanup`) flagged, not
-  collided on; **`maybe T`→`maybe<T>` corrected across the non-owned spec files — REF-golden-rules.md's
-  L108 prose left intact, and naming.md/vocabulary.md overlap flagged per R11, not touched**; full
-  suite green.
+     IMP-maybe.md:150 records and this step's own guard forbids changing). **[FRAGO 007] `rules-corpus-
+     cleanup` owned `naming.md` and `vocabulary.md`, which also carry the drift — that plan is now
+     done+merged (PR #81; `naming.md` was merged into `vocabulary.md`), so R11's contention is lifted.**
+     Correct `vocabulary.md:152`'s "returns `maybe User`" example to `maybe<User>` in-plan;
+     `vocabulary.md:108`'s prose stays untouched (same prose-vs-syntax split as REF-golden-rules.md:108
+     above). This is a *code-example* fix, never a terminology change.
+- **Exit criteria:** F9 fixed with a round-trip test (real defect site: `ynz-parser`'s `parse_shape_decl`
+  union-alias span computation, per FRAGO 006); TS2 corrected across all occurrences found by an
+  exhaustive `docs/`-tree sweep (at minimum the three named homes: IMP-type-system.md, REF-types.md,
+  REF-golden-rules.md L26/27/35) **plus, per FRAGO 007, `non-oop.md` now that its contention with
+  `rules-corpus-cleanup` is lifted**; deferral recorded; **`maybe T`→`maybe<T>` corrected across the
+  spec files — REF-golden-rules.md's L108 prose left intact, and, per FRAGO 007, `vocabulary.md:152`
+  now that its contention is lifted (`vocabulary.md:108`'s prose left intact)**; full suite green.
 - **Reviewer fan-out:** code-reviewer + doc-auditor + rules-compliance.
 - **Model tag:** `(coding, standard, medium)`  *(bumped small→medium: F9 code fix + two whole-`docs/`-tree concept sweeps across ≥6 files + registry eval; 5 steps (not >5), scale=medium (not large), no heavy/adversarial step — none of the three CHECKPOINT triggers tripped, so no marks)*
 
@@ -752,16 +808,25 @@ escape hatch, not a bug-response). Full detail in `audit.md` Session log.
   *feature* work, not this plan's bug fix (decision D2). COST: a dedicated milestone/design pass (not
   scoped here). TRIGGER: a plan takes up overload dispatch as a feature. Also add the
   `[[deferred_language_feature]]` registry entry if the correction formalizes the deferral.
-- **[R8 — flagged overlap, NOT actioned here] overload claim in owned/contended docs** —
-  `.claude/rules/non-oop.md` carries the same "compiler picks the most specific overload" claim TS2
-  corrects (owned by `2026-07-11-rules-corpus-cleanup`), and `REF-golden-rules.md` carries it too AND
-  is contended by that plan's count/ordering fix. WHY-deferred: out of this plan's scope / shared file.
-  COST: one edit + one coordination. TRIGGER: route to the rules-corpus-cleanup plan / Patrick —
-  surfaced, not silently left inconsistent.
-- **[R11 — flagged overlap, NOT actioned here] `maybe<T>` drift in owned docs** —
-  `.claude/rules/naming.md` and `vocabulary.md` carry the `maybe T`/`maybe<T>` drift TS1's sibling
-  correction fixes, but are **owned by `2026-07-11-rules-corpus-cleanup`**. WHY-deferred: out of this
-  plan's scope. COST: minor. TRIGGER: route to the rules-corpus-cleanup plan / Patrick.
+- **[R8 — originally flagged, WIDENED and RESOLVED by FRAGO 007] overload claim in owned/contended
+  docs** — `.claude/rules/non-oop.md` carried the same "compiler picks the most specific overload"
+  claim TS2 corrects (owned by `2026-07-11-rules-corpus-cleanup`), and `REF-golden-rules.md` carried it
+  too AND was contended by that plan's count/ordering fix. Originally deferred: out of this plan's
+  scope / shared file. **`2026-07-11-rules-corpus-cleanup` is now done+merged (PR #81)** — the
+  contention basis is lifted. FRAGO 007 widens the fix-round scope: `non-oop.md`'s "How Inheritance
+  Works" section and its "OOP pattern → Yinz pattern" table row are corrected in-plan to describe the
+  actual v0.1 behavior (same-named functions are a compile error), citing the
+  `function-overload-by-argument-type` deferred-feature registry entry, mirroring
+  `IMP-type-system.md:77-94`'s correction.
+- **[R11 — originally flagged, WIDENED and RESOLVED by FRAGO 007] `maybe<T>` drift in owned docs** —
+  `.claude/rules/naming.md` and `vocabulary.md` carried the `maybe T`/`maybe<T>` drift TS1's sibling
+  correction fixes, but were **owned by `2026-07-11-rules-corpus-cleanup`**. Originally deferred: out
+  of this plan's scope. **`2026-07-11-rules-corpus-cleanup` is now done+merged (PR #81)** —
+  `naming.md`'s content was merged into `vocabulary.md` by that plan, and the contention is lifted.
+  FRAGO 007 widens the fix-round scope: `vocabulary.md:152`'s "returns `maybe User`" example is
+  corrected in-plan to `maybe<User>`. `vocabulary.md:108`'s prose ("a maybe T" / "a maybe int") stays
+  untouched — legitimate spoken-register prose per IMP-maybe.md:150's prose-vs-syntax split, not a
+  broken code example.
 
 ### Considered — no action (dropped scratch leads, disposition on the record)
 - **`dynamic Foo` dispatch lead** (from the audit scratch docs — "confirm whether documented deferral"):

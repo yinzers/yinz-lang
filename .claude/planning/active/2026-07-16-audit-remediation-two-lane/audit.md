@@ -226,6 +226,31 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   ships inside the `ynz` binary via the `watch` subcommand, already covered by the `ynz-driver`
   rebuild). No git commit made — left for the conductor's Step-8 CONFIRM gate.
 
+- `session_01CZ3fYLUXaJqfQnaPgUzwBQ` — 2026-07-16 — Cold-resume (same CLI session, post-/clear).
+  Git-authoritative reconcile: A1 (0cbfb00), A2 (881f6d6), A3 (e3ad1ba + follow-up f53d841) all
+  sealed with Plan-Phase trailers, all `test-scope: affected` → affected-verified/full-pending
+  carried forward. Preflight dirt: the five SCRATCH-audit-2026-07-11-*.md input docs (known-not-mine,
+  ride in at A5/B5). Resumed at Phase A4.
+
+- (executor, agent a4162462618d995a3) — 2026-07-16 — Phase A4 executor dispatch (Sonnet 5 / high via
+  executor-high; cell coding·standard·medium). STATUS: COMPLETE. F9 root-caused to `ynz-parser`, NOT
+  `ynz-fmt` as the plan text named: `parse_shape_decl`'s union-alias arm computed `ShapeDecl.span.end`
+  from the next unconsumed token's start, over-extending the span past trailing comments so
+  `comment_merge` never saw them; fixed to mirror the struct-form's end computation; RED→GREEN with a
+  new fmt round-trip test + fixtures. TS2 corrected in IMP-type-system.md, REF-types.md,
+  REF-golden-rules.md L26/27/35, + docs/README.md (sweep find); `[[deferred_language_feature]]
+  function-overload-by-argument-type` added to registry (jargon_audit-clean after one reword) +
+  TextMate grammar regenerated (drift test). `maybe T`→`maybe<T>` concept sweep corrected ~20
+  non-owned docs files; REF-golden-rules L108 + genuine prose registers left intact;
+  scratchpad exempt. Suite green (one pre-existing wall-clock flake, passes in isolation); golden
+  34/34 zero movement; fmt + clippy clean. Deviations surfaced (not self-adjudicated): (1) F9 fix
+  location parser-not-fmt; (2) docs/README.md corrections beyond named lists (sweep-mandated);
+  (3-4) registry jargon reword + grammar regen. Weather-change implications surfaced for the
+  deviation-judge: rules-corpus-cleanup now done+merged (PR #81); `naming.md` no longer exists
+  (merged into `vocabulary.md` by ca60f0b) — residual drift is `vocabulary.md:152` (genuine
+  syntax-example bug), `vocabulary.md:108` (arguably legitimate prose), `non-oop.md:200` (TS2
+  claim); an expanded correction is now mechanically safe but NOT made — flagged per R8/R11.
+
 ## FRAGO log
 
 ## FRAGO 001 — 2026-07-16 — session-id: session_01CZ3fYLUXaJqfQnaPgUzwBQ
@@ -270,6 +295,36 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   no-test posture; forcing malloc-NULL needs privileged overcommit setup the suite lacks —
   verification.md mechanical-fix escape hatch, verified not asserted).
 - **Applied by:** re-dispatched executor amends the exit-criteria line in plan.md.
+
+## FRAGO 006 — 2026-07-16 — session-id: session_01CZ3fYLUXaJqfQnaPgUzwBQ
+- **Phase:** A4. **Classified:** deviation-judge (agent a0f52579d716768ab) — JUSTIFIED, risk-neutral
+  (administrative/citation class, same shape as FRAGO 002/004) → auto-apply + log, no signature.
+- **Delta:** A4 step 1's F9 citation "`ynz-fmt` `walker.rs` union-alias emitter" corrected to the
+  real defect site: `crates/ynz-parser/src/parser.rs` `parse_shape_decl`'s union-alias arm computed
+  `ShapeDecl.span.end` from `current_span().start` (next unconsumed token) instead of the last
+  consumed token's end — comments are trivia that never enter the token stream, so no `walker.rs`
+  edit could fix a span already wrong at the parser boundary. `ynz-parser` is Lane A
+  (zero-contention). The fmt round-trip test the step demanded still landed as specified.
+- **Applied by:** re-dispatched executor corrects A4 step 1's text in plan.md (fix-round dispatch).
+
+## FRAGO 007 — 2026-07-16 — session-id: session_01CZ3fYLUXaJqfQnaPgUzwBQ
+- **Phase:** A4 / risk rows R8+R11. **Classified:** deviation-judge (agent a0f52579d716768ab) —
+  JUSTIFIED, risk-neutral-to-risk-LOWERING → auto-apply + log, no signature.
+- **Delta:** R8/R11's "flag, do NOT edit" mitigation was forced by live contention: at authoring,
+  `2026-07-11-rules-corpus-cleanup` was a concurrently-executing session owning `non-oop.md`,
+  `naming.md`, `vocabulary.md`. That session is now DONE and MERGED on `main` (PR #81, dd9a8c1 —
+  verified an ancestor of Lane A's fork point), and `naming.md` no longer exists (merged into
+  `vocabulary.md` by ca60f0b). The forcing reality is gone; R11's own recorded TRIGGER ("route to
+  the rules-corpus-cleanup plan / Patrick") has effectively fired with that plan's closure. R8/R11
+  are amended from "contended — flag-only" to "uncontended — correct in place," and A4's scope
+  widens to correct: `.claude/rules/non-oop.md:200` area (the TS2 overload claim, presented as
+  current behavior — actively cross-referenced by the just-corrected IMP-type-system.md/REF-types.md)
+  and `.claude/rules/vocabulary.md:152` (a "✅ Correct" example reading bare `maybe User` — a genuine
+  syntax-example bug). `vocabulary.md:108` stays — legitimate prose per the IMP-maybe.md:150
+  prose-vs-syntax split. Risk-lowering: no contention exists, no Lane B file is touched, and the
+  status quo leaves corrected docs pointing readers at a stale claim.
+- **Applied by:** re-dispatched executor amends R8/R11 rows + Future Requirements + A4 text in
+  plan.md and makes the widened corrections (fix-round dispatch).
 
 ## Context-segment log
 (none yet)

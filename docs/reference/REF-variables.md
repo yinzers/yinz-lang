@@ -4,7 +4,7 @@ description: "Variables store values. Declare them with let or const."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -103,7 +103,7 @@ You cannot declare a variable without giving it a value:
 ```
 let name: string
 // COMPILE ERROR: name has no value.
-// Every variable must be initialized. Use maybe string if the value is optional.
+// Every variable must be initialized. Use maybe<string> if the value is optional.
 ```
 
 If a value might not exist, use a `maybe` type — see [Maybe Types](REF-maybe.md).

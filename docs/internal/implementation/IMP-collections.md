@@ -4,7 +4,7 @@ description: "Design rationale for Yinz's collection types (fixed<T> vs array<T>
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-04"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -43,8 +43,8 @@ Several method names chosen for plain-English readability over functional progra
 - `.filter(fn)` over `.where(fn)` — more standard, clearer to non-FP developers
 - `.limit(n)` over `.take(n)` — "limit to N results" reads like English; `.take` is FP jargon
 - `.prepend(item)` added — mirrors `.append()`, non-mutating, works on both `fixed` and `array`
-- `.get(index)` over `items[n]` — safe access returning `maybe T`; brackets are sugar for `.get()`
-- `.last()` added — mirrors `.first()`, returns `maybe T`
+- `.get(index)` over `items[n]` — safe access returning `maybe<T>`; brackets are sugar for `.get()`
+- `.last()` added — mirrors `.first()`, returns `maybe<T>`
 
 **Why**: Golden Rule 12. Every method name that requires FP background knowledge is a barrier. `.limit`, `.filter`, `.prepend` are plain English instructions anyone can guess.
 
@@ -55,9 +55,9 @@ Several method names chosen for plain-English readability over functional progra
 Brackets at a value position desugar to `.get()` (read) or `.set()` (write):
 
 ```ynz
-let p = players[3]              // sugar for players.get(3)         → maybe Player
-let s = scores["alice"]         // sugar for scores.get("alice")    → maybe number
-let c = name[0]                 // sugar for name.get(0)            → maybe string
+let p = players[3]              // sugar for players.get(3)         → maybe<Player>
+let s = scores["alice"]         // sugar for scores.get("alice")    → maybe<number>
+let c = name[0]                 // sugar for name.get(0)            → maybe<string>
 
 players[2] = newPlayer          // sugar for players.set(2, newPlayer)
 scores["bob"] = 75              // sugar for scores.set("bob", 75)
@@ -69,7 +69,7 @@ Does NOT work on: `type` instances. Types use dot access for fields and methods 
 
 **Why bracket sugar:**
 - **Familiarity:** Every JS/Python/C-family dev expects `arr[0]`. Forcing `.get(0)` everywhere creates needless friction.
-- **Safety preserved:** The sugar still returns `maybe T`. The type system enforces handling. Surface looks familiar; semantics stay safe.
+- **Safety preserved:** The sugar still returns `maybe<T>`. The type system enforces handling. Surface looks familiar; semantics stay safe.
 - **No syntax conflict with type parameters:** Different syntax, different position. `array<Player>` is a TYPE (left of equals or in a type annotation); `players[0]` is a VALUE (right of equals or in an expression). TypeScript proved this distinction works for human readers.
 
 **Reverses an earlier decision:** the original `docs/internal/implementation/IMP-collections.md` rejected `map["key"]` notation citing visual ambiguity with `array<Player>` type syntax. That argument was weaker than originally stated — TS does both fine. Reversing for consistency: brackets work universally on all four collection types for read; on map/array/fixed for write.
@@ -698,8 +698,8 @@ So: `array → set` is a real promotion (arrays are heap + variable-size already
 
 Default indexing on strings (`.get(n)` / `s[n]`) is by **Unicode code point**. Two escape valves exist for explicit access modes:
 
-- `.byteAt(n)` — `maybe int` — n-th UTF-8 byte. For parsers and protocol handling.
-- `.graphemeAt(n)` — `maybe string` — n-th grapheme cluster (what a human sees as "one character"). For text rendering and cursor positioning.
+- `.byteAt(n)` — `maybe<int>` — n-th UTF-8 byte. For parsers and protocol handling.
+- `.graphemeAt(n)` — `maybe<string>` — n-th grapheme cluster (what a human sees as "one character"). For text rendering and cursor positioning.
 
 Companion length methods:
 - `.count()` — code point count
