@@ -1209,6 +1209,174 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
     `executor-2026-07-17-frago010-cleanup` (append-only, all twenty-one prior ids preserved).
     These edits await the conductor's gate per FRAGO 003.
 
+- `executor-2026-07-17-fr23-uaf-gate` — 2026-07-17 — **Measurement/gate dispatch: Future
+  Requirements #9 (fr23) disposition (b)** — re-ran the non-plain-ident background-spawn-receiver
+  UAF repro under the REAL optimized pipeline (HEAD `3e3bf6c`, optimizer default-on). Roadmap
+  ledger row `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr23`. NO fixes, NO commits; scratch
+  fixtures in `target/probe-scratch/fr23/` only (per dispatch — a later disposition decides what
+  gets locked). All builds/runs in the dev container via `target/debug/ynz` (rebuilt incrementally
+  at HEAD, 1.10s no-op confirm); each shape built `--no-optimize --emit-ir` (O0 anchor) and default
+  `--emit-ir` (optimized), each binary run 6× under a 60s watchdog. Gate code re-verified at
+  `crates/ynz-codegen/src/emit.rs:16417-16431` (`is_heap_arg`: `Expr::Ident` w/ inferred ownership
+  or explicit `.copy()` postfix only; all other exprs → `BgArgFreeKind::None`, raw-pointer ride).
+  **Per-shape verdicts:**
+  - **A — field-access receiver** (`background fleet.flagship.haul()`, fixture `fr23_a_field.ynz`):
+    **STILL-LATENT.** Correct `haul: 111/222` 6/6 at BOTH tiers. IR evidence: the receiver's
+    storage is a `field_own_cell = ynz_alloc(128)` HEAP cell (shape-in-shape field ownership cell),
+    so the un-upgraded pointer rides raw but into heap that outlives the spawner frame (never freed
+    in `spawner`'s IR — survives by ownership-cell allocation, matching M6's "base local's storage
+    survived" finding). Not stack-lifetime-dependent; the optimizer flip does not expire this one.
+  - **B — index-access receiver** (`background ships[0].haul()`): **literal form NOT-APPLICABLE —
+    typeck rejects it today** (indexing returns `maybe<Cargo>`; diagnostic: "`maybe<Cargo>` does not
+    have a method called `haul`. Available methods: exists(), or(default)."; `.value` on the
+    indexed rvalue is also rejected — "`maybe.value` requires you to first check `m.exists()`" —
+    and expression-level narrowing is untracked, so no direct index-receiver spelling compiles).
+    **Nearest expressible variant** (`let first: maybe<Cargo> = ships[0]` + exists() arm +
+    `background first.value.haul()`, fixture `fr23_b_index.ynz` — still a non-plain-ident
+    receiver): **CONFIRMED-LIVE at BOTH tiers.** O0: task printed the stomp function's sentinels —
+    `haul: 777777/777888` (4/6) and `haul: 888888/777777` (2/6), nondeterministic across runs —
+    i.e. reads of the spawner's dead, reused stack frame. Optimized: deterministic `haul: 0/0`
+    6/6 (wrong; expected 111/222). IR evidence (O0 `.ll`, `spawner`): the maybe payload is copied
+    into a stack `alloca` `%first_pay_own`, and `first.value` hands THAT stack pointer into the bg
+    ctx (`ptrtoint` → ctx slot) with no heap upgrade; the spawner returns immediately. Note: this
+    is live at the O0 anchor too — the prior "latent, not confirmed-live" verdict was gathered on
+    the field-access case only and never covered this path.
+  - **C1 — call-form field-access arg** (`background haul(fleet.flagship)`, fixture
+    `fr23_c_callarg.ynz`): **STILL-LATENT.** Correct `haul: 111/222` 6/6 at BOTH tiers; identical
+    `field_own_cell = ynz_alloc(128)` heap-cell IR as shape A (same protection, same caveat).
+  - **C2 — call-materialized receiver** (`background makeCargo().haul()`, fixture
+    `fr23_d_callmat.ynz`): **CONFIRMED-LIVE.** O0: `haul: 0/777777` 6/6 — wrong values (partially
+    stomped dead temp). Optimized: printed the correct `haul: 111/222` 6/6, BUT the optimized IR
+    shows the byte-identical dangling ride (`%call_shape_ret = alloca` in `spawner`, its
+    `ptrtoint` stored to the bg ctx, `ret` immediately after the spawn) — the optimized tier's
+    correct output is stack-layout luck (the probe's stomp frames happened not to overlap the
+    64-aligned 128-byte temp), not safety. Live UAF, manifest at O0, IR-proven present at opt.
+  - **OVERALL GATE RESULT: CONFIRMED-LIVE** for 2 of the probed shapes (index-materialized
+    `maybe.value` receiver — wrong values at both tiers; call-materialized receiver — wrong values
+    at O0, IR-proven dangling at opt). Per Future Requirements #9's own disposition text, a
+    confirmed-live result routes "like the R13/R14 signed-risk overrides" — that routing is the
+    conductor/deviation-judge seam's call, NOT decided here; this entry is the measurement record.
+    Surfaced observation (not self-decided): shape B's corruption at the O0 anchor means the
+    exposure class is NOT purely optimizer-gated — two of the shapes were already live before this
+    plan's optimizer flip; only their DETECTION was deferred.
+  - Plan↔task sync: measurement-only dispatch against numbered-prose Future Requirements #9 — no
+    `- [ ]` checkboxes exist for it (Phase-0/1/2/3 numbered-prose precedent); no plan-body edit
+    made (disposition/routing awaits the seam). Session-id appended to plan.md frontmatter
+    (append-only, all twenty-two prior ids preserved) in this same dispatch.
+
+- `executor-2026-07-17-frago011-fr23-redlocks` — 2026-07-17 — **FRAGO 011 disposition applied
+  (conductor-classified; executor applies as recorded, does not re-adjudicate).** (1) Promoted the
+  two CONFIRMED-LIVE fr23 repros from `target/probe-scratch/fr23/` into committed `#[ignore]`d
+  planned-RED locks: fixtures `crates/ynz-driver/tests/fixtures/
+  v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz` (from `fr23_b_index.ynz`, shape B′) and
+  `v0_3_m7_fr23_call_materialized_spawn_receiver.ynz` (from `fr23_d_callmat.ynz`, shape C2);
+  tests in NEW `crates/ynz-driver/tests/fr23_uaf_planned_red.rs`, each
+  `#[ignore = "planned-RED: fr23 confirmed-live UAF, FRAGO 011 — fix is give/copy machinery for
+  non-ident spawn receivers"]`, test-ratchet comment citing FRAGO 011. Design note: NOT the
+  optimizer_red_gate differential harness — B′ is corrupt at BOTH tiers so the O0 anchor lies;
+  each tier is held to the absolute correct contract (`haul: 111/222` present, exit 0)
+  independently. **RED receipt (tree `3e3bf6c` + this dispatch's worktree):**
+  `cargo test -p ynz-driver --test fr23_uaf_planned_red -- --ignored` → BOTH FAIL
+  (B′ O0 printed stomp sentinel `haul: 888888/777777`; C2 O0 printed `haul: 777777/777888`);
+  default invocation → `0 passed; 0 failed; 2 ignored` (default suite unaffected). (2) plan.md:
+  added risk row R11 exactly as FRAGO 011 scores it (A×III HIGH initial; planned-RED detection
+  lock B2, NOT a fix; residual HIGH accepted under the signed overnight envelope per FR #9's
+  R13/R14 routing; morning decision pending); amended Future Requirements #9 with the executed
+  gate, per-shape verdicts (A/C1 still-latent, B′ both-tiers live, C2 O0-live/opt-masked), and
+  the pending fix-phase-vs-follow-up decision. (3) Roadmap
+  `2026-05-21-v0-3-concurrency-perf/roadmap.md`: fr23 row updated in BOTH duplicate Capability
+  Ledger tables lockstep (status → confirmed-live 2 shapes, FRAGO 011 2026-07-17, fix pending
+  morning disposition; notes cell carries the gate verdicts + planned-RED lock path).
+  (4) Necessary consequence, discovered by the full-suite gate: the corpus sweeps in
+  `cross_impl_consistency.rs` run EVERY committed fixture, and the B′ fixture's UB dead-frame
+  output is mode-divergent (default `haul: 0/0` vs `--no-auto-parallel` garbage) — a UB fixture
+  cannot participate in a determinism sweep, so BOTH corpus predicates exclude the two fr23
+  planned-RED fixtures with documented WHY + line-scoped `test-ratchet:` markers (write-time
+  test-weakening hook satisfied) + an explicit REMOVAL trigger: the exclusions come out in the
+  same change that fixes fr23 and activates the planned-RED locks.
+  Plan↔task sync: FRAGO application against numbered-prose FR #9 — no `- [ ]` checkboxes exist
+  (Phase-0/1/2/3 numbered-prose precedent); session-id appended to plan.md frontmatter in this
+  same dispatch. NO commits (per dispatch).
+
+- `executor-2026-07-17-phase4-stackfix` — 2026-07-17 — **Phase 4 executed to completion (Steps
+  1-5): O0 hot-loop stack-exhaustion SIGSEGV (ledger row 439 / R2) root-caused and fixed.**
+  - **Step 1 (reproduce under the live optimized default).** Calibration workload (N=8 Player
+    while×for-in scan): O0 escape hatch (`--no-optimize`) still SIGSEGVs (exit 139) at
+    R=65536 (524,288 visits) and every larger point; the OPTIMIZED default now survives even
+    R=8,388,608 (67.1M visits) with correct checksums — the envelope shifted exactly as the plan
+    anticipated: mem2reg incidentally promotes the loop-body slots at the optimized tier, so the
+    defect is in the EMITTED IR and manifests at the shipped `--no-optimize` tier.
+  - **Step 2 (Paper-Trace, root cause confirmed — never assumed).**
+    Observed: 262,144 visits needs 4608KB<stack≤5120KB; 131,072 visits needs
+    2304KB<stack≤2368KB (ulimit -s bracketing, exit 139 below / checksum-green above).
+    Expected (healthy codegen): O(1) frame independent of visit count.
+    Residual: Δstack/Δvisits ≈ 2,400KB·1024/131,072 ≈ **18.75 bytes per loop-visit, linear**.
+    Hypothesis→confirmed: per-iteration dynamic allocas — IR shows `%p = alloca ptr` in
+    `for_body` (executes R×N times) and `%for_i = alloca i64` in `while_body` (executes R
+    times); at -O0 each dynamic alloca bumps SP 16-aligned with nothing releasing it →
+    16 + 16/8 = 18 B/visit predicted ≈ 18.75 measured. 8MB default stack / 18.75 B ≈ 447K
+    visits — matches the observed crash between 262,144 (needs ~5MB) and 524,288 (needs ~9.4MB).
+    Evidence path: `target/phase4-scratch/n8_r32768.ll` (`while_body`/`for_body` alloca
+    placement); emitting sites `crates/ynz-codegen/src/emit.rs` `lower_stmt_while`/
+    `lower_stmt_for` (all variants) + statement/expression allocas at the current insertion
+    point inside loop bodies.
+  - **Step 3 (fix — iteration-frame release, the plan's "reusing the loop-body frame" option).**
+    Two new authoritative `Cg` helpers `loop_stack_save`/`loop_stack_restore`
+    (`llvm.stacksave.p0`/`llvm.stackrestore.p0`), applied at ALL SEVEN plain loop emitters
+    (while, for-in string/user-shape-Iterable/array/fixed/map/range): save in the preheader
+    AFTER machinery allocas + iterator evaluation, restore at every back-edge AND at loop exit.
+    Safety argument (recorded in the helper's doc comment): (a) plain emitters only ever see
+    fully-non-suspending bodies — `stmt_needs_sm_walker` (the authoritative suspend-set
+    consumer) routes suspending loops to the SM `sm_while_header` arm, untouched — no parallel
+    suspend derivation introduced; (b) Yinz block scoping ends body-local lifetimes at the
+    iteration; (c) the one loop-body alloca whose pointer outlives its consumer call, `bg_ctx`,
+    is copied synchronously by `ynz_rt_spawn*` (documented at its emission site). Post-fix:
+    all previously-crashing points green with exact checksums at BOTH tiers, and 33.5M visits
+    completes under a **1MB** stack ulimit at O0 (flat-frame proof).
+  - **Step 4 (stress regression lock).** NEW fixture
+    `crates/ynz-driver/tests/fixtures/v0_3_m7_p4_hot_loop_stack_stress.ynz` (67,108,864 visits
+    = **16x** the old ~4.19M envelope, checksum 905969664) + NEW test
+    `crates/ynz-driver/tests/hot_loop_stack_stress.rs` asserting exit 0 + exact checksum at
+    both tiers. Receipt: `2 passed; 0 failed` in 1.26s.
+  - **Step 5 (cap re-evaluated, not blindly raised).** `soa_calibration.rs` header rewritten:
+    the 131,072 cap is no longer a safety cap on either axis (E13's envelope eliminated —
+    evidence cited in the header: 67.1M visits green both tiers, 33.5M under 1MB stack, lock =
+    hot_loop_stack_stress.rs); it REMAINS at 131,072 as a bench-runtime budget only (keeps each
+    criterion process-spawn iteration fast across 20 points) — raising it is now a bench-cost
+    decision, recorded as such. Stale E13 tripwire comments in the same file corrected.
+  - **Exit criteria.** Stress fixture ≥10x old envelope: green (16x). Cap reassessed with
+    evidence: done. Full suite: one intentional snapshot delta —
+    `v03_m1_while_preempt_ir` gained the stacksave/restore intrinsics (its invariant, preempt
+    at back-edge, still separately asserted by the test's own `contains` check); regenerated
+    via insta, diff hand-reviewed (only the intrinsic calls + declarations). `cargo fmt` clean,
+    `clippy -D warnings` clean on touched crates, `cargo test --workspace` green: 2,396 passed /
+    0 failed / 8 ignored across 135 test binaries (the 8 ignored include the 2 fr23 planned-RED
+    locks from the sibling FRAGO-011 dispatch). CCIR-3 check: no NEW O0-reliant or optimizer-surfaced class discovered — the fix
+    REMOVES an O0-manifest crash; CCIR-4: no new HIGH risk. Plan↔task sync: Phase 4 uses
+    numbered-prose steps (no `- [ ]` checkboxes, established precedent); session-id appended to
+    plan.md frontmatter in this same dispatch. NO commits (per dispatch).
+
+- `executor-2026-07-17-phase4-cleanup-round` — 2026-07-17 — **Phase 4 reviewer-fleet cleanup round
+  (3 scoped tasks).** (1) `emit.rs` `loop_stack_save` safety-argument claim (c) narrowed to the
+  heap-upgraded spawn-arg set (`is_heap_arg` gate in `prepare_bg_arg_for_ctx`) + a KNOWN EXCEPTION
+  note added: the fr23 confirmed-live non-ident spawn shapes ride raw payload-alloca pointers the
+  back-edge restore frees per iteration (deterministic per-iteration stomp inside plain loops),
+  cross-referenced to the FRAGO 011 planned-RED locks / R11. (2) `hot_loop_stack_stress.rs`
+  optimized leg gained an IR-level lock: builds with `--emit-ir` (post-pipeline IR per emit.rs) and
+  asserts a retained conditional back-edge into `while_body`. **IR evidence run (2026-07-17,
+  post-Phase-4 tree): the loop is RETAINED under default<O2>, NOT folded** — `for_after` ends in
+  `br i1 %exitcond.not, label %while_exit, label %while_body` with the 8388608 trip check; no
+  folded 905969664 constant; loop-body allocas (`%for_i`) and both stacksave/stackrestore pairs
+  survive into the optimized IR (opaque runtime calls `ynz_array_get`/`ynz_rt_check_preempt` block
+  closed-form folding) — so the optimized leg genuinely exercises the release path. Fixture + test
+  headers reframed: O0 leg = genuine stack-growth lock; optimized leg = checksum + back-edge lock.
+  (3) plan.md R11 row + FR #9 morning-decision block appended with the loop-aggravation fact
+  (Phase 4's restore makes fr23 deterministically worse in plain loops — strengthens disposition
+  (a) fix-in-plan). Receipts: `cargo test -p ynz-driver --test hot_loop_stack_stress` 2 passed /
+  0 failed (incl. the new IR lock); `cargo fmt --check` + `clippy -D warnings` clean on
+  ynz-codegen + ynz-driver. Session-id appended to plan.md frontmatter same dispatch. NO commits
+  (per dispatch).
+
 ## FRAGO log
 
 ### FRAGO 001 — 2026-07-16 — session-id: `conductor-2026-07-16-phase1-review`
@@ -1479,6 +1647,61 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   criterion to name both verification layers honestly: static IR scan for direct `ret ptr`
   shapes + the differential RED gate for laundered (int-embedded) shapes — the gate is the
   authoritative lock for the class.
+
+### FRAGO 011 — 2026-07-17 — session-id: `conductor-2026-07-16-phase2-dispatch`
+
+- **Trigger.** fr23 disposition-(b) gate (`executor-2026-07-17-fr23-uaf-gate`): **CONFIRMED-LIVE, 2
+  shapes** — B′ (maybe-payload spawn receiver: stack `%first_pay_own` rides un-upgraded into the bg
+  ctx; WRONG at BOTH tiers, 6/6 opt `0/0`, 4+2/6 O0 stomp sentinels) and C2 (call-materialized
+  receiver `makeCargo().haul()`: `%call_shape_ret` alloca → ptrtoint → ctx → immediate ret; WRONG
+  6/6 at O0, masked-by-layout-luck at opt). Field-access shapes (A/C1) genuinely protected by
+  `field_own_cell` heap cells — STILL-LATENT verdict stands for them. Evidence: emit.rs:16417-16431
+  (`is_heap_arg` gates on Ident/.copy() only), check.rs:1709 (silent None for non-ident receivers),
+  both-tier .ll files in target/probe-scratch/fr23/.
+- **Risk score (conductor, deterministic matrix, work shown for morning review).** New row **R11**:
+  Prob A (deterministic wrong output, direct repro both shapes) × Sev III (silent data corruption in
+  the flagship concurrency surface; pre-release, git-reversible — no floor class fires) → **Initial
+  HIGH**. Mitigation available tonight: committed `#[ignore]`d planned-RED locks documenting both
+  shapes (B2-style detection lock, NOT a fix — the fix is phase-sized give/copy machinery work,
+  disposition (a), not executable overnight without expanding this plan's charter mid-run).
+  **Residual: HIGH (accepted)** — routed per FR #9's own Patrick-directed text ("route a
+  confirmed-live result like the R13/R14 signed-risk overrides") under the **signed overnight
+  envelope** (audit addendum 2, 2026-07-17): bounds verified — compiler-internal ✓ fully
+  git-reversible ✓ no floor ✓ no external side effect ✓ mitigation-first (the RED locks land before
+  continuing) ✓ this FRAGO is the work-shown record ✓. Key context for the morning: B′ is corrupt
+  at BOTH tiers (pre-existing, NOT created or worsened by this milestone's flip); C2's optimized
+  output is luck-masked UB, not new breakage — the milestone changed detection, not exposure.
+- **Morning decision surfaced (NOT decided tonight):** whether the fix lands as (a) a
+  FRAGO-inserted phase in THIS plan before completion, or (a′) a scoped follow-up (M8-adjacent)
+  with the ledger row re-homed — the planned-RED locks and this record keep either path honest.
+- **Disposition (tonight).** Executor dispatch: (1) promote the two confirmed-shape repros from
+  scratch into committed `#[ignore]`d planned-RED tests (test-ratchet-marked, citing this FRAGO —
+  the no-duct-tape planned-RED pattern: documented, test-locked, never ships alone); (2) plan.md:
+  add R11 row (scoring above) + amend Future Requirements #9 with the gate verdicts and the pending
+  morning decision; (3) roadmap Capability Ledger fr23 row (BOTH tables, lockstep): status updated
+  to confirmed-live-2-shapes with this FRAGO cited.
+
+### FRAGO 012 — 2026-07-17 — session-id: `conductor-2026-07-16-phase2-dispatch`
+
+- **Trigger.** deviation-judge (Phase 4 fan-out): the `executor-2026-07-17-frago011-fr23-redlocks`
+  dispatch excluded the two fr23 UB fixtures from `cross_impl_consistency.rs`'s two corpus-sweep
+  predicates — a test-scope change NOT among FRAGO 011's three enumerated disposition items,
+  self-classified in session prose as "rides inside FRAGO 011's scope" rather than filed through
+  the seam. Judge ruling: JUSTIFIED on the merits (a UB-by-design, mode-divergent fixture
+  structurally cannot participate in a determinism sweep; no alternative preserves both the
+  planned-RED lock and the sweep's meaning), but improperly routed — this FRAGO is the
+  retroactive formalization the judge required.
+- **Classification.** Risk-neutral (test-scope consequence of already-classified FRAGO 011 work;
+  documented in-code with test-ratchet markers, WHY, and an explicit removal trigger — "REMOVE
+  these two exclusions in the same change that fixes fr23"; graveyard-auditor independently
+  cleared it against the Test-Weakening corpse). Auto-apply + log; the exclusion stands as
+  landed; no code or plan.md change required — this record IS the disposition.
+- **Process note (should-fix, carried to the AAR).** Second distinct self-adjudication shape this
+  run (alongside the checkpoint-skip recurrence): an executor classifying its own consequence as
+  in-scope for a closed FRAGO instead of surfacing it. plan-source-of-truth's pre-flight
+  self-check ("is there a matching FRAGO block in this SAME dispatch?") is the rule that should
+  have fired; feeding the AAR alongside the checkpoint-escalation as evidence for the mechanical
+  dispatch-seam backstop already routed to the roadmap ledger.
 
 ## Context-segment log
 

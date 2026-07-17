@@ -2274,6 +2274,78 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(slot)
     }
 
+    /// Capture the stack pointer at a loop's preheader via `llvm.stacksave.p0`.
+    ///
+    /// Fix for the general hot-loop O0 stack-exhaustion SIGSEGV (roadmap ledger row 439,
+    /// v0.3-M7 Phase 4 / risk R2): statement- and expression-level allocas emitted inside
+    /// a loop body execute once per ITERATION, and at `-O0` (the `--no-optimize` escape
+    /// hatch) nothing releases them — the frame grows ~16 bytes per dynamic alloca per
+    /// iteration until the 8 MB stack guard faults (measured: ~18.75 B/visit on the
+    /// calibration workload; SIGSEGV between 262,144 and 524,288 visits). The optimized
+    /// default only survives because mem2reg incidentally promotes the slots — the
+    /// emitted IR itself is the defect.
+    ///
+    /// The pairing contract (`loop_stack_restore` at every back-edge AND at loop exit)
+    /// releases each iteration's allocas, so the loop reuses one iteration-frame instead
+    /// of accumulating one per trip. SAFE because (a) the plain loop emitters only ever
+    /// see fully-non-suspending bodies — `stmt_needs_sm_walker` (the authoritative
+    /// suspend-set consumer) routes any suspending loop to the SM `sm_while_header` arm,
+    /// which never uses this; (b) Yinz block scoping ends body-local lifetimes at the
+    /// iteration; (c) for the HEAP-UPGRADED spawn-arg set — plain-ident args with
+    /// inferred give/copy ownership and explicit `.copy()` args, the `is_heap_arg` gate
+    /// in `prepare_bg_arg_for_ctx` — the only in-loop alloca whose pointer legitimately
+    /// outlives the call consuming it is `bg_ctx` itself, and `ynz_rt_spawn*` copies
+    /// those bytes synchronously before returning (documented at its emission site).
+    ///
+    /// KNOWN EXCEPTION to (c) — fr23 (FRAGO 011, risk row R11): the confirmed-live
+    /// non-ident spawn receiver/arg shapes (maybe-payload and call-materialized
+    /// receivers) fall through `is_heap_arg` as `BgArgFreeKind::None` and ride RAW
+    /// payload-alloca pointers into the task ctx. Inside a plain loop, this back-edge
+    /// restore frees that alloca every iteration — the pre-existing fr23 UAF becomes a
+    /// deterministic per-iteration stomp (strictly worse than the whole-frame-lifetime
+    /// ride it was before this fix) until the give/copy machinery for non-ident spawn
+    /// receivers lands. Locked by the planned-RED tests
+    /// `crates/ynz-driver/tests/fr23_uaf_planned_red.rs` (fixtures
+    /// `v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz` /
+    /// `v0_3_m7_fr23_call_materialized_spawn_receiver.ynz`).
+    ///
+    /// The save must be emitted AFTER the loop's own machinery allocas and iterator
+    /// evaluation (e.g. a `fixed_arr` literal buffer the loop reads every iteration) —
+    /// restore only releases allocas created after the save point.
+    fn loop_stack_save(&self) -> Result<PointerValue<'ctx>, String> {
+        let f = match self.module.get_function("llvm.stacksave.p0") {
+            Some(f) => f,
+            None => {
+                let ty = self.ptr().fn_type(&[], false);
+                self.module.add_function("llvm.stacksave.p0", ty, None)
+            }
+        };
+        self.builder
+            .build_call(f, &[], "loop_sp")
+            .map_err(|e| format!("loop stacksave: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "llvm.stacksave returned void".to_string())
+            .map(|v| v.into_pointer_value())
+    }
+
+    /// Release the current iteration's allocas by restoring the stack pointer captured
+    /// by `loop_stack_save` — emitted at every loop back-edge and at loop exit. See
+    /// `loop_stack_save` for the full rationale and safety argument.
+    fn loop_stack_restore(&self, sp: PointerValue<'ctx>) -> Result<(), String> {
+        let f = match self.module.get_function("llvm.stackrestore.p0") {
+            Some(f) => f,
+            None => {
+                let ty = self.ctx.void_type().fn_type(&[self.ptr().into()], false);
+                self.module.add_function("llvm.stackrestore.p0", ty, None)
+            }
+        };
+        self.builder
+            .build_call(f, &[sp.into()], "")
+            .map_err(|e| format!("loop stackrestore: {e}"))?;
+        Ok(())
+    }
+
     /// Build an alloca holding a `maybe<T>` with `has_value = 0`.
     fn build_maybe_none(&self) -> Result<PointerValue<'ctx>, String> {
         let slot = self
@@ -13901,6 +13973,8 @@ fn lower_stmt_while<'ctx>(
     let body_bb = cg.append_block("while_body");
     let exit_bb = cg.append_block("while_exit");
 
+    // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+    let loop_sp = cg.loop_stack_save()?;
     cg.builder
         .build_unconditional_branch(header_bb)
         .map_err(|e| format!("{e}"))?;
@@ -13920,12 +13994,14 @@ fn lower_stmt_while<'ctx>(
     }
     if !is_block_terminated(cg) {
         emit_loop_preempt(cg)?;
+        cg.loop_stack_restore(loop_sp)?;
         cg.builder
             .build_unconditional_branch(header_bb)
             .map_err(|e| format!("{e}"))?;
     }
 
     cg.builder.position_at_end(exit_bb);
+    cg.loop_stack_restore(loop_sp)?;
     Ok(())
 }
 
@@ -13962,6 +14038,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("si_body");
         let after_bb = cg.append_block("si_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14013,6 +14091,7 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -14020,6 +14099,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -14037,6 +14117,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("uf_body");
         let after_bb = cg.append_block("uf_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14095,12 +14177,14 @@ fn lower_stmt_for<'ctx>(
         cg.locals.remove(var);
         if !is_block_terminated(cg) {
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
         }
 
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -14133,6 +14217,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("for_body");
         let after_bb = cg.append_block("for_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14196,6 +14282,7 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -14203,6 +14290,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -14229,6 +14317,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("ff_body");
         let after_bb = cg.append_block("ff_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14279,6 +14369,7 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -14286,6 +14377,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -14337,6 +14429,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("mfor_body");
         let after_bb = cg.append_block("mfor_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14406,12 +14500,14 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
         }
 
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -14474,6 +14570,8 @@ fn lower_stmt_for<'ctx>(
     let body_bb = cg.append_block("for_body");
     let exit_bb = cg.append_block("for_exit");
 
+    // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+    let loop_sp = cg.loop_stack_save()?;
     cg.builder
         .build_unconditional_branch(header_bb)
         .map_err(|e| format!("{e}"))?;
@@ -14529,12 +14627,14 @@ fn lower_stmt_for<'ctx>(
             .build_store(counter_slot, ctr_next)
             .map_err(|e| format!("{e}"))?;
         emit_loop_preempt(cg)?;
+        cg.loop_stack_restore(loop_sp)?;
         cg.builder
             .build_unconditional_branch(header_bb)
             .map_err(|e| format!("{e}"))?;
     }
 
     cg.builder.position_at_end(exit_bb);
+    cg.loop_stack_restore(loop_sp)?;
     cg.locals.remove(var);
     Ok(())
 }

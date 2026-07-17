@@ -24,13 +24,24 @@ define noundef i32 @main() local_unnamed_addr {
 entry:
   tail call void @ynz_siphash_init()
   tail call void @ynz_rt_init()
+  %loop_sp = tail call ptr @llvm.stacksave.p0()
   tail call void @ynz_rt_check_preempt()
+  tail call void @llvm.stackrestore.p0(ptr %loop_sp)
   tail call void @ynz_rt_check_preempt()
+  tail call void @llvm.stackrestore.p0(ptr %loop_sp)
   tail call void @ynz_rt_check_preempt()
+  tail call void @llvm.stackrestore.p0(ptr %loop_sp)
   %int_str = tail call ptr @ynz_int_to_string(i64 0)
   %puts = tail call i32 @puts(ptr nonnull dereferenceable(1) %int_str)
   tail call void @ynz_rt_shutdown()
   ret i32 0
 }
 
+; Function Attrs: mustprogress nocallback nofree nosync nounwind willreturn
+declare ptr @llvm.stacksave.p0() #1
+
+; Function Attrs: mustprogress nocallback nofree nosync nounwind willreturn
+declare void @llvm.stackrestore.p0(ptr) #1
+
 attributes #0 = { nofree nounwind }
+attributes #1 = { mustprogress nocallback nofree nosync nounwind willreturn }

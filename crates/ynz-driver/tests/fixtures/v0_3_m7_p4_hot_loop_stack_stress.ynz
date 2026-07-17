@@ -1,0 +1,52 @@
+// v0.3-M7 Phase 4 stress regression fixture — hot-loop O0 stack exhaustion
+// (roadmap ledger row 439 / plan risk R2, absorbed by this plan).
+//
+// 8,388,608 while-reps x 8 for-in visits = 67,108,864 total loop-visits — 16x past
+// the old ~4.19M-visit crash envelope (and 128x past the N=8 O0 SIGSEGV point of
+// 524,288 visits measured 2026-07-17). Pre-fix, per-iteration loop-body allocas grew
+// the stack ~18.75 bytes/visit at -O0 with nothing releasing them, faulting the 8 MB
+// guard; the fix releases each iteration's frame via llvm.stacksave/stackrestore at
+// every plain-loop back-edge (emit.rs `loop_stack_save`/`loop_stack_restore`).
+//
+// Checksum contract: acc = reps * 3 * N(N+1)/2 = 8388608 * 3 * 36 = 905969664.
+// The driving test (hot_loop_stack_stress.rs) asserts this EXACT stdout at both
+// tiers, but the two legs lock different things: the `--no-optimize` O0 escape hatch
+// is the GENUINE stack-growth lock (where the per-iteration alloca growth faulted);
+// the optimized-default leg is a run-level checksum plus an IR back-edge lock proving
+// the default pipeline still retains the loop (and its stacksave/stackrestore release
+// path) rather than folding it closed-form. A wrong checksum is silent corruption; a
+// non-zero exit is the crash class.
+
+shape Player {
+  x: int
+  y: int
+  dx: int
+  dy: int
+  health: int
+  stamina: int
+  gold: int
+  level: int
+}
+
+function entrypoint() -> nothing {
+  let players: array<Player> = [
+    { x: 1, y: 2, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
+    { x: 2, y: 4, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
+    { x: 3, y: 6, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
+    { x: 4, y: 8, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
+    { x: 5, y: 10, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
+    { x: 6, y: 12, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
+    { x: 7, y: 14, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 },
+    { x: 8, y: 16, dx: 1, dy: 1, health: 100, stamina: 50, gold: 7, level: 3 }
+  ]
+  let reps: int = 8388608
+  let r: int = 0
+  let acc: int = 0
+  while (r < reps) {
+    for (p in players) {
+      acc = acc + p.x + p.y
+    }
+    r = r + 1
+  }
+  print(acc.toString())
+}

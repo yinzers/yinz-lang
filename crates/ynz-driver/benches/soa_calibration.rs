@@ -9,23 +9,30 @@
 // two, once per layout mode via the harness-only YNZ_SOA_FORCE override (D8).
 //
 // Every workload binary passes three gates BEFORE it is benched:
-//   1. checksum — one run must print exactly R·3·N(N+1)/2 (E13 tripwire: the
-//      pre-existing O0 stack-growth SIGSEGV corrupts nothing silently here);
+//   1. checksum — one run must print exactly R·3·N(N+1)/2 (correctness tripwire;
+//      historically also the E13 stack-growth-SIGSEGV canary — fixed, see below);
 //   2. byte-identical stdout across the two layout modes (the dual-mode oracle);
 //   3. IR gate — the soa-mode .ll must contain the SoA lowering symbols
 //      (soa_ctor/soa_new) and the aos-mode .ll must contain ZERO (the M3d
 //      silent-decline tripwire; without it this would measure AoS vs AoS).
 //
 // TOTAL_VISITS is held constant across N so per-point totals compare per-visit
-// cost directly; R = TOTAL_VISITS / N. The 131072 cap is risk E13's mitigation:
-// the crash envelope is 2-dimensional (visits AND for-in loop entries), per the
-// corrected segment-3 bracket in soa-threshold-raw-2026-07-04.md — on a healthy
-// toolchain, N=8/R=65536 (524,288 visits) SIGSEGVs while N=512/R=1000 (512,000
-// visits) and N=8/R=32768 (262,144 visits) both pass clean. (The earlier
-// "SIGABRT at 262144 visits at N=8" reading was the stale-runtime-archive bug,
-// FRAGO 018 — not this stack-growth class.) 131072 visits keeps BOTH axes at
-// proven-good points (max entries = 16384, at N=8). Do NOT raise either axis
-// until the underlying stack-growth bug is fixed (plan Future Requirements #13).
+// cost directly; R = TOTAL_VISITS / N.
+//
+// Cap re-evaluated 2026-07-17 (v0.3-M7 Phase 4): the underlying hot-loop O0
+// stack-growth SIGSEGV (roadmap ledger row 439 / risk E13's crash envelope —
+// historically N=8/R=65536 = 524,288 visits SIGSEGV'd at -O0) is FIXED: plain-loop
+// back-edges now release each iteration's allocas via llvm.stacksave/stackrestore
+// (ynz-codegen/src/emit.rs `loop_stack_save`/`loop_stack_restore`). Fresh evidence:
+// N=8/R=8,388,608 (67.1M visits — 16x the old ~4.19M envelope, 128x the old N=8
+// crash point) runs green with the exact checksum at BOTH tiers, and 33.5M visits
+// completes under a 1 MB stack ulimit at -O0 (flat frame). Permanent lock:
+// crates/ynz-driver/tests/hot_loop_stack_stress.rs. 131,072 therefore remains ONLY
+// as a bench-runtime budget (it keeps each criterion process-spawn iteration fast
+// across all 20 points) — no longer a safety cap on either axis; raising it is a
+// bench-cost decision, not a crash-envelope one. (The earlier "SIGABRT at 262144
+// visits at N=8" reading was the stale-runtime-archive bug, FRAGO 018 — not this
+// stack-growth class.)
 //
 // Each criterion iteration spawns the compiled binary; spawn overhead is identical
 // across modes so it cancels in the crossover comparison, and the `overhead`
@@ -45,7 +52,8 @@ use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 
-/// E13 cap: total element visits per process run (2-axis rationale in header).
+/// Total element visits per process run — a bench-runtime budget since the v0.3-M7
+/// Phase 4 stack-growth fix (re-evaluation record + evidence in the header).
 const TOTAL_VISITS: i64 = 131_072;
 
 /// Calibration points: powers of two bracketing SOA_SIZE_THRESHOLD = 64.
@@ -142,7 +150,8 @@ fn run_once_checked(bin: &Path, expected: i64) -> String {
     let out = Command::new(bin).output().expect("spawn workload binary");
     assert!(
         out.status.success(),
-        "workload {} exited non-zero ({:?}) — E13 tripwire: is the visit count over the cap?",
+        "workload {} exited non-zero ({:?}) — crash-class regression (row-439 stack bug \
+         is fixed and locked by hot_loop_stack_stress.rs; investigate, don't lower the cap)",
         bin.display(),
         out.status
     );
