@@ -3,7 +3,7 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround", "executor-2026-07-17-phase6-designnote", "executor-2026-07-17-phase6-transform", "executor-2026-07-17-phase6-fixloop-determinism", "executor-2026-07-17-phase6-review-closeout", "executor-2026-07-17-phase7-ab-harness", "executor-2026-07-17-phase7-rust-equiv", "executor-2026-07-17-phase7-benchdedup-fixround"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround", "executor-2026-07-17-phase6-designnote", "executor-2026-07-17-phase6-transform", "executor-2026-07-17-phase6-fixloop-determinism", "executor-2026-07-17-phase6-review-closeout", "executor-2026-07-17-phase7-ab-harness", "executor-2026-07-17-phase7-rust-equiv", "executor-2026-07-17-phase7-benchdedup-fixround", "executor-2026-07-17-phase8-final-reconciliation", "executor-2026-07-17-phase8-fixround", "executor-2026-07-17-phase8-fixround2", "executor-2026-07-17-phase8-fixround3", "executor-2026-07-18-soa-lint-testfix"]
 created_at: "2026-07-04"
 updated_at: "2026-07-17"
 metadata:
@@ -775,6 +775,28 @@ after 3 and 4.
 
 #### Phase 8 — Documentation, Registry, and Roadmap Reconciliation
 
+**DONE (fix-loop round `executor-2026-07-17-phase8-fixround3`, closing prior rounds
+`executor-2026-07-17-phase8-fixround`/`executor-2026-07-17-phase8-fixround2` and a first-pass dispatch
+`executor-2026-07-17-phase8-final-reconciliation`):** all 5 steps below complete. The first pass left
+5 real gaps (registry entry never touched; CHANGELOG cited the stale M5-era ~3.3x figure, omitted the
+Rust-parity-gap disclosure, and falsely claimed loop-free-recursion starvation Fixed; roadmap
+§Milestone 7 status text left stale; ledger row 442 missed in both Capability Ledger tables), each
+confirmed by four independent review lenses (code-reviewer, rules-compliance, acceptance-verifier,
+deviation-judge) and closed in the first fix-loop round. Two subsequent narrow fix rounds each caught
+one more stale "optimizer does not run by default" instance a prior round's fix missed a sibling of
+(`fixround2`: the `array-using-soa-layout` lint's `why_template`, plus a `Feature Registry Entries`
+subsection gap and a CHANGELOG range-vs-scalar inconsistency). `fixround3` closed the whack-a-mole
+pattern with a genuinely exhaustive, paraphrase-aware repo-wide grep sweep (not another single-string
+fix): fixed the `array-using-soa-layout` lint's now-self-contradicting COMMENT block (registry entry's
+`why_template` was fixed in `fixround2` but the comment above it was not) and
+`docs/internal/implementation/IMP-collections.md`'s "Honest performance provenance (E14)" section
+(stale M5-era present-tense claim, now marked explicitly historical/pre-M7 with the current shipped
+reality stated up top); confirmed via broad multi-phrasing grep across the whole repo that no further
+live instances remain — every other hit is legitimate historical record (dated bench/audit reports,
+archived-plan Mission text, CHANGELOG's own dated M5 section) or unrelated (kernel-mode diagnostics,
+dead-code comments, the not-yet-shipped `ynz build --release` CLI flag). See `audit.md`'s Session log
+for all four dispatches' full accounts.
+
 - **Task + purpose:** Close the loop — CHANGELOG, feature registry (if Phase 6 deferred call-site
   checks), and the roadmap's milestones list + **BOTH** Capability Ledger tables (add M7, reconcile
   rows 438–443 per §Roadmap Reconciliation below).
@@ -997,6 +1019,11 @@ after 3 and 4.
   round: it gates the compile-time `YNZ_PREEMPT_CALLSITE_CHECKS` toggle — a compiler-internal
   mechanism with no user-typeable syntax — matching the sibling
   `cooperative-preemption-back-edge-yield` entry's classification on the identical topic).
+- The now-shipped-for-real back-edge yield's stale `[[deferred_tooling_feature]]` entry
+  (`cooperative-preemption-back-edge-yield`, describing the pre-M7 no-op stub): **modified** — retired
+  to a comment-only historical note (mirroring the registry's existing `ec-wrapper-collect-on-completion`
+  retirement precedent), since Phase 6 shipped the real loop back-edge poll-yield mechanism it deferred.
+  **Executed 2026-07-17** (Phase 8 fix-loop round).
 - `--no-optimize` (CLI flag) and `YNZ_OPT_FORCE` (dev/bench env var): **no registry entry** — mirrors
   the existing precedent already set by `--no-auto-parallel`/`YNZ_SOA_FORCE`, neither of which carry
   registry entries (CLI flags and internal test-only env vars are not language keywords, jargon,

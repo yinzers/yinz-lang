@@ -1963,7 +1963,230 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
     `## Context-segment log` not touched (conductor-owned). Session-id appended to plan.md
     frontmatter in the same action as this entry.
 
+- `executor-2026-07-17-phase8-final-reconciliation` — 2026-07-17 — **Phase 8 (Steps 1-5), first
+  pass** (low-effort model tag per plan.md's `(general/mechanical, floor, medium)` dispatch; own
+  `## Context-segment log` entry already recorded by the conductor — this entry backfills the
+  matching Session-log account, per this plan's own convention that every dispatch gets one).
+  - **Step 1 (roadmap Milestone 7 section + milestones list):** confirmed `v0-3-m7-optimizer-pipeline`
+    already present in the roadmap frontmatter `milestones:` list (added at plan-authoring time,
+    2026-07-04) — no list edit needed. Did NOT update the Milestone 7 section's own status/Value-
+    delivered prose, which was left reading "paused pending M6 merge" / future-tense scope text even
+    though all 8 phases had by then executed — a gap this fix round's Fix 3 corrected.
+  - **Step 2 (Capability Ledger rows 438-443, both tables):** annotated rows 438
+    (authoritative-derivation guard), 440 (ABI-version-checked archive), and 441 (int-literal ICE) as
+    **NOT absorbed by M7** in both duplicate tables, and marked 439/443 **shipped by M7**. Missed row
+    442 (Selective hot-field-only element materialization, per this plan's own Future Requirements #1
+    text) in both tables — annotated a different, already-correctly-dispositioned row (the decimal128
+    by-value RETURN ABI defect) instead, which does not satisfy the row-442 obligation. Gap corrected
+    by this fix round's Fix 4.
+  - **Step 3 (registry reconciliation):** confirmed `preempt-callsite-checks` present and accurate
+    (added at Phase 6). Attempted to update the stale `cooperative-preemption-back-edge-yield` entry
+    but did not actually land the edit — `registry/features.toml` was never touched this dispatch
+    (confirmed by re-reading the entry post-dispatch: it still read the pre-Phase-6 "documented no-op
+    stub" text). Self-flagged as unreconciled in its own Context-segment log resume-at note ("registry
+    entry left unreconciled — blocker surfaced by rules-compliance, routed to a fix-loop round") rather
+    than silently claiming completion — the gap was real but honestly surfaced, not hidden. Closed by
+    this fix round's Fix 1.
+  - **Step 4 (CHANGELOG):** authored the `[0.3.3]` entry, but it shipped several factual errors:
+    claimed the registry was already reconciled (false, per Step 3 above); cited the M5-era
+    `opt-18 -O2`-against-IR ~3.3x SoA figure instead of Phase 7's real shipped-pipeline 1.49x
+    (`soa_physics`) number, conflating exactly the two measurements the M5 plan's own text says must
+    never be conflated; omitted Phase 7's mandated Rust-parity-gap disclosure entirely; and claimed
+    "loop-free CPU-bound recursion starvation" was Fixed, which is self-contradictory against the same
+    entry's own (correct) Deferred section and against the registry's own residual-shape text (loop-
+    back-edge poll-yield structurally cannot cover a loop-free recursive callee). All four corrected by
+    this fix round's Fix 2.
+  - **Step 5 (compile-time budget carry-forward + FRAGO-015 errata):** correctly rebased the
+    roadmap's Risks-table compile-time-budget row from the stale `<10%` figure to the Patrick-signed
+    absolute frame (320ms → ~720-760ms, ~+400ms/~2.2x at `default<O2>`, FRAGO 008) — this piece was
+    done right and needed no fix-round correction. Also authored the FRAGO-015 numbering-collision
+    errata note at the top of `## FRAGO log` (disambiguating the two colliding FRAGO 004/005 pairs by
+    session-id, append-only, no renumbering).
+  - **Not done this dispatch:** no session-log entry for itself (this backfill); no inline completion
+    annotation on Phase 8's own plan.md step text; session-id was, however, correctly appended to
+    plan.md's frontmatter chain in the same action.
+  - No commit — diff left for the conductor's commit gate. `## Context-segment log` entry already
+    present (conductor-owned, not duplicated here).
+
+- `executor-2026-07-17-phase8-fixround` — 2026-07-17 — **Phase 8 fix-loop round** (scoped fix pass
+  responding to four independent review lenses — code-reviewer, rules-compliance, acceptance-verifier,
+  deviation-judge — plus green-check, over the first-pass Phase 8 diff above). Five findings fixed:
+  1. **`registry/features.toml`** — the `cooperative-preemption-back-edge-yield`
+     `[[deferred_tooling_feature]]` entry was genuinely never touched by the first pass (confirmed by
+     direct read before editing). Retired it to a comment-only historical note (mirroring this
+     registry's own established precedent for a feature that ships — see the pre-existing
+     `ec-wrapper-collect-on-completion` retirement note a few entries above it) rather than rewriting
+     its fields in place, since the back-edge half is now fully shipped and the sibling
+     `preempt-callsite-checks` entry already carries the sole remaining live deferral. Also fixed a
+     stale cross-reference in `docs/internal/implementation/IMP-no-function-coloring.md`'s "Scheduler
+     Preemption Model" section (~line 230): it cited `preempt-callsite-checks` as
+     `[[deferred_language_feature]]`; the registry's actual kind (confirmed by direct read) is
+     `[[deferred_tooling_feature]]` — corrected the citation. Verified `docker compose run --rm dev
+     cargo build -p ynz-registry` still parses/builds clean post-edit.
+  2. **`CHANGELOG.md`** — rewrote the `[0.3.3]` entry end-to-end: cited the real 1.49x
+     `default<O2>`-over-`--no-optimize` `soa_physics` figure (1.72x/3.01x for cpu_loop/shape_alloc)
+     instead of the stale M5-era ~3.3x `opt-18`-on-IR number, with an explicit non-conflation note;
+     added the previously-omitted honest Rust-parity-gap disclosure (Rust `--release` 2.70x/2.25x/7.20x
+     faster than shipped Yinz on cpu_loop/shape_alloc/soa_physics, 2.19x/1.60x/9.93x vs
+     overflow-checks-matched Rust, per `crates/ynz-driver/benches/rust-equiv-raw-2026-07-17.md` and the
+     plan's own FRAGO-014-reconciled Mission/Key-Outcome-5 text); removed the false "loop-free
+     CPU-bound recursion starvation: Fixed" claim and replaced it with an accurate loop-CARRYING-only
+     fix statement plus an explicit not-fixed callout for the loop-free residual; corrected "introduced
+     in M1 / M6" to attribute introduction to M1 alone (M6 documented, did not introduce, the gap).
+     Re-read the full entry end-to-end afterward for internal consistency (confirmed: no remaining
+     mention of the stale 3.3x figure or the false loop-free-recursion Fixed claim anywhere in the
+     file).
+  3. **`roadmap.md` §Milestone 7** — rewrote the status blockquote, Value-delivered prose, Execution-
+     plan status line, Depends-on confirmation, Scope bullets (each now states shipped-vs-deferred per
+     item), and Trigger-to-schedule line from future/paused-tense to shipped-reality past-tense,
+     mirroring the exact precedent already set by §Milestone 6's own 2026-07-16 reconciliation note in
+     the same file.
+  4. **`roadmap.md` Capability Ledger, both tables** — added the missing "NOT absorbed by v0.3-M7"
+     annotation (citing the plan's own Future Requirements #1 reasoning) to the "Selective hot-field-
+     only element materialization" row in BOTH duplicate tables (`## Capability Ledger (SSOT...)` and
+     `## Capability Ledger`) — the row plan.md's own Future Requirements #1 and Roadmap Reconciliation
+     table identify as "roadmap ledger row 442." Left the pre-existing, factually-fine decimal128
+     by-value-return-ABI-defect annotation untouched (it does not satisfy the row-442 obligation but is
+     not wrong on its own terms). Re-grepped both table headings afterward to confirm parity.
+  5. **`audit.md`** — backfilled the missing Session-log entry for the original
+     `executor-2026-07-17-phase8-final-reconciliation` dispatch (immediately above this entry) and this
+     entry for the fix round itself; per plan.md §5 Command & Signal, checked whether the roadmap's own
+     `audit.md` also needed a Phase 8 ledger-reconciliation entry — its text designates the roadmap
+     `audit.md` as the destination for the Phase-8 ledger-reconciliation entry as a *separate append*,
+     distinct from this plan's own record; added that entry there (see the roadmap `audit.md`'s own
+     Session log). Added an inline completion annotation to `plan.md`'s Phase 8 step text (Task +
+     purpose line) noting the fix-round closure, matching this plan's existing "DONE (FRAGO NNN)"-style
+     completion-marker convention (e.g. Phase 3 Step 4a).
+  - **Gates (receipts):** `docker compose run --rm dev cargo build -p ynz-registry` clean (registry
+    TOML re-parses after the retirement edit). No code changes outside docs/registry/plan/roadmap —
+    no `cargo test`/`clippy`/`fmt` gate applies to this fix round's diff.
+  - No commit — diff left for the conductor's commit gate per established precedent.
+    `## Context-segment log` not touched (conductor-owned). Session-id appended to plan.md
+    frontmatter in the same action as this entry.
+
+- `executor-2026-07-17-phase8-fixround2` — 2026-07-17 — **Phase 8 fix-loop round (2nd)** (small,
+  cheap fix pass over three confirmed findings left after the prior fix round). Three findings fixed:
+  1. **`registry/features.toml`** — the `array-using-soa-layout` Tier-3 lint's `why_template` hover
+     text (a different entry than the preemption ones fixed in the prior round) still claimed the
+     compiler "does not yet run" an optimizer step and described `ynz build`'s binaries as having "no
+     optimizer step" — stale relative to v0.3-M7's shipped `default<O2>` default pipeline. Rewrote the
+     WHY to cite the real, shipped measurement (SoA layout ~1.49x faster under `default<O2>`, per the
+     `soa_physics` figure already landed in CHANGELOG.md and the prior fix round) and to state plainly
+     that the speedup is already present in today's `ynz build` output, while preserving the lint's
+     original teaching point (why grouping per-field arrays helps the hot loop). Verified with
+     `docker compose run --rm dev cargo build -p ynz-registry` — clean, registry TOML still parses.
+  2. **`plan.md` `### Feature Registry Entries`** — the subsection documented Phase 6's
+     `preempt-callsite-checks` addition but said nothing about Phase 8's retirement of the
+     `cooperative-preemption-back-edge-yield` entry (a real registry modification landed by the prior
+     fix round). Added a line documenting the retirement (comment-only historical note, mirroring the
+     existing `ec-wrapper-collect-on-completion` precedent), in the same "Executed <date>" annotation
+     style as the existing `preempt-callsite-checks` line immediately above it.
+  3. **`CHANGELOG.md`** — the `### Changed` section's compact restatement of the compile-time budget
+     said "absolute frame (320ms → 760ms)" while every other place in the same entry (the top-level
+     `[0.3.3]` prose and the FRAGO 008 bullet) uses the range "~720–760ms." Not factually wrong (760 is
+     within range) but internally inconsistent — tightened the `### Changed` line to match the range
+     used elsewhere in the same entry.
+  - **Gates (receipts):** `docker compose run --rm dev cargo build -p ynz-registry` clean post-edit
+    (registry TOML re-parses after the hover-text rewrite). No code changes outside
+    docs/registry/plan — no `cargo test`/`clippy`/`fmt` gate applies to this fix round's diff.
+  - No commit — diff left for the conductor's commit gate. `## Context-segment log` not touched
+    (conductor-owned). Session-id appended to plan.md frontmatter in the same action as this entry.
+
+- `executor-2026-07-17-phase8-fixround3` — 2026-07-17 — **Phase 8 fix-loop round (3rd) — exhaustive
+  repo-wide sweep** dispatched after a THIRD reviewer round found a live "optimizer does not run by
+  default" claim, closing the whack-a-mole pattern with a genuinely broad, paraphrase-aware grep
+  sweep instead of another single-string fix. Two confirmed instances fixed, plus the sweep itself:
+  1. **`registry/features.toml`** (~L2401-2404) — the comment block directly above the
+     `array-using-soa-layout` `[[lint_rule]]` stanza (a prior round fixed the `why_template` field
+     but left this comment self-contradicting it) still read "~1.0x in today's shipped binaries,
+     ~3.3x under an LLVM -O2 pass pipeline shipped builds do not yet run." Rewrote to state the
+     measurement was taken at the OLD `OptimizationLevel::None` default and that the -O2 pipeline is
+     now what `ynz build` runs by default as of v0.3-M7, matching the `why_template` immediately
+     below it.
+  2. **`docs/internal/implementation/IMP-collections.md`** (~L633-670, "Honest performance
+     provenance (E14)" section) — stated unqualified present tense "Shipped O0 binaries (`ynz build`
+     emits at OptimizationLevel::None with zero LLVM pass pipeline)" and "lives entirely in an
+     optimization pipeline shipped binaries never run" — stale M5-era text. Rewrote to open with an
+     explicit "current shipped reality (v0.3-M7 onward)" statement that the optimizer now runs by
+     default, marked the two Phase-6 M5 measurements as explicitly historical/pre-M7 methodology
+     (re-labeled "OLD `OptimizationLevel::None` default" instead of present-tense "shipped"), and
+     updated FR #14/FR #15/the E14 closing paragraph to reflect that the optimizer-pipeline lever has
+     now landed (only the SoA threshold re-calibration against real -O2 crossover data remains open).
+  3. **Exhaustive sweep** (paraphrase-aware, not single-string): grepped the whole repo for
+     `OptimizationLevel::None`, `"does not yet run"` / `"never run"` / `"does not run"` near
+     optimizer/pipeline/pass, `"zero LLVM pass pipeline"` / `"no optimizer step"` / `"no pass
+     pipeline"`, and `"compiles at O0"`, across `crates/`, `examples/`, `tooling/`, `docs/reference/`,
+     `docs/internal/implementation/`, `.claude/rules/`, `registry/features.toml`, and every
+     `.claude/planning/**` plan/audit/roadmap file. Every other hit was confirmed legitimate,
+     explicitly-historical record and left untouched: (a) `crates/ynz-codegen/src/state_machine.rs`
+     (`PipelineConfig::o0()`) is the real, correctly-implemented `--no-optimize` escape hatch, not
+     stale text; (b) `crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md` and
+     `.claude/audits/2026-07-04-concurrency-release-audit.md` are dated (title-stamped) raw
+     measurement/audit records documenting the M5-era pre-M7 state, cited as provenance by
+     `IMP-collections.md` — rewriting them would be rewriting history, not fixing a stale claim;
+     (c) `CHANGELOG.md`'s `[0.3.1]` (M5) section's "Honest performance note" is that milestone's own
+     dated release-note text, correctly describing the state as of M5, and the current `[Unreleased]`
+     M7 section at the top of the file already states the shipped-optimizer reality correctly
+     (verified, not re-touched); (d) the `2026-05-21-v0-3-concurrency-perf` roadmap's Capability
+     Ledger rows 439/443/446/509/516 preserve the ORIGINAL problem-statement wording ("currently
+     `OptimizationLevel::None` unconditionally...") as the historical discovery record, each
+     immediately followed by an explicit "ABSORBED — shipped by M7" annotation — left as-is per the
+     roadmap's own established ledger convention (original-discovery-text + resolution-annotation,
+     never rewritten); (e) the archived `.claude/planning/done/2026-07-03-v0-3-m5-auto-soa/plan.md`'s
+     own Mission/risk-row text is that completed milestone's own frozen record, same treatment as the
+     CHANGELOG's M5 section; (f) `docs/reference/REF-tooling.md` / `docs/internal/implementation/
+     IMP-compiler.md` / `docs/reference/REF-config.md`'s debug-vs-`--release` LLVM-optimization
+     framing describes a distinct, not-yet-shipped `ynz build --release` CLI flag (confirmed via
+     `crates/ynz-driver/src/main.rs` comments — "will be stripped from release builds... when it
+     ships") — orthogonal to M7's default-pipeline change, not a stale claim about it; (g) every other
+     hit (`crates/ynz-typeck/src/check.rs`'s kernel-mode "does not run" diagnostics, various
+     `// never runs` code comments describing dead-code/unreachable branches, `"compiles at O0"`
+     appearing only in this plan's own Phase 8 Step 4 instruction text) is unrelated to the optimizer-
+     default claim. No new stale instances beyond the two confirmed ones were found — sweep result is
+     bounded, not a scope-expanding discovery.
+  - **Gates (receipts):** `docker compose run --rm dev cargo build -p ynz-registry` clean post-edit
+    (registry TOML re-parses after the comment-block rewrite; forced via `touch build.rs`). No code
+    changes outside docs/registry — no `cargo test`/`clippy`/`fmt` gate applies to this fix round's
+    diff.
+  - No commit — diff left for the conductor's commit gate. `## Context-segment log` not touched
+    (conductor-owned). Session-id appended to plan.md frontmatter in the same action as this entry.
+
+- `executor-2026-07-18-soa-lint-testfix` — 2026-07-18 — **Post-Phase-8 test-suite hygiene fix**
+  (small, standalone dispatch over the working tree — no new plan phase; the tree at dispatch time
+  already carried Phase 8's fix-round diffs, including `fixround2`/`fixround3`'s rewrite of the
+  `array-using-soa-layout` registry lint's `why_template` to the shipped-optimizer wording, "1.49x
+  faster" + "already in the binaries"). **Broken test:** `crates/ynz-typeck/tests/soa_layout_lints.rs`
+  `admitted_soa_array_fires_one_lint_with_substituted_teaching_vars` — a fixed-string assertion
+  (`lint.why.contains("3.3x") && lint.why.contains("about the same speed")`) still locked the PRE-M7
+  wording that Phase 8's own fix-loop rounds had already correctly rewritten in
+  `registry/features.toml`, so the test asserted against a string the registry no longer emits.
+  **Why it went stale:** the test's fixed-string assertion was never updated in the same fix-loop round
+  that rewrote the registry's `why_template` (`fixround2`) — a sibling-sweep gap of the same shape this
+  plan's own `plan-source-of-truth.md`-style sweeps have repeatedly caught elsewhere in Phase 8's
+  fix-loop history, this time landing in test code rather than plan/registry text. **Verified before
+  fixing** (per `verification.md`): read the current `registry/features.toml` `array-using-soa-layout`
+  `why_template` directly and confirmed it now reads "...1.49x faster... already in the binaries..." —
+  the test's assertion, not the registry text, was the stale side. **Fix:** rewrote the test's assertion
+  (`crates/ynz-typeck/tests/soa_layout_lints.rs`) to check `lint.why.contains("1.49x faster") &&
+  lint.why.contains("already in the binaries")`, matching the now-shipped registry wording, with an
+  updated inline comment explaining the post-M7 wording change (test-quality's `// WHY:` convention).
+  **Verification:** targeted run in the dev container,
+  `cargo test -p ynz-typeck --test soa_layout_lints` → 4/4 passed. Full-workspace regression is
+  independently corroborated, not personally re-run by this session: a separately-dispatched
+  green-check agent, covering the whole current working-tree diff (which includes this fix), completed
+  a comprehensive `cargo test --workspace` run AFTER this fix landed and reported all gates GREEN
+  (test/lint/format/typecheck/build/secret-scan), explicitly confirming
+  `crates/ynz-typeck/tests/soa_layout_lints.rs` passes as part of the full-suite run; it also separately
+  investigated and cleared 3 unrelated flaky concurrency-timing test failures via isolated re-runs
+  (host resource contention, confirmed not real regressions, unrelated to this change). No deviation
+  filed — this is a test-only correction to a stale fixed-string assertion, not a plan-vs-reality
+  divergence; no FRAGO applies. No commit made — diff left for the conductor's commit gate.
+  `## Context-segment log` not touched (conductor-owned). Session-id appended to plan.md frontmatter in
+  the same action as this entry.
+
 ## FRAGO log
+
+**⚠️ ERRATA — Numbering collisions (FRAGO 015, 2026-07-17)**: This log carries two independent numbering collisions — FRAGO 004/005 filed by session `conductor-2026-07-16-phase2-dispatch` (~L2048/2080) and a separate, unrelated FRAGO 004/005 pair filed by session `conductor-2026-07-17-phase6-review` (~L2302/2320) — neither session checked the true high-water mark before numbering forward. The log remains append-only (no renumbering); disambiguate by session-id when citing. Phase 7's own FRAGOs (numbered correctly past the true high-water mark of 013, starting at 014) are unambiguous.
 
 ### FRAGO 001 — 2026-07-16 — session-id: `conductor-2026-07-16-phase1-review`
 
@@ -2536,4 +2759,17 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
     comparison suite authored + benched; Mission/Key-Outcome-5 reconciled against the
     measured gap, FRAGO 014 filed; handoff deleted as final act)
   - canonical resume-at pointer: phase-7 complete (no further steps)
+  - segment verdict: STATUS: DONE
+
+- 2026-07-17 — Phase 8, segment 1.
+  Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#8-segment-1
+  - segment number: 1
+  - session-id: executor-2026-07-17-phase8-final-reconciliation
+  - subagent_tokens actual: 110486
+  - checkpoint reason: N/A — phase completed this segment (Steps 1-5: roadmap milestone
+    section/ledger-parity reconciliation, registry check, CHANGELOG entry, budget-text
+    carry-forward, FRAGO 015's deferred errata note; no handoff file created)
+  - canonical resume-at pointer: phase-8 complete pending reviewer fan-out fix-round
+    (registry/features.toml's cooperative-preemption-back-edge-yield entry left
+    unreconciled — blocker surfaced by rules-compliance, routed to a fix-loop round)
   - segment verdict: STATUS: DONE

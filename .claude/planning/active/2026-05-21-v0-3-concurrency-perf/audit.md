@@ -1027,3 +1027,29 @@ Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#3: checkpoint-mark-enforc
   charter); never an ad-hoc mid-AAR bolt-on.
 - **TRIGGER** — the next plan execution dispatching a checkpoint-marked phase, or the next
   recurrence anywhere.
+
+## 2026-07-17 — Session log: v0.3-M7 Phase 8 ledger reconciliation closed out (fix-loop round; per the M7 plan's own §5 Command & Signal, this roadmap `audit.md` receives the Phase 8 ledger-reconciliation entry as a separate append)
+
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#8-fixround: roadmap-ledger-reconciliation
+
+- **What happened.** v0.3-M7's Phase 8 (Documentation, Registry, and Roadmap Reconciliation) executed
+  in two passes: a first-pass dispatch (`executor-2026-07-17-phase8-final-reconciliation`, own account
+  in the M7 plan's `audit.md`) partially reconciled this roadmap, followed by a scoped fix-loop round
+  (`executor-2026-07-17-phase8-fixround`) closing gaps four independent review lenses confirmed. This
+  entry is the roadmap-side closing record; the full account of both dispatches lives in the M7 plan's
+  own `audit.md` Session log (not duplicated here).
+- **§Milestone 7 section** — rewrote the status blockquote, Value-delivered prose, Execution-plan
+  status, Depends-on confirmation, per-item Scope bullets, and Trigger-to-schedule line from
+  future/paused-tense to shipped-reality past-tense (all 8 phases complete, `default<O2>` shipped by
+  default, back-edge poll-yield shipped, call-site checks honestly deferred, goldens stable, both
+  benchmark suites committed and green) — mirroring this same roadmap's own §Milestone 6 2026-07-16
+  reconciliation-note precedent.
+- **Capability Ledger, both duplicate tables** — rows 438/440/441 were already correctly annotated
+  "NOT absorbed by M7" by the first pass; this round added the row the first pass missed — "Selective
+  hot-field-only element materialization" (the row the M7 plan's own Future Requirements #1 and
+  Roadmap Reconciliation table name as "roadmap ledger row 442") — with the matching "NOT absorbed by
+  v0.3-M7" annotation, in BOTH tables. Parity re-confirmed by grepping both headings.
+- **Compile-time budget text** (Risks table, row citing FRAGO 008) was already correctly rebased by
+  the first pass to the Patrick-signed absolute frame — no further edit needed this round.
+- No code touched. Session-id `executor-2026-07-17-phase8-fixround` appended to this roadmap's
+  frontmatter chain in the same action as this entry.
