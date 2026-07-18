@@ -52,6 +52,14 @@ use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 
+#[path = "bench_common.rs"]
+mod bench_common;
+use bench_common::{compile_workload, run_once_checked, scratch_dir};
+
+/// The knob-not-to-reach-for tail of run_once_checked's crash panic: this
+/// harness's budget axis is the visit cap (TOTAL_VISITS), not workload shape.
+const CRASH_HINT: &str = "lower the cap";
+
 /// Total element visits per process run — a bench-runtime budget since the v0.3-M7
 /// Phase 4 stack-growth fix (re-evaluation record + evidence in the header).
 const TOTAL_VISITS: i64 = 131_072;
@@ -92,34 +100,12 @@ fn expected_checksum(n: i64, reps: i64) -> i64 {
     reps * 3 * n * (n + 1) / 2
 }
 
-/// Workspace-target scratch dir for generated sources, binaries, and .ll files.
-fn scratch_dir() -> PathBuf {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/p6-soa-calibration");
-    fs::create_dir_all(&dir).expect("create scratch dir");
-    dir
-}
-
-/// Compile one workload under one forced layout; returns the binary path.
-/// The force var is set on the CHILD process only (never set_var — the bench
-/// binary itself may share the process with other criterion machinery).
+/// Compile one workload under one forced layout (harness-only YNZ_SOA_FORCE
+/// override); returns the binary path. Spawn-and-assert plumbing is shared —
+/// see bench_common::compile_workload.
 fn compile(dir: &Path, n: i64, reps: i64, mode: &str) -> PathBuf {
     let stem = format!("n{n}_{mode}");
-    let src = dir.join(format!("{stem}.ynz"));
-    fs::write(&src, workload_source(n, reps)).expect("write workload source");
-    let out = Command::new(env!("CARGO_BIN_EXE_ynz"))
-        .arg("build")
-        .arg(&src)
-        .arg("--emit-ir")
-        .env("YNZ_SOA_FORCE", mode)
-        .output()
-        .expect("spawn ynz build");
-    assert!(
-        out.status.success(),
-        "ynz build failed for {stem}: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    dir.join(stem)
+    compile_workload(dir, &stem, &workload_source(n, reps), "YNZ_SOA_FORCE", mode)
 }
 
 /// IR gate: soa-mode IR must carry the SoA lowering symbols; aos-mode must not.
@@ -145,34 +131,14 @@ fn assert_ir_gate(bin: &Path, mode: &str) {
     }
 }
 
-/// Checksum gate: one run, stdout must be exactly the closed-form checksum.
-fn run_once_checked(bin: &Path, expected: i64) -> String {
-    let out = Command::new(bin).output().expect("spawn workload binary");
-    assert!(
-        out.status.success(),
-        "workload {} exited non-zero ({:?}) — crash-class regression (row-439 stack bug \
-         is fixed and locked by hot_loop_stack_stress.rs; investigate, don't lower the cap)",
-        bin.display(),
-        out.status
-    );
-    let stdout = String::from_utf8(out.stdout).expect("utf8 stdout");
-    assert_eq!(
-        stdout.trim(),
-        expected.to_string(),
-        "checksum gate failed for {}",
-        bin.display()
-    );
-    stdout
-}
-
 fn soa_threshold_bench(c: &mut Criterion) {
-    let dir = scratch_dir();
+    let dir = scratch_dir("p6-soa-calibration");
 
     // Process-overhead baseline: reps = 0 (touches nothing, prints 0). Recorded
     // in the provenance file so per-point totals can be read net of spawn cost.
     {
         let bin = compile(&dir, 8, 0, "aos");
-        run_once_checked(&bin, 0);
+        run_once_checked(&bin, 0, CRASH_HINT);
         let mut overhead = c.benchmark_group("overhead");
         overhead.sample_size(12);
         overhead.sampling_mode(SamplingMode::Flat);
@@ -204,7 +170,7 @@ fn soa_threshold_bench(c: &mut Criterion) {
         for &mode in MODES {
             let bin = compile(&dir, n, reps, mode);
             assert_ir_gate(&bin, mode);
-            outputs.push(run_once_checked(&bin, expected));
+            outputs.push(run_once_checked(&bin, expected, CRASH_HINT));
             bins.push((mode, bin));
         }
         assert_eq!(

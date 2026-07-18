@@ -1849,6 +1849,120 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
     conductor's Step-8 commit gate. Session-id appended to plan.md frontmatter in the
     same action as this entry (append-only).
 
+- 2026-07-17 — session-id: `executor-2026-07-17-phase7-ab-harness` — Phase 7, segment 1
+  (Steps 1-2: O0-vs-optimized A/B harness; checkpointed at the planned post-Step-2 mark).
+  - **Step 1 (harness):** `crates/ynz-driver/benches/opt_pipeline_calibration.rs` authored
+    extending soa_calibration.rs's exact pattern (criterion, compiled-.ynz-binary driving,
+    child-process-only env override, workspace-target scratch dir), registered as a
+    `[[bench]]` in `crates/ynz-driver/Cargo.toml`. Tiers: `YNZ_OPT_FORCE=o0` (byte-for-byte
+    the `--no-optimize` PipelineConfig::o0 tier) vs `YNZ_OPT_FORCE=default` (the shipped
+    `default<O2>` tier). Three workloads: cpu_loop (scalar add+rem, 2^24 iters),
+    shape_alloc (per-iteration 3-field shape literal, 2^23 iters — exercises the row-439
+    stacksave/stackrestore path), soa_physics (the M5-characterized Player hot-x/y scan,
+    N=64, 16.8M visits, default SoA admission — no YNZ_SOA_FORCE; this harness A/Bs the
+    pipeline tier only). **Visit-budget re-assessment (Step 1's explicit obligation):**
+    the old 131,072 cap NOT copied — per soa_calibration's own Phase-4 re-evaluation
+    record and the hot_loop_stack_stress.rs 67.1M-visit lock, the crash envelope is
+    eliminated and the cap is bench-runtime-only; raised to 8.4M-16.8M visits/workload so
+    per-run wall-clock (16-90ms) dominates the measured 3.2ms spawn overhead (rationale
+    in the bench header + provenance file).
+  - **Step 2 (gates + raw numbers):** all three gates green for every workload
+    (checksum tripwire vs closed forms; dual-mode byte-identical stdout oracle; IR-content
+    gate — default-tier .ll differs from o0 .ll). IR-gate validity verified against
+    emit.rs:976-978 BEFORE authoring: `--emit-ir` prints the module AFTER run_passes, and
+    Phase 5 proved deterministic builds, so cross-tier .ll byte-equality would prove
+    exactly "mid-end pipeline silently did not run" (M3d silent-decline class). Raw
+    numbers recorded in `crates/ynz-driver/benches/opt-pipeline-raw-2026-07-17.md`:
+    net-of-spawn speedups default-over-o0 = 1.72x (cpu_loop), 3.01x (shape_alloc),
+    1.49x (soa_physics) — real, honest, committed-run-traceable wins.
+  - **Gates (receipts):** `cargo bench -p ynz-driver --bench opt_pipeline_calibration --
+    --test` all points Success (gate-only mode); full criterion run completed (medians +
+    CIs in the provenance file); `cargo clippy -p ynz-driver --benches -- -D warnings`
+    clean; `cargo fmt --all -- --check` clean. Tree state for receipts: 108e3202 + this
+    segment's diff. Demo & Error Gallery: N/A — dev-only bench harness, zero new
+    user-facing surface or error classes.
+  - **Deviations surfaced:** (1) the dispatch instruction told this executor to record
+    the resume-at pointer in audit.md's `## Context-segment log` — that section is
+    conductor-owned per the executor charter's ownership mirror; NOT written by this
+    session (pointer carried in handoff-phase-7.md + the PARTIAL return instead) —
+    surfaced for the conductor, not silently resolved either way. (2) None against the
+    phase's technical content. No commit made — diff left for the conductor's commit
+    gate per the established precedent; the CHECKPOINT mark's "committed" state is
+    reached at that gate. Session-id appended to plan.md frontmatter in the same action
+    as this entry (append-only). Checkpoint: STATUS PARTIAL, resume at phase-7/step-3
+    (Rust-equivalent comparison suite), handoff-phase-7.md written.
+
+- `executor-2026-07-17-phase7-rust-equiv` — 2026-07-17 — Phase 7 segment 2 (resumed at
+  `phase-7/step-3` from handoff-phase-7.md; Steps 3-4 → phase DONE).
+  - **Handoff inheritance:** all five receipts (R1-R5) inherited, not re-bought; the one
+    dispatch-mandated delta-check (R-item 4, the compiler cargo-profile trap) re-verified cheaply
+    against `crates/ynz-driver/build.rs:20-30` — `PROFILE` at driver-build time selects the
+    embedded `libynz_runtime.a`, and `cargo bench` builds at PROFILE=release, so `CARGO_BIN_EXE_ynz`
+    links the release runtime. Confirmed; all recorded numbers are release-runtime numbers.
+  - **Step 3 (Rust-equivalent comparison suite):** hand-authored idiomatic Rust equivalents of all
+    three workloads at `crates/ynz-driver/benches/rust-equivalents/` — a deliberately
+    NON-workspace-member cargo package (empty `[workspace]` table detaches it; placement decision
+    + rationale in its Cargo.toml header: workspace membership = shipped-together semantics, and
+    these are bench scaffolding). Built at bench run time by the harness itself
+    (`cargo build --manifest-path`, isolated `target/p7-rust-equiv` dir) at TWO profiles — the
+    overflow-semantics decision: `release` (idiomatic defaults, checks off — primary, "Rust as
+    shipped") and `release-checked` (`overflow-checks = true` — secondary, Yinz-semantics-matched,
+    quantifying the semantic cost). New `rust_equiv` criterion group in
+    `opt_pipeline_calibration.rs` + a per-language spawn baseline (`spawn_probe` — the Yinz
+    reps=0 baseline includes Yinz runtime init, so each side nets against its OWN spawn cost;
+    measured Yinz runtime-init ≈ 2.46 ms/process). Same closed-form checksum oracle gates both
+    languages. Full same-session run recorded in
+    `crates/ynz-driver/benches/rust-equiv-raw-2026-07-17.md` (medians, CIs, nets,
+    what-is/is-not-comparable section). Measured position: Rust `--release` faster than shipped
+    Yinz by 2.70x/2.25x/7.20x (cpu_loop/shape_alloc/soa_physics); 2.19x/1.60x/9.93x vs
+    release-checked. No degenerate constant-folding on either side (per-visit times bound it);
+    this session's A/B replication (1.75x/3.11x/1.37x) agrees with segment 1's record within CIs.
+  - **Step 4 (Mission reconciliation):** the numbers falsify "as fast as Rust" → executed the
+    reframe path per plan-source-of-truth's execution-time discipline: Mission ¶2, Key Outcome 5,
+    and Future Requirement #7 rewritten in plan.md to state the measured position (pipeline wins
+    real, Rust parity NOT achieved, gap attributed + remediation named as FR #7 with
+    WHAT/WHY/COST/TRIGGER) — plan.md amendment + FRAGO 014 filed in this SAME dispatch. Sibling
+    sweep of the whole plan for parity claims done (grep: Mission, KO5, FR7 amended; the
+    Performance-invariant A/B text and ledger-row-443 rationale quote checked — consistent, no
+    stale siblings).
+  - **Gates (receipts, this segment's own work):** gate mode
+    `cargo bench -p ynz-driver --bench opt_pipeline_calibration -- --test` all 14 points Success
+    (both languages); full criterion measurement run completed same-session;
+    `cargo clippy -p ynz-driver --benches -- -D warnings` clean; `cargo fmt --all -- --check`
+    clean; rust-equivalents package clippy + fmt clean (checked separately — it is outside the
+    workspace by design). Tree state: 108e3202 + Phase 7 uncommitted diff. Demo & Error Gallery:
+    N/A — dev-only bench scaffolding, zero new user-facing surface or error classes.
+  - **Deviations/observations surfaced (not self-resolved):** (1) the FRAGO log's numbering
+    collides — entries "FRAGO 004" and "FRAGO 005" (session `conductor-2026-07-17-phase6-review`,
+    audit.md ~L2253/2271) reuse numbers already used by Phase 2-era FRAGOs; this segment numbered
+    its own record 014 (next after the true high-water mark 013) and left the append-only history
+    untouched — surfaced for the conductor/AAR to reconcile. (2) `## Context-segment log` not
+    touched (conductor-owned). No commit made — diff left for the conductor's commit gate per
+    established precedent. Handoff-phase-7.md deleted as this segment's final act (phase returns
+    DONE). Session-id appended to plan.md frontmatter in the same action as this entry.
+
+- `executor-2026-07-17-phase7-benchdedup-fixround` — 2026-07-17 — Phase 7 fix-loop round
+  (single scoped code-reviewer finding; not a new phase segment).
+  - **Finding fixed:** `run_once_checked` / `scratch_dir` / `compile`'s Command-spawn-and-assert
+    scaffolding duplicated near-verbatim between `soa_calibration.rs` and
+    `opt_pipeline_calibration.rs` (reuse-rule / plan-intent drift class; not load-bearing).
+  - **Fix:** extracted the genuinely-shared plumbing into new
+    `crates/ynz-driver/benches/bench_common.rs`, included by both benches via
+    `#[path = "bench_common.rs"] mod bench_common;` (the standard `harness = false`
+    cross-bench sharing pattern). `scratch_dir(subdir)`, `compile_workload(dir, stem, source,
+    force_var, mode)`, `run_once_checked(bin, expected, crash_hint)` — the per-bench bits
+    (scratch subdir, force env var, workload stem/source, and the semantically-per-bench
+    crash-panic knob wording "lower the cap" vs "shrink the workload") stay parameters, so
+    rendered panic text and all gate behavior are byte-identical to before. Each bench keeps
+    its own IR gate (genuinely different checks) and workload generators.
+  - **Gates (receipts):** `cargo build -p ynz-driver --bench soa_calibration` and
+    `--bench opt_pipeline_calibration` clean; gate mode `cargo bench ... -- --test` all
+    Success for BOTH benches (behavior-regression check); `cargo clippy -p ynz-driver
+    --benches -- -D warnings` clean; `cargo fmt --all -- --check` clean.
+  - No commit — diff left for the conductor's commit gate per established precedent.
+    `## Context-segment log` not touched (conductor-owned). Session-id appended to plan.md
+    frontmatter in the same action as this entry.
+
 ## FRAGO log
 
 ### FRAGO 001 — 2026-07-16 — session-id: `conductor-2026-07-16-phase1-review`
@@ -2244,6 +2358,73 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   the budget mechanism generically ("a cheap runtime counter/time check") without committing to
   wall-clock specifically, so the plan text is not stale. Logged here for the record.
 
+### FRAGO 014 — 2026-07-17 — session-id: `executor-2026-07-17-phase7-rust-equiv`
+
+- **Base:** 2026-07-04-v0-3-m7-optimizer-pipeline @ Phase 7 (Step 4 — the plan's own prescribed
+  reconciliation step; numbered 014, next after the true high-water mark 013 — see this segment's
+  session-log note on the pre-existing 004/005 numbering collision).
+- **Trigger.** Phase 7 Step 3's committed measurement falsifies the "as fast or faster than Rust"
+  aspiration the Mission's "Rust-level performance" positioning carries. Paper-Trace (full record:
+  `crates/ynz-driver/benches/rust-equiv-raw-2026-07-17.md`, one same-session criterion run, all
+  gates green): **Observed** — net-of-own-spawn medians, Yinz `ynz build` default vs idiomatic
+  Rust `cargo --release`: cpu_loop 32.360 ms vs 12.006 ms (2.70x), shape_alloc 12.784 ms vs
+  5.677 ms (2.25x), soa_physics 58.195 ms vs 8.087 ms (7.20x); vs overflow-checks-matched Rust:
+  2.19x / 1.60x / 9.93x. **Expected (aspiration):** ~1.0x parity. **Residual:** a 2.2–7.2x gap.
+  **Hypothesis (evidence-backed):** opaque runtime-call ABI floor (`ynz_array_get`; ~0.48 vs
+  ~3.46 ns/visit on soa_physics), always-on overflow checks (quantified by the release-checked
+  delta), missing LTO/PGO/vectorization tuning. **Evidence path:** the committed harness
+  (`crates/ynz-driver/benches/opt_pipeline_calibration.rs`, `rust_equiv` group) + both raw-number
+  records.
+- **Classification.** The exact pre-registered reframe path: KO5's own text and Phase 7 Step 4
+  conditionally mandated this rewrite, and FR #7 pre-registered the gap as a deferral seam — per
+  plan-source-of-truth's execution-time reframe discipline this is reframe-and-record, not a halt
+  (documentation-honesty falsification; no money/user-data/production/irreversibility floor
+  fired). Residual after the honest reframe: LOW-to-MEDIUM, record-only — no new risk row needed
+  because the falsification path was pre-registered in KO5/FR7 and the phase's own reviewer
+  fan-out (docs-consistency) already gates the reframed text. Auto-apply + log, no signature
+  required.
+- **Changes:**
+  - ¶2 Mission: CHANGED — final clause rewritten from "the 'Rust-level performance' positioning
+    can be pursued on real numbers" to state the measured position: real 1.4–3.1x pipeline wins
+    over `--no-optimize` AND a measured ~2.2–2.7x (scalar/shape) / ~7–10x (array-scan) gap to
+    Rust `--release`; positioning is pursued-with-named-gap, not achieved.
+  - ¶3.1 Key Outcome 5: CHANGED — conditional "if the numbers fall short, reconcile" text replaced
+    with the actual measured numbers (A/B wins + Rust gap, both provenance files cited), the
+    explicit "Rust parity is NOT achieved as of v0.3-M7" statement, and the CI-green surface
+    (gate mode `-- --test`, soa_calibration precedent).
+  - Future Requirements #7: CHANGED — "honest gap, if any" placeholder replaced with the measured
+    gap and a full four-field deferral (WHAT: close the gap, contributors named largest-first;
+    WHY: each contributor is milestone-scale, out of pipeline-correctness charter; COST:
+    milestone-scale per contributor; TRIGGER: next performance-positioning milestone or the first
+    user-facing claim needing parity numbers).
+  - Sibling sweep: whole-plan grep for parity claims — Performance-invariant A/B text (magnitude
+    honestly unspecified, satisfied) and the ledger row-443 rationale (historical quote of
+    Patrick's note) checked and left unchanged as consistent.
+- **Unchanged:** everything not listed — no phase steps, risk rows, or exit criteria altered; the
+  A/B (Step 2) record and its Key-Outcome-5 falsifiability claim stand as written.
+- **Override:** none required (no HIGH residual).
+
+### FRAGO 015 — 2026-07-17 — session-id: `conductor-2026-07-17-phase7-review`
+
+- **Trigger.** Phase 7's reviewer fan-out surfaced a pre-existing process defect (flagged by the
+  Phase-7 segment-2 executor as a deviation, confirmed by deviation-judge): `audit.md`'s FRAGO log
+  carries two independent numbering collisions — `FRAGO 004`/`005` filed by session
+  `conductor-2026-07-16-phase2-dispatch` (~L2048/2080) and a SECOND, unrelated `FRAGO 004`/`005`
+  pair filed by session `conductor-2026-07-17-phase6-review` (~L2302/2320) — neither session
+  checked the true high-water mark before numbering forward.
+- **Classification.** Risk-neutral (a bookkeeping slip in an append-only ledger; no code or plan
+  content defect, no re-score above any accepted residual). deviation-judge confirmed: not Phase
+  7's defect to fix (both colliding sessions predate this phase), and NOT to be resolved by an
+  in-place renumber (`audit.md` is append-only, per this project's plan-storage convention; a
+  renumber would also risk breaking live citations elsewhere in `plan.md` that already reference
+  "FRAGO 004" for the phase2-era reconciliation). Auto-apply + log, no signature required.
+  Deferred, not fixed this phase — the "004"/"005" pair used by Phase 7 itself is unambiguous
+  (`FRAGO 014`, correctly numbered past the true high-water mark of 013).
+- **Disposition.** A lightweight disambiguation errata note (naming both colliding occurrences by
+  session-id + line, no renumber) is owed at the next documentation-reconciliation pass — Phase 8
+  ("Documentation, Registry, and Roadmap Reconciliation") is the natural home, or the plan's
+  completion-gate/AAR if Phase 8 does not pick it up. Recorded here so it is not lost.
+
 ## Context-segment log
 
 - 2026-07-16 — Phase 1, segment 1.
@@ -2333,4 +2514,26 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   - checkpoint reason: N/A — phase completed this segment (Steps 2-7; handoff deleted as
     final act)
   - canonical resume-at pointer: phase-6 complete (no further steps)
+  - segment verdict: STATUS: DONE
+
+- 2026-07-17 — Phase 7, segment 1.
+  Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#7-segment-1
+  - segment number: 1
+  - session-id: executor-2026-07-17-phase7-ab-harness
+  - subagent_tokens actual: 181511
+  - checkpoint reason: planned mark (post-Step-2 CHECKPOINT honored — O0-vs-optimized A/B
+    harness `opt_pipeline_calibration.rs` authored, all three gates green, raw numbers
+    committed to `opt-pipeline-raw-2026-07-17.md`; Rust-comparison suite not started)
+  - canonical resume-at pointer: phase-7/step-3
+  - segment verdict: STATUS: PARTIAL
+
+- 2026-07-17 — Phase 7, segment 2.
+  Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#7-segment-2
+  - segment number: 2
+  - session-id: executor-2026-07-17-phase7-rust-equiv
+  - subagent_tokens actual: 206460
+  - checkpoint reason: N/A — phase completed this segment (Steps 3-4: Rust-equivalent
+    comparison suite authored + benched; Mission/Key-Outcome-5 reconciled against the
+    measured gap, FRAGO 014 filed; handoff deleted as final act)
+  - canonical resume-at pointer: phase-7 complete (no further steps)
   - segment verdict: STATUS: DONE

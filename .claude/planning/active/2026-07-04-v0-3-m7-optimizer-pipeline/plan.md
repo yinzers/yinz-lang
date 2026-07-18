@@ -3,7 +3,7 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround", "executor-2026-07-17-phase6-designnote", "executor-2026-07-17-phase6-transform", "executor-2026-07-17-phase6-fixloop-determinism", "executor-2026-07-17-phase6-review-closeout"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround", "executor-2026-07-17-phase6-designnote", "executor-2026-07-17-phase6-transform", "executor-2026-07-17-phase6-fixloop-determinism", "executor-2026-07-17-phase6-review-closeout", "executor-2026-07-17-phase7-ab-harness", "executor-2026-07-17-phase7-rust-equiv", "executor-2026-07-17-phase7-benchdedup-fixround"]
 created_at: "2026-07-04"
 updated_at: "2026-07-17"
 metadata:
@@ -264,8 +264,12 @@ inferred.
 The Yinz compiler team replaces the hardcoded `OptimizationLevel::None` codegen pipeline with a real,
 root-caused, safety-verified LLVM optimization pipeline for `ynz build` — after v0.3-M6's correctness
 hotfixes merge to `main` — so that every performance claim about Yinz (concurrency, SoA, and beyond)
-becomes falsifiable against measured evidence instead of a compiler that structurally never optimizes,
-and the language's "Rust-level performance" positioning can be pursued on real numbers.
+becomes falsifiable against measured evidence instead of a compiler that structurally never optimizes;
+Phase 7's measured position (FRAGO 014): the shipped pipeline delivers real 1.4–3.1x net wins over
+`--no-optimize`, AND idiomatic Rust `--release` remains measurably faster than shipped Yinz
+(~2.2–2.7x on scalar/shape microworkloads, ~7–10x on array-scan — dominated by the opaque
+runtime-call ABI floor and always-on overflow checks), so "Rust-level performance" is a pursued
+positioning with a named, measured gap (Future Requirement #7), not an achieved outcome.
 
 ## 3. Execution
 
@@ -303,10 +307,19 @@ benchmark integrity) that would otherwise corrupt every measurement this milesto
 4. The O0 stack-exhaustion SIGSEGV (roadmap ledger row 439) is root-caused and fixed, unblocking honest
    hot-loop benchmarking (the `soa_calibration.rs` 131,072-visit cap can be reassessed).
 5. A committed, reproducible O0-vs-optimized A/B benchmark suite AND an honestly-framed Rust-equivalent
-   comparison suite exist and run clean in CI — reporting the TRUE measured number, whatever it is. If
-   Phase 7's numbers fall short of "as fast as Rust," the Mission and this Key Outcome get reconciled to
-   state that honestly (per [plan-source-of-truth.md](../../../../rules/plan-source-of-truth.md)'s
-   execution-time reframe discipline) rather than buried or asserted away.
+   comparison suite exist and run clean in CI — reporting the TRUE measured numbers
+   (both harnesses live in `opt_pipeline_calibration.rs`; gate mode `-- --test` is the CI-green
+   surface, matching the soa_calibration precedent): default-over-o0 net wins of 1.72x / 3.01x /
+   1.49x on cpu_loop / shape_alloc / soa_physics
+   (`crates/ynz-driver/benches/opt-pipeline-raw-2026-07-17.md`), and a measured gap to idiomatic
+   Rust `--release` of 2.70x / 2.25x / 7.20x on the same workloads (2.19x / 1.60x / 9.93x against
+   overflow-checks-matched Rust; `crates/ynz-driver/benches/rust-equiv-raw-2026-07-17.md`).
+   Phase 7's numbers fell SHORT of "as fast as Rust," so per
+   [plan-source-of-truth.md](../../../../rules/plan-source-of-truth.md)'s execution-time reframe
+   discipline the Mission and this Key Outcome now state the measured position rather than the
+   aspiration (FRAGO 014): Rust parity is NOT achieved as of v0.3-M7; the gap's evidence-backed
+   attribution (runtime-call ABI floor, always-on overflow checks, mid-end/backend maturity) and
+   its remediation path are named in Future Requirement #7 — not buried, not asserted away.
 6. Every golden (`crates/ynz-codegen/tests/golden.rs` IR-text + object-SHA-256, and
    `examples/pirates-roster/expected_stdout.txt`) is regenerated and verified **stable across at least 2
    independent regeneration runs** — not a single-run commit (this repo has an existing, named failure
@@ -1098,12 +1111,22 @@ after 3 and 4.
    added at Phase 6 execution time per this plan's Feature Registry Entries section (kind
    recategorized from `[[deferred_language_feature]]` at the Phase 6 review round — a compile-time
    toggle, not user-typeable syntax).
-7. **"As fast or faster than Rust" — honest gap, if any, from Phase 7's real numbers** — this plan does
-   NOT assert full Rust parity as an achieved outcome; Phase 7 reports the true measured position. Any
-   remaining gap (missing PGO, missing LTO, missing vectorization tuning, or any other concrete
-   follow-on) becomes its own named future revisit once Phase 7's numbers exist — not asserted now,
-   since asserting it before the measurement would be exactly the overclaim
-   [plan-source-of-truth.md](../../../../rules/plan-source-of-truth.md) exists to prevent.
+7. **"As fast or faster than Rust" — measured NOT achieved as of v0.3-M7; closing the gap is its own
+   future work (FRAGO 014)** — Phase 7's committed numbers
+   (`crates/ynz-driver/benches/rust-equiv-raw-2026-07-17.md`): idiomatic Rust `--release` is
+   2.70x / 2.25x / 7.20x faster than shipped Yinz on cpu_loop / shape_alloc / soa_physics
+   (2.19x / 1.60x / 9.93x vs overflow-checks-matched Rust). **WHAT:** closing the measured gap; the
+   evidence-backed contributors, largest first: (a) the opaque runtime-call ABI floor —
+   `ynz_array_get` per element access, which LLVM cannot inline or vectorize across (~0.48 vs
+   ~3.46 ns/visit on soa_physics — essentially all of the 7x); (b) always-on overflow-check
+   semantics (roughly a fifth to a third of the scalar gap, quantified by the release-checked
+   column); (c) missing LTO/PGO/vectorization tuning in the `default<O2>` tier. **WHY deferred:**
+   each contributor is a milestone-scale mechanism (array-access intrinsic lowering or
+   runtime-call inlining across the FFI boundary; cross-language LTO against `libynz_rt`; PGO
+   plumbing) — out of this plan's pipeline-correctness charter. **COST:** milestone-scale per
+   contributor; the array-ABI floor alone touches codegen + runtime ABI. **TRIGGER:** the next
+   performance-positioning milestone (roadmap successor to ledger row 443), or the first
+   user-facing doc/marketing claim that needs parity numbers to be honest.
 8. **Named residual: CPU-heavy code inside a non-SM (non-wait-containing) function that CPU-admission
    misses** — **WHAT:** Phase 6's back-edge poll-yield mechanism only exists for loops inside
    state-machine functions; a plain synchronous function's hot loop can never cooperatively yield this
