@@ -22,21 +22,19 @@
 // check.rs's spawn-receiver ownership path likewise returns silent None for
 // non-ident receivers.
 //
-// These tests are the no-duct-tape planned-RED inverse: they assert the CORRECT
-// contract (both tiers print real values), so they FAIL today and go green only when
-// the real fix — give/copy machinery for field/index/call-materialized spawn
-// receivers — lands. Do NOT weaken an assertion, widen the watchdog, or assert the
-// currently-observed wrong output to force green: a red here is a live
-// use-after-free in the flagship concurrency surface.
+// FIXED — v0.3-M7 Phase 9 (FRAGO 016, disposition (a)): typeck's
+// `bg_arg_is_materialized_shape_temp` records both shapes as `Give` in
+// `background_arg_inferred_ownership`, and codegen's `is_heap_arg` gate consults
+// that ONE authoritative record by span for any expression shape — the receiver's
+// pointed-to bytes now heap-upgrade (`ynz_alloc` + memcpy, freed by the task's
+// existing `BgArgFreeKind::HeapShape` ladder) before the ctx is built.
 //
-// test-ratchet: planned-RED lock authored per FRAGO 011 (2026-07-17) — `#[ignore]`d
-// pending the fr23 fix (morning disposition: FRAGO-inserted phase in this plan vs a
-// scoped M8-adjacent follow-up). The fixing phase removes the `#[ignore]` marks per
-// the Phase-1/Phase-3 RED-set precedent; deleting or weakening these tests instead
-// is the test-weakening corpse.
-//
-// Run explicitly (dev container): docker compose run --rm dev \
-//   cargo test -p ynz-driver --test fr23_uaf_planned_red -- --ignored
+// test-ratchet: authored as FRAGO 011 planned-RED locks (2026-07-17); converted to
+// permanent green regression locks by the Phase 9 fix (`#[ignore]` removed per the
+// Phase-1/Phase-3 RED-set precedent). They assert the CORRECT contract (both tiers
+// print real values). Do NOT weaken an assertion, widen the watchdog, or delete
+// these tests: a red here is a live use-after-free in the flagship concurrency
+// surface — the test-weakening corpse applies.
 
 use std::{
     path::PathBuf,
@@ -48,8 +46,8 @@ use std::{
 /// never a slow test — fix the codegen, don't widen this.
 const RUN_WATCHDOG: Duration = Duration::from_secs(60);
 
-/// The one correctness line both fixtures must produce: the spawned task reading the
-/// receiver's REAL field values, not a dead frame's reuse garbage.
+/// The one correctness line every fixture in this suite must produce: the spawned task
+/// reading the receiver's REAL field values, not a dead frame's reuse garbage.
 const CORRECT_HAUL_LINE: &str = "haul: 111/222";
 
 fn ynz_binary() -> PathBuf {
@@ -147,7 +145,6 @@ fn assert_both_tiers_print_correct_haul(fixture_name: &str) {
 }
 
 #[test]
-#[ignore = "planned-RED: fr23 confirmed-live UAF, FRAGO 011 — fix is give/copy machinery for non-ident spawn receivers"]
 fn fr23_red_maybe_payload_spawn_receiver_reads_live_values() {
     // WHY: locks fr23 shape B' — a maybe-payload spawn receiver's backing storage
     // must outlive the spawner's frame. Today the payload alloca rides raw into the
@@ -157,7 +154,6 @@ fn fr23_red_maybe_payload_spawn_receiver_reads_live_values() {
 }
 
 #[test]
-#[ignore = "planned-RED: fr23 confirmed-live UAF, FRAGO 011 — fix is give/copy machinery for non-ident spawn receivers"]
 fn fr23_red_call_materialized_spawn_receiver_reads_live_values() {
     // WHY: locks fr23 shape C2 — a call-materialized spawn receiver
     // (`background makeCargo().haul()`) must not hand the callee-return temp's
@@ -165,4 +161,46 @@ fn fr23_red_call_materialized_spawn_receiver_reads_live_values() {
     // the optimized tier's correct output is layout luck over IR-proven identical
     // dangling — confirmed-live 2026-07-17, FRAGO 011.
     assert_both_tiers_print_correct_haul("v0_3_m7_fr23_call_materialized_spawn_receiver.ynz");
+}
+
+#[test]
+fn fr23_generic_call_materialized_spawn_receiver_reads_live_values() {
+    // WHY: locks the GENERIC-callee C2 variant (`background identity(c).haul()` with
+    // `identity<T>(give T) -> T`). Generic functions live in `generic_fn_table.fns`,
+    // not `sig_table.fns`, so a sig_table-only admission read in
+    // `bg_arg_is_materialized_shape_temp` silently missed the callee and reproduced
+    // the fr23 UAF at both tiers — live-reproduced 2026-07-18 (Phase 9 security
+    // fix-round). A red here means the generic-table fallback in the C2 arm regressed.
+    assert_both_tiers_print_correct_haul(
+        "v0_3_m7_fr23_generic_call_materialized_spawn_receiver.ynz",
+    );
+}
+
+#[test]
+fn fr23_generic_maybe_payload_spawn_receiver_reads_live_values() {
+    // WHY: locks the GENERIC-container B' variant — a `maybe<Cargo>` binding whose
+    // type arrives through a generic instantiation (`let first = identity(m)`,
+    // un-annotated). The B' admission arm reads `binding_ty_narrowed` (the concrete
+    // instantiated scope type) and never touches the fn tables, so it is generic-safe
+    // by construction — this test locks that construction against a future rewrite
+    // that re-keys the arm on a table lookup (Phase 9 security fix-round, 2026-07-18).
+    assert_both_tiers_print_correct_haul("v0_3_m7_fr23_generic_maybe_payload_spawn_receiver.ynz");
+}
+
+#[test]
+fn fr23_sm_arm_call_materialized_spawn_receiver_reads_live_values() {
+    // WHY: locks the C2 shape through the STATE-MACHINE spawn arm
+    // (`lower_sm_background_spawn` — the callee suspends via `wait sleep`). The CPU
+    // and SM arms share `prepare_bg_arg_for_ctx`, but until this test that sharing
+    // was an inspection claim for the fr23 receiver shapes, not a verified contract
+    // (Phase 9 code-reviewer fix-round, 2026-07-18).
+    assert_both_tiers_print_correct_haul("v0_3_m7_fr23_sm_call_materialized_spawn_receiver.ynz");
+}
+
+#[test]
+fn fr23_sm_arm_maybe_payload_spawn_receiver_reads_live_values() {
+    // WHY: locks the B' shape through the STATE-MACHINE spawn arm — same
+    // shared-`prepare_bg_arg_for_ctx` contract as the SM C2 lock above, for the
+    // maybe-payload receiver (Phase 9 code-reviewer fix-round, 2026-07-18).
+    assert_both_tiers_print_correct_haul("v0_3_m7_fr23_sm_maybe_payload_spawn_receiver.ynz");
 }

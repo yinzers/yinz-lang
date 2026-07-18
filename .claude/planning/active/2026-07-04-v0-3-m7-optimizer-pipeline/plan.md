@@ -3,9 +3,9 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround", "executor-2026-07-17-phase6-designnote", "executor-2026-07-17-phase6-transform", "executor-2026-07-17-phase6-fixloop-determinism", "executor-2026-07-17-phase6-review-closeout", "executor-2026-07-17-phase7-ab-harness", "executor-2026-07-17-phase7-rust-equiv", "executor-2026-07-17-phase7-benchdedup-fixround", "executor-2026-07-17-phase8-final-reconciliation", "executor-2026-07-17-phase8-fixround", "executor-2026-07-17-phase8-fixround2", "executor-2026-07-17-phase8-fixround3", "executor-2026-07-18-soa-lint-testfix"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround", "executor-2026-07-17-phase6-designnote", "executor-2026-07-17-phase6-transform", "executor-2026-07-17-phase6-fixloop-determinism", "executor-2026-07-17-phase6-review-closeout", "executor-2026-07-17-phase7-ab-harness", "executor-2026-07-17-phase7-rust-equiv", "executor-2026-07-17-phase7-benchdedup-fixround", "executor-2026-07-17-phase8-final-reconciliation", "executor-2026-07-17-phase8-fixround", "executor-2026-07-17-phase8-fixround2", "executor-2026-07-17-phase8-fixround3", "executor-2026-07-18-soa-lint-testfix", "executor-2026-07-18-frago016-phase9-insert", "executor-2026-07-18-phase9-fr23-fix", "executor-2026-07-18-phase9-fr23-fixloop", "executor-2026-07-18-phase9-fixloop-deferral-fr23-c2"]
 created_at: "2026-07-04"
-updated_at: "2026-07-17"
+updated_at: "2026-07-18"
 metadata:
   type: "plan"
 ---
@@ -131,7 +131,7 @@ this is pre-release compiler-internal work, fully git-reversible):
 | **R8 — the back-edge poll-yield codegen transform introduces a NEW frame-layout/crossing-local suspension hazard** (turning a qualifying loop back edge INSIDE a state-machine function into a new poll-yield suspension point — store `resume_point`, flush crossing locals, return `Pending` — is net-new codegen logic in the same silent-miscompile family as R1, and this repo's four-milestone twin-derivation/frame history: M3a/M3d/M3e/M3g, per [`authoritative-derivation.md`](../../../rules/authoritative-derivation.md)) — *Phase 6* | B | II | HIGH | Adversarial/RED-repro fixtures: loop-crossing-local suspension fixtures (the SM-positive case AND the non-SM residual case) authored and committed BEFORE the transform lands, gating the build (**B2 adversarial/RED-repro**, probability, −1; proof: failing fixtures committed pre-implementation, Phase 6 Steps 1 & 3) — re-lookup(C, II) = **HIGH, unchanged** (Critical severity does not clear High until probability reaches D; no second honestly-provable catalog mitigation applies — full work-shown in the RISK OVERRIDE block immediately below) | **HIGH** (C×II) | **BLOCKED — unsigned RISK OVERRIDE below** |
 | **R9 — dangling-stack-return ABI miscompile class** (proven, deterministic: `ret ptr` to the callee's OWN alloca on `maybe<T>`/`number` returns — `emit.rs:2213-2223` / `:5292-5320`'s own "copy-and-forget ABI" comment; UB, garbage+hang under O2; confirmed THIRD O0-reliant class, structurally undiscoverable by Phase 1's attribute/alignment sweep because manifestation is inlining-dependent; FRAGO 005) — *Phase 3 (extended)* | A | III | HIGH | Committed RED fixture gating the fix (`v0_3_m7_p3_dangling_stack_return.ynz` + the `optimizer_red_gate` Class-3 test); root-cause-before-fix ordering (**B2 adversarial/RED-repro**, prob −1; proof: failing fixture + gate test committed before the fix lands) | **MEDIUM** (B×III) | recorded |
 | **R10 — pre-existing multi-file build nondeterminism** (proven at clean HEAD/O0: `pirates-roster` object files flap between exactly two hashes — git-stash probe proof, orthogonal to the optimizer; breaks the reproducible-build Safety invariant AND R7's Phase-5 byte-identical 2-run gate mechanism; FRAGO 006) — *Phase 5 (Step 0)* | A | III | HIGH | Root-cause + eliminate the nondeterminism source before Phase 5 Step 3's gate runs, plus a determinism regression check (**B1 eliminate**, prob −2; proof: Phase 5 Step 0's committed determinism check green) | **MEDIUM** (C×III) | recorded |
-| **R11 — fr23 confirmed-live UAF: non-plain-ident background-spawn receivers** (Future Requirements #9's disposition-(b) gate, executed 2026-07-17: B′ maybe-payload receiver WRONG at BOTH tiers; C2 call-materialized receiver WRONG 6/6 at O0, IR-proven dangling luck-masked at opt; A/C1 field-access shapes still-latent via `field_own_cell` heap cells; evidence `emit.rs:16417-16431` `is_heap_arg`, `check.rs:1709`; FRAGO 011) — anchor: fr23 / **morning decision pending** (fix-phase-in-plan vs scoped follow-up). **Loop-aggravation fact (2026-07-17 cleanup round):** Phase 4's back-edge restore makes the fr23 shapes deterministically worse inside plain loops (per-iteration stomp; code-reviewer 2026-07-17) — strengthens the case for disposition (a) fix-in-plan | A | III | HIGH | Committed `#[ignore]`d planned-RED locks documenting both confirmed shapes (`crates/ynz-driver/tests/fr23_uaf_planned_red.rs`, test-ratchet-marked, citing FRAGO 011) — **B2 detection lock, NOT a fix**; the fix is phase-sized give/copy machinery for non-ident spawn receivers, not executable overnight without expanding this plan's charter | **HIGH (accepted)** — routed per FR #9's own Patrick-directed text ("route a confirmed-live result like the R13/R14 signed-risk overrides") under the signed overnight envelope (audit addendum 2, 2026-07-17); work-shown record: FRAGO 011 | **accepted — FRAGO 011 (overnight envelope); morning decision pending** |
+| **R11 — fr23 confirmed-live UAF: non-plain-ident background-spawn receivers** (Future Requirements #9's disposition-(b) gate, executed 2026-07-17: B′ maybe-payload receiver WRONG at BOTH tiers; C2 call-materialized receiver WRONG 6/6 at O0, IR-proven dangling luck-masked at opt; A/C1 field-access shapes still-latent via `field_own_cell` heap cells; evidence `emit.rs:16417-16431` `is_heap_arg`, `check.rs:1709`; FRAGO 011) — anchor: fr23 / **disposition (a) decided 2026-07-18 (FRAGO 016) and EXECUTED 2026-07-18 (Phase 9, `executor-2026-07-18-phase9-fr23-fix`)**. **Loop-aggravation fact (2026-07-17 cleanup round):** Phase 4's back-edge restore made the fr23 shapes deterministically worse inside plain loops (per-iteration stomp; code-reviewer 2026-07-17) — strengthened the case for disposition (a) fix-in-plan | A | III | HIGH | **FIXED (B1 eliminate, Phase 9):** typeck records both confirmed shapes as `Give` via ONE admission helper (`bg_arg_is_materialized_shape_temp`, `check.rs`); codegen's `is_heap_arg` gate consults the ONE authoritative `background_arg_inferred_ownership` record by span for any expression shape (`emit.rs`, `prepare_bg_arg_for_ctx`) — the existing `HeapShape` heap-upgrade/free ladder covers both spawn arms; the planned-RED locks converted to permanent green regression tests (`fr23_uaf_planned_red.rs`, `#[ignore]` removed); proof: both fixtures re-run at BOTH tiers print `haul: 111/222`, corpus sweep clean with both fixtures included (FRAGO 012 exclusions removed); fix-round 2026-07-18 (`executor-2026-07-18-phase9-fr23-fixloop`): C2 admission extended to GENERIC shape-returning callees (`generic_fn_table` fallback — security live-repro closed) and SM-spawn-arm + generic-B′ coverage test-locked (4 new fixtures, `fr23_uaf_planned_red.rs`) | **CLOSED** — both confirmed-live shapes (B′, C2) fixed and verified at both tiers, including the generic-callee C2 variant; A/C1 (`field_own` heap-cell protected) untouched, still-latent, correctly out of scope; work-shown record: FRAGO 011, FRAGO 016, Phase 9 | **closed — disposition (a) executed (Phase 9, 2026-07-18)** |
 
 R8's residual lands HIGH and, per the frozen risk-engine catalog's available patterns, cannot be
 honestly mitigated further at plan-authoring time (see the RISK OVERRIDE block immediately below —
@@ -843,6 +843,94 @@ for all four dispatches' full accounts.
   nothing in this plan's execution silently contradicted a cited design doc without being surfaced).
 - **Model tag:** `(general/mechanical, floor, medium)`
 
+#### Phase 9 — Close the fr23 Confirmed-Live UAF (R11/FRAGO 011 Disposition (a))
+
+**Inserted by FRAGO 016** (`conductor-2026-07-18-completion-gate`, 2026-07-18) — Patrick's own
+"morning decision" (two days late, made on the record at the completion gate, not silently skipped):
+fix fr23 in this plan rather than defer it to a scoped M8-adjacent follow-up. See `audit.md`'s
+`### FRAGO 016` for the full trigger/decision/classification record.
+
+- **Task + purpose:** Close the confirmed-live UAF (R11 / Future Requirements #9) for non-plain-ident
+  `background`-spawn receivers — specifically the two shapes the 2026-07-17 fr23 gate CONFIRMED-LIVE:
+  **B′** (maybe-payload receiver, e.g. `first.value.haul()` where `first: maybe<Cargo>` was
+  materialized from an index — wrong at BOTH tiers) and **C2** (call-materialized receiver, e.g.
+  `background makeCargo().haul()` — wrong 6/6 at O0, optimized-tier "correct" only by IR-proven
+  stack-layout luck over identical dangling). Both shapes heap-upgrade as raw pointers today because
+  `is_heap_arg` (`crates/ynz-codegen/src/emit.rs`, ~16787-16801) and its typeck twin
+  (`crates/ynz-typeck/src/check.rs`'s spawn-receiver ownership normalization, ~line 1709 area) gate
+  the heap-upgrade path on `Expr::Ident` (with inferred ownership) or an explicit `.copy()` postfix
+  only — every other receiver expression shape falls through to `BgArgFreeKind::None`, a raw pointer
+  into a task that can outlive the spawner's frame. Phase 4's back-edge stacksave/restore turned this
+  from a latent risk (real only under artificially-long O0 stack-slot lifetimes) into a deterministic
+  per-iteration stomp inside plain loops — the loop-aggravation fact that strengthened the case for
+  fixing now rather than deferring. **A/C1 (the field-access and call-form-field-access-arg shapes,
+  protected today by `field_own_cell` heap-cell allocation) are explicitly OUT OF SCOPE** — they are
+  still-latent, not confirmed-live, and FRAGO 011 never routed them for a fix; do not touch their
+  handling.
+- **Steps:**
+  1. Root-cause the exact gap between the `Expr::Ident` path (correctly heap-upgraded via
+     `background_arg_inferred_ownership`) and the B′/C2 receiver shapes (silently falling through to
+     `BgArgFreeKind::None`): read `is_heap_arg`'s match arm in `emit.rs` and the typeck-side spawn
+     normalization helper in `check.rs` end-to-end for a maybe-payload receiver and a
+     call-materialized receiver, and name the precise site(s) where each shape's ownership/ident-span
+     information is lost before it ever reaches the heap-upgrade gate.
+  2. Design and implement the fix by EXTENDING the existing give/copy/ownership machinery — never a
+     second, parallel mechanism, per this repo's
+     [`authoritative-derivation.md`](../../../rules/authoritative-derivation.md) — so that B′
+     (maybe-payload) and C2 (call-materialized) spawn receivers get correctly heap-upgraded (or
+     copied, whichever the ownership model's existing discipline calls for) before the spawned task's
+     context is built. Reuse the same `BgArgFreeKind`/heap-upgrade infrastructure `is_heap_arg`'s
+     `Expr::Ident`/`.copy()` arms already use for Shape/array/maybe-payload receivers — extend the
+     admission logic (`is_heap_arg`'s match, plus whatever typeck-side ownership recording the fix
+     needs) to recognize these two additional receiver expression shapes, not build a sibling path.
+     A/C1's `field_own_cell` handling must be left untouched.
+  3. Remove the `#[ignore]` attributes from the two planned-RED tests in
+     `crates/ynz-driver/tests/fr23_uaf_planned_red.rs` once the fix makes them pass for real — this is
+     the planned-RED-to-green conversion this repo's `no-duct-tape.md` legitimate-inverse discipline
+     describes. Actually run both tests (`cargo test -p ynz-driver --test fr23_uaf_planned_red --
+     --ignored`, or un-ignored via the normal suite) and confirm BOTH genuinely pass at both tiers
+     (`CORRECT_HAUL_LINE` — do not just delete the `#[ignore]` marker and assume green).
+  4. Remove the two fr23 fixture exclusions in `crates/ynz-driver/tests/cross_impl_consistency.rs`
+     (the `v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz` / `v0_3_m7_fr23_call_materialized_spawn_receiver.ynz`
+     name-exclusions, both marked `test-ratchet: FRAGO 011 planned-RED fixture` with the explicit
+     removal trigger "the exclusions come out in the same change that fixes fr23") — FRAGO 012's
+     named removal trigger firing. Re-run the corpus sweep this test drives and confirm it is
+     genuinely clean with both fixtures included, not merely that the exclusion lines compile out.
+  5. Amend this plan's own R11 risk-table row (¶1 Risk Assessment) and Future Requirements #9's text
+     to record disposition (a) **EXECUTED** (not merely decided/inserted) — state concretely what
+     shipped (the give/copy extension, which receiver shapes it covers), cite this Phase 9, and update
+     the risk's residual/gate columns from "accepted HIGH — morning decision pending" to the closed,
+     verified state (both confirmed-live shapes fixed and proven; A/C1 unchanged and still correctly
+     out of scope).
+  6. Amend the roadmap's fr23 Capability Ledger row in **BOTH** duplicate tables in
+     [`roadmap.md`](../../active/2026-05-21-v0-3-concurrency-perf/roadmap.md) (the "Non-plain-ident
+     shape receivers/args in background-spawn position" row, currently "confirmed-live — 2 shapes
+     (FRAGO 011, 2026-07-17); fix pending M7 morning disposition") to "fixed by M7 Phase 9" — citing
+     this phase and its verification evidence. This is Phase 9's own boundary-commit responsibility,
+     not a separate completion-gate pass.
+- **Exit criteria:** both confirmed-live UAF shapes (B′, C2) produce correct output (`haul: 111/222`
+  or the fixture's equivalent correct values) at both O0 and `default<O2>` tiers, independently
+  verified by re-running the fixtures — not merely asserted from the fix's design; the two planned-RED
+  tests in `fr23_uaf_planned_red.rs` pass with `#[ignore]` removed; the two
+  `cross_impl_consistency.rs` exclusions are removed and the corpus sweep is genuinely clean with both
+  fixtures included; R11, Future Requirements #9, and the roadmap's fr23 row (both tables) all reflect
+  the closed risk; A/C1's `field_own_cell` handling is untouched (grep-confirmed, not just asserted)
+  and remains correctly out of scope. **Fix-round addendum (2026-07-18,
+  `executor-2026-07-18-phase9-fr23-fixloop`):** the C2 admission also covers GENERIC shape-returning
+  callees (`generic_fn_table` fallback in `bg_arg_is_materialized_shape_temp`, mirroring the
+  borrow-reject check's established `.or_else` pattern), live-verified red-before/green-after at both
+  tiers; the SM spawn arm (both shapes) and the generic-B′ analog are locked by four new permanent
+  fixtures/tests in `fr23_uaf_planned_red.rs`.
+- **Reviewer fan-out:** code-reviewer (the give/copy fix's correctness — this is exactly the class of
+  ownership/memory-safety fix that needs real scrutiny, in the same silent-miscompile family this
+  plan's R1/R9/authoritative-derivation history already warns about); security (memory-safety-adjacent
+  — this is a UAF fix); deviation-judge (confirm A/C1 stayed untouched, confirm the fix reuses the
+  authoritative give/copy/ownership machinery rather than forking a parallel one, per
+  `authoritative-derivation.md`).
+- **Model tag:** `(coding, high, medium)` — real memory-safety engineering (give/copy machinery for
+  two specific receiver shapes) deserves the higher quality bar, but the scope is bounded to one
+  subsystem's admission gate, not a multi-file architecture change.
+
 ### 3.4 Coordinating Instructions
 
 - **Sequencing:** Phases 0–2 gate everything after them (R3, R1, R4 must be closed before the default
@@ -1196,15 +1284,40 @@ for all four dispatches' full accounts.
    stack-layout luck over IR-proven identical dangling). Both confirmed shapes are locked by
    committed `#[ignore]`d planned-RED tests (`crates/ynz-driver/tests/fr23_uaf_planned_red.rs` +
    fixtures `v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz` /
-   `v0_3_m7_fr23_call_materialized_spawn_receiver.ynz`). **MORNING DECISION PENDING:** (a) fix lands
-   as a FRAGO-inserted phase in THIS plan before completion, vs (a′) a scoped follow-up
-   (M8-adjacent) with the ledger row re-homed — the planned-RED locks and FRAGO 011 keep either
-   path honest. **Decision-context addition (2026-07-17 cleanup round):** Phase 4's back-edge
-   restore makes the fr23 shapes deterministically worse inside plain loops — the un-upgraded
-   payload alloca a spawned task points into is now FREED at every plain-loop back-edge, turning
-   the UAF into a deterministic per-iteration stomp (per-iteration stomp; code-reviewer
-   2026-07-17; documented at emit.rs `loop_stack_save`'s KNOWN EXCEPTION note) — strengthens the
-   case for disposition (a) fix-in-plan.
+   `v0_3_m7_fr23_call_materialized_spawn_receiver.ynz`). **Decision-context addition (2026-07-17
+   cleanup round):** Phase 4's back-edge restore makes the fr23 shapes deterministically worse
+   inside plain loops — the un-upgraded payload alloca a spawned task points into is now FREED at
+   every plain-loop back-edge, turning the UAF into a deterministic per-iteration stomp
+   (per-iteration stomp; code-reviewer 2026-07-17; documented at emit.rs `loop_stack_save`'s KNOWN
+   EXCEPTION note, since rewritten to record closure) — strengthened the case for disposition (a)
+   fix-in-plan. **MORNING DECISION MADE 2026-07-18 (FRAGO 016,
+   `conductor-2026-07-18-completion-gate`):** disposition (a) — fix lands in THIS plan; **Phase 9 —
+   Close the fr23 Confirmed-Live UAF** inserted (§3.3) to execute it. **DISPOSITION (a) EXECUTED
+   2026-07-18 (Phase 9, `executor-2026-07-18-phase9-fr23-fix`): CLOSED.** What shipped: typeck's
+   spawn-site normalization + ownership recording extended to the two confirmed-live receiver/arg
+   shapes via ONE new admission helper (`bg_arg_is_materialized_shape_temp`, `check.rs` — B′
+   maybe-payload access `m.value` on a `maybe<Shape>` binding; C2 call-materialized
+   shape-returning call), recorded as `BgOwnership::Give` in `background_arg_inferred_ownership`
+   (a materialized temp has no binding to read after the spawn); codegen's `is_heap_arg` gate
+   (`emit.rs`, `prepare_bg_arg_for_ctx`) now consults that ONE authoritative record by span for
+   any expression shape (byte-identical for the Ident arm it subsumes; explicit `.copy()`
+   unchanged) — the existing `BgArgFreeKind::HeapShape` heap-upgrade/free ladder does the rest,
+   both spawn arms (CPU `lower_expr_background` + SM `lower_sm_background_spawn`) covered since
+   they share `prepare_bg_arg_for_ctx`. Never a sibling path (authoritative-derivation.md).
+   Verified: both planned-RED tests pass with `#[ignore]` removed (now permanent regression
+   locks); both fixtures independently re-run at BOTH tiers print `haul: 111/222`; the two
+   `cross_impl_consistency.rs` exclusions removed (FRAGO 012's named trigger fired) with the
+   corpus sweep clean, both fixtures included. A/C1 (field-access shapes, `field_own` heap-cell
+   protected, still-latent) remain untouched and out of scope — the admission helper explicitly
+   excludes field-access expressions. **Fix-round addition (2026-07-18,
+   `executor-2026-07-18-phase9-fr23-fixloop`):** the C2 arm's callee resolution now ALSO falls back
+   to `generic_fn_table` (security review live-reproduced the UAF for a generic shape-returning
+   callee, `background identity(c).haul()` with `identity<T>(give T) -> T` — the sig_table-only
+   read silently missed it); the instantiated return type is resolved with the same
+   `unify_param`/`apply_substitution` machinery `check_generic_fn_call` uses, never a sibling
+   scheme. SM-spawn-arm coverage (both shapes through `lower_sm_background_spawn`) and the
+   generic-B′ analog (safe by construction — the B′ arm reads the concrete instantiated binding
+   type, never the fn tables) are locked by four new fixtures/tests in `fr23_uaf_planned_red.rs`.
 10. **N1: `fixed<T>` function returns are broken at BOTH tiers** (Phase 3 Step-4b sweep finding,
     FRAGO 009 disposition (5)) — **WHAT:** a `-> fixed<T>` return loses its size through the return
     (probe prints `0,0` for `[7,8,9].get(0)/.get(2)` after return), identically at O0 and optimized —

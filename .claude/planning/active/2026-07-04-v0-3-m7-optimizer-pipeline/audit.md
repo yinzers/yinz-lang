@@ -2184,6 +2184,219 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   `## Context-segment log` not touched (conductor-owned). Session-id appended to plan.md frontmatter in
   the same action as this entry.
 
+- `executor-2026-07-18-frago016-phase9-insert` — 2026-07-18 — **FRAGO 016 application: insert
+  Phase 9 text + amend R11/FR #9 to future tense + two should-fix roadmap corrections.** Scope was
+  strictly the FRAGO-application dispatch itself — inserting the new phase's plan text and
+  reconciling the citations it depends on, NOT executing Phase 9's actual give/copy fix (no
+  `emit.rs`/`check.rs` code touched; no `#[ignore]` removed).
+  - **Read first:** `audit.md`'s `### FRAGO 016` record in full (trigger/decision/classification/
+    disposition/sibling-sweep) before writing anything, per the dispatch instructions.
+  - **Inserted** `#### Phase 9 — Close the fr23 Confirmed-Live UAF (R11/FRAGO 011 Disposition (a))`
+    into `plan.md` §3.3, immediately after Phase 8 and before `### 3.4 Coordinating Instructions`,
+    following the plan's existing Task+purpose/Steps/Exit-criteria/Reviewer-fan-out/Model-tag phase
+    shape. Read `crates/ynz-driver/tests/fr23_uaf_planned_red.rs` (both planned-RED tests + their
+    header comment), `crates/ynz-codegen/src/emit.rs`'s `is_heap_arg` match (~16787-16801) and its
+    surrounding `BgArgFreeKind`/heap-upgrade machinery, `crates/ynz-typeck/src/check.rs`'s spawn-
+    receiver ownership normalization helper (~line 1709 area), and
+    `crates/ynz-driver/tests/cross_impl_consistency.rs`'s two fr23 name-exclusions (both test-ratchet-
+    marked with FRAGO 012's removal trigger) to write an accurate, specific Steps list rather than a
+    generic template — confirmed the exact root-cause shape (both `is_heap_arg`'s codegen-side match
+    and typeck's ownership-recording helper gate the heap-upgrade path on `Expr::Ident`/`.copy()`
+    only) without touching any of that code.
+  - **Amended R11** (¶1 Risk Assessment risk-table row) and **Future Requirements #9** in `plan.md`
+    to record the disposition-(a) decision (FRAGO 016) in FUTURE tense — "Phase 9 inserted to execute
+    it; not yet executed" — per the dispatch's explicit instruction not to write "executed" until
+    Phase 9's own execution dispatch actually ships the fix. The prior "morning decision pending"
+    framing is replaced with "decision made 2026-07-18 (FRAGO 016)."
+  - **Should-fix (a) — roadmap.md decimal128-by-value-RETURN-ABI row, both duplicate Capability
+    Ledger tables** (lines ~442 and ~512 pre-edit): the row cited "NOT absorbed by v0.3-M7 (Future
+    Requirements #15)" — verified this citation against the M7 plan's own FR list and confirmed FR
+    #15 is the unrelated "fire-and-forget `background` completion lines" item, so the citation was
+    dangling. Cross-checked the M7 plan's FR #10 (N1, `fixed<T>` return breakage) text, which states
+    the roadmap's decimal128 return-ABI row is "now largely absorbed by this plan's `abi_return_type`"
+    — traced this to Phase 3 Step 4b's R9/FRAGO 005 return-ABI fix (eliminates `ret ptr` to the
+    callee's own alloca on `maybe<T>`/`number` returns), which is exactly the decimal128-by-value-
+    return-garbage defect's class. Rewrote both rows' status column ("largely absorbed — M7 Phase 3
+    (R9 return-ABI fix)") and notes column (corrected citation, named the closing fix, and named the
+    genuine residual — the sibling `fixed<T>` return-ABI gap, tracked separately as M7 FR #10/N1 —
+    rather than claiming full closure). Flagged in both edits that the row should be verified with a
+    fresh `toll(5.0)`-shaped repro before being marked fully closed (this dispatch did not re-run
+    that repro — a text-reconciliation task, not a fix-verification task).
+  - **Should-fix (b) — roadmap.md row 441 (int-literal-into-`number` ICE), single-table dedupe**: the
+    Notes cell had its entire "NOT absorbed... ELEVATED 2026-07-04..." clause duplicated verbatim
+    back-to-back (confirmed via direct read — the duplicate table at line ~511 did NOT carry the same
+    duplication, so this was row 441-only). Removed the duplicate occurrence, preserving the
+    "Capability discovery" and "ASSIGNED 2026-07-04" sentences in their original relative order — a
+    mechanical dedupe, no content change beyond removing the exact repeated span (verification.md's
+    refactor/mechanical-edit escape hatch applies; no Paper-Trace).
+  - Session-id appended to `plan.md`'s frontmatter (`executor-2026-07-18-frago016-phase9-insert`) and
+    to `roadmap.md`'s frontmatter (same id — one dispatch touched both files) in the same action as
+    this entry; both files' `updated_at` bumped to 2026-07-18.
+  - **Plan↔task sync:** no plan/task-store checkboxes apply to this dispatch — it is a FRAGO-
+    application text edit, not a phase execution; nothing to tick.
+  - **Deviations surfaced:** none — this dispatch is itself the FRAGO 016 disposition's own
+    application, already classified and authorized by Patrick per the `### FRAGO 016` record; no new
+    plan-vs-reality divergence to route.
+  - **RED handoffs honored:** Phase 9's two planned-RED tests
+    (`crates/ynz-driver/tests/fr23_uaf_planned_red.rs`) remain `#[ignore]`d, untouched by this
+    dispatch — the documented cross-phase handoff (fixed by Phase 9's own execution) stays intact.
+  - No commit — diff left for the conductor's commit gate. `## Context-segment log` not touched
+    (conductor-owned).
+
+- `executor-2026-07-18-phase9-fr23-fix` — 2026-07-18 — Executed **Phase 9 — Close the fr23
+  Confirmed-Live UAF (R11/FRAGO 011 Disposition (a))**, Steps 1-6, single segment, **DONE**.
+  - **Step 1 (root cause).** The ownership/span information for the B′/C2 receiver shapes is lost at
+    three sites: (a) typeck `check.rs` `background_spawn_call_form`'s MethodCall arm required an
+    `Expr::Ident` receiver — a non-ident receiver aborted Call-form normalization entirely, so the
+    statement form skipped give/copy inference and the receiver's span never entered
+    `background_arg_inferred_ownership`; (b) both typeck recording loops (statement-form
+    `check_stmts` and handle-form `check_background_handle_spawn`) recorded only `Expr::Ident` args;
+    (c) codegen `emit.rs` `is_heap_arg`'s `_ => false` fallthrough — while codegen's
+    `synthesize_ufcs_call_expr` normalizes ANY Shape-typed receiver into arg 0 (the typeck/codegen
+    admission asymmetry), so the un-recorded receiver reached `prepare_bg_arg_for_ctx` and rode raw
+    (`BgArgFreeKind::None`). Paper-trace: observed pre-fix (FRAGO 011 gate record) B′ optimized
+    `0/0` 6/6 + O0 stomp sentinels, C2 O0 `haul: 0/777777` 6/6; expected `haul: 111/222`; the raw
+    pointer is B′'s `%..._pay_own` payload alloca (`maybe_payload_stable_bits`) / C2's callee-return
+    temp alloca, both dead with the spawner's frame.
+  - **Step 2 (fix, extending the one machinery).** New typeck admission helper
+    `bg_arg_is_materialized_shape_temp` (`check.rs`): B′ = `Expr::FieldAccess { field: "value" }` on
+    an ident binding of type `maybe<Shape>` (a non-ident base is unreachable — the flow-sensitive
+    `.exists()` check only proves safety for ident bindings); C2 = `Expr::Call` with ident callee
+    whose declared return type is a shape. Consumed at three sites: the MethodCall arm of
+    `background_spawn_call_form` (admits the receiver, normalizing it to arg 0 exactly as codegen
+    does) and both recording loops (record `BgOwnership::Give` — a materialized temp has no binding
+    the caller could read after the spawn; nothing to consume in scope). Codegen: `is_heap_arg`'s
+    `Expr::Ident` arm and `_ => false` fallthrough collapsed into ONE span lookup against
+    `background_arg_inferred_ownership` (byte-identical for idents; explicit `.copy()` arm
+    unchanged) — admission extends exactly to what typeck recorded, never a codegen-side
+    re-derivation (authoritative-derivation.md). Both spawn arms covered (CPU + SM share
+    `prepare_bg_arg_for_ctx`); the existing `BgArgFreeKind::HeapShape` alloc/free ladder is reused
+    unchanged. Field-access expressions (A/C1) are explicitly NOT admitted by the helper — their
+    `store_field` `field_own` heap-cell handling is untouched (grep-confirmed: no diff lines touch
+    `store_field`/`shape_bytes_to_heap_cell`/`maybe_to_heap_cell` beyond new doc-comment mentions).
+    Stale doc comments updated: `prepare_bg_arg_for_ctx`'s arg-kinds list; `loop_stack_save`'s
+    "KNOWN EXCEPTION (c)" note rewritten to record closure (the loop-aggravation hazard is gone —
+    no in-loop payload alloca rides raw anymore).
+  - **Step 3.** `#[ignore]` removed from both tests in `fr23_uaf_planned_red.rs`; header prose
+    updated from planned-RED to permanent-green regression locks (test-ratchet note preserved —
+    weakening/deleting stays the corpse). Verified by real runs: green via `-- --ignored` BEFORE
+    the marker removal, green again via the normal suite after (2 passed / 0 failed both times).
+    Independent fixture re-runs: both fixtures, both tiers (`--no-optimize` + default optimized),
+    all four runs print `haul: 111/222` (plus correct `stomp: 1666665` ×2 and `main done`).
+  - **Step 4.** Both fr23 name-exclusions removed from `cross_impl_consistency.rs` (both sweep
+    functions — FRAGO 012's named removal trigger fired); corpus sweep re-run with both fixtures
+    included: clean (see return for the run receipt).
+  - **Step 5.** `plan.md` R11 row → CLOSED (B1 eliminate, disposition (a) EXECUTED, verification
+    evidence cited); FR #9 → disposition (a) EXECUTED 2026-07-18 with the concrete shipped-fix
+    record. Sibling sweep for stale pending-state citations: only remaining "morning
+    disposition/pending" strings are Phase 9's own step instructions quoting the pre-fix cell text
+    they instructed to change — historical instruction text, not stale state.
+  - **Step 6.** Roadmap fr23 Capability Ledger row updated in BOTH duplicate tables: status cell →
+    "fixed by M7 Phase 9 (2026-07-18)"; notes cell → morning-disposition record (FRAGO 016) + the
+    executed-fix/verification record. Roadmap frontmatter untouched by this edit beyond content
+    cells (session-id chain lives in the M7 plan, which owns this dispatch).
+  - **Plan↔task sync:** this plan's phases carry numbered Steps, not `- [ ]` checkboxes — no
+    checkbox glyphs exist to tick (consistent with every prior phase's convention here). No
+    task-store tooling (TodoWrite) is granted in this dispatch's environment, so step completion is
+    recorded here + in the return: Steps 1-6 all complete this segment; session-id
+    `executor-2026-07-18-phase9-fr23-fix` appended to `plan.md` frontmatter in the same action as
+    this entry; `updated_at` already 2026-07-18.
+  - **Deviations surfaced:** none plan-vs-reality. One scope note for the deviation-judge, NOT a
+    divergence: the admission helper recognizes the two shapes wherever they appear in the
+    normalized spawn ARG list (so `background haul(makeCargo())` — the Call-form twin of the C2
+    receiver shape — is also fixed). This is the same two expression shapes through the same single
+    gate, not a third shape: restricting to "arg index 0 that came from a receiver" would have
+    forked the admission logic per-position. Field-access args (C1) remain excluded either way.
+  - **RED handoffs honored:** none remaining — this phase IS the documented RED's resolution; the
+    two planned-RED locks converted to permanent green.
+  - No commit — diff left for the conductor's commit gate. `## Context-segment log` not touched
+    (conductor-owned). No handoff file was ever created this phase (single segment); nothing to
+    delete.
+
+- `executor-2026-07-18-phase9-fr23-fixloop` — 2026-07-18 — **Phase 9 fix-loop round** (security
+  BLOCKER + two reviewer should-fixes on the fr23 fix), single segment, **DONE**.
+  - **Fix 1 (BLOCKER, security live-repro — C2 admission missed GENERIC shape-returning
+    callees).** Verified live BEFORE the fix (`background identity(c).haul()` with
+    `identity<T>(give T) -> T`): O0 printed stomp-junk (`haul: 888777/888888` / `haul: 0/888777`
+    3/3), optimized printed nondeterministic garbage (`haul: 1/140723670713856`-class) —
+    expected `haul: 111/222`; root cause `check.rs` `bg_arg_is_materialized_shape_temp`'s C2 arm
+    read ONLY `sig_table.fns`, while a generic function lives in `generic_fn_table.fns`
+    (`signatures.rs` routes `!f.generics.is_empty()` there), so the receiver fell to
+    `BgArgFreeKind::None`. Fix: the C2 arm now falls back to `generic_fn_table` (mirroring the
+    borrow-reject check's established `.or_else` split in the same file) and resolves the
+    instantiated return type with the SAME `unify_param`/`apply_substitution` machinery
+    `check_generic_fn_call` uses (seeded side-effect-free from explicit shape type args +
+    plain-ident arg bindings via `binding_ty_narrowed`; an unresolved TypeParam never matches
+    `Shape`, so no false admission) — never a sibling inference scheme
+    (authoritative-derivation.md). Verified AFTER: 6/6 correct at both tiers; locked permanent
+    by `v0_3_m7_fr23_generic_call_materialized_spawn_receiver.ynz` +
+    `fr23_generic_call_materialized_spawn_receiver_reads_live_values`.
+  - **Fix 2 (code-reviewer — SM spawn arm untested for B′/C2).** Two new fixtures whose `haul`
+    genuinely suspends (`wait sleep(150)`), routing the spawn through
+    `lower_sm_background_spawn` (the `suspend_set` routing in `lower_expr_background`,
+    emit.rs): `v0_3_m7_fr23_sm_call_materialized_spawn_receiver.ynz` (C2) +
+    `v0_3_m7_fr23_sm_maybe_payload_spawn_receiver.ynz` (B′), each with a permanent
+    both-tiers lock in `fr23_uaf_planned_red.rs`. Both green — the shared
+    `prepare_bg_arg_for_ctx` claim is now a test result, not an inspection claim.
+  - **Fix 3 (security — B′ generic-container analog).** Confirmed generic-SAFE BY CONSTRUCTION
+    with reasoning + live repro: the B′ arm reads `binding_ty_narrowed(base)` — the scope
+    entry's already-CONCRETE instantiated type (stored at the `let` after
+    `check_generic_fn_call`'s `apply_substitution`) — and never touches
+    `sig_table`/`generic_fn_table`, so the C2 gap has no B′ analog. Live-verified with an
+    UN-annotated `let first = identity(m)` binding (type arrives purely through generic
+    instantiation): 6/6 correct at both tiers; locked permanent by
+    `v0_3_m7_fr23_generic_maybe_payload_spawn_receiver.ynz` +
+    `fr23_generic_maybe_payload_spawn_receiver_reads_live_values` (guards a future rewrite that
+    re-keys the arm on a table lookup).
+  - **Verification receipts:** full `fr23_uaf_planned_red` suite 6/6 green (both tiers per
+    test); `cross_impl_consistency` corpus sweep green with all 4 new fixtures included (2
+    passed, 514s); `cargo clippy -p ynz-typeck -p ynz-driver -- -D warnings` clean; `cargo fmt
+    --all -- --check` clean. A/C1 untouched (diff touches only the C2 arm + fixtures/tests).
+  - **Plan amendments (one-line additions, per the fix-round dispatch):** Phase 9 exit-criteria
+    addendum, R11 row's proof/residual cells, FR #9 fix-round addition — all citing this
+    session-id. Session-id appended to `plan.md` frontmatter in the same action as this entry.
+  - **Deviations surfaced:** none — plan-said-X/reality-is-Y did not occur; the dispatch's
+    named fix spec matched reality at every anchor (predicate at check.rs ~1750, sibling
+    `.or_else` at ~2946, `signatures.rs:132` routing).
+  - No commit — diff left for the conductor's commit gate. `## Context-segment log` not touched
+    (conductor-owned). No handoff file (single segment).
+
+- `executor-2026-07-18-phase9-fixloop-deferral-fr23-c2` — 2026-07-18 — **Phase 9 fix-loop round**
+  (should-fix finding routed to the roadmap's durable deferral store rather than fixed in a 4th
+  round), single segment, **DONE**.
+  - **Finding.** Two independent reviewers (graveyard-auditor and security) confirmed, on the
+    uncommitted working-tree diff, that `bg_arg_is_materialized_shape_temp`'s C2
+    explicit-type-args admission loop (`crates/ynz-typeck/src/check.rs:1783`) hand-rolls a
+    shape-name check instead of calling the authoritative `ast_type_to_type` conversion
+    (`check.rs:5179`), missing the two compiler-synthesized builtin shape names (`Frame`,
+    `SourceLoc`) that conversion special-cases (`check.rs:5208-5210`).
+  - **Why routed, not fixed this round.** Security independently live-tested exploitability and
+    confirmed the gap is NOT reachable today: two separate falsification attempts
+    (`identity<SourceLoc>(...)`, and a plain non-generic function taking/returning `SourceLoc`)
+    both hit unrelated, pre-existing compiler ICEs in `emit.rs`'s shape-ABI registration path
+    (`abi_return_type: no LLVM struct type for shape 'SourceLoc'` and `cannot alloca for type
+    Error`) BEFORE ever reaching a spawn/runtime path where the gap would matter — Frame/SourceLoc
+    cannot currently be used as an ordinary function's parameter/return type at all, independent of
+    the fr23 fix, generics, or `background`. This meets the no-duct-tape four-field deferral bar
+    (a genuine tradeoff, not an excuse): the fix is a real small edit, but shipping it as a 4th
+    fix-loop round chasing an already-fixed class (the fr23 admission gate) with zero live
+    exploitability crosses the YAGNI ceiling, not the floor.
+  - **Where filed.** This plan is roadmap-linked (`roadmap-id:
+    "2026-05-21-v0-3-concurrency-perf"`); per this plan's own established routing discipline, a
+    code-quality/robustness nit with no missing capability gets a durable no-duct-tape deferral in
+    the ROADMAP's own `audit.md` sidecar, not a new Capability Ledger row. Filed as:
+    Idempotency-Key `2026-07-04-v0-3-m7-optimizer-pipeline:
+    crates-ynz-typeck-src-check-rs-1783` in
+    `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` (full four-field WHAT/WHY/
+    COST/TRIGGER record there). Session-id appended to that roadmap's frontmatter chain in the same
+    action as that entry.
+  - **Plan↔task sync:** no `plan.md` phase text or checkbox changed this round (the finding is
+    deferred to the roadmap, not fixed in this plan's own scope) — nothing to reconcile here.
+  - **Deviations surfaced:** none — this is the documented, no-duct-tape-compliant deferral path,
+    not a plan-vs-reality divergence.
+  - No commit — diff left for the conductor's commit gate. `## Context-segment log` not touched
+    (conductor-owned). No handoff file (single segment).
+
 ## FRAGO log
 
 **⚠️ ERRATA — Numbering collisions (FRAGO 015, 2026-07-17)**: This log carries two independent numbering collisions — FRAGO 004/005 filed by session `conductor-2026-07-16-phase2-dispatch` (~L2048/2080) and a separate, unrelated FRAGO 004/005 pair filed by session `conductor-2026-07-17-phase6-review` (~L2302/2320) — neither session checked the true high-water mark before numbering forward. The log remains append-only (no renumbering); disambiguate by session-id when citing. Phase 7's own FRAGOs (numbered correctly past the true high-water mark of 013, starting at 014) are unambiguous.
@@ -2648,6 +2861,60 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   ("Documentation, Registry, and Roadmap Reconciliation") is the natural home, or the plan's
   completion-gate/AAR if Phase 8 does not pick it up. Recorded here so it is not lost.
 
+### FRAGO 016 — 2026-07-18 — session-id: `conductor-2026-07-18-completion-gate`
+
+- **Trigger.** The cumulative cross-phase completion gate (§9.0) fanned out three cross-phase
+  lenses over the whole 9-phase plan diff (`0ac76d5..aa897f6`). Both acceptance-verifier and
+  deviation-judge independently surfaced the SAME open item: risk row **R11** / Future
+  Requirement **#9** (fr23 confirmed-live UAF, non-plain-ident `background`-spawn receivers,
+  FRAGO 011) was accepted HIGH on 2026-07-17 under an EXPLICIT term — "morning decision pending"
+  — between disposition (a) fix-in-plan and (a′) scoped follow-up. Phases 4 through 8 then ran
+  and sealed, and the completion gate itself convened, with that promised decision never actually
+  made or recorded anywhere (`plan.md`, the roadmap's fr23 row, and the M8 plan all still read
+  "pending"). deviation-judge graded the absence a **blocker** — not because the RED-lock
+  tracking was dishonored (it wasn't: FRAGO 011's planned-RED locks remain committed and
+  correctly `#[ignore]`d) but because the plan's own text explicitly reserved this exact decision
+  for a human, and no human decision closes the completion gate silently.
+- **The decision (made, not self-adjudicated).** Per this rule's own charter — the conductor
+  routes, it does not resolve a reserved human decision itself — the disposition (a)-vs-(a′)
+  choice was put to Patrick directly at the completion gate, with the full stakes named: the
+  confirmed-live UAF (2 shapes, B′/C2), Phase 4's own back-edge restore having made it
+  deterministically worse (a per-iteration stomp, not merely latent), and both options' real cost
+  (insert a phase now vs. a dedicated follow-up plan). **Patrick's decision, 2026-07-18: fix in
+  this plan — disposition (a).** This dispatch's Trigger + Decision fields together ARE the
+  "morning decision," made two calendar days late but made on the record, not silently skipped.
+- **Classification.** Risk-RAISING in mechanism (a new phase, Phase 9, is inserted into an
+  already-9-phase-sealed plan, with real give/copy-machinery engineering — not a documentation
+  reframe) but risk-REDUCING in substance (it closes, rather than defers, a HIGH-accepted
+  confirmed-live UAF). Per Step 7's authority flow, a risk-raising FRAGO re-runs the risk matrix
+  and requires the human's sign — which this dispatch's own AskUserQuestion interaction with
+  Patrick IS: he was shown the full R11/FRAGO-011 record (the confirmed-live shapes, the
+  loop-aggravation fact, both disposition options' costs) and explicitly chose disposition (a).
+  This is the signed override the gate calls for, not a self-signed shortcut.
+- **Disposition — Phase 9 inserted (applied by a re-dispatched executor, never this conductor's
+  own hand-edit, per this plan's established FRAGO-application convention).** New **Phase 9 —
+  Close the fr23 Confirmed-Live UAF (R11/FRAGO 011 Disposition (a))** is added to `plan.md` §3.3,
+  after Phase 8, with its own Task+purpose/Steps/Exit-criteria/Reviewer-fan-out/Model-tag. Scope:
+  build the give/copy machinery fix for non-ident `background`-spawn receivers covering BOTH
+  confirmed-live shapes (B′ maybe-payload receiver, C2 call-materialized receiver —
+  `crates/ynz-driver/tests/fr23_uaf_planned_red.rs`'s two `#[ignore]`d planned-RED tests), remove
+  the `#[ignore]` attributes once the fix is proven (the planned-RED locks converting to real
+  green, per this project's planned-RED-is-not-duct-tape discipline), and remove the two
+  `cross_impl_consistency.rs` fr23 exclusions FRAGO 012 left with an explicit removal trigger
+  ("the exclusions come out in the same change that fixes fr23"). R11's risk-table row and FR
+  #9's text both get amended to record disposition (a) executed, not merely decided. The
+  Roadmap Reconciliation's fr23 ledger row (both duplicate Capability Ledger tables) updates from
+  "confirmed-live, fix pending morning disposition" to "fixed by M7 Phase 9" once the phase
+  completes — this update rides Phase 9's own boundary commit, not a second completion-gate pass.
+  A/C1 (the still-latent shapes, protected by `field_own_cell`) are explicitly OUT of Phase 9's
+  scope — they are not confirmed-live and FRAGO 011 never routed them for a fix.
+- **Sibling sweep.** Grepped the whole plan for every other reference to "morning decision" /
+  "R11" / "fr23" / "FRAGO 011" / "FRAGO 012" to confirm no other stale citation of the
+  now-resolved pending state survives outside the sites this FRAGO's disposition already updates
+  (plan.md's R11 row + FR #9, the roadmap's fr23 row in both tables) — none found; the M8 plan
+  carries zero fr23/R11 references (confirmed by the cumulative deviation-judge pass), so no
+  cross-plan citation needs reconciling.
+
 ## Context-segment log
 
 - 2026-07-16 — Phase 1, segment 1.
@@ -2773,3 +3040,16 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
     (registry/features.toml's cooperative-preemption-back-edge-yield entry left
     unreconciled — blocker surfaced by rules-compliance, routed to a fix-loop round)
   - segment verdict: STATUS: DONE
+
+## Cumulative cross-phase completion gate (§9.0)
+
+- 2026-07-18 — Coupling heuristic decision — session-id: `conductor-2026-07-18-completion-gate`.
+  All 9 phases (0-8) sealed. Coupling check (§9.0.1): Phases 2 (`89c4f04`), 3 (`3e3bf6c`), 4
+  (`743d0af`), and 6 (`108e320`/`9d0798a`) all declare overlapping touched-surfaces —
+  `crates/ynz-codegen/src/emit.rs` and `crates/ynz-codegen/src/state_machine.rs` — the shared
+  `TargetMachine`/pipeline-config constructor Phase 2 threaded, which Phase 3 wires the real
+  pipeline through, which Phase 4's stack-exhaustion fix and Phase 6's back-edge poll-yield
+  transform both build atop. Not pairwise disjoint. **Decision: RUN** (fail-safe default-to-run,
+  R2) — no skip is provable here. Diff range for the cumulative pass:
+  `0ac76d5..aa897f6` (parent of Phase 0's boundary commit `7b51713`, through Phase 8's boundary
+  commit `aa897f6`).

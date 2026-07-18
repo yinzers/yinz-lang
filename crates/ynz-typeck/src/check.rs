@@ -1470,6 +1470,16 @@ impl<'b> Checker<'b> {
                                     if inferred == BgOwnership::Give {
                                         gives.push(name.clone());
                                     }
+                                } else if self.bg_arg_is_materialized_shape_temp(arg) {
+                                    // fr23 (M7 Phase 9, FRAGO 016): a materialized
+                                    // shape temp (B′ maybe-payload / C2 call-
+                                    // materialized) has no binding to read after the
+                                    // spawn — the task takes ownership (`Give`).
+                                    // Recording its span admits it to codegen's
+                                    // heap-upgrade gate; nothing to consume in scope.
+                                    let span = arg.span();
+                                    self.bg_inferred
+                                        .insert((span.start, span.end), BgOwnership::Give);
                                 }
                             }
                             // Infer_expr runs first (for diagnostics / type registration),
@@ -1706,6 +1716,91 @@ impl<'b> Checker<'b> {
         );
     }
 
+    /// fr23 (v0.3-M7 Phase 9, FRAGO 016): does this `background` spawn argument or
+    /// receiver MATERIALIZE a shape temporary in the spawner's frame — the two
+    /// confirmed-live UAF shapes the FRAGO 011 gate proved (B′: maybe-payload access
+    /// `m.value` on a `maybe<Shape>` binding; C2: a call `makeCargo()` whose declared
+    /// return type is a shape)? Such a temp has no binding the caller could read
+    /// after the spawn, so its ownership is `Give`; recording its span in
+    /// `bg_inferred` is what admits it to codegen's ONE heap-upgrade gate
+    /// (`prepare_bg_arg_for_ctx`'s span lookup) — the same give/copy machinery
+    /// plain-ident args ride, never a sibling path (authoritative-derivation.md).
+    ///
+    /// Deliberately NOT admitted: field-access receivers/args (`ship.cargo`) — the
+    /// still-latent A/C1 class FRAGO 011 left out of scope; their storage is already
+    /// a counted heap cell (`store_field`'s `field_own` cells). A `.value` access
+    /// with a NON-ident base is unreachable here: the flow-sensitive `.exists()`
+    /// check (`maybe.value` inference) only proves safety for ident bindings, so
+    /// any other base is a compile error before this question is asked.
+    fn bg_arg_is_materialized_shape_temp(&self, arg: &Expr) -> bool {
+        match arg {
+            // B′: maybe-payload access on an ident binding of type `maybe<Shape>`.
+            Expr::FieldAccess {
+                receiver, field, ..
+            } if field == "value" => {
+                let Expr::Ident(base, _) = receiver.as_ref() else {
+                    return false;
+                };
+                matches!(
+                    self.binding_ty_narrowed(base),
+                    Some(Type::Maybe { inner }) if matches!(inner.as_ref(), Type::Shape { .. })
+                )
+            }
+            // C2: a direct call whose declared return type is a shape. The callee is
+            // resolved from EITHER the concrete signature table OR the generic table —
+            // the same sig_table/generic_fn_table split the borrow-reject check's
+            // `.or_else` fallback already handles (see `check_background_handle_spawn`'s
+            // R3-boundary resolution in this file): a generic callee
+            // (`background identity(c).haul()` with `identity<T>(give T) -> T`) lives
+            // ONLY in `generic_fn_table.fns`, so a sig_table-only read silently missed
+            // it, fell through to `BgArgFreeKind::None`, and reproduced the exact fr23
+            // UAF this predicate exists to close (security fix-round, live-reproduced
+            // at both tiers 2026-07-18).
+            Expr::Call(call) => {
+                let Expr::Ident(fname, _) = &call.callee else {
+                    return false;
+                };
+                if let Some(sig) = self.sig_table.fns.get(fname.as_str()) {
+                    return matches!(sig.ret, Type::Shape { .. });
+                }
+                let Some(gsig) = self.generic_fn_table.fns.get(fname.as_str()) else {
+                    return false;
+                };
+                // Resolve the instantiated return type with the SAME
+                // `unify_param`/`apply_substitution` machinery `check_generic_fn_call`
+                // uses — never a sibling inference scheme (authoritative-derivation.md).
+                // This predicate is a side-effect-free `&self` read consulted BEFORE the
+                // spawn expression is type-checked, so the substitution is seeded from
+                // what is resolvable without running inference: explicit shape type args
+                // and plain-ident argument bindings (`binding_ty_narrowed`, the one
+                // narrowing-aware read). Partial substitution is tolerated exactly as in
+                // `check_generic_fn_call`: an unresolved TypeParam stays a TypeParam and
+                // never matches `Shape`, so this cannot false-admit; a concrete `-> Shape`
+                // return needs no substitution at all.
+                let mut subst: Substitution = HashMap::new();
+                if let Some(type_args) = &call.type_args {
+                    for (tp_name, ast_ty) in gsig.type_params.iter().zip(type_args.iter()) {
+                        if let AstType::Named(n, _) = ast_ty {
+                            if self.shape_table.contains(n) {
+                                subst.insert(tp_name.clone(), Type::Shape { name: n.clone() });
+                            }
+                        }
+                    }
+                }
+                let non_self_params = gsig.params.iter().filter(|(p, _)| p != "self");
+                for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params) {
+                    if let Expr::Ident(arg_name, _) = arg {
+                        if let Some(actual) = self.binding_ty_narrowed(arg_name) {
+                            let _ = unify_param(param_ty, &actual, &mut subst);
+                        }
+                    }
+                }
+                matches!(apply_substitution(&gsig.ret, &subst), Type::Shape { .. })
+            }
+            _ => false,
+        }
+    }
+
     /// Normalize a `background` spawn target to its Call-form (callee ident, argument
     /// list): a plain call contributes its callee + args as-is; a shape-receiver method
     /// call (UFCS) contributes the method name + `[receiver, ...args]` — the typeck twin
@@ -1753,6 +1848,22 @@ impl<'b> Checker<'b> {
                 ..
             } => {
                 let Expr::Ident(rname, rspan) = receiver.as_ref() else {
+                    // fr23 (M7 Phase 9): a materialized shape-temp receiver (B′
+                    // maybe-payload / C2 call-materialized) IS a UFCS spawn —
+                    // normalize it identically so ownership recording sees the
+                    // receiver as argument 0. Codegen's `synthesize_ufcs_call_expr`
+                    // already normalizes ANY shape-typed receiver; admitting these
+                    // two shapes here closes the typeck/codegen admission asymmetry
+                    // that let the receiver ride into the task as a raw pointer to
+                    // the spawner's dead frame (the FRAGO 011 confirmed-live UAF).
+                    if self.bg_arg_is_materialized_shape_temp(receiver.as_ref()) {
+                        return Some((
+                            Some(method.as_str()),
+                            std::iter::once(receiver.as_ref())
+                                .chain(args.iter())
+                                .collect(),
+                        ));
+                    }
                     return None;
                 };
                 let Some(Type::Shape { name: variant }) = self.binding_ty_narrowed(rname) else {
@@ -1866,6 +1977,15 @@ impl<'b> Checker<'b> {
                         BgOwnership::Copy
                     };
                     self.bg_inferred.insert((span.start, span.end), o);
+                } else if self.bg_arg_is_materialized_shape_temp(arg) {
+                    // fr23 (M7 Phase 9, FRAGO 016): same materialized-shape-temp
+                    // admission as the statement form above — the handle form
+                    // shares codegen's ONE heap-upgrade gate, so the receiver's
+                    // span must be recorded here too (`Give`: a temp has no
+                    // binding the caller could read after the spawn).
+                    let span = arg.span();
+                    self.bg_inferred
+                        .insert((span.start, span.end), BgOwnership::Give);
                 }
             }
         }

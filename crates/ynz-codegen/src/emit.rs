@@ -2318,14 +2318,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// outlives the call consuming it is `bg_ctx` itself, and `ynz_rt_spawn*` copies
     /// those bytes synchronously before returning (documented at its emission site).
     ///
-    /// KNOWN EXCEPTION to (c) — fr23 (FRAGO 011, risk row R11): the confirmed-live
-    /// non-ident spawn receiver/arg shapes (maybe-payload and call-materialized
-    /// receivers) fall through `is_heap_arg` as `BgArgFreeKind::None` and ride RAW
-    /// payload-alloca pointers into the task ctx. Inside a plain loop, this back-edge
-    /// restore frees that alloca every iteration — the pre-existing fr23 UAF becomes a
-    /// deterministic per-iteration stomp (strictly worse than the whole-frame-lifetime
-    /// ride it was before this fix) until the give/copy machinery for non-ident spawn
-    /// receivers lands. Locked by the planned-RED tests
+    /// (c) also covers the fr23 shapes (FRAGO 011 → closed by v0.3-M7 Phase 9 /
+    /// FRAGO 016): the once-confirmed-live non-ident spawn receiver/arg shapes
+    /// (maybe-payload `m.value` and call-materialized `makeCargo()`) are now
+    /// recorded as `Give` by typeck's `bg_arg_is_materialized_shape_temp` and
+    /// heap-upgraded by the same `is_heap_arg` span lookup as plain idents, so no
+    /// in-loop payload alloca rides raw into a task ctx. Locked green by
     /// `crates/ynz-driver/tests/fr23_uaf_planned_red.rs` (fixtures
     /// `v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz` /
     /// `v0_3_m7_fr23_call_materialized_spawn_receiver.ynz`).
@@ -16684,10 +16682,15 @@ enum BgArgFreeKind {
 /// the returned value is the heap pointer (safe to pass to the task via the ctx).
 /// The returned `BgArgFreeKind` tells the closure body what to free after the call.
 ///
-/// Two kinds of bg args reach this function:
+/// Three kinds of bg args reach this function's heap-upgrade path:
 /// - Plain-ident args where typeck chose Copy (inferred from use-after-spawn).
 /// - Explicit `.copy()` args whose inner `lower_expr` produced a Shape alloca pointer.
 ///   Those also point into spawner stack memory and need the same heap-upgrade.
+/// - fr23 materialized-shape-temp receivers/args (v0.3-M7 Phase 9, FRAGO 016):
+///   maybe-payload access (`m.value`, B′) and call-materialized (`makeCargo()`, C2)
+///   expressions, whose `lower_expr` pointer is a payload/return-temp alloca on the
+///   spawner's frame. Typeck records them as `Give` in
+///   `background_arg_inferred_ownership`; the same span lookup admits them here.
 ///
 /// In both cases the heap allocation outlives the spawner's frame (ynz_rt_spawn_blocking
 /// copies the ctx bytes — the i64 pointer value — before returning; the pointed-to
@@ -16785,19 +16788,27 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     }
 
     let is_heap_arg = match arg {
-        ynz_ast::nodes::Expr::Ident(_, s) => {
-            // Plain ident: any inferred Give or Copy ownership gets the heap fix.
-            let key = (s.start, s.end);
-            cg.typed
-                .background_arg_inferred_ownership
-                .contains_key(&key)
-        }
         // Explicit .copy() postfix — always heap-upgrade for heap types.
         ynz_ast::nodes::Expr::PostfixOp {
             op: ynz_ast::nodes::PostfixOpKind::Copy,
             ..
         } => true,
-        _ => false,
+        // Everything else: consult the ONE authoritative ownership record typeck
+        // produced at the spawn site (`background_arg_inferred_ownership` — plain
+        // idents with inferred give/copy/channel ownership, plus the fr23
+        // materialized-shape-temp receiver/arg shapes admitted by
+        // `bg_arg_is_materialized_shape_temp`: B′ maybe-payload access and C2
+        // call-materialized, v0.3-M7 Phase 9 / FRAGO 016). Byte-identical for the
+        // Ident arm this lookup replaces; extends admission exactly to what typeck
+        // recorded — never a codegen-side re-derivation (authoritative-derivation).
+        // Un-recorded shapes (e.g. field-access receivers — the still-latent A/C1
+        // class, whose storage is already a `field_own` heap cell) stay un-upgraded.
+        _ => {
+            let s = arg.span();
+            cg.typed
+                .background_arg_inferred_ownership
+                .contains_key(&(s.start, s.end))
+        }
     };
 
     if !is_heap_arg {

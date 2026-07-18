@@ -207,18 +207,6 @@ fn corpus_produces_deterministic_output_across_runs() {
                     // asserts the ordering invariant directly, with the same generous margins
                     // this corpus sweep's blanket byte-comparison cannot express.
                     || n == "v0_3_m3g_overlap_proof.ynz"
-                    // v0.3-M7 fr23 planned-RED fixtures (FRAGO 011): CONFIRMED-LIVE
-                    // use-after-free — the spawned task reads a dead stack frame, so their
-                    // runtime output is UB garbage BY DESIGN until the give/copy machinery
-                    // for non-ident spawn receivers lands. Their contract is owned by the
-                    // planned-RED locks in fr23_uaf_planned_red.rs (not run by default); a
-                    // UB fixture cannot participate in a determinism sweep. REMOVE these two
-                    // exclusions in the same change that fixes fr23 and activates those
-                    // locks — post-fix they must be deterministic like any other fixture.
-                    // test-ratchet: FRAGO 011 planned-RED fixture — UB output until the fr23 fix; excluded, not weakened (next line)
-                    || n == "v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz"
-                    // test-ratchet: FRAGO 011 planned-RED fixture — UB output until the fr23 fix; excluded, not weakened
-                    || n == "v0_3_m7_fr23_call_materialized_spawn_receiver.ynz"
                     // v0.3-M7 Phase 6 back-edge preemption fixtures: timing-margin races BY
                     // CONSTRUCTION — a fire-and-forget CPU hog (100M iterations; v0.3 has no
                     // join primitive, background is fire-and-forget) vs. main's fixed
@@ -329,14 +317,6 @@ fn corpus_byte_identical_across_mode_matrix() {
             // test asserts both modes' orderings explicitly (and that the final RESULT value is
             // identical either way, preserving the real invariant this sweep protects).
             || name == "v0_3_m3g_overlap_proof.ynz"
-            // v0.3-M7 fr23 planned-RED fixtures (FRAGO 011): confirmed-live UAF — output is
-            // dead-frame garbage by design until the fr23 fix lands (see the matching
-            // exclusion + full WHY in corpus_produces_deterministic_output_across_runs
-            // above; contract owned by fr23_uaf_planned_red.rs). REMOVE with the fix.
-            // test-ratchet: FRAGO 011 planned-RED fixture — UB output until the fr23 fix; excluded, not weakened (next line)
-            || name == "v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz"
-            // test-ratchet: FRAGO 011 planned-RED fixture — UB output until the fr23 fix; excluded, not weakened
-            || name == "v0_3_m7_fr23_call_materialized_spawn_receiver.ynz"
             // v0.3-M7 Phase 6 back-edge preemption fixtures: timing-margin races by
             // construction (fire-and-forget CPU hog vs. main's fixed 4000ms keep-alive) —
             // see the matching exclusion + full WHY in
