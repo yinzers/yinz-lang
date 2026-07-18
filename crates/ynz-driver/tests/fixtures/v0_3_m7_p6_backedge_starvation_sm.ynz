@@ -1,0 +1,45 @@
+// v0.3-M7 Phase 6 fixture (a) — SM-positive starvation proof (R8's committed RED fixture).
+//
+// hogTally is a state-machine function (its call graph reaches `sleep`, so it is admitted
+// to the I/O worker pool) whose hot loop is WAIT-FREE — the exact starvation shape the
+// scheduler-preemption model exists to prevent: with a single I/O worker
+// (YNZ_WORKER_THREADS=1 in the driving test) and no back-edge poll-yield, the hog owns the
+// worker for the loop's whole duration and victimPing cannot run until the hog finishes.
+//
+// With the codegen back-edge poll-yield in place, the hog's loop back edge polls
+// ynz_rt_check_preempt, yields Pending after ~one quantum (~10ms), and the victim gets
+// scheduled time BEFORE the hog completes — observable as "victim ran" preceding
+// "hog done" in stdout.
+
+function hogTally() -> nothing {
+  let x = 0
+  while (x < 100000000) {
+    x = x + 1
+  }
+  // The completion marker prints BEFORE the trailing wait: the wait exists only to make
+  // hogTally a state-machine function, and printing after it would let the wait's own
+  // suspension release the worker to the victim — faking the GREEN this fixture must
+  // only reach through a genuine back-edge yield inside the loop above.
+  print(`hog done`)
+  wait sleep(0)
+}
+
+function victimPing() -> nothing {
+  wait sleep(0)
+  print(`victim ran`)
+}
+
+function entrypoint() -> nothing {
+  background hogTally()
+  // Let the hog OCCUPY the single worker before the victim is spawned — Tokio's
+  // scheduler does not guarantee spawn-order execution (newest-task-first fast paths),
+  // so without this gap the victim can run first even with no preemption at all,
+  // which would fake the exact GREEN this fixture exists to prove for real.
+  wait sleep(50)
+  background victimPing()
+  // Keep the program alive while both background tasks run: runtime shutdown cancels
+  // still-pending async tasks rather than running them to completion, so the entrypoint
+  // must outlast the hog's loop (well under a second) for both prints to appear.
+  wait sleep(4000)
+  print(`main done`)
+}
