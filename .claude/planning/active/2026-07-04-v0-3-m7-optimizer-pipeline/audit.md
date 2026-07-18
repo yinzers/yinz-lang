@@ -1548,6 +1548,307 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
     `executor-2026-07-17-frago013-fixround` appended to plan.md frontmatter in the same
     action as this entry (append-only).
 
+- `conductor-2026-07-16-phase2-dispatch` — 2026-07-17 (addendum 3) — **R8 pre-Phase-6-Step-2
+  re-score (the signed override's own revisit trigger; deterministic matrix, work shown).**
+  Trigger conditions checked: (a) did Phase 1's sweep (or subsequent execution) change R8's
+  probability/severity picture? The campaign found MORE members of the silent-miscompile family
+  (R9's 8 members, R11's 2 shapes) — but every one strengthens the CASE FOR the mitigation
+  discipline R8 already carries (RED-repro-first), and the suspension machinery R8's transform
+  will REUSE (`store_resume_point`/`flush_var_slot_to_frame`) is now MORE proven than at
+  authoring: it survived the full optimizer flip green across every crossing-local fixture
+  (Phases 3/5 receipts). Probability stays B (net-new codegen in the family), severity stays II.
+  (b) No new B1/B2 catalog mitigation has been authored into REF-risk-engine.md since Gate 4.
+  Re-lookup with the existing mitigation: (C, II) = **HIGH, UNCHANGED** — the exact residual
+  Patrick signed at Gate 4 (2026-07-04). Per the Patrick-agreed bounded rule (2026-07-17
+  session): an UNCHANGED re-score continues on the existing signature without waking him.
+  Continuing to Phase 6; Step 2 may begin once Step 1's design note exists.
+
+- `executor-2026-07-17-phase6-designnote` — 2026-07-17 — **Phase 6 Step 1: back-edge
+  poll-yield design note authored; checkpoint at the first planner-authored mark.**
+  Design note at [`phase6-design-note-backedge-poll-yield.md`](./phase6-design-note-backedge-poll-yield.md)
+  covers all four required points: (a) qualifying loops = every back edge inside an SM
+  function, with the verified two-path routing fact that a WAIT-FREE loop inside an SM
+  function currently lowers through the PLAIN arms (`stmt_needs_sm_walker`, emit.rs:5806,
+  returns false for it) — so the transform widens SM loop routing, it does not merely edit
+  the SM arms; the qualifying predicate must be defined ONCE and consumed by all three
+  authoritative walks (`count_suspension_points` emit.rs:5671, `crossing_local_names`
+  check.rs:8100, the SM walker routing) per authoritative-derivation.md; (b) yield =
+  conditional branch on `ynz_rt_check_preempt() -> bool` → `store_resume_point`
+  (state_machine.rs:134) + existing per-statement `flush_var_slot_to_frame` discipline (NO
+  new yield-site flush path) + `sm_pending` return, resume via `reload_params_from_frame`
+  (emit.rs:5851) → loop header; (c) budget = thread-local countdown + ~10ms quantum check
+  inside the runtime fn, bool-returning, single ABI (plain-loop sites discard the bool);
+  (d) non-SM loops get NOTHING new — protection stays CPU-admission blocking-pool routing;
+  residual named (admission-missed CPU-heavy non-SM interiors), fixture (b) documents it.
+  Also pre-settled: fixture (a) is RED-first-able; fixture (b) is expected-behavior-pass by
+  shape (recorded per plan Step 3). Step-2 named verification items: SM-arm stacksave
+  interaction with suspension (row-439 class, R8 family, Paper-Trace required); SM-walker
+  fallback iteration forms (gain an arm vs. named exclusion). Anchors verified against HEAD
+  `a05aced` (plan's `emit.rs:12356-12365` citation has drifted; current anchors in the
+  note). No code touched this segment. CHECKPOINT honored at the post-Step-1 mark:
+  `handoff-phase-6.md` written, resume pointer `phase-6/step-2`, STATUS: PARTIAL. Session-id
+  appended to plan.md frontmatter in the same action as this entry (append-only).
+
+- `executor-2026-07-17-phase6-transform` — 2026-07-17 — **Phase 6 Steps 2–7: back-edge
+  poll-yield transform implemented, RED-first fixture-proven, call-site checks measured
+  and deferred, design doc rewritten.** Segment 2 of Phase 6, resumed at `phase-6/step-2`
+  from `handoff-phase-6.md` (receipts inherited; only deltas re-verified).
+  - **Step 3(a) RED-first (R8's committed mitigation):** fixture (a)
+    `v0_3_m7_p6_backedge_starvation_sm.ynz` + driving test
+    `v03_m7_backedge_preemption.rs` authored BEFORE the transform and confirmed RED
+    against the no-op stub (single worker via new test-only `YNZ_WORKER_THREADS` env
+    latch in `ynz_rt_init`; observed starvation ordering `hog done` → `victim ran`).
+    Fixture (b) `v0_3_m7_p6_backedge_residual_nonsm.ynz` confirmed expected-PASS from
+    day one (blocking-pool routing, the documented non-SM residual). Both GREEN after
+    the transform (victim runs mid-hog-loop in (a)); loop-count correctness across
+    yields verified exactly (x = 50000000 probe). NOTE: fixtures are in the working
+    tree, not committed — the conductor's commit gate seals commits; the R8 mitigation's
+    "committed BEFORE the transform lands" ordering within one commit boundary is
+    surfaced in the segment return for the conductor to sequence.
+  - **Step 2 (the transform):** ONE qualifying predicate
+    (`ynz_typeck::loop_stmt_back_edge_yields` + containment forms, check.rs) consumed by
+    all three authoritative walks — `count_suspension_stmt` (emit.rs While/For arms),
+    `crossing_local_names_*` (via a threaded `back_edge_yield` flag through
+    `locals_crossing_wait`/`block_suspends_m3d`/the synthetic for-idx collector), and
+    the SM-walker routing (`stmt_needs_sm_walker` widening) — grep receipt in the
+    segment return; zero parallel derivations. Per-function ADMISSION
+    (`back_edge_yield_admission`, ONE producer stored in
+    `TypedModule::back_edge_yield_admitted`): declines keep byte-identical pre-Phase-6
+    behavior. Decline conditions: kernel mode; non-SM; no qualifying loop; D3
+    (fallback-form `for` wrapping a qualifying loop); D5 (shared loop-var name across
+    differently-typed `for` loops — see fix round below); suspension guards firing over
+    the WIDENED crossing set (probe = `suspension_guards_fire_for_fn` with the new
+    flag — no guard-logic twin). Yield emission (`emit_sm_loop_back_edge`) reuses ONLY
+    `store_resume_point` + the existing flush discipline + `sm_pending` +
+    `reload_params_from_frame(reload_crossing=true)`; qualifying forms: while,
+    for-range(literal)/array/map; fixed + string/shape/stored-range excluded (named
+    residuals). ABI: `ynz_rt_check_preempt(waker_ctx: ptr) -> bool` (i8), plain sites
+    pass null and discard (one entry point); runtime_decls + golden snapshot
+    `v03_m1_while_preempt_ir` updated.
+  - **Fix round 1 (fairness, Paper-Trace in return):** plain self-`wake_by_ref` during
+    poll re-queued the yielding task into Tokio's LIFO slot — victim starved until hog
+    completion (tokio#5115 class). Fix: remote wake from a blocking-pool thread
+    (injection queue → siblings first). Fixture (a) went GREEN only after this.
+  - **Fix round 2 (determinism, Paper-Trace in return):** the design note's
+    countdown+wall-clock quantum made compiled-program stdout NONDETERMINISTIC across
+    runs (pirates-roster: 6 runs, 6 orderings — the clock decides WHETHER a loop
+    yields). Fix: pure call-count budget (2^20 back-edge polls ≈ 2-15ms for tight
+    loops; plain-site expiry latches until an SM edge consumes it). Demo tail restored
+    byte-stable across runs; `examples_basics_runs_end_to_end` green with the EXISTING
+    golden (no regeneration). Recorded divergence from the design note §(c), reflected
+    in the IMP doc's Time-quantum paragraph.
+  - **Fix round 3 (R8-class heap corruption, Paper-Trace in return):**
+    `m5_p5_soa_copy_wait_bg.ynz` SIGABRT ("corrupted size vs. prev_size") under
+    default mode — minimized to THREE for-loops sharing loop-var `p` across element
+    types Point/Part + a background spawn; renaming the third var eliminates it. Root
+    cause: name-keyed crossing frame slots (one slot per NAME, classified once from the
+    first loop's element type). Fix: admission decline D5 (`for_var_elem_type_conflict`).
+    SURFACED, not self-fixed: the same collision PRE-EXISTS Phase 6 for
+    suspending-body loops sharing a var name across element types — flagged in the
+    segment return for the deviation-judge seam as a pre-existing hazard needing its
+    own RED fixture/fix outside this phase's charter.
+  - **Row-439 parity:** migrated leaf wait-free loops get per-iteration
+    stacksave/restore in the SM arms (`sm_leaf_loop_stack_save` — save/restore provably
+    within one activation ONLY for bodies with no internal suspension; suspending
+    bodies keep today's no-save SM behavior).
+  - **Step 4 (pre-registered BEFORE measuring):** "call-site check overhead ≤5% median
+    wall-clock on the fib(30) call-heavy microbenchmark, 5 runs per configuration,
+    default optimized pipeline, toggle-on vs toggle-off back-to-back." Registered prior
+    to any build/run of the benchmark.
+  - **Step 5 (measurement):** emission behind compile-time toggle
+    `YNZ_PREEMPT_CALLSITE_CHECKS` at the direct user-call choke point (emit.rs);
+    microbenchmark fixture `v0_3_m7_p6_callsite_overhead_fib.ynz`. Measured: OFF median
+    ~26.5ms (runs 24/28/29/24/30 + control 50/25/22/17/32), ON median 132ms
+    (99/138/107/132/144) → **~+398%**.
+  - **Step 6 (measurement-gated decision):** FAILS the pre-registered bar by ~80× → NOT
+    shipped. Four-field deferral landed in plan.md Future Requirements item 6 (the
+    plan's pre-registered home, with the measured number) + registry entry
+    `preempt-callsite-checks` (`[[deferred_language_feature]]`). The now-shipped
+    back-edge half's stale `cooperative-preemption-back-edge-yield`
+    `[[deferred_tooling_feature]]` entry is left for Phase 8's registry reconciliation
+    (flagged in the segment return).
+  - **Step 7:** IMP-no-function-coloring.md "Scheduler Preemption Model" rewritten to
+    the TRUE three-part architecture (SM back-edge poll-yield with admission +
+    named exclusions; non-SM blocking-pool routing; the named residuals incl. loop-free
+    SM recursion) + the call-site deferral with measurement + the count-based-quantum
+    divergence rationale.
+  - **Demo & Error Gallery:** explicitly N/A — backend codegen + runtime ABI change;
+    zero new syntax, zero new compile-error classes, zero new user-facing diagnostics
+    (admission declines are silent by design), so no `pirates-roster` /
+    `primantis-orders` extension is owed.
+  - **Gates:** clippy clean (`-D warnings`), fmt clean; full `cargo test --workspace`
+    green (fixtures (a)/(b) green; the four reds found and fixed mid-segment: m5_p5
+    heap corruption → D5 decline; examples golden ordering → count-based budget;
+    jargon-audit "residual" in the new registry `why` field → reworded plain-English;
+    tmgrammar committed-grammar drift from the new registry entry → regenerated via
+    `cargo run -p ynz-tmgrammar`, snapshot green). NOTE for reviewers: under DOUBLE
+    host load (two full suites concurrently) `examples_basics_runs_end_to_end` and the
+    already-deferred m4_p3 build-state-race tests flaked; like-for-like solo runs are
+    3/3 + finalgate green on this tree and 2/2 on baseline — surfaced in the segment
+    return as a timing-margin watch item, not a demonstrated regression. Session-id
+    appended to plan.md frontmatter in the same action as this entry (append-only).
+
+- **2026-07-17 — session `executor-2026-07-17-phase6-fixloop-determinism`** — Phase 6
+  fix-loop round (green-check RED finding: `corpus_produces_deterministic_output_across_runs`
+  failing on the two Phase-6 preemption fixtures). Two halves: (1) a prior fix-loop
+  dispatch authored the fix but died mid-verification on a model billing error ("Usage
+  credits are required") — its diff was already in the working tree; this session verified
+  it rather than re-authoring it. (2) The full-suite verification surfaced and closed one
+  more instance of the same nondeterminism class.
+  - **Paper-Trace (prior dispatch's fix, reconstructed from its diff — the fix was applied
+    but its reasoning was never logged):**
+    - Observed: `v0_3_m7_p6_backedge_starvation_sm.ynz` / `v0_3_m7_p6_backedge_residual_nonsm.ynz`
+      produced differing stdout across two independent runs — the `hog done` /
+      `plain hog done` line present in one run, absent in the other, both exit 0.
+    - Expected: byte-identical stdout+stderr+exit across runs (the determinism sweep's
+      contract for non-timing fixtures).
+    - Residual: presence AND position of exactly the hog-completion line; every other
+      line identical.
+    - Hypothesis (confirmed by fixture construction): timing-margin race BY DESIGN — a
+      fire-and-forget 100M-iteration CPU hog (v0.3 has no join primitive) vs. main's
+      fixed `wait sleep(4000)` keep-alive; under host load the hog's completion crosses
+      the deadline nondeterministically, and runtime shutdown cancels still-pending
+      tasks by design (exit 0 either way).
+    - Evidence path: `crates/ynz-driver/tests/cross_impl_consistency.rs:237` (sweep
+      assert); fixture keep-alive comments (`v0_3_m7_p6_backedge_starvation_sm.ynz:40-43`).
+    - Fix (prior dispatch, verified principled this session): per-fixture exclusion
+      from BOTH determinism sweeps (`corpus_produces_deterministic_output_across_runs`
+      + `corpus_byte_identical_across_mode_matrix`) with full WHY comments — the SAME
+      established convention as `v0_3_m3g_overlap_proof.ynz` (a timing fixture whose
+      filename lacks the "timing"/"background" substrings). NOT a weakening: the real
+      invariants (both lines present; victim runs BEFORE the hog completes) are owned
+      by the dedicated `v03_m7_backedge_preemption.rs` tests under the deterministic
+      `YNZ_WORKER_THREADS=1` latch.
+  - **Paper-Trace (this session's additional fix — same class, third surface):** the
+    first full-suite run failed `examples_basics_runs_end_to_end`
+    (`crates/ynz-driver/tests/integration.rs:2648`).
+    - Observed: `background analytics done` printed inside the nested-SM section
+      (after `Sanguillen roster slot: 8`); golden pins it in the inferred-wait section
+      (before `Honus: done`). All values identical; one line's position shifted.
+    - Expected: byte-exact tail match against `examples/pirates-roster/expected_stdout.txt`.
+    - Residual: position of exactly that one line.
+    - Hypothesis (confirmed): the M1 demo section's `background recordPittsburghAnalytics(...)`
+      is fire-and-forget ("Main never waits for it" — `entrypoint.ynz:841`), so its
+      completion line lands at a scheduler-dependent point; under full-suite parallel
+      load it drifts across section boundaries. Standalone reruns 4/4 green confirmed
+      load-dependence, and the Phase 6 segment-2 entry above had already surfaced this
+      exact test as a timing-margin watch item under doubled host load. The harness
+      comment (`integration.rs:2600-2601`) even CLAIMED a relaxation for this exact
+      line that the code never implemented — a comment-code mismatch.
+    - Evidence path: `integration.rs:2648` (assert), `integration.rs:2600` (stale
+      comment), `examples/pirates-roster/entrypoint.ynz:450` (fire-and-forget spawn).
+    - Fix: presence-check the line exactly once, then strip it from both stdout and
+      golden before the positional comparisons — the identical relaxation the 8 pirate
+      lines already get in the same test. No value assertion was weakened; the golden
+      is unchanged.
+  - **Verification receipts (tree state: working tree at `a05aced` + Phase 6 diff):**
+    `corpus_produces_deterministic_output_across_runs` 3/3 independent solo runs green
+    (464s / 478s / 610s each); `examples_basics_runs_end_to_end` 4/4 + 1 post-fix solo
+    runs green; `v03_m3g_overlap_proof_...` (flaked once under a doubled-load suite
+    run that overlapped sweep run 3) 3/3 solo green; full
+    `cargo test --workspace` SOLO run entirely green (integration 523/523, zero FAILED
+    lines across all targets); `cargo clippy --workspace -- -D warnings` clean;
+    `cargo fmt --all -- --check` clean (after the integration.rs edit).
+  - **Surfaced for the deviation-judge (not self-adjudicated):** the recurring pattern —
+    three surfaces (two P6 fixtures, the demo golden, plus the m4_p3 watch item from
+    segment 2) of the same class: fire-and-forget `background` completion lines are
+    scheduler-positioned by design because v0.3 has no join primitive, so any byte-exact
+    assertion over them is load-flaky. Each instance is now handled by the established
+    per-surface convention (exclusion-with-owned-invariant / presence-relaxation), but
+    whether the class deserves a structural answer (e.g. a join primitive, or a
+    corpus-wide "fire-and-forget lines are presence-checked" convention) is a design
+    call for the seam, not this fix-loop. No evidence of a genuine preemption-mechanism
+    determinism bug: the dedicated `YNZ_WORKER_THREADS=1` tests are 3/3-stable, and the
+    count-based quantum (fix round 2 above) already made compiled-program yield
+    decisions clock-independent.
+  - No commit made — diff left for the conductor's Step-8 commit gate. Session-id
+    appended to plan.md frontmatter in the same action as this entry (append-only).
+
+- `executor-2026-07-17-phase6-review-closeout` — 2026-07-17 — **Phase 6 review-round
+  fix-loop: all six reviewer findings closed (code-reviewer ×2, rules-compliance ×1,
+  deviation-judge ×3).** FRAGO 004/005 (2026-07-17 conductor entries) were informational
+  / already reconciled — no action taken on those, per the dispatch.
+  - **Item 1 (gating — R8 value-integrity proof through the widened SM path):** new
+    fixture `crates/ynz-driver/tests/fixtures/v0_3_m7_p6_backedge_value_integrity.ynz` +
+    driving test `crates/ynz-driver/tests/v03_m7_p6_backedge_value_integrity.rs`. A
+    single-task SM function's while loop runs 2,400,000 iterations — past TWO full
+    2^20-poll budgets (the real shipped `PREEMPT_YIELD_INTERVAL`, `runtime.rs:490`;
+    call-count budget, so the ≥2 yield/resume cycles are deterministic) — with one
+    crossing local per frame value class (int accumulator, int counter, number mutated
+    at i == 1500000 i.e. BETWEEN the two yields, string), all printed after the loop.
+    Byte-exact closed-form stdout (`crossing-intact\n2879998800000\n2400000\n0.75\n
+    main done\n`) asserted at BOTH tiers; the default-tier leg adds an IR
+    vacuous-pass lock (emitted IR must contain the `sm_backedge_yield` block AND a
+    NON-null-waker `ynz_rt_check_preempt(ptr %…)` call — a silent admission decline
+    would otherwise pass this test without exercising the resume path). Verified live:
+    IR shows `sm_backedge_yield` (4 refs) + `call i8 @ynz_rt_check_preempt(ptr %1)`;
+    both tiers print the exact contract in ~35ms. **Recorded decision — NO env hook to
+    lower `PREEMPT_YIELD_INTERVAL`:** the >2^20 literal count completes in tens of ms
+    and proves the REAL production interval; a test-only runtime toggle would add
+    shipped surface for zero test benefit (the `YNZ_WORKER_THREADS` latch exists
+    because worker count is otherwise host-dependent — no analogous need here).
+    Fixture auto-joins both corpus sweeps (deterministic, no exclusions needed).
+  - **Item 2 (snapshot metadata):** `golden__v03_m1_while_preempt_ir.snap` —
+    `assertion_line: 583` metadata line removed, matching the 33/35 repo convention
+    (insta treats it as informational; the golden test re-run confirms green:
+    `v03_m1_while_loop_preempt_ir_snapshot` 1/1 ok). The one pre-existing
+    `assertion_line` snapshot (`error_galleries__pirates_roster_demo_warning_lines.snap`)
+    untouched — pre-existing, out of this round's scope.
+  - **Item 3 (registry kind):** `preempt-callsite-checks` recategorized
+    `[[deferred_language_feature]]` → `[[deferred_tooling_feature]]`
+    (`registry/features.toml:1542`), all six fields intact, with a KIND rationale
+    comment added to the entry's four-field header — it gates the compile-time
+    `YNZ_PREEMPT_CALLSITE_CHECKS` toggle (no user-typeable token), matching the sibling
+    `cooperative-preemption-back-edge-yield` entry's classification. Consumer check:
+    the entry leaves `deferred_language_features()` (LSP autocomplete/hover deferred
+    list + tmgrammar deferred pattern) — correct, since it never was user syntax;
+    `cargo run -p ynz-tmgrammar` regeneration confirmed the committed grammar
+    byte-stable (the hyphenated name never appeared in the word-boundary pattern);
+    ynz-registry 12/12 + ynz-tmgrammar 5/5 tests green. Sibling-sweep per
+    plan-source-of-truth: plan.md's four prescriptive/current-truth citations of the
+    kind updated (Phase 6 Step 6 text, Phase 8 Step 3, `### Feature Registry Entries`,
+    Future Requirements #6); the Design-Doc-Alignment divergence-1 mention left as-is
+    (historical narrative about the pre-plan P4-1 gap, still true as written).
+  - **Item 4 (D5-underlying hazard tracked + locked, ELEVATED):** (a) plan.md Future
+    Requirements **#14** added (WHAT/WHY/COST/TRIGGER, ELEVATED for the heap-corruption
+    severity class), citing `check.rs:8283` `for_var_elem_type_conflict` as the
+    current mitigation-not-fix and both live repros. (b) The general hazard (NOT the
+    Phase-6 decline) locked per the FR #9/fr23 planned-RED precedent: minimized
+    committed repro `v0_3_m7_d5_suspending_loop_var_slot_collision.ynz` (suspending
+    Point loop then suspending string loop sharing `p` — the string reloads raw
+    garbage bytes through the Point-classified name-keyed slot; reproduced live 3/3
+    identical-in-run garbage, exit 0 — the silent-corruption face of the same collision
+    that SIGABRTs on m5_p5's shape) + `#[ignore]`d test-ratchet-marked planned-RED
+    locks `d5_frame_slot_collision_planned_red.rs` asserting the correct contract at
+    both tiers. **RED verified live:** `--ignored` run fails both tests today
+    (`"111\n��`…"` vs `"111\nanchor\nharbor\ndone\n"`). Fixture excluded from BOTH
+    corpus sweeps (`cross_impl_consistency.rs`, fr23-precedent WHY comments +
+    test-ratchet markers, removal tied to the fix).
+  - **Item 5 (Phase 8 Step 3 scope):** rewritten to name BOTH registry entries —
+    confirm the new `preempt-callsite-checks` deferral AND update/retire the now-stale
+    `cooperative-preemption-back-edge-yield` entry (its "documented no-op stub" text is
+    false post-Phase-6; the back-edge half shipped) — with an explicit "touching only
+    the new entry is an incomplete reconciliation" guard.
+  - **Item 6 (recurring load-flakiness class tracked):** plan.md Future Requirements
+    **#15** added (WHAT/WHY/COST/TRIGGER) — four surfaces, one root cause
+    (fire-and-forget `background` completion lines are scheduler-positioned; no join
+    primitive in v0.3); tracks the structural design question (join primitive vs a
+    ratified corpus-wide presence-check convention) without proposing to build either
+    now.
+  - **Gates (receipts):** full `cargo test --workspace` run 1 entirely green (139/139
+    test-result lines `ok`, 0 failed, exit 0 — includes both new value-integrity tests,
+    the corpus determinism + mode-matrix sweeps with the new fixture participating, and
+    the new planned-RED file registering 2 ignored); second independent targeted run:
+    `v03_m7_p6_backedge_value_integrity` 2/2 ok + `v03_m7_backedge_preemption` 2/2 ok —
+    the Item-1 fixture is 2-independent-runs deterministic on top of the sweep's own
+    intra-run byte comparison. `cargo clippy --workspace -- -D warnings` clean;
+    `cargo fmt --all -- --check` clean. Demo & Error Gallery: N/A — all six items are
+    backend/test/plan-doc; zero new user-facing syntax or error classes.
+  - **Deviations surfaced:** none new — this closing round found no plan-vs-reality
+    divergence beyond the six dispatched findings. No commit made — diff left for the
+    conductor's Step-8 commit gate. Session-id appended to plan.md frontmatter in the
+    same action as this entry (append-only).
+
 ## FRAGO log
 
 ### FRAGO 001 — 2026-07-16 — session-id: `conductor-2026-07-16-phase1-review`
@@ -1906,6 +2207,43 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   mechanical sweep; TRIGGER: the first CI change adding --tests/--all-targets to the clippy gate,
   or the next test-infra milestone.
 
+### FRAGO 004 — 2026-07-17 — session-id: `conductor-2026-07-17-phase6-review`
+
+- **Trigger.** deviation-judge (dispatched over Phase 6's diff) confirmed the Step-1 design note's
+  §(c) ABI sketch (`ynz_rt_check_preempt: extern "C" fn() -> bool`) diverged from the actual
+  implementation (`fn(waker_ctx: *mut u8) -> bool`, `crates/ynz-runtime/src/runtime.rs:543`). The
+  note never addressed waking a yielded task; a literal implementation returning `Pending` with no
+  waker registered would permanently lose the task — strictly worse than the pre-Phase-6 no-op.
+- **Classification.** Risk-neutral. The correction stays inside the note's own recorded Decision #2
+  (single bool-returning ABI over a second SM-only entry point); it reduces R8's hazard rather than
+  raising it. No re-score of R8 — its trigger-to-revisit conditions are scoped to pre-Step-2
+  discoveries, and this is a within-Step-2 implementation correction of an incomplete design-note
+  detail, already reflected in Step 7's `IMP-no-function-coloring.md` rewrite. Auto-apply + log, no
+  signature required.
+- **Disposition.** No plan.md body edit needed — plan.md's own Phase 6 text (Steps 1-2) never
+  literally specified the ABI signature; the divergence lived entirely in the standalone design-note
+  document, which is a Step-1 deliverable artifact, not plan.md phase text. Logged here per
+  plan-source-of-truth's build-time-discovery discipline; no further amendment required.
+
+### FRAGO 005 — 2026-07-17 — session-id: `conductor-2026-07-17-phase6-review`
+
+- **Trigger.** deviation-judge confirmed the Step-1 design note's §(c) budget-mechanism sketch
+  (countdown + wall-clock quantum, per `IMP-no-function-coloring.md`'s prior ~10ms framing) diverged
+  from the actual implementation (a pure call-count budget, `PREEMPT_YIELD_INTERVAL = 1 << 20`,
+  `crates/ynz-runtime/src/runtime.rs:490`, no clock read anywhere in the check). Root cause
+  (Paper-Traced in the transform executor's session entry): a wall-clock-gated yield decision
+  produced nondeterministic compiled-program stdout (six independent runs of the pirates-roster
+  demo, six distinct output orderings) — directly violating the Performance invariant's (R7)
+  byte-identical-goldens requirement.
+- **Classification.** Risk-neutral. The clock-based mechanism was never load-bearing to R8's own
+  frame-layout-correctness hazard (R8 governs the yield/resume frame-flush path, not the
+  admission-timing heuristic); replacing it with a deterministic counter is a strict improvement for
+  the plan's own R7 mitigation. Already reflected honestly in Step 7's IMP-doc rewrite ("Why count,
+  not clock" section). Auto-apply + log, no signature required.
+- **Disposition.** No plan.md body edit needed — plan.md's own Phase 6 text (Step 1(c)) describes
+  the budget mechanism generically ("a cheap runtime counter/time check") without committing to
+  wall-clock specifically, so the plan text is not stale. Logged here for the record.
+
 ## Context-segment log
 
 - 2026-07-16 — Phase 1, segment 1.
@@ -1975,4 +2313,24 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
     final act)
   - canonical resume-at pointer: phase-5 complete (no further steps)
   - segment verdict: DONE
+  - segment verdict: STATUS: DONE
+
+- 2026-07-17 — Phase 6, segment 1.
+  Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#6-segment-1
+  - segment number: 1
+  - session-id: executor-2026-07-17-phase6-designnote
+  - subagent_tokens actual: 158308
+  - checkpoint reason: planned mark (post-Step-1 CHECKPOINT honored — design note authored,
+    covering all four required points; implementation not started)
+  - canonical resume-at pointer: phase-6/step-2
+  - segment verdict: STATUS: PARTIAL
+
+- 2026-07-17 — Phase 6, segment 2.
+  Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#6-segment-2
+  - segment number: 2
+  - session-id: executor-2026-07-17-phase6-transform
+  - subagent_tokens actual: 573275
+  - checkpoint reason: N/A — phase completed this segment (Steps 2-7; handoff deleted as
+    final act)
+  - canonical resume-at pointer: phase-6 complete (no further steps)
   - segment verdict: STATUS: DONE

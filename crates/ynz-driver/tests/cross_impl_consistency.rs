@@ -219,6 +219,33 @@ fn corpus_produces_deterministic_output_across_runs() {
                     || n == "v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz"
                     // test-ratchet: FRAGO 011 planned-RED fixture — UB output until the fr23 fix; excluded, not weakened
                     || n == "v0_3_m7_fr23_call_materialized_spawn_receiver.ynz"
+                    // v0.3-M7 Phase 6 back-edge preemption fixtures: timing-margin races BY
+                    // CONSTRUCTION — a fire-and-forget CPU hog (100M iterations; v0.3 has no
+                    // join primitive, background is fire-and-forget) vs. main's fixed
+                    // `wait sleep(4000)` keep-alive. Under host load the hog's completion
+                    // crosses the deadline nondeterministically, so the `hog done` /
+                    // `plain hog done` line's presence AND position vary between runs (exit 0
+                    // either way — runtime shutdown cancels still-pending tasks by design).
+                    // Same class as v0_3_m3g_overlap_proof.ynz above: the filename just lacks
+                    // the "timing"/"background" substrings. The real invariants (victim runs
+                    // BEFORE the hog completes; both lines present) are owned by the dedicated
+                    // v03_m7_backedge_preemption.rs tests under the deterministic
+                    // YNZ_WORKER_THREADS=1 latch, where the starvation shape does not depend
+                    // on host load.
+                    || n == "v0_3_m7_p6_backedge_starvation_sm.ynz"
+                    || n == "v0_3_m7_p6_backedge_residual_nonsm.ynz"
+                    // v0.3-M7 planned-RED fixture (Phase 6 review round): the name-keyed
+                    // loop-var frame-slot collision on suspending-body loops — its second
+                    // loop prints MISCOMPILED garbage bytes (a string reloaded through a
+                    // Point-classified frame slot) BY DESIGN until the per-loop slot-keying
+                    // fix lands (plan Future Requirements, ELEVATED). Garbage-pointer bytes
+                    // cannot participate in a determinism sweep; the contract is owned by
+                    // the planned-RED locks in d5_frame_slot_collision_planned_red.rs (not
+                    // run by default). REMOVE this exclusion in the same change that fixes
+                    // the collision and activates those locks — post-fix the fixture must
+                    // be deterministic like any other.
+                    // test-ratchet: planned-RED fixture — miscompiled output until the slot-keying fix; excluded, not weakened (next line)
+                    || n == "v0_3_m7_d5_suspending_loop_var_slot_collision.ynz"
             })
             .unwrap_or(false);
 
@@ -310,6 +337,23 @@ fn corpus_byte_identical_across_mode_matrix() {
             || name == "v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz"
             // test-ratchet: FRAGO 011 planned-RED fixture — UB output until the fr23 fix; excluded, not weakened
             || name == "v0_3_m7_fr23_call_materialized_spawn_receiver.ynz"
+            // v0.3-M7 Phase 6 back-edge preemption fixtures: timing-margin races by
+            // construction (fire-and-forget CPU hog vs. main's fixed 4000ms keep-alive) —
+            // see the matching exclusion + full WHY in
+            // corpus_produces_deterministic_output_across_runs above. The hog-completion
+            // line's presence/position varies under load WITHIN a single mode, so a
+            // cross-mode byte comparison would flag scheduling noise, not a codegen
+            // divergence. Invariants owned by v03_m7_backedge_preemption.rs
+            // (YNZ_WORKER_THREADS=1).
+            || name == "v0_3_m7_p6_backedge_starvation_sm.ynz"
+            || name == "v0_3_m7_p6_backedge_residual_nonsm.ynz"
+            // v0.3-M7 planned-RED slot-collision fixture: miscompiled garbage output by
+            // design until the per-loop slot-keying fix — see the matching exclusion +
+            // full WHY in corpus_produces_deterministic_output_across_runs above
+            // (contract owned by d5_frame_slot_collision_planned_red.rs). REMOVE with
+            // the fix.
+            // test-ratchet: planned-RED fixture — miscompiled output until the slot-keying fix; excluded, not weakened (next line)
+            || name == "v0_3_m7_d5_suspending_loop_var_slot_collision.ynz"
             || (name == "entrypoint.ynz"
                 && path
                     .parent()

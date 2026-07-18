@@ -353,7 +353,7 @@ fn check_preempt_per_call_cost() {
     const ITERS: u64 = 1_000_000;
     let start = Instant::now();
     for _ in 0..ITERS {
-        ynz_rt_check_preempt();
+        unsafe { ynz_rt_check_preempt(std::ptr::null_mut()) };
     }
     let elapsed = start.elapsed();
     let ns_per_call = elapsed.as_nanos() / ITERS as u128;
@@ -366,14 +366,16 @@ fn check_preempt_per_call_cost() {
 }
 
 // ---------------------------------------------------------------------------
-// Measurement: check_preempt per-call cost (M1 no-op stub).
+// Measurement: check_preempt per-call cost (null-waker fast path).
 // ---------------------------------------------------------------------------
 
 // WHY: P1 plan gate fib(30) result — fib(30) with preempt at every call site
-// showed 1190% overhead (release mode). GATE FIRES: call-site preempt defers
-// to M2. M1 ships loop back-edges only. This test measures the raw per-call
-// cost of the no-op stub to confirm M1's loop back-edge insertion is viable.
-// The Spike Findings section in the plan documents the full gate decision.
+// showed 1190% overhead (release mode, -O0-tier evidence). GATE FIRES: call-site
+// preempt deferred (re-measured and re-deferred v0.3-M7 Phase 6 at ~+398% under the
+// real optimizer — registry entry `preempt-callsite-checks`). This test measures the
+// raw per-call cost of the null-waker fast path (v0.3-M7: a thread-local countdown
+// decrement, no longer a no-op) to confirm loop back-edge insertion stays viable.
+// The Spike Findings section in the plan documents the original gate decision.
 #[test]
 #[cfg_attr(
     miri,
@@ -385,20 +387,20 @@ fn check_preempt_per_call_cost() {
 fn check_preempt_noop_per_call_cost_acceptable() {
     use ynz_runtime::runtime::ynz_rt_check_preempt;
 
-    // Measure per-call cost of the no-op stub.
+    // Measure per-call cost of the null-waker fast path.
     const ITERS: u64 = 1_000_000;
     let start = Instant::now();
     for _ in 0..ITERS {
-        ynz_rt_check_preempt();
+        unsafe { ynz_rt_check_preempt(std::ptr::null_mut()) };
     }
     let elapsed = start.elapsed();
     let ns_per_call = elapsed.as_nanos() as f64 / ITERS as f64;
 
-    eprintln!("check_preempt no-op stub: {ns_per_call:.2}ns/call over {ITERS} iterations");
+    eprintln!("check_preempt fast path: {ns_per_call:.2}ns/call over {ITERS} iterations");
 
-    // In release mode: target is a single `ret` ≈ 1-2ns. Allow up to 10ns for
-    // measurement noise. In debug mode, unoptimised function call overhead is
-    // much higher — allow up to 200ns.
+    // In release mode: target is a thread-local decrement + compare ≈ 1-3ns. Allow
+    // up to 10ns for measurement noise. In debug mode, unoptimised function call
+    // overhead is much higher — allow up to 200ns.
     let max_ns = if cfg!(debug_assertions) {
         200.0_f64
     } else {

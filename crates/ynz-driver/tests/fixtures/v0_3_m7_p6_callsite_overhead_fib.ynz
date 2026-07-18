@@ -1,0 +1,23 @@
+// v0.3-M7 Phase 6 Steps 4-6 — the call-heavy microbenchmark for the R6 call-site
+// preempt-check re-measurement. Deliberately the SAME shape as v0.3-M1's P1 GATE spike
+// (fib(30): ~2.7M calls, near-zero per-call work) so the fresh default-pipeline number is
+// directly comparable to the 1190% O0 figure that pre-authorized the original deferral.
+//
+// Measurement procedure (recorded in the Phase 6 audit entry with the PRE-registered
+// acceptance threshold): compile this fixture twice with the default optimized pipeline —
+// once normally, once with YNZ_PREEMPT_CALLSITE_CHECKS=1 set for the compile — then run
+// each binary 5 times and compare median wall-clock.
+
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  let a = fib(n - 1)
+  let b = fib(n - 2)
+  return a + b
+}
+
+function entrypoint() -> nothing {
+  let result = fib(30)
+  print(`fib(30) = ${result}`)
+}

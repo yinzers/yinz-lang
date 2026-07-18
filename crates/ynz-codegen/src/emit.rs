@@ -334,6 +334,9 @@ pub fn build_frame_layouts_with_resolver(
                 &suspending_refs,
                 &cpu_supported_refs,
                 &typed.expr_types,
+                // Phase 6: frame layout must reserve slots for the SAME widened
+                // crossing set the resume fn flushes/reloads — one producer verdict.
+                typed.back_edge_yield_admitted.contains(&f.name),
             );
             let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
 
@@ -778,6 +781,9 @@ fn compute_frame_size(
                         &suspending_refs,
                         &cpu_supported_refs,
                         &typed.expr_types,
+                        // Phase 6: the child-frame-size memo must match the layout's
+                        // widened crossing reservation exactly — same producer verdict.
+                        typed.back_edge_yield_admitted.contains(&f.name),
                     );
                     let crossing_slots =
                         crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
@@ -1556,6 +1562,8 @@ fn lower_generic_function<'ctx>(
         sm_number_errors_staging_offset: None,
         // Generic functions cannot contain `wait` — auto-parallel is never applicable.
         no_auto_parallel: false,
+        // Generic functions never SM-lower; no back-edge yield.
+        back_edge_yield: false,
         // Generic functions never reach lower_sm_block; the empty table satisfies
         // the struct field without the caller needing a real SignatureTable.
         sig_table: empty_sig_table(),
@@ -2008,6 +2016,12 @@ struct Cg<'ctx, 'g> {
     // When false (the default), `lower_sm_block` runs `partition_independent_groups`
     // and routes independent groups through `emit_independent_group_poll`.
     no_auto_parallel: bool,
+    // v0.3-M7 Phase 6: true iff the CURRENT function is admitted to the back-edge
+    // poll-yield transform (typeck's `TypedModule::back_edge_yield_admitted` — the ONE
+    // producer). Widens `stmt_needs_sm_walker` so every qualifying loop routes through
+    // the SM loop arms, and gates the poll-yield emission at their back edges. False in
+    // every non-resume-fn Cg (plain functions and generic bodies have no frame to yield).
+    back_edge_yield: bool,
     // v0.3-M3b Phase 4: signature table for write-effect classification in the
     // independence analysis. Used ONLY by `lower_sm_block` → `partition_independent_groups`.
     // When `no_auto_parallel` is true, this is never accessed.
@@ -4459,6 +4473,8 @@ fn lower_function<'ctx, 'g>(
         sm_number_errors_staging_offset: None,
         // Non-SM functions cannot contain independent suspending groups.
         no_auto_parallel: false,
+        // Non-SM functions have no frame and cannot yield — the documented residual.
+        back_edge_yield: false,
         // sig_table unused for non-SM functions — independence analysis runs only in
         // lower_sm_block which is never reached from the non-SM path.
         sig_table,
@@ -4670,12 +4686,18 @@ fn lower_function_with_waits<'ctx, 'g>(
     } else {
         HashSet::new()
     };
+    // v0.3-M7 Phase 6: the admission verdict for THIS function — typeck's ONE producer
+    // (`back_edge_yield_admission`), threaded into the crossing collection, the
+    // suspension-point count, and the SM-walker routing below so all three walks consume
+    // the identical qualifying predicate (authoritative-derivation.md; R8).
+    let back_edge_yield = typed.back_edge_yield_admitted.contains(&f.name);
     let crossing_names: Vec<String> = crossing_local_names_with_cpu_spike(
         &f.body.stmts,
         &param_name_refs,
         &suspending_refs,
         &cpu_supported_refs,
         &typed.expr_types,
+        back_edge_yield,
     );
 
     // Slot index layout: params occupy slots [0..n_params), crossing locals occupy
@@ -4855,7 +4877,8 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Pre-create state blocks.
     // Count ALL suspension points: explicit `wait` nodes + calls to suspending callees.
     // Each suspension point needs a poll-loop continuation state.
-    let n_waits_base = count_suspension_points(&f.body, suspend_set, &typed.expr_types);
+    let n_waits_base =
+        count_suspension_points(&f.body, suspend_set, &typed.expr_types, back_edge_yield);
     // Spike: a CPU-parallel group occupies two states — the spawn state (state 0, which is
     // the initial dispatch state, always present) and the poll state (state 1, the extra one).
     // After emit_cpu_group_spawn_join, *current_state is advanced by 2. Any subsequent
@@ -4960,6 +4983,9 @@ fn lower_function_with_waits<'ctx, 'g>(
         // When set, lower_sm_block skips independence analysis and lowers all stmts
         // sequentially — the TRUE dumb-sequential baseline (not a shared-analysis no-op).
         no_auto_parallel,
+        // v0.3-M7 Phase 6: thread typeck's admission verdict (the ONE producer) into
+        // this resume fn's routing + back-edge emission.
+        back_edge_yield,
         // sig_table forwarded so independence analysis can read param_ownerships
         // without re-deriving write effects from scratch (corpse b compliance).
         sig_table,
@@ -5672,11 +5698,12 @@ fn count_suspension_points(
     block: &ynz_ast::nodes::Block,
     suspend_set: &SuspendSet,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> usize {
     block
         .stmts
         .iter()
-        .map(|s| count_suspension_stmt(s, suspend_set, expr_types))
+        .map(|s| count_suspension_stmt(s, suspend_set, expr_types, back_edge_yield))
         .sum()
 }
 
@@ -5684,6 +5711,7 @@ fn count_suspension_stmt(
     stmt: &Stmt,
     suspend_set: &SuspendSet,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> usize {
     match stmt {
         Stmt::Expr(e) => count_suspension_expr(e, suspend_set, expr_types),
@@ -5709,15 +5737,22 @@ fn count_suspension_stmt(
         }
         Stmt::If { cond, body, .. } => {
             count_suspension_expr(cond, suspend_set, expr_types)
-                + count_suspension_points(body, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types, back_edge_yield)
         }
+        // v0.3-M7 Phase 6: in an ADMITTED function, every QUALIFYING loop's back edge is
+        // one extra poll-yield continuation state — counted via THE one predicate
+        // (`ynz_typeck::loop_stmt_back_edge_yields`), exactly matching the state the SM
+        // loop arm claims at emission (authoritative-derivation.md; the M3d/M3e
+        // envelope-narrowing family is exactly a count-vs-claim drift).
         Stmt::While { cond, body, .. } => {
-            count_suspension_expr(cond, suspend_set, expr_types)
-                + count_suspension_points(body, suspend_set, expr_types)
+            usize::from(back_edge_yield && ynz_typeck::loop_stmt_back_edge_yields(stmt, expr_types))
+                + count_suspension_expr(cond, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types, back_edge_yield)
         }
         Stmt::For { iter, body, .. } => {
-            count_suspension_expr(iter, suspend_set, expr_types)
-                + count_suspension_points(body, suspend_set, expr_types)
+            usize::from(back_edge_yield && ynz_typeck::loop_stmt_back_edge_yields(stmt, expr_types))
+                + count_suspension_expr(iter, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types, back_edge_yield)
         }
         Stmt::Match {
             scrutinee,
@@ -5728,11 +5763,13 @@ fn count_suspension_stmt(
             count_suspension_expr(scrutinee, suspend_set, expr_types)
                 + arms
                     .iter()
-                    .map(|a| count_suspension_points(&a.body, suspend_set, expr_types))
+                    .map(|a| {
+                        count_suspension_points(&a.body, suspend_set, expr_types, back_edge_yield)
+                    })
                     .sum::<usize>()
-                + else_arm
-                    .as_ref()
-                    .map_or(0, |b| count_suspension_points(b, suspend_set, expr_types))
+                + else_arm.as_ref().map_or(0, |b| {
+                    count_suspension_points(b, suspend_set, expr_types, back_edge_yield)
+                })
         }
     }
 }
@@ -5807,6 +5844,12 @@ fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
     stmt_contains_wait(stmt)
         || stmt_contains_suspending_call(stmt, cg.suspend_set, &cg.typed.expr_types)
         || ynz_typeck::stmt_contains_conduit_suspend(stmt, &cg.typed.expr_types)
+        // v0.3-M7 Phase 6: in an ADMITTED function, a statement that IS or CONTAINS a
+        // qualifying loop routes through the SM walker so the loop reaches its SM arm's
+        // back-edge poll-yield (a wait-free `if` wrapping a hot loop must not strand the
+        // loop in plain lowering). THE one containment predicate — never re-derived.
+        || (cg.back_edge_yield
+            && ynz_typeck::stmt_contains_back_edge_yield(stmt, &cg.typed.expr_types))
 }
 
 /// True if the statement contains a direct call to a suspending user-defined function.
@@ -7287,6 +7330,8 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
 
             // Body: lower via SM block walker so nested waits consume continuation states.
             cg.builder.position_at_end(while_body_bb);
+            // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+            let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
             lower_sm_block(
                 cg,
                 body,
@@ -7300,11 +7345,26 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 current_state,
             )?;
             if !is_block_terminated(cg) {
-                // Body didn't contain a return; flush preempt hook then loop back to header.
-                emit_loop_preempt(cg)?;
-                cg.builder
-                    .build_unconditional_branch(while_header_bb)
-                    .map_err(|e| format!("sm while body->header branch: {e}"))?;
+                // Body didn't contain a return: release this iteration's allocas (leaf
+                // wait-free bodies only), then the back edge — a poll-yield suspension
+                // point when this function is admitted (Phase 6), else the legacy
+                // budget-tick + branch.
+                if let Some(sp) = loop_sp {
+                    cg.loop_stack_restore(sp)?;
+                }
+                emit_sm_loop_back_edge(
+                    cg,
+                    while_header_bb,
+                    "sm while body->header branch",
+                    state_blocks,
+                    pending_block,
+                    frame_ptr,
+                    waker_ctx,
+                    param_names,
+                    f,
+                    shape_table,
+                    current_state,
+                )?;
             }
 
             cg.sm_scope_depth -= 1;
@@ -7563,6 +7623,8 @@ fn lower_sm_for<'ctx, 'g>(
         // flush_crossing_local_if_needed does not see it — flush manually here.
         flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
 
+        // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+        let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
             cg,
             body,
@@ -7577,6 +7639,10 @@ fn lower_sm_for<'ctx, 'g>(
         )?;
 
         if !is_block_terminated(cg) {
+            // Release this iteration's allocas before the back edge (leaf bodies only).
+            if let Some(sp) = loop_sp {
+                cg.loop_stack_restore(sp)?;
+            }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7591,10 +7657,21 @@ fn lower_sm_for<'ctx, 'g>(
                 .map_err(|e| format!("{e}"))?;
             state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
                 .map_err(|e| format!("sm range flush next: {e}"))?;
-            emit_loop_preempt(cg)?;
-            cg.builder
-                .build_unconditional_branch(header_bb)
-                .map_err(|e| format!("sm for range back-edge: {e}"))?;
+            // Back edge: poll-yield when admitted (idx is already frame-flushed above,
+            // so the resume header reloads the post-increment value).
+            emit_sm_loop_back_edge(
+                cg,
+                header_bb,
+                "sm for range back-edge",
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
         }
 
         cg.builder.position_at_end(exit_bb);
@@ -7704,6 +7781,8 @@ fn lower_sm_for<'ctx, 'g>(
         // the only shadow case an admitted binding can hit is its own loop var.
         let soa_masked = cg.soa_bindings.remove(var);
 
+        // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+        let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
             cg,
             body,
@@ -7722,6 +7801,10 @@ fn lower_sm_for<'ctx, 'g>(
         }
 
         if !is_block_terminated(cg) {
+            // Release this iteration's allocas before the back edge (leaf bodies only).
+            if let Some(sp) = loop_sp {
+                cg.loop_stack_restore(sp)?;
+            }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7736,10 +7819,19 @@ fn lower_sm_for<'ctx, 'g>(
                 .map_err(|e| format!("{e}"))?;
             state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
                 .map_err(|e| format!("sm array flush next: {e}"))?;
-            emit_loop_preempt(cg)?;
-            cg.builder
-                .build_unconditional_branch(header_bb)
-                .map_err(|e| format!("sm for array back: {e}"))?;
+            emit_sm_loop_back_edge(
+                cg,
+                header_bb,
+                "sm for array back",
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
         }
 
         cg.builder.position_at_end(exit_bb);
@@ -7945,6 +8037,8 @@ fn lower_sm_for<'ctx, 'g>(
         // after a `wait` inside the body — crossing-local analysis handles this correctly
         // because map entry destructure bindings are not yet tracked as scalar crossing locals.
 
+        // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+        let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
             cg,
             body,
@@ -7959,6 +8053,10 @@ fn lower_sm_for<'ctx, 'g>(
         )?;
 
         if !is_block_terminated(cg) {
+            // Release this iteration's allocas before the back edge (leaf bodies only).
+            if let Some(sp) = loop_sp {
+                cg.loop_stack_restore(sp)?;
+            }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7973,10 +8071,19 @@ fn lower_sm_for<'ctx, 'g>(
                 .map_err(|e| format!("{e}"))?;
             state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
                 .map_err(|e| format!("sm map flush next: {e}"))?;
-            emit_loop_preempt(cg)?;
-            cg.builder
-                .build_unconditional_branch(header_bb)
-                .map_err(|e| format!("{e}"))?;
+            emit_sm_loop_back_edge(
+                cg,
+                header_bb,
+                "sm for map back-edge",
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
         }
 
         cg.builder.position_at_end(exit_bb);
@@ -13262,16 +13369,166 @@ fn is_block_terminated(cg: &Cg) -> bool {
         .unwrap_or(true)
 }
 
-/// Emit a cooperative preemption checkpoint at a loop back-edge.
+/// Emit the budget-ticking preemption call at a NON-yielding loop back-edge — plain
+/// (non-state-machine) loops, and the SM fixed-array arm (excluded from the yield by THE
+/// qualifying predicate; see `ynz_typeck::loop_stmt_back_edge_yields`).
 ///
-/// The v0.3-M1 stub is a no-op (single `ret`); it correctly positions call sites
-/// for v0.3-M2 state-machine suspension. Call-site preempt (at every `build_call`
-/// for user functions) deferred to M2 per P1 GATE measurement (1190% overhead).
+/// v0.3-M7 Phase 6: `ynz_rt_check_preempt` now takes the waker context and returns a
+/// bool. Non-yielding sites pass NULL and DISCARD the result: they cannot suspend (no
+/// frame, no Pending), but the call still ticks the per-worker budget — one function,
+/// one signature, no SM-only twin entry point. Yielding SM back edges go through
+/// `emit_sm_loop_back_edge` instead.
+/// v0.3-M7 Phase 6 Step 5: compile-time toggle for CALL-SITE preempt-check emission —
+/// the R6 re-measurement experiment. When `YNZ_PREEMPT_CALLSITE_CHECKS=1` is set at
+/// COMPILE time, every direct user-function call site emits the same budget-ticking
+/// `ynz_rt_check_preempt(null)` call the plain loop back edges use. This exists ONLY to
+/// take the fresh default-pipeline overhead measurement the plan's R6 mitigation
+/// requires (the prior 1190% figure was O0, wrong-tier evidence); it is NOT a user
+/// surface, and the ship/defer decision is measurement-gated against the
+/// pre-registered threshold recorded in the Phase 6 audit entry.
+fn callsite_preempt_checks_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("YNZ_PREEMPT_CALLSITE_CHECKS").is_ok_and(|v| v == "1"))
+}
+
 #[inline]
 fn emit_loop_preempt<'ctx>(cg: &mut Cg<'ctx, '_>) -> Result<(), String> {
+    let null_waker = cg.ctx.ptr_type(AddressSpace::default()).const_null();
     cg.builder
-        .build_call(cg.rt.ynz_rt_check_preempt, &[], "preempt")
+        .build_call(cg.rt.ynz_rt_check_preempt, &[null_waker.into()], "preempt")
         .map_err(|e| format!("preempt: {e}"))?;
+    Ok(())
+}
+
+/// v0.3-M7 Phase 6: emit a state-machine loop's back edge — a conditional POLL-YIELD
+/// suspension point when the enclosing function is admitted (`cg.back_edge_yield`),
+/// or the legacy budget-tick + unconditional branch when not.
+///
+/// The yield reuses ONLY the existing authoritative suspension machinery
+/// (R8 / authoritative-derivation.md — no new frame-touching path):
+///
+/// ```llvm
+/// back_edge:
+///   %p = call i8 @ynz_rt_check_preempt(ptr %waker_ctx)   ; budget check; wakes on true
+///   %should = icmp ne i8 %p, 0
+///   br i1 %should, label %yield_K, label %header
+/// yield_K:
+///   ; crossing locals are already frame-resident BY CONSTRUCTION (the per-statement
+///   ; flush discipline: flush_crossing_local_if_needed / flush_for_loop_var / the
+///   ; sm-range idx flush — all delegating to flush_var_slot_to_frame). No bulk flush.
+///   call store_resume_point(frame, K)                    ; state_machine.rs helper
+///   br label %sm_pending                                 ; existing Pending return
+/// sm_sK:                                                 ; continuation (resume path)
+///   call reload_params_from_frame(..., reload_crossing=true, reload_spike=true)
+///   br label %header                                     ; re-evaluate loop condition
+/// ```
+///
+/// The continuation index is claimed via the SAME `*current_state + 1` advance protocol
+/// every wait site uses, matching `count_suspension_stmt`'s per-qualifying-loop pre-count
+/// (count-vs-claim drift is the M3d/M3e envelope-narrowing family).
+///
+/// Callers: the SM while / for-range / for-array / for-map arms — the four forms THE
+/// qualifying predicate admits. The fixed arm and the fallback keep `emit_loop_preempt`.
+/// v0.3-M7 Phase 6 — R2/row-439 parity for MIGRATED wait-free loops: when an admitted
+/// function routes a LEAF wait-free loop (no suspension of any kind inside the body —
+/// no wait, no suspending call, no conduit, no nested qualifying loop) through an SM
+/// arm, the body's per-iteration allocas (e.g. a non-crossing union `let`'s tagged
+/// struct) would otherwise accumulate unboundedly — the exact stack-exhaustion class the
+/// plain arms' `loop_stack_save` fixed (ledger row 439), newly hot-loop-relevant because
+/// migration moves wait-free loops off the plain arms.
+///
+/// Returns `Some(sp)` — a stacksave taken at the START of each body iteration — ONLY for
+/// leaf wait-free bodies. The matching restore is emitted at the back edge, BEFORE the
+/// poll-yield branch: with no internal suspension, save and restore provably live in the
+/// SAME resume-fn activation (the yield, if taken, fires after the restore; the resume
+/// re-enters at the header and the next body pass re-takes a fresh save). A body WITH
+/// internal suspensions must NOT stacksave here — a mid-body resume would re-enter past
+/// the save site, leaving the slot from a dead C stack (fresh-stack-per-resume law) —
+/// so those bodies keep today's no-save SM behavior.
+fn sm_leaf_loop_stack_save<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    body: &ynz_ast::nodes::Block,
+) -> Result<Option<PointerValue<'ctx>>, String> {
+    let body_suspends = body.stmts.iter().any(|s| stmt_needs_sm_walker(cg, s));
+    if cg.back_edge_yield && !body_suspends {
+        Ok(Some(cg.loop_stack_save()?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_sm_loop_back_edge<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    header_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    err_label: &str,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    if !cg.back_edge_yield {
+        // Not admitted: byte-identical legacy back edge (budget tick + branch).
+        emit_loop_preempt(cg)?;
+        cg.builder
+            .build_unconditional_branch(header_bb)
+            .map_err(|e| format!("{err_label}: {e}"))?;
+        return Ok(());
+    }
+
+    let continuation_state = *current_state + 1;
+    let cont_state_bb = state_blocks
+        .get(continuation_state)
+        .copied()
+        .ok_or_else(|| {
+            format!(
+                "back-edge yield continuation state {continuation_state} out of range —                  count_suspension_points and the SM loop arms disagree on the qualifying                  predicate (authoritative-derivation violation; compiler bug)"
+            )
+        })?;
+    let yield_bb = cg.append_block("sm_backedge_yield");
+
+    let preempt_i8 = cg
+        .builder
+        .build_call(cg.rt.ynz_rt_check_preempt, &[waker_ctx.into()], "preempt")
+        .map_err(|e| format!("{err_label} preempt call: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_rt_check_preempt returned void")?
+        .into_int_value();
+    let should_yield = cg
+        .builder
+        .build_int_compare(
+            inkwell::IntPredicate::NE,
+            preempt_i8,
+            cg.ctx.i8_type().const_zero(),
+            "preempt_should",
+        )
+        .map_err(|e| format!("{err_label} preempt cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(should_yield, yield_bb, header_bb)
+        .map_err(|e| format!("{err_label} preempt branch: {e}"))?;
+
+    // yield_bb: record the continuation and return Pending. ynz_rt_check_preempt has
+    // already woken the task (wake-before-Pending), so this is a yield-and-requeue.
+    cg.builder.position_at_end(yield_bb);
+    state_machine::store_resume_point(cg.ctx, &cg.builder, frame_ptr, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("{err_label} yield->pending: {e}"))?;
+
+    // Continuation state: fresh resume-fn invocation — reload params + crossing locals
+    // (the same reload every wait continuation performs), then re-enter at the header.
+    *current_state = continuation_state;
+    cg.builder.position_at_end(cont_state_bb);
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
+    cg.builder
+        .build_unconditional_branch(header_bb)
+        .map_err(|e| format!("{err_label} cont->header: {e}"))?;
+
     Ok(())
 }
 
@@ -15803,6 +16060,12 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     for arg in &call.args {
                         let val = lower_expr(cg, arg)?;
                         call_args.push(val.into());
+                    }
+                    // Phase 6 Step 5 (R6 re-measurement): budget tick before every direct
+                    // user call when the experiment toggle is on — see
+                    // `callsite_preempt_checks_enabled`.
+                    if callsite_preempt_checks_enabled() {
+                        emit_loop_preempt(cg)?;
                     }
                     let call_site = cg
                         .builder

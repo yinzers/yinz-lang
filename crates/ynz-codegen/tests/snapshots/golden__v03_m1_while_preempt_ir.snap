@@ -16,7 +16,7 @@ declare void @ynz_siphash_init() local_unnamed_addr
 
 declare void @ynz_rt_init() local_unnamed_addr
 
-declare void @ynz_rt_check_preempt() local_unnamed_addr
+declare i8 @ynz_rt_check_preempt(ptr) local_unnamed_addr
 
 declare void @ynz_rt_shutdown() local_unnamed_addr
 
@@ -25,11 +25,11 @@ entry:
   tail call void @ynz_siphash_init()
   tail call void @ynz_rt_init()
   %loop_sp = tail call ptr @llvm.stacksave.p0()
-  tail call void @ynz_rt_check_preempt()
+  %preempt = tail call i8 @ynz_rt_check_preempt(ptr null)
   tail call void @llvm.stackrestore.p0(ptr %loop_sp)
-  tail call void @ynz_rt_check_preempt()
+  %preempt.1 = tail call i8 @ynz_rt_check_preempt(ptr null)
   tail call void @llvm.stackrestore.p0(ptr %loop_sp)
-  tail call void @ynz_rt_check_preempt()
+  %preempt.2 = tail call i8 @ynz_rt_check_preempt(ptr null)
   tail call void @llvm.stackrestore.p0(ptr %loop_sp)
   %int_str = tail call ptr @ynz_int_to_string(i64 0)
   %puts = tail call i32 @puts(ptr nonnull dereferenceable(1) %int_str)

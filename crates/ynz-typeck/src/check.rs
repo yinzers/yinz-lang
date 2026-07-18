@@ -90,6 +90,16 @@ pub struct TypedModule {
     /// all thread its `padded_shapes`); a direct read outside that authority is
     /// the E3 twin-derivation corpse (authoritative-derivation.md).
     pub cross_thread_padded_shapes: std::collections::HashSet<String>,
+    /// v0.3-M7 Phase 6: function names ADMITTED to the back-edge poll-yield transform —
+    /// state-machine functions whose loops become poll-yield suspension points.
+    ///
+    /// Computed ONCE per function by `back_edge_yield_admission` (the safe-default
+    /// admission gate: declined functions keep pre-Phase-6 behavior byte-identically) and
+    /// consumed by every downstream deriver — codegen's SM-walker routing, its
+    /// suspension-point counting, and the crossing-local collection's `back_edge_yield`
+    /// flag — so all consumers key off ONE producer (authoritative-derivation.md), never
+    /// a per-consumer re-derivation.
+    pub back_edge_yield_admitted: std::collections::HashSet<String>,
 }
 
 /// Run the M5 type checker over all function bodies.
@@ -157,6 +167,7 @@ pub fn check(
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
         cross_thread_shapes: HashMap::new(),
         padded_shapes: HashSet::new(),
+        back_edge_yield_admitted: std::collections::HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -164,6 +175,7 @@ pub fn check(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         cross_thread_padded_shapes: checker.padded_shapes,
+        back_edge_yield_admitted: checker.back_edge_yield_admitted,
     };
     (
         typed,
@@ -227,6 +239,7 @@ pub fn check_with_kernel_mode(
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
         cross_thread_shapes: HashMap::new(),
         padded_shapes: HashSet::new(),
+        back_edge_yield_admitted: std::collections::HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -234,6 +247,7 @@ pub fn check_with_kernel_mode(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         cross_thread_padded_shapes: checker.padded_shapes,
+        back_edge_yield_admitted: checker.back_edge_yield_admitted,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -425,6 +439,9 @@ struct Checker<'b> {
     /// v0.3-M4 Phase 4: the finalized padded-shape set (`finalize_false_sharing` output),
     /// moved into `TypedModule::cross_thread_padded_shapes` when the pass completes.
     padded_shapes: HashSet<String>,
+    /// v0.3-M7 Phase 6: per-function back-edge poll-yield admission verdicts —
+    /// moved into `TypedModule::back_edge_yield_admitted` at the end of `check`.
+    back_edge_yield_admitted: std::collections::HashSet<String>,
 }
 
 impl<'b> Checker<'b> {
@@ -846,6 +863,26 @@ impl<'b> Checker<'b> {
         // field store an opaque pointer to a stack-allocated struct in their LLVM layout; that
         // pointer becomes invalid after the resume function returns and resumes.
         // Full recursive aggregate frame-embedding ships in a later milestone.
+        // v0.3-M7 Phase 6: back-edge poll-yield admission — the ONE producer of the
+        // verdict every downstream consumer (codegen routing / counting / crossing
+        // collection) reads via `TypedModule::back_edge_yield_admitted`. Runs after
+        // check_stmts (expr_types populated) exactly like Check 2 below. `is_sm` is
+        // `is_suspending_fn` ALONE (the may-block fixpoint verdict): codegen SM-lowers
+        // exactly the suspend-set members, and a function whose only wait is a no-op
+        // wait-on-non-may-block never becomes a state machine.
+        if back_edge_yield_admission(
+            f,
+            &ret_ty,
+            is_suspending_fn,
+            &suspending_fns,
+            self.shape_table,
+            &self.union_aliases,
+            &self.expr_types,
+            self.kernel_mode,
+        ) {
+            self.back_edge_yield_admitted.insert(f.name.clone());
+        }
+
         if !self.kernel_mode && (has_explicit_waits || is_suspending_fn) {
             let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
             // Provenance-aware call (v0.3-M6 Phase 1c): Check 2/2b need to know which
@@ -862,6 +899,15 @@ impl<'b> Checker<'b> {
                 &suspending_fns,
                 &std::collections::HashSet::new(),
                 &self.expr_types,
+                // Checks 2/2b/2c grade the BASELINE crossing set (back_edge_yield =
+                // false) even for Phase-6-admitted functions — a deliberate, recorded
+                // choice: admission (back_edge_yield_admission) only ever GRANTS when
+                // the widened set adds zero guard-firing names, so the diagnostics are
+                // provably identical either way, and keeping the checks on the baseline
+                // set means an admission-logic bug can never surface as a novel
+                // user-facing compile error (it stays codegen-internal, caught by the
+                // RED fixture set instead).
+                false,
             );
             for crossing_name in &crossings {
                 // v0.3-M6 Phase 1c step 3c (FRAGO 014 ITEM 2): a union-ANNOTATED local
@@ -8097,6 +8143,265 @@ pub struct LocalCrossesWait {
 /// codegen re-creates the entry struct on each body-bb entry from ynz_map_iter_get —
 /// it does not need a frame slot. Passing `None` disables this detection and falls
 /// back to the old behaviour (adding the var for all non-destructure for-loops).
+/// v0.3-M7 Phase 6 — THE back-edge poll-yield qualifying predicate (one definition).
+///
+/// Inside an ADMITTED state-machine function (see [`back_edge_yield_admission`]), a loop
+/// statement's back edge becomes one poll-yield suspension point iff this returns true:
+///
+///   - `while` — always qualifies.
+///   - `for` over a LITERAL `range(...)` call, an `array<T>`, or a `map<K, V>` — the
+///     iteration forms whose SM loop arms hold their cursor in a frame slot, so the loop
+///     can resume at its header after a yield.
+///   - `for` over `fixed<T>` — EXCLUDED: fixed arrays are stack-allocated in the resume
+///     function's stack frame, which dies on Pending; a yield mid-iteration would leave
+///     the header re-reading a dangling alloca (the same hazard Check 1b
+///     FixedArrayIterWithWait rejects for explicit waits).
+///   - `for` over a string / shape-iterable / stored-range variable — EXCLUDED: these
+///     forms lower through the SM walker's non-frame-backed fallback and cannot host a
+///     suspension point. Both exclusions are named residuals in
+///     IMP-no-function-coloring.md's Scheduler Preemption Model, never silent.
+///
+/// Consumed by: the crossing-local walk here (via its `back_edge_yield` flag), the
+/// admission gate below, codegen's `count_suspension_points`, and codegen's SM-walker
+/// routing + loop-arm emission. NEVER re-derive an "equivalent" per-consumer copy
+/// (authoritative-derivation.md — this is exactly R8's twin-derivation hazard).
+///
+/// Time: O(1)  Space: O(1)
+pub fn loop_stmt_back_edge_yields(stmt: &Stmt, expr_types: &HashMap<(usize, usize), Type>) -> bool {
+    match stmt {
+        Stmt::While { .. } => true,
+        Stmt::For { iter, .. } => {
+            let key = (iter.span().start, iter.span().end);
+            match expr_types.get(&key) {
+                // Stored-range variables (`let r = range(..); for (i in r)`) are the SM
+                // fallback form — only a literal `range(...)` call qualifies (the SM
+                // range arm re-evaluates the literal bounds at its header).
+                Some(Type::Range { .. }) => matches!(
+                    iter,
+                    Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "range")
+                ),
+                Some(Type::BuiltinArray { .. } | Type::BuiltinMap { .. }) => true,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// True iff `stmt` IS a qualifying back-edge-yield loop or CONTAINS one anywhere in its
+/// sub-tree — the recursive containment form of [`loop_stmt_back_edge_yields`], used by
+/// codegen's SM-walker routing (an `if` wrapping a qualifying loop must route through the
+/// SM walker so the nested loop reaches its SM arm) and by the synthetic for-idx slot
+/// collector's routing-parity guard.
+///
+/// Time: O(N) where N = AST nodes in `stmt`  Space: O(D) recursion depth
+pub fn stmt_contains_back_edge_yield(
+    stmt: &Stmt,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> bool {
+    if loop_stmt_back_edge_yields(stmt, expr_types) {
+        return true;
+    }
+    match stmt {
+        Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+            block_contains_back_edge_yield(body, expr_types)
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter()
+                .any(|a| block_contains_back_edge_yield(&a.body, expr_types))
+                || else_arm
+                    .as_ref()
+                    .is_some_and(|eb| block_contains_back_edge_yield(eb, expr_types))
+        }
+        _ => false,
+    }
+}
+
+/// Block-level form of [`stmt_contains_back_edge_yield`].
+///
+/// Time: O(N) where N = AST nodes in `block`  Space: O(D) recursion depth
+pub fn block_contains_back_edge_yield(
+    block: &Block,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> bool {
+    block
+        .stmts
+        .iter()
+        .any(|s| stmt_contains_back_edge_yield(s, expr_types))
+}
+
+/// D3 admission decline: a NON-qualifying `for` form (fixed / string / shape-iter /
+/// stored-range) whose body contains a qualifying loop. Routing such a `for` through the
+/// SM walker would either drag the nested loop through the non-frame-backed fallback
+/// (string/shape/stored-range — the nested loop would silently lose its yield) or let a
+/// nested yield dangle the outer fixed array's stack storage (fixed<T>). Declining the
+/// whole function keeps its behavior byte-identical to pre-Phase-6.
+///
+/// Time: O(N²) worst case over nested loops (N = AST nodes; real bodies are tiny)
+/// Space: O(D) recursion depth
+fn exists_non_qualifying_loop_containing_yield(
+    stmts: &[Stmt],
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+        Stmt::For { body, .. } => {
+            (!loop_stmt_back_edge_yields(stmt, expr_types)
+                && block_contains_back_edge_yield(body, expr_types))
+                || exists_non_qualifying_loop_containing_yield(&body.stmts, expr_types)
+        }
+        Stmt::If { body, .. } | Stmt::While { body, .. } => {
+            exists_non_qualifying_loop_containing_yield(&body.stmts, expr_types)
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter()
+                .any(|a| exists_non_qualifying_loop_containing_yield(&a.body.stmts, expr_types))
+                || else_arm.as_ref().is_some_and(|eb| {
+                    exists_non_qualifying_loop_containing_yield(&eb.stmts, expr_types)
+                })
+        }
+        _ => false,
+    })
+}
+
+/// D5 admission decline: two `for` loops in the same function share a loop-variable
+/// NAME while iterating elements of DIFFERENT types. The crossing-local frame-slot
+/// machinery is name-keyed (one slot per name, classified once from the first loop's
+/// element type via `find_for_loop_var_type_in_stmts`), so routing both loops through
+/// the SM arms would flush/reload the second loop's differently-typed variable through
+/// a slot sized and classified for the first — live-reproduced as heap corruption
+/// ("corrupted size vs. prev_size", SIGABRT) on `m5_p5_soa_copy_wait_bg.ynz`, where
+/// `for (p in pts /* Point */)` and `for (p in parts /* Part */)` share `p`; renaming
+/// the second variable eliminates the crash. Same-name/same-type sharing is safe (each
+/// loop rebinds the shared slot before reading it) and stays admitted.
+///
+/// NOTE this hazard PRE-EXISTS Phase 6 for loops whose bodies suspend (they were
+/// already routed and name-collided the same way); this decline only prevents Phase 6
+/// from WIDENING the exposure. The pre-existing sibling is surfaced to the plan seam,
+/// not silently fixed here.
+///
+/// Time: O(N) where N = AST nodes  Space: O(V) distinct loop-var names
+fn for_var_elem_type_conflict(
+    stmts: &[Stmt],
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut HashMap<String, Type>,
+) -> bool {
+    fn elem_of(iter: &Expr, expr_types: &HashMap<(usize, usize), Type>) -> Type {
+        let key = (iter.span().start, iter.span().end);
+        match expr_types.get(&key) {
+            Some(Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. }) => {
+                elem.as_ref().clone()
+            }
+            Some(Type::Range { .. }) => Type::Int,
+            // Map / string / shape-iter / unknown: compare the iterator type itself —
+            // exact-type sharing stays admitted, anything else conflicts conservatively.
+            Some(other) => other.clone(),
+            None => Type::Nothing,
+        }
+    }
+    for stmt in stmts {
+        match stmt {
+            Stmt::For {
+                var, iter, body, ..
+            } => {
+                let ty = elem_of(iter, expr_types);
+                if let Some(prev) = seen.get(var.as_str()) {
+                    if prev != &ty {
+                        return true;
+                    }
+                } else {
+                    seen.insert(var.clone(), ty);
+                }
+                if for_var_elem_type_conflict(&body.stmts, expr_types, seen) {
+                    return true;
+                }
+            }
+            Stmt::If { body, .. } | Stmt::While { body, .. } => {
+                if for_var_elem_type_conflict(&body.stmts, expr_types, seen) {
+                    return true;
+                }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                let arm_conflicts = arms
+                    .iter()
+                    .any(|a| for_var_elem_type_conflict(&a.body.stmts, expr_types, seen));
+                if arm_conflicts {
+                    return true;
+                }
+                let else_conflicts = else_arm
+                    .as_ref()
+                    .is_some_and(|eb| for_var_elem_type_conflict(&eb.stmts, expr_types, seen));
+                if else_conflicts {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// v0.3-M7 Phase 6 — the per-function back-edge poll-yield ADMISSION gate (safe default:
+/// decline keeps pre-Phase-6 behavior byte-identically; admission is granted only when
+/// every hazard probe passes). The ONE producer of the verdict every consumer reads via
+/// `TypedModule::back_edge_yield_admitted`.
+///
+/// Admission requires ALL of:
+///   1. Not kernel mode (no scheduler → no yield target; mirrors Check 2's own gate).
+///   2. The function is a state-machine function (caller-supplied `is_sm` — explicit
+///      waits or a transitively-suspending call graph; a plain function has no frame,
+///      cannot return Pending, and is the DOCUMENTED non-SM residual).
+///   3. At least one qualifying loop exists (otherwise the flag would widen nothing).
+///   4. No non-qualifying `for` form contains a qualifying loop (D3 — see
+///      [`exists_non_qualifying_loop_containing_yield`]).
+///   5. No two `for` loops share a loop-variable name across DIFFERENT element types
+///      (D5 — see [`for_var_elem_type_conflict`]; the name-keyed frame-slot collision).
+///   6. The suspension guards do NOT fire over the WIDENED crossing set
+///      ([`suspension_guards_fire_for_fn`] with `back_edge_yield = true`): making loop
+///      back edges suspension points must not force any local whose type cannot be
+///      frame-backed (fixed<T> / maybe / union / dynamic / range / nested-shape shape)
+///      to cross a suspension. A function where it would is DECLINED — the user program
+///      stays legal and byte-identical, and its loops are a named residual, never a new
+///      compile error and never a silent miscompile.
+///
+/// Time: O(N²) worst case (dominated by the D3 scan + one widened crossing collection)
+/// Space: O(C) crossing names
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn back_edge_yield_admission(
+    f: &ynz_ast::nodes::FunctionDecl,
+    ret_ty: &Type,
+    is_sm: bool,
+    suspending_fns: &std::collections::HashSet<&str>,
+    shape_table: &ShapeTable,
+    union_aliases: &HashMap<String, Type>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    kernel_mode: bool,
+) -> bool {
+    if kernel_mode || !is_sm {
+        return false;
+    }
+    if !block_contains_back_edge_yield(&f.body, expr_types) {
+        return false;
+    }
+    if exists_non_qualifying_loop_containing_yield(&f.body.stmts, expr_types) {
+        return false;
+    }
+    // D5: shared loop-var name across differently-typed for-loops (see
+    // for_var_elem_type_conflict — the name-keyed frame-slot collision class).
+    if for_var_elem_type_conflict(&f.body.stmts, expr_types, &mut HashMap::new()) {
+        return false;
+    }
+    !suspension_guards_fire_for_fn(
+        f,
+        ret_ty,
+        suspending_fns,
+        shape_table,
+        union_aliases,
+        expr_types,
+        kernel_mode,
+        true, // back_edge_yield: probe the WIDENED crossing set
+    )
+}
+
 pub fn crossing_local_names(
     stmts: &[Stmt],
     param_names: &[&str],
@@ -8109,6 +8414,7 @@ pub fn crossing_local_names(
         suspending,
         &std::collections::HashSet::new(),
         expr_types,
+        false,
     )
 }
 
@@ -8140,9 +8446,17 @@ pub fn crossing_local_names_with_cpu_spike(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> Vec<String> {
-    crossing_local_names_with_provenance(stmts, param_names, suspending, cpu_supported, expr_types)
-        .names
+    crossing_local_names_with_provenance(
+        stmts,
+        param_names,
+        suspending,
+        cpu_supported,
+        expr_types,
+        back_edge_yield,
+    )
+    .names
 }
 
 /// Crossing-local names plus provenance (v0.3-M6 Phase 1c, FRAGOs 013/014).
@@ -8180,8 +8494,16 @@ pub fn crossing_local_names_with_provenance(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> CrossingNames {
-    let crossings = locals_crossing_wait(stmts, param_names, suspending, cpu_supported, expr_types);
+    let crossings = locals_crossing_wait(
+        stmts,
+        param_names,
+        suspending,
+        cpu_supported,
+        expr_types,
+        back_edge_yield,
+    );
     let mut seen = std::collections::HashSet::new();
     let mut names: Vec<String> = crossings
         .into_iter()
@@ -8233,7 +8555,14 @@ pub fn crossing_local_names_with_provenance(
     // Only `wait`/may-block loop bodies suspend here: a CPU spike-group inside a loop body
     // DECLINES to sequential lowering (the codegen `spike_nested_blocks` excludes loop
     // bodies), so it is never a suspension point and needs no synthetic iteration slot.
-    collect_for_loop_synthetic_crossings(stmts, suspending, &mut seen, &mut names, expr_types);
+    collect_for_loop_synthetic_crossings(
+        stmts,
+        suspending,
+        &mut seen,
+        &mut names,
+        expr_types,
+        back_edge_yield,
+    );
     names.sort();
     CrossingNames {
         names,
@@ -8590,11 +8919,21 @@ fn collect_for_loop_synthetic_crossings(
     seen: &mut std::collections::HashSet<String>,
     names: &mut Vec<String>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) {
-    collect_for_loop_synthetic_crossings_inner(stmts, suspending, seen, names, &mut 0, expr_types);
+    collect_for_loop_synthetic_crossings_inner(
+        stmts,
+        suspending,
+        seen,
+        names,
+        &mut 0,
+        expr_types,
+        back_edge_yield,
+    );
 }
 
 /// Time: O(N) where N = AST nodes in `stmts`  Space: O(D) recursion depth
+#[allow(clippy::too_many_arguments)]
 fn collect_for_loop_synthetic_crossings_inner(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
@@ -8602,6 +8941,7 @@ fn collect_for_loop_synthetic_crossings_inner(
     names: &mut Vec<String>,
     counter: &mut usize,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) {
     for stmt in stmts {
         match stmt {
@@ -8612,7 +8952,14 @@ fn collect_for_loop_synthetic_crossings_inner(
                 map_destructure_pattern,
                 ..
             } if block_contains_wait(body)
-                || block_contains_inferred_suspension(body, suspending, expr_types) =>
+                || block_contains_inferred_suspension(body, suspending, expr_types)
+                // v0.3-M7 Phase 6: under the admitted widening, a for-loop ALSO routes
+                // through lower_sm_for (which claims the next __ynz_for_idx_N counter
+                // unconditionally at its top) when it qualifies for a back-edge yield
+                // OR wraps a qualifying loop anywhere in its sub-tree — the collector
+                // must allocate in exact lock-step with codegen's stmt_needs_sm_walker
+                // widening (THE one containment predicate; never a re-derived twin).
+                || (back_edge_yield && stmt_contains_back_edge_yield(stmt, expr_types)) =>
             {
                 let syn_name = format!("__ynz_for_idx_{counter}");
                 *counter += 1;
@@ -8648,6 +8995,7 @@ fn collect_for_loop_synthetic_crossings_inner(
                     names,
                     counter,
                     expr_types,
+                    back_edge_yield,
                 );
             }
             Stmt::If { body, .. } => {
@@ -8658,6 +9006,7 @@ fn collect_for_loop_synthetic_crossings_inner(
                     names,
                     counter,
                     expr_types,
+                    back_edge_yield,
                 );
             }
             Stmt::While { body, .. } | Stmt::For { body, .. } => {
@@ -8668,6 +9017,7 @@ fn collect_for_loop_synthetic_crossings_inner(
                     names,
                     counter,
                     expr_types,
+                    back_edge_yield,
                 );
             }
             Stmt::Match { arms, else_arm, .. } => {
@@ -8679,11 +9029,18 @@ fn collect_for_loop_synthetic_crossings_inner(
                         names,
                         counter,
                         expr_types,
+                        back_edge_yield,
                     );
                 }
                 if let Some(eb) = else_arm {
                     collect_for_loop_synthetic_crossings_inner(
-                        &eb.stmts, suspending, seen, names, counter, expr_types,
+                        &eb.stmts,
+                        suspending,
+                        seen,
+                        names,
+                        counter,
+                        expr_types,
+                        back_edge_yield,
                     );
                 }
             }
@@ -9064,6 +9421,7 @@ pub fn locals_crossing_wait(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> Vec<LocalCrossesWait> {
     let mut problems = Vec::new();
     collect_crossings_in_stmts(
@@ -9072,6 +9430,7 @@ pub fn locals_crossing_wait(
         suspending,
         cpu_supported,
         expr_types,
+        back_edge_yield,
         &mut Vec::new(),
         &mut problems,
     );
@@ -9163,10 +9522,15 @@ fn block_suspends_m3d(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> bool {
     block_contains_wait(block)
         || block_contains_inferred_suspension(block, suspending, expr_types)
         || block_contains_cpu_spike_pair(block, suspending, cpu_supported)
+        // v0.3-M7 Phase 6: under the admitted back-edge poll-yield widening, a block
+        // containing a qualifying loop contains a suspension point (the loop's back
+        // edge) — THE one predicate, threaded, never re-derived.
+        || (back_edge_yield && block_contains_back_edge_yield(block, expr_types))
 }
 
 /// Recursive crossing-analysis kernel.
@@ -9184,6 +9548,7 @@ fn collect_crossings_in_stmts(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
     declared: &mut Vec<String>,
     out: &mut Vec<LocalCrossesWait>,
 ) {
@@ -9266,20 +9631,48 @@ fn collect_crossings_in_stmts(
                     ..
                 } if is_suspending_call(c, suspending) => true,
                 Stmt::If { body, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if block_suspends_m3d(
+                        body,
+                        suspending,
+                        cpu_supported,
+                        expr_types,
+                        back_edge_yield,
+                    ) =>
                 {
                     true
                 }
+                // v0.3-M7 Phase 6: under the admitted widening, a QUALIFYING loop is a
+                // suspension point in its own right (its back edge yields) even when its
+                // body contains no wait — THE one predicate, threaded, never re-derived.
                 Stmt::While { body, .. } | Stmt::For { body, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if (back_edge_yield && loop_stmt_back_edge_yields(stmt, expr_types))
+                        || block_suspends_m3d(
+                            body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) =>
                 {
                     true
                 }
                 Stmt::Match { arms, else_arm, .. }
                     if arms.iter().any(|a| {
-                        block_suspends_m3d(&a.body, suspending, cpu_supported, expr_types)
+                        block_suspends_m3d(
+                            &a.body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        )
                     }) || else_arm.as_ref().is_some_and(|eb| {
-                        block_suspends_m3d(eb, suspending, cpu_supported, expr_types)
+                        block_suspends_m3d(
+                            eb,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        )
                     }) =>
                 {
                     true
@@ -9346,6 +9739,7 @@ fn collect_crossings_in_stmts(
                             suspending,
                             cpu_supported,
                             expr_types,
+                            back_edge_yield,
                             &mut branch_declared,
                             out,
                         );
@@ -9359,6 +9753,7 @@ fn collect_crossings_in_stmts(
                             suspending,
                             cpu_supported,
                             expr_types,
+                            back_edge_yield,
                             &mut branch_declared,
                             out,
                         );
@@ -9366,8 +9761,13 @@ fn collect_crossings_in_stmts(
                     Stmt::Match { arms, else_arm, .. } => {
                         collect_ident_refs_in_stmt(stmt, declared, out);
                         for arm in arms {
-                            if block_suspends_m3d(&arm.body, suspending, cpu_supported, expr_types)
-                            {
+                            if block_suspends_m3d(
+                                &arm.body,
+                                suspending,
+                                cpu_supported,
+                                expr_types,
+                                back_edge_yield,
+                            ) {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &arm.body.stmts,
@@ -9375,13 +9775,20 @@ fn collect_crossings_in_stmts(
                                     suspending,
                                     cpu_supported,
                                     expr_types,
+                                    back_edge_yield,
                                     &mut branch_declared,
                                     out,
                                 );
                             }
                         }
                         if let Some(eb) = else_arm {
-                            if block_suspends_m3d(eb, suspending, cpu_supported, expr_types) {
+                            if block_suspends_m3d(
+                                eb,
+                                suspending,
+                                cpu_supported,
+                                expr_types,
+                                back_edge_yield,
+                            ) {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &eb.stmts,
@@ -9389,6 +9796,7 @@ fn collect_crossings_in_stmts(
                                     suspending,
                                     cpu_supported,
                                     expr_types,
+                                    back_edge_yield,
                                     &mut branch_declared,
                                     out,
                                 );
@@ -9502,7 +9910,13 @@ fn collect_crossings_in_stmts(
                 //   (b) Locals declared INSIDE the branch, before the suspension, and
                 //       read after it IN THE SAME BRANCH — handled via recursive call.
                 Stmt::If { body, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if block_suspends_m3d(
+                        body,
+                        suspending,
+                        cpu_supported,
+                        expr_types,
+                        back_edge_yield,
+                    ) =>
                 {
                     // Sub-case (b): recurse into the branch, seeding with the outer
                     // `declared` set so outer-scope names are also tracked inside.
@@ -9513,6 +9927,7 @@ fn collect_crossings_in_stmts(
                         suspending,
                         cpu_supported,
                         expr_types,
+                        back_edge_yield,
                         &mut branch_declared,
                         out,
                     );
@@ -9535,8 +9950,18 @@ fn collect_crossings_in_stmts(
                 // survive each `wait` via the frame slot. A purely forward textual scan
                 // misses this because the write and the condition-read both appear before
                 // the `wait` in textual order, yet execution cycles back through them.
+                // v0.3-M7 Phase 6: under the admitted widening every `while` back edge
+                // is a suspension point, so the arm fires for wait-free bodies too — the
+                // same back-edge-crossing scan below is exactly what a poll-yield needs.
                 Stmt::While { body, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if back_edge_yield
+                        || block_suspends_m3d(
+                            body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) =>
                 {
                     // Scan the condition and body for reads of outer-declared locals.
                     // This catches the back-edge case: counter/accumulator locals are
@@ -9550,6 +9975,7 @@ fn collect_crossings_in_stmts(
                         suspending,
                         cpu_supported,
                         expr_types,
+                        back_edge_yield,
                         &mut branch_declared,
                         out,
                     );
@@ -9561,8 +9987,18 @@ fn collect_crossings_in_stmts(
                 // (the collection pointer/count is stable). Outer locals READ inside the body
                 // are still crossing locals — a forward scan seeded with the outer `declared`
                 // set catches them. Mark past_wait so post-for statements are scanned.
+                // v0.3-M7 Phase 6: a QUALIFYING `for` form's back edge is a suspension
+                // point under the admitted widening (fixed / fallback forms stay out —
+                // THE one predicate decides, never a per-site re-derivation).
                 Stmt::For { body, iter, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if (back_edge_yield && loop_stmt_back_edge_yields(stmt, expr_types))
+                        || block_suspends_m3d(
+                            body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) =>
                 {
                     // Scan the iter expression and body for reads of outer-declared locals.
                     // The iter expression may reference an outer local (e.g., the collection
@@ -9576,6 +10012,7 @@ fn collect_crossings_in_stmts(
                         suspending,
                         cpu_supported,
                         expr_types,
+                        back_edge_yield,
                         &mut branch_declared,
                         out,
                     );
@@ -9589,16 +10026,28 @@ fn collect_crossings_in_stmts(
                     scrutinee,
                     ..
                 } if arms.iter().any(|a| {
-                    block_suspends_m3d(&a.body, suspending, cpu_supported, expr_types)
+                    block_suspends_m3d(
+                        &a.body,
+                        suspending,
+                        cpu_supported,
+                        expr_types,
+                        back_edge_yield,
+                    )
                 }) || else_arm.as_ref().is_some_and(|eb| {
-                    block_suspends_m3d(eb, suspending, cpu_supported, expr_types)
+                    block_suspends_m3d(eb, suspending, cpu_supported, expr_types, back_edge_yield)
                 }) =>
                 {
                     // Scrutinee may reference outer-declared locals.
                     let _ = scrutinee; // scanned via collect_ident_refs_in_stmt
                     collect_ident_refs_in_stmt(stmt, declared, out);
                     for arm in arms {
-                        if block_suspends_m3d(&arm.body, suspending, cpu_supported, expr_types) {
+                        if block_suspends_m3d(
+                            &arm.body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) {
                             let mut arm_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &arm.body.stmts,
@@ -9606,13 +10055,20 @@ fn collect_crossings_in_stmts(
                                 suspending,
                                 cpu_supported,
                                 expr_types,
+                                back_edge_yield,
                                 &mut arm_declared,
                                 out,
                             );
                         }
                     }
                     if let Some(eb) = else_arm {
-                        if block_suspends_m3d(eb, suspending, cpu_supported, expr_types) {
+                        if block_suspends_m3d(
+                            eb,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) {
                             let mut eb_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &eb.stmts,
@@ -9620,6 +10076,7 @@ fn collect_crossings_in_stmts(
                                 suspending,
                                 cpu_supported,
                                 expr_types,
+                                back_edge_yield,
                                 &mut eb_declared,
                                 out,
                             );
@@ -9833,6 +10290,7 @@ pub(crate) fn suspending_calls_in_subexpr_position(
 /// contract explicit).
 ///
 /// Time: O(stmts · crossings)  Space: O(crossings)
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn suspension_guards_fire_for_fn(
     f: &ynz_ast::nodes::FunctionDecl,
     ret_ty: &Type,
@@ -9841,6 +10299,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
     union_aliases: &HashMap<String, Type>,
     expr_types: &HashMap<(usize, usize), Type>,
     kernel_mode: bool,
+    back_edge_yield: bool,
 ) -> bool {
     if kernel_mode {
         return false;
@@ -9891,6 +10350,12 @@ pub(crate) fn suspension_guards_fire_for_fn(
         suspending_fns,
         &std::collections::HashSet::new(),
         expr_types,
+        // `back_edge_yield = true` ONLY when probing for Phase 6 admission
+        // (back_edge_yield_admission): the probe then evaluates the guards over the
+        // WIDENED crossing set, so a function whose loop yields would force an
+        // un-frame-backable type to cross is DECLINED rather than miscompiled. Every
+        // other caller (the M3d decline probe) passes false — baseline behavior.
+        back_edge_yield,
     );
 
     for crossing_name in &crossings {

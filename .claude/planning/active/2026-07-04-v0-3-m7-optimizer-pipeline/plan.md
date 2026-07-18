@@ -3,7 +3,7 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround", "executor-2026-07-17-phase6-designnote", "executor-2026-07-17-phase6-transform", "executor-2026-07-17-phase6-fixloop-determinism", "executor-2026-07-17-phase6-review-closeout"]
 created_at: "2026-07-04"
 updated_at: "2026-07-17"
 metadata:
@@ -694,9 +694,11 @@ after 3 and 4.
      threshold, ship call-site checks unconditionally (matches
      [`IMP-no-function-coloring.md`](../../../../docs/internal/implementation/IMP-no-function-coloring.md)'s
      original lock exactly — no divergence to record). If it does NOT clear the threshold, do not ship
-     them; author the four-field deferral (WHAT/WHY/COST/TRIGGER) plus a `[[deferred_language_feature]]`
-     registry entry (name TBD at this step, e.g. `preempt-callsite-checks`) — closing audit finding P4-1
-     honestly either way.
+     them; author the four-field deferral (WHAT/WHY/COST/TRIGGER) plus a deferral registry entry
+     (`[[deferred_tooling_feature]]` — it gates a compiler-internal compile-time toggle, not
+     user-typeable syntax; kind settled at the Phase 6 review round, matching the sibling
+     `cooperative-preemption-back-edge-yield` entry's classification) named e.g.
+     `preempt-callsite-checks` — closing audit finding P4-1 honestly either way.
   7. Update [`IMP-no-function-coloring.md`](../../../../docs/internal/implementation/IMP-no-function-coloring.md)'s
      "Scheduler Preemption Model" section to state the TRUE, three-part shipped architecture: (a)
      SM-function back edges = codegen poll-yield (new, this milestone), (b) non-SM CPU-bound work =
@@ -783,9 +785,18 @@ after 3 and 4.
      absorbed by M7**, each with the one-line reason from §Roadmap Reconciliation below. A diff that
      updates only one of the two tables is an incomplete Phase 8 — grep both headings to confirm parity
      before calling this step done.
-  3. If Phase 6 deferred call-site preemption checks, add its `[[deferred_language_feature]]` registry
-     entry to [`registry/features.toml`](../../../../registry/features.toml) now (if not already
-     added at Phase 6 authoring time).
+  3. Registry reconciliation covers **BOTH** preemption entries in
+     [`registry/features.toml`](../../../../registry/features.toml), not just the new one: (a)
+     confirm the Phase-6-added `preempt-callsite-checks` `[[deferred_tooling_feature]]` deferral
+     entry is present and accurate (added at Phase 6 execution time; kind recategorized from
+     `[[deferred_language_feature]]` at the Phase 6 review round — it gates a compile-time toggle,
+     not user-typeable syntax); (b) update or retire the now-STALE
+     `cooperative-preemption-back-edge-yield` `[[deferred_tooling_feature]]` entry (`ships_in =
+     "v0.3-M7"`) — the back-edge half genuinely SHIPPED this milestone (real poll-yield; its
+     "documented no-op stub" substitute/why text is false post-Phase-6), so rewrite it to the
+     shipped reality or remove it, leaving the still-deferred call-site half's record solely to
+     `preempt-callsite-checks`. A Step 3 that touches only the new entry is an incomplete
+     reconciliation.
   4. CHANGELOG entry for the milestone; confirm no stray references to "compiles at O0" survive in any
      doc this milestone's grep sweep touches.
   5. Carry the FRAGO-008-rebased compile-time budget into the roadmap's own budget text (the roadmap
@@ -967,8 +978,12 @@ after 3 and 4.
 
 - The preemption mechanism update (Phase 6): if call-site checks ship for real, **NO new registry
   entry** (matches `IMP-no-function-coloring.md`'s original lock exactly — Phase 6 step 6). If
-  deferred instead, exactly ONE new `[[deferred_language_feature]]` entry (name TBD at Phase 6
-  execution time, e.g. `preempt-callsite-checks`), per the four-field deferral.
+  deferred instead, exactly ONE new deferral entry, per the four-field deferral. **Executed 2026-07-17:
+  deferred; the entry shipped as `preempt-callsite-checks`, kind `[[deferred_tooling_feature]]`**
+  (recategorized from the initially-authored `[[deferred_language_feature]]` at the Phase 6 review
+  round: it gates the compile-time `YNZ_PREEMPT_CALLSITE_CHECKS` toggle — a compiler-internal
+  mechanism with no user-typeable syntax — matching the sibling
+  `cooperative-preemption-back-edge-yield` entry's classification on the identical topic).
 - `--no-optimize` (CLI flag) and `YNZ_OPT_FORCE` (dev/bench env var): **no registry entry** — mirrors
   the existing precedent already set by `--no-auto-parallel`/`YNZ_SOA_FORCE`, neither of which carry
   registry entries (CLI flags and internal test-only env vars are not language keywords, jargon,
@@ -1060,11 +1075,29 @@ after 3 and 4.
    different capability (CPU-bound task-routing override). **COST:** small (spawn-site annotation +
    registry entry). **TRIGGER:** the next milestone touching `background`/task-routing surface — v0.3-M6
    or a future one; not this plan's charter.
-6. **(Contingent) Preemption call-site checks deferred** — if Phase 6's fresh O2 measurement fails its
-   pre-registered acceptance threshold, the four-field deferral (WHAT/WHY/COST/TRIGGER) and its
-   `[[deferred_language_feature]]` registry entry land here at Phase 6 execution time, with the actual
-   measured number cited as evidence — pre-registered as a live possibility so Phase 6 has a ready home
-   rather than inventing one mid-flight.
+6. **Preemption call-site checks deferred (Phase 6 measurement-gated decision, 2026-07-17)** — the
+   fresh default-pipeline measurement FAILED the pre-registered threshold ("≤5% median wall-clock on
+   the fib(30) call-heavy microbenchmark, 5 runs per configuration, toggle-on vs toggle-off" —
+   registered in the Phase 6 audit entry BEFORE measuring): toggle-ON median 132ms vs toggle-OFF
+   median ~26.5ms = **~+398% overhead** (far below the O0-era 1190%, still ~80× over the bar — the
+   opaque per-call-site check defeats inlining at exactly the call boundaries the optimizer
+   milestone sped up). Per the gate: NOT shipped. **WHAT:** emitting `ynz_rt_check_preempt` at every
+   user-function call site (the "call sites" half of IMP-no-function-coloring.md's safe-point
+   model; the loop-back-edge half shipped for real in this same phase). **WHY:** measured cost vs
+   bounded benefit — back-edge poll-yield covers the hot-loop starvation class; the uncovered
+   residual is loop-free CPU-bound recursion inside a state-machine function, undemonstrated in any
+   real workload. **COST to fix later:** small mechanically (emission exists behind the
+   `YNZ_PREEMPT_CALLSITE_CHECKS` compile-time toggle at the direct user-call choke point in
+   `emit.rs`, microbenchmark fixture committed at
+   `crates/ynz-driver/tests/fixtures/v0_3_m7_p6_callsite_overhead_fib.ynz`); the real cost is a
+   cheap-check design (inlinable fast path / non-inlined-boundary-only checks) plus re-measurement.
+   **TRIGGER:** a reproduced starvation incident traced to loop-free CPU-bound recursion in an SM
+   function, OR a cheap-check design making a re-measurement plausible, OR PGO/LTO call-boundary
+   work re-opening the question. Registry entry `preempt-callsite-checks`
+   (`[[deferred_tooling_feature]]`, [`registry/features.toml`](../../../../registry/features.toml))
+   added at Phase 6 execution time per this plan's Feature Registry Entries section (kind
+   recategorized from `[[deferred_language_feature]]` at the Phase 6 review round — a compile-time
+   toggle, not user-typeable syntax).
 7. **"As fast or faster than Rust" — honest gap, if any, from Phase 7's real numbers** — this plan does
    NOT assert full Rust parity as an achieved outcome; Phase 7 reports the true measured position. Any
    remaining gap (missing PGO, missing LTO, missing vectorization tuning, or any other concrete
@@ -1174,6 +1207,55 @@ after 3 and 4.
     warnings`, no `--tests`) is clean throughout. **COST:** ~half a session, mechanical sweep.
     **TRIGGER:** the first CI change adding `--tests`/`--all-targets` to the clippy gate, or the
     next test-infra milestone.
+14. **Name-keyed loop-var frame-slot collision on suspending-body `for` loops** (Phase 6 fix-round-3
+    discovery, surfaced by the D5 admission decline and tracked per the Phase 6 review round;
+    **ELEVATED priority** — heap-corruption severity class) — **WHAT:** the crossing-local frame
+    slot for a `for` loop variable is keyed by NAME and classified once from the FIRST loop's
+    element type (`find_for_loop_var_type_in_stmts`), so two suspending-body loops sharing a var
+    name across DIFFERENT element types flush/reload the second loop's variable through a slot
+    sized and classified for the first. Live-reproduced two ways (2026-07-17): SIGABRT "corrupted
+    size vs. prev_size" — genuine heap corruption, not just wrong output — on the pre-existing
+    `m5_p5_soa_copy_wait_bg.ynz` shape (three loops sharing `p` across Point/Part + a background
+    spawn), and deterministic silent garbage on the minimized committed repro
+    `crates/ynz-driver/tests/fixtures/v0_3_m7_d5_suspending_loop_var_slot_collision.ynz` (a Point
+    loop then a string loop sharing `p` — the string reloads raw bytes through the
+    Point-classified slot). **Current mitigation (a decline, NOT a fix):** Phase 6's D5 admission
+    decline (`for_var_elem_type_conflict`, `crates/ynz-typeck/src/check.rs:8283`) only prevents
+    Phase 6 from WIDENING the exposure to wait-free loops; the suspending-body exposure PRE-EXISTS
+    Phase 6 and remains live. **LOCK:** committed `#[ignore]`d planned-RED tests
+    (`crates/ynz-driver/tests/d5_frame_slot_collision_planned_red.rs`, test-ratchet-marked, both
+    tiers, per the FR #9/fr23 planned-RED precedent) assert the correct contract; the repro fixture
+    is excluded from both corpus sweeps until the fix, with the exclusions marked for removal in
+    the fixing change. **WHY not fixed now:** out of Phase 6's charter — the fix is a frame-slot
+    keying/classification redesign in the suspension machinery (per-loop or per-name+type slots),
+    not a back-edge-yield concern; the decline keeps the newly-widened path safe in the interim.
+    **COST:** ~0.5-1 session — key crossing loop-var slots per loop (or per name+type) instead of
+    per name, re-run the m5_p5 shape, activate the planned-RED locks, remove the sweep exclusions,
+    and retire whatever of D5's conservatism the fix subsumes. **TRIGGER:** the next milestone
+    touching the SM frame flush/reload machinery or crossing-set classification, OR a real user
+    hitting the garbage/SIGABRT class — the heap-corruption severity is what justifies pulling
+    this forward ahead of ordinary backlog (hence ELEVATED).
+15. **Fire-and-forget `background` completion lines are inherently load-flaky under byte-exact
+    assertion — a recurring class needing ONE structural decision** (Phase 6 review round,
+    deviation-judge disposition; tracking entry, NOT a proposal to build anything now) — **WHAT:**
+    v0.3 has no join primitive, so a fire-and-forget `background` task's completion line lands at a
+    scheduler-dependent stdout position BY DESIGN; any byte-exact assertion over such a line is
+    load-flaky. FOUR independent surfaces of this one root cause are now on record: the two Phase 6
+    preemption fixtures (`v0_3_m7_p6_backedge_starvation_sm.ynz` /
+    `v0_3_m7_p6_backedge_residual_nonsm.ynz`, closed via determinism-sweep exclusion with the
+    invariants owned by `v03_m7_backedge_preemption.rs`), the pirates-roster demo golden (closed
+    via presence-relaxation of the `background analytics done` line in `integration.rs`), and the
+    m4_p3 build-state-race watch item (flagged in the Phase 6 segment-2 audit entry, not yet
+    closed). **WHY tracked:** each per-surface fix is legitimate under the established
+    conventions, but four occurrences of one root cause warrant a structural design decision
+    rather than an open-ended series of per-surface patches. Options at decision time: a real
+    join/handle primitive (a language-design call deserving its own milestone and design doc), or
+    a ratified corpus-wide testing convention ("fire-and-forget completion lines are
+    presence-checked, never position-checked") applied mechanically across the corpus. **COST:**
+    a design session to decide; the convention option is ~0.5 session to sweep the corpus; a join
+    primitive is milestone-sized. **TRIGGER:** a fifth occurrence of the class, the next milestone
+    touching `background`/task-lifecycle surface, or the m4_p3 watch item escalating to a real
+    failure.
 
 ## Roadmap Reconciliation (executed at Phase 8; recorded here so the executor has zero ambiguity)
 

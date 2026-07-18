@@ -1506,6 +1506,46 @@ ships_in = "v0.3-M7 (optimizer milestone) — re-measured under a real LLVM pass
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "M7's optimizer pipeline lands and back-edge preemption cost is re-measured under real LLVM passes, OR a real workload demonstrates starvation before then."
 
+# --- Call-site preemption checks (v0.3-M7 Phase 6 measurement-gated deferral).
+# The four-field record (per no-duct-tape.md):
+#   WHAT: emitting the cooperative-preemption budget check (`ynz_rt_check_preempt`) at
+#         every user-function call site, completing the "call sites AND loop back-edges"
+#         half of IMP-no-function-coloring.md's compile-time-assisted safe-point model
+#         (loop back-edge poll-yield shipped for real in this same phase).
+#   WHY: the fresh v0.3-M7 measurement under the DEFAULT optimized pipeline failed the
+#        PRE-registered acceptance threshold (<=5% median wall-clock on the fib(30)
+#        call-heavy microbenchmark, 5 runs per configuration): toggle-ON median 132ms vs
+#        toggle-OFF median ~26.5ms = ~+398% overhead. Far below the O0-era 1190% figure,
+#        but still ~80x over the bar - an opaque external call before every call site
+#        defeats inlining at the call boundary, which IS the optimizer benefit this
+#        milestone shipped. Starvation coverage loss is bounded: loop back-edge
+#        poll-yield (shipped) covers hot loops; the remaining uncovered shape is
+#        loop-free CPU-bound recursion inside a state-machine function.
+#   COST to fix later: small mechanically (the emission exists behind the
+#        YNZ_PREEMPT_CALLSITE_CHECKS compile-time toggle at the direct user-call choke
+#        point in crates/ynz-codegen/src/emit.rs, with the fib microbenchmark fixture
+#        committed at crates/ynz-driver/tests/fixtures/v0_3_m7_p6_callsite_overhead_fib.ynz);
+#        the real cost is the optimization design work to make the check cheap at call
+#        sites (e.g. inlinable counter fast path via an exported thread-local, or
+#        checks only at non-inlined call boundaries) plus re-measurement.
+#   TRIGGER: a reproduced starvation incident traced to loop-free CPU-bound recursion in
+#        a state-machine function, OR a cheap-check design (inlinable fast path) making a
+#        re-measurement plausible under the threshold, OR PGO/LTO work (the "as fast or
+#        faster than Rust" follow-on) revisiting call-boundary codegen anyway.
+#   KIND: [[deferred_tooling_feature]], NOT [[deferred_language_feature]] — this gates a
+#        compiler-internal mechanism behind a compile-time toggle
+#        (YNZ_PREEMPT_CALLSITE_CHECKS), with no lexer/parser-reserved token a user can
+#        write; the language-feature kind is reserved for user-typeable reserved syntax.
+#        Same classification as its sibling entry on the identical topic,
+#        cooperative-preemption-back-edge-yield, above. ---
+[[deferred_tooling_feature]]
+name = "preempt-callsite-checks"
+substitute = "No user action available or needed - preemption is not a user-facing surface. Hot loops inside functions that can pause are already preempted for real at their loop back edges (shipped v0.3-M7); purely CPU-bound work with no pause points is routed off the I/O workers automatically. The one uncovered shape is deep, loop-free, CPU-bound recursion inside a function that can pause - restructure such code into a loop if a long-running recursion must share its worker fairly."
+why = "v0.3-M7 Phase 6 re-measured the call-site check under the real default optimizer pipeline against a PRE-registered <=5% threshold and measured ~+398% on the fib(30) call-heavy microbenchmark (toggle-ON median 132ms vs OFF ~26.5ms, 5 runs each) - the opaque per-call-site check defeats the inlining the optimizer milestone exists to deliver. Loop back-edge poll-yield shipped in the same phase and covers the hot-loop starvation class; shipping call-site checks at this cost would tax every call-heavy program to cover one remaining uncovered case (loop-free CPU-bound recursion in a function that can pause) that no real workload has yet demonstrated."
+ships_in = "unscheduled - trigger-driven (see the four-field record above)"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
+triggers = "A reproduced starvation incident traced to loop-free CPU-bound recursion in a state-machine function, OR a cheap inlinable-check design, OR call-boundary codegen work (PGO/LTO follow-on) that re-opens the measurement."
+
 # ---------------------------------------------------------------------------
 # [[deferred_stdlib_api]] — RESERVED, zero entries in M1.
 # Each v0.5+ stdlib milestone populates its own entries.

@@ -2612,6 +2612,22 @@ fn examples_basics_runs_end_to_end() {
         code, 0,
         "examples/pirates-roster must compile and run; stderr:\n{stderr}"
     );
+    // The M1 section's `background recordPittsburghAnalytics(...)` is fire-and-forget
+    // ("Main never waits for it" — entrypoint.ynz), so its completion line lands at a
+    // scheduler-dependent point: under full-suite parallel load it drifts across
+    // section boundaries (observed: from the inferred-wait section into the nested-SM
+    // section) while every value stays identical. Check PRESENCE exactly once, then
+    // strip the line from both sides before the positional comparisons — the same
+    // relaxation the 8 pirate lines get above, applied to the one other
+    // scheduler-positioned line in the demo.
+    let analytics_line = "background analytics done\n";
+    assert_eq!(
+        stdout.matches(analytics_line).count(),
+        1,
+        "demo must print 'background analytics done' exactly once; stdout: {stdout:?}"
+    );
+    let stdout = stdout.replace(analytics_line, "");
+    let golden = golden.replace(analytics_line, "");
     // Split at the M2 concurrent section: everything before the first pirate's
     // ": done" line is deterministic and must byte-match the golden prefix.
     // Everything after "all 8 pirates done" is deterministic again.

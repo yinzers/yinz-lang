@@ -238,6 +238,7 @@ fn check_query_cycle_initial(
                 span: ynz_diagnostics::SourceSpan::new("", 0, 0),
             },
             expr_types: std::collections::HashMap::new(),
+            back_edge_yield_admitted: std::collections::HashSet::new(),
             background_arg_inferred_ownership: std::collections::HashMap::new(),
             cross_thread_padded_shapes: std::collections::HashSet::new(),
         },
@@ -1112,6 +1113,9 @@ pub(crate) fn compute_cpu_promotions(
                 &union_aliases,
                 expr_types,
                 kernel_mode,
+                // M3d decline probe: baseline crossing set, never the Phase 6 widening
+                // (only back_edge_yield_admission probes with true).
+                false,
             ) {
                 // Every promoted candidate reachable from `f` is a cause; remove all.
                 let reachable =
