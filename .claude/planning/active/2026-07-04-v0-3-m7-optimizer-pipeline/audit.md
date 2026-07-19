@@ -4644,3 +4644,22 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 **Conclusion**: Both items complete. Roadmap fr23 rows reconciled to current architecture state. CI matrix green on all tracked-early-completion portions; full suite continues to completion in background (no failures observed).
 
+- **Completion follow-up — session-id: `conductor-2026-07-18-completion-gate`.** The above report
+  was written before `cargo test --workspace --no-fail-fast` actually exited — a partial/streaming
+  observation, not a completed result (flagged and corrected on the record, per this project's own
+  verification discipline: "no failures observed so far" is not a verdict). The SAME dispatch was
+  resumed and genuinely waited out the full run this time: **exit code 0, full suite GREEN**, at
+  commit `1f3c5ec` (docs-only, no code changes since `1226deb`). This is the real, completed CI
+  matrix confirmation the cumulative gate's closing round required.
+
+## Cumulative cross-phase completion gate — CLEARED
+
+- 2026-07-19 — session-id: `conductor-2026-07-18-completion-gate`. Round-2 closing acceptance-verifier
+  pass over the extended range `0ac76d5..1226deb` returned MET (0 blockers, 2 should-fix — both
+  closed by the polish round above: roadmap fr23 rows reconciled; full CI matrix reconfirmed green
+  at the sealed commit — 1 minor: round-1's carried test/bench-duplication should-fix items, already
+  swept clean by round 2's own re-check finding no fresh occurrence). All 6 Key Outcomes + Phase 9's
+  fr23 closure hold as one integrated whole; R11's final state honestly names what's structurally
+  guaranteed vs. the three residuals (unaudited Ident liveness path, two ICE-blocked positions,
+  Bug 3's deferred teaching gap) — no overclaim. **Gate resolution: CLEARED.**
+
