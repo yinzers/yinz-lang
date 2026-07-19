@@ -4663,3 +4663,57 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   guaranteed vs. the three residuals (unaudited Ident liveness path, two ICE-blocked positions,
   Bug 3's deferred teaching gap) — no overclaim. **Gate resolution: CLEARED.**
 
+## AAR — 2026-07-19 — session-id: `aar-2026-07-19-m7-optimizer-pipeline`
+
+**End State verdict:** partial — Definition of Done MET/CLEARED, but with multiple justified,
+honestly-recorded deviations from the plan's original ambition (KO5's "as fast as Rust" reframed
+to a named measured gap, not achieved; call-site preemption checks deferred, not shipped; 15
+Future Requirements carried forward, one ELEVATED).
+
+**What happened vs. what was supposed to happen:** all 10 phases (0–9, Phase 9 FRAGO-inserted)
+executed and the cumulative completion gate cleared, but the path included: 3 new O0-reliant
+miscompile classes beyond the 2 anticipated (FRAGO 002/005/006, each correctly RED-fixtured per
+the plan's own CCIR); a renegotiated compile-time budget (FRAGO 008); an honest Mission reframe
+when Phase 7 falsified the "as fast as Rust" claim (FRAGO 014); an 8-round memory-safety saga
+(fr23/R11, FRAGO 016–025) closing only after a Patrick-directed architectural redesign
+(default-deny); a 3-round Phase-8 documentation-reconciliation cycle; a Patrick-directed,
+logged-objection override routing Phases 1–8 to an unscored model (Fable) despite the safety-floor
+default; one process stray (FRAGO 003, an executor self-commit with no reviewer fan-out, caught
+downstream); and one self-caught near-miss (a completion-gate report citing a still-streaming test
+run as complete, corrected same-session).
+
+**Root-causing:** the fr23 recurrence is this AAR's central finding — `authoritative-derivation.md`
+was genuinely in-context and cited at every one of 6 rounds, each round's own diligence verified
+sound, yet the SAME violation class (a second/independent enumeration drifting from the
+authoritative one) recurred 6 times before an architectural fix — the `corpse-recurrence-escalation.md`
+lever-failure signature, confirmed in real time by the plan's own FRAGO 021 entry. The final
+default-deny redesign genuinely closes the "unclassified `Expr` shape" flavor structurally, but a
+DIFFERENT flavor (a resolver reading only one of a required two-table pair, `sig_table` vs
+`generic_fn_table`) recurred at least twice in the same saga with NO analogous backstop — still
+open.
+
+**Lessons surfaced for rule-author disposal** (proposed, not authored by the AAR):
+- **Corpse (project-scoped, ynz)**: "two-table lookup resolved from only one table" — the
+  still-open, un-backstopped half of the fr23 saga.
+- **Corpse (global-scoped)**: commit-to-main with no `Plan-Phase` trailer / no reviewer fan-out
+  record (FRAGO 003's shape).
+- **Corpse (global-scoped)**: a completion/gate report citing "no failures observed" from a test
+  run that had not yet exited (this plan's own near-miss, self-caught).
+- **Corpse (global-scoped)**: narrow single-instance fix for a "stale claim across N documents"
+  class without an exhaustive paraphrase-aware sweep (Phase 8's 3-round history).
+- **Rule (global-scoped)**: model/effort-tier selection for "reconcile N documents against a
+  shipped, evolving reality" phases — floor-tier dispatch needed 3 rounds to converge.
+- **Rule (global-scoped)**: a logged-but-overridden safety-floor objection should be explicitly
+  re-examined in the plan's AAR when the predicted risk family later materializes (the Fable
+  override named exactly the risk class that later required 8 rounds to close — correlation only,
+  not proven causation, but worth surfacing for the next plan's risk scoring).
+- **Not a rule-author artifact — flagged directly for the roadmap owner**: this plan's own audit
+  already recommended TWO roadmap-tracked mechanical backstops (the CHECKPOINT-mark enforcement
+  hook, FRAGO 009; the admission-gate-architecture design question, FRAGO 021/022) per
+  `corpse-recurrence-escalation.md`'s prescribed response — no evidence either has actually been
+  built yet; worth a direct check rather than a rule-author dispatch.
+
+**The one thing left to check** (per the AAR): whether those two roadmap-tracked backstops have
+actually been picked up as real Capability Ledger entries, or are still sitting as prose-only
+intentions in this plan's own audit.md.
+
