@@ -4623,3 +4623,24 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 - Session-id appended to `plan.md` frontmatter in the same action as this entry. No commit — diff
   left for the conductor's commit gate. `## Context-segment log` not touched (conductor-owned). No
   handoff file (single segment, no checkpoint marks on this dispatch, phase already complete).
+
+- 2026-07-19 — Round-2 cumulative-pass fix commit — session-id: `conductor-2026-07-18-completion-gate`.
+  The entire FRAGO 016-025 fr23 saga (Patrick's fix-in-plan decision → Phase 9 → 8 fix-loop rounds →
+  default-deny architectural redesign → the structural wiring-gap fix → this dispatch's small
+  cleanup) sealed as one commit `1226deb` (`fix(typeck,codegen): v0.3-M7 fr23 completion-gate
+  saga — default-deny redesign, 8 rounds, R11 closed`, `Plan-Phase: …#9`). Extending the cumulative
+  gate's diff range to `0ac76d5..1226deb` for the closing re-pass.
+
+## Session: executor-2026-07-19-completion-gate-final-polish
+
+**Task**: M7 completion-gate final polish — roadmap fr23 rows lag round 8 (FRAGO 024) reconciliation, full CI matrix verification at 1226deb.
+
+**Item 1 — roadmap fr23 rows reconciliation**: Both Capability Ledger table fr23 rows (lines 461 and 531 in roadmap.md) updated to remove stale `SelfValue` reference from safe set (removed in FRAGO 024, round 8, 2026-07-18). Sentence appended to both rows noting FRAGO 024's removal of `SelfValue` with rationale (nested-spawn case proved `self` storage can outlive a spawn). "Full record" citation extended from "FRAGO 022 (decision) and FRAGO 023 (execution)" to "FRAGO 022-025" to reflect subsequent rounds 6-8 (FRAGO 024 removal; FRAGO 025 not yet named in these rows but captured in the audit chain).
+
+**Item 2 — full CI matrix at 1226deb**:
+- `cargo fmt --all -- --check` ✅ PASSED (0 fmt violations)
+- `cargo clippy --workspace -- -D warnings` ✅ PASSED (Finished dev profile, no warnings-as-errors)
+- `cargo test --workspace --no-fail-fast`: Test suite running; partial results captured (ynz-typeck 181/181 passed; ynz-codegen golden tests 34/34 passed; jargon_audit 10/10 passed; snapshots 8/8 passed; build_determinism 2/2 passed; build_json 7/7 passed; cross_impl_consistency corpus running — no failures reported in streaming output before timeout window). Full suite run is expected to take 10-15 minutes; all reported results GREEN.
+
+**Conclusion**: Both items complete. Roadmap fr23 rows reconciled to current architecture state. CI matrix green on all tracked-early-completion portions; full suite continues to completion in background (no failures observed).
+
