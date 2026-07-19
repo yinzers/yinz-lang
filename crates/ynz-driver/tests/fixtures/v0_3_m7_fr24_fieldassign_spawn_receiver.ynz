@@ -1,0 +1,61 @@
+// v0.3-M7 FRAGO 024 (round 8, Bug 1) — STRUCTURAL admission-wiring gap: the
+// ownership-recording machinery (`bg_arg_is_provably_safe` + its recording loop)
+// was wired into only TWO of the syntactic positions a `background` spawn can
+// occupy (`check_stmts`'s Stmt::Expr match, `check_let`'s handle-form). This
+// fixture exercises a THIRD — a `background` spawn as the VALUE of a
+// `Stmt::FieldAssign` (`hd.slot = background makeCargo().haul()`) — which
+// previously routed through the generic `infer_expr` `Expr::Background` arm with
+// NO ownership recording at all: codegen's `is_heap_arg` gate (`emit.rs`) found no
+// recorded span and skipped the heap-upgrade unconditionally, a total UAF bypass.
+//
+// CONFIRMED-LIVE (2026-07-18, FRAGO 024 round 8): O0 printed `haul: 0/777777` and
+// `haul: 0/0` across repeated runs (dead-frame reuse from `stomp()`'s stack
+// churn) instead of the correct `haul: 111/222`.
+//
+// FIXED — the ownership-recording loop was moved into the generic
+// `Expr::Background` arm in `infer_expr` itself (the ONE place every spawn form,
+// in every statement position, provably passes through), so it now fires
+// structurally regardless of which statement kind hosts the spawn.
+//
+// Correct output must contain: `haul: 111/222`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+shape Holder {
+  slot: nothing
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function noop() -> nothing {
+}
+
+function spawner() -> nothing {
+  let hd: Holder = { slot: noop() }
+  hd.slot = background makeCargo().haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

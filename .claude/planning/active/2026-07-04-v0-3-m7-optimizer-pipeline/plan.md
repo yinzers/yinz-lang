@@ -3,9 +3,9 @@ name: "v0-3-m7-optimizer-pipeline"
 plan-id: "2026-07-04-v0-3-m7-optimizer-pipeline"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround", "executor-2026-07-17-phase6-designnote", "executor-2026-07-17-phase6-transform", "executor-2026-07-17-phase6-fixloop-determinism", "executor-2026-07-17-phase6-review-closeout", "executor-2026-07-17-phase7-ab-harness", "executor-2026-07-17-phase7-rust-equiv", "executor-2026-07-17-phase7-benchdedup-fixround", "executor-2026-07-17-phase8-final-reconciliation", "executor-2026-07-17-phase8-fixround", "executor-2026-07-17-phase8-fixround2", "executor-2026-07-17-phase8-fixround3", "executor-2026-07-18-soa-lint-testfix", "executor-2026-07-18-frago016-phase9-insert", "executor-2026-07-18-phase9-fr23-fix", "executor-2026-07-18-phase9-fr23-fixloop", "executor-2026-07-18-phase9-fixloop-deferral-fr23-c2"]
+session-id: ["plan-author-2026-07-04-m7-optimizer", "plan-amend-2026-07-04-m7-blockers", "plan-amend-2026-07-04-m7-links", "plan-amend-2026-07-04-m7-phase6-yield", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "executor-2026-07-16-phase0-spike", "conductor-2026-07-16-fable-model-override", "executor-2026-07-16-phase0-fixloop", "executor-2026-07-16-phase1-rootcause", "executor-2026-07-16-phase1-sweep-redgate", "executor-2026-07-16-phase1-fragoapply", "conductor-2026-07-16-phase2-dispatch", "executor-2026-07-16-phase2-fix-constructor", "executor-2026-07-16-phase2-frago004-reconcile", "executor-2026-07-16-phase2-fixloop-timing", "executor-2026-07-17-phase3-pipeline-flip", "executor-2026-07-17-phase3-tier-measurement", "executor-2026-07-17-frago005-007-apply", "executor-2026-07-17-phase3-r9-abifix", "executor-2026-07-17-phase3-frago009-fixround", "executor-2026-07-17-frago010-cleanup", "executor-2026-07-17-fr23-uaf-gate", "executor-2026-07-17-frago011-fr23-redlocks", "executor-2026-07-17-phase4-stackfix", "executor-2026-07-17-phase4-cleanup-round", "executor-2026-07-17-phase5-determinism-goldens", "executor-2026-07-17-phase5-stability-matrix", "executor-2026-07-17-frago013-fixround", "executor-2026-07-17-phase6-designnote", "executor-2026-07-17-phase6-transform", "executor-2026-07-17-phase6-fixloop-determinism", "executor-2026-07-17-phase6-review-closeout", "executor-2026-07-17-phase7-ab-harness", "executor-2026-07-17-phase7-rust-equiv", "executor-2026-07-17-phase7-benchdedup-fixround", "executor-2026-07-17-phase8-final-reconciliation", "executor-2026-07-17-phase8-fixround", "executor-2026-07-17-phase8-fixround2", "executor-2026-07-17-phase8-fixround3", "executor-2026-07-18-soa-lint-testfix", "executor-2026-07-18-frago016-phase9-insert", "executor-2026-07-18-phase9-fr23-fix", "executor-2026-07-18-phase9-fr23-fixloop", "executor-2026-07-18-phase9-fixloop-deferral-fr23-c2", "executor-2026-07-18-completion-gate-round2-cleanup", "executor-2026-07-18-completion-gate-round3-fr23-recursive", "executor-2026-07-18-completion-gate-round4-fr23-unify", "executor-2026-07-18-completion-gate-round6-fr23-audit-blocked", "conductor-2026-07-18-completion-gate", "executor-2026-07-18-frago023-default-deny-redesign", "executor-2026-07-19-frago024-round8-apply", "executor-2026-07-19-frago025-fr23-cleanup"]
 created_at: "2026-07-04"
-updated_at: "2026-07-18"
+updated_at: "2026-07-19"
 metadata:
   type: "plan"
 ---
@@ -131,7 +131,7 @@ this is pre-release compiler-internal work, fully git-reversible):
 | **R8 — the back-edge poll-yield codegen transform introduces a NEW frame-layout/crossing-local suspension hazard** (turning a qualifying loop back edge INSIDE a state-machine function into a new poll-yield suspension point — store `resume_point`, flush crossing locals, return `Pending` — is net-new codegen logic in the same silent-miscompile family as R1, and this repo's four-milestone twin-derivation/frame history: M3a/M3d/M3e/M3g, per [`authoritative-derivation.md`](../../../rules/authoritative-derivation.md)) — *Phase 6* | B | II | HIGH | Adversarial/RED-repro fixtures: loop-crossing-local suspension fixtures (the SM-positive case AND the non-SM residual case) authored and committed BEFORE the transform lands, gating the build (**B2 adversarial/RED-repro**, probability, −1; proof: failing fixtures committed pre-implementation, Phase 6 Steps 1 & 3) — re-lookup(C, II) = **HIGH, unchanged** (Critical severity does not clear High until probability reaches D; no second honestly-provable catalog mitigation applies — full work-shown in the RISK OVERRIDE block immediately below) | **HIGH** (C×II) | **BLOCKED — unsigned RISK OVERRIDE below** |
 | **R9 — dangling-stack-return ABI miscompile class** (proven, deterministic: `ret ptr` to the callee's OWN alloca on `maybe<T>`/`number` returns — `emit.rs:2213-2223` / `:5292-5320`'s own "copy-and-forget ABI" comment; UB, garbage+hang under O2; confirmed THIRD O0-reliant class, structurally undiscoverable by Phase 1's attribute/alignment sweep because manifestation is inlining-dependent; FRAGO 005) — *Phase 3 (extended)* | A | III | HIGH | Committed RED fixture gating the fix (`v0_3_m7_p3_dangling_stack_return.ynz` + the `optimizer_red_gate` Class-3 test); root-cause-before-fix ordering (**B2 adversarial/RED-repro**, prob −1; proof: failing fixture + gate test committed before the fix lands) | **MEDIUM** (B×III) | recorded |
 | **R10 — pre-existing multi-file build nondeterminism** (proven at clean HEAD/O0: `pirates-roster` object files flap between exactly two hashes — git-stash probe proof, orthogonal to the optimizer; breaks the reproducible-build Safety invariant AND R7's Phase-5 byte-identical 2-run gate mechanism; FRAGO 006) — *Phase 5 (Step 0)* | A | III | HIGH | Root-cause + eliminate the nondeterminism source before Phase 5 Step 3's gate runs, plus a determinism regression check (**B1 eliminate**, prob −2; proof: Phase 5 Step 0's committed determinism check green) | **MEDIUM** (C×III) | recorded |
-| **R11 — fr23 confirmed-live UAF: non-plain-ident background-spawn receivers** (Future Requirements #9's disposition-(b) gate, executed 2026-07-17: B′ maybe-payload receiver WRONG at BOTH tiers; C2 call-materialized receiver WRONG 6/6 at O0, IR-proven dangling luck-masked at opt; A/C1 field-access shapes still-latent via `field_own_cell` heap cells; evidence `emit.rs:16417-16431` `is_heap_arg`, `check.rs:1709`; FRAGO 011) — anchor: fr23 / **disposition (a) decided 2026-07-18 (FRAGO 016) and EXECUTED 2026-07-18 (Phase 9, `executor-2026-07-18-phase9-fr23-fix`)**. **Loop-aggravation fact (2026-07-17 cleanup round):** Phase 4's back-edge restore made the fr23 shapes deterministically worse inside plain loops (per-iteration stomp; code-reviewer 2026-07-17) — strengthened the case for disposition (a) fix-in-plan | A | III | HIGH | **FIXED (B1 eliminate, Phase 9):** typeck records both confirmed shapes as `Give` via ONE admission helper (`bg_arg_is_materialized_shape_temp`, `check.rs`); codegen's `is_heap_arg` gate consults the ONE authoritative `background_arg_inferred_ownership` record by span for any expression shape (`emit.rs`, `prepare_bg_arg_for_ctx`) — the existing `HeapShape` heap-upgrade/free ladder covers both spawn arms; the planned-RED locks converted to permanent green regression tests (`fr23_uaf_planned_red.rs`, `#[ignore]` removed); proof: both fixtures re-run at BOTH tiers print `haul: 111/222`, corpus sweep clean with both fixtures included (FRAGO 012 exclusions removed); fix-round 2026-07-18 (`executor-2026-07-18-phase9-fr23-fixloop`): C2 admission extended to GENERIC shape-returning callees (`generic_fn_table` fallback — security live-repro closed) and SM-spawn-arm + generic-B′ coverage test-locked (4 new fixtures, `fr23_uaf_planned_red.rs`) | **CLOSED** — both confirmed-live shapes (B′, C2) fixed and verified at both tiers, including the generic-callee C2 variant; A/C1 (`field_own` heap-cell protected) untouched, still-latent, correctly out of scope; work-shown record: FRAGO 011, FRAGO 016, Phase 9 | **closed — disposition (a) executed (Phase 9, 2026-07-18)** |
+| **R11 — fr23 confirmed-live UAF: non-plain-ident background-spawn receivers** (Future Requirements #9's disposition-(b) gate, executed 2026-07-17: B′ maybe-payload receiver WRONG at BOTH tiers; C2 call-materialized receiver WRONG 6/6 at O0, IR-proven dangling luck-masked at opt; A/C1 field-access shapes still-latent via `field_own_cell` heap cells; evidence `emit.rs:16417-16431` `is_heap_arg`, `check.rs:1709`; FRAGO 011) — anchor: fr23 / **disposition (a) decided 2026-07-18 (FRAGO 016) and EXECUTED 2026-07-18 (Phase 9, `executor-2026-07-18-phase9-fr23-fix`)**. **Loop-aggravation fact (2026-07-17 cleanup round):** Phase 4's back-edge restore made the fr23 shapes deterministically worse inside plain loops (per-iteration stomp; code-reviewer 2026-07-17) — strengthened the case for disposition (a) fix-in-plan | A | III | HIGH | **FIXED (B1 eliminate, Phase 9):** typeck records both confirmed shapes as `Give` via ONE admission helper (`bg_arg_is_materialized_shape_temp`, `check.rs`); codegen's `is_heap_arg` gate consults the ONE authoritative `background_arg_inferred_ownership` record by span for any expression shape (`emit.rs`, `prepare_bg_arg_for_ctx`) — the existing `HeapShape` heap-upgrade/free ladder covers both spawn arms; the planned-RED locks converted to permanent green regression tests (`fr23_uaf_planned_red.rs`, `#[ignore]` removed); proof: both fixtures re-run at BOTH tiers print `haul: 111/222`, corpus sweep clean with both fixtures included (FRAGO 012 exclusions removed); fix-round 2026-07-18 (`executor-2026-07-18-phase9-fr23-fixloop`): C2 admission extended to GENERIC shape-returning callees (`generic_fn_table` fallback — security live-repro closed) and SM-spawn-arm + generic-B′ coverage test-locked (4 new fixtures, `fr23_uaf_planned_red.rs`); further fix-round 2026-07-18 (cumulative completion-gate round 2, FRAGO 018): C2's substitution-seeding loop extended past ident-only args to also resolve a NESTED CALL argument whose callee has a concrete `sig_table` signature (`bg_arg_type_readonly` helper) — closes a live-reproduced gap where `identity<T>`'s `T` was resolvable ONLY from a non-ident argument (`background identity(makeCargo()).haul()`), confirmed wrong at both tiers before the fix, test-locked (`fr23_generic_call_nested_arg_spawn_receiver_reads_live_values`, 1 new fixture); **fourth fix-round 2026-07-18 (scoped fix-loop round, FRAGO 019 — STRUCTURAL fix, not a fifth narrowing):** FRAGO 018's fix was ITSELF still a one-level-only hand-rolled special case (`bg_arg_type_readonly`'s nested-call arm read `sig_table` ONLY, never falling back to `generic_fn_table` the way the outer `Expr::Call` arm does) — confirmed live for a NESTED GENERIC call argument (`background identity(identity(makeCargo())).haul()`, `identity<T>`'s outer `T` resolvable only from a call to another generic function), reproduced as garbage at both tiers by two independent reviewers before this round. Rather than patch a 4th narrow instance, `bg_arg_is_materialized_shape_temp`'s C2 arm and `bg_arg_type_readonly`'s nested-call arm were BOTH collapsed into ONE authoritative, RECURSIVE resolver (`bg_call_return_type_readonly`, `check.rs`) that resolves a call's return type — concrete or generic, at ANY nesting depth — by recursing into `bg_arg_type_readonly` for each argument that is itself a call. This closes the entire nesting-depth class in one definition rather than one level at a time (authoritative-derivation.md); verified at BOTH 2-deep (`identity(identity(makeCargo()))`) AND 3-deep (`identity(identity(identity(makeCargo())))`) nesting, both tiers, multiple repeated runs each, deterministic `haul: 111/222`; pre-fix Paper-Trace re-confirmed both new fixtures RED (garbage/stomp-sentinel values at both tiers) via a scoped revert-rebuild-restore; 2 new permanent regression fixtures/tests added (`fr23_generic_call_nested_generic_arg_spawn_receiver_reads_live_values`, `fr23_generic_call_triple_nested_spawn_receiver_reads_live_values`); **fifth fix-round 2026-07-18 (scoped fix-loop round, FRAGO 020 — STRUCTURAL fix, UNIFICATION not another narrowing):** FRAGO 019's recursive resolver was itself STILL only half the picture — `bg_arg_is_materialized_shape_temp` (the top-level admission predicate) and `bg_arg_type_readonly` (the nested-argument resolver `bg_call_return_type_readonly` seeded its substitution from) remained TWO independently hand-rolled enumerations of "which expression shapes materialize a temp": the top-level predicate recognized `FieldAccess`/`Call` directly (plus `MethodCall`, indirectly, via `background_spawn_call_form`'s own normalization) while the nested resolver recognized ONLY `Ident`/`Call`. Confirmed live INDEPENDENTLY by two reviewers (code-reviewer, security) for TWO shapes nested inside a generic call's argument: a UFCS method-call chain (`background identity(makeCargo().reroute()).haul()`) and a maybe-payload field access (`background identity(first.value).haul()`) — both garbage at both tiers before this round. Rather than add two more match arms to `bg_arg_type_readonly` (a sixth narrowing), BOTH enumerations were collapsed into ONE exhaustively-matched classifier, `bg_expr_resolved_type` (`check.rs`), consulted by every caller that previously hand-rolled its own shape list: `bg_arg_is_materialized_shape_temp` (top-level admission), `bg_call_return_type_readonly` (plain-`Call` nested resolution, unchanged self-filtering alignment), and a new `bg_ufcs_return_type` (UFCS `MethodCall` nested resolution, self-inclusive alignment — the receiver fills the callee's first parameter position). The classifier's `match` has **NO `_ =>` catch-all** — every one of `Expr`'s 22 variants is listed explicitly, so the Rust compiler itself refuses to build the moment a future `Expr` variant is added without a classification decision here: a genuine COMPILE-TIME exhaustiveness guarantee for the shapes this function enumerates, not a runtime parity test standing in for one. Verified: both new repros fixed, 3 repeated runs each, both tiers, deterministic `haul: 111/222`; pre-fix Paper-Trace re-confirmed both RED (nondeterministic garbage, e.g. `haul: 1/6355112`, `haul: 976778432/976778432`) via a scoped before/after diff-swap rebuild (not `git stash` — the branch's `push`-substring graveyard pre-filter fires on `git stash push`, so the comparison used a manual block-swap instead); one additional self-authored adversarial construction beyond the two reported repros (a `MethodCall` whose receiver is itself a `FieldAccess`, AND a `Call` whose arg is a `MethodCall` whose receiver is a nested `Call`, wrapped in a second generic layer) also verified correct at both tiers, 3 runs each; 2 new permanent regression fixtures/tests added (`fr23_generic_call_ufcs_nested_arg_spawn_receiver_reads_live_values`, `fr23_generic_call_fieldaccess_nested_arg_spawn_receiver_reads_live_values`); full `fr23_uaf_planned_red.rs` suite 11/11 green (9 pre-existing + 2 new, strict superset); `cargo test -p ynz-typeck` all green; `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all -- --check` clean; corpus sweep (`cross_impl_consistency`) re-run this round, see FRAGO 020 audit entry for the verdict; **SIXTH round 2026-07-18 (FRAGO 021 — full 22-arm semantic audit, NO code fix applied):** security live-reproduced `background haul({ weight: 111, tag: 222 })` (StructLit, wrong both tiers), proving FRAGO 020's exhaustive match still let a semantically-WRONG arm (`Expr::StructLit { .. } => None`) ship undetected. Per dispatch, ran a full live-verified audit of all 22 arms rather than patching StructLit alone — found **3 ADDITIONAL confirmed-live wrong/incomplete arms**: `FieldAccess{"value"}`'s guard misses `MapEntry<K,Shape>.value` (a for-loop map-entry field, backed by a per-iteration-rewritten out-buffer); `PostfixOp`(`.copy()`) and `Wait`, both nested inside a generic call's argument, fail to seed the generic substitution (`identity(c.copy())` / `identity(wait makeCargo())` as spawn receivers never resolve to Shape). All 4 findings (StructLit + 3 new) independently live-repro'd, Paper-Traced, persisted as checked-in documented-RED fixtures (`v0_3_m7_fr23_structlit_spawn_receiver.ynz`, `v0_3_m7_fr23_mapentry_value_spawn_receiver.ynz`, `v0_3_m7_fr23_generic_call_copy_nested_arg_spawn_receiver.ynz`, `v0_3_m7_fr23_generic_call_wait_nested_arg_spawn_receiver.ynz`) — not wired into the green suite. One hypothesis (`SelfValue`) was live-tested and DISCONFIRMED (recorded for transparency). Crossed this round's own "3+ additional wrong arms" STOP threshold — no fix applied (not even the unambiguous StructLit one), pending a conductor decision: continue narrowing (round 7+) vs. redesign as default-DENY (heap-upgrade everything that is NOT a provably-safe stable `Ident`/`SelfValue`/primitive, rather than allowlisting each materializing shape). Full 22-arm audit table + all 4 Paper-Traces in the FRAGO 021 audit.md entry; **SEVENTH round 2026-07-18 (FRAGO 022 decision + FRAGO 023 execution) — ARCHITECTURAL CLOSURE, not another narrowing.** Patrick decided the fork FRAGO 021 surfaced (FRAGO 022, `conductor-2026-07-18-completion-gate`): flip the admission check from ALLOWLIST (`bg_arg_is_materialized_shape_temp` asking "is this one of the shapes we've confirmed dangerous?") to DENYLIST-OF-SAFETY (`bg_arg_is_provably_safe` asking "is this PROVABLY a stable, already-owned binding or a statically-non-`Shape` primitive?", heap-upgrading everything else via a trailing WILDCARD, no `_ =>`-exhaustiveness needed for safety anymore since the wildcard IS the safety net). FRAGO 023 executed the redesign: three call sites updated (`check_stmts`'s give/copy loop, `check_background_handle_spawn`'s loop, AND `background_spawn_call_form`'s non-Ident-receiver UFCS gate — the third call site needed the SAME predicate too, closing FRAGO 021 finding 2 without a special-case arm since a `FieldAccess` receiver is never in the safe set); `bg_expr_resolved_type`/`bg_call_return_type_readonly`/`bg_ufcs_return_type`/`bg_apply_generic_return_subst` UNCHANGED and reused (their `None` now reads as "unresolved," consumed fail-closed, which is what closes findings 3/4 with zero new seeding arms). **Verified:** all 4 of FRAGO 021's fixtures pass via the DEFAULT (no per-shape arm added) — `fr23_uaf_planned_red.rs` 15/15 (11 pre-existing + 4 newly wired), strict superset, no regression; 3 self-authored adversarial constructions never tested before (a `StructLit` through the HANDLE form, `MapEntry<K,Shape>.value` nested inside a generic call's substitution-seeding argument, and the still-latent A/C1 `ship.cargo` class used directly as a spawn arg — the FIRST fixture ever to exercise A/C1 at all) all 6/6 correct at both tiers; one regression probe (scoped, restored, `diff`/`md5sum`-confirmed byte-identical after restore) confirmed the MapEntry-nested-generic construction WAS genuinely vulnerable under old-allowlist semantics (O0 deterministic `haul: 111/0` 6/6; optimized nondeterministic leaked garbage 6/6) before the redesign closed it; full `cross_impl_consistency.rs` corpus sweep (~557 fixtures, 2×2 mode matrix) clean; full `ynz-driver` test suite (20 binaries, 523-test `integration.rs` included) clean, zero `FAILED`; performance sanity check (20,000-spawn `background`-heavy workload, field-access-arg vs. ident-baseline) indistinguishable within noise — see FRAGO 024's audit correction: this comparison isolates two ALREADY-heap-upgraded paths, not a genuine no-upgrade baseline, so it is weaker evidence for the "zero LLVM IR" claim than originally worded (the claim itself remains true by direct code read of `prepare_bg_arg_for_ctx`'s no-op fallback arm, independent of this benchmark). Full record: FRAGO 022/023 audit.md entries; **EIGHTH round 2026-07-18/19 (FRAGO 024) — the redesign's OWN security re-check found the architecture had TWO remaining gaps, both closed this round: (1) a STRUCTURAL WIRING gap — the admission-recording machinery (`bg_arg_is_provably_safe` + its recording loop) ran on only 2 of the syntactic positions a `background` spawn can occupy (`check_stmts`'s Stmt::Expr match, `check_let`'s handle-form); `check_assign`/`check_field_assign`/`check_index_assign` routed through the generic `infer_expr` `Expr::Background` arm with NO recording at all — live-reproduced (`hd.slot = background makeCargo().haul()`, a FieldAssign target, wrong at O0). Closed by moving the recording loop into the generic arm itself — the ONE place every spawn form, in every statement position AND every expression-embedding, provably passes through (verified: a 4th adversarial position, a function-call argument, also reaches it, and the recursion through `infer_expr` is a stronger closure than any fixed enumeration). (2) A `SelfValue` FALSE-SAFE classification — `bg_arg_is_provably_safe`'s blanket `SelfValue => true` assumed self's storage always outlives any spawn using it, true for the single-level case FRAGO 021 arm #15 tested but false for a NESTED spawn (a `give self` parameter whose owning function is itself reached via `background`) — live-reproduced 16/16 this round (`weight` corrupted every run, `tag` survived). Closed by removing `SelfValue` from the safe set; it now rides the same default-`Give` wildcard as every other non-enumerated shape.** A THIRD finding (Bug 3, the borrow-reject diagnostic's `Some(Share)`-only gating) was investigated live, found to break 15/15 pre-existing fr23 fixtures if applied as literally instructed (the fix cannot distinguish a hazardous caller-retained alias from an already-safe materialized temp without becoming call-site-aware), and DEFERRED with a four-field record (FRAGO 024 audit entry) rather than forced through — not a memory-safety gap, a missing teaching nudge. Full record: FRAGO 024 audit.md entry | **CLOSED — architecturally, not empirically.** The allowlist's six-round failure mode (a fixed-but-large `Expr` grammar with no proof of enumeration completeness) is structurally inverted: the wildcard arm cannot be "wrong" in the dangerous direction — any expression `bg_arg_is_provably_safe` does not affirmatively prove safe defaults to heap-upgraded, including any FUTURE `Expr` variant or any shape this round's own adversarial testing did not think of, with ZERO code change required. What remains NOT guaranteed (named honestly, not overclaimed): a latent bug INSIDE the safe-set proof itself (the pre-existing, untouched `Ident` liveness path) is a categorically narrower risk surface than "did we allowlist every dangerous shape" — this round found no evidence of one, but it is not the same class of guarantee. A/C1 (`ship.cargo`) is no longer "still-latent, deliberately excluded" — it rides the same default protection as every other shape, verified harmless (redundant, not unsafe) both by reasoning and by a live adversarial fixture. **Round 8 (FRAGO 024) narrowing — stated precisely, per the dispatch's own instruction to be conservative rather than overclaim:** the architectural inversion above is now ADDITIONALLY confirmed to be wired to every syntactic position (not just the two call sites FRAGO 023 verified) and no longer carries a false-safe `SelfValue` classification. Still NOT guaranteed, named honestly: (a) a latent bug inside the pre-existing `Ident` liveness path itself remains unaudited by any round to date; (b) two syntactic positions (`Stmt::Assign`, `IndexAssign` on `nothing`-typed storage) are proven correct only at the TYPECK layer — full codegen/runtime proof is blocked by an orthogonal, pre-existing, out-of-scope ICE class; (c) the borrow-reject diagnostic's default-ownership teaching gap (Bug 3) remains OPEN, deferred with a four-field record — a missing teaching nudge, not a memory-safety hole, since the admission machinery above already protects the underlying argument regardless of this diagnostic. Work-shown record: FRAGO 011, FRAGO 016, Phase 9, FRAGO 018, FRAGO 019, FRAGO 020, FRAGO 021, FRAGO 022, FRAGO 023, FRAGO 024 | **CLOSED (architecturally) for the wiring/self-classification gaps FRAGO 024 found — `STATUS: DONE` returned 2026-07-19 (FRAGO 024, round 8). Bug 3 (borrow-reject teaching gap) remains OPEN as a named, deferred, non-security finding — not blocking, not silently dropped.** |
 
 R8's residual lands HIGH and, per the frozen risk-engine catalog's available patterns, cannot be
 honestly mitigated further at plan-authoring time (see the RISK OVERRIDE block immediately below —
@@ -280,7 +280,12 @@ spike's decimal128 SIGSEGVs) before any durable phase depends on an unverified t
 exhaustively for undiscovered siblings (execution has since confirmed two more O0-reliant miscompile
 classes: the false-ownership-attribute class, R1/FRAGO 002, and the dangling-stack-return ABI class,
 R9/FRAGO 005), and close the two adjacent bugs (the O0 stack-exhaustion ceiling, and honest
-benchmark integrity) that would otherwise corrupt every measurement this milestone produces.
+benchmark integrity) that would otherwise corrupt every measurement this milestone produces. Execution
+also surfaced a THIRD, unrelated bug outside this original two-bug scope — the fr23 confirmed-live UAF
+(non-plain-ident `background`-spawn receivers riding raw pointers into a dead frame, exposed by this
+milestone's own optimizer flip shrinking/reusing stack-slot lifetimes) — closed as an added Phase 9
+(FRAGO 016) per the Purpose's own disciplined-initiative guidance below: a real memory-safety bug
+discovered mid-milestone, fixed in-plan rather than silently expanding scope elsewhere.
 
 **Key outcomes:**
 1. `ynz build` compiles through a real LLVM pass pipeline by default; `ynz build --no-optimize` is the
@@ -353,7 +358,7 @@ ships. Phase 3 → Phase 4 is therefore a **hard sequence**, not an either-order
 what Phase 7's benchmarks need (an honest row-439 repro under the LIVE pipeline, not the stale O0
 one).
 
-Nine phases, strictly root-cause-before-fix ordered. **Phase 0** hard-gates the one net-new mechanical
+Ten phases, strictly root-cause-before-fix ordered. **Phase 0** hard-gates the one net-new mechanical
 assumption (does `inkwell` 0.9.0 expose enough LLVM 18 PassBuilder surface) before anything durable
 depends on it. **Phase 1** root-causes the spike's actual failure mechanism and exhaustively sweeps for
 siblings — producing a committed RED fixture set, not a fix. **Phase 2** fixes what Phase 1 found and
@@ -368,9 +373,12 @@ nondeterminism (Step 0, R10/FRAGO 006), then regenerates every invalidated golde
 full suite — the proof phase for outcomes 2 and 6. **Phase 6** resolves the preemption honesty question
 (real call-site checks or a proper deferral). **Phase 7** builds the two benchmark suites (A/B,
 Rust-comparison) now that rows R1/R2 are closed. **Phase 8** closes the loop on documentation, registry,
-and roadmap reconciliation. Phases 0–2 gate everything after them; **Phase 3 then Phase 4 run in that
-strict order** once 0–2 are green (see the Ordering note above); Phases 5–8 are strictly sequential
-after 3 and 4.
+and roadmap reconciliation. **Phase 9** — added after Phase 8's original close, via FRAGO 016 — closes
+R11/the fr23 confirmed-live UAF (non-plain-ident `background`-spawn receivers riding raw pointers into
+a dead frame): a real memory-safety fix (give/copy machinery extended to materialized-shape-temp
+receivers), not a documentation catch-up like Phase 8. Phases 0–2 gate everything after them; **Phase 3
+then Phase 4 run in that strict order** once 0–2 are green (see the Ordering note above); Phases 5–9 are
+strictly sequential after 3 and 4, with Phase 9 sequenced last as a post-close security fix-round.
 
 ### 3.3 Phases
 
@@ -937,7 +945,7 @@ fix fr23 in this plan rather than defer it to a scoped M8-adjacent follow-up. Se
   flips). **Phase 3 then Phase 4 run in that strict, hard-sequenced order** once 0–2 are green — Phase
   4 Step 1 re-confirms the O0 stack-exhaustion crash under Phase 3's now-live optimized pipeline, so
   Phase 4 cannot honestly start before Phase 3 ships (this is also what Phase 7's benchmarks need: an
-  honest row-439 repro under the LIVE pipeline, not the stale O0 one). Phases 5–8 are strictly
+  honest row-439 repro under the LIVE pipeline, not the stale O0 one). Phases 5–9 are strictly
   sequential after 3 and 4.
 - **Verify-before-complete gate (every phase):** the phase's own exit criteria must be independently
   re-run by the closing executor, not just narrated as done — this repo's own precedent (the M4 audit's
@@ -1318,6 +1326,243 @@ fix fr23 in this plan rather than defer it to a scoped M8-adjacent follow-up. Se
    scheme. SM-spawn-arm coverage (both shapes through `lower_sm_background_spawn`) and the
    generic-B′ analog (safe by construction — the B′ arm reads the concrete instantiated binding
    type, never the fn tables) are locked by four new fixtures/tests in `fr23_uaf_planned_red.rs`.
+   **Fix-round addition (2026-07-18, cumulative completion-gate round 2, FRAGO 018):** the C2
+   arm's argument-based substitution-seeding loop was ALSO ident-only, missing a generic callee
+   whose type param is resolvable only from a NON-IDENT argument (a nested call, e.g.
+   `background identity(makeCargo()).haul()` — `identity<T>`'s `T` is bound only by `makeCargo()`'s
+   return type, never by any ident). Live-reproduced at both tiers before the fix (default:
+   nondeterministic garbage; O0: `haul: 0/1`). Fixed via a new side-effect-free helper
+   `bg_arg_type_readonly` that resolves a plain-ident arg (unchanged) OR a nested call whose
+   callee has a concrete `sig_table` signature — bounded to the confirmed-live case, never a
+   general-purpose expression-typer (per the same `&self`-only architectural constraint the
+   Frame/SourceLoc gap deferral names, roadmap audit.md Idempotency-Key
+   `2026-07-04-v0-3-m7-optimizer-pipeline: crates-ynz-typeck-src-check-rs-1783`). Test-locked
+   (`fr23_generic_call_nested_arg_spawn_receiver_reads_live_values`,
+   `v0_3_m7_fr23_generic_call_nested_arg_spawn_receiver.ynz`).
+
+   **FOURTH fix-round 2026-07-18 (scoped fix-loop round, FRAGO 019) — closes the class instead of
+   patching a 5th narrow instance.** Round 3's fix was itself still a hand-rolled, ONE-LEVEL-ONLY
+   special case: `bg_arg_type_readonly`'s own nested-call arm read `sig_table` ONLY, never falling
+   back to `generic_fn_table` — so a nested argument that is ITSELF a call to a GENERIC function
+   (`background identity(identity(makeCargo())).haul()` — the outer `identity`'s argument is a call
+   to `identity` again, not a concrete callee) left `T` unresolved and the receiver fell through
+   un-admitted, one level deeper than round 3 closed. Two independent reviewers (code-reviewer,
+   security) live-reproduced this as nondeterministic garbage at the default tier and
+   deterministic wrong values at O0, and both converged on the same diagnosis: this predicate had
+   accreted into 2-3 separate, hand-rolled "what does this call resolve to" derivations instead of
+   ONE authoritative, recursive one — a fourth narrow patch would only guarantee a fifth. The fix
+   collapses `bg_arg_is_materialized_shape_temp`'s C2 arm AND `bg_arg_type_readonly`'s nested-call
+   arm into ONE authoritative, RECURSIVE resolver, `bg_call_return_type_readonly` (`check.rs`):
+   resolves a call expression's return type — concrete callee (direct `sig_table.ret`) or generic
+   callee (the same `sig_table`/`generic_fn_table` two-table split + `unify_param`/
+   `apply_substitution` machinery `check_generic_fn_call` uses) — at ANY nesting depth, by
+   recursing into `bg_arg_type_readonly` for each argument that is itself a call. Stays
+   `&self`/side-effect-free (never calls `infer_expr`/`ast_type_to_type`) per the same documented
+   architectural constraint the round-3 fix and the Frame/SourceLoc deferral both name; an
+   unresolved `TypeParam` still never matches `Shape`, so this cannot false-admit. **Verified at
+   BOTH 2-deep** (`identity(identity(makeCargo()))`) **AND 3-deep**
+   (`identity(identity(identity(makeCargo())))`) **nesting**, both tiers, 5 repeated runs each
+   post-fix (deterministic `haul: 111/222` every run); pre-fix Paper-Trace independently
+   re-confirmed both new fixtures genuinely RED (garbage at default tier, `stomp()`-sentinel-class
+   wrong values at O0) via a scoped revert-rebuild-restore of `check.rs` alone. Termination:
+   recursion descends into strictly smaller argument subexpressions of a finite, cycle-free AST
+   (a call's arguments can never contain the call itself), so it poses no new stack-safety concern
+   beyond what any other recursive typeck walk (`infer_expr` included) already tolerates for
+   deeply-nested source — considered explicitly, not a silent risk. Two new permanent regression
+   fixtures/tests: `fr23_generic_call_nested_generic_arg_spawn_receiver_reads_live_values`
+   (`v0_3_m7_fr23_generic_call_nested_generic_arg_spawn_receiver.ynz`, 2-deep) and
+   `fr23_generic_call_triple_nested_spawn_receiver_reads_live_values`
+   (`v0_3_m7_fr23_generic_call_triple_nested_spawn_receiver.ynz`, 3-deep, the proof the fix is
+   genuinely recursive and not depth-bounded). Full `fr23_uaf_planned_red.rs` suite re-run: 9/9
+   green. **R11 is CLOSED as of this round** — see the risk-table row above for the consolidated
+   four-round history.
+
+   **FIFTH fix-round 2026-07-18 (scoped fix-loop round, FRAGO 020) — unifies the class instead of
+   patching a 6th narrow instance.** Round 4's "R11 is CLOSED" verdict above was accurate for the
+   nesting-DEPTH question it closed (a `Call` nested inside a generic call, at any depth) but did NOT
+   close a DIFFERENT, ORTHOGONAL gap in the SAME predicate: `bg_arg_is_materialized_shape_temp`
+   (top-level admission) and `bg_arg_type_readonly` (the nested-argument resolver
+   `bg_call_return_type_readonly` seeded its substitution from) were STILL two independently
+   hand-rolled enumerations of "which expression shapes materialize a temp" — the top-level predicate
+   recognized `FieldAccess`/`Call` (plus `MethodCall`, indirectly, via
+   `background_spawn_call_form`'s own normalization) while the nested resolver recognized ONLY
+   `Ident`/`Call`. Two independent reviewers (code-reviewer, security) live-reproduced this
+   independently for TWO NEW shapes NESTED inside a generic call's argument — a UFCS method-call
+   chain (`background identity(makeCargo().reroute()).haul()`) and a maybe-payload field access
+   (`background identity(first.value).haul()`) — both garbage at both tiers, both converging on the
+   same root cause and the same recommended fix direction. Rather than add two more match arms to
+   `bg_arg_type_readonly` (the sixth narrowing in this predicate's history), BOTH enumerations were
+   collapsed into ONE exhaustively-matched classifier, `bg_expr_resolved_type` (`check.rs`) — every
+   one of `Expr`'s 22 variants is listed explicitly with **no `_ =>` catch-all**, so the Rust compiler
+   itself refuses to build the moment a future `Expr` variant is added without a classification
+   decision here. `bg_arg_is_materialized_shape_temp`, `bg_call_return_type_readonly` (plain `Call`),
+   and a new `bg_ufcs_return_type` (UFCS `MethodCall`, self-inclusive parameter alignment — the
+   receiver fills the callee's first parameter position, unlike plain-`Call`'s self-EXCLUDING
+   alignment, which stays unchanged) all now consult this ONE classifier — never a fourth hand-rolled
+   scheme. **Honesty note on the compile-time claim:** the exhaustive match genuinely guarantees no
+   `Expr` variant can be SILENTLY un-classified again (a real compile-time guarantee, not a runtime
+   parity test standing in for one) — it does NOT guarantee no future bug can exist in HOW an
+   already-classified variant's alignment/substitution is computed. **Verified:** both new repros
+   fixed, 3 repeated runs each, both tiers, deterministic `haul: 111/222`; pre-fix Paper-Trace
+   re-confirmed both genuinely RED (nondeterministic garbage, e.g. `haul: 1/6355112`,
+   `haul: 976778432/976778432`) via a scoped before/after manual block-swap of `check.rs` (NOT
+   `git stash` — this branch's `push`-substring graveyard pre-filter fires on `git stash push` as a
+   false positive; the comparison used a saved-block swap instead, avoiding the gate entirely rather
+   than routing through its remediation for an unrelated command). One additional self-authored
+   adversarial construction beyond the two reported repros — a `MethodCall` whose receiver is itself
+   a `FieldAccess` (`first.value.reroute()`), AND a `Call` whose argument is a `MethodCall` whose
+   receiver is a nested `Call`, wrapped in a second generic layer
+   (`identity(identity(makeCargo().reroute()))`) — also verified correct at both tiers, 3 runs each.
+   Two new permanent regression fixtures/tests:
+   `fr23_generic_call_ufcs_nested_arg_spawn_receiver_reads_live_values`
+   (`v0_3_m7_fr23_generic_call_ufcs_nested_arg_spawn_receiver.ynz`) and
+   `fr23_generic_call_fieldaccess_nested_arg_spawn_receiver_reads_live_values`
+   (`v0_3_m7_fr23_generic_call_fieldaccess_nested_arg_spawn_receiver.ynz`). Full
+   `fr23_uaf_planned_red.rs` suite re-run: 11/11 green (strict superset — 9 pre-existing + 2 new);
+   `cargo test -p ynz-typeck` all green; `cargo build --workspace` clean; `cargo clippy --workspace
+   -- -D warnings` clean; `cargo fmt --all -- --check` clean; `cross_impl_consistency.rs` corpus
+   sweep re-run — see the FRAGO 020 audit.md entry for the verdict. ~~**R11 is CLOSED as of this
+   round, on the genuinely structural basis described above**~~ — **FALSIFIED by round 6 (FRAGO
+   021) below; R11 is REOPENED.** The struck-through claim was accurate for the nesting-DEPTH
+   question it addressed but did not survive a full exhaustive-arm semantic audit.
+
+   **SIXTH round 2026-07-18 (FRAGO 021) — semantic audit found 4 confirmed-live wrong/incomplete
+   arms in the SAME "exhaustively-matched" classifier; R11 REOPENED, no code fix applied this
+   round.** Security live-reproduced `background haul({ weight: 111, tag: 222 })` — an anonymous
+   struct literal used directly as a background-spawn argument, wrong at both tiers — proving
+   `bg_expr_resolved_type`'s `Expr::StructLit { .. } => None` arm is semantically WRONG (not
+   missing): `lower_struct_lit` always materializes it as a stack alloca in the spawner's frame.
+   Per this round's explicit dispatch instruction, rather than fix StructLit and move on (which
+   would have been the SEVENTH narrowing), this round ran a full 22-arm audit of
+   `bg_expr_resolved_type` against real, live-tested Yinz semantics rather than reasoning from
+   type signatures alone. Found **3 ADDITIONAL distinct confirmed-live wrong/incomplete arms**
+   beyond StructLit: (2) `FieldAccess { field: "value" }`'s guard only recognizes `maybe<Shape>`
+   receivers, silently missing `MapEntry<K, Shape>.value` (a for-loop map-iteration entry's Shape
+   field, backed by a per-site out-buffer rewritten every iteration — the SAME hazard class the
+   MapEntry-as-whole-arg pre-gate already protects against, but not this access pattern); (3)
+   `PostfixOp` (`.copy()`) nested inside a generic call's argument fails to seed the generic
+   substitution, so `identity(c.copy())` used as a spawn receiver is never recognized as
+   Shape-typed; (4) the same substitution-seeding gap for `Wait`-wrapped nested call arguments
+   (`identity(wait makeCargo())`) — M8 sequential semantics make `wait expr` type-identical to
+   `expr`, but the classifier does not unwrap it. All 4 findings independently live-repro'd (build
+   + run, 3-6 runs per tier, Paper-Traced) and persisted as checked-in, documented-RED fixtures:
+   `v0_3_m7_fr23_structlit_spawn_receiver.ynz`, `v0_3_m7_fr23_mapentry_value_spawn_receiver.ynz`,
+   `v0_3_m7_fr23_generic_call_copy_nested_arg_spawn_receiver.ynz`,
+   `v0_3_m7_fr23_generic_call_wait_nested_arg_spawn_receiver.ynz` — NOT wired into
+   `fr23_uaf_planned_red.rs`'s green suite (that file's header claims every test in it is fixed).
+   One hypothesis (`SelfValue`, arm 15) was live-tested and DISCONFIRMED — recorded in the FRAGO
+   021 audit entry for transparency, since the round's whole premise was distrusting
+   reasoned-but-unverified classifications. This round crossed its own explicit "3+ additional
+   wrong arms" STOP threshold, so NO code fix was applied — not even the unambiguous StructLit
+   fix — pending a conductor decision on whether to continue narrowing (a 7th, 8th, 9th round) or
+   redesign the classifier as **default-DENY** (heap-upgrade everything that is not a
+   provably-safe, stable `Ident`/`SelfValue`/primitive binding, rather than allowlisting each
+   materializing shape one at a time). Full 22-arm audit table, all 4 Paper-Traces, and the
+   disconfirmed-hypothesis record are in the FRAGO 021 audit.md entry.
+
+   **SEVENTH round 2026-07-18 (FRAGO 022 decision + FRAGO 023 execution) — ARCHITECTURAL CLOSURE.**
+   Patrick decided the fork directly (FRAGO 022, `conductor-2026-07-18-completion-gate`), shown the
+   full six-round record (10 confirmed-live shapes) and both options' tradeoffs: **default-deny**.
+   `bg_arg_is_materialized_shape_temp` (the allowlist — "is this one of the shapes we've confirmed
+   dangerous?") is replaced by `bg_arg_is_provably_safe` (the denylist-of-safety — "is this PROVABLY
+   a stable, already-owned binding, or an expression whose STATIC TYPE can never be `Shape`?"), with
+   every caller heap-upgrading whatever the new predicate does NOT affirmatively prove safe, via a
+   trailing WILDCARD `_ => false` arm. FRAGO 023 executed this: all THREE admission call sites
+   updated (`check_stmts`'s statement-form give/copy loop; `check_background_handle_spawn`'s
+   handle-form loop; AND `background_spawn_call_form`'s non-Ident-receiver UFCS-normalization gate —
+   this third site needed the identical predicate too, which is what closes FRAGO 021 finding 2
+   (`entry.value.haul()`, a `MapEntry<K,Shape>.value` UFCS receiver) with ZERO special-case arm: a
+   `FieldAccess` is never in the safe set, so the wildcard now normalizes it regardless of which
+   `.value` producer it came from). `bg_expr_resolved_type`/`bg_call_return_type_readonly`/
+   `bg_ufcs_return_type`/`bg_apply_generic_return_subst` are UNCHANGED — reused per
+   authoritative-derivation.md, not rewritten — but their `None` result is now consumed FAIL-CLOSED
+   everywhere (an unresolved generic substitution seed is read as "not proven safe," never as "proven
+   not-Shape"), which is what closes findings 3/4 (nested `.copy()`/`wait` inside a generic call's
+   argument) without adding a single arm to the seeding resolver.
+
+   **Verified — all 4 of FRAGO 021's fixtures pass via the DEFAULT, no special-case arm added**:
+   `fr23_uaf_planned_red.rs` 15/15 (11 pre-existing + 4 newly wired —
+   `fr23_structlit_spawn_receiver_reads_live_values`,
+   `fr23_mapentry_value_spawn_receiver_reads_live_values`,
+   `fr23_generic_call_copy_nested_arg_spawn_receiver_reads_live_values`,
+   `fr23_generic_call_wait_nested_arg_spawn_receiver_reads_live_values`), strict superset, no
+   regression on any already-fixed shape. **Three self-authored adversarial constructions**, none
+   reusing an existing fixture's exact AST shape, all 6/6 correct at both tiers: (1) a bare
+   `StructLit` used as a spawn ARGUMENT through the HANDLE form (`let h = background
+   haul({...})`), the first fr23 fixture to exercise `check_background_handle_spawn` for a
+   materialized-shape ARG rather than a receiver; (2) `identity(entry.value).haul()` —
+   `MapEntry<K,Shape>.value` nested inside a GENERIC call's substitution-seeding argument (finding 2
+   was tested only as the direct UFCS receiver, a different code path); (3) `ship.cargo` — the
+   still-latent A/C1 class used DIRECTLY as a spawn argument, never exercised by ANY fr23 fixture
+   before this round. A fourth candidate (a bare `StructLit` nested inside a purely generic call's
+   argument) was constructed and found genuinely UNREACHABLE valid Yinz (the real type checker
+   rejects it — a struct literal has no type without a concrete expected-parameter context, which a
+   generic parameter cannot provide) — recorded as a verified negative result, not silently dropped.
+   One regression probe (scoped `// TEMP-PROBE-DISABLE` revert to old-allowlist semantics, restored
+   and `diff`/`md5sum`-confirmed byte-identical afterward) empirically confirmed construction (2) WAS
+   genuinely vulnerable pre-redesign (O0 deterministic `haul: 111/0` 6/6; optimized nondeterministic
+   leaked garbage 6/6 — the established fr23 UAF signature). Full `cross_impl_consistency.rs` corpus
+   sweep (~557 fixtures, 2×2 mode matrix) clean; full `ynz-driver` test suite (20 test binaries
+   including the 523-test `integration.rs`) clean, zero `FAILED`; `cargo test -p ynz-typeck -p
+   ynz-codegen` clean. Performance sanity check (a 20,000-iteration `background`-spawn-heavy
+   workload, field-access-arg variant vs. plain-ident-baseline variant) showed indistinguishable
+   wall-clock (2.03-2.08s both) — empirically confirming, not merely asserting, that over-admission
+   costs one typeck-time hashmap entry and zero LLVM IR for anything that doesn't resolve to
+   `Shape`/`BuiltinArray`/`Maybe` at codegen time.
+
+   **R11 status: CLOSED — architecturally, not empirically.** What is now GUARANTEED: any
+   `background`-spawn expression that is not provably a stable `Ident`/`SelfValue` binding or a
+   statically-non-`Shape` primitive gets heap-upgraded, so a FUTURE unknown-dangerous shape — one
+   this round's own adversarial testing did not think of, or one a future milestone's grammar adds —
+   cannot slip through un-upgraded BY CONSTRUCTION, closing the class the six-round allowlist could
+   never structurally close. What is NOT guaranteed (named honestly, not overclaimed): a latent bug
+   INSIDE the safe-set proof itself — e.g. the pre-existing, untouched `Ident` liveness-based
+   give/copy path — is a categorically narrower, different risk surface than "did we allowlist every
+   dangerous shape"; this round found no evidence of one, but that is a distinct claim from "the
+   class is closed." A/C1 (`ship.cargo`) is no longer "still-latent, deliberately excluded" — it
+   rides the same default `Give` protection as every other non-safe expression, verified harmless
+   (one redundant, not unsafe, heap copy) both by reasoning and by adversarial construction (3)
+   above. Full record: FRAGO 022 (the decision) and FRAGO 023 (the execution) audit.md entries.
+
+   **EIGHTH round 2026-07-18/19 (FRAGO 024, round 8) — narrowing to this entry, added by FRAGO 025
+   (2026-07-19) so a reader consulting this entry in isolation is not misled by the stale
+   FRAGO-023-era "CLOSED, architecturally" text above.** FRAGO 023's own security re-check found TWO
+   remaining gaps in the just-shipped default-deny architecture, both closed this round: (1) a
+   **structural wiring gap** — the admission-recording machinery (`bg_arg_is_provably_safe` + its
+   recording loop) ran on only 2 of the syntactic positions a `background` spawn can occupy
+   (`check_stmts`'s `Stmt::Expr` match, `check_let`'s handle-form); `check_assign`/
+   `check_field_assign`/`check_index_assign` routed through the generic `infer_expr`
+   `Expr::Background` arm with NO recording at all — live-reproduced (`hd.slot = background
+   makeCargo().haul()`, a `FieldAssign` target, wrong at O0). Closed by moving the recording loop
+   into the generic arm itself, the one place every spawn form/statement-position/expression-
+   embedding provably passes through. (2) A **`SelfValue` false-safe classification** —
+   `bg_arg_is_provably_safe`'s blanket `SelfValue => true` assumed self's storage always outlives any
+   spawn using it, true for the single-level case FRAGO 021 tested but false for a NESTED spawn (a
+   `give self` parameter whose owning function is itself reached via `background`) — live-reproduced
+   16/16 this round. Closed by removing `SelfValue` from the safe set; it now rides the same default-
+   `Give` wildcard as every other non-enumerated shape. A THIRD finding (Bug 3, the borrow-reject
+   diagnostic's `Some(Share)`-only gating) was investigated live, found to break 15/15 pre-existing
+   fr23 fixtures if applied as literally instructed, and DEFERRED with a four-field record (FRAGO 024
+   audit entry) — not a memory-safety gap, a missing teaching nudge (see FRAGO 025's sharpened
+   wording of that deferral, which also names a separate, non-memory-safety semantic-correctness gap
+   the deferred check would have caught: an unannotated `background`-spawned Shape receiver that
+   mutates its parameter silently mutates only the task's PRIVATE heap-upgraded copy, never the
+   caller's original binding, with zero diagnostic today).
+
+   **R11 status after round 8 (FRAGO 024) — CLOSED, architecturally, for the wiring/self-
+   classification gaps this round found.** The admission machinery is now confirmed structurally
+   wired to EVERY syntactic position a `background` spawn can occupy (not just the two call sites
+   FRAGO 023 verified), and `self` no longer carries a false-safe classification. Still NOT
+   guaranteed, stated precisely, per FRAGO 024's own conservative framing: (a) a latent bug inside
+   the pre-existing `Ident` liveness path itself remains unaudited by any round to date; (b) two
+   syntactic positions (`Stmt::Assign`, `IndexAssign` on `nothing`-typed storage) are proven correct
+   only at the TYPECK layer — full codegen/runtime proof is blocked by an orthogonal, pre-existing,
+   out-of-scope ICE class; (c) the borrow-reject diagnostic's default-ownership teaching gap (Bug 3)
+   remains OPEN, deferred with a four-field record — a missing teaching nudge, not a memory-safety
+   hole, since the admission machinery above already protects the underlying argument regardless of
+   this diagnostic. `STATUS: DONE` returned 2026-07-19 (FRAGO 024, round 8). Full record: FRAGO 024
+   audit.md entry; see also the R11 risk-table row (¶1 Risk Assessment) for the equivalent summary in
+   that table.
 10. **N1: `fixed<T>` function returns are broken at BOTH tiers** (Phase 3 Step-4b sweep finding,
     FRAGO 009 disposition (5)) — **WHAT:** a `-> fixed<T>` return loses its size through the return
     (probe prints `0,0` for `[7,8,9].get(0)/.get(2)` after return), identically at O0 and optimized —

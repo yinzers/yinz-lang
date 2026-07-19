@@ -1,0 +1,64 @@
+// fr23 regression fixture — shape C2, GENERIC-callee variant whose argument is a
+// MAYBE-PAYLOAD FIELD ACCESS (M7 completion-gate FRAGO 020):
+// `background identity(first.value).haul()` where `first: maybe<Cargo>`.
+//
+// Same class of gap as the UFCS sibling fixture: the nested-argument resolver's
+// match had exactly two arms, `Expr::Ident` and `Expr::Call`. A maybe-payload
+// access (`first.value`, `Expr::FieldAccess`) is a THIRD shape the resolver
+// never classified, even though the sibling top-level admission predicate
+// already recognized `.value` as a materializing shape (the B' class, FRAGO
+// 016). Nested one level inside a generic callee's argument list, `first.value`
+// could not be resolved, `identity`'s `T` stayed unresolved, and the receiver
+// fell through un-admitted — the fr23 UAF, live-reproduced independently by two
+// reviewers 2026-07-18.
+//
+// FRAGO 020 closes this the same way as the UFCS sibling: ONE exhaustively-
+// matched classifier (`bg_expr_resolved_type`) now handles `FieldAccess`
+// (`.value` on `maybe<Shape>`) at every nesting depth by construction.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed before this fix (2026-07-18, live-reproduced, both tiers): garbage —
+// default tier nondeterministic garbage across repeated runs; O0 the `stomp()`
+// sentinel values.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  let ships: array<Cargo> = [{ weight: 111, tag: 222 }, { weight: 333, tag: 444 }]
+  let first: maybe<Cargo> = ships[0]
+  if (first.exists()) {
+    background identity(first.value).haul()
+  }
+}
+
+function stomp() -> nothing {
+  let junk: array<Cargo> = [{ weight: 777777, tag: 777888 }, { weight: 888777, tag: 888888 }]
+  let ja: maybe<Cargo> = junk[0]
+  let jb: maybe<Cargo> = junk[1]
+  if (ja.exists()) {
+    if (jb.exists()) {
+      let sum: int = ja.value.weight + jb.value.tag
+      print(`stomp: ${sum}`)
+    }
+  }
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

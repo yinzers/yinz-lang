@@ -1,0 +1,66 @@
+// fr23 regression fixture — shape C2, GENERIC-callee variant whose argument is a
+// UFCS METHOD-CALL CHAIN (M7 completion-gate FRAGO 020):
+// `background identity(makeCargo().reroute()).haul()`.
+//
+// Rounds 2/3 (FRAGO 018/019) made the nested-argument resolver recursive for
+// `Call` expressions (a nested call to a concrete OR generic function, at any
+// depth) — but its match had exactly two arms, `Expr::Ident` and `Expr::Call`.
+// A UFCS chain (`makeCargo().reroute()`) is `Expr::MethodCall`, a THIRD shape
+// the resolver never classified, even though the sibling top-level admission
+// predicate already recognized a top-level UFCS chain (via
+// `background_spawn_call_form`'s own normalization). Nested one level inside a
+// generic callee's argument list, the UFCS chain's type could not be resolved,
+// `identity`'s `T` stayed unresolved, and the receiver fell through un-admitted
+// — the fr23 UAF, live-reproduced independently by two reviewers 2026-07-18.
+//
+// FRAGO 020 closes this by collapsing the TWO independently hand-rolled
+// "materializing expression shape" enumerations (the top-level admission check
+// and the nested-argument resolver) into ONE exhaustively-matched classifier
+// (`bg_expr_resolved_type`) that both consult — a `MethodCall` arm now exists
+// exactly once, consulted at every nesting depth by construction.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed before this fix (2026-07-18, live-reproduced, both tiers): garbage —
+// default tier nondeterministic garbage across repeated runs; O0 the `stomp()`
+// sentinel values.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function reroute(self: Cargo) -> Cargo {
+  return self
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  background identity(makeCargo().reroute()).haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

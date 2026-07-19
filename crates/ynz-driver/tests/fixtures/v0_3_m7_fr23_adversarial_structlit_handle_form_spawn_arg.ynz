@@ -1,0 +1,50 @@
+// fr23 ADVERSARIAL construction — FRAGO 022 verify step 3 (2026-07-18). A
+// genuinely NEW code path not covered by any prior fr23 fixture: a `StructLit`
+// used as a spawn ARGUMENT through the HANDLE form (`let h = background
+// haul({ weight: 111, tag: 222 })`), not the fire-and-forget STATEMENT form
+// every other fr23 fixture (old and new) uses. The handle form is admitted by a
+// SEPARATE typeck function, `check_background_handle_spawn`, which FRAGO 022
+// also had to redesign (it shares `bg_arg_is_provably_safe` with the statement
+// form, but is a genuinely distinct call site — a regression here could slip
+// past every statement-form fixture in this suite). The handle is legally
+// never-received here (the never-received pattern is already covered/legal per
+// `v0_3_m7_fr23_..._never_received.ynz`-style fixtures elsewhere), so `spawner`
+// returns immediately after the spawn statement exactly like every OTHER fr23
+// fixture — the same "materialize, return, let `stomp()` reuse the freed
+// stack slot, then give the task time to run" race every prior fr23 fixture
+// exercises.
+//
+// `bg_arg_is_provably_safe` does not distinguish handle-form from statement-
+// form callers — a `StructLit` falls through the trailing wildcard to `Give`
+// regardless of which of the two admission call sites consults it.
+//
+// Correct output must contain: `haul: 111/222`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function haul(self: Cargo) -> nothing {
+  wait sleep(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  let h = background haul({ weight: 111, tag: 222 })
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

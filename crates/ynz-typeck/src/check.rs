@@ -168,6 +168,7 @@ pub fn check(
         cross_thread_shapes: HashMap::new(),
         padded_shapes: HashSet::new(),
         back_edge_yield_admitted: std::collections::HashSet::new(),
+        bg_union_narrowed_diag_spans: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -240,6 +241,7 @@ pub fn check_with_kernel_mode(
         cross_thread_shapes: HashMap::new(),
         padded_shapes: HashSet::new(),
         back_edge_yield_admitted: std::collections::HashSet::new(),
+        bg_union_narrowed_diag_spans: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -442,6 +444,14 @@ struct Checker<'b> {
     /// v0.3-M7 Phase 6: per-function back-edge poll-yield admission verdicts —
     /// moved into `TypedModule::back_edge_yield_admitted` at the end of `check`.
     back_edge_yield_admitted: std::collections::HashSet<String>,
+    /// v0.3-M7 FRAGO 024 (round 8): dedup guard for `background_spawn_call_form`'s
+    /// union-narrowed-receiver diagnostic (FRAGO 026). That helper is now called
+    /// from MULTIPLE sites for the SAME spawn (the Stmt::Expr / handle-form
+    /// pre-recording loops, AND the generic `Expr::Background` arm's structural
+    /// admission backstop below) — without this guard the same diagnostic would be
+    /// pushed twice for one spawn. Keyed by the receiver's span; the function's
+    /// other return paths are pure (no side effect) and need no dedup.
+    bg_union_narrowed_diag_spans: HashSet<(usize, usize)>,
 }
 
 impl<'b> Checker<'b> {
@@ -1470,13 +1480,13 @@ impl<'b> Checker<'b> {
                                     if inferred == BgOwnership::Give {
                                         gives.push(name.clone());
                                     }
-                                } else if self.bg_arg_is_materialized_shape_temp(arg) {
-                                    // fr23 (M7 Phase 9, FRAGO 016): a materialized
-                                    // shape temp (B′ maybe-payload / C2 call-
-                                    // materialized) has no binding to read after the
-                                    // spawn — the task takes ownership (`Give`).
-                                    // Recording its span admits it to codegen's
-                                    // heap-upgrade gate; nothing to consume in scope.
+                                } else if !self.bg_arg_is_provably_safe(arg) {
+                                    // fr23 (M7 Phase 9, FRAGO 016; default-deny
+                                    // FRAGO 022): not a plain ident, and not
+                                    // PROVABLY safe — default-deny heap-upgrades
+                                    // it (`Give`). No binding to consume in scope
+                                    // either way (a non-ident arg is never a
+                                    // reachable binding the caller could reuse).
                                     let span = arg.span();
                                     self.bg_inferred
                                         .insert((span.start, span.end), BgOwnership::Give);
@@ -1716,89 +1726,405 @@ impl<'b> Checker<'b> {
         );
     }
 
-    /// fr23 (v0.3-M7 Phase 9, FRAGO 016): does this `background` spawn argument or
-    /// receiver MATERIALIZE a shape temporary in the spawner's frame — the two
-    /// confirmed-live UAF shapes the FRAGO 011 gate proved (B′: maybe-payload access
-    /// `m.value` on a `maybe<Shape>` binding; C2: a call `makeCargo()` whose declared
-    /// return type is a shape)? Such a temp has no binding the caller could read
-    /// after the spawn, so its ownership is `Give`; recording its span in
-    /// `bg_inferred` is what admits it to codegen's ONE heap-upgrade gate
-    /// (`prepare_bg_arg_for_ctx`'s span lookup) — the same give/copy machinery
-    /// plain-ident args ride, never a sibling path (authoritative-derivation.md).
+    /// fr23 (v0.3-M7 Phase 9, FRAGO 016; unified FRAGO 020; consumption redesigned
+    /// FRAGO 022): the ONE authoritative, side-effect-free, EXHAUSTIVELY-MATCHED
+    /// classifier of "what type does this expression resolve to" — consulted ONLY
+    /// by `bg_call_return_type_readonly` / `bg_ufcs_return_type` /
+    /// `bg_apply_generic_return_subst` to seed a generic callee's type-parameter
+    /// substitution at ANY nesting depth (a call's own return type may depend on a
+    /// NESTED argument's resolved type, recursively, since those functions route
+    /// back through this same classifier).
     ///
-    /// Deliberately NOT admitted: field-access receivers/args (`ship.cargo`) — the
-    /// still-latent A/C1 class FRAGO 011 left out of scope; their storage is already
-    /// a counted heap cell (`store_field`'s `field_own` cells). A `.value` access
-    /// with a NON-ident base is unreachable here: the flow-sensitive `.exists()`
-    /// check (`maybe.value` inference) only proves safety for ident bindings, so
-    /// any other base is a compile error before this question is asked.
-    fn bg_arg_is_materialized_shape_temp(&self, arg: &Expr) -> bool {
-        match arg {
-            // B′: maybe-payload access on an ident binding of type `maybe<Shape>`.
+    /// **This function is NOT the `background`-spawn admission gate.** Before
+    /// FRAGO 022, this classifier's `Option<Type>` result doubled as the admission
+    /// answer too (`bg_arg_is_materialized_shape_temp` treated `Some(Type::Shape)`
+    /// as "needs heap-upgrade" and everything else — including every case this
+    /// function genuinely cannot resolve — as "safe to skip"). That conflated "I
+    /// proved this is NOT a Shape" with "I don't know" and was the root cause of
+    /// SIX rounds of confirmed-live UAF findings (FRAGO 016 → 021): a `StructLit`,
+    /// a `MapEntry<K,Shape>.value`, a nested `.copy()`, and a nested `wait` all
+    /// return `None` here for reasons that have nothing to do with being
+    /// non-`Shape` — they are either context-dependent (a bare `StructLit` has no
+    /// type without the caller's expected-parameter context) or simply
+    /// unclassified by this function's small arm list — and the OLD admission
+    /// logic silently read that `None` as "proven safe." The admission decision
+    /// now lives in `bg_arg_is_provably_safe`, below, which is FAIL-CLOSED: a
+    /// `None` from THIS function feeding into a generic substitution just leaves a
+    /// type parameter unresolved, which `bg_arg_is_provably_safe`'s `Call`/
+    /// `MethodCall` arms correctly read as "not proven safe" (default to
+    /// heap-upgrade) rather than "proven safe." This function's own arms are
+    /// UNCHANGED by FRAGO 022 — they remain a genuinely useful, if incomplete,
+    /// best-effort resolver for the seeding question; incompleteness here no
+    /// longer has any safety consequence because the CONSUMER of an unresolved
+    /// result now fails closed instead of open.
+    ///
+    /// Every `Expr` variant is classified EXPLICITLY below — there is deliberately
+    /// NO `_ =>` catch-all arm, so the Rust compiler itself refuses to build the
+    /// moment a future `Expr` variant is added without a classification decision
+    /// here. This exhaustiveness is still worth keeping even though it is no
+    /// longer load-bearing for SAFETY (an unresolved substitution seed fails
+    /// closed regardless) — it forces a conscious choice about how a new variant
+    /// contributes to substitution-seeding PRECISION.
+    ///
+    /// Deliberately `&self`/side-effect-free (never calls `infer_expr`/
+    /// `ast_type_to_type`, which mutate `referenced_names`/diagnostics): this
+    /// classifier runs speculatively over every `background`-spawn arg/receiver,
+    /// including ones that never end up spawn-relevant, and must not pollute typeck
+    /// state for args the caller ultimately discards.
+    ///
+    /// Recursion (`Call`/`MethodCall` arms) terminates structurally: each recursive
+    /// call descends into a strictly smaller argument subexpression of the same
+    /// finite, cycle-free AST (a call's arguments can never contain the call
+    /// itself), so depth is bounded by the source's own nesting depth — the same
+    /// bound every other recursive walk in this file (`infer_expr` included) already
+    /// relies on.
+    fn bg_expr_resolved_type(&self, expr: &Expr) -> Option<Type> {
+        match expr {
+            // Base case every other arm's recursion eventually bottoms out on: a
+            // plain ident binding's narrowed type.
+            Expr::Ident(name, _) => self.binding_ty_narrowed(name),
+
+            // B′: maybe-payload access (`m.value`) on an ident binding of type
+            // `maybe<Shape>`. A `.value` access with a NON-ident base is
+            // unreachable here: the flow-sensitive `.exists()` check (`maybe.value`
+            // narrowing) only proves safety for ident bindings, so any other base
+            // is a compile error before this question is asked.
             Expr::FieldAccess {
                 receiver, field, ..
             } if field == "value" => {
                 let Expr::Ident(base, _) = receiver.as_ref() else {
-                    return false;
+                    return None;
                 };
-                matches!(
-                    self.binding_ty_narrowed(base),
-                    Some(Type::Maybe { inner }) if matches!(inner.as_ref(), Type::Shape { .. })
-                )
-            }
-            // C2: a direct call whose declared return type is a shape. The callee is
-            // resolved from EITHER the concrete signature table OR the generic table —
-            // the same sig_table/generic_fn_table split the borrow-reject check's
-            // `.or_else` fallback already handles (see `check_background_handle_spawn`'s
-            // R3-boundary resolution in this file): a generic callee
-            // (`background identity(c).haul()` with `identity<T>(give T) -> T`) lives
-            // ONLY in `generic_fn_table.fns`, so a sig_table-only read silently missed
-            // it, fell through to `BgArgFreeKind::None`, and reproduced the exact fr23
-            // UAF this predicate exists to close (security fix-round, live-reproduced
-            // at both tiers 2026-07-18).
-            Expr::Call(call) => {
-                let Expr::Ident(fname, _) = &call.callee else {
-                    return false;
-                };
-                if let Some(sig) = self.sig_table.fns.get(fname.as_str()) {
-                    return matches!(sig.ret, Type::Shape { .. });
-                }
-                let Some(gsig) = self.generic_fn_table.fns.get(fname.as_str()) else {
-                    return false;
-                };
-                // Resolve the instantiated return type with the SAME
-                // `unify_param`/`apply_substitution` machinery `check_generic_fn_call`
-                // uses — never a sibling inference scheme (authoritative-derivation.md).
-                // This predicate is a side-effect-free `&self` read consulted BEFORE the
-                // spawn expression is type-checked, so the substitution is seeded from
-                // what is resolvable without running inference: explicit shape type args
-                // and plain-ident argument bindings (`binding_ty_narrowed`, the one
-                // narrowing-aware read). Partial substitution is tolerated exactly as in
-                // `check_generic_fn_call`: an unresolved TypeParam stays a TypeParam and
-                // never matches `Shape`, so this cannot false-admit; a concrete `-> Shape`
-                // return needs no substitution at all.
-                let mut subst: Substitution = HashMap::new();
-                if let Some(type_args) = &call.type_args {
-                    for (tp_name, ast_ty) in gsig.type_params.iter().zip(type_args.iter()) {
-                        if let AstType::Named(n, _) = ast_ty {
-                            if self.shape_table.contains(n) {
-                                subst.insert(tp_name.clone(), Type::Shape { name: n.clone() });
-                            }
-                        }
+                match self.binding_ty_narrowed(base) {
+                    Some(Type::Maybe { inner }) if matches!(inner.as_ref(), Type::Shape { .. }) => {
+                        Some(inner.as_ref().clone())
                     }
+                    _ => None,
                 }
-                let non_self_params = gsig.params.iter().filter(|(p, _)| p != "self");
-                for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params) {
-                    if let Expr::Ident(arg_name, _) = arg {
-                        if let Some(actual) = self.binding_ty_narrowed(arg_name) {
-                            let _ = unify_param(param_ty, &actual, &mut subst);
-                        }
-                    }
-                }
-                matches!(apply_substitution(&gsig.ret, &subst), Type::Shape { .. })
             }
+
+            // C2 (+ recursive nesting): a direct call, concrete or generic,
+            // resolved by the authoritative recursive helper below.
+            Expr::Call(call) => self.bg_call_return_type_readonly(call),
+
+            // UFCS chain (`receiver.method(args)`): the SAME question as `Call`,
+            // normalized identically to codegen's `synthesize_ufcs_call_expr` /
+            // this file's `background_spawn_call_form` (method name as callee,
+            // receiver as argument 0). RECURSIVE because the receiver may itself be
+            // any materializing shape (another `MethodCall`, a `Call`, a
+            // `FieldAccess`) — this is the exact gap this round fixes: a UFCS chain
+            // NESTED inside a generic call's argument previously fell through to
+            // `None` because the old nested-argument resolver had no `MethodCall`
+            // arm at all.
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => self.bg_ufcs_return_type(receiver, method, args),
+
+            // Every remaining `Expr` variant is NOT resolved by this classifier for
+            // the substitution-seeding question — either it genuinely can never
+            // produce a Shape (most literals/operators/collection forms) or its
+            // type is context-dependent and this side-effect-free classifier has
+            // no context to resolve it with (`StructLit`, `FieldAccess` whose field
+            // isn't `.value`, `PostfixOp`, `Wait`'s inner expression, `SelfValue`).
+            // Per FRAGO 022, `None` here is READ, by every consumer, as "unresolved"
+            // — NOT as "proven safe" — so leaving these unclassified has no safety
+            // consequence (see this function's own doc comment). Listed explicitly
+            // (never `_`) purely to keep the seeding-precision exhaustiveness
+            // guarantee described above; a future `Expr` variant added here
+            // defaults to `None` (unresolved) either way once classified.
+            Expr::FieldAccess { .. }
+            | Expr::StringLit(..)
+            | Expr::Error(..)
+            | Expr::IntLit(..)
+            | Expr::NumberLit(..)
+            | Expr::BoolLit(..)
+            | Expr::BinOp { .. }
+            | Expr::UnaryOp { .. }
+            | Expr::StructLit { .. }
+            | Expr::PostfixOp { .. }
+            | Expr::SelfValue { .. }
+            | Expr::NoneLit { .. }
+            | Expr::IndexAccess { .. }
+            | Expr::ArrayLit { .. }
+            | Expr::MapLit { .. }
+            | Expr::Is { .. }
+            | Expr::InterpolatedString(..)
+            | Expr::Wait(..)
+            | Expr::Background(..) => None,
+        }
+    }
+
+    /// fr23 (v0.3-M7 Phase 9, FRAGO 016 → 021; DEFAULT-DENY REDESIGN, FRAGO 022): is
+    /// this `background` spawn argument or receiver PROVABLY SAFE — a stable,
+    /// already-owned binding, or an expression whose STATIC TYPE can never be a
+    /// `Shape` — such that it needs NO heap-upgrade?
+    ///
+    /// **This supersedes the six-round ALLOWLIST architecture.** FRAGO 016 → 021
+    /// answered a different question — "is this expression ONE OF THE SHAPES we
+    /// have confirmed materializes a dangerous Shape temp?" — and every round found
+    /// another shape the enumeration missed (`FieldAccess.value` on a
+    /// `maybe<Shape>`, a `Call`, a UFCS `MethodCall` chain, a `StructLit`, a
+    /// `MapEntry<K,Shape>.value`, a nested `.copy()`, a nested `wait` — 10
+    /// confirmed-live UAF shapes across 6 rounds, on the SAME predicate, with
+    /// nothing structurally guaranteeing round 7 would not find an 11th). This
+    /// function asks the INVERSE question — "is this expression PROVABLY safe?" —
+    /// and every caller heap-upgrades (`Give`) whatever this function does NOT
+    /// affirmatively recognize, via the trailing wildcard arm. That inversion is
+    /// what closes the class STRUCTURALLY rather than accumulating one more
+    /// allowlist entry: a brand-new `Expr` variant added in a future milestone, or
+    /// any expression shape this round's own adversarial testing did not think of,
+    /// defaults to heap-upgraded (safe, at worst wastefully) with ZERO code change
+    /// here — it is never silently un-upgraded the way every one of the 10 prior
+    /// shapes was.
+    ///
+    /// **Why "over-upgrading" costs nothing.** A heap-upgrade attempt on an
+    /// expression that turns out NOT to be `Shape`/`BuiltinArray`/`Maybe`-typed is
+    /// free, not merely cheap: `prepare_bg_arg_for_ctx` (`emit.rs`) only emits real
+    /// work for those three resolved types — every other CODEGEN-resolved type
+    /// (`Int`/`Bool`/`Float`/`String`/`map`/`union`/…) falls through to that
+    /// function's own `_ => Ok((val, BgArgFreeKind::None))` no-op arm regardless of
+    /// whether THIS function recorded it as needing upgrade. So marking more
+    /// expressions `Give` than strictly necessary costs one extra typeck-time
+    /// hashmap entry and zero extra LLVM IR. That asymmetry — a false "safe" is a
+    /// live UAF; a false "unsafe" is free — is the entire reason default-deny is
+    /// the correct default DIRECTION, independent of how precisely any one
+    /// expression kind gets classified.
+    ///
+    /// The safe set (small and closed, per the dispatch's own default-deny
+    /// architecture):
+    /// - `Ident`: handled entirely by the separate liveness-based give/copy path in
+    ///   `check_stmts` BEFORE this function is ever consulted for a given arg —
+    ///   listed here defensively (fail SAFE, not silently unsafe, if some future
+    ///   refactor ever reaches this function on an `Ident`).
+    /// - `IntLit`/`StringLit`/`BoolLit`/`NumberLit`: always a scalar primitive by
+    ///   their own AST shape — no expression of these kinds can ever be `Shape`.
+    /// - `NoneLit`: always wrapped in an outer `Maybe`, never a bare `Shape`.
+    /// - `PostfixOp { op: Copy, .. }` used directly as the spawn arg: codegen's own
+    ///   `is_heap_arg` AST match (`emit.rs`) unconditionally heap-upgrades an
+    ///   explicit `.copy()` BEFORE ever consulting `background_arg_inferred_ownership`
+    ///   — recording it here too would be a redundant, dead entry, not a behavior
+    ///   change either way, so it is recognized as its own already-handled case
+    ///   rather than defaulting through the wildcard.
+    /// - `Call` / `MethodCall`: the ONE pair that still consults the recursive
+    ///   return-type resolver (`bg_call_return_type_readonly` / `bg_ufcs_return_type`
+    ///   — UNCHANGED from FRAGO 020/021, reused rather than rewritten per
+    ///   authoritative-derivation.md), but the result is read FAIL-CLOSED: safe
+    ///   ONLY when the resolved type is AFFIRMATIVELY one of the narrow primitive
+    ///   types `type_provably_not_shape` recognizes. An unresolved call (unknown
+    ///   callee, or a generic whose type parameter never got seeded because a
+    ///   nested argument's own `bg_expr_resolved_type` arm returns `None` — e.g.
+    ///   `identity(c.copy())`'s `T` staying an unbound `TypeParam`) is NOT proof of
+    ///   safety and falls through to `Give`. This is precisely what closes FRAGO
+    ///   021 findings 3 and 4 WITHOUT adding a single new arm to the seeding
+    ///   resolver: an inconclusive seed now fails closed instead of being silently
+    ///   read as "not Shape."
+    ///
+    /// **`SelfValue` was REMOVED from this safe set in FRAGO 024 (round 8) — it is
+    /// NOT a special case anymore, it rides the trailing wildcard like everything
+    /// else below.** The prior claim here ("Yinz shapes are always passed by
+    /// pointer, so `self` never independently materializes a fresh per-call temp")
+    /// is true for the SINGLE-LEVEL case FRAGO 021 arm #15 actually tested (`give
+    /// self`/`share self` spawned directly from an ordinary, non-backgrounded
+    /// caller) but false for a NESTED spawn: a `give self` parameter whose OWNING
+    /// function is itself reached via `background` (e.g. `background
+    /// relay(makeCargo())` where `relay(give self: Cargo) { background
+    /// self.haul() }`). There, `self`'s heap cell is freed by the OUTER task's own
+    /// end-of-scope free ladder immediately after the inner fire-and-forget spawn
+    /// returns (spawning does not wait for the child task to run), racing the
+    /// inner task's delayed read of `self` — confirmed-live 14/14 (both `give
+    /// self` and default `self`), isolated via an `Ident`-parameter control that
+    /// correctly avoided the bug (the `Ident` liveness path in `check_stmts`
+    /// always records SOME ownership entry for a plain-named parameter, forcing
+    /// heap-upgrade at codegen; `SelfValue`'s blanket `true` recorded NONE). `self`
+    /// now falls through to `Give` by default exactly like every other
+    /// non-enumerated shape below — a redundant heap copy in the single-level case
+    /// FRAGO 021 arm #15 tested (still correct, per the cost note above), and the
+    /// fix that closes the nested-spawn race.
+    ///
+    /// Everything else defaults to `Give` via the trailing wildcard —
+    /// `SelfValue` (see above), `StructLit` (finding 1), `FieldAccess` in BOTH its
+    /// forms (the `.value` maybe-payload case AND FRAGO 021 finding 2's
+    /// `MapEntry<K,Shape>.value`, AND the still-latent A/C1 `field != "value"`
+    /// class), `IndexAccess`, `ArrayLit`,
+    /// `MapLit`, `Is`, `InterpolatedString`, `Wait`, `Background`, `BinOp`,
+    /// `UnaryOp`, `PostfixOp { op: Freeze, .. }`. Several of these ARE provably
+    /// non-`Shape` by the same literal-AST-shape reasoning that makes the four
+    /// literals above safe (`Is` is always `Bool`; `InterpolatedString` is always
+    /// `String`; `Background` is always `Nothing`; `BinOp`/`UnaryOp` never dispatch
+    /// to a user operator overload today — FRAGO 021's 22-arm audit confirmed all
+    /// of these by exhaustive code read). They are deliberately NOT special-cased
+    /// here anyway: per the cost note above, precision buys nothing at runtime, and
+    /// this round's adversarial test set specifically exercises several of them to
+    /// prove the WILDCARD — not a per-arm carve-out — is what protects them.
+    ///
+    /// A/C1 field-access shapes (`ship.cargo`, `field != "value"`) are deliberately
+    /// NOT excluded from the wildcard even though their storage is ALREADY a
+    /// counted `field_own` heap cell (FRAGO 011's separate, pre-existing
+    /// protection): riding the default `Give` path produces one redundant shallow
+    /// heap copy — the identical "byte-copy the struct into a fresh `ynz_alloc`'d
+    /// cell" the Ident/Give path already performs for every ordinary Shape-typed
+    /// give — not a new correctness risk, and excluding them would need a second
+    /// classification check for no safety benefit. Simplicity wins here per the
+    /// dispatch's own explicit latitude on this call.
+    fn bg_arg_is_provably_safe(&self, arg: &Expr) -> bool {
+        match arg {
+            Expr::Ident(..) => true,
+            Expr::IntLit(..)
+            | Expr::StringLit(..)
+            | Expr::BoolLit(..)
+            | Expr::NumberLit(..)
+            | Expr::NoneLit { .. } => true,
+            Expr::PostfixOp {
+                op: PostfixOpKind::Copy,
+                ..
+            } => true,
+            Expr::Call(call) => matches!(
+                self.bg_call_return_type_readonly(call),
+                Some(ref t) if Self::type_provably_not_shape(t)
+            ),
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => matches!(
+                self.bg_ufcs_return_type(receiver, method, args),
+                Some(ref t) if Self::type_provably_not_shape(t)
+            ),
+            // SelfValue (FRAGO 024 — removed from the safe set; nested-spawn
+            // free-ladder race), StructLit, FieldAccess (any field), IndexAccess,
+            // ArrayLit, MapLit,
+            // Is, InterpolatedString, Wait, Background, BinOp, UnaryOp,
+            // PostfixOp{Freeze}, Error, and any future Expr variant: NOT provably
+            // safe. Default-deny (FRAGO 022) — heap-upgrade.
             _ => false,
         }
+    }
+
+    /// The narrow, closed set of resolved types that can NEVER be — or, for this
+    /// predicate's purposes, need not be treated as possibly being — a `Shape`
+    /// value needing the spawner-frame heap-upgrade. Consulted ONLY by
+    /// `bg_arg_is_provably_safe`'s `Call`/`MethodCall` arms to decide whether a
+    /// SUCCESSFULLY resolved return type proves safety.
+    ///
+    /// Deliberately narrow: `Type::Maybe`/`Type::BuiltinArray`/`Type::MapEntry`/
+    /// `Type::TypeParam`/`Type::Shape`/`Type::Dynamic`/union types are ALL excluded
+    /// (return `false`) even where a specific instantiation might itself be
+    /// provably safe (e.g. `array<int>`, `maybe<int>`) — the cost of a missed
+    /// narrowing is zero (see `bg_arg_is_provably_safe`'s doc comment on why
+    /// over-upgrading is free), so there is no reason to widen this past the exact
+    /// cases FRAGO 022 needs to prove a `Call`/`MethodCall` result safe.
+    fn type_provably_not_shape(t: &Type) -> bool {
+        matches!(
+            t,
+            Type::Int
+                | Type::Float
+                | Type::Number { .. }
+                | Type::Bool
+                | Type::String
+                | Type::Nothing
+        )
+    }
+
+    /// The authoritative, side-effect-free, RECURSIVE resolver for "what type does
+    /// this call expression return" — consulted by `bg_expr_resolved_type`'s `Call`
+    /// arm (both for a spawn-site call itself and for any NESTED call argument, at
+    /// any depth, since `bg_expr_resolved_type` routes back through this function).
+    /// Recursive so a generic callee's type parameter can be bound by a
+    /// call-materialized argument AT ANY NESTING DEPTH — `identity(x)`,
+    /// `identity(identity(x))`, `identity(identity(identity(x)))`, … — instead of a
+    /// fixed number of hand-unrolled levels that the next deeper nesting silently
+    /// falls through (M7 completion-gate round 3, FRAGO 019).
+    ///
+    /// - **Concrete (non-generic) callee**: the declared return type directly — no
+    ///   substitution needed.
+    /// - **Generic callee** (resolved via the SAME sig_table/generic_fn_table split
+    ///   the borrow-reject check's `.or_else` fallback and the outer `Expr::Call`
+    ///   arm both already use — never a third lookup scheme): substitution is seeded
+    ///   and applied by the shared `bg_apply_generic_return_subst` step below —
+    ///   never a second scheme, and shared with `bg_ufcs_return_type`'s UFCS
+    ///   resolution. A plain-`Call` form's argument list does NOT include an
+    ///   explicit `self` argument (existing convention, unchanged by this round —
+    ///   see `bg_ufcs_return_type`'s doc comment for why UFCS alignment differs).
+    fn bg_call_return_type_readonly(&self, call: &CallExpr) -> Option<Type> {
+        let Expr::Ident(fname, _) = &call.callee else {
+            return None;
+        };
+        if let Some(sig) = self.sig_table.fns.get(fname.as_str()) {
+            return Some(sig.ret.clone());
+        }
+        let gsig = self.generic_fn_table.fns.get(fname.as_str())?;
+        let non_self_params: Vec<&Type> = gsig
+            .params
+            .iter()
+            .filter(|(p, _)| p != "self")
+            .map(|(_, ty)| ty)
+            .collect();
+        let aligned: Vec<(&Expr, &Type)> = call.args.iter().zip(non_self_params).collect();
+        Some(self.bg_apply_generic_return_subst(gsig, call.type_args.as_ref(), &aligned))
+    }
+
+    /// The UFCS twin of `bg_call_return_type_readonly`, for a `receiver.method(args)`
+    /// expression — consulted ONLY by `bg_expr_resolved_type`'s `MethodCall` arm.
+    /// Normalizes identically to `background_spawn_call_form` / codegen's
+    /// `synthesize_ufcs_call_expr`: the receiver fills the callee's FIRST parameter
+    /// position. Unlike `bg_call_return_type_readonly`'s plain-`Call` alignment,
+    /// this does NOT filter out a literal `self`-named parameter — the receiver IS
+    /// that parameter's argument here, not an implicit extra, so filtering it would
+    /// misalign every subsequent parameter against the wrong argument. `MethodCall`
+    /// carries no explicit type-args syntax (unlike `CallExpr::type_args`), so
+    /// `None` is passed for that slot. Same concrete-then-generic two-table lookup
+    /// and the same shared `bg_apply_generic_return_subst` substitution step as
+    /// `bg_call_return_type_readonly` — never a third resolution scheme.
+    fn bg_ufcs_return_type(&self, receiver: &Expr, method: &str, args: &[Expr]) -> Option<Type> {
+        if let Some(sig) = self.sig_table.fns.get(method) {
+            return Some(sig.ret.clone());
+        }
+        let gsig = self.generic_fn_table.fns.get(method)?;
+        let full_args: Vec<&Expr> = std::iter::once(receiver).chain(args.iter()).collect();
+        let param_types: Vec<&Type> = gsig.params.iter().map(|(_, ty)| ty).collect();
+        let aligned: Vec<(&Expr, &Type)> = full_args.into_iter().zip(param_types).collect();
+        Some(self.bg_apply_generic_return_subst(gsig, None, &aligned))
+    }
+
+    /// Shared substitution-seed-and-apply step for a generic callee's declared
+    /// return type, consumed by BOTH `bg_call_return_type_readonly` (plain `Call`)
+    /// and `bg_ufcs_return_type` (UFCS `MethodCall`) — never a second scheme. The
+    /// two callers differ ONLY in how they align arguments to declared parameters
+    /// (plain-`Call` excludes any literal `self` parameter; UFCS includes the
+    /// receiver AS `self`'s argument) — each resolves that alignment itself and
+    /// hands this function the already-aligned `(arg-expr, declared-param-type)`
+    /// pairs. Matches `check_generic_fn_call`'s own `unify_param`/
+    /// `apply_substitution` machinery. Each argument's resolvable type is read via
+    /// `bg_expr_resolved_type` — RECURSIVELY, so a nested call or UFCS chain at any
+    /// depth can seed the substitution. Partial substitution is tolerated exactly as
+    /// in `check_generic_fn_call`: an unresolved `TypeParam` stays a `TypeParam` and
+    /// never matches `Shape`, so this can never false-admit.
+    fn bg_apply_generic_return_subst(
+        &self,
+        gsig: &GenericFnSig,
+        type_args: Option<&Vec<AstType>>,
+        aligned_args: &[(&Expr, &Type)],
+    ) -> Type {
+        let mut subst: Substitution = HashMap::new();
+        if let Some(type_args) = type_args {
+            for (tp_name, ast_ty) in gsig.type_params.iter().zip(type_args.iter()) {
+                if let AstType::Named(n, _) = ast_ty {
+                    if self.shape_table.contains(n) {
+                        subst.insert(tp_name.clone(), Type::Shape { name: n.clone() });
+                    }
+                }
+            }
+        }
+        for (arg, param_ty) in aligned_args {
+            if let Some(actual) = self.bg_expr_resolved_type(arg) {
+                let _ = unify_param(param_ty, &actual, &mut subst);
+            }
+        }
+        apply_substitution(&gsig.ret, &subst)
     }
 
     /// Normalize a `background` spawn target to its Call-form (callee ident, argument
@@ -1848,15 +2174,32 @@ impl<'b> Checker<'b> {
                 ..
             } => {
                 let Expr::Ident(rname, rspan) = receiver.as_ref() else {
-                    // fr23 (M7 Phase 9): a materialized shape-temp receiver (B′
-                    // maybe-payload / C2 call-materialized) IS a UFCS spawn —
-                    // normalize it identically so ownership recording sees the
-                    // receiver as argument 0. Codegen's `synthesize_ufcs_call_expr`
-                    // already normalizes ANY shape-typed receiver; admitting these
-                    // two shapes here closes the typeck/codegen admission asymmetry
-                    // that let the receiver ride into the task as a raw pointer to
-                    // the spawner's dead frame (the FRAGO 011 confirmed-live UAF).
-                    if self.bg_arg_is_materialized_shape_temp(receiver.as_ref()) {
+                    // fr23 (M7 Phase 9, FRAGO 016; default-deny FRAGO 022): a
+                    // non-ident receiver IS a UFCS spawn worth normalizing (so
+                    // ownership recording sees the receiver as argument 0)
+                    // whenever it is NOT provably safe — codegen's
+                    // `synthesize_ufcs_call_expr` already normalizes ANY
+                    // shape-typed receiver regardless of what this side-effect-
+                    // free classifier can resolve, so typeck's admission-
+                    // recording mirror must be AT LEAST as broad. The OLD
+                    // positive-allowlist gate here (`bg_arg_is_materialized_
+                    // shape_temp`) reproduced the exact allowlist bug this FRAGO
+                    // closes: FRAGO 021 finding 2 (`entry.value.haul()`, a
+                    // `MapEntry<K,Shape>.value` receiver) fell through this exact
+                    // gate because `bg_expr_resolved_type`'s narrow `.value` arm
+                    // only recognizes a `maybe<Shape>` producer, not a
+                    // `MapEntry.value` producer — reusing `bg_arg_is_provably_safe`
+                    // (the SAME predicate the arg-admission loop below uses) fixes
+                    // it for free: a `FieldAccess` is never in that predicate's
+                    // safe set, so it is normalized here regardless of which
+                    // `.value` producer it came from. Over-admitting a receiver
+                    // that turns out NOT to be a real UFCS-to-user-function target
+                    // is harmless: a non-existent callee name is rejected
+                    // downstream by the ordinary `sig_table.fns` lookup
+                    // (unaffected by this normalization), and a channel/MapEntry/
+                    // number receiver is protected by its own UNCONDITIONAL
+                    // codegen pre-gate regardless of what this function records.
+                    if !self.bg_arg_is_provably_safe(receiver.as_ref()) {
                         return Some((
                             Some(method.as_str()),
                             std::iter::once(receiver.as_ref())
@@ -1881,31 +2224,42 @@ impl<'b> Checker<'b> {
                 // into a shape-sized binding — an OOB read that SIGSEGVs on a
                 // pointer-field read, one binding over (Future Requirements #24).
                 if self.union_narrowed.contains_key(rname) {
-                    self.diags.push(Diagnostic::error(
-                        rspan.clone(),
-                        format!(
-                            "a union value narrowed to `{variant}` cannot yet be used \
-                             as a `background` receiver."
-                        ),
-                        format!(
-                            "Start the background task where the `{variant}` value is \
-                             created, before it is stored into the union — call \
-                             `background <binding>.{method}()` on the original \
-                             `{variant}`-typed binding at that point. Do not copy \
-                             `{rname}` into a new `{variant}`-typed binding here (for \
-                             example, `let inner: {variant} = {rname}`): inside this \
-                             `is` arm `{rname}` is still the union, so the new binding \
-                             would hold the union's storage, not a `{variant}` value."
-                        ),
-                        format!(
-                            "Inside an `is {variant}` arm, `{rname}` still holds the \
-                             whole union — which variant it is plus that variant's \
-                             data — not a standalone `{variant}` value. The compiler \
-                             cannot yet copy the variant's data out of a union to hand \
-                             the background task its own `{variant}`, so it stops here \
-                             instead of starting the task with wrong or unsafe data."
-                        ),
-                    ));
+                    // FRAGO 024 (round 8): this function is now called MULTIPLE
+                    // times for the same spawn (the pre-recording loops in
+                    // `check_stmts`/`check_background_handle_spawn` AND the
+                    // generic `Expr::Background` arm's structural admission
+                    // backstop) — dedup by span so the diagnostic fires exactly
+                    // once per spawn instead of once per call site.
+                    if self
+                        .bg_union_narrowed_diag_spans
+                        .insert((rspan.start, rspan.end))
+                    {
+                        self.diags.push(Diagnostic::error(
+                            rspan.clone(),
+                            format!(
+                                "a union value narrowed to `{variant}` cannot yet be used \
+                                 as a `background` receiver."
+                            ),
+                            format!(
+                                "Start the background task where the `{variant}` value is \
+                                 created, before it is stored into the union — call \
+                                 `background <binding>.{method}()` on the original \
+                                 `{variant}`-typed binding at that point. Do not copy \
+                                 `{rname}` into a new `{variant}`-typed binding here (for \
+                                 example, `let inner: {variant} = {rname}`): inside this \
+                                 `is` arm `{rname}` is still the union, so the new binding \
+                                 would hold the union's storage, not a `{variant}` value."
+                            ),
+                            format!(
+                                "Inside an `is {variant}` arm, `{rname}` still holds the \
+                                 whole union — which variant it is plus that variant's \
+                                 data — not a standalone `{variant}` value. The compiler \
+                                 cannot yet copy the variant's data out of a union to hand \
+                                 the background task its own `{variant}`, so it stops here \
+                                 instead of starting the task with wrong or unsafe data."
+                            ),
+                        ));
+                    }
                     return None;
                 }
                 Some((
@@ -1977,12 +2331,13 @@ impl<'b> Checker<'b> {
                         BgOwnership::Copy
                     };
                     self.bg_inferred.insert((span.start, span.end), o);
-                } else if self.bg_arg_is_materialized_shape_temp(arg) {
-                    // fr23 (M7 Phase 9, FRAGO 016): same materialized-shape-temp
-                    // admission as the statement form above — the handle form
-                    // shares codegen's ONE heap-upgrade gate, so the receiver's
-                    // span must be recorded here too (`Give`: a temp has no
-                    // binding the caller could read after the spawn).
+                } else if !self.bg_arg_is_provably_safe(arg) {
+                    // fr23 (M7 Phase 9, FRAGO 016; default-deny FRAGO 022): same
+                    // admission predicate as the statement form above — the
+                    // handle form shares codegen's ONE heap-upgrade gate, so a
+                    // non-ident arg that isn't PROVABLY safe must be recorded
+                    // here too (`Give`: default-deny, no binding to read after
+                    // the spawn either way).
                     let span = arg.span();
                     self.bg_inferred
                         .insert((span.start, span.end), BgOwnership::Give);
@@ -2956,6 +3311,72 @@ impl<'b> Checker<'b> {
                          It cannot be applied to non-call expressions.",
                     ));
                 }
+                // v0.3-M7 FRAGO 024 (round 8): structural admission-recording
+                // backstop.
+                //
+                // `check_stmts`'s Stmt::Expr loop and `check_background_handle_spawn`
+                // each pre-record ownership for the args THEY see, BEFORE calling
+                // into this arm — but every OTHER statement form that can host a
+                // `background` spawn (`Assign`, `FieldAssign`, `IndexAssign`, and any
+                // future statement kind) routes straight through `infer_expr` with NO
+                // pre-recording at all, so codegen's `is_heap_arg` gate (`emit.rs`)
+                // finds no recorded span for those args and skips the heap-upgrade
+                // unconditionally — a total UAF bypass (FRAGO 024 Bug 1,
+                // live-reproduced: `hd.slot = background makeCargo().haul()`, a
+                // `FieldAssign` target, reads dead-frame garbage at O0).
+                //
+                // This arm is the ONE place every spawn form provably passes through
+                // (already the sole recording site for `cross_thread_shapes` below),
+                // so it is the correct place to close the class STRUCTURALLY — one
+                // definition every syntactic position inherits — rather than hunting
+                // down and hand-wiring a fourth, fifth, ... call site every time a new
+                // statement form is added. `.contains_key` + explicit insert (not
+                // `.entry().or_insert_with()`, to keep the borrow-checker happy with
+                // `self` reborrows) never clobbers a MORE PRECISE Give/Copy decision
+                // `check_stmts`'s liveness pass already made for a Stmt::Expr spawn —
+                // it only fills in what nothing else has recorded yet. Codegen's
+                // `is_heap_arg` gate does not distinguish Give from Copy (either
+                // records "heap-upgrade this"), so this default-Copy backstop is
+                // fully memory-safe even without liveness precision; only the
+                // finer-grained give/copy DISTINCTION (whether the binding gets
+                // consumed, used-after-give diagnostics, inlay hints) stays
+                // Stmt::Expr-exclusive, exactly as before.
+                //
+                // `background_spawn_call_form` is ALSO the receiver-normalization
+                // step (so a UFCS `background self.haul()` sees `self` as arg 0) —
+                // reusing it here, rather than a second hand-rolled extraction,
+                // is what closes FRAGO 024 Bug 2 (the `SelfValue` false-safe) for
+                // every syntactic position at once, not just the two `bg_inferred`
+                // pre-recording loops. It is idempotent across repeat calls for the
+                // same spawn (`bg_union_narrowed_diag_spans` dedups its one
+                // diagnostic side effect, above).
+                if let Some((_, bg_args)) = self.background_spawn_call_form(inner.as_ref()) {
+                    for arg in bg_args {
+                        let key = (arg.span().start, arg.span().end);
+                        if self.bg_inferred.contains_key(&key) {
+                            continue;
+                        }
+                        if let Some(name) = simple_ident_name(arg) {
+                            // `Ident` or `SelfValue` (FRAGO 024 Bug 2: `self` no
+                            // longer defaults to provably-safe — see
+                            // `bg_arg_is_provably_safe` — so it reaches this
+                            // branch exactly like a plain-named parameter would).
+                            let is_channel = self
+                                .scope
+                                .lookup(name)
+                                .is_some_and(|e| matches!(e.ty, Type::BuiltinChannel { .. }));
+                            let o = if is_channel {
+                                BgOwnership::Channel
+                            } else {
+                                BgOwnership::Copy
+                            };
+                            self.bg_inferred.insert(key, o);
+                        } else if !self.bg_arg_is_provably_safe(arg) {
+                            self.bg_inferred.insert(key, BgOwnership::Give);
+                        }
+                    }
+                }
+
                 // Locked M8 decision (spec/concurrency.md:164-177): `background` must
                 // reject callees that borrow their arguments via `share`. A `share`
                 // borrow may outlive the caller's scope once the task runs in the background.
@@ -3001,6 +3422,39 @@ impl<'b> Checker<'b> {
                         // underlying bounded buffer is heap-owned, internally thread-safe,
                         // and refcount-shared at the spawn (`ynz_channel_share`) — the
                         // borrow-outlives-owner hole the rejects close cannot occur.
+                        //
+                        // FRAGO 024 (round 8) Bug 3 — INVESTIGATED, NOT APPLIED (see the
+                        // FRAGO 024 audit entry's four-field deferral, sharpened by FRAGO 025):
+                        // an unannotated (`None`) Shape parameter compiles to the same
+                        // `readonly` ABI pointer as an explicit `share` one, and widening this
+                        // reject to also fire on default ownership was the literal instruction.
+                        // Applying it live broke 15/15 `fr23_uaf_planned_red.rs` fixtures
+                        // outright (grep-confirmed: 18 of the crate's `.ynz` fixtures
+                        // combine `background` with the unannotated
+                        // `function haul(self: Cargo)` UFCS-receiver idiom this whole
+                        // fr23 saga's own regression suite is built on — likely more
+                        // across the wider M1–M7 corpus using a differently-named
+                        // unannotated receiver, not indexed here). The reject is
+                        // SIGNATURE-only (never call-site-aware), so it cannot
+                        // distinguish "a hazardous caller-retained alias" from "a
+                        // harmless materialized temp the fr23 admission machinery
+                        // ALREADY heap-upgrades independent of the callee's declared
+                        // ownership" — widening it as instructed would outlaw the
+                        // dominant idiom, not close a narrow gap. Deferred rather than
+                        // forced through; see the audit entry for the full WHAT/WHY/COST/
+                        // TRIGGER. Two DISTINCT residual claims, named separately (FRAGO 025 —
+                        // do not fold them back into one "not a hazard" sentence): (1) this
+                        // gap is MEMORY-SAFE, verified — the fr23 admission machinery already
+                        // heap-upgrades the underlying argument regardless of this diagnostic,
+                        // so no UAF/dangling-pointer exposure exists here. (2) A SEPARATE,
+                        // still-open semantic-correctness gap exists independent of (1): a
+                        // `background`-spawned function that MUTATES an unannotated Shape
+                        // parameter silently mutates only the task's PRIVATE heap-upgraded
+                        // copy, never the caller's original binding — with zero diagnostic
+                        // warning that this happens. That silent value-divergence is a real,
+                        // un-closed teaching-completeness gap (not a memory-safety hole) and is
+                        // exactly what widening this reject to `give`-only would have taught the
+                        // user to expect.
                         let borrowed_non_channel = |modifier: OwnershipModifier| {
                             param_ownerships
                                 .iter()

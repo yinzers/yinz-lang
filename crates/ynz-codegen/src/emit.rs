@@ -2318,10 +2318,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// outlives the call consuming it is `bg_ctx` itself, and `ynz_rt_spawn*` copies
     /// those bytes synchronously before returning (documented at its emission site).
     ///
-    /// (c) also covers the fr23 shapes (FRAGO 011 → closed by v0.3-M7 Phase 9 /
-    /// FRAGO 016): the once-confirmed-live non-ident spawn receiver/arg shapes
-    /// (maybe-payload `m.value` and call-materialized `makeCargo()`) are now
-    /// recorded as `Give` by typeck's `bg_arg_is_materialized_shape_temp` and
+    /// (c) also covers the fr23 shapes (FRAGO 011 → FRAGO 016-021's allowlist →
+    /// default-deny redesign, FRAGO 022): any non-ident spawn receiver/arg that
+    /// typeck's `bg_arg_is_provably_safe` does NOT prove safe (which now includes
+    /// every confirmed-live shape across all 6 rounds, PLUS any future shape by
+    /// construction — see that function's doc comment) is recorded as `Give` and
     /// heap-upgraded by the same `is_heap_arg` span lookup as plain idents, so no
     /// in-loop payload alloca rides raw into a task ctx. Locked green by
     /// `crates/ynz-driver/tests/fr23_uaf_planned_red.rs` (fixtures
@@ -16795,14 +16796,17 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         } => true,
         // Everything else: consult the ONE authoritative ownership record typeck
         // produced at the spawn site (`background_arg_inferred_ownership` — plain
-        // idents with inferred give/copy/channel ownership, plus the fr23
-        // materialized-shape-temp receiver/arg shapes admitted by
-        // `bg_arg_is_materialized_shape_temp`: B′ maybe-payload access and C2
-        // call-materialized, v0.3-M7 Phase 9 / FRAGO 016). Byte-identical for the
-        // Ident arm this lookup replaces; extends admission exactly to what typeck
-        // recorded — never a codegen-side re-derivation (authoritative-derivation).
-        // Un-recorded shapes (e.g. field-access receivers — the still-latent A/C1
-        // class, whose storage is already a `field_own` heap cell) stay un-upgraded.
+        // idents with inferred give/copy/channel ownership, plus every non-ident
+        // spawn arg/receiver typeck's `bg_arg_is_provably_safe` did NOT prove safe,
+        // v0.3-M7 Phase 9 FRAGO 016, redesigned default-deny FRAGO 022). Byte-
+        // identical for the Ident arm this lookup replaces; extends admission
+        // exactly to what typeck recorded — never a codegen-side re-derivation
+        // (authoritative-derivation). Since FRAGO 022, that admission is
+        // default-deny: a field-access receiver (e.g. the still-latent A/C1 class,
+        // whose storage is already a separate `field_own` heap cell) rides the SAME
+        // `Give` default as everything else typeck cannot prove safe — a harmless
+        // redundant heap copy on top of an already-safe pointer, not a correctness
+        // concern (see `bg_arg_is_provably_safe`'s doc comment).
         _ => {
             let s = arg.span();
             cg.typed
@@ -16948,6 +16952,24 @@ fn prepare_bg_arg_for_ctx<'ctx>(
                 .unwrap_or(0);
             Ok((cell.into(), BgArgFreeKind::HeapMaybeEnv { byte_size }))
         }
+        // fr23 tracking guard (v0.3-M7, FRAGO 025): `dynamic Contract` receivers are
+        // CURRENTLY unreachable here — dynamic-dispatch call sites abort earlier with
+        // "codegen: dynamic dispatch call sites not yet lowered in M4 P4" (this file,
+        // Expr::MethodCall's dynamic-dispatch arm), so no `background`-spawn ever
+        // reaches this match with `resolved = Type::Dynamic` today. But the moment a
+        // future milestone lowers dynamic-dispatch codegen, a fat-pointer/vtable
+        // receiver spawned via `background` would silently fall through to the `_`
+        // arm below (`BgArgFreeKind::None` — no heap-upgrade) and reopen the entire
+        // fr23 UAF class for dynamic receivers, exactly as it did for Shape/Maybe/
+        // array before FRAGO 016 closed those. Fail loudly instead of silently: this
+        // arm must be replaced with a real heap-upgrade path (mirroring the Shape arm
+        // above, sized for the fat-pointer + vtable layout) BEFORE dynamic-dispatch
+        // codegen ships — see FRAGO 024/025, roadmap fr23 history.
+        Type::Dynamic { contract } => Err(format!(
+            "codegen: `background`-spawn heap-upgrade for `dynamic {contract}` receivers is \
+             not yet implemented (fr23 tracking guard, FRAGO 025) — dynamic-dispatch codegen \
+             must not ship until prepare_bg_arg_for_ctx gets a real heap-upgrade arm here"
+        )),
         _ => {
             // Primitives (Int/Bool/Float) are i64 by-value — no pointer involved.
             // Other heap types (map, union) alias today on explicit .copy() too;
