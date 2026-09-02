@@ -218,7 +218,12 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_rt_spawn_blocking(fn_ptr: ptr, ctx_ptr: ptr, ctx_size: i64) → void
     // fn_ptr: extern "C" fn(*mut u8); ctx_ptr + ctx_size describe heap-copy of arg struct.
     pub ynz_rt_spawn_blocking: FunctionValue<'ctx>,
-    // ynz_rt_check_preempt() → void  — v0.3-M1 stub (no-op); loop back-edge cooperative yield
+    // ynz_rt_check_preempt(waker_ctx: ptr) → i8 (bool) — v0.3-M7 Phase 6: cheap synchronous
+    // budget check consumed by the codegen-emitted back-edge poll-yield branch. Returns
+    // true when the worker's quantum expired (and, given a non-null waker_ctx, has already
+    // woken the task so the Pending the codegen returns is a yield-and-requeue). Plain
+    // (non-state-machine) loop back edges pass null and DISCARD the result — one function,
+    // one signature, no SM-only twin entry point.
     pub ynz_rt_check_preempt: FunctionValue<'ctx>,
     // ynz_rt_shutdown() → void  — drain runtime at main exit (shutdown_timeout 5s)
     pub ynz_rt_shutdown: FunctionValue<'ctx>,
@@ -281,6 +286,7 @@ impl<'ctx> RuntimeDecls<'ctx> {
     pub fn declare(ctx: &'ctx inkwell::context::Context, module: &Module<'ctx>) -> Self {
         let void = ctx.void_type();
         let i1 = ctx.bool_type();
+        let i8t = ctx.i8_type();
         let i32 = ctx.i32_type();
         let i64 = ctx.i64_type();
         let f64 = ctx.f64_type();
@@ -721,10 +727,12 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 // fn_ptr: opaque function pointer (ptr), ctx_ptr: *mut u8 (ptr), ctx_size: i64
                 void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
             ),
+            // Rust `extern "C" fn(*mut u8) -> bool` — C ABI bool is i8; the SM back-edge
+            // branch compares the i8 against zero for its i1 condition.
             ynz_rt_check_preempt: declare_fn(
                 module,
                 "ynz_rt_check_preempt",
-                void.fn_type(&[], false),
+                i8t.fn_type(&[ptr.into()], false),
             ),
             ynz_rt_shutdown: declare_fn(module, "ynz_rt_shutdown", void.fn_type(&[], false)),
             ynz_thread_sleep_ms: declare_fn(

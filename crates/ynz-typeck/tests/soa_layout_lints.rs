@@ -92,11 +92,14 @@ fn admitted_soa_array_fires_one_lint_with_substituted_teaching_vars() {
         "WHY carries the provable element count: {}",
         lint.why
     );
-    // The honest Phase 6 measurement pair (risk E14 / FRAGO 017): the optimized
-    // figure and the shipped-today figure must BOTH be present, never conflated.
+    // Post-M7 wording (the optimizer pipeline shipped in this milestone, so the
+    // old "projected" / "about the same speed until the optimizer ships" framing
+    // is now false — a prior fix round in this phase corrected the registry's
+    // why_template to the honest, single shipped measurement): the speedup figure
+    // AND the "already shipping today" claim must both be present.
     assert!(
-        lint.why.contains("3.3x") && lint.why.contains("about the same speed"),
-        "WHY cites both honest measurements: {}",
+        lint.why.contains("1.49x faster") && lint.why.contains("already in the binaries"),
+        "WHY cites the shipped-optimizer measurement: {}",
         lint.why
     );
 }

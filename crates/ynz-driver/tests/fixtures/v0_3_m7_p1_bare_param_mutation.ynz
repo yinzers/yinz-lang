@@ -1,0 +1,22 @@
+// RED fixture (v0.3-M7 Phase 1): a BARE (no ownership modifier) parameter that the
+// body mutates. Typeck's effective-ownership analysis legally infers `lend` for it,
+// but codegen's `declare_function` defaults bare params to `share` and emits a FALSE
+// `readonly` + `noalias` LLVM attribute pair. Under an optimizing pipeline the store
+// through the readonly-claimed pointer is UB and gets deleted: the mutation is
+// silently lost (prints 1 twice instead of 1 then 42).
+//
+// Expected (semantic / O0) output: 1\n42
+shape Box {
+  value: int
+}
+
+function bump(b: Box) -> nothing {
+  b.value = b.value + 41
+}
+
+function entrypoint() -> nothing {
+  let b: Box = { value: 1 }
+  print(b.value.toString())
+  bump(b)
+  print(b.value.toString())
+}

@@ -45,6 +45,7 @@
 - [v0-3-m4-channels-arc-release](done/2026-07-02-v0-3-m4-channels-arc-release/plan.md) `done`
 - [v0-3-m5-auto-soa](done/2026-07-03-v0-3-m5-auto-soa/plan.md) `done`
 - [v0-3-m6-concurrency-hotfix](done/2026-07-04-v0-3-m6-concurrency-hotfix/plan.md) `done`
+- [v0-3-m7-optimizer-pipeline](done/2026-07-04-v0-3-m7-optimizer-pipeline/plan.md) `done`
 
 ## Standalone plans
 

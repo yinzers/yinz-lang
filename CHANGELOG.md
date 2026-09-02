@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.3.3] — 2026-07-17 — M7: Optimizer Pipeline + Preemption Re-Measurement
+
+Commit range: v0.3.2..v0.3.3.
+
+### What ships
+
+The compiler now runs a real LLVM 18 pass pipeline at `default<O2>` (mapped to `-O2` at link time). Under this real, shipped pipeline the SoA layout optimization delivers a measured net win over `--no-optimize` of 1.49x on the `soa_physics` workload (1.72x on `cpu_loop`, 3.01x on `shape_alloc`) — see `crates/ynz-driver/benches/opt-pipeline-raw-2026-07-17.md` for the committed run. (An earlier, different M5-era measurement — hand-running `opt-18 -O2` directly against emitted IR, NOT the shipped compiler pipeline — showed ~3.3x; that number must never be conflated with this milestone's real shipped-pipeline figure, per the M5 plan's own explicit caution, and this entry cites only the real `default<O2>` result.) Alongside the optimizer, loop-back-edge poll-yield preemption ships for real: every qualifying loop back edge inside an admitted state-machine function now carries a true `ynz_rt_check_preempt()` call that suspends to other tasks when a timeslice expires — closing the loop-CARRYING half of the starvation gap that has existed since the call-site-only stub shipped in M1 (M6 subsequently documented, but did not introduce, that gap). Loop-FREE CPU-bound recursion (no back edge to instrument) is NOT covered by this fix — see "Deferred" below. Together, these shifts rebase the optimizer's compile-time budget from "<10% overhead" (a small-denominator O0 artifact) to an absolute Patrick-signed frame: measured 320ms baseline → ~720–760ms with the full pipeline (+400ms / ~2.2x) on the `examples/pirates-roster/` demo scale at `default<O2>`, accepted as the new gate.
+
+**Honest disclosure: "Rust-level performance" is NOT achieved as of this milestone.** Idiomatic Rust `--release` measures faster than shipped Yinz across every benchmarked workload: 2.70x on `cpu_loop`, 2.25x on `shape_alloc`, and 7.20x on `soa_physics` (2.19x / 1.60x / 9.93x against an overflow-checks-matched Rust build, isolating the semantic-cost portion of the gap from general maturity) — see `crates/ynz-driver/benches/rust-equiv-raw-2026-07-17.md`. The gap is attributed to the opaque runtime-call ABI floor, always-on overflow checks, and mid-end/backend maturity; the remediation path is named as Future Requirement #7 in the milestone plan. "Rust-level performance" remains a pursued positioning with a named, measured gap — not an achieved outcome.
+
+### What shifts
+
+The demo and error gallery are **not extended** (a tracked, explicit deferral from M6 — see M6 CHANGELOG), pending a follow-on audit-response milestone that consolidates gallery entries across M5–M8. The [Feature Registry](registry/features.toml) preemption entries are reconciled to the real shipped state this phase: `cooperative-preemption-back-edge-yield` is retired (a comment-only historical note replaces the former deferral entry — the back-edge half shipped for real) and `preempt-callsite-checks` now carries the sole remaining deferral, following the v0.3-M7 Phase 6 re-measurement under the real optimizer pipeline (~+398% overhead on fib(30) call-heavy workload, far below the pre-O0 1190% but still ~80x over the 5% pre-registered threshold).
+
+### Added
+
+- Real LLVM 18 pass pipeline at `default<O2>`: `-O2` class passes for loop rotation, vectorization, SLP, GVN, dead-code elimination, and instruction scheduling
+- Loop-back-edge poll-yield preemption (real, not stub) — every qualifying loop back edge inside an admitted state-machine function calls `ynz_rt_check_preempt()`, suspending when the current task's timeslice expires
+- A/B benchmark suite (`crates/ynz-driver/tests/v0_3_m7_*`, `crates/ynz-driver/benches/opt_pipeline_calibration.rs`) comparing optimizer-OFF (O0) vs optimizer-ON (O2) across call-heavy, loop-heavy, and shape-heavy workloads, plus Rust-equivalent reference numbers
+- Compile-time cost gate measurement and documentation (FRAGO 008): the absolute frame on `pirates-roster`, measured 320ms → ~720–760ms, signed off as acceptable for the optimizer payoff
+
+### Fixed
+
+- O0 stack-exhaustion class (loop-body frame reuse / hoisting via loop stacksave/restore): starvation-proof under the real optimizer pipeline (M4/M5 workarounds now elided by inlining)
+- SoA layout optimization performance realized: 1.49x cache-locality win on `soa_physics` (1.72x `cpu_loop`, 3.01x `shape_alloc`) under `default<O2>` over `--no-optimize`, at scale with real LLVM passes (M5's codegen, now executing for real — see "What ships" above for the full number set and provenance)
+- Loop-CARRYING CPU-bound starvation: a loop back edge inside an admitted state-machine function now carries real preemption (poll-yield), so a tight hot loop can no longer monopolize a worker thread indefinitely. **Not fixed by this change:** loop-FREE CPU-bound recursion (e.g. naive `fib`) inside a state-machine function has no back edge to instrument and remains unpreempted — this is exactly the residual `preempt-callsite-checks` (deferred, below) would close; this milestone does not close the general starvation class, only the loop-carrying half of it.
+
+### Changed
+
+- Compile-time budget reporting reframed from relative percentage ("<10%") to absolute frame (320ms → ~720-760ms) on the canonical demo, with date/measured-state/revisit-trigger recorded
+- Registry entries for preemption mechanism reconciled: `cooperative-preemption-back-edge-yield` retired (shipped, real — comment-only historical note); `preempt-callsite-checks` is now the sole live preemption deferral, trigger-driven (O2 re-measurement showed ~+398% call-site overhead)
+
+### Deferred (tracked, not silent)
+
+Call-site preemption checks (the second half of the compile-time-assisted safe-point model) remain deferred pending a cheaper inlinable design or a reproduced starvation incident traced to loop-free CPU-bound recursion inside a state-machine function. The trigger is named in [Feature Registry](registry/features.toml)'s `preempt-callsite-checks` entry. Rust-parity ("as fast or faster than Rust") also remains open — see "What ships" above; tracked as Future Requirement #7 in the M7 plan.
+
 ## [0.3.2] — 2026-07-16 — M6: Concurrency Hotfix
 
 Commit range: v0.3.1..v0.3.2.

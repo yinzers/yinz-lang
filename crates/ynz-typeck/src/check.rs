@@ -90,6 +90,16 @@ pub struct TypedModule {
     /// all thread its `padded_shapes`); a direct read outside that authority is
     /// the E3 twin-derivation corpse (authoritative-derivation.md).
     pub cross_thread_padded_shapes: std::collections::HashSet<String>,
+    /// v0.3-M7 Phase 6: function names ADMITTED to the back-edge poll-yield transform —
+    /// state-machine functions whose loops become poll-yield suspension points.
+    ///
+    /// Computed ONCE per function by `back_edge_yield_admission` (the safe-default
+    /// admission gate: declined functions keep pre-Phase-6 behavior byte-identically) and
+    /// consumed by every downstream deriver — codegen's SM-walker routing, its
+    /// suspension-point counting, and the crossing-local collection's `back_edge_yield`
+    /// flag — so all consumers key off ONE producer (authoritative-derivation.md), never
+    /// a per-consumer re-derivation.
+    pub back_edge_yield_admitted: std::collections::HashSet<String>,
 }
 
 /// Run the M5 type checker over all function bodies.
@@ -157,6 +167,8 @@ pub fn check(
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
         cross_thread_shapes: HashMap::new(),
         padded_shapes: HashSet::new(),
+        back_edge_yield_admitted: std::collections::HashSet::new(),
+        bg_union_narrowed_diag_spans: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -164,6 +176,7 @@ pub fn check(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         cross_thread_padded_shapes: checker.padded_shapes,
+        back_edge_yield_admitted: checker.back_edge_yield_admitted,
     };
     (
         typed,
@@ -227,6 +240,8 @@ pub fn check_with_kernel_mode(
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
         cross_thread_shapes: HashMap::new(),
         padded_shapes: HashSet::new(),
+        back_edge_yield_admitted: std::collections::HashSet::new(),
+        bg_union_narrowed_diag_spans: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -234,6 +249,7 @@ pub fn check_with_kernel_mode(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         cross_thread_padded_shapes: checker.padded_shapes,
+        back_edge_yield_admitted: checker.back_edge_yield_admitted,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -425,6 +441,17 @@ struct Checker<'b> {
     /// v0.3-M4 Phase 4: the finalized padded-shape set (`finalize_false_sharing` output),
     /// moved into `TypedModule::cross_thread_padded_shapes` when the pass completes.
     padded_shapes: HashSet<String>,
+    /// v0.3-M7 Phase 6: per-function back-edge poll-yield admission verdicts —
+    /// moved into `TypedModule::back_edge_yield_admitted` at the end of `check`.
+    back_edge_yield_admitted: std::collections::HashSet<String>,
+    /// v0.3-M7 FRAGO 024 (round 8): dedup guard for `background_spawn_call_form`'s
+    /// union-narrowed-receiver diagnostic (FRAGO 026). That helper is now called
+    /// from MULTIPLE sites for the SAME spawn (the Stmt::Expr / handle-form
+    /// pre-recording loops, AND the generic `Expr::Background` arm's structural
+    /// admission backstop below) — without this guard the same diagnostic would be
+    /// pushed twice for one spawn. Keyed by the receiver's span; the function's
+    /// other return paths are pure (no side effect) and need no dedup.
+    bg_union_narrowed_diag_spans: HashSet<(usize, usize)>,
 }
 
 impl<'b> Checker<'b> {
@@ -846,6 +873,26 @@ impl<'b> Checker<'b> {
         // field store an opaque pointer to a stack-allocated struct in their LLVM layout; that
         // pointer becomes invalid after the resume function returns and resumes.
         // Full recursive aggregate frame-embedding ships in a later milestone.
+        // v0.3-M7 Phase 6: back-edge poll-yield admission — the ONE producer of the
+        // verdict every downstream consumer (codegen routing / counting / crossing
+        // collection) reads via `TypedModule::back_edge_yield_admitted`. Runs after
+        // check_stmts (expr_types populated) exactly like Check 2 below. `is_sm` is
+        // `is_suspending_fn` ALONE (the may-block fixpoint verdict): codegen SM-lowers
+        // exactly the suspend-set members, and a function whose only wait is a no-op
+        // wait-on-non-may-block never becomes a state machine.
+        if back_edge_yield_admission(
+            f,
+            &ret_ty,
+            is_suspending_fn,
+            &suspending_fns,
+            self.shape_table,
+            &self.union_aliases,
+            &self.expr_types,
+            self.kernel_mode,
+        ) {
+            self.back_edge_yield_admitted.insert(f.name.clone());
+        }
+
         if !self.kernel_mode && (has_explicit_waits || is_suspending_fn) {
             let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
             // Provenance-aware call (v0.3-M6 Phase 1c): Check 2/2b need to know which
@@ -862,6 +909,15 @@ impl<'b> Checker<'b> {
                 &suspending_fns,
                 &std::collections::HashSet::new(),
                 &self.expr_types,
+                // Checks 2/2b/2c grade the BASELINE crossing set (back_edge_yield =
+                // false) even for Phase-6-admitted functions — a deliberate, recorded
+                // choice: admission (back_edge_yield_admission) only ever GRANTS when
+                // the widened set adds zero guard-firing names, so the diagnostics are
+                // provably identical either way, and keeping the checks on the baseline
+                // set means an admission-logic bug can never surface as a novel
+                // user-facing compile error (it stays codegen-internal, caught by the
+                // RED fixture set instead).
+                false,
             );
             for crossing_name in &crossings {
                 // v0.3-M6 Phase 1c step 3c (FRAGO 014 ITEM 2): a union-ANNOTATED local
@@ -1424,6 +1480,16 @@ impl<'b> Checker<'b> {
                                     if inferred == BgOwnership::Give {
                                         gives.push(name.clone());
                                     }
+                                } else if !self.bg_arg_is_provably_safe(arg) {
+                                    // fr23 (M7 Phase 9, FRAGO 016; default-deny
+                                    // FRAGO 022): not a plain ident, and not
+                                    // PROVABLY safe — default-deny heap-upgrades
+                                    // it (`Give`). No binding to consume in scope
+                                    // either way (a non-ident arg is never a
+                                    // reachable binding the caller could reuse).
+                                    let span = arg.span();
+                                    self.bg_inferred
+                                        .insert((span.start, span.end), BgOwnership::Give);
                                 }
                             }
                             // Infer_expr runs first (for diagnostics / type registration),
@@ -1660,6 +1726,407 @@ impl<'b> Checker<'b> {
         );
     }
 
+    /// fr23 (v0.3-M7 Phase 9, FRAGO 016; unified FRAGO 020; consumption redesigned
+    /// FRAGO 022): the ONE authoritative, side-effect-free, EXHAUSTIVELY-MATCHED
+    /// classifier of "what type does this expression resolve to" — consulted ONLY
+    /// by `bg_call_return_type_readonly` / `bg_ufcs_return_type` /
+    /// `bg_apply_generic_return_subst` to seed a generic callee's type-parameter
+    /// substitution at ANY nesting depth (a call's own return type may depend on a
+    /// NESTED argument's resolved type, recursively, since those functions route
+    /// back through this same classifier).
+    ///
+    /// **This function is NOT the `background`-spawn admission gate.** Before
+    /// FRAGO 022, this classifier's `Option<Type>` result doubled as the admission
+    /// answer too (`bg_arg_is_materialized_shape_temp` treated `Some(Type::Shape)`
+    /// as "needs heap-upgrade" and everything else — including every case this
+    /// function genuinely cannot resolve — as "safe to skip"). That conflated "I
+    /// proved this is NOT a Shape" with "I don't know" and was the root cause of
+    /// SIX rounds of confirmed-live UAF findings (FRAGO 016 → 021): a `StructLit`,
+    /// a `MapEntry<K,Shape>.value`, a nested `.copy()`, and a nested `wait` all
+    /// return `None` here for reasons that have nothing to do with being
+    /// non-`Shape` — they are either context-dependent (a bare `StructLit` has no
+    /// type without the caller's expected-parameter context) or simply
+    /// unclassified by this function's small arm list — and the OLD admission
+    /// logic silently read that `None` as "proven safe." The admission decision
+    /// now lives in `bg_arg_is_provably_safe`, below, which is FAIL-CLOSED: a
+    /// `None` from THIS function feeding into a generic substitution just leaves a
+    /// type parameter unresolved, which `bg_arg_is_provably_safe`'s `Call`/
+    /// `MethodCall` arms correctly read as "not proven safe" (default to
+    /// heap-upgrade) rather than "proven safe." This function's own arms are
+    /// UNCHANGED by FRAGO 022 — they remain a genuinely useful, if incomplete,
+    /// best-effort resolver for the seeding question; incompleteness here no
+    /// longer has any safety consequence because the CONSUMER of an unresolved
+    /// result now fails closed instead of open.
+    ///
+    /// Every `Expr` variant is classified EXPLICITLY below — there is deliberately
+    /// NO `_ =>` catch-all arm, so the Rust compiler itself refuses to build the
+    /// moment a future `Expr` variant is added without a classification decision
+    /// here. This exhaustiveness is still worth keeping even though it is no
+    /// longer load-bearing for SAFETY (an unresolved substitution seed fails
+    /// closed regardless) — it forces a conscious choice about how a new variant
+    /// contributes to substitution-seeding PRECISION.
+    ///
+    /// Deliberately `&self`/side-effect-free (never calls `infer_expr`/
+    /// `ast_type_to_type`, which mutate `referenced_names`/diagnostics): this
+    /// classifier runs speculatively over every `background`-spawn arg/receiver,
+    /// including ones that never end up spawn-relevant, and must not pollute typeck
+    /// state for args the caller ultimately discards.
+    ///
+    /// Recursion (`Call`/`MethodCall` arms) terminates structurally: each recursive
+    /// call descends into a strictly smaller argument subexpression of the same
+    /// finite, cycle-free AST (a call's arguments can never contain the call
+    /// itself), so depth is bounded by the source's own nesting depth — the same
+    /// bound every other recursive walk in this file (`infer_expr` included) already
+    /// relies on.
+    fn bg_expr_resolved_type(&self, expr: &Expr) -> Option<Type> {
+        match expr {
+            // Base case every other arm's recursion eventually bottoms out on: a
+            // plain ident binding's narrowed type.
+            Expr::Ident(name, _) => self.binding_ty_narrowed(name),
+
+            // B′: maybe-payload access (`m.value`) on an ident binding of type
+            // `maybe<Shape>`. A `.value` access with a NON-ident base is
+            // unreachable here: the flow-sensitive `.exists()` check (`maybe.value`
+            // narrowing) only proves safety for ident bindings, so any other base
+            // is a compile error before this question is asked.
+            Expr::FieldAccess {
+                receiver, field, ..
+            } if field == "value" => {
+                let Expr::Ident(base, _) = receiver.as_ref() else {
+                    return None;
+                };
+                match self.binding_ty_narrowed(base) {
+                    Some(Type::Maybe { inner }) if matches!(inner.as_ref(), Type::Shape { .. }) => {
+                        Some(inner.as_ref().clone())
+                    }
+                    _ => None,
+                }
+            }
+
+            // C2 (+ recursive nesting): a direct call, concrete or generic,
+            // resolved by the authoritative recursive helper below.
+            Expr::Call(call) => self.bg_call_return_type_readonly(call),
+
+            // UFCS chain (`receiver.method(args)`): the SAME question as `Call`,
+            // normalized identically to codegen's `synthesize_ufcs_call_expr` /
+            // this file's `background_spawn_call_form` (method name as callee,
+            // receiver as argument 0). RECURSIVE because the receiver may itself be
+            // any materializing shape (another `MethodCall`, a `Call`, a
+            // `FieldAccess`) — this is the exact gap this round fixes: a UFCS chain
+            // NESTED inside a generic call's argument previously fell through to
+            // `None` because the old nested-argument resolver had no `MethodCall`
+            // arm at all.
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => self.bg_ufcs_return_type(receiver, method, args),
+
+            // Every remaining `Expr` variant is NOT resolved by this classifier for
+            // the substitution-seeding question — either it genuinely can never
+            // produce a Shape (most literals/operators/collection forms) or its
+            // type is context-dependent and this side-effect-free classifier has
+            // no context to resolve it with (`StructLit`, `FieldAccess` whose field
+            // isn't `.value`, `PostfixOp`, `Wait`'s inner expression, `SelfValue`).
+            // Per FRAGO 022, `None` here is READ, by every consumer, as "unresolved"
+            // — NOT as "proven safe" — so leaving these unclassified has no safety
+            // consequence (see this function's own doc comment). Listed explicitly
+            // (never `_`) purely to keep the seeding-precision exhaustiveness
+            // guarantee described above; a future `Expr` variant added here
+            // defaults to `None` (unresolved) either way once classified.
+            Expr::FieldAccess { .. }
+            | Expr::StringLit(..)
+            | Expr::Error(..)
+            | Expr::IntLit(..)
+            | Expr::NumberLit(..)
+            | Expr::BoolLit(..)
+            | Expr::BinOp { .. }
+            | Expr::UnaryOp { .. }
+            | Expr::StructLit { .. }
+            | Expr::PostfixOp { .. }
+            | Expr::SelfValue { .. }
+            | Expr::NoneLit { .. }
+            | Expr::IndexAccess { .. }
+            | Expr::ArrayLit { .. }
+            | Expr::MapLit { .. }
+            | Expr::Is { .. }
+            | Expr::InterpolatedString(..)
+            | Expr::Wait(..)
+            | Expr::Background(..) => None,
+        }
+    }
+
+    /// fr23 (v0.3-M7 Phase 9, FRAGO 016 → 021; DEFAULT-DENY REDESIGN, FRAGO 022): is
+    /// this `background` spawn argument or receiver PROVABLY SAFE — a stable,
+    /// already-owned binding, or an expression whose STATIC TYPE can never be a
+    /// `Shape` — such that it needs NO heap-upgrade?
+    ///
+    /// **This supersedes the six-round ALLOWLIST architecture.** FRAGO 016 → 021
+    /// answered a different question — "is this expression ONE OF THE SHAPES we
+    /// have confirmed materializes a dangerous Shape temp?" — and every round found
+    /// another shape the enumeration missed (`FieldAccess.value` on a
+    /// `maybe<Shape>`, a `Call`, a UFCS `MethodCall` chain, a `StructLit`, a
+    /// `MapEntry<K,Shape>.value`, a nested `.copy()`, a nested `wait` — 10
+    /// confirmed-live UAF shapes across 6 rounds, on the SAME predicate, with
+    /// nothing structurally guaranteeing round 7 would not find an 11th). This
+    /// function asks the INVERSE question — "is this expression PROVABLY safe?" —
+    /// and every caller heap-upgrades (`Give`) whatever this function does NOT
+    /// affirmatively recognize, via the trailing wildcard arm. That inversion is
+    /// what closes the class STRUCTURALLY rather than accumulating one more
+    /// allowlist entry: a brand-new `Expr` variant added in a future milestone, or
+    /// any expression shape this round's own adversarial testing did not think of,
+    /// defaults to heap-upgraded (safe, at worst wastefully) with ZERO code change
+    /// here — it is never silently un-upgraded the way every one of the 10 prior
+    /// shapes was.
+    ///
+    /// **Why "over-upgrading" costs nothing.** A heap-upgrade attempt on an
+    /// expression that turns out NOT to be `Shape`/`BuiltinArray`/`Maybe`-typed is
+    /// free, not merely cheap: `prepare_bg_arg_for_ctx` (`emit.rs`) only emits real
+    /// work for those three resolved types — every other CODEGEN-resolved type
+    /// (`Int`/`Bool`/`Float`/`String`/`map`/`union`/…) falls through to that
+    /// function's own `_ => Ok((val, BgArgFreeKind::None))` no-op arm regardless of
+    /// whether THIS function recorded it as needing upgrade. So marking more
+    /// expressions `Give` than strictly necessary costs one extra typeck-time
+    /// hashmap entry and zero extra LLVM IR. That asymmetry — a false "safe" is a
+    /// live UAF; a false "unsafe" is free — is the entire reason default-deny is
+    /// the correct default DIRECTION, independent of how precisely any one
+    /// expression kind gets classified.
+    ///
+    /// The safe set (small and closed, per the dispatch's own default-deny
+    /// architecture):
+    /// - `Ident`: handled entirely by the separate liveness-based give/copy path in
+    ///   `check_stmts` BEFORE this function is ever consulted for a given arg —
+    ///   listed here defensively (fail SAFE, not silently unsafe, if some future
+    ///   refactor ever reaches this function on an `Ident`).
+    /// - `IntLit`/`StringLit`/`BoolLit`/`NumberLit`: always a scalar primitive by
+    ///   their own AST shape — no expression of these kinds can ever be `Shape`.
+    /// - `NoneLit`: always wrapped in an outer `Maybe`, never a bare `Shape`.
+    /// - `PostfixOp { op: Copy, .. }` used directly as the spawn arg: codegen's own
+    ///   `is_heap_arg` AST match (`emit.rs`) unconditionally heap-upgrades an
+    ///   explicit `.copy()` BEFORE ever consulting `background_arg_inferred_ownership`
+    ///   — recording it here too would be a redundant, dead entry, not a behavior
+    ///   change either way, so it is recognized as its own already-handled case
+    ///   rather than defaulting through the wildcard.
+    /// - `Call` / `MethodCall`: the ONE pair that still consults the recursive
+    ///   return-type resolver (`bg_call_return_type_readonly` / `bg_ufcs_return_type`
+    ///   — UNCHANGED from FRAGO 020/021, reused rather than rewritten per
+    ///   authoritative-derivation.md), but the result is read FAIL-CLOSED: safe
+    ///   ONLY when the resolved type is AFFIRMATIVELY one of the narrow primitive
+    ///   types `type_provably_not_shape` recognizes. An unresolved call (unknown
+    ///   callee, or a generic whose type parameter never got seeded because a
+    ///   nested argument's own `bg_expr_resolved_type` arm returns `None` — e.g.
+    ///   `identity(c.copy())`'s `T` staying an unbound `TypeParam`) is NOT proof of
+    ///   safety and falls through to `Give`. This is precisely what closes FRAGO
+    ///   021 findings 3 and 4 WITHOUT adding a single new arm to the seeding
+    ///   resolver: an inconclusive seed now fails closed instead of being silently
+    ///   read as "not Shape."
+    ///
+    /// **`SelfValue` was REMOVED from this safe set in FRAGO 024 (round 8) — it is
+    /// NOT a special case anymore, it rides the trailing wildcard like everything
+    /// else below.** The prior claim here ("Yinz shapes are always passed by
+    /// pointer, so `self` never independently materializes a fresh per-call temp")
+    /// is true for the SINGLE-LEVEL case FRAGO 021 arm #15 actually tested (`give
+    /// self`/`share self` spawned directly from an ordinary, non-backgrounded
+    /// caller) but false for a NESTED spawn: a `give self` parameter whose OWNING
+    /// function is itself reached via `background` (e.g. `background
+    /// relay(makeCargo())` where `relay(give self: Cargo) { background
+    /// self.haul() }`). There, `self`'s heap cell is freed by the OUTER task's own
+    /// end-of-scope free ladder immediately after the inner fire-and-forget spawn
+    /// returns (spawning does not wait for the child task to run), racing the
+    /// inner task's delayed read of `self` — confirmed-live 14/14 (both `give
+    /// self` and default `self`), isolated via an `Ident`-parameter control that
+    /// correctly avoided the bug (the `Ident` liveness path in `check_stmts`
+    /// always records SOME ownership entry for a plain-named parameter, forcing
+    /// heap-upgrade at codegen; `SelfValue`'s blanket `true` recorded NONE). `self`
+    /// now falls through to `Give` by default exactly like every other
+    /// non-enumerated shape below — a redundant heap copy in the single-level case
+    /// FRAGO 021 arm #15 tested (still correct, per the cost note above), and the
+    /// fix that closes the nested-spawn race.
+    ///
+    /// Everything else defaults to `Give` via the trailing wildcard —
+    /// `SelfValue` (see above), `StructLit` (finding 1), `FieldAccess` in BOTH its
+    /// forms (the `.value` maybe-payload case AND FRAGO 021 finding 2's
+    /// `MapEntry<K,Shape>.value`, AND the still-latent A/C1 `field != "value"`
+    /// class), `IndexAccess`, `ArrayLit`,
+    /// `MapLit`, `Is`, `InterpolatedString`, `Wait`, `Background`, `BinOp`,
+    /// `UnaryOp`, `PostfixOp { op: Freeze, .. }`. Several of these ARE provably
+    /// non-`Shape` by the same literal-AST-shape reasoning that makes the four
+    /// literals above safe (`Is` is always `Bool`; `InterpolatedString` is always
+    /// `String`; `Background` is always `Nothing`; `BinOp`/`UnaryOp` never dispatch
+    /// to a user operator overload today — FRAGO 021's 22-arm audit confirmed all
+    /// of these by exhaustive code read). They are deliberately NOT special-cased
+    /// here anyway: per the cost note above, precision buys nothing at runtime, and
+    /// this round's adversarial test set specifically exercises several of them to
+    /// prove the WILDCARD — not a per-arm carve-out — is what protects them.
+    ///
+    /// A/C1 field-access shapes (`ship.cargo`, `field != "value"`) are deliberately
+    /// NOT excluded from the wildcard even though their storage is ALREADY a
+    /// counted `field_own` heap cell (FRAGO 011's separate, pre-existing
+    /// protection): riding the default `Give` path produces one redundant shallow
+    /// heap copy — the identical "byte-copy the struct into a fresh `ynz_alloc`'d
+    /// cell" the Ident/Give path already performs for every ordinary Shape-typed
+    /// give — not a new correctness risk, and excluding them would need a second
+    /// classification check for no safety benefit. Simplicity wins here per the
+    /// dispatch's own explicit latitude on this call.
+    fn bg_arg_is_provably_safe(&self, arg: &Expr) -> bool {
+        match arg {
+            Expr::Ident(..) => true,
+            Expr::IntLit(..)
+            | Expr::StringLit(..)
+            | Expr::BoolLit(..)
+            | Expr::NumberLit(..)
+            | Expr::NoneLit { .. } => true,
+            Expr::PostfixOp {
+                op: PostfixOpKind::Copy,
+                ..
+            } => true,
+            Expr::Call(call) => matches!(
+                self.bg_call_return_type_readonly(call),
+                Some(ref t) if Self::type_provably_not_shape(t)
+            ),
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => matches!(
+                self.bg_ufcs_return_type(receiver, method, args),
+                Some(ref t) if Self::type_provably_not_shape(t)
+            ),
+            // SelfValue (FRAGO 024 — removed from the safe set; nested-spawn
+            // free-ladder race), StructLit, FieldAccess (any field), IndexAccess,
+            // ArrayLit, MapLit,
+            // Is, InterpolatedString, Wait, Background, BinOp, UnaryOp,
+            // PostfixOp{Freeze}, Error, and any future Expr variant: NOT provably
+            // safe. Default-deny (FRAGO 022) — heap-upgrade.
+            _ => false,
+        }
+    }
+
+    /// The narrow, closed set of resolved types that can NEVER be — or, for this
+    /// predicate's purposes, need not be treated as possibly being — a `Shape`
+    /// value needing the spawner-frame heap-upgrade. Consulted ONLY by
+    /// `bg_arg_is_provably_safe`'s `Call`/`MethodCall` arms to decide whether a
+    /// SUCCESSFULLY resolved return type proves safety.
+    ///
+    /// Deliberately narrow: `Type::Maybe`/`Type::BuiltinArray`/`Type::MapEntry`/
+    /// `Type::TypeParam`/`Type::Shape`/`Type::Dynamic`/union types are ALL excluded
+    /// (return `false`) even where a specific instantiation might itself be
+    /// provably safe (e.g. `array<int>`, `maybe<int>`) — the cost of a missed
+    /// narrowing is zero (see `bg_arg_is_provably_safe`'s doc comment on why
+    /// over-upgrading is free), so there is no reason to widen this past the exact
+    /// cases FRAGO 022 needs to prove a `Call`/`MethodCall` result safe.
+    fn type_provably_not_shape(t: &Type) -> bool {
+        matches!(
+            t,
+            Type::Int
+                | Type::Float
+                | Type::Number { .. }
+                | Type::Bool
+                | Type::String
+                | Type::Nothing
+        )
+    }
+
+    /// The authoritative, side-effect-free, RECURSIVE resolver for "what type does
+    /// this call expression return" — consulted by `bg_expr_resolved_type`'s `Call`
+    /// arm (both for a spawn-site call itself and for any NESTED call argument, at
+    /// any depth, since `bg_expr_resolved_type` routes back through this function).
+    /// Recursive so a generic callee's type parameter can be bound by a
+    /// call-materialized argument AT ANY NESTING DEPTH — `identity(x)`,
+    /// `identity(identity(x))`, `identity(identity(identity(x)))`, … — instead of a
+    /// fixed number of hand-unrolled levels that the next deeper nesting silently
+    /// falls through (M7 completion-gate round 3, FRAGO 019).
+    ///
+    /// - **Concrete (non-generic) callee**: the declared return type directly — no
+    ///   substitution needed.
+    /// - **Generic callee** (resolved via the SAME sig_table/generic_fn_table split
+    ///   the borrow-reject check's `.or_else` fallback and the outer `Expr::Call`
+    ///   arm both already use — never a third lookup scheme): substitution is seeded
+    ///   and applied by the shared `bg_apply_generic_return_subst` step below —
+    ///   never a second scheme, and shared with `bg_ufcs_return_type`'s UFCS
+    ///   resolution. A plain-`Call` form's argument list does NOT include an
+    ///   explicit `self` argument (existing convention, unchanged by this round —
+    ///   see `bg_ufcs_return_type`'s doc comment for why UFCS alignment differs).
+    fn bg_call_return_type_readonly(&self, call: &CallExpr) -> Option<Type> {
+        let Expr::Ident(fname, _) = &call.callee else {
+            return None;
+        };
+        if let Some(sig) = self.sig_table.fns.get(fname.as_str()) {
+            return Some(sig.ret.clone());
+        }
+        let gsig = self.generic_fn_table.fns.get(fname.as_str())?;
+        let non_self_params: Vec<&Type> = gsig
+            .params
+            .iter()
+            .filter(|(p, _)| p != "self")
+            .map(|(_, ty)| ty)
+            .collect();
+        let aligned: Vec<(&Expr, &Type)> = call.args.iter().zip(non_self_params).collect();
+        Some(self.bg_apply_generic_return_subst(gsig, call.type_args.as_ref(), &aligned))
+    }
+
+    /// The UFCS twin of `bg_call_return_type_readonly`, for a `receiver.method(args)`
+    /// expression — consulted ONLY by `bg_expr_resolved_type`'s `MethodCall` arm.
+    /// Normalizes identically to `background_spawn_call_form` / codegen's
+    /// `synthesize_ufcs_call_expr`: the receiver fills the callee's FIRST parameter
+    /// position. Unlike `bg_call_return_type_readonly`'s plain-`Call` alignment,
+    /// this does NOT filter out a literal `self`-named parameter — the receiver IS
+    /// that parameter's argument here, not an implicit extra, so filtering it would
+    /// misalign every subsequent parameter against the wrong argument. `MethodCall`
+    /// carries no explicit type-args syntax (unlike `CallExpr::type_args`), so
+    /// `None` is passed for that slot. Same concrete-then-generic two-table lookup
+    /// and the same shared `bg_apply_generic_return_subst` substitution step as
+    /// `bg_call_return_type_readonly` — never a third resolution scheme.
+    fn bg_ufcs_return_type(&self, receiver: &Expr, method: &str, args: &[Expr]) -> Option<Type> {
+        if let Some(sig) = self.sig_table.fns.get(method) {
+            return Some(sig.ret.clone());
+        }
+        let gsig = self.generic_fn_table.fns.get(method)?;
+        let full_args: Vec<&Expr> = std::iter::once(receiver).chain(args.iter()).collect();
+        let param_types: Vec<&Type> = gsig.params.iter().map(|(_, ty)| ty).collect();
+        let aligned: Vec<(&Expr, &Type)> = full_args.into_iter().zip(param_types).collect();
+        Some(self.bg_apply_generic_return_subst(gsig, None, &aligned))
+    }
+
+    /// Shared substitution-seed-and-apply step for a generic callee's declared
+    /// return type, consumed by BOTH `bg_call_return_type_readonly` (plain `Call`)
+    /// and `bg_ufcs_return_type` (UFCS `MethodCall`) — never a second scheme. The
+    /// two callers differ ONLY in how they align arguments to declared parameters
+    /// (plain-`Call` excludes any literal `self` parameter; UFCS includes the
+    /// receiver AS `self`'s argument) — each resolves that alignment itself and
+    /// hands this function the already-aligned `(arg-expr, declared-param-type)`
+    /// pairs. Matches `check_generic_fn_call`'s own `unify_param`/
+    /// `apply_substitution` machinery. Each argument's resolvable type is read via
+    /// `bg_expr_resolved_type` — RECURSIVELY, so a nested call or UFCS chain at any
+    /// depth can seed the substitution. Partial substitution is tolerated exactly as
+    /// in `check_generic_fn_call`: an unresolved `TypeParam` stays a `TypeParam` and
+    /// never matches `Shape`, so this can never false-admit.
+    fn bg_apply_generic_return_subst(
+        &self,
+        gsig: &GenericFnSig,
+        type_args: Option<&Vec<AstType>>,
+        aligned_args: &[(&Expr, &Type)],
+    ) -> Type {
+        let mut subst: Substitution = HashMap::new();
+        if let Some(type_args) = type_args {
+            for (tp_name, ast_ty) in gsig.type_params.iter().zip(type_args.iter()) {
+                if let AstType::Named(n, _) = ast_ty {
+                    if self.shape_table.contains(n) {
+                        subst.insert(tp_name.clone(), Type::Shape { name: n.clone() });
+                    }
+                }
+            }
+        }
+        for (arg, param_ty) in aligned_args {
+            if let Some(actual) = self.bg_expr_resolved_type(arg) {
+                let _ = unify_param(param_ty, &actual, &mut subst);
+            }
+        }
+        apply_substitution(&gsig.ret, &subst)
+    }
+
     /// Normalize a `background` spawn target to its Call-form (callee ident, argument
     /// list): a plain call contributes its callee + args as-is; a shape-receiver method
     /// call (UFCS) contributes the method name + `[receiver, ...args]` — the typeck twin
@@ -1707,6 +2174,39 @@ impl<'b> Checker<'b> {
                 ..
             } => {
                 let Expr::Ident(rname, rspan) = receiver.as_ref() else {
+                    // fr23 (M7 Phase 9, FRAGO 016; default-deny FRAGO 022): a
+                    // non-ident receiver IS a UFCS spawn worth normalizing (so
+                    // ownership recording sees the receiver as argument 0)
+                    // whenever it is NOT provably safe — codegen's
+                    // `synthesize_ufcs_call_expr` already normalizes ANY
+                    // shape-typed receiver regardless of what this side-effect-
+                    // free classifier can resolve, so typeck's admission-
+                    // recording mirror must be AT LEAST as broad. The OLD
+                    // positive-allowlist gate here (`bg_arg_is_materialized_
+                    // shape_temp`) reproduced the exact allowlist bug this FRAGO
+                    // closes: FRAGO 021 finding 2 (`entry.value.haul()`, a
+                    // `MapEntry<K,Shape>.value` receiver) fell through this exact
+                    // gate because `bg_expr_resolved_type`'s narrow `.value` arm
+                    // only recognizes a `maybe<Shape>` producer, not a
+                    // `MapEntry.value` producer — reusing `bg_arg_is_provably_safe`
+                    // (the SAME predicate the arg-admission loop below uses) fixes
+                    // it for free: a `FieldAccess` is never in that predicate's
+                    // safe set, so it is normalized here regardless of which
+                    // `.value` producer it came from. Over-admitting a receiver
+                    // that turns out NOT to be a real UFCS-to-user-function target
+                    // is harmless: a non-existent callee name is rejected
+                    // downstream by the ordinary `sig_table.fns` lookup
+                    // (unaffected by this normalization), and a channel/MapEntry/
+                    // number receiver is protected by its own UNCONDITIONAL
+                    // codegen pre-gate regardless of what this function records.
+                    if !self.bg_arg_is_provably_safe(receiver.as_ref()) {
+                        return Some((
+                            Some(method.as_str()),
+                            std::iter::once(receiver.as_ref())
+                                .chain(args.iter())
+                                .collect(),
+                        ));
+                    }
                     return None;
                 };
                 let Some(Type::Shape { name: variant }) = self.binding_ty_narrowed(rname) else {
@@ -1724,31 +2224,42 @@ impl<'b> Checker<'b> {
                 // into a shape-sized binding — an OOB read that SIGSEGVs on a
                 // pointer-field read, one binding over (Future Requirements #24).
                 if self.union_narrowed.contains_key(rname) {
-                    self.diags.push(Diagnostic::error(
-                        rspan.clone(),
-                        format!(
-                            "a union value narrowed to `{variant}` cannot yet be used \
-                             as a `background` receiver."
-                        ),
-                        format!(
-                            "Start the background task where the `{variant}` value is \
-                             created, before it is stored into the union — call \
-                             `background <binding>.{method}()` on the original \
-                             `{variant}`-typed binding at that point. Do not copy \
-                             `{rname}` into a new `{variant}`-typed binding here (for \
-                             example, `let inner: {variant} = {rname}`): inside this \
-                             `is` arm `{rname}` is still the union, so the new binding \
-                             would hold the union's storage, not a `{variant}` value."
-                        ),
-                        format!(
-                            "Inside an `is {variant}` arm, `{rname}` still holds the \
-                             whole union — which variant it is plus that variant's \
-                             data — not a standalone `{variant}` value. The compiler \
-                             cannot yet copy the variant's data out of a union to hand \
-                             the background task its own `{variant}`, so it stops here \
-                             instead of starting the task with wrong or unsafe data."
-                        ),
-                    ));
+                    // FRAGO 024 (round 8): this function is now called MULTIPLE
+                    // times for the same spawn (the pre-recording loops in
+                    // `check_stmts`/`check_background_handle_spawn` AND the
+                    // generic `Expr::Background` arm's structural admission
+                    // backstop) — dedup by span so the diagnostic fires exactly
+                    // once per spawn instead of once per call site.
+                    if self
+                        .bg_union_narrowed_diag_spans
+                        .insert((rspan.start, rspan.end))
+                    {
+                        self.diags.push(Diagnostic::error(
+                            rspan.clone(),
+                            format!(
+                                "a union value narrowed to `{variant}` cannot yet be used \
+                                 as a `background` receiver."
+                            ),
+                            format!(
+                                "Start the background task where the `{variant}` value is \
+                                 created, before it is stored into the union — call \
+                                 `background <binding>.{method}()` on the original \
+                                 `{variant}`-typed binding at that point. Do not copy \
+                                 `{rname}` into a new `{variant}`-typed binding here (for \
+                                 example, `let inner: {variant} = {rname}`): inside this \
+                                 `is` arm `{rname}` is still the union, so the new binding \
+                                 would hold the union's storage, not a `{variant}` value."
+                            ),
+                            format!(
+                                "Inside an `is {variant}` arm, `{rname}` still holds the \
+                                 whole union — which variant it is plus that variant's \
+                                 data — not a standalone `{variant}` value. The compiler \
+                                 cannot yet copy the variant's data out of a union to hand \
+                                 the background task its own `{variant}`, so it stops here \
+                                 instead of starting the task with wrong or unsafe data."
+                            ),
+                        ));
+                    }
                     return None;
                 }
                 Some((
@@ -1820,6 +2331,16 @@ impl<'b> Checker<'b> {
                         BgOwnership::Copy
                     };
                     self.bg_inferred.insert((span.start, span.end), o);
+                } else if !self.bg_arg_is_provably_safe(arg) {
+                    // fr23 (M7 Phase 9, FRAGO 016; default-deny FRAGO 022): same
+                    // admission predicate as the statement form above — the
+                    // handle form shares codegen's ONE heap-upgrade gate, so a
+                    // non-ident arg that isn't PROVABLY safe must be recorded
+                    // here too (`Give`: default-deny, no binding to read after
+                    // the spawn either way).
+                    let span = arg.span();
+                    self.bg_inferred
+                        .insert((span.start, span.end), BgOwnership::Give);
                 }
             }
         }
@@ -2790,6 +3311,72 @@ impl<'b> Checker<'b> {
                          It cannot be applied to non-call expressions.",
                     ));
                 }
+                // v0.3-M7 FRAGO 024 (round 8): structural admission-recording
+                // backstop.
+                //
+                // `check_stmts`'s Stmt::Expr loop and `check_background_handle_spawn`
+                // each pre-record ownership for the args THEY see, BEFORE calling
+                // into this arm — but every OTHER statement form that can host a
+                // `background` spawn (`Assign`, `FieldAssign`, `IndexAssign`, and any
+                // future statement kind) routes straight through `infer_expr` with NO
+                // pre-recording at all, so codegen's `is_heap_arg` gate (`emit.rs`)
+                // finds no recorded span for those args and skips the heap-upgrade
+                // unconditionally — a total UAF bypass (FRAGO 024 Bug 1,
+                // live-reproduced: `hd.slot = background makeCargo().haul()`, a
+                // `FieldAssign` target, reads dead-frame garbage at O0).
+                //
+                // This arm is the ONE place every spawn form provably passes through
+                // (already the sole recording site for `cross_thread_shapes` below),
+                // so it is the correct place to close the class STRUCTURALLY — one
+                // definition every syntactic position inherits — rather than hunting
+                // down and hand-wiring a fourth, fifth, ... call site every time a new
+                // statement form is added. `.contains_key` + explicit insert (not
+                // `.entry().or_insert_with()`, to keep the borrow-checker happy with
+                // `self` reborrows) never clobbers a MORE PRECISE Give/Copy decision
+                // `check_stmts`'s liveness pass already made for a Stmt::Expr spawn —
+                // it only fills in what nothing else has recorded yet. Codegen's
+                // `is_heap_arg` gate does not distinguish Give from Copy (either
+                // records "heap-upgrade this"), so this default-Copy backstop is
+                // fully memory-safe even without liveness precision; only the
+                // finer-grained give/copy DISTINCTION (whether the binding gets
+                // consumed, used-after-give diagnostics, inlay hints) stays
+                // Stmt::Expr-exclusive, exactly as before.
+                //
+                // `background_spawn_call_form` is ALSO the receiver-normalization
+                // step (so a UFCS `background self.haul()` sees `self` as arg 0) —
+                // reusing it here, rather than a second hand-rolled extraction,
+                // is what closes FRAGO 024 Bug 2 (the `SelfValue` false-safe) for
+                // every syntactic position at once, not just the two `bg_inferred`
+                // pre-recording loops. It is idempotent across repeat calls for the
+                // same spawn (`bg_union_narrowed_diag_spans` dedups its one
+                // diagnostic side effect, above).
+                if let Some((_, bg_args)) = self.background_spawn_call_form(inner.as_ref()) {
+                    for arg in bg_args {
+                        let key = (arg.span().start, arg.span().end);
+                        if self.bg_inferred.contains_key(&key) {
+                            continue;
+                        }
+                        if let Some(name) = simple_ident_name(arg) {
+                            // `Ident` or `SelfValue` (FRAGO 024 Bug 2: `self` no
+                            // longer defaults to provably-safe — see
+                            // `bg_arg_is_provably_safe` — so it reaches this
+                            // branch exactly like a plain-named parameter would).
+                            let is_channel = self
+                                .scope
+                                .lookup(name)
+                                .is_some_and(|e| matches!(e.ty, Type::BuiltinChannel { .. }));
+                            let o = if is_channel {
+                                BgOwnership::Channel
+                            } else {
+                                BgOwnership::Copy
+                            };
+                            self.bg_inferred.insert(key, o);
+                        } else if !self.bg_arg_is_provably_safe(arg) {
+                            self.bg_inferred.insert(key, BgOwnership::Give);
+                        }
+                    }
+                }
+
                 // Locked M8 decision (spec/concurrency.md:164-177): `background` must
                 // reject callees that borrow their arguments via `share`. A `share`
                 // borrow may outlive the caller's scope once the task runs in the background.
@@ -2835,6 +3422,39 @@ impl<'b> Checker<'b> {
                         // underlying bounded buffer is heap-owned, internally thread-safe,
                         // and refcount-shared at the spawn (`ynz_channel_share`) — the
                         // borrow-outlives-owner hole the rejects close cannot occur.
+                        //
+                        // FRAGO 024 (round 8) Bug 3 — INVESTIGATED, NOT APPLIED (see the
+                        // FRAGO 024 audit entry's four-field deferral, sharpened by FRAGO 025):
+                        // an unannotated (`None`) Shape parameter compiles to the same
+                        // `readonly` ABI pointer as an explicit `share` one, and widening this
+                        // reject to also fire on default ownership was the literal instruction.
+                        // Applying it live broke 15/15 `fr23_uaf_planned_red.rs` fixtures
+                        // outright (grep-confirmed: 18 of the crate's `.ynz` fixtures
+                        // combine `background` with the unannotated
+                        // `function haul(self: Cargo)` UFCS-receiver idiom this whole
+                        // fr23 saga's own regression suite is built on — likely more
+                        // across the wider M1–M7 corpus using a differently-named
+                        // unannotated receiver, not indexed here). The reject is
+                        // SIGNATURE-only (never call-site-aware), so it cannot
+                        // distinguish "a hazardous caller-retained alias" from "a
+                        // harmless materialized temp the fr23 admission machinery
+                        // ALREADY heap-upgrades independent of the callee's declared
+                        // ownership" — widening it as instructed would outlaw the
+                        // dominant idiom, not close a narrow gap. Deferred rather than
+                        // forced through; see the audit entry for the full WHAT/WHY/COST/
+                        // TRIGGER. Two DISTINCT residual claims, named separately (FRAGO 025 —
+                        // do not fold them back into one "not a hazard" sentence): (1) this
+                        // gap is MEMORY-SAFE, verified — the fr23 admission machinery already
+                        // heap-upgrades the underlying argument regardless of this diagnostic,
+                        // so no UAF/dangling-pointer exposure exists here. (2) A SEPARATE,
+                        // still-open semantic-correctness gap exists independent of (1): a
+                        // `background`-spawned function that MUTATES an unannotated Shape
+                        // parameter silently mutates only the task's PRIVATE heap-upgraded
+                        // copy, never the caller's original binding — with zero diagnostic
+                        // warning that this happens. That silent value-divergence is a real,
+                        // un-closed teaching-completeness gap (not a memory-safety hole) and is
+                        // exactly what widening this reject to `give`-only would have taught the
+                        // user to expect.
                         let borrowed_non_channel = |modifier: OwnershipModifier| {
                             param_ownerships
                                 .iter()
@@ -8097,6 +8717,265 @@ pub struct LocalCrossesWait {
 /// codegen re-creates the entry struct on each body-bb entry from ynz_map_iter_get —
 /// it does not need a frame slot. Passing `None` disables this detection and falls
 /// back to the old behaviour (adding the var for all non-destructure for-loops).
+/// v0.3-M7 Phase 6 — THE back-edge poll-yield qualifying predicate (one definition).
+///
+/// Inside an ADMITTED state-machine function (see [`back_edge_yield_admission`]), a loop
+/// statement's back edge becomes one poll-yield suspension point iff this returns true:
+///
+///   - `while` — always qualifies.
+///   - `for` over a LITERAL `range(...)` call, an `array<T>`, or a `map<K, V>` — the
+///     iteration forms whose SM loop arms hold their cursor in a frame slot, so the loop
+///     can resume at its header after a yield.
+///   - `for` over `fixed<T>` — EXCLUDED: fixed arrays are stack-allocated in the resume
+///     function's stack frame, which dies on Pending; a yield mid-iteration would leave
+///     the header re-reading a dangling alloca (the same hazard Check 1b
+///     FixedArrayIterWithWait rejects for explicit waits).
+///   - `for` over a string / shape-iterable / stored-range variable — EXCLUDED: these
+///     forms lower through the SM walker's non-frame-backed fallback and cannot host a
+///     suspension point. Both exclusions are named residuals in
+///     IMP-no-function-coloring.md's Scheduler Preemption Model, never silent.
+///
+/// Consumed by: the crossing-local walk here (via its `back_edge_yield` flag), the
+/// admission gate below, codegen's `count_suspension_points`, and codegen's SM-walker
+/// routing + loop-arm emission. NEVER re-derive an "equivalent" per-consumer copy
+/// (authoritative-derivation.md — this is exactly R8's twin-derivation hazard).
+///
+/// Time: O(1)  Space: O(1)
+pub fn loop_stmt_back_edge_yields(stmt: &Stmt, expr_types: &HashMap<(usize, usize), Type>) -> bool {
+    match stmt {
+        Stmt::While { .. } => true,
+        Stmt::For { iter, .. } => {
+            let key = (iter.span().start, iter.span().end);
+            match expr_types.get(&key) {
+                // Stored-range variables (`let r = range(..); for (i in r)`) are the SM
+                // fallback form — only a literal `range(...)` call qualifies (the SM
+                // range arm re-evaluates the literal bounds at its header).
+                Some(Type::Range { .. }) => matches!(
+                    iter,
+                    Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "range")
+                ),
+                Some(Type::BuiltinArray { .. } | Type::BuiltinMap { .. }) => true,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// True iff `stmt` IS a qualifying back-edge-yield loop or CONTAINS one anywhere in its
+/// sub-tree — the recursive containment form of [`loop_stmt_back_edge_yields`], used by
+/// codegen's SM-walker routing (an `if` wrapping a qualifying loop must route through the
+/// SM walker so the nested loop reaches its SM arm) and by the synthetic for-idx slot
+/// collector's routing-parity guard.
+///
+/// Time: O(N) where N = AST nodes in `stmt`  Space: O(D) recursion depth
+pub fn stmt_contains_back_edge_yield(
+    stmt: &Stmt,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> bool {
+    if loop_stmt_back_edge_yields(stmt, expr_types) {
+        return true;
+    }
+    match stmt {
+        Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+            block_contains_back_edge_yield(body, expr_types)
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter()
+                .any(|a| block_contains_back_edge_yield(&a.body, expr_types))
+                || else_arm
+                    .as_ref()
+                    .is_some_and(|eb| block_contains_back_edge_yield(eb, expr_types))
+        }
+        _ => false,
+    }
+}
+
+/// Block-level form of [`stmt_contains_back_edge_yield`].
+///
+/// Time: O(N) where N = AST nodes in `block`  Space: O(D) recursion depth
+pub fn block_contains_back_edge_yield(
+    block: &Block,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> bool {
+    block
+        .stmts
+        .iter()
+        .any(|s| stmt_contains_back_edge_yield(s, expr_types))
+}
+
+/// D3 admission decline: a NON-qualifying `for` form (fixed / string / shape-iter /
+/// stored-range) whose body contains a qualifying loop. Routing such a `for` through the
+/// SM walker would either drag the nested loop through the non-frame-backed fallback
+/// (string/shape/stored-range — the nested loop would silently lose its yield) or let a
+/// nested yield dangle the outer fixed array's stack storage (fixed<T>). Declining the
+/// whole function keeps its behavior byte-identical to pre-Phase-6.
+///
+/// Time: O(N²) worst case over nested loops (N = AST nodes; real bodies are tiny)
+/// Space: O(D) recursion depth
+fn exists_non_qualifying_loop_containing_yield(
+    stmts: &[Stmt],
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+        Stmt::For { body, .. } => {
+            (!loop_stmt_back_edge_yields(stmt, expr_types)
+                && block_contains_back_edge_yield(body, expr_types))
+                || exists_non_qualifying_loop_containing_yield(&body.stmts, expr_types)
+        }
+        Stmt::If { body, .. } | Stmt::While { body, .. } => {
+            exists_non_qualifying_loop_containing_yield(&body.stmts, expr_types)
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter()
+                .any(|a| exists_non_qualifying_loop_containing_yield(&a.body.stmts, expr_types))
+                || else_arm.as_ref().is_some_and(|eb| {
+                    exists_non_qualifying_loop_containing_yield(&eb.stmts, expr_types)
+                })
+        }
+        _ => false,
+    })
+}
+
+/// D5 admission decline: two `for` loops in the same function share a loop-variable
+/// NAME while iterating elements of DIFFERENT types. The crossing-local frame-slot
+/// machinery is name-keyed (one slot per name, classified once from the first loop's
+/// element type via `find_for_loop_var_type_in_stmts`), so routing both loops through
+/// the SM arms would flush/reload the second loop's differently-typed variable through
+/// a slot sized and classified for the first — live-reproduced as heap corruption
+/// ("corrupted size vs. prev_size", SIGABRT) on `m5_p5_soa_copy_wait_bg.ynz`, where
+/// `for (p in pts /* Point */)` and `for (p in parts /* Part */)` share `p`; renaming
+/// the second variable eliminates the crash. Same-name/same-type sharing is safe (each
+/// loop rebinds the shared slot before reading it) and stays admitted.
+///
+/// NOTE this hazard PRE-EXISTS Phase 6 for loops whose bodies suspend (they were
+/// already routed and name-collided the same way); this decline only prevents Phase 6
+/// from WIDENING the exposure. The pre-existing sibling is surfaced to the plan seam,
+/// not silently fixed here.
+///
+/// Time: O(N) where N = AST nodes  Space: O(V) distinct loop-var names
+fn for_var_elem_type_conflict(
+    stmts: &[Stmt],
+    expr_types: &HashMap<(usize, usize), Type>,
+    seen: &mut HashMap<String, Type>,
+) -> bool {
+    fn elem_of(iter: &Expr, expr_types: &HashMap<(usize, usize), Type>) -> Type {
+        let key = (iter.span().start, iter.span().end);
+        match expr_types.get(&key) {
+            Some(Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. }) => {
+                elem.as_ref().clone()
+            }
+            Some(Type::Range { .. }) => Type::Int,
+            // Map / string / shape-iter / unknown: compare the iterator type itself —
+            // exact-type sharing stays admitted, anything else conflicts conservatively.
+            Some(other) => other.clone(),
+            None => Type::Nothing,
+        }
+    }
+    for stmt in stmts {
+        match stmt {
+            Stmt::For {
+                var, iter, body, ..
+            } => {
+                let ty = elem_of(iter, expr_types);
+                if let Some(prev) = seen.get(var.as_str()) {
+                    if prev != &ty {
+                        return true;
+                    }
+                } else {
+                    seen.insert(var.clone(), ty);
+                }
+                if for_var_elem_type_conflict(&body.stmts, expr_types, seen) {
+                    return true;
+                }
+            }
+            Stmt::If { body, .. } | Stmt::While { body, .. } => {
+                if for_var_elem_type_conflict(&body.stmts, expr_types, seen) {
+                    return true;
+                }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                let arm_conflicts = arms
+                    .iter()
+                    .any(|a| for_var_elem_type_conflict(&a.body.stmts, expr_types, seen));
+                if arm_conflicts {
+                    return true;
+                }
+                let else_conflicts = else_arm
+                    .as_ref()
+                    .is_some_and(|eb| for_var_elem_type_conflict(&eb.stmts, expr_types, seen));
+                if else_conflicts {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// v0.3-M7 Phase 6 — the per-function back-edge poll-yield ADMISSION gate (safe default:
+/// decline keeps pre-Phase-6 behavior byte-identically; admission is granted only when
+/// every hazard probe passes). The ONE producer of the verdict every consumer reads via
+/// `TypedModule::back_edge_yield_admitted`.
+///
+/// Admission requires ALL of:
+///   1. Not kernel mode (no scheduler → no yield target; mirrors Check 2's own gate).
+///   2. The function is a state-machine function (caller-supplied `is_sm` — explicit
+///      waits or a transitively-suspending call graph; a plain function has no frame,
+///      cannot return Pending, and is the DOCUMENTED non-SM residual).
+///   3. At least one qualifying loop exists (otherwise the flag would widen nothing).
+///   4. No non-qualifying `for` form contains a qualifying loop (D3 — see
+///      [`exists_non_qualifying_loop_containing_yield`]).
+///   5. No two `for` loops share a loop-variable name across DIFFERENT element types
+///      (D5 — see [`for_var_elem_type_conflict`]; the name-keyed frame-slot collision).
+///   6. The suspension guards do NOT fire over the WIDENED crossing set
+///      ([`suspension_guards_fire_for_fn`] with `back_edge_yield = true`): making loop
+///      back edges suspension points must not force any local whose type cannot be
+///      frame-backed (fixed<T> / maybe / union / dynamic / range / nested-shape shape)
+///      to cross a suspension. A function where it would is DECLINED — the user program
+///      stays legal and byte-identical, and its loops are a named residual, never a new
+///      compile error and never a silent miscompile.
+///
+/// Time: O(N²) worst case (dominated by the D3 scan + one widened crossing collection)
+/// Space: O(C) crossing names
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn back_edge_yield_admission(
+    f: &ynz_ast::nodes::FunctionDecl,
+    ret_ty: &Type,
+    is_sm: bool,
+    suspending_fns: &std::collections::HashSet<&str>,
+    shape_table: &ShapeTable,
+    union_aliases: &HashMap<String, Type>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    kernel_mode: bool,
+) -> bool {
+    if kernel_mode || !is_sm {
+        return false;
+    }
+    if !block_contains_back_edge_yield(&f.body, expr_types) {
+        return false;
+    }
+    if exists_non_qualifying_loop_containing_yield(&f.body.stmts, expr_types) {
+        return false;
+    }
+    // D5: shared loop-var name across differently-typed for-loops (see
+    // for_var_elem_type_conflict — the name-keyed frame-slot collision class).
+    if for_var_elem_type_conflict(&f.body.stmts, expr_types, &mut HashMap::new()) {
+        return false;
+    }
+    !suspension_guards_fire_for_fn(
+        f,
+        ret_ty,
+        suspending_fns,
+        shape_table,
+        union_aliases,
+        expr_types,
+        kernel_mode,
+        true, // back_edge_yield: probe the WIDENED crossing set
+    )
+}
+
 pub fn crossing_local_names(
     stmts: &[Stmt],
     param_names: &[&str],
@@ -8109,6 +8988,7 @@ pub fn crossing_local_names(
         suspending,
         &std::collections::HashSet::new(),
         expr_types,
+        false,
     )
 }
 
@@ -8140,9 +9020,17 @@ pub fn crossing_local_names_with_cpu_spike(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> Vec<String> {
-    crossing_local_names_with_provenance(stmts, param_names, suspending, cpu_supported, expr_types)
-        .names
+    crossing_local_names_with_provenance(
+        stmts,
+        param_names,
+        suspending,
+        cpu_supported,
+        expr_types,
+        back_edge_yield,
+    )
+    .names
 }
 
 /// Crossing-local names plus provenance (v0.3-M6 Phase 1c, FRAGOs 013/014).
@@ -8180,8 +9068,16 @@ pub fn crossing_local_names_with_provenance(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> CrossingNames {
-    let crossings = locals_crossing_wait(stmts, param_names, suspending, cpu_supported, expr_types);
+    let crossings = locals_crossing_wait(
+        stmts,
+        param_names,
+        suspending,
+        cpu_supported,
+        expr_types,
+        back_edge_yield,
+    );
     let mut seen = std::collections::HashSet::new();
     let mut names: Vec<String> = crossings
         .into_iter()
@@ -8233,7 +9129,14 @@ pub fn crossing_local_names_with_provenance(
     // Only `wait`/may-block loop bodies suspend here: a CPU spike-group inside a loop body
     // DECLINES to sequential lowering (the codegen `spike_nested_blocks` excludes loop
     // bodies), so it is never a suspension point and needs no synthetic iteration slot.
-    collect_for_loop_synthetic_crossings(stmts, suspending, &mut seen, &mut names, expr_types);
+    collect_for_loop_synthetic_crossings(
+        stmts,
+        suspending,
+        &mut seen,
+        &mut names,
+        expr_types,
+        back_edge_yield,
+    );
     names.sort();
     CrossingNames {
         names,
@@ -8590,11 +9493,21 @@ fn collect_for_loop_synthetic_crossings(
     seen: &mut std::collections::HashSet<String>,
     names: &mut Vec<String>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) {
-    collect_for_loop_synthetic_crossings_inner(stmts, suspending, seen, names, &mut 0, expr_types);
+    collect_for_loop_synthetic_crossings_inner(
+        stmts,
+        suspending,
+        seen,
+        names,
+        &mut 0,
+        expr_types,
+        back_edge_yield,
+    );
 }
 
 /// Time: O(N) where N = AST nodes in `stmts`  Space: O(D) recursion depth
+#[allow(clippy::too_many_arguments)]
 fn collect_for_loop_synthetic_crossings_inner(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
@@ -8602,6 +9515,7 @@ fn collect_for_loop_synthetic_crossings_inner(
     names: &mut Vec<String>,
     counter: &mut usize,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) {
     for stmt in stmts {
         match stmt {
@@ -8612,7 +9526,14 @@ fn collect_for_loop_synthetic_crossings_inner(
                 map_destructure_pattern,
                 ..
             } if block_contains_wait(body)
-                || block_contains_inferred_suspension(body, suspending, expr_types) =>
+                || block_contains_inferred_suspension(body, suspending, expr_types)
+                // v0.3-M7 Phase 6: under the admitted widening, a for-loop ALSO routes
+                // through lower_sm_for (which claims the next __ynz_for_idx_N counter
+                // unconditionally at its top) when it qualifies for a back-edge yield
+                // OR wraps a qualifying loop anywhere in its sub-tree — the collector
+                // must allocate in exact lock-step with codegen's stmt_needs_sm_walker
+                // widening (THE one containment predicate; never a re-derived twin).
+                || (back_edge_yield && stmt_contains_back_edge_yield(stmt, expr_types)) =>
             {
                 let syn_name = format!("__ynz_for_idx_{counter}");
                 *counter += 1;
@@ -8648,6 +9569,7 @@ fn collect_for_loop_synthetic_crossings_inner(
                     names,
                     counter,
                     expr_types,
+                    back_edge_yield,
                 );
             }
             Stmt::If { body, .. } => {
@@ -8658,6 +9580,7 @@ fn collect_for_loop_synthetic_crossings_inner(
                     names,
                     counter,
                     expr_types,
+                    back_edge_yield,
                 );
             }
             Stmt::While { body, .. } | Stmt::For { body, .. } => {
@@ -8668,6 +9591,7 @@ fn collect_for_loop_synthetic_crossings_inner(
                     names,
                     counter,
                     expr_types,
+                    back_edge_yield,
                 );
             }
             Stmt::Match { arms, else_arm, .. } => {
@@ -8679,11 +9603,18 @@ fn collect_for_loop_synthetic_crossings_inner(
                         names,
                         counter,
                         expr_types,
+                        back_edge_yield,
                     );
                 }
                 if let Some(eb) = else_arm {
                     collect_for_loop_synthetic_crossings_inner(
-                        &eb.stmts, suspending, seen, names, counter, expr_types,
+                        &eb.stmts,
+                        suspending,
+                        seen,
+                        names,
+                        counter,
+                        expr_types,
+                        back_edge_yield,
                     );
                 }
             }
@@ -9064,6 +9995,7 @@ pub fn locals_crossing_wait(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> Vec<LocalCrossesWait> {
     let mut problems = Vec::new();
     collect_crossings_in_stmts(
@@ -9072,6 +10004,7 @@ pub fn locals_crossing_wait(
         suspending,
         cpu_supported,
         expr_types,
+        back_edge_yield,
         &mut Vec::new(),
         &mut problems,
     );
@@ -9163,10 +10096,15 @@ fn block_suspends_m3d(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> bool {
     block_contains_wait(block)
         || block_contains_inferred_suspension(block, suspending, expr_types)
         || block_contains_cpu_spike_pair(block, suspending, cpu_supported)
+        // v0.3-M7 Phase 6: under the admitted back-edge poll-yield widening, a block
+        // containing a qualifying loop contains a suspension point (the loop's back
+        // edge) — THE one predicate, threaded, never re-derived.
+        || (back_edge_yield && block_contains_back_edge_yield(block, expr_types))
 }
 
 /// Recursive crossing-analysis kernel.
@@ -9184,6 +10122,7 @@ fn collect_crossings_in_stmts(
     suspending: &std::collections::HashSet<&str>,
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
     declared: &mut Vec<String>,
     out: &mut Vec<LocalCrossesWait>,
 ) {
@@ -9266,20 +10205,48 @@ fn collect_crossings_in_stmts(
                     ..
                 } if is_suspending_call(c, suspending) => true,
                 Stmt::If { body, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if block_suspends_m3d(
+                        body,
+                        suspending,
+                        cpu_supported,
+                        expr_types,
+                        back_edge_yield,
+                    ) =>
                 {
                     true
                 }
+                // v0.3-M7 Phase 6: under the admitted widening, a QUALIFYING loop is a
+                // suspension point in its own right (its back edge yields) even when its
+                // body contains no wait — THE one predicate, threaded, never re-derived.
                 Stmt::While { body, .. } | Stmt::For { body, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if (back_edge_yield && loop_stmt_back_edge_yields(stmt, expr_types))
+                        || block_suspends_m3d(
+                            body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) =>
                 {
                     true
                 }
                 Stmt::Match { arms, else_arm, .. }
                     if arms.iter().any(|a| {
-                        block_suspends_m3d(&a.body, suspending, cpu_supported, expr_types)
+                        block_suspends_m3d(
+                            &a.body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        )
                     }) || else_arm.as_ref().is_some_and(|eb| {
-                        block_suspends_m3d(eb, suspending, cpu_supported, expr_types)
+                        block_suspends_m3d(
+                            eb,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        )
                     }) =>
                 {
                     true
@@ -9346,6 +10313,7 @@ fn collect_crossings_in_stmts(
                             suspending,
                             cpu_supported,
                             expr_types,
+                            back_edge_yield,
                             &mut branch_declared,
                             out,
                         );
@@ -9359,6 +10327,7 @@ fn collect_crossings_in_stmts(
                             suspending,
                             cpu_supported,
                             expr_types,
+                            back_edge_yield,
                             &mut branch_declared,
                             out,
                         );
@@ -9366,8 +10335,13 @@ fn collect_crossings_in_stmts(
                     Stmt::Match { arms, else_arm, .. } => {
                         collect_ident_refs_in_stmt(stmt, declared, out);
                         for arm in arms {
-                            if block_suspends_m3d(&arm.body, suspending, cpu_supported, expr_types)
-                            {
+                            if block_suspends_m3d(
+                                &arm.body,
+                                suspending,
+                                cpu_supported,
+                                expr_types,
+                                back_edge_yield,
+                            ) {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &arm.body.stmts,
@@ -9375,13 +10349,20 @@ fn collect_crossings_in_stmts(
                                     suspending,
                                     cpu_supported,
                                     expr_types,
+                                    back_edge_yield,
                                     &mut branch_declared,
                                     out,
                                 );
                             }
                         }
                         if let Some(eb) = else_arm {
-                            if block_suspends_m3d(eb, suspending, cpu_supported, expr_types) {
+                            if block_suspends_m3d(
+                                eb,
+                                suspending,
+                                cpu_supported,
+                                expr_types,
+                                back_edge_yield,
+                            ) {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &eb.stmts,
@@ -9389,6 +10370,7 @@ fn collect_crossings_in_stmts(
                                     suspending,
                                     cpu_supported,
                                     expr_types,
+                                    back_edge_yield,
                                     &mut branch_declared,
                                     out,
                                 );
@@ -9502,7 +10484,13 @@ fn collect_crossings_in_stmts(
                 //   (b) Locals declared INSIDE the branch, before the suspension, and
                 //       read after it IN THE SAME BRANCH — handled via recursive call.
                 Stmt::If { body, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if block_suspends_m3d(
+                        body,
+                        suspending,
+                        cpu_supported,
+                        expr_types,
+                        back_edge_yield,
+                    ) =>
                 {
                     // Sub-case (b): recurse into the branch, seeding with the outer
                     // `declared` set so outer-scope names are also tracked inside.
@@ -9513,6 +10501,7 @@ fn collect_crossings_in_stmts(
                         suspending,
                         cpu_supported,
                         expr_types,
+                        back_edge_yield,
                         &mut branch_declared,
                         out,
                     );
@@ -9535,8 +10524,18 @@ fn collect_crossings_in_stmts(
                 // survive each `wait` via the frame slot. A purely forward textual scan
                 // misses this because the write and the condition-read both appear before
                 // the `wait` in textual order, yet execution cycles back through them.
+                // v0.3-M7 Phase 6: under the admitted widening every `while` back edge
+                // is a suspension point, so the arm fires for wait-free bodies too — the
+                // same back-edge-crossing scan below is exactly what a poll-yield needs.
                 Stmt::While { body, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if back_edge_yield
+                        || block_suspends_m3d(
+                            body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) =>
                 {
                     // Scan the condition and body for reads of outer-declared locals.
                     // This catches the back-edge case: counter/accumulator locals are
@@ -9550,6 +10549,7 @@ fn collect_crossings_in_stmts(
                         suspending,
                         cpu_supported,
                         expr_types,
+                        back_edge_yield,
                         &mut branch_declared,
                         out,
                     );
@@ -9561,8 +10561,18 @@ fn collect_crossings_in_stmts(
                 // (the collection pointer/count is stable). Outer locals READ inside the body
                 // are still crossing locals — a forward scan seeded with the outer `declared`
                 // set catches them. Mark past_wait so post-for statements are scanned.
+                // v0.3-M7 Phase 6: a QUALIFYING `for` form's back edge is a suspension
+                // point under the admitted widening (fixed / fallback forms stay out —
+                // THE one predicate decides, never a per-site re-derivation).
                 Stmt::For { body, iter, .. }
-                    if block_suspends_m3d(body, suspending, cpu_supported, expr_types) =>
+                    if (back_edge_yield && loop_stmt_back_edge_yields(stmt, expr_types))
+                        || block_suspends_m3d(
+                            body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) =>
                 {
                     // Scan the iter expression and body for reads of outer-declared locals.
                     // The iter expression may reference an outer local (e.g., the collection
@@ -9576,6 +10586,7 @@ fn collect_crossings_in_stmts(
                         suspending,
                         cpu_supported,
                         expr_types,
+                        back_edge_yield,
                         &mut branch_declared,
                         out,
                     );
@@ -9589,16 +10600,28 @@ fn collect_crossings_in_stmts(
                     scrutinee,
                     ..
                 } if arms.iter().any(|a| {
-                    block_suspends_m3d(&a.body, suspending, cpu_supported, expr_types)
+                    block_suspends_m3d(
+                        &a.body,
+                        suspending,
+                        cpu_supported,
+                        expr_types,
+                        back_edge_yield,
+                    )
                 }) || else_arm.as_ref().is_some_and(|eb| {
-                    block_suspends_m3d(eb, suspending, cpu_supported, expr_types)
+                    block_suspends_m3d(eb, suspending, cpu_supported, expr_types, back_edge_yield)
                 }) =>
                 {
                     // Scrutinee may reference outer-declared locals.
                     let _ = scrutinee; // scanned via collect_ident_refs_in_stmt
                     collect_ident_refs_in_stmt(stmt, declared, out);
                     for arm in arms {
-                        if block_suspends_m3d(&arm.body, suspending, cpu_supported, expr_types) {
+                        if block_suspends_m3d(
+                            &arm.body,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) {
                             let mut arm_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &arm.body.stmts,
@@ -9606,13 +10629,20 @@ fn collect_crossings_in_stmts(
                                 suspending,
                                 cpu_supported,
                                 expr_types,
+                                back_edge_yield,
                                 &mut arm_declared,
                                 out,
                             );
                         }
                     }
                     if let Some(eb) = else_arm {
-                        if block_suspends_m3d(eb, suspending, cpu_supported, expr_types) {
+                        if block_suspends_m3d(
+                            eb,
+                            suspending,
+                            cpu_supported,
+                            expr_types,
+                            back_edge_yield,
+                        ) {
                             let mut eb_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &eb.stmts,
@@ -9620,6 +10650,7 @@ fn collect_crossings_in_stmts(
                                 suspending,
                                 cpu_supported,
                                 expr_types,
+                                back_edge_yield,
                                 &mut eb_declared,
                                 out,
                             );
@@ -9833,6 +10864,7 @@ pub(crate) fn suspending_calls_in_subexpr_position(
 /// contract explicit).
 ///
 /// Time: O(stmts · crossings)  Space: O(crossings)
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn suspension_guards_fire_for_fn(
     f: &ynz_ast::nodes::FunctionDecl,
     ret_ty: &Type,
@@ -9841,6 +10873,7 @@ pub(crate) fn suspension_guards_fire_for_fn(
     union_aliases: &HashMap<String, Type>,
     expr_types: &HashMap<(usize, usize), Type>,
     kernel_mode: bool,
+    back_edge_yield: bool,
 ) -> bool {
     if kernel_mode {
         return false;
@@ -9891,6 +10924,12 @@ pub(crate) fn suspension_guards_fire_for_fn(
         suspending_fns,
         &std::collections::HashSet::new(),
         expr_types,
+        // `back_edge_yield = true` ONLY when probing for Phase 6 admission
+        // (back_edge_yield_admission): the probe then evaluates the guards over the
+        // WIDENED crossing set, so a function whose loop yields would force an
+        // un-frame-backable type to cross is DECLINED rather than miscompiled. Every
+        // other caller (the M3d decline probe) passes false — baseline behavior.
+        back_edge_yield,
     );
 
     for crossing_name in &crossings {

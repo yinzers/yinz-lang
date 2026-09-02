@@ -1,0 +1,39 @@
+// v0.3-M7 Phase 6 fixture (b) — the documented non-SM residual (expected-behavior PASS).
+//
+// plainHog is a PLAIN (non-state-machine) function: its call graph contains zero
+// may-block calls, so it is NOT preempted by the back-edge poll-yield mechanism — a
+// synchronous function has no frame, cannot return Pending, and has nothing to resume.
+// Its protection is the EXISTING CPU-admission routing: a task whose call graph cannot
+// suspend is routed to the blocking pool, OFF the I/O workers, so even with a single
+// I/O worker (YNZ_WORKER_THREADS=1 in the driving test) the victim's I/O-pool task runs
+// immediately while the hog grinds on a blocking-pool thread.
+//
+// This fixture documents that residual as expected behavior, not a gap: it passes both
+// BEFORE and AFTER the back-edge transform, proving the non-SM path is untouched.
+
+function plainHog() -> nothing {
+  let x = 0
+  while (x < 100000000) {
+    x = x + 1
+  }
+  print(`plain hog done`)
+}
+
+function victimPing() -> nothing {
+  wait sleep(0)
+  print(`victim ran`)
+}
+
+function entrypoint() -> nothing {
+  background plainHog()
+  // Mirror fixture (a)'s spawn gap exactly: the hog is fully started before the victim
+  // is spawned, so the victim-runs-first verdict below can only come from the hog being
+  // OFF the I/O worker (blocking-pool routing) — never from spawn-order scheduling luck.
+  wait sleep(50)
+  background victimPing()
+  // Keep the program alive while both background tasks run: runtime shutdown cancels
+  // still-pending async tasks rather than running them to completion, so the entrypoint
+  // must outlast the hog's loop (well under a second) for both prints to appear.
+  wait sleep(4000)
+  print(`main done`)
+}

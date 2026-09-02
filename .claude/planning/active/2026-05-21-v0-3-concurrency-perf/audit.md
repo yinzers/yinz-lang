@@ -977,3 +977,87 @@ lockstep):**
 Session-id `executor-2026-07-16-patrick-triage-application` appended to the roadmap's frontmatter
 chain and to both amended plans' frontmatter chains in the same action as this entry. No code
 touched. Nothing committed.
+
+## 2026-07-16 — Deferral: M7 plan status-blockquote narrative history (non-blocking — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#0 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#0: claude-planning-active-2026-07-04-v0-3-m7-optimizer-pipeline-plan-md-15
+
+- **WHAT** — the plan's status blockquote (`.claude/planning/active/2026-07-04-v0-3-m7-optimizer-pipeline/plan.md:15-22`) and audit.md:887's folder-origin claim assert a discrete paused→active "flip" event gated on Gate-4/M6-merge clearing; git log history contradicts this — the frontmatter `status: "active"` and the actual folder location under `active/` date back to the plan's first commit (`de9a60d`, 2026-07-04), predating both the Gate-4 signature that same day and M6's merge by 12 days. The plan was authored as `active`, not transitioned from `paused`.
+- **WHY** — correcting this requires re-verifying the actual authoring timeline and rewriting historical narrative prose across two files (the blockquote and the audit clause) without touching any load-bearing content (no phase, risk, or exit-criteria changes). It is a documentation-accuracy correction (a narrative prose consistency gap), not a durable design change, so fixing it now would be scope creep relative to the plan's own execution.
+- **COST** — ~15 minutes, one executor dispatch reading the git timeline, rewriting the blockquote and the audit note to state the actual history (plan created directly under `active/`, no flip), no reviewer fan-out needed (prose-only, factual correction).
+- **TRIGGER** — the next time this plan.md is amended for any other reason (e.g. a FRAGO, a phase-boundary checkpoint edit), or before this plan reaches its own completion/AAR gate — whichever comes first.
+
+## 2026-07-16 — Deferral: roadmap sibling-fact sweep for M7 plan status (non-blocking — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#0 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#0: claude-planning-active-2026-05-21-v0-3-concurrency-perf-roadmap-md-384
+
+- **WHAT** — the roadmap.md still repeats "plan paused; plan-id `2026-07-04-v0-3-m7-optimizer-pipeline`" / "status: paused" in approximately 10 locations (lines ~384, 439, 446, 508, 515, 519, 529 and nearby — exact numbers may have shifted) within the Capability Ledger sections, contradicting the plan's own corrected "active" status recorded in the plan.md frontmatter and folder location.
+- **WHY** — this is a sibling-fact sweep miss per plan-source-of-truth.md discipline — the fix-loop that corrected plan.md's stale status text never swept the linked roadmap for the same fact. Fixing it now as a piecemeal edit touches a shared document that other in-flight milestone plans also read; batching this correction with any other pending roadmap amendment (rather than a single-purpose edit) avoids re-touching the same file multiple times in quick succession.
+- **COST** — ~20-30 minutes — grep roadmap.md for every instance of the plan-id paired with a "paused" reference, confirm each one, correct each one, verify no other status fields became contradictory in the sweep.
+- **TRIGGER** — the next roadmap.md amendment for any reason (e.g. Phase 8's own roadmap-reconciliation step, which already touches this file to update Capability Ledger tables, is a natural place to fold this fix in), or before M7's own completion/AAR gate — whichever comes first.
+
+## 2026-07-16 — Deferral: integration-test build-state race under parallelism (non-blocking — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#2 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#2: crates-ynz-driver-tests-integration-rs-5276
+
+- **WHAT** — `v0_3_m4_p3_cross_give_generic_not_over_rejected` flakes under full-suite parallelism. Race mechanism: the `ynz_run_with_alloc_counter` helper (`crates/ynz-driver/tests/integration.rs:5276`) invokes `ynz run` — an in-place build — so tests routing through it race shared build state (the same target/build artifacts) against parallel sibling tests doing the same, producing intermittent failures that vanish under serial runs.
+- **WHY** — pre-existing harness issue untouched by M7 Phase 2's diff (the flake predates the phase and its mechanism involves no code the phase changed); fixing shared-build-state isolation is test-infra work outside this plan's codegen charter.
+- **COST** — ~half a session: per-test temp-dir isolation for the alloc-counter helper, mirroring the TempDir pattern `optimizer_red_gate.rs` already uses.
+- **TRIGGER** — the flake recurring in CI, or the next milestone touching ynz-driver's integration harness.
+
+## 2026-07-16 — Deferral: run_fixture_with_timeout has no process-kill — a true hang blocks CI at any bound (non-blocking — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#2 at the phase boundary)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#2: crates-ynz-driver-tests-m2-state-machine-integration-rs-66
+
+- **WHAT** — the m2_state_machine_integration test helper's "timeout" is a post-hoc elapsed assertion after a blocking `Command::output()`; no spawn+poll+kill exists, so a genuine deadlock regression hangs the suite/CI indefinitely rather than failing — zero protection against exactly the Bug-C hang class those tests guard.
+- **WHY** — pre-existing test-infra design untouched by M7 Phase 2's diff (which only re-based two outlier bounds onto the file default); building real timeout+kill plumbing is harness work outside M7's codegen charter.
+- **COST** — ~half a session: wrap `Command::spawn()` in a poll-with-deadline loop (wait-timeout pattern) + kill-on-expiry in the shared helper; all 31 call sites inherit it.
+- **TRIGGER** — the next milestone touching ynz-driver's integration/test harness, or the first CI hang traced to a fixture that never terminated.
+
+## 2026-07-17 — Deferral: dispatch-time CHECKPOINT-mark enforcement backstop (hook-author design — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline#3, corpse-recurrence escalation)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#3: checkpoint-mark-enforcement-backstop
+
+- **WHAT** — a mechanical dispatch/write-time check that an executor segment crossing a
+  planner-authored CHECKPOINT mark without checkpointing is caught at the seam, not by a downstream
+  judge. Today the mark's enforcement is prose only: the executor charter's "honor a planner-placed
+  mark" default plus per-dispatch restatements.
+- **WHY** — prose restatement failed twice in one plan (`2026-07-04-v0-3-m7-optimizer-pipeline`):
+  the FRAGO 004 note AND an explicit dispatch restatement were both in-context, and the mark was
+  still passed without a checkpoint in Phase 2 and again in Phase 3 (deviation-judge ruling
+  2026-07-17: the second in-plan recurrence crosses the corpse-recurrence-escalation floor — a
+  lever failure, not a wording problem; a third prose pass would repeat an already-failed
+  intervention).
+- **COST** — a hook-author design session (live-hooks-spec fetch + stdin-JSON smoke test per that
+  charter); never an ad-hoc mid-AAR bolt-on.
+- **TRIGGER** — the next plan execution dispatching a checkpoint-marked phase, or the next
+  recurrence anywhere.
+
+## 2026-07-17 — Session log: v0.3-M7 Phase 8 ledger reconciliation closed out (fix-loop round; per the M7 plan's own §5 Command & Signal, this roadmap `audit.md` receives the Phase 8 ledger-reconciliation entry as a separate append)
+
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline#8-fixround: roadmap-ledger-reconciliation
+
+- **What happened.** v0.3-M7's Phase 8 (Documentation, Registry, and Roadmap Reconciliation) executed
+  in two passes: a first-pass dispatch (`executor-2026-07-17-phase8-final-reconciliation`, own account
+  in the M7 plan's `audit.md`) partially reconciled this roadmap, followed by a scoped fix-loop round
+  (`executor-2026-07-17-phase8-fixround`) closing gaps four independent review lenses confirmed. This
+  entry is the roadmap-side closing record; the full account of both dispatches lives in the M7 plan's
+  own `audit.md` Session log (not duplicated here).
+- **§Milestone 7 section** — rewrote the status blockquote, Value-delivered prose, Execution-plan
+  status, Depends-on confirmation, per-item Scope bullets, and Trigger-to-schedule line from
+  future/paused-tense to shipped-reality past-tense (all 8 phases complete, `default<O2>` shipped by
+  default, back-edge poll-yield shipped, call-site checks honestly deferred, goldens stable, both
+  benchmark suites committed and green) — mirroring this same roadmap's own §Milestone 6 2026-07-16
+  reconciliation-note precedent.
+- **Capability Ledger, both duplicate tables** — rows 438/440/441 were already correctly annotated
+  "NOT absorbed by M7" by the first pass; this round added the row the first pass missed — "Selective
+  hot-field-only element materialization" (the row the M7 plan's own Future Requirements #1 and
+  Roadmap Reconciliation table name as "roadmap ledger row 442") — with the matching "NOT absorbed by
+  v0.3-M7" annotation, in BOTH tables. Parity re-confirmed by grepping both headings.
+- **Compile-time budget text** (Risks table, row citing FRAGO 008) was already correctly rebased by
+  the first pass to the Patrick-signed absolute frame — no further edit needed this round.
+- No code touched. Session-id `executor-2026-07-17-phase8-fixround` appended to this roadmap's
+  frontmatter chain in the same action as this entry.
+
+## 2026-07-18 — Ledger amendment: authoritative-derivation gap in fr23 fix's C2 explicit-type-args admission (unscoped — deferred by 2026-07-04-v0-3-m7-optimizer-pipeline Phase 9 fix-loop review)
+Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline: crates-ynz-typeck-src-check-rs-1783
+
+- **WHAT** — `bg_arg_is_materialized_shape_temp`'s C2 explicit-type-args admission loop (`crates/ynz-typeck/src/check.rs`, ~line 1783) hand-rolls a shape-name check instead of calling the authoritative `ast_type_to_type` conversion, missing the two compiler-synthesized builtin shape names (`Frame`, `SourceLoc`) that conversion special-cases.
+- **WHY** — the predicate must stay side-effect-free (`&self`, never `&mut self`) because it runs speculatively on EVERY background-spawn argument regardless of eventual match; `ast_type_to_type` is `&mut self` and mutates `referenced_names`/diagnostics as a side effect, so calling it directly here would spuriously pollute compiler state for args that never end up spawn-relevant. This is a genuine architectural constraint, not an excuse — but the result is a second, narrower reimplementation of one arm of the authoritative conversion, the exact drift class `authoritative-derivation.md` exists to prevent (this repo has paid for this class of bug 4+ times across M3a/M3d/M3e/M3g).
+- **COST to fix later** — small: add two more match arms to the hand-rolled check mirroring `ast_type_to_type`'s Frame/SourceLoc special case (`"Frame" | "SourceLoc" => true`), or factor a shared, side-effect-free classification helper both `ast_type_to_type` and this predicate call into. Under half a session.
+- **TRIGGER** — (a) a real user-reported repro of a generic call over `Frame`/`SourceLoc` spawned in `background` producing wrong output, OR (b) the day someone fixes the orthogonal, pre-existing compiler ICEs in `emit.rs`'s shape-ABI registration path (`abi_return_type: no LLVM struct type for shape`, `cannot alloca for type Error`) that currently make Frame/SourceLoc unusable as any function's param/return type — at that point this gap reactivates as a live UAF vector with no new review catching it, since the two bugs are orthogonal and nothing currently links them.

@@ -208,9 +208,16 @@ fn nested_sm_3level_prints_in_order_exits_0() {
 // ynz_rt_spawn also tries to acquire it → deadlock. The fix: block_on releases
 // the mutex before polling; ynz_rt_spawn uses Handle::try_current() to bypass
 // the mutex entirely when inside a Tokio context.
+// Timing bound: the elapsed check bounds `ynz run` wall time = debug-compiler
+// compile + ~150ms of program sleeps (uncontended ~0.5s, measured 2026-07-16).
+// It only catches slow-but-terminating regressions — a true Bug C deadlock blocks
+// Command::output() before the check ever runs, at any bound. The file-default 10s
+// is used because a tighter 5s bound went red at 5.5-5.9s under full-suite
+// contention (v0.3-M7 Phase 2 green-check, 2026-07-16) with an unchanged compiler.
+// The concurrency proof is the stdout ordering assertion below, not the bound.
 #[test]
 fn background_from_suspending_entrypoint_runs_concurrently() {
-    let (stdout, _, code) = run_fixture_with_timeout("v0_3_m2_background_from_sm.ynz", 5);
+    let (stdout, _, code) = run_fixture("v0_3_m2_background_from_sm.ynz");
     assert_eq!(code, 0, "should exit 0");
     assert!(
         stdout.contains("main waiting"),
@@ -681,9 +688,11 @@ fn background_subexpr_suspending_call_rejected_with_teaching_error() {
 // function — must NOT be rejected by the sub-expression guard.  worker becomes its own
 // state machine; the caller merely hands it to the runtime.  If this test fails with
 // exit 1, the guard is over-firing and the route-to-I/O-pool pattern is broken.
+// Timing bound: file-default 10s — the prior 5s bound was contention-marginal;
+// see background_from_suspending_entrypoint_runs_concurrently for the analysis.
 #[test]
 fn background_direct_spawn_of_suspending_fn_still_runs() {
-    let (stdout, _, exit_code) = run_fixture_with_timeout("v0_3_m2_background_from_sm.ynz", 5);
+    let (stdout, _, exit_code) = run_fixture("v0_3_m2_background_from_sm.ynz");
     assert_eq!(
         exit_code, 0,
         "direct spawn of a suspending fn must run successfully (exit 0). \

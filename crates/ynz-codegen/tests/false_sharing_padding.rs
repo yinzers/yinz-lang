@@ -14,7 +14,7 @@ use std::collections::HashSet;
 
 use inkwell::context::Context;
 use ynz_codegen::shape_types::{emit_shape_types, CACHE_LINE_BYTES};
-use ynz_codegen::state_machine::default_target_machine;
+use ynz_codegen::state_machine::{default_target_machine, PipelineConfig};
 use ynz_diagnostics::SourceSpan;
 use ynz_typeck::shapes::{FieldDef, ShapeDef};
 use ynz_typeck::{ShapeTable, Type};
@@ -60,7 +60,7 @@ fn tally_shape_table() -> ShapeTable {
 
 /// Measure (per-element byte offsets, total ABI size) for a named shape's struct type.
 fn measure(padded: &HashSet<String>) -> (Vec<u64>, u64) {
-    let machine = default_target_machine().expect("target machine");
+    let machine = default_target_machine(None, PipelineConfig::o0()).expect("target machine");
     let ctx = Context::create();
     let module = ctx.create_module("padding_test");
     module.set_triple(&machine.get_triple());

@@ -18,10 +18,13 @@ use inkwell::{
     basic_block::BasicBlock,
     context::Context,
     module::Module,
-    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple},
+    targets::FileType,
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
-    values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
-    AddressSpace, IntPredicate, OptimizationLevel,
+    values::{
+        BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+        PointerValue,
+    },
+    AddressSpace, IntPredicate,
 };
 use ynz_ast::nodes::{
     BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt, UnaryOpKind,
@@ -331,6 +334,9 @@ pub fn build_frame_layouts_with_resolver(
                 &suspending_refs,
                 &cpu_supported_refs,
                 &typed.expr_types,
+                // Phase 6: frame layout must reserve slots for the SAME widened
+                // crossing set the resume fn flushes/reloads — one producer verdict.
+                typed.back_edge_yield_admitted.contains(&f.name),
             );
             let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
 
@@ -775,6 +781,9 @@ fn compute_frame_size(
                         &suspending_refs,
                         &cpu_supported_refs,
                         &typed.expr_types,
+                        // Phase 6: the child-frame-size memo must match the layout's
+                        // widened crossing reservation exactly — same producer verdict.
+                        typed.back_edge_yield_admitted.contains(&f.name),
                     );
                     let crossing_slots =
                         crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
@@ -874,38 +883,31 @@ pub fn emit_artifact(
     // (shape-type emission + padded-alloca alignment); ZERO consumers of
     // `layout.arrays` exist until Phase 5's SoA lowering lands.
     layout: &ynz_typeck::soa::LayoutDecisions,
+    // The transitive effective-ownership fixpoint from `check_query` (v0.3-M7 Phase 2,
+    // FRAGO 002). `declare_function` consults THIS — never the raw AST ownership
+    // modifier — when emitting `readonly`/`noalias` parameter attributes
+    // (authoritative-derivation: consume the computed answer downstream).
+    effective_ownership: &ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<CompiledArtifact, String> {
     let context = Context::create();
     let module_id = module_identifier(source_path);
     let module = context.create_module(&module_id);
 
-    // Use the shared target-machine constructor for the default triple (Guard G1: same
-    // triple/CPU/data-layout as frame_layouts_query — byte-identical shape ABI sizes
-    // between the emitter and the query). For explicit target_triple overrides (cross-
-    // compilation and tests), construct the machine from the supplied triple directly.
-    let machine = match target_triple {
-        None => crate::state_machine::default_target_machine()?,
-        Some(t) => {
-            // Override-branch init: default_target_machine() handles it for the None branch.
-            Target::initialize_x86(&InitializationConfig::default());
-            let triple = TargetTriple::create(t);
-            module.set_triple(&triple);
-            let target = Target::from_triple(&triple)
-                .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
-            target
-                .create_target_machine(
-                    &triple,
-                    "generic",
-                    "",
-                    OptimizationLevel::None,
-                    RelocMode::Default,
-                    CodeModel::Default,
-                )
-                .ok_or_else(|| "LLVM: failed to create target machine".to_string())?
-        }
-    };
-    // Always set triple and data-layout from the machine (the shared constructor uses the
-    // default triple; the override branch already set the triple above).
+    // THE one authoritative target-machine constructor (v0.3-M7 Phase 2, risk R4):
+    // both the default-triple path (Guard G1: same triple/CPU/data-layout as
+    // frame_layouts_query — byte-identical shape ABI sizes between the emitter and
+    // the query) and the explicit target_triple override (cross-compilation and
+    // tests) route through `state_machine::default_target_machine` — never a second
+    // inline `create_target_machine` that could drift on pipeline config.
+    //
+    // Tier resolution (v0.3-M7 Phase 3): optimized by default; `YNZ_NO_OPTIMIZE=1`
+    // (set by `ynz build --no-optimize` before the first salsa call, same barrier
+    // pattern as YNZ_NO_AUTO_PARALLEL below) selects the exact pre-M7 O0 path;
+    // `YNZ_OPT_FORCE` is the dev/bench harness override. One env read, one config,
+    // driving BOTH the backend level here and the mid-end `run_passes` stage below.
+    let pipeline_config = crate::state_machine::pipeline_config_from_env();
+    let machine = crate::state_machine::default_target_machine(target_triple, pipeline_config)?;
+    // Always set triple and data-layout from the machine (covers both triple paths).
     module.set_triple(&machine.get_triple());
     module.set_data_layout(&machine.get_target_data().get_data_layout());
 
@@ -962,11 +964,19 @@ pub fn emit_artifact(
         no_auto_parallel,
         m3d_spike,
         layout,
+        effective_ownership,
     )?;
 
     module
         .verify()
         .map_err(|e| format!("LLVM module verify failed: {}", e.to_string()))?;
+
+    // Mid-end pipeline (v0.3-M7 Phase 3): after emission + verify, before object
+    // emission — the ordering the Phase 0 spike locked. No-op at the O0 tier, so
+    // `--no-optimize` reproduces the pre-M7 artifact byte-for-byte. `ir_text` is
+    // printed AFTER the passes: `--emit-ir` and the IR goldens show the IR the
+    // object was actually lowered from, never a pre-pipeline draft.
+    crate::state_machine::run_mid_end_pipeline(&module, &machine, pipeline_config)?;
 
     let ir_text = module.print_to_string().to_string();
     let obj_buf = machine
@@ -1031,6 +1041,7 @@ fn build_module<'ctx, 'g>(
     no_auto_parallel: bool,
     m3d_spike: bool,
     layout: &'g ynz_typeck::soa::LayoutDecisions,
+    effective_ownership: &'g ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<(), String> {
     // E5 compile-time-adjacent link (should-fix, cumulative M3g review): cross-check codegen's
     // AST-level CPU-ABI-support gate against typeck's resolved-level gate for every function in
@@ -1114,7 +1125,14 @@ fn build_module<'ctx, 'g>(
     // For suspending imported functions: the SM inline-poll mechanism calls the callee's
     // RESUME FUNCTION (`ynz_sm_<name>_resume`), not the outer wrapper. Both declarations
     // are emitted here — the wrapper for non-SM callers, the resume fn for SM callers.
-    for (local_name, sig) in imported_fns {
+    // Iterate in sorted order: this loop's iteration order is DECLARATION EMISSION ORDER
+    // in the module's IR text, and `imported_fns` is a per-process-seeded HashMap — unsorted
+    // iteration made multi-file `--emit-ir` output flap run-to-run (v0.3-M7 R10 determinism
+    // fix; the mono-table twin lives in typeck's MonomorphizationTable as a BTreeMap).
+    let mut imported_fns_ordered: Vec<(&String, &ynz_typeck::signatures::FunctionSig)> =
+        imported_fns.iter().collect();
+    imported_fns_ordered.sort_by_key(|(local_name, _)| local_name.as_str());
+    for (local_name, sig) in imported_fns_ordered {
         // Use the exported symbol name for the LLVM declaration. When the import is aliased
         // (`import { getValue as fetchVal }`), the exporting module compiled and exported
         // `getValue` — the LLVM external declaration must use that name so the linker
@@ -1134,20 +1152,15 @@ fn build_module<'ctx, 'g>(
                     _ => ptr.into(),
                 })
                 .collect();
-            let fn_ty = match &sig.ret {
-                Type::Nothing => ctx.void_type().fn_type(&param_types, false),
-                Type::Int => ctx.i64_type().fn_type(&param_types, false),
-                Type::Float => ctx.f64_type().fn_type(&param_types, false),
-                Type::Bool => ctx.bool_type().fn_type(&param_types, false),
-                Type::Number { precision } if *precision <= 34 => {
-                    ctx.i128_type().fn_type(&param_types, false)
-                }
-                // Errors-capable functions return `{i64, i64}` — the same ABI as the
-                // errors_result_type struct. Using ptr here produces an ABI mismatch:
-                // the importer reads an i64 where the callee returns a {i64,i64} struct,
-                // silently returning 0 instead of the real value.
-                Type::ErrorsCapable { .. } => errors_result_type(ctx).fn_type(&param_types, false),
-                _ => ptr.fn_type(&param_types, false),
+            // Return ABI from the ONE authoritative mapping (`abi_return_type`) — the
+            // same producer `declare_function` (local defs) and the mono declarations
+            // read, so the importer's declaration can never drift from the exporting
+            // module's definition (v0.3-M7 R9 by-value return ABI; this site already
+            // declared `number` returns as by-value i128 pre-fix, which the local
+            // definition path now matches instead of contradicting).
+            let fn_ty = match abi_return_type(ctx, &shape_types, &sig.ret)? {
+                None => ctx.void_type().fn_type(&param_types, false),
+                Some(t) => t.fn_type(&param_types, false),
             };
             module.add_function(llvm_name, fn_ty, None);
         }
@@ -1256,9 +1269,14 @@ fn build_module<'ctx, 'g>(
     // Pass 1 — forward-declare every non-generic function so vtables and bodies can reference them.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) if f.generics.is_empty() => {
-                declare_function(ctx, module, f, shape_table)?
-            }
+            Item::Function(f) if f.generics.is_empty() => declare_function(
+                ctx,
+                module,
+                f,
+                shape_table,
+                &shape_types,
+                effective_ownership,
+            )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
             | Item::OptionsDecl(_)
@@ -1280,7 +1298,10 @@ fn build_module<'ctx, 'g>(
                     .unwrap_or_else(|| ctx.i64_type().into())
             })
             .collect();
-        let fn_ty = match llvm_type_for_ctx(ctx, &mono_sig.ret_type) {
+        // Return ABI from the ONE authoritative mapping (`abi_return_type`) — shared
+        // with `declare_function` and the imported-fn declarations (v0.3-M7 R9
+        // by-value return ABI). Params keep `llvm_type_for_ctx` (unchanged ABI).
+        let fn_ty = match abi_return_type(ctx, &shape_types, &mono_sig.ret_type)? {
             Some(ret) => ret.fn_type(&param_llvms, false),
             None => ctx.void_type().fn_type(&param_llvms, false),
         };
@@ -1491,7 +1512,7 @@ fn lower_generic_function<'ctx>(
         typed,
         current_fn: fn_val,
         is_main: false,
-        _current_fn_ret_ty: ret_ty,
+        current_fn_ret_ty: ret_ty,
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -1541,6 +1562,8 @@ fn lower_generic_function<'ctx>(
         sm_number_errors_staging_offset: None,
         // Generic functions cannot contain `wait` — auto-parallel is never applicable.
         no_auto_parallel: false,
+        // Generic functions never SM-lower; no back-edge yield.
+        back_edge_yield: false,
         // Generic functions never reach lower_sm_block; the empty table satisfies
         // the struct field without the caller needing a real SignatureTable.
         sig_table: empty_sig_table(),
@@ -1613,16 +1636,31 @@ fn llvm_param_types<'ctx>(
 
 /// Forward-declare a function in the LLVM module (signature only, no body).
 ///
-/// Also attaches LLVM `readonly` and `noalias` attributes to pointer parameters
-/// based on the declared ownership modifier:
-/// - `share` / inferred (None) → `readonly` + `noalias`
-/// - `lend` → `noalias` only
-/// - `give` → no attributes (callee owns the data, may mutate)
+/// Also attaches LLVM `readonly` and `noalias` attributes to pointer parameters,
+/// consulting typeck's EFFECTIVE-ownership analysis — never the raw AST modifier
+/// (v0.3-M7 Phase 2, FRAGO 002; authoritative-derivation: consume the computed
+/// answer). The raw-AST version defaulted bare params to `share` and emitted a
+/// FALSE `readonly` on a bare param the body mutates — the optimizer deletes the
+/// "impossible" store (RED fixture `v0_3_m7_p1_bare_param_mutation.ynz`).
+///
+/// - effective `Reads` (declared `share`, or a bare param proven read-only) →
+///   `readonly` + `noalias`. Read-read overlap between arguments is explicitly
+///   permitted by LLVM's `noalias` semantics, so the pair is honest even when the
+///   same value is passed to two read-only positions.
+/// - effective `Writes` (declared `lend`, or a bare param the body mutates) →
+///   `noalias` only. The exclusivity `noalias` asserts is enforced at every call
+///   site by typeck's aliasing-call rejection (same FRAGO): a call passing
+///   overlapping values where any position is write-capable is a compile error.
+/// - effective `Unknown` → NO attributes. The analysis cannot prove read-only, so
+///   any claim would be hope, not knowledge — degrade to conservative.
+/// - declared `give` → no attributes (callee owns the data, may mutate or free).
 fn declare_function<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
     f: &FunctionDecl,
     shape_table: &ShapeTable,
+    shape_types: &ShapeLlvmTypes<'ctx>,
+    effective_ownership: &ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<(), String> {
     let params = llvm_param_types(ctx, f, shape_table);
     let fn_ty = if f.name == "entrypoint" {
@@ -1634,14 +1672,13 @@ fn declare_function<'ctx>(
         let result_ty = errors_result_type(ctx);
         result_ty.fn_type(&params, false)
     } else {
-        match &f.return_type {
-            ynz_ast::nodes::Type::Nothing => ctx.void_type().fn_type(&params, false),
-            ynz_ast::nodes::Type::Int => ctx.i64_type().fn_type(&params, false),
-            ynz_ast::nodes::Type::Float => ctx.f64_type().fn_type(&params, false),
-            ynz_ast::nodes::Type::Bool => ctx.bool_type().fn_type(&params, false),
-            _ => ctx
-                .ptr_type(AddressSpace::default())
-                .fn_type(&params, false),
+        // The return ABI comes from the ONE authoritative mapping (`abi_return_type`,
+        // shared with the imported-fn and mono declaration sites) — v0.3-M7 R9:
+        // number/maybe/shape return BY VALUE, never a pointer to a callee alloca.
+        let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+        match abi_return_type(ctx, shape_types, &ret_ty)? {
+            None => ctx.void_type().fn_type(&params, false),
+            Some(t) => t.fn_type(&params, false),
         }
     };
     // `entrypoint` is the Yinz name; the C ABI entry point must be `main` for the linker.
@@ -1660,12 +1697,16 @@ fn declare_function<'ctx>(
         if !is_ptr_param(&param.ty, shape_table) {
             continue;
         }
-        let ownership = param
-            .ownership
-            .as_ref()
-            .unwrap_or(&OwnershipModifier::Share);
-        match ownership {
-            OwnershipModifier::Share => {
+        // `give` transfers ownership — the callee may mutate or free; no claims.
+        if param.ownership == Some(OwnershipModifier::Give) {
+            continue;
+        }
+        // Consult the authoritative effective-ownership answer (see doc comment).
+        // A declared `share` that reaches `Writes` is already a typeck compile error
+        // (transitive share violation), so declared modifiers never contradict the
+        // effective answer in a program that reaches codegen.
+        match effective_ownership.ownership_of(&f.name, i) {
+            ynz_typeck::EffectiveOwnership::Reads => {
                 fn_val.add_attribute(
                     AttributeLoc::Param(i as u32),
                     ctx.create_enum_attribute(readonly_kind, 0),
@@ -1675,13 +1716,14 @@ fn declare_function<'ctx>(
                     ctx.create_enum_attribute(noalias_kind, 0),
                 );
             }
-            OwnershipModifier::Lend => {
+            ynz_typeck::EffectiveOwnership::Writes => {
                 fn_val.add_attribute(
                     AttributeLoc::Param(i as u32),
                     ctx.create_enum_attribute(noalias_kind, 0),
                 );
             }
-            OwnershipModifier::Give => {}
+            // Cannot prove read-only or exclusive — claim nothing (conservative).
+            ynz_typeck::EffectiveOwnership::Unknown => {}
         }
     }
 
@@ -1703,6 +1745,67 @@ fn declare_function<'ctx>(
 ///     type before dereferencing.
 fn errors_result_type(ctx: &Context) -> inkwell::types::StructType<'_> {
     ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
+}
+
+/// The ONE C-ABI return-type mapping for user functions (v0.3-M7 Phase 3, R9/FRAGO 005).
+///
+/// Consumed by ALL THREE declaration sites — local `declare_function`, the imported-fn
+/// forward declarations (Pass 0.25), and the monomorphized-generic declarations
+/// (Pass 1.5) — so the return ABI can never drift between them
+/// (authoritative-derivation: one producer; the pre-fix imported path already declared
+/// `number` returns as by-value `i128` while the local path declared `ptr` — exactly
+/// the twin-drift class this unification closes).
+///
+/// # The dangling-stack-return fix (R9)
+///
+/// Value classes whose payload used to be returned as `ret ptr <callee-own-alloca>`
+/// (the "stack-backed, copy-and-forget ABI" — UB the optimizer legally exploits by
+/// deleting stores to the dying alloca) now return BY VALUE, so callee-owned stack
+/// memory is never the returned storage:
+///
+/// - `number` (N ≤ 34) → `i128` by value (rax:rdx — no memory at all).
+/// - `maybe<T>`        → `{i64, i64}` envelope by value (same registers).
+/// - `Shape`           → the shape's LLVM struct by value (the backend lowers large
+///   aggregates to an implicit sret slot the CALLER owns). Interior shape/maybe
+///   fields are already counted heap cells (`store_field`), so the shallow copy is
+///   complete.
+///
+/// Everything heap-backed (string, array, map, sensitive, bignum) keeps the `ptr`
+/// return. `fixed<T>` and union returns also keep `ptr`: fixed returns are broken at
+/// BOTH tiers today (pre-existing size-loss bug, not an O0-reliant class) and union
+/// read-back after a call is loudly blocked (the documented union KNOWN-HOLE posture)
+/// — neither is silently-wrong-under-optimization, and both are surfaced findings,
+/// not ride-along fixes.
+///
+/// Returns `Ok(None)` for `Nothing` (void).
+fn abi_return_type<'ctx>(
+    ctx: &'ctx Context,
+    shape_types: &ShapeLlvmTypes<'ctx>,
+    ret: &Type,
+) -> Result<Option<BasicTypeEnum<'ctx>>, String> {
+    Ok(match ret {
+        Type::Nothing => None,
+        Type::Int => Some(ctx.i64_type().into()),
+        Type::Float => Some(ctx.f64_type().into()),
+        Type::Bool => Some(ctx.bool_type().into()),
+        Type::Number { precision } if *precision <= 34 => Some(ctx.i128_type().into()),
+        Type::ErrorsCapable { .. } => Some(errors_result_type(ctx).into()),
+        Type::Maybe { .. } => Some(
+            ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
+                .into(),
+        ),
+        Type::Shape { name } => {
+            let struct_ty = shape_types.named.get(name).ok_or_else(|| {
+                format!(
+                    "abi_return_type: no LLVM struct type for shape `{name}` — a \
+                     shape-returning function's return type must resolve to a declared \
+                     shape (is this an unresolved `Self` return?)"
+                )
+            })?;
+            Some((*struct_ty).into())
+        }
+        _ => Some(ctx.ptr_type(AddressSpace::default()).into()),
+    })
 }
 
 /// True when the AST type will be passed as a pointer in LLVM (not a scalar value).
@@ -1762,7 +1865,7 @@ struct Cg<'ctx, 'g> {
     /// True when this function is `main` (affects return type and implicit ret).
     is_main: bool,
     /// Return type of the current function.
-    _current_fn_ret_ty: Type,
+    current_fn_ret_ty: Type,
     locals: HashMap<String, PointerValue<'ctx>>,
     // M4 additions:
     shape_table: &'g ShapeTable,
@@ -1913,6 +2016,12 @@ struct Cg<'ctx, 'g> {
     // When false (the default), `lower_sm_block` runs `partition_independent_groups`
     // and routes independent groups through `emit_independent_group_poll`.
     no_auto_parallel: bool,
+    // v0.3-M7 Phase 6: true iff the CURRENT function is admitted to the back-edge
+    // poll-yield transform (typeck's `TypedModule::back_edge_yield_admitted` — the ONE
+    // producer). Widens `stmt_needs_sm_walker` so every qualifying loop routes through
+    // the SM loop arms, and gates the poll-yield emission at their back edges. False in
+    // every non-resume-fn Cg (plain functions and generic bodies have no frame to yield).
+    back_edge_yield: bool,
     // v0.3-M3b Phase 4: signature table for write-effect classification in the
     // independence analysis. Used ONLY by `lower_sm_block` → `partition_independent_groups`.
     // When `no_auto_parallel` is true, this is never accessed.
@@ -2184,6 +2293,77 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder.position_at_end(bb);
         }
         Ok(slot)
+    }
+
+    /// Capture the stack pointer at a loop's preheader via `llvm.stacksave.p0`.
+    ///
+    /// Fix for the general hot-loop O0 stack-exhaustion SIGSEGV (roadmap ledger row 439,
+    /// v0.3-M7 Phase 4 / risk R2): statement- and expression-level allocas emitted inside
+    /// a loop body execute once per ITERATION, and at `-O0` (the `--no-optimize` escape
+    /// hatch) nothing releases them — the frame grows ~16 bytes per dynamic alloca per
+    /// iteration until the 8 MB stack guard faults (measured: ~18.75 B/visit on the
+    /// calibration workload; SIGSEGV between 262,144 and 524,288 visits). The optimized
+    /// default only survives because mem2reg incidentally promotes the slots — the
+    /// emitted IR itself is the defect.
+    ///
+    /// The pairing contract (`loop_stack_restore` at every back-edge AND at loop exit)
+    /// releases each iteration's allocas, so the loop reuses one iteration-frame instead
+    /// of accumulating one per trip. SAFE because (a) the plain loop emitters only ever
+    /// see fully-non-suspending bodies — `stmt_needs_sm_walker` (the authoritative
+    /// suspend-set consumer) routes any suspending loop to the SM `sm_while_header` arm,
+    /// which never uses this; (b) Yinz block scoping ends body-local lifetimes at the
+    /// iteration; (c) for the HEAP-UPGRADED spawn-arg set — plain-ident args with
+    /// inferred give/copy ownership and explicit `.copy()` args, the `is_heap_arg` gate
+    /// in `prepare_bg_arg_for_ctx` — the only in-loop alloca whose pointer legitimately
+    /// outlives the call consuming it is `bg_ctx` itself, and `ynz_rt_spawn*` copies
+    /// those bytes synchronously before returning (documented at its emission site).
+    ///
+    /// (c) also covers the fr23 shapes (FRAGO 011 → FRAGO 016-021's allowlist →
+    /// default-deny redesign, FRAGO 022): any non-ident spawn receiver/arg that
+    /// typeck's `bg_arg_is_provably_safe` does NOT prove safe (which now includes
+    /// every confirmed-live shape across all 6 rounds, PLUS any future shape by
+    /// construction — see that function's doc comment) is recorded as `Give` and
+    /// heap-upgraded by the same `is_heap_arg` span lookup as plain idents, so no
+    /// in-loop payload alloca rides raw into a task ctx. Locked green by
+    /// `crates/ynz-driver/tests/fr23_uaf_planned_red.rs` (fixtures
+    /// `v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz` /
+    /// `v0_3_m7_fr23_call_materialized_spawn_receiver.ynz`).
+    ///
+    /// The save must be emitted AFTER the loop's own machinery allocas and iterator
+    /// evaluation (e.g. a `fixed_arr` literal buffer the loop reads every iteration) —
+    /// restore only releases allocas created after the save point.
+    fn loop_stack_save(&self) -> Result<PointerValue<'ctx>, String> {
+        let f = match self.module.get_function("llvm.stacksave.p0") {
+            Some(f) => f,
+            None => {
+                let ty = self.ptr().fn_type(&[], false);
+                self.module.add_function("llvm.stacksave.p0", ty, None)
+            }
+        };
+        self.builder
+            .build_call(f, &[], "loop_sp")
+            .map_err(|e| format!("loop stacksave: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "llvm.stacksave returned void".to_string())
+            .map(|v| v.into_pointer_value())
+    }
+
+    /// Release the current iteration's allocas by restoring the stack pointer captured
+    /// by `loop_stack_save` — emitted at every loop back-edge and at loop exit. See
+    /// `loop_stack_save` for the full rationale and safety argument.
+    fn loop_stack_restore(&self, sp: PointerValue<'ctx>) -> Result<(), String> {
+        let f = match self.module.get_function("llvm.stackrestore.p0") {
+            Some(f) => f,
+            None => {
+                let ty = self.ctx.void_type().fn_type(&[self.ptr().into()], false);
+                self.module.add_function("llvm.stackrestore.p0", ty, None)
+            }
+        };
+        self.builder
+            .build_call(f, &[sp.into()], "")
+            .map_err(|e| format!("loop stackrestore: {e}"))?;
+        Ok(())
     }
 
     /// Build an alloca holding a `maybe<T>` with `has_value = 0`.
@@ -3141,62 +3321,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| format!("{e}"))?
             .into_int_value();
 
-        let final_bits = if let Type::Shape { ref name } = self.resolve_type(inner_ty) {
-            let size = self.shape_abi_size_const(name, "maybe_to_owned_dest")?;
-            let has = self
-                .builder
-                .build_int_compare(
-                    IntPredicate::NE,
-                    flag,
-                    self.i64().const_zero(),
-                    &format!("{site}_has_pay"),
-                )
-                .map_err(|e| format!("{e}"))?;
-            let pre_bb = self
-                .builder
-                .get_insert_block()
-                .ok_or_else(|| format!("{site}: builder has no insert block"))?;
-            let copy_bb = self.append_block(&format!("{site}_pay_copy"));
-            let cont_bb = self.append_block(&format!("{site}_pay_cont"));
-            self.builder
-                .build_conditional_branch(has, copy_bb, cont_bb)
-                .map_err(|e| format!("{e}"))?;
-            self.builder.position_at_end(copy_bb);
-            // Payload destination: heap cells allocate INSIDE the guarded block
-            // (no cell burned for a `none`); entry-block allocas are free and
-            // position-independent, so the same acquisition point serves both.
-            let owned_pay = if heap {
-                self.heap_cell(size, &format!("{site}_pay"))?
-            } else {
-                let struct_ty = self.shape_types.get(name).ok_or_else(|| {
-                    format!("maybe_to_owned_dest: LLVM type for `{name}` missing")
-                })?;
-                self.alloca_in_entry_llvm(struct_ty, &format!("{site}_pay_own"))?
-            };
-            let src_pay = self
-                .builder
-                .build_int_to_ptr(bits, self.ptr(), &format!("{site}_src_pay"))
-                .map_err(|e| format!("{e}"))?;
-            self.builder
-                .build_memcpy(owned_pay, 1, src_pay, 1, size)
-                .map_err(|e| format!("maybe_to_owned_dest payload memcpy: {e}"))?;
-            let own_bits = self
-                .builder
-                .build_ptr_to_int(owned_pay, self.i64(), &format!("{site}_own_bits"))
-                .map_err(|e| format!("{e}"))?;
-            self.builder
-                .build_unconditional_branch(cont_bb)
-                .map_err(|e| format!("{e}"))?;
-            self.builder.position_at_end(cont_bb);
-            let phi = self
-                .builder
-                .build_phi(self.i64(), &format!("{site}_final_bits"))
-                .map_err(|e| format!("{e}"))?;
-            phi.add_incoming(&[(&own_bits, copy_bb), (&bits, pre_bb)]);
-            phi.as_basic_value().into_int_value()
-        } else {
-            bits
-        };
+        let final_bits = self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap)?;
 
         let dst_flag_gep = self
             .builder
@@ -3213,6 +3338,216 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_store(dst_val_gep, final_bits)
             .map_err(|e| format!("{e}"))?;
         Ok(owned_env)
+    }
+
+    /// The ONE flag-guarded maybe-PAYLOAD ownership copy (extracted from
+    /// `maybe_to_owned_dest`, v0.3-M7 Phase 3 / R9): given a maybe envelope's
+    /// loaded `flag` and `bits`, return payload bits that are STABLE past the
+    /// producing site. Two inners carry NON-self-contained bits and promote,
+    /// guarded on `flag != 0` so a `none` burns nothing:
+    /// - Shape: the payload pointer is cloned into a counted heap cell
+    ///   (`heap = true`) or an entry-block alloca (`heap = false`).
+    /// - `number` (decimal128, N ≤ 34): the bits are ptr_to_int of a 16-byte
+    ///   i128 STACK slot on the producing frame (FRAGO 009 — the 8th R9
+    ///   member; NOT a self-contained value). A copy that must survive that
+    ///   frame (`heap = true`: by-value returns, persist cells, background
+    ///   crossings) clones the slot via the ONE authoritative
+    ///   `number_to_heap_cell` — never a second promotion path. An in-frame
+    ///   copy (`heap = false`) keeps the pointer: the slot is frame-local
+    ///   (stable against per-site reuse) and outlives the binding.
+    ///
+    /// The remaining inners' bits are self-contained i64 values or
+    /// already-heap-backed pointers (string / array / map) and pass through.
+    ///
+    /// Consumers: `maybe_to_owned_dest` (binding/persist copies) AND the by-value
+    /// return paths (non-SM `-> maybe<T>` return + the SM resume-side maybe return),
+    /// which must promote a wide payload to the heap because the callee's stack —
+    /// where the payload alloca lives — dies at `ret`. One promotion discipline,
+    /// never a return-side twin (authoritative-derivation).
+    fn maybe_payload_stable_bits(
+        &self,
+        flag: inkwell::values::IntValue<'ctx>,
+        bits: inkwell::values::IntValue<'ctx>,
+        inner_ty: &Type,
+        site: &str,
+        heap: bool,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        enum WidePayload {
+            Shape(String),
+            Number,
+        }
+        let wide = match self.resolve_type(inner_ty) {
+            Type::Shape { name } => WidePayload::Shape(name),
+            Type::Number { precision } if precision <= 34 && heap => WidePayload::Number,
+            _ => return Ok(bits),
+        };
+        let has = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                &format!("{site}_has_pay"),
+            )
+            .map_err(|e| format!("{e}"))?;
+        let pre_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        let copy_bb = self.append_block(&format!("{site}_pay_copy"));
+        let cont_bb = self.append_block(&format!("{site}_pay_cont"));
+        self.builder
+            .build_conditional_branch(has, copy_bb, cont_bb)
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(copy_bb);
+        let src_pay = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_src_pay"))
+            .map_err(|e| format!("{e}"))?;
+        let owned_pay = match &wide {
+            WidePayload::Shape(name) => {
+                let size = self.shape_abi_size_const(name, "maybe_payload_stable_bits")?;
+                // Payload destination: heap cells allocate INSIDE the guarded block
+                // (no cell burned for a `none`); entry-block allocas are free and
+                // position-independent, so the same acquisition point serves both.
+                let owned_pay = if heap {
+                    self.heap_cell(size, &format!("{site}_pay"))?
+                } else {
+                    let struct_ty = self.shape_types.get(name).ok_or_else(|| {
+                        format!("maybe_payload_stable_bits: LLVM type for `{name}` missing")
+                    })?;
+                    self.alloca_in_entry_llvm(struct_ty, &format!("{site}_pay_own"))?
+                };
+                self.builder
+                    .build_memcpy(owned_pay, 1, src_pay, 1, size)
+                    .map_err(|e| format!("maybe_payload_stable_bits payload memcpy: {e}"))?;
+                owned_pay
+            }
+            // Number reaches here only with `heap = true` (the match above passes
+            // in-frame copies through) — the one authoritative i128 promotion.
+            WidePayload::Number => self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?,
+        };
+        let own_bits = self
+            .builder
+            .build_ptr_to_int(owned_pay, self.i64(), &format!("{site}_own_bits"))
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(self.i64(), &format!("{site}_final_bits"))
+            .map_err(|e| format!("{e}"))?;
+        phi.add_incoming(&[(&own_bits, copy_bb), (&bits, pre_bb)]);
+        Ok(phi.as_basic_value().into_int_value())
+    }
+
+    /// Load a maybe envelope's `(flag, bits)` pair from its `{i64, i64}` storage.
+    fn load_maybe_env_pair(
+        &self,
+        env_ptr: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let flag_gep = self
+            .builder
+            .build_struct_gep(self.maybe_type(), env_ptr, 0, &format!("{site}_flag_gep"))
+            .map_err(|e| format!("{e}"))?;
+        let flag = self
+            .builder
+            .build_load(self.i64(), flag_gep, &format!("{site}_flag"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let bits_gep = self
+            .builder
+            .build_struct_gep(self.maybe_type(), env_ptr, 1, &format!("{site}_bits_gep"))
+            .map_err(|e| format!("{e}"))?;
+        let bits = self
+            .builder
+            .build_load(self.i64(), bits_gep, &format!("{site}_bits"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        Ok((flag, bits))
+    }
+
+    /// Re-materialize a BY-VALUE user-call result into the internal pointer
+    /// representation the rest of codegen expects (v0.3-M7 Phase 3 / R9).
+    ///
+    /// The R9 return-ABI fix makes user functions return `number` as `i128`,
+    /// `maybe<T>` as `{i64, i64}`, and shapes as their LLVM struct BY VALUE (see
+    /// `abi_return_type`). Internally, codegen still represents those values as
+    /// pointers to storage — so every C-ABI call reception site routes through
+    /// THIS one wrapper: it allocas a CALLER-OWNED slot, stores the returned
+    /// aggregate, and yields the slot pointer. The slot is the caller's own stack —
+    /// exactly the ownership the old callee-alloca ABI faked.
+    ///
+    /// Every other return class passes through untouched.
+    fn wrap_abi_call_result(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        ret_ty: &Type,
+        site: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match self.resolve_type(ret_ty) {
+            Type::Number { precision } if precision <= 34 => {
+                let iv = val.into_int_value();
+                let slot = self
+                    .builder
+                    .build_alloca(self.i128(), &format!("{site}_num_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                // The fresh alloca is ABI-aligned (16) by construction; make the
+                // guarantee explicit so `claim_i128_align_by_provenance` keeps it.
+                if let Some(inst) = slot.as_instruction() {
+                    inst.set_alignment(16)
+                        .map_err(|e| format!("{site}_num_ret align: {e}"))?;
+                }
+                self.builder
+                    .build_store(slot, iv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            Type::Maybe { .. } => {
+                let sv = val.into_struct_value();
+                let slot = self
+                    .builder
+                    .build_alloca(self.maybe_type(), &format!("{site}_maybe_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                self.builder
+                    .build_store(slot, sv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            Type::Shape { ref name } if !name.is_empty() => {
+                let sv = val.into_struct_value();
+                let struct_ty = self.shape_types.get(name).ok_or_else(|| {
+                    format!("wrap_abi_call_result: LLVM type for shape `{name}` missing")
+                })?;
+                let slot = self
+                    .builder
+                    .build_alloca(struct_ty, &format!("{site}_shape_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                // Mirror lower_struct_lit's padded-shape discipline: a false-sharing-
+                // padded shape's stack slot is 64-byte aligned so each field's 64-byte
+                // slot coincides with one cache line.
+                if self.layout.padded_shapes.contains(name) {
+                    if let Some(inst) = slot.as_instruction() {
+                        inst.set_alignment(crate::shape_types::CACHE_LINE_BYTES)
+                            .map_err(|e| format!("align padded ret slot {name}: {e}"))?;
+                    }
+                }
+                self.builder
+                    .build_store(slot, sv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            _ => Ok(val),
+        }
     }
 
     /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
@@ -3474,6 +3809,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .builder
             .build_load(self.i128(), num_ptr, &format!("{site}_num_ld"))
             .map_err(|e| format!("number_to_heap_cell load {site}: {e}"))?;
+        // A number value pointer's provenance is either a 16-aligned alloca/heap cell
+        // OR an 8-aligned frame-interior address (an SM staged-param pointer or an EC
+        // staging slot) — claim the guaranteed floor, never ABI 16.
+        state_machine::claim_frame_i128_align(
+            bits.as_instruction_value()
+                .ok_or_else(|| format!("number_to_heap_cell load {site}: no instruction value"))?,
+        )?;
         self.builder
             .build_store(cell, bits)
             .map_err(|e| format!("number_to_heap_cell store {site}: {e}"))?;
@@ -4090,7 +4432,7 @@ fn lower_function<'ctx, 'g>(
         typed,
         current_fn: fn_val,
         is_main,
-        _current_fn_ret_ty: ret_ty,
+        current_fn_ret_ty: ret_ty,
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -4130,6 +4472,8 @@ fn lower_function<'ctx, 'g>(
         sm_number_errors_staging_offset: None,
         // Non-SM functions cannot contain independent suspending groups.
         no_auto_parallel: false,
+        // Non-SM functions have no frame and cannot yield — the documented residual.
+        back_edge_yield: false,
         // sig_table unused for non-SM functions — independence analysis runs only in
         // lower_sm_block which is never reached from the non-SM path.
         sig_table,
@@ -4341,12 +4685,18 @@ fn lower_function_with_waits<'ctx, 'g>(
     } else {
         HashSet::new()
     };
+    // v0.3-M7 Phase 6: the admission verdict for THIS function — typeck's ONE producer
+    // (`back_edge_yield_admission`), threaded into the crossing collection, the
+    // suspension-point count, and the SM-walker routing below so all three walks consume
+    // the identical qualifying predicate (authoritative-derivation.md; R8).
+    let back_edge_yield = typed.back_edge_yield_admitted.contains(&f.name);
     let crossing_names: Vec<String> = crossing_local_names_with_cpu_spike(
         &f.body.stmts,
         &param_name_refs,
         &suspending_refs,
         &cpu_supported_refs,
         &typed.expr_types,
+        back_edge_yield,
     );
 
     // Slot index layout: params occupy slots [0..n_params), crossing locals occupy
@@ -4526,7 +4876,8 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Pre-create state blocks.
     // Count ALL suspension points: explicit `wait` nodes + calls to suspending callees.
     // Each suspension point needs a poll-loop continuation state.
-    let n_waits_base = count_suspension_points(&f.body, suspend_set, &typed.expr_types);
+    let n_waits_base =
+        count_suspension_points(&f.body, suspend_set, &typed.expr_types, back_edge_yield);
     // Spike: a CPU-parallel group occupies two states — the spawn state (state 0, which is
     // the initial dispatch state, always present) and the poll state (state 1, the extra one).
     // After emit_cpu_group_spawn_join, *current_state is advanced by 2. Any subsequent
@@ -4586,7 +4937,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         typed,
         current_fn: resume_fn,
         is_main: false,
-        _current_fn_ret_ty: Type::Nothing, // resume fn returns i32, not the Yinz type
+        current_fn_ret_ty: Type::Nothing, // resume fn returns i32, not the Yinz type
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -4631,6 +4982,9 @@ fn lower_function_with_waits<'ctx, 'g>(
         // When set, lower_sm_block skips independence analysis and lowers all stmts
         // sequentially — the TRUE dumb-sequential baseline (not a shared-analysis no-op).
         no_auto_parallel,
+        // v0.3-M7 Phase 6: thread typeck's admission verdict (the ONE producer) into
+        // this resume fn's routing + back-edge emission.
+        back_edge_yield,
         // sig_table forwarded so independence analysis can read param_ownerships
         // without re-deriving write effects from scratch (corpse b compliance).
         sig_table,
@@ -5158,6 +5512,12 @@ fn lower_function_with_waits<'ctx, 'g>(
                 .build_load(ctx.i128_type(), staging_ptr, "wrap_ec_i128")
                 .map_err(|e| format!("ec wrapper load i128: {e}"))?
                 .into_int_value();
+            // Staging slot is frame-interior: only 8-aligned — claim that, not ABI 16.
+            state_machine::claim_frame_i128_align(
+                i128_val
+                    .as_instruction_value()
+                    .ok_or("ec wrapper load i128: no instruction value")?,
+            )?;
             let heap_ptr = builder
                 .build_call(
                     rt.ynz_alloc,
@@ -5254,38 +5614,49 @@ fn lower_function_with_waits<'ctx, 'g>(
             }
             Type::Number { precision } if *precision <= 34 => {
                 // Decimal128 (i128): the resume fn stored the full 16-byte i128 value
-                // directly in the 16-byte return slot. The wrapper is declared as ptr-returning;
-                // the non-SM `number` lowering returns a pointer to a caller-local i128 the
-                // caller copies out immediately and never frees (a stack-backed, copy-and-forget
-                // ABI — see the non-SM `addUp`/`combine` lowering: `ret ptr %resultN` where
-                // `%resultN = alloca i128`). The SM wrapper MUST return the same shape so the
-                // single shared caller contract holds for both lowerings. A heap allocation here
-                // would have no owner: no `number` call site frees its returned pointer (the
-                // non-SM ABI taught every caller it is unowned), so a heap block leaks once per
-                // promoted `number` returned out of its function. Mirror the non-SM ABI: copy the
-                // i128 into a wrapper-local stack slot, free the frame, return that slot's
-                // pointer. The pointee lives until this wrapper returns; the caller's copy
-                // happens at the call site before the slot is reused — identical to the non-SM
-                // path. (Freeing inside the wrapper is impossible: the caller's copy is at its
-                // own call site, after this return — a free here would dangle the pointee.)
+                // directly in the 16-byte return slot. v0.3-M7 R9: the wrapper is
+                // declared i128-returning (`abi_return_type`) — load the value and
+                // return it BY VALUE. The old shape (copy into a wrapper-local alloca,
+                // `ret ptr` to it — the "stack-backed, copy-and-forget ABI") was UB the
+                // optimizer legally exploited: stores to the dying alloca were deleted
+                // and callers read garbage out of the dead wrapper frame.
                 let i128_val =
                     state_machine::load_return_value_i128(ctx, &builder, frame_ptr, "ret_i128")?;
-                let ret_slot = builder
-                    .build_alloca(ctx.i128_type(), "ret_dec_slot")
-                    .map_err(|e| format!("ret_dec_slot: {e}"))?;
-                builder
-                    .build_store(ret_slot, i128_val)
-                    .map_err(|e| format!("ret_dec_store: {e}"))?;
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
                 builder
-                    .build_return(Some(&ret_slot))
+                    .build_return(Some(&i128_val))
                     .map_err(|e| format!("wrapper number ret: {e}"))?;
             }
+            Type::Maybe { .. } => {
+                // v0.3-M7 R9: the resume fn stored the maybe envelope's (flag, bits)
+                // pair in the 16-byte return slot (same +0/+8 pair layout as the
+                // errors ABI); rebuild the {i64, i64} envelope and return it BY VALUE —
+                // the wrapper is declared {i64,i64}-returning per `abi_return_type`.
+                let (flag, bits) =
+                    state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                let env_ty =
+                    ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false);
+                let mut env = env_ty.const_zero();
+                env = builder
+                    .build_insert_value(env, flag, 0, "wrap_maybe_flag")
+                    .map_err(|e| format!("wrapper maybe flag insert: {e}"))?
+                    .into_struct_value();
+                env = builder
+                    .build_insert_value(env, bits, 1, "wrap_maybe_bits")
+                    .map_err(|e| format!("wrapper maybe bits insert: {e}"))?
+                    .into_struct_value();
+                builder
+                    .build_return(Some(&env))
+                    .map_err(|e| format!("wrapper maybe ret: {e}"))?;
+            }
+            // Shape stays in the pointer group below only nominally: typeck's
+            // WideValueSuspendingReturn rejects every `-> Shape` suspending function,
+            // so this arm is unreachable for shapes today.
             Type::String
             | Type::Shape { .. }
             | Type::BuiltinArray { .. }
             | Type::BuiltinFixed { .. }
-            | Type::Maybe { .. }
             | Type::BuiltinMap { .. }
             | Type::Union { .. }
             | Type::Sensitive { .. } => {
@@ -5326,11 +5697,12 @@ fn count_suspension_points(
     block: &ynz_ast::nodes::Block,
     suspend_set: &SuspendSet,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> usize {
     block
         .stmts
         .iter()
-        .map(|s| count_suspension_stmt(s, suspend_set, expr_types))
+        .map(|s| count_suspension_stmt(s, suspend_set, expr_types, back_edge_yield))
         .sum()
 }
 
@@ -5338,6 +5710,7 @@ fn count_suspension_stmt(
     stmt: &Stmt,
     suspend_set: &SuspendSet,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> usize {
     match stmt {
         Stmt::Expr(e) => count_suspension_expr(e, suspend_set, expr_types),
@@ -5363,15 +5736,22 @@ fn count_suspension_stmt(
         }
         Stmt::If { cond, body, .. } => {
             count_suspension_expr(cond, suspend_set, expr_types)
-                + count_suspension_points(body, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types, back_edge_yield)
         }
+        // v0.3-M7 Phase 6: in an ADMITTED function, every QUALIFYING loop's back edge is
+        // one extra poll-yield continuation state — counted via THE one predicate
+        // (`ynz_typeck::loop_stmt_back_edge_yields`), exactly matching the state the SM
+        // loop arm claims at emission (authoritative-derivation.md; the M3d/M3e
+        // envelope-narrowing family is exactly a count-vs-claim drift).
         Stmt::While { cond, body, .. } => {
-            count_suspension_expr(cond, suspend_set, expr_types)
-                + count_suspension_points(body, suspend_set, expr_types)
+            usize::from(back_edge_yield && ynz_typeck::loop_stmt_back_edge_yields(stmt, expr_types))
+                + count_suspension_expr(cond, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types, back_edge_yield)
         }
         Stmt::For { iter, body, .. } => {
-            count_suspension_expr(iter, suspend_set, expr_types)
-                + count_suspension_points(body, suspend_set, expr_types)
+            usize::from(back_edge_yield && ynz_typeck::loop_stmt_back_edge_yields(stmt, expr_types))
+                + count_suspension_expr(iter, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types, back_edge_yield)
         }
         Stmt::Match {
             scrutinee,
@@ -5382,11 +5762,13 @@ fn count_suspension_stmt(
             count_suspension_expr(scrutinee, suspend_set, expr_types)
                 + arms
                     .iter()
-                    .map(|a| count_suspension_points(&a.body, suspend_set, expr_types))
+                    .map(|a| {
+                        count_suspension_points(&a.body, suspend_set, expr_types, back_edge_yield)
+                    })
                     .sum::<usize>()
-                + else_arm
-                    .as_ref()
-                    .map_or(0, |b| count_suspension_points(b, suspend_set, expr_types))
+                + else_arm.as_ref().map_or(0, |b| {
+                    count_suspension_points(b, suspend_set, expr_types, back_edge_yield)
+                })
         }
     }
 }
@@ -5461,6 +5843,12 @@ fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
     stmt_contains_wait(stmt)
         || stmt_contains_suspending_call(stmt, cg.suspend_set, &cg.typed.expr_types)
         || ynz_typeck::stmt_contains_conduit_suspend(stmt, &cg.typed.expr_types)
+        // v0.3-M7 Phase 6: in an ADMITTED function, a statement that IS or CONTAINS a
+        // qualifying loop routes through the SM walker so the loop reaches its SM arm's
+        // back-edge poll-yield (a wait-free `if` wrapping a hot loop must not strand the
+        // loop in plain lowering). THE one containment predicate — never re-derived.
+        || (cg.back_edge_yield
+            && ynz_typeck::stmt_contains_back_edge_yield(stmt, &cg.typed.expr_types))
 }
 
 /// True if the statement contains a direct call to a suspending user-defined function.
@@ -6363,6 +6751,11 @@ fn flush_var_slot_to_frame<'ctx>(
                 .build_load(ctx.i128_type(), dec_ptr, &format!("{name}_flush_i128"))
                 .map_err(|e| format!("crossing flush ec_num load i128 {name}: {e}"))?
                 .into_int_value();
+            // The ok-word points at the callee's frame-interior staging slot: only
+            // 8-aligned — claim that, not ABI 16.
+            state_machine::claim_frame_i128_align(i128_val.as_instruction_value().ok_or_else(
+                || format!("crossing flush ec_num load i128 {name}: no instruction value"),
+            )?)?;
             let lo = cg
                 .builder
                 .build_int_truncate(i128_val, ctx.i64_type(), &format!("{name}_flush_lo"))
@@ -6936,6 +7329,8 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
 
             // Body: lower via SM block walker so nested waits consume continuation states.
             cg.builder.position_at_end(while_body_bb);
+            // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+            let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
             lower_sm_block(
                 cg,
                 body,
@@ -6949,11 +7344,26 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 current_state,
             )?;
             if !is_block_terminated(cg) {
-                // Body didn't contain a return; flush preempt hook then loop back to header.
-                emit_loop_preempt(cg)?;
-                cg.builder
-                    .build_unconditional_branch(while_header_bb)
-                    .map_err(|e| format!("sm while body->header branch: {e}"))?;
+                // Body didn't contain a return: release this iteration's allocas (leaf
+                // wait-free bodies only), then the back edge — a poll-yield suspension
+                // point when this function is admitted (Phase 6), else the legacy
+                // budget-tick + branch.
+                if let Some(sp) = loop_sp {
+                    cg.loop_stack_restore(sp)?;
+                }
+                emit_sm_loop_back_edge(
+                    cg,
+                    while_header_bb,
+                    "sm while body->header branch",
+                    state_blocks,
+                    pending_block,
+                    frame_ptr,
+                    waker_ctx,
+                    param_names,
+                    f,
+                    shape_table,
+                    current_state,
+                )?;
             }
 
             cg.sm_scope_depth -= 1;
@@ -7212,6 +7622,8 @@ fn lower_sm_for<'ctx, 'g>(
         // flush_crossing_local_if_needed does not see it — flush manually here.
         flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
 
+        // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+        let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
             cg,
             body,
@@ -7226,6 +7638,10 @@ fn lower_sm_for<'ctx, 'g>(
         )?;
 
         if !is_block_terminated(cg) {
+            // Release this iteration's allocas before the back edge (leaf bodies only).
+            if let Some(sp) = loop_sp {
+                cg.loop_stack_restore(sp)?;
+            }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7240,10 +7656,21 @@ fn lower_sm_for<'ctx, 'g>(
                 .map_err(|e| format!("{e}"))?;
             state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
                 .map_err(|e| format!("sm range flush next: {e}"))?;
-            emit_loop_preempt(cg)?;
-            cg.builder
-                .build_unconditional_branch(header_bb)
-                .map_err(|e| format!("sm for range back-edge: {e}"))?;
+            // Back edge: poll-yield when admitted (idx is already frame-flushed above,
+            // so the resume header reloads the post-increment value).
+            emit_sm_loop_back_edge(
+                cg,
+                header_bb,
+                "sm for range back-edge",
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
         }
 
         cg.builder.position_at_end(exit_bb);
@@ -7353,6 +7780,8 @@ fn lower_sm_for<'ctx, 'g>(
         // the only shadow case an admitted binding can hit is its own loop var.
         let soa_masked = cg.soa_bindings.remove(var);
 
+        // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+        let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
             cg,
             body,
@@ -7371,6 +7800,10 @@ fn lower_sm_for<'ctx, 'g>(
         }
 
         if !is_block_terminated(cg) {
+            // Release this iteration's allocas before the back edge (leaf bodies only).
+            if let Some(sp) = loop_sp {
+                cg.loop_stack_restore(sp)?;
+            }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7385,10 +7818,19 @@ fn lower_sm_for<'ctx, 'g>(
                 .map_err(|e| format!("{e}"))?;
             state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
                 .map_err(|e| format!("sm array flush next: {e}"))?;
-            emit_loop_preempt(cg)?;
-            cg.builder
-                .build_unconditional_branch(header_bb)
-                .map_err(|e| format!("sm for array back: {e}"))?;
+            emit_sm_loop_back_edge(
+                cg,
+                header_bb,
+                "sm for array back",
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
         }
 
         cg.builder.position_at_end(exit_bb);
@@ -7594,6 +8036,8 @@ fn lower_sm_for<'ctx, 'g>(
         // after a `wait` inside the body — crossing-local analysis handles this correctly
         // because map entry destructure bindings are not yet tracked as scalar crossing locals.
 
+        // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+        let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
             cg,
             body,
@@ -7608,6 +8052,10 @@ fn lower_sm_for<'ctx, 'g>(
         )?;
 
         if !is_block_terminated(cg) {
+            // Release this iteration's allocas before the back edge (leaf bodies only).
+            if let Some(sp) = loop_sp {
+                cg.loop_stack_restore(sp)?;
+            }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7622,10 +8070,19 @@ fn lower_sm_for<'ctx, 'g>(
                 .map_err(|e| format!("{e}"))?;
             state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
                 .map_err(|e| format!("sm map flush next: {e}"))?;
-            emit_loop_preempt(cg)?;
-            cg.builder
-                .build_unconditional_branch(header_bb)
-                .map_err(|e| format!("{e}"))?;
+            emit_sm_loop_back_edge(
+                cg,
+                header_bb,
+                "sm for map back-edge",
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
         }
 
         cg.builder.position_at_end(exit_bb);
@@ -7946,6 +8403,34 @@ fn load_sm_return_value_typed<'ctx>(
             let i128_val = state_machine::load_return_value_i128(ctx, &cg.builder, frame_ptr, tag)?;
             Ok(i128_val.into())
         }
+        Some(Type::Maybe { .. }) => {
+            // v0.3-M7 R9: a maybe-returning callee's resume fn stores the envelope's
+            // (flag, bits) VALUE pair in the return slot (+0/+8, the errors pair
+            // layout) — never a pointer into its own dead stack. Rebuild a
+            // CALLER-owned {i64, i64} envelope and hand back its pointer, matching
+            // the representation `lower_expr` produces for a non-SM maybe call.
+            let (flag, bits) =
+                state_machine::load_return_value_errors(ctx, &cg.builder, frame_ptr)?;
+            let env_slot = cg
+                .builder
+                .build_alloca(cg.maybe_type(), &format!("{tag}_maybe_env"))
+                .map_err(|e| format!("{tag} maybe env alloca: {e}"))?;
+            let flag_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env_slot, 0, &format!("{tag}_mflag"))
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(flag_gep, flag)
+                .map_err(|e| format!("{e}"))?;
+            let bits_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env_slot, 1, &format!("{tag}_mbits"))
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(bits_gep, bits)
+                .map_err(|e| format!("{e}"))?;
+            Ok(env_slot.into())
+        }
         _ => {
             // All other types (int, bool, string, shape, array, etc.): load the i64
             // from the return slot (ptr-as-i64 for pointer-family; raw i64 for scalars).
@@ -8189,6 +8674,12 @@ fn bind_sm_result_and_flush<'ctx>(
                         .build_load(cg.ctx.i128_type(), staging_ptr, &format!("{name}_cob_i128"))
                         .map_err(|e| format!("bind_sm_result ec_num load i128 {name}: {e}"))?
                         .into_int_value();
+                    // Staging slot is frame-interior: only 8-aligned — claim that.
+                    state_machine::claim_frame_i128_align(
+                        i128_val.as_instruction_value().ok_or_else(|| {
+                            format!("bind_sm_result ec_num load i128 {name}: no instruction value")
+                        })?,
+                    )?;
                     cg.builder
                         .build_store(i128_alloca, i128_val)
                         .map_err(|e| format!("bind_sm_result ec_num store i128 {name}: {e}"))?;
@@ -8469,6 +8960,12 @@ fn bind_sm_result_and_flush<'ctx>(
                     .build_load(cg.ctx.i128_type(), staging_ptr, &format!("{name}_cob_i128"))
                     .map_err(|e| format!("copy-on-bind load i128 {name}: {e}"))?
                     .into_int_value();
+                // Staging slot is frame-interior: only 8-aligned — claim that.
+                state_machine::claim_frame_i128_align(
+                    i128_val.as_instruction_value().ok_or_else(|| {
+                        format!("copy-on-bind load i128 {name}: no instruction value")
+                    })?,
+                )?;
                 cg.builder
                     .build_store(binding_alloca, i128_val)
                     .map_err(|e| format!("copy-on-bind store {name}: {e}"))?;
@@ -9667,42 +10164,31 @@ fn build_cpu_trampoline<'ctx, 'g>(
             (bits, i64_ty.const_int(0, false))
         }
         inkwell::values::BasicValueEnum::PointerValue(pv) => {
-            if callee_returns_bare_number(cg.typed, cg.imported_fns, callee) {
-                // number (decimal128): the non-SM ABI returns a POINTER to a
-                // heap-stable 16-byte i128. Dereference it and pack lo/hi so the
-                // result slot holds the raw i128 the join-side i128 load expects.
-                let i128_val = tramp_builder
-                    .build_load(i128_ty, pv, "spike_num_load")
-                    .map_err(|e| format!("trampoline num load {trampoline_name}: {e}"))?
-                    .into_int_value();
-                let lo = tramp_builder
-                    .build_int_truncate(i128_val, i64_ty, "spike_num_lo")
-                    .map_err(|e| format!("trampoline num lo {trampoline_name}: {e}"))?;
-                let hi_shift = tramp_builder
-                    .build_right_shift(
-                        i128_val,
-                        i128_ty.const_int(64, false),
-                        false,
-                        "spike_num_sh",
-                    )
-                    .map_err(|e| format!("trampoline num shift {trampoline_name}: {e}"))?;
-                let hi = tramp_builder
-                    .build_int_truncate(hi_shift, i64_ty, "spike_num_hi")
-                    .map_err(|e| format!("trampoline num hi {trampoline_name}: {e}"))?;
-                (lo, hi)
-            } else {
-                // string/array/map: the returned heap pointer IS the value. Store it
-                // as i64 (ptr_to_int); the heap block outlives the blocking-pool task,
-                // so the parent reads it post-join.
-                let bits = tramp_builder
-                    .build_ptr_to_int(pv, i64_ty, "spike_ptr_to_i")
-                    .map_err(|e| format!("trampoline ptr_to_int {trampoline_name}: {e}"))?;
-                (bits, i64_ty.const_int(0, false))
-            }
+            // string/array/map: the returned heap pointer IS the value. Store it
+            // as i64 (ptr_to_int); the heap block outlives the blocking-pool task,
+            // so the parent reads it post-join. (v0.3-M7 R9: `number` callees no
+            // longer return pointers — they return by-value i128, handled by the
+            // i128 arm above; the old deref-the-copy-and-forget-pointer branch is
+            // gone with the ABI that required it.)
+            let bits = tramp_builder
+                .build_ptr_to_int(pv, i64_ty, "spike_ptr_to_i")
+                .map_err(|e| format!("trampoline ptr_to_int {trampoline_name}: {e}"))?;
+            (bits, i64_ty.const_int(0, false))
         }
         inkwell::values::BasicValueEnum::StructValue(sv) => {
-            // `T errors`: {i64 error word, i64 success word}. Both words must reach
-            // the result slot — dropping field0 would turn an error into a success.
+            // `T errors` {i64 error, i64 success} — or, post-R9, a by-value
+            // `maybe<T>` envelope {i64 flag, i64 bits}: both are the same two-word
+            // pair the 16-byte result slot carries at +0/+8, and the join-side
+            // typed load rebuilds each correctly. Any OTHER aggregate (e.g. a
+            // by-value shape return) has no packing contract here — fail loud
+            // rather than silently truncating it to two words.
+            if sv.get_type() != cpu_result_ty {
+                return Err(format!(
+                    "spike trampoline: callee `{callee}` returns aggregate {:?}, which \
+                     does not fit the two-word CPU result protocol",
+                    sv.get_type()
+                ));
+            }
             let err = tramp_builder
                 .build_extract_value(sv, 0, "spike_ec_err")
                 .map_err(|e| format!("trampoline ec err {trampoline_name}: {e}"))?
@@ -10383,9 +10869,9 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
     // The alloca sits in poll_state (a non-entry block), which is valid because each call
     // to the resume_fn gets a fresh stack frame — poll_state is only ever entered from the
     // SM dispatch switch in sm_entry, so the alloca always dominates its uses in this
-    // invocation. OptimizationLevel::None means mem2reg does not run; the alloca stays
-    // as a stack slot, not an SSA value, so LLVM does not require entry-block placement
-    // for correctness here.
+    // invocation. Dominance is the only placement requirement LLVM imposes on an alloca,
+    // at every pipeline tier: a dominating non-entry alloca is safely promotable (or
+    // simply stays a stack slot) whether or not mem2reg/SROA run.
     let any_pending = cg
         .builder
         .build_alloca(ctx.i32_type(), "spike_any_pending")
@@ -11139,10 +11625,11 @@ fn emit_fused_group_spawn_poll<'ctx, 'g>(
 
     // The alloca sits in poll_state (a non-entry block), which is valid because each call to the
     // resume_fn gets a fresh stack frame — poll_state is only ever entered from the SM dispatch
-    // switch in sm_entry, so the alloca always dominates its uses in this invocation.
-    // OptimizationLevel::None means mem2reg does not run; the alloca stays as a stack slot, not
-    // an SSA value, so LLVM does not require entry-block placement for correctness here (mirrors
-    // `emit_cpu_group_spawn_join`'s identical `spike_any_pending` rationale).
+    // switch in sm_entry, so the alloca always dominates its uses in this invocation. Dominance
+    // is the only placement requirement LLVM imposes on an alloca, at every pipeline tier: a
+    // dominating non-entry alloca is safely promotable (or simply stays a stack slot) whether or
+    // not mem2reg/SROA run (mirrors `emit_cpu_group_spawn_join`'s identical `spike_any_pending`
+    // rationale).
     let any_pending = cg
         .builder
         .build_alloca(ctx.i32_type(), "fused_any_pending")
@@ -12881,16 +13368,166 @@ fn is_block_terminated(cg: &Cg) -> bool {
         .unwrap_or(true)
 }
 
-/// Emit a cooperative preemption checkpoint at a loop back-edge.
+/// Emit the budget-ticking preemption call at a NON-yielding loop back-edge — plain
+/// (non-state-machine) loops, and the SM fixed-array arm (excluded from the yield by THE
+/// qualifying predicate; see `ynz_typeck::loop_stmt_back_edge_yields`).
 ///
-/// The v0.3-M1 stub is a no-op (single `ret`); it correctly positions call sites
-/// for v0.3-M2 state-machine suspension. Call-site preempt (at every `build_call`
-/// for user functions) deferred to M2 per P1 GATE measurement (1190% overhead).
+/// v0.3-M7 Phase 6: `ynz_rt_check_preempt` now takes the waker context and returns a
+/// bool. Non-yielding sites pass NULL and DISCARD the result: they cannot suspend (no
+/// frame, no Pending), but the call still ticks the per-worker budget — one function,
+/// one signature, no SM-only twin entry point. Yielding SM back edges go through
+/// `emit_sm_loop_back_edge` instead.
+/// v0.3-M7 Phase 6 Step 5: compile-time toggle for CALL-SITE preempt-check emission —
+/// the R6 re-measurement experiment. When `YNZ_PREEMPT_CALLSITE_CHECKS=1` is set at
+/// COMPILE time, every direct user-function call site emits the same budget-ticking
+/// `ynz_rt_check_preempt(null)` call the plain loop back edges use. This exists ONLY to
+/// take the fresh default-pipeline overhead measurement the plan's R6 mitigation
+/// requires (the prior 1190% figure was O0, wrong-tier evidence); it is NOT a user
+/// surface, and the ship/defer decision is measurement-gated against the
+/// pre-registered threshold recorded in the Phase 6 audit entry.
+fn callsite_preempt_checks_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("YNZ_PREEMPT_CALLSITE_CHECKS").is_ok_and(|v| v == "1"))
+}
+
 #[inline]
 fn emit_loop_preempt<'ctx>(cg: &mut Cg<'ctx, '_>) -> Result<(), String> {
+    let null_waker = cg.ctx.ptr_type(AddressSpace::default()).const_null();
     cg.builder
-        .build_call(cg.rt.ynz_rt_check_preempt, &[], "preempt")
+        .build_call(cg.rt.ynz_rt_check_preempt, &[null_waker.into()], "preempt")
         .map_err(|e| format!("preempt: {e}"))?;
+    Ok(())
+}
+
+/// v0.3-M7 Phase 6: emit a state-machine loop's back edge — a conditional POLL-YIELD
+/// suspension point when the enclosing function is admitted (`cg.back_edge_yield`),
+/// or the legacy budget-tick + unconditional branch when not.
+///
+/// The yield reuses ONLY the existing authoritative suspension machinery
+/// (R8 / authoritative-derivation.md — no new frame-touching path):
+///
+/// ```llvm
+/// back_edge:
+///   %p = call i8 @ynz_rt_check_preempt(ptr %waker_ctx)   ; budget check; wakes on true
+///   %should = icmp ne i8 %p, 0
+///   br i1 %should, label %yield_K, label %header
+/// yield_K:
+///   ; crossing locals are already frame-resident BY CONSTRUCTION (the per-statement
+///   ; flush discipline: flush_crossing_local_if_needed / flush_for_loop_var / the
+///   ; sm-range idx flush — all delegating to flush_var_slot_to_frame). No bulk flush.
+///   call store_resume_point(frame, K)                    ; state_machine.rs helper
+///   br label %sm_pending                                 ; existing Pending return
+/// sm_sK:                                                 ; continuation (resume path)
+///   call reload_params_from_frame(..., reload_crossing=true, reload_spike=true)
+///   br label %header                                     ; re-evaluate loop condition
+/// ```
+///
+/// The continuation index is claimed via the SAME `*current_state + 1` advance protocol
+/// every wait site uses, matching `count_suspension_stmt`'s per-qualifying-loop pre-count
+/// (count-vs-claim drift is the M3d/M3e envelope-narrowing family).
+///
+/// Callers: the SM while / for-range / for-array / for-map arms — the four forms THE
+/// qualifying predicate admits. The fixed arm and the fallback keep `emit_loop_preempt`.
+/// v0.3-M7 Phase 6 — R2/row-439 parity for MIGRATED wait-free loops: when an admitted
+/// function routes a LEAF wait-free loop (no suspension of any kind inside the body —
+/// no wait, no suspending call, no conduit, no nested qualifying loop) through an SM
+/// arm, the body's per-iteration allocas (e.g. a non-crossing union `let`'s tagged
+/// struct) would otherwise accumulate unboundedly — the exact stack-exhaustion class the
+/// plain arms' `loop_stack_save` fixed (ledger row 439), newly hot-loop-relevant because
+/// migration moves wait-free loops off the plain arms.
+///
+/// Returns `Some(sp)` — a stacksave taken at the START of each body iteration — ONLY for
+/// leaf wait-free bodies. The matching restore is emitted at the back edge, BEFORE the
+/// poll-yield branch: with no internal suspension, save and restore provably live in the
+/// SAME resume-fn activation (the yield, if taken, fires after the restore; the resume
+/// re-enters at the header and the next body pass re-takes a fresh save). A body WITH
+/// internal suspensions must NOT stacksave here — a mid-body resume would re-enter past
+/// the save site, leaving the slot from a dead C stack (fresh-stack-per-resume law) —
+/// so those bodies keep today's no-save SM behavior.
+fn sm_leaf_loop_stack_save<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    body: &ynz_ast::nodes::Block,
+) -> Result<Option<PointerValue<'ctx>>, String> {
+    let body_suspends = body.stmts.iter().any(|s| stmt_needs_sm_walker(cg, s));
+    if cg.back_edge_yield && !body_suspends {
+        Ok(Some(cg.loop_stack_save()?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_sm_loop_back_edge<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    header_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    err_label: &str,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    if !cg.back_edge_yield {
+        // Not admitted: byte-identical legacy back edge (budget tick + branch).
+        emit_loop_preempt(cg)?;
+        cg.builder
+            .build_unconditional_branch(header_bb)
+            .map_err(|e| format!("{err_label}: {e}"))?;
+        return Ok(());
+    }
+
+    let continuation_state = *current_state + 1;
+    let cont_state_bb = state_blocks
+        .get(continuation_state)
+        .copied()
+        .ok_or_else(|| {
+            format!(
+                "back-edge yield continuation state {continuation_state} out of range —                  count_suspension_points and the SM loop arms disagree on the qualifying                  predicate (authoritative-derivation violation; compiler bug)"
+            )
+        })?;
+    let yield_bb = cg.append_block("sm_backedge_yield");
+
+    let preempt_i8 = cg
+        .builder
+        .build_call(cg.rt.ynz_rt_check_preempt, &[waker_ctx.into()], "preempt")
+        .map_err(|e| format!("{err_label} preempt call: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_rt_check_preempt returned void")?
+        .into_int_value();
+    let should_yield = cg
+        .builder
+        .build_int_compare(
+            inkwell::IntPredicate::NE,
+            preempt_i8,
+            cg.ctx.i8_type().const_zero(),
+            "preempt_should",
+        )
+        .map_err(|e| format!("{err_label} preempt cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(should_yield, yield_bb, header_bb)
+        .map_err(|e| format!("{err_label} preempt branch: {e}"))?;
+
+    // yield_bb: record the continuation and return Pending. ynz_rt_check_preempt has
+    // already woken the task (wake-before-Pending), so this is a yield-and-requeue.
+    cg.builder.position_at_end(yield_bb);
+    state_machine::store_resume_point(cg.ctx, &cg.builder, frame_ptr, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("{err_label} yield->pending: {e}"))?;
+
+    // Continuation state: fresh resume-fn invocation — reload params + crossing locals
+    // (the same reload every wait continuation performs), then re-enter at the header.
+    *current_state = continuation_state;
+    cg.builder.position_at_end(cont_state_bb);
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
+    cg.builder
+        .build_unconditional_branch(header_bb)
+        .map_err(|e| format!("{err_label} cont->header: {e}"))?;
+
     Ok(())
 }
 
@@ -13599,6 +14236,8 @@ fn lower_stmt_while<'ctx>(
     let body_bb = cg.append_block("while_body");
     let exit_bb = cg.append_block("while_exit");
 
+    // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+    let loop_sp = cg.loop_stack_save()?;
     cg.builder
         .build_unconditional_branch(header_bb)
         .map_err(|e| format!("{e}"))?;
@@ -13618,12 +14257,14 @@ fn lower_stmt_while<'ctx>(
     }
     if !is_block_terminated(cg) {
         emit_loop_preempt(cg)?;
+        cg.loop_stack_restore(loop_sp)?;
         cg.builder
             .build_unconditional_branch(header_bb)
             .map_err(|e| format!("{e}"))?;
     }
 
     cg.builder.position_at_end(exit_bb);
+    cg.loop_stack_restore(loop_sp)?;
     Ok(())
 }
 
@@ -13660,6 +14301,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("si_body");
         let after_bb = cg.append_block("si_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -13711,6 +14354,7 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -13718,6 +14362,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -13735,29 +14380,31 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("uf_body");
         let after_bb = cg.append_block("uf_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
         cg.builder.position_at_end(cond_bb);
 
-        // Call next(&obj) → maybe<T> (stored in a fresh alloca returned as ptr).
-        let maybe_slot_ptr = cg
+        // Call next(&obj) → maybe<T>. v0.3-M7 R9: `next` returns the {i64, i64}
+        // envelope BY VALUE (never a pointer into its own dead frame — the exact
+        // miscompile the Class-3 RED fixture locks: the optimizer deleted the
+        // stores to the callee's dying alloca and this loop never saw `none`).
+        // Extract (has_value, bits) straight from the returned aggregate.
+        let maybe_env = cg
             .builder
             .build_call(next_fn, &[obj_ptr.into()], "uf_next")
             .map_err(|e| format!("{e}"))?
             .try_as_basic_value()
             .basic()
             .ok_or("next() returned void")?
-            .into_pointer_value();
+            .into_struct_value();
 
-        // Check has_value (slot 0).
-        let tag_gep = cg
-            .builder
-            .build_struct_gep(cg.maybe_type(), maybe_slot_ptr, 0, "uf_tag")
-            .map_err(|e| format!("{e}"))?;
+        // Check has_value (field 0).
         let tag = cg
             .builder
-            .build_load(cg.i64(), tag_gep, "uf_tag_v")
+            .build_extract_value(maybe_env, 0, "uf_tag_v")
             .map_err(|e| format!("{e}"))?
             .into_int_value();
         let has = cg
@@ -13769,14 +14416,10 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        // Extract the value (slot 1) and determine its type by looking at the typeck.
-        let val_gep = cg
-            .builder
-            .build_struct_gep(cg.maybe_type(), maybe_slot_ptr, 1, "uf_val")
-            .map_err(|e| format!("{e}"))?;
+        // Extract the value (field 1) and determine its type by looking at the typeck.
         let bits = cg
             .builder
-            .build_load(cg.i64(), val_gep, "uf_bits")
+            .build_extract_value(maybe_env, 1, "uf_bits")
             .map_err(|e| format!("{e}"))?
             .into_int_value();
         // The element type is Int (as the most common case in our fixtures).
@@ -13797,12 +14440,14 @@ fn lower_stmt_for<'ctx>(
         cg.locals.remove(var);
         if !is_block_terminated(cg) {
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
         }
 
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -13835,6 +14480,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("for_body");
         let after_bb = cg.append_block("for_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -13898,6 +14545,7 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -13905,6 +14553,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -13931,6 +14580,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("ff_body");
         let after_bb = cg.append_block("ff_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -13981,6 +14632,7 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -13988,6 +14640,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -14039,6 +14692,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("mfor_body");
         let after_bb = cg.append_block("mfor_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14108,12 +14763,14 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
         }
 
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -14176,6 +14833,8 @@ fn lower_stmt_for<'ctx>(
     let body_bb = cg.append_block("for_body");
     let exit_bb = cg.append_block("for_exit");
 
+    // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+    let loop_sp = cg.loop_stack_save()?;
     cg.builder
         .build_unconditional_branch(header_bb)
         .map_err(|e| format!("{e}"))?;
@@ -14231,12 +14890,14 @@ fn lower_stmt_for<'ctx>(
             .build_store(counter_slot, ctr_next)
             .map_err(|e| format!("{e}"))?;
         emit_loop_preempt(cg)?;
+        cg.loop_stack_restore(loop_sp)?;
         cg.builder
             .build_unconditional_branch(header_bb)
             .map_err(|e| format!("{e}"))?;
     }
 
     cg.builder.position_at_end(exit_bb);
+    cg.loop_stack_restore(loop_sp)?;
     cg.locals.remove(var);
     Ok(())
 }
@@ -14381,11 +15042,24 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                     )
                                                     .map_err(|e| format!("num err i128 load: {e}"))?
                                                     .into_int_value();
-                                                cg.builder
+                                                // The value pointer may be an SM
+                                                // staged-param pointer into the
+                                                // caller's frame (8-aligned) —
+                                                // claim the floor, never ABI 16.
+                                                state_machine::claim_frame_i128_align(
+                                                    i128_val.as_instruction_value().ok_or(
+                                                        "num err i128 load: no instruction value",
+                                                    )?,
+                                                )?;
+                                                let st = cg
+                                                    .builder
                                                     .build_store(staging_ptr, i128_val)
                                                     .map_err(|e| {
                                                         format!("num err staging store: {e}")
                                                     })?;
+                                                // Staging slot is frame-interior:
+                                                // only 8-aligned — claim that.
+                                                state_machine::claim_frame_i128_align(st)?;
                                                 // The EC ok-word is the staging slot address as i64.
                                                 cg.builder
                                                     .build_ptr_to_int(
@@ -14410,9 +15084,31 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                         .to_string(),
                                                 );
                                             }
-                                            // String, Array, Map, Maybe, Union: all heap-allocated
-                                            // (global literals or ynz_alloc). The pointer survives
-                                            // resume fn return — ptr_to_int is safe.
+                                            // Maybe: the envelope is a per-site STACK alloca
+                                            // (`build_maybe_none` etc.) — it dies with this
+                                            // resume invocation, so its raw pointer must never
+                                            // ride the ok word (v0.3-M7 R9 sibling). Promote
+                                            // envelope + any Shape payload to counted heap
+                                            // cells; the wrapper/caller reads a stable cell.
+                                            Type::Maybe { inner: m_inner } => {
+                                                let cell = cg.maybe_to_heap_cell(
+                                                    ptr,
+                                                    m_inner,
+                                                    "sm_ec_ret",
+                                                )?;
+                                                cg.builder
+                                                    .build_ptr_to_int(
+                                                        cell,
+                                                        cg.ctx.i64_type(),
+                                                        "sm_ec_maybe_ok",
+                                                    )
+                                                    .map_err(|e| {
+                                                        format!("sm_ec_maybe_ok p2i: {e}")
+                                                    })?
+                                            }
+                                            // String, Array, Map, Union: heap-allocated
+                                            // (global literals or ynz_alloc). The pointer
+                                            // survives resume fn return — ptr_to_int is safe.
                                             _ => cg
                                                 .builder
                                                 .build_ptr_to_int(
@@ -14502,6 +15198,14 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 .build_load(cg.ctx.i128_type(), ptr_v, "sm_ret_dec_load")
                                 .map_err(|e| format!("sm ret number i128 load: {e}"))?
                                 .into_int_value();
+                            // For an SM number PARAM the value pointer is staged bits
+                            // pointing into the caller's frame (8-aligned) — claim the
+                            // guaranteed floor, never ABI 16.
+                            state_machine::claim_frame_i128_align(
+                                i128_val
+                                    .as_instruction_value()
+                                    .ok_or("sm ret number i128 load: no instruction value")?,
+                            )?;
                             state_machine::store_return_value_i128(
                                 cg.ctx,
                                 &cg.builder,
@@ -14509,10 +15213,36 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 i128_val,
                             )?;
                         }
+                        // Maybe: the envelope is a per-site STACK alloca that dies with
+                        // this resume invocation — storing its raw pointer in the return
+                        // slot dangles by the time the wrapper loads it (v0.3-M7 R9).
+                        // Store the envelope's VALUE instead: the (flag, bits) pair rides
+                        // the 16-byte return slot exactly like the errors {i64,i64} pair
+                        // (same slot+0/+8 layout — `store_return_value_errors` IS the one
+                        // pair-store producer). A wide payload (shape / number) heap-promotes
+                        // first (the shared flag-guarded discipline; heap is mandatory
+                        // because the resume stack dies).
+                        Type::Maybe { ref inner } => {
+                            let env_ptr = val.into_pointer_value();
+                            let (flag, bits) = cg.load_maybe_env_pair(env_ptr, "sm_ret_maybe")?;
+                            let stable_bits = cg.maybe_payload_stable_bits(
+                                flag,
+                                bits,
+                                inner,
+                                "sm_ret_maybe",
+                                true,
+                            )?;
+                            state_machine::store_return_value_errors(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                flag,
+                                stable_bits,
+                            )?;
+                        }
                         Type::String
                         | Type::BuiltinArray { .. }
                         | Type::BuiltinFixed { .. }
-                        | Type::Maybe { .. }
                         | Type::BuiltinMap { .. }
                         | Type::Union { .. }
                         | Type::Sensitive { .. } => {
@@ -14577,9 +15307,40 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
-                let success_bits = cg
-                    .to_i64_bits(val, &val_ty)
-                    .unwrap_or_else(|_| cg.i64().const_int(0, false));
+                // v0.3-M7 Phase 3 / R9 sibling: the EC ok-WORD must never carry a
+                // pointer into the callee's own stack. maybe / shape / number
+                // success values are per-site stack storage (envelope alloca,
+                // struct-lit alloca, i128 alloca) — promote each to a counted heap
+                // cell before packing its address into the ok word (verified live:
+                // `-> maybe<int> errors` / `-> Coin errors` / `-> number errors`
+                // all returned garbage under default<O2> pre-fix). Same
+                // never-drop-cells posture as store_field (FRAGO 009); everything
+                // else is self-contained bits or already heap-backed.
+                let success_bits = match cg.resolve_type(&val_ty) {
+                    Type::Maybe { ref inner } => {
+                        let cell =
+                            cg.maybe_to_heap_cell(val.into_pointer_value(), inner, "ec_ret")?;
+                        cg.builder
+                            .build_ptr_to_int(cell, cg.i64(), "ec_ret_maybe_bits")
+                            .map_err(|e| format!("ec ret maybe bits: {e}"))?
+                    }
+                    Type::Shape { ref name } if !name.is_empty() => {
+                        let cell =
+                            cg.shape_bytes_to_heap_cell(val.into_pointer_value(), name, "ec_ret")?;
+                        cg.builder
+                            .build_ptr_to_int(cell, cg.i64(), "ec_ret_shape_bits")
+                            .map_err(|e| format!("ec ret shape bits: {e}"))?
+                    }
+                    Type::Number { precision } if precision <= 34 => {
+                        let cell = cg.number_to_heap_cell(val.into_pointer_value(), "ec_ret")?;
+                        cg.builder
+                            .build_ptr_to_int(cell, cg.i64(), "ec_ret_num_bits")
+                            .map_err(|e| format!("ec ret num bits: {e}"))?
+                    }
+                    _ => cg
+                        .to_i64_bits(val, &val_ty)
+                        .unwrap_or_else(|_| cg.i64().const_int(0, false)),
+                };
                 let result_ty = errors_result_type(cg.ctx);
                 let mut result = result_ty.const_zero();
                 result = cg
@@ -14607,9 +15368,79 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
         }
         Some(expr) => {
             let val = lower_expr(cg, expr)?;
-            cg.builder
-                .build_return(Some(&val))
-                .map_err(|e| format!("ret: {e}"))?;
+            // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
+            // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
+            // legally miscompiled: stores to the dying alloca get deleted and the
+            // caller reads garbage out of the dead frame). The declared return type
+            // (`abi_return_type`) is i128 / {i64,i64} / the shape struct; load the
+            // VALUE out of the internal pointer representation and return it.
+            match cg.resolve_type(&cg.current_fn_ret_ty.clone()) {
+                Type::Number { precision } if precision <= 34 => {
+                    let ptr_v = val.into_pointer_value();
+                    let i128_val = cg
+                        .builder
+                        .build_load(cg.i128(), ptr_v, "ret_num_val")
+                        .map_err(|e| format!("ret number load: {e}"))?
+                        .into_int_value();
+                    // Provenance may be an 8-aligned frame-interior pointer — claim
+                    // ABI 16 only when the source is provably a >=16-aligned alloca.
+                    state_machine::claim_i128_align_by_provenance(
+                        i128_val
+                            .as_instruction_value()
+                            .ok_or("ret number load: no instruction value")?,
+                        ptr_v,
+                    )?;
+                    cg.builder
+                        .build_return(Some(&i128_val))
+                        .map_err(|e| format!("ret number: {e}"))?;
+                }
+                Type::Maybe { ref inner } => {
+                    let env_ptr = val.into_pointer_value();
+                    let (flag, bits) = cg.load_maybe_env_pair(env_ptr, "ret_maybe")?;
+                    // A wide payload's pointer (shape struct alloca / number i128
+                    // slot) targets the callee's own stack — promote it to a counted
+                    // heap cell (flag-guarded; the shared promotion discipline, never
+                    // a return-side twin). Same never-drop-cells posture as
+                    // store_field (FRAGO 009).
+                    let stable_bits =
+                        cg.maybe_payload_stable_bits(flag, bits, inner, "ret_maybe", true)?;
+                    let mut env = cg.maybe_type().const_zero();
+                    env = cg
+                        .builder
+                        .build_insert_value(env, flag, 0, "ret_maybe_flag")
+                        .map_err(|e| format!("ret maybe flag insert: {e}"))?
+                        .into_struct_value();
+                    env = cg
+                        .builder
+                        .build_insert_value(env, stable_bits, 1, "ret_maybe_bits")
+                        .map_err(|e| format!("ret maybe bits insert: {e}"))?
+                        .into_struct_value();
+                    cg.builder
+                        .build_return(Some(&env))
+                        .map_err(|e| format!("ret maybe: {e}"))?;
+                }
+                Type::Shape { ref name } if !name.is_empty() => {
+                    let ptr_v = val.into_pointer_value();
+                    let struct_ty = cg
+                        .shape_types
+                        .get(name)
+                        .ok_or_else(|| format!("shape return: LLVM type for `{name}` missing"))?;
+                    // Shallow by-value copy is complete: interior shape/maybe fields
+                    // are counted heap cells (store_field), never stack pointers.
+                    let sv = cg
+                        .builder
+                        .build_load(struct_ty, ptr_v, "ret_shape_val")
+                        .map_err(|e| format!("ret shape load: {e}"))?;
+                    cg.builder
+                        .build_return(Some(&sv))
+                        .map_err(|e| format!("ret shape: {e}"))?;
+                }
+                _ => {
+                    cg.builder
+                        .build_return(Some(&val))
+                        .map_err(|e| format!("ret: {e}"))?;
+                }
+            }
         }
     }
     Ok(())
@@ -15229,6 +16060,12 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         let val = lower_expr(cg, arg)?;
                         call_args.push(val.into());
                     }
+                    // Phase 6 Step 5 (R6 re-measurement): budget tick before every direct
+                    // user call when the experiment toggle is on — see
+                    // `callsite_preempt_checks_enabled`.
+                    if callsite_preempt_checks_enabled() {
+                        emit_loop_preempt(cg)?;
+                    }
                     let call_site = cg
                         .builder
                         .build_call(fn_val, &call_args, "call")
@@ -15253,7 +16090,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     }
 
                     match call_site.try_as_basic_value().basic() {
-                        Some(val) => Ok(val),
+                        // v0.3-M7 R9: number/maybe/shape come back BY VALUE — wrap
+                        // them into a CALLER-owned slot so the internal
+                        // pointer-representation convention holds downstream. The
+                        // call expression's typeck type is the authoritative answer.
+                        Some(val) => {
+                            let ret_ty = cg.expr_type(expr);
+                            cg.wrap_abi_call_result(val, &ret_ty, "call")
+                        }
                         None => Ok(cg.i32().const_int(0, false).into()),
                     }
                 }
@@ -15271,7 +16115,12 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             match &recv_ty {
                 Type::Shape { name } => {
                     let name = name.clone();
-                    lower_ufcs_call(cg, recv_val, &name, method, args)
+                    let raw = lower_ufcs_call(cg, recv_val, &name, method, args)?;
+                    // v0.3-M7 R9: a UFCS call is the same C-ABI invocation as the
+                    // direct-call arm — by-value number/maybe/shape results wrap into
+                    // a caller-owned slot here too (one reception discipline).
+                    let ret_ty = cg.expr_type(expr);
+                    cg.wrap_abi_call_result(raw, &ret_ty, "ufcs")
                 }
                 Type::Dynamic { .. } => {
                     // Dynamic dispatch via vtable — deferred post-P5.
@@ -15834,10 +16683,15 @@ enum BgArgFreeKind {
 /// the returned value is the heap pointer (safe to pass to the task via the ctx).
 /// The returned `BgArgFreeKind` tells the closure body what to free after the call.
 ///
-/// Two kinds of bg args reach this function:
+/// Three kinds of bg args reach this function's heap-upgrade path:
 /// - Plain-ident args where typeck chose Copy (inferred from use-after-spawn).
 /// - Explicit `.copy()` args whose inner `lower_expr` produced a Shape alloca pointer.
 ///   Those also point into spawner stack memory and need the same heap-upgrade.
+/// - fr23 materialized-shape-temp receivers/args (v0.3-M7 Phase 9, FRAGO 016):
+///   maybe-payload access (`m.value`, B′) and call-materialized (`makeCargo()`, C2)
+///   expressions, whose `lower_expr` pointer is a payload/return-temp alloca on the
+///   spawner's frame. Typeck records them as `Give` in
+///   `background_arg_inferred_ownership`; the same span lookup admits them here.
 ///
 /// In both cases the heap allocation outlives the spawner's frame (ynz_rt_spawn_blocking
 /// copies the ctx bytes — the i64 pointer value — before returning; the pointed-to
@@ -15935,19 +16789,30 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     }
 
     let is_heap_arg = match arg {
-        ynz_ast::nodes::Expr::Ident(_, s) => {
-            // Plain ident: any inferred Give or Copy ownership gets the heap fix.
-            let key = (s.start, s.end);
-            cg.typed
-                .background_arg_inferred_ownership
-                .contains_key(&key)
-        }
         // Explicit .copy() postfix — always heap-upgrade for heap types.
         ynz_ast::nodes::Expr::PostfixOp {
             op: ynz_ast::nodes::PostfixOpKind::Copy,
             ..
         } => true,
-        _ => false,
+        // Everything else: consult the ONE authoritative ownership record typeck
+        // produced at the spawn site (`background_arg_inferred_ownership` — plain
+        // idents with inferred give/copy/channel ownership, plus every non-ident
+        // spawn arg/receiver typeck's `bg_arg_is_provably_safe` did NOT prove safe,
+        // v0.3-M7 Phase 9 FRAGO 016, redesigned default-deny FRAGO 022). Byte-
+        // identical for the Ident arm this lookup replaces; extends admission
+        // exactly to what typeck recorded — never a codegen-side re-derivation
+        // (authoritative-derivation). Since FRAGO 022, that admission is
+        // default-deny: a field-access receiver (e.g. the still-latent A/C1 class,
+        // whose storage is already a separate `field_own` heap cell) rides the SAME
+        // `Give` default as everything else typeck cannot prove safe — a harmless
+        // redundant heap copy on top of an already-safe pointer, not a correctness
+        // concern (see `bg_arg_is_provably_safe`'s doc comment).
+        _ => {
+            let s = arg.span();
+            cg.typed
+                .background_arg_inferred_ownership
+                .contains_key(&(s.start, s.end))
+        }
     };
 
     if !is_heap_arg {
@@ -16087,6 +16952,24 @@ fn prepare_bg_arg_for_ctx<'ctx>(
                 .unwrap_or(0);
             Ok((cell.into(), BgArgFreeKind::HeapMaybeEnv { byte_size }))
         }
+        // fr23 tracking guard (v0.3-M7, FRAGO 025): `dynamic Contract` receivers are
+        // CURRENTLY unreachable here — dynamic-dispatch call sites abort earlier with
+        // "codegen: dynamic dispatch call sites not yet lowered in M4 P4" (this file,
+        // Expr::MethodCall's dynamic-dispatch arm), so no `background`-spawn ever
+        // reaches this match with `resolved = Type::Dynamic` today. But the moment a
+        // future milestone lowers dynamic-dispatch codegen, a fat-pointer/vtable
+        // receiver spawned via `background` would silently fall through to the `_`
+        // arm below (`BgArgFreeKind::None` — no heap-upgrade) and reopen the entire
+        // fr23 UAF class for dynamic receivers, exactly as it did for Shape/Maybe/
+        // array before FRAGO 016 closed those. Fail loudly instead of silently: this
+        // arm must be replaced with a real heap-upgrade path (mirroring the Shape arm
+        // above, sized for the fat-pointer + vtable layout) BEFORE dynamic-dispatch
+        // codegen ships — see FRAGO 024/025, roadmap fr23 history.
+        Type::Dynamic { contract } => Err(format!(
+            "codegen: `background`-spawn heap-upgrade for `dynamic {contract}` receivers is \
+             not yet implemented (fr23 tracking guard, FRAGO 025) — dynamic-dispatch codegen \
+             must not ship until prepare_bg_arg_for_ctx gets a real heap-upgrade arm here"
+        )),
         _ => {
             // Primitives (Int/Bool/Float) are i64 by-value — no pointer involved.
             // Other heap types (map, union) alias today on explicit .copy() too;
@@ -19015,37 +19898,6 @@ fn lower_maybe_method<'ctx>(
 
 // ── M7 P4a: errors-capable helpers ───────────────────────────────────────────
 
-/// True when the named function returns a bare `number` (decimal128, precision ≤ 34) —
-/// NOT `number errors`. The non-SM `number` ABI returns a POINTER to a heap-stable 16-byte
-/// i128 (see the wrapper at the `Type::Number` arm of the SM wrapper), so a CPU trampoline
-/// must DEREFERENCE that pointer to recover the i128 value before packing it into the result
-/// slot — unlike string/array/map, where the returned pointer IS the value (`ptr_to_int`).
-///
-/// Time: O(n) where n = items in the typed module  Space: O(1)
-fn callee_returns_bare_number(
-    typed: &TypedModule,
-    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
-    fn_name: &str,
-) -> bool {
-    let local = typed.module.items.iter().any(|item| {
-        if let ynz_ast::nodes::Item::Function(f) = item {
-            f.name == fn_name
-                && matches!(
-                    f.return_type,
-                    ynz_ast::nodes::Type::Number { precision } if precision <= 34
-                )
-        } else {
-            false
-        }
-    });
-    if local {
-        return true;
-    }
-    imported_fns.get(fn_name).is_some_and(
-        |sig| matches!(sig.ret, ynz_typeck::types::Type::Number { precision } if precision <= 34),
-    )
-}
-
 /// True when the named function's FIRST parameter is a bare decimal128 (`number`,
 /// N ≤ 34) — the first-param twin of `callee_returns_bare_number` (v0.3-M6 Phase
 /// 1d, FRAGO 009 defect C). A cpu-member spawn stages an 8-byte ctx word and the
@@ -19288,6 +20140,11 @@ fn lower_errors_capable_call_result<'ctx>(
             .build_load(cg.ctx.i128_type(), dec_ptr, "ec_cob_i128")
             .map_err(|e| format!("ec_result cob load i128 {callee_name}: {e}"))?
             .into_int_value();
+        // The ok-word points at the callee's frame-interior staging slot: only
+        // 8-aligned — claim that, not ABI 16.
+        state_machine::claim_frame_i128_align(i128_val.as_instruction_value().ok_or_else(
+            || format!("ec_result cob load i128 {callee_name}: no instruction value"),
+        )?)?;
         cg.builder
             .build_store(binding_alloca, i128_val)
             .map_err(|e| format!("ec_result cob store {callee_name}: {e}"))?;
@@ -20308,6 +21165,14 @@ fn store<'ctx>(
                 .builder
                 .build_load(cg.i128(), val.into_pointer_value(), "dec_bits")
                 .map_err(|e| format!("{e}"))?;
+            // The value pointer may be an 8-aligned frame-interior address (SM staged
+            // param / EC staging slot) — claim the guaranteed floor unless the source
+            // is provably a >=16-aligned alloca (the one airtight ABI-16 provenance).
+            state_machine::claim_i128_align_by_provenance(
+                bits.as_instruction_value()
+                    .ok_or("store dec_bits load: no instruction value")?,
+                val.into_pointer_value(),
+            )?;
             cg.builder
                 .build_store(slot, bits)
                 .map_err(|e| format!("{e}"))?;
@@ -20476,6 +21341,12 @@ fn store_field<'ctx>(
                 .builder
                 .build_load(cg.i128(), val.into_pointer_value(), "dec_field_bits")
                 .map_err(|e| format!("{e}"))?;
+            // Same provenance-narrowed claim rationale as `store`'s dec_bits load above.
+            state_machine::claim_i128_align_by_provenance(
+                bits.as_instruction_value()
+                    .ok_or("dec_field_bits load: no instruction value")?,
+                val.into_pointer_value(),
+            )?;
             cg.builder
                 .build_store(field_ptr, bits)
                 .map_err(|e| format!("{e}"))?;

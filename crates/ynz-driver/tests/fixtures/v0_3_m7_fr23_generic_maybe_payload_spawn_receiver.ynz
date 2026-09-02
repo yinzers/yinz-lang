@@ -1,0 +1,50 @@
+// fr23 regression fixture — shape B', GENERIC-container variant: a maybe-payload
+// background-spawn receiver whose `maybe<Cargo>` binding type arrives through a
+// GENERIC function's instantiation (`let first = identity(m)` with
+// `identity<T>(give T) -> T`, un-annotated so the binding type comes purely from the
+// instantiated return). Phase 9 security fix-round, 2026-07-18: locks the finding
+// that the B' admission arm (`bg_arg_is_materialized_shape_temp`'s FieldAccess arm,
+// check.rs) is generic-safe by construction — it reads `binding_ty_narrowed` (the
+// scope entry's already-CONCRETE instantiated type, stored at the `let` after
+// `check_generic_fn_call`'s `apply_substitution`) and never touches
+// `sig_table`/`generic_fn_table`, so the C2 generic-table gap has no B' analog.
+//
+// Correct output must contain: `haul: 111/222`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  let ships: array<Cargo> = [{ weight: 111, tag: 222 }, { weight: 333, tag: 444 }]
+  let m: maybe<Cargo> = ships[0]
+  let first = identity(m)
+  if (first.exists()) {
+    background first.value.haul()
+  }
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

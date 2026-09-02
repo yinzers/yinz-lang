@@ -455,3 +455,48 @@ fn v0_3_m4_gallery_fires_expected_diagnostics() {
         "prefer-yielding-sleep must echo the literal ms into WHAT-INSTEAD; got:\n{stderr}"
     );
 }
+
+// WHY: v0_3_m7_errors.ynz exercises the aliasing-call rejection class v0.3-M7 Phase 2
+// added (FRAGO 002): a call passing the same value — or overlapping pieces of one
+// value — into two parameter positions where at least one position modifies it is an
+// ownership-contract violation caught at compile time (`lend` = exclusive access).
+// Three triggers: share+lend same value, lend+lend same value, whole+part overlap.
+// If the error count drops, a trigger regressed (the miscompile class the rejection
+// closes — false LLVM `noalias` under an optimizing pipeline — is reachable again).
+#[test]
+fn v0_3_m7_gallery_fires_expected_diagnostics() {
+    let (stderr, code) = compile_gallery(&gallery("v0_3_m7_errors.ynz"));
+    // Gallery has intentional errors; must exit non-zero.
+    assert_ne!(code, 0, "v0_3_m7 gallery must exit non-zero");
+
+    let error_count = count_errors(&stderr);
+    // Expected 3 errors (one per trigger block). Range gives headroom for incidental
+    // diagnostic refinements without masking a trigger regression.
+    assert!(
+        (3..=5).contains(&error_count),
+        "v0_3_m7 gallery must produce 3–5 errors; got {error_count}.\nstderr:\n{stderr}"
+    );
+
+    // share + lend, same value.
+    assert!(
+        stderr.contains("passed to `copyQuantity` twice in the same call")
+            && stderr.contains("`share` (a read-only view)")
+            && stderr.contains("`lend` (the function modifies it)"),
+        "v0_3_m7 gallery must include the share+lend aliasing diagnostic; got:\n{stderr}"
+    );
+    // lend + lend, same value.
+    assert!(
+        stderr.contains("passed to `swapQuantities` twice in the same call"),
+        "v0_3_m7 gallery must include the lend+lend aliasing diagnostic; got:\n{stderr}"
+    );
+    // Whole + part overlap (`order.slip` is part of `order`).
+    assert!(
+        stderr.contains("`order.slip` is part of `order`"),
+        "v0_3_m7 gallery must include the whole-vs-part overlap diagnostic; got:\n{stderr}"
+    );
+    // Teaching shape: the copyable fix and the non-circular WHY must render.
+    assert!(
+        stderr.contains(".copy()") && stderr.contains("only way that value is reached"),
+        "v0_3_m7 aliasing diagnostic must carry its WHAT-INSTEAD/WHY teaching text; got:\n{stderr}"
+    );
+}

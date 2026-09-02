@@ -1,0 +1,65 @@
+// fr23 CONFIRMED-LIVE UAF — round 6 (FRAGO 021), a NEW shape found by this
+// round's mandated exhaustive semantic audit of `bg_expr_resolved_type`
+// (`crates/ynz-typeck/src/check.rs`), NOT the originally-reported StructLit bug.
+//
+// `bg_expr_resolved_type`'s `Expr::PostfixOp { .. } => None` arm is correct for
+// the TOP-LEVEL admission question (an explicit `.copy()` used directly as a
+// background arg/receiver is already unconditionally heap-upgraded by a SEPARATE
+// codegen-side special case — `prepare_bg_arg_for_ctx`'s `is_heap_arg` match on
+// `PostfixOp{op: Copy, ..} => true`, `crates/ynz-codegen/src/emit.rs` ~16791) —
+// but it is WRONG for the RECURSIVE substitution-seeding question this SAME
+// classifier also answers: `bg_apply_generic_return_subst` calls
+// `bg_expr_resolved_type` on each argument of a generic call to seed the type
+// parameter substitution. A `.copy()` NESTED inside a generic call's argument
+// (`identity(c.copy())`) never resolves to `Some(Type::Shape{..})`, so `T` stays
+// an unresolved `TypeParam`, and the OUTER call (`identity(c.copy())`, itself
+// the C2 shape) is never recognized as Shape-typed — the receiver falls through
+// un-admitted exactly like every prior round's finding.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed live (2026-07-18, FRAGO 021, this exact fixture, 6 runs each tier):
+// O0 mixed garbage (`haul: 0/0` and `haul: 111/0` across runs — `weight`
+// sometimes survives by luck, `tag` never does); optimized tier leaked stack
+// addresses / nondeterministic garbage (`haul: 1/140728223835264`,
+// `haul: 493341264/493341232`) — wrong at both tiers, no luck-masking observed
+// for this shape. See FRAGO 021 audit.md entry for the full Paper-Trace.
+//
+// NOT YET FIXED — see FRAGO 021 (this is one of 3 additional distinct
+// wrong/incomplete arms found beyond the originally-reported StructLit bug,
+// crossing this round's own "3+ wrong arms" STOP condition). Deferred pending
+// the conductor's architectural decision. Documented RED per no-duct-tape.md's
+// legitimate-inverse pattern.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  let c: Cargo = { weight: 111, tag: 222 }
+  background identity(c.copy()).haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

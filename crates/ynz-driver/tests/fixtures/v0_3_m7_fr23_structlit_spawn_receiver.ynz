@@ -1,0 +1,65 @@
+// fr23 CONFIRMED-LIVE UAF — round 6 (FRAGO 021, plan
+// 2026-07-04-v0-3-m7-optimizer-pipeline). Security's live-reproduced finding that
+// triggered this round: `bg_expr_resolved_type`'s exhaustive 22-arm classifier
+// (`crates/ynz-typeck/src/check.rs`, unified in FRAGO 020) has an arm that is
+// semantically WRONG, not missing — `Expr::StructLit { .. } => None` incorrectly
+// claims a bare anonymous struct literal can never produce a materializing Shape
+// value, when `background haul({ weight: 111, tag: 222 })` is legal Yinz and
+// materializes a fresh unbound alloca (`lower_struct_lit`) in the spawner's frame.
+//
+// Root cause: `crates/ynz-codegen/src/emit.rs`'s `prepare_bg_arg_for_ctx`/
+// `is_heap_arg` gate (~line 16790-16812) has no `StructLit` handling because
+// typeck never records the span in `background_arg_inferred_ownership` for this
+// shape — the SAME `Type::Shape` heap-upgrade arm that already handles every
+// other Give-path Shape (plain ident, C2 call-materialized, B' maybe-payload)
+// would work unchanged once typeck's classifier resolves `StructLit` to
+// `Some(Type::Shape{..})`; no codegen change is structurally required.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed live (2026-07-18, FRAGO 021, HEAD past FRAGO 020, this exact fixture,
+// 6 runs each tier): O0 deterministic 6/6 `haul: 777777/<leaked-stack-address>`
+// (stomp()'s junkA.weight stomps the dead alloca's weight slot; tag leaks
+// whatever garbage/stack address sits in that byte range — non-deterministic
+// across runs). Optimized tier printed the correct `haul: 111/222` 6/6 in THIS
+// fixture — matching the same "stack-layout luck" pattern already documented for
+// the sibling C2/B' shapes (FRAGO 011): the IR still carries the identical
+// dangling-pointer ride regardless of tier, so the opt-tier correctness is not
+// evidence of safety, only of this fixture's particular stack layout not
+// (yet) exposing it. See FRAGO 021 audit.md entry for the full Paper-Trace.
+//
+// NOT YET FIXED — this round found 3 additional distinct wrong/incomplete arms
+// beyond this one (see FRAGO 021), crossing this round's own "3+ wrong arms"
+// STOP condition. Fixing this fixture in isolation is deferred pending the
+// conductor's architectural decision (continue narrowing vs. default-DENY
+// redesign) so the fix isn't re-done twice. This fixture is the locked,
+// documented RED per no-duct-tape.md's legitimate-inverse pattern: guaranteed to
+// be picked up by whichever round makes that decision, never shipped silently.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  background haul({ weight: 111, tag: 222 })
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

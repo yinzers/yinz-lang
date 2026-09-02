@@ -65,11 +65,12 @@ pub mod type_at_offset;
 pub mod types;
 
 pub use check::{
-    check, check_with_kernel_mode, crossing_local_names, crossing_local_names_with_cpu_spike,
-    crossing_local_names_with_provenance, expr_is_conduit_suspend, expr_is_ufcs_suspending_call,
-    find_let_annotation_type_in_stmts, stmt_contains_conduit_suspend, stmt_is_conduit_suspend,
-    type_attached_const_type, CrossingNames, LocalCrossesWait, TypedModule,
-    DEFAULT_CHANNEL_CAPACITY,
+    block_contains_back_edge_yield, check, check_with_kernel_mode, crossing_local_names,
+    crossing_local_names_with_cpu_spike, crossing_local_names_with_provenance,
+    expr_is_conduit_suspend, expr_is_ufcs_suspending_call, find_let_annotation_type_in_stmts,
+    loop_stmt_back_edge_yields, stmt_contains_back_edge_yield, stmt_contains_conduit_suspend,
+    stmt_is_conduit_suspend, type_attached_const_type, CrossingNames, LocalCrossesWait,
+    TypedModule, DEFAULT_CHANNEL_CAPACITY,
 };
 pub use effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
 pub use exports::ExportTable;

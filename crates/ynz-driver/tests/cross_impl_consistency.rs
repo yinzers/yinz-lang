@@ -22,19 +22,25 @@ fn ynz_binary() -> PathBuf {
 
 /// Run `ynz run <path>` and return (stdout, stderr, exit_code).
 fn run_ynz(path: &Path) -> (String, String, i32) {
-    run_ynz_mode(path, false)
+    run_ynz_mode(path, false, false)
 }
 
-/// Run `ynz run <path>` in default (auto-parallel) or `--no-auto-parallel` mode and return
-/// (stdout, stderr, exit_code). The sequential mode is selected via the `YNZ_NO_AUTO_PARALLEL`
-/// env var (the `run` subcommand reads it; the `build` subcommand takes the `--no-auto-parallel`
-/// flag — both select the same sequential lowering).
-fn run_ynz_mode(path: &Path, no_auto_parallel: bool) -> (String, String, i32) {
+/// Run `ynz run <path>` in any combination of the two compilation-mode axes and return
+/// (stdout, stderr, exit_code). Both axes are selected via env vars the compiler reads
+/// through the salsa barrier (the `build` subcommand's `--no-auto-parallel` /
+/// `--no-optimize` flags set the same vars — both routes select the same lowering):
+/// - `YNZ_NO_AUTO_PARALLEL=1` — forced-sequential statement lowering (no auto-parallel pass);
+/// - `YNZ_NO_OPTIMIZE=1` — LLVM pipeline off, -O0 backend (the pre-M7 `ynz build` behavior;
+///   read by `pipeline_config_from_env`, crates/ynz-codegen/src/state_machine.rs).
+fn run_ynz_mode(path: &Path, no_auto_parallel: bool, no_optimize: bool) -> (String, String, i32) {
     let mut cmd = Command::new(ynz_binary());
     cmd.args(["run", path.to_str().unwrap()])
         .env("CLICOLOR", "0");
     if no_auto_parallel {
         cmd.env("YNZ_NO_AUTO_PARALLEL", "1");
+    }
+    if no_optimize {
+        cmd.env("YNZ_NO_OPTIMIZE", "1");
     }
     let out = cmd
         .output()
@@ -201,6 +207,33 @@ fn corpus_produces_deterministic_output_across_runs() {
                     // asserts the ordering invariant directly, with the same generous margins
                     // this corpus sweep's blanket byte-comparison cannot express.
                     || n == "v0_3_m3g_overlap_proof.ynz"
+                    // v0.3-M7 Phase 6 back-edge preemption fixtures: timing-margin races BY
+                    // CONSTRUCTION — a fire-and-forget CPU hog (100M iterations; v0.3 has no
+                    // join primitive, background is fire-and-forget) vs. main's fixed
+                    // `wait sleep(4000)` keep-alive. Under host load the hog's completion
+                    // crosses the deadline nondeterministically, so the `hog done` /
+                    // `plain hog done` line's presence AND position vary between runs (exit 0
+                    // either way — runtime shutdown cancels still-pending tasks by design).
+                    // Same class as v0_3_m3g_overlap_proof.ynz above: the filename just lacks
+                    // the "timing"/"background" substrings. The real invariants (victim runs
+                    // BEFORE the hog completes; both lines present) are owned by the dedicated
+                    // v03_m7_backedge_preemption.rs tests under the deterministic
+                    // YNZ_WORKER_THREADS=1 latch, where the starvation shape does not depend
+                    // on host load.
+                    || n == "v0_3_m7_p6_backedge_starvation_sm.ynz"
+                    || n == "v0_3_m7_p6_backedge_residual_nonsm.ynz"
+                    // v0.3-M7 planned-RED fixture (Phase 6 review round): the name-keyed
+                    // loop-var frame-slot collision on suspending-body loops — its second
+                    // loop prints MISCOMPILED garbage bytes (a string reloaded through a
+                    // Point-classified frame slot) BY DESIGN until the per-loop slot-keying
+                    // fix lands (plan Future Requirements, ELEVATED). Garbage-pointer bytes
+                    // cannot participate in a determinism sweep; the contract is owned by
+                    // the planned-RED locks in d5_frame_slot_collision_planned_red.rs (not
+                    // run by default). REMOVE this exclusion in the same change that fixes
+                    // the collision and activates those locks — post-fix the fixture must
+                    // be deterministic like any other.
+                    // test-ratchet: planned-RED fixture — miscompiled output until the slot-keying fix; excluded, not weakened (next line)
+                    || n == "v0_3_m7_d5_suspending_loop_var_slot_collision.ynz"
             })
             .unwrap_or(false);
 
@@ -225,14 +258,23 @@ fn corpus_produces_deterministic_output_across_runs() {
     );
 }
 
-// WHY: the auto-parallel pass must be OBSERVABLY INVISIBLE across the ENTIRE corpus — every
-// program must produce byte-identical stdout/stderr/exit-code in default (auto-parallel) mode
-// and `--no-auto-parallel` (forced-sequential) mode. This is the strongest cross-impl invariant
-// the milestone carries: parallelizing independent statements changes WHEN work runs, never
-// WHAT the program observes. A divergence here is a silent miscompile (a parallel pack/bind that
-// disagrees with the sequential path) — exactly the failure class the per-fixture m3d FIRE/
-// DECLINE tests guard one fixture at a time, lifted to the whole corpus so a NEW fixture is
-// covered the moment it lands without anyone wiring a bespoke twin assertion.
+// WHY: BOTH compilation-mode axes must be OBSERVABLY INVISIBLE across the ENTIRE corpus —
+// every program must produce byte-identical stdout/stderr/exit-code across the full 2×2 mode
+// matrix: {default auto-parallel, --no-auto-parallel} × {default optimized, --no-optimize}.
+// This is the strongest cross-impl invariant the milestone carries:
+// - the auto-parallel axis: parallelizing independent statements changes WHEN work runs,
+//   never WHAT the program observes — a divergence is a silent miscompile (a parallel
+//   pack/bind that disagrees with the sequential path);
+// - the optimizer axis (v0.3-M7 Phase 5 step 5): the LLVM pass pipeline changes HOW FAST
+//   code runs, never what it computes — a divergence is an optimizer-revealed miscompile
+//   (exactly the R9 return-ABI / fr21 class Phases 2-3 closed), and the corpus includes
+//   the suspension-path fixtures (v0_3_m2_* wait/state-machine programs), so the frame
+//   flush/reload machinery is exercised under O2 here, not just at O0.
+// The matrix is asserted pairwise against the default-mode (parallel+optimized) baseline,
+// so any single divergent combination is named in the failure. Exactly the failure class
+// the per-fixture m3d FIRE/DECLINE tests guard one fixture at a time, lifted to the whole
+// corpus so a NEW fixture is covered the moment it lands without anyone wiring a bespoke
+// twin assertion.
 //
 // Timing/background/concurrent fixtures are excluded for the same reason the determinism test
 // excludes them: their print ordering is scheduler-dependent within a single mode, so a strict
@@ -240,7 +282,7 @@ fn corpus_produces_deterministic_output_across_runs() {
 //
 // Quality gate: at least 30 non-excluded files (validates coverage, not a stub).
 #[test]
-fn corpus_byte_identical_across_auto_parallel_modes() {
+fn corpus_byte_identical_across_mode_matrix() {
     let corpus = collect_corpus();
 
     let mut compared = 0usize;
@@ -275,6 +317,23 @@ fn corpus_byte_identical_across_auto_parallel_modes() {
             // test asserts both modes' orderings explicitly (and that the final RESULT value is
             // identical either way, preserving the real invariant this sweep protects).
             || name == "v0_3_m3g_overlap_proof.ynz"
+            // v0.3-M7 Phase 6 back-edge preemption fixtures: timing-margin races by
+            // construction (fire-and-forget CPU hog vs. main's fixed 4000ms keep-alive) —
+            // see the matching exclusion + full WHY in
+            // corpus_produces_deterministic_output_across_runs above. The hog-completion
+            // line's presence/position varies under load WITHIN a single mode, so a
+            // cross-mode byte comparison would flag scheduling noise, not a codegen
+            // divergence. Invariants owned by v03_m7_backedge_preemption.rs
+            // (YNZ_WORKER_THREADS=1).
+            || name == "v0_3_m7_p6_backedge_starvation_sm.ynz"
+            || name == "v0_3_m7_p6_backedge_residual_nonsm.ynz"
+            // v0.3-M7 planned-RED slot-collision fixture: miscompiled garbage output by
+            // design until the per-loop slot-keying fix — see the matching exclusion +
+            // full WHY in corpus_produces_deterministic_output_across_runs above
+            // (contract owned by d5_frame_slot_collision_planned_red.rs). REMOVE with
+            // the fix.
+            // test-ratchet: planned-RED fixture — miscompiled output until the slot-keying fix; excluded, not weakened (next line)
+            || name == "v0_3_m7_d5_suspending_loop_var_slot_collision.ynz"
             || (name == "entrypoint.ynz"
                 && path
                     .parent()
@@ -295,22 +354,37 @@ fn corpus_byte_identical_across_auto_parallel_modes() {
         // exit code MUST stay byte-identical across modes (for m5_p4_soa_qualifying.ynz this
         // sweep is the only runtime stdout-equivalence oracle; its other tests are typeck-
         // analysis / lint-firing only) — so these fixtures skip just the stderr comparison
-        // instead of dropping out of the sweep entirely.
-        let stderr_diverges_by_design =
+        // instead of dropping out of the sweep entirely. The skip applies ONLY to the
+        // sequential (`--no-auto-parallel`) variants: the optimizer axis does not touch SoA
+        // admission (the gate lives in typeck's auto-parallel analysis, not the LLVM
+        // pipeline), so the parallel+no-optimize corner still admits SoA, still prints the
+        // lint, and its stderr MUST match the baseline.
+        let soa_lint_fixture =
             name == "m5_p4_soa_qualifying.ynz" || name == "m5_p5_soa_copy_wait_bg.ynz";
 
-        let (par_out, par_err, par_code) = run_ynz_mode(path, false);
-        let (seq_out, seq_err, seq_code) = run_ynz_mode(path, true);
+        // Baseline: the default mode users actually get (auto-parallel + optimized).
+        let (base_out, base_err, base_code) = run_ynz_mode(path, false, false);
+        // The other three corners of the 2×2 matrix, each compared against the baseline
+        // (pairwise-vs-baseline is transitively all-pairs equality).
+        let variants: [(&str, bool, bool); 3] = [
+            ("sequential+optimized", true, false),
+            ("parallel+no-optimize", false, true),
+            ("sequential+no-optimize", true, true),
+        ];
         compared += 1;
 
-        let stderr_mismatch = !stderr_diverges_by_design && par_err != seq_err;
-        if par_out != seq_out || stderr_mismatch || par_code != seq_code {
-            failures.push(format!(
-                "MODE-DIVERGENT: {:?}\n  default  stdout: {:?} exit {par_code}\n  sequential stdout: {:?} exit {seq_code}",
-                path.file_name().unwrap_or_default(),
-                &par_out[..par_out.len().min(200)],
-                &seq_out[..seq_out.len().min(200)],
-            ));
+        for (label, no_auto_parallel, no_optimize) in variants {
+            let (var_out, var_err, var_code) = run_ynz_mode(path, no_auto_parallel, no_optimize);
+            let stderr_diverges_by_design = soa_lint_fixture && no_auto_parallel;
+            let stderr_mismatch = !stderr_diverges_by_design && base_err != var_err;
+            if base_out != var_out || stderr_mismatch || base_code != var_code {
+                failures.push(format!(
+                    "MODE-DIVERGENT: {:?} [{label}]\n  default (parallel+optimized) stdout: {:?} exit {base_code}\n  {label} stdout: {:?} exit {var_code}",
+                    path.file_name().unwrap_or_default(),
+                    &base_out[..base_out.len().min(200)],
+                    &var_out[..var_out.len().min(200)],
+                ));
+            }
         }
     }
 
@@ -321,7 +395,7 @@ fn corpus_byte_identical_across_auto_parallel_modes() {
     );
     assert!(
         failures.is_empty(),
-        "auto-parallel mode divergences ({} / {} compared files):\n{}",
+        "mode-matrix divergences ({} findings across {} compared files):\n{}",
         failures.len(),
         compared,
         failures.join("\n\n")

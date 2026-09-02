@@ -1492,19 +1492,59 @@ ships_in = "v0.4+ (pending LSP custom notification design + VSCode panel scaffol
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "Patrick explicitly schedules the IDE graphical view milestone AND the LSP custom-notification protocol for client-side panels is designed."
 
-# --- Real back-edge cooperative-preemption yield (docs/internal/implementation/IMP-no-function-coloring.md
-# "Scheduler Preemption Model" — v0.3-M6 Phase 7 docs/registry honesty sweep, Future Requirements #5).
-# The 2026-07-04 concurrency-release audit found the design doc's "locked" preemption-mechanism
-# claim overstated reality (codegen emits the back-edge call site; the checkpoint itself is a
-# documented no-op) with no matching registry entry — the exact undocumented-deferral shape
-# no-duct-tape.md bans. This entry closes that gap. ---
+# --- Real back-edge cooperative-preemption yield — SHIPPED in v0.3-M7 Phase 6. ---
+# The deferred_tooling_feature entry (`cooperative-preemption-back-edge-yield`) has been retired —
+# the real yield is live: every qualifying loop back edge inside an admitted state-machine function
+# now carries a genuine `ynz_rt_check_preempt(waker_ctx)` poll-yield call
+# (crates/ynz-runtime/src/runtime.rs) that suspends the current task and fairly requeues it via a
+# remote wake through the blocking pool when the per-worker poll budget (2^20 back-edge polls) is
+# spent — no longer the documented no-op stub this entry used to describe. Admission is per-function
+# (declines safely to pre-M7 behavior when an un-frame-backable type would have to cross the yield).
+# See docs/internal/implementation/IMP-no-function-coloring.md "Scheduler Preemption Model" for the
+# shipped three-part architecture. The sibling call-site half remains deferred — see the
+# `preempt-callsite-checks` entry immediately below, which carries its own four-field record for
+# that remaining gap (loop-free CPU-bound recursion inside a state-machine function is the one
+# residual shape the back-edge mechanism structurally cannot cover).
+
+# --- Call-site preemption checks (v0.3-M7 Phase 6 measurement-gated deferral).
+# The four-field record (per no-duct-tape.md):
+#   WHAT: emitting the cooperative-preemption budget check (`ynz_rt_check_preempt`) at
+#         every user-function call site, completing the "call sites AND loop back-edges"
+#         half of IMP-no-function-coloring.md's compile-time-assisted safe-point model
+#         (loop back-edge poll-yield shipped for real in this same phase).
+#   WHY: the fresh v0.3-M7 measurement under the DEFAULT optimized pipeline failed the
+#        PRE-registered acceptance threshold (<=5% median wall-clock on the fib(30)
+#        call-heavy microbenchmark, 5 runs per configuration): toggle-ON median 132ms vs
+#        toggle-OFF median ~26.5ms = ~+398% overhead. Far below the O0-era 1190% figure,
+#        but still ~80x over the bar - an opaque external call before every call site
+#        defeats inlining at the call boundary, which IS the optimizer benefit this
+#        milestone shipped. Starvation coverage loss is bounded: loop back-edge
+#        poll-yield (shipped) covers hot loops; the remaining uncovered shape is
+#        loop-free CPU-bound recursion inside a state-machine function.
+#   COST to fix later: small mechanically (the emission exists behind the
+#        YNZ_PREEMPT_CALLSITE_CHECKS compile-time toggle at the direct user-call choke
+#        point in crates/ynz-codegen/src/emit.rs, with the fib microbenchmark fixture
+#        committed at crates/ynz-driver/tests/fixtures/v0_3_m7_p6_callsite_overhead_fib.ynz);
+#        the real cost is the optimization design work to make the check cheap at call
+#        sites (e.g. inlinable counter fast path via an exported thread-local, or
+#        checks only at non-inlined call boundaries) plus re-measurement.
+#   TRIGGER: a reproduced starvation incident traced to loop-free CPU-bound recursion in
+#        a state-machine function, OR a cheap-check design (inlinable fast path) making a
+#        re-measurement plausible under the threshold, OR PGO/LTO work (the "as fast or
+#        faster than Rust" follow-on) revisiting call-boundary codegen anyway.
+#   KIND: [[deferred_tooling_feature]], NOT [[deferred_language_feature]] — this gates a
+#        compiler-internal mechanism behind a compile-time toggle
+#        (YNZ_PREEMPT_CALLSITE_CHECKS), with no lexer/parser-reserved token a user can
+#        write; the language-feature kind is reserved for user-typeable reserved syntax.
+#        Same classification as its sibling entry on the identical topic,
+#        cooperative-preemption-back-edge-yield, above. ---
 [[deferred_tooling_feature]]
-name = "cooperative-preemption-back-edge-yield"
-substitute = "Every loop back-edge already carries a call to the preemption checkpoint (`ynz_rt_check_preempt`, emitted by `emit_loop_preempt` in crates/ynz-codegen/src/emit.rs) — the call site is real, correctly-positioned code shipped in v0.3-M1. The checkpoint function itself (crates/ynz-runtime/src/runtime.rs) is presently a documented no-op stub: it never actually yields to another task. There is no user-facing action to take today; no Yinz program can opt into real preemption yet. A tight, loop-free, CPU-bound recursive function (e.g. naive fib) is NOT preempted — the exact starvation class this design exists to prevent (Go's pre-1.14 cooperative-only scheduler) is live for that specific case until the real yield ships."
-why = "v0.3-M1's P1 GATE spike measured 1190% overhead inserting a preempt check at every call site (fib(30), release mode, -O0 — no optimizer passes run) against a 5% threshold; the roadmap pre-authorized shipping loop-back-edge call sites only (a true no-op stub) and deferring the real yield, but that relaxation was never written back to this design doc or given a registry entry until this sweep. Yinz is pre-1.0 with zero public users, so the risk of the gap being live in the interim is accepted rather than shipping a rushed fix against O0-tier cost evidence — the real fix belongs in v0.3-M7, where the optimizer pipeline exists to re-measure the cost honestly (inlining and other passes change the per-call overhead the O0 spike cannot represent)."
-ships_in = "v0.3-M7 (optimizer milestone) — re-measured under a real LLVM pass pipeline"
+name = "preempt-callsite-checks"
+substitute = "No user action available or needed - preemption is not a user-facing surface. Hot loops inside functions that can pause are already preempted for real at their loop back edges (shipped v0.3-M7); purely CPU-bound work with no pause points is routed off the I/O workers automatically. The one uncovered shape is deep, loop-free, CPU-bound recursion inside a function that can pause - restructure such code into a loop if a long-running recursion must share its worker fairly."
+why = "v0.3-M7 Phase 6 re-measured the call-site check under the real default optimizer pipeline against a PRE-registered <=5% threshold and measured ~+398% on the fib(30) call-heavy microbenchmark (toggle-ON median 132ms vs OFF ~26.5ms, 5 runs each) - the opaque per-call-site check defeats the inlining the optimizer milestone exists to deliver. Loop back-edge poll-yield shipped in the same phase and covers the hot-loop starvation class; shipping call-site checks at this cost would tax every call-heavy program to cover one remaining uncovered case (loop-free CPU-bound recursion in a function that can pause) that no real workload has yet demonstrated."
+ships_in = "unscheduled - trigger-driven (see the four-field record above)"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
-triggers = "M7's optimizer pipeline lands and back-edge preemption cost is re-measured under real LLVM passes, OR a real workload demonstrates starvation before then."
+triggers = "A reproduced starvation incident traced to loop-free CPU-bound recursion in a state-machine function, OR a cheap inlinable-check design, OR call-boundary codegen work (PGO/LTO follow-on) that re-opens the measurement."
 
 # ---------------------------------------------------------------------------
 # [[deferred_stdlib_api]] — RESERVED, zero entries in M1.
@@ -2359,14 +2399,16 @@ design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 # form, so per auto-promotion.md / inference.md the muted-hint protocol does not
 # apply (plan Divergence 5 — considered and correctly omitted, not forgotten).
 # The WHY cites the honest Phase 6 measurement (crates/ynz-driver/benches/
-# soa-threshold-raw-2026-07-04.md): ~1.0x in today's shipped binaries, ~3.3x under
-# an LLVM -O2 pass pipeline shipped builds do not yet run — never conflated.
+# soa-threshold-raw-2026-07-04.md): ~1.0x measured at the OLD OptimizationLevel::None
+# default, ~3.3x under the LLVM -O2 pass pipeline `ynz build` now runs by default as
+# of v0.3-M7 — never conflated; the why_template below reflects the shipped v0.3-M7
+# reality, not the pre-M7 baseline this historical note preserves.
 [[lint_rule]]
 name = "array-using-soa-layout"
 severity = "suggestion"
 description = "A large, never-grown array of shape values whose hot loops read at most two fields is stored as separate per-field arrays (one memory block per field). A compiler layout choice with no typeable source form; program behavior is identical."
 what_template = "`{array}` is stored as separate per-field arrays: one block of memory per `{shape}` field, instead of each element's fields sitting side by side."
 what_instead_template = "Nothing to change — there is no source form for this layout, and the program behaves exactly the same in both layouts. If this array's use changes (it grows, leaves this function, or its loops read more than two fields), the compiler quietly returns to the normal side-by-side layout."
-why_template = "The hot loops over `{array}` ({len} `{shape}` values) read only {fields}, so grouping each field's values together lets those loops load just the bytes they use. Two honest measurements: run through an optimizer step the compiler does not yet run by default, this layout measured about 3.3x faster on a large loop of this shape; in the binaries `ynz build` produces today (no optimizer step), it measured about the same speed — no detectable difference. The layout costs nothing in correctness now, and the speedup arrives when that optimizer step ships."
+why_template = "The hot loops over `{array}` ({len} `{shape}` values) read only {fields}, so grouping each field's values together lets those loops load just the bytes they use. Honest measurement: under the optimizer the compiler now runs by default, this layout measured about 1.49x faster on a comparable large loop of this shape — a real, shipped speedup, not a projected one. The layout costs nothing in correctness, and the speedup is already in the binaries `ynz build` produces today."
 since = "v0.3-M5"
 design_doc = "docs/internal/implementation/IMP-collections.md"

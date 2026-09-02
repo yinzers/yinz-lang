@@ -1,0 +1,51 @@
+// fr23 regression fixture — shape C2, GENERIC-callee variant nested THREE levels
+// deep (M7 completion-gate round 3, FRAGO 019):
+// `background identity(identity(identity(makeCargo()))).haul()`.
+//
+// This is the proof that `bg_call_return_type_readonly` is genuinely RECURSIVE and
+// closes the whole nesting-depth class, not merely the 2-deep case a 4th hand-rolled
+// special case would have covered. A non-recursive fix that only special-cased
+// "nested call, one level" (or even "nested generic call, one level") would still
+// fall through here; recursion has no depth limit other than the source's own
+// nesting, so this fixture and the 2-deep sibling
+// (`v0_3_m7_fr23_generic_call_nested_generic_arg_spawn_receiver.ynz`) are both
+// expected to pass from the SAME fix.
+//
+// Correct output must contain: `haul: 111/222`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  background identity(identity(identity(makeCargo()))).haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

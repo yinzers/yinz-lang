@@ -220,8 +220,18 @@ pub extern "C" fn ynz_rt_init() {
     let mutex = RUNTIME.get_or_init(|| Mutex::new(None));
     let mut lock = mutex.lock().expect("ynz_rt_init: mutex poisoned");
     if lock.is_none() {
+        // Test-only worker-count override (v0.3-M7 Phase 6): the back-edge poll-yield
+        // starvation fixtures pin YNZ_WORKER_THREADS=1 so "another task on the same
+        // worker" is deterministic regardless of the host's core count. Same env-latch
+        // register as YNZ_ALLOC_COUNTER_OUTPUT / YNZ_SHUTDOWN_TIMEOUT_MS: read once at
+        // init, production default (num_cpus) when unset or unparsable.
+        let worker_threads = std::env::var("YNZ_WORKER_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or_else(num_cpus::get);
         let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(num_cpus::get())
+            .worker_threads(worker_threads)
             .enable_all()
             .build()
             .expect("ynz_rt_init: failed to create Tokio runtime");
@@ -460,24 +470,110 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
     });
 }
 
-/// Cooperative preemption checkpoint — call at loop back-edges and function call sites.
+/// Back-edge polls between granted yields: the cooperative budget is a PURE CALL COUNT,
+/// not a wall clock. At the ~1-15ns/poll cost of a tight state-machine loop iteration,
+/// 2^20 polls lands in the ~2-15ms band — the same order as the scheduler-preemption
+/// model's ~10ms quantum target for exactly the tight-hot-loop starvation shape the
+/// mechanism exists to break.
 ///
-/// # v0.3-M1 stub — intentional no-op
+/// WHY count, not clock (a recorded Phase 6 divergence from the design note's
+/// countdown+quantum sketch): a wall-clock budget makes WHETHER a given loop yields
+/// depend on run-to-run timing jitter, which makes compiled-program stdout
+/// NONDETERMINISTIC across runs — live-reproduced on `examples/pirates-roster`
+/// (six runs, six different output orderings) the moment the clock-based cut landed.
+/// Byte-exact output goldens and the cross-mode byte-identity gate are load-bearing
+/// in this repo (Phase 5 determinism proofs; the plan-invariants demo golden), so the
+/// budget must be a deterministic function of program execution alone. The cost of the
+/// trade: loops with heavy per-iteration bodies yield less often than a strict 10ms
+/// quantum would — recorded honestly in IMP-no-function-coloring.md's preemption
+/// section rather than silently drifted.
+const PREEMPT_YIELD_INTERVAL: u32 = 1 << 20;
+
+thread_local! {
+    /// Per-worker poll countdown (starvation is a per-worker phenomenon; no cross-worker
+    /// synchronization on the hot path). 0 is the "expired, unconsumed" latch: a plain
+    /// (null-waker) caller that hits expiry cannot yield, so the expiry stays latched
+    /// until a state-machine back edge consumes it.
+    static PREEMPT_COUNTDOWN: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(PREEMPT_YIELD_INTERVAL) };
+}
+
+/// Cooperative preemption budget check — called at every loop back-edge (and, behind the
+/// Phase 6 call-site toggle, at user-function call sites).
 ///
-/// This stub exists so every loop back-edge and user-function call site in
-/// compiled Yinz code has the correct call site from day one. The call overhead
-/// is a single `ret` in release mode.
+/// # v0.3-M7 Phase 6 — the real budget check (decides WHETHER; never yields itself)
 ///
-/// Full preemption semantics (cooperative suspension at every call site, Go-style
-/// loop-back-edge yield, Tokio budget integration) land in v0.3-M2 when state
-/// machines ship. Until then, Tokio's blocking-pool threads handle their own
-/// internal scheduling without assistance from this function.
+/// A synchronous `extern "C"` callee cannot yield the enclosing Tokio task — the YIELD is
+/// codegen's: at a state-machine loop back edge the compiler emits
+/// `br (ynz_rt_check_preempt(waker_ctx)), yield_bb, header` where `yield_bb` stores the
+/// resume point and returns Pending. This function only answers "has this worker burned
+/// a full yield interval since it last yielded?" — and, when the answer is yes AND a
+/// waker context is provided, arranges the task's wake FIRST so the Pending the codegen
+/// is about to return is a yield-and-requeue, never a lost, never-woken task.
+///
+/// # Flow
+/// 1. Fast path: decrement the thread-local countdown; while above the floor → `false`
+///    (one Cell decrement + compare — no clock, no atomics; the ≤5ns bound the Phase 0
+///    spike measured for the call shape holds).
+/// 2. Expiry with a NULL `waker_ctx` (a plain, non-state-machine back edge — it discards
+///    the result and CANNOT yield): latch the expiry (countdown 0) and return `true`;
+///    the first state-machine back edge on this worker consumes the latch.
+/// 3. Expiry (or latched expiry) with a non-null `waker_ctx`: reset the countdown,
+///    schedule the wake, return `true`.
+///
+/// # The wake — off-thread by construction
+/// The wake must come from OFF this worker thread. A plain self-`wake_by_ref` during the
+/// task's own poll re-queues it into Tokio's LIFO slot, so the yielding task runs again
+/// IMMEDIATELY after returning Pending and the queued sibling starves — the exact
+/// self-wake starvation Tokio's own `task::yield_now` needed an internal defer-queue to
+/// fix (tokio#5115), and which reproduced verbatim on this mechanism's first cut
+/// (fixture (a): the victim only ran after the hog fully completed). Tokio's defer list
+/// is not public API, so the equivalent fairness is bought by waking from a
+/// blocking-pool thread: a remote wake lands in the injection queue, which the worker
+/// drains only after its local queue — siblings run first.
+///
+/// # Safety
+/// `waker_ctx` must be null OR a valid `*mut u8` pointing to a live `&mut Context<'_>`
+/// for the duration of the call (the locked waker_ctx ABI every resume-fn callee uses).
 ///
 /// # Side effects
-/// None. Pure no-op.
+/// Thread-local budget bookkeeping; on a granted yield, schedules the calling task's
+/// wake on the blocking pool.
 #[no_mangle]
-pub extern "C" fn ynz_rt_check_preempt() {
-    // M1 stub: intentional no-op. See doc comment above.
+pub unsafe extern "C" fn ynz_rt_check_preempt(waker_ctx: *mut u8) -> bool {
+    let expired = PREEMPT_COUNTDOWN.with(|c| {
+        let n = c.get();
+        if n > 1 {
+            c.set(n - 1);
+            false
+        } else {
+            // n == 1 (expiring now) or n == 0 (latched by a plain caller earlier).
+            true
+        }
+    });
+    if !expired {
+        return false;
+    }
+    if waker_ctx.is_null() {
+        // Plain-loop caller: cannot yield — latch the expiry for the next SM back edge
+        // on this worker. The returned bool is discarded by plain call sites.
+        PREEMPT_COUNTDOWN.with(|c| c.set(0));
+        return true;
+    }
+    PREEMPT_COUNTDOWN.with(|c| c.set(PREEMPT_YIELD_INTERVAL));
+    // SAFETY: waker_ctx was cast from &mut Context<'_> by the enclosing state-machine
+    // poll (StateFnFuture / SpawnStateFnFuture) — the caller guarantees liveness.
+    let cx = unsafe { &mut *(waker_ctx as *mut Context<'_>) };
+    let waker = cx.waker().clone();
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn_blocking(move || waker.wake());
+        }
+        // No runtime context (unreachable for a real SM poll, which always runs inside
+        // block_on or a worker): plain wake keeps the task schedulable rather than lost.
+        Err(_) => waker.wake(),
+    }
+    true
 }
 
 /// Shut down the Tokio runtime, draining in-flight background tasks.

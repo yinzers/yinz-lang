@@ -3628,8 +3628,6 @@ mod m3d_join_shims {
             let handle_ptr = spawn_panicking_handle();
             assert!(!handle_ptr.is_null());
 
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
             let mut result_slot = [0i64; 2];
             let result_ptr = result_slot.as_mut_ptr() as *mut u8;
 
@@ -3641,16 +3639,43 @@ mod m3d_join_shims {
                 // catch_unwind inside block_in_place captures the resume_unwind before it crosses
                 // the block_in_place OS-thread boundary.
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    rt.block_on(with_cx(|cx| {
-                        let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
-                        ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
-                    }))
+                    // Poll to readiness instead of polling ONCE after a fixed wall-clock sleep.
+                    // The child is a real blocking-pool task; under the sanitizer lanes
+                    // (`-Zsanitizer=thread`, Miri) its panic takes far longer to surface as a
+                    // JoinError than any sleep constant can safely guess, so a single poll
+                    // returned Pending (`1i32`) and the re-raise never happened — green locally,
+                    // intermittently red on CI (observed on `main` itself, same sha green on
+                    // other runs). The deadline below is a liveness backstop, NOT a timing
+                    // assumption: the loop exits the instant the poll resolves, so a fast run
+                    // is just as fast as the old single-poll version.
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                    loop {
+                        let code = rt.block_on(with_cx(|cx| {
+                            let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                            ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
+                        }));
+                        // Any non-Pending code means the handle was consumed (and, on the
+                        // panic path, this line is never reached — resume_unwind already left).
+                        // Never re-poll after that: the Ready(Ok) arm frees the Box.
+                        if code != 1 {
+                            return Some(code);
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            return None;
+                        }
+                        // Already on the blocking OS thread via block_in_place, so a thread
+                        // sleep is the correct wait here — an async sleep would need the very
+                        // runtime this loop is driving with block_on.
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
                 }))
             });
 
             assert!(
                 caught.is_err(),
-                "poll must panic (via resume_unwind) when the child panicked"
+                "poll must panic (via resume_unwind) when the child panicked; \
+                 poll returned {:?} instead (None = never left Pending before the deadline)",
+                caught.as_ref().ok()
             );
             let payload = caught.unwrap_err();
             let msg = payload

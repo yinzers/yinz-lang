@@ -1,0 +1,46 @@
+// v0.3-M7 planned-RED fixture — the PRE-EXISTING name-keyed loop-var frame-slot
+// collision that Phase 6's D5 admission decline AVOIDS (for the widened wait-free path)
+// but does not FIX (plan `2026-07-04-v0-3-m7-optimizer-pipeline` Future Requirements
+// entry "name-keyed loop-var frame-slot collision", ELEVATED).
+//
+// Root cause (crates/ynz-typeck/src/check.rs `for_var_elem_type_conflict`'s own NOTE +
+// the crossing-local frame machinery): the crossing frame slot for a `for` loop variable
+// is keyed by NAME — one slot per name, classified ONCE from the FIRST loop's element
+// type (`find_for_loop_var_type_in_stmts`). Two SUSPENDING-body loops sharing a var name
+// across different element types were ALREADY routed through the SM arms before Phase 6,
+// so the second loop's variable is flushed/reloaded through a slot sized and classified
+// for the first loop's type.
+//
+// This minimized shape reproduces the collision TODAY (2026-07-17, deterministic within
+// a run): `p` is classified from `Point` by the first loop; the second loop's STRING
+// element then reloads through the Point-classified slot and prints raw garbage bytes
+// instead of `anchor` / `harbor`. On the sibling m5_p5_soa_copy_wait_bg.ynz shape (three
+// loops sharing `p` across Point/Part + a background spawn, pre-D5 widened routing) the
+// same collision manifests as heap corruption — SIGABRT "corrupted size vs. prev_size".
+//
+// Correct contract (the planned-RED lock in d5_frame_slot_collision_planned_red.rs):
+//   111
+//   anchor
+//   harbor
+//   done
+// with exit 0 — green only when loop-var frame slots are keyed/classified per loop
+// (or per name+type), not once per name.
+
+shape Point {
+  x: int
+  y: int
+}
+
+function entrypoint() -> nothing {
+  let pts: array<Point> = [{ x: 111, y: 222 }]
+  let names: array<string> = [`anchor`, `harbor`]
+  for (p in pts) {
+    wait sleep(0)
+    print(p.x.toString())
+  }
+  for (p in names) {
+    wait sleep(0)
+    print(p)
+  }
+  print(`done`)
+}

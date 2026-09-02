@@ -1,0 +1,55 @@
+// fr23 ADVERSARIAL construction — FRAGO 022 verify step 3 (2026-07-18). The
+// still-latent A/C1 class (FRAGO 011's documented deferral): a PLAIN field
+// access whose field name is NOT `.value` (`ship.cargo`, not a maybe-payload or
+// MapEntry read) used DIRECTLY as a `background` spawn argument. No fr23
+// fixture has ever exercised this class before — A/C1 was deferred out of
+// scope in every prior round because its storage is a SEPARATE, already-safe
+// mechanism (`store_field`'s `field_own` heap cell), not the spawner-stack
+// alloca hazard the other fr23 shapes hit.
+//
+// `bg_arg_is_provably_safe` does not special-case this class: a `FieldAccess`
+// with any field name falls through the trailing wildcard to `Give`, exactly
+// like every other `FieldAccess`. This fixture proves that default-deny
+// riding the A/C1 case "harmlessly" (per FRAGO 022's design note) is genuinely
+// harmless in practice, not just in reasoning: `ship.cargo`'s value is ALREADY
+// a `field_own` heap-cell pointer, so `prepare_bg_arg_for_ctx`'s `Type::Shape`
+// heap-upgrade arm performs one redundant shallow byte-copy into a FRESH
+// `ynz_alloc`'d cell on top of the field cell that was already safe — and the
+// spawned task still reads the correct, live values.
+//
+// Correct output must contain: `haul: 111/222`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+shape Ship {
+  cargo: Cargo
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner(ship: Ship) -> nothing {
+  background haul(ship.cargo)
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  let ca: Cargo = { weight: 111, tag: 222 }
+  let ship: Ship = { cargo: ca }
+  spawner(ship)
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

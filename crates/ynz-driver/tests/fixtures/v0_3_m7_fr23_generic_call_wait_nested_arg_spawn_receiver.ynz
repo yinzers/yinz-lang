@@ -1,0 +1,67 @@
+// fr23 CONFIRMED-LIVE UAF — round 6 (FRAGO 021), a NEW shape found by this
+// round's mandated exhaustive semantic audit of `bg_expr_resolved_type`
+// (`crates/ynz-typeck/src/check.rs`), NOT the originally-reported StructLit bug.
+//
+// Same defect class as the nested-`.copy()` sibling fixture
+// (`v0_3_m7_fr23_generic_call_copy_nested_arg_spawn_receiver.ynz`): M8 sequential
+// semantics make `wait expr` type-identical to `expr` ("wait foo() compiles
+// identically to foo()," `ynz-ast/src/nodes.rs` doc comment) — but
+// `bg_expr_resolved_type`'s `Expr::Wait(..) => None` arm does not unwrap the
+// inner expression, so a `wait`-wrapped call NESTED inside a generic call's
+// argument (`identity(wait makeCargo())`) never resolves to
+// `Some(Type::Shape{..})` for substitution-seeding purposes. `identity`'s `T`
+// stays an unresolved `TypeParam`, and the OUTER call (itself the C2 shape) is
+// never recognized as Shape-typed — the receiver falls through un-admitted.
+//
+// (`wait` on a non-suspending callee like `makeCargo` emits a
+// `prefer-yielding-sleep`-class advisory lint — "wait has no effect" — but is
+// NOT a compile error; the program still builds and runs, which is what makes
+// this reachable.)
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed live (2026-07-18, FRAGO 021, this exact fixture, 6 runs each tier):
+// O0 deterministic-ish garbage (`haul: 111/0` 5/6, `haul: 0/0` 1/6 — `weight`
+// mostly survives by luck of this repro's exact layout, `tag` never does).
+//
+// NOT YET FIXED — see FRAGO 021 (this is one of 3 additional distinct
+// wrong/incomplete arms found beyond the originally-reported StructLit bug,
+// crossing this round's own "3+ wrong arms" STOP condition). Deferred pending
+// the conductor's architectural decision. Documented RED per no-duct-tape.md's
+// legitimate-inverse pattern.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  background identity(wait makeCargo()).haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

@@ -2,7 +2,12 @@
 ///
 /// Variant count is pinned by `m4_type_variant_count_locked` in tests.
 /// Current count: 22 (v0.3-M4 adds BuiltinChannel + BackgroundHandle; total 22 across M1–v0.3-M4)
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// `Ord` exists so `Type` can key ordered containers (`MonoKey` → `BTreeMap` in the
+/// monomorphization table) — iteration order there reaches LLVM emission order, and an
+/// unordered container made multi-file builds nondeterministic (v0.3-M7 R10). The derived
+/// order is arbitrary but stable; nothing may attach semantic meaning to it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Type {
     /// Functions that don't return a value.
     Nothing,

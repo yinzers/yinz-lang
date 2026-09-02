@@ -1,0 +1,60 @@
+// v0.3-M7 FRAGO 024 (round 8, Bug 2) — `SelfValue` FALSE-SAFE classification:
+// `bg_arg_is_provably_safe`'s `SelfValue => true` arm assumed `self`'s backing
+// storage always outlives any spawn that uses it — true for a SINGLE-LEVEL spawn
+// (FRAGO 021 arm #15), but false for a NESTED spawn: a `give self` parameter whose
+// OWNING function is ITSELF reached via `background`. There, `self`'s heap cell is
+// freed by the OUTER task's own end-of-scope free ladder immediately after the
+// inner fire-and-forget spawn returns (spawning does not wait for the child task
+// to run), racing the inner task's delayed read of `self`.
+//
+// CONFIRMED-LIVE (2026-07-18, FRAGO 024 round 8): 14/14 runs (both tiers) printed
+// garbage for `weight` while `tag` (222, the SECOND field) survived — e.g.
+// `haul: 243688/222`, `haul: 186729/222` — instead of the correct `haul: 111/222`.
+// Isolated via a control using a plain-named parameter instead of `self`
+// (`v0_3_m7_fr24_nested_ident_spawn_receiver_control.ynz`), which was correct 6/6:
+// the `Ident` liveness path in `check_stmts` always records SOME ownership entry
+// (forcing heap-upgrade), while `SelfValue`'s blanket `true` recorded none.
+//
+// FIXED — `SelfValue` was removed from `bg_arg_is_provably_safe`'s safe set; it
+// now defaults to `Give` via the trailing wildcard like every other
+// non-enumerated shape (a redundant heap copy in the single-level case, and the
+// fix that closes this nested-spawn race).
+//
+// Correct output must contain: `haul: 111/222`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function relay(give self: Cargo) -> nothing {
+  background self.haul()
+}
+
+function spawner() -> nothing {
+  background relay(makeCargo())
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}
