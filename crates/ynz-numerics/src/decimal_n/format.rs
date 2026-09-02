@@ -35,7 +35,7 @@ pub fn format_bignum(bn: &BigNum) -> String {
             return format!("{sign}{coeff}{}", "0".repeat(zeros));
         }
         // Too many trailing zeros — use scientific notation
-        format!("{sign}{}e+{}", &coeff, adjusted)
+        format!("{sign}{coeff}e+{adjusted}")
     } else if adjusted >= 0 {
         // Has a decimal point within the digits: e.g., "12345" exp=-2 → "123.45"
         let int_len = (num_digits + exp) as usize; // digits before decimal
