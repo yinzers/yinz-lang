@@ -14,7 +14,63 @@
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
 };
+
+/// Run `f` over every corpus entry across all available cores, concatenating the
+/// per-entry findings.
+///
+/// WHY parallel: each corpus entry is fully independent. `f` spawns `ynz run` as a child
+/// process, compares the captured strings, and returns findings — nothing is shared and
+/// nothing is ordered. Concurrent invocations cannot collide on disk either: `ynz run`
+/// builds into its OWN per-invocation temp directory (random name, mode 0o700 — see the
+/// contract on `crates/ynz-driver/src/run.rs::run`).
+///
+/// WHY it matters: run serially, this sweep was the single most expensive thing in the
+/// workspace — 2291s of a 3108s full-suite run (74% of total wall clock) from just two
+/// tests, holding one core of sixteen while every other test binary queued behind it.
+///
+/// WHY an atomic cursor instead of pre-chunked ranges: per-fixture cost varies by more
+/// than an order of magnitude (a two-line program vs. a suspension-heavy state machine),
+/// so fixed chunks would strand cores waiting on whichever chunk drew the slow tail.
+/// Workers claim the next index as they free up.
+fn parallel_sweep<F>(corpus: &[PathBuf], f: F) -> Vec<String>
+where
+    F: Fn(&Path) -> Vec<String> + Sync,
+{
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(corpus.len().max(1));
+    let cursor = AtomicUsize::new(0);
+    let collected = Mutex::new(Vec::new());
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let idx = cursor.fetch_add(1, Ordering::Relaxed);
+                let Some(path) = corpus.get(idx) else { break };
+                let mut found = f(path);
+                if !found.is_empty() {
+                    collected
+                        .lock()
+                        .expect("findings mutex poisoned")
+                        .append(&mut found);
+                }
+            });
+        }
+    });
+
+    let mut out = collected.into_inner().expect("findings mutex poisoned");
+    // Completion order is nondeterministic; sort so a failing run reports the same text
+    // every time. (A determinism harness with nondeterministic failure output would be a
+    // poor joke at the next reader's expense.)
+    out.sort();
+    out
+}
 
 fn ynz_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ynz"))
@@ -149,9 +205,9 @@ fn corpus_produces_deterministic_output_across_runs() {
         "corpus must have at least 30 files (got {corpus_size}); discovery logic may be broken"
     );
 
-    let mut failures: Vec<String> = Vec::new();
+    let failures = parallel_sweep(&corpus, |path| {
+        let mut failures: Vec<String> = Vec::new();
 
-    for path in &corpus {
         let (run1_out, run1_err, run1_code) = run_ynz(path);
         let (run2_out, run2_err, run2_code) = run_ynz(path);
 
@@ -247,7 +303,9 @@ fn corpus_produces_deterministic_output_across_runs() {
                 &run2_out[..run2_out.len().min(200)],
             ));
         }
-    }
+
+        failures
+    });
 
     assert!(
         failures.is_empty(),
@@ -285,10 +343,11 @@ fn corpus_produces_deterministic_output_across_runs() {
 fn corpus_byte_identical_across_mode_matrix() {
     let corpus = collect_corpus();
 
-    let mut compared = 0usize;
-    let mut failures: Vec<String> = Vec::new();
+    let compared = AtomicUsize::new(0);
 
-    for path in &corpus {
+    let failures = parallel_sweep(&corpus, |path| {
+        let mut failures: Vec<String> = Vec::new();
+
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         // Same exclusions as the determinism harness: ordering of these is scheduler-dependent
         // WITHIN a single run, so cross-mode byte comparison would flag scheduling noise, not a
@@ -341,7 +400,7 @@ fn corpus_byte_identical_across_mode_matrix() {
                     .and_then(|n| n.to_str())
                     == Some("pirates-roster"));
         if is_scheduling_nondeterministic {
-            continue;
+            return failures;
         }
 
         // v0.3-M5 SoA-admitted fixtures: the `array-using-soa-layout` Tier 3 lint fires only
@@ -371,7 +430,7 @@ fn corpus_byte_identical_across_mode_matrix() {
             ("parallel+no-optimize", false, true),
             ("sequential+no-optimize", true, true),
         ];
-        compared += 1;
+        compared.fetch_add(1, Ordering::Relaxed);
 
         for (label, no_auto_parallel, no_optimize) in variants {
             let (var_out, var_err, var_code) = run_ynz_mode(path, no_auto_parallel, no_optimize);
@@ -386,8 +445,11 @@ fn corpus_byte_identical_across_mode_matrix() {
                 ));
             }
         }
-    }
 
+        failures
+    });
+
+    let compared = compared.into_inner();
     assert!(
         compared >= 30,
         "expected at least 30 corpus files to compare across modes (got {compared}); discovery \
