@@ -108,6 +108,98 @@ fn run_ynz_mode(path: &Path, no_auto_parallel: bool, no_optimize: bool) -> (Stri
     )
 }
 
+/// True when a program's OUTPUT ORDERING is scheduler-dependent — i.e. it spawns `background`
+/// work, so the interleaving of its prints is not a property the language guarantees.
+///
+/// AUTHORITATIVE SOURCE, not a name proxy. Both sweeps below previously decided this by testing
+/// the FILE NAME for the substrings "timing"/"background"/"concurrent". That is the
+/// `authoritative-derivation.md` twin: the real property lives in the source text, and the proxy
+/// drifted from it — 91 corpus fixtures use `background`, only 16 are NAMED for it, leaving 75
+/// asserting a byte-identical ordering the language never promised. They passed only because a
+/// serially-run sweep left the machine idle enough for the interleaving to repeat by luck;
+/// parallelizing the sweep (this same commit series) started flipping them. The first to fall was
+/// `v0_3_m4_p3_cross_copy.ynz`, which printed `q3\n42\n...` on one run and `42\n...\nq3` on the
+/// next — same lines, same exit code, different order.
+///
+/// Reading the source is the fix, and it is cheap: each corpus file is read once per sweep,
+/// against ~4 compile+link+execute cycles for the same file.
+fn output_order_is_scheduler_dependent(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .map(|src| src.contains("background"))
+        .unwrap_or(false)
+}
+
+/// Compare two program outputs, relaxing ORDER (and only order) when the program's ordering is
+/// scheduler-dependent.
+///
+/// WHY NOT simply exclude those fixtures: this harness exists BECAUSE v0.3-M1 introduced
+/// background scheduling (see the module header) — background programs are its whole subject.
+/// Dropping all 91 would leave a "determinism harness" that skips every concurrent program, which
+/// is `no-duct-tape.md`'s six-month-contributor test failing on the spot.
+///
+/// WHAT IS STILL STRICT, for every fixture without exception: the exit code, the stderr text, and
+/// the complete multiset of stdout lines. A dropped line, a duplicated line, a wrong VALUE, or a
+/// changed exit code all still fail. The ONLY thing relaxed is the sequence in which concurrently
+/// produced lines appear — which per `IMP-concurrency.md`'s Model A is not a codegen property at
+/// all (`wait` is the user's ordering tool), so asserting it was asserting a guarantee Yinz does
+/// not make.
+fn outputs_match(a: &str, b: &str, order_sensitive: bool) -> bool {
+    if order_sensitive {
+        return a == b;
+    }
+    let mut a_lines: Vec<&str> = a.lines().collect();
+    let mut b_lines: Vec<&str> = b.lines().collect();
+    a_lines.sort_unstable();
+    b_lines.sort_unstable();
+    a_lines == b_lines
+}
+
+#[cfg(test)]
+mod outputs_match_contract {
+    use super::outputs_match;
+
+    // WHY these exist: `outputs_match` RELAXES an assertion on the corpus sweep — this
+    // workspace's strongest silent-miscompile guard. A relaxation that quietly stopped
+    // catching real divergence would be strictly worse than the flaky strictness it replaced,
+    // and it would fail silently (green forever). These lock the exact boundary: order is
+    // forgiven, nothing else is.
+
+    #[test]
+    fn reordering_is_forgiven_only_when_order_insensitive() {
+        assert!(outputs_match("q3\n42\ndone\n", "42\ndone\nq3\n", false));
+        // The same pair MUST still fail under strict comparison — the relaxation has to be
+        // opt-in per fixture, never the global default.
+        assert!(!outputs_match("q3\n42\ndone\n", "42\ndone\nq3\n", true));
+    }
+
+    #[test]
+    fn a_wrong_value_still_fails_even_when_order_insensitive() {
+        // The miscompile shape this sweep exists to catch: same line count, same ordering,
+        // one value silently different.
+        assert!(!outputs_match("42\ndone\n", "43\ndone\n", false));
+    }
+
+    #[test]
+    fn a_missing_or_extra_line_still_fails_even_when_order_insensitive() {
+        assert!(!outputs_match("a\nb\n", "a\n", false));
+        assert!(!outputs_match("a\n", "a\nb\n", false));
+    }
+
+    #[test]
+    fn duplicate_lines_are_multiset_compared_not_set_compared() {
+        // Sorted-Vec, not HashSet: a line emitted twice where it should appear once is a real
+        // defect (a loop running an extra iteration, a double-flush) and must not be collapsed.
+        assert!(!outputs_match("a\na\n", "a\n", false));
+        assert!(outputs_match("a\na\nb\n", "b\na\na\n", false));
+    }
+
+    #[test]
+    fn identical_output_matches_under_both_modes() {
+        assert!(outputs_match("a\nb\n", "a\nb\n", true));
+        assert!(outputs_match("a\nb\n", "a\nb\n", false));
+    }
+}
+
 /// True when a file is an intentional-error gallery file (should fail to compile).
 fn is_error_gallery(path: &Path) -> bool {
     path.ancestors().any(|p| p.ends_with("primantis-orders"))
@@ -293,11 +385,19 @@ fn corpus_produces_deterministic_output_across_runs() {
             })
             .unwrap_or(false);
 
+        // Ordering is relaxed ONLY for programs that actually spawn background work — derived
+        // from the source, never from the file name (see `output_order_is_scheduler_dependent`).
+        // Values, line multiset, stderr and exit code stay strict for every fixture.
+        let order_sensitive = !output_order_is_scheduler_dependent(path);
+
         if !is_timing_fixture
-            && (run1_out != run2_out || run1_err != run2_err || run1_code != run2_code)
+            && (!outputs_match(&run1_out, &run2_out, order_sensitive)
+                || !outputs_match(&run1_err, &run2_err, order_sensitive)
+                || run1_code != run2_code)
         {
             failures.push(format!(
-                "NON-DETERMINISTIC: {:?}\n  run1 stdout: {:?}\n  run2 stdout: {:?}\n  run1 exit: {run1_code}, run2 exit: {run2_code}",
+                "NON-DETERMINISTIC{}: {:?}\n  run1 stdout: {:?}\n  run2 stdout: {:?}\n  run1 exit: {run1_code}, run2 exit: {run2_code}",
+                if order_sensitive { "" } else { " (order-insensitive: program uses `background`; line multiset differs, not just their order)" },
                 path.file_name().unwrap_or_default(),
                 &run1_out[..run1_out.len().min(200)],
                 &run2_out[..run2_out.len().min(200)],
@@ -432,13 +532,24 @@ fn corpus_byte_identical_across_mode_matrix() {
         ];
         compared.fetch_add(1, Ordering::Relaxed);
 
+        // Same authoritative source as the determinism sweep above — the CLUSTERED sibling of the
+        // same defect (root-cause.md: two findings sharing an ancestor get ONE fix at the
+        // ancestor). This sweep carried an identical name-substring filter with the identical
+        // 75-fixture blind spot; both now consult `output_order_is_scheduler_dependent`.
+        let order_sensitive = !output_order_is_scheduler_dependent(path);
+
         for (label, no_auto_parallel, no_optimize) in variants {
             let (var_out, var_err, var_code) = run_ynz_mode(path, no_auto_parallel, no_optimize);
             let stderr_diverges_by_design = soa_lint_fixture && no_auto_parallel;
-            let stderr_mismatch = !stderr_diverges_by_design && base_err != var_err;
-            if base_out != var_out || stderr_mismatch || base_code != var_code {
+            let stderr_mismatch =
+                !stderr_diverges_by_design && !outputs_match(&base_err, &var_err, order_sensitive);
+            if !outputs_match(&base_out, &var_out, order_sensitive)
+                || stderr_mismatch
+                || base_code != var_code
+            {
                 failures.push(format!(
-                    "MODE-DIVERGENT: {:?} [{label}]\n  default (parallel+optimized) stdout: {:?} exit {base_code}\n  {label} stdout: {:?} exit {var_code}",
+                    "MODE-DIVERGENT{}: {:?} [{label}]\n  default (parallel+optimized) stdout: {:?} exit {base_code}\n  {label} stdout: {:?} exit {var_code}",
+                    if order_sensitive { "" } else { " (order-insensitive: program uses `background`; line multiset differs, not just their order)" },
                     path.file_name().unwrap_or_default(),
                     &base_out[..base_out.len().min(200)],
                     &var_out[..var_out.len().min(200)],
