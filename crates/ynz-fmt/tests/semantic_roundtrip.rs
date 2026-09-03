@@ -5,7 +5,46 @@
 //!   1. `format(source)` succeeds (no parse errors introduced).
 //!   2. `ast_eq_modulo_trivia(original_ast, reformatted_ast)` — same program.
 
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
+/// Run `check` over every file across all available cores.
+///
+/// Same shape as the canonical `parallel_sweep` in
+/// `crates/ynz-driver/tests/cross_impl_consistency.rs` (duplicated rather than shared because
+/// these are separate crates' test targets, with no shared test-support crate between them).
+/// Per `.claude/rules/test-parallelism.md`, the four independence questions are answered here
+/// so the next reader does not re-derive them:
+///
+///   1. No shared mutable state — `check_semantic_roundtrip` builds its OWN
+///      `ynz_parser::CompilerDb::default()` per call; nothing is threaded between files.
+///   2. No ordering dependency — each file is parsed, formatted, and re-parsed in isolation.
+///   3. No shared filesystem path — the check is read-only (`read_to_string`); it writes
+///      nothing and spawns no subprocess.
+///   4. No global process state — no env mutation, no `set_current_dir`, no singleton.
+///
+/// A failing file panics inside its worker with the path already in the assert message;
+/// `std::thread::scope` propagates that panic on join, so a failure still fails the test.
+/// This matches the previous serial behavior, which also stopped at the first bad file.
+fn check_all_parallel(files: &[PathBuf], check: impl Fn(&Path) + Sync) {
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(files.len().max(1));
+    let cursor = AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let idx = cursor.fetch_add(1, Ordering::Relaxed);
+                let Some(file) = files.get(idx) else { break };
+                check(file);
+            });
+        }
+    });
+}
 
 fn check_semantic_roundtrip(path: &Path) {
     let source = std::fs::read_to_string(path).expect("could not read fixture");
@@ -96,15 +135,12 @@ fn examples_roundtrip() {
     if !examples_dir.exists() {
         return;
     }
-    let files = walk_ynz_files(&examples_dir);
-    for file in &files {
-        let path_str = file.to_string_lossy();
+    let files: Vec<PathBuf> = walk_ynz_files(&examples_dir)
+        .into_iter()
         // fmt_demo is intentionally non-canonical; skip it.
-        if path_str.contains("fmt_demo") {
-            continue;
-        }
-        check_semantic_roundtrip(file);
-    }
+        .filter(|f| !f.to_string_lossy().contains("fmt_demo"))
+        .collect();
+    check_all_parallel(&files, check_semantic_roundtrip);
 }
 
 #[test]
@@ -118,7 +154,5 @@ fn driver_fixtures_roundtrip() {
         return;
     }
     let files = walk_ynz_files(&fixtures_dir);
-    for file in &files {
-        check_semantic_roundtrip(file);
-    }
+    check_all_parallel(&files, check_semantic_roundtrip);
 }

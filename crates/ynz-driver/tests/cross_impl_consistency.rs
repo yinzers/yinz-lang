@@ -14,7 +14,63 @@
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
 };
+
+/// Run `f` over every corpus entry across all available cores, concatenating the
+/// per-entry findings.
+///
+/// WHY parallel: each corpus entry is fully independent. `f` spawns `ynz run` as a child
+/// process, compares the captured strings, and returns findings — nothing is shared and
+/// nothing is ordered. Concurrent invocations cannot collide on disk either: `ynz run`
+/// builds into its OWN per-invocation temp directory (random name, mode 0o700 — see the
+/// contract on `crates/ynz-driver/src/run.rs::run`).
+///
+/// WHY it matters: run serially, this sweep was the single most expensive thing in the
+/// workspace — 2291s of a 3108s full-suite run (74% of total wall clock) from just two
+/// tests, holding one core of sixteen while every other test binary queued behind it.
+///
+/// WHY an atomic cursor instead of pre-chunked ranges: per-fixture cost varies by more
+/// than an order of magnitude (a two-line program vs. a suspension-heavy state machine),
+/// so fixed chunks would strand cores waiting on whichever chunk drew the slow tail.
+/// Workers claim the next index as they free up.
+fn parallel_sweep<F>(corpus: &[PathBuf], f: F) -> Vec<String>
+where
+    F: Fn(&Path) -> Vec<String> + Sync,
+{
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(corpus.len().max(1));
+    let cursor = AtomicUsize::new(0);
+    let collected = Mutex::new(Vec::new());
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let idx = cursor.fetch_add(1, Ordering::Relaxed);
+                let Some(path) = corpus.get(idx) else { break };
+                let mut found = f(path);
+                if !found.is_empty() {
+                    collected
+                        .lock()
+                        .expect("findings mutex poisoned")
+                        .append(&mut found);
+                }
+            });
+        }
+    });
+
+    let mut out = collected.into_inner().expect("findings mutex poisoned");
+    // Completion order is nondeterministic; sort so a failing run reports the same text
+    // every time. (A determinism harness with nondeterministic failure output would be a
+    // poor joke at the next reader's expense.)
+    out.sort();
+    out
+}
 
 fn ynz_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ynz"))
@@ -50,6 +106,98 @@ fn run_ynz_mode(path: &Path, no_auto_parallel: bool, no_optimize: bool) -> (Stri
         String::from_utf8_lossy(&out.stderr).into_owned(),
         out.status.code().unwrap_or(-1),
     )
+}
+
+/// True when a program's OUTPUT ORDERING is scheduler-dependent — i.e. it spawns `background`
+/// work, so the interleaving of its prints is not a property the language guarantees.
+///
+/// AUTHORITATIVE SOURCE, not a name proxy. Both sweeps below previously decided this by testing
+/// the FILE NAME for the substrings "timing"/"background"/"concurrent". That is the
+/// `authoritative-derivation.md` twin: the real property lives in the source text, and the proxy
+/// drifted from it — 91 corpus fixtures use `background`, only 16 are NAMED for it, leaving 75
+/// asserting a byte-identical ordering the language never promised. They passed only because a
+/// serially-run sweep left the machine idle enough for the interleaving to repeat by luck;
+/// parallelizing the sweep (this same commit series) started flipping them. The first to fall was
+/// `v0_3_m4_p3_cross_copy.ynz`, which printed `q3\n42\n...` on one run and `42\n...\nq3` on the
+/// next — same lines, same exit code, different order.
+///
+/// Reading the source is the fix, and it is cheap: each corpus file is read once per sweep,
+/// against ~4 compile+link+execute cycles for the same file.
+fn output_order_is_scheduler_dependent(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .map(|src| src.contains("background"))
+        .unwrap_or(false)
+}
+
+/// Compare two program outputs, relaxing ORDER (and only order) when the program's ordering is
+/// scheduler-dependent.
+///
+/// WHY NOT simply exclude those fixtures: this harness exists BECAUSE v0.3-M1 introduced
+/// background scheduling (see the module header) — background programs are its whole subject.
+/// Dropping all 91 would leave a "determinism harness" that skips every concurrent program, which
+/// is `no-duct-tape.md`'s six-month-contributor test failing on the spot.
+///
+/// WHAT IS STILL STRICT, for every fixture without exception: the exit code, the stderr text, and
+/// the complete multiset of stdout lines. A dropped line, a duplicated line, a wrong VALUE, or a
+/// changed exit code all still fail. The ONLY thing relaxed is the sequence in which concurrently
+/// produced lines appear — which per `IMP-concurrency.md`'s Model A is not a codegen property at
+/// all (`wait` is the user's ordering tool), so asserting it was asserting a guarantee Yinz does
+/// not make.
+fn outputs_match(a: &str, b: &str, order_sensitive: bool) -> bool {
+    if order_sensitive {
+        return a == b;
+    }
+    let mut a_lines: Vec<&str> = a.lines().collect();
+    let mut b_lines: Vec<&str> = b.lines().collect();
+    a_lines.sort_unstable();
+    b_lines.sort_unstable();
+    a_lines == b_lines
+}
+
+#[cfg(test)]
+mod outputs_match_contract {
+    use super::outputs_match;
+
+    // WHY these exist: `outputs_match` RELAXES an assertion on the corpus sweep — this
+    // workspace's strongest silent-miscompile guard. A relaxation that quietly stopped
+    // catching real divergence would be strictly worse than the flaky strictness it replaced,
+    // and it would fail silently (green forever). These lock the exact boundary: order is
+    // forgiven, nothing else is.
+
+    #[test]
+    fn reordering_is_forgiven_only_when_order_insensitive() {
+        assert!(outputs_match("q3\n42\ndone\n", "42\ndone\nq3\n", false));
+        // The same pair MUST still fail under strict comparison — the relaxation has to be
+        // opt-in per fixture, never the global default.
+        assert!(!outputs_match("q3\n42\ndone\n", "42\ndone\nq3\n", true));
+    }
+
+    #[test]
+    fn a_wrong_value_still_fails_even_when_order_insensitive() {
+        // The miscompile shape this sweep exists to catch: same line count, same ordering,
+        // one value silently different.
+        assert!(!outputs_match("42\ndone\n", "43\ndone\n", false));
+    }
+
+    #[test]
+    fn a_missing_or_extra_line_still_fails_even_when_order_insensitive() {
+        assert!(!outputs_match("a\nb\n", "a\n", false));
+        assert!(!outputs_match("a\n", "a\nb\n", false));
+    }
+
+    #[test]
+    fn duplicate_lines_are_multiset_compared_not_set_compared() {
+        // Sorted-Vec, not HashSet: a line emitted twice where it should appear once is a real
+        // defect (a loop running an extra iteration, a double-flush) and must not be collapsed.
+        assert!(!outputs_match("a\na\n", "a\n", false));
+        assert!(outputs_match("a\na\nb\n", "b\na\na\n", false));
+    }
+
+    #[test]
+    fn identical_output_matches_under_both_modes() {
+        assert!(outputs_match("a\nb\n", "a\nb\n", true));
+        assert!(outputs_match("a\nb\n", "a\nb\n", false));
+    }
 }
 
 /// True when a file is an intentional-error gallery file (should fail to compile).
@@ -149,9 +297,9 @@ fn corpus_produces_deterministic_output_across_runs() {
         "corpus must have at least 30 files (got {corpus_size}); discovery logic may be broken"
     );
 
-    let mut failures: Vec<String> = Vec::new();
+    let failures = parallel_sweep(&corpus, |path| {
+        let mut failures: Vec<String> = Vec::new();
 
-    for path in &corpus {
         let (run1_out, run1_err, run1_code) = run_ynz(path);
         let (run2_out, run2_err, run2_code) = run_ynz(path);
 
@@ -237,17 +385,27 @@ fn corpus_produces_deterministic_output_across_runs() {
             })
             .unwrap_or(false);
 
+        // Ordering is relaxed ONLY for programs that actually spawn background work — derived
+        // from the source, never from the file name (see `output_order_is_scheduler_dependent`).
+        // Values, line multiset, stderr and exit code stay strict for every fixture.
+        let order_sensitive = !output_order_is_scheduler_dependent(path);
+
         if !is_timing_fixture
-            && (run1_out != run2_out || run1_err != run2_err || run1_code != run2_code)
+            && (!outputs_match(&run1_out, &run2_out, order_sensitive)
+                || !outputs_match(&run1_err, &run2_err, order_sensitive)
+                || run1_code != run2_code)
         {
             failures.push(format!(
-                "NON-DETERMINISTIC: {:?}\n  run1 stdout: {:?}\n  run2 stdout: {:?}\n  run1 exit: {run1_code}, run2 exit: {run2_code}",
+                "NON-DETERMINISTIC{}: {:?}\n  run1 stdout: {:?}\n  run2 stdout: {:?}\n  run1 exit: {run1_code}, run2 exit: {run2_code}",
+                if order_sensitive { "" } else { " (order-insensitive: program uses `background`; line multiset differs, not just their order)" },
                 path.file_name().unwrap_or_default(),
                 &run1_out[..run1_out.len().min(200)],
                 &run2_out[..run2_out.len().min(200)],
             ));
         }
-    }
+
+        failures
+    });
 
     assert!(
         failures.is_empty(),
@@ -285,10 +443,11 @@ fn corpus_produces_deterministic_output_across_runs() {
 fn corpus_byte_identical_across_mode_matrix() {
     let corpus = collect_corpus();
 
-    let mut compared = 0usize;
-    let mut failures: Vec<String> = Vec::new();
+    let compared = AtomicUsize::new(0);
 
-    for path in &corpus {
+    let failures = parallel_sweep(&corpus, |path| {
+        let mut failures: Vec<String> = Vec::new();
+
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         // Same exclusions as the determinism harness: ordering of these is scheduler-dependent
         // WITHIN a single run, so cross-mode byte comparison would flag scheduling noise, not a
@@ -341,7 +500,7 @@ fn corpus_byte_identical_across_mode_matrix() {
                     .and_then(|n| n.to_str())
                     == Some("pirates-roster"));
         if is_scheduling_nondeterministic {
-            continue;
+            return failures;
         }
 
         // v0.3-M5 SoA-admitted fixtures: the `array-using-soa-layout` Tier 3 lint fires only
@@ -371,23 +530,37 @@ fn corpus_byte_identical_across_mode_matrix() {
             ("parallel+no-optimize", false, true),
             ("sequential+no-optimize", true, true),
         ];
-        compared += 1;
+        compared.fetch_add(1, Ordering::Relaxed);
+
+        // Same authoritative source as the determinism sweep above — the CLUSTERED sibling of the
+        // same defect (root-cause.md: two findings sharing an ancestor get ONE fix at the
+        // ancestor). This sweep carried an identical name-substring filter with the identical
+        // 75-fixture blind spot; both now consult `output_order_is_scheduler_dependent`.
+        let order_sensitive = !output_order_is_scheduler_dependent(path);
 
         for (label, no_auto_parallel, no_optimize) in variants {
             let (var_out, var_err, var_code) = run_ynz_mode(path, no_auto_parallel, no_optimize);
             let stderr_diverges_by_design = soa_lint_fixture && no_auto_parallel;
-            let stderr_mismatch = !stderr_diverges_by_design && base_err != var_err;
-            if base_out != var_out || stderr_mismatch || base_code != var_code {
+            let stderr_mismatch =
+                !stderr_diverges_by_design && !outputs_match(&base_err, &var_err, order_sensitive);
+            if !outputs_match(&base_out, &var_out, order_sensitive)
+                || stderr_mismatch
+                || base_code != var_code
+            {
                 failures.push(format!(
-                    "MODE-DIVERGENT: {:?} [{label}]\n  default (parallel+optimized) stdout: {:?} exit {base_code}\n  {label} stdout: {:?} exit {var_code}",
+                    "MODE-DIVERGENT{}: {:?} [{label}]\n  default (parallel+optimized) stdout: {:?} exit {base_code}\n  {label} stdout: {:?} exit {var_code}",
+                    if order_sensitive { "" } else { " (order-insensitive: program uses `background`; line multiset differs, not just their order)" },
                     path.file_name().unwrap_or_default(),
                     &base_out[..base_out.len().min(200)],
                     &var_out[..var_out.len().min(200)],
                 ));
             }
         }
-    }
 
+        failures
+    });
+
+    let compared = compared.into_inner();
     assert!(
         compared >= 30,
         "expected at least 30 corpus files to compare across modes (got {compared}); discovery \
