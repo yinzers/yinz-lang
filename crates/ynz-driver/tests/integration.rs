@@ -11037,3 +11037,193 @@ fn m5_p5_bg_copy_alloc_gap_pin() {
          (seg-4 4b regression); alloc={alloc} free={free}"
     );
 }
+
+// ── background spawn-arg ownership hand-off: channel send / handle send / handle return ───
+//
+// A `background` task is handed a HEAP CLONE of each `array<...>` argument, owned by the
+// task's drop ladder (`BgArgDropEntry` kind HEAP_ARRAY, freed at task retire). When the task
+// hands that pointer to something that outlives it — a channel (`ch.send`, `h.send`) or the
+// parent via `h.receive()` — the runtime releases it from the ladder at the hand-off
+// (`release_ladder_payload`). Pre-fix the ladder freed it and the receiver read a freed
+// header: `got.count()` printed `-4760032263271174595` / SIGSEGV on this exact fixture.
+//
+// The alloc gap follows the M5 exact-gap accounting (`m3d_assert_fires_byte_identical_alloc_gap`
+// doc): local arrays are never dropped at scope exit, so every array a local ends up holding
+// costs 2 counted allocs held to process exit. The gap is pinned EXACTLY because it is the
+// mutation tripwire for both failure directions: the ladder freeing a sent payload again
+// shrinks it by 2 (the double-owner regression); a payload nobody frees grows it.
+
+/// Byte-exact stdout + exact alloc gap for one hand-off fixture. `gap_explained` names every
+/// held-to-exit array the pin counts so a drift is diagnosable from the failure message.
+fn assert_bg_arg_handoff_fixture(
+    fixture_name: &str,
+    expected_stdout: &str,
+    expected_gap: u64,
+    gap_explained: &str,
+) {
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_eq!(
+        code, 0,
+        "{fixture_name} must exit 0 (a SIGSEGV here = the receiver read the ladder-freed \
+         payload); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, expected_stdout,
+        "{fixture_name}: the receiver must read the INTACT array after the sending task \
+         retired; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert!(
+        alloc > 0,
+        "{fixture_name}: alloc=0 — the counter saw nothing, parity is vacuous (FRAGO 005)"
+    );
+    assert_eq!(
+        alloc,
+        free + expected_gap,
+        "{fixture_name}: alloc must equal free + {expected_gap} ({gap_explained}); a gap \
+         2 smaller = the ladder freed the handed-off payload again (double owner); a gap \
+         larger = a new leak; alloc={alloc} free={free}"
+    );
+}
+
+#[test]
+fn bg_arg_channel_send_receiver_reads_intact_array_after_task_retired() {
+    // WHY: the reported UAF — `producer(wire, rows)` sends its heap-cloned `rows`; the
+    // spawner receives it AFTER the task (and its ladder) retired.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_channel_send_array.ynz",
+        "3\n10\n30\n",
+        4,
+        "2 = the spawner's `rows` literal, 2 = the sent clone now held by the receiver's `got`",
+    );
+}
+
+#[test]
+fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
+    // WHY: the never-drained sibling. Ownership rests with the channel (its teardown glue is
+    // the payload's one drop — `send_of_ladder_owned_payload_releases_ladder_alloc_free_parity`
+    // proves that path in the runtime). The spawner's channel local is itself never released
+    // today (no scope-exit `ynz_channel_free` is emitted — the pre-existing never-drop-locals
+    // class), so the payload is held to exit WITH the channel: gap 4, not the pre-fix 2 that
+    // meant the ladder had freed a pointer still sitting in the channel's buffer.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_channel_send_array_never_drained.ynz",
+        "never drained\n",
+        4,
+        "2 = the spawner's `rows` literal, 2 = the sent clone held by the never-torn-down channel",
+    );
+}
+
+#[test]
+fn bg_arg_handle_send_grandchild_reads_intact_array_after_relay_retired() {
+    // WHY: the OTHER send producer. `relay` forwards its heap-cloned `rows` through
+    // `h.send(rows)` (the handle outbox, which funnels into the same channel core); the
+    // grandchild `sink` reads it and reports `count * 100 + first` = 307.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_handle_send_array.ynz",
+        "307\n",
+        4,
+        "2 = the spawner's `rows` literal, 2 = the forwarded clone now held by sink's `got`",
+    );
+}
+
+#[test]
+fn bg_arg_handle_return_parent_reads_intact_array_after_child_retired() {
+    // WHY: the return-slot door. `echo(rows)` returns its heap-cloned argument; the parent
+    // takes it through `h.receive()` after the child retired. The `*_HEAP_PTR` return kinds
+    // are what let the runtime release it at completion extraction.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_handle_return_array.ynz",
+        "3\n4\n",
+        6,
+        "2 = the spawner's `rows` literal, 2 = the returned clone now held by `arr`, \
+         2 = the `fallback` empty-array literal",
+    );
+}
+
+#[test]
+fn bg_arg_two_arrays_send_one_releases_only_the_sent_slot() {
+    // WHY: multi-descriptor selectivity. Every other hand-off fixture spawns a callee with ONE
+    // heap-cloned argument, so `release_ladder_payload`'s descriptor walk never faced 2+ live
+    // descriptors where exactly one must match. Here `producer` holds clones of `rows` AND
+    // `scratch` and sends only `rows`. The two assertions together cover both wrong-walk
+    // directions: releasing the WRONG slot frees `rows` under the receiver (stdout garbage)
+    // while leaking `scratch`; releasing EVERY slot leaks `scratch` (gap 8, not 6). The task
+    // reads `scratch` after the send to prove the un-sent clone is still intact.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_two_arrays_send_one.ynz",
+        "2\n7\n3\n10\n",
+        6,
+        "2 = the spawner's `rows` literal, 2 = the spawner's `scratch` literal, 2 = the sent \
+         `rows` clone now held by the receiver's `got` (the `scratch` clone is freed by the \
+         ladder at retire — it was never handed off)",
+    );
+}
+
+#[test]
+fn bg_arg_handle_return_map_heap_ptr_kind_is_a_clean_no_op() {
+    // WHY: the `BuiltinMap` half of the `*_HEAP_PTR` return-kind classification had zero
+    // coverage. Maps are not ladder-cloned today (`prepare_bg_arg_for_ctx`'s per-type table),
+    // so the release walk at completion extraction must find nothing and change nothing —
+    // this pins that the kind is delivered like `VALUE_WORD` (intact map, exit 0) and disturbs
+    // no ownership (exact gap). Gap components were each measured standalone: the sync
+    // `build(21)` control costs alloc 6 / free 1 (gap 5 — header, table, two entry cells, one
+    // grow); an empty `{}` literal alone costs alloc 5 / free 0; an `-> int` handle spawn +
+    // receive nets 0 (alloc 2 / free 2).
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_handle_return_map.ynz",
+        "2\n42\n",
+        10,
+        "5 = the returned map now held by `m` (header, table, two entry cells, one grow — \
+         identical to the synchronous control), 5 = the parent's `fallback` empty-map literal",
+    );
+}
+
+#[test]
+fn bg_arg_alias_container_add_is_a_known_uaf_red_pin() {
+    // KNOWN DEFECT — this test asserts TODAY'S WRONG behavior on purpose, so the fix flips it
+    // loudly. Do not "fix" the test by widening it; flip the expected gap to the correct-world
+    // value (and add a dereferencing read of `bucket[0]`) when the producer is closed.
+    //
+    // WHAT: `stash(bucket, rows)` stores its ladder-owned `rows` clone into `bucket`, an
+    // `array<array<int>>` bg arg that ALIASES the parent's container (`prepare_bg_arg_for_ctx`
+    // passes `array<pointer-elem>` / `map` args through un-cloned). The ladder frees the clone
+    // at retire; the parent's `bucket[0]` dangles. Dereferencing it printed garbage
+    // (`471878446419399850`, `-924992314359518642`) or SIGSEGV'd across 5 runs, so the fixture
+    // observes the defect through the deterministic alloc counter instead of a dereference.
+    //
+    // The pointer-identity release protocol deliberately does NOT hook `ynz_array_push` for
+    // this: the escape exists because the container was aliased rather than cloned, so the fix
+    // is closing that alias fall-through — recorded as a four-field deferral in the v0.3-M8
+    // plan (`.claude/planning/active/2026-07-04-v0-3-m8-concurrency-completion/plan.md`,
+    // Future Requirements #8).
+    //
+    // Gap accounting TODAY (4): 2 = the parent's `bucket` literal, 2 = the parent's `rows`
+    // literal; the `rows` clone (2 allocs) is freed by the ladder while `bucket` still holds
+    // it — that free IS the defect. In the correct world the clone is held to exit with
+    // `bucket` (gap 6), or, if the fix clones the container instead, `bucket.count()` reads 0.
+    let fixture_name = "bg_arg_alias_container_add_red.ynz";
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_eq!(
+        code, 0,
+        "{fixture_name} must exit 0 (no dereference of the dangling slot); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "1\n",
+        "{fixture_name}: the task pushed into the PARENT's aliased bucket; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert!(
+        alloc > 0,
+        "{fixture_name}: alloc=0 — the counter saw nothing, the pin is vacuous"
+    );
+    assert_eq!(
+        alloc,
+        free + 4,
+        "{fixture_name}: RED PIN FLIPPED — the alias-container escape door has changed behavior. \
+         Expected today's defective gap 4 (the ladder frees the clone `bucket` still holds); a gap \
+         of 6 means the clone is now correctly held to exit — the defect is FIXED: flip this test \
+         to the correct-world assertions, add a `bucket[0]` dereference, and close M8 Future \
+         Requirements #8; alloc={alloc} free={free}"
+    );
+}

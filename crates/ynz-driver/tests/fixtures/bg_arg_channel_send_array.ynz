@@ -1,0 +1,22 @@
+// A `background` task is handed a HEAP CLONE of its `array<int>` argument (the spawn
+// ladder owns that clone and frees it when the task retires). The task then sends the
+// SAME pointer into a channel. The receiver must read the intact array AFTER the task
+// has retired — never the freed clone. Pre-fix the ladder freed it and `got.count()`
+// printed garbage (use-after-free).
+function producer(wire: channel<array<int>>, rows: array<int>) -> nothing {
+  wire.send(rows)
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(4)
+  let rows: array<int> = [10, 20, 30]
+  background producer(wire, rows)
+  // Let the task retire (and its drop ladder run) BEFORE the receive.
+  wait sleep(50)
+  let got = wire.receive()
+  print(got.count().toString())
+  let first = got[0].or(-1)
+  let last = got[2].or(-1)
+  print(first.toString())
+  print(last.toString())
+}

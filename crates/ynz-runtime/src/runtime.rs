@@ -174,8 +174,10 @@ impl Drop for PendingBlockingGuard {
 // the count and frees exactly that many slots. Normal (non-spike) SM frames leave bytes 4-7 as
 // zero (ynz_alloc_zeroed guarantee), so the high-bits tag never false-matches.
 use ynz_abi::{
-    FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE, SPIKE_FRAME_DISCRIMINATOR_OFFSET,
-    SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET, SPIKE_HANDLE_SLOT_BYTES,
+    BG_ARG_KIND_HEAP_ARRAY, BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_RELEASED,
+    BG_ARG_KIND_SHARED_CHANNEL, FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE,
+    SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET,
+    SPIKE_HANDLE_SLOT_BYTES,
 };
 
 /// Extract the spike tag (high 16 bits) and handle count (low 16 bits) from a
@@ -799,7 +801,11 @@ impl Future for SyncStateFnFuture {
         // P3-1 ABA salt, uniform across every producer. RAII: restores the previous value
         // even if resume_fn unwinds; nesting-safe for a sync drive re-entered from inside
         // a Tokio worker/blocking-pool thread.
-        let _task_gen_guard = crate::channel::TaskGenGuard::enter(self.task_gen);
+        // A sync drive owns no spawn-arg drop ladder (nothing was heap-cloned for it), so
+        // it publishes a ladder-less identity: a send from the entrypoint never releases
+        // anything.
+        let _drive_guard =
+            crate::channel::DriveGuard::enter(DriveIdentity::ladderless(self.task_gen));
         // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
         // frame_ptr is valid for frame_size bytes (caller guarantee).
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
@@ -840,13 +846,100 @@ impl Future for SyncStateFnFuture {
 ///
 /// Layout (repr C, matches the alloca'd array in codegen):
 ///   byte_offset: u64  — byte offset from frame_ptr to the i64 slot holding the heap pointer
-///   kind: u64         — 0 = HeapShape (free with ynz_free(ptr, size)), 1 = HeapArray (free with ynz_array_drop(ptr))
-///   size: u64         — byte count passed to ynz_free for HeapShape (ignored for HeapArray)
+///   kind: u64         — one of `ynz_abi::BG_ARG_KIND_*` (the free protocol for the slot)
+///   size: u64         — byte count passed to ynz_free for `BG_ARG_KIND_HEAP_SHAPE` (ignored
+///                       by the other kinds)
+///
+/// `kind` is written by codegen at spawn time and may be REWRITTEN by the runtime to
+/// `BG_ARG_KIND_RELEASED` while the task runs — see [`release_ladder_payload`].
 #[repr(C)]
 pub struct BgArgDropEntry {
     pub byte_offset: u64,
     pub kind: u64,
     pub size: u64,
+}
+
+/// The identity of the state-machine drive whose `poll` is running on the current thread —
+/// what a channel send needs to know about its caller: the ABA-salt generation, plus the
+/// caller's spawn-arg drop ladder (frame + descriptors) so a payload the ladder owns can be
+/// released when the channel takes it. Published per poll by [`crate::channel::DriveGuard`].
+#[derive(Clone, Copy)]
+pub(crate) struct DriveIdentity {
+    /// The drive's caller-generation stamp (0 = none — a bare test call outside any drive).
+    pub(crate) generation: u64,
+    /// The drive's root frame — the base the descriptors' `byte_offset`s are relative to.
+    /// Null for a ladder-less drive.
+    pub(crate) frame_ptr: *mut u8,
+    /// The drive's `BgArgDropEntry` array (null when it owns no heap arg-copies). Exclusively
+    /// owned by the drive's future; only touched on the thread running that future's `poll`.
+    pub(crate) arg_drop_ptr: *mut BgArgDropEntry,
+    /// Entry count at `arg_drop_ptr` (0 when null).
+    pub(crate) arg_drop_count: usize,
+}
+
+impl DriveIdentity {
+    /// No drive is running (the thread-local's rest state).
+    pub(crate) const NONE: DriveIdentity = DriveIdentity::ladderless(0);
+
+    /// A drive with a generation but no spawn-arg drop ladder — the sync entrypoint drive
+    /// (nothing was heap-cloned for it) and bare test drives.
+    pub(crate) const fn ladderless(generation: u64) -> DriveIdentity {
+        DriveIdentity {
+            generation,
+            frame_ptr: std::ptr::null_mut(),
+            arg_drop_ptr: std::ptr::null_mut(),
+            arg_drop_count: 0,
+        }
+    }
+}
+
+/// Release `bits` from a spawned task's spawn-arg drop ladder: every descriptor whose frame
+/// slot holds exactly `bits` is rewritten to [`BG_ARG_KIND_RELEASED`], so the ladder no
+/// longer frees that payload when the task retires. Returns how many descriptors changed.
+///
+/// This is the ONE link between the drop ladder and the places ownership of a ladder-owned
+/// payload can leave the task while it runs — a channel send (`channel_send_poll_guarded`,
+/// which both `ch.send` and `h.send` funnel through) and a task-handle return
+/// (`HandleStateFnFuture::poll`'s completion extraction). Before it existed the same pointer
+/// was owned by the ladder AND by the channel/parent, and the ladder freed it under the
+/// receiver: `got.count()` on a freed array printed `-4760032263271174595`.
+///
+/// Matching is by pointer identity, not by static type or by which parameter name was
+/// written: `wire.send(rows)`, `let alias = rows; wire.send(alias)`, and a nested SM callee
+/// sending its caller's parameter all hand the SAME pointer bits over, and all must release
+/// the same slot. Two live heap allocations never share an address, so a match is never a
+/// coincidence for a heap-pointer payload. Callers gate on the payload being a heap pointer
+/// (the channel's element drop glue exists; the handle return kind is `*_HEAP_PTR`) so a
+/// plain `int` payload is never compared at all — an `int` can hold any bits.
+///
+/// Only payload kinds ([`BG_ARG_KIND_HEAP_SHAPE`], [`BG_ARG_KIND_HEAP_ARRAY`]) are
+/// releasable; a [`BG_ARG_KIND_SHARED_CHANNEL`] slot is a refcount the task itself holds and
+/// is never a channel element (typeck rejects `channel<channel<T>>`).
+///
+/// Time: O(n) where n = the task's descriptor count (bounded by its parameter count,
+/// typically 0-3). Space: O(1).
+///
+/// # Safety
+/// `drive` must describe the future whose `poll` is running on the current thread (or be
+/// ladder-less): `frame_ptr` valid for every descriptor's `byte_offset + 8`, and
+/// `arg_drop_ptr` valid for `arg_drop_count` entries and not aliased by any other thread.
+pub(crate) unsafe fn release_ladder_payload(drive: &DriveIdentity, bits: i64) -> usize {
+    if drive.arg_drop_ptr.is_null() || drive.arg_drop_count == 0 || drive.frame_ptr.is_null() {
+        return 0;
+    }
+    let descs = std::slice::from_raw_parts_mut(drive.arg_drop_ptr, drive.arg_drop_count);
+    let mut released = 0;
+    for desc in descs {
+        if desc.kind != BG_ARG_KIND_HEAP_SHAPE && desc.kind != BG_ARG_KIND_HEAP_ARRAY {
+            continue;
+        }
+        let slot = drive.frame_ptr.add(desc.byte_offset as usize) as *const i64;
+        if *slot == bits {
+            desc.kind = BG_ARG_KIND_RELEASED;
+            released += 1;
+        }
+    }
+    released
 }
 
 /// Drives a Yinz codegen-emitted state-machine resume function as a fire-and-forget
@@ -873,8 +966,10 @@ pub(crate) struct SpawnStateFnFuture {
     /// callee takes only primitives or strings).
     ///
     /// The array is heap-allocated by codegen at spawn time and freed here in Drop after
-    /// all arg-copies have been released — exactly once, on every exit path.
-    pub(crate) arg_drop_ptr: *const BgArgDropEntry,
+    /// all arg-copies have been released — exactly once, on every exit path. Mutable because
+    /// [`release_ladder_payload`] rewrites an entry's `kind` when its payload's ownership
+    /// leaves the task mid-run (channel send / handle return).
+    pub(crate) arg_drop_ptr: *mut BgArgDropEntry,
     /// Number of entries at `arg_drop_ptr`. 0 when `arg_drop_ptr` is null.
     pub(crate) arg_drop_count: usize,
     /// This task's caller-generation stamp (v0.3-M6 P3-1), minted once at construction from
@@ -903,9 +998,23 @@ impl SpawnStateFnFuture {
             frame_ptr,
             frame_size,
             recursion_slot_offset,
-            arg_drop_ptr,
+            arg_drop_ptr: arg_drop_ptr as *mut BgArgDropEntry,
             arg_drop_count: arg_drop_count as usize,
             task_gen: crate::channel::next_caller_generation(),
+        }
+    }
+}
+
+impl SpawnStateFnFuture {
+    /// This task's identity as a channel caller: generation + drop ladder. Published for the
+    /// duration of each `poll` (see `DriveGuard`) and consulted directly by the handle
+    /// future's completion extraction.
+    pub(crate) fn drive_identity(&self) -> DriveIdentity {
+        DriveIdentity {
+            generation: self.task_gen,
+            frame_ptr: self.frame_ptr,
+            arg_drop_ptr: self.arg_drop_ptr,
+            arg_drop_count: self.arg_drop_count,
         }
     }
 }
@@ -1014,16 +1123,24 @@ impl Drop for SpawnStateFnFuture {
                     }
                     let heap_ptr = bits as *mut u8;
                     match desc.kind {
-                        0 => {
+                        BG_ARG_KIND_HEAP_SHAPE => {
                             // HeapShape: allocated with ynz_alloc; free with ynz_free(ptr, size).
                             crate::ynz_free(heap_ptr, desc.size as usize);
                         }
-                        1 => {
-                            // HeapArrayPrimitive: allocated by ynz_array_clone_primitive (malloc);
-                            // free with ynz_array_drop which handles both the data buffer and the header.
+                        BG_ARG_KIND_HEAP_ARRAY => {
+                            // HeapArrayPrimitive: allocated by ynz_array_clone_primitive (counted
+                            // ynz_alloc); free with ynz_array_drop which handles both the data
+                            // buffer and the header.
                             crate::ynz_array_drop(heap_ptr as *mut crate::YnzArray);
                         }
-                        2 => {
+                        BG_ARG_KIND_RELEASED => {
+                            // Ownership left this task while it ran (`release_ladder_payload`):
+                            // the payload was sent into a channel or returned through the task
+                            // handle, and whoever holds it now frees it. The frame slot still
+                            // holds the pointer (the task's own later reads keep working); it is
+                            // simply no longer this ladder's to free.
+                        }
+                        BG_ARG_KIND_SHARED_CHANNEL => {
                             // v0.3-M4 SharedChannel: the task's refcounted reference to a
                             // channel it was handed (`ynz_channel_share` at the spawn site).
                             // v0.3-M6 P2-2: purge THIS task's suspended sends BEFORE releasing
@@ -1100,12 +1217,13 @@ impl Future for SpawnStateFnFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let waker_ctx = cx as *mut Context<'_> as *mut u8;
-        // Publish this task's generation for the duration of the resume-fn call: any
+        // Publish this task's identity for the duration of the resume-fn call: any
         // ynz_channel_send_poll the state machine reaches keys its suspended send by
-        // (frame token, THIS generation) — the P3-1 ABA salt, with the extern-C send ABI
+        // (frame token, THIS generation) — the P3-1 ABA salt — and releases a sent payload
+        // from THIS task's drop ladder (`release_ladder_payload`), with the extern-C send ABI
         // unchanged. RAII: restores the previous value even if resume_fn unwinds; re-set
-        // from the future's own field at every poll, so work-stealing is safe.
-        let _task_gen_guard = crate::channel::TaskGenGuard::enter(self.task_gen);
+        // from the future's own fields at every poll, so work-stealing is safe.
+        let _drive_guard = crate::channel::DriveGuard::enter(self.drive_identity());
         // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
         // frame_ptr is valid for frame_size bytes (caller guarantee).
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
@@ -1173,7 +1291,9 @@ pub unsafe extern "C" fn ynz_rt_spawn(
         frame_ptr,
         frame_size,
         recursion_slot_offset,
-        arg_drop_ptr,
+        // Exclusively owned by this call (safety contract above): the future may rewrite
+        // entry kinds as payload ownership leaves the task.
+        arg_drop_ptr: arg_drop_ptr as *mut BgArgDropEntry,
         arg_drop_count: arg_drop_count as usize,
         task_gen: crate::channel::next_caller_generation(),
     };

@@ -84,3 +84,34 @@ pub const HANDLE_RET_KIND_VALUE_WORD: i64 = 2;
 /// Plain `-> number`: the return slot itself holds the 16-byte decimal — copy it to the
 /// handle-owned buffer; completion is `{0, buf}`.
 pub const HANDLE_RET_KIND_VALUE_NUMBER: i64 = 3;
+/// Plain `-> array<T>` / `-> map<K, V>`: the slot word is a heap-stable pointer the parent
+/// takes ownership of through `h.receive()`. Extraction is identical to `VALUE_WORD`; the
+/// distinct kind exists so the runtime can release the pointer from the child's spawn-arg
+/// drop ladder (`BG_ARG_KIND_*` below) when the child returns one of its own heap-cloned
+/// arguments — otherwise the ladder would free what the parent now holds.
+pub const HANDLE_RET_KIND_VALUE_HEAP_PTR: i64 = 4;
+/// `-> array<T> errors` / `-> map<K, V> errors`: the `EC_WORD` twin of `VALUE_HEAP_PTR` —
+/// the ok-word is a heap-stable pointer released from the drop ladder on the ok path.
+pub const HANDLE_RET_KIND_EC_HEAP_PTR: i64 = 5;
+
+// ── `background` spawn-argument drop-ladder descriptor kinds ─────────────────
+//
+// `ynz-codegen` heap-clones every heap-typed `background` argument so it survives the
+// spawner's frame, and hands `ynz_rt_spawn` / `ynz_rt_spawn_handle` one descriptor per clone
+// (`ynz-runtime`'s `BgArgDropEntry { byte_offset, kind, size }`). The runtime's task-retire
+// drop ladder reads the pointer back out of the named frame slot and frees it by `kind`.
+// Shared here so the two sides cannot drift on the wire values.
+
+/// `ynz_alloc`'d cell (a shape copy, a decimal128 cell, a maybe envelope, a map-entry cell):
+/// freed with `ynz_free(ptr, size)`.
+pub const BG_ARG_KIND_HEAP_SHAPE: u64 = 0;
+/// Array clone (`ynz_array_clone_primitive`): freed with `ynz_array_drop(ptr)`; `size` unused.
+pub const BG_ARG_KIND_HEAP_ARRAY: u64 = 1;
+/// The task's refcounted `channel<T>` reference (`ynz_channel_share` at the spawn site):
+/// released with `ynz_channel_free(ptr)` after purging the task's suspended sends.
+pub const BG_ARG_KIND_SHARED_CHANNEL: u64 = 2;
+/// Ownership left the task while it ran — the payload was sent into a channel (whose buffer,
+/// receiver, or teardown glue now owns it) or returned through a task handle. Written by the
+/// runtime at that hand-off, never by codegen; the drop ladder skips the slot. Without this the
+/// same pointer is owned twice (ladder + channel) and freed under the receiver's feet.
+pub const BG_ARG_KIND_RELEASED: u64 = 3;

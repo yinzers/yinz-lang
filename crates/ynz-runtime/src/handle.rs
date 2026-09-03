@@ -65,7 +65,9 @@ use crate::channel::{
     channel_send_poll_guarded, lock_or_recover, next_caller_generation, purge_pending_sends,
     ynz_channel_free, ynz_channel_share,
 };
-use crate::runtime::{spawn_on_runtime, BgArgDropEntry, SpawnStateFnFuture};
+use crate::runtime::{
+    release_ladder_payload, spawn_on_runtime, BgArgDropEntry, SpawnStateFnFuture,
+};
 use ynz_abi::FRAME_OFFSET_RETURN_SLOT;
 
 /// Poll results — the channel poll ABI codes, shared verbatim (Ready/Pending/Closed).
@@ -85,8 +87,15 @@ use crate::channel::{CHANNEL_CLOSED, CHANNEL_PENDING, CHANNEL_READY};
 ///   `{0, slot}`.
 /// - `RET_KIND_VALUE_NUMBER` (3): plain `-> number` — the return slot ITSELF holds the
 ///   16-byte decimal; copy it to the handle-owned buffer, deliver `{0, buf}`.
+/// - `RET_KIND_VALUE_HEAP_PTR` (4) / `RET_KIND_EC_HEAP_PTR` (5): the `VALUE_WORD` /
+///   `EC_WORD` twins for `-> array<T>` / `-> map<K, V>` (plain / `errors`). Extraction is
+///   word-identical; the kind additionally RELEASES the delivered pointer from the child's
+///   spawn-arg drop ladder (`release_ladder_payload`) — a child returning one of its own
+///   heap-cloned arguments hands ownership to the parent, and the ladder must not free it.
 pub use ynz_abi::{
+    HANDLE_RET_KIND_EC_HEAP_PTR as RET_KIND_EC_HEAP_PTR,
     HANDLE_RET_KIND_EC_NUMBER as RET_KIND_EC_NUMBER, HANDLE_RET_KIND_EC_WORD as RET_KIND_EC_WORD,
+    HANDLE_RET_KIND_VALUE_HEAP_PTR as RET_KIND_VALUE_HEAP_PTR,
     HANDLE_RET_KIND_VALUE_NUMBER as RET_KIND_VALUE_NUMBER,
     HANDLE_RET_KIND_VALUE_WORD as RET_KIND_VALUE_WORD,
 };
@@ -188,6 +197,20 @@ impl Future for HandleStateFnFuture {
                 // ok-value is copied OUT here, before that free.
                 let frame = this.inner.frame_ptr;
                 let (err, ok) = unsafe { extract_completion(frame, this.ret_kind, &this.shared) };
+                // A delivered heap pointer now belongs to the parent (`h.receive()`). If it is
+                // one of THIS child's heap-cloned spawn arguments, the child's drop ladder —
+                // which runs when `inner` drops, right after this returns — must not free it.
+                // Gated on the compile-time kind so an `int` completion is never compared.
+                let delivers_heap_ptr = match this.ret_kind {
+                    RET_KIND_VALUE_HEAP_PTR => true,
+                    RET_KIND_EC_HEAP_PTR => err == 0,
+                    _ => false,
+                };
+                if delivers_heap_ptr && ok != 0 {
+                    // SAFETY: `inner` is this future's own drive; its frame and ladder are
+                    // live (freed only by `inner`'s Drop) and exclusively ours during poll.
+                    unsafe { release_ladder_payload(&this.inner.drive_identity(), ok) };
+                }
                 if let Some(tx) = this.outbox_tx.take() {
                     // Capacity >= 1 and this is the sole sender in v0.3-M4, so try_send
                     // cannot observe Full; a dropped-receiver (handle already freed) makes
@@ -215,7 +238,7 @@ impl Future for HandleStateFnFuture {
 unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShared) -> (i64, i64) {
     let slot = frame.add(FRAME_OFFSET_RETURN_SLOT as usize);
     match ret_kind {
-        RET_KIND_EC_WORD | RET_KIND_EC_NUMBER => {
+        RET_KIND_EC_WORD | RET_KIND_EC_NUMBER | RET_KIND_EC_HEAP_PTR => {
             let err = *(slot as *const i64);
             let mut ok = *(slot.add(8) as *const i64);
             if ret_kind == RET_KIND_EC_NUMBER && err == 0 && ok != 0 {
@@ -236,8 +259,9 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
             *lock_or_recover(&shared.ok_buf) = Some(buf);
             (0, ok)
         }
-        // RET_KIND_VALUE_WORD and any future kind default: the slot's first word is the
-        // self-contained value (int/bool/float bits, heap-stable pointer, or 0 for nothing).
+        // RET_KIND_VALUE_WORD / RET_KIND_VALUE_HEAP_PTR and any future kind default: the
+        // slot's first word is the self-contained value (int/bool/float bits, heap-stable
+        // pointer, or 0 for nothing).
         _ => (0, *(slot as *const i64)),
     }
 }
@@ -283,7 +307,9 @@ pub unsafe extern "C" fn ynz_rt_spawn_handle(
             frame_ptr,
             frame_size,
             recursion_slot_offset,
-            arg_drop_ptr,
+            // Exclusively owned by this call (safety contract): kinds are rewritten as
+            // payload ownership leaves the child (channel send / handle return).
+            arg_drop_ptr: arg_drop_ptr as *mut BgArgDropEntry,
             arg_drop_count: arg_drop_count as usize,
             // The CHILD TASK's own caller identity (frame tokens; purged by its drop ladder).
             task_gen: next_caller_generation(),
