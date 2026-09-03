@@ -11,6 +11,48 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `conductor-2026-09-03-m8-execution` — 2026-09-03 — **The `/execute-plan` conductor session that ran
+  Phase 0 and Phase 1 to sign-off.** Ends with the plan handed off mid-milestone to a fresh
+  conductor; this entry is the session's own record, distinct from the executor entries below.
+  - **Pre-flight.** No `.claude/rules/branching.md` existed; Patrick's answer captured and written
+    there (`main` protected, plan work on `feat/<slug>`, close-out via PR, one live checkout per
+    branch). Plan frontmatter gained `branch:` so a cold resume can find the ref.
+  - **Phase 0** — PROCEED. Double merge gate satisfied. Produced FRAGO 001 (Phase 6 retired: M6 had
+    already shipped P2-7 under its own FRAGO 010; confirmed revert-sensitively, not on the commit
+    subject) and FRAGO 002 (two plan citations were DANGLING, pointing at unrelated code — the drop
+    ladder among them, which Phases 4 and 7 both navigate by).
+  - **Phase 1** — three fix rounds, three grading rounds, ~14 agent dispatches. Signed off narrowed.
+    Produced FRAGOs 003–008 and the sign-off record above.
+  - **An unplanned hotfix took priority mid-phase.** Phase 1's own review found a use-after-free live
+    in released v0.3.3; Patrick ruled it a separate hotfix. PR #89 merged (three UAF instances closed
+    across channel send / handle send / handle return, plus a parked→Closed leak, plus a flaky
+    `ynz-watch` test that had been making every verification gate a coin flip), then merged back into
+    this branch at `6143c1d` so the milestone stopped carrying the bug its own review had found.
+  - **Bugs found that predate this milestone and are recorded rather than fixed:** `h.receive()` on a
+    `-> maybe<T>` background task SIGSEGVs on consumption (a **Phase 4 precondition**, since Phase 1
+    designs bare `receive()` to return `maybe<T>`); `map.copy()` compiles today and silently aliases
+    through a codegen catch-all (parked #13, and the reason Patrick's `.copy()`-on-`map` ruling is
+    load-bearing rather than cosmetic); the `Consumed` diagnostic template is dead data nothing
+    attaches (parked #7); `bucket.add(rows)` on a bg-arg alias (Future Requirements #9, RED-pinned).
+  - **The session's most reusable output is not about channels.** `.claude/corpses.md` was created
+    with its first entry: three review rounds were spent re-deriving an ownership analysis by
+    enumerating syntactic call sites while `effective_ownership.rs` — a whole-program fixpoint that
+    already answers the question — sat unused one phase away, inside a plan whose own Phase 2 exists
+    to reuse it. The cheap check that would have caught it in round one: grep
+    `crates/ynz-typeck/` for an existing analysis before writing a new predicate about
+    program-wide behavior.
+  - **Conductor discipline notes for the successor.** Reviewer seats were derived per round from each
+    round's own diff, never inherited; every dispatch carries a minted classification receipt (the
+    gate caught one mis-addressed effort and was right). Green-check was skipped only on rounds with
+    no compiler code, and that skip is recorded rather than silent. Two agents were stopped mid-run to
+    avoid concurrent mutation of one checkout. Three separate agents ended their turn waiting on a
+    backgrounded suite that dies with the turn — dispatch prompts should say "foreground everything,
+    or report the rest as not observed."
+  - **Left deliberately undone:** the branch is UNPUSHED, no PR opened for the milestone; a tagged
+    release was explicitly skipped by Patrick (the UAF fix rides M8's eventual release), though a
+    local `cargo build --workspace --release` is still what stops consumer projects mounting
+    `target/release` from running the pre-fix binary.
+
 - `m8-p1-fix3-20260903` — 2026-09-03 — Phase 1 fix round 3 (docs-only; no compiler code). Answered
   a reviewer BLOCKER: the give-at-send rule did not flow through an ordinary call. Read
   `check_arg_ownership` (`check.rs:4591–4648`), its three call sites (`:4799`, `:5115`, `:5445`),
