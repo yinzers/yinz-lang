@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903"]
 created_at: "2026-07-04"
 updated_at: "2026-09-03"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -919,23 +919,68 @@ suite/release-handoff).
 > `queries.rs`, `arc.rs`, `ynz-ast`, `emit.rs`, `channel.rs` and the registry was verified true by
 > line. Executor's in-place correction of `.claude/corpses.md` (fixpoint runs AFTER `check()`)
 > RATIFIED by the conductor — both seats confirmed it against `queries.rs:423`/`:503`. Round 1
-> sealed; fix round 2 answers `red:doc-auditor`.
+> sealed at `6a416c0`; fix round 2 answers `red:doc-auditor`.
+>
+> **Round 2 grading (fix round, executor `m8-p2-fix1-20260903`, Fable medium — the escalation
+> notch is capped at medium in this house, receipt carries `red:doc-auditor`).** Green-check
+> SKIPPED — docs-only. Seats re-derived from the round's own manifest: `plan-adherence-medium`
+> (Fable) → `VERDICT: findings`, 0 blockers, 3 should-fix, 4 minor, no `frago-needed` (re-ran three
+> probes itself; confirmed the blocker was fixed at the producer — a `Stmt`-exhaustive
+> binding-event rule, not an `Assign` row); `doc-auditor-medium` (Fable, fresh dispatch — a
+> different actor from round 1's, grading the whole section) → `VERDICT: findings`, 0 blockers, 7
+> should-fix, 4 minor; `Stmt` exhaustiveness, scope-entry keying, walker extension, revive
+> soundness, contract-modifier optionality and every git pointer verified against the code.
+> **Round 2 terminal state: CLEAN.** All should-fix/minor collected to `.claude/plans/parked.md`
+> items 19–27 with the trigger "applied in the round that records Patrick's sign-off". Step 6
+> (sign-off) is the next action and is Patrick's.
+>
+> **Round 2 (fix, executor `m8-p2-fix1-20260903`, 2026-09-03; docs-only; six throwaway probes run
+> and deleted, results in `audit.md`).** BLOCKER defeated at the producer, not the instance: the
+> origin/alias table was an enumeration of binding-CREATING statement forms that omitted the
+> binding-MUTATING one. Replaced by a **binding-event rule exhaustive over `Stmt`** (10 variants
+> named; `Let` incl. shadowing, `Assign`, `For` incl. destructures, and params bind; the other
+> seven do not) stating what a re-bind does to the previous class (leaves it; the old members keep
+> their state; a consumed name that is reassigned is REVIVED — which also fixes a false error on
+> today's tree, probe `eat(rows); rows = [4, 5]; rows.count()` refused). Caller-side Arc group: ONE
+> predicate `stmt_rebinds` in `effective_ownership.rs`; the walker's `Stmt::Assign` arm becomes
+> `Writes` on the tracked name (its `:330–333` comment corrected — named as the honest extension's
+> second part); a TOP-LEVEL rebinding between spawns is a **group boundary**, a NESTED one is
+> `Writes` (decline). Probe: `background render(scene, out); scene = other; background
+> render(scene, out)` prints `8` today — round 1's group would have printed `2`. Should-fixes: (1)
+> the `background` INFERRED-give path is NOT a `check_transfer` sink — class-aware liveness,
+> `Give` only for `Owned`/`Param(give)`, everything else declines to `Copy` silently (codegen copies
+> by type regardless; `bg_inferred` feeds only inlay hints); (2) the exhaustive-`Expr`-match
+> divergence surfaced in the required form in the section and in the packet; (3) contract
+> modifiers are OPTIONAL (parser), bare = never a give position, `follows` parity exact — the
+> "REQUIRED on" line in "Signature-Level Declaration" corrected; (4) the dangling
+> `SCRATCH-audit-2026-07-11-memory-safety.md` cite (never existed in git) replaced at all three
+> sites with the code-direct premise (`ynz_handle_free` declared, zero emit sites) +
+> `IMP-no-function-coloring.md` + the roadmap row; (5) dead `m8-p1-fix2/fix3` pointers → `de631bf`
+> (verified by `git log -S`); (6) `.freeze()` provenance row (typed `nothing`, `Fresh`). Minors:
+> `consumed[fn][i]` send case gated on the DECLARED param type; `emit.rs:12657`; round-by-round
+> narrative trimmed to current state + pointer in both IMP docs and `corpses.md`. Step 6 still OPEN.
 >
 > **Downstream plan text this design invalidates — NOT edited (no Phase 2 ruling exists yet; FRAGO
 > 003's traceability gate requires one). Owed in the same round the sign-off lands:** Phase 4 step
 > 3b (syntactic classify → `check_transfer`/provenance; `SendPayloadNeedsCopy` → `TransferNeedsCopy`;
-> hoist the fixpoint; `ContractSigDef` modifiers + `follows` parity; alias classes/origin; the two
-> fixpoint facts; the shared call-form normalization); Phase 4 step 5 (+ the seven probe programs
-> as gallery triggers; the fr12 fixture class); a new Phase 4 step for fr12 (`NumberCell` glue,
+> hoist the fixpoint; `ContractSigDef` modifiers + `follows` EXACT parity, no parser change; the
+> binding-event function called from BOTH `Stmt::Let` and `Stmt::Assign` (origin, class
+> leave/join, consumed cleared on reassign); the `stmt_rebinds` predicate + walker `Writes`-on-rebind;
+> the class-aware inferred-give liveness; the two fixpoint facts with the declared-type gate on
+> `consumed`; the shared call-form normalization); Phase 4 step 5 (+ the probe programs as gallery
+> triggers — the seven of round 1 plus alias-by-assign and alias-by-shadow — and revive-on-reassign as
+> a correct-program fixture; the fr12 fixture class); a new Phase 4 step for fr12 (`NumberCell` glue,
 > send/receive marshalling, `channel-element-heap-upgrade` narrowed, `v0_3_m4_errors.ynz:98`
 > retired for a `channel<Player>` trigger); Phase 5 steps 2–3 (topology (B) specifics — transient,
-> group, `arc_shareable`, `BgOwnership::Arc`, `BG_ARG_KIND_ARC_SHAPE`, releasable-predicate
-> decision); Invariants → Safety (alias-by-`let` no longer outside the guarantee; loop-cell door
-> closed), Teaching (`TransferNeedsCopy`), Performance (`.give` is not typeable — `.copy()` only),
+> group, group BOUNDARIES at top-level rebindings, `arc_shareable`, `BgOwnership::Arc`,
+> `BG_ARG_KIND_ARC_SHAPE`, releasable-predicate decision); Invariants → Safety (alias-by-`let`,
+> alias-by-assign and alias-by-shadow no longer outside the guarantee; loop-cell door closed),
+> Teaching (`TransferNeedsCopy`), Performance (`.give` is not typeable — `.copy()` only),
 > Feature Registry Entries (`TransferNeedsCopy`; `modify channel-element-heap-upgrade`; `modify
 > auto_arc` hover); FR#9 (loop-cell-through-spawn door closed by `TransferNeedsCopy`); FR#10
 > (provenance refuses transfer of the alias-no-op types); Phase 9 step 2 (`m8_errors.ynz` trigger
-> list).
+> list); and the Phase 2 block's own "never enumerating `Expr::` variants" sentence, if Patrick
+> accepts the one-exhaustive-match divergence.
 
 - **Task + purpose:** write the missing caller/task Arc-sharing-topology section into
   `IMP-ownership.md`, resolving the registry's own self-diagnosed gap, reusing

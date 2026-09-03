@@ -11,6 +11,93 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p2-fix1-20260903` — 2026-09-03 — **Phase 2 fix round 2 (design only, no compiler code):
+  the `doc-auditor` BLOCKER defeated at its producer; six should-fixes and the minors answered; step
+  6 (Patrick's sign-off) still OPEN.** Read: the Phase 2 STATUS block and round-1 grading, the
+  `m8-p2-20260903-a1` entry, `corpses.md`, both design sections, `Stmt` (`nodes.rs:201–305`, ten
+  variants, `For`'s two destructure fields, no closure form in `Expr`), the walker
+  (`effective_ownership.rs:303–404` — `:379` classifies `Let`/`Assign` by value only, `:330–333`
+  says reassignment "does not escalate"), the `Assign` arm (`check.rs:2436–2465` — param / loop-var /
+  `const` refusals, then a type check; the consumed flag is never cleared), `Scope` (`scope.rs` —
+  same-frame `insert` REPLACES; `consume` marks by name), the liveness inference (`check.rs:1443–1515`;
+  `ident_read_in_stmt` `:8499` has the same by-value blind spot for `Assign`), `bg_inferred`'s
+  consumers (only `inlay_hint_passes.rs:765` — codegen copies by type), `.freeze()` typing
+  (`check.rs:6947` → `nothing`; `emit.rs:19297` lowers the receiver), the contract-signature loop
+  (`parser.rs:3996–4012`, `_ => None`), `emit.rs:12657`, and `git log -S` for the fix2/fix3 text
+  (`de631bf`) and the scratch-audit file (never in git). **Six throwaway probes** (`.probe-m8p2r2/`,
+  `docker compose run --rm dev ./target/debug/ynz run`, deleted): (p1) `let rows = [1]; let other =
+  [2, 3]; rows = other; wire.send(rows); other.count()` then `receive()` — compiles, prints `2 2`
+  (the blocker's first program, live); (p2) `background render(scene, out); scene = other; background
+  render(scene, out)` with `width` 1 and 7 — prints `8`: each spawn copies the CURRENT value today; the
+  round-1 Arc group would have shared the block minted at spawn 1 and printed `2` (the blocker's
+  second program, live); (p3) `eat(rows)` (`give`) then `rows = [4, 5]; rows.count()` — REFUSED
+  "already given away": today's typeck never revives a reassigned consumed name — a correct program
+  rejected, a pre-existing false error the binding-event rule fixes by construction; (p4) same-frame
+  shadow `let rows = [1,2,3]; let rows = [4]` — legal, prints `1`; (p5) the shadow form of p1 — prints
+  `2 2`; (p6) `for (row in matrix) { background producer(wire, row) }` — prints `3` then `matrix`'s
+  count `2`: correct today, so the inferred-give path must not error on a `Cell` origin.
+  **Decisions (pending sign-off):** origin and alias class are properties of a BINDING EVENT; the rule
+  is exhaustive over `Stmt` (`Let` incl. shadowing, `Assign`, `For` incl. destructures, plus params;
+  the other seven variants named as non-binding), keyed by entry not name; a re-bind LEAVES the old
+  class (old members keep their state) and clears the consumed flag, then joins per the initializer
+  table; `Stmt::Assign` calls the same binding-event function `Stmt::Let` does. Caller-side Arc:
+  ONE `stmt_rebinds(stmt, name)` predicate in `effective_ownership.rs`; the walker returns `Writes`
+  on a rebinding of the tracked name (the honest extension's second part, `:330–333` corrected); a
+  top-level rebinding between spawns is a GROUP BOUNDARY (each segment judged on its own member
+  count — a rebinding changes WHICH value is shared, not whether sharing is sound), a nested
+  rebinding is `Writes` (path-dependent → decline). Inferred-give (sink 3) is the liveness
+  inference, not `check_transfer`: `Give` iff origin `Owned`/`Param(give)` AND no class member read
+  after; else `Copy`, silently. Contract modifiers optional; bare = never a give position; `follows`
+  parity exact; the "REQUIRED on" line corrected. `.freeze()` → `Fresh` (typed `nothing`).
+  `consumed[fn][i]`'s send case gated on the declared parameter type. Dangling scratch-audit cite
+  replaced at three sites (two in `IMP-concurrency.md`, one in `IMP-ownership.md`) with the
+  code-direct premise (`ynz_handle_free` declared `runtime_decls.rs:126`, zero emit sites) +
+  `IMP-no-function-coloring.md` "Task Cancellation" + the roadmap's never-drop-locals row (the
+  roadmap row itself still carries the dead cite — a plan artifact from Patrick's triage, not
+  edited). `m8-p1-fix2/fix3` pointers → `de631bf`. Narrative trimmed (`IMP-concurrency.md` Status,
+  `:207`, sign-off record → "What is signed off, and what awaits Phase 2"; `IMP-ownership.md`
+  producer paragraph; `corpses.md:37–39`). **Plan:** STATUS block gained the round-2 paragraph and
+  the owed-list grew (binding-event function at both `Let`/`Assign`, `stmt_rebinds`, group
+  boundaries, exact parity, revive-on-reassign fixture, alias-by-assign/shadow gallery triggers,
+  the Phase 2 block's own "never enumerating" sentence); downstream text unedited; session-id
+  appended. Tests: none run (docs-only). No handoff file.
+
+  **Sign-off packet for Patrick (revised; supersedes round 1's):**
+  (1) Auto-Arc topology (B) — one shared copy, N task references, caller keeps its original + one
+  transient released after the last spawn of the group.
+  (2) Beneficial iff ≥2 spawns in one block share a whole binding, no suspension between, task-side
+  `Reads`, caller-side `Reads` where a rebinding is `Writes`, `arc_shareable` type; "caller + 1
+  task" is OUT; **a top-level rebinding of the binding between spawns is a group boundary, a nested
+  one declines the group.**
+  (3) The transfer rule in one paragraph — every value that leaves a frame for a sink that will
+  free it passes one `check_transfer`; provenance says `Fresh`/`Whole`/`Reaches`/`Unknown` from ONE
+  exhaustive `Expr` match; **origin and alias class are set at every binding event — `let`,
+  shadowing `let`, reassignment, `for`, parameter — exhaustively over `Stmt`, a re-bind leaving its
+  old class and reviving a consumed name**; a whole owned binding is consumed with its class; a
+  parameter must say `give` (every frame of a chain reported in one build); anything still
+  reachable elsewhere needs `.copy()`.
+  (4) fr12 — send-minted 16-byte cell; `number` NOT in the give set.
+  (5) Override directions — `.copy()` only (no `.give` exists); no force-the-auto-pick; `share`
+  stays an error.
+  (6) OPEN QUESTIONS — (a) confirm the container-store/literal-element sink deferral; (b) confirm
+  whole-chain reporting in one compile, including consuming a caller's LOCAL at an
+  effectively-consumed-but-undeclared position for reporting only; (c) confirm alias classes as a
+  language change (`let other = rows; wire.send(rows)` — and now `rows = other; wire.send(rows)` —
+  makes `other` unusable; programs that never transfer are unaffected); (d) `TransferNeedsCopy` as
+  the registry name; (e) confirm `number` copy-through; (f) confirm `dynamic Contract` coverage in
+  Phase 4 scope; (g) the relay-a-received-value cost (`other.send(got.value)` needs `.copy()` this
+  milestone); (h) Phase 5's `bg_arg_kind_is_releasable_payload(ARC)` answer; **(i) NEW — the plan
+  says "never enumerating `Expr::` variants"; the design does ONE exhaustive `Expr` match inside
+  `effective_ownership.rs` (the corpse bans partial lists at call sites; a no-wildcard match in the
+  owning module is closed by the compiler) — accept, and the plan sentence is amended at sign-off;
+  (j) NEW — contract-signature ownership modifiers stay OPTIONAL (the parser's behavior); a bare
+  contract position is never a give position; `follows` parity is exact (bare = bare) — the
+  alternative is parser enforcement of the old "REQUIRED" line, owed to Phase 4; (k) NEW —
+  reassignment REVIVES a consumed name (`eat(rows); rows = [4, 5]; rows.count()` becomes legal —
+  today it is refused); (l) NEW — rebinding between spawns as a group boundary rather than a
+  whole-group decline (boundary is more precise and reads the same predicate; decline is simpler
+  to implement — one line — and forfeits sharing only in a rare shape).**
+
 - `m8-p2-20260903-a1` — 2026-09-03 — **Phase 2 executed (design only, no compiler code): steps 1–5
   done, FRAGO 008's ownership absorption done, FRAGO 009's fr12 done; step 6 (Patrick's sign-off)
   OPEN.** Read in full: `effective_ownership.rs` (1,747 lines — lattice, fixpoint, `Reads` bottom,

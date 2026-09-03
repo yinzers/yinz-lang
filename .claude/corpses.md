@@ -34,8 +34,8 @@ finished; each new expression form silently reopens the hole.
 **What was already there, unused.** `crates/ynz-typeck/src/effective_ownership.rs` is a whole-program
 Kleene fixpoint over every parameter. It converges under mutual recursion, runs in the same query as
 body checking (`queries.rs:484-512` — today AFTER `check(...)` at `:~423`, but it depends only on the
-parse and the signature tables, so hoisting it above the body check is a reorder; an earlier revision
-of this entry said "before", corrected by Phase 2 on a direct read), and **already classifies "passed
+parse and the signature tables, so hoisting it above the body check is a reorder; ordering verified
+on a direct read, `git log --grep=m8-p2`), and **already classifies "passed
 to a declared `give` position"** as `Writes` (`:410-411`, `:676`, with a test at `:1391`). The
 design's stated reason for reporting one frame per compile — that typeck lacks a callee-before-caller
 ordering — is factually false against this module.

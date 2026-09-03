@@ -150,6 +150,59 @@ surfaced that has no other home.
     widening is Phase 2's call, not a defect. COST: small. TRIGGER: Phase 2's admitted-form decision;
     record the widening or the deliberate omission. **Status: DECIDED in Phase 2 — deliberate conservative omission with a widening point** — constructor calls (`array<int>()`, `map<..>()`, `channel<T>()`) and `receive()` are `Fresh`; builtin method results default to `Reaches(receiver root)` via ONE `builtins` table (`builtin_method_returns_fresh`), widened per method with evidence, never by default. A user function's result is `Fresh` iff its `returns_fresh` fixpoint fact says so.
 
+### Phase 2 round 2 — text-accuracy findings on the signed-off-pending design (added 2026-09-03, round close)
+
+Round 2 closed CLEAN (0 blockers, two seats). Everything below is `should-fix`/`minor` against
+`docs/internal/implementation/IMP-ownership.md` ("Transfer" / "Auto-Arc" sections) and
+`IMP-concurrency.md`'s channel-close section. None changes a decision; all are wording that would
+mislead a Phase 4 implementer. **TRIGGER for every entry: the round that records Patrick's Phase 2
+sign-off applies them alongside the owed downstream plan edits** — the design must not reach Phase
+4 carrying a known-false claim. COST: one docs-only executor round, no code. Source plan-id
+`2026-07-04-v0-3-m8-concurrency-completion`.
+
+19. **`bg_inferred` is NOT read only by the inlay-hint pass.** `IMP-ownership.md:263-264` (sink 3)
+    and the round-2 audit entry say so; codegen's `is_heap_arg` gate at `emit.rs:16810-16828` reads
+    `background_arg_inferred_ownership.contains_key(span)` — PRESENCE gates the heap upgrade, the
+    variant is ignored (`fr23_uaf_planned_red.rs:27` says the same). "Declines to `Copy` silently"
+    must state that a `Copy` entry is still RECORDED for every `Whole(name)` spawn arg; an
+    implementer who records nothing hands the task a spawner-stack pointer (the fr23 class).
+    Raised independently by both round-2 seats.
+20. **The restated `background` inference omits the `BgOwnership::Channel` branch** that runs before
+    liveness (`check.rs:1461-1469`). `IMP-ownership.md:263` as written infers `Give` on a
+    `channel<T>()` binding not read after the spawn (constructor → `Fresh` → `Owned`), where the
+    real rule shares it (`emit.rs:16752-16761`, `ynz_channel_share`).
+21. **Swapped labels, again.** `IMP-concurrency.md:925` calls `check.rs:1511` the user-function
+    `give` path and `:4618` the `background` spawn path; it is the reverse (`:1511` is inside the
+    `Expr::Background` liveness block `:1443-1515`; `:4618` is inside `check_arg_ownership`). Same
+    class as parked item 1 — a third instance means Phase 4 should cite by FUNCTION NAME, not line.
+22. **`IMP-concurrency.md:958` still says origin/alias class are "set once at creation."** That is
+    the round-1 sentence the blocker retired; the same paragraph cites the binding-event rule that
+    recomputes both at every `Let`/`Assign`. Internal contradiction across the two IMP docs.
+23. **Function-type annotations do not exist.** `IMP-ownership.md:116` states the OPTIONAL-modifier
+    rule over `let f: function(give Data) -> nothing`; `ynz-ast`'s `Type` enum has no function
+    type and `parse_type_with_depth` (`parser.rs:900`) has no `function` arm. Drop the form.
+24. **`IMP-ownership.md:52`/`:116`/`:276` — the "REQUIRED on contract signatures" line was rewritten
+    to OPTIONAL before a Patrick ruling** (packet item (j)), and `:276` narrates the rewrite.
+    Either mark provisional pending the ruling or, once ruled, state current truth with a one-clause
+    anchor and delete the narrative.
+25. **`For` destructure names are desugared `Let`s, not `Stmt::For` bindings.** `IMP-ownership.md:169`
+    (`For` row) and `:224` (`stmt_rebinds`): the parser prepends `Stmt::Let { value: __shape.field }`
+    per destructured name (`parser.rs:2252-2274`; map form `:2417`), so they are `Let` events with
+    `Reaches(__shape)` provenance and — unlike the loop variable — `Assign` to them is admitted
+    (`check.rs:2436-2465`). Outcome stays sound (the `Let` row covers them); the AST claim and the
+    predicate's scope are wrong.
+26. **Dead `--grep=m8-p1` pointer.** `IMP-concurrency.md:843`/`:1122` claim `git log --grep=m8-p1`
+    finds `de631bf`; only `cd71f7f` carries the token. The bare SHA resolves; drop the grep half or
+    cite the SHA alone.
+27. **Minors, one line each:** six `ScopeEntry` constructors, all in `check.rs`, not seven
+    (`IMP-concurrency.md:963`); "nine found live" at `IMP-ownership.md:130`/`:302` is not what
+    `corpses.md` says (eight ran; the `dynamic` probe ICEs in codegen); `root_binding_name` has a
+    pre-existing twin at `check.rs:11864` beside `effective_ownership.rs:658` — Phase 4 collapses it
+    or the "defined once" claim rests on a twin; dated "probe, 2026-09-03" prose at
+    `IMP-ownership.md:167,168,191,224` → "probe" + grep pointer; the cold-resume banner
+    (`plan.md:17`) still names the round-1 executor; the roadmap row (`roadmap.md:456`) and a plan
+    Future-Requirements row still cite the nonexistent `SCRATCH-audit-2026-07-11-memory-safety.md`.
+
 ### Open exposure carrying a cheap in-scope guard — flagged under `no-duct-tape.md`
 
 11. **The `background-handle-close` deferral leaves a live window and names a cheap guard it does
