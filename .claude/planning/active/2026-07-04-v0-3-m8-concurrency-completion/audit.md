@@ -11,6 +11,50 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p1-fix3-20260903` — 2026-09-03 — Phase 1 fix round 3 (docs-only; no compiler code). Answered
+  a reviewer BLOCKER: the give-at-send rule did not flow through an ordinary call. Read
+  `check_arg_ownership` (`check.rs:4591–4648`), its three call sites (`:4799`, `:5115`, `:5445`),
+  the ident-only gate (`:4798`), the `background` liveness path (`:1443–1515`), the `Expr::Background`
+  arm (`:3283–3302`, confirming the spawned call reaches `check_user_fn_call` and thus the one give
+  helper), the handle-form pre-record (`:2321–2345`), `ScopeEntry` (`scope.rs:9–34`), the ladder's
+  free match and `release_ladder_payload` (`runtime.rs:926–943`, `:1125–1158`), and the send core's
+  first-poll arms (`channel.rs:494–558`). Recorded Patrick's guard-A ruling in `IMP-concurrency.md`
+  as the new "Ownership must flow through the call" subsection: `ParamNeedsGive` (a parameter given
+  away must be declared `give`; threads the existing Give path at every call and spawn site; ALSO
+  applied at `check_arg_ownership`'s Give arm so the `:4617` silent consume of a bare/`lend`
+  parameter — the relay hole — becomes the error; the `:4611` share refusal retires into it) and
+  `SendPayloadNeedsCopy` (admitted forms: ident, `.copy()`, literal). Transit decided: the whole
+  chain declares `give`, one frame reported per compile. FR#9's channel-door instance recorded as
+  CLOSED by the guard in both the design and the plan's FR#9 text; the container door stays.
+  Should-fixes: `ChannelElemDrop` → `Option<{Array, Map}>`; THREE first-poll CLOSED arms
+  (`channel.rs:503`, `:554`, new `None`) → one `refuse_closed` fallthrough; `release_ladder_payload`
+  filter → one `ynz-abi` predicate + `ALL_BG_ARG_KINDS` + per-kind parity test; `map.copy()`
+  independence fixture RED-before-clone as an obligation. Bookkeeping: parked 9 marked ABSORBED
+  (round 2), parked 10 corrected to fixed-in-round-1, banner "stays parked" list now 5/7/8. The
+  section header no longer says "DESIGN LOCKED"; an "Open at sign-off" list names fr12, the
+  error-vs-warning call, and the `give` requirement as Patrick's three discrete decisions. FRAGO 007
+  below records the ruling. fr12 left OPEN, untouched. Tests: none run (docs-only diff).
+
+- `m8-p1-fix2-20260903` — 2026-09-03 — Phase 1 fix round 2 (docs-only; no compiler code). Read the
+  hotfix `861fd4d` from the code (`channel.rs`, `handle.rs`, `runtime.rs`, `ynz-abi/lib.rs`, `emit.rs`),
+  not the commit message, and reconciled it with the channel-close design in `IMP-concurrency.md`:
+  new subsection "Two mechanisms, one rule" — typeck consume and the runtime pointer-identity
+  release protocol BOTH stay (different questions: source readability vs. ladder ownership), linked
+  by the `ChannelElemDrop` enum; **record correction**: FRAGO 004 ruling 2's "ladder consults
+  consumption" is NOT what shipped (the runtime consults the hand-off event, not typeck — the commit
+  names why the literal ruling was infeasible); **P2-3's closed-send free moves into the runtime's
+  CLOSED-first-poll path** because a codegen-side free of a ladder-owned clone would double-free
+  (this inverts a shipped doc comment + test case (c) of
+  `ladder_is_untouched_when_the_channel_does_not_take_ownership`, called out for Phase 4). Scoped
+  the "one owner at every moment" claim to task-OWNED payloads and named FR#9's aliased-bg-arg
+  shape through the channel door as not assumed away. Rewrote the `ConsumedBySend` WHY (compile-time
+  refusal, nothing "empty" at runtime). Recorded `.copy()`-on-`map` as Phase 4 step 3a with its
+  registry entry, plus the finding that `map.copy()` compiles TODAY as an alias no-op through the
+  codegen catch-all (new FR#10 for the remaining types). Absorbed parked 1/2/3/4/6; took parked 11
+  as a compile ERROR (`HandleChannelArgNeedsBinding`) — the design now has TWO new compile-time
+  diagnostics. fr12 left OPEN, untouched. Banner flipped from BLOCKED to UNBLOCKED, resume at Phase 1
+  step 7. Tests: none run (docs-only diff).
+
 - `plan-producer-2026-07-04-m8-concurrency-completion` — 2026-07-04 — Authored the complete OPORD from
   the assembled brief. Read the concurrency-release audit
   (`.claude/audits/2026-07-04-concurrency-release-audit.md`), the frozen plan-format/risk-engine/
@@ -225,6 +269,168 @@ delta-records against this running plan)
   in `.claude/plans/parked.md`.
 - **Still unruled and owed to Patrick at sign-off:** fr12's disposition (ride this design pass, per
   his July triage, or become its own step).
+
+### SIGN-OFF — 2026-09-03 — Patrick signed off Phase 1 (as narrowed by FRAGO 008). Step 7 CLOSED.
+
+- **Authority:** Patrick, 2026-09-03, conditional on everything unresolved being genuinely re-homed
+  to a later phase rather than dropped. That condition was met by parking items 12–18 in
+  `.claude/plans/parked.md` and by Phase 2's plan block carrying the three failing programs.
+- **What is signed:** the narrowed Phase 1 — explicit `.close()`; the name, decided against
+  `vocabulary.md` and GR12; bare `receive()` → `maybe<T>` with the handle's `T errors` deliberately
+  distinct; idempotent double-close; close wakes every recorded receive-waiter (closing the co-waiter
+  gap `channel.rs` left for this milestone); in-flight pre-close sends complete; drop-without-close
+  byte-identical; the `refuse_closed` collapse of all three first-poll CLOSED arms; P2-3's free
+  living in the runtime rather than codegen's closed arms (FRAGO 006); `Option<ChannelElemDrop>`;
+  `HandleChannelArgNeedsBinding`; and the four-field auto-close-on-last-producer deferral.
+- **What is NOT signed, because it left Phase 1:** the ownership rule and its three diagnostics —
+  Phase 2's, per FRAGO 008, and gated by Phase 2's own sign-off.
+
+**THREE ITEMS REMAIN OPEN. Patrick's sign-off did not answer them, and they must NOT be read as
+settled by it.** The next conductor asks him before the phase that needs each:
+
+1. **fr12 — `channel<number>` decimal128 marshalling.** Patrick assigned it to this milestone in July
+   so it would "ride the same design pass as channel close — one design head for both." Phase 1
+   argued separability and left it undesigned; Phase 1 has now closed without it. **Conductor's
+   recommendation, not a decision:** it should ride Phase 2, since the ownership pass moved there and
+   marshalling is the other half of "what does sending a value actually do." Ask before Phase 2
+   starts.
+2. **`HandleChannelArgNeedsBinding`: hard error or warning?** Designed as a compile error (GR5; a
+   warning leaves the hang class live; the fix costs one `let`). It rejects source that compiles and
+   runs correctly today whenever the channel is never closed. Ask before Phase 4 implements it.
+3. **Does FRAGO 003's ratification stand for every Phase 1 fix round, or renew per round?** Patrick
+   ratified round 1's downstream plan edits; rounds 2 and 3 did the same class of thing without
+   their own ratification. `plan-adherence` raised it rather than assuming either way. Ask at the
+   next round that edits Gate-4-signed plan text.
+
+### FRAGO 008 — 2026-09-03 — The ownership question MOVES from Phase 1 to Phase 2; Phase 1's fix loop closed by re-diagnosis, not by ceiling
+
+- **Trigger:** three consecutive Phase 1 review rounds returned the SAME class of finding — an
+  ownership rule that could not see every holder of a value. Round 1: `send` freeing a payload it
+  never took. Round 2: consume not reaching the caller through an unannotated parameter. Round 3:
+  three more blockers — UFCS non-receiver arguments never reaching `check_arg_ownership`
+  (`check.rs:3063-3085`, `:5431-5479`), non-ident expressions satisfying a `give` parameter while the
+  caller still holds the value (the ident-only gates at `:4798`, `:5114`, `:5444`), and a `for`-loop
+  variable admitted as a fresh payload when it is a cell pointer the parent still owns
+  (`check.rs:2792-2803`). Round 4 was already visible before it ran: `dynamic Contract` dispatch
+  carries no ownership modifiers at all (`shapes.rs:24-29`).
+- **`root-cause.md` governs:** a recurring finding class is a diagnosis failure, not a fix
+  opportunity. The loop is closed by re-diagnosis rather than by patching the fourth instance.
+- **The producer, named:** the design derived *"who else holds this value?"* by **enumerating
+  syntactic argument shapes at call sites** rather than threading the one authoritative answer. A
+  syntactic site list is unbounded and grows with the language, so each new expression form silently
+  reopens the hole. Every round fixed its instance correctly and was blind to the next form.
+- **What was sitting unused:** `crates/ynz-typeck/src/effective_ownership.rs` — a whole-program Kleene
+  fixpoint over every parameter that converges under mutual recursion, runs before body checking
+  (`queries.rs:484-512`), and **already classifies "passed to a declared `give` position"** as
+  `Writes` (`:410-411`, `:676`, test at `:1391`). The design's stated reason for reporting one frame
+  per compile — that typeck lacks a callee-before-caller ordering — is **factually false** against
+  this module, so that decision rested on a wrong premise and is void.
+- **The aggravating detail.** This plan's **Phase 2** exists specifically to reuse
+  `effective_ownership` rather than re-derive it, under `authoritative-derivation.md`. Phase 1 spent
+  three rounds re-deriving a weaker version of that module, inside the same milestone, against the
+  same rule, with the rule's canonical example one phase away in the same document. Recorded as the
+  first entry in `.claude/corpses.md`.
+- **Patrick's ruling, 2026-09-03: merge the ownership design into Phase 2.**
+  - **Phase 1 KEEPS** (and is otherwise ready for sign-off): the close mechanism (explicit
+    `.close()`, `Option<mpsc::Sender>` + `.take()`); the name, decided against `vocabulary.md` and
+    GR12; bare `receive()` returning `maybe<T>` with the handle's `T errors` deliberately distinct;
+    the idempotency, wake-all, in-flight-completion and drop-unchanged contract points; the
+    `refuse_closed` collapse of the three first-poll CLOSED arms; the ruling that P2-3's free lives in
+    the runtime rather than codegen's closed arms (FRAGO 006); the `Option<ChannelElemDrop>` element
+    classification; the `HandleChannelArgNeedsBinding` diagnostic (a close-ability question, not an
+    ownership one); and the four-field auto-close deferral.
+  - **Phase 2 ABSORBS** the whole *"who else holds this value"* question and every diagnostic that
+    depends on it: `ConsumedBySend`, `ParamNeedsGive`, `SendPayloadNeedsCopy`, the transit rule, the
+    admitted-payload-form set, and the `.copy()`-on-`map` obligation that exists to make that advice
+    executable. Phase 2 answers them by threading `effective_ownership`, never by enumerating syntax.
+  - **Phase 4 stays blocked on BOTH** Phase 1's and Phase 2's sign-offs, since the channel-close
+    implementation now depends on an ownership rule Phase 2 owns.
+- **Not a ceiling closure.** The three round-3 blockers are NOT parked as accepted residual — they are
+  re-homed as Phase 2's design inputs, with the concrete failing programs preserved so Phase 2's
+  answer must defeat all three or explain why each is out of scope.
+- **Blast radius carried forward:** `examples/primantis-orders/m6_errors.ynz:112-115` passes a bare
+  parameter `fig` as a receiver into `haulCircle(give self: Circle)` — a real instance of the silent
+  consume at `check.rs:4617` that any `give`-tightening rule will convert into a second diagnostic on
+  that line. The gallery's count assertion (`error_galleries.rs:100`, allowing 7–14) probably absorbs
+  it, and the `// WHY:` comment needs updating. The design's "zero existing instances" claim is false
+  until this one is accounted for.
+
+### FRAGO 005 — 2026-09-03 — FRAGO 004's ruling 2 is misrecorded; what shipped is not what it says
+
+- **Trigger:** Phase 1's fix round 2 read the merged hotfix code (`861fd4d`) rather than its commit
+  message, and found the record does not match the mechanism.
+- **The correction.** FRAGO 004 records Patrick's ruling 2 as *"ladder consults consumption — codegen
+  skips the ladder free for a binding typeck already marked consumed by a send."* **What shipped
+  consults no typeck fact at all.** `crates/ynz-typeck` is untouched by the hotfix. The shipped
+  protocol matches the hand-off EVENT at runtime by pointer identity (`release_ladder_payload`,
+  `DriveIdentity`, `BG_ARG_KIND_RELEASED`). The commit names why the literal ruling was infeasible in
+  a patch: one compiled body cannot know whether it was spawned or `wait`ed, the frame header is full,
+  and a name-based match misses aliases like `let a = rows; wire.send(a)`.
+- **Patrick's intent was preserved; the mechanism differs.** The ruling's substance — the ladder must
+  stop freeing what the task gave away — is exactly what shipped. This record exists so a later reader
+  comparing FRAGO 004 against the code does not conclude the fix diverged from its own authorization.
+- **Consequence for Phase 4, now settled in the design** (`IMP-concurrency.md`, Channel Close section):
+  the two mechanisms are NOT twins and neither is removed. Typeck consumption answers *may the source
+  read this binding again* (binding-level, authoritative for `ConsumedBySend`); the runtime release
+  answers *does this task's ladder still own this allocation at retire* (allocation-level,
+  authoritative for double-free and leak). The compile-time link that keeps them from drifting is the
+  `ChannelElemDrop { None, Array, Map }` enum: typeck consumes iff `!= None`, `channel_drop_glue`
+  matches it exhaustively, and the runtime releases iff the channel has glue — so adding an element
+  kind on one side is a non-exhaustive match on the other.
+
+### FRAGO 007 — 2026-09-03 — Ownership must flow through the call: a parameter that is given away must be declared `give`
+
+- **Trigger:** Phase 1's third review round constructed a program that compiles under the round-2
+  design and is a deterministic use-after-free through plain `wait`, no `background`:
+  `function producer(wire: channel<array<int>>, rows: array<int>) { wire.close(); wire.send(rows) }`
+  called as `wait producer(wire, rows)`, then `print(rows.count())` in the caller. The send consumed
+  producer's PARAMETER; the caller's `rows` stayed live; the send core freed the payload on the
+  closed path.
+- **Root cause, named:** `check_arg_ownership` (`check.rs:4591–4648`) consumes the caller's binding
+  only when the callee's parameter is declared `give` (`:4599`); unannotated and `share` parameters
+  fall to `_ => {}` (`:4646`); and the helper runs only for plain-identifier arguments
+  (`:4798–4800`). Ownership never flowed through an ordinary call. Harmless while nothing freed a
+  value; load-bearing the moment a channel does.
+- **Patrick's ruling — guard A, both halves:** (1) a parameter binding sent on an owned-heap channel
+  must be declared `give` on its enclosing function — compile error `ParamNeedsGive` otherwise;
+  with `give`, the EXISTING Give path consumes the caller's binding at every call site and every
+  spawn site (the `Expr::Background` arm's `infer_expr(inner)` reaches `check_user_fn_call`), no
+  second analysis. (2) A non-identifier owned-heap payload is refused (`SendPayloadNeedsCopy`) with
+  the `.copy()` WHAT-INSTEAD; `.copy()` postfix and literals are admitted as fresh.
+- **Consequences the ruling did not spell out, decided in the design and surfaced for the sign-off:**
+  (a) the obligation transits the WHOLE chain — every relay frame declares `give` — enforced at the
+  one site, `check_arg_ownership`'s Give arm, where `:4617` today silently consumes a bare/`lend`
+  parameter passed to a `give` parameter; that becomes `ParamNeedsGive`, so a bare parameter can
+  no longer be relayed into a give without the word (a language-ergonomics change to shipped
+  behavior; the fixture corpus is compiled in Phase 4 to confirm zero existing instances); (b) the
+  error names the immediate frame only, one frame per compile — the honest cost, with the WHY
+  stating the word travels up; (c) the `:4611` share refusal is retired into the new template;
+  (d) inferring `give` for bare parameters was weighed and rejected (callee-before-caller
+  ordering/fixpoint; silent change to the caller's program from another body; signatures carry
+  ownership per `inference.md`); (e) FR#9's channel-door instance is CLOSED by (1) — `background
+  producer(wire, table)` with `give table` consumes the parent's `table` at the spawn — and the
+  plan's FR#9 text now says so; the container door stays.
+- **Authority:** Patrick, 2026-09-03 (ruling relayed by the conductor with the fix-round-3 brief).
+  The transit rule (a) and retirement (c) are listed under the design's "Open at sign-off" for his
+  explicit confirmation at step 7, because they widen the ruling beyond the send arm.
+
+### FRAGO 006 — 2026-09-03 — P2-3's leak fix MOVES to the runtime; freeing in codegen's closed arms would double-free
+
+- **Trigger:** same read. The shipped CLOSED-first-poll path documents "the sender still owns it" and
+  a shipped test (`ladder_is_untouched_when_the_channel_does_not_take_ownership`, case (c)) asserts it.
+  That is correct **today**, in a world where `send` does not consume.
+- **The defect this catches before it is built.** Under Phase 1's design `send()` gives its payload on
+  every outcome, so a payload refused by a closed channel has no source owner left. The plan's
+  original P2-3 fix frees it in codegen's closed arms — and for a ladder-owned spawn-arg clone that is
+  a **double free**: codegen's arm frees it, then the ladder frees it again at task retire. The plan's
+  own Phase 4 step 4 would have built this.
+- **Resolution recorded in the design:** P2-3's free moves into the runtime's CLOSED-first-poll path
+  (`release_taken_value()` + glue, mirroring the shipped re-poll-CLOSED arm the hotfix added).
+  Codegen's closed arms free nothing. Phase 4 deliberately flips that runtime doc comment and that
+  test case, rather than tripping over them.
+- **Authority:** none needed — this is a design correction inside Phase 1's own remit, surfaced before
+  implementation and gated by Patrick's still-open step-7 sign-off. Recorded as a FRAGO because it
+  changes what Phase 4 step 4 is instructed to do.
 
 ### FRAGO 003 — 2026-09-03 — Downstream plan edits and the `param_ownership` schema field, RATIFIED
 

@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903"]
 created_at: "2026-07-04"
 updated_at: "2026-09-03"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -14,9 +14,35 @@ metadata:
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — start at **Phase 0**. Execution has NOT begun.
+> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 awaiting **Patrick's sign-off** · Phase 2 next
 >
-> **Every precondition is now MET (verified 2026-09-03).** Nothing blocks Phase 0.
+> ### 🔀 RESTRUCTURED 2026-09-03 — FRAGO 008: Phase 1's ownership scope MOVED to Phase 2
+>
+> **Phase 1 is narrowed and ready for sign-off.** It keeps the close mechanism, the `.close()` name,
+> bare `receive()` → `maybe<T>` (the handle's `T errors` stays deliberately distinct), the contract
+> points, the `refuse_closed` collapse of the three CLOSED arms, the runtime free-site ruling
+> (FRAGO 006), the `Option<ChannelElemDrop>` classification, `HandleChannelArgNeedsBinding`, and the
+> four-field auto-close deferral.
+>
+> **Phase 2 absorbs** the entire *"who else holds this value"* question and its three diagnostics
+> (`ConsumedBySend`, `ParamNeedsGive`, `SendPayloadNeedsCopy`) — because Phase 1 spent three review
+> rounds re-deriving an ownership analysis by enumerating syntactic call-site shapes, while
+> `crates/ynz-typeck/src/effective_ownership.rs`, a whole-program fixpoint that already answers it,
+> sat unused one phase away. Producer named in `audit.md` FRAGO 008 and in `.claude/corpses.md`.
+> Phase 2's own block carries the three failing programs any answer must defeat.
+>
+> **Phase 4 is blocked on BOTH Phase 1's and Phase 2's sign-offs.**
+>
+> **Owed to Patrick at Phase 1's sign-off:** fr12's disposition · `HandleChannelArgNeedsBinding` as a
+> hard error vs a warning · whether FRAGO 003's ratification of downstream plan edits stands for all
+> Phase 1 fix rounds or needs renewing per round.
+>
+> **The UAF hotfix has LANDED** (PR #89, merged into this branch at `6143c1d`), so this branch no
+> longer carries the three use-after-frees Phase 1's own review discovered.
+>
+> ---
+>
+> **Preconditions (all MET, verified 2026-09-03).**
 >
 > | Precondition | State |
 > |---|---|
@@ -52,32 +78,52 @@ metadata:
 >
 > ---
 >
-> ### ⛔ BLOCKED (2026-09-03) — resume at **Phase 1, step 7**, but NOT until the UAF hotfix lands.
+> ### ▶️ UNBLOCKED (2026-09-03, fix round 2) — resume at **Phase 1, step 7** (Patrick's sign-off gate).
 >
-> **Do not start any M8 phase.** Phase 1's round-2 review found a **use-after-free live on `main`**
-> (v0.3.3, released): a task's `background` array argument sent into a channel is freed by the drop
-> ladder while still sitting in the channel buffer — reproduced, prints garbage. Patrick ruled it
-> gets a hotfix on its own branch, ahead of M8. Full record and root cause: **FRAGO 004** in
-> `audit.md`.
+> Phase 1's round-2 review found a **use-after-free live on `main`** (v0.3.3, released): a task's
+> `background` array argument sent into a channel was freed by the drop ladder while still sitting
+> in the channel buffer. Patrick ruled it a hotfix on its own branch, ahead of M8 (**FRAGO 004** in
+> `audit.md`). **That hotfix has LANDED and is in this branch's history**: `861fd4d` (runtime) +
+> `30f6d36` (test isolation), merged as PR #89 at `ec014d8`, merged into this branch at `6143c1d`.
 >
-> The hotfix and M8's Phase 1 design blocker are **one bug with one ancestor** (codegen's drop ladder
-> and typeck's ownership view are independent owners of the same pointer), so the hotfix's mechanism
-> — *the ladder consults consumption* — is the substrate Phase 4 inherits rather than re-derives.
->
-> `status` stays `active` deliberately: this is a short gate on a sibling fix, not a paused
-> workstream, and the resume pointer below is precise. If the hotfix grows into its own milestone,
-> flip to `paused` and move the directory then.
+> **What shipped is NOT what FRAGO 004 ruling 2 described.** The ruling said *"the ladder consults
+> consumption"* (codegen skips the free for a typeck-consumed binding). The shipped fix is a
+> **runtime pointer-identity release protocol** (`release_ladder_payload`, `DriveIdentity`,
+> `BG_ARG_KIND_RELEASED`) that consults the hand-off EVENT, not typeck — because one compiled body
+> cannot know whether it was spawned or `wait`ed, the frame header is full, and a name match misses
+> `let alias = rows`. The ruling's intent (one authoritative answer, no ladder taught about typeck)
+> survives; its literal mechanism did not. The design section "Two mechanisms, one rule" in
+> `IMP-concurrency.md` is the authoritative reconciliation: **both mechanisms stay** (typeck owns
+> "may the source read this binding"; the runtime owns "does the ladder still own this
+> allocation"), linked by the one `ChannelElemDrop` enum, and **P2-3's closed-send free moves into
+> the runtime's CLOSED-first-poll path** (a codegen-side free would double-free a ladder-owned
+> clone). Phase 4 inherits that section verbatim; do not re-derive it from this banner.
 >
 > **Exact resume state:**
 > - Phase 0 — ✅ COMPLETE (record in `audit.md`).
-> - Phase 1 — steps 1–6 complete through TWO review rounds. **Step 7 (Patrick's sign-off) is OPEN
->   and has never been granted.** Four rulings were made on 2026-09-03 (FRAGO 004) — those are
->   inputs to the design, *not* the sign-off.
-> - **One Phase 1 fix round is owed before sign-off**, carrying: FRAGO 004's ownership resolution;
->   the `ConsumedBySend` WHY rewrite (doc-auditor blocker — "is empty afterward" teaches a
->   runtime-emptiness model when the real behavior is a compile error); the ruling that `.copy()`
->   ships on `map<K,V>`; and the eleven parked items in `.claude/plans/parked.md`.
-> - **Unruled, owed to Patrick at the sign-off gate:** fr12's disposition.
+> - Phase 1 — steps 1–6 complete through THREE review rounds + THREE fix rounds (`m8-p1-fix1`,
+>   `m8-p1-fix2`, `m8-p1-fix3`). **Step 7 (Patrick's sign-off) is OPEN and has never been granted.**
+>   Fix round 2 absorbed: FRAGO 004's ownership reconciliation (above); the `ConsumedBySend` WHY
+>   rewrite; the `.copy()`-on-`map` ruling (with the finding that `map.copy()` already compiles today
+>   as a silent ALIAS via codegen's `_ => Ok(recv_val)` catch-all); parked items 1, 2, 3, 4, 6, 9, 11
+>   — item 11 is taken as a compile-ERROR guard (`HandleChannelArgNeedsBinding`). **Fix round 3
+>   answered a BLOCKER**: the give-at-send rule did not flow through an ordinary call (`wait
+>   producer(wire, rows)` then `rows.count()` — a use-after-free with no `background`; root cause
+>   `check_arg_ownership` consumes only for a declared-`give` parameter, `check.rs:4599`/`:4646`).
+>   Patrick ruled for guard A: a sent parameter must be declared `give` (`ParamNeedsGive`, which ALSO
+>   closes the relay hole at `check.rs:4617` and retires the share refusal at `:4611`), and a
+>   non-binding payload is refused (`SendPayloadNeedsCopy`). The design now ships **FOUR** new
+>   compile-time diagnostics. Also round 3: `ChannelElemDrop` is `Option<{Array, Map}>`, not a
+>   three-variant enum; THREE first-poll CLOSED arms collapse into one `refuse_closed` fallthrough;
+>   `release_ladder_payload`'s kind filter gets one `ynz-abi` predicate + parity test; the
+>   `map.copy()` independence fixture is RED-before-clone by obligation; FR#9's channel-door instance
+>   is recorded as CLOSED by the guard (the container door stays). Parked items 5, 7, 8 stay parked
+>   for Phase 4 (item 9 was absorbed in round 2 and is now marked; item 10 was fixed in round 1).
+> - **Owed to Patrick at the sign-off gate — the design's "Open at sign-off" list, three items:**
+>   fr12's disposition (unchanged, deliberately not decided by any fix round); the error-vs-warning
+>   call on `HandleChannelArgNeedsBinding` (designed as an error, surfaced as HIS decision); and the
+>   `give`-on-parameters requirement with its transit rule (a real language-ergonomics change —
+>   confirm knowingly).
 > - Phases 2, 3, 5, 7, 8, 9 — not started. Phase 4 — hard-blocked on Phase 1's sign-off. Phase 6 —
 >   retired (FRAGO 001).
 >
@@ -589,14 +635,76 @@ suite/release-handoff).
 > design is NOT written by this phase — **disposition OPEN pending Patrick**: Phase 4 step or its own
 > FRAGO'd design step.
 >
+> **Fix round 2 (`m8-p1-fix2-20260903`) — what changed in the section, so a reader of the text above
+> is not misled (the registry count above is now `[[primitive_intrinsic]]` ×4 and
+> `[[diagnostic_template]]` ×2):** (a) the hotfix `861fd4d` landed a RUNTIME pointer-identity release
+> protocol for spawn-arg clones; the new subsection "Two mechanisms, one rule" rules that it and the
+> typeck consume BOTH stay, states which is authoritative for what, names the `ChannelElemDrop` enum
+> as their compile-time link, and corrects FRAGO 004 ruling 2's description of the mechanism; (b)
+> **P2-3's closed-send free moves from codegen's closed arms into `channel_send_poll_guarded`'s
+> CLOSED-first-poll path** (release + glue, mirroring the shipped re-poll-CLOSED arm), which
+> inverts a shipped runtime doc comment and one test case — deliberately; (c) the "one owner at
+> every moment" claim is scoped to payloads the task OWNS — FR#9's aliased bg args (`map`,
+> `array<pointer-elem>`, union) are named as the class this design neither opens nor closes; (d)
+> the `ConsumedBySend` WHY no longer says "is empty afterward" — it says the compiler refuses to
+> build the read and nothing happens at runtime; (e) `.copy()` on `map<K,V>` is a Phase 4
+> obligation with its registry entry, and the section records that `map.copy()` compiles TODAY as
+> an alias no-op through codegen's catch-all (the FRAGO 014 stub class), so the copy must be real
+> before the advice ships; (f) parked 1/3/4/6 are absorbed as text corrections (labels swapped
+> back, enum-not-bool, "extract", the `consumed: Option<ConsumedBy>` signature change); parked 2
+> mandates `alloca_in_entry_llvm` for the `maybe<T>` envelope; parked 11 becomes the
+> `HandleChannelArgNeedsBinding` compile ERROR on the handle form. **The design now introduces TWO
+> compile-time diagnostics**, both in Invariants → Teaching and Phase 9's gallery.
+>
+> **Fix round 3 (`m8-p1-fix3-20260903`) — a reviewer BLOCKER and four should-fixes; the diagnostic
+> count above is now FOUR and `[[diagnostic_template]]` ×4:** (a) **the give-at-send rule did not
+> flow through an ordinary call.** `function producer(wire, rows: array<int>) { wire.close();
+> wire.send(rows) }` called as `wait producer(wire, rows)` consumed producer's parameter and left
+> entrypoint's `rows` live — `print(rows.count())` read the payload the send core had just freed, a
+> deterministic use-after-free with no `background` anywhere. Root cause: `check_arg_ownership`
+> (`check.rs:4591–4648`) consumes the caller's binding only for a declared-`give` parameter
+> (`:4599`); bare/`share` fall to `_ => {}` (`:4646`); and it runs only for plain idents
+> (`:4798–4800`), so `wire.send(bucket.rows)` / `wire.send(matrix[0])` were never seen. **Patrick
+> ruled for guard A**, both halves now in the design's "Ownership must flow through the call": (1)
+> a parameter sent on an owned-heap channel must be declared `give` on its function —
+> `ParamNeedsGive`, threading the EXISTING Give path so every call site AND every spawn site
+> (the `Expr::Background` arm runs `infer_expr(inner)` → `check_user_fn_call` → the `:4799` site)
+> consumes the caller's binding; (2) a non-ident payload (other than `.copy()` or a literal) is
+> refused — `SendPayloadNeedsCopy`. **Transit decided**: the `give` obligation travels the WHOLE
+> chain (A→B→C: B's parameter needs `give` too), enforced at the one site — `check_arg_ownership`'s
+> Give arm, whose `:4617` silent consume of a bare/`lend` parameter IS the relay hole and becomes
+> `ParamNeedsGive`; the error names the immediate frame only (one frame per compile, one word per
+> fix, WHY says the word travels up). The share refusal at `:4611` is retired into the new template.
+> Inferring `give` for bare parameters was weighed and rejected (ordering/fixpoint; silent change to
+> the caller's program; signatures carry ownership). **FR#9's channel-door instance is CLOSED by
+> guard (1)** — `background producer(wire, table)` with `give table` consumes the parent's `table` at
+> the spawn — and the plan's FR#9 text says so; the container door (`bucket.add`) stays RED-pinned.
+> (b) `ChannelElemDrop` is **`Option<ChannelElemDrop { Array, Map }>`**, not `{ None, Array, Map }`
+> — an exhaustive match guarantees an arm, not that the arm registers glue (`Number =>
+> const_null()` compiles); with `Option`, every `Some(kind)` arm is a function value. (c) **THREE**
+> first-poll CLOSED arms, not two — `channel.rs:503` (`try_send → Closed`), `:554` (`Full`, then the
+> fresh future's first poll `Ready(Err)`), and the new `None`-under-lock arm — collapse into one
+> `refuse_closed` fallthrough (release + glue). (d) `release_ladder_payload`'s hand-maintained kind
+> filter (`runtime.rs:933`) gets ONE `ynz-abi` predicate (`bg_arg_kind_is_releasable_payload`,
+> inverted: everything but `SHARED_CHANNEL`/`RELEASED`), an `ALL_BG_ARG_KINDS` list, and a per-kind
+> alloc/free parity test linking it to the ladder's free match (`runtime.rs:1125`). (e) the
+> `map.copy()` independence fixture is committed **RED before** `ynz_map_clone` lands — the RED run
+> is the evidence step 3a happened. Bookkeeping: parked item 9 marked ABSORBED (round 2); item 10
+> corrected to fixed-in-round-1. The section header no longer says "DESIGN LOCKED"; an **"Open at
+> sign-off"** list closes the section with fr12, the error-vs-warning call, and the `give`
+> requirement as Patrick's three discrete decisions.
+>
 > **Obligations this design hands Phase 4 (each is cited in the section; listed here so the phase
 > cannot miss one):** (1) the `receive()` retyping touches **19 bare-channel sites across 13 fixture
 > files** plus `v0_3_m4_errors.ynz:80,93`, `pirates-roster/entrypoint.ynz:1083,1120–1122,1146`,
 > `REF-concurrency.md:199–201,252`; (2) **no `channel<array<T>>`/`channel<map<K,V>>` E2E fixture
 > exists anywhere in the tree** — one per element kind must be authored (round-trip, use-after-send
 > compile error, send-after-close free with alloc/free parity, drop-with-buffered-element); (3) the
-> "is this element owned-heap?" predicate is ONE shared function typeck and codegen both read, lifted
-> from `channel_drop_glue`'s two-arm match — never a typeck twin; (4) `close` needs THREE typeck
+> "is this element owned-heap?" predicate is ONE shared definition typeck and codegen both read —
+> **`Option<ChannelElemDrop { Array, Map }>`** (codegen needs the drop function; `Option` so that
+> every `Some(kind)` arm MUST be a function value — a three-variant enum let `Number =>
+> const_null()` compile), matched exhaustively inside `Some` in `channel_drop_glue` — never a bool,
+> never a typeck twin; (4) `close` needs THREE typeck
 > sites, not one: `known` (`check.rs:3993–3998`), the receiver-discipline + derivable-conduit guards
 > (`check.rs:4011–4082`, which run unconditionally and justify themselves with "can suspend"), and
 > the channel/handle-SHARED unknown-method string (`check.rs:4003`) which must split; (5) the
@@ -606,7 +714,43 @@ suite/release-handoff).
 > `Cargo.toml`) — Phase 3's `cfg(loom)` swap must land before the two new interleavings are
 > model-checkable; (7) the existing `Consumed` template (`features.toml:1599–1603`) and its emitting
 > code (`check.rs:3624–3629`) already disagree in wording — reconcile while adding `ConsumedBySend`
-> at the same site.
+> at the same site; (8) **`.copy()` on `map<K,V>`** — new runtime `ynz_map_clone` (one-level deep
+> copy mirroring `ynz_array_clone_primitive`), a `Type::BuiltinMap` arm in the `PostfixOpKind::Copy`
+> lowering (`emit.rs:19301`), the registry entry, and an independence fixture in the shape of
+> `m5_p5_copy_aos_independent.ynz` — lands BEFORE 3b so the diagnostic's advice is true, **and the
+> fixture is committed RED before `ynz_map_clone` lands** (the RED run is the evidence the alias
+> stub existed and 3a changed it); (9) **the shipped release protocol is untouched EXCEPT its
+> CLOSED-first-poll path**, which has THREE arms — `None` under the sender lock; `try_send →
+> Closed` (`channel.rs:503`); `Full` then the fresh future's first poll `Ready(Err)`
+> (`channel.rs:554`) — all collapsed into ONE `refuse_closed` fallthrough doing
+> `release_taken_value()` + `glue(value)`; the runtime doc comment and test case (c) of
+> `ladder_is_untouched_when_the_channel_does_not_take_ownership` flip to the new contract, and
+> codegen's `conduit_closed1`/`closed2` arms free nothing; (10) the `HandleChannelArgNeedsBinding`
+> compile error at the handle-form pre-record (`check.rs:2321–2345`); (11) `pub enum ChannelElemDrop
+> { Array, Map }` + `channel_elem_drop(&Type) -> Option<ChannelElemDrop>` in `ynz_typeck::types`,
+> `match … { None => null, Some(kind) => <exhaustive, function-valued> }` in `channel_drop_glue`, and
+> `check_channel_construction`'s `elem_supported` derived from it or parity-tested; (12) the
+> `maybe<T>` envelope alloca via `alloca_in_entry_llvm`, never at `conduit_post`; (13)
+> `is_consumed: bool` → `consumed: Option<ConsumedBy>` across the seven `ScopeEntry` constructors,
+> `Scope::consume` gaining the cause, both `!is_consumed` guards; (14) the `channel<map<string,int>>`
+> fixture covers BOTH a map built inside the sending task AND a map passed as a `give` bg arg and
+> sent — both asserted CORRECT (the `give` consumes the parent's binding at the spawn; alloc/free
+> parity) — plus the no-`give` variant as a `ParamNeedsGive` gallery trigger; FR#9's RED pin stays
+> for the `bucket.add` container door only; (15) **`ParamNeedsGive`** at two sites that are one
+> rule: the `send` arm (payload ident whose `ScopeEntry` is `is_param && param_ownership !=
+> Some(Give)`) and `check_arg_ownership`'s Give arm (`check.rs:4599–4619` — the `:4617` silent
+> consume of a bare/`lend` parameter becomes the error; the `:4611` share refusal is retired into
+> the template, and whatever gallery/snapshot asserts the old share-refusal text is updated —
+> `v0_3_m4_errors.ynz` first); the corpus compile confirms zero existing relay-through-bare-parameter
+> instances; (16) **`SendPayloadNeedsCopy`** in the `send` arm: admitted payload forms are
+> `Expr::Ident` (consumed), `.copy()` postfix (fresh), array/map literal (fresh); everything else is
+> the error; (17) `release_ladder_payload`'s kind filter (`runtime.rs:933`) consumes ONE `ynz-abi`
+> predicate `bg_arg_kind_is_releasable_payload(kind)` (inverted: `!= SHARED_CHANNEL && !=
+> RELEASED`), with `ALL_BG_ARG_KINDS` and a per-kind alloc/free parity test against the ladder's free
+> match (`runtime.rs:1125`), whose `_ => {}` arm gains a `debug_assert!(!releasable)`; (18) the
+> ownership-flow fixture class: the reviewer's `wait producer(wire, rows)` program with and without
+> `give`, a two-hop relay with and without `give` on the middle frame (error names the middle
+> frame), the three refused payload forms beside the three admitted ones.
 
 - **Task + purpose:** decide, design, and document the channel-close mechanism BEFORE any
   implementation lands — the DESIGN-FIRST phase the brief mandates, producing an `IMP-concurrency.md`
@@ -657,7 +801,49 @@ suite/release-handoff).
   over it).
 - **Model tag:** `(reasoning, high, medium)` — checkpoint mark mandatory (>5 steps).
 
-#### Phase 2 — Design: Auto-Arc Sharing Topology (Patrick sign-off gate)
+#### Phase 2 — Design: Auto-Arc Sharing Topology **+ the channel-send ownership rule** (Patrick sign-off gate)
+
+> **FRAGO 008 (2026-09-03) — Phase 2's scope GREW. Read `audit.md`'s FRAGO 008 before starting.**
+>
+> Phase 1 spent three review rounds re-deriving an ownership analysis by enumerating syntactic
+> call-site shapes, and each round found the same class of hole in the next syntactic form. The
+> producer was named and the loop closed by re-diagnosis, not by patching instance four. **Patrick
+> ruled the whole "who else holds this value" question moves here**, because this phase already owns
+> `crates/ynz-typeck/src/effective_ownership.rs` — a whole-program Kleene fixpoint that converges
+> under mutual recursion, runs before body checking, and already classifies "passed to a declared
+> `give` position."
+>
+> **This phase now answers, by THREADING `effective_ownership` and never enumerating `Expr::`
+> variants:**
+> - Does `ch.send(value)` consume its argument, and how does that obligation transit call frames?
+> - The `ConsumedBySend`, `ParamNeedsGive` and `SendPayloadNeedsCopy` diagnostics (drafted in
+>   `IMP-concurrency.md`'s channel-close section — reuse the teaching text, re-derive the rule).
+> - Which payload forms are admitted as fresh, and the `.copy()`-on-`map` obligation that makes the
+>   diagnostics' own advice executable (`map.copy()` compiles today and silently aliases through a
+>   codegen catch-all — the advice ships broken without `ynz_map_clone`).
+>
+> **Three concrete failing programs any answer must defeat** (all found by review, all currently
+> compile-and-run correctly, all become use-after-frees under a naive consume rule):
+> 1. `bucket.stash(rows)` — UFCS non-receiver arguments never reach `check_arg_ownership`
+>    (`check.rs:3063-3085`, `:5431-5479`); only the receiver slot is checked.
+> 2. `B(bucket.rows)` / `B(matrix[0])` into `function B(give rows: array<int>)` — the ident-only
+>    gates (`check.rs:4798`, `:5114`, `:5444`) let a non-ident satisfy `give` while the caller still
+>    holds the value.
+> 3. `for (row in matrix) { wire.send(row) }` — a loop variable (`check.rs:2792-2803`) is a cell
+>    pointer the parent still owns; the design refuses `matrix[0]` and admitted its loop-var twin.
+>
+> A fourth is visible and unaddressed: `dynamic Contract` dispatch carries no ownership modifiers at
+> all (`shapes.rs:24-29`).
+>
+> **Also inherited:** the corrected fact that typeck DOES have whole-program ordering — so
+> "one frame reported per compile" must be decided on its merits, not on the false premise that the
+> infrastructure is missing. And `examples/primantis-orders/m6_errors.ynz:112-115` is a real
+> blast-radius instance of `check.rs:4617`'s silent consume that any tightening converts into a second
+> diagnostic on that line.
+>
+> **Phase 4 is now blocked on BOTH Phase 1's and Phase 2's sign-offs.**
+
+
 
 - **Task + purpose:** write the missing caller/task Arc-sharing-topology section into
   `IMP-ownership.md`, resolving the registry's own self-diagnosed gap, reusing
@@ -774,17 +960,66 @@ suite/release-handoff).
      gallery, and spec lines the design section enumerates. Extend `close` at all THREE typeck sites
      the design names (`known`; the unconditional receiver/derivable guards; the channel/handle-shared
      unknown-method string, which splits).
+  3a. **Ship `.copy()` on `map<K,V>` (Patrick's ruling, 2026-09-03; precondition for 3b's advice):**
+     new runtime `ynz_map_clone` (fresh header + `ctrl`/`keys`/`vals`/`insert_order` buffers via
+     counted `ynz_alloc`, one-level byte copy mirroring `ynz_array_clone_primitive`), a
+     `Type::BuiltinMap` arm in the `PostfixOpKind::Copy` lowering (`emit.rs:19301` — today `map`
+     falls to `_ => Ok(recv_val)` and `table.copy()` silently ALIASES), the
+     `[[primitive_intrinsic]] copy` entry on `receiver_type = "map"`, an independence fixture in the
+     shape of `m5_p5_copy_aos_independent.ynz` — **authored and committed RED (failing on today's
+     alias no-op) BEFORE `ynz_map_clone` and the codegen arm land, flipped GREEN in the commit that
+     lands them; the RED run is the proof this step happened** — and the `REF-ownership.md:87`
+     stale-text fix.
   3b. **Implement `send()`-gives-payload (Phase 1 ruling, precondition for step 4):** in
-     `check_conduit_method_call`'s `send` arm, mirror the spawn-arg give admission (`check.rs:4596–4620`)
-     for owned-heap element types only — consume the ident binding, refuse `const`/`share` with the
-     send-specific `.copy()` advice — gated on ONE shared "owned-heap element" predicate lifted from
-     `channel_drop_glue`'s two-arm match (typeck and codegen both read it; never a twin). Add the
-     consumption CAUSE to the scope entry so the existing consumed-read site (`check.rs:3622–3631`)
-     emits `ConsumedBySend`; reconcile the pre-existing `Consumed` template/code wording drift there.
-  4. Fix P2-3: route the closed-send blocks' payload cleanup through the SAME drop-glue choke point M6
-     Phase 5 registers for buffered-element cleanup (authoritative-derivation.md — confirm this is
-     literally the same function pointer / call site, not a second implementation). **Sound only after
-     step 3b** — without the consume, this free is a use-after-free on the sender's binding.
+     `check_conduit_method_call`'s `send` arm (`check.rs:4105–4149`), gated on
+     `channel_elem_drop(elem).is_some()` — where `pub enum ChannelElemDrop { Array, Map }` +
+     `channel_elem_drop(&Type) -> Option<ChannelElemDrop>` live in `ynz_typeck::types` and
+     `channel_drop_glue` matches `None => null, Some(kind) => <exhaustive, function-valued arms>`
+     (the compile-time link; never a bool, never a three-variant enum whose extra arm could be a
+     null, never a twin) — classify the payload: `Expr::Ident` → mirror **`check_arg_ownership`**
+     (`check.rs:4591–4648` — the user-fn/UFCS give path; NOT the `background` give-inference path at
+     `:1498–1512`, which has no refusals): **extract** the const refusal `format!` (`:4602`) into a
+     helper with a caller-supplied WHAT-INSTEAD and pass the send-specific `.copy()` advice; a
+     parameter with `param_ownership != Some(Give)` → **`ParamNeedsGive`**; else consume with cause
+     `Sent { channel }`. `.copy()` postfix and array/map literals → admitted, nothing to consume.
+     Anything else → **`SendPayloadNeedsCopy`**. **Apply `ParamNeedsGive` at `check_arg_ownership`'s
+     Give arm too** (`:4617`'s silent consume of a bare/`lend` parameter becomes the error; the
+     `:4611` share refusal is retired into the template — update the gallery/snapshot that asserts
+     the old text, `v0_3_m4_errors.ynz` first) — this is the transit rule: every relay frame between
+     an owner and a give declares `give`. Compile the whole fixture corpus and confirm zero existing
+     relay-through-bare-parameter instances. Derive `check_channel_construction`'s `elem_supported`
+     (`check.rs:4286–4297`) from the same function or parity-test it. Change
+     `ScopeEntry.is_consumed: bool` → `consumed: Option<ConsumedBy>` (`Given | Sent { channel }`),
+     `Scope::consume` gains the cause, seven constructors + both `!is_consumed` guards updated — one
+     field, no parallel `Option<String>`. The existing consumed-read site (`check.rs:3622–3631`)
+     selects `Consumed`/`ConsumedBySend` by cause; reconcile the pre-existing `Consumed`
+     template/code wording drift there (parked items 7/8).
+  3c. **`HandleChannelArgNeedsBinding`:** at the handle-form spawn pre-record (`check.rs:2321–2345`),
+     a non-`Ident` argument binding the callee's first `channel<T>` parameter is a compile ERROR with
+     the design's three-slot text; statement form untouched. Registry template + gallery trigger.
+  4. Fix P2-3 **in the runtime, not in codegen**: `channel_send_poll_guarded`'s **THREE** first-poll
+     CLOSED outcomes — `None` sender under the lock; `try_send → Closed` (`channel.rs:503`); `Full`
+     then the fresh endpoint future's first poll `Ready(Err)` (`channel.rs:554`) — collapse into ONE
+     `refuse_closed` fallthrough that calls `release_taken_value()` then `glue(value)` when
+     `drop_glue.is_some()` and returns `CHANNEL_CLOSED` — the same two-step the shipped
+     re-poll-CLOSED arm performs; no arm returns `CHANNEL_CLOSED` except through it. Codegen's
+     `conduit_closed1`/`conduit_closed2` build the error and free NOTHING (a codegen free of a
+     ladder-owned clone + a non-releasing runtime = double free at retire). Flip the shipped doc
+     comment ("a CLOSED result on a FIRST poll never releases") and test case (c) of
+     `ladder_is_untouched_when_the_channel_does_not_take_ownership` to the new contract; add the
+     CLOSED-first-poll alloc/free parity gate for each of the three arms. **Sound only after step
+     3b** — without the consume, this free is a use-after-free on the sender's binding. Leave every
+     other part of the release protocol (`DriveGuard`, handle-return release) exactly as shipped,
+     with ONE exception: `release_ladder_payload`'s kind filter (`runtime.rs:933`) consumes a new
+     `ynz-abi` predicate `bg_arg_kind_is_releasable_payload(kind)` (inverted — `!= SHARED_CHANNEL &&
+     != RELEASED`) instead of its hand-listed `HEAP_SHAPE`/`HEAP_ARRAY`; add `ALL_BG_ARG_KINDS` in
+     `ynz-abi` and a `ynz-runtime` per-kind alloc/free parity test linking the predicate to the
+     ladder's free match (`runtime.rs:1125`), whose `_ => {}` arm gains
+     `debug_assert!(!bg_arg_kind_is_releasable_payload(kind))`.
+  4b. `receive()`'s `maybe<T>` envelope alloca goes through `alloca_in_entry_llvm` (`emit.rs:~2270`),
+     hoisted to the entry block — `conduit_post` (`emit.rs:12785`) is inside the consumer's `while`
+     body, so an insertion-point alloca grows the frame per iteration. `build_maybe_some`
+     (`emit.rs:2382`, `#[allow(dead_code)]`) is not the model.
 
      **CHECKPOINT** — close mechanism + live error path + P2-3 fix all implemented; fixture authoring
      (next steps) not yet started.
@@ -796,8 +1031,19 @@ suite/release-handoff).
      exist for ANY element kind today** — one fixture each for `channel<array<int>>` and
      `channel<map<string, int>>`: send-then-receive round-trip, send-then-read (the `ConsumedBySend`
      compile error), send-after-close (payload freed via the glue, alloc/free parity via
-     `YNZ_ALLOC_COUNTER_OUTPUT`), drop-with-buffered-element. Commit RED before the fix, confirm GREEN
-     after.
+     `YNZ_ALLOC_COUNTER_OUTPUT`), drop-with-buffered-element. **The map fixture covers BOTH shapes as
+     correct programs**: a map built INSIDE the sending task, and a map passed as a **`give`** bg arg
+     and sent (the `give` consumes the parent's binding at the spawn through `check_arg_ownership`;
+     the un-cloned alias has one holder; alloc/free parity through retire) — the fix-round-3 guard
+     closed FR#9's channel-door instance; only the `bucket.add` container door stays RED-pinned in
+     `bg_arg_alias_container_add_red.ynz`. **Plus the ownership-flow class**: the reviewer's `wait
+     producer(wire, rows)` program with `give` (parent's later read is the use-after-give error) and
+     without (`ParamNeedsGive`); a two-hop relay `A → B → C` correct with `give` on both, and the
+     error naming `B` when `B`'s parameter lacks it; the three refused payload forms (field, index,
+     call result → `SendPayloadNeedsCopy`) beside the three admitted (ident, `.copy()`, literal).
+     Plus the four-diagnostic gallery triggers (`ConsumedBySend` for array AND map; `ParamNeedsGive`
+     at a send AND at a give-parameter call; `SendPayloadNeedsCopy`; `HandleChannelArgNeedsBinding`).
+     Commit RED before the fix, confirm GREEN after.
   6. Retire or rewrite the bare-channel-footgun `IMP-concurrency.md` Design Divergences entry M6 Phase 7
      added — it is stale once this ships; replace with a pointer to the new design section (Phase 1's
      doc work) rather than leaving two contradictory doc entries live.
@@ -1035,9 +1281,11 @@ suite/release-handoff).
      applies (informational-only, no typeable form). Regenerate + commit the byte-exact golden.
   2. Create `examples/primantis-orders/m8_errors.ynz` with intentional triggers for every new compile-
      time diagnostic this milestone adds — at minimum, from Phase 1's design: the **use-after-send**
-     diagnostic (`ConsumedBySend`: send an `array<int>` binding into a channel, then read it), the
-     const-binding-sent and share-param-sent refusals with their send-specific `.copy()` advice, and
-     `.close()`-with-arguments; plus `.close()` on a HANDLE (the split unknown-method list must read
+     diagnostic (`ConsumedBySend`: send an `array<int>` binding into a channel, then read it — and the
+     same for a `map<string, int>` binding, so the gallery proves the `.copy()` advice is executable
+     for both element kinds), **`HandleChannelArgNeedsBinding`** (`let h = background
+     doubler(makeWire())`), the const-binding-sent and share-param-sent refusals with their
+     send-specific `.copy()` advice, and `.close()`-with-arguments; plus `.close()` on a HANDLE (the split unknown-method list must read
      `send(value), receive()` there and `send(value), receive(), close()` on a channel); plus any new
      diagnostic Phase 7's Branch A might add, if it ships. Wire the new gallery's assertions into
      `crates/ynz-driver/tests/error_galleries.rs` (diagnostic-count + key-phrase convention).
@@ -1114,11 +1362,28 @@ assertion, not an aspiration.
     channel — the Lock-8 error path goes live on `send()` only; the handle's `receive()` keeps its
     `T errors`)** — never blocks, never panics.
   - **`send()` on an owned-heap element type (`array<T>`/`map<K,V>`) consumes the sent binding** — a
-    read of the binding after the send is a compile error (`ConsumedBySend`), a `const` binding or
-    `share` parameter cannot be sent without `.copy()`, and the buffered value therefore has exactly
-    one holder at every moment (sender → channel → receiver). This is the soundness precondition for
-    the P2-3 closed-arm free below AND closes a live aliasing hole on the current tree (probe
-    2026-09-03: `wire.send(rows)` then `rows.count()` compiles and runs today). Primitive and `string`
+    read of the binding after the send is a compile error (`ConsumedBySend`); a `const` binding
+    cannot be sent without `.copy()`; **a PARAMETER binding cannot be sent unless its function
+    declares it `give`** (`ParamNeedsGive`), and the same rule holds wherever a parameter is passed
+    to a `give` parameter (`check_arg_ownership`'s Give arm — the relay hole at `check.rs:4617`), so
+    the consume reaches every caller's binding through the existing give call-site path at every
+    call AND every `background` spawn; **a payload that is not a named binding, a `.copy()`, or a
+    literal cannot be sent** (`SendPayloadNeedsCopy`). The buffered value therefore has exactly one
+    SOURCE-LEVEL holder at every moment (owner → channel → receiver) for any payload reached through
+    named bindings and `give` parameters — a task-built value, a heap-CLONED bg arg (whose ladder slot
+    the shipped runtime release protocol flips to `RELEASED` at the send), or an ALIASED bg arg
+    (`map`, `array<pointer-elem>`, union) that arrived through a `give` parameter. Outside the
+    guarantee: FR#9's container door (`bucket.add(rows)`, stays RED-pinned) and the pre-existing
+    alias-by-`let` blind spot. This is the soundness precondition for the P2-3 closed-send free (now
+    in the runtime's CLOSED-first-poll path, all three arms, per the design) AND closes two live
+    holes on the current tree (probe 2026-09-03: `wire.send(rows)` then `rows.count()` compiles and
+    runs today; and `wait producer(wire, rows)` with a bare parameter would have made the first
+    hole a use-after-free — the fix-round-3 BLOCKER).
+  - **The typeck consume and the shipped runtime release protocol BOTH stay** — they answer
+    different questions (source readability vs. ladder ownership) and are linked by the one
+    `ChannelElemDrop` enum plus per-element-kind fixtures asserting BOTH the compile error AND exact
+    alloc/free parity through task retire. Phase 4 removes neither and adds no codegen-side ladder
+    edit. Per `IMP-concurrency.md` "Two mechanisms, one rule". Primitive and `string`
     channels are unchanged — every existing `ch.send(v)` fixture stays green. Locked by the new
     owned-heap fixture class (Phase 4), which does not exist yet for ANY element kind.
   - Double-close is a safe no-op (the idempotency contract Phase 1 decides and Phase 4 implements) —
@@ -1216,11 +1481,22 @@ pattern. Considered and declined.
 - Any new compile-time diagnostic the close mechanism introduces (e.g. a compile-time-checkable
   `.send()`-after-close case, if Phase 1 decides that's checkable rather than a runtime error) follows
   the same three-part format — decided and drafted at Phase 1 step 6. **Phase 1's decision: send-after-
-  close is NOT compile-checkable (runtime typed error). The ONE new compile-time diagnostic is
-  use-after-send (`ConsumedBySend`)** — a read of an `array<T>`/`map<K,V>` binding after it was sent
-  into a channel. Drafted in full WHAT/WHAT-INSTEAD/WHY in `IMP-concurrency.md` "Teaching text"
+  close is NOT compile-checkable (runtime typed error). FOUR new compile-time diagnostics: use-after-send
+  (`ConsumedBySend`)** — a read of an `array<T>`/`map<K,V>` binding after it was sent into a channel;
+  **`ParamNeedsGive`** — a parameter given away (sent into an owned-heap channel, or passed to a `give`
+  parameter) whose function does not declare it `give` (fix round 3; replaces the share-parameter
+  refusal at `check.rs:4611`; its WHY tells the user the `give` word travels up the call chain);
+  **`SendPayloadNeedsCopy`** — an owned-heap payload at a send that is not a named binding, a
+  `.copy()`, or a literal (fix round 3); **and `HandleChannelArgNeedsBinding`** — a handle-form spawn
+  whose first channel argument is not a named binding (the `no-duct-tape` guard on the
+  `background-handle-close` deferral; fix round 2). All four are drafted in full three-slot text in
+  `IMP-concurrency.md` "Teaching text", with gallery worked examples.
+  `ConsumedBySend` is drafted in full WHAT/WHAT-INSTEAD/WHY in `IMP-concurrency.md` "Teaching text"
   (WHAT names the binding and the channel; WHAT-INSTEAD is the copyable `{channel}.send({name}.copy())`
-  or "put this line above the `send()`"; WHY is the two-tasks-one-value reason with no internals). Emitted
+  — executable for BOTH element kinds because `.copy()` ships on `map<K,V>` in Phase 4 step 3a — or
+  "put this line above the `send()`"; WHY is the two-tasks-one-value reason with no internals, and it
+  states the real behavior — the compiler refuses to build the read; nothing is "empty" at runtime —
+  the earlier "is empty afterward" wording was a doc-audit BLOCKER and is gone). Emitted
   from the existing consumed-read site (`check.rs:3622–3631`) by consumption cause, never from a
   second read-check; registered as a `[[diagnostic_template]]`; confirmed live at Phase 4; in the
   Phase 9 gallery. `receive()`'s end-of-stream has NO teaching string — it returns `none`, which the
@@ -1296,10 +1572,19 @@ pattern. Considered and declined.
   semantics), set to `["give"]` on `send`, so the LSP hover derives "send gives its value" from data.
 - **`[[deferred_language_feature]]` ×2 (new):** `channel-auto-close-on-last-producer` and
   `background-handle-close` — both with four fields carried verbatim from the design section.
-- **`[[diagnostic_template]]` ×1 (new): `ConsumedBySend`** — the use-after-send compile diagnostic.
-  This resolves the "possible but not certain" item at the end of this subsection: the RUNTIME
-  channel-closed message stays out of the registry (per-op codegen string, not a `DiagnosticKind`);
-  the new COMPILE diagnostic goes in.
+- **`[[primitive_intrinsic]]` `name = "copy"`, `kind = "method"`, `receiver_type = "map"`,
+  `param_types = []`, `return_type = "map<K, V>"`, `since = "v0.3-M8"` (new; Patrick's ruling
+  2026-09-03, FRAGO 004 ruling 4).** Phase 4 step 3a adds it alongside the runtime `ynz_map_clone`
+  and the codegen arm — same shape as the existing `array` (`features.toml:1987`) and `fixed`
+  (`:2153`) `copy` entries.
+- **`[[diagnostic_template]]` ×4 (new): `ConsumedBySend`** — the use-after-send compile diagnostic;
+  **`ParamNeedsGive`** — a parameter given away without a `give` declaration (fix round 3; fires at
+  the send arm and at `check_arg_ownership`'s Give arm; retires the inline share refusal at
+  `check.rs:4611–4616`); **`SendPayloadNeedsCopy`** — a non-binding owned-heap payload at a send (fix
+  round 3); **and `HandleChannelArgNeedsBinding`** — the handle-form channel-must-be-a-binding guard
+  (fix round 2; parked item 11 taken as a guard). This resolves the "possible but not certain" item
+  at the end of this subsection: the RUNTIME channel-closed message stays out of the registry
+  (per-op codegen string, not a `DiagnosticKind`); the new COMPILE diagnostics go in.
 - **`auto-arc-codegen-emission`** (existing entry): retired if Phase 5's shipped emission covers the FULL
   beneficial-emission condition Phase 2 decides, OR narrowed to name the real remaining residual if
   Phase 2's topology leaves a bounded slice unimplemented (Phase 5 step 7) — mirroring the
@@ -1449,4 +1734,31 @@ pattern. Considered and declined.
    arguments — the scope-drop / drop-insertion design this plan's Track 3 and Future Requirement
    7(2) own must decide, once and for every heap type, whether a bg arg is cloned, shared, or
    given; this alias fall-through closes under that rule (the same phase that lands it), or
-   earlier if a user hits the dangling-container read in the wild.
+   earlier if a user hits the dangling-container read in the wild. **Channel-close design
+   interaction (fix round 2, corrected in fix round 3):** round 2 named the aliased-bg-arg-then-
+   `send` shape (`background producer(wire, table)` + `wire.send(table)` on a `channel<map<..>>`)
+   as THIS door through the channel, neither opened nor closed by close semantics. **Round 3's
+   `ParamNeedsGive` guard CLOSES that channel-door instance**: the send requires `give table` on
+   `producer`, and `give` consumes the parent's `table` at the spawn through `check_arg_ownership`
+   (the `Expr::Background` arm runs `infer_expr(inner)` → `check_user_fn_call`), so the parent can
+   no longer read the aliased map; the channel or its receiver is the allocation's only holder, and
+   the ladder has no descriptor for an un-cloned arg (nothing to double-free). Phase 4's
+   `channel<map>` fixture asserts the `give`-map pass-and-send shape CORRECT (alloc/free parity), and
+   the no-`give` variant as the gallery trigger. **What this FR still owns is the non-channel door
+   only** — `bucket.add(rows)` storing a ladder-owned clone into an aliased container — which no
+   channel rule can reach; its RED pin, cost, and trigger above are unchanged.
+10. **`.copy()` codegen catch-all silently aliases for every type outside `Shape`/`array`**
+    (discovered 2026-09-03 while recording FRAGO 004 ruling 4). **WHAT is deferred:** the
+    `PostfixOpKind::Copy` lowering (`crates/ynz-codegen/src/emit.rs:19301`) ends in
+    `_ => Ok(recv_val)` — the receiver's own pointer — and typeck's `check_postfix_op`
+    (`check.rs:6939`) admits ANY receiver ("P3c will enforce trivially-copyable" never shipped). So
+    `x.copy()` compiles and returns `x` itself for `maybe<T>`, union, `fixed<T>`, `dynamic` — the
+    same FRAGO 014 alias-no-op stub class that was closed for `array` (`m5_p5_copy_aos_independent`)
+    and, in Phase 4 step 3a, for `map`. **WHY not absorbed here:** Phase 4 closes exactly the type
+    this milestone's diagnostic advice names (`map`); a `.copy()` audit across the remaining types
+    is a decision about what `.copy()` MEANS for each (one-level? deep? refused?) and belongs with
+    the ownership/drop story, not with channel close. **COST to fix later:** small-to-medium —
+    per-type decision + arm (or a typeck refusal with a three-slot diagnostic for types that must
+    not be copied), one independence fixture per admitted type. **TRIGGER:** the first diagnostic
+    or spec example that recommends `.copy()` on one of those types, or Track 3 / FR 7(2)'s
+    ownership rule for `background` arguments (which must decide what a copy of each heap type is).
