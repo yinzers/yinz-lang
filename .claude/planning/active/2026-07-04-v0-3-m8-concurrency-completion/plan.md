@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903"]
 created_at: "2026-07-04"
 updated_at: "2026-09-03"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -14,7 +14,7 @@ metadata:
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 steps 1–5 DONE, step 6 (Patrick's sign-off) OPEN** (executor `m8-p2-20260903-a1`; conductor `conductor-2026-09-03-m8-phase2`) — read Phase 2's status block before dispatching anything
+> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) — **Phases 4 and 5 UNBLOCKED** (both design gates signed); **Phase 3 (loom substrate) is the frontier** — the plan's own sequencing (¶3.2 Concept, ¶3.4 Coordinating Instructions) lands loom before Phases 4/5's implementation work begins, so Phase 3 is next, not Phase 4/5 directly — read Phase 3's block before dispatching anything
 >
 > ### 🔀 RESTRUCTURED 2026-09-03 — FRAGO 008: Phase 1's ownership scope MOVED to Phase 2
 >
@@ -815,8 +815,12 @@ suite/release-handoff).
 > under mutual recursion, runs before body checking, and already classifies "passed to a declared
 > `give` position."
 >
-> **This phase now answers, by THREADING `effective_ownership` and never enumerating `Expr::`
-> variants:**
+> **This phase now answers, by THREADING `effective_ownership`.** (Amended at Phase 2 sign-off,
+> packet item (i), 2026-09-03, FRAGO 010: the design threads the fixpoint through ONE exhaustive,
+> wildcard-free `Expr` match — `provenance()` — inside the owning module, `effective_ownership.rs`.
+> That single match is the remedy for the corpse's ban on enumerating syntactic shapes at call
+> sites, not an instance of it; "never enumerating `Expr::` variants" overstated the rule and is
+> retired in favor of the ruled wording.) It answers:
 > - Does `ch.send(value)` consume its argument, and how does that obligation transit call frames?
 > - The `ConsumedBySend`, `ParamNeedsGive` and `SendPayloadNeedsCopy` diagnostics (drafted in
 >   `IMP-concurrency.md`'s channel-close section — reuse the teaching text, re-derive the rule).
@@ -852,7 +856,7 @@ suite/release-handoff).
 > the marshalling representation, whether `number` joins the give-set or stays copy-through, and
 > the alloc/free consequence either way. Same sign-off gate (step 6).
 
-> ### Phase 2 STATUS (executor `m8-p2-20260903-a1`, 2026-09-03) — steps 1–5 ✅, FRAGO 008 absorption ✅, fr12 ✅; **step 6 OPEN (Patrick)**
+> ### Phase 2 STATUS — steps 1–6 ✅, FRAGO 008 absorption ✅, fr12 ✅; **step 6 (Patrick's sign-off) CLOSED 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) — **exit criteria MET, Phase 5 UNBLOCKED**
 >
 > Deliverables (design only; no compiler code; seven throwaway probes run in the dev container and
 > deleted — results in `audit.md`):
@@ -898,7 +902,10 @@ suite/release-handoff).
 >   stays copy-through — it does NOT join the give set**, so the enum gains `transfers_source()`
 >   (`Array|Map → true`, `NumberCell → false`) and typeck consumes on `is_some_and(transfers_source)`.
 >   One alloc per send, one free per receive, parity-gated. `shape` and bignum stay deferred.
-> - [ ] **Step 6 — Patrick's sign-off.** The packet is in `audit.md` under `m8-p2-20260903-a1`.
+> - [x] **Step 6 — Patrick's sign-off.** SIGNED 2026-09-03, all twelve packet items ruled — the
+>   SIGN-OFF record in `audit.md` (above FRAGO 009) is the authority. Sign-off round
+>   `m8-p2-signoff-20260903` records it in the design, applies parked 19–27, and executes the owed
+>   downstream plan edits under FRAGO 003's standing gate.
 >
 > **Round 1 grading (conductor `conductor-2026-09-03-m8-phase2`, 2026-09-03).** Green-check
 > SKIPPED — docs-only diff, no compiler code (recorded, not silent). Seats derived from the round's
@@ -934,6 +941,24 @@ suite/release-handoff).
 > items 19–27 with the trigger "applied in the round that records Patrick's sign-off". Step 6
 > (sign-off) is the next action and is Patrick's.
 >
+> **Sign-off round grading (executor `m8-p2-signoff-20260903`, Sonnet high — coding/medium/
+> moderate; docs-only, green-check SKIPPED).** Seats: `plan-adherence-medium` (Fable) →
+> `VERDICT: findings`, **1 BLOCKER** — Phase 5 step 6 pre-ruled `false` for
+> `bg_arg_kind_is_releasable_payload(ARC)` and attributed it to packet item (h), which only assigned
+> the decision; 2 should-fix, 3 minor; every other plan hunk traced on CONTENT to its ruling
+> letter; roadmap touch confirmed minimal (both duplicate ledger rows, parked 27). `doc-auditor-high`
+> (Sonnet, after the gate denied a mis-addressed medium) → `VERDICT: findings`, 0 blockers, 2
+> should-fix (the `maybe-move-out` registry bullet misstated the `[[deferred_language_feature]]`
+> schema; a probe-count contradiction between the two IMP docs), 1 minor; parked 19–27 all verified
+> true against the code. **Fix round (`m8-p2-signoff-fix1-20260903`, Sonnet medium,
+> `red:plan-adherence`, six enumerated edits):** confirmed by a fresh `plan-adherence-medium`
+> (Sonnet) → blocker FIXED (step 6 now carries the obligation and the design's leaning, no ruled
+> answer), all five should-fixes landed, the added seventh probe sourced from a real run; 1 new
+> should-fix — a dead `git log --grep=FRAGO-009` pointer, the SAME class as parked 26 → stop-test
+> fired: closed at the producer by this phase's boundary commit carrying every cited token, and
+> recorded as `.claude/corpses.md`'s second entry (parked 28). **Phase 2 terminal state: CLEAN.
+> Phase-boundary commit next; frontier advances to Phase 3.**
+>
 > **Round 2 (fix, executor `m8-p2-fix1-20260903`, 2026-09-03; docs-only; six throwaway probes run
 > and deleted, results in `audit.md`).** BLOCKER defeated at the producer, not the instance: the
 > origin/alias table was an enumeration of binding-CREATING statement forms that omitted the
@@ -960,27 +985,10 @@ suite/release-handoff).
 > `consumed[fn][i]` send case gated on the DECLARED param type; `emit.rs:12657`; round-by-round
 > narrative trimmed to current state + pointer in both IMP docs and `corpses.md`. Step 6 still OPEN.
 >
-> **Downstream plan text this design invalidates — NOT edited (no Phase 2 ruling exists yet; FRAGO
-> 003's traceability gate requires one). Owed in the same round the sign-off lands:** Phase 4 step
-> 3b (syntactic classify → `check_transfer`/provenance; `SendPayloadNeedsCopy` → `TransferNeedsCopy`;
-> hoist the fixpoint; `ContractSigDef` modifiers + `follows` EXACT parity, no parser change; the
-> binding-event function called from BOTH `Stmt::Let` and `Stmt::Assign` (origin, class
-> leave/join, consumed cleared on reassign); the `stmt_rebinds` predicate + walker `Writes`-on-rebind;
-> the class-aware inferred-give liveness; the two fixpoint facts with the declared-type gate on
-> `consumed`; the shared call-form normalization); Phase 4 step 5 (+ the probe programs as gallery
-> triggers — the seven of round 1 plus alias-by-assign and alias-by-shadow — and revive-on-reassign as
-> a correct-program fixture; the fr12 fixture class); a new Phase 4 step for fr12 (`NumberCell` glue,
-> send/receive marshalling, `channel-element-heap-upgrade` narrowed, `v0_3_m4_errors.ynz:98`
-> retired for a `channel<Player>` trigger); Phase 5 steps 2–3 (topology (B) specifics — transient,
-> group, group BOUNDARIES at top-level rebindings, `arc_shareable`, `BgOwnership::Arc`,
-> `BG_ARG_KIND_ARC_SHAPE`, releasable-predicate decision); Invariants → Safety (alias-by-`let`,
-> alias-by-assign and alias-by-shadow no longer outside the guarantee; loop-cell door closed),
-> Teaching (`TransferNeedsCopy`), Performance (`.give` is not typeable — `.copy()` only),
-> Feature Registry Entries (`TransferNeedsCopy`; `modify channel-element-heap-upgrade`; `modify
-> auto_arc` hover); FR#9 (loop-cell-through-spawn door closed by `TransferNeedsCopy`); FR#10
-> (provenance refuses transfer of the alias-no-op types); Phase 9 step 2 (`m8_errors.ynz` trigger
-> list); and the Phase 2 block's own "never enumerating `Expr::` variants" sentence, if Patrick
-> accepts the one-exhaustive-match divergence.
+> **Downstream plan text this design invalidated is now EDITED** — Patrick's Phase 2 sign-off
+> (`audit.md`'s SIGN-OFF record, 2026-09-03) authorized every edit the list above named under FRAGO
+> 003's standing gate; each is applied and traced to FRAGO 010 (`audit.md`), the sign-off round
+> `m8-p2-signoff-20260903`.
 
 - **Task + purpose:** write the missing caller/task Arc-sharing-topology section into
   `IMP-ownership.md`, resolving the registry's own self-diagnosed gap, reusing
@@ -1023,7 +1031,8 @@ suite/release-handoff).
      and the override-direction analysis for explicit approval before Phase 5 implements against it.
 - **Exit criteria:** topology + beneficial-emission condition decided and reasoned; `IMP-ownership.md`
   section written, resolving the dangling cross-reference; override-direction analysis complete;
-  Patrick's sign-off recorded (blocks Phase 5 until this lands).
+  Patrick's sign-off recorded (blocks Phase 5 until this lands). **MET — signed off 2026-09-03**
+  (`audit.md`'s SIGN-OFF record, dispatch `m8-p2-signoff-20260903`); Phase 5 UNBLOCKED.
 - **Reviewer fan-out:** design-doc-alignment reviewer (does the section genuinely resolve the silence
   and the dangling cross-reference); code-reviewer (does the reuse of `EffectiveOwnership::Reads` hold
   up against a direct read of that module, not merely the registry's own characterization of it).
@@ -1107,33 +1116,106 @@ suite/release-handoff).
      alias no-op) BEFORE `ynz_map_clone` and the codegen arm land, flipped GREEN in the commit that
      lands them; the RED run is the proof this step happened** — and the `REF-ownership.md:87`
      stale-text fix.
-  3b. **Implement `send()`-gives-payload (Phase 1 ruling, precondition for step 4):** in
-     `check_conduit_method_call`'s `send` arm (`check.rs:4105–4149`), gated on
-     `channel_elem_drop(elem).is_some()` — where `pub enum ChannelElemDrop { Array, Map }` +
-     `channel_elem_drop(&Type) -> Option<ChannelElemDrop>` live in `ynz_typeck::types` and
-     `channel_drop_glue` matches `None => null, Some(kind) => <exhaustive, function-valued arms>`
-     (the compile-time link; never a bool, never a three-variant enum whose extra arm could be a
-     null, never a twin) — classify the payload: `Expr::Ident` → mirror **`check_arg_ownership`**
-     (`check.rs:4591–4648` — the user-fn/UFCS give path; NOT the `background` give-inference path at
-     `:1498–1512`, which has no refusals): **extract** the const refusal `format!` (`:4602`) into a
-     helper with a caller-supplied WHAT-INSTEAD and pass the send-specific `.copy()` advice; a
-     parameter with `param_ownership != Some(Give)` → **`ParamNeedsGive`**; else consume with cause
-     `Sent { channel }`. `.copy()` postfix and array/map literals → admitted, nothing to consume.
-     Anything else → **`SendPayloadNeedsCopy`**. **Apply `ParamNeedsGive` at `check_arg_ownership`'s
-     Give arm too** (`:4617`'s silent consume of a bare/`lend` parameter becomes the error; the
-     `:4611` share refusal is retired into the template — update the gallery/snapshot that asserts
-     the old text, `v0_3_m4_errors.ynz` first) — this is the transit rule: every relay frame between
-     an owner and a give declares `give`. Compile the whole fixture corpus and confirm zero existing
-     relay-through-bare-parameter instances. Derive `check_channel_construction`'s `elem_supported`
-     (`check.rs:4286–4297`) from the same function or parity-test it. Change
-     `ScopeEntry.is_consumed: bool` → `consumed: Option<ConsumedBy>` (`Given | Sent { channel }`),
-     `Scope::consume` gains the cause, seven constructors + both `!is_consumed` guards updated — one
-     field, no parallel `Option<String>`. The existing consumed-read site (`check.rs:3622–3631`)
-     selects `Consumed`/`ConsumedBySend` by cause; reconcile the pre-existing `Consumed`
-     template/code wording drift there (parked items 7/8).
+  3b. **Implement the transfer rule (Phase 2 signed design, precondition for step 4 — supersedes this
+     step's earlier syntactic-classify shape; every clause below traces to `IMP-ownership.md`
+     "Transfer — Who Else Holds This Value," FRAGO 010, signed 2026-09-03):**
+     - **Hoist the `effective_ownership` fixpoint above the body check** (`queries.rs`: the fixpoint
+       currently runs after `check(...)` at `:~423`, `analyze` at `:503`; it depends only on the
+       parse and signature tables, both in hand at `:279–308` — a reorder, not a redesign). Every
+       consumer below assumes the report exists before any body is checked.
+     - **Add `provenance(expr, bindings) -> Provenance`** to `effective_ownership.rs` — ONE exhaustive
+       `Expr` match, no wildcard arm, returning `Fresh`/`Whole(name)`/`Reaches(roots)`/`Unknown` per
+       the classification table in `IMP-ownership.md`. No sink inspects syntax directly again.
+     - **Add the binding-event function**, called from BOTH `Stmt::Let` (first declaration and
+       shadowing) and `Stmt::Assign` (reassignment) — never a re-implementation beside the existing
+       `Stmt::Assign` type check at `check.rs:2436–2465`. On `Let`: origin/alias class set per the
+       initializer table. On `Assign`: the entry LEAVES its old class (old members keep their state)
+       and its `consumed` flag is CLEARED (revive-on-reassign — `eat(rows); rows = [4, 5];
+       rows.count()` becomes legal), then joins the new value's class per the same initializer table.
+       `for` loop variables get `Cell` origin (`Stmt::For`, unchanged); `for`-destructure names are
+       `Let` events with `Reaches(__shape)` provenance, not `Stmt::For` bindings (parked item 25).
+     - **`ScopeEntry.is_consumed: bool` → `consumed: Option<ConsumedBy>`** (`Given { callee } | Sent {
+       channel }`), `ScopeEntry` gains `origin: Origin` and an alias-class id (both recomputed at
+       every binding event, never set once at creation). `Scope::consume(name, cause)` consumes the
+       whole class. The six `ScopeEntry` constructors, all in `check.rs` (`:642`, `:1406`, `:1623`,
+       `:1660`, `:1723`, `:2803` — parked item 27), and both `!is_consumed` guards (`:1510`, `:4617`)
+       are updated to "not already consumed by any cause" — one field, no parallel `Option<String>`.
+     - **Add `stmt_rebinds(stmt, name) -> bool`** (true for `Stmt::Assign`/`Stmt::Let`/`Stmt::For`
+       binding `name`) and consult it from `effective_ownership.rs`'s walker: a rebinding of the
+       tracked name returns `Writes` (correcting the `:330–333` doc comment and the `:379`
+       by-value-only classification — the honest extension Phase 2 designed).
+     - **Add the two fixpoint facts**: `consumed[fn][i]: bool` (a position is consumed when declared
+       `give`, OR the body passes it whole to a consumed position, OR sends it whole on a channel —
+       the send case gated on the parameter's DECLARED type, `channel_elem_drop(ty).is_some_and
+       (transfers_source)`, never a receiver-type lookup the fixpoint cannot make); `returns_fresh[fn]:
+       Freshness` (`Fresh` iff every `return` yields a value nobody else reaches). Both monotone
+       false→true in the same loop; imported functions are `MayAlias`/not-consumed.
+     - **Add `check_transfer(expr, sink)`** — the ONE emit site for all three transfer diagnostics
+       (`ConsumedBySend`, `ParamNeedsGive`, **`TransferNeedsCopy`** — this is the registry/plan name;
+       the earlier `SendPayloadNeedsCopy` was never registered or shipped). Wire it to the closed sink
+       list: `channel<T>.send(v)` when `channel_elem_drop(T)` is `Some(kind)` and
+       `kind.transfers_source()`; every declared-`give` position of every call form (plain call,
+       monomorphized generic, UFCS dot-call — receiver AND non-receiver arguments — and `dynamic
+       Contract` dispatch) through **one shared call-form/argument-list normalization**
+       (`[receiver, args…]`, the same normalization `background_spawn_call_form` and
+       `collect_aliasing_in_expr` already perform — Phase 4 makes the three call paths share it
+       rather than adding a fourth loop); and the `background` spawn liveness INFERENCE (not a
+       `check_transfer` call — class-aware: infer `Give` iff origin `Owned`/`Param(give)` AND no
+       class member is read after; else infer `Copy`, and a `Copy` entry is still RECORDED for every
+       `Whole(name)` spawn arg, never nothing — parked item 19, the fr23 UAF class). The
+       `BgOwnership::Channel` branch (`check.rs:1461–1469`) still claims `channel<T>` arguments before
+       this rule sees them (parked item 20).
+     - In `check_conduit_method_call`'s `send` arm (`check.rs:4105–4149`), gated on
+       `channel_elem_drop(elem).is_some_and(transfers_source)` — `pub enum ChannelElemDrop { Array,
+       Map, NumberCell }` + `channel_elem_drop(&Type) -> Option<ChannelElemDrop>` in
+       `ynz_typeck::types`, `channel_drop_glue` matching `None => null, Some(kind) => <exhaustive,
+       function-valued arms>` (never a bool, never a twin) — call `check_transfer(payload, Sink::Send
+       { channel })`; **extract** the const refusal `format!` (`:4602`) into a helper with a
+       sink-supplied WHAT-INSTEAD (`{channel}.send({name}.copy())`). **Apply `ParamNeedsGive` at
+       `check_arg_ownership`'s Give arm too** (`:4617`'s silent consume of a bare/`lend` parameter
+       becomes the error; the `:4611` share refusal is retired into the template — update the
+       gallery/snapshot that asserts the old text, `v0_3_m4_errors.ynz` first) — the whole chain is
+       reported in ONE compile via `consumed[fn][i]`, never one frame per compile (the earlier
+       callee-before-caller-ordering premise was false and is withdrawn). Compile the whole fixture
+       corpus and confirm zero existing relay-through-bare-parameter instances, with the one known
+       exception `examples/primantis-orders/m6_errors.ynz:112–115` (parked item 17 — update its
+       `// WHY:` and the gallery count bound).
+     - **`dynamic Contract` dispatch, covered by construction**: `ContractSigDef` (`shapes.rs`) gains
+       `param_ownerships` and the receiver kind from the AST's `ContractSig.params`/`ReceiverKind`
+       (**parser-optional, exactly as on a function with a body — no parser enforcement is added**;
+       `follows` conformance checks EXACT parity, bare matches bare, `give` matches `give`); the
+       dispatch site (`check.rs:5391–5421`) builds the same normalized argument list and calls
+       `check_transfer` for every `give` position using the contract's declared modifiers. Runtime
+       exposure today is nil (codegen refuses every dynamic-dispatch call site, probe-confirmed).
+     - Derive `check_channel_construction`'s `elem_supported` (`check.rs:4286–4297`) from
+       `channel_elem_drop` or parity-test it. The existing consumed-read site (`check.rs:3622–3631`)
+       selects `Consumed`/`ConsumedBySend` by cause; reconcile the pre-existing `Consumed`
+       template/code wording drift there (parked items 7/8).
   3c. **`HandleChannelArgNeedsBinding`:** at the handle-form spawn pre-record (`check.rs:2321–2345`),
      a non-`Ident` argument binding the callee's first `channel<T>` parameter is a compile ERROR with
      the design's three-slot text; statement form untouched. Registry template + gallery trigger.
+  3d. **fr12 — `channel<number>` decimal128 marshalling (Phase 2 signed design, `IMP-concurrency.md`
+     "fr12"; FRAGO 010, signed 2026-09-03):** the typeck gate on `Type::Number { precision <= 34 }` is
+     lifted by extending `channel_elem_drop` (from which `elem_supported` derives — never by editing
+     the list directly); send lowering copies the sender's 16-byte `i128` into a fresh
+     `ynz_alloc(16)` cell through the existing `number_to_heap_cell` helper (`emit.rs:3802`, the same
+     one the `background` decimal128 bg-arg path already uses); receive lowering loads the 16 bytes
+     into the receiver's own storage and frees the cell before the `maybe<number>` envelope is built.
+     Drop glue: `ChannelElemDrop::NumberCell → ynz_number_cell_free` (a named `ynz_free(ptr, 16)`
+     C-ABI entry, registry-invisible per the feature-registry carve-out — compiler-internal glue).
+     **`number` does NOT join the give set** — `transfers_source()` is `Array | Map => true, NumberCell
+     => false`, so typeck consumes on `is_some_and(transfers_source)`, never on `is_some()` alone; a
+     `number` channel binding stays usable after `send()`. `shape` elements and bignum `number`
+     (precision > 34) stay REJECTED at construction. `modify [[deferred_language_feature]]
+     channel-element-heap-upgrade` narrows to those two, with `substitute`/`why`/`triggers` rewritten
+     to say decimal128 shipped in v0.3-M8. Retire `examples/primantis-orders/v0_3_m4_errors.ynz:98`
+     (the `channel<number>` rejected-construction trigger) and replace it with a `channel<Player>`
+     trigger so the error class keeps a gallery instance. Fixture class: send-then-receive round-trip
+     (value round-trip through a suspension on the receive side, exercising the two-slot frame path);
+     send-then-drop-with-buffered-element; send-after-close (freed via `refuse_closed`, a harmless
+     no-op through `release_taken_value` since the cell is never ladder-owned); a parked send drained
+     after close — all asserting exact alloc/free parity (`YNZ_ALLOC_COUNTER_OUTPUT`), one counted
+     16-byte alloc per send, one counted free per receive.
   4. Fix P2-3 **in the runtime, not in codegen**: `channel_send_poll_guarded`'s **THREE** first-poll
      CLOSED outcomes — `None` sender under the lock; `try_send → Closed` (`channel.rs:503`); `Full`
      then the fresh endpoint future's first poll `Ready(Err)` (`channel.rs:554`) — collapse into ONE
@@ -1176,10 +1258,23 @@ suite/release-handoff).
      `bg_arg_alias_container_add_red.ynz`. **Plus the ownership-flow class**: the reviewer's `wait
      producer(wire, rows)` program with `give` (parent's later read is the use-after-give error) and
      without (`ParamNeedsGive`); a two-hop relay `A → B → C` correct with `give` on both, and the
-     error naming `B` when `B`'s parameter lacks it; the three refused payload forms (field, index,
-     call result → `SendPayloadNeedsCopy`) beside the three admitted (ident, `.copy()`, literal).
-     Plus the four-diagnostic gallery triggers (`ConsumedBySend` for array AND map; `ParamNeedsGive`
-     at a send AND at a give-parameter call; `SendPayloadNeedsCopy`; `HandleChannelArgNeedsBinding`).
+     error naming `B` when `B`'s parameter lacks it — both A's and B's errors in one build when A
+     relays its own bare parameter; the three refused payload forms (a field, an index/loop-cell, a
+     call result that returns a piece of its argument → **`TransferNeedsCopy`**, the registry/plan
+     name — `SendPayloadNeedsCopy` was never registered or shipped) beside the admitted forms (an
+     owned ident, `.copy()`, a literal of fresh elements, a constructor call, a `returns_fresh` call
+     result bound by `let`). **Plus the eight probes of 2026-09-03 as gallery/fixture triggers**
+     (`.claude/corpses.md`, `git log --grep=m8-p2`): `bucket.stash(rows)` UFCS non-receiver give;
+     `eat(bucket.rows)` field; `for (row in matrix) { wire.send(row) }` loop cell; `let other = rows;
+     wire.send(rows)` alias-by-`let`; `rows = other; wire.send(rows)` alias-by-**reassignment**; a
+     shadowing `let rows = other; wire.send(rows)` alias-by-**shadow**; `let rows = pick(bucket);
+     eat(rows)` returns-a-piece; `[a]` nested-literal `Reaches`; `dynamic Contract` give (typeck
+     rejects, codegen ICEs — zero runtime exposure, a compile-time-only trigger). **Plus
+     revive-on-reassign as a correct-program fixture**: `eat(rows); rows = [4, 5]; rows.count()`
+     compiles and prints `4 5` (today it is wrongly refused "already given away" — the binding-event
+     rule fixes this by construction; FRAGO 010, signed 2026-09-03). Plus the four-diagnostic gallery triggers
+     (`ConsumedBySend` for array AND map; `ParamNeedsGive` at a send AND at a give-parameter call;
+     `TransferNeedsCopy`; `HandleChannelArgNeedsBinding`). fr12's fixture class is step 3d's.
      Commit RED before the fix, confirm GREEN after.
   6. Retire or rewrite the bare-channel-footgun `IMP-concurrency.md` Design Divergences entry M6 Phase 7
      added — it is stale once this ships; replace with a pointer to the new design section (Phase 1's
@@ -1208,15 +1303,40 @@ suite/release-handoff).
 - **Steps**
   1. Confirm Phase 2's sign-off is recorded before starting (hard gate).
   2. **Spike (per [plan-spike-discipline](../../../rules/plan-spike-discipline.md) Facet 1 — net-new,
-     load-bearing codegen mechanism):** on a minimal throwaway fixture, emit the Arc-wrap at ONE spawn
-     site, reusing `EffectiveOwnership::Reads` for the proof, and confirm (a) refcounts balance under a
-     single spawn+join, and (b) the emitted calls interact correctly with the frame-layout/state-machine
-     embedding used for `background` spawns (no aliasing violation against existing `noalias`/`readonly`
-     LLVM attributes M7's Phase 1 audit already confirmed on `ynz_arc_*`). GREEN/RED verdict before
+     load-bearing codegen mechanism):** on a minimal throwaway fixture, implement **topology (B)**
+     (`IMP-ownership.md` "Auto-Arc," signed 2026-09-03, FRAGO 010): one `ynz_arc_new(struct_bytes)` +
+     memcpy at the FIRST spawn of a group, held in a **caller-side transient**; `ynz_arc_clone` at
+     every member spawn including the first (the transient's own reference is separate);
+     `ynz_arc_free(transient)` immediately after the LAST member spawn statement of the group; each
+     task's argument-drop ladder releases its own reference through a new `BgOwnership::Arc { group,
+     first, last }` recording → `BG_ARG_KIND_ARC_SHAPE` ladder arm calling `ynz_arc_free(ptr, size)`.
+     Reuse `EffectiveOwnership::Reads` for the task-side proof, and confirm (a) refcounts balance
+     under a single spawn+join (`new`=1, N clones → N+1, transient released → N, tasks retire → 0),
+     and (b) the emitted calls interact correctly with the frame-layout/state-machine embedding used
+     for `background` spawns (no aliasing violation against existing `noalias`/`readonly` LLVM
+     attributes M7's Phase 1 audit already confirmed on `ynz_arc_*`). GREEN/RED verdict before
      extending to the full codegen path.
-  3. On GREEN, extend the emission to every Arc-eligible spawn boundary per Phase 2's decided beneficial-
-     emission condition (≥2 readers of one allocation) — for the single-reader case, confirm the
-     existing `.copy` path is UNCHANGED (no regression to the correct-and-cheaper existing behavior).
+  3. On GREEN, extend the emission to every Arc-eligible spawn boundary per Phase 2's decided
+     beneficial-emission condition (FRAGO 010, signed 2026-09-03), checked at the statement-form
+     liveness pass (`check.rs:1443–1515`):
+     ALL of — **≥2 spawn statements in one block pass the same whole binding, no suspension between
+     the first and the last** (a suspending statement between them ends the group; **"caller + 1
+     task" is explicitly OUT** — the caller reads its own original, the one task reads its copy, which
+     is the shipped one-copy path, and an Arc would add a header and atomics for nothing); task-side
+     `report.ownership_of(callee, position) == Reads` on every member (`Unknown`/`Writes` declines the
+     whole group); caller-side `classify_binding_in_stmts(v, stmts between first and last spawn) ==
+     Reads`, where **`stmt_rebinds(v, stmt)` (`IMP-ownership.md`'s honest walker extension) makes a
+     rebinding `Writes`** — EXCEPT a rebinding at the TOP LEVEL of the spawns' own block (`v = …`, a
+     shadowing `let v`, a `for (v in …)`) is a **GROUP BOUNDARY, not a decline**: the group closes at
+     the last spawn before it and a new group opens after it, each judged on its own member count; a
+     rebinding INSIDE a nested block (`if (…) { v = other }`) IS `Writes` and declines the enclosing
+     group (path-dependent, no statically placed block is right on both paths); and **`arc_shareable
+     (ty)`** — a new predicate in `ynz_typeck::types`, a `shape` whose fields are transitively
+     `int`/`float`/`bool`/`string`/inline `shape` (`number`, `array`/`map`/`maybe`/union fields, and
+     every non-shape type are excluded — the residual below). Loops are out (one spawn statement, no
+     group). For the single-reader/failing-condition case, confirm the existing `.copy` path is
+     UNCHANGED (no regression to the correct-and-cheaper existing behavior) — nothing changes when any
+     condition fails.
 
      **CHECKPOINT** — spike GREEN, full emission implemented for the beneficial case, existing `.copy`
      path confirmed unchanged; hint-wiring and fixture work (next steps) not yet started.
@@ -1231,7 +1351,12 @@ suite/release-handoff).
      (per M5's FRAGO-005 lesson — confirm real, non-zero Arc allocations are exercised, never a vacuous
      pass), plus a loom test (Phase 3's substrate) covering the Arc refcount acquire-release protocol
      under the new codegen-emitted call pattern specifically (distinct from the existing substrate-level
-     loom coverage, if any).
+     loom coverage, if any). **Decide and record `bg_arg_kind_is_releasable_payload(BG_ARG_KIND_ARC_SHAPE)`
+     (packet item (h), signed 2026-09-03 — packet item (h) assigned the decision here; it did not
+     answer it)**: the design's reasoning (`IMP-ownership.md` §"What typeck records and what codegen
+     reads") points to `false` — leak-one-count is conservative, never free-early — but Phase 5 must
+     record its own decision with evidence rather than inherit an unruled answer; add the per-kind case
+     to Phase 4's `ALL_BG_ARG_KINDS` parity test.
   7. Retire the `auto-arc-codegen-emission` registry entry (if the shipped emission covers the FULL
      beneficial-emission condition Phase 2 decided) OR narrow it to name the real remaining residual
      (if Phase 2's topology decision left a bounded slice unimplemented — e.g., multi-task fan-out beyond
@@ -1417,14 +1542,17 @@ suite/release-handoff).
      only per Phase 2's design), add that too; otherwise state explicitly why no new demo section
      applies (informational-only, no typeable form). Regenerate + commit the byte-exact golden.
   2. Create `examples/primantis-orders/m8_errors.ynz` with intentional triggers for every new compile-
-     time diagnostic this milestone adds — at minimum, from Phase 1's design: the **use-after-send**
+     time diagnostic this milestone adds — from Phases 1 and 2's signed design (FRAGO 010): the **use-after-send**
      diagnostic (`ConsumedBySend`: send an `array<int>` binding into a channel, then read it — and the
      same for a `map<string, int>` binding, so the gallery proves the `.copy()` advice is executable
-     for both element kinds), **`HandleChannelArgNeedsBinding`** (`let h = background
-     doubler(makeWire())`), the const-binding-sent and share-param-sent refusals with their
-     send-specific `.copy()` advice, and `.close()`-with-arguments; plus `.close()` on a HANDLE (the split unknown-method list must read
-     `send(value), receive()` there and `send(value), receive(), close()` on a channel); plus any new
-     diagnostic Phase 7's Branch A might add, if it ships. Wire the new gallery's assertions into
+     for both element kinds), **`ParamNeedsGive`** (a sent or given-away parameter whose function does
+     not declare `give`, at both a send and a give-parameter call), **`TransferNeedsCopy`** (the
+     signed name — supersedes the earlier `SendPayloadNeedsCopy` — a field, an index/loop-cell, and a
+     call-result-that-returns-a-piece, beside the `const`-binding-sent and share-param-sent refusals
+     it now covers), **`HandleChannelArgNeedsBinding`** (`let h = background doubler(makeWire())`),
+     and `.close()`-with-arguments; plus `.close()` on a HANDLE (the split unknown-method list must
+     read `send(value), receive()` there and `send(value), receive(), close()` on a channel); plus any
+     new diagnostic Phase 7's Branch A might add, if it ships. Wire the new gallery's assertions into
      `crates/ynz-driver/tests/error_galleries.rs` (diagnostic-count + key-phrase convention).
   3. Update the roadmap's `milestones:` frontmatter list (add
      `v0-3-m8-concurrency-completion`) and BOTH duplicate `## Capability Ledger` tables (per the
@@ -1504,18 +1632,36 @@ assertion, not an aspiration.
     declares it `give`** (`ParamNeedsGive`), and the same rule holds wherever a parameter is passed
     to a `give` parameter (`check_arg_ownership`'s Give arm — the relay hole at `check.rs:4617`), so
     the consume reaches every caller's binding through the existing give call-site path at every
-    call AND every `background` spawn; **a payload that is not a named binding, a `.copy()`, or a
-    literal cannot be sent** (`SendPayloadNeedsCopy`). The buffered value therefore has exactly one
-    SOURCE-LEVEL holder at every moment (owner → channel → receiver) for any payload reached through
-    named bindings and `give` parameters — a task-built value, a heap-CLONED bg arg (whose ladder slot
-    the shipped runtime release protocol flips to `RELEASED` at the send), or an ALIASED bg arg
-    (`map`, `array<pointer-elem>`, union) that arrived through a `give` parameter. Outside the
-    guarantee: FR#9's container door (`bucket.add(rows)`, stays RED-pinned) and the pre-existing
-    alias-by-`let` blind spot. This is the soundness precondition for the P2-3 closed-send free (now
-    in the runtime's CLOSED-first-poll path, all three arms, per the design) AND closes two live
-    holes on the current tree (probe 2026-09-03: `wire.send(rows)` then `rows.count()` compiles and
-    runs today; and `wait producer(wire, rows)` with a bare parameter would have made the first
+    call AND every `background` spawn — reported for EVERY frame of the relay chain in one compile,
+    never one frame per compile; **a payload that is not a named binding, a `.copy()`, or a
+    literal cannot be sent** (`TransferNeedsCopy` — the registry/plan name; `SendPayloadNeedsCopy`
+    was Phase 1's draft name and was never registered or shipped). **Alias classes close the
+    by-`let`, by-reassignment, and by-shadow blind spots (FRAGO 010, signed 2026-09-03,
+    `IMP-ownership.md` "Binding events, origin and alias classes"):** every binding event (`let`, shadowing `let`,
+    reassignment, `for`, parameter) puts the name in the class of the value it now denotes,
+    consuming any member consumes all — `let other = rows; wire.send(rows); other.count()`,
+    `rows = other; wire.send(rows); other.count()`, and a shadowing `let rows = other;
+    wire.send(rows)` are now `ConsumedBySend` on the alias read, where all three compile and print
+    the un-consumed alias's count on today's tree. **A reassignment REVIVES a consumed name** — the
+    entry leaves its old class and its `consumed` flag is CLEARED on `Assign`, so
+    `eat(rows); rows = [4, 5]; rows.count()` is a CORRECT program (today it is wrongly refused
+    "already given away" — this is a false-error fix, not a new restriction). The buffered value
+    therefore has exactly one SOURCE-LEVEL holder at every moment (owner → channel → receiver) for
+    any payload reached through named bindings and `give` parameters — a task-built value, a
+    heap-CLONED bg arg (whose ladder slot the shipped runtime release protocol flips to `RELEASED`
+    at the send), or an ALIASED bg arg (`map`, `array<pointer-elem>`, union) that arrived through a
+    `give` parameter. Outside the guarantee: FR#9's container door (`bucket.add(rows)`, stays
+    RED-pinned) and the FR#10 `.copy()`-alias-no-op types (which provenance classifies `Unknown`, so
+    they cannot be transferred at all). This is the soundness precondition for the P2-3 closed-send
+    free (now in the runtime's CLOSED-first-poll path, all three arms, per the design) AND closes two
+    live holes on the current tree (probe 2026-09-03: `wire.send(rows)` then `rows.count()` compiles
+    and runs today; and `wait producer(wire, rows)` with a bare parameter would have made the first
     hole a use-after-free — the fix-round-3 BLOCKER).
+  - **`number` (fr12) stays copy-through, never joins the give set** (FRAGO 010, signed 2026-09-03,
+    `IMP-concurrency.md` "fr12"): `send()` on a `channel<number>` mints a fresh 16-byte
+    `ynz_alloc`'d cell for the payload — the sender's own `number` binding is untouched and stays
+    usable, exactly like `int`. `ConsumedBySend`/`ParamNeedsGive`/`TransferNeedsCopy` never fire on a
+    `number` channel.
   - **The typeck consume and the shipped runtime release protocol BOTH stay** — they answer
     different questions (source readability vs. ladder ownership) and are linked by the one
     `ChannelElemDrop` enum plus per-element-kind fixtures asserting BOTH the compile error AND exact
@@ -1580,19 +1726,26 @@ picking that form automatically. Analyzed against the rule's own checklist:
   lint suggestion applies "when explicit form would benefit code review" — but there is no typeable
   explicit form of "make this Arc'd" to suggest rewriting TOWARD (contrast `array→fixed`/`let→const`,
   which have a losing alternative SOURCE form the lint recommends adopting). The only user-facing lever
-  is the OVERRIDE (`.give`/`.copy` at the spawn site, avoiding Arc entirely) — a different mechanism
-  from "rewrite to the stricter form" — so no lint rule name is minted for this feature.
+  is the OVERRIDE (`.copy()` at the spawn site, avoiding Arc entirely — no body-level `.give` exists;
+  `PostfixOpKind` is `Copy | Freeze` only, corrected at Phase 2 sign-off, `IMP-ownership.md` "Override
+  directions"; FRAGO 010, signed 2026-09-03) — a different mechanism from "rewrite to the stricter
+  form" — so no lint rule name is minted for this feature.
 - **Hover WHAT/WHAT-INSTEAD/WHY:** drafted at Phase 2 step 5 (updating the `auto_arc` domain's existing
   placeholder hover text to match Phase 2's decided topology), confirmed live at Phase 5 step 4. WHAT
-  (the value is Arc-shared because ≥2 readers share it post-spawn); WHAT-INSTEAD (write `.give`/`.copy`
+  (the value is Arc-shared because ≥2 readers share it post-spawn); WHAT-INSTEAD (write `{name}.copy()`
   at the spawn site to force an independent copy instead); WHY tied to the ACTUAL call site's reader
   count, per Golden Rule 11's "specific and contextual" requirement — never a generic "avoids
   allocation."
 - **Override directions (per auto-promotion.md "Override Patterns — Consider Both Directions"):**
   **force-the-other-pick** has a real use case (a caller wanting an independent copy despite ≥2 readers,
   e.g. to avoid the Arc header/atomic-op cost on a cold path) and is handled by EXISTING, ALREADY-
-  TYPEABLE syntax — `.give` or `.copy` at the spawn site — per auto-promotion.md's own canonical
-  "Auto-Arc cross-thread" example; no new API needed, documented at Phase 2 step 4.
+  TYPEABLE syntax — **`.copy()` at the spawn site, `.copy()` only** (there is no body-level `.give`
+  syntax in Yinz — `PostfixOpKind` is `Copy | Freeze`; the earlier text naming `.give` as a spawn-site
+  override was corrected at Phase 2 sign-off, `IMP-ownership.md` "Override directions": the give
+  direction is already what the liveness inference does for a binding unused after the spawn, so
+  there is nothing to force there) — `.copy()` is `Provenance::Fresh`, not `Whole`, so that spawn is
+  not a group member and takes the shipped per-task copy path; no new API needed, documented at
+  Phase 2 step 4.
   **Force-the-auto-pick** (force Arc when the compiler would NOT have picked it) is a deliberate
   no-override case: manufacturing Arc-sharing for a single-reader value has a real cost (header + atomic
   ops) with zero benefit, so — mirroring auto-promotion.md's own reasoning for this exact shape — no
@@ -1623,12 +1776,19 @@ pattern. Considered and declined.
   **`ParamNeedsGive`** — a parameter given away (sent into an owned-heap channel, or passed to a `give`
   parameter) whose function does not declare it `give` (fix round 3; replaces the share-parameter
   refusal at `check.rs:4611`; its WHY tells the user the `give` word travels up the call chain);
-  **`SendPayloadNeedsCopy`** — an owned-heap payload at a send that is not a named binding, a
-  `.copy()`, or a literal (fix round 3); **and `HandleChannelArgNeedsBinding`** — a handle-form spawn
-  whose first channel argument is not a named binding (the `no-duct-tape` guard on the
-  `background-handle-close` deferral; fix round 2). All four are drafted in full three-slot text in
-  `IMP-concurrency.md` "Teaching text", with gallery worked examples.
-  `ConsumedBySend` is drafted in full WHAT/WHAT-INSTEAD/WHY in `IMP-concurrency.md` "Teaching text"
+  **`TransferNeedsCopy`** (Phase 2's signed name; the Phase 1 draft's `SendPayloadNeedsCopy` was
+  never registered or shipped) — a payload at ANY transfer sink (a send, or a `give` position of any
+  call form) that someone else still reaches — a field, an index, a loop cell, a literal built from
+  named values, or a call that returns a piece of its argument; **and `HandleChannelArgNeedsBinding`**
+  — a handle-form spawn whose first channel argument is not a named binding (the `no-duct-tape` guard
+  on the `background-handle-close` deferral; fix round 2). `ConsumedBySend` and `ParamNeedsGive`'s
+  full WHAT/WHAT-INSTEAD/WHY text lives in [`IMP-ownership.md`](../../../../docs/internal/implementation/IMP-ownership.md)
+  "Teaching text" (Phase 2 signed); `HandleChannelArgNeedsBinding`'s stays in `IMP-concurrency.md`
+  "Teaching text" (Phase 1 signed). All four are drafted in full three-slot text, with gallery worked
+  examples.
+  `ConsumedBySend` is drafted in full WHAT/WHAT-INSTEAD/WHY in `IMP-ownership.md` "Teaching text" —
+  the one home for all three transfer diagnostics, per the paragraph above (FRAGO 010, signed
+  2026-09-03 — packet item (d), one home)
   (WHAT names the binding and the channel; WHAT-INSTEAD is the copyable `{channel}.send({name}.copy())`
   — executable for BOTH element kinds because `.copy()` ships on `map<K,V>` in Phase 4 step 3a — or
   "put this line above the `send()`"; WHY is the two-tasks-one-value reason with no internals, and it
@@ -1714,18 +1874,39 @@ pattern. Considered and declined.
   2026-09-03, FRAGO 004 ruling 4).** Phase 4 step 3a adds it alongside the runtime `ynz_map_clone`
   and the codegen arm — same shape as the existing `array` (`features.toml:1987`) and `fixed`
   (`:2153`) `copy` entries.
-- **`[[diagnostic_template]]` ×4 (new): `ConsumedBySend`** — the use-after-send compile diagnostic;
-  **`ParamNeedsGive`** — a parameter given away without a `give` declaration (fix round 3; fires at
-  the send arm and at `check_arg_ownership`'s Give arm; retires the inline share refusal at
-  `check.rs:4611–4616`); **`SendPayloadNeedsCopy`** — a non-binding owned-heap payload at a send (fix
-  round 3); **and `HandleChannelArgNeedsBinding`** — the handle-form channel-must-be-a-binding guard
-  (fix round 2; parked item 11 taken as a guard). This resolves the "possible but not certain" item
-  at the end of this subsection: the RUNTIME channel-closed message stays out of the registry
-  (per-op codegen string, not a `DiagnosticKind`); the new COMPILE diagnostics go in.
+- **`[[diagnostic_template]]` ×4 (new; corrected list, Phase 2 signed 2026-09-03, FRAGO 010):
+  `ConsumedBySend`**
+  — the use-after-send compile diagnostic; **`ParamNeedsGive`** — a parameter given away without a
+  `give` declaration (fires at the send arm, at `check_arg_ownership`'s Give arm, and at every
+  `give` position of every call form incl. `dynamic Contract` dispatch; retires the inline share
+  refusal at `check.rs:4611–4616`; the whole relay chain reported in ONE compile); **`TransferNeedsCopy`**
+  (Phase 2's signed name — supersedes the Phase 1 draft's `SendPayloadNeedsCopy`, which was never
+  registered or shipped) — a payload at ANY transfer sink (not only a send) that someone else still
+  reaches; **and `HandleChannelArgNeedsBinding`** — the handle-form channel-must-be-a-binding guard
+  (Phase 1, fix round 2; parked item 11 taken as a guard). This resolves the "possible but not
+  certain" item at the end of this subsection: the RUNTIME channel-closed message stays out of the
+  registry (per-op codegen string, not a `DiagnosticKind`); the new COMPILE diagnostics go in.
+- **`[[deferred_language_feature]]` `name = "maybe-move-out"` (new, Phase 2 signed 2026-09-03, packet
+  item (g), FRAGO 010):**
+  a consuming move-out-of-`maybe<T>` accessor, deferred with its four fields carried verbatim from
+  `IMP-ownership.md` "What this makes sound, and what stays outside." Phase 4 does not add it; a
+  relayed received value pays `.copy()` this milestone.
+- **`modify [[deferred_language_feature]] name = "channel-element-heap-upgrade"` (fr12, Phase 2
+  signed 2026-09-03, FRAGO 010):** narrows to `shape` elements and bignum `number` (precision > 34) only —
+  `substitute`/`why`/`triggers` rewritten to state decimal128 (`number`, precision ≤ 34) shipped in
+  v0.3-M8 via the send-minted `NumberCell`. No new `[[primitive_intrinsic]]` for fr12 (the element
+  type widens; `send`/`receive` are unchanged); the runtime gains `ynz_number_cell_free` as a
+  registry-invisible compiler-internal C-ABI entry (carve-out, per `.claude/rules/feature-registry.md`).
 - **`auto-arc-codegen-emission`** (existing entry): retired if Phase 5's shipped emission covers the FULL
   beneficial-emission condition Phase 2 decides, OR narrowed to name the real remaining residual if
-  Phase 2's topology leaves a bounded slice unimplemented (Phase 5 step 7) — mirroring the
-  `ec-wrapper-collect-on-completion` retirement-note convention.
+  Phase 2's topology leaves a bounded slice unimplemented (Phase 5 step 7) — the residual Phase 2
+  already named: spawn groups straddling a suspension point, spawn groups inside a loop, and
+  `array`/`map` values and shapes with pointer-cell or `number` fields (`arc_shareable`'s floor) —
+  mirroring the `ec-wrapper-collect-on-completion` retirement-note convention.
+- **`modify [[muted_hint_domain]] auto_arc` hover text (FRAGO 010, signed 2026-09-03):** the
+  placeholder hover text is replaced with Phase 2's decided-topology wording, tied to the group's
+  reader count `{n}` (`IMP-ownership.md` "The muted hint" — drafted at Phase 2 step 5, confirmed live
+  at Phase 5 step 4).
 - **`auto-arc-cautionary-tint`** (existing entry): stays unchanged, still deferred — no per-hint tint
   rendering path exists in `ynz-lsp` today (confirmed, ¶1 Terrain); this milestone does not touch it.
 - **`background-handle-cancel-injection`** (existing entry): retired (Phase 7 Branch A) if the
@@ -1819,10 +2000,14 @@ pattern. Considered and declined.
    leak + the shutdown-dropped trampoline staged decimal128 arg-cell leak; Idempotency-Key
    `2026-07-04-v0-3-m6-concurrency-hotfix#8-fr13-fr17: never-drop-locals-heap-cell-and-trampoline-leaks`)
    is a named DESIGN INPUT to this plan's scope-drop cancellation model. Its root cause is the
-   compiler-wide missing scope-exit drop-insertion pass
-   (`docs/internal/scratchpad/SCRATCH-audit-2026-07-11-memory-safety.md`, finding M1 CRITICAL: no
-   drop-insertion pass exists at all — these two leaks are symptoms of that gap, not independent
-   bugs). The scope-drop design must not be finalized blind to this class. Whether the drop-story
+   compiler-wide missing scope-exit drop-insertion pass — confirmed by code, not by
+   `docs/internal/scratchpad/SCRATCH-audit-2026-07-11-memory-safety.md`, which was never committed to
+   this repo (parked item 27, `m8-p2-signoff-20260903`): `ynz_handle_free` is declared in
+   `crates/ynz-codegen/src/runtime_decls.rs:126` with zero emit sites — see
+   [`IMP-no-function-coloring.md`](../../../../docs/internal/implementation/IMP-no-function-coloring.md)
+   "Task Cancellation" and the roadmap's never-drop-locals row — no drop-insertion pass exists at all,
+   and these two leaks are symptoms of that gap, not independent bugs. The scope-drop design must not
+   be finalized blind to this class. Whether the drop-story
    work itself lands in M8 or its own milestone is a plan-review question to resolve at M8's
    plan-review gate — this entry does not pre-decide that; it only ensures the design account for
    the class.
@@ -1899,3 +2084,10 @@ pattern. Considered and declined.
     not be copied), one independence fixture per admitted type. **TRIGGER:** the first diagnostic
     or spec example that recommends `.copy()` on one of those types, or Track 3 / FR 7(2)'s
     ownership rule for `background` arguments (which must decide what a copy of each heap type is).
+    **Phase 2's transfer rule reaches this class without waiting for the audit (FRAGO 010, signed
+    2026-09-03):**
+    `provenance(expr).copy()` classifies `Unknown` unless `copy_is_independent(type)` holds
+    (`IMP-ownership.md` "Classification" table), so a `.copy()` on `maybe<T>`, union, `fixed<T>`, or
+    `dynamic` is refused as a transfer (`TransferNeedsCopy`) rather than silently admitted as an
+    alias — this FR's remaining scope is auditing what `.copy()` on those types SHOULD mean, not
+    whether transferring one of today's alias-no-op copies is caught.

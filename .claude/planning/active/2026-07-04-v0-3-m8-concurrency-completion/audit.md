@@ -11,6 +11,49 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p2-signoff-fix1-20260903` — 2026-09-03 — **Phase 2 sign-off fix round (docs only, six edits).**
+  Plan step 6 no longer attributes `false` to packet item (h) — obligation + design leaning only.
+  Plan's Teaching subsection repoints the stale `ConsumedBySend`-lives-in-`IMP-concurrency.md`
+  sentence to its one real home, `IMP-ownership.md`. `IMP-concurrency.md`'s `HandleChannelArgNeedsBinding`
+  paragraph now says hard compile error (FRAGO 009 ruling 2), not "Patrick's call." `IMP-ownership.md`'s
+  `maybe-move-out` bullet rewritten to the real six-field registry schema. Probe count aligned
+  (eight probes, seven live-hole, `dynamic Contract` separate). Fixed prior session's self-report
+  ("seven Invariants subsections" → "the four touched"). No compiler code touched.
+
+- `m8-p2-signoff-20260903` — 2026-09-03 — **Phase 2 sign-off round (design only, no compiler code):
+  Patrick's sign-off recorded in the design docs, parked 19–27 applied, and the owed downstream plan
+  edits executed under FRAGO 003's standing gate.** Authority: `audit.md`'s SIGN-OFF record ("Patrick
+  signed off Phase 2") — every edit traces to one of its twelve packet items or its top-level ruling;
+  full enumeration in the new FRAGO 010 entry below. Read in full: the SIGN-OFF record, the Phase 2
+  STATUS block's owed-edits list, `.claude/plans/parked.md` items 19–27, `IMP-ownership.md`
+  "Transfer"/"Auto-Arc," `IMP-concurrency.md`'s channel-close section (including "Two mechanisms, one
+  rule" and fr12), `.claude/rules/plan-invariants.md`, and `~/.claude/docs/reference/REF-plan-format.md`.
+  **Docs:** both `IMP-*.md` sign-off markers converted to current-state text with a one-clause anchor
+  (`decision-records.md` discipline — no narrative, no invented commit-grep pointer where none exists
+  yet: `audit.md`'s SIGN-OFF record is the anchor, not a fictional `git log --grep=m8-p2-signoff`,
+  since this round does not commit). The (g) four-field `maybe-move-out` deferral written in full,
+  with its registry entry. All nine text-accuracy findings (parked 19–27) applied at their producer
+  sites, each marked APPLIED in `parked.md`. Two roadmap rows (`roadmap.md`, both duplicate Capability
+  Ledger tables) and one plan Future-Requirements row had their dangling
+  `SCRATCH-audit-2026-07-11-memory-safety.md` citation corrected to the code-direct premise, without
+  altering Patrick's own quoted triage words. **Plan:** Phase 4 step 3b rewritten to the signed
+  transfer rule; a new Phase 4 step 3d authored for fr12; Phase 4 step 5 extended with the probe/alias/
+  revive fixtures; Phase 5 steps 2–3 rewritten to topology (B)'s specifics, step 6 gained the
+  `bg_arg_kind_is_releasable_payload(ARC)` ruling; the four Invariants subsections touched by the
+  owed list corrected (Safety, Performance, Teaching, Feature Registry Entries); FR#10 tied to the
+  `Unknown`-provenance classification; Phase 9 step 2's gallery list corrected; the FRAGO 008 "never
+  enumerating `Expr::` variants" sentence amended per packet item (i); the "Downstream plan text … NOT
+  edited" paragraph replaced with a pointer to FRAGO 010; the cold-resume banner and Phase 2's STATUS
+  header/exit-criteria rewritten to reflect the closed sign-off (Phases 4/5 UNBLOCKED, Phase 3 the
+  frontier). **Untraceable-to-a-ruling, not made:** none found. **Deviation from the dispatch's own
+  wording:** every downstream-edit `(FRAGO 010, signed 2026-09-03)` inline tag cites `audit.md`'s
+  SIGN-OFF record rather than a `git log --grep=m8-p2-signoff` pointer, because this round is
+  instructed not to commit — a grep pointer minted now would be a dead pointer the moment it was
+  written, the exact class parked item 26 exists to catch; the conductor's eventual commit message is
+  expected to carry the `m8-p2-signoff` token, at which point the anchor could be widened, but that is
+  not this round's call to make. Tests: none run (docs-only diff). No handoff file (round ran to
+  completion in one segment).
+
 - `m8-p2-fix1-20260903` — 2026-09-03 — **Phase 2 fix round 2 (design only, no compiler code):
   the `doc-auditor` BLOCKER defeated at its producer; six should-fixes and the minors answered; step
   6 (Patrick's sign-off) still OPEN.** Read: the Phase 2 STATUS block and round-1 grading, the
@@ -493,6 +536,117 @@ settled by it.** The next conductor asks him before the phase that needs each:
    ratified round 1's downstream plan edits; rounds 2 and 3 did the same class of thing without
    their own ratification. `plan-adherence` raised it rather than assuming either way. Ask at the
    next round that edits Gate-4-signed plan text.
+
+### FRAGO 010 — 2026-09-03 — Phase 2 sign-off recorded in the design docs; owed downstream plan edits and parked 19–27 applied
+
+- **Trigger:** Patrick's Phase 2 sign-off (the SIGN-OFF record immediately below this entry), at the
+  conductor's gate after round 2 closed CLEAN. The sign-off's own text authorizes this round, under
+  FRAGO 003's standing traceability gate, to (1) record the ruling in the design docs, (2) apply
+  parked items 19–27 (text-accuracy corrections on the signed design), and (3) execute every
+  downstream plan edit the Phase 2 STATUS block's "Downstream plan text … NOT edited … Owed" list
+  named. Dispatch `m8-p2-signoff-20260903`.
+- **Authority:** the SIGN-OFF record below — every edit this FRAGO records traces to one of its
+  twelve ruled packet items (a)–(l), or to the sign-off's top-level rulings (topology (B), the
+  transfer rule, fr12, the `.copy()`-only override direction).
+- **Applied — design docs** (`docs/internal/implementation/IMP-ownership.md`,
+  `docs/internal/implementation/IMP-concurrency.md`): every "AWAITING Patrick's sign-off" /
+  "awaiting Phase 2's sign-off" marker on the "Transfer" and "Auto-Arc" sections, the channel-close
+  section's header/status, and the fr12 subsection header, converted to current-state text with a
+  one-clause anchor (`audit.md`'s SIGN-OFF record) — traces to the sign-off's own authority, not a
+  single lettered item. The (g) four-field deferral for a consuming move-out-of-`maybe` form written
+  in full (WHAT/WHY/COST/TRIGGER) into `IMP-ownership.md` "What this makes sound, and what stays
+  outside," with a matching `[[deferred_language_feature]] name = "maybe-move-out"` entry in the
+  section's registry list — traces to packet item (g). The "never enumerating `Expr::` variants"
+  divergence note amended to the ruled wording — traces to packet item (i). The `dynamic Contract`
+  section's "REQUIRED" narrative trimmed to current state plus anchor — traces to packet item (j).
+  Parked items 19 (`bg_inferred`/`is_heap_arg` presence-not-variant), 20 (`BgOwnership::Channel`
+  precedes the inferred-give rule), 21 (swapped `check.rs:1511`/`:4618` labels, third instance, now
+  cited by function name), 22 (origin/alias "set once at creation" corrected to "recomputed at every
+  binding event"), 23 (function-type-annotation form dropped — does not exist), 24 (see packet item
+  (j) above), 25 (`For`-destructure origin/alias row split from the loop-variable row), 26 (dead
+  `git log --grep=m8-p1` claim against `de631bf` dropped for a direct SHA cite), and 27 (six not
+  seven `ScopeEntry` constructors; "eight probes, seven live" not "nine found live";
+  `root_binding_name`'s pre-existing twin flagged; dated probe prose replaced with a grep pointer;
+  the roadmap's two duplicate rows and the plan's FR item 7(2) both gained a citation correction for
+  the uncommitted `SCRATCH-audit-2026-07-11-memory-safety.md`) — each applied and marked in
+  `.claude/plans/parked.md`, traceable to the SIGN-OFF record's "It also applies parked items 19–27"
+  clause.
+- **Applied — plan.md, downstream edits owed by the Phase 2 STATUS block, each traced:**
+  - Phase 4 step 3b rewritten in full to the signed transfer rule (hoisted fixpoint, `provenance()`,
+    the binding-event function at both `Stmt::Let`/`Stmt::Assign`, `stmt_rebinds`, the two fixpoint
+    facts, `TransferNeedsCopy`, `dynamic Contract` coverage, the shared call-form normalization) —
+    traces to the sign-off's transfer-rule paragraph and packet items (b)/(c)/(d)/(f)/(k).
+  - Phase 4 step 5 extended with the eight probes as gallery/fixture triggers, alias-by-assign and
+    alias-by-shadow, and revive-on-reassign as a correct-program fixture — traces to packet items
+    (c) and (k).
+  - New Phase 4 step 3d authored for fr12 (`NumberCell` glue, `number_to_heap_cell` marshalling,
+    `channel-element-heap-upgrade` narrowed, the `v0_3_m4_errors.ynz:98` retirement) — traces to the
+    sign-off's fr12 paragraph and packet item (e).
+  - Phase 5 steps 2–3 rewritten with topology (B)'s specifics (the caller-side transient, the group
+    condition, `stmt_rebinds` group boundaries, `arc_shareable`, "caller + 1 task" OUT) and step 6
+    gained the explicit `bg_arg_kind_is_releasable_payload(BG_ARG_KIND_ARC_SHAPE)` ruling — traces to
+    the sign-off's topology paragraph and packet item (h).
+  - Invariants → Safety gained the alias-classes/revive-on-rebind paragraph and the `number`
+    copy-through bullet; → Teaching renamed the three transfer diagnostics to their signed names and
+    pointed each at its `IMP-*.md` home; → Feature Registry Entries corrected the diagnostic list to
+    `TransferNeedsCopy`, added `maybe-move-out` and the narrowed `channel-element-heap-upgrade` entry
+    plus a `modify auto_arc hover` line; → Performance deleted the nonexistent spawn-site `.give`
+    override claim in three places, replacing it with `.copy()`-only — traces to packet items
+    (c)/(d)/(e)/(g) and the sign-off's override-direction ruling.
+  - FR#10 gained a paragraph tying the FR#10 alias-no-op types to `provenance(expr).copy()`'s
+    `Unknown` classification (`TransferNeedsCopy` refuses their transfer already); FR#9's text was
+    already reconciled by Phase 1 fix round 3 and needed no further edit this round.
+  - Phase 9 step 2 gallery-trigger list corrected to `ParamNeedsGive`/`TransferNeedsCopy` and
+    attributed to "Phases 1 and 2's signed design."
+  - `plan.md`'s Phase 2 block FRAGO 008 sentence ("never enumerating `Expr::` variants") amended to
+    the ruled wording — traces to packet item (i).
+  - The Phase 2 STATUS block's "Downstream plan text … NOT edited … Owed" paragraph, now executed,
+    replaced with a one-line pointer to this FRAGO entry.
+  - The cold-resume banner and Phase 2's own STATUS header and exit-criteria line updated to reflect
+    the closed sign-off, Phases 4/5 UNBLOCKED, and Phase 3 as the frontier — traces to the sign-off's
+    top-level authority, not a lettered packet item.
+- **Not applied — untraceable to any ruling, listed rather than made:** none identified this round;
+  every edit above traces to a named packet item or the sign-off's top-level text.
+
+### SIGN-OFF — 2026-09-03 — Patrick signed off Phase 2. Step 6 CLOSED. Phase 5 UNBLOCKED; Phase 4 UNBLOCKED (both design gates now signed).
+
+- **Authority:** Patrick, 2026-09-03, at the conductor's gate after round 2 closed CLEAN (0 blockers
+  across `plan-adherence-medium` and a fresh `doc-auditor-medium`; rounds sealed at `6a416c0` and
+  `1ac1ab1`). Signed on the packet as revised by `m8-p2-fix1-20260903`, with every default the
+  conductor recommended.
+- **What is signed:** Auto-Arc topology (B) — one shared heap copy, N task references, the caller
+  keeps its original plus one transient reference released after the last spawn of the group;
+  beneficial-emission = ≥2 spawn statements in one block passing the same whole binding, no
+  suspension between, `Reads` on both sides, `arc_shareable` type — "caller + 1 task" is OUT; the
+  transfer rule — ONE `provenance()` exhaustive over `Expr`, ONE `check_transfer`, a closed list of
+  free-positions, binding events exhaustive over all ten `Stmt` variants, keyed by scope entry,
+  rebinding leaves the old class and revives the name; fr12 — decimal128 as a send-minted 16-byte
+  cell freed at receive, `number` copy-through (NOT in the give set), `ChannelElemDrop::NumberCell`
+  + `transfers_source()`; the `.copy()`-only override direction (`.give` body syntax does not exist).
+- **The twelve packet items, each ruled:** (a) container-store/literal-element sinks DEFERRED
+  four-field, literal elements `Reaches`; (b) whole relay chain reported in ONE compile; (c) alias
+  classes ACCEPTED as a language change — `let other = rows; wire.send(rows)` makes `other`
+  unusable, the read is refused, the holder is named; (d) `TransferNeedsCopy` is the registry name;
+  (e) `number` copy-through CONFIRMED (parked item 3's assumption withdrawn); (f) `dynamic Contract`
+  covered by construction, in Phase 4 scope; (g) relay-a-received-value pays `.copy()` this
+  milestone — **with a FOUR-FIELD deferral for a consuming move-out-of-`maybe` form** (WHAT: a
+  consuming accessor on `maybe<T>`; WHY: one extra allocation per relay hop vs. a language-wide
+  `maybe` semantics addition outside a concurrency milestone's charter; COST: a `maybe` design
+  addendum, one provenance arm, one codegen path; TRIGGER: a measured relay workload or the general
+  move/drop story landing) — Patrick asked which option leaned toward `no-duct-tape.md`; the answer
+  recorded: neither is duct tape, and "accept" stays compliant only while all four fields are
+  written, which the sign-off round must do; (h) `bg_arg_kind_is_releasable_payload(ARC)` is
+  Phase 5's; (i) the plan's "never enumerating `Expr::` variants" sentence is AMENDED — one
+  exhaustive, wildcard-free match in the owning module is the remedy for open per-site lists, not
+  an instance of them; (j) contract-signature modifiers stay parser-OPTIONAL, bare = never a give
+  position, no parser enforcement; (k) revive-on-rebind ACCEPTED (today's false error on
+  `eat(rows); rows = [4, 5]; rows.count()` becomes legal); (l) top-level rebinding between spawns
+  is an Arc-group boundary, nested is a decline.
+- **What this ruling authorizes under FRAGO 003's standing gate:** the sign-off round may edit
+  every downstream plan section the Phase 2 STATUS block lists as owed (Phase 4 steps 3b/5 + a new
+  fr12 step, Phase 5 steps 2–3, the Invariants subsections, FR#9/#10, Phase 9, `plan.md:818`) —
+  each edit traces to this record. It also applies parked items 19–27 (text-accuracy corrections on
+  the signed design) so Phase 4 never reads a known-false claim.
 
 ### FRAGO 009 — 2026-09-03 — The three items Phase 1's sign-off left open are RULED; Phase 2 begins
 

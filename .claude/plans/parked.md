@@ -166,34 +166,49 @@ sign-off applies them alongside the owed downstream plan edits** — the design 
     variant is ignored (`fr23_uaf_planned_red.rs:27` says the same). "Declines to `Copy` silently"
     must state that a `Copy` entry is still RECORDED for every `Whole(name)` spawn arg; an
     implementer who records nothing hands the task a spawner-stack pointer (the fr23 class).
-    Raised independently by both round-2 seats.
+    Raised independently by both round-2 seats. **Status: APPLIED in m8-p2-signoff-20260903** —
+    `IMP-ownership.md` sink 3 paragraph rewritten to state the PRESENCE-gates-not-variant reading and
+    name `emit.rs:16810–16828`/`fr23_uaf_planned_red.rs:27` directly.
 20. **The restated `background` inference omits the `BgOwnership::Channel` branch** that runs before
     liveness (`check.rs:1461-1469`). `IMP-ownership.md:263` as written infers `Give` on a
     `channel<T>()` binding not read after the spawn (constructor → `Fresh` → `Owned`), where the
-    real rule shares it (`emit.rs:16752-16761`, `ynz_channel_share`).
+    real rule shares it (`emit.rs:16752-16761`, `ynz_channel_share`). **Status: APPLIED in
+    m8-p2-signoff-20260903** — sink 3 paragraph now states the `BgOwnership::Channel` branch claims
+    channel-typed arguments first, before this rule sees them.
 21. **Swapped labels, again.** `IMP-concurrency.md:925` calls `check.rs:1511` the user-function
     `give` path and `:4618` the `background` spawn path; it is the reverse (`:1511` is inside the
     `Expr::Background` liveness block `:1443-1515`; `:4618` is inside `check_arg_ownership`). Same
     class as parked item 1 — a third instance means Phase 4 should cite by FUNCTION NAME, not line.
+    **Status: APPLIED in m8-p2-signoff-20260903** — "The hole" paragraph corrected and now cites
+    `check_arg_ownership` by name, with a note that this is the third swap of this pair.
 22. **`IMP-concurrency.md:958` still says origin/alias class are "set once at creation."** That is
     the round-1 sentence the blocker retired; the same paragraph cites the binding-event rule that
     recomputes both at every `Let`/`Assign`. Internal contradiction across the two IMP docs.
+    **Status: APPLIED in m8-p2-signoff-20260903** — corrected to "(re)computed at every binding
+    event," cross-referenced to `IMP-ownership.md` "Binding events, origin and alias classes."
 23. **Function-type annotations do not exist.** `IMP-ownership.md:116` states the OPTIONAL-modifier
     rule over `let f: function(give Data) -> nothing`; `ynz-ast`'s `Type` enum has no function
     type and `parse_type_with_depth` (`parser.rs:900`) has no `function` arm. Drop the form.
+    **Status: APPLIED in m8-p2-signoff-20260903** — the function-type-annotation clause dropped from
+    "Signature-Level Declaration"; the OPTIONAL sentence now states there is no third position.
 24. **`IMP-ownership.md:52`/`:116`/`:276` — the "REQUIRED on contract signatures" line was rewritten
     to OPTIONAL before a Patrick ruling** (packet item (j)), and `:276` narrates the rewrite.
     Either mark provisional pending the ruling or, once ruled, state current truth with a one-clause
-    anchor and delete the narrative.
+    anchor and delete the narrative. **Status: APPLIED in m8-p2-signoff-20260903** — packet item (j)
+    is ruled; the "dynamic Contract" section's narrative of the rewrite is trimmed to current state
+    plus a one-clause anchor (`audit.md`'s SIGN-OFF record).
 25. **`For` destructure names are desugared `Let`s, not `Stmt::For` bindings.** `IMP-ownership.md:169`
     (`For` row) and `:224` (`stmt_rebinds`): the parser prepends `Stmt::Let { value: __shape.field }`
     per destructured name (`parser.rs:2252-2274`; map form `:2417`), so they are `Let` events with
     `Reaches(__shape)` provenance and — unlike the loop variable — `Assign` to them is admitted
     (`check.rs:2436-2465`). Outcome stays sound (the `Let` row covers them); the AST claim and the
-    predicate's scope are wrong.
+    predicate's scope are wrong. **Status: APPLIED in m8-p2-signoff-20260903** — the origin/alias
+    table's `For` row split into a loop-variable row and a separate destructure-name row correctly
+    described as a desugared `Let` event.
 26. **Dead `--grep=m8-p1` pointer.** `IMP-concurrency.md:843`/`:1122` claim `git log --grep=m8-p1`
     finds `de631bf`; only `cd71f7f` carries the token. The bare SHA resolves; drop the grep half or
-    cite the SHA alone.
+    cite the SHA alone. **Status: APPLIED in m8-p2-signoff-20260903** — both sites now cite `de631bf`
+    directly (dropping the false grep claim) and `cd71f7f` via `git log --grep=m8-p1`.
 27. **Minors, one line each:** six `ScopeEntry` constructors, all in `check.rs`, not seven
     (`IMP-concurrency.md:963`); "nine found live" at `IMP-ownership.md:130`/`:302` is not what
     `corpses.md` says (eight ran; the `dynamic` probe ICEs in codegen); `root_binding_name` has a
@@ -202,6 +217,21 @@ sign-off applies them alongside the owed downstream plan edits** — the design 
     `IMP-ownership.md:167,168,191,224` → "probe" + grep pointer; the cold-resume banner
     (`plan.md:17`) still names the round-1 executor; the roadmap row (`roadmap.md:456`) and a plan
     Future-Requirements row still cite the nonexistent `SCRATCH-audit-2026-07-11-memory-safety.md`.
+    **Status: APPLIED in m8-p2-signoff-20260903** — all six minors fixed: the six-constructor count
+    corrected; the "nine found live" claim rewritten to "eight probes... seven found a live hole";
+    the `root_binding_name` twin flagged with a Phase 4 obligation; the dated probe prose replaced
+    with a `git log --grep=m8-p2` pointer; the cold-resume banner rewritten (no longer names the
+    round-1 executor alone); the roadmap's two duplicate rows and the plan's FR item 7(2) both gained
+    a citation correction pointing at the code-direct premise instead of the uncommitted SCRATCH file.
+28. **A second dead `git log --grep` pointer, minted by the fix that closed the first.** WHAT:
+    `IMP-concurrency.md:1006` (sign-off fix round, `m8-p2-signoff-fix1-20260903`) cites
+    `git log --grep=FRAGO-009`; no commit carried that token at write time — FRAGO 009 existed
+    only in `audit.md` prose. Same class as item 26. WHY deferred: not deferred — closed at the
+    producer instead of the instance: the Phase 2 phase-boundary commit carries `FRAGO-009`,
+    `FRAGO-010` and `m8-p2-signoff` in its body so every pointer this phase minted resolves, and
+    `.claude/corpses.md` gained the entry "Minting a `git log --grep` token no commit carries."
+    COST: none further. TRIGGER: n/a. **Status: CLOSED by the Phase 2 boundary commit (conductor,
+    2026-09-03) — verify with `git log --grep=FRAGO-009` after it lands.**
 
 ### Open exposure carrying a cheap in-scope guard — flagged under `no-duct-tape.md`
 

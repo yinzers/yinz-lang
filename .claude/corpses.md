@@ -56,3 +56,31 @@ who may read or write a value, the answer is `effective_ownership.rs` until prov
 **The cheap check that would have caught it in round 1.** Before writing a new predicate about
 program-wide behavior, grep `crates/ynz-typeck/src/` for an existing analysis over the same subject.
 One grep, round one, three rounds saved.
+
+---
+
+## Minting a `git log --grep` token that no commit carries
+
+**Found:** 2026-09-03, v0.3-M8 Phase 2, twice in one review loop.
+
+| Instance | Pointer written | What actually resolved |
+|---|---|---|
+| Phase 1 fix rounds (caught as parked item 26) | `--grep=m8-p1-fix2`, `--grep=m8-p1-fix3` | nothing — the seal commit's subject never carried the dispatch ids |
+| Sign-off fix round (caught by the confirmation seat) | `--grep=FRAGO-009` | nothing — FRAGO 009 existed only in `audit.md` prose |
+
+**The producer.** `decision-records.md` says docs carry current state plus a `git log --grep`
+anchor, so authors reach for a grep token by reflex — and mint one against a NAME (a dispatch id, a
+FRAGO number) that lives in a planning file, not in any commit message. An executor cannot commit,
+so at write time the token is guaranteed dead; whether it ever resolves depends on a conductor
+remembering to carry it in the seal. The sign-off round's executor saw this and correctly refused to
+mint `--grep=m8-p2-signoff`; the fix round right after it minted `--grep=FRAGO-009` anyway.
+
+**Detection signature.** Any `git log --grep=<token>` written in the same diff that introduces the
+token, or citing a FRAGO/dispatch/session id. Run `git log --all --grep=<token>` before the pointer
+ships; zero hits means it's dead.
+
+**The rule.** An executor cites the DURABLE record it can see (`audit.md`'s entry by heading, a
+SHA that already exists). The CONDUCTOR owns grep tokens: every round-seal and phase-boundary
+commit body carries every FRAGO number, dispatch id and session id the round's docs cite, so the
+pointer resolves the moment the commit lands. If a doc must name a future token, it says so
+("resolves once the Phase N boundary commit lands") instead of pretending it already does.
