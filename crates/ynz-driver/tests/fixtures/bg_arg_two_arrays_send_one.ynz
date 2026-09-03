@@ -1,0 +1,25 @@
+// Two heap-cloned `array<int>` arguments on ONE spawned task, and the task hands off exactly
+// one of them (`wire.send(rows)`). The runtime's release walk (`release_ladder_payload`) must
+// flip only the descriptor whose frame slot holds the sent pointer: `scratch` stays intact for
+// the task's own later reads, and the ladder still frees it at retire. Releasing the wrong
+// slot would free `rows` under the receiver (garbage stdout) AND leak `scratch` (alloc gap
+// grows); releasing every slot would leak `scratch` alone (gap grows by 2).
+function producer(wire: channel<array<int>>, rows: array<int>, scratch: array<int>) -> nothing {
+  wire.send(rows)
+  print(scratch.count().toString())
+  let s0 = scratch[0].or(-1)
+  print(s0.toString())
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(4)
+  let rows: array<int> = [10, 20, 30]
+  let scratch: array<int> = [7, 8]
+  background producer(wire, rows, scratch)
+  // Let the task retire (and its drop ladder run) BEFORE the receive.
+  wait sleep(50)
+  let got = wire.receive()
+  print(got.count().toString())
+  let first = got[0].or(-1)
+  print(first.toString())
+}

@@ -1421,3 +1421,32 @@ pattern. Considered and declined.
    call sites migrated + loom coverage of the unified path). **TRIGGER:** Phase 3's loom substrate
    work, if it finds it needs one registry rather than two to model-check the ordering — otherwise
    the next milestone touching either recv-poll path.
+9. **`background` arg escape door #4 — a ladder-owned array clone stored into an ALIASED outer
+   container** (discovered 2026-09-03 during the `fix/bg-arg-channel-send-uaf` hotfix; live in the
+   released v0.3.3 compiler; RED-pinned by `bg_arg_alias_container_add_is_a_known_uaf_red_pin` in
+   `crates/ynz-driver/tests/integration.rs` against fixture `bg_arg_alias_container_add_red.ynz`).
+   **WHAT is deferred:** `stash(bucket: array<array<int>>, rows: array<int>) { bucket.add(rows) }`
+   spawned with `background` — `rows` is heap-cloned and owned by the task's drop ladder, but
+   `bucket` is an `array<pointer-elem>` bg arg that `prepare_bg_arg_for_ctx`
+   (`crates/ynz-codegen/src/emit.rs`, the `array<string/maybe/map/union/array>` and `map`/`union`
+   fall-through arms) passes through UN-cloned, aliasing the parent's container. The task pushes
+   its clone into the parent's bucket; the ladder frees the clone at retire; the parent's
+   `bucket[0]` dangles (observed: garbage counts `471878446419399850` / `-924992314359518642` and
+   SIGSEGV across 5 runs). The hotfix's pointer-identity release protocol closes the channel-send,
+   handle-send, and handle-return doors and deliberately does NOT close this one. **WHY:** the
+   escape exists because the container was aliased rather than cloned — a different producer from
+   the three fixed doors (where the runtime is the hand-off point and can release the slot at the
+   moment ownership moves). Hooking `ynz_array_push` to walk the current drive's ladder would put
+   an O(descriptors) scan plus a thread-local read on a hot, synchronous, non-concurrency path to
+   patch a symptom of the alias fall-through; both hotfix reviewers agreed the right fix is closing
+   the fall-through (clone — or otherwise give a defined ownership — to `array<pointer-elem>` /
+   `map` / `union` bg args), which is a design decision about what a `background` argument IS, not
+   a runtime patch. **COST to fix later:** ~1 session — extend `prepare_bg_arg_for_ctx`'s per-type
+   table with a defined deep-copy (or share) semantics for pointer-cell element arrays and maps,
+   with the matching `BgArgFreeKind` free arm, a fixture per element class, and the RED pin flipped
+   to its correct-world assertions (gap 6 with a real `bucket[0]` dereference, or `bucket.count()`
+   = 0 if the container is cloned). **TRIGGER:** v0.3-M8's general ownership rule for `background`
+   arguments — the scope-drop / drop-insertion design this plan's Track 3 and Future Requirement
+   7(2) own must decide, once and for every heap type, whether a bg arg is cloned, shared, or
+   given; this alias fall-through closes under that rule (the same phase that lands it), or
+   earlier if a user hits the dangling-container read in the wild.

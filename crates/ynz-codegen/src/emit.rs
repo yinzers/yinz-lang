@@ -12466,12 +12466,24 @@ fn lower_let_background_handle<'ctx>(
         .map(|s| s.ret.clone())
         .or_else(|| cg.imported_fns.get(&callee_name).map(|s| s.ret.clone()))
         .ok_or_else(|| format!("handle spawn: signature for `{callee_name}` not found"))?;
+    // Heap-pointer words (`array<T>` / `map<K, V>`) get their own kinds so the runtime can
+    // release a returned pointer from the child's spawn-arg drop ladder — a child that
+    // returns one of its own heap-cloned arguments hands ownership to the parent, and the
+    // ladder must not free it behind `h.receive()`.
+    let is_heap_ptr = |t: &Type| {
+        matches!(
+            cg.resolve_type(t),
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+        )
+    };
     let ret_kind = match &sig_ret {
         Type::ErrorsCapable { inner } => match inner.as_ref() {
             Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_EC_NUMBER,
+            t if is_heap_ptr(t) => ynz_abi::HANDLE_RET_KIND_EC_HEAP_PTR,
             _ => ynz_abi::HANDLE_RET_KIND_EC_WORD,
         },
         Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_VALUE_NUMBER,
+        t if is_heap_ptr(t) => ynz_abi::HANDLE_RET_KIND_VALUE_HEAP_PTR,
         _ => ynz_abi::HANDLE_RET_KIND_VALUE_WORD,
     } as u64;
 
@@ -17500,8 +17512,9 @@ fn lower_sm_background_spawn<'ctx>(
     //
     // Each BgArgDropEntry has three i64 fields (24 bytes total):
     //   byte_offset: u64 — byte offset in the frame to the i64 slot holding the heap pointer
-    //   kind: u64        — 0=HeapShape (ynz_free), 1=HeapArrayPrimitive (ynz_array_drop)
-    //   size: u64        — byte count for ynz_free (HeapShape); 0 for HeapArrayPrimitive
+    //   kind: u64        — ynz_abi::BG_ARG_KIND_* (HEAP_SHAPE → ynz_free, HEAP_ARRAY →
+    //                      ynz_array_drop, SHARED_CHANNEL → ynz_channel_free)
+    //   size: u64        — byte count for ynz_free (HEAP_SHAPE); 0 for the other kinds
     //
     // Build the descriptor list only for args that were actually heap-copied; skip None.
     // If no args need freeing, pass null pointer + count=0 (no allocation needed).
@@ -17580,13 +17593,17 @@ fn lower_sm_background_spawn<'ctx>(
                 .build_store(off0, i64_ty.const_int(*byte_offset, false))
                 .map_err(|e| format!("desc store 0: {e}"))?;
 
-            // field 1: kind (0=HeapShape, 1=HeapArrayPrimitive)
+            // field 1: kind (the ynz-abi `BG_ARG_KIND_*` wire contract; the runtime may
+            // later rewrite it to `BG_ARG_KIND_RELEASED` when the payload's ownership
+            // leaves the task via a channel send or handle return).
             let kind_val = match &free_kinds[*slot_idx] {
-                // HeapMaybeEnv deliberately shares wire kind 0: the free
+                // HeapMaybeEnv deliberately shares the HEAP_SHAPE wire kind: the free
                 // protocol IS ynz_free(ptr, size) — no runtime change.
-                BgArgFreeKind::HeapShape { .. } | BgArgFreeKind::HeapMaybeEnv { .. } => 0_u64,
-                BgArgFreeKind::HeapArrayPrimitive => 1_u64,
-                BgArgFreeKind::SharedChannel => 2_u64,
+                BgArgFreeKind::HeapShape { .. } | BgArgFreeKind::HeapMaybeEnv { .. } => {
+                    ynz_abi::BG_ARG_KIND_HEAP_SHAPE
+                }
+                BgArgFreeKind::HeapArrayPrimitive => ynz_abi::BG_ARG_KIND_HEAP_ARRAY,
+                BgArgFreeKind::SharedChannel => ynz_abi::BG_ARG_KIND_SHARED_CHANNEL,
                 BgArgFreeKind::None => unreachable!("filtered above"),
             };
             let off1 = unsafe {

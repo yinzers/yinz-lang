@@ -1,0 +1,24 @@
+// KNOWN-DEFECT PIN (RED-documenting, asserts TODAY'S wrong behavior — see the integration test
+// `bg_arg_alias_container_add_is_a_known_uaf_red_pin`).
+//
+// The FOURTH escape door for a heap-cloned `background` array argument, deliberately NOT
+// closed by the pointer-identity release protocol: the task stores its ladder-owned clone
+// into an outer container it ALIASES. `bucket: array<array<int>>` is an `array<pointer-elem>`
+// bg arg, which `prepare_bg_arg_for_ctx` passes through unchanged (no clone — the task writes
+// into the PARENT's bucket), while `rows` IS cloned and ladder-owned. `bucket.add(rows)` hands
+// the clone to the parent's container, the ladder frees it at task retire, and the parent's
+// `bucket[0]` is a dangling pointer. Dereferencing it (`bucket[0].or(fb).count()`) printed
+// `471878446419399850` / `-924992314359518642` / SIGSEGV across 5 runs on this compiler — so
+// this fixture deliberately does NOT dereference: it observes the defect through the alloc
+// counter instead, which is deterministic.
+function stash(bucket: array<array<int>>, rows: array<int>) -> nothing {
+  bucket.add(rows)
+}
+
+function entrypoint() -> nothing {
+  let bucket: array<array<int>> = []
+  let rows: array<int> = [10, 20, 30]
+  background stash(bucket, rows)
+  wait sleep(50)
+  print(bucket.count().toString())
+}

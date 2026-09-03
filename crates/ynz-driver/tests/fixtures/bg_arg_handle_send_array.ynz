@@ -1,0 +1,23 @@
+// Sibling of bg_arg_channel_send_array.ynz through the OTHER send producer: a task forwards
+// its ladder-owned `array<int>` clone to a grandchild with `h.send(rows)` (the handle outbox,
+// which funnels into the same channel core). The grandchild must read the intact array after
+// the middle task has retired.
+function sink(inbox: channel<array<int>>, report: channel<int>) -> nothing {
+  let got = inbox.receive()
+  let first = got[0].or(-1)
+  report.send(got.count() * 100 + first)
+}
+
+function relay(report: channel<int>, rows: array<int>) -> nothing {
+  let inbox: channel<array<int>> = channel<array<int>>(4)
+  let h = background sink(inbox, report)
+  h.send(rows)
+}
+
+function entrypoint() -> nothing {
+  let report: channel<int> = channel<int>(4)
+  let rows: array<int> = [7, 8, 9]
+  background relay(report, rows)
+  let summary = report.receive()
+  print(summary.toString())
+}
