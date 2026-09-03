@@ -107,3 +107,33 @@ not as FRAGO delta-records against a running plan)
 ## Context-segment log
 
 (none yet — this plan has not begun execution)
+
+- `conductor-2026-09-03-m7-merge-and-precondition-clear` — 2026-09-03 — **Preconditions cleared; plan
+  is now genuinely startable at Phase 0.** No plan content changed beyond the status block and
+  frontmatter; execution has still NOT begun.
+  - **Cleared the double merge-and-tag precondition.** M7 was complete and sealed but its branch had
+    never merged: PR #87 sat open with a red sanitizer lane. Root-caused that red to a pre-existing
+    TSan flake in `panic_reraises_in_parent` (a 50ms sleep then a single poll — the poll returned
+    `Poll::Pending` under instrumentation, so `resume_unwind` never fired). Confirmed pre-existing,
+    not an M7 regression: the identical failure occurred on `main` at the released v0.3.2 sha on
+    2026-07-16 and passed on that same sha on 07-24/07-29/07-31. Fixed by polling to readiness with
+    a liveness deadline (`12f397b`); a duplicated `check_preempt` benchmark hiding behind it was
+    collapsed (`67b3148`). PR #87 merged at `f7eb2fa`; v0.3.3 cut and tagged.
+  - **Corrected the status/frontmatter contradiction.** `status: "active"` had been set while the
+    status note still declared the plan "deliberately held at `paused`" pending those merges. A cold
+    resume this session cost roughly a dozen tool calls to resolve which was true. The note is now a
+    COLD-RESUME ENTRY POINT block stating the entry phase, a precondition table with evidence, and
+    the tree changes Phase 0's re-read should expect.
+  - **Tree changes this session that Phase 0's re-verification will encounter** (all on `main` at
+    `cf17de3`, PR #88): `ynz_fmt::format()` was cubic — `comment_merge::line_of` rescanned the source
+    from byte 0 per call, 91.18s on the 1,352-line `pirates-roster/entrypoint.ynz`, live in the
+    just-released v0.3.3 — now `partition_point` over precomputed newline offsets (88.86s → 0.06s).
+    The corpus sweep is parallel, and BOTH corpus sweeps now derive scheduler-dependence from the
+    fixture SOURCE rather than its filename (the old name-substring proxy had drifted: 91 fixtures
+    use `background`, only 16 were named for it, leaving 75 asserting a byte-identical ordering the
+    language never promised). `/tmp` is tmpfs+exec in the dev container. Full workspace suite
+    51.8 min → 4.5 min, same coverage.
+  - **Relevant to this milestone specifically:** any new `background`/channel fixture M8 adds is now
+    auto-classified by the corpus sweeps with no exclusion-list entry to remember; and
+    `.claude/rules/test-parallelism.md` must be loaded before adding any fixture-looping test here.
+  - Appended this session's id to the frontmatter `session-id` chain in the same action as this entry.

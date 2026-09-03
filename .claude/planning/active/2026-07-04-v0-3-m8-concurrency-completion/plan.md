@@ -3,27 +3,50 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear"]
 created_at: "2026-07-04"
-updated_at: "2026-07-16"
+updated_at: "2026-09-03"
 metadata:
   type: "plan"
 ---
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> **Status note.** This is a complete OPORD — ¶3.1 Intent & End State is non-empty, every phase is
-> concrete, the risk table is scored — which would ordinarily flip `status` straight to `active`. It
-> is deliberately held at `paused` instead, matching the exact convention the sibling
-> [`2026-07-04-v0-3-m7-optimizer-pipeline`](../../paused/2026-07-04-v0-3-m7-optimizer-pipeline/plan.md)
-> plan set: `paused` is the **conductor pre-approval state** for a plan that is fully written but
-> gated on real external preconditions on EXECUTION start, not on anything wrong with the document
-> itself — **(1)** the orchestrator's human read-through/approval checkpoint, which has not yet run
-> on this plan, and **(2)** the double merge-and-tag precondition (¶1 Friendly forces; CCIR item 1):
-> Phase 0 cannot begin until BOTH the sibling v0.3-M6 hotfix plan AND the sibling v0.3-M7 optimizer
-> plan have merged to `main`. The orchestrator flips `status` to `active` once Gate 4 clears and both
-> merges land — a plain frontmatter edit on this same file, per the status lifecycle
-> ([`REF-plan-format.md`](../../../../../.claude/docs/reference/REF-plan-format.md)).
+> ## ⏭️ COLD-RESUME ENTRY POINT — start at **Phase 0**. Execution has NOT begun.
+>
+> **Every precondition is now MET (verified 2026-09-03).** Nothing blocks Phase 0.
+>
+> | Precondition | State |
+> |---|---|
+> | Gate 4 human read-through / risk-override signature | ✅ Signed 2026-07-04 (R2 override, see ¶1 Risk Assessment) |
+> | Sibling **v0.3-M6** merged to `main` | ✅ PR #82, released **v0.3.2** |
+> | Sibling **v0.3-M7** merged to `main` | ✅ PR #87, released **v0.3.3** (merged 2026-09-02, `f7eb2fa`) |
+>
+> This note previously said the plan was "deliberately held at `paused`" pending those merges. That
+> is why `status` and this block contradicted each other for weeks and cost a later session a dozen
+> tool calls of archaeology to resolve. Both merges have landed; `status: active` is now correct and
+> this block is the record of why.
+>
+> **What Phase 0 must still actually do** (it is a re-verification gate, not a formality): confirm the
+> merges on `main`, then re-read every file:line this plan cites against the POST-M6-POST-M7 tree and
+> record drift. Both siblings touched `channel.rs` / `handle.rs` / `runtime.rs` / `emit.rs`, which is
+> exactly the terrain this plan's ¶1 cites, so drift is expected rather than unlikely.
+>
+> **Tree changes since this plan was written that Phase 0's re-read should expect** (2026-09-02/03
+> session, `main` at `cf17de3`):
+> - `crates/ynz-fmt/src/comment_merge.rs` — `line_of` was O(filesize) per call, making `format()`
+>   cubic (91s on a 1,352-line file); now precomputed newline offsets + `partition_point`. Unrelated
+>   to this plan's terrain, but it is why the test suite timings below changed.
+> - `crates/ynz-driver/tests/cross_impl_consistency.rs` — the corpus sweep is now parallel
+>   (`parallel_sweep`), and both sweeps derive "is this program's output order scheduler-dependent?"
+>   from the SOURCE (`output_order_is_scheduler_dependent`) rather than the filename. **Relevant to
+>   this plan:** any new `background`/channel fixture it adds is now auto-classified correctly, with
+>   no exclusion-list entry to remember.
+> - `docker-compose.yml` — `/tmp` is tmpfs with `exec` in the dev container.
+> - Full `cargo test --workspace` now runs in **~4.5 min** (was ~52 min). Budget verification
+>   accordingly; the old "the suite takes an hour" assumption is dead.
+> - New rule: [`.claude/rules/test-parallelism.md`](../../../rules/test-parallelism.md) — load it
+>   before adding any fixture-looping test in this milestone.
 
 ## 1. Situation
 
