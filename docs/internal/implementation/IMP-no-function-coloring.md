@@ -174,6 +174,7 @@ This rule applies to **writes into a queue** (`.send()` / channel push). It does
 
 - [`.claude/rules/stdlib-design.md`](../../../.claude/rules/stdlib-design.md) Rule 4 (bounded by default) — channel/queue is the canonical instance of this rule.
 - `lockin-concurrency.md` Findings #12 (Erlang) and #16 (Node.js streams2) for the source pain.
+- [`IMP-concurrency.md`](IMP-concurrency.md) "Channel Close — End-of-Stream Semantics" — the other half of the channel contract: `.close()`, `receive()` as `maybe<T>` on a bare channel (`none` = end of stream; the handle's `receive()` stays `T errors` because it carries the task's own failure), `send()` giving its owned-heap payload, and the deferred auto-close (designed v0.3-M8; ships Phase 4).
 
 ---
 

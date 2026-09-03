@@ -3,9 +3,11 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903"]
 created_at: "2026-07-04"
 updated_at: "2026-09-03"
+branch: "feat/v0-3-m8-concurrency-completion"
+worktree: null
 metadata:
   type: "plan"
 ---
@@ -47,6 +49,67 @@ metadata:
 >   accordingly; the old "the suite takes an hour" assumption is dead.
 > - New rule: [`.claude/rules/test-parallelism.md`](../../../rules/test-parallelism.md) — load it
 >   before adding any fixture-looping test in this milestone.
+>
+> ---
+>
+> ### ⛔ BLOCKED (2026-09-03) — resume at **Phase 1, step 7**, but NOT until the UAF hotfix lands.
+>
+> **Do not start any M8 phase.** Phase 1's round-2 review found a **use-after-free live on `main`**
+> (v0.3.3, released): a task's `background` array argument sent into a channel is freed by the drop
+> ladder while still sitting in the channel buffer — reproduced, prints garbage. Patrick ruled it
+> gets a hotfix on its own branch, ahead of M8. Full record and root cause: **FRAGO 004** in
+> `audit.md`.
+>
+> The hotfix and M8's Phase 1 design blocker are **one bug with one ancestor** (codegen's drop ladder
+> and typeck's ownership view are independent owners of the same pointer), so the hotfix's mechanism
+> — *the ladder consults consumption* — is the substrate Phase 4 inherits rather than re-derives.
+>
+> `status` stays `active` deliberately: this is a short gate on a sibling fix, not a paused
+> workstream, and the resume pointer below is precise. If the hotfix grows into its own milestone,
+> flip to `paused` and move the directory then.
+>
+> **Exact resume state:**
+> - Phase 0 — ✅ COMPLETE (record in `audit.md`).
+> - Phase 1 — steps 1–6 complete through TWO review rounds. **Step 7 (Patrick's sign-off) is OPEN
+>   and has never been granted.** Four rulings were made on 2026-09-03 (FRAGO 004) — those are
+>   inputs to the design, *not* the sign-off.
+> - **One Phase 1 fix round is owed before sign-off**, carrying: FRAGO 004's ownership resolution;
+>   the `ConsumedBySend` WHY rewrite (doc-auditor blocker — "is empty afterward" teaches a
+>   runtime-emptiness model when the real behavior is a compile error); the ruling that `.copy()`
+>   ships on `map<K,V>`; and the eleven parked items in `.claude/plans/parked.md`.
+> - **Unruled, owed to Patrick at the sign-off gate:** fr12's disposition.
+> - Phases 2, 3, 5, 7, 8, 9 — not started. Phase 4 — hard-blocked on Phase 1's sign-off. Phase 6 —
+>   retired (FRAGO 001).
+>
+> ### ✅ PHASE 0 IS COMPLETE (2026-09-03).
+>
+> Double merge-and-tag gate **SATISFIED**: `main` at `cf17de3` carries PR #82 (M6, `10df6d7`) and
+> PR #87 (M7, `f7eb2fa`, tagged v0.3.3). Branch for this plan: `feat/v0-3-m8-concurrency-completion`
+> (frontmatter `branch:`), per the newly-written [`.claude/rules/branching.md`](../../../rules/branching.md) —
+> `main` is protected, close-out is a PR, never a direct merge. Full Phase 0 record, including the
+> complete drift table, is in `audit.md`.
+>
+> **Two amendments landed out of Phase 0 — read both before touching Phases 4 or 7:**
+>
+> **FRAGO 001 — Phase 6 is RETIRED.** M6 already shipped P2-7 (its FRAGO 010 / M6 Phase 4b,
+> `b0cdbd3`); independently confirmed revert-sensitive. Nine phases now (0–5, 7–9), NOT renumbered.
+> Details in the Phase 6 block below.
+>
+> **FRAGO 002 — two of this plan's citations are DANGLING, not merely offset.** They point at
+> unrelated code in the current tree; navigating by them lands you in the wrong function:
+>
+> | Cited in this plan | Actually at, today | What the cited lines are NOW |
+> |---|---|---|
+> | `runtime.rs:591-693` "the drop ladder" (¶1 Terrain; the choke point **Phases 4 and 7 both wire through**) | **`runtime.rs:981-1050`** — `SpawnStateFnFuture::drop`, the kind-2 `BgArgDropEntry` arm calling `channel::purge_pending_sends` + `ynz_channel_free` | `ynz_rt_shutdown` — unrelated |
+> | `check.rs:3392-3398` / `3047-3059` (kernel-mode gates, Invariants → Kernel-Mode Behavior) | construction gate **`~4316-4322`**; method-call gate **`~3972-3980`** | `background`/`share`/`lend` reject logic; an unrelated 1-arg intrinsic arg-type check |
+>
+> **Offset-only drift** (substance intact, just moved — safe to follow by name):
+> `channel.rs:109-123` → `200-225` · `channel.rs:536-539`/`557-560` → `962`/`1123` ·
+> `channel.rs:120` (`pending_sends`) → `213`, shape now `Mutex<HashMap<(u64,u64), PendingSendEntry>>` ·
+> `emit.rs:~11833-11960` → `~12776-12961` (**P2-3's leak is genuinely still unfixed**; the
+> "Structurally unreachable in v0.3-M4" comment is still there verbatim at `emit.rs:12852`) ·
+> `IMP-no-function-coloring.md:281-294` → `295-311`. Exact, zero drift:
+> `registry/features.toml:1229-1235` and `IMP-no-function-coloring.md:58`.
 
 ## 1. Situation
 
@@ -101,8 +164,12 @@ metadata:
   M6/this-plan already register for channel drop-glue is a small, contained extension, or whether it
   genuinely requires the general language-wide scope-drop mechanism, is a real open question this
   plan's Phase 7 investigates rather than assumes either way.
-- **P2-7 — `ynz_handle_recv_poll` panic-then-pending hang, newly surfaced in M6's audit, NOT fixed by
-  M6.** `crates/ynz-runtime/src/handle.rs:297-303` — a panic inside the poll returns `Pending` with a
+- **P2-7 — ❌ SUPERSEDED BY FRAGO 001 (2026-09-03). This bullet is stale; M6 DID fix P2-7** (its own
+  FRAGO 010, shipped as M6 Phase 4b, commit `b0cdbd3`, in PR #82; independently confirmed
+  revert-sensitive by a `code-reviewer-medium` on 2026-09-03). Phase 6 is retired. The original text
+  is retained below unedited for the record — do not act on it.
+  ~~`ynz_handle_recv_poll` panic-then-pending hang, newly surfaced in M6's audit, NOT fixed by
+  M6.~~ `crates/ynz-runtime/src/handle.rs:297-303` — a panic inside the poll returns `Pending` with a
   possibly-unregistered waker; if the panic fires before waker registration the task may never wake (a
   hang, not a crash). M6's own Phase 4 (`ynz_channel_recv_poll` lost-wakeup fix, P3-2) establishes the
   exact register-before-poll pattern this bug needs. Per the brief, this plan absorbs P2-7 as a small,
@@ -224,7 +291,7 @@ assume — so R2 is scored on the honest hazard, not stretched to match R1's nar
 | **R3 — loom refactor destabilizes ynz-runtime's existing (M6-fixed) synchronization logic** — *Phase 3* | C | III | M | The refactor is architecturally a type-alias/cfg swap (`#[cfg(not(loom))]` resolves to the exact existing `std`/Tokio-primitive types in production; only `#[cfg(loom)]` test builds see the swapped types) — a spike proves this is non-observable in production builds BEFORE the full harness lands (**B2** canary/staged, prob −1; proof: Phase 3's spike verdict + a production-build diff showing zero generated-code change) | **L** (D×III) | pass |
 | **R4 — Track 3 (scope-drop cancellation) design ball​oons into the general drop system mid-phase** — *Phase 7* | C | III | M | The phase's OWN structure makes ballooning a non-failure: Step 1 investigates: if the SAME choke point M6/Phase 4 register for channel drop-glue extends cleanly to handle bindings, implement; if it genuinely requires the general mechanism, STOP and author the formal re-deferral with Patrick's sign-off — both branches are legitimate exits, built into the phase's own exit criteria, not an escape hatch bolted on after the fact (**B1** eliminate — the failure mode is structurally converted into a legitimate outcome; prob −2) | **L** (E×III) | pass |
 | **R5 — structured fuzzing (Track 4b) finds a genuine miscompile mid-milestone, threatening scope flood** — *Phase 8* | B | III | M | Every finding routes through the plan-amendment/FRAGO seam (per [plan-source-of-truth.md](../../../rules/plan-source-of-truth.md)) — never a silent inline fix or a silent scope expansion; the CCIR below names this explicitly (**B2** engineered guard — bounded, gate-like routing; prob −1) | **M** (C×III) | recorded |
-| **R6 — P2-7 handle-panic-hang fix reintroduces a race** (mirrors M6 Phase 4's exact pattern) — *Phase 6* | D | III | L | Mechanical mirror of the already-fixed sibling pattern (M6 Phase 4's register-before-poll), re-verified against the SAME "no lock held across a blocking poll" invariant M6 re-confirmed | **L** (D×III) | pass |
+| ~~**R6 — P2-7 handle-panic-hang fix reintroduces a race**~~ — **RETIRED, FRAGO 001 (2026-09-03)** | — | — | — | The hazard no longer exists in this plan's scope: M6 shipped the P2-7 fix itself (FRAGO 010 / M6 Phase 4b, `b0cdbd3`), so this plan writes no code on that path and cannot reintroduce a race there. Retirement is confirmed, not asserted — an independent reviewer reverted the ordering fix and watched both locking tests fail on the P2-7 hang assertion before restoring the tree | **n/a — risk retired** | closed |
 | **R7 — docs/registry reconciliation sweep introduces a new factual drift** — *Phase 9* | D | IV | L | docs-consistency reviewer diffs every edited claim against this plan's own citations before merge | **L** (D×IV) | pass |
 | **R8 — roadmap/Capability Ledger reconciliation mechanical additions** — *Phase 9* | D | IV | L | Mechanical, docs-consistency + code-reviewer fan-out; both duplicate tables updated in lockstep per the established M6/M7 both-tables convention | **L** (D×IV) | pass |
 
@@ -378,9 +445,12 @@ silence this plan's Phase 2 fills) ·
    **This plan's Phase 7 either satisfies that trigger for real (if the existing drop-glue choke point
    extends cleanly) or formally re-defers with an updated registry entry and Patrick's sign-off** — it
    does not silently assume either outcome; the phase text carries both branches explicitly.
-4. **Milestone-boundary assumption flagged**: M6 owns every concurrency-release audit finding EXCEPT
+4. **Milestone-boundary assumption flagged** — ⚠️ **PARTIALLY SUPERSEDED BY FRAGO 001 (2026-09-03):
+   the P2-7 half of this claim is WRONG. M6 does own P2-7 and shipped it** (FRAGO 010 / M6 Phase 4b,
+   `b0cdbd3`); only the P2-1/P2-3 and P2-6 halves stand. Original text follows:
+   M6 owns every concurrency-release audit finding EXCEPT
    P2-1/P2-3 (channel-close design gap, this plan's Phases 1&4), P2-6 (Auto-Arc emission, this plan's
-   Phases 2&5), and P2-7 (handle panic-hang, this plan's Phase 6) — M6's own plan text names this
+   Phases 2&5), and ~~P2-7 (handle panic-hang, this plan's Phase 6)~~ — M6's own plan text names this
    boundary explicitly ("P2-3... genuinely unreachable dead code until channel-close semantics ship,"
    "P2-6... needs NO action this milestone — already correctly deferred," and P2-7 recorded in M6's own
    Future Requirements). This plan does not re-fix anything M6 or M7 already own; confirmed by direct
@@ -491,6 +561,52 @@ suite/release-handoff).
 - **Model tag:** `(coding, standard, small)`
 
 #### Phase 1 — Design: Channel Close / End-of-Stream Semantics (Patrick sign-off gate)
+
+> **Status (2026-09-03, dispatches `m8-p1-20260903-a1` + fix round `m8-p1-fix1-20260903`): steps
+> 1–6 DONE; step 7 (Patrick sign-off) OPEN — Phase 4 stays blocked until it lands.** Decided:
+> explicit **`.close()`** (non-suspending, `-> nothing`, no args, idempotent no-op on repeat),
+> auto-close-on-last-producer DEFERRED (four fields recorded), bare-channel **`receive()` becomes
+> `maybe<T>`** (`none` = end of stream; the HANDLE's `receive()` stays `T errors` because it carries
+> the task's own failure — the two are deliberately different and the section says why), **`send()`
+> gives its payload** for owned-heap element types (`array<T>`/`map<K,V>` — the sent binding is
+> consumed; primitives and `string` unchanged; this is what makes the P2-3 closed-arm free sound and
+> closes a live cross-task aliasing hole confirmed by probe on the current tree), send-after-close is
+> a RUNTIME typed error (no compile diagnostic — cross-task flow is undecidable), close wakes every
+> parked receiver. **ONE new compile-time diagnostic** (use-after-send, `ConsumedBySend`) — text in
+> the section; it reaches Invariants → Teaching and Phase 9's gallery. `h.close()` NOT provided, with
+> a real gap recorded as a four-field deferral (a call-materialized first channel arg on the handle
+> form compiles today — probe: `background doubler(makeWire())` + `h.send(21)` prints 42 — and leaves
+> no spawner binding to close). Doc home: `IMP-concurrency.md` "Channel Close — End-of-Stream
+> Semantics"; the M6 Divergence entry is a pointer that retires at Phase 4. Registry for Phase 4:
+> `[[primitive_intrinsic]]` ×3 (`close`, plus back-filling `send`/`receive` with this design's types
+> and a NEW optional `param_ownership` schema field so `send`'s give is data), `[[deferred_language_feature]]`
+> ×2 (`channel-auto-close-on-last-producer`, `background-handle-close`), `[[diagnostic_template]]` ×1
+> (`ConsumedBySend`). The first draft's `T errors` typing and its unconditional closed-arm free were
+> both reviewer BLOCKERs ruled on by Patrick; the section carries the rulings and the reasoning
+> (vocabulary.md's `maybe`-vs-`errors` line; auto-propagation at `check.rs:3647–3653` turning
+> end-of-stream into a task failure; `ynz_error_new` per normal loop exit). **Scope question
+> surfaced, not absorbed:** fr12 (`channel<number>` marshalling) is separable from close and its
+> design is NOT written by this phase — **disposition OPEN pending Patrick**: Phase 4 step or its own
+> FRAGO'd design step.
+>
+> **Obligations this design hands Phase 4 (each is cited in the section; listed here so the phase
+> cannot miss one):** (1) the `receive()` retyping touches **19 bare-channel sites across 13 fixture
+> files** plus `v0_3_m4_errors.ynz:80,93`, `pirates-roster/entrypoint.ynz:1083,1120–1122,1146`,
+> `REF-concurrency.md:199–201,252`; (2) **no `channel<array<T>>`/`channel<map<K,V>>` E2E fixture
+> exists anywhere in the tree** — one per element kind must be authored (round-trip, use-after-send
+> compile error, send-after-close free with alloc/free parity, drop-with-buffered-element); (3) the
+> "is this element owned-heap?" predicate is ONE shared function typeck and codegen both read, lifted
+> from `channel_drop_glue`'s two-arm match — never a typeck twin; (4) `close` needs THREE typeck
+> sites, not one: `known` (`check.rs:3993–3998`), the receiver-discipline + derivable-conduit guards
+> (`check.rs:4011–4082`, which run unconditionally and justify themselves with "can suspend"), and
+> the channel/handle-SHARED unknown-method string (`check.rs:4003`) which must split; (5) the
+> `close()`-vs-`send()` ordering is linearized at the sender-lock clone — a send already holding a
+> clone is a pre-close send and LANDS; a fixture or loom model demanding "refuse any `try_send` after
+> `close()` returns" cannot pass and is wrong; (6) **loom is not a dependency yet** (no `loom` in any
+> `Cargo.toml`) — Phase 3's `cfg(loom)` swap must land before the two new interleavings are
+> model-checkable; (7) the existing `Consumed` template (`features.toml:1599–1603`) and its emitting
+> code (`check.rs:3624–3629`) already disagree in wording — reconcile while adding `ConsumedBySend`
+> at the same site.
 
 - **Task + purpose:** decide, design, and document the channel-close mechanism BEFORE any
   implementation lands — the DESIGN-FIRST phase the brief mandates, producing an `IMP-concurrency.md`
@@ -649,19 +765,39 @@ suite/release-handoff).
      design calls for — likely: the object stops treating its retained endpoint as a permanent producer,
      and/or a closed-flag/generation marker gates `send`/`receive` post-close), wired into Phase 3's
      loom-swappable substrate from the start (no retrofit).
-  3. Wire `receive()` on a closed-and-drained channel to return the typed channel-closed error (the
-     Lock-8 path) — confirm the closed-recv codegen arm's existing "structurally unreachable" comment
-     is removed and replaced with the real reachable path.
+  3. Wire `receive()` on a closed-and-drained channel to return ~~the typed channel-closed error (the
+     Lock-8 path)~~ **`none` — Phase 1 retyped bare-channel `receive()` to `maybe<T>` (the Lock-8
+     error path goes live on `send()` only; the handle's `receive()` keeps `T errors`)** — confirm the
+     closed-recv codegen arm's existing "structurally unreachable" comment is removed and replaced
+     with the real reachable path, built through the same `maybe<T>` construction every `.exists()`/
+     `.value` site reads. Rewrite the 19 bare-channel `receive()` sites / 13 fixture files + the demo,
+     gallery, and spec lines the design section enumerates. Extend `close` at all THREE typeck sites
+     the design names (`known`; the unconditional receiver/derivable guards; the channel/handle-shared
+     unknown-method string, which splits).
+  3b. **Implement `send()`-gives-payload (Phase 1 ruling, precondition for step 4):** in
+     `check_conduit_method_call`'s `send` arm, mirror the spawn-arg give admission (`check.rs:4596–4620`)
+     for owned-heap element types only — consume the ident binding, refuse `const`/`share` with the
+     send-specific `.copy()` advice — gated on ONE shared "owned-heap element" predicate lifted from
+     `channel_drop_glue`'s two-arm match (typeck and codegen both read it; never a twin). Add the
+     consumption CAUSE to the scope entry so the existing consumed-read site (`check.rs:3622–3631`)
+     emits `ConsumedBySend`; reconcile the pre-existing `Consumed` template/code wording drift there.
   4. Fix P2-3: route the closed-send blocks' payload cleanup through the SAME drop-glue choke point M6
      Phase 5 registers for buffered-element cleanup (authoritative-derivation.md — confirm this is
-     literally the same function pointer / call site, not a second implementation).
+     literally the same function pointer / call site, not a second implementation). **Sound only after
+     step 3b** — without the consume, this free is a use-after-free on the sender's binding.
 
      **CHECKPOINT** — close mechanism + live error path + P2-3 fix all implemented; fixture authoring
      (next steps) not yet started.
   5. Author the RED→GREEN fixture class (per R1's mitigation): explicit close then receive-drains-then-
-     errors, double-close idempotency, drop-without-close (confirm this still behaves per the PRE-close
-     behavior for any channel never explicitly closed — no regression), concurrent send-during-close.
-     Commit RED before the fix, confirm GREEN after.
+     `none`, double-close idempotency, drop-without-close (confirm this still behaves per the PRE-close
+     behavior for any channel never explicitly closed — no regression), concurrent send-during-close
+     (asserting the design's linearization — a send already holding its sender-lock clone LANDS; do
+     not assert "refused after `close()` returns"). **Plus the owned-heap element class that does not
+     exist for ANY element kind today** — one fixture each for `channel<array<int>>` and
+     `channel<map<string, int>>`: send-then-receive round-trip, send-then-read (the `ConsumedBySend`
+     compile error), send-after-close (payload freed via the glue, alloc/free parity via
+     `YNZ_ALLOC_COUNTER_OUTPUT`), drop-with-buffered-element. Commit RED before the fix, confirm GREEN
+     after.
   6. Retire or rewrite the bare-channel-footgun `IMP-concurrency.md` Design Divergences entry M6 Phase 7
      added — it is stale once this ships; replace with a pointer to the new design section (Phase 1's
      doc work) rather than leaving two contradictory doc entries live.
@@ -730,7 +866,47 @@ suite/release-handoff).
   (authoritative-derivation.md — `EffectiveOwnership::Reads` reused, never re-derived, grep-verified).
 - **Model tag:** `(coding, high, large)` — checkpoint mark mandatory.
 
-#### Phase 6 — P2-7: `ynz_handle_recv_poll` Panic-Then-Pending Hang
+#### Phase 6 — P2-7: `ynz_handle_recv_poll` Panic-Then-Pending Hang — ❌ **RETIRED, FRAGO 001 (2026-09-03)**
+
+> **FRAGO 001 — Phase 6 is RETIRED as already-satisfied. Do not execute it.**
+>
+> **Finding:** M6 did not defer P2-7; it un-deferred it under its own FRAGO 010 and shipped the fix as
+> M6 Phase 4b, commit `b0cdbd3` ("fix(runtime): close ynz_handle_recv_poll panic-then-Pending hang
+> (M6 P4b)", 2026-07-11), inside PR #82. This plan's ¶1 Terrain claim that P2-7 was "NOT fixed by M6"
+> was written before that FRAGO landed and is stale.
+>
+> **Confirmed independently, not self-graded.** Phase 0's executor surfaced the finding; a separate
+> `code-reviewer-medium` confirmed it adversarially rather than on the commit subject line:
+> `record_recv_waiter(cx.waker())` is now the first statement inside the `catch_unwind` closure
+> (`handle.rs:354`), before `poll_recv` (`:355`), so the exact panic-before-registration window from
+> the audit's P2-7 report is closed; `handle::tests::handle_recv_poll_registers_waiter_before_polling`
+> and `handle::tests::completion_wakes_receiver_after_panic_before_slot_registration`
+> (`handle.rs:724`, `:798`) lock it, **proven revert-sensitive** — the reviewer mechanically swapped
+> the ordering back to poll-first and both tests failed on the P2-7 hang assertion (`wakes == 0`),
+> then restored the tree clean. M6's "no lock held across a blocking poll" invariant holds in the
+> changed code (`recv_waiters` released before `outbox_rx` is taken; never nested). The handle-side
+> and channel-side fixes are a genuine structural mirror.
+>
+> **Authority:** Patrick, 2026-09-03, directing "verify first, then retire" — the retirement is
+> conditional authority that the confirmation above discharged.
+>
+> **Consequences applied in this same amendment:** risk row **R6 is retired** (its hazard no longer
+> exists in this plan's scope); the ¶1 Terrain P2-7 bullet and the Design-Doc Alignment §4
+> milestone-boundary claim are annotated as superseded; the Invariants → Safety P2-7 assertion is
+> annotated as satisfied-by-M6 rather than owed by this plan. This milestone is now **nine phases**
+> (0–5, 7–9); phase numbers are NOT renumbered, so every existing citation and `Plan-Phase:` trailer
+> stays valid.
+>
+> **Two residuals inherited from M6, deliberately NOT absorbed here** (both already carry fielded
+> deferrals in the roadmap's own `audit.md`, so neither is silent duct tape): the handle-side panic
+> log message drops the panic payload string because `panic_payload_msg` is private to `channel.rs`
+> (cosmetic, log text only); and the `recv_waiters`/`record_recv_waiter`/`wake_recv_waiters` trio is
+> duplicated byte-identically between `channel.rs` and `handle.rs`. Recorded in this plan's Future
+> Requirements as item 8 so a reader of THIS plan finds them without archaeology.
+
+<details>
+<summary>Original Phase 6 text, retained verbatim for the record (superseded — do not execute)</summary>
+
 
 - **Task + purpose:** close the newly-surfaced (M6 audit) handle-side panic-then-pending hang, mirroring
   M6 Phase 4's exact register-before-poll fix for the sibling channel-side race.
@@ -752,6 +928,8 @@ suite/release-handoff).
 - **Reviewer fan-out:** code-reviewer; adversarial gate-checker (does the repro genuinely force the
   panic-before-registration window, not a different failure shape).
 - **Model tag:** `(coding, standard, small)`
+
+</details>
 
 #### Phase 7 — Track 3: Source-Level Scope-Drop Cancellation (Design + Contingent Implementation)
 
@@ -856,8 +1034,12 @@ suite/release-handoff).
      only per Phase 2's design), add that too; otherwise state explicitly why no new demo section
      applies (informational-only, no typeable form). Regenerate + commit the byte-exact golden.
   2. Create `examples/primantis-orders/m8_errors.ynz` with intentional triggers for every new compile-
-     time diagnostic this milestone adds (Phase 1/4's channel-close diagnostics; any new diagnostic
-     Phase 7's Branch A might add, if it ships). Wire the new gallery's assertions into
+     time diagnostic this milestone adds — at minimum, from Phase 1's design: the **use-after-send**
+     diagnostic (`ConsumedBySend`: send an `array<int>` binding into a channel, then read it), the
+     const-binding-sent and share-param-sent refusals with their send-specific `.copy()` advice, and
+     `.close()`-with-arguments; plus `.close()` on a HANDLE (the split unknown-method list must read
+     `send(value), receive()` there and `send(value), receive(), close()` on a channel); plus any new
+     diagnostic Phase 7's Branch A might add, if it ships. Wire the new gallery's assertions into
      `crates/ynz-driver/tests/error_galleries.rs` (diagnostic-count + key-phrase convention).
   3. Update the roadmap's `milestones:` frontmatter list (add
      `v0-3-m8-concurrency-completion`) and BOTH duplicate `## Capability Ledger` tables (per the
@@ -927,8 +1109,18 @@ assertion, not an aspiration.
 
 - **Channel-close semantics cannot regress existing (M4/M6-fixed) channel behavior — RED class as
   testable assertions (Phase 4 step 5, gating Phase 4's exit criteria):**
-  - Explicit close, then full drain, then `receive()` returns the typed channel-closed error (the
-    previously-dead Lock-8 path) — never blocks, never panics.
+  - Explicit close, then full drain, then `receive()` returns ~~the typed channel-closed error (the
+    previously-dead Lock-8 path)~~ **`none` (Phase 1 decided `receive()` is `maybe<T>` on a bare
+    channel — the Lock-8 error path goes live on `send()` only; the handle's `receive()` keeps its
+    `T errors`)** — never blocks, never panics.
+  - **`send()` on an owned-heap element type (`array<T>`/`map<K,V>`) consumes the sent binding** — a
+    read of the binding after the send is a compile error (`ConsumedBySend`), a `const` binding or
+    `share` parameter cannot be sent without `.copy()`, and the buffered value therefore has exactly
+    one holder at every moment (sender → channel → receiver). This is the soundness precondition for
+    the P2-3 closed-arm free below AND closes a live aliasing hole on the current tree (probe
+    2026-09-03: `wire.send(rows)` then `rows.count()` compiles and runs today). Primitive and `string`
+    channels are unchanged — every existing `ch.send(v)` fixture stays green. Locked by the new
+    owned-heap fixture class (Phase 4), which does not exist yet for ANY element kind.
   - Double-close is a safe no-op (the idempotency contract Phase 1 decides and Phase 4 implements) —
     never a panic on a second `.close()`/equivalent call.
   - Drop-without-close (a channel NEVER explicitly closed) behaves byte-for-byte identically to the
@@ -948,7 +1140,13 @@ assertion, not an aspiration.
   temporarily-reverted fix is caught by loom (Phase 3 step 5), not merely present. The loom suite runs
   GREEN together with the full pre-existing test suite at every subsequent phase gate that touches the
   covered surface (Phase 4 step 8, Phase 5 step 8, Phase 9 step 4) — never proven piecemeal.
-- **P2-7 is fixed via register-before-poll** (Phase 6) — the `ynz_handle_recv_poll` panic-then-pending
+- **P2-7 is fixed via register-before-poll — ✅ ALREADY SATISFIED BY M6, NOT OWED BY THIS PLAN**
+  (FRAGO 001, 2026-09-03). The assertion below still holds as a true statement about the tree; what
+  changed is WHO discharged it. M6 Phase 4b (`b0cdbd3`) registers the waker before the poll body at
+  `handle.rs:354`, locked by two revert-sensitive tests (`handle.rs:724`, `:798`) and re-verified
+  against the no-lock-across-blocking-poll invariant. This plan inherits the guarantee and writes no
+  code on that path. Original assertion, retained:
+  ~~(Phase 6)~~ — the `ynz_handle_recv_poll` panic-then-pending
   hang is closed by registering the waker BEFORE the poll body that could panic, mirroring M6 Phase 4's
   channel-side register-before-poll fix exactly (Phase 6 step 2); a RED repro (Phase 6 step 3) confirms
   the task wakes rather than hangs after the fix; the "no lock held across a blocking poll" invariant is
@@ -1017,7 +1215,16 @@ pattern. Considered and declined.
   WHY per Golden Rule 11 — drafted at Phase 1 step 6, confirmed live at Phase 4 step 3.
 - Any new compile-time diagnostic the close mechanism introduces (e.g. a compile-time-checkable
   `.send()`-after-close case, if Phase 1 decides that's checkable rather than a runtime error) follows
-  the same three-part format — decided and drafted at Phase 1 step 6.
+  the same three-part format — decided and drafted at Phase 1 step 6. **Phase 1's decision: send-after-
+  close is NOT compile-checkable (runtime typed error). The ONE new compile-time diagnostic is
+  use-after-send (`ConsumedBySend`)** — a read of an `array<T>`/`map<K,V>` binding after it was sent
+  into a channel. Drafted in full WHAT/WHAT-INSTEAD/WHY in `IMP-concurrency.md` "Teaching text"
+  (WHAT names the binding and the channel; WHAT-INSTEAD is the copyable `{channel}.send({name}.copy())`
+  or "put this line above the `send()`"; WHY is the two-tasks-one-value reason with no internals). Emitted
+  from the existing consumed-read site (`check.rs:3622–3631`) by consumption cause, never from a
+  second read-check; registered as a `[[diagnostic_template]]`; confirmed live at Phase 4; in the
+  Phase 9 gallery. `receive()`'s end-of-stream has NO teaching string — it returns `none`, which the
+  user already knows how to read from every other `maybe<T>`.
 - The `auto_arc` muted-hint hover text (see Performance above) is drafted at Phase 2 step 5 and must
   itself follow WHAT/WHAT-INSTEAD/WHY, tied to the actual call site's reader count — never a generic
   "avoids allocation" explanation, per Golden Rule 11's contextual-specificity requirement.
@@ -1080,11 +1287,19 @@ pattern. Considered and declined.
 
 ### Feature Registry Entries
 
-- **Channel-close's new method (kind TBD, likely `[[primitive_intrinsic]]`):** Phase 1 decides the
-  method name (candidates: `.close()`, `.done()`, `.finish()`) against vocabulary.md + Golden Rule 12;
-  Phase 4 step 7 adds the corresponding registry entry once the kind and name are locked. Enumerated
-  here as a KIND, not yet a name, per the plan-invariants rule's own allowance for "name TBD at design
-  sign-off."
+- **Channel-close's new method — DECIDED at Phase 1 (2026-09-03): `[[primitive_intrinsic]]`
+  `name = "close"`, `kind = "method"`, `receiver_type = "channel"`, `return_type = "nothing"`.** Phase 4
+  step 7 adds it. Phase 1 also found `send`/`receive` were never registered (a pre-existing SSOT gap):
+  Phase 4 back-fills both with this design's types — `receive` `return_type = "maybe<T>"`; `send`
+  `kind = "method_1arg"`, `param_types = ["T"]`, `return_type = "nothing errors"` — and adds ONE
+  optional schema field, `param_ownership` (list aligned with `param_types`; absent = today's
+  semantics), set to `["give"]` on `send`, so the LSP hover derives "send gives its value" from data.
+- **`[[deferred_language_feature]]` ×2 (new):** `channel-auto-close-on-last-producer` and
+  `background-handle-close` — both with four fields carried verbatim from the design section.
+- **`[[diagnostic_template]]` ×1 (new): `ConsumedBySend`** — the use-after-send compile diagnostic.
+  This resolves the "possible but not certain" item at the end of this subsection: the RUNTIME
+  channel-closed message stays out of the registry (per-op codegen string, not a `DiagnosticKind`);
+  the new COMPILE diagnostic goes in.
 - **`auto-arc-codegen-emission`** (existing entry): retired if Phase 5's shipped emission covers the FULL
   beneficial-emission condition Phase 2 decides, OR narrowed to name the real remaining residual if
   Phase 2's topology leaves a bounded slice unimplemented (Phase 5 step 7) — mirroring the
@@ -1189,3 +1404,20 @@ pattern. Considered and declined.
    work itself lands in M8 or its own milestone is a plan-review question to resolve at M8's
    plan-review gate — this entry does not pre-decide that; it only ensures the design account for
    the class.
+8. **Two M6-inherited residuals on the P2-7 waker-registration path** (surfaced 2026-09-03 by the
+   independent confirmation that retired Phase 6 under FRAGO 001; recorded HERE so a reader of this
+   plan finds them without archaeology — both already carry fielded deferrals in the roadmap's own
+   `audit.md`, so neither is silent duct tape):
+   (1) **Panic-payload log asymmetry.** The handle-side panic path logs a payload-less message
+   because `panic_payload_msg` is private to `channel.rs`, while the channel-side logs the payload
+   string. **WHY not fixed here:** cosmetic, log text only on a now-theoretical panic path; it does
+   not narrow the hang-closing guarantee, and this plan writes no code on that path at all.
+   **COST:** trivial (widen the helper's visibility, one call site). **TRIGGER:** the next milestone
+   that touches `handle.rs`'s panic-reporting path, or any real panic there needing diagnosis.
+   (2) **`recv_waiters` / `record_recv_waiter` / `wake_recv_waiters` duplicated byte-identically
+   between `channel.rs` and `handle.rs`.** **WHY not fixed here:** unifying a waker registry across
+   two FFI-boundary types is its own design call, and doing it inside a milestone that touches
+   neither path would be scope drift. **COST:** small-to-medium (one shared registry type + both
+   call sites migrated + loom coverage of the unified path). **TRIGGER:** Phase 3's loom substrate
+   work, if it finds it needs one registry rather than two to model-check the ordering — otherwise
+   the next milestone touching either recv-poll path.
