@@ -1,0 +1,15 @@
+// Sibling of bg_arg_channel_send_array.ynz: the task sends its ladder-owned clone into a
+// channel NOBODY drains. Ownership of the payload now rests with the channel — its last-ref
+// teardown drop glue frees the buffered element exactly once. The task's ladder must NOT
+// free it as well (pre-fix: ladder free + channel-teardown glue = a double free).
+function producer(wire: channel<array<int>>, rows: array<int>) -> nothing {
+  wire.send(rows)
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(4)
+  let rows: array<int> = [10, 20, 30]
+  background producer(wire, rows)
+  wait sleep(50)
+  print(`never drained`)
+}

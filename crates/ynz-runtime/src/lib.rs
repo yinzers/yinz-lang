@@ -4382,7 +4382,7 @@ mod m6_pending_send_aba {
         // One kind-2 (SharedChannel) arg-drop descriptor over the CHAN_SLOT.
         let descs = ynz_alloc_zeroed(std::mem::size_of::<BgArgDropEntry>()) as *mut BgArgDropEntry;
         (*descs).byte_offset = CHAN_SLOT as u64;
-        (*descs).kind = 2;
+        (*descs).kind = ynz_abi::BG_ARG_KIND_SHARED_CHANNEL;
         (*descs).size = 0;
         let fut = SpawnStateFnFuture::new(
             send_from_frame_resume,
