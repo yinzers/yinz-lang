@@ -111,21 +111,21 @@ surfaced that has no other home.
     aliasing the rule exists to forbid. WHY deferred: it belongs to Phase 2's ownership answer, and a
     syntactic patch here is the very producer FRAGO 008 named. COST: small once Phase 2's rule
     exists — either restrict owned-heap channel elements with pointer-cell inner types, or state the
-    exception explicitly. TRIGGER: Phase 2's design.
+    exception explicitly. TRIGGER: Phase 2's design. **Status: ABSORBED by Phase 2's design (pending sign-off, `m8-p2-20260903-a1`)** — a literal built from named heap values is `Provenance::Reaches`, never transferable; literal elements as consuming sinks is deferred with the container-store class (`IMP-ownership.md` "Transfer", sinks). Probe confirmed `[a]` given away leaves `a` readable (`1 3`).
 13. **`.copy()` admission must be ordered after `ynz_map_clone`.** WHAT: the send-arm admission
     treats `.copy()` as always fresh, but `map.copy()` today returns the receiver's own pointer
     through codegen's `_ => Ok(recv_val)` catch-all (`emit.rs:19360`). If the admission lands before
     Phase 4 step 3a, `wire.send(table.copy())` compiles and sends an alias — the diagnostic's own
     advice becoming the bug. WHY deferred: it is an ordering obligation, not a defect. COST: none if
     ordered; a real aliasing hole if not. TRIGGER: Phase 4 step 3a, which must land before any
-    `.copy()` admission ships.
+    `.copy()` admission ships. **Status: CARRIED into Phase 2's design** — `.copy()` is `Fresh` only where `copy_is_independent(type)` holds (parity-tested against the codegen arms), so a `map.copy()` before `ynz_map_clone` lands is `Unknown` and refused rather than admitted as an alias. The ordering obligation on Phase 4 step 3a stands.
 14. **`dynamic Contract` dispatch has no ownership checking at all.** WHAT: `check.rs:5391-5421` and
     `shapes.rs:24-29` — `ContractSigDef` carries no ownership modifiers, so a contract method with a
     non-`self` `give array<int>` parameter bypasses every ownership rule. A shape `self` cannot be a
     channel payload, so there is no direct send hole today. WHY deferred: it is the fourth instance
     of the class FRAGO 008 re-homed; Phase 2's whole-program answer should cover it by construction
     rather than as another enumerated site. COST: unknown until Phase 2's shape is decided. TRIGGER:
-    Phase 2's design must state whether contract dispatch is covered or explicitly excluded.
+    Phase 2's design must state whether contract dispatch is covered or explicitly excluded. **Status: COVERED BY CONSTRUCTION in Phase 2's design (pending sign-off)** — `ContractSigDef` carries the AST's modifiers, the dispatch site threads the one `check_transfer`, `follows` checks modifier parity (`IMP-ownership.md` "`dynamic Contract` dispatch — covered by construction"). Probe: typeck accepts today, codegen ICEs `dynamic dispatch call sites not yet lowered in M4 P4` — zero runtime exposure.
 15. **`refuse_closed` must drop the sender lock before calling glue.** WHAT: the design's new
     `None`-under-the-sender-lock arm calls drop glue; `channel.rs:496` holds a `Mutex<mpsc::Sender>`,
     and the existing convention at `:480-481` releases it first. The design does not say so. WHY
@@ -136,19 +136,19 @@ surfaced that has no other home.
     (`emit.rs:16731-16738`), so it is not observable today — but any IDE hint reading `bg_inferred`
     would tell the user "copied" for a value that was given. WHY deferred: not observable until the
     muted-hint surface reads that field. COST: trivial. TRIGGER: whichever phase wires a hint over
-    `bg_inferred` — Phase 5's `auto_arc` hint work is the likely first reader.
+    `bg_inferred` — Phase 5's `auto_arc` hint work is the likely first reader. **Status: ABSORBED by Phase 2's design** — the three spawn-arg recording sites share ONE recording function that derives the label (`Give`/`Copy`/`Channel`/`Arc`) from the truth, so the handle form no longer records `Copy` for a given binding (`IMP-ownership.md` "What typeck records and what codegen reads"). Phase 5 implements.
 17. **A real blast-radius instance the design's "zero instances" claim missed.** WHAT:
     `examples/primantis-orders/m6_errors.ynz:112-115` passes bare parameter `fig` as a receiver into
     `haulCircle(give self: Circle)` — today's silent consume at `check.rs:4617`. Any `give`-tightening
     rule converts it into a second diagnostic on that line. `error_galleries.rs:100` allows 7–14
     diagnostics so the count assertion probably absorbs it, but the `// WHY:` comment needs updating.
     WHY deferred: Phase 2 owns the rule that decides whether it fires at all. COST: trivial (one
-    comment, possibly one count bound). TRIGGER: Phase 2's rule shipping.
+    comment, possibly one count bound). TRIGGER: Phase 2's rule shipping. **Status: CARRIED into Phase 2's design** — named as the one known corpus instance in `IMP-concurrency.md` "How far the `give` obligation transits"; Phase 4 updates the `// WHY:` and the count bound.
 18. **Fresh forms that are conservatively refused.** WHAT: `array<int>()` / `map<..>()` constructor
     calls and builtin-returned fresh arrays (`.sort()` and friends) are call results, so the admitted
     -form set refuses them even though they are genuinely fresh. WHY deferred: conservative and safe;
     widening is Phase 2's call, not a defect. COST: small. TRIGGER: Phase 2's admitted-form decision;
-    record the widening or the deliberate omission.
+    record the widening or the deliberate omission. **Status: DECIDED in Phase 2 — deliberate conservative omission with a widening point** — constructor calls (`array<int>()`, `map<..>()`, `channel<T>()`) and `receive()` are `Fresh`; builtin method results default to `Reaches(receiver root)` via ONE `builtins` table (`builtin_method_returns_fresh`), widened per method with evidence, never by default. A user function's result is `Fresh` iff its `returns_fresh` fixpoint fact says so.
 
 ### Open exposure carrying a cheap in-scope guard — flagged under `no-duct-tape.md`
 

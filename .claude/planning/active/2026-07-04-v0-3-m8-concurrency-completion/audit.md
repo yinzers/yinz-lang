@@ -11,6 +11,69 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p2-20260903-a1` — 2026-09-03 — **Phase 2 executed (design only, no compiler code): steps 1–5
+  done, FRAGO 008's ownership absorption done, FRAGO 009's fr12 done; step 6 (Patrick's sign-off)
+  OPEN.** Read in full: `effective_ownership.rs` (1,747 lines — lattice, fixpoint, `Reads` bottom,
+  `classify_call_position`, `arg_is_binding`/`root_binding_name`/`place_path`, the aliasing-call
+  check, all 26 tests), the plan's Phase 2 block + FRAGO 008/009, `audit.md` FRAGO 005/007 and the
+  SIGN-OFF, `.claude/corpses.md`, parked items 3 and 12–18, the channel-close section of
+  `IMP-concurrency.md`, `IMP-ownership.md`, `arc.rs`, the `auto_arc` / `auto-arc-*` /
+  `channel-element-heap-upgrade` registry entries, `check.rs` at every cited site
+  (`check_arg_ownership` and its three call sites, the UFCS path, the `for` binding, the spawn
+  liveness pass, `bg_arg_is_provably_safe`, the handle pre-record, the `Expr::Background` arm, the
+  `send` arm, the consumed-read site, the share/lend-across-`background` guard, the dynamic-dispatch
+  site), `shapes.rs` `ContractSigDef`, `ynz-ast` `ContractSig`/`Param`, `queries.rs` ordering,
+  `emit.rs` (`number_to_heap_cell`, the decimal128 bg-arg arm, `channel_drop_glue`, the
+  `readonly`/`noalias` consumer of the report, `prepare_bg_arg_for_ctx`), `channel.rs` slot
+  contract, `ynz-abi` kinds. **Seven throwaway probes** (created under `.probe-m8p2/`, run with
+  `docker compose run --rm dev ./target/debug/ynz run`, deleted): (1) `bucket.stash(rows)` with
+  `stash(give self: Bucket, give rows)` — compiles, prints `3` (caller keeps `rows`); (1b) the
+  function-call form `stash(bucket, rows)` — correctly `already given away`; (2) `eat(bucket.rows)`
+  into `give` — `3 3`; (3) `for (row in matrix) { wire.send(row) }` then `receive()` — `2 2`;
+  (4) `dynamic Sink` call with a contract `give` param — typeck accepts, codegen ICEs `dynamic
+  dispatch call sites not yet lowered in M4 P4` (parked 14 has NO runtime exposure today);
+  (5) `let other = rows; eat(rows); other.count()` — `3 3`; (6) `let rows = pick(bucket)` where
+  `pick` returns `b.rows`, then `eat(rows)` — `3 3` (Phase 1's "bind it first" advice admits an
+  alias); (7) `let outer = [a]; eat(outer); a.count()` — `1 3` (parked 12 confirmed). **Two record
+  corrections**: the fixpoint runs AFTER `check(...)` today (`queries.rs:~423` vs `:503`) — FRAGO
+  008 and the corpse said "before"; corpse text corrected, FRAGO 008 left as written (append-only)
+  and corrected here. And `IMP-concurrency.md:207`/the plan's Performance invariant name a
+  spawn-site `.give` override that does not exist (`PostfixOpKind` is `Copy | Freeze`). **Decisions
+  (all pending sign-off):** Auto-Arc topology (B) — one shared copy, N task references, caller keeps
+  its original + one transient released after the last spawn; beneficial iff ≥2 spawns in one block
+  share a whole binding with no suspension between, `Reads` both sides, `arc_shareable` type; the
+  transfer rule as ONE `provenance()` + origin/alias classes + ONE `check_transfer` + a closed sink
+  list + `consumed`/`returns_fresh` fixpoint facts; whole chain reported in one compile; `dynamic
+  Contract` covered by construction; `SendPayloadNeedsCopy` → `TransferNeedsCopy`; container-store
+  sinks deferred (four fields), literals of named heap values `Reaches`; fr12 as a send-minted
+  16-byte cell with `number` copy-through and `ChannelElemDrop::transfers_source()`. **Docs:**
+  `IMP-ownership.md` +2 sections; `IMP-concurrency.md` channel-close section re-pointed (rule,
+  transit, alternative-weighed, element-types enum, fr12, registry list, teaching text → one home,
+  sign-off record), `.give` override line fixed, inference table rows corrected;
+  `IMP-no-function-coloring.md:58` pointer resolved; `corpses.md` ordering claim corrected. **Plan:**
+  Phase 2 status block with the owed-downstream-edits list (Phase 4/5/Invariants/FR text NOT edited —
+  no ruling to trace to); banner; session-id. **Parked:** 12/13/14/16/17/18 annotated with their
+  Phase 2 disposition. **Sign-off packet for Patrick** (also in the executor return):
+  (1) topology (B); (2) beneficial condition as above — confirm "caller + 1 task" is out;
+  (3) the transfer rule in one paragraph — every value that leaves a frame for a sink that will free
+  it passes one `check_transfer`; provenance says Fresh/Whole/Reaches/Unknown; a whole owned binding
+  is consumed with its alias class, a parameter must say `give` (every frame of a chain reported
+  in one build), anything still reachable elsewhere needs `.copy()`; (4) fr12 — cell marshalling,
+  `number` NOT in the give set; (5) override directions — `.copy()` only (no `.give` exists),
+  no force-the-auto-pick, `share` stays an error; (6) OPEN QUESTIONS — (a) confirm the
+  container-store/literal-element sink deferral (the alternative: literal elements consume, Rust's
+  zero-copy answer — but then `[a]` and `.add(a)` disagree until the drop story); (b) confirm
+  reporting the whole chain in one compile, including consuming a caller's LOCAL at an
+  effectively-consumed-but-undeclared position for reporting only; (c) confirm alias classes as a
+  language change (`let other = rows; wire.send(rows)` now makes `other` unusable — programs that
+  never transfer are unaffected); (d) `TransferNeedsCopy` as the registry name (or keep
+  `SendPayloadNeedsCopy` — it was never shipped); (e) confirm `number` copy-through (parked 3
+  assumed the opposite); (f) confirm `dynamic Contract` coverage in Phase 4 scope (three small
+  sub-steps) rather than a deferral; (g) the relay-a-received-value cost (`other.send(got.value)`
+  needs `.copy()` this milestone) — accept, or ask for a move-out-of-`maybe` form now;
+  (h) Phase 5's `bg_arg_kind_is_releasable_payload(ARC)` answer. Tests: none run (no code touched).
+  No handoff file (phase ran to its sign-off boundary in one segment).
+
 - `conductor-2026-09-03-m8-execution` — 2026-09-03 — **The `/execute-plan` conductor session that ran
   Phase 0 and Phase 1 to sign-off.** Ends with the plan handed off mid-milestone to a fresh
   conductor; this entry is the session's own record, distinct from the executor entries below.
@@ -343,6 +406,28 @@ settled by it.** The next conductor asks him before the phase that needs each:
    ratified round 1's downstream plan edits; rounds 2 and 3 did the same class of thing without
    their own ratification. `plan-adherence` raised it rather than assuming either way. Ask at the
    next round that edits Gate-4-signed plan text.
+
+### FRAGO 009 — 2026-09-03 — The three items Phase 1's sign-off left open are RULED; Phase 2 begins
+
+- **Trigger:** the SIGN-OFF record above named three questions Patrick's signature did not answer.
+  The successor conductor (`conductor-2026-09-03-m8-phase2`) asked all three before Phase 2's first
+  dispatch, per that record's instruction.
+- **Patrick's rulings, 2026-09-03:**
+  1. **fr12 rides Phase 2.** `channel<number>` decimal128 marshalling is designed in Phase 2 alongside
+     the ownership rule (parked item 3 already ties `number` to the `ChannelElemDrop` give-set
+     question Phase 2 owns); Phase 4 implements. Not its own FRAGO'd step, not deferred out of M8.
+  2. **`HandleChannelArgNeedsBinding` is a hard compile ERROR**, as designed. GR5; the hang class dies
+     at compile time; the fix is one `let`; pre-1.0 with zero users, so rejecting never-closed
+     source that compiles today costs nothing real. Phase 4 step 3c ships it as an error.
+  3. **FRAGO 003's ratification is STANDING, traceability-gated.** A fix round may edit downstream
+     plan text (including Gate-4-signed sections) when every edit traces to a ruling Patrick made
+     in that round; `plan-adherence` verifies the trace as part of its ordinary grade. An edit that
+     traces to no ruling halts to Patrick. Rounds 2 and 3 of Phase 1 are covered retroactively by
+     the same rule (their edits were already reviewer-verified as traceable).
+- **Also settled at the same gate:** Phase 2 stays in this checkout on
+  `feat/v0-3-m8-concurrency-completion` (worktree gate re-answered for this session).
+- **Applied:** the plan's cold-resume banner (the "owed" line becomes the answered line), a FRAGO 009
+  block inside Phase 2's own plan block carrying the fr12 obligation, and the session-id chain.
 
 ### FRAGO 008 — 2026-09-03 — The ownership question MOVES from Phase 1 to Phase 2; Phase 1's fix loop closed by re-diagnosis, not by ceiling
 

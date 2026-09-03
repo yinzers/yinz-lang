@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1"]
 created_at: "2026-07-04"
 updated_at: "2026-09-03"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -14,7 +14,7 @@ metadata:
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 awaiting **Patrick's sign-off** · Phase 2 next
+> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 steps 1–5 DONE, step 6 (Patrick's sign-off) OPEN** (executor `m8-p2-20260903-a1`; conductor `conductor-2026-09-03-m8-phase2`) — read Phase 2's status block before dispatching anything
 >
 > ### 🔀 RESTRUCTURED 2026-09-03 — FRAGO 008: Phase 1's ownership scope MOVED to Phase 2
 >
@@ -33,9 +33,11 @@ metadata:
 >
 > **Phase 4 is blocked on BOTH Phase 1's and Phase 2's sign-offs.**
 >
-> **Owed to Patrick at Phase 1's sign-off:** fr12's disposition · `HandleChannelArgNeedsBinding` as a
-> hard error vs a warning · whether FRAGO 003's ratification of downstream plan edits stands for all
-> Phase 1 fix rounds or needs renewing per round.
+> **The three items owed at Phase 1's sign-off are ANSWERED (FRAGO 009, 2026-09-03):** fr12 rides
+> Phase 2's design (Phase 4 implements) · `HandleChannelArgNeedsBinding` is a hard compile ERROR ·
+> FRAGO 003's ratification is STANDING, traceability-gated (a fix round may edit downstream plan
+> text when every edit traces to a ruling Patrick made that round; `plan-adherence` verifies the
+> trace; an untraceable edit halts to him).
 >
 > **The UAF hotfix has LANDED** (PR #89, merged into this branch at `6143c1d`), so this branch no
 > longer carries the three use-after-frees Phase 1's own review discovered.
@@ -843,7 +845,97 @@ suite/release-handoff).
 >
 > **Phase 4 is now blocked on BOTH Phase 1's and Phase 2's sign-offs.**
 
+> **FRAGO 009 (2026-09-03) — fr12 rides this phase.** Patrick's ruling: `channel<number>`
+> decimal128 marshalling (fr12 — a 128-bit value through the channel's 64-bit `to_i64_bits` slot)
+> is DESIGNED here, alongside the ownership rule, because parked item 3 already ties `number` to the
+> `ChannelElemDrop` classification this phase owns; Phase 4 implements it. The design must state
+> the marshalling representation, whether `number` joins the give-set or stays copy-through, and
+> the alloc/free consequence either way. Same sign-off gate (step 6).
 
+> ### Phase 2 STATUS (executor `m8-p2-20260903-a1`, 2026-09-03) — steps 1–5 ✅, FRAGO 008 absorption ✅, fr12 ✅; **step 6 OPEN (Patrick)**
+>
+> Deliverables (design only; no compiler code; seven throwaway probes run in the dev container and
+> deleted — results in `audit.md`):
+> - [x] **Step 1** — `EffectiveOwnership::Reads` is directly reusable for the TASK side (callee
+>   position, transitive). The CALLER side needs one honest extension, `classify_binding_in_stmts`
+>   (the existing per-name classifier over a statement suffix — same lattice, same walker), not a new
+>   analysis. Two record corrections: the fixpoint runs AFTER the body check today (`check(...)`
+>   `queries.rs:~423`, `analyze` `:503`) and must be hoisted (a reorder — it needs only parse +
+>   signatures); and `arc.rs`'s "Arc-able floor" exists in a doc comment only, no code predicate.
+> - [x] **Step 2** — Topology **(B)**: one shared heap copy, N task-held Arc references, the caller
+>   keeps its original and holds ONE transient reference for the lexical extent of the spawn group.
+>   (A) repoint-the-caller needs the scope-exit drop pass that does not exist and changes the
+>   caller's frame representation (R2's class).
+> - [x] **Step 3** — Beneficial iff ≥2 spawn statements in one block pass the same whole binding,
+>   no suspension between first and last, task-side `Reads` on every member, caller-side `Reads`
+>   between the spawns, and `arc_shareable(type)` (shape of primitive/string/inline-shape fields).
+>   "Caller + 1 task" is NOT beneficial under (B). Loops, suspension-straddling groups, arrays/maps
+>   are the named residual. **CHECKPOINT passed.**
+> - [x] **Step 4** — `IMP-ownership.md` gained TWO sections: "Transfer — Who Else Holds This Value"
+>   (the FRAGO 008 rule) and "Auto-Arc — Sharing Topology Across `background` Boundaries" (topology,
+>   condition, proof, override analysis, residual). `IMP-no-function-coloring.md:58`'s dangling
+>   pointer now names the section.
+> - [x] **Step 5** — `auto_arc` hover text re-drafted, tied to the group's reader count `{n}`;
+>   `.copy` → `.copy()`. Registry `modify` listed for Phase 5; `features.toml` not edited (design
+>   phase).
+> - [x] **FRAGO 008 absorption** — the rule is ONE `provenance()` function in
+>   `effective_ownership.rs` (exhaustive `Expr` match, no wildcard; four values `Fresh` / `Whole` /
+>   `Reaches` / `Unknown`) + binding ORIGIN and ALIAS CLASSES in `ScopeEntry` + ONE `check_transfer`
+>   emit site called by a closed SINK list (channel send of `array`/`map`; every `give` position of
+>   every call form incl. UFCS non-receiver args and `dynamic Contract`; `background` give) + two new
+>   fixpoint facts (`consumed[fn][i]`, `returns_fresh[fn]`). Defeats the three failing programs AND
+>   four more found by probe (alias-by-`let`, returns-a-piece, nested literal, dynamic). **`dynamic
+>   Contract` is covered by construction** (`ContractSigDef` gains the AST's modifiers; dispatch site
+>   threads the helper; `follows` checks modifier parity) — runtime exposure today is nil (codegen
+>   refuses dynamic call sites, probe-confirmed). **One frame per compile → the WHOLE chain in one
+>   compile** (the `consumed` fact; the false ordering premise is withdrawn; "infer give" stays
+>   rejected on its two remaining reasons). `SendPayloadNeedsCopy` → **`TransferNeedsCopy`** (fires
+>   at every sink). Container-store sinks (`add`/`set`/field-assign/index-assign) and literal
+>   elements: deferred with four fields; a literal built from named heap values is `Reaches` (not
+>   transferable) in the meantime.
+> - [x] **fr12** — decimal128 crosses as a send-minted counted 16-byte cell (`number_to_heap_cell`,
+>   the one existing helper), freed at the receive; glue `ChannelElemDrop::NumberCell`; **`number`
+>   stays copy-through — it does NOT join the give set**, so the enum gains `transfers_source()`
+>   (`Array|Map → true`, `NumberCell → false`) and typeck consumes on `is_some_and(transfers_source)`.
+>   One alloc per send, one free per receive, parity-gated. `shape` and bignum stay deferred.
+> - [ ] **Step 6 — Patrick's sign-off.** The packet is in `audit.md` under `m8-p2-20260903-a1`.
+>
+> **Round 1 grading (conductor `conductor-2026-09-03-m8-phase2`, 2026-09-03).** Green-check
+> SKIPPED — docs-only diff, no compiler code (recorded, not silent). Seats derived from the round's
+> own manifest: `plan-adherence-medium` (Fable) → `VERDICT: findings`, 0 blockers, 2 should-fix
+> (the `background` inferred-give path is silent on `Cell`/`Reaches`/`Unknown` origins; the
+> exhaustive-`Expr`-match-vs-"never enumerate" divergence is unsurfaced), 5 minor; no
+> `frago-needed`. `doc-auditor-medium` (Fable) → `VERDICT: findings`, **1 BLOCKER** —
+> `Stmt::Assign` (whole-binding reassignment, `rows = other`) is invisible to BOTH the origin/alias
+> table (`IMP-ownership.md:226-236`) and the reused walker (`effective_ownership.rs:330-333`, `:379`
+> classifies reassignment as a non-write), so alias-by-assign is a two-holder send and a
+> between-spawns reassignment admits an Arc group sharing the OLD value; 4 should-fix (contract
+> param modifiers are parser-optional, `parser.rs:3996-4012`, not REQUIRED as the doc says; a
+> dangling `SCRATCH-audit-2026-07-11-memory-safety.md` cite behind the topology-(B) premise; dead
+> `git log --grep=m8-p1-fix2/fix3` pointers; `Expr::PostfixOp` `.freeze()` has no provenance row);
+> 3 minor. The executor's `code-reviewer` FIRE was routed to `doc-auditor` instead — the cited
+> question ("do the claims about `effective_ownership.rs` hold against the module") is that
+> charter, not a code-diff grade. Every other design claim against `effective_ownership.rs`,
+> `queries.rs`, `arc.rs`, `ynz-ast`, `emit.rs`, `channel.rs` and the registry was verified true by
+> line. Executor's in-place correction of `.claude/corpses.md` (fixpoint runs AFTER `check()`)
+> RATIFIED by the conductor — both seats confirmed it against `queries.rs:423`/`:503`. Round 1
+> sealed; fix round 2 answers `red:doc-auditor`.
+>
+> **Downstream plan text this design invalidates — NOT edited (no Phase 2 ruling exists yet; FRAGO
+> 003's traceability gate requires one). Owed in the same round the sign-off lands:** Phase 4 step
+> 3b (syntactic classify → `check_transfer`/provenance; `SendPayloadNeedsCopy` → `TransferNeedsCopy`;
+> hoist the fixpoint; `ContractSigDef` modifiers + `follows` parity; alias classes/origin; the two
+> fixpoint facts; the shared call-form normalization); Phase 4 step 5 (+ the seven probe programs
+> as gallery triggers; the fr12 fixture class); a new Phase 4 step for fr12 (`NumberCell` glue,
+> send/receive marshalling, `channel-element-heap-upgrade` narrowed, `v0_3_m4_errors.ynz:98`
+> retired for a `channel<Player>` trigger); Phase 5 steps 2–3 (topology (B) specifics — transient,
+> group, `arc_shareable`, `BgOwnership::Arc`, `BG_ARG_KIND_ARC_SHAPE`, releasable-predicate
+> decision); Invariants → Safety (alias-by-`let` no longer outside the guarantee; loop-cell door
+> closed), Teaching (`TransferNeedsCopy`), Performance (`.give` is not typeable — `.copy()` only),
+> Feature Registry Entries (`TransferNeedsCopy`; `modify channel-element-heap-upgrade`; `modify
+> auto_arc` hover); FR#9 (loop-cell-through-spawn door closed by `TransferNeedsCopy`); FR#10
+> (provenance refuses transfer of the alias-no-op types); Phase 9 step 2 (`m8_errors.ynz` trigger
+> list).
 
 - **Task + purpose:** write the missing caller/task Arc-sharing-topology section into
   `IMP-ownership.md`, resolving the registry's own self-diagnosed gap, reusing
