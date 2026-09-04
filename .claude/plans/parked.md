@@ -471,7 +471,14 @@ program before the IR count could fail; a skipped transient release showed as `a
     fixture can only pin a crash. COST: one `m8_arc_number_field_declines.ynz` through
     `assert_declined_fixture` (correct output, 0 `ynz_arc_*`). TRIGGER: the merge-back of the
     hotfix into this branch — author it in the same commit that merges, so the parked-40 crash
-    becomes a named GREEN.
+    becomes a named GREEN. **Status: DONE (dispatch `m8-tail-20260904-a1`)** — the hotfix
+    (parked item 40) merged back into this branch; `m8_arc_number_field_declines.ynz` (two-spawn
+    twin of `m8_arc_two_spawn_group.ynz` with an added `ratio: number` field) plus
+    `number_field_excludes_the_shape_from_arc_sharing_and_declines_correctly` in
+    `v03_m8_auto_arc.rs` pin the decline end-to-end: `assert_declined_fixture` asserts zero
+    `ynz_arc_*` calls in the IR, exit 0, expected stdout, alloc==free. Proved non-vacuous by
+    temporarily widening `arc_shareable`'s match arm to admit `Type::Number` — the fixture then
+    failed loud with IR counts `(1, 2, 1)` instead of `(0, 0, 0)` — before reverting.
 44. **No fixture exercises a caller write AFTER the group.** WHAT: condition 3 covers
     `first..=last`; a write after the last spawn is allowed and must not reach the tasks' block
     (a snapshot minted at `first`). If a future change makes the transient alias the caller's

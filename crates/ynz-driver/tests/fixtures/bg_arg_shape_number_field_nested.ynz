@@ -30,5 +30,5 @@ function entrypoint() -> nothing {
   let scene: Scene = { name: `Three Rivers`, lens: { focal: 2.5 } }
   background render(scene, results)
   let a = results.receive()
-  print(`tasks saw ${a}`)
+  print(`tasks saw ${a.or(-1)}`)
 }

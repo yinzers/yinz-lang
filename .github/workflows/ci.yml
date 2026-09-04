@@ -76,7 +76,7 @@ jobs:
         run: cargo build -p ynz-runtime
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build (release)
         # Pre-build the release-profile runtime staticlib first, for the same reason as the

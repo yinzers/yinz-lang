@@ -409,3 +409,21 @@ fn hammer_four_tasks_read_one_shared_block_under_concurrent_load() {
         "tasks total 105000\ncaller keeps Fort Pitt 30x35 depth 2\n",
     );
 }
+
+// ── parked item 43: end-to-end pin of the `number`-field exclusion from Arc sharing ─────────
+
+#[test]
+fn number_field_excludes_the_shape_from_arc_sharing_and_declines_correctly() {
+    // WHY: parked item 43 — `arc_shareable`'s exclusion of `Type::Number` was pinned only at
+    // the unit level (`types.rs::every_excluded_field_kind_declines`); no end-to-end fixture
+    // could exist until the `bg-arg-number-field` hotfix merged back, because ANY spawn of a
+    // shape with a `number` field crashed before that fix (parked item 40 / M8 FRAGO 012).
+    // Same two-spawn topology as `m8_arc_two_spawn_group.ynz` — the only difference is the
+    // added `number` field — so this fixture would be an ADMITTED group (1, 2, 1) if the
+    // exclusion regressed. It must decline: no `ynz_arc_*` call anywhere in the IR, and the
+    // program still runs correctly on the shipped copy path.
+    assert_declined_fixture(
+        "m8_arc_number_field_declines.ynz",
+        "tasks saw 84\ncaller keeps Three Rivers 6x7 1.5\n",
+    );
+}
