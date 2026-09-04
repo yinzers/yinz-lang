@@ -289,7 +289,7 @@ let late = wire.send(9)
 if (late.failed()) {
   print(late.message)
 }
-// The channel is closed - close() was called, so this value cannot be delivered.
+// The channel is closed — close() was called, so this value cannot be delivered.
 // Check .failed() on the send, or send everything before close().
 ```
 

@@ -363,3 +363,78 @@ fn m8_p4_number_channel_parked_send_is_drained_after_close() {
         "two cells minted (one parked), two freed at the receives",
     );
 }
+
+// ── fix round 2: the renderer, `.message`, the same-call alias pair, the oracle ──────────
+
+/// A program the transfer rule must REFUSE: non-zero exit, no stdout (nothing ran), and the
+/// named diagnostic phrase on stderr. Compile-time-only fixtures, so no alloc parity.
+fn assert_refused(name: &str, phrase: &str) {
+    let (stdout, stderr, code) = ynz_run(name);
+    assert_ne!(
+        code, 0,
+        "{name}: must be refused at compile time; it ran and printed:\n{stdout}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "{name}: a refused program must not run; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains(phrase),
+        "{name}: stderr must contain {phrase:?}; got:\n{stderr}"
+    );
+}
+
+const SAME_CALL_ALIAS_PHRASE: &str =
+    "`other` was already given away and cannot be used here — it shares its value with `rows`, \
+     which is what was given away.";
+
+#[test]
+fn m8_p4_fix2_errors_value_message_reads_the_runtime_error_text() {
+    // WHY: RED at `2be2244` — ICE `field_gep: receiver is not a Shape, got ErrorsCapable`
+    // (Producer B: no `.message` codegen arm beside `.failed()`/`.or()`).
+    assert_runs(
+        "v0_3_m8_p4_errors_message_after_failed.ynz",
+        "The channel is closed — close() was called, so this value cannot be delivered. Check \
+         .failed() on the send, or send everything before close().\nend\n",
+    );
+}
+
+#[test]
+fn m8_p4_fix2_same_call_alias_pair_at_two_give_positions_is_refused() {
+    // WHY: RED at `2be2244` — compiled and printed `3 3` (Producer C1).
+    assert_refused(
+        "v0_3_m8_p4_same_call_alias_give_give.ynz",
+        SAME_CALL_ALIAS_PHRASE,
+    );
+}
+
+#[test]
+fn m8_p4_fix2_same_call_alias_pair_at_give_and_share_positions_is_refused() {
+    // WHY: RED at `2be2244` — compiled and printed `3 3` (Producer C1, the mixed form).
+    assert_refused(
+        "v0_3_m8_p4_same_call_alias_give_share.ynz",
+        SAME_CALL_ALIAS_PHRASE,
+    );
+}
+
+#[test]
+fn m8_p4_fix2_same_call_alias_pair_through_a_background_spawn_is_refused() {
+    // WHY: RED at `2be2244` — compiled; the ladder got two descriptors for one allocation.
+    assert_refused(
+        "v0_3_m8_p4_same_call_alias_background.ynz",
+        SAME_CALL_ALIAS_PHRASE,
+    );
+}
+
+#[test]
+fn m8_p4_fix2_builder_with_a_computed_scalar_local_is_fresh_and_sends() {
+    // WHY: RED at `2be2244` — refused as TransferNeedsCopy with a WHY false about the program
+    // (should-fix 5: the fixpoint's type oracle answered `None` for every `let` local).
+    assert_runs_with_parity(
+        "v0_3_m8_p4_builder_with_computed_scalar_is_fresh.ynz",
+        "1\n3\nend\n",
+        4,
+        "the received one-element array (2 counted allocs) held by the consumer, plus the \
+         bucket's rows array (2 counted allocs) held by `bucket` — nothing is freed at scope exit",
+    );
+}

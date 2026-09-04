@@ -141,7 +141,8 @@ fn m8_gallery_fires_expected_diagnostics() {
     // four new compile diagnostics (ConsumedBySend ×5 incl. the three alias forms,
     // ParamNeedsGive ×5 incl. both frames of the relay chain, TransferNeedsCopy ×5 incl. the
     // dynamic-contract instance, HandleChannelArgNeedsBinding ×1), the extracted const-send
-    // refusal, the existing use-after-give error at two new sites, and the two diagnostics
+    // refusal, the existing use-after-give error at two new sites (+2 same-call alias-pair
+    // sites, fix round 2), and the two diagnostics
     // `.close()` extends (no-args, per-receiver unknown-method list) — 26–36 in all. Every
     // new class is pinned by key phrase below so the count can never pass for the wrong reason.
     let (stderr, code) = compile_gallery(&gallery("m8_errors.ynz"));
@@ -175,8 +176,8 @@ fn m8_gallery_fires_expected_diagnostics() {
     );
     // ParamNeedsGive fires for BOTH frames of the relay chain in one build.
     assert!(
-        stderr.contains("parameter of `m8_hopB`") && stderr.contains("parameter of `m8_hopA`"),
-        "m8 gallery must report both m8_hopB's and m8_hopA's missing `give` in one build; got:\n{stderr}"
+        stderr.contains("parameter of `m8HopB`") && stderr.contains("parameter of `m8HopA`"),
+        "m8 gallery must report both m8HopB's and m8HopA's missing `give` in one build; got:\n{stderr}"
     );
     // TransferNeedsCopy — the WHAT's fixed clause, plus each `{reason}` form.
     assert!(
@@ -205,11 +206,30 @@ fn m8_gallery_fires_expected_diagnostics() {
         stderr.contains("wire.send(rows.copy())"),
         "m8 gallery must include the const-send refusal with the send-sink advice; got:\n{stderr}"
     );
-    // `.close()` with arguments.
+    // `.close()` with arguments — WHAT and WHAT-INSTEAD both render (fix round 2: the renderer
+    // read byte spans as char offsets and dropped the teaching block of any span that landed
+    // past the file's char count; trigger order is irrelevant now).
     assert!(
         stderr.contains("`.close()` takes no arguments"),
         "m8 gallery must include the close-takes-no-arguments diagnostic; got:\n{stderr}"
     );
+    assert!(
+        stderr.contains("Call it bare: wire.close()"),
+        "m8 gallery must render the close-takes-no-arguments WHAT-INSTEAD; got:\n{stderr}"
+    );
+    // The same-call alias pair (fix round 2, Producer C1): the use-after-give error's `{via}`
+    // slot names the class-mate that was given.
+    assert!(
+        stderr.contains("which is what was given away"),
+        "m8 gallery must include the same-call alias-pair use-after-give; got:\n{stderr}"
+    );
+    // Every rendered diagnostic points at its own trigger line, never into a `// WHY:` comment
+    // (fix round 2, Producer A: byte spans were read as char offsets).
+    for line in stderr.lines() {
+        if line.contains(" │ ") && line.contains("// WHY:") && !line.contains("─▶") {
+            panic!("a diagnostic's caret line landed inside a `// WHY:` comment:\n{line}\n\nfull stderr:\n{stderr}");
+        }
+    }
     // The unknown-method list split per receiver: channel gains close(), handle does not.
     assert!(
         stderr.contains("Available methods: send(value), receive(), close()."),

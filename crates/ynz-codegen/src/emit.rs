@@ -34,8 +34,9 @@ use ynz_typeck::{
     build_effective_suspend_set, crossing_local_names_with_cpu_spike,
     find_let_annotation_type_in_stmts,
     independence::{partition_independent_groups, IndependentGroup},
-    is_base_suspension_intrinsic, type_attached_const_type, GenericFnTable, MonomorphizationTable,
-    ShapeTable, SignatureTable, Type, TypedModule,
+    is_base_suspension_intrinsic, type_attached_const_type,
+    types::{channel_elem_drop, ChannelElemDrop},
+    GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable, Type, TypedModule,
 };
 
 use crate::{
@@ -12688,7 +12689,10 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         // receive side (below) copies out and frees it. Both send producers (`ch.send`,
         // `h.send`) pass through here, so the handle form gets the marshalling for free. The
         // sender's own binding is untouched — `number` is copy-through (never given away).
-        if matches!(cg.resolve_type(&arg_ty), Type::Number { precision } if precision <= 34) {
+        // "Does this element get a minted cell?" is answered by the ONE element-kind
+        // classification (`channel_elem_drop == NumberCell`), never by a re-derived
+        // precision test beside it (authoritative-derivation; fix round 2 replaced the twin).
+        if channel_elem_drop(&cg.resolve_type(&arg_ty)) == Some(ChannelElemDrop::NumberCell) {
             let cell = cg.number_to_heap_cell(v.into_pointer_value(), "conduit_send_num")?;
             cg.builder
                 .build_ptr_to_int(cell, i64t, "conduit_send_num_bits")
@@ -12705,7 +12709,9 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
     // and frees the cell immediately, BEFORE the `maybe<number>` envelope is built — the cell
     // never outlives the receive statement. Shared by both ready paths.
     let recv_number_own: Option<PointerValue<'ctx>> = match op {
-        ConduitOp::ChanRecv { elem } if matches!(cg.resolve_type(elem), Type::Number { precision } if precision <= 34) => {
+        ConduitOp::ChanRecv { elem }
+            if channel_elem_drop(&cg.resolve_type(elem)) == Some(ChannelElemDrop::NumberCell) =>
+        {
             Some(cg.alloca_in_entry_llvm(cg.i128(), "conduit_recv_num_own")?)
         }
         _ => None,
@@ -12852,7 +12858,7 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
     // — the end of a stream is a normal value, not a failure (v0.3-M8 Phase 4).
     let closed_msg: Option<&str> = match op {
         ConduitOp::ChanSend | ConduitOp::HandleSend => Some(
-            "The channel is closed - close() was called, so this value cannot be delivered. \
+            "The channel is closed — close() was called, so this value cannot be delivered. \
              Check .failed() on the send, or send everything before close().",
         ),
         ConduitOp::HandleRecv => Some(
@@ -15642,12 +15648,12 @@ fn channel_drop_glue<'ctx>(
             ))
         }
     };
-    let drop_fn = match ynz_typeck::types::channel_elem_drop(&elem) {
+    let drop_fn = match channel_elem_drop(&elem) {
         None => return Ok(cg.ptr().const_null()),
         Some(kind) => match kind {
-            ynz_typeck::types::ChannelElemDrop::Array => cg.rt.ynz_array_drop,
-            ynz_typeck::types::ChannelElemDrop::Map => cg.rt.ynz_map_drop,
-            ynz_typeck::types::ChannelElemDrop::NumberCell => cg.rt.ynz_number_cell_free,
+            ChannelElemDrop::Array => cg.rt.ynz_array_drop,
+            ChannelElemDrop::Map => cg.rt.ynz_map_drop,
+            ChannelElemDrop::NumberCell => cg.rt.ynz_number_cell_free,
         },
     };
     let name = format!("ynz_chan_drop_glue_{}", mangle_type(&elem));
@@ -19193,6 +19199,62 @@ fn lower_field_access<'ctx>(
         return cg.i64_bits_to(bits, &field_ty);
     }
 
+    // `errors`-value `.message` — the error's text (`REF-errors.md`: "error description, only
+    // valid after a `.failed()` check"). The receiver is a pointer to the {i64 error_ptr,
+    // i64 success_val} result struct, exactly as `.failed()`/`.or()` read it
+    // (`lower_errors_capable_method`); the message is the null-terminated bytes
+    // `ynz_error_new` stored (a Yinz `string` at the ABI). A null error pointer (read on the
+    // success path) yields the empty string rather than a null dereference. Before this arm
+    // the field fell through to `field_gep` and ICEd (v0.3-M8 Phase 4 fix round 2, Producer B).
+    if let Type::ErrorsCapable { .. } = &recv_ty {
+        if field_name == "message" {
+            let result_ty = errors_result_type(cg.ctx);
+            let recv_ptr = lower_expr(cg, receiver)?.into_pointer_value();
+            let err_gep = cg
+                .builder
+                .build_struct_gep(result_ty, recv_ptr, 0, "ec_msg_err_gep")
+                .map_err(|e| format!("{e}"))?;
+            let err_bits = cg
+                .builder
+                .build_load(cg.i64(), err_gep, "ec_msg_err_bits")
+                .map_err(|e| format!("{e}"))?
+                .into_int_value();
+            let is_failed = cg
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    err_bits,
+                    cg.i64().const_zero(),
+                    "ec_msg_failed",
+                )
+                .map_err(|e| format!("{e}"))?;
+            let err_ptr = cg
+                .builder
+                .build_int_to_ptr(err_bits, cg.ptr(), "ec_msg_err_ptr")
+                .map_err(|e| format!("{e}"))?;
+            let msg = cg
+                .builder
+                .build_call(cg.rt.ynz_error_message, &[err_ptr.into()], "ec_msg_call")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "ynz_error_message returned void".to_string())?;
+            let empty = cg
+                .builder
+                .build_global_string_ptr("", "ec_msg_empty")
+                .map_err(|e| format!("{e}"))?
+                .as_pointer_value();
+            return cg
+                .builder
+                .build_select(is_failed, msg.into_pointer_value(), empty, "ec_msg")
+                .map_err(|e| format!("{e}"))
+                .map(|v| v.as_basic_value_enum());
+        }
+        return Err(format!(
+            "codegen: `.{field_name}` on an `errors` value is not lowered yet (only `.message`)"
+        ));
+    }
+
     // maybe<T>.value — extract value bits from the {i64,i64} alloca.
     if let Type::Maybe { inner } = &recv_ty {
         let inner = inner.as_ref().clone();
@@ -19445,9 +19507,18 @@ fn lower_postfix_op<'ctx>(
         PostfixOpKind::Copy => {
             let recv_ty = cg.expr_type(receiver);
             let recv_val = lower_expr(cg, receiver)?;
-            match &recv_ty {
-                Type::Shape { name } => {
+            // Dispatch on the ONE classification of what `.copy()` does for this type
+            // (`copy_lowering_arm`, exhaustive over `Type`) — never on the type directly, so
+            // the arm set here and typeck's `copy_is_independent` are held to parity by
+            // `copy_parity_tests` below (v0.3-M8 Phase 4 fix round 2, should-fix 6).
+            match copy_lowering_arm(&recv_ty) {
+                CopyLowering::ShapeMemcpy => {
                     // Trivially-copyable shape: memcpy into a fresh alloca.
+                    let Type::Shape { name } = &recv_ty else {
+                        unreachable!(
+                            "copy_lowering_arm: ShapeMemcpy is only classified for Type::Shape"
+                        )
+                    };
                     let name = name.clone();
                     let struct_ty = cg
                         .shape_types
@@ -19475,7 +19546,7 @@ fn lower_postfix_op<'ctx>(
                 // a fresh buffer, element cells byte-copied; pointer cells
                 // (string/maybe elements) copy as pointers, so nested data still
                 // aliases (consistent with D12/D13's recorded stance).
-                Type::BuiltinArray { .. } => {
+                CopyLowering::ArrayClone => {
                     let arr = recv_val.into_pointer_value();
                     if let Some(info) = cg.soa_expr_info(receiver) {
                         // SoA receiver: gather into a fresh AoS buffer — the
@@ -19508,7 +19579,7 @@ fn lower_postfix_op<'ctx>(
                 // have sent the original allocation and silently reintroduced the
                 // cross-task aliasing the ConsumedBySend advice exists to close
                 // (independence lock: `v0_3_m8_p4_map_copy_independent.ynz`).
-                Type::BuiltinMap { .. } => {
+                CopyLowering::MapClone => {
                     let map = recv_val.into_pointer_value();
                     let cloned = cg
                         .builder
@@ -19520,14 +19591,182 @@ fn lower_postfix_op<'ctx>(
                     Ok(cloned)
                 }
                 // Value-bit primitives (int/float/bool/number/string) are already by-value
-                // (or immortal bytes) — the receiver is the copy. The types that still fall
-                // through here as an alias no-op — `maybe`, union, `fixed`, `dynamic` — are
-                // the FR#10 stub class the v0.3-M8 plan records; provenance classifies their
-                // `.copy()` as `Unknown` so they can never be transferred through it
-                // (`copy_is_independent` in ynz_typeck::types is the parity-tested twin of
-                // the arms above).
-                _ => Ok(recv_val),
+                // (or immortal bytes) — the receiver is the copy.
+                CopyLowering::ByValue => Ok(recv_val),
+                // The types that still fall through as an alias no-op — `maybe`, union,
+                // `fixed`, `dynamic`, … — are the FR#10 stub class the v0.3-M8 plan records;
+                // provenance classifies their `.copy()` as `Unknown` so they can never be
+                // transferred through it (`copy_is_independent` in ynz_typeck::types answers
+                // `false` for exactly this arm — `copy_parity_tests` holds the two together).
+                CopyLowering::AliasNoOp => Ok(recv_val),
             }
+        }
+    }
+}
+
+/// What the `PostfixOpKind::Copy` lowering above does for a receiver type — THE
+/// classification the match dispatches on, exhaustive over `Type` with no `_` arm, so a new
+/// `Type` variant fails to compile here until someone says what its `.copy()` does. Typeck's
+/// `copy_is_independent` (`ynz_typeck::types`) must answer `true` for exactly the arms that
+/// yield an independent value (everything but `AliasNoOp`); `copy_parity_tests` below holds
+/// the two to that contract over one sample of every variant, so adding a real clone arm here
+/// without teaching provenance about it — or the reverse — fails loudly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyLowering {
+    /// A trivially-copyable shape: memcpy into a fresh alloca.
+    ShapeMemcpy,
+    /// `array<T>`: `ynz_array_clone_primitive` / SoA gather — a one-level deep copy.
+    ArrayClone,
+    /// `map<K, V>`: `ynz_map_clone` — a one-level deep copy.
+    MapClone,
+    /// Value bits or immortal bytes: the receiver IS the copy.
+    ByValue,
+    /// Not yet lowered: the receiver is returned unchanged (an alias, FR#10's stub class).
+    AliasNoOp,
+}
+
+pub fn copy_lowering_arm(ty: &Type) -> CopyLowering {
+    match ty {
+        Type::Shape { .. } => CopyLowering::ShapeMemcpy,
+        Type::BuiltinArray { .. } => CopyLowering::ArrayClone,
+        Type::BuiltinMap { .. } => CopyLowering::MapClone,
+        Type::Int | Type::Float | Type::Bool | Type::Number { .. } | Type::String => {
+            CopyLowering::ByValue
+        }
+        Type::Nothing
+        | Type::Error
+        | Type::Range { .. }
+        | Type::Dynamic { .. }
+        | Type::TypeParam { .. }
+        | Type::Generic { .. }
+        | Type::BuiltinFixed { .. }
+        | Type::Maybe { .. }
+        | Type::MapEntry { .. }
+        | Type::BuiltinChannel { .. }
+        | Type::BackgroundHandle { .. }
+        | Type::Options { .. }
+        | Type::Union { .. }
+        | Type::ErrorsCapable { .. }
+        | Type::Sensitive { .. } => CopyLowering::AliasNoOp,
+    }
+}
+
+#[cfg(test)]
+mod copy_parity_tests {
+    use super::{copy_lowering_arm, CopyLowering};
+    use ynz_typeck::types::Type;
+
+    /// One representative per `Type` variant. `copy_lowering_arm` is the exhaustiveness
+    /// driver: a variant missing here is still matched by an arm with no `_` fallback, so
+    /// the compiler forces a classification — and `every_variant_is_sampled` below forces a
+    /// sample for it.
+    fn all_variants() -> Vec<Type> {
+        vec![
+            Type::Nothing,
+            Type::String,
+            Type::Error,
+            Type::Int,
+            Type::Float,
+            Type::Number { precision: 34 },
+            Type::Bool,
+            Type::Range {
+                element: Box::new(Type::Int),
+                end_inclusive: false,
+            },
+            Type::Shape {
+                name: "Player".to_string(),
+            },
+            Type::Dynamic {
+                contract: "Damageable".to_string(),
+            },
+            Type::TypeParam {
+                name: "T".to_string(),
+            },
+            Type::Generic {
+                name: "Pair".to_string(),
+                args: vec![Type::Int, Type::Int],
+            },
+            Type::BuiltinArray {
+                elem: Box::new(Type::Int),
+            },
+            Type::BuiltinFixed {
+                elem: Box::new(Type::Int),
+                size: None,
+            },
+            Type::Maybe {
+                inner: Box::new(Type::Int),
+            },
+            Type::BuiltinMap {
+                key: Box::new(Type::String),
+                val: Box::new(Type::Int),
+            },
+            Type::MapEntry {
+                key: Box::new(Type::String),
+                val: Box::new(Type::Int),
+            },
+            Type::BuiltinChannel {
+                elem: Box::new(Type::Int),
+            },
+            Type::BackgroundHandle {
+                result: Box::new(Type::Int),
+                msg_elem: None,
+            },
+            Type::Options {
+                name: "Status".to_string(),
+            },
+            Type::Union {
+                variants: vec![Type::Int, Type::String],
+            },
+            Type::ErrorsCapable {
+                inner: Box::new(Type::Int),
+            },
+            Type::Sensitive {
+                inner: Box::new(Type::String),
+            },
+        ]
+    }
+
+    /// The variant count `copy_lowering_arm` matches. Bump it when a `Type` variant is added
+    /// (the classifier's non-exhaustive-pattern error is what brings you here) and add the
+    /// variant's sample above.
+    const TYPE_VARIANT_COUNT: usize = 23;
+
+    #[test]
+    fn every_variant_is_sampled() {
+        let samples = all_variants();
+        let distinct: std::collections::BTreeSet<String> = samples
+            .iter()
+            .map(|t| {
+                format!("{t:?}")
+                    .split(['{', ' '])
+                    .next()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            distinct.len(),
+            TYPE_VARIANT_COUNT,
+            "one sample per Type variant: {distinct:?}"
+        );
+    }
+
+    #[test]
+    fn copy_is_independent_matches_the_copy_lowering_arm_for_every_type_variant() {
+        // WHY: `copy_is_independent` (typeck provenance: "is `x.copy()` Fresh?") and the
+        // codegen arm that lowers `.copy()` used to be linked only by a comment claiming a
+        // parity test that did not exist (v0.3-M8 Phase 4 round-1 finding). This is the test.
+        for ty in all_variants() {
+            let arm = copy_lowering_arm(&ty);
+            let independent = arm != CopyLowering::AliasNoOp;
+            assert_eq!(
+                ynz_typeck::types::copy_is_independent(&ty),
+                independent,
+                "{ty:?}: codegen lowers `.copy()` as {arm:?} but typeck's copy_is_independent \
+                 says {} — a `.copy()` provenance would admit or refuse a transfer the machine \
+                 code does not honor",
+                ynz_typeck::types::copy_is_independent(&ty)
+            );
         }
     }
 }

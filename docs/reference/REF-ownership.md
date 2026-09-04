@@ -80,7 +80,7 @@ rename(player)
 
 ```ynz
 const original: Player = { name: `Patrick`, health: 100 }
-const backup = original.copy()    // produces a new owned value (cheap, trivially-copyable types only)
+const backup = original.copy()    // a new value of your own — one level deep for an array or a map
 saveForever(backup)                // backup is given to saveForever; original is unchanged
 ```
 

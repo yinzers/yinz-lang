@@ -1200,7 +1200,7 @@ triggers = "`let h = background crunch()` where `crunch` never suspends - reject
 [[deferred_language_feature]]
 name = "channel-element-heap-upgrade"
 substitute = "Use one of the supported element types: int, float, boolean, string, number, array<T>, map<K, V>. For a `shape`, send its fields as separate values (or pack them into an array or map) and rebuild the shape on the receiving side. Alternatively, put the value in a heap-allocated container you manage (an `array<T>` of one element) and send that."
-why = "Channel values travel between tasks as a single 64-bit slot: scalars by value (int, float, boolean), heap-stable pointers (string, array, map), and - since v0.3-M8 (fr12) - a `number` as a 16-byte heap cell the send mints and the receive frees (the sender's binding stays usable; `number` is copy-through, never given away). What is still deferred is narrower: a `shape` element, and a bignum `number` (more than 34 digits of precision). A `shape` value is backed by the SENDING task's stack frame, which can be freed while the value still sits in the channel - the receiver would read freed memory - and an inline copy of it would share any pointer-cell field (an `array` field) between sender and receiver, which is the depth-two transfer question the container-store deferral in IMP-ownership.md owns, not a marshalling question. Until that ships, shape and bignum elements are rejected at channel construction with a clean teaching error, never a silent dangling read."
+why = "Channel values travel between tasks as a single 64-bit slot: scalars by value (int, float, boolean), heap-stable pointers (string, array, map), and a `number` as a 16-byte heap cell the send mints and the receive frees (the sender's binding stays usable; `number` is copy-through, never given away). What is still deferred is narrower: a `shape` element, and a bignum `number` (more than 34 digits of precision). A `shape` value is backed by the SENDING task's stack frame, which can be freed while the value still sits in the channel — the receiver would read freed memory — and an inline copy of it would share any pointer-cell field (an `array` field) between sender and receiver, which is a question of handing over a value that holds other values, not a marshalling question. Until that ships, shape and bignum elements are rejected at channel construction with a clean teaching error, never a silent dangling read."
 ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
 triggers = "`channel<Player>()` - a channel construction whose element type is a shape (or a bignum `number`) - rejected today with a teaching error (crates/ynz-typeck/src/check.rs, channel-construction element check, derived from `ynz_typeck::types::channel_elem_supported`). Lift when the depth-two transfer rule for container stores lands and a shape's pointer-cell fields can be handed over soundly."
@@ -1623,13 +1623,15 @@ what_template = "Imported module `{path}` was not found."
 what_instead_template = "Check that the path is correct (paths are root-relative, starting from the project's entry file)."
 why_template = "Yinz import paths are root-relative, not relative to the current file."
 
-# Rendered FROM this entry by typeck's consumed-read site since v0.3-M8 Phase 4 (before
+# Rendered FROM this entry by typeck's consumed-read rendering since v0.3-M8 Phase 4 (before
 # that the emit site carried a hand-written twin and this entry was dead data — parked
-# items 7/8; the "move" wording is retired, `give` is the Yinz word).
+# items 7/8; the "move" wording is retired, `give` is the Yinz word). `{via}` is empty when the
+# name read is the name that was given; otherwise it names the alias-class mate that was
+# (" — it shares its value with `rows`, which is what was given away"), mirroring ConsumedBySend.
 [[diagnostic_template]]
 kind_name = "Consumed"
-what_template = "`{name}` was already given away and cannot be used here."
-what_instead_template = "Create a new value, or use `.copy()` before giving `{name}` away if you need it in both places."
+what_template = "`{name}` was already given away and cannot be used here{via}."
+what_instead_template = "Create a new value, or use `.copy()` before giving `{given}` away if you need it in both places."
 why_template = "When a function takes ownership of a value, the caller no longer holds it. Using it afterward would read memory the new owner may already have freed."
 
 # ── v0.3-M8 Phase 4: the transfer rule's three diagnostics (IMP-ownership.md "Teaching

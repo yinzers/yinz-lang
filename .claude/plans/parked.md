@@ -263,7 +263,11 @@ sign-off applies them alongside the owed downstream plan edits** — the design 
     regression.rs:180,rename.rs:178,inlay_hint_array_to_fixed_edit.rs:234}`,
     `ynz-numerics/{src/decimal128/ops.rs:695,tests/differential.rs:12,126}`,
     `ynz-diagnostics/tests/jargon_audit.rs:{69,97,236,563}`, `ynz-watch/tests/long_session.rs:117`,
-    `ynz-registry/tests/consistency.rs:6` — `manual_contains`, `unused_imports`, `len_zero`,
+    `ynz-registry/tests/consistency.rs:6`, and (found by the round-2 gate once clippy got past the
+    earlier-aborting crates) `ynz-typeck/tests/{strings_typeck.rs ×15 incl. 14 non-snake-case test
+    fns, builtins.rs:11, inlay_hint_passes.rs:6, iterables_typeck.rs:13, maps.rs:11,
+    generics_typeck.rs:410, check.rs:1027}` + `ynz-typeck/src/independence.rs:{981,995,1009,1026,
+    1117}` (unused `susp` ×5; all last changed at `3b7e6e9`, pre-M8) — `manual_contains`, `unused_imports`, `len_zero`,
     `unnecessary_map_or`, `implicit_saturating_sub`, `while_let_on_iterator`, `single_match`,
     `dead_code`. None of these files are in Phase 4's diff (`git diff --name-only HEAD` confirms);
     clippy aborts at a different first-failing crate per run, so two green-check passes reported

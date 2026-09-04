@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904"]
 created_at: "2026-07-04"
 updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -1272,6 +1272,69 @@ in-session, no handoff file):**
 > minor. **Five blockers, three producers**: the diagnostics renderer's span handling (ux ×2), a
 > missing `ErrorsCapable` `.message` codegen arm (doc), the transfer check's same-call ordering +
 > one `ChannelElemDrop` twin (code). Fix round 2 answers `red:code-reviewer`.
+>
+> **Round 2 grading (fix round `m8-p4-fix2-20260904`, Fable medium; conductor, 2026-09-04).**
+> Root cause of the renderer blockers: byte-indexed `SourceSpan` rendered under ariadne's default
+> `IndexType::Char` — every gallery diagnostic since M4 pointed past its trigger by the file's
+> multi-byte surplus (m6/m7 too); `IndexType::Byte` + `clamp_to_source` fixes all galleries.
+> `green-check-medium` (Sonnet) → all lanes green (29/10/530/7 driver, typeck/diagnostics/abi/codegen
+> all targets, 110 lib + 8 loom, release builds, gallery `// WHY:` excerpt count 0, gitleaks); red
+> only on `clippy --all-targets` in `ynz-typeck` test files last touched at `3b7e6e9` — pre-M8,
+> not in the diff, added to parked 31. Seats (four read-only in parallel): `ux-low` (Haiku) → clean
+> — 10+ excerpts on their trigger lines, last diagnostic renders its full block, 32 camelCase / 0
+> snake_case gallery fns; `plan-adherence-medium` (Sonnet) → clean — all 20 round-1 findings walked,
+> each fixed or declined on record, the consumed-classes snapshot ruled sound and risk-neutral, every
+> exit criterion re-run; `doc-auditor-medium` (Sonnet) → 0 blockers, 1 should-fix
+> (`IMP-ownership.md:277` still carries the stale "typeck drops the modifiers… checks no ownership at
+> all" sentence beside the corrected text, with a dead `check.rs:5391` cite — real site is
+> `check.rs:~6153-6190`), 2 minor; `code-reviewer-medium` (Fable, seven probes) → **1 BLOCKER**:
+> `.message` on a NOT-failed `errors` value SIGABRTs — `emit.rs:~19235-19248` calls
+> `ynz_error_message(err_ptr)` unconditionally then `select`s "" on null, and `select` does not
+> short-circuit; the arm's own comment claims the opposite; the new fixture covers only the failed
+> path. **Producer named upstream**: `REF-errors.md:171-175` says `.message` without a `.failed()`
+> check is a COMPILE ERROR; typeck types `.message` as `string` unconditionally (`check.rs:~6364`,
+> `~7051`), so codegen was guarding a path the design forbids. 2 should-fix (that divergence; the
+> `CHANNEL_ELEM_SUPPORTED_NAMES` parity test is hand-picked and `channel_elem_drop` keeps a `_ =>
+> None`, so admitting a new element kind stays green — plus a duplicate per-variant sampler in
+> `emit.rs`), 5 minor (`copy_lowering_arm` calls bignum `ByValue` though `precision > 34` lowers as
+> a pointer — unreachable today; `TYPE_VARIANT_COUNT` hand constant; single-line-only const parser;
+> `call_argument_text` string-skip fragility; a truncated registry comment). `test-quality` still
+> DEFERRED — round 3 changes the test set again; it grades once, on the final set. **A fix that
+> opened a gap earns exactly one more round: fix round 3 answers `red:code-reviewer`.**
+
+> **Fix round 2 (dispatch `m8-p4-fix2-20260904`, 2026-09-04 — all five blockers closed, all
+> eight should-fixes done, four minors done; uncommitted, pending conductor review).**
+> Producer A was ONE renderer defect, not this phase's emit sites: `SourceSpan` offsets are
+> bytes and `ariadne::Config::default()` indexes by CHARS, so every multi-byte character before
+> a span (the galleries' `──────` rules and em dashes) pushed the caret forward by the byte
+> surplus (m8: +28 bytes at line 19 → rendered at 22:11; +90 at line 92 → 95) and a span whose
+> byte offset exceeded the file's char count was dropped by ariadne with its note — the m6/m7
+> galleries were off too. Fix: `IndexType::Byte` + a past-EOF clamp in `render.rs`; three RED→
+> GREEN tests in `ynz-diagnostics/tests/byte_spans.rs`; the gallery reorder workaround removed
+> (the handle trigger is LAST on purpose now). Producer B: `.message` IS spec-defined
+> (`REF-errors.md`), so the codegen arm landed in `lower_field_access` (null-safe select to the
+> empty string); fixture `v0_3_m8_p4_errors_message_after_failed.ynz` RED (ICE) → GREEN.
+> Producer C1: `check_transfer` takes the call form's PRE-CALL snapshot of consumed alias
+> classes (`Scope::consumed_classes`); a consumed class absent from the snapshot was consumed
+> by an earlier position of the same call and is reported through the ONE consumed-read
+> rendering (`consumed_read_diag`, shared with `resolve_ident`); non-`give` positions run the
+> same read check (`mix(give a, share b)`); `ConsumedBy::Given` gained `given` and the
+> `Consumed` template a `{via}` slot. Three fixtures RED (`3 3` printed / compiled) → GREEN
+> refused. C2: both NumberCell twins replaced with `channel_elem_drop(..) ==
+> Some(NumberCell)`. Should-fixes: camelCase gallery names; `IMP-concurrency.md`'s CLOSED-
+> first-poll paragraph rewritten to shipped state; the registry `why` cleaned; `REF-ownership.md:83`
+> comment; the fixpoint oracle resolves `let` locals (annotation / literal / receiver-independent
+> scalar builtin from the registry) — `wire.send(build(bucket))` RED refused → GREEN sends;
+> `copy_lowering_arm` (exhaustive, the Copy lowering dispatches on it) + `copy_parity_tests`;
+> the parity ratchet's tier 2 parses `registry_diag(` argument lists (exemption gone);
+> `IMP-ownership.md:277` says what the code enforces. Minors: caret tag "given away"; `—` in
+> `closed_msg`; the "Use one of" list rendered from `CHANNEL_ELEM_SUPPORTED_NAMES` with a parity
+> test; `ALL_BG_ARG_KINDS` source-parity test. Verified (exit 0 each): fmt; typeck all-targets
+> (incl. 6 new parity tests); diagnostics all-targets; abi; codegen `copy_parity`; driver
+> `v03_m8_channel_close` 29, `error_galleries` 10, `integration` 530; runtime lib 110; loom 8;
+> clippy clean on every touched lib/test target (the parked-31 test-target debt in
+> `jargon_audit.rs` / `independence.rs` / typeck's older test files is untouched, as instructed);
+> `ynz-driver --release` rebuilt. Demo golden unchanged (the demo prints no `.message`).
 
 - **Task + purpose:** implement Phase 1's signed-off design — the explicit close mechanism, the live
   typed channel-closed error, and P2-3's closed-send drop-glue leak fixed through M6's single choke

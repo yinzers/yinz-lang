@@ -145,3 +145,56 @@ pub const ALL_BG_ARG_KINDS: &[u64] = &[
 pub const fn bg_arg_kind_is_releasable_payload(kind: u64) -> bool {
     kind != BG_ARG_KIND_SHARED_CHANNEL && kind != BG_ARG_KIND_RELEASED
 }
+
+#[cfg(test)]
+mod bg_arg_kind_tests {
+    use super::*;
+
+    /// `ALL_BG_ARG_KINDS` is a hand list; this holds it to the crate's own `BG_ARG_KIND_*`
+    /// constants by reading this source file, so a kind added above without being listed (or
+    /// the reverse) fails here instead of slipping past the runtime's per-kind parity test.
+    #[test]
+    fn every_bg_arg_kind_const_is_in_all_bg_arg_kinds() {
+        let src = include_str!("lib.rs");
+        let mut declared: Vec<(String, u64)> = Vec::new();
+        for line in src.lines() {
+            let Some(rest) = line.trim_start().strip_prefix("pub const BG_ARG_KIND_") else {
+                continue;
+            };
+            let Some((name, value)) = rest.split_once(": u64 = ") else {
+                continue;
+            };
+            let value: u64 = value
+                .trim_end_matches(';')
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("BG_ARG_KIND_{name}: not an integer literal"));
+            declared.push((name.to_string(), value));
+        }
+        assert!(
+            !declared.is_empty(),
+            "found no `pub const BG_ARG_KIND_*: u64 = N;` lines — the parser drifted from the source"
+        );
+        for (name, value) in &declared {
+            assert!(
+                ALL_BG_ARG_KINDS.contains(value),
+                "BG_ARG_KIND_{name} = {value} is declared but missing from ALL_BG_ARG_KINDS"
+            );
+        }
+        assert_eq!(
+            ALL_BG_ARG_KINDS.len(),
+            declared.len(),
+            "ALL_BG_ARG_KINDS lists {} kinds but {} BG_ARG_KIND_* constants are declared",
+            ALL_BG_ARG_KINDS.len(),
+            declared.len()
+        );
+        let mut sorted = ALL_BG_ARG_KINDS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            ALL_BG_ARG_KINDS.len(),
+            "duplicate kind value in ALL_BG_ARG_KINDS"
+        );
+    }
+}

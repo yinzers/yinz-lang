@@ -647,7 +647,8 @@ pub fn analyze(
             // returns_fresh[f]: every `return` fresh, else MayAlias (naming the parameter it
             // reaches through when there is one).
             if returns_fresh[&f.name] == Freshness::Fresh {
-                let type_of = fixpoint_type_oracle(f, resolve_ty);
+                let type_of =
+                    fixpoint_type_oracle(f, resolve_ty, &local_fn_names, imported_fn_names);
                 let ctx = ProvenanceCtx {
                     returns_fresh: &returns_fresh,
                     local_fns: &local_fn_names,
@@ -879,49 +880,82 @@ fn param_consumed_in_expr(
 }
 
 /// The fixpoint's type oracle for `provenance`: it runs before any body is checked, so it
-/// knows only DECLARED parameter types (by name, unless a `let` in the body rebinds the
-/// name) and the value literals — everything else is `None` (treated as heap-typed, the
-/// conservative direction). Typeck's `check_transfer` answers from `expr_types` instead.
+/// knows only what is decidable from the AST alone — DECLARED parameter types, the value
+/// literals, and (v0.3-M8 Phase 4 fix round 2, should-fix 5) `let` locals whose type is
+/// knowable without inference: an annotation, a literal initializer, or a builtin method
+/// whose result type is the same scalar on every receiver (`.count()` is `int` on a string,
+/// an array and a map alike). A name bound more than once to different knowable types, or
+/// bound once knowably and once not, answers `None`. Everything else is `None` — treated as
+/// heap-typed, the conservative direction (a `Reaches` where typeck would say `Fresh`
+/// refuses a transfer, never admits one). Typeck's `check_transfer` answers from `expr_types`
+/// instead. Before this extension every `let` local was `None`, so a builder like
+/// `let n = b.rows.count(); let out: array<int> = [n]; return out` was `MayAlias` and
+/// `wire.send(build(bucket))` was refused with a WHY that was false about the program.
 fn fixpoint_type_oracle<'a>(
     f: &'a FunctionDecl,
     resolve_ty: &'a dyn Fn(&AstType) -> Type,
+    local_fns: &'a HashSet<String>,
+    imported_fn_names: &'a HashSet<String>,
 ) -> impl Fn(&Expr) -> Option<Type> + 'a {
-    let rebound: HashSet<String> = collect_let_names(&f.body);
-    move |e: &Expr| match e {
-        Expr::IntLit(..) => Some(Type::Int),
-        Expr::NumberLit(..) => Some(Type::Number { precision: 34 }),
-        Expr::BoolLit(..) => Some(Type::Bool),
-        Expr::StringLit(..) | Expr::InterpolatedString(..) => Some(Type::String),
-        Expr::Ident(name, _) if !rebound.contains(name) => f
-            .params
-            .iter()
-            .find(|p| &p.name == name)
-            .map(|p| resolve_ty(&p.ty)),
-        _ => None,
+    let is_user_fn = move |name: &str| local_fns.contains(name) || imported_fn_names.contains(name);
+    let literal_type = move |e: &Expr| -> Option<Type> {
+        match e {
+            Expr::IntLit(..) => Some(Type::Int),
+            Expr::NumberLit(..) => Some(Type::Number { precision: 34 }),
+            Expr::BoolLit(..) => Some(Type::Bool),
+            Expr::StringLit(..) | Expr::InterpolatedString(..) => Some(Type::String),
+            Expr::MethodCall { method, .. } if !is_user_fn(method) => {
+                receiver_independent_scalar_result(method)
+            }
+            _ => None,
+        }
+    };
+    // Every name a `let`/`for` binds, with the ONE type all its bindings agree on (`None` when
+    // any binding is not knowable or two disagree). A parameter of the same name is one more
+    // candidate — the name means the parameter until the `let` shadows it.
+    let mut locals: HashMap<String, Option<Type>> = HashMap::new();
+    fn join(locals: &mut HashMap<String, Option<Type>>, name: &str, ty: Option<Type>) {
+        match locals.get_mut(name) {
+            Some(existing) => {
+                if *existing != ty {
+                    *existing = None;
+                }
+            }
+            None => {
+                locals.insert(name.to_string(), ty);
+            }
+        }
     }
-}
-
-/// Every name a `let` in `block` (at any depth) binds — the names the declared-parameter
-/// oracle must NOT answer for, since a shadowing `let` can change the name's type.
-fn collect_let_names(block: &Block) -> HashSet<String> {
-    let mut out = HashSet::new();
-    fn walk(stmts: &[Stmt], out: &mut HashSet<String>) {
+    fn walk(
+        stmts: &[Stmt],
+        resolve_ty: &dyn Fn(&AstType) -> Type,
+        literal_type: &dyn Fn(&Expr) -> Option<Type>,
+        join: &mut dyn FnMut(&str, Option<Type>),
+    ) {
         for s in stmts {
             match s {
-                Stmt::Let { name, .. } => {
-                    out.insert(name.clone());
+                Stmt::Let {
+                    name, ty, value, ..
+                } => {
+                    let known = match ty {
+                        Some(annot) => Some(resolve_ty(annot)),
+                        None => literal_type(value),
+                    };
+                    join(name, known);
                 }
                 Stmt::For { var, body, .. } => {
-                    out.insert(var.clone());
-                    walk(&body.stmts, out);
+                    join(var, None);
+                    walk(&body.stmts, resolve_ty, literal_type, join);
                 }
-                Stmt::If { body, .. } | Stmt::While { body, .. } => walk(&body.stmts, out),
+                Stmt::If { body, .. } | Stmt::While { body, .. } => {
+                    walk(&body.stmts, resolve_ty, literal_type, join)
+                }
                 Stmt::Match { arms, else_arm, .. } => {
                     for a in arms {
-                        walk(&a.body.stmts, out);
+                        walk(&a.body.stmts, resolve_ty, literal_type, join);
                     }
                     if let Some(eb) = else_arm {
-                        walk(&eb.stmts, out);
+                        walk(&eb.stmts, resolve_ty, literal_type, join);
                     }
                 }
                 Stmt::Expr(_)
@@ -932,8 +966,57 @@ fn collect_let_names(block: &Block) -> HashSet<String> {
             }
         }
     }
-    walk(&block.stmts, &mut out);
-    out
+    {
+        let mut join_into = |name: &str, ty: Option<Type>| join(&mut locals, name, ty);
+        walk(&f.body.stmts, resolve_ty, &literal_type, &mut join_into);
+    }
+    for p in &f.params {
+        if locals.contains_key(&p.name) {
+            join(&mut locals, &p.name, Some(resolve_ty(&p.ty)));
+        }
+    }
+    move |e: &Expr| match e {
+        Expr::Ident(name, _) => match locals.get(name) {
+            Some(known) => known.clone(),
+            None => f
+                .params
+                .iter()
+                .find(|p| &p.name == name)
+                .map(|p| resolve_ty(&p.ty)),
+        },
+        other => literal_type(other),
+    }
+}
+
+/// The result type of a builtin method that is the SAME scalar on every receiver type the
+/// registry lists it for (`count` → `int` on string/array/map), so the oracle can answer it
+/// without knowing the receiver. Read from `[[primitive_intrinsic]]` — the one inventory of
+/// builtin methods — never a hand list here. `None` when the name is unknown, has receivers
+/// that disagree, or returns anything other than a value-bit scalar or `string`.
+fn receiver_independent_scalar_result(method: &str) -> Option<Type> {
+    let mut result: Option<&str> = None;
+    let mut seen = false;
+    for entry in ynz_registry::primitive_intrinsics()
+        .filter(|e| e.name == method && e.receiver_type.is_some())
+    {
+        seen = true;
+        match result {
+            None => result = Some(entry.return_type),
+            Some(r) if r == entry.return_type => {}
+            Some(_) => return None,
+        }
+    }
+    if !seen {
+        return None;
+    }
+    match result? {
+        "int" => Some(Type::Int),
+        "float" => Some(Type::Float),
+        "boolean" | "bool" => Some(Type::Bool),
+        "string" => Some(Type::String),
+        "number" => Some(Type::Number { precision: 34 }),
+        _ => None,
+    }
 }
 
 /// Walk `block` tracking which locals are FRESH (initializer fresh, never aliased by another

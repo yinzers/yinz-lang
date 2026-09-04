@@ -97,30 +97,99 @@ fn every_template_kind_name_is_classified() {
     }
 }
 
+/// The `DiagnosticKind::X` variants that appear INSIDE a `registry_diag(...)` call's argument
+/// list in `check.rs` — the kinds whose text really is rendered from the registry. Each call
+/// is located by its `registry_diag(` token and closed at its matching `)` (parentheses
+/// balanced, string literals skipped), so a `.with_kind(DiagnosticKind::X)` on a hand-written
+/// diagnostic elsewhere never counts as "rendered" (the token-presence check this replaced
+/// was satisfied by exactly that, and needed a hardcoded exemption to stay green).
+fn kinds_rendered_via_registry_diag(src: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let needle = "registry_diag(";
+    let mut from = 0;
+    while let Some(rel) = src[from..].find(needle) {
+        let open = from + rel + needle.len() - 1;
+        let args = call_argument_text(src, open);
+        let mut rest = args.as_str();
+        while let Some(i) = rest.find("DiagnosticKind::") {
+            let after = &rest[i + "DiagnosticKind::".len()..];
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            out.insert(after[..end].to_string());
+            rest = &after[end..];
+        }
+        from = open + args.len() + 1;
+    }
+    out
+}
+
+/// The text between the `(` at byte `open` and its matching `)`, skipping over string
+/// literals (a `)` inside a slot value must not close the call early).
+fn call_argument_text(src: &str, open: usize) -> String {
+    debug_assert_eq!(&src[open..open + 1], "(");
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    for (i, c) in src[open..].char_indices() {
+        if in_str {
+            match c {
+                '\\' if !escaped => escaped = true,
+                '"' if !escaped => in_str = false,
+                _ => escaped = false,
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return src[open + 1..open + i].to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced parentheses after byte {open} in check.rs");
+}
+
 #[test]
 fn variant_backed_templates_are_rendered_from_the_registry_or_on_the_shrinking_ratchet() {
     let src = check_rs_source();
+    let rendered_kinds = kinds_rendered_via_registry_diag(&src);
+    assert!(
+        !rendered_kinds.is_empty(),
+        "no `registry_diag(... DiagnosticKind::X ...)` call found in check.rs — the parser drifted"
+    );
     let ratchet: BTreeSet<&str> = HAND_WRITTEN_RATCHET.iter().copied().collect();
     for kind in DiagnosticKind::TEMPLATE_KIND_NAMES {
         if *kind == "BannedJargon" {
             continue;
         }
-        let rendered = src.contains(&format!("DiagnosticKind::{kind},"))
-            || src.contains(&format!("DiagnosticKind::{kind} "))
-            || src.contains(&format!("DiagnosticKind::{kind})"));
+        let rendered = rendered_kinds.contains(*kind);
         let on_ratchet = ratchet.contains(kind);
         assert!(
             rendered || on_ratchet,
             "DiagnosticKind::{kind} has a registry template but check.rs neither renders it \
-             through `registry_diag` nor lists it on HAND_WRITTEN_RATCHET — a dead template \
-             (parked item 7's class)"
+             through `registry_diag(... DiagnosticKind::{kind} ...)` nor lists it on \
+             HAND_WRITTEN_RATCHET — a dead template (parked item 7's class)"
         );
         // A kind that is rendered must be off the ratchet (the ratchet only shrinks).
-        let rendered_via_registry = src.contains(&format!("registry_diag(\n"))
-            && src.contains(&format!("DiagnosticKind::{kind}"));
-        if rendered_via_registry && on_ratchet && !matches!(*kind, "NotDefined" | "UnusedImport") {
-            panic!("DiagnosticKind::{kind} is rendered from the registry — remove it from HAND_WRITTEN_RATCHET");
-        }
+        assert!(
+            !(rendered && on_ratchet),
+            "DiagnosticKind::{kind} is rendered from the registry — remove it from \
+             HAND_WRITTEN_RATCHET"
+        );
+    }
+    // Every kind the parser found is a real variant with a template (the parser is not
+    // picking up stray text).
+    for kind in &rendered_kinds {
+        assert!(
+            DiagnosticKind::TEMPLATE_KIND_NAMES.contains(&kind.as_str()),
+            "registry_diag renders DiagnosticKind::{kind}, which is not a template-backed variant"
+        );
     }
 }
 
@@ -183,7 +252,106 @@ fn consumed_is_rendered_from_the_registry() {
            eat(rows)\n\
            print(rows.count())\n\
          }",
-        &[("name", "rows")],
+        &[("name", "rows"), ("given", "rows"), ("via", "")],
+    );
+}
+
+#[test]
+fn consumed_through_an_alias_class_names_what_was_given_in_the_via_slot() {
+    assert_rendered(
+        DiagnosticKind::Consumed,
+        "function eat(give rows: array<int>) -> nothing { print(rows.count()) }\n\
+         function entrypoint() -> nothing {\n\
+           let rows: array<int> = [1, 2, 3]\n\
+           let other = rows\n\
+           eat(rows)\n\
+           print(other.count())\n\
+         }",
+        &[
+            ("name", "other"),
+            ("given", "rows"),
+            (
+                "via",
+                " — it shares its value with `rows`, which is what was given away",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
+    // WHY: v0.3-M8 Phase 4 fix round 2 (Producer C1). Every call form infers all arguments
+    // before any position consumes, so the consumed-read site never sees `other`; the ONE
+    // place left is the transfer decision at position 1, with the pre-call snapshot telling
+    // it the consume happened inside this call. RED before the fix: zero diagnostics.
+    assert_rendered(
+        DiagnosticKind::Consumed,
+        "function eat2(give a: array<int>, give b: array<int>) -> nothing { print(a.count()) }\n\
+         function entrypoint() -> nothing {\n\
+           let rows: array<int> = [1, 2, 3]\n\
+           let other = rows\n\
+           eat2(rows, other)\n\
+         }",
+        &[
+            ("name", "other"),
+            ("given", "rows"),
+            (
+                "via",
+                " — it shares its value with `rows`, which is what was given away",
+            ),
+        ],
+    );
+    // The mixed form: a `share` position reading what a `give` position of the same call
+    // consumed is the same read after free.
+    assert_rendered(
+        DiagnosticKind::Consumed,
+        "function mix(give a: array<int>, share b: array<int>) -> nothing { print(a.count()) }\n\
+         function entrypoint() -> nothing {\n\
+           let rows: array<int> = [1, 2, 3]\n\
+           let other = rows\n\
+           mix(rows, other)\n\
+         }",
+        &[
+            ("name", "other"),
+            ("given", "rows"),
+            (
+                "via",
+                " — it shares its value with `rows`, which is what was given away",
+            ),
+        ],
+    );
+    // The same name twice: `{via}` is empty — it IS the name that was given.
+    assert_rendered(
+        DiagnosticKind::Consumed,
+        "function eat2(give a: array<int>, give b: array<int>) -> nothing { print(a.count()) }\n\
+         function entrypoint() -> nothing {\n\
+           let rows: array<int> = [1, 2, 3]\n\
+           eat2(rows, rows)\n\
+         }",
+        &[("name", "rows"), ("given", "rows"), ("via", "")],
+    );
+}
+
+#[test]
+fn a_class_consumed_before_the_call_is_not_reported_twice() {
+    // `resolve_ident` reports the read at inference; the transfer decision must stay quiet.
+    let errors = errors_for(
+        "function eat(give rows: array<int>) -> nothing { print(rows.count()) }\n\
+         function entrypoint() -> nothing {\n\
+           let rows: array<int> = [1, 2, 3]\n\
+           eat(rows)\n\
+           eat(rows)\n\
+         }",
+    );
+    let consumed: Vec<_> = errors
+        .iter()
+        .filter(|d| d.kind == Some(DiagnosticKind::Consumed))
+        .collect();
+    assert_eq!(
+        consumed.len(),
+        1,
+        "exactly one use-after-give for the second `eat(rows)`; got {:#?}",
+        errors.iter().map(|d| &d.what).collect::<Vec<_>>()
     );
 }
 

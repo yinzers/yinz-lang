@@ -124,7 +124,7 @@ impl DiagnosticKind {
             DiagnosticKind::MissingField { field } => format!("missing: {field}"),
             DiagnosticKind::HiddenAccess => "hidden".to_string(),
             DiagnosticKind::ImportNotFound => "not found".to_string(),
-            DiagnosticKind::Consumed => "consumed".to_string(),
+            DiagnosticKind::Consumed => "given away".to_string(),
             DiagnosticKind::ConsumedBySend => "sent away".to_string(),
             DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
             DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),

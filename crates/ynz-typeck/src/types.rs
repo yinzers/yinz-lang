@@ -306,19 +306,114 @@ pub fn channel_elem_supported(elem: &Type) -> bool {
         || channel_elem_drop(elem).is_some()
 }
 
+/// The user-facing names of the element types [`channel_elem_supported`] admits, in the
+/// order the teaching text lists them ("Use one of: …"). Held to the predicate by
+/// `channel_elem_supported_names_match_the_predicate` below — the prose list at the
+/// construction check is rendered FROM this constant, never typed a second time.
+pub const CHANNEL_ELEM_SUPPORTED_NAMES: &[&str] = &[
+    "int",
+    "float",
+    "boolean",
+    "string",
+    "number",
+    "array<T>",
+    "map<K, V>",
+];
+
 /// Is `.copy()` on a value of this type a genuinely INDEPENDENT copy (a fresh allocation
 /// nobody else reaches), so provenance may classify the result `Fresh`?
 ///
-/// Parity-tested against codegen's `PostfixOpKind::Copy` arms (`emit.rs`): `array`
-/// (`ynz_array_clone_primitive` / SoA gather), `map` (`ynz_map_clone`, v0.3-M8 step 3a), and
-/// an inline `shape` (memcpy into a fresh alloca). Every other type still falls through
-/// codegen's `_ => Ok(recv_val)` alias no-op (the FR#10 stub class — `maybe`, union,
-/// `fixed`, `dynamic`), so its `.copy()` is `Unknown` and can never be transferred.
-/// Value-bit primitives are trivially independent.
+/// Held to parity with codegen's `copy_lowering_arm` (`ynz_codegen::emit`, the ONE
+/// classification the `PostfixOpKind::Copy` lowering dispatches on) by
+/// `copy_parity_tests::copy_is_independent_matches_the_copy_lowering_arm_for_every_type_variant`
+/// over one sample of every `Type` variant: `true` here ⇔ the lowering yields an independent
+/// value — `array` (`ynz_array_clone_primitive` / SoA gather), `map` (`ynz_map_clone`,
+/// v0.3-M8 step 3a), an inline `shape` (memcpy into a fresh alloca), and the value-bit
+/// primitives / immortal `string` bytes, which are already by-value. Every other type is
+/// codegen's alias no-op (the FR#10 stub class — `maybe`, union, `fixed`, `dynamic`, …), so its
+/// `.copy()` is `Unknown` and can never be transferred.
 pub fn copy_is_independent(ty: &Type) -> bool {
     is_trivially_copyable(ty)
         || matches!(
             ty,
             Type::String | Type::Shape { .. } | Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
         )
+}
+
+#[cfg(test)]
+mod channel_elem_tests {
+    use super::*;
+
+    /// One sample per supported name, in the constant's order, plus the rejected kinds the
+    /// registry deferral names (`channel-element-heap-upgrade`: shape and bignum) and the
+    /// other non-element types.
+    #[test]
+    fn channel_elem_supported_names_match_the_predicate() {
+        let supported: Vec<(&str, Type)> = vec![
+            ("int", Type::Int),
+            ("float", Type::Float),
+            ("boolean", Type::Bool),
+            ("string", Type::String),
+            ("number", Type::Number { precision: 34 }),
+            (
+                "array<T>",
+                Type::BuiltinArray {
+                    elem: Box::new(Type::Int),
+                },
+            ),
+            (
+                "map<K, V>",
+                Type::BuiltinMap {
+                    key: Box::new(Type::String),
+                    val: Box::new(Type::Int),
+                },
+            ),
+        ];
+        let names: Vec<&str> = supported.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            names, CHANNEL_ELEM_SUPPORTED_NAMES,
+            "the prose list and the sampled predicate must name the same kinds in the same order"
+        );
+        for (name, ty) in &supported {
+            assert!(
+                channel_elem_supported(ty),
+                "`{name}` is listed as supported but channel_elem_supported({ty:?}) is false"
+            );
+        }
+        let rejected = [
+            Type::Shape {
+                name: "Player".to_string(),
+            },
+            Type::Number { precision: 40 },
+            Type::Maybe {
+                inner: Box::new(Type::Int),
+            },
+            Type::BuiltinFixed {
+                elem: Box::new(Type::Int),
+                size: None,
+            },
+            Type::BuiltinChannel {
+                elem: Box::new(Type::Int),
+            },
+            Type::Options {
+                name: "Status".to_string(),
+            },
+            Type::Union {
+                variants: vec![Type::Int, Type::String],
+            },
+            Type::Sensitive {
+                inner: Box::new(Type::String),
+            },
+            Type::Dynamic {
+                contract: "Eater".to_string(),
+            },
+            Type::Nothing,
+        ];
+        for ty in &rejected {
+            assert!(
+                !channel_elem_supported(ty),
+                "{ty:?} is admitted as a channel element but is not in CHANNEL_ELEM_SUPPORTED_NAMES"
+            );
+        }
+    }
 }

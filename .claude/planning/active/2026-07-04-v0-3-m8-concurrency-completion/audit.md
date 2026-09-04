@@ -11,6 +11,79 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p4-fix2-20260904` — 2026-09-04 — **Phase 4 fix round 2: five blockers, three producers,
+  all closed; eight should-fixes and four minors done; nothing committed.** Read: the Phase 4
+  block's round-1 grading, the `m8-p4-20260904-a2` entry, `corpses.md`, root-cause /
+  authoritative-derivation / teaching-surfaces / test-parallelism, `IMP-concurrency.md` "Channel
+  Close…", `IMP-ownership.md` "Transfer…". **Producer A — root cause named: the renderer, not
+  the emit sites.** `SourceSpan` is byte-indexed; `ariadne::Config::default()` is
+  `IndexType::Char`. Measured on `m8_errors.ynz`: 164 surplus bytes over the file, +28 before
+  line 19 (rendered 22:11 — exactly 28 chars past the trigger), +90 before line 92 (→ 95); the
+  m6/m7 galleries carry 26/116 surplus bytes and were off too, so this was never a Phase 4
+  regression. The past-EOF drop (A2) is the SAME producer: a byte offset past the char count
+  makes `get_offset_line` return `None` and ariadne `continue`s past the label, taking the note
+  with it. Fix: `.with_index_type(IndexType::Byte)` + `clamp_to_source` (a span past the end is
+  pinned to the last byte so the teaching block always renders). RED: `byte_spans.rs` 3 tests
+  FAILED against the old `render.rs` (stash/pop run) → GREEN 3 passed. Gallery: the reorder
+  workaround and its comment removed; `m8CloseOnHandle` deliberately last; the gallery test now
+  fails if any caret line lands inside a `// WHY:` comment and asserts the close-with-args
+  WHAT-INSTEAD renders. **Producer B — path taken: the codegen arm.** `REF-errors.md` defines
+  `.message` (":160 error description (only valid after `.failed()` check)"), so the spec's
+  example is legitimate and the ICE was a missing arm. `lower_field_access` gained the
+  `ErrorsCapable`/`"message"` arm reading `{i64 err_ptr, i64 ok}` exactly as `.failed()` does,
+  `ynz_error_message` → the null-terminated bytes (a Yinz `string` at the ABI), `select`ed
+  against the empty string when `err_ptr == 0`. Other EC fields error explicitly instead of
+  falling to `field_gep`. RED: `field_gep: receiver is not a Shape, got ErrorsCapable` → GREEN
+  prints the closed-send message. **Producer C1 — chosen shape: the pre-call snapshot, not a
+  two-pass reclassification.** A two-pass "classify all, then consume all" cannot see the alias
+  pair at all (both positions are admitted individually; the defect is that they share a class),
+  so the ONE fact that distinguishes "consumed before this call (reported at inference)" from
+  "consumed by this call (reported nowhere)" is the set of consumed classes at call entry:
+  `Scope::consumed_classes()` taken once in `check_call_transfers` (and right before each send
+  arm's single `check_transfer`), passed to `check_transfer`, which now renders the consumed
+  read when the class is absent from the snapshot — never an early return. The rendering is
+  ONE function, `consumed_read_diag`, with two callers (`resolve_ident`, `check_transfer`/
+  `check_read_of_same_call_consumed`); `ConsumedBy::Given { callee, given }` mirrors `Sent`,
+  and the `Consumed` template gained `{via}` (" — it shares its value with `rows`, which is what
+  was given away") + `{given}` in WHAT-INSTEAD. Non-`give` positions (`share`/`lend`/bare) run
+  the same read check so `mix(give a, share b)` is caught. RED: give/give printed `3 3`,
+  give/share printed `3 3`, background compiled → GREEN all three refused with the `{via}`
+  form; `eat2(rows, rows)` renders the empty-`via` form; a class consumed BEFORE a call is
+  reported exactly once (typeck test). **C2:** `emit.rs` conduit send/receive now ask
+  `channel_elem_drop(..) == Some(ChannelElemDrop::NumberCell)`; codegen swept — the other
+  `Type::Number { precision <= 34 }` tests are ABI/i128-storage decisions, not channel-element
+  ones (the `elem_ty2` test at the array-literal lowering is SM decimal-global staging). **Should-
+  fixes:** (1) 30 gallery fns → camelCase, `error_galleries.rs` phrases updated; (2) the
+  `IMP-concurrency.md` CLOSED-first-poll paragraph rewritten to shipped state, anchor `git log
+  --grep=m8-p4` (resolves: `2be2244`, `6b8a34d`); (3) the registry `why` no longer carries the
+  milestone tag or the internal path; (4) `REF-ownership.md:83` comment; (5) the oracle resolves
+  `let` locals from an annotation, a literal, or a builtin whose registry `return_type` is the
+  same scalar on every receiver (`count` → `int`), joining all bindings of a name (disagreement
+  or a `for` var → `None`, a same-named parameter is one more candidate) — RED refused → GREEN
+  `1\n3\nend`, alloc gap 4 observed; (6) `copy_lowering_arm` is THE classification the Copy
+  lowering dispatches on (no `_` arm over `Type`), `copy_parity_tests` holds it to
+  `copy_is_independent` over one sample per variant, a variant count pins the sample list —
+  there was no prior test, so RED is "absent"; (7) tier 2 parses each `registry_diag(` call's
+  balanced argument list for `DiagnosticKind::X` (string literals skipped); the
+  `NotDefined | UnusedImport` exemption is gone; (8) `IMP-ownership.md:277` now states the
+  receiver rule the code enforces; (9) n/a — A2 landed, no `parked.md` entry. **Minors:** tag
+  "given away"; `—` in `closed_msg` (+ the two doc quotes); "Use one of" rendered from
+  `CHANNEL_ELEM_SUPPORTED_NAMES` with `channel_elem_supported_names_match_the_predicate`;
+  `every_bg_arg_kind_const_is_in_all_bg_arg_kinds` (source-parsing test in `ynz-abi`). **Dead
+  code removed:** `collect_let_names` (its only caller was the old oracle). **Runs (exit 0
+  observed):** `cargo fmt --all --check`; `ynz-typeck --all-targets`; `ynz-diagnostics
+  --all-targets`; `ynz-abi`; `ynz-codegen --lib copy_parity`; `ynz-driver` `v03_m8_channel_close`
+  (29), `error_galleries` (10), `integration` (530); `ynz-runtime --lib` (110); loom lane (8);
+  clippy `-D warnings` on `ynz-typeck --lib --test diagnostic_template_parity`, `ynz-codegen`/
+  `ynz-abi` `--lib --tests`, `ynz-diagnostics --lib --test byte_spans --test snapshots`,
+  `ynz-driver --bins --test v03_m8_channel_close --test error_galleries`; `cargo build -p
+  ynz-driver --release`. Clippy on `ynz-typeck`'s lib-test target and the older typeck test
+  files, and `ynz-diagnostics/tests/jargon_audit.rs`, is red on parked-31 debt in files this
+  round never touched (`independence.rs` `susp` ×5, `iterables_typeck.rs`, `builtins.rs`,
+  `inlay_hint_passes.rs`, `generics_typeck.rs`, `check.rs` tests). Demo golden untouched.
+  **Deviation:** none from the brief's steps; one judgment call — C1 was fixed with a snapshot
+  rather than the brief's suggested two-pass reclassification, for the reason above.
+
 - `m8-p4-fix1-20260904` — 2026-09-04 — **Green-check fix round: cargo fmt + clippy manual_contains.** All tests GREEN; fmt --check exit 0; clippy exit 101 with reported-pre-existing at consistency.rs:6.
 - `m8-p4-20260904-a2` — 2026-09-04 — **Phase 4 segment 2: the implementation — all 24 RED fixtures
   flipped GREEN, steps 2–8 done, the phase is complete pending conductor review.** Read in full:

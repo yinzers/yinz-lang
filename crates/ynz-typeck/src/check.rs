@@ -53,6 +53,7 @@ impl TransferSink<'_> {
             },
             TransferSink::Give { callee, .. } => ConsumedBy::Given {
                 callee: callee.to_string(),
+                given: sent.to_string(),
             },
         }
     }
@@ -107,6 +108,47 @@ fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)])
         fill(template.why_template),
     )
     .with_kind(kind)
+}
+
+/// THE rendering of a read of a consumed binding — the use-after-give (`Consumed`) or
+/// use-after-send (`ConsumedBySend`) template, selected by the cause `Scope::consume` stamped
+/// on the alias class, with the `{via}` slot naming the class-mate that was actually given or
+/// sent when it is not the name being read (v0.3-M8 Phase 4; parked items 7/8 reconciled the
+/// `Consumed` template with this rendering, fix round 2 gave it the `{via}` slot). Two callers,
+/// one text: `resolve_ident` (a read inferred after the consume) and `check_transfer` (a read
+/// at a later position of the call that consumed it).
+fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagnostic {
+    match cause {
+        ConsumedBy::Given { given, .. } => {
+            let via = if given == name {
+                String::new()
+            } else {
+                format!(" — it shares its value with `{given}`, which is what was given away")
+            };
+            registry_diag(
+                span,
+                DiagnosticKind::Consumed,
+                &[("name", name), ("given", given), ("via", &via)],
+            )
+        }
+        ConsumedBy::Sent { channel, sent } => {
+            let via = if sent == name {
+                String::new()
+            } else {
+                format!(" — it shares its value with `{sent}`, which is what was sent")
+            };
+            registry_diag(
+                span,
+                DiagnosticKind::ConsumedBySend,
+                &[
+                    ("name", name),
+                    ("channel", channel),
+                    ("sent", sent),
+                    ("via", &via),
+                ],
+            )
+        }
+    }
 }
 
 /// Source-shaped text for an expression in a diagnostic slot (`bucket.rows`, `matrix[0]`,
@@ -1742,6 +1784,7 @@ impl<'b> Checker<'b> {
                                             name.as_str(),
                                             ConsumedBy::Given {
                                                 callee: spawn_callee.clone(),
+                                                given: name.clone(),
                                             },
                                         );
                                     }
@@ -3919,34 +3962,13 @@ impl<'b> Checker<'b> {
             }
         }
         if let Some(entry) = self.scope.lookup(name) {
-            // THE consumed-read site: the one place a use-after-give / use-after-send is
-            // reported. The cause on the entry (set class-wide by `Scope::consume`) selects
-            // the registry template — `Consumed` for a give, `ConsumedBySend` for a send —
-            // and fills its slots (v0.3-M8 Phase 4; parked items 7/8 reconciled the
-            // `Consumed` template with this site by rendering FROM the registry).
+            // The consumed-read site for every read the type checker infers: a use-after-give
+            // / use-after-send is rendered by `consumed_read_diag` (the ONE rendering of the
+            // `Consumed` / `ConsumedBySend` templates). Its other caller is `check_transfer`,
+            // for the one read this site cannot see — an argument consumed by an earlier
+            // position of the SAME call, which was inferred before the call consumed anything.
             if let Some(cause) = entry.consumed.clone() {
-                let diag = match cause {
-                    ConsumedBy::Given { .. } => {
-                        registry_diag(span.clone(), DiagnosticKind::Consumed, &[("name", name)])
-                    }
-                    ConsumedBy::Sent { channel, sent } => {
-                        let via = if sent == name {
-                            String::new()
-                        } else {
-                            format!(" — it shares its value with `{sent}`, which is what was sent")
-                        };
-                        registry_diag(
-                            span.clone(),
-                            DiagnosticKind::ConsumedBySend,
-                            &[
-                                ("name", name),
-                                ("channel", &channel),
-                                ("sent", &sent),
-                                ("via", &via),
-                            ],
-                        )
-                    }
-                };
+                let diag = consumed_read_diag(span.clone(), name, &cause);
                 self.diags.push(diag);
                 return Type::Error;
             }
@@ -4513,7 +4535,8 @@ impl<'b> Checker<'b> {
                         let sink = TransferSink::Send {
                             channel: receiver_name.as_str(),
                         };
-                        self.check_transfer(&args[0], &sink);
+                        let consumed_before = self.scope.consumed_classes();
+                        self.check_transfer(&args[0], &sink, &consumed_before);
                     }
                     // Lock 8: `.send()` is `-> nothing errors` — a dropped/closed receiver
                     // yields a typed channel-closed error, never a silent drop.
@@ -4624,7 +4647,8 @@ impl<'b> Checker<'b> {
                         let sink = TransferSink::Send {
                             channel: receiver_name.as_str(),
                         };
-                        self.check_transfer(&args[0], &sink);
+                        let consumed_before = self.scope.consumed_classes();
+                        self.check_transfer(&args[0], &sink, &consumed_before);
                     }
                     Type::ErrorsCapable {
                         inner: Box::new(Type::Nothing),
@@ -4684,9 +4708,11 @@ impl<'b> Checker<'b> {
                     "`channel<{}>` is not supported yet — this element type cannot cross a task boundary.",
                     type_name(&elem)
                 ),
-                "Use one of: int, float, boolean, string, number, array<T>, map<K, V>. For a \
-                 shape, send its fields as separate values or as an array, and rebuild the \
-                 shape on the receiving side.",
+                format!(
+                    "Use one of: {}. For a shape, send its fields as separate values or as \
+                     an array, and rebuild the shape on the receiving side.",
+                    crate::types::CHANNEL_ELEM_SUPPORTED_NAMES.join(", ")
+                ),
                 "Channel values travel between tasks as a single 64-bit slot: numbers-by-value \
                  or a pointer to heap memory that both tasks can safely read. A `shape` value \
                  lives in the SENDING task's stack frame, which can be freed while the value \
@@ -5069,10 +5095,23 @@ impl<'b> Checker<'b> {
     /// The ONE transfer decision (`IMP-ownership.md` "The transfer decision — ONE emit
     /// site"). Returns true when the transfer is admitted (the caller may proceed as if the
     /// value moved). Emits `ParamNeedsGive` / `TransferNeedsCopy` / the const refusal;
-    /// consumes an admitted `Whole` binding's whole alias class with the sink's cause. A read
-    /// of an already-consumed name was reported by `resolve_ident` when the argument was
-    /// inferred, so nothing is re-reported here.
-    fn check_transfer(&mut self, expr: &Expr, sink: &TransferSink<'_>) -> bool {
+    /// consumes an admitted `Whole` binding's whole alias class with the sink's cause.
+    ///
+    /// `consumed_before` is the caller's snapshot of `Scope::consumed_classes()` taken BEFORE
+    /// the call form ran any transfer decision. Every call form infers all of its arguments
+    /// first and only then walks the positions, so a name whose class was consumed before the
+    /// call had its read reported by `resolve_ident` at inference — nothing to re-report. A
+    /// name whose class is consumed but NOT in the snapshot was consumed by an earlier
+    /// position of THIS call (`eat2(rows, other)` with `let other = rows`) — no other site
+    /// ever sees that read, so it is reported here, naming both bindings (v0.3-M8 Phase 4 fix
+    /// round 2; the earlier unconditional early return let the alias pair compile and print
+    /// `3 3`).
+    fn check_transfer(
+        &mut self,
+        expr: &Expr,
+        sink: &TransferSink<'_>,
+        consumed_before: &HashSet<u64>,
+    ) -> bool {
         let span = expr.span().clone();
         match self.provenance_of(expr) {
             Provenance::Fresh => true,
@@ -5080,8 +5119,12 @@ impl<'b> Checker<'b> {
                 let Some(entry) = self.scope.lookup(&name) else {
                     return false; // undefined — already diagnosed
                 };
-                if entry.consumed.is_some() {
-                    return false; // the consumed-read site already fired on this read
+                if let Some(cause) = entry.consumed.clone() {
+                    if !consumed_before.contains(&entry.alias_class) {
+                        let diag = consumed_read_diag(span, &name, &cause);
+                        self.diags.push(diag);
+                    }
+                    return false;
                 }
                 if entry.is_const {
                     let what_instead = match sink {
@@ -5267,6 +5310,10 @@ impl<'b> Checker<'b> {
         ownerships: &[Option<OwnershipModifier>],
         param_names: &[String],
     ) {
+        // The pre-call snapshot: which alias classes were consumed before THIS call touched
+        // anything. A later position whose class is consumed but absent here was consumed by
+        // an earlier position of this same call — `check_transfer` reports that read.
+        let consumed_before = self.scope.consumed_classes();
         for (i, arg) in normalized_args.iter().enumerate() {
             let declared = ownerships.get(i).and_then(|o| o.as_ref());
             match declared {
@@ -5275,7 +5322,7 @@ impl<'b> Checker<'b> {
                         callee,
                         chain_param: None,
                     };
-                    self.check_transfer(arg, &sink);
+                    self.check_transfer(arg, &sink, &consumed_before);
                 }
                 _ if self.ownership.consumed_of(callee, i) => {
                     // Not declared `give`, but the callee's body gives this position away:
@@ -5287,14 +5334,37 @@ impl<'b> Checker<'b> {
                         callee,
                         chain_param: chain.as_deref(),
                     };
-                    self.check_transfer(arg, &sink);
+                    self.check_transfer(arg, &sink, &consumed_before);
                 }
                 Some(OwnershipModifier::Lend) => {
                     if let Some(binding_name) = simple_ident_name(arg) {
                         self.check_lend_arg(binding_name, callee, arg.span());
                     }
+                    self.check_read_of_same_call_consumed(arg, &consumed_before);
                 }
-                _ => {} // share or bare: no restrictions
+                // share or bare: no transfer, but the value is READ by the callee — a read of
+                // a class-mate an earlier `give` position of this same call consumed
+                // (`mix(rows, other)` with `mix(give a, share b)`) is a read after free.
+                _ => self.check_read_of_same_call_consumed(arg, &consumed_before),
+            }
+        }
+    }
+
+    /// A non-`give` position of a call whose argument names a binding consumed by an
+    /// earlier position of the SAME call: `resolve_ident` inferred it before the consume, so
+    /// this is the only place that read can be reported. Anything consumed before the call
+    /// was already reported at inference (`consumed_before`).
+    fn check_read_of_same_call_consumed(&mut self, arg: &Expr, consumed_before: &HashSet<u64>) {
+        let Provenance::Whole(name) = self.provenance_of(arg) else {
+            return;
+        };
+        let Some(entry) = self.scope.lookup(&name) else {
+            return;
+        };
+        if let Some(cause) = entry.consumed.clone() {
+            if !consumed_before.contains(&entry.alias_class) {
+                let diag = consumed_read_diag(arg.span().clone(), &name, &cause);
+                self.diags.push(diag);
             }
         }
     }

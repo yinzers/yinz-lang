@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ynz_ast::nodes::OwnershipModifier;
 use ynz_diagnostics::SourceSpan;
@@ -11,8 +11,10 @@ use crate::types::Type;
 /// `IMP-ownership.md` "Binding events, origin and alias classes").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConsumedBy {
-    /// Given to a `give` position of `callee` (a call, a UFCS dot-call, a `background` spawn).
-    Given { callee: String },
+    /// Given to a `give` position of `callee` (a call, a UFCS dot-call, a `background` spawn);
+    /// `given` is the binding that was named at the give — it differs from the consumed name
+    /// when the consumption reached this entry through its alias class (the `{via}` slot).
+    Given { callee: String, given: String },
     /// Sent into `channel` (a `channel<T>.send` / `h.send` of an owned-heap payload); `sent`
     /// is the binding that was named at the send — it differs from the consumed name when
     /// the consumption reached this entry through its alias class.
@@ -187,6 +189,23 @@ impl Scope {
                 }
             }
         }
+    }
+
+    /// Every alias class with at least one consumed entry in any frame — the snapshot a call
+    /// form takes BEFORE it runs its transfer decisions, so `check_transfer` can tell a class
+    /// consumed by an earlier statement (its read was reported when the argument was
+    /// inferred) from one consumed by an earlier position of the SAME call (never reported
+    /// anywhere else — v0.3-M8 Phase 4 fix round 2, the `eat2(rows, other)` alias pair).
+    pub fn consumed_classes(&self) -> HashSet<u64> {
+        let mut out = HashSet::new();
+        for frame in &self.frames {
+            for entry in frame.values() {
+                if entry.consumed.is_some() {
+                    out.insert(entry.alias_class);
+                }
+            }
+        }
+        out
     }
 
     /// All names currently in scope (all frames), for Levenshtein suggestions.

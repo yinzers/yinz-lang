@@ -1,0 +1,18 @@
+// WHY: v0.3-M8 Phase 4 fix round 2 (Producer C1) — two arguments of ONE call that share an
+// alias class (`let other = rows`), both at `give` positions. Every call form infers all of
+// its arguments FIRST (the consumed-read site sees nothing consumed yet) and only then runs
+// the transfer decision per position — so after `rows` is consumed at position 0, position
+// 1's `other` was already consumed BY THIS SAME CALL and `check_transfer`'s "the consumed-read
+// site already fired" early return was false. The program compiled and printed `3 3`: two
+// owners of one allocation handed to a callee that frees both.
+// RED today: compiles, prints `3 3`. GREEN: refused with the use-after-give error naming
+// `other` AND `rows` (the class-mate that was given).
+function eat2(give a: array<int>, give b: array<int>) -> nothing {
+  print(`${a.count()} ${b.count()}`)
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  let other = rows
+  eat2(rows, other)
+}

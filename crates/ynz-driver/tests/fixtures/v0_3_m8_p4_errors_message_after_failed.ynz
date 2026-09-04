@@ -1,0 +1,20 @@
+// WHY: v0.3-M8 Phase 4 fix round 2 (Producer B) — `.message` on an `errors` value whose
+// `.failed()` is true reads the error's text. `REF-errors.md` defines `.message` ("error
+// description, only valid after a `.failed()` check") and `REF-concurrency.md`'s
+// "Closing a channel" example prints `late.message` on a refused send — but codegen had no
+// `ErrorsCapable` arm for the field, so the spec's own example ICEd:
+//   `field_gep: receiver is not a Shape, got ErrorsCapable`.
+// RED today: that ICE. GREEN: the closed-send message the runtime error carries.
+//
+// Expected output:
+//   The channel is closed — close() was called, so this value cannot be delivered. Check .failed() on the send, or send everything before close().
+//   end
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  wire.close()
+  let late = wire.send(9)
+  if (late.failed()) {
+    print(late.message)
+  }
+  print(`end`)
+}
