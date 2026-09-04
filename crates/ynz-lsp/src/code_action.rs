@@ -362,8 +362,6 @@ pub fn import_insert_byte(state: &ServerState, uri: &Url) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn registry_label_class_to_shape() {
         let label = ynz_registry::lsp_code_action_label_for("BannedKeyword", "class");

@@ -9,7 +9,7 @@
 /// CI installs Python before running the test suite.
 use std::process::Command;
 
-use ynz_numerics::{add, compare, div, format, mul, parse, sub};
+use ynz_numerics::{add, compare, div, format, mul, parse};
 
 /// Check whether Python 3.8+ is available.
 fn python_available() -> bool {
@@ -123,7 +123,7 @@ fn differential_large_multiply() {
 mod proptest_differential {
     use super::*;
     use proptest::prelude::*;
-    use ynz_numerics::{add, div, format, mul, parse};
+    use ynz_numerics::{add, div, mul, parse};
 
     /// Simpler strategy: generate from a set of representative values.
     fn representative_values() -> impl Strategy<Value = (String, String)> {

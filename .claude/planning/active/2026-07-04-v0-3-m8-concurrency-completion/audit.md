@@ -11,6 +11,77 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p9-20260904-b1` — 2026-09-04 — **Phase 9 re-dispatch: steps 4 and 5 completed. Phase 9 is now
+  fully executed (steps 1–5). Nothing committed (conductor seals).**
+  **Prior dispatch `m8-p9-20260904-a1` (executor-medium) was halted by the worktree-ask gate after
+  reaching only step 3.** Its one landed edit — both duplicate roadmap Capability Ledger tables'
+  placeholder row replaced by four granular rows (channel close ABSORBED Phases 1&4; Auto-Arc
+  ABSORBED Phases 2&5; scope-drop cancellation NOT fully absorbed, Branch B re-deferral pending
+  Patrick's sign-off; loom+fuzzing ABSORBED Phases 3&8) — was sealed unreviewed and ungraded by the
+  conductor per corpse #3, commit `9d8e4da`. **The fr12 deviation:** a1 also flipped the "Conduit-
+  send decimal128 marshalling" row from "scheduled — assigned to M8" to "ABSORBED (narrowed)" —
+  not in its four-row brief. It disclosed the change rather than folding it in silently. The
+  conductor verified the claim against the artifact before accepting it (corpse #4 discipline,
+  never relay unverified): `registry/features.toml`'s narrowed `channel-element-heap-upgrade`
+  entry (`name = "channel-element-heap-upgrade"`, ~line 1201) confirms `number` at precision ≤ 34
+  ships copy-through via a fresh `NumberCell`, never joining the give/heap-upgrade set, and scopes
+  the remaining deferral to `shape` elements and bignum `number` (precision > 34) — matching the
+  row's new text exactly. Accepted.
+  **This dispatch (b1) verified steps 1–2 already complete (no work needed — `pirates-roster/
+  entrypoint.ynz` and `primantis-orders/m8_errors.ynz` both already carry the required sections
+  per Phases 4/5, and Phase 7's Branch B correctly leaves step 2's Phase-7-diagnostic expectation
+  N/A) and executed steps 4 and 5:**
+  - **Step 5 — Future Requirements four-field audit.** Read `crates/ynz-driver/tests/fuzz_grammar/
+    README.md`'s "Where an interesting case is promoted" section directly (not relayed) and
+    confirmed FR #6 (fuzzing corpus backlog) is CLOSED-BY the shipped seed-replay + fixtures/
+    promotion mechanism — corrected FR #6's plan text and added `.claude/plans/parked.md` entry 45.
+    Grepped `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` directly and
+    confirmed FR #8's claim that BOTH its residuals "already carry fielded deferrals in the
+    roadmap's own `audit.md`" is FALSE for item (1) (panic-payload log asymmetry) — zero hits for
+    `panic_payload_msg`/"panic-payload"; its only surviving text is in the already-archived M6
+    hotfix plan. Corrected FR #8's plan text (item (1) only; item (2)'s roadmap-`audit.md` home at
+    "2026-07-11 — Deferral: shared RecvWaiterRegistry extraction" was confirmed correct and left
+    untouched) and added parked entries 46–49 for the five plan-level deferrals with no durable
+    home once this plan archives (FR #6 residual note, FR #8 item (1), FR #9, FR #10, FR #11).
+  - **Step 4 — cumulative full-workspace gate, one lane, foreground, inside the dev container:**
+    `cargo fmt --all -- --check` clean on first run. `cargo clippy --workspace --all-targets -- -D
+    warnings` was RED exactly as parked item 31 predicted (32 sites across
+    `ynz-lsp`/`ynz-numerics`/`ynz-diagnostics`/`ynz-watch`/`ynz-registry`/`ynz-typeck`, plus several
+    NOT in parked 31's enumeration that surfaced once earlier-aborting crates cleared: `ynz-parser`
+    tests — `error_recovery.rs`, `trivia.rs`, `keyword_sync.rs`, `lex.rs`, `parse.rs` — and
+    `ynz-fmt` tests' `useless_conversion`). Fixed every site with a real correction (renames,
+    `is_empty()`/`is_some_and()`/`contains()` rewrites, dead-import/dead-variable removal,
+    `saturating_sub`, a genuine missing `#[test]` attribute on `ynz-numerics::decimal128::ops::
+    neg_and_abs` that meant the test never ran) — zero `#[allow]`s added. Re-ran clippy 9 times
+    across the fix loop; final run clean (`cargo clippy --workspace --all-targets -- -D warnings`
+    exit 0). `cargo fmt --all` re-run after the fixes (one line needed re-wrapping); `--check`
+    clean after. `.github/workflows/ci.yml` NOT touched, per the brief. `cargo test --workspace`:
+    green except one test, reproduced on 3 of 3 full-workspace runs —
+    `bounded_run_kills_the_whole_tree::timed_out_program_leaves_no_descendant_process_running`
+    (`crates/ynz-driver/tests/cross_impl_consistency.rs`) — fails under full-suite CPU contention
+    (a descendant process still in `D` state 3s after `killpg`), passes cleanly in isolation
+    (`cargo test -p ynz-driver --test cross_impl_consistency bounded_run_kills_the_whole_tree`).
+    This file was not touched by this dispatch's diff; the test's own 3s liveness-poll margin
+    (added per this plan's Phase 8 audit, `audit.md` BLOCKER 1) is evidently insufficient at this
+    container's full-workspace contention level. NOT fixed — out of this dispatch's assigned scope,
+    and widening a timing budget without diagnosing would repeat the exact "wall-clock budget
+    calibrated on an idle machine" corpse class `.claude/rules/test-parallelism.md` already
+    documents. Flagged to the conductor for a scoping decision, not silently absorbed. `cargo build
+    --workspace --release` clean. Loom lane
+    (`RUSTFLAGS='--cfg loom' CARGO_TARGET_DIR=/work/target/loom cargo test -p ynz-runtime --release
+    --lib -- loom_ --nocapture`): 9/9 passed, matching the brief's expected count. Bounded fuzz run
+    (`cargo test -p ynz-driver --test cross_impl_consistency generated_corpus -- --nocapture`): 24
+    generated, 24 compiled and ran to exit 0, 0 findings.
+  - Parked item 31 marked CLEARED with the full list of touched files and lint classes in its
+    Status field.
+  - Updated `plan.md`'s Phase 9 step-status line, the COLD-RESUME banner, and appended
+    `m8-p9-20260904-a1` and `m8-p9-20260904-b1` to the frontmatter `session-id` chain.
+  **Still owed:** Patrick's sign-off on Phase 7's re-deferral; PR #90 merge-back + parked-43
+  fixture; `--all-targets` added to `ci.yml` (ruled OK, rides its own confirm gate); the
+  full-workspace-contention test flake above needs a scoping decision; then close-out per the
+  `/execute-plan` skill (cumulative green-check, plan-adherence pass, `status: done`, move to
+  `.claude/planning/done/`, `/pr`).
+
 - `m8-p8-fix4-20260904` — 2026-09-04 — **Phase 8 correction round (verification + audit corrections + corpus widening): proof-of-fire claim corrected, citation qualifications verified, pool-reuse floor test corpus expanded. Nothing committed.**
   Read: the dispatch instruction, `mod.rs:~1244-1261` and the pool-reuse floor test, `take_or_make_array`'s doc comment, `audit.md` BLOCKER 1 and FRAGO 015 entries, `README.md:~75 and ~137`.
   **Proof-of-fire correction (BLOCKER 1, round-3 entry false claim).** Round-3's `m8-p8-fix3-20260904` entry (line ~25) claimed the panic-probe fires on "the FIRST seed (seed 0)" with the fixed code. Re-run confirms: first fire is **seed 176**, not seed 0. The pre-fix half (old code, 0 panics across 8,192 seeds) remains correct. Round-3 entry stands unedited per append-only; this record corrects the false claim.

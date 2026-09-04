@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904", "m8-p7-20260904-a1", "m8-p7-fix1-20260904", "m8-p8-20260904-a1", "m8-p8-fix1-20260904", "m8-p8-fix2-20260904", "m8-p8-fix3-20260904", "m8-p8-fix4-20260904"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904", "m8-p7-20260904-a1", "m8-p7-fix1-20260904", "m8-p8-20260904-a1", "m8-p8-fix1-20260904", "m8-p8-fix2-20260904", "m8-p8-fix3-20260904", "m8-p8-fix4-20260904", "m8-p9-20260904-a1", "m8-p9-20260904-b1"]
 created_at: "2026-07-04"
 updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -14,7 +14,7 @@ metadata:
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth) · **Phase 4 ✅ CLOSED BY CEILING 2026-09-04** (executors `m8-p4-20260904-a1` RED seal at `6b8a34d`, `m8-p4-20260904-a2` implementation, fix rounds `m8-p4-fix1/fix2/fix3-20260904`; three grading rounds; two `errors`-surface blockers re-homed to a post-M8 hotfix branch per FRAGO 011 — parked 32/33/34 — none a channel-close defect) · **Phase 5 ✅ CLOSED 2026-09-04** (executor `m8-p5-20260904-a1`, fix rounds `m8-p5-fix1/fix2-20260904`; two grading rounds, terminal state CLEAN; spike GREEN, full beneficial condition shipped with the caller-side proof covering the member spawns themselves, one-spawn IR byte-identical, `auto_arc` hint firing on both spawn forms, R2 stays HIGH under its signed override) — **Phase 7 ✅ EXECUTED 2026-09-04, PARTIAL at its sign-off gate** (executor `m8-p7-20260904-a1` + text round `m8-p7-fix1`; Branch B RE-DEFER earned by evidence — no local of any type is released at scope exit, the ladder is the child's retirement over the child's frame while a handle's scope exit is the parent's event on the parent's frame; ten probes, every child ran past the scope exit; four seats, 0 blockers; **Patrick signs the re-deferral, and the cheap muted-hint guard question rides that signature**) · **Phase 8 ✅ CLOSED 2026-09-04, CLEAN** (see its STATUS block — the fuzzer found two defects, both pre-existing on `main`, FRAGO 015) — **Phase 9 (close-out) is the frontier; the parked-40 hotfix (PR #90) still merges back before the milestone PR**: `fix/bg-arg-number-field` (FRAGO 012) runs in its own worktree `../ynz-lang-hotfix-bgarg`; sequence = hotfix PR → merge to `main` → merge `main` into this branch → author parked 43's fixture in that merge commit → dispatch Phase 7 (receipt already minted, `m8-p7-20260904-a1`)
+> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth) · **Phase 4 ✅ CLOSED BY CEILING 2026-09-04** (executors `m8-p4-20260904-a1` RED seal at `6b8a34d`, `m8-p4-20260904-a2` implementation, fix rounds `m8-p4-fix1/fix2/fix3-20260904`; three grading rounds; two `errors`-surface blockers re-homed to a post-M8 hotfix branch per FRAGO 011 — parked 32/33/34 — none a channel-close defect) · **Phase 5 ✅ CLOSED 2026-09-04** (executor `m8-p5-20260904-a1`, fix rounds `m8-p5-fix1/fix2-20260904`; two grading rounds, terminal state CLEAN; spike GREEN, full beneficial condition shipped with the caller-side proof covering the member spawns themselves, one-spawn IR byte-identical, `auto_arc` hint firing on both spawn forms, R2 stays HIGH under its signed override) — **Phase 7 ✅ EXECUTED 2026-09-04, PARTIAL at its sign-off gate** (executor `m8-p7-20260904-a1` + text round `m8-p7-fix1`; Branch B RE-DEFER earned by evidence — no local of any type is released at scope exit, the ladder is the child's retirement over the child's frame while a handle's scope exit is the parent's event on the parent's frame; ten probes, every child ran past the scope exit; four seats, 0 blockers; **Patrick signs the re-deferral, and the cheap muted-hint guard question rides that signature**) · **Phase 8 ✅ CLOSED 2026-09-04, CLEAN** (see its STATUS block — the fuzzer found two defects, both pre-existing on `main`, FRAGO 015) — **Phase 9 steps 1–5 all complete as of `m8-p9-20260904-b1` (2026-09-04)**: steps 1–2 (demo + gallery) and step 3 (roadmap reconciliation, `9d8e4da`) verified/landed by the halted prior dispatch `m8-p9-20260904-a1`; steps 4 (cumulative gate) and 5 (Future Requirements audit) landed by `m8-p9-20260904-b1` — fmt/clippy(`--all-targets`)/test/release-build/loom(9/9)/bounded-fuzz all green except one pre-existing, diff-unrelated test flake under full-workspace contention (`bounded_run_kills_the_whole_tree::timed_out_program_leaves_no_descendant_process_running`, passes in isolation) flagged to the conductor rather than fixed; five plan-level Future Requirements deferrals with no durable post-archival home were written to `.claude/plans/parked.md` (entries 45–49); FR #6 and FR #8 item (1) corrected in this plan's own text; parked item 31 (workspace clippy `--all-targets` debt) CLEARED for real, not allowed-past. Milestone close-out (release-handoff confirmation, final PR) is the remaining work.
 >
 > ### 🔀 RESTRUCTURED 2026-09-03 — FRAGO 008: Phase 1's ownership scope MOVED to Phase 2
 >
@@ -1979,6 +1979,16 @@ in-session, no handoff file):**
 - **Task + purpose:** close the plan-invariants Demo & Error Gallery obligation, reconcile the roadmap +
   BOTH duplicate Capability Ledger tables, run the cumulative full-suite gate, and confirm release
   preconditions.
+- **Step status (as of `m8-p9-20260904-b1`):** Step 1 ✅ (verified complete, prior dispatch
+  `m8-p9-20260904-a1`) · Step 2 ✅ (verified complete, prior dispatch) · Step 3 ✅ SEALED
+  (`9d8e4da`, prior dispatch) · Step 4 ✅ this dispatch — fmt clean, clippy `--all-targets` clean
+  (was RED on parked-31 debt, now fixed for real per that entry's Status field), `cargo test
+  --workspace` GREEN except one reproducible-under-full-suite-contention flake
+  (`bounded_run_kills_the_whole_tree::timed_out_program_leaves_no_descendant_process_running`,
+  passes in isolation, file untouched by this dispatch's diff — flagged to the conductor, not
+  fixed, out of this dispatch's charter), release build clean, loom lane 9/9 green, bounded fuzz
+  run 24/24 clean · Step 5 ✅ this dispatch (Future Requirements four-field audit; FR #6 and FR #8
+  corrected; both fixes cross-referenced into `.claude/plans/parked.md`).
 - **Steps**
   1. Extend `examples/pirates-roster/entrypoint.ynz` with a channel-close section demonstrating the
      decided mechanism in a realistic context (a Pirate/Ship-domain producer/consumer pair, not a bare
@@ -2522,13 +2532,21 @@ pattern. Considered and declined.
    compiler temporaries land; (2) the scope-exit cleanup mechanism lands; (3) a counted substrate for
    pointer-carrying values is designed; each slice widens the admission independently. The `number`
    slice additionally waits on parked item 40's hotfix.
-6. **Fuzzing corpus backlog** — **WHAT:** interesting failing/regression cases the structured fuzzer
+6. **Fuzzing corpus backlog — CLOSED-BY Phase 8's shipped mechanism (confirmed at Phase 9 close-out,
+   2026-09-04).** **WHAT was deferred:** interesting failing/regression cases the structured fuzzer
    surfaces during and after this milestone need a durable home (a saved corpus for replay, not
-   discarded after each CI run). **WHY not fully specified here:** the exact backlog mechanism is
-   Phase 8's own design-note deliverable (step 6), not pre-decided at plan-authoring time. **COST:**
-   small (a `fixtures/fuzz-corpus/` directory + a replay test harness, per Phase 8's design note).
-   **TRIGGER:** Phase 8's own execution; this entry tracks that the design note gets written, not a
-   separate task.
+   discarded after each CI run). **Closure:** `crates/ynz-driver/tests/fuzz_grammar/README.md`
+   documents the shipped mechanism directly (read at Phase 9 close-out, not restated from memory):
+   every finding replays from its seed alone (`YNZ_FUZZ_SEED=<seed> cargo test ...
+   print_generated_program`, seed + full generated source embedded in the failure text), and a
+   finding confirmed as a genuine miscompile is promoted verbatim into
+   `crates/ynz-driver/tests/fixtures/` ("Where an interesting case is promoted") where the existing
+   hand-written sweeps cover it forever, independent of later generator revisions. That is the
+   durable home this entry asked for. **Residual (tracked under Future Requirement #11, not here):**
+   the two genuine defects Phase 8 found have not yet been promoted into `fixtures/` as RED pins,
+   because their fix is deferred off-plan — that is FR #11's scope, not a gap in the backlog
+   mechanism. Recorded in full at `.claude/plans/parked.md` "Plan-level deferrals with no durable
+   home outside the plan," entry 45.
 7. **Patrick-directed addition 2026-07-16 (M6 completion triage)** — two items assigned to this
    milestone by Patrick's own triage of the M6 completion review:
    (1) **fr12 — `channel<number>` decimal128 send/recv marshalling design** (roadmap Capability
@@ -2554,14 +2572,21 @@ pattern. Considered and declined.
    the class.
 8. **Two M6-inherited residuals on the P2-7 waker-registration path** (surfaced 2026-09-03 by the
    independent confirmation that retired Phase 6 under FRAGO 001; recorded HERE so a reader of this
-   plan finds them without archaeology — both already carry fielded deferrals in the roadmap's own
-   `audit.md`, so neither is silent duct tape):
+   plan finds them without archaeology):
    (1) **Panic-payload log asymmetry.** The handle-side panic path logs a payload-less message
    because `panic_payload_msg` is private to `channel.rs`, while the channel-side logs the payload
-   string. **WHY not fixed here:** cosmetic, log text only on a now-theoretical panic path; it does
-   not narrow the hang-closing guarantee, and this plan writes no code on that path at all.
-   **COST:** trivial (widen the helper's visibility, one call site). **TRIGGER:** the next milestone
-   that touches `handle.rs`'s panic-reporting path, or any real panic there needing diagnosis.
+   string. **CORRECTION (Phase 9 close-out, 2026-09-04): this item does NOT carry a fielded
+   deferral in the roadmap's own `audit.md`, unlike item (2) below** — a grep of
+   `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` for `panic_payload_msg` and
+   "panic-payload" returns zero hits; its only surviving text is inside the already-archived
+   `.claude/planning/done/2026-07-04-v0-3-m6-concurrency-hotfix/plan.md`. Because this plan itself
+   moves to `.claude/planning/done/` at close-out, item (1) is parked instead —
+   `.claude/plans/parked.md` "Plan-level deferrals with no durable home outside the plan," entry 46
+   — which is now its durable record. **WHY not fixed here:** cosmetic, log text only on a
+   now-theoretical panic path; it does not narrow the hang-closing guarantee, and this plan writes
+   no code on that path at all. **COST:** trivial (widen the helper's visibility, one call site).
+   **TRIGGER:** the next milestone that touches `handle.rs`'s panic-reporting path, or any real
+   panic there needing diagnosis.
    (2) **`recv_waiters` / `record_recv_waiter` / `wake_recv_waiters` duplicated byte-identically
    between `channel.rs` and `handle.rs`.** **WHY not fixed here:** unifying a waker registry across
    two FFI-boundary types is its own design call, and doing it inside a milestone that touches

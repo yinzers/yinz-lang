@@ -231,7 +231,7 @@ fn every_array_to_fixed_hint_in_file_carries_an_edit() {
         if let lsp_types::InlayHintLabel::String(s) = &hint.label {
             if s.contains("fixed") {
                 assert!(
-                    hint.text_edits.as_deref().map_or(false, |e| !e.is_empty()),
+                    hint.text_edits.as_deref().is_some_and(|e| !e.is_empty()),
                     "every array→fixed hint must carry a TextEdit; hint: {:?}",
                     hint.label
                 );

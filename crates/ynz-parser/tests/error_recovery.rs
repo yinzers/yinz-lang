@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 fn parse_within_timeout(source: &str) {
     let start = Instant::now();
     let db = ynz_parser::CompilerDb::default();
-    let sf = ynz_parser::SourceFile::new(&db, "test.ynz".into(), source.to_string().into());
+    let sf = ynz_parser::SourceFile::new(&db, "test.ynz".into(), source.to_string());
     let _ = ynz_parser::parse_query(&db, sf);
     assert!(
         start.elapsed() < Duration::from_secs(5),
@@ -54,7 +54,7 @@ fn gallery_files_do_not_hang() {
             std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("could not read {name}"));
         let start = Instant::now();
         let db = ynz_parser::CompilerDb::default();
-        let sf = ynz_parser::SourceFile::new(&db, name.to_string().into(), source.into());
+        let sf = ynz_parser::SourceFile::new(&db, name.to_string(), source);
         let _ = ynz_parser::parse_query(&db, sf);
         assert!(
             start.elapsed() < Duration::from_secs(5),

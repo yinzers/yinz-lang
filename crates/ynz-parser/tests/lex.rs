@@ -1467,7 +1467,7 @@ fn m7_backtick_string_with_one_interpolation() {
         "Must contain BacktickString(b\"hello \")"
     );
     assert!(
-        tokens.iter().any(|t| *t == Token::InterpolationStart),
+        tokens.contains(&Token::InterpolationStart),
         "Must contain InterpolationStart"
     );
     assert!(
@@ -1477,7 +1477,7 @@ fn m7_backtick_string_with_one_interpolation() {
         "Must contain Identifier(name)"
     );
     assert!(
-        tokens.iter().any(|t| *t == Token::InterpolationEnd),
+        tokens.contains(&Token::InterpolationEnd),
         "Must contain InterpolationEnd"
     );
     assert!(
@@ -1501,7 +1501,7 @@ fn m7_backtick_string_interpolation_at_start() {
         "Interpolation at start must be preceded by an empty BacktickString"
     );
     assert!(
-        tokens.iter().any(|t| *t == Token::InterpolationStart),
+        tokens.contains(&Token::InterpolationStart),
         "Must contain InterpolationStart"
     );
     assert!(
@@ -1548,7 +1548,7 @@ fn m7_backtick_escape_sequences_decoded() {
         .find(|t| matches!(t, Token::BacktickString(_)));
     assert!(bs.is_some(), "Must produce a BacktickString");
     if let Some(Token::BacktickString(bytes)) = bs {
-        assert_eq!(bytes.as_slice(), &[b'\n', b'\t', b'\\']);
+        assert_eq!(bytes.as_slice(), b"\n\t\\");
     }
 }
 
@@ -1740,7 +1740,7 @@ fn m7_errors_keyword_in_context() {
     // produce a FunctionDecl with `errors_capable: true`.
     let tokens = lex_tokens("-> string errors");
     assert!(
-        tokens.iter().any(|t| *t == Token::Errors),
+        tokens.contains(&Token::Errors),
         "Token::Errors must appear in the token stream for `errors` keyword"
     );
     // The token immediately before Errors should be an Identifier("string") or similar
@@ -1858,7 +1858,7 @@ fn m8_import_keyword_tokenizes() {
     // lexes as Identifier, the parser cannot build ImportDecl nodes.
     let tokens = lex_tokens("import");
     assert!(
-        tokens.iter().any(|t| *t == Token::Import),
+        tokens.contains(&Token::Import),
         "Token::Import must appear for `import` keyword"
     );
 }
@@ -1868,7 +1868,7 @@ fn m8_export_keyword_tokenizes() {
     // WHY: `export` must lex as Token::Export, not as an Identifier.
     let tokens = lex_tokens("export");
     assert!(
-        tokens.iter().any(|t| *t == Token::Export),
+        tokens.contains(&Token::Export),
         "Token::Export must appear for `export` keyword"
     );
 }
@@ -1878,7 +1878,7 @@ fn m8_sensitive_keyword_tokenizes() {
     // WHY: `sensitive` must lex as Token::Sensitive for type-modifier parsing.
     let tokens = lex_tokens("sensitive");
     assert!(
-        tokens.iter().any(|t| *t == Token::Sensitive),
+        tokens.contains(&Token::Sensitive),
         "Token::Sensitive must appear for `sensitive` keyword"
     );
 }
@@ -1888,7 +1888,7 @@ fn m8_wait_keyword_tokenizes() {
     // WHY: `wait` must lex as Token::Wait, not an Identifier.
     let tokens = lex_tokens("wait");
     assert!(
-        tokens.iter().any(|t| *t == Token::Wait),
+        tokens.contains(&Token::Wait),
         "Token::Wait must appear for `wait` keyword"
     );
 }
@@ -1898,7 +1898,7 @@ fn m8_background_keyword_tokenizes() {
     // WHY: `background` must lex as Token::Background.
     let tokens = lex_tokens("background");
     assert!(
-        tokens.iter().any(|t| *t == Token::Background),
+        tokens.contains(&Token::Background),
         "Token::Background must appear for `background` keyword"
     );
 }

@@ -692,6 +692,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn neg_and_abs() {
         let v = from_str("3.14");
         let neg_v = neg(v);

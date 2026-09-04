@@ -282,6 +282,36 @@ sign-off applies them alongside the owed downstream plan edits** — the design 
     TRIGGER: Phase 9 close-out's full-workspace gate, at the latest; earlier if any phase's
     green-check needs `--all-targets` clean to distinguish its own lints from the debt. Source
     plan-id `2026-07-04-v0-3-m8-concurrency-completion`.
+    **Status: CLEARED at Phase 9 close-out (2026-09-04, `m8-p9-20260904-b1`).** `cargo clippy
+    --workspace --all-targets -- -D warnings` is GREEN. Every listed site was fixed with a real
+    one-line-to-few-line correction, never an `#[allow]`: `ynz-watch/tests/long_session.rs`
+    (`match` → `if let`); `ynz-lsp/tests/{code_action.rs,rename.rs,completion.rs,regression.rs,
+    inlay_hint_array_to_fixed_edit.rs}` (`manual_contains`/`len_zero`/unused import/
+    `double_ended_iterator_last`→`filter_next`→`rfind`/`unnecessary_map_or`);
+    `ynz-lsp/src/{code_action.rs,semantic_tokens.rs}` (dead `use super::*` / dead `LineTable`
+    import in `#[cfg(test)]` modules — confirmed dead by reading every call site first, not
+    assumed); `ynz-numerics/src/decimal128/ops.rs:695` (`neg_and_abs` was missing `#[test]` — a
+    REAL bug, not lint noise: the test never ran; now runs and passes); `ynz-numerics/tests/
+    {differential.rs,conformance/mod.rs,deterministic_vectors.rs}` (unused imports/vars, all
+    confirmed genuinely dead by grep before removal); `ynz-diagnostics/tests/jargon_audit.rs`
+    (redundant `use ynz_registry;`, `unnecessary_map_or`, `while_let_on_iterator`→`for`,
+    `implicit_saturating_sub`×3→`saturating_sub`, and a genuinely-dead `site_count` variable
+    superseded by `site_strings.len()` everywhere it mattered — removed, not renamed to
+    `_site_count`); `ynz-registry/tests/consistency.rs` + `ynz-parser/tests/keyword_sync.rs`
+    (redundant `use ynz_registry;`); `ynz-parser/tests/trivia.rs` (unused `Comment` import);
+    `ynz-parser/tests/lex.rs` (`manual_contains`×8, `byte_char_slices`); `ynz-parser/tests/
+    {error_recovery.rs,parse.rs}` (`useless_conversion`×3, `len_zero`×8); `ynz-typeck/tests/
+    {strings_typeck.rs,builtins.rs,iterables_typeck.rs,maps.rs,inlay_hint_passes.rs,
+    generics_typeck.rs,check.rs}` (unused `Type`/`SourceFileRegistry` imports, `len_zero`×2, and
+    14 non-snake-case test function renames — e.g. `m7_string_toUpperCase_returns_string` →
+    `m7_string_to_upper_case_returns_string` — identifier only, test bodies untouched);
+    `ynz-typeck/src/independence.rs` (5 genuinely-dead `let susp = suspend_set(...)` bindings —
+    `stmts_are_independent` never took a suspend-set parameter — confirmed by reading the
+    function signature before deleting, and by NOT touching the other 9 `let susp = ...` lines
+    in the same file whose `susp` binding IS consumed downstream); `ynz-fmt/tests/
+    {proptest_idempotency.rs,semantic_roundtrip.rs}` (`useless_conversion`×5, `String::into::
+    <String>()` no-ops). `.github/workflows/ci.yml` was NOT touched — `--all-targets` still rides
+    its own confirm gate per this entry's original COST field.
 
 ### Phase 4 — pre-existing correctness bug surfaced by fix round 3 (2026-09-04)
 
@@ -472,3 +502,151 @@ program before the IR count could fail; a skipped transient release showed as `a
     (`HandleChannelArgNeedsBinding`, handle form only; a warning would leave the hang class live for
     one spawn shape while the fix costs one `let`), with three-slot text in the design's "Teaching
     text", a `[[diagnostic_template]]` entry, and a gallery trigger; Phase 4 step 3c ships it.
+
+### Plan-level deferrals with no durable home outside the plan (added at Phase 9 close-out, 2026-09-04)
+
+Five of the plan's eleven Future Requirements have no durable record once
+`2026-07-04-v0-3-m8-concurrency-completion` moves to `.claude/planning/done/` at close-out — the
+other six are homed in the roadmap Capability Ledger and/or `registry/features.toml`
+`[[deferred_language_feature]]` entries and are NOT duplicated here (authoritative-derivation.md).
+Source plan-id `2026-07-04-v0-3-m8-concurrency-completion`, `## Future Requirements / Revisit`.
+
+45. **Fuzzing corpus backlog — CLOSED-BY, not a residual deferral (plan FR #6).** WHAT was deferred:
+    "interesting failing/regression cases the structured fuzzer surfaces need a durable home (a
+    saved corpus for replay, not discarded after each CI run)". Phase 8 shipped the mechanism,
+    documented in `crates/ynz-driver/tests/fuzz_grammar/README.md`: every finding is reproducible
+    from its seed alone (`YNZ_FUZZ_SEED=<seed> cargo test ... print_generated_program`, seed + full
+    generated source embedded in the failure text), and a finding confirmed as a genuine miscompile
+    is copied verbatim into `crates/ynz-driver/tests/fixtures/` under "Where an interesting case is
+    promoted" — at which point the existing hand-written sweeps cover it forever, independent of any
+    later generator revision. That closes the FR's own ask. Residual, tracked under FR #11/parked
+    entry 49, not here: the two genuine defects Phase 8 found have NOT yet been promoted into
+    `fixtures/` as RED pins, because their fix is itself deferred off-plan — promoting an
+    unfixed-but-known bug as a fixture is a decision for whoever picks up FR #11, not a gap in the
+    backlog mechanism itself.
+46. **Panic-payload log asymmetry — `panic_payload_msg` private to `channel.rs` (plan FR #8, item
+    (1)).** WHAT: the handle-side panic path logs a payload-less message while the channel-side logs
+    the panic payload string, because the formatting helper is private to `channel.rs`. **Correction
+    to the plan's own text:** FR #8 claims both its residuals "already carry fielded deferrals in the
+    roadmap's own `audit.md`" — false for this item. A grep of
+    `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md` for `panic_payload_msg` and
+    "panic-payload" returns zero hits; the only surviving record of item (1) is inside the
+    already-archived `.claude/planning/done/2026-07-04-v0-3-m6-concurrency-hotfix/plan.md` (line
+    ~1775) and its `audit.md` (line ~3259), neither of which is a durable home once this plan itself
+    archives. (Item (2) — the duplicated `recv_waiters`/`record_recv_waiter`/`wake_recv_waiters`
+    registry — IS correctly homed: `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/audit.md`
+    "2026-07-11 — Deferral: shared RecvWaiterRegistry extraction", confirmed by direct read; it is
+    NOT re-parked here.) WHY deferred: cosmetic, log text only on a now-theoretical panic path; does
+    not narrow the hang-closing guarantee; this plan writes no code on that path. COST: trivial
+    (widen the helper's visibility, one call site). TRIGGER: the next milestone that touches
+    `handle.rs`'s panic-reporting path, or any real panic there needing diagnosis.
+47. **`background` arg escape door #4 — a ladder-owned array clone stored into an ALIASED outer
+    container (plan FR #9).** WHAT is deferred: `stash(bucket: array<array<int>>, rows: array<int>) {
+    bucket.add(rows) }` spawned with `background` — `rows` is heap-cloned and owned by the task's
+    drop ladder, but `bucket` is an `array<pointer-elem>` bg arg passed through un-cloned by
+    `prepare_bg_arg_for_ctx`'s fall-through arms, aliasing the parent's container; the task's clone is
+    pushed into the parent's bucket and freed at task retire, leaving `bucket[0]` dangling (observed
+    garbage counts and SIGSEGV across 5 runs). RED-pinned by
+    `bg_arg_alias_container_add_is_a_known_uaf_red_pin` in `crates/ynz-driver/tests/integration.rs`
+    against fixture `bg_arg_alias_container_add_red.ynz`, with two companion guards in
+    `crates/ynz-driver/tests/cross_impl_consistency.rs`. WHY: the escape exists because the container
+    is aliased rather than cloned or given a defined ownership — a design decision about what a
+    `background` argument IS, not a runtime patch; hooking `ynz_array_push` to walk the ladder would
+    put an O(descriptors) scan on a hot synchronous path to treat a symptom. The plan's own `give`
+    guard (`ParamNeedsGive`) closes the channel-send instance of this door but explicitly does not
+    reach the non-channel container-aliasing instance. COST to fix later: ~1 session — extend
+    `prepare_bg_arg_for_ctx`'s per-type table with defined deep-copy (or share) semantics for
+    pointer-cell element arrays and maps, matching `BgArgFreeKind` free arm, one fixture per element
+    class, RED pin flipped to its correct-world assertions. TRIGGER: v0.3-M8's general ownership rule
+    for `background` arguments (owned by whichever future milestone lands the scope-drop /
+    drop-insertion design) deciding, once and for every heap type, whether a bg arg is cloned,
+    shared, or given — or earlier if a user hits the dangling-container read in the wild.
+48. **`.copy()` codegen catch-all silently aliases outside `Shape`/`array`/`map` (plan FR #10).**
+    WHAT is deferred: `PostfixOpKind::Copy` lowering (`crates/ynz-codegen/src/emit.rs`) ends in
+    `_ => Ok(recv_val)` — the receiver's own pointer — for `maybe<T>`, union, `fixed<T>`, `dynamic`,
+    the same alias-no-op stub class already closed for `array` and (Phase 4) `map`. WHY not absorbed
+    in this plan: a `.copy()` audit across the remaining types is a decision about what `.copy()`
+    MEANS for each type (one-level? deep? refused?), belonging with the ownership/drop story, not
+    channel close. **Narrowing already shipped (FRAGO 010, signed 2026-09-03) — this plan's residual
+    scope is smaller than the original finding:** `provenance(expr).copy()` classifies `Unknown`
+    unless `copy_is_independent(type)` holds (`IMP-ownership.md` "Classification" table), so a
+    `.copy()` on one of these types is refused as a transfer (`TransferNeedsCopy`) rather than
+    silently admitted as an alias for any value this plan's transfer rule reaches — the FR's
+    remaining scope is auditing what `.copy()` on those types SHOULD mean, not whether transferring
+    one of today's alias-no-op copies is caught. COST to fix later: small-to-medium — per-type
+    decision + arm (or a typeck refusal with a three-slot diagnostic for types that must not be
+    copied), one independence fixture per admitted type. TRIGGER: the first diagnostic or spec
+    example that recommends `.copy()` on one of those types, or the future `background`-argument
+    ownership rule (which must decide what a copy of each heap type is).
+49. **Two genuine pre-existing runtime defects the Phase 8 owned-heap-channel fuzz widening
+    surfaced (plan FR #11) — the ONLY durable record; NOT fixed inline per this plan's CCIR item 5 /
+    risk R5.** Both are PRE-EXISTING on `main` (`ec014d8`), independently reproduced twice in clean
+    worktrees, and are NOT M8 regressions. Neither is RED-pinned in the tree; repro is kept only in
+    this entry and the FR text.
+    - **(a) A crossing-local heap-channel-send corruption.** WHAT: an `array<int>`/`map<string,int>`
+      LOCAL declared BEFORE any suspension point in the same function and later `.send()`-ed into a
+      channel AFTER that suspension reads back corrupted on receive — `RUNTIME ERROR: killed by
+      signal 6 (SIGABRT)`, a null/misaligned pointer dereference inside `ynz_map_count`/
+      `ynz_array_count`. Fires in the DEFAULT optimized mode. The SIGABRT is the MINORITY symptom: an
+      `YNZ_FUZZ_PROGRAMS=256` sweep with the generator's protective guard removed produced 35
+      findings, of which 28 were silent `MODE-DIVERGENT` wrong output at exit 0 (a heap address
+      printed where a count belonged) rather than a crash — the silent divergence is the majority and
+      the more dangerous half since nothing signals a failure. WHY not fixed here: this is the same
+      frame-crossing/suspension-boundary hazard family the M3a/M3d/M3e/M3g twin-derivation corpses
+      warned about (`authoritative-derivation.md`); diagnosing which choke point needs the fix (the
+      channel-send transfer lowering, or the crossing-local frame-slot machinery itself) is real
+      engineering, not a fuzzing-harness-round task. COST to fix later: a diagnosis session (read
+      `crossing_local_names`/the channel-send lowering against the plan's exact repro) plus a fix of
+      likely-small size once the choke point is identified. TRIGGER: the next milestone touching
+      channel-send lowering or the crossing-local/suspension-frame machinery, or a real workload
+      building an `array`/`map` before an I/O call and sending it afterward.
+    - **(b) A capacity-forced-blocking channel send reads back garbage.** WHAT: NOT `number`-specific
+      (the `int` variant shows it too), NOT deterministic (~17–30% bad-run rate across runs), NOT an
+      arithmetic shortfall (bad runs print a heap address, i.e. an uninitialized-or-freed read, not a
+      lost addend). Fires ONLY when a `background` producer is forced to actually BLOCK on a full
+      channel buffer, and ONLY under `--no-optimize`/`--no-auto-parallel` (`-O0`) — the DEFAULT
+      optimized mode measured 36/36 correct on the same shape. WHY not fixed here: this is the
+      channel's blocked-send path under `-O0` (`crates/ynz-runtime/src/channel.rs`'s blocked-send
+      retry/wake logic) — NOT `fr12`'s `number_to_heap_cell` marshalling, which is not on the `int`
+      path at all — a runtime diagnosis, not a fuzzing-harness-round task. COST to fix later: a
+      diagnosis session (the blocked-send retry/wake path in `channel.rs` under `-O0`, for both `int`
+      and `number`) plus a fix of unknown size until diagnosed. TRIGGER: the next milestone touching
+      the channel send/backpressure path, or a real workload whose producer blocks on a full channel
+      under `-O0`.
+    - **Open question, unresolved:** are (a) and (b) the same producer (a general "value crossing a
+      suspension/blocking-send boundary" bug with two symptoms) or two independent ones? Bisection
+      did not settle it. Per `root-cause.md`'s "cluster findings before fixing any," whoever picks
+      this up should check that first before fixing either.
+    - **Routing, per Patrick's ruling 2026-09-04:** fix in a SEPARATE chat, on its own branch off
+      `main` — not owed by this plan and not a trigger this plan carries; recorded here as the
+      routing decision, not as a deferred task with its own trigger.
+
+### Phase 9 — cumulative-gate RED, pre-existing test infrastructure (2026-09-04, `m8-p9-20260904-b1`)
+
+50. **`timed_out_program_leaves_no_descendant_process_running` fails under full-workspace
+    contention and passes in isolation.** WHAT:
+    `bounded_run_kills_the_whole_tree::timed_out_program_leaves_no_descendant_process_running`
+    (`crates/ynz-driver/tests/cross_impl_consistency.rs`) failed 3 of 3 full
+    `cargo test --workspace` runs during Phase 9's cumulative gate — the descendant process was
+    still in `D` state (uninterruptible sleep, i.e. blocked in the kernel on I/O) 3 seconds after
+    `killpg` — and passed cleanly every time the file was run on its own. The file is UNTOUCHED by
+    Phase 9's diff (confirmed: it does not appear in the round's `git status`), and by the M8 branch
+    generally; this is pre-existing infrastructure debt surfaced by the gate, not a regression.
+    WHY not fixed here: it is a textbook instance of the corpse class
+    [`.claude/rules/test-parallelism.md`](../rules/test-parallelism.md) already documents as OPEN —
+    *a wall-clock budget calibrated on an idle machine* — where the same producer (a fixed poll
+    margin, here 3s, that holds on an idle box and not under 16-way contention) has already killed
+    four other tests in this repo. A process in `D` state cannot respond to a signal until its I/O
+    completes, so the margin, not the kill, is what failed. That rule's companion obligation is
+    explicit: liveness budgets in a parallel lane stay generous (an order of magnitude over the
+    observed run) and performance assertions do not belong in a parallel lane. The Phase 9 executor
+    was right to refuse to widen the margin without diagnosis — widening a timing budget to make a
+    red go away, with no measurement behind the new number, is how this class keeps recurring.
+    COST to fix later: small — one measurement of the observed teardown latency under real
+    contention, then either a generous liveness budget derived from it (order-of-magnitude, per the
+    rule) or a poll-until-gone loop with a generous ceiling instead of a fixed sleep; ~half a
+    session including re-running the suite enough times to show the flake is actually gone rather
+    than merely quieter. TRIGGER: the `cargo nextest` migration this repo already wants (the same
+    contention that produced this red is what that migration makes permanent), or the next
+    full-workspace gate that has to distinguish a real red from this one — whichever comes first.
+    Source plan: `2026-07-04-v0-3-m8-concurrency-completion`, Phase 9 cumulative gate.

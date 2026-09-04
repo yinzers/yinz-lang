@@ -1024,7 +1024,7 @@ fn module_signatures_query_is_separate_from_check_query() {
     // check_query should also have the error (it includes sig diags)
     let check_out = check_query(&db, sf);
     assert!(
-        check_out.diagnostics.len() >= 1,
+        !check_out.diagnostics.is_empty(),
         "Missing main must appear in check output"
     );
 }

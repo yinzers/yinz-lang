@@ -2681,7 +2681,7 @@ fn m5_generic_type_depth_cap_error() {
     let source = format!("function entrypoint() -> nothing {{ let x: {deep} = x }}");
     let output = parse(&source);
     assert!(
-        output.diagnostics.len() >= 1,
+        !output.diagnostics.is_empty(),
         "Expected at least one diagnostic for 17-deep nesting"
     );
 }
@@ -3012,7 +3012,7 @@ fn m5_recovery_unclosed_generic_param_list() {
     // would drown out the single real mistake.
     let output = parse("function foo< { } function bar() -> nothing { }");
     assert!(
-        output.diagnostics.len() >= 1,
+        !output.diagnostics.is_empty(),
         "Expected at least one diagnostic"
     );
     // bar() must still be parsed — recovery must continue past the broken decl.
@@ -3037,7 +3037,7 @@ fn m5_recovery_missing_type_arg_close_bracket() {
     // still give the parser enough to continue with the next statement.
     let output = parse(&wrap("let x: array<int = 5"));
     assert!(
-        output.diagnostics.len() >= 1,
+        !output.diagnostics.is_empty(),
         "Expected at least one diagnostic for missing `>`"
     );
 }
@@ -3066,7 +3066,7 @@ fn m5_recovery_index_missing_close_bracket() {
     // WHY: `arr[0` without `]` must produce exactly one diagnostic and not crash.
     let output = parse(&wrap("let x = arr[0"));
     assert!(
-        output.diagnostics.len() >= 1,
+        !output.diagnostics.is_empty(),
         "Expected diagnostic for unclosed `[`"
     );
 }
@@ -3077,7 +3077,7 @@ fn m5_maybe_missing_type_arg() {
     // message must guide the user to write `maybe<T>` — not produce a cascade.
     let output = parse(&wrap("let x: maybe = none"));
     assert!(
-        output.diagnostics.len() >= 1,
+        !output.diagnostics.is_empty(),
         "Expected diagnostic for bare `maybe`"
     );
     assert!(
@@ -3486,7 +3486,7 @@ fn m7_errors_keyword_in_expression_position_is_rejected() {
     // is ambiguous.
     let output = parse(&wrap("let x = errors"));
     assert!(
-        output.diagnostics.len() >= 1,
+        !output.diagnostics.is_empty(),
         "expected at least one diagnostic for `errors` in expression position, got 0"
     );
 }
@@ -3501,7 +3501,7 @@ fn m7_errors_keyword_not_after_type_is_ignored() {
     // `string errors` in let-binding type position — `errors` is unexpected there.
     // The parser produces a diagnostic about unexpected token.
     assert!(
-        output.diagnostics.len() >= 1,
+        !output.diagnostics.is_empty(),
         "expected a diagnostic for `errors` after a let-binding type annotation"
     );
 }
@@ -3512,7 +3512,7 @@ fn m7_errors_keyword_as_standalone_expression_is_rejected() {
     // rejected. It is not an identifier and not an expression-producing keyword.
     let output = parse(&wrap("errors"));
     assert!(
-        output.diagnostics.len() >= 1,
+        !output.diagnostics.is_empty(),
         "expected at least one diagnostic for standalone `errors` statement"
     );
 }
