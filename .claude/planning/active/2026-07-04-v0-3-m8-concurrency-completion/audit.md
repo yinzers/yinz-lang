@@ -11,6 +11,53 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p5-20260904-a1` — 2026-09-04 — **Phase 5 executed in one segment: the Auto-Arc emission
+  (topology (B)) is live for the full beneficial-emission condition; nothing committed.** Read:
+  the Phase 5 block (FRAGO 010 rewrite), R2's RISK OVERRIDE, `IMP-ownership.md` "Auto-Arc",
+  this file's Phase 2 SIGN-OFF + FRAGO 010, `arc.rs`, `effective_ownership.rs`, `emit.rs`'s
+  bg-arg path + both spawn lowerings, `runtime.rs`'s ladder + release protocol, `ynz-abi`,
+  the registry entries, `inlay_hint.rs`, parked 16, Phase 3's loom harness, `corpses.md`.
+  **Step 1:** sign-off confirmed. **Step 2 spike GREEN** on `m8_arc_two_spawn_group.ynz`
+  (kept as the first real fixture): RED = correct output with zero `ynz_arc_*` calls; after =
+  1 new / 2 clone / 1 transient free in IR, alloc=6 free=6 vs one-spawn 4/4 (one counted block
+  replaced two copies — +2, not +3), all Arc calls in `sm_s0` before the first suspension,
+  `%arc_new` an SSA local never in a frame slot. **Step 3:** `admit_arc_group_for` +
+  `record_spawn_arg_ownership` (the ONE recording function all three sites share — parked 16
+  done) + `stmt_may_suspend_conservative`/`stmt_contains_return` boundaries + `arc_shareable`;
+  codegen's `Arc` arm in `prepare_bg_arg_for_ctx`, `release_pending_arc_transients` after
+  both spawn calls, `BgArgFreeKind::ArcShape`, lazy `arc_decls` (so the one-spawn IR is
+  byte-identical: sha256 `4a812358596c3c01…` before and after — verified with `cmp`); the
+  ladder's `BG_ARG_KIND_ARC_SHAPE` arm; **(h) = `false`** with the co-owner-staged parity
+  case. **Step 4:** `auto_arc_hints` + LSP domain 11 + 3 tests. **Step 5:** the four-task
+  hammer fixture (105000, alloc=free). **Step 6:** 11 driver tests; loom
+  `loom_arc_group_clone_per_task_then_transient_release_frees_exactly_once` — 152
+  interleavings exhaustive in 4 ms, driving the real `arc.rs` (its `AtomicU64`/`fence` now
+  come from `crate::sync`; `ARC_HEADER_SIZE` rounds loom's wider atomic; production stays 8);
+  **revert-proof:** dropping task 2's `ynz_arc_clone` → assertion "task 1: the shared block
+  was freed while this task still holds a reference" (left 1, right 0), never a crash; tree
+  restored from the scratchpad copy, sha256 `b1628457c5239502…` identical before/after.
+  **Step 7:** `auto-arc-codegen-emission` narrowed to the residual, `auto_arc` hover updated.
+  **Step 8 (affected lane, exit codes seen):** `ynz-driver --test v03_m8_auto_arc` 11/11,
+  `--test v03_m8_channel_close` green, `integration::examples_basics_runs_end_to_end` green
+  (golden regenerated; the eight nondeterministic pirate lines kept in committed order),
+  `cross_impl_consistency` green with the ten new fixtures in the corpus, `ynz-lsp --test
+  inlay_hint` 27/27 (+ hover, array_to_fixed), `ynz-abi` 1/1, `ynz-runtime --lib` green
+  (arc ×3, per-kind parity with the Arc kind), `ynz-typeck --lib` green (arc_shareable ×3),
+  `ynz-registry` green; `cargo fmt --all --check` clean; clippy `-D warnings` clean on every
+  touched lib and on the touched test targets (`ynz-typeck`'s pre-existing test-file debt in
+  untouched files stays — parked 31). `ynz-driver` + `ynz-lsp` rebuilt `--release`.
+  **Design-says-A / implementation-has-B (all recorded in `IMP-ownership.md`):** (1) "inline
+  `shape`" fields are shareable → the tree stores nested shape fields as pointers
+  (`llvm_field_type`), so they are EXCLUDED; (2) no early-exit rule in the signed list → a
+  reachable `return` between spawns is a group boundary (a leaked count otherwise); (3) the
+  plan's "attributes M7's audit confirmed on `ynz_arc_*`" → M7's own R1 row records that NO
+  `ynz_arc_*` symbol was declared or called from codegen; this phase declares them (lazily)
+  for the first time; (4) the hover `{n}` → the registry hover is static markdown, so the
+  count is in the label and the hover says "the tasks spawned here". **Out of scope, found:**
+  a shape with a `number` field SIGSEGVs on ANY `background` spawn (one spawn, zero Arc
+  involvement, copy path) — parked item 40 with the repro. **No commit; no grep token
+  minted** (this entry is the durable record; the conductor's seal carries the dispatch id).
+
 - `m8-p4-fix3-20260904` — 2026-09-04 — **Phase 4 fix round 3: the blocker closed, two
   producers, both fixed; seven should-fix/minor items done; nothing committed.** Read: the
   Phase 4 block's round-2 grading, `REF-errors.md:155-180` (the `.message` contract),

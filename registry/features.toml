@@ -1241,25 +1241,24 @@ ships_in = "v0.4+"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "A real workload whose correctness contract requires a global total order across multiple concurrent atomic operations (seq-cst), OR the v0.4 concurrency-polish milestone — at which point the named opt-in surface (`.withGlobalOrdering()` or its final name) is designed and shipped."
 
-# --- Auto-Arc CODEGEN EMISSION for read-only cross-`background` shared state ---
-# (docs/internal/implementation/IMP-no-function-coloring.md §Runtime item 4)
+# --- Auto-Arc CODEGEN EMISSION — SHIPPED for the beneficial case; NARROWED to its residual ---
+# (docs/internal/implementation/IMP-ownership.md "Auto-Arc — Sharing Topology Across
+# `background` Boundaries" — topology (B), signed 2026-09-03)
 #
-# SURFACED to deviation-judge / conductor by the Phase 3 executor: the plan's Phase 3 exit
-# criteria ("auto-Arc programs correct under repeated runs"; "alloc=free — Arc control
-# blocks freed") assume the Arc codegen EMISSION ships this phase. It does NOT — and this is
-# a scope deviation, not a silent skip. The SAFETY half of R3 (boundary exactness — the
-# reject fires where it must, safe crossings are not falsely rejected, the generic
-# silent-skip gap is closed, the channel exemption holds) ships and is build-blocking. The
-# runtime SUBSTRATE (ynz-runtime/src/arc.rs: ynz_arc_new/clone/free, acquire-release
-# refcount discipline, concurrency-hammer-tested) ships. Only the codegen that EMITS the
-# Arc-wrap at the spawn site is deferred — see WHY.
+# The emission is LIVE: two or more `background` spawns in one block that pass the same
+# whole shape binding, with nothing changing it between them, every spawned function only
+# reading it, and a shape made of `int`/`float`/`bool`/`string` fields, share ONE
+# reference-counted block (`ynz_arc_new` at the first spawn, `ynz_arc_clone` per task, the
+# caller's transient released after the last spawn, each task's reference released when it
+# retires). The `auto_arc` muted hint fires at every member spawn. What remains deferred is
+# exactly the residual the design names — this entry now describes THAT, nothing wider.
 [[deferred_language_feature]]
 name = "auto-arc-codegen-emission"
-substitute = "A read-only value shared across a `background` boundary crosses SAFELY today via the independent-copy path (the compiler infers `.copy` when the value is used after the spawn; the task reads its own copy, the caller keeps its own). This is correct and race-free — auto-Arc is a performance optimization of this exact crossing (refcount-share one copy instead of deep-copying per task), not a correctness fix. Nothing is unsafe in the meantime."
-why = "Auto-Arc is an auto-promotion perf-form of the already-safe copy crossing (Golden Rule 10 'efficiency first'; the safe form already ships). A BENEFICIAL emission (Golden Rule 8 zero-cost: Arc must be cheaper than the copy it replaces, which only holds when one allocation is genuinely SHARED across the caller and/or multiple tasks) requires (a) a topology decision the design docs leave underspecified — IMP-no-function-coloring:58 points to IMP-ownership.md for the mechanism, but that doc does not actually specify it, and IMP-concurrency:189 locks `.share`-across-background as a hard error, so the caller/task sharing topology (repoint-caller-binding vs multi-task-share) is a design call, not an executor call — and (b) a SOUND read-only proof for the receiving callee, which the authoritative `ynz_typeck::effective_ownership` analysis (EffectiveOwnership::Reads) already provides and MUST be reused rather than re-deriving the fragile name-based mutation analysis that was built-and-removed for auto-parallel (IMP-concurrency:878, the authoritative-derivation.md corpse). A minimal single-task emission is a pessimization (adds an atomic + 8-byte header for zero sharing benefit), so there is no small sound-and-beneficial slice; shipping a speculative one risks R3's false-Arc silent data race (dormant override #3 class). The disciplined call: ship the safe boundary + substrate + teaching hint, defer the emission for a design decision on topology."
+substitute = "In the three shapes the shared block does not yet cover, each spawn takes its own independent copy — the same safe, race-free path every `background` argument used before sharing existed: (1) spawns of the same value separated by a suspension point (`wait`, a suspending call, a channel `send`/`receive`); (2) spawns inside a loop body (one spawn statement per iteration); (3) `array`/`map` values, and shapes with a `number`, `array`, `map`, `maybe`, union, or nested-shape field. Nothing is unsafe in the meantime; only the per-task copy is paid."
+why = "Sharing one block across a group of spawns is sound only while the caller's transient reference is a straight-line temporary: it is minted at the first spawn and released right after the last, and never lives in a state-machine frame. (1) A suspension between the spawns would have to carry that temporary across a frame boundary — the frame-layout plumbing for a compiler-owned temporary does not exist yet, and the shape-copy path is correct there. (2) A loop runs ONE spawn statement many times, so no group of statements forms; sharing across iterations needs a caller-held reference that outlives the statement, which needs the scope-exit cleanup mechanism the language does not have yet. (3) The block is a byte copy of the shape with an 8-byte-aligned refcount in front: a `number` field needs 16-byte alignment, and a field that is itself a pointer (an array, a map, a maybe, a union, a nested shape) would alias the inner allocation between tasks with no count on it; an `array`/`map` value is a header-plus-buffer pair, a different sharing substrate. Each of these declines to the copy path by construction rather than sharing unsoundly."
 ships_in = "v0.4+"
-design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
-triggers = "A design decision on the caller/task Arc-sharing topology (recorded in IMP-ownership.md / IMP-no-function-coloring.md), enabling a sound-AND-beneficial emission that reuses `ynz_typeck::effective_ownership` (EffectiveOwnership::Reads) as the read-only proof and `ynz-runtime/src/arc.rs` as the runtime hook — OR the v0.4 concurrency-polish milestone. On landing: wire the `auto_arc` muted-hint domain to fire in `crates/ynz-lsp/src/inlay_hint.rs`, and add the `should-Arc-and-emits-Arc` cells to the R3 matrix (the boundary/safety cells already ship)."
+design_doc = "docs/internal/implementation/IMP-ownership.md"
+triggers = "(1) The compiler gains frame-backed storage for compiler-owned temporaries across a suspension point, so a group's transient can straddle a `wait`; (2) the language-wide scope-exit cleanup mechanism lands, so a caller-held reference can outlive one loop iteration; (3) a counted sharing substrate for pointer-carrying values (arrays, maps, shapes with pointer or 16-byte-aligned fields) is designed. Each slice widens the admission independently; the copy path stays the fallback for whatever remains."
 
 # --- Stored range variable as a suspending for-loop iterator (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
@@ -2447,18 +2446,21 @@ hover_why = "64 is the locked default. A channel is always bounded, so send() ma
 # reference counting has cost"). The red-TINT visual is staged behind
 # `[[deferred_tooling_feature]]` `auto-arc-cautionary-tint` (no per-hint tint path exists in
 # ynz-lsp today); the teaching text below ships now and renders as a normal muted hint.
-# The domain is REGISTERED here in Phase 3; LSP inlay-firing wiring waits on the auto-Arc
-# codegen emission (`[[deferred_language_feature]]` `auto-arc-codegen-emission`) — the
-# `channel_capacity` registered-not-yet-firing precedent (its wiring lands in P5).
+# The domain FIRES since the auto-Arc codegen emission landed: `ynz_typeck::auto_arc_hints`
+# reads the same `BgOwnership::Arc` group record codegen mints the shared block from, and
+# `crates/ynz-lsp/src/inlay_hint.rs` renders it after every member spawn with the group's
+# task count in the label. The hover text is the signed design's wording
+# (IMP-ownership.md "The muted hint") — the label carries the exact count; the hover speaks
+# of "the tasks spawned here" because hover text is static registry markdown.
 [[muted_hint_domain]]
 domain = "auto_arc"
 placement_category = "Informational"
-description = "Shows where the compiler shares a read-only value across a `background` boundary by reference-counting it (auto-Arc) instead of deep-copying it. A codegen choice with no typeable source form, so it is informational only; the hover carries the reference-counting-has-cost caution."
+description = "Shows where the compiler shares a read-only value across a `background` boundary by reference-counting one copy (auto-Arc) instead of deep-copying it per task. A codegen choice with no typeable source form, so it is informational only; the hover carries the reference-counting-has-cost caution."
 example_source = "background render(scene)"
-example_hint_rendered = "// shared by reference count across tasks — read-only"
-hover_what = "This value is shared with the background task by counting references to one copy, instead of making a separate deep copy for each task."
-hover_what_instead = "There is nothing to write in source — the compiler picks this automatically when the value is only read across the boundary. If you need each task to change its own version, pass `.copy` so they get independent copies."
-hover_why = "Reference counting is not free — each task that takes or drops a reference does a small atomic bump. The compiler only does this when the value is read-only across the boundary, where sharing one copy is cheaper than copying it for every task."
+example_hint_rendered = "// shared by reference count with 2 tasks — read-only"
+hover_what = "This value is copied once into a shared block, and each of the background tasks spawned here holds a counted reference to that one copy instead of getting its own full copy. Your own binding is untouched — you keep reading your original."
+hover_what_instead = "Nothing to type — the compiler picks this when two or more tasks only read the value and nothing changes it between the spawns. If one task needs its own version to change, pass `scene.copy()` at that spawn so it gets an independent copy."
+hover_why = "Several tasks read this value, so one shared copy saves a full copy per task. Each task pays a small atomic bump when it takes and drops its reference — cheaper than a copy here, which is why the compiler shares only when at least two tasks read it."
 
 # Cross-module frame serialization shipped in v0.3-M3e.
 # The deferred_language_feature entry has been retired — the feature is live.

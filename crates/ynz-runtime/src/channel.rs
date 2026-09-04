@@ -1796,6 +1796,14 @@ mod tests {
     /// `debug_assert!` in the ladder's `_ => {}` arm fails the first debug retire; a kind the
     /// ladder frees but the predicate skips (freed-but-unreleasable — the pre-Phase-4
     /// `HEAP_MAP` hazard) fails here too.
+    ///
+    /// v0.3-M8 Phase 5 pins packet item (h): `BG_ARG_KIND_ARC_SHAPE` is staged the way the
+    /// codegen-emitted protocol actually leaves it — the ladder's slot is ONE count on a block
+    /// a CO-OWNER (another task, or the caller's transient) still counts — so the ladder's
+    /// retire frees NO counted allocation (`ladder_freed == 0`) and the predicate must say
+    /// `false`; the co-owner's release afterwards frees the block, keeping alloc=free exact.
+    /// Flipping the predicate to `true` for the Arc kind fails the `releasable ==` assertion
+    /// below; dropping the ladder arm fails the exact-parity assertion (the block leaks).
     #[test]
     #[cfg_attr(
         miri,
@@ -1810,8 +1818,8 @@ mod tests {
             return;
         }
         use ynz_abi::{
-            bg_arg_kind_is_releasable_payload, ALL_BG_ARG_KINDS, BG_ARG_KIND_HEAP_SHAPE,
-            BG_ARG_KIND_SHARED_CHANNEL,
+            bg_arg_kind_is_releasable_payload, ALL_BG_ARG_KINDS, BG_ARG_KIND_ARC_SHAPE,
+            BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_SHARED_CHANNEL,
         };
         crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
         let alloc_before = crate::ynz_alloc_count();
@@ -1819,24 +1827,68 @@ mod tests {
         for &kind in ALL_BG_ARG_KINDS {
             unsafe {
                 // The payload the slot holds, and how many COUNTED allocations it is.
-                let (bits, size, payload_allocs, base_chan): (i64, u64, u64, *mut u8) =
-                    if kind == BG_ARG_KIND_HEAP_SHAPE {
-                        (crate::ynz_alloc(16) as i64, 16, 1, std::ptr::null_mut())
-                    } else if kind == BG_ARG_KIND_HEAP_ARRAY {
-                        (crate::ynz_array_new(8) as i64, 0, 2, std::ptr::null_mut())
-                    } else if kind == BG_ARG_KIND_SHARED_CHANNEL {
-                        // The task's own refcount: an `Arc` (uncounted) the ladder releases.
-                        let base = make_chan(1);
-                        (ynz_channel_share(base) as i64, 0, 0, base)
-                    } else if kind == BG_ARG_KIND_RELEASED {
-                        // A cell whose ownership already left the task — whoever holds it
-                        // now (here: this test) frees it; the ladder must not.
-                        (crate::ynz_alloc(16) as i64, 16, 1, std::ptr::null_mut())
-                    } else {
-                        panic!(
+                // `co_owner_arc`: for the Auto-Arc kind, the co-owner's reference to the
+                // shared block (released after the ladder retires); null otherwise.
+                let (bits, size, payload_allocs, base_chan, co_owner_arc): (
+                    i64,
+                    u64,
+                    u64,
+                    *mut u8,
+                    *mut u8,
+                ) = if kind == BG_ARG_KIND_HEAP_SHAPE {
+                    (
+                        crate::ynz_alloc(16) as i64,
+                        16,
+                        1,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_HEAP_ARRAY {
+                    (
+                        crate::ynz_array_new(8) as i64,
+                        0,
+                        2,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_SHARED_CHANNEL {
+                    // The task's own refcount: an `Arc` (uncounted) the ladder releases.
+                    let base = make_chan(1);
+                    (
+                        ynz_channel_share(base) as i64,
+                        0,
+                        0,
+                        base,
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_RELEASED {
+                    // A cell whose ownership already left the task — whoever holds it
+                    // now (here: this test) frees it; the ladder must not.
+                    (
+                        crate::ynz_alloc(16) as i64,
+                        16,
+                        1,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_ARC_SHAPE {
+                    // The task's counted reference to a block a co-owner still counts
+                    // (exactly what `ynz_arc_clone` at a group spawn leaves in the slot).
+                    // The block is ONE counted allocation; the ladder's release must free
+                    // NOTHING while the co-owner lives.
+                    let base = crate::arc::ynz_arc_new(16);
+                    (
+                        crate::arc::ynz_arc_clone(base) as i64,
+                        16,
+                        0,
+                        std::ptr::null_mut(),
+                        base,
+                    )
+                } else {
+                    panic!(
                         "ALL_BG_ARG_KINDS has a kind ({kind}) this test does not stage — add it"
                     );
-                    };
+                };
                 let free_at_plant = crate::ynz_free_count();
                 let (_descs, fut) = plant_ladder_of_kind(kind, bits, size);
                 drop(fut); // the ladder: frame + descriptor (2 counted frees) + its arm
@@ -1859,6 +1911,17 @@ mod tests {
                     }
                     if !base_chan.is_null() {
                         ynz_channel_free(base_chan); // the base reference; the share was released
+                    }
+                    if !co_owner_arc.is_null() {
+                        // The co-owner's release is the LAST reference: this frees the block
+                        // (one counted free) — the ladder's own release above must have
+                        // dropped exactly one count and freed nothing.
+                        assert_eq!(
+                            crate::arc::arc_strong_count(co_owner_arc),
+                            1,
+                            "kind {kind}: the ladder must release exactly one Arc count"
+                        );
+                        crate::arc::ynz_arc_free(co_owner_arc, 16);
                     }
                 }
             }

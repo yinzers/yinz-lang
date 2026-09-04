@@ -345,6 +345,136 @@ pub fn copy_is_independent(ty: &Type) -> bool {
         )
 }
 
+/// v0.3-M8 Phase 5 — THE Auto-Arc compile-time floor (`IMP-ownership.md` "The
+/// beneficial-emission condition", item 4): can a value of this type be shared across a
+/// `background` boundary as ONE refcounted block whose bytes every task reads?
+///
+/// A `shape` whose fields are all `int`/`float`/`bool`/`string` — the field kinds a byte copy
+/// of the struct shares soundly: value bits, or (`string`) a pointer to immutable heap bytes
+/// that outlive every frame. Excluded, each for a reason the block cannot express:
+/// - `number` fields: 16-byte alignment; the block's data starts 8-aligned (`arc.rs`).
+/// - `array`/`map`/`maybe`/union/`channel` fields: pointer cells whose ownership the block
+///   does not count — sharing the outer bytes would alias the inner allocation between tasks.
+/// - nested `shape` fields: stored as an opaque POINTER inside the struct
+///   (`ynz-codegen/src/shape_types.rs::llvm_field_type`), so the same pointer-cell aliasing
+///   applies — the design's original "inline shape" wording did not match the tree.
+/// - every non-shape type: `array<int>` etc. are a header-plus-buffer pair, a different
+///   sharing substrate (the registry's residual).
+///
+/// One predicate, consulted by the group admission in `check.rs` only; codegen reads the
+/// recorded `BgOwnership::Arc` and never re-derives shareability (authoritative-derivation).
+pub fn arc_shareable(ty: &Type, shapes: &crate::shapes::ShapeTable) -> bool {
+    let Type::Shape { name } = ty else {
+        return false;
+    };
+    shapes.get(name).is_some_and(|def| {
+        def.fields
+            .iter()
+            .all(|f| matches!(f.ty, Type::Int | Type::Float | Type::Bool | Type::String))
+    })
+}
+
+#[cfg(test)]
+mod arc_shareable_tests {
+    use super::*;
+    use crate::shapes::{FieldDef, ShapeDef, ShapeTable};
+    use ynz_diagnostics::SourceSpan;
+
+    fn table_with(name: &str, fields: Vec<Type>) -> ShapeTable {
+        let mut t = ShapeTable::empty();
+        t.shapes.insert(
+            name.to_string(),
+            ShapeDef {
+                name: name.to_string(),
+                is_base: false,
+                extends: None,
+                follows: vec![],
+                fields: fields
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, ty)| FieldDef {
+                        name: format!("f{i}"),
+                        ty,
+                        is_hidden: false,
+                        is_inherited: false,
+                        defined_at: SourceSpan::new("", 0, 0),
+                    })
+                    .collect(),
+                contract_sigs: vec![],
+                defined_at: SourceSpan::new("", 0, 0),
+            },
+        );
+        t
+    }
+
+    #[test]
+    fn primitive_and_string_fields_are_shareable() {
+        let t = table_with(
+            "Scene",
+            vec![Type::String, Type::Int, Type::Float, Type::Bool],
+        );
+        assert!(arc_shareable(
+            &Type::Shape {
+                name: "Scene".into()
+            },
+            &t
+        ));
+    }
+
+    #[test]
+    fn every_excluded_field_kind_declines() {
+        let excluded = [
+            Type::Number { precision: 34 },
+            Type::BuiltinArray {
+                elem: Box::new(Type::Int),
+            },
+            Type::BuiltinMap {
+                key: Box::new(Type::String),
+                val: Box::new(Type::Int),
+            },
+            Type::Maybe {
+                inner: Box::new(Type::Int),
+            },
+            Type::Shape {
+                name: "Inner".into(),
+            },
+            Type::BuiltinChannel {
+                elem: Box::new(Type::Int),
+            },
+        ];
+        for field in excluded {
+            let t = table_with("Outer", vec![Type::Int, field.clone()]);
+            assert!(
+                !arc_shareable(
+                    &Type::Shape {
+                        name: "Outer".into()
+                    },
+                    &t
+                ),
+                "a shape with a {field:?} field must not be Arc-shareable"
+            );
+        }
+    }
+
+    #[test]
+    fn non_shape_types_and_unknown_shapes_decline() {
+        let t = table_with("Scene", vec![Type::Int]);
+        assert!(!arc_shareable(&Type::Int, &t));
+        assert!(!arc_shareable(
+            &Type::BuiltinArray {
+                elem: Box::new(Type::Int)
+            },
+            &t
+        ));
+        assert!(!arc_shareable(
+            &Type::Shape {
+                name: "Missing".into()
+            },
+            &t
+        ));
+    }
+}
+
 #[cfg(test)]
 mod channel_elem_tests {
     use super::*;

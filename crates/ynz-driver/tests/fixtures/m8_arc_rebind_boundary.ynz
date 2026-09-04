@@ -1,0 +1,39 @@
+// v0.3-M8 Phase 5 — a TOP-LEVEL rebinding between spawns is a GROUP BOUNDARY, not a
+// decline (`IMP-ownership.md` "The beneficial-emission condition", item 3): spawns 1–2 share
+// value A, spawns 3–4 share value B — TWO groups, two `ynz_arc_new` calls — and each task
+// reads exactly the value that was bound when it was spawned. An Arc admitted ACROSS the
+// rebinding would make tasks 3–4 read A (the probe in the design: `1 + 7 = 8` vs `2`).
+//
+// Expected output:
+//   tasks total 284
+//   caller keeps Kiner 10x10
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(5)
+  results.send(scene.width * scene.height)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let scene: Scene = { name: `Wagner`, width: 6, height: 7 }
+  background render(scene, results)
+  background render(scene, results)
+  let other: Scene = { name: `Kiner`, width: 10, height: 10 }
+  scene = other
+  background render(scene, results)
+  background render(scene, results)
+  let total = 0
+  for (k in range(0, 4)) {
+    let got = results.receive()
+    if (got.exists()) {
+      total = total + got.value
+    }
+  }
+  print(`tasks total ${total}`)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}

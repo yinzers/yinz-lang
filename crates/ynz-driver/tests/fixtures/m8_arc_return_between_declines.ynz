@@ -1,0 +1,38 @@
+// v0.3-M8 Phase 5 — an early `return` reachable between two spawns is a group boundary
+// (the implementation's one addition to the signed condition, recorded in the design): the
+// transient's release is straight-line code after the last spawn, and an exit between the
+// spawns would skip it. Both spawns take the copy path; no `ynz_arc_*` call may be emitted.
+//
+// Expected output:
+//   tasks total 84
+//   caller keeps Bonds 6x7
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(5)
+  results.send(scene.width * scene.height)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let scene: Scene = { name: `Bonds`, width: 6, height: 7 }
+  let bail = scene.width > 100
+  background render(scene, results)
+  if (bail) {
+    return
+  }
+  background render(scene, results)
+  let total = 0
+  for (k in range(0, 2)) {
+    let got = results.receive()
+    if (got.exists()) {
+      total = total + got.value
+    }
+  }
+  print(`tasks total ${total}`)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}

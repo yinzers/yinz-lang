@@ -41,11 +41,40 @@
 //!   other thread's last use.
 //!
 //! This is the same pairing `std::sync::Arc` uses; none of it is sequentially consistent.
+//!
+//! # Who calls this (v0.3-M8 Phase 5 — the emission is live)
+//!
+//! `ynz-codegen`'s `prepare_bg_arg_for_ctx` emits the topology-(B) protocol from
+//! `docs/internal/implementation/IMP-ownership.md` "Auto-Arc — Sharing Topology Across
+//! `background` Boundaries": at the FIRST spawn of an admitted group, `ynz_arc_new(size)` +
+//! a copy of the shape bytes, held in a caller-side transient; `ynz_arc_clone` at EVERY
+//! member spawn (the task's reference); `ynz_arc_free(transient, size)` right after the last
+//! member's spawn call; and each task's drop ladder (`BG_ARG_KIND_ARC_SHAPE`, the CPU-arm
+//! closure free, or the state-machine ladder in `runtime.rs`) releases its reference at
+//! retire. Count: new=1, N clones → N+1, transient released → N, tasks retire → 0.
+//! `loom_tests::arc_*` model-checks exactly that call pattern against this code.
 
-use std::sync::atomic::{fence, AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
+
+use crate::sync::{fence, AtomicU64};
+
+/// Observation counter for the runtime's own tests and the loom models: how many blocks the
+/// LAST release has freed (never read by generated code). A plain std atomic — under loom it
+/// is not a modeled object, just a value the model reads at a schedule point, like Phase 3's
+/// wake counters. Process-wide; the loom Arc models serialize on `loom_tests::ARC_MODEL_LANE`
+/// so a concurrent model cannot perturb another's reading.
+#[cfg(any(test, loom))]
+pub(crate) static ARC_BLOCK_FREES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// Byte size of the refcount header preceding the data bytes.
-const ARC_HEADER_SIZE: usize = 8;
+///
+/// Production: 8 (`std::sync::atomic::AtomicU64` is one machine word — the layout the
+/// C-ABI contract above documents). Under `--cfg loom` the header is loom's tracked atomic,
+/// which is wider; the size is rounded up to keep the data 8-aligned. The loom build never
+/// produces `libynz_runtime.a`, so codegen's `data_ptr - 8` recovery is only ever paired with
+/// the 8-byte production header.
+const ARC_HEADER_SIZE: usize = std::mem::size_of::<AtomicU64>().div_ceil(8) * 8;
 
 /// Recover the header pointer from a data pointer.
 ///
@@ -105,8 +134,26 @@ pub unsafe extern "C" fn ynz_arc_free(data_ptr: *mut u8, size: usize) {
     if header(data_ptr).fetch_sub(1, Ordering::Release) == 1 {
         // Last reference: acquire every other releasing thread's writes before freeing.
         fence(Ordering::Acquire);
+        // Loom's atomic is a tracked object that must be dropped inside the model; the
+        // production `std` atomic has no drop glue, so this is a no-op there (and the
+        // header's raw bytes are freed with the block either way).
+        #[cfg(loom)]
+        std::ptr::drop_in_place(data_ptr.sub(ARC_HEADER_SIZE) as *mut AtomicU64);
+        #[cfg(any(test, loom))]
+        ARC_BLOCK_FREES.fetch_add(1, Ordering::Relaxed);
         crate::ynz_free(data_ptr.sub(ARC_HEADER_SIZE), ARC_HEADER_SIZE + size);
     }
+}
+
+/// Read the live strong count — an observation point for the runtime's own tests and the
+/// loom models (never called by generated code).
+///
+/// # Safety
+///
+/// Same contract as [`ynz_arc_clone`]: `data_ptr` is live.
+#[cfg(any(test, loom))]
+pub(crate) unsafe fn arc_strong_count(data_ptr: *mut u8) -> u64 {
+    header(data_ptr).load(Ordering::Acquire)
 }
 
 #[cfg(test)]
@@ -115,7 +162,7 @@ mod tests {
 
     /// Read the live strong count (test-only observation point).
     unsafe fn strong(data_ptr: *mut u8) -> u64 {
-        header(data_ptr).load(Ordering::Acquire)
+        arc_strong_count(data_ptr)
     }
 
     #[test]

@@ -1,0 +1,35 @@
+// v0.3-M8 Phase 5 — the override direction (`IMP-ownership.md` "Override directions"):
+// `.copy()` at a spawn makes that spawn `Provenance::Fresh`, not a whole-binding member, so
+// it takes the shipped per-task copy path while the OTHER two spawns still form a group of
+// two. Exactly one `ynz_arc_new` and two `ynz_arc_clone` calls are emitted.
+//
+// Expected output:
+//   tasks total 126
+//   caller keeps Beaumont 6x7
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(5)
+  results.send(scene.width * scene.height)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let scene: Scene = { name: `Beaumont`, width: 6, height: 7 }
+  background render(scene, results)
+  background render(scene.copy(), results)
+  background render(scene, results)
+  let total = 0
+  for (k in range(0, 3)) {
+    let got = results.receive()
+    if (got.exists()) {
+      total = total + got.value
+    }
+  }
+  print(`tasks total ${total}`)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}

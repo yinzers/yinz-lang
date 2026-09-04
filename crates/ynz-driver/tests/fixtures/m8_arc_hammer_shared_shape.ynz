@@ -1,0 +1,43 @@
+// v0.3-M8 Phase 5 — the end-to-end Auto-Arc hammer (plan step 5): FOUR suspending tasks
+// share ONE Arc'd shape under real concurrent load. Each task reads every field of the
+// shared block on every iteration of a suspending loop (interleaving with the other three
+// on the I/O pool), then reports its sum through a channel. The caller keeps reading its own
+// original throughout. Alloc=free parity + `ynz_arc_new` count are asserted by the driver
+// test; a torn read, a use-after-free, or a double free shows up as a wrong total or a crash.
+//
+// Expected output (4 tasks × 25 iterations × 30·35):
+//   tasks total 105000
+//   caller keeps Fort Pitt 30x35 depth 2
+shape Bridge {
+  name: string
+  width: int
+  height: int
+  depth: int
+}
+
+function survey(bridge: Bridge, results: channel<int>) -> nothing {
+  let sum = 0
+  for (i in range(0, 25)) {
+    wait sleep(1)
+    sum = sum + bridge.width * bridge.height + bridge.depth * 0
+  }
+  results.send(sum)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let bridge: Bridge = { name: `Fort Pitt`, width: 30, height: 35, depth: 2 }
+  background survey(bridge, results)
+  background survey(bridge, results)
+  background survey(bridge, results)
+  background survey(bridge, results)
+  let total = 0
+  for (k in range(0, 4)) {
+    let got = results.receive()
+    if (got.exists()) {
+      total = total + got.value
+    }
+  }
+  print(`tasks total ${total}`)
+  print(`caller keeps ${bridge.name} ${bridge.width}x${bridge.height} depth ${bridge.depth}`)
+}

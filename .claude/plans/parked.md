@@ -136,7 +136,7 @@ surfaced that has no other home.
     (`emit.rs:16731-16738`), so it is not observable today — but any IDE hint reading `bg_inferred`
     would tell the user "copied" for a value that was given. WHY deferred: not observable until the
     muted-hint surface reads that field. COST: trivial. TRIGGER: whichever phase wires a hint over
-    `bg_inferred` — Phase 5's `auto_arc` hint work is the likely first reader. **Status: ABSORBED by Phase 2's design** — the three spawn-arg recording sites share ONE recording function that derives the label (`Give`/`Copy`/`Channel`/`Arc`) from the truth, so the handle form no longer records `Copy` for a given binding (`IMP-ownership.md` "What typeck records and what codegen reads"). Phase 5 implements.
+    `bg_inferred` — Phase 5's `auto_arc` hint work is the likely first reader. **Status: ABSORBED by Phase 2's design** — the three spawn-arg recording sites share ONE recording function that derives the label (`Give`/`Copy`/`Channel`/`Arc`) from the truth, so the handle form no longer records `Copy` for a given binding (`IMP-ownership.md` "What typeck records and what codegen reads"). **DONE in Phase 5 (`m8-p5-20260904-a1`)**: `record_spawn_arg_ownership` in `check.rs` is the one function; the handle-form pre-record now records `Give` for a position the callee's signature declares `give` (and `Arc` for a group member), `Copy` otherwise.
 17. **A real blast-radius instance the design's "zero instances" claim missed.** WHAT:
     `examples/primantis-orders/m6_errors.ynz:112-115` passes bare parameter `fig` as a receiver into
     `haulCircle(give self: Circle)` — today's silent consume at `check.rs:4617`. Any `give`-tightening
@@ -370,6 +370,27 @@ byte-span renderer via `byte_spans.rs` + the gallery caret check). 0 blockers. E
     `recv_waiters`.
     Also: the four `ec_method_*_resolves_in_ec_fn` tests assert only the guarded form compiles —
     the refusal half exists only for `.message` (driver-level). Rides item 35's branch.
+
+### Phase 5 — Auto-Arc emission (2026-09-04, `m8-p5-20260904-a1`)
+
+40. **A shape with a `number` field SIGSEGVs when passed to ANY `background` spawn — pre-existing,
+    on the shipped copy path.** WHAT: `shape Scene { name: string, width: int, height: int,
+    scale: number }` passed as `background render(scene, results)` (a suspending callee, ONE spawn,
+    no Auto-Arc involvement — the program emits zero `ynz_arc_*` calls and the one-spawn IR is
+    proven byte-identical to the pre-Phase-5 compiler) dies with signal 11; the identical program
+    without the `number` field runs. Repro: the probe in the Phase 5 audit entry (a two-spawn
+    twin was authored as `m8_arc_number_field_declines.ynz` and DELETED because the fixture
+    corpus sweep runs every fixture and this one crashes). Likely producer: the shape heap-copy
+    at `prepare_bg_arg_for_ctx` (`ynz_alloc` + a struct load/store) copies the 16-byte `i128`
+    field by value, but the task-side field read of a decimal128 goes through the
+    `sm_number_param_set` / heap-cell indirection (v0.3-M6 FRAGO 006/007) that expects a
+    POINTER — a load through i128 bits as an address. Unverified beyond the symptom. WHY
+    deferred: out of Phase 5's scope (the Arc floor excludes `number` fields precisely, so the
+    emission never touches this path); a fix belongs with the M6 number-arg marshalling. COST:
+    small-to-medium (one probe with `--emit-ir` to confirm the producer, one codegen arm).
+    TRIGGER: the post-M8 hotfix branch (FRAGO 011) or the next milestone touching
+    `prepare_bg_arg_for_ctx`'s Shape arm — the crash is a silent-until-run miscompile on a
+    plausible user program.
 
 ### Open exposure carrying a cheap in-scope guard — flagged under `no-duct-tape.md`
 

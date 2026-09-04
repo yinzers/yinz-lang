@@ -159,6 +159,10 @@ v0.3-M8 — closing a channel:
   lineup received with 3 jerseys
   the lineup wire is closed and empty
 
+v0.3-M8 — one shared copy for three background scouts:
+  three scouts graded Paul Skenes: combined 1095
+  the front office still holds the original: 60/70/45
+
 v0.3-M5 — per-field array layout: 128-cannonball volley, hot loop on x/y:
   height integral over 64 steps:
 2955264.00

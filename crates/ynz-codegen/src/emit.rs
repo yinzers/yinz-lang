@@ -1530,6 +1530,8 @@ fn lower_generic_function<'ctx>(
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
+        arc_transients: HashMap::new(),
+        arc_pending_release: Vec::new(),
         // Generic functions cannot contain `wait` in M2. Use empty caches.
         wait_cache: empty_wait_cache(),
         suspend_set: empty_suspend_set(),
@@ -1907,6 +1909,18 @@ struct Cg<'ctx, 'g> {
     // Per-Cg (not global static) so identical source always produces identical IR even
     // when multiple compilations run in the same process (LSP, test harness).
     bg_uid: u64,
+    // v0.3-M8 Phase 5 Auto-Arc (topology (B)): the caller-side TRANSIENT reference of each
+    // admitted spawn group lowered in this function — keyed by typeck's group id, holding
+    // the `ynz_arc_new` data pointer and the block's byte size. Minted at the group's
+    // `first` member, cloned from at every member, and moved to `arc_pending_release` at
+    // the `last` member so the spawn-site lowering frees it right after the spawn call.
+    // An ordinary SSA local: typeck admits a group only when no suspension point lies
+    // between its first and last spawn, so it never has to survive a frame boundary.
+    arc_transients: HashMap<u32, (PointerValue<'ctx>, u64)>,
+    // Transients whose group's last member was just prepared; drained (ynz_arc_free) by the
+    // spawn-site lowering immediately after the spawn call — never by the drop ladder,
+    // which frees only the TASKS' references.
+    arc_pending_release: Vec<(PointerValue<'ctx>, u64)>,
     // v0.3-M2 P6: local contains-wait cache (kept for generic lowering backward-compat).
     // Dead in P7 for non-generic code; remove in M3 when generic functions can suspend.
     #[allow(dead_code)]
@@ -4447,6 +4461,8 @@ fn lower_function<'ctx, 'g>(
         is_errors_capable,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
+        arc_transients: HashMap::new(),
+        arc_pending_release: Vec::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -4956,6 +4972,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
+        arc_transients: HashMap::new(),
+        arc_pending_release: Vec::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -16836,6 +16854,10 @@ enum BgArgFreeKind {
     /// FRAGO 011): freeing it would need a flag-guarded interior walk this
     /// ladder has no machinery for, and the class's drop story is P3-owned.
     HeapMaybeEnv { byte_size: u64 },
+    /// v0.3-M8 Phase 5 Auto-Arc: the task's counted reference to a shared shape block
+    /// (`ynz_arc_clone` at the spawn site): release with `ynz_arc_free(ptr, byte_size)`
+    /// after the call (CPU arm) or at retire via `BG_ARG_KIND_ARC_SHAPE` (SM ladder).
+    ArcShape { byte_size: u64 },
 }
 
 /// Prepare one `background` argument for storage in the task ctx.
@@ -16948,6 +16970,78 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     if matches!(cg.resolve_type(ty), Type::Number { precision } if precision <= 34) {
         let cell = cg.number_to_heap_cell(val.into_pointer_value(), "bg_number")?;
         return Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+    }
+
+    // v0.3-M8 Phase 5 Auto-Arc, topology (B) (`IMP-ownership.md` "Auto-Arc — Sharing
+    // Topology Across `background` Boundaries"): a member of an admitted spawn group shares
+    // ONE block instead of taking its own heap copy. Codegen reads typeck's recorded
+    // `BgOwnership::Arc { group, first, last }` and consults no ownership fact of its own
+    // (authoritative-derivation): `first` mints the block (`ynz_arc_new` + a copy of the
+    // struct bytes) into the caller-side transient; EVERY member (the first included — the
+    // transient's own reference is separate) takes the task's reference with
+    // `ynz_arc_clone`; `last` queues the transient for release right after this spawn call.
+    // The task's reference rides the drop ladder as `BG_ARG_KIND_ARC_SHAPE`. The transient is
+    // what keeps the block alive between the spawns: without it, task 1 could retire and free
+    // the block before spawn 2 clones it. When the record is anything but `Arc`, this arm is
+    // not entered and the pre-existing paths below run byte-for-byte unchanged.
+    {
+        let s = arg.span();
+        if let Some(ynz_typeck::check::BgOwnership::Arc { group, first, last }) = cg
+            .typed
+            .background_arg_inferred_ownership
+            .get(&(s.start, s.end))
+        {
+            let (group, first, last) = (*group, *first, *last);
+            let arc = arc_decls(cg.ctx, cg.module);
+            let Type::Shape { name } = cg.resolve_type(ty) else {
+                return Err(format!(
+                    "auto-arc: typeck admitted a non-shape argument ({}) to an Arc group",
+                    ynz_typeck::types::type_name(ty)
+                ));
+            };
+            let struct_ty = cg
+                .shape_types
+                .get(&name)
+                .ok_or_else(|| format!("auto-arc: LLVM type for `{name}` not found"))?;
+            let abi_size =
+                cg.shape_abi_sizes.get(&name).copied().ok_or_else(|| {
+                    format!("auto-arc: shape `{name}` missing from shape_abi_sizes")
+                })?;
+            if first {
+                let size_val = cg.i64().const_int(abi_size, false);
+                let block = cg
+                    .builder
+                    .build_call(arc.new, &[size_val.into()], "arc_new")
+                    .map_err(|e| format!("auto-arc: ynz_arc_new call: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| "auto-arc: ynz_arc_new returned void".to_string())?
+                    .into_pointer_value();
+                let struct_val = cg
+                    .builder
+                    .build_load(struct_ty, val.into_pointer_value(), "arc_src")
+                    .map_err(|e| format!("auto-arc: load src: {e}"))?;
+                cg.builder
+                    .build_store(block, struct_val)
+                    .map_err(|e| format!("auto-arc: store to block: {e}"))?;
+                cg.arc_transients.insert(group, (block, abi_size));
+            }
+            let (transient, size) = cg.arc_transients.get(&group).copied().ok_or_else(|| {
+                format!("auto-arc: group {group} member lowered before its first member")
+            })?;
+            let task_ref = cg
+                .builder
+                .build_call(arc.clone, &[transient.into()], "arc_clone")
+                .map_err(|e| format!("auto-arc: ynz_arc_clone call: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "auto-arc: ynz_arc_clone returned void".to_string())?;
+            if last {
+                cg.arc_transients.remove(&group);
+                cg.arc_pending_release.push((transient, size));
+            }
+            return Ok((task_ref, BgArgFreeKind::ArcShape { byte_size: size }));
+        }
     }
 
     let is_heap_arg = match arg {
@@ -17149,9 +17243,12 @@ fn prepare_bg_arg_for_ctx<'ctx>(
 ///
 /// The `ctx_arg` pointer and `arg_types` give the slot layout; `free_kinds` is parallel to
 /// `arg_types` and was recorded at the spawn site.
+/// `arc` is `Some` only when a slot is an Auto-Arc reference (declared lazily by the caller so a
+/// program with no admitted group carries no `ynz_arc_*` declaration).
 fn emit_bg_arg_frees<'ctx>(
     cg_builder: &inkwell::builder::Builder<'ctx>,
     rt: &RuntimeDecls<'ctx>,
+    arc: Option<&ArcDecls<'ctx>>,
     i64_ty: inkwell::types::IntType<'ctx>,
     ptr_ty: inkwell::types::PointerType<'ctx>,
     ctx_arg: inkwell::values::PointerValue<'ctx>,
@@ -17262,7 +17359,95 @@ fn emit_bg_arg_frees<'ctx>(
                     .build_call(rt.ynz_channel_free, &[chan_ptr.into()], "bg_chan_free")
                     .map_err(|e| format!("bg chan free call: {e}"))?;
             }
+            // v0.3-M8 Phase 5 Auto-Arc: release the task's counted reference to the shared
+            // block (the CPU-arm twin of the SM ladder's `BG_ARG_KIND_ARC_SHAPE` arm).
+            BgArgFreeKind::ArcShape { byte_size } => {
+                let slot = unsafe {
+                    cg_builder
+                        .build_gep(
+                            i64_ty,
+                            ctx_arg,
+                            &[i64_ty.const_int(i as u64, false)],
+                            "free_arc_slot",
+                        )
+                        .map_err(|e| format!("bg arc free gep: {e}"))?
+                };
+                let bits = cg_builder
+                    .build_load(i64_ty, slot, "free_arc_bits")
+                    .map_err(|e| format!("bg arc free load: {e}"))?
+                    .into_int_value();
+                let arc_ptr = cg_builder
+                    .build_int_to_ptr(bits, ptr_ty, "free_arc_ptr")
+                    .map_err(|e| format!("bg arc free inttoptr: {e}"))?;
+                let size_val = i64_ty.const_int(*byte_size, false);
+                let arc = arc.ok_or_else(|| {
+                    "bg arc free: ArcShape slot with no arc declarations".to_string()
+                })?;
+                cg_builder
+                    .build_call(arc.free, &[arc_ptr.into(), size_val.into()], "bg_arc_free")
+                    .map_err(|e| format!("bg arc free call: {e}"))?;
+            }
         }
+    }
+    Ok(())
+}
+
+/// v0.3-M8 Phase 5 — the Auto-Arc runtime entry points, declared ON FIRST USE (idempotent,
+/// the same `declare_fn` `RuntimeDecls` uses) rather than eagerly in `RuntimeDecls`: a module
+/// with no admitted spawn group then carries no `ynz_arc_*` declaration at all, so its IR is
+/// byte-identical to the pre-emission compiler's — the single-reader no-op proof. The DATA
+/// pointer is what codegen holds and passes; the refcount header (data − 8) is runtime-private.
+struct ArcDecls<'ctx> {
+    /// `ynz_arc_new(size: i64) -> ptr` — a block for `size` data bytes, count = 1.
+    new: FunctionValue<'ctx>,
+    /// `ynz_arc_clone(data: ptr) -> ptr` — one more reference (same pointer back).
+    clone: FunctionValue<'ctx>,
+    /// `ynz_arc_free(data: ptr, size: i64) -> void` — release one; the last frees.
+    free: FunctionValue<'ctx>,
+}
+
+fn arc_decls<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) -> ArcDecls<'ctx> {
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let i64 = ctx.i64_type();
+    ArcDecls {
+        new: crate::runtime_decls::declare_fn(
+            module,
+            "ynz_arc_new",
+            ptr.fn_type(&[i64.into()], false),
+        ),
+        clone: crate::runtime_decls::declare_fn(
+            module,
+            "ynz_arc_clone",
+            ptr.fn_type(&[ptr.into()], false),
+        ),
+        free: crate::runtime_decls::declare_fn(
+            module,
+            "ynz_arc_free",
+            ctx.void_type().fn_type(&[ptr.into(), i64.into()], false),
+        ),
+    }
+}
+
+/// v0.3-M8 Phase 5 Auto-Arc: release the caller-side transient of every group whose LAST
+/// member was prepared for the spawn just emitted (`ynz_arc_free(transient, size)`). Called
+/// by both spawn-site lowerings right after their spawn call — the statically placed release
+/// topology (B) specifies ("immediately after the last member's spawn statement"); the drop
+/// ladder frees only the tasks' references. Empty for every non-group spawn.
+fn release_pending_arc_transients(cg: &mut Cg<'_, '_>) -> Result<(), String> {
+    let pending = std::mem::take(&mut cg.arc_pending_release);
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let arc = arc_decls(cg.ctx, cg.module);
+    for (transient, size) in pending {
+        let size_val = cg.i64().const_int(size, false);
+        cg.builder
+            .build_call(
+                arc.free,
+                &[transient.into(), size_val.into()],
+                "arc_transient_free",
+            )
+            .map_err(|e| format!("auto-arc: transient release: {e}"))?;
     }
     Ok(())
 }
@@ -17501,8 +17686,20 @@ fn lower_expr_background<'ctx>(
     // Each BgArgFreeKind::HeapShape/HeapArrayPrimitive slot holds a heap pointer that was
     // ynz_alloc'd at spawn time and must be freed exactly once here.
     let ptr_ty = cg.ctx.ptr_type(inkwell::AddressSpace::default());
-    emit_bg_arg_frees(&cg.builder, cg.rt, cg.i64(), ptr_ty, ctx_arg, &free_kinds)
-        .map_err(|e| format!("bg arg free: {e}"))?;
+    let arc = free_kinds
+        .iter()
+        .any(|k| matches!(k, BgArgFreeKind::ArcShape { .. }))
+        .then(|| arc_decls(cg.ctx, cg.module));
+    emit_bg_arg_frees(
+        &cg.builder,
+        cg.rt,
+        arc.as_ref(),
+        cg.i64(),
+        ptr_ty,
+        ctx_arg,
+        &free_kinds,
+    )
+    .map_err(|e| format!("bg arg free: {e}"))?;
 
     cg.builder
         .build_return(None)
@@ -17538,6 +17735,7 @@ fn lower_expr_background<'ctx>(
         )
         .map_err(|e| format!("spawn_blocking: {e}"))?;
 
+    release_pending_arc_transients(cg)?;
     Ok(cg.i32().const_int(0, false).into())
 }
 
@@ -17697,6 +17895,12 @@ fn lower_sm_background_spawn<'ctx>(
                 let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
                 Some((slot_idx, byte_offset, *byte_size))
             }
+            // v0.3-M8 Phase 5 Auto-Arc: the task's reference — `ynz_arc_free(ptr, size)` at
+            // retire (kind 4); size = the block's data byte count (the `ynz_arc_new` size).
+            BgArgFreeKind::ArcShape { byte_size } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, *byte_size))
+            }
             BgArgFreeKind::None => None,
         })
         .collect();
@@ -17754,6 +17958,7 @@ fn lower_sm_background_spawn<'ctx>(
                 }
                 BgArgFreeKind::HeapArrayPrimitive => ynz_abi::BG_ARG_KIND_HEAP_ARRAY,
                 BgArgFreeKind::SharedChannel => ynz_abi::BG_ARG_KIND_SHARED_CHANNEL,
+                BgArgFreeKind::ArcShape { .. } => ynz_abi::BG_ARG_KIND_ARC_SHAPE,
                 BgArgFreeKind::None => unreachable!("filtered above"),
             };
             let off1 = unsafe {
@@ -17825,6 +18030,7 @@ fn lower_sm_background_spawn<'ctx>(
             .try_as_basic_value()
             .basic()
             .ok_or_else(|| "ynz_rt_spawn_handle returned void".to_string())?;
+        release_pending_arc_transients(cg)?;
         return Ok(handle);
     }
 
@@ -17843,6 +18049,7 @@ fn lower_sm_background_spawn<'ctx>(
         )
         .map_err(|e| format!("ynz_rt_spawn: {e}"))?;
 
+    release_pending_arc_transients(cg)?;
     Ok(cg.i32().const_int(0, false).into())
 }
 

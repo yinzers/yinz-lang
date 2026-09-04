@@ -21,6 +21,7 @@
 //! | P2-2 orphan purge at BOTH cancellation paths (frame ladder + `ynz_handle_free`) | `orphan_purge_*` | a `pending_sends` entry outliving its owner |
 //! | drop ladder kind-2 arm: purge THIS task's sends, THEN release its channel ref, concurrent with co-owners | `drop_ladder_*` | orphan / refcount imbalance / payload glued ≠ once; and — the ORDER, asserted by [`assert_purged_before_released`] in both models — the ladder's own entry still parked after its reference is gone (the two calls swapped) |
 //! | P3-2 recv register-before-poll: no lost wakeup when a send lands mid-poll | `recv_register_before_poll_*` | a Pending receiver never woken while a value sits buffered |
+//! | v0.3-M8 Phase 5 Auto-Arc: the codegen-emitted protocol (new at the first spawn, clone per task, transient released after the last spawn, task releases at retire) frees the block exactly once, never under a live task | `arc_group_*` | a task observing the block freed while it still holds a reference (drop one `ynz_arc_clone` — the revert-proof at introduction), or the block freed ≠ once |
 //!
 //! The revert-proofs were performed at introduction (M8 Phase 3 step 5 and its fix round 2,
 //! recorded in the plan's audit) — the harness catches each reverted fix by its OWN assertion,
@@ -47,6 +48,7 @@ use std::task::{Context, Wake, Waker};
 
 use loom::thread;
 
+use crate::arc::{arc_strong_count, ynz_arc_clone, ynz_arc_free, ynz_arc_new, ARC_BLOCK_FREES};
 use crate::channel::{
     channel_send_poll_guarded, pending_send_contains, pending_send_count, purge_pending_sends,
     strong_count, ynz_channel_create, ynz_channel_free, ynz_channel_recv_poll, ynz_channel_share,
@@ -767,5 +769,75 @@ fn loom_refuse_closed_releases_the_ladder_slot_then_glues_exactly_once() {
             "exactly one free across refuse_closed / teardown glue / the ladder"
         );
         crate::ynz_free(cell, 16);
+    });
+}
+
+// ── v0.3-M8 Phase 5: Auto-Arc — the codegen-emitted protocol ────────────────────────────
+
+/// The Arc models read the process-wide `ARC_BLOCK_FREES` observation counter, so they take
+/// this lane for their whole run: libtest runs the models on parallel OS threads, and a
+/// sibling model's frees would otherwise perturb the "no free yet" reading.
+static ARC_MODEL_LANE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+const ARC_DATA: u64 = 0x5EED_0000_0000_5EED;
+const ARC_SIZE: usize = 8;
+
+/// Topology (B) exactly as `ynz-codegen`'s `prepare_bg_arg_for_ctx` + the spawn-site release
+/// emit it, driving the REAL `arc.rs` code with its header atomic swapped to loom's: the caller
+/// mints the block (`ynz_arc_new`, count 1), and for each of the N tasks takes the task's
+/// reference (`ynz_arc_clone`) BEFORE spawning it; right after the last spawn the caller
+/// releases its transient (`ynz_arc_free`); each task reads the shared bytes and then releases
+/// its own reference (the drop ladder's `BG_ARG_KIND_ARC_SHAPE` arm / the closure-body free).
+/// Loom schedules every interleaving of the two tasks' reads and releases against the
+/// transient's release. Under all of them: no task ever observes the block freed while it holds
+/// a reference (the count is what keeps it alive across the spawn gap), the bytes it reads are
+/// intact, and the block is freed exactly ONCE — by whichever release is last.
+///
+/// Teeth (revert-proven at introduction): dropping the second task's `ynz_arc_clone` — the
+/// exact imbalance a missed spawn-site clone would be — makes the transient release + task 1's
+/// release hit zero while task 2 still holds the pointer, and task 2's "freed while I hold it"
+/// assertion fires (an assertion, not a crash: the check runs BEFORE the read).
+#[test]
+fn loom_arc_group_clone_per_task_then_transient_release_frees_exactly_once() {
+    let _lane = ARC_MODEL_LANE.lock().unwrap();
+    model("arc_group_clone_per_task", |_iteration| unsafe {
+        let frees_before = ARC_BLOCK_FREES.load(Ordering::Relaxed);
+        let block = ynz_arc_new(ARC_SIZE);
+        (block as *mut u64).write(ARC_DATA);
+        assert_eq!(arc_strong_count(block), 1);
+        let mut joins = Vec::new();
+        for task in 0..2 {
+            // Spawn-site order: the task's reference is taken BEFORE the spawn.
+            let task_ref = P(ynz_arc_clone(block));
+            joins.push(thread::spawn(move || {
+                let freed = ARC_BLOCK_FREES.load(Ordering::Relaxed) - frees_before;
+                assert_eq!(
+                    freed, 0,
+                    "task {task}: the shared block was freed while this task still holds a \
+                     reference — a missing clone or an early release"
+                );
+                assert_eq!(
+                    (task_ref.0 as *const u64).read(),
+                    ARC_DATA,
+                    "task {task}: torn read"
+                );
+                let freed = ARC_BLOCK_FREES.load(Ordering::Relaxed) - frees_before;
+                assert_eq!(
+                    freed, 0,
+                    "task {task}: block freed before this task released"
+                );
+                ynz_arc_free(task_ref.0, ARC_SIZE); // the ladder's release at retire
+            }));
+        }
+        // Right after the last spawn: the caller's transient goes away.
+        ynz_arc_free(block, ARC_SIZE);
+        for j in joins {
+            j.join().expect("task thread panicked");
+        }
+        assert_eq!(
+            ARC_BLOCK_FREES.load(Ordering::Relaxed) - frees_before,
+            1,
+            "the block must be freed exactly once, by the last of the three releases"
+        );
     });
 }

@@ -124,6 +124,11 @@ pub const BG_ARG_KIND_SHARED_CHANNEL: u64 = 2;
 /// runtime at that hand-off, never by codegen; the drop ladder skips the slot. Without this the
 /// same pointer is owned twice (ladder + channel) and freed under the receiver's feet.
 pub const BG_ARG_KIND_RELEASED: u64 = 3;
+/// The task's counted reference to an Auto-Arc shared shape block (`ynz_arc_clone` at the
+/// spawn site, v0.3-M8 Phase 5 — `IMP-ownership.md` "Auto-Arc — Sharing Topology Across
+/// `background` Boundaries", topology (B)): released with `ynz_arc_free(ptr, size)`; the LAST
+/// release frees the block. `size` is the shape's ABI byte size (the `ynz_arc_new` size).
+pub const BG_ARG_KIND_ARC_SHAPE: u64 = 4;
 
 /// Every `BG_ARG_KIND_*` value, for the runtime's per-kind alloc/free parity test that links
 /// [`bg_arg_kind_is_releasable_payload`] to the drop ladder's free match: a kind added here
@@ -133,6 +138,7 @@ pub const ALL_BG_ARG_KINDS: &[u64] = &[
     BG_ARG_KIND_HEAP_ARRAY,
     BG_ARG_KIND_SHARED_CHANNEL,
     BG_ARG_KIND_RELEASED,
+    BG_ARG_KIND_ARC_SHAPE,
 ];
 
 /// Is a ladder slot of this kind a heap PAYLOAD the task can hand off (send into a channel,
@@ -142,8 +148,20 @@ pub const ALL_BG_ARG_KINDS: &[u64] = &[
 /// `HEAP_SHAPE`/`HEAP_ARRAY` filter would have missed a future `HEAP_MAP` and reopened the
 /// spawn-arg use-after-free door). A shared-channel slot is the task's own refcount, never a
 /// channel element (typeck rejects `channel<channel<T>>`); a released slot is terminal.
+///
+/// An Auto-Arc slot ([`BG_ARG_KIND_ARC_SHAPE`]) is NOT releasable — decided v0.3-M8 Phase 5
+/// (the plan's packet item (h)), with this reasoning: the slot holds one COUNT on a block
+/// other tasks also count, not a payload the task owns outright. Today no hand-off can ever
+/// match it (shapes are not channel elements, and a shape is returned by value, so the data
+/// pointer never leaves the task). If a future hand-off DID match, the two possible mistakes
+/// are asymmetric: skipping the ladder's release leaks ONE count (the block is never freed —
+/// a bounded leak the alloc/free parity gate reports); releasing it while a receiver still
+/// reads the block is a use-after-free. `false` picks the leak side by construction, and the
+/// runtime's per-kind parity test pins the answer.
 pub const fn bg_arg_kind_is_releasable_payload(kind: u64) -> bool {
-    kind != BG_ARG_KIND_SHARED_CHANNEL && kind != BG_ARG_KIND_RELEASED
+    kind != BG_ARG_KIND_SHARED_CHANNEL
+        && kind != BG_ARG_KIND_RELEASED
+        && kind != BG_ARG_KIND_ARC_SHAPE
 }
 
 #[cfg(test)]

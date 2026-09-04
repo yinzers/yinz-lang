@@ -718,3 +718,131 @@ fn test_channel_capacity_registry_hover_states_the_authoritative_default() {
          ({cap}); hover text was: {hover}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain 11: auto_arc — shared-by-reference-count comment after a group-member spawn
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AUTO_ARC_GROUP_SRC: &str = "\
+shape Scene {
+  name: string
+  width: int
+}
+function render(scene: Scene) -> nothing {
+  wait sleep(1)
+  print(scene.name)
+}
+function run() -> nothing {
+  let scene: Scene = { name: `Three Rivers`, width: 6 }
+  background render(scene)
+  background render(scene)
+  print(scene.width)
+}
+";
+
+fn auto_arc_labels(hints: &[lsp_types::InlayHint]) -> Vec<String> {
+    hints
+        .iter()
+        .filter_map(|h| match &h.label {
+            lsp_types::InlayHintLabel::String(s) if s.contains("shared by reference count") => {
+                Some(s.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn test_inlay_hint_auto_arc_fires_once_per_group_member_with_the_task_count() {
+    // WHY: v0.3-M8 Phase 5 wired the `auto_arc` domain to FIRE. Two spawns of the same
+    // read-only shape form one group of two, so BOTH spawn lines carry the comment naming
+    // the group's task count — read from the same `BgOwnership::Arc` record codegen emits
+    // the block from, so the hint and the binary cannot disagree.
+    let (state, uri) = state_single("/tmp/ynz_ih_auto_arc_group.ynz", AUTO_ARC_GROUP_SRC);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+    let labels = auto_arc_labels(&hints);
+    assert_eq!(
+        labels.len(),
+        2,
+        "two group members must each carry the auto_arc comment; got hints: {:?}",
+        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
+    );
+    for l in &labels {
+        assert!(
+            l.contains("with 2 tasks") && l.contains("read-only"),
+            "auto_arc label must name the group's task count and read-only sharing; got {l:?}"
+        );
+    }
+    // No `copy` ownership annotation may sit on a group member's argument — one compiler
+    // decision, one annotation (the ownership_call_site walker yields to auto_arc).
+    let copy_labels: Vec<_> = hints
+        .iter()
+        .filter(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s.trim() == "copy"))
+        .collect();
+    assert!(
+        copy_labels.is_empty(),
+        "a group member must not also be annotated `copy`; got {}",
+        copy_labels.len()
+    );
+}
+
+#[test]
+fn test_inlay_hint_auto_arc_tooltip_carries_the_registry_hover() {
+    // WHY: Golden Rule 11 — a muted annotation without a WHAT/WHAT-INSTEAD/WHY hover is a
+    // teaching surface the user cannot learn from. The hover is the registry's `auto_arc`
+    // text, which carries the reference-counting-has-cost caution in words (the red tint is
+    // `auto-arc-cautionary-tint`, deferred).
+    let (state, uri) = state_single("/tmp/ynz_ih_auto_arc_tooltip.ynz", AUTO_ARC_GROUP_SRC);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+    let arc_hints: Vec<_> = hints
+        .iter()
+        .filter(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s.contains("shared by reference count")))
+        .collect();
+    assert!(
+        !arc_hints.is_empty(),
+        "auto_arc must fire for the group source"
+    );
+    for h in arc_hints {
+        let md = match &h.tooltip {
+            Some(lsp_types::InlayHintTooltip::MarkupContent(m)) => m.value.clone(),
+            other => panic!("auto_arc hint must carry a markdown tooltip; got {other:?}"),
+        };
+        assert!(
+            md.contains("WHAT") && md.contains("WHY"),
+            "auto_arc tooltip must be the WHAT/WHAT-INSTEAD/WHY hover; got {md:?}"
+        );
+        assert!(
+            md.contains("copy()"),
+            "auto_arc hover must name the `.copy()` override direction; got {md:?}"
+        );
+    }
+}
+
+#[test]
+fn test_inlay_hint_auto_arc_silent_for_a_single_spawn() {
+    // WHY: "caller + 1 task" is NOT a sharing case (topology (B)); no group forms, so the
+    // hint must be silent — the hint and codegen read the same record, and codegen emits
+    // nothing here either.
+    let src = "\
+shape Scene {
+  name: string
+  width: int
+}
+function render(scene: Scene) -> nothing {
+  wait sleep(1)
+  print(scene.name)
+}
+function run() -> nothing {
+  let scene: Scene = { name: `Three Rivers`, width: 6 }
+  background render(scene)
+  print(scene.width)
+}
+";
+    let (state, uri) = state_single("/tmp/ynz_ih_auto_arc_single.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+    assert!(
+        auto_arc_labels(&hints).is_empty(),
+        "a single spawn must not carry the auto_arc comment; got hints: {:?}",
+        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
+    );
+}

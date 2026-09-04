@@ -12,7 +12,10 @@ use crate::{
         fixed_method_is_mutating, fixed_method_return, map_method_is_mutating, map_method_return,
         maybe_method_return, sensitive_method_return, string_method_return,
     },
-    effective_ownership::{provenance, Freshness, Provenance, ProvenanceCtx},
+    effective_ownership::{
+        classify_binding_in_stmts, provenance, stmt_rebinds, EffectiveOwnership, Freshness,
+        Provenance, ProvenanceCtx,
+    },
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
@@ -23,8 +26,8 @@ use crate::{
     scope::{ConsumedBy, Origin, Scope, ScopeEntry},
     shapes::ShapeTable,
     signatures::SignatureTable,
-    suspension_source::is_base_suspension_intrinsic,
-    types::{channel_elem_drop, type_name, Type},
+    suspension_source::{is_base_suspension_intrinsic, CHANNEL_SUSPENDING_METHODS},
+    types::{arc_shareable, channel_elem_drop, type_name, Type},
 };
 
 /// A transfer sink — where a value is about to leave this frame for a holder that will free
@@ -289,6 +292,16 @@ pub enum BgOwnership {
     /// operate on the SAME bounded buffer (that is the whole point of a channel), so neither
     /// `give` (caller loses its end) nor `copy` (two disconnected buffers) is correct.
     Channel,
+    /// v0.3-M8 Phase 5 Auto-Arc (`IMP-ownership.md` "Auto-Arc — Sharing Topology Across
+    /// `background` Boundaries", topology (B)): this argument is a member of an admitted
+    /// spawn GROUP — ≥2 spawn statements in one block passing the same whole shape binding,
+    /// no suspension/rebinding/early exit between them, every callee proven `Reads`
+    /// (`effective_ownership`), the caller proven `Reads` between the spawns, and the type
+    /// `arc_shareable`. Codegen mints ONE shared block at the `first` member (held in a
+    /// caller-side transient), `ynz_arc_clone`s a reference for EVERY member's task, and
+    /// releases the transient right after the `last` member's spawn. Recorded by the ONE
+    /// group admission (`admit_arc_group_for`); codegen consults no ownership fact of its own.
+    Arc { group: u32, first: bool, last: bool },
 }
 
 /// The type-annotated view of a module.
@@ -402,6 +415,8 @@ pub fn check(
         inside_background: false,
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
+        next_arc_group: 0,
+        declared_writes: declared_writes_from_sigs(sig_table),
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
@@ -484,6 +499,8 @@ pub fn check_with_kernel_mode(
         inside_background: false,
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
+        next_arc_group: 0,
+        declared_writes: declared_writes_from_sigs(sig_table),
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
@@ -667,6 +684,15 @@ struct Checker<'b> {
     /// Only plain `Expr::Ident` args are recorded — explicit `.give`/`.copy()` postfix
     /// args are handled by the postfix-op path; explicit always wins over inferred.
     bg_inferred: HashMap<(usize, usize), BgOwnership>,
+
+    /// v0.3-M8 Phase 5: the next Auto-Arc group id (minted per admitted group, module-wide).
+    next_arc_group: u32,
+
+    /// v0.3-M8 Phase 5: declared `lend`/`give` positions of every function this unit can
+    /// see (local + imported, from the merged signature table) — the seed
+    /// `classify_binding_in_stmts` takes for the Auto-Arc caller-side proof. Same derivation
+    /// `check_query` feeds the fixpoint (`declared_write_positions` + imported modifiers).
+    declared_writes: HashMap<String, HashSet<usize>>,
 
     /// v0.3-M4 Phase 2: spans at which a suspending conduit-method call (`ch.send(v)`,
     /// `ch.receive()`, `h.send(v)`, `h.receive()`) is allowed to appear — the ROOT of a
@@ -1696,6 +1722,224 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// THE one spawn-argument ownership recording function (`IMP-ownership.md` "What typeck
+    /// records and what codegen reads") — the statement-form liveness pass, the handle-form
+    /// pre-record, and the `Expr::Background` backstop all derive their label HERE, so the
+    /// three sites cannot drift on what a spawn argument is. Returns the label recorded at
+    /// the argument's span (`None` when nothing is recorded: a non-ident argument typeck
+    /// proved safe).
+    ///
+    /// Precedence: an `Arc` entry the group admission placed wins outright (and a fill-only
+    /// caller never overwrites any existing entry); then a `channel` binding is `Channel`;
+    /// then a position the callee's signature declares `give` is `Give` (the binding IS
+    /// given — recording `Copy` there was parked item 16); then, when the remaining
+    /// statements are in hand, the class-aware liveness rule (v0.3-M8 Phase 4, `IMP-
+    /// ownership.md` sink 3: `Give` iff origin `Owned`/`Param(give)` and no alias-class
+    /// member is read afterwards, else `Copy`); with no liveness view, `Copy` (the safe
+    /// direction — the caller keeps its original). A non-ident argument that is not provably
+    /// safe (`bg_arg_is_provably_safe`, default-deny FRAGO 022) records `Give` so codegen's
+    /// presence-gated heap-upgrade fires. A `Copy` is always RECORDED, never omitted —
+    /// codegen's `is_heap_arg` gate reads PRESENCE (parked item 19, the fr23 class).
+    fn record_spawn_arg_ownership(
+        &mut self,
+        arg: &Expr,
+        ident: Option<&str>,
+        callee: Option<&str>,
+        position: usize,
+        remaining: Option<&[Stmt]>,
+        fill_only: bool,
+    ) -> Option<BgOwnership> {
+        let span = arg.span();
+        let key = (span.start, span.end);
+        if let Some(existing) = self.bg_inferred.get(&key) {
+            if fill_only || matches!(existing, BgOwnership::Arc { .. }) {
+                return Some(existing.clone());
+            }
+        }
+        let label = match ident {
+            Some(name) => {
+                let is_channel = self
+                    .scope
+                    .lookup(name)
+                    .is_some_and(|e| matches!(e.ty, Type::BuiltinChannel { .. }));
+                let declared_give = callee
+                    .and_then(|c| self.sig_table.fns.get(c))
+                    .and_then(|sig| sig.param_ownerships.get(position))
+                    .is_some_and(|o| matches!(o, Some(OwnershipModifier::Give)));
+                if is_channel {
+                    BgOwnership::Channel
+                } else if declared_give {
+                    BgOwnership::Give
+                } else if let Some(remaining) = remaining {
+                    let (origin_ok, members) = match self.scope.lookup(name) {
+                        Some(e) => (
+                            matches!(
+                                e.origin,
+                                Origin::Owned | Origin::Param(Some(OwnershipModifier::Give))
+                            ),
+                            self.scope.visible_members_of(e.alias_class),
+                        ),
+                        None => (false, vec![name.to_string()]),
+                    };
+                    let used_after = remaining
+                        .iter()
+                        .any(|s| members.iter().any(|m| ident_read_in_stmt(s, m.as_str())));
+                    if origin_ok && !used_after {
+                        BgOwnership::Give
+                    } else {
+                        BgOwnership::Copy
+                    }
+                } else {
+                    BgOwnership::Copy
+                }
+            }
+            None => {
+                if self.bg_arg_is_provably_safe(arg) {
+                    return None;
+                }
+                BgOwnership::Give
+            }
+        };
+        self.bg_inferred.insert(key, label.clone());
+        Some(label)
+    }
+
+    /// The spawn statement forms the Auto-Arc group admission scans: a bare
+    /// `background f(...)` statement or the handle form `let h = background f(...)`, both
+    /// normalized through the ONE call-form normalization (`background_spawn_call_form`).
+    fn stmt_spawn_form<'e>(&mut self, stmt: &'e Stmt) -> Option<(Option<&'e str>, Vec<&'e Expr>)> {
+        match stmt {
+            Stmt::Expr(Expr::Background(inner, _))
+            | Stmt::Let {
+                value: Expr::Background(inner, _),
+                ..
+            } => self.background_spawn_call_form(inner.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// v0.3-M8 Phase 5: run the Auto-Arc group admission for every whole-binding ident
+    /// argument of the spawn statement at `stmts[start]` that no earlier admission covered.
+    fn admit_arc_groups_from(&mut self, stmts: &[Stmt], start: usize) {
+        let Some((_, args)) = self.stmt_spawn_form(&stmts[start]) else {
+            return;
+        };
+        let mut names: Vec<String> = Vec::new();
+        for arg in args {
+            if let Expr::Ident(name, span) = arg {
+                if !self.bg_inferred.contains_key(&(span.start, span.end))
+                    && !names.iter().any(|n| n == name)
+                {
+                    names.push(name.clone());
+                }
+            }
+        }
+        for name in names {
+            self.admit_arc_group_for(stmts, start, &name);
+        }
+    }
+
+    /// THE Auto-Arc beneficial-emission condition (`IMP-ownership.md` "The beneficial-
+    /// emission condition"), judged for binding `name` on the spawn group that begins at
+    /// `stmts[start]`. Records `BgOwnership::Arc { group, first, last }` for every member
+    /// when ALL hold, and records nothing (the shipped `Give`/`Copy` inference then runs
+    /// unchanged) when any fails:
+    ///
+    /// 1. ≥ 2 spawn STATEMENTS in this block pass `name` as a whole binding, with no group
+    ///    boundary between the first and the last. A boundary is: a top-level rebinding of
+    ///    `name` (`stmt_rebinds` — the group closes; the next spawn opens a new one, judged on
+    ///    its own), a statement that may suspend (the caller-side transient is a straight-line
+    ///    temporary that must never cross a frame boundary — judged CONSERVATIVELY and
+    ///    syntactically by `stmt_may_suspend_conservative`, because expression types of the
+    ///    statements ahead are not yet inferred when this runs), or a statement containing a
+    ///    `return` at any depth (an early exit would skip the transient's release — the one
+    ///    boundary this implementation adds beyond the signed text, recorded in the design).
+    ///    "Caller + 1 task" is out by construction (one statement is not a group).
+    /// 2. Task-side: `report.ownership_of(callee, position) == Reads` for every member —
+    ///    `effective_ownership`'s whole-program fixpoint, never a second classifier.
+    /// 3. Caller-side: `classify_binding_in_stmts(name, between first and last) == Reads` —
+    ///    the same walker over the statements between the spawns (a rebinding INSIDE a nested
+    ///    block is `Writes` there, per the walker's `stmt_rebinds` arm).
+    /// 4. `arc_shareable(type)` — the compile-time floor in `types.rs`.
+    fn admit_arc_group_for(&mut self, stmts: &[Stmt], start: usize, name: &str) {
+        let shareable = self
+            .scope
+            .lookup(name)
+            .is_some_and(|e| arc_shareable(&e.ty, self.shape_table));
+        if !shareable {
+            return;
+        }
+        // `let v = background f(v)` — the spawn reads the OLD `v`, the statement binds a
+        // new one; a later spawn would pass a different value. Not a group opener.
+        if stmt_rebinds(&stmts[start], name) {
+            return;
+        }
+        // (stmt index, arg span key, callee, argument position) per member, in order.
+        let mut members: Vec<(usize, (usize, usize), String, usize)> = Vec::new();
+        for (k, stmt) in stmts.iter().enumerate().skip(start) {
+            if k > start && self.stmt_breaks_arc_group(stmt, name) {
+                break;
+            }
+            let Some((callee, args)) = self.stmt_spawn_form(stmt) else {
+                continue;
+            };
+            for (position, arg) in args.iter().enumerate() {
+                if let Expr::Ident(n, span) = arg {
+                    if n == name {
+                        // A spawn whose callee has no name cannot be proven `Reads`.
+                        let Some(callee) = callee else {
+                            return;
+                        };
+                        members.push((k, (span.start, span.end), callee.to_string(), position));
+                    }
+                }
+            }
+        }
+        let distinct_stmts: HashSet<usize> = members.iter().map(|m| m.0).collect();
+        if distinct_stmts.len() < 2 {
+            return;
+        }
+        let report = self.ownership;
+        for (_, _, callee, position) in &members {
+            if report.ownership_of(callee, *position) != EffectiveOwnership::Reads {
+                return;
+            }
+        }
+        let first = members[0].0;
+        let last = members[members.len() - 1].0;
+        let between = &stmts[first + 1..last];
+        if classify_binding_in_stmts(
+            name,
+            between,
+            report,
+            &self.declared_writes,
+            self.imported_fn_names,
+        ) != EffectiveOwnership::Reads
+        {
+            return;
+        }
+        let group = self.next_arc_group;
+        self.next_arc_group += 1;
+        let n = members.len();
+        for (i, (_, key, _, _)) in members.into_iter().enumerate() {
+            self.bg_inferred.insert(
+                key,
+                BgOwnership::Arc {
+                    group,
+                    first: i == 0,
+                    last: i + 1 == n,
+                },
+            );
+        }
+    }
+
+    /// Does `stmt` end an Auto-Arc spawn group for `name`? See `admit_arc_group_for` item 1.
+    fn stmt_breaks_arc_group(&self, stmt: &Stmt, name: &str) -> bool {
+        stmt_rebinds(stmt, name)
+            || stmt_contains_return(stmt)
+            || stmt_may_suspend_conservative(stmt, self.sig_table)
+    }
+
     fn check_stmts(&mut self, stmts: &[Stmt]) {
         // Collect early-return narrowing facts: when an `if (!m.exists()) { return }` or
         // `if (!m.exists()) { panic(...) }` is detected, mark `m` as non-none for all
@@ -1707,6 +1951,20 @@ impl<'b> Checker<'b> {
             // Apply any early-return narrowing facts from previous `if (!x.exists()) { return }`.
             for name in &early_return_narrowed {
                 self.maybe_non_none.insert(name.clone());
+            }
+
+            // v0.3-M8 Phase 5: Auto-Arc group admission runs at the FIRST spawn of a
+            // candidate group, before either spawn form records its per-argument label, so
+            // the shared recording function finds the group's `Arc` entries already placed.
+            if matches!(
+                stmt,
+                Stmt::Expr(Expr::Background(..))
+                    | Stmt::Let {
+                        value: Expr::Background(..),
+                        ..
+                    }
+            ) {
+                self.admit_arc_groups_from(stmts, i);
             }
 
             match stmt {
@@ -1736,62 +1994,36 @@ impl<'b> Checker<'b> {
                                 .unwrap_or_else(|| "the task".to_string());
                             // Only infer for plain Expr::Ident args — explicit .give/.copy()
                             // postfix args are handled by the postfix-op path; explicit wins.
+                            //
+                            // v0.3-M8 Phase 5: every label comes from the ONE recording
+                            // function all three spawn-arg sites share
+                            // (`record_spawn_arg_ownership`): Channel / Arc (group
+                            // admission ran first, above the match) / declared-`give` /
+                            // liveness-inferred Give-or-Copy / default-deny Give for a
+                            // non-ident arg. This site is the only one with the remaining
+                            // statements in hand, so it is the only one that can prove
+                            // liveness-Give; it consumes the bindings it proved.
+                            let callee_for_sig: Option<String> = self
+                                .background_spawn_call_form(inner.as_ref())
+                                .and_then(|(c, _)| c.map(str::to_string));
                             let mut gives: Vec<String> = Vec::new();
-                            for arg in bg_args {
-                                if let Expr::Ident(name, span) = arg {
-                                    // v0.3-M4: a channel argument is SHARED with the task
-                                    // (refcounted alias) — both sides must operate on the
-                                    // same bounded buffer; neither give nor copy is correct.
-                                    let is_channel = self.scope.lookup(name).is_some_and(|e| {
-                                        matches!(e.ty, Type::BuiltinChannel { .. })
-                                    });
-                                    if is_channel {
-                                        self.bg_inferred
-                                            .insert((span.start, span.end), BgOwnership::Channel);
-                                        continue;
-                                    }
-                                    // v0.3-M8 Phase 4, class-aware (`IMP-ownership.md` sink
-                                    // 3): infer `Give` iff the binding's origin is `Owned`
-                                    // or `Param(give)` AND no member of its alias class is
-                                    // read in any remaining statement; otherwise `Copy`. A
-                                    // `Copy` entry is still RECORDED (never nothing) —
-                                    // codegen's `is_heap_arg` gate reads the PRESENCE of an
-                                    // entry to heap-upgrade the argument (parked item 19,
-                                    // the fr23 use-after-free class).
-                                    let (origin_ok, members) = match self.scope.lookup(name) {
-                                        Some(e) => (
-                                            matches!(
-                                                e.origin,
-                                                Origin::Owned
-                                                    | Origin::Param(Some(OwnershipModifier::Give))
-                                            ),
-                                            self.scope.visible_members_of(e.alias_class),
-                                        ),
-                                        None => (false, vec![name.clone()]),
-                                    };
-                                    let used_after = remaining.iter().any(|s| {
-                                        members.iter().any(|m| ident_read_in_stmt(s, m.as_str()))
-                                    });
-                                    let inferred = if origin_ok && !used_after {
-                                        BgOwnership::Give
-                                    } else {
-                                        BgOwnership::Copy
-                                    };
-                                    self.bg_inferred
-                                        .insert((span.start, span.end), inferred.clone());
-                                    if inferred == BgOwnership::Give {
-                                        gives.push(name.clone());
-                                    }
-                                } else if !self.bg_arg_is_provably_safe(arg) {
-                                    // fr23 (M7 Phase 9, FRAGO 016; default-deny
-                                    // FRAGO 022): not a plain ident, and not
-                                    // PROVABLY safe — default-deny heap-upgrades
-                                    // it (`Give`). No binding to consume in scope
-                                    // either way (a non-ident arg is never a
-                                    // reachable binding the caller could reuse).
-                                    let span = arg.span();
-                                    self.bg_inferred
-                                        .insert((span.start, span.end), BgOwnership::Give);
+                            for (position, arg) in bg_args.iter().enumerate() {
+                                let ident = match arg {
+                                    Expr::Ident(name, _) => Some(name.as_str()),
+                                    _ => None,
+                                };
+                                let recorded = self.record_spawn_arg_ownership(
+                                    arg,
+                                    ident,
+                                    callee_for_sig.as_deref(),
+                                    position,
+                                    Some(remaining),
+                                    false,
+                                );
+                                if let (Some(name), Some(BgOwnership::Give)) =
+                                    (ident, recorded.as_ref())
+                                {
+                                    gives.push(name.to_string());
                                 }
                             }
                             // Infer_expr runs first (for diagnostics / type registration),
@@ -2639,31 +2871,30 @@ impl<'b> Checker<'b> {
         // gates codegen's Shape heap-upgrade. Without it the receiver rides into the
         // task as a raw pointer to the spawner's dead resume-fn frame — the FRAGO 025
         // handle-form twin of the FRAGO 024 statement-form use-after-free.
+        //
+        // v0.3-M8 Phase 5: labels come from the ONE shared recording function. With no
+        // remaining-statement view here the liveness-Give rule cannot run (Copy is the safe
+        // default), but a binding the callee's signature declares `give` is recorded `Give`
+        // — parked item 16: the handle form used to record `Copy` unconditionally, so a hint
+        // over this map would have said "copied" for a value that was given. An Arc entry
+        // the group admission already placed (the `check_stmts` loop runs it before this
+        // `let` is checked) is never overwritten.
         let call_form = self.background_spawn_call_form(inner);
-        if let Some((_, args)) = &call_form {
-            for &arg in args {
-                if let Expr::Ident(n, span) = arg {
-                    let is_channel = self
-                        .scope
-                        .lookup(n)
-                        .is_some_and(|e| matches!(e.ty, Type::BuiltinChannel { .. }));
-                    let o = if is_channel {
-                        BgOwnership::Channel
-                    } else {
-                        BgOwnership::Copy
-                    };
-                    self.bg_inferred.insert((span.start, span.end), o);
-                } else if !self.bg_arg_is_provably_safe(arg) {
-                    // fr23 (M7 Phase 9, FRAGO 016; default-deny FRAGO 022): same
-                    // admission predicate as the statement form above — the
-                    // handle form shares codegen's ONE heap-upgrade gate, so a
-                    // non-ident arg that isn't PROVABLY safe must be recorded
-                    // here too (`Give`: default-deny, no binding to read after
-                    // the spawn either way).
-                    let span = arg.span();
-                    self.bg_inferred
-                        .insert((span.start, span.end), BgOwnership::Give);
-                }
+        if let Some((callee, args)) = &call_form {
+            let callee_for_sig: Option<String> = callee.map(str::to_string);
+            for (position, &arg) in args.iter().enumerate() {
+                let ident = match arg {
+                    Expr::Ident(n, _) => Some(n.as_str()),
+                    _ => None,
+                };
+                let _ = self.record_spawn_arg_ownership(
+                    arg,
+                    ident,
+                    callee_for_sig.as_deref(),
+                    position,
+                    None,
+                    false,
+                );
             }
         }
 
@@ -3706,30 +3937,22 @@ impl<'b> Checker<'b> {
                 // pre-recording loops. It is idempotent across repeat calls for the
                 // same spawn (`bg_union_narrowed_diag_spans` dedups its one
                 // diagnostic side effect, above).
-                if let Some((_, bg_args)) = self.background_spawn_call_form(inner.as_ref()) {
-                    for arg in bg_args {
-                        let key = (arg.span().start, arg.span().end);
-                        if self.bg_inferred.contains_key(&key) {
-                            continue;
-                        }
-                        if let Some(name) = simple_ident_name(arg) {
-                            // `Ident` or `SelfValue` (FRAGO 024 Bug 2: `self` no
-                            // longer defaults to provably-safe — see
-                            // `bg_arg_is_provably_safe` — so it reaches this
-                            // branch exactly like a plain-named parameter would).
-                            let is_channel = self
-                                .scope
-                                .lookup(name)
-                                .is_some_and(|e| matches!(e.ty, Type::BuiltinChannel { .. }));
-                            let o = if is_channel {
-                                BgOwnership::Channel
-                            } else {
-                                BgOwnership::Copy
-                            };
-                            self.bg_inferred.insert(key, o);
-                        } else if !self.bg_arg_is_provably_safe(arg) {
-                            self.bg_inferred.insert(key, BgOwnership::Give);
-                        }
+                if let Some((callee, bg_args)) = self.background_spawn_call_form(inner.as_ref()) {
+                    let callee_for_sig: Option<String> = callee.map(str::to_string);
+                    for (position, arg) in bg_args.iter().enumerate() {
+                        // `Ident` or `SelfValue` (FRAGO 024 Bug 2: `self` no longer
+                        // defaults to provably-safe — see `bg_arg_is_provably_safe` — so
+                        // it reaches the ident path exactly like a plain-named parameter
+                        // would). v0.3-M8 Phase 5: through the ONE shared recording
+                        // function, fill-only (never clobbers a prior, more precise entry).
+                        let _ = self.record_spawn_arg_ownership(
+                            arg,
+                            simple_ident_name(arg),
+                            callee_for_sig.as_deref(),
+                            position,
+                            None,
+                            true,
+                        );
                     }
                 }
 
@@ -9401,6 +9624,142 @@ pub(crate) fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool 
 /// (`.give` on a still-live binding) would be a use-after-move bug.
 ///
 /// Time: O(stmt nodes).  Space: O(1).
+/// The declared `lend`/`give` positions of every function in the merged signature table —
+/// the `declared_writes` seed `classify_binding_in_stmts` reads (v0.3-M8 Phase 5).
+fn declared_writes_from_sigs(sig_table: &SignatureTable) -> HashMap<String, HashSet<usize>> {
+    sig_table
+        .fns
+        .iter()
+        .map(|(name, sig)| {
+            let set: HashSet<usize> = sig
+                .param_ownerships
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| {
+                    matches!(
+                        o,
+                        Some(OwnershipModifier::Lend) | Some(OwnershipModifier::Give)
+                    )
+                })
+                .map(|(i, _)| i)
+                .collect();
+            (name.clone(), set)
+        })
+        .collect()
+}
+
+/// Does `stmt` contain a `return` at any nesting depth? An Auto-Arc group boundary: the
+/// caller-side transient is released by straight-line code after the last spawn, and an
+/// early exit between two spawns would skip that release (a leaked count, never a free-early).
+fn stmt_contains_return(stmt: &Stmt) -> bool {
+    let block = |b: &Block| b.stmts.iter().any(stmt_contains_return);
+    match stmt {
+        Stmt::Return { .. } => true,
+        Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => block(body),
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter().any(|a| block(&a.body)) || else_arm.as_ref().is_some_and(block)
+        }
+        Stmt::Expr(_)
+        | Stmt::Let { .. }
+        | Stmt::Assign { .. }
+        | Stmt::FieldAssign { .. }
+        | Stmt::IndexAssign { .. } => false,
+    }
+}
+
+/// May `stmt` suspend the enclosing function? CONSERVATIVE and purely syntactic — an
+/// Auto-Arc group boundary (`admit_arc_group_for` item 1), judged over statements whose
+/// expression types are not yet inferred, so it cannot use `stmt_is_conduit_suspend`'s
+/// `expr_types` view. Anything that COULD be a suspension point counts: an explicit `wait`,
+/// a call to a function the may-block fixpoint marked `suspends` or to a base suspension
+/// intrinsic, a call through a non-identifier callee, or a `send`/`receive` method call on
+/// ANY receiver (a conduit's suspending methods, by name). A `background` spawn is never a
+/// suspension of the parent. Over-approximating only declines a group to the shipped copy
+/// path; under-approximating would hand a straight-line transient across a frame boundary.
+fn stmt_may_suspend_conservative(stmt: &Stmt, sigs: &SignatureTable) -> bool {
+    let expr = |e: &Expr| expr_may_suspend_conservative(e, sigs);
+    let block = |b: &Block| {
+        b.stmts
+            .iter()
+            .any(|s| stmt_may_suspend_conservative(s, sigs))
+    };
+    match stmt {
+        Stmt::Expr(e) => expr(e),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr(value),
+        Stmt::If { cond, body, .. } => expr(cond) || block(body),
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            expr(scrutinee)
+                || arms.iter().any(|a| block(&a.body))
+                || else_arm.as_ref().is_some_and(block)
+        }
+        Stmt::While { cond, body, .. } => expr(cond) || block(body),
+        Stmt::For { iter, body, .. } => expr(iter) || block(body),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(expr),
+        Stmt::FieldAssign { target, value, .. } => expr(target) || expr(value),
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => expr(receiver) || expr(index) || expr(value),
+    }
+}
+
+fn expr_may_suspend_conservative(expr: &Expr, sigs: &SignatureTable) -> bool {
+    let r = |e: &Expr| expr_may_suspend_conservative(e, sigs);
+    let fn_suspends = |name: &str| {
+        sigs.fns.get(name).is_some_and(|s| s.suspends) || is_base_suspension_intrinsic(name)
+    };
+    match expr {
+        Expr::Wait(..) => true,
+        // A spawn is not a suspension of the parent; its arguments cannot suspend either
+        // (typeck rejects a suspending call in sub-expression position).
+        Expr::Background(..) => false,
+        Expr::Call(c) => match &c.callee {
+            Expr::Ident(name, _) => fn_suspends(name) || c.args.iter().any(r),
+            _ => true,
+        },
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            CHANNEL_SUSPENDING_METHODS.contains(&method.as_str())
+                || fn_suspends(method)
+                || r(receiver)
+                || args.iter().any(r)
+        }
+        Expr::BinOp { lhs, rhs, .. } => r(lhs) || r(rhs),
+        Expr::UnaryOp { operand, .. } => r(operand),
+        Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => r(receiver),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => r(receiver) || r(index),
+        Expr::StructLit { fields, .. } => fields.iter().any(|f| r(&f.value)),
+        Expr::ArrayLit { elements, .. } => elements.iter().any(r),
+        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| r(k) || r(v)),
+        Expr::Is { expr: inner, .. } => r(inner),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| match p {
+            ynz_ast::nodes::StringPart::Expr(e, _) => r(e),
+            ynz_ast::nodes::StringPart::Lit(_, _) => false,
+        }),
+        Expr::Ident(_, _)
+        | Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => false,
+    }
+}
+
 fn ident_read_in_stmt(stmt: &Stmt, name: &str) -> bool {
     match stmt {
         Stmt::Expr(e) => expr_refs_ident(e, name),

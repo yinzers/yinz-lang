@@ -47,6 +47,11 @@ pub struct RuntimeDecls<'ctx> {
     // Heap deallocator (M4): (ptr: *mut u8, size: usize) → void
     pub ynz_free: FunctionValue<'ctx>,
 
+    // v0.3-M8 Phase 5 — the Auto-Arc substrate (`ynz_arc_new`/`clone`/`free`, ynz-runtime
+    // arc.rs) is NOT declared here: it is declared on first use by emit.rs `arc_decls`, so a
+    // module with no admitted spawn group emits byte-identical IR to the pre-emission
+    // compiler (the single-reader no-op the M8 plan's Phase 5 step 3 requires).
+
     // Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) — all operate
     // on the heap YnzArray header pointer. Element loads/stores go through byte
     // pointers (`*const u8` src / `*mut u8` out) sized by the header's elem_size;
@@ -829,7 +834,7 @@ impl<'ctx> RuntimeDecls<'ctx> {
     }
 }
 
-fn declare_fn<'ctx>(
+pub(crate) fn declare_fn<'ctx>(
     module: &Module<'ctx>,
     name: &str,
     ty: FunctionType<'ctx>,

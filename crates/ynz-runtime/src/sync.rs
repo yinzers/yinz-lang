@@ -40,6 +40,16 @@ pub(crate) use std::sync::{Arc, Mutex, MutexGuard};
 #[cfg(loom)]
 pub(crate) use loom::sync::{Arc, Mutex, MutexGuard};
 
+// v0.3-M8 Phase 5: the Auto-Arc refcount header (`arc.rs`) is the one raw atomic the runtime
+// owns outside a `Mutex`. Swapped the same way so `loom_tests::arc_*` schedules every
+// clone/free interleaving of the codegen-emitted protocol against the REAL `ynz_arc_*` code.
+// Production resolves to `std::sync::atomic` — byte-identical to the pre-shim crate.
+#[cfg(not(loom))]
+pub(crate) use std::sync::atomic::{fence, AtomicU64};
+
+#[cfg(loom)]
+pub(crate) use loom::sync::atomic::{fence, AtomicU64};
+
 // The one thread-local this swap touches (`channel::CURRENT_DRIVE`) is declared as two cfg
 // variants at its own site rather than through a macro here: its production form uses the
 // `const { .. }` initializer, which loom's `thread_local!` has no equivalent for, and a shim

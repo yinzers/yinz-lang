@@ -1,0 +1,31 @@
+// v0.3-M8 Phase 5 — the handle form (`let h = background f(v)`) is a group member exactly
+// like the bare statement form: both spawns share one Arc block; each handle's completion
+// is received afterwards. Also the first reader of the parked-16 fix: the handle form's
+// per-argument label comes from the same shared recording function as the statement form.
+//
+// Expected output:
+//   handles total 84
+//   caller keeps Clemente 6x7
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function render(scene: Scene) -> int {
+  wait sleep(5)
+  return scene.width * scene.height
+}
+
+function entrypoint() -> nothing {
+  let scene: Scene = { name: `Clemente`, width: 6, height: 7 }
+  let h1 = background render(scene)
+  let h2 = background render(scene)
+  let total = 0
+  let a = h1.receive()
+  total = total + a.or(0)
+  let b = h2.receive()
+  total = total + b.or(0)
+  print(`handles total ${total}`)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}

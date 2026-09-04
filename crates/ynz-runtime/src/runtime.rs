@@ -174,10 +174,10 @@ impl Drop for PendingBlockingGuard {
 // the count and frees exactly that many slots. Normal (non-spike) SM frames leave bytes 4-7 as
 // zero (ynz_alloc_zeroed guarantee), so the high-bits tag never false-matches.
 use ynz_abi::{
-    bg_arg_kind_is_releasable_payload, BG_ARG_KIND_HEAP_ARRAY, BG_ARG_KIND_HEAP_SHAPE,
-    BG_ARG_KIND_RELEASED, BG_ARG_KIND_SHARED_CHANNEL, FRAME_OFFSET_RETURN_SLOT,
-    FRAME_OFFSET_SLEEP_HANDLE, SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG,
-    SPIKE_HANDLE_BASE_OFFSET, SPIKE_HANDLE_SLOT_BYTES,
+    bg_arg_kind_is_releasable_payload, BG_ARG_KIND_ARC_SHAPE, BG_ARG_KIND_HEAP_ARRAY,
+    BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_RELEASED, BG_ARG_KIND_SHARED_CHANNEL,
+    FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE, SPIKE_FRAME_DISCRIMINATOR_OFFSET,
+    SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET, SPIKE_HANDLE_SLOT_BYTES,
 };
 
 /// Extract the spike tag (high 16 bits) and handle count (low 16 bits) from a
@@ -1153,6 +1153,15 @@ impl Drop for SpawnStateFnFuture {
                             // task exit path, including cancellation.
                             crate::channel::purge_pending_sends(heap_ptr, self.task_gen);
                             crate::channel::ynz_channel_free(heap_ptr);
+                        }
+                        BG_ARG_KIND_ARC_SHAPE => {
+                            // v0.3-M8 Phase 5 Auto-Arc: THIS task's counted reference to the
+                            // group's shared shape block (`ynz_arc_clone` at the spawn site).
+                            // Release exactly one count; the last release frees the block
+                            // through the counted `ynz_free`, so alloc=free parity holds on
+                            // every exit path including cancellation. Never rewritten to
+                            // RELEASED (`bg_arg_kind_is_releasable_payload` is false for it).
+                            crate::arc::ynz_arc_free(heap_ptr, desc.size as usize);
                         }
                         _ => {
                             // Unknown kind — defensive no-op; avoids a bad free on future
