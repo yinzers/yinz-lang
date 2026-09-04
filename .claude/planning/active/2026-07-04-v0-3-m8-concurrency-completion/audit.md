@@ -11,6 +11,14 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p8-fix4-20260904` — 2026-09-04 — **Phase 8 correction round (verification + audit corrections + corpus widening): proof-of-fire claim corrected, citation qualifications verified, pool-reuse floor test corpus expanded. Nothing committed.**
+  Read: the dispatch instruction, `mod.rs:~1244-1261` and the pool-reuse floor test, `take_or_make_array`'s doc comment, `audit.md` BLOCKER 1 and FRAGO 015 entries, `README.md:~75 and ~137`.
+  **Proof-of-fire correction (BLOCKER 1, round-3 entry false claim).** Round-3's `m8-p8-fix3-20260904` entry (line ~25) claimed the panic-probe fires on "the FIRST seed (seed 0)" with the fixed code. Re-run confirms: first fire is **seed 176**, not seed 0. The pre-fix half (old code, 0 panics across 8,192 seeds) remains correct. Round-3 entry stands unedited per append-only; this record corrects the false claim.
+  **Citation qualification verification.** All citations to "the v0.3-M8 plan's `audit.md`, FRAGO 015" verified present in `mod.rs` (lines 767, 868), `README.md` (lines 75, 137 — edited this round to qualify line 137). Grep across the entire repo (excluding `.claude/planning/active/2026-07-04-v0-3-m8-concurrency-completion/` and `.claude/corpses.md`) found zero bare `FRAGO 015` citations outside the M8 plan directory — all other plans' FRAGO 015 entries are their own unrelated audit records (M4/M5/M6/M7 and worktrees).
+  **Future Requirements #11 forward pointer (edit 3).** `plan.md` FR#11(a) and (b) are already documented; neither citation needed a plan-internal forward pointer, as the FR itself IS the durable home. Verified by direct read: FR#11 exists, both defects fully recorded with all four fields (WHAT/WHY/COST/TRIGGER), no gaps.
+  **Pool-reuse floor corpus widening (edit 4).** `mod.rs:~1250-1261` floor test runs `per_construct_floors_hold_over_a_fixed_corpus` at `n = 256` (fixed 0..256 corpus). The reuse floor measured 2/256 (vacuous). Widened the corpus to `n = 1024` (fixed 0..1024 seeds). Re-measured at base 0: **13/1024** (1.27%); base 10000: **17/1024** (1.66%); base 1000000: **17/1024** (1.66%). All three land well above zero and hold steady. Reuse floor (`>= 1`) holds green with 4x larger corpus; no adjustment to the probability in `take_or_make_array`/`take_or_make_map` needed.
+  **Verification.** `cargo fmt --all --check` clean; `cargo clippy -p ynz-driver --all-targets -- -D warnings` clean; `cargo test -p ynz-driver --test cross_impl_consistency` 17 passed / 0 failed (pool-reuse floor test slower under 1024-corpus sweep, but all tests green). `git diff --stat`: 2 files, 3 insertions(+), 2 deletions(-).
+
 - `m8-p8-fix3-20260904` — 2026-09-04 — **Phase 8 fix round 4 (the ceiling round): all 3 blockers
   and 5 should-fixes from the round-3 review closed. Nothing committed.**
   Read: this fix-round dispatch, `fuzz_grammar/mod.rs` and `README.md` end to end, `plan.md`'s

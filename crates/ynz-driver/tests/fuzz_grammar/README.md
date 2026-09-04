@@ -134,7 +134,7 @@ guard against this construct silently going dead again.
   topology hardcodes `channel<int>(4)` against 2 sends). Corpus-wide, that leaves ZERO coverage
   of the blocked-send path — coverage this generator HAD before this round, and lost as the
   direct cost of containing defect #2. Restoring it is exactly the trigger recorded for defect
-  #2 in Future Requirements #11 / FRAGO 015: fix the blocked-send path, then let
+  #2 in Future Requirements #11 / the v0.3-M8 plan's `audit.md`, FRAGO 015: fix the blocked-send path, then let
   `stmt_background_drain_loop`'s capacity floor go back to drawing independently of
   `send_count`.
 

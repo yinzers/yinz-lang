@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904", "m8-p7-20260904-a1", "m8-p7-fix1-20260904", "m8-p8-20260904-a1", "m8-p8-fix1-20260904", "m8-p8-fix2-20260904", "m8-p8-fix3-20260904"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904", "m8-p7-20260904-a1", "m8-p7-fix1-20260904", "m8-p8-20260904-a1", "m8-p8-fix1-20260904", "m8-p8-fix2-20260904", "m8-p8-fix3-20260904", "m8-p8-fix4-20260904"]
 created_at: "2026-07-04"
 updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -14,7 +14,7 @@ metadata:
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth) · **Phase 4 ✅ CLOSED BY CEILING 2026-09-04** (executors `m8-p4-20260904-a1` RED seal at `6b8a34d`, `m8-p4-20260904-a2` implementation, fix rounds `m8-p4-fix1/fix2/fix3-20260904`; three grading rounds; two `errors`-surface blockers re-homed to a post-M8 hotfix branch per FRAGO 011 — parked 32/33/34 — none a channel-close defect) · **Phase 5 ✅ CLOSED 2026-09-04** (executor `m8-p5-20260904-a1`, fix rounds `m8-p5-fix1/fix2-20260904`; two grading rounds, terminal state CLEAN; spike GREEN, full beneficial condition shipped with the caller-side proof covering the member spawns themselves, one-spawn IR byte-identical, `auto_arc` hint firing on both spawn forms, R2 stays HIGH under its signed override) — **Phase 7 is next, AFTER the parked-40 hotfix merges back**: `fix/bg-arg-number-field` (FRAGO 012) runs in its own worktree `../ynz-lang-hotfix-bgarg`; sequence = hotfix PR → merge to `main` → merge `main` into this branch → author parked 43's fixture in that merge commit → dispatch Phase 7 (receipt already minted, `m8-p7-20260904-a1`)
+> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth) · **Phase 4 ✅ CLOSED BY CEILING 2026-09-04** (executors `m8-p4-20260904-a1` RED seal at `6b8a34d`, `m8-p4-20260904-a2` implementation, fix rounds `m8-p4-fix1/fix2/fix3-20260904`; three grading rounds; two `errors`-surface blockers re-homed to a post-M8 hotfix branch per FRAGO 011 — parked 32/33/34 — none a channel-close defect) · **Phase 5 ✅ CLOSED 2026-09-04** (executor `m8-p5-20260904-a1`, fix rounds `m8-p5-fix1/fix2-20260904`; two grading rounds, terminal state CLEAN; spike GREEN, full beneficial condition shipped with the caller-side proof covering the member spawns themselves, one-spawn IR byte-identical, `auto_arc` hint firing on both spawn forms, R2 stays HIGH under its signed override) — **Phase 7 ✅ EXECUTED 2026-09-04, PARTIAL at its sign-off gate** (executor `m8-p7-20260904-a1` + text round `m8-p7-fix1`; Branch B RE-DEFER earned by evidence — no local of any type is released at scope exit, the ladder is the child's retirement over the child's frame while a handle's scope exit is the parent's event on the parent's frame; ten probes, every child ran past the scope exit; four seats, 0 blockers; **Patrick signs the re-deferral, and the cheap muted-hint guard question rides that signature**) · **Phase 8 ✅ CLOSED 2026-09-04, CLEAN** (see its STATUS block — the fuzzer found two defects, both pre-existing on `main`, FRAGO 015) — **Phase 9 (close-out) is the frontier; the parked-40 hotfix (PR #90) still merges back before the milestone PR**: `fix/bg-arg-number-field` (FRAGO 012) runs in its own worktree `../ynz-lang-hotfix-bgarg`; sequence = hotfix PR → merge to `main` → merge `main` into this branch → author parked 43's fixture in that merge commit → dispatch Phase 7 (receipt already minted, `m8-p7-20260904-a1`)
 >
 > ### 🔀 RESTRUCTURED 2026-09-03 — FRAGO 008: Phase 1's ownership scope MOVED to Phase 2
 >
@@ -1894,6 +1894,42 @@ in-session, no handoff file):**
   branching).
 
 #### Phase 8 — Structured Fuzzing Harness + CI Wiring (Track 4b)
+
+> ### Phase 8 STATUS — ✅ CLOSED 2026-09-04, terminal state CLEAN (conductor `conductor-2026-09-03-m8-phase2`)
+>
+> Executor `m8-p8-20260904-a1` (sealed `ff8859e` BEFORE any seat, per corpse #3), then fix rounds
+> `m8-p8-fix1` (`0ac2ce3`), `m8-p8-fix2` (`ccbaa6b`), `m8-p8-fix3` (`049e8b6`, the ceiling round —
+> earned because fix2 introduced its own gaps), and a correction round `m8-p8-fix4`.
+> **Spike GREEN first attempt** — the generator is type-valid by construction, so a refused program
+> is a generator bug; 64/64 then 256/256 compiled and ran. **The oracle provably bites**: an
+> adversarial seat planted a one-mode divergence and it was caught in 5 of 16 programs, each named
+> by seed and mode.
+> **Grading, four rounds.** `green-check` green throughout (it reproduced the corpus numbers itself
+> rather than accepting them). `code-reviewer` round 1 → **1 blocker**: the 90s liveness budget
+> killed only `ynz run`, leaving the compiled grandchild reparented and running — fixed with a real
+> process group, revert-proven (`process group 173 still has a RUNNING member (177, R)`).
+> `plan-adherence` round 1 → **1 blocker**: a claim that parked 41 was named in the design note's
+> non-coverage list, which it was not — the artifact was fixed, not the record softened.
+> **The adversarial gate-check earned the phase its value**: it disproved the README's justification
+> for excluding owned-heap channel payloads by hand-writing three such programs in the generator's
+> own idiom, all clean across four modes. Widening the grammar to `array`/`map`/`number` payloads
+> **immediately surfaced two genuine defects** — see FRAGO 015 and Future Requirements #11 — both
+> confirmed PRE-EXISTING on `main` (`ec014d8`) by two independent rebuilds, so neither is an M8
+> regression; routed through R5's seam, contained by narrow guards, never fixed inline.
+> Round 3's own fix then shipped three gaps of its own (the flagship reuse path was dead code, two
+> doc comments described it as live, and FRAGO 015 was cited four times without existing) — all
+> closed in round 4 with a panic-probe proving the branch fires, and a per-construct floor so it
+> cannot silently die again. A confirm seat answered the question round 4's fix opened — whether the
+> moved `suspension_seen` leaves a window inside one composite — **structurally: no**, because the
+> composite emits every send before any receive and the reuse gate is read only during the sends
+> phase.
+> **Conductor defects this phase, recorded:** a mutating seat was dispatched alongside a reader
+> (killed before damage; the rule from corpse #3 re-applied), and TWICE an executor's claim about an
+> artifact was relayed into a sealed commit body unverified — now the fourth `.claude/corpses.md`
+> entry, whose detector then caught the third instance within the hour.
+> **Residual parked:** the five hand-maintained `suspension_seen` assignment sites (the first
+> corpse's signature — a future composite that suspends and forgets its line silently reopens defect
+> (a) in the corpus).
 
 - **Task + purpose:** build a grammar-constrained (type-valid-by-construction) `.ynz` program generator,
   drive it through build+run across mode combinations, and assert observable-behavior equivalence via

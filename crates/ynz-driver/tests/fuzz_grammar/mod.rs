@@ -1179,13 +1179,14 @@ mod generator_contract {
     /// whole-source substring count for "close() in body" would read close to 100% no matter
     /// what the entrypoint's own statements did).
     ///
-    /// Floors are set comfortably below the values measured over this exact 256-seed corpus on
+    /// Floors are set comfortably below the values measured over this exact 1024-seed corpus on
     /// the widened generator (see the fix-round dispatch record for the measured numbers) — a
     /// starved or deleted arm collapses its share toward 0%, which trips the floor long before
-    /// ordinary RNG variance would.
+    /// ordinary RNG variance would. Pool-reuse floor verified stable across bases 0, 10000,
+    /// 1000000 with 1024-seed corpus (fix round 4, m8-p8-fix4-20260904).
     #[test]
     fn per_construct_floors_hold_over_a_fixed_corpus() {
-        let n = 256usize;
+        let n = 1024usize;
         let mut inline_close = 0usize;
         let mut drain_loop = 0usize;
         let mut two_spawn_arc = 0usize;
@@ -1248,10 +1249,10 @@ mod generator_contract {
         // fit this construct: reuse needs FOUR preconditions to align in the SAME statement (an
         // Array/Map inline-channel draw; a non-empty `arrays`/`maps` pool; the composite running
         // before ANY suspension anywhere earlier in the body; a `one_in(2)` coin flip), so it is
-        // genuinely rare by construction — measured 2/256 over this exact fixed corpus. `>= 1`
-        // is what "not dead" means here; `floor`'s percentage semantics would need `pct == 0` to
-        // admit a measured value this small, which would silently accept 0 too and defeat the
-        // guard's entire purpose.
+        // genuinely rare by construction — measured 13/1024 (base 0), 17/1024 (bases 10000,
+        // 1000000) over this widened 1024-seed corpus. `>= 1` is what "not dead" means here;
+        // `floor`'s percentage semantics would need `pct == 0` to admit a measured value this
+        // small, which would silently accept 0 too and defeat the guard's entire purpose.
         assert!(
             pool_reuse >= 1,
             "pool-reuse (take_or_make_array/take_or_make_map picking a PRE-EXISTING pooled \
