@@ -246,6 +246,19 @@ fn m8_gallery_fires_expected_diagnostics() {
         stderr.contains("hasn't been checked with `.failed()` yet"),
         "m8 gallery must include the MessageBeforeFailedCheck diagnostic; got:\n{stderr}"
     );
+
+    // ── Phase 7: the `background-handle-not-waited` Tier 3 lint (SUGGESTION severity —
+    //    must be present in stderr WITHOUT raising the Error count above: the no-duct-tape
+    //    guard for the re-deferred scope-drop cancellation fix is a teaching surface, never
+    //    a build gate) ──
+    assert!(
+        stderr.contains("lint: background-handle-not-waited"),
+        "m8 gallery must fire background-handle-not-waited with its rule code; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("h.receive()"),
+        "background-handle-not-waited must name the actual binding in its WHAT-INSTEAD; got:\n{stderr}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

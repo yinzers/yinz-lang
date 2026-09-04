@@ -2531,3 +2531,26 @@ what_instead_template = "Nothing to change — there is no source form for this 
 why_template = "The hot loops over `{array}` ({len} `{shape}` values) read only {fields}, so grouping each field's values together lets those loops load just the bytes they use. Honest measurement: under the optimizer the compiler now runs by default, this layout measured about 1.49x faster on a comparable large loop of this shape — a real, shipped speedup, not a projected one. The layout costs nothing in correctness, and the speedup is already in the binaries `ynz build` produces today."
 since = "v0.3-M5"
 design_doc = "docs/internal/implementation/IMP-collections.md"
+
+# v0.3-M8 Phase 7 no-duct-tape guard: Patrick re-deferred the real scope-drop-cancellation
+# fix (codegen calling `ynz_handle_free` when a handle binding's scope ends — the
+# `background-handle-cancel-injection` deferred_language_feature entry above) on condition
+# that the live exposure ships with a LOUD guard rather than a muted one ("i dont like
+# shipping silent errors i prefer loud ones that remind us we need to fix it" — audit.md
+# m8-p7-20260904-a1). Nothing releases a local of any type at scope exit today (see that
+# entry's `why`), so a task whose handle goes out of scope keeps running unseen; this fires
+# a dismissable SUGGESTION (never a build gate) at the spawn site whenever a bound handle is
+# never received anywhere in the rest of its own scope. Fires from `check_stmts`'s
+# `Stmt::Let` arm in crates/ynz-typeck/src/check.rs — narrowed to bound spawns only (an
+# unbound `background f()` has no handle to mislead anyone) and suppressed the moment a
+# `.receive()` call on the same binding appears anywhere later in scope, including inside a
+# following nested block. Retires the moment `background-handle-cancel-injection` ships.
+[[lint_rule]]
+name = "background-handle-not-waited"
+severity = "suggestion"
+description = "A `background` task handle is bound to a name but never received anywhere in its scope, so its task's completion is never waited on. Nothing frees the task when the handle's binding goes out of scope — it keeps running on its own."
+what_template = "`{handle}` never gets received anywhere below this spawn — nothing here ever waits for the task it started."
+what_instead_template = "Call `{handle}.receive()` before this scope ends to wait for the task, or give the task its own way to stop — for example, close the channel it reads its work from."
+why_template = "Yinz does not yet release a local when its scope ends, so `{handle}` going out of scope does not stop the task it started — that task keeps running on its own, even after `{handle}` is gone."
+since = "v0.3-M8"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"

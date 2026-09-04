@@ -342,6 +342,18 @@ function m8MessageBeforeFailedCheck() -> nothing {
   print(late.message)
 }
 
+// WHY: `background-handle-not-waited` Tier 3 lint (SUGGESTION severity — never a build
+// gate; a correct program must still compile). Yinz does not yet release a local when its
+// scope ends, so a background task handle that is bound but never received keeps its task
+// running unseen after `h` goes out of scope. This is the no-duct-tape guard for the
+// re-deferred scope-drop cancellation fix: loud until the real fix ships.
+function m8HandleNotWaited() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  let h = background m8Doubler(wire)
+  h.send(5)
+  print(`spawned but never received`)
+}
+
 // ────── positive reference case ──────
 
 function entrypoint() -> nothing {

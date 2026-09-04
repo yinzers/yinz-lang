@@ -2060,6 +2060,45 @@ impl<'b> Checker<'b> {
                     span: _,
                 } => {
                     self.check_let(*is_const, name, name_span, ty.as_ref(), value);
+                    // v0.3-M8 Phase 7 no-duct-tape guard: the `background-handle-not-waited`
+                    // Tier 3 lint. Patrick re-deferred the real fix (codegen calling
+                    // `ynz_handle_free` when a handle binding's scope ends — registry entry
+                    // `background-handle-cancel-injection`) on condition that the live
+                    // exposure ships with a LOUD guard, not a muted one: today NOTHING
+                    // releases a local of any type at scope exit (`emit.rs` only frees along
+                    // three narrow glue paths — see that registry entry's `why`), so a task
+                    // whose handle goes out of scope keeps running unseen. This fires a
+                    // dismissable SUGGESTION — never a build gate — when a bound handle is
+                    // never received anywhere in the rest of its own scope. It retires the
+                    // moment the real fix ships.
+                    if matches!(value, Expr::Background(..))
+                        && matches!(
+                            self.scope.lookup(name).map(|e| &e.ty),
+                            Some(Type::BackgroundHandle { .. })
+                        )
+                    {
+                        let remaining = &stmts[i + 1..];
+                        let waited = remaining
+                            .iter()
+                            .any(|s| stmt_receives_from_handle(s, name.as_str()));
+                        if !waited {
+                            let vars: std::collections::HashMap<&str, &str> =
+                                std::collections::HashMap::from([("handle", name.as_str())]);
+                            let diag = crate::lints::lint_diagnostic(
+                                "background-handle-not-waited",
+                                value.span().clone(),
+                                &vars,
+                            )
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "[[lint_rule]] `background-handle-not-waited` missing from \
+                                     registry/features.toml — the firing site and the registry \
+                                     drifted"
+                                )
+                            });
+                            self.diags.push(diag);
+                        }
+                    }
                 }
                 Stmt::Assign {
                     target,
@@ -9768,6 +9807,138 @@ fn ident_read_in_stmt(stmt: &Stmt, name: &str) -> bool {
         }
         Stmt::For { iter, body, .. } => {
             expr_refs_ident(iter, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+        }
+    }
+}
+
+/// Returns `true` if `expr` contains a `.receive()` method call on the plain identifier
+/// `name` — the only wait-equivalent a `background` task handle exposes in v0.3 (there is
+/// no explicit `wait h` call-site syntax for a handle; `h.receive()` IS the wait). Used by
+/// the `background-handle-not-waited` Tier 3 lint (v0.3-M8 Phase 7 guard) to decide whether
+/// a handle binding was ever waited on anywhere in the rest of its scope.
+///
+/// Mirrors `expr_refs_ident`'s traversal shape but narrows the predicate from "any
+/// reference" to "a `.receive()` call rooted at this exact identifier" — a plain `h` read
+/// (e.g. `h.send(v)`, or passing `h` itself somewhere) does not count; only a receive does.
+/// Like `ident_read_in_stmt`/`expr_refs_ident`, this does not special-case shadowing inside
+/// a nested block — the same simplification those helpers already make, acceptable here
+/// because this is a dismissable teaching nag, not a soundness-load-bearing analysis.
+fn expr_receives_from_handle(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            (method == "receive" && matches!(receiver.as_ref(), Expr::Ident(n, _) if n == name))
+                || expr_receives_from_handle(receiver, name)
+                || args.iter().any(|a| expr_receives_from_handle(a, name))
+        }
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => expr_receives_from_handle(inner, name),
+        Expr::Call(c) => {
+            expr_receives_from_handle(&c.callee, name)
+                || c.args.iter().any(|a| expr_receives_from_handle(a, name))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_receives_from_handle(lhs, name) || expr_receives_from_handle(rhs, name)
+        }
+        Expr::UnaryOp { operand, .. } => expr_receives_from_handle(operand, name),
+        Expr::FieldAccess { receiver, .. } => expr_receives_from_handle(receiver, name),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => expr_receives_from_handle(receiver, name) || expr_receives_from_handle(index, name),
+        Expr::StructLit { fields, .. } => fields
+            .iter()
+            .any(|f| expr_receives_from_handle(&f.value, name)),
+        Expr::ArrayLit { elements, .. } => {
+            elements.iter().any(|e| expr_receives_from_handle(e, name))
+        }
+        Expr::MapLit { entries, .. } => entries
+            .iter()
+            .any(|(k, v)| expr_receives_from_handle(k, name) || expr_receives_from_handle(v, name)),
+        Expr::PostfixOp { receiver, .. } => expr_receives_from_handle(receiver, name),
+        Expr::Is { expr: inner, .. } => expr_receives_from_handle(inner, name),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| {
+            if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                expr_receives_from_handle(e, name)
+            } else {
+                false
+            }
+        }),
+        Expr::Ident(_, _)
+        | Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => false,
+    }
+}
+
+/// Statement-level counterpart to [`expr_receives_from_handle`] — recurses into nested
+/// block bodies (`if`/`while`/`for`/`match`) the same way [`ident_read_in_stmt`] does, so a
+/// `.receive()` inside a following nested block still counts as "waited on."
+fn stmt_receives_from_handle(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_receives_from_handle(e, name),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+            expr_receives_from_handle(value, name)
+        }
+        Stmt::Return { value, .. } => value
+            .as_ref()
+            .is_some_and(|e| expr_receives_from_handle(e, name)),
+        Stmt::FieldAssign { target, value, .. } => {
+            expr_receives_from_handle(target, name) || expr_receives_from_handle(value, name)
+        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            expr_receives_from_handle(receiver, name)
+                || expr_receives_from_handle(index, name)
+                || expr_receives_from_handle(value, name)
+        }
+        Stmt::If { cond, body, .. } => {
+            expr_receives_from_handle(cond, name)
+                || body
+                    .stmts
+                    .iter()
+                    .any(|s| stmt_receives_from_handle(s, name))
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            expr_receives_from_handle(scrutinee, name)
+                || arms.iter().any(|arm| {
+                    arm.body
+                        .stmts
+                        .iter()
+                        .any(|s| stmt_receives_from_handle(s, name))
+                })
+                || else_arm
+                    .as_ref()
+                    .is_some_and(|b| b.stmts.iter().any(|s| stmt_receives_from_handle(s, name)))
+        }
+        Stmt::While { cond, body, .. } => {
+            expr_receives_from_handle(cond, name)
+                || body
+                    .stmts
+                    .iter()
+                    .any(|s| stmt_receives_from_handle(s, name))
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_receives_from_handle(iter, name)
+                || body
+                    .stmts
+                    .iter()
+                    .any(|s| stmt_receives_from_handle(s, name))
         }
     }
 }

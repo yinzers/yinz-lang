@@ -11,6 +11,53 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-guard-20260904-a1` — 2026-09-04 — **The Phase 7 no-duct-tape cheap guard, shipped for real (as
+  a Tier 3 lint, not the muted hint Future Requirements #3 had described before Patrick's ruling).**
+  Nothing committed (conductor seals). Scope was exactly the guard, not the deferred fix itself
+  (`ynz_handle_free` at scope exit, owned by plan `2026-09-04-v0-3-concurrency-hardening` Phase 4,
+  which retires this lint when it lands).
+  - **Registry:** `[[lint_rule]] background-handle-not-waited` added to `registry/features.toml`
+    (severity `suggestion`, `design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"`),
+    cross-referencing the `background-handle-cancel-injection` deferred-feature entry it retires.
+  - **Compiler:** fires from `check_stmts`'s `Stmt::Let` arm in `crates/ynz-typeck/src/check.rs`
+    when a `let h = background f()` binding's `h` is never received (`.receive()`) anywhere in the
+    rest of its own scope (recursing into later nested blocks via two new helpers,
+    `expr_receives_from_handle`/`stmt_receives_from_handle`, mirrored off the existing
+    `expr_refs_ident`/`ident_read_in_stmt` shape). Does not fire on an unbound fire-and-forget spawn
+    (no `let`, no handle) or on a handle that is received.
+  - **Tests:** four new typeck tests in
+    `crates/ynz-typeck/tests/background_handle_not_waited_lint.rs` (fires on the exposing shape;
+    no-fire on an unbound spawn; no-fire when received later in scope; no-fire when received inside
+    a later nested block). A new gallery trigger `m8HandleNotWaited` in
+    `examples/primantis-orders/m8_errors.ynz`, asserted by two new key-phrase checks appended to
+    `m8_gallery_fires_expected_diagnostics` in `crates/ynz-driver/tests/error_galleries.rs` (the
+    SUGGESTION severity does not move the gallery's `Error:`-line count, confirmed unchanged at
+    26–37 by the actual test run).
+  - **Verification (dev container, foreground, FRAGO 014's registry-consumer lane included):**
+    `cargo test -p ynz-registry -p ynz-diagnostics -p ynz-typeck -p ynz-driver` — the new lint's 4
+    tests and the m8 gallery test both green; two failure clusters present but confirmed
+    PRE-EXISTING and diff-unrelated by stashing this session's diff and reproducing both unchanged
+    on bare `HEAD`: `fr23_uaf_planned_red` (3 give/copy-inference failures, unrelated to
+    background-handle code) and `hotfix_bg_arg_number_field` (5 failures, all the same
+    `maybe<int>` string-interpolation defect — FRAGO 015, Phase 8's fuzzer finding, already
+    routed not fixed). The brief's named flake
+    (`bounded_run_kills_the_whole_tree::timed_out_program_leaves_no_descendant_process_running`)
+    was also observed once, passed on rerun — consistent with the documented flake, not a new one.
+    `cargo fmt --all -- --check` clean (after one `cargo fmt --all` pass this session tightened four
+    long-line wraps in the new helpers). `cargo clippy --workspace --all-targets -- -D warnings`
+    clean, zero warnings.
+  - **Deviation from the dispatch brief, flagged:** the brief said the lint firing site lives "in
+    `crates/ynz-typeck/src/lints.rs` alongside the existing rules." That file holds only the ONE
+    generic `lint_diagnostic` firing helper every rule shares — no per-rule logic lives there today
+    (`prefer-yielding-sleep` fires inline in `check.rs`; `cross-thread-fields-not-padded` and
+    `array-using-soa-layout` each get their own dedicated analysis module). This lint's trigger
+    needs the same `stmts`/index view `check_stmts` already holds for its Give-inference logic, so
+    it was placed inline in `check_stmts`'s `Stmt::Let` arm — matching `prefer-yielding-sleep`'s
+    precedent, not a new pattern.
+  - Appended this session's id to the frontmatter `session-id` chain and updated the Future
+    Requirements #3 guard bullet in plan.md to record the lint as shipped (not just decided), in
+    the same action as this entry.
+
 - `m8-p9-20260904-b1` — 2026-09-04 — **Phase 9 re-dispatch: steps 4 and 5 completed. Phase 9 is now
   fully executed (steps 1–5). Nothing committed (conductor seals).**
   **Prior dispatch `m8-p9-20260904-a1` (executor-medium) was halted by the worktree-ask gate after
