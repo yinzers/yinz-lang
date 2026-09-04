@@ -457,8 +457,7 @@ static layout rule because a child sub-frame is embedded at an arbitrary 8-multi
 offset inside its parent, and it is stable across resumes because a task's frame never
 moves. Codegen refuses to lower a shape whose measured ABI alignment exceeds 16 (the
 compile-time link between the constant and the TargetData truth). Locked by the
-`bgarg-number` hotfix (`git log --grep=bgarg-number` — resolves once this hotfix's commit
-lands): a shape with a `number` field copied for a `background` spawn from an 8-mod-16
+`bgarg-number` hotfix (`git log --grep=bgarg-number`): a shape with a `number` field copied for a `background` spawn from an 8-mod-16
 frame region made optimized ISel emit `movaps` and SIGSEGV; `--no-optimize` hid it
 because `-O0` lowers i128 ops alignment-indifferently.
 

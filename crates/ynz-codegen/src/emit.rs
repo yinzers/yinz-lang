@@ -1213,7 +1213,9 @@ fn build_module<'ctx, 'g>(
         // must raise the constant (and the slack) in the same change.
         for (name, &struct_ty) in &shape_types.named {
             let align = u64::from(target_data.get_abi_alignment(&struct_ty));
-            if align > state_machine::FRAME_SHAPE_REGION_ALIGN {
+            // Unreachable from any Yinz program today (the widest field type is i128); fires
+            // loudly the first time a wider field type is lowered — no test exercises it.
+            if align > u64::from(state_machine::FRAME_SHAPE_REGION_ALIGN) {
                 return Err(format!(
                     "codegen: shape `{name}` has LLVM ABI alignment {align}, wider than the \
                      {} bytes a frame-embedded shape region is rounded to \
