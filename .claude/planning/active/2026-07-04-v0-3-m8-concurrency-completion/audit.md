@@ -11,6 +11,73 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p7-20260904-a1` — 2026-09-04 — **Phase 7 (Track 3, scope-drop cancellation): recon done,
+  verdict Branch B — RE-DEFER; four-field re-deferral authored, registry entry updated, current
+  state pinned in-suite; STATUS PARTIAL awaiting Patrick's sign-off; nothing committed.**
+  Read: the Phase 7 block, the cold-resume banner's FRAGO 002 table (navigated to
+  `SpawnStateFnFuture::drop` by function, not by the dangling `runtime.rs:591-693`),
+  `IMP-no-function-coloring.md` "Task Cancellation", registry `background-handle-cancel-injection`
+  / `channel-auto-close-on-last-producer` / `background-handle-close`, `IMP-concurrency.md`
+  "Deferred: auto-close on last-producer drop", `handle.rs` (`ynz_rt_spawn_handle`,
+  `ynz_handle_free`), `emit.rs` (`lower_let_background_handle`, `lower_sm_background_spawn`,
+  `emit_bg_arg_frees`, the channel glue table at `channel_elem_drop`), `state_machine.rs::free_frame`,
+  `runtime.rs::ynz_rt_shutdown`, `loom_tests.rs`'s model list, FR #7(2)/#8, `corpses.md` (3),
+  `parked.md` 32–34, `authoritative-derivation.md`, `test-parallelism.md`, `teaching-surfaces.md`.
+  **Step 1 — the recon question.** No generic scope-exit drop dispatch exists for ANY type.
+  Codegen's only release emissions: `emit_bg_arg_frees` (a CPU-pool task's closure freeing ITS
+  arg copies after the callee returns), the channel element-glue table (registered at
+  construction, run by the runtime at teardown / `refuse_closed`), the spike trampoline's staged
+  decimal128 cell, and `free_frame` (a suspending callee's frame BYTES, freed by its caller after
+  Ready — no per-slot walk). The runtime's `SpawnStateFnFuture::drop` ladder is the CHILD task's
+  retirement over the CHILD's frame descriptors. **Step 2 — does it extend to handles?** No, by
+  frame and by time: a handle's scope exit is the PARENT's event on the PARENT's frame, and the
+  parent has no ladder unless it is itself a task (and then it fires at retirement, not scope
+  exit). **Probes** (throwaway, `target/probe-p7/`, `YNZ_ALLOC_COUNTER=1` +
+  `YNZ_ALLOC_COUNTER_OUTPUT`, debug `ynz` at `d1c4294`; the `handle_alloc`/`handle_free` lines
+  count `CpuJoinHandle`s, not `YnzTaskHandle` — the handle Box and the channel `Arc` are
+  uncounted, so alloc==free cannot see a leaked handle; the IR read is the proof for that):
+  P1 handle bound, never received, `entrypoint` returns at once → stdout `parent: returning` /
+  `child: start` only; alloc=1 free=1 — `ynz_rt_shutdown` stopped the child at its next
+  suspension and the ladder freed its frame. P1b statement-form control → identical, so that
+  is shutdown, not the handle form. P2 handle bound in an `if` block, block exits, parent sleeps
+  150ms → child prints all three lines including `child: done`; alloc=2 free=2 — **scope exit
+  did not cancel**. P3 handle crosses a `wait` in the parent, never received → child completes;
+  IR: `ynz_rt_spawn_handle` result stored to the parent's frame slot (`%h_ptr_i64` → `%ls_0`),
+  **0 `ynz_handle_free` calls, 0 declarations**. P4 handle bound in a suspending helper called by
+  `wait`, whose frame the caller's `free_frame` frees after Ready → `launch: returning`, then
+  the child's remaining lines — the slot died with the frame bytes, the child kept running. P5
+  statement-form spawn, parent sleeps → child completes (baseline). P6 non-suspending parent
+  (`lower_let_background_handle`'s alloca branch) returns → child completes. P7 receive then
+  scope exit → `42`, alloc=2 free=2, handle Box still never freed (no call site). P8 handle
+  holding a command-channel reference, dropped without receive → alloc=3 free=3 (the channel is
+  an `Arc`, uncounted; its handle-held reference leaks invisibly to the counter). P9 `for` loop
+  re-binding `h` three times → three scope exits, all three children complete; alloc=4 free=4.
+  P10 the parent is itself a `background` task (the only parent kind WITH a ladder) →
+  `child: retiring` then `grandchild: done` — the ladder fired at retirement and never read the
+  handle slot. **Verdict: Branch B.** A handle-only release would have to build the scope-edge
+  enumeration the general pass needs verbatim (block end, loop back-edge, every `return` path,
+  `errors` auto-propagation, both state-machine frame free paths) and run beside it — the second
+  mechanism — and would make scope exit mean *stop the task* for handles while every other value
+  at the same exit stays held. A `BG_ARG_KIND_TASK_HANDLE` arm in the parent's ladder was weighed
+  and rejected (only task-parents have one; retirement ≠ scope exit; silent structured-cancellation
+  semantics). **Deliverables.** Plan FR #3 replaced with the four fields; `background-handle-
+  cancel-injection` `substitute`/`why`/`triggers`/`ships_in` rewritten (no milestone tags or
+  internal paths); `IMP-no-function-coloring.md` "Task Cancellation" amended to current state +
+  recon record; `IMP-concurrency.md` auto-close deferral carries the ruling (its drop-pass
+  dependency NOT satisfied; `background-handle-close` never depended on it). Pin tests
+  `crates/ynz-driver/tests/v03_m8_handle_scope_pin.rs` (2, planned-RED inverse) over fixture
+  `v0_3_m8_p7_handle_scope_exit_pin.ynz` — 2/2 green, exit 0. **Design doc says A; tree does
+  B:** the doc's "never silently killed mid-work" — the tree stops a still-running child at its
+  next suspension when `entrypoint` returns (P1); corrected in the doc as current state, runtime
+  behavior untouched. **Out-of-phase touch, flagged:** `jargon_audit`'s
+  `no_banned_jargon_in_deferred_feature_user_facing_fields` was RED at `d1c4294` — Phase 5's
+  `auto-arc-codegen-emission` `why` says "would alias the inner allocation" and `alias` has been
+  banned since `4aef3b8`; one word changed to "share" (no semantic change) so the full-suite gate
+  does not trip on it; 10/10 after. Lanes green: `ynz-diagnostics` `jargon_audit` 10/10,
+  `ynz-registry` 70/70, `ynz-driver` `v03_m8_handle_scope_pin` 2/2 and `v03_m8_auto_arc` 12/12,
+  `cargo fmt --check`, `cargo clippy -p ynz-driver --tests -D warnings`. No runtime or codegen
+  change, so no `--release` rebuild. Resume-at `phase-7/step-3` per the dispatch brief (plan
+  numbers Branch B as step 4).
 - `m8-p5-fix2-20260904` — 2026-09-04 — **Phase 5 fix round 2 (`red:code-reviewer`): the R2-class
   blocker fixed at the producer, RED→GREEN; eight should-fix/minor items done; nothing committed.**
   Read: the Phase 5 STATUS block's round-1 grading, entry `m8-p5-20260904-a1` below,
@@ -1169,9 +1236,15 @@ settled by it.** The next conductor asks him before the phase that needs each:
   `worktree-birth.sh --no-deps` — the host has no `cargo`; everything builds in Docker), in
   parallel with Phase 5's fix round in the main checkout. Two executors, two trees, no shared
   state — the `one live checkout per branch` rule holds because the branches differ. Hotfix
-  dispatch `bgarg-number-20260904-a1`. Sequence from here: hotfix PR → merge to `main` → merge
-  `main` into `feat/v0-3-m8-concurrency-completion` before Phase 7 dispatches (the same shape as
-  PR #89's merge-back at `6143c1d`). The worktree is removed after the merge-back.
+  dispatch `bgarg-number-20260904-a1`. **PR #90 opened 2026-09-04**
+  (https://github.com/yinzers/yinz-lang/pull/90, `ee7158c`, both gates green, RED re-proven on a
+  clean `ec014d8` checkout). Sequence from here: merge on GitHub (Patrick) → merge `main` into
+  `feat/v0-3-m8-concurrency-completion` **before Phase 8 dispatches** — Phase 7 runs meanwhile,
+  since a design phase on the drop ladder / handle lifecycle touches different regions of
+  `emit.rs`/`runtime.rs` than the hotfix's frame-layout change and idling on a GitHub button is
+  waste (conductor's sequencing call, not a ruling) — and parked 43's fixture rides that merge
+  commit (the same shape as PR #89's merge-back at `6143c1d`). The worktree is removed after the
+  merge-back.
 
 ### FRAGO 011 — 2026-09-04 — Phase 4 CLOSED BY CEILING; the `errors`-value field surface is re-homed to its own hotfix branch after M8
 

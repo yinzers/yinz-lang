@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904", "m8-p7-20260904-a1"]
 created_at: "2026-07-04"
 updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -1840,6 +1840,15 @@ in-session, no handoff file):**
 
 </details>
 
+> ### Phase 7 STATUS — steps 1–2 ✅ recon done, **CHECKPOINT reached and the decision made: Branch B (RE-DEFER)**, step 4's four-field re-deferral AUTHORED 2026-09-04 (executor `m8-p7-20260904-a1`; nothing committed) — **AWAITING PATRICK'S SIGN-OFF** (step 4's own gate); step 5 (full suite) is the gate agent's lane
+>
+> - **Step 1** ✅ the recon question answered with evidence, not assumed: **no generic scope-exit drop dispatch exists for ANY droppable type.** `emit.rs` emits `ynz_array_drop`/`ynz_free`/`ynz_channel_free` only in task-side arg-free glue (`emit_bg_arg_frees`), the channel element-glue table (`channel_elem_drop`), and the spike trampoline's staged cell; `free_frame` frees a suspending callee's frame bytes with no per-slot walk; `ynz_handle_free` has zero call sites (IR read). The ONE choke point Phases 4/5 wired through — `SpawnStateFnFuture::drop`'s kind arms — is the CHILD task's retirement ladder over the CHILD's frame.
+> - **Step 2** ✅ extending that ladder to handle bindings is NOT clean: scope exit is the PARENT's event on the PARENT's frame (block end / loop back-edge / `return` / the caller's `free_frame`), and the parent has no ladder unless it is itself a task — and even then the ladder fires at retirement, not scope exit. Ten probes (`audit.md` entry `m8-p7-20260904-a1`): P2/P4/P6/P9/P10 all show the child completing past the scope exit; P1/P1b show `ynz_rt_shutdown` stopping a still-running child at its next suspension when `entrypoint` returns.
+> - **Step 4 (Branch B)** ✅ four fields in Future Requirements #3; `background-handle-cancel-injection` UPDATED (not retired) — `substitute`/`why`/`triggers` rewritten to the concrete finding, no milestone tags or internal paths, `ships_in = "a later version"`; `IMP-no-function-coloring.md` "Task Cancellation" amended to current state + the recon record + anchor; `IMP-concurrency.md`'s auto-close deferral carries the ruling that its drop-pass dependency is NOT satisfied by M8. Current state pinned loud in-suite: `crates/ynz-driver/tests/v03_m8_handle_scope_pin.rs` (2 tests, planned-RED inverse — they flip when the trigger fires), fixture `v0_3_m8_p7_handle_scope_exit_pin.ynz`.
+> - **Step 3 (Branch A)** — not taken. **Step 5** — the affected lane ran green (the two pin tests, registry tests); the full suite is the gate agent's lane.
+> - **Demo/gallery:** no executable surface and no diagnostic shipped, so `pirates-roster` and `m8_errors.ynz` are unchanged (N/A with reason, per the invariant).
+> - **Sign-off needed from Patrick:** the re-deferral text (FR #3) and the registry entry's rewritten fields. Resume-at `phase-7/step-3` per the dispatch brief (the plan numbers Branch B as step 4; the seam is the same — the sign-off gate before the phase closes).
+
 #### Phase 7 — Track 3: Source-Level Scope-Drop Cancellation (Design + Contingent Implementation)
 
 - **Task + purpose:** investigate whether extending the SAME drop-glue choke point M6/Phase 4 register
@@ -2313,6 +2322,11 @@ pattern. Considered and declined.
 - **`background-handle-cancel-injection`** (existing entry): retired (Phase 7 Branch A) if the
   language-half cancellation ships for real, OR its `ships_in`/`triggers` fields are rewritten with a
   concrete, milestone-specific finding (Phase 7 Branch B) — never left with the prior vague wording.
+  **Outcome 2026-09-04: Branch B — `modify [[deferred_language_feature]] name =
+  "background-handle-cancel-injection"`: `substitute` (current run-to-completion-then-shutdown-stop
+  semantics), `why` (the task-retirement-ladder-is-not-a-scope-exit finding), `triggers` (the
+  scope-exit release pass with handles as one arm, the pin tests as the flip), `ships_in = "a later
+  version"` — pending Patrick's sign-off (Future Requirements #3).**
 - **Explicitly none** for the rest: no new keywords, banned_declaration_keywords, banned_jargon words,
   or type_attached_constants are anticipated from this milestone's work — stated explicitly so reviewers
   know it was considered, not forgotten. (A diagnostic_template entry for the newly-live channel-closed
@@ -2371,9 +2385,69 @@ pattern. Considered and declined.
    channel-close/Arc/cancellation/verification). **COST/TRIGGER:** unchanged from M6/M7's own text —
    small (spawn-site annotation + registry entry); the next milestone touching `background`/task-routing
    surface.
-3. **(Contingent) Track 3 re-deferral, if Phase 7 takes Branch B** — the concrete four-field deferral
-   text lands here at Phase 7 execution time, replacing this placeholder, with the updated
-   `background-handle-cancel-injection` registry entry's `ships_in`/`triggers` fields cited as evidence.
+3. **Track 3 re-deferral — Phase 7 took Branch B (RE-DEFER), 2026-09-04, executor
+   `m8-p7-20260904-a1`; PENDING Patrick's sign-off (the phase's own exit criterion).** Evidence:
+   ten probe programs with the alloc counter armed plus a `--emit-ir` read, recorded in `audit.md`
+   entry `m8-p7-20260904-a1`; the current state is pinned loud in-suite by
+   `crates/ynz-driver/tests/v03_m8_handle_scope_pin.rs` (two tests that flip when the trigger fires).
+   - **WHAT is deferred:** the language half of cancel-via-drop — codegen calling `ynz_handle_free`
+     when a `background` handle binding's scope ends (block end, loop-iteration end, every function
+     exit path including early `return` and auto-propagated `errors`, and a state-machine frame's
+     retirement on both of its free paths: the caller's `free_frame` and a spawned parent's drop
+     ladder), plus the cancellation surfacing inside the child as a typed `errors` value. What the
+     general mechanism must provide, so handles can be one arm of it: a per-scope-edge, per-binding
+     release point for every heap-backed local type (`array`, `map`, `string`, `channel`, promoted
+     `maybe`/union cells, handles) on the PARENT's frame at the parent's time; bindings consumed by
+     the transfer rule (sent / given away / returned) skipped; loop-rebound locals released per
+     iteration; one registration surface and one dispatch with a per-type arm — the source-scope
+     twin of the runtime ladder's kind arms, never a second ladder.
+   - **WHY a handle-only pass forks a second mechanism (probe evidence, by frame and by time):**
+     (a) the ONE cleanup choke point — `SpawnStateFnFuture::drop`'s kind arms in
+     `crates/ynz-runtime/src/runtime.rs` (Phase 4 wired `refuse_closed`/`ChannelElemDrop` through the
+     channel glue; Phase 5 added `BG_ARG_KIND_ARC_SHAPE`) — is the CHILD task's retirement ladder: it
+     walks the child's own frame's `BgArgDropEntry` descriptors when the child retires. A handle's
+     scope exit is the PARENT's event on the PARENT's frame. Probes: P2 (handle bound in an `if`
+     block; block exits, parent lives on; child prints `child: done` — no cancel; alloc=2/free=2);
+     P4 (handle in a suspending helper called by `wait`; the helper's frame is freed by the caller's
+     `free_frame` after Ready — memory only, no per-slot walk; child completes after
+     `launch: returning`); P6 (non-suspending parent: `lower_let_background_handle`'s alloca branch;
+     dies at `ret`; child completes); P9 (`for` loop re-binding `h` three times — three scope exits in
+     one function, three children complete); P10 (parent is itself a `background` task — the only
+     parent kind that HAS a ladder — and the grandchild still completes after `child: retiring`,
+     because the ladder fires at retirement and never reads a handle slot). (b) NO local of ANY type
+     is released at scope exit today: `emit.rs`'s only `ynz_array_drop`/`ynz_free`/`ynz_channel_free`
+     emissions are the task-side arg-free glue `emit_bg_arg_frees`, the channel element-glue table
+     built from `channel_elem_drop`, and the spike trampoline's staged decimal128 cell; P3's IR has
+     zero `ynz_handle_free` calls (and none for anything else at the parent's exit). There is nothing
+     to extend — a handle arm would have to invent the scope-edge enumeration the general pass needs
+     verbatim, then the general pass would run beside it. (c) Semantics: handle scope exit meaning
+     *stop the task* while the array/map/channel/`maybe` cell bound at the same scope exit stays held
+     is a per-type inconsistency ([`auto-promotion.md`](../../../rules/auto-promotion.md)'s banned
+     pattern 4) and a teaching contradiction (Golden Rule 11). (d) Weighed and rejected: a
+     `BG_ARG_KIND_TASK_HANDLE` arm in the PARENT's ladder — one choke point, but it only exists when
+     the parent is itself a task and fires at the parent's retirement, not the binding's scope exit:
+     structured task-tree cancellation for nested spawns only, a different semantics from the locked
+     model, silently. (e) A finding the probes surfaced about the doc's current-state claim: "never
+     silently killed mid-work" holds only while `entrypoint` runs — at its return `ynz_rt_shutdown`
+     stops every still-running task at its next suspension (P1/P1b: `child: start` printed, `child:
+     done` never; alloc=1/free=1 — the ladder ran). `IMP-no-function-coloring.md` "Task Cancellation"
+     now says so.
+   - **COST to fix later:** the drop-story milestone's pass — 1–2 sessions per the roadmap's
+     never-drop-locals row (scope-edge enumeration, per-type arms, transfer-rule skip, per-iteration
+     release, the state-machine retirement hook on both free paths) — plus, for the handle arm itself,
+     small: one arm calling the already-proven `ynz_handle_free`, the two pin tests rewritten into the
+     Branch A fixtures (scope-exit cancel at the next suspension; alloc==free; the crossing-local,
+     non-suspending-parent and loop shapes; double-free impossible by construction with a parity
+     test), and the child-side typed `errors` surfacing, which is its own small design (Tokio abort
+     drops the child's future; nothing in the child observes it today).
+   - **TRIGGER:** the drop-story milestone landing its scope-exit release pass (handles join as one
+     arm; the pin tests flip; `background-handle-cancel-injection` is retired then), OR a real
+     workload needing to stop a running task before then (the command-channel substitute is the
+     shipped answer meanwhile). Consequence for the two Phase 1 deferrals that named "the missing
+     scope-exit drop pass": `channel-auto-close-on-last-producer`'s dependency is NOT satisfied by M8
+     (its trigger stands; remaining blockers unchanged — the producer-role analysis, the producer/holder
+     refcount split, and the pass itself); `background-handle-close` never depended on the pass (its
+     trigger is a real program that cannot bind the channel first) — unaffected.
 4. **Loom's Tokio-internals boundary** (Phase 3, landed 2026-09-03) — **WHAT:** loom model-checks
    only the synchronization logic ynz-runtime owns directly (`pending_sends`, `recv_waiters`, the
    channel refcount, the published drive identity, the drop ladder's kind-2 arm, recv-poll ordering);
