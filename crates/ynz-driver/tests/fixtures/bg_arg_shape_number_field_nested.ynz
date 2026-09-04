@@ -1,0 +1,34 @@
+// Hotfix `bgarg-number` sweep pin: a `number` field inside a NESTED shape
+// (`Scene.lens: Lens`, `Lens.focal: number`) passed to a `background` spawn on the
+// inferred-GIVE path (the caller never touches `scene` after the spawn). This is the
+// only nested form reachable today: the inferred-COPY twin (caller reads `scene` after
+// the spawn → `scene` would be a frame-embedded crossing local) is refused at compile
+// time by the nested-shape crossing-local teaching error ("Restructure `Scene` so all
+// its fields are primitive types ..."), so no misaligned frame region can exist for a
+// nested shape. A nested shape field is a pointer to its own heap cell, so the i128
+// never sits inline in the outer struct either. Ran clean pre-fix; pinned so the
+// nested form stays covered next to the direct-field fix:
+//   task sees 2.5
+//   tasks saw 1
+shape Lens {
+  focal: number
+}
+
+shape Scene {
+  name: string
+  lens: Lens
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(5)
+  print(`task sees ${scene.lens.focal}`)
+  results.send(1)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>(4)
+  let scene: Scene = { name: `Three Rivers`, lens: { focal: 2.5 } }
+  background render(scene, results)
+  let a = results.receive()
+  print(`tasks saw ${a}`)
+}
