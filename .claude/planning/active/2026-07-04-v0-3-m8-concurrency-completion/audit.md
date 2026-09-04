@@ -11,6 +11,76 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p8-20260904-a1` — 2026-09-04 — **Phase 8 (Track 4b, structured fuzzing): spike GREEN,
+  full grammar + oracle wiring + CI job + design note all landed; ZERO findings across 512
+  generated programs; nothing committed.**
+  Read: the Phase 8 block, `cross_impl_consistency.rs` end to end, `.github/workflows/ci.yml`'s
+  Loom step, `test-parallelism.md`, `authoritative-derivation.md`, `corpses.md`, `parked.md`
+  31/41, plus the M4/M5/M8 channel/handle/Arc/array/map fixtures the grammar is modelled on.
+  **Step 1–2 — spike verdict GREEN, first attempt, no grammar narrowing needed.** 64 programs
+  generated / 64 distinct / **64 compiled and ran to exit 0** (100%), 59 of them spawning
+  `background`, 0 findings, 14.5s. The 100% rate is the design working as specified, not a
+  weak grammar: the generator is type-valid *by construction* (it draws every operand from a
+  typed environment it maintains), so a rejection would have been a GENERATOR bug — which is
+  exactly how the sweep reports one. Anti-triviality is asserted mechanically, not asserted in
+  prose: `distinct >= 90%` of the corpus in the sweep, `>=120/128` distinct + `>=128/256`
+  concurrent + `>=10` body statements in the generator's own contract tests.
+  **Steps 3–6.** Grammar covers the full composable subset the phase named — independent
+  statements, `wait` calls, both `background` spawn forms (statement + handle), `channel<int>`
+  construct/send/receive/close, shape declarations + field reads, `array<int>` and
+  `map<string,int>` literals with their real intrinsics — plus two composites that matter to
+  THIS milestone: the taught end-of-stream drain loop (Phase 4's `.close()` contract) and the
+  two-spawn read-only-shape topology (Phase 5's Auto-Arc). The oracle is **extended, never
+  re-derived**: the generator lives in `tests/fuzz_grammar/mod.rs` (a subdirectory module, not
+  a second test target) so the sweep calls `cross_impl_consistency`'s own `parallel_sweep`,
+  `outputs_match` and `output_order_is_scheduler_dependent` directly. A generated `background`
+  program is therefore auto-classified as scheduler-order-dependent from its SOURCE, with no
+  exclusion list to maintain — which is the whole reason that classifier had to stop reading
+  file names.
+  **CHECKPOINT (after step 3) — passed through, not stopped at.** The checkpoint's condition
+  was met (grammar + oracle wiring complete) and the remaining work was ~20 minutes of CI YAML,
+  one measured run, and a design note; segmenting there would have cost a handoff for no
+  reduction in risk. Recorded here because the decision was the executor's, not the plan's.
+  **Deadlock is designed out, not hoped for.** The builder tracks pending sends per channel and
+  never emits a receive it cannot account for (asserted at the end of generation); helpers never
+  print (so an auto-parallel reorder cannot move an output line); every suspending call in a body
+  is `wait`-prefixed (an un-prefixed adjacent pair is the documented M3b Model-A intended
+  reorder, which the oracle would flag as a divergence it is not); every channel is
+  `channel<int>` (an owned-heap payload would need `.copy()`/`give` plumbing and would produce
+  correctly-REJECTED programs). The last three are locked by generator contract tests, and a
+  90s per-invocation liveness kill (`run_ynz_mode_bounded`) means a hang is reported as a
+  finding rather than becoming one.
+  **Step 4 — CI.** New `fuzz` job, `continue-on-error: true` with its promote-to-blocking
+  trigger written beside the flag (30 consecutive findings-free, timeout-free runs). Bounded
+  three ways: fixed corpus of 96, 90s per (program × mode) kill, `timeout-minutes: 30` on the
+  job. Three-part vacuity guard under `set -euo pipefail` (zero tests matched, zero programs
+  generated, or zero compiled all FAIL the step) — the Loom step's shape.
+  **Step 5 — real local run: 2 × 256 programs (seed bases 770000 and 31337000), 1,024
+  compile+link+execute invocations each, 60.6s and 59.0s, 256/256 distinct and 256/256 ran to
+  exit 0 both times, ZERO findings.** Note that the four mode corners are four separate
+  processes, so this sweep also catches run-to-run nondeterminism, not only mode divergence.
+  **Step 5's contingency did not fire: NO genuine miscompile was found**, so nothing was routed
+  through the FRAGO/R5 seam and nothing was fixed inline. Parked 41 (`background` argument
+  evaluation order) was never tripped — the grammar passes only idents and literals at spawn
+  sites, so no `f(x, mutate(x))` shape can be emitted; that is a coverage gap named in the
+  design note, not a silent pass. Parked 31 (pre-existing `--all-targets` clippy debt) left
+  alone; the touched test target is clippy-clean under `-D warnings`.
+  **Step 6 — design note** at `crates/ynz-driver/tests/fuzz_grammar/README.md`: grammar
+  coverage, the explicit non-coverage list with a WHY per item, the determinism argument, the
+  mode matrix, the three budgets with their measured basis, and the replay path (seed →
+  `print_generated_program`; a genuinely interesting case gets promoted out of the corpus into
+  a named `tests/fixtures/` file, because a seed is a weak pin that any grammar change
+  invalidates).
+  Gates run: `cargo fmt --all --check` clean; `cargo clippy -p ynz-driver --tests -- -D
+  warnings` clean (with NO `allow(dead_code)` blanket — the three unread `ChanState` fields, the
+  unread `shape_vars` environment and a dead zeroing loop were deleted rather than muted, and
+  `Program::seed` was made live by naming the saved file from the program's own recorded seed
+  instead of a parallel local copy); full `cargo test -p ynz-driver --test
+  cross_impl_consistency` **15 passed / 1 ignored / 0 failed, 176.4s** (both hand-written sweeps
+  still green). The cleanup left the seed→program mapping byte-identical — the 64-program spike
+  re-ran to the same three numbers afterwards. No `registry/features.toml`
+  entry added, so the jargon-audit / ynz-registry lane (FRAGO 014) is out of scope this round.
+
 - `m8-p7-fix1-20260904` — 2026-09-04 — **Phase 7 text fixes (teaching-surfaces + vocabulary rules applied): deferred feature registry entries rewritten for 18-year-old-JS-dev audience, file-path citations in IMP-concurrency.md replaced with function-name references, Future Requirements #3 paragraph appended re: cheap muted-hint guard, plan frontmatter session-id updated, no commits made.**
 
 - `m8-p7-20260904-a1` — 2026-09-04 — **Phase 7 (Track 3, scope-drop cancellation): recon done,

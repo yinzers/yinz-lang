@@ -18,7 +18,15 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
     },
+    time::{Duration, Instant},
 };
+
+/// The v0.3-M8 Phase 8 structured-fuzzing generator. It lives in a subdirectory module, not a
+/// second test target, precisely so the generated-corpus sweep at the bottom of this file can
+/// reuse THIS file's oracle (`outputs_match`, `output_order_is_scheduler_dependent`,
+/// `run_ynz_mode`, `parallel_sweep`) instead of growing a second copy of it — the
+/// `authoritative-derivation.md` constraint applied to the test tree.
+mod fuzz_grammar;
 
 /// Run `f` over every corpus entry across all available cores, concatenating the
 /// per-entry findings.
@@ -89,6 +97,20 @@ fn run_ynz(path: &Path) -> (String, String, i32) {
 /// - `YNZ_NO_OPTIMIZE=1` — LLVM pipeline off, -O0 backend (the pre-M7 `ynz build` behavior;
 ///   read by `pipeline_config_from_env`, crates/ynz-codegen/src/state_machine.rs).
 fn run_ynz_mode(path: &Path, no_auto_parallel: bool, no_optimize: bool) -> (String, String, i32) {
+    let out = ynz_cmd(path, no_auto_parallel, no_optimize)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to spawn ynz: {e}"));
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+/// The single place the `ynz run` invocation (args + both mode env vars) is built. Both the
+/// blocking `run_ynz_mode` above and the bounded `run_ynz_mode_bounded` below go through it, so
+/// the two runners cannot drift on how a mode is selected.
+fn ynz_cmd(path: &Path, no_auto_parallel: bool, no_optimize: bool) -> Command {
     let mut cmd = Command::new(ynz_binary());
     cmd.args(["run", path.to_str().unwrap()])
         .env("CLICOLOR", "0");
@@ -98,14 +120,60 @@ fn run_ynz_mode(path: &Path, no_auto_parallel: bool, no_optimize: bool) -> (Stri
     if no_optimize {
         cmd.env("YNZ_NO_OPTIMIZE", "1");
     }
-    let out = cmd
-        .output()
+    cmd
+}
+
+/// `run_ynz_mode` with a LIVENESS bound: returns `None` when the child outlived `budget`
+/// (after killing it), `Some((stdout, stderr, exit_code))` otherwise.
+///
+/// WHY it exists only for the generated corpus: a hand-written fixture that hangs is a bug
+/// someone will notice within one `cargo test`. A GENERATED program that hangs would wedge a CI
+/// job with no fixture name to blame, so the fuzzing sweep must be able to report "timed out"
+/// as a finding rather than becoming one. The hand-written sweeps keep the unbounded runner —
+/// this adds a bound where it is needed and changes nothing where it is not.
+///
+/// WHY files instead of pipes: reading `Child::stdout` while polling `try_wait` risks filling
+/// the pipe buffer and deadlocking the very thing the budget is meant to bound. Redirecting to
+/// files sidesteps it. Per `~/.claude/rules/testing.md` the budget is a LIVENESS timeout, not a
+/// performance assertion — it is set an order of magnitude above the observed per-program cost.
+fn run_ynz_mode_bounded(
+    path: &Path,
+    no_auto_parallel: bool,
+    no_optimize: bool,
+    budget: Duration,
+    scratch: &Path,
+) -> Option<(String, String, i32)> {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("prog");
+    let tag = format!("{stem}-{}{}", no_auto_parallel as u8, no_optimize as u8);
+    let out_path = scratch.join(format!("{tag}.out"));
+    let err_path = scratch.join(format!("{tag}.err"));
+    let out_file = std::fs::File::create(&out_path).expect("create stdout capture file");
+    let err_file = std::fs::File::create(&err_path).expect("create stderr capture file");
+
+    let mut child = ynz_cmd(path, no_auto_parallel, no_optimize)
+        .stdout(out_file)
+        .stderr(err_file)
+        .spawn()
         .unwrap_or_else(|e| panic!("failed to spawn ynz: {e}"));
-    (
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-        out.status.code().unwrap_or(-1),
-    )
+
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait().expect("try_wait on ynz child") {
+            Some(status) => break status,
+            None if started.elapsed() >= budget => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    };
+
+    Some((
+        std::fs::read_to_string(&out_path).unwrap_or_default(),
+        std::fs::read_to_string(&err_path).unwrap_or_default(),
+        status.code().unwrap_or(-1),
+    ))
 }
 
 /// True when a program's OUTPUT ORDERING is scheduler-dependent — i.e. it spawns `background`
@@ -602,4 +670,225 @@ fn corpus_byte_identical_across_mode_matrix() {
         compared,
         failures.join("\n\n")
     );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Structured fuzzing (v0.3-M8 Phase 8, Track 4b)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// The generator (`fuzz_grammar`) supplies programs; THIS file's oracle judges them. Nothing
+// about the judgment is re-derived here: the mode matrix, `outputs_match`'s order relaxation,
+// and `output_order_is_scheduler_dependent`'s source-derived classification are all the same
+// ones the hand-written corpus above runs under. A generated `background` program is
+// auto-classified as scheduler-order-dependent with no exclusion list to remember, which is
+// exactly why that classifier had to read the source rather than the file name.
+//
+// Full scope, budget and replay documentation: `tests/fuzz_grammar/README.md`.
+
+/// Corpus size for a plain `cargo test` run. Deliberately small — the local/CI knob is
+/// `YNZ_FUZZ_PROGRAMS`, and the default must not turn `cargo test --workspace` into a
+/// fuzzing session.
+const FUZZ_DEFAULT_PROGRAMS: usize = 24;
+
+/// LIVENESS bound per (program × mode) invocation — compile, link and execute. Generated
+/// programs sleep at most a few milliseconds; the observed worst case is a couple of seconds of
+/// LLVM work under a fully loaded sweep. 90s is the order-of-magnitude headroom
+/// `~/.claude/rules/testing.md` asks for: it catches a genuine hang and cannot fail a slow
+/// machine.
+const FUZZ_RUN_BUDGET: Duration = Duration::from_secs(90);
+
+fn fuzz_env<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+// WHY: the whole point of Track 4b. Every program the grammar can emit must observe the SAME
+// stdout multiset, the same stderr and the same exit code across the full 2×2 compilation-mode
+// matrix — a divergence is a silent miscompile in a shape nobody wrote a fixture for.
+//
+// Three failure kinds are reported, each by program (never as one "sweep failed"):
+//   - GENERATOR BUG   — the program did not compile or exited non-zero. The generator claims
+//                       type-validity by construction, so this is its defect, not the
+//                       compiler's; the source is saved for the report.
+//   - TIMED OUT       — the program outlived FUZZ_RUN_BUDGET in some mode.
+//   - MODE-DIVERGENT  — the finding this harness exists for.
+//
+// Vacuity guard: a corpus of zero programs FAILS. A "passing" fuzz lane that generated nothing
+// is the exact shape of green rot this milestone's loom lane also guards against.
+#[test]
+fn generated_corpus_byte_identical_across_mode_matrix() {
+    let programs: usize = fuzz_env("YNZ_FUZZ_PROGRAMS", FUZZ_DEFAULT_PROGRAMS);
+    let base_seed: u64 = fuzz_env("YNZ_FUZZ_SEED", 0u64);
+
+    assert!(
+        programs > 0,
+        "vacuity guard: YNZ_FUZZ_PROGRAMS resolved to 0 — a fuzz lane that generates nothing \
+         must fail, not pass"
+    );
+
+    let dir = tempfile::Builder::new()
+        .prefix("ynz-fuzz-")
+        .tempdir()
+        .expect("create fuzz scratch dir");
+    let scratch = dir.path().join("capture");
+    std::fs::create_dir_all(&scratch).expect("create capture dir");
+
+    let started = Instant::now();
+    let mut corpus = Vec::with_capacity(programs);
+    let mut sources = std::collections::BTreeSet::new();
+    let mut concurrent = 0usize;
+    for i in 0..programs {
+        let seed = base_seed.wrapping_add(i as u64);
+        let program = fuzz_grammar::generate(seed);
+        if program.uses_background {
+            concurrent += 1;
+        }
+        sources.insert(program.source.clone());
+        // Named from the program's OWN recorded seed, not from the local `seed` that produced
+        // it — so the replay key in the filename cannot drift from the one in the file's header
+        // comment even if the generator's seeding ever changes.
+        let path = dir.path().join(format!("gen_{:020}.ynz", program.seed));
+        std::fs::write(&path, &program.source).expect("write generated program");
+        corpus.push(path);
+    }
+
+    // Anti-triviality: a hit rate propped up by re-emitting one program measures nothing.
+    let distinct = sources.len();
+    assert!(
+        distinct * 10 >= programs * 9,
+        "only {distinct}/{programs} generated programs are distinct — the grammar has collapsed"
+    );
+
+    let ran_ok = AtomicUsize::new(0);
+
+    let findings = parallel_sweep(&corpus, |path| {
+        let mut findings: Vec<String> = Vec::new();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+
+        let Some((base_out, base_err, base_code)) =
+            run_ynz_mode_bounded(path, false, false, FUZZ_RUN_BUDGET, &scratch)
+        else {
+            findings.push(format!(
+                "TIMED OUT: {name} [default (parallel+optimized)] after {}s\n{}",
+                FUZZ_RUN_BUDGET.as_secs(),
+                indent_source(path)
+            ));
+            return findings;
+        };
+
+        if base_code != 0 {
+            // The generator's own contract is "type-valid by construction". A rejection here
+            // is a GENERATOR bug (the grammar drifted past what the compiler accepts), and it
+            // is also exactly what the Phase 8 spike measures as its hit rate.
+            findings.push(format!(
+                "GENERATOR BUG (program did not compile or exited {base_code}): {name}\n  \
+                 stderr: {}\n{}",
+                truncate(&base_err, 1600),
+                indent_source(path)
+            ));
+            return findings;
+        }
+        ran_ok.fetch_add(1, Ordering::Relaxed);
+
+        // Same authoritative classifier the hand-written sweeps use — derived from the source
+        // text, never from the file name.
+        let order_sensitive = !output_order_is_scheduler_dependent(path);
+
+        let variants: [(&str, bool, bool); 3] = [
+            ("sequential+optimized", true, false),
+            ("parallel+no-optimize", false, true),
+            ("sequential+no-optimize", true, true),
+        ];
+        for (label, no_auto_parallel, no_optimize) in variants {
+            let Some((var_out, var_err, var_code)) = run_ynz_mode_bounded(
+                path,
+                no_auto_parallel,
+                no_optimize,
+                FUZZ_RUN_BUDGET,
+                &scratch,
+            ) else {
+                findings.push(format!(
+                    "TIMED OUT: {name} [{label}] after {}s\n{}",
+                    FUZZ_RUN_BUDGET.as_secs(),
+                    indent_source(path)
+                ));
+                continue;
+            };
+
+            if !outputs_match(&base_out, &var_out, order_sensitive)
+                || !outputs_match(&base_err, &var_err, order_sensitive)
+                || base_code != var_code
+            {
+                findings.push(format!(
+                    "MODE-DIVERGENT{}: {name} [{label}]\n  default stdout: {:?} exit {base_code}\n  \
+                     {label} stdout: {:?} exit {var_code}\n  default stderr: {:?}\n  {label} \
+                     stderr: {:?}\n{}",
+                    if order_sensitive {
+                        ""
+                    } else {
+                        " (order-insensitive: program uses `background`; line multiset differs, \
+                          not just their order)"
+                    },
+                    truncate(&base_out, 600),
+                    truncate(&var_out, 600),
+                    truncate(&base_err, 600),
+                    truncate(&var_err, 600),
+                    indent_source(path),
+                ));
+            }
+        }
+
+        findings
+    });
+
+    let ran_ok = ran_ok.into_inner();
+    let elapsed = started.elapsed();
+    // Printed on every run (visible with --nocapture, and always on failure): the spike's three
+    // numbers, so a CI log answers "did this lane actually do anything?" without a rerun.
+    println!(
+        "fuzz corpus: seed base {base_seed}, {programs} generated ({distinct} distinct, \
+         {concurrent} spawning `background`), {ran_ok} compiled and ran to exit 0, \
+         {} findings, {:.1}s wall clock",
+        findings.len(),
+        elapsed.as_secs_f64()
+    );
+
+    if !findings.is_empty() {
+        // Keep the corpus on disk so a failing program can be replayed by hand. (The seed
+        // alone reproduces it, but a saved file survives a generator revision.)
+        let kept = dir.keep();
+        panic!(
+            "structured-fuzzing findings ({} across {programs} generated programs; corpus kept at \
+             {}):\n\n{}",
+            findings.len(),
+            kept.display(),
+            findings.join("\n\n")
+        );
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…<{} more bytes>", &s[..max], s.len() - max)
+    }
+}
+
+/// The generated source, indented — a finding is only actionable with the program attached,
+/// and a generated program has no name a reader can look up.
+fn indent_source(path: &Path) -> String {
+    let src = std::fs::read_to_string(path).unwrap_or_default();
+    let body: String = src
+        .lines()
+        .map(|l| format!("    {l}\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    format!("  --- generated source ---\n{body}  --- end ---")
 }
