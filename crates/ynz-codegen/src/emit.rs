@@ -1204,6 +1204,27 @@ fn build_module<'ctx, 'g>(
                 (name.clone(), bytes)
             })
             .collect();
+        // Compile-time link for `FRAME_SHAPE_REGION_ALIGN` (hotfix `bgarg-number`): a
+        // frame-embedded shape region is rounded up to that alignment and no further,
+        // so a shape struct whose measured ABI alignment exceeds it would be read
+        // through the region pointer with a claim the frame cannot honor — the exact
+        // `movaps`-on-an-8-aligned-address SIGSEGV this constant exists to close.
+        // Refuse to lower rather than ship the miscompile; a new wider field type
+        // must raise the constant (and the slack) in the same change.
+        for (name, &struct_ty) in &shape_types.named {
+            let align = u64::from(target_data.get_abi_alignment(&struct_ty));
+            // Unreachable from any Yinz program today (the widest field type is i128); fires
+            // loudly the first time a wider field type is lowered — no test exercises it.
+            if align > u64::from(state_machine::FRAME_SHAPE_REGION_ALIGN) {
+                return Err(format!(
+                    "codegen: shape `{name}` has LLVM ABI alignment {align}, wider than the \
+                     {} bytes a frame-embedded shape region is rounded to \
+                     (FRAME_SHAPE_REGION_ALIGN) — raise the constant and its slack before \
+                     lowering a field type this wide",
+                    state_machine::FRAME_SHAPE_REGION_ALIGN
+                ));
+            }
+        }
         // v0.3-M5 P5: per-field (abi_size, abi_align) in DECLARED field order, from
         // the SAME TargetData as shape_abi_sizes — the one ABI derivation both the
         // AoS elem-size and the SoA segment offsets read (authoritative-derivation:
@@ -5274,20 +5295,20 @@ fn lower_function_with_waits<'ctx, 'g>(
             let shape_name = shape_names
                 .get(cname.as_str())
                 .ok_or_else(|| format!("sm shape wire: shape name for `{cname}` not found"))?;
-            // Compute the GEP into the frame's slot region for this shape.
+            // Compute the region pointer into the frame's slot region for this shape —
+            // through the ONE producer (`shape_frame_region_ptr`), which rounds the
+            // address up to `FRAME_SHAPE_REGION_ALIGN` inside the slack
+            // `shape_frame_slots` reserved. Every consumer below reads this pointer
+            // from the ptr alloca; nothing recomputes it from `slot_idx`.
             let frame_slot_byte_offset = state_machine::FRAME_OFFSET_LOCALS_START
                 + (slot_idx as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
-            let shape_region_ptr = unsafe {
-                cg_resume
-                    .builder
-                    .build_gep(
-                        ctx.i8_type(),
-                        frame_param,
-                        &[ctx.i64_type().const_int(frame_slot_byte_offset, false)],
-                        &format!("{cname}_frame_region"),
-                    )
-                    .map_err(|e| format!("sm shape frame GEP {cname}: {e}"))?
-            };
+            let shape_region_ptr = state_machine::shape_frame_region_ptr(
+                ctx,
+                &cg_resume.builder,
+                frame_param,
+                frame_slot_byte_offset,
+                cname,
+            )?;
             // Verify the struct type is known (for documentation; GEP is byte-level).
             let _ = cg_resume
                 .shape_types
@@ -9009,13 +9030,19 @@ fn bind_sm_result_and_flush<'ctx>(
 /// once in `emit_program`) — the ONE shape-size source. The SM shape-embed memcpys
 /// (the Let-embed arm and the `bind_sm_result_and_flush` flush) and the bg heap copy
 /// read the SAME map via `shape_abi_size_const` (FRAGO 010 twin unified, P3 step 5(c)).
-/// `ceil(byte_size / 8)` rounds up to the next 8-byte slot boundary.
+/// `ceil(byte_size / 8)` rounds up to the next 8-byte slot boundary, plus
+/// `FRAME_SHAPE_REGION_SLACK_SLOTS` so the region pointer `shape_frame_region_ptr`
+/// rounds up to `FRAME_SHAPE_REGION_ALIGN` at runtime still has `byte_size` bytes in
+/// front of it (hotfix `bgarg-number`: a shape with an i128 field is read through its
+/// region pointer at ABI `align 16`, which an 8-multiple frame offset cannot honor).
+/// The slack is unconditional — one rule for every embedded shape, no per-shape
+/// alignment branch for a future field type to drift past.
 fn shape_frame_slots(shape_name: &str, shape_abi_sizes: &HashMap<String, u64>) -> usize {
     // Fallback to 1 slot (8 bytes) if the shape is not in the precomputed map. This
     // can only happen for shapes not seen during emit_shape_types (compiler bug).
     let byte_size = shape_abi_sizes.get(shape_name).copied().unwrap_or(8);
     // At minimum 1 slot even for a zero-byte struct (degenerate; avoids zero-size alloca).
-    (byte_size.max(8) as usize).div_ceil(8)
+    (byte_size.max(8) as usize).div_ceil(8) + state_machine::FRAME_SHAPE_REGION_SLACK_SLOTS
 }
 
 /// Most types fit in 1 slot (8 bytes). Decimal128 (number with precision ≤ 34) is

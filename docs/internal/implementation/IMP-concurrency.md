@@ -438,8 +438,28 @@ The frame-slot classifier in codegen handles int, bool, float, number, string, a
 | `int`, `bool`, `float` | CLEAN | scalar i64/i1/f64 slot |
 | `number` (decimal128) | CLEAN | 2 consecutive i64 slots (lo+hi) |
 | `string`, `array<T>`, `map<K,V>` | CLEAN | heap-stable pointer stored as i64 |
-| `Shape` (primitive fields only) | CLEAN | frame-embedded struct bytes |
+| `Shape` (primitive fields only) | CLEAN | frame-embedded struct bytes, region rounded up to 16 bytes |
 | `T errors` (ErrorsCapable) | CLEAN | 2-slot {err, ok} struct |
+
+**Frame-embedded shape regions are 16-byte aligned at runtime.** The composed frame lays
+crossing locals out at 8-byte slot granularity, but a shape's LLVM struct carries the
+ABI alignment of its widest field — 16 the moment it has a `number` (i128) field — and
+every access through the shape's region pointer (field reads, the whole-struct copy a
+`background` spawn makes for its task, any callee the shape is passed to) is emitted at
+that ABI alignment; those sites cannot downgrade the claim the way a bare i128 slot does
+(`FRAME_I128_SLOT_ALIGN`), because a callee's `scene.scale` read cannot tell a frame
+shape from a heap one. So the frame honors the claim: `shape_frame_region_ptr` (the ONE
+producer of the region pointer, read by every consumer from the crossing local's ptr
+alloca) rounds the address up to `FRAME_SHAPE_REGION_ALIGN` (16), and
+`shape_frame_slots` reserves `FRAME_SHAPE_REGION_SLACK_SLOTS` (one 8-byte slot) per
+embedded shape so the rounded region still fits. The rounding is dynamic rather than a
+static layout rule because a child sub-frame is embedded at an arbitrary 8-multiple
+offset inside its parent, and it is stable across resumes because a task's frame never
+moves. Codegen refuses to lower a shape whose measured ABI alignment exceeds 16 (the
+compile-time link between the constant and the TargetData truth). Locked by the
+`bgarg-number` hotfix (`git log --grep=bgarg-number`): a shape with a `number` field copied for a `background` spawn from an 8-mod-16
+frame region made optimized ISel emit `movaps` and SIGSEGV; `--no-optimize` hid it
+because `-O0` lowers i128 ops alignment-indifferently.
 
 **Blocked types and workarounds**:
 
