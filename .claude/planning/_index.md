@@ -17,7 +17,7 @@ _No member plans yet._
 
 ### [v0-3-concurrency-perf](active/2026-05-21-v0-3-concurrency-perf/roadmap.md) `active`
 - [v0-3-hotfix-int-literal-number](active/2026-07-04-v0-3-hotfix-int-literal-number/plan.md) `stub`
-- [v0-3-m8-concurrency-completion](active/2026-07-04-v0-3-m8-concurrency-completion/plan.md) `active`
+- [v0-3-concurrency-hardening](active/2026-09-04-v0-3-concurrency-hardening/plan.md) `active`
 
 ## Standalone plans
 
