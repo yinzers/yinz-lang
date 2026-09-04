@@ -136,12 +136,64 @@ fn ynz_cmd(path: &Path, no_auto_parallel: bool, no_optimize: bool) -> Command {
 /// the pipe buffer and deadlocking the very thing the budget is meant to bound. Redirecting to
 /// files sidesteps it. Per `~/.claude/rules/testing.md` the budget is a LIVENESS timeout, not a
 /// performance assertion — it is set an order of magnitude above the observed per-program cost.
+///
+/// WHY the child gets its own process group: `ynz run` itself blocks on `Command::status()` for
+/// the COMPILED BINARY it just built (`crates/ynz-driver/src/run.rs::run`) — a grandchild doing
+/// the actual work. `child.kill()` here only reaches the direct child (`ynz run`); killing it
+/// reparents the grandchild instead of ending it, so a hung generated program outlives the very
+/// budget meant to bound it — on a full sweep, competing with the rest of the sweep for cores
+/// while this function reports a clean "timed out". Spawning with `process_group(0)` (stable
+/// since Rust 1.64; workspace MSRV is 1.80, see `Cargo.toml`) puts `ynz run` AND every process it
+/// spawns in one group whose pgid equals its own pid, so `killpg` reaches the grandchild too.
 fn run_ynz_mode_bounded(
     path: &Path,
     no_auto_parallel: bool,
     no_optimize: bool,
     budget: Duration,
     scratch: &Path,
+) -> Option<(String, String, i32)> {
+    run_ynz_mode_bounded_impl(
+        path,
+        no_auto_parallel,
+        no_optimize,
+        budget,
+        scratch,
+        &mut None,
+    )
+}
+
+/// Test-only twin of `run_ynz_mode_bounded` that also reports the pgid `kill_process_tree` sent
+/// `SIGKILL` to on a timeout, so a test can verify no descendant of that group survived. Thin
+/// wrapper over the SAME implementation production uses (`run_ynz_mode_bounded_impl`) — per
+/// `authoritative-derivation.md`, the kill mechanism under test must not be re-derived by the
+/// test that verifies it.
+#[cfg(test)]
+fn run_ynz_mode_bounded_with_killed_pgid(
+    path: &Path,
+    no_auto_parallel: bool,
+    no_optimize: bool,
+    budget: Duration,
+    scratch: &Path,
+) -> (Option<(String, String, i32)>, Option<i32>) {
+    let mut killed_pgid = None;
+    let result = run_ynz_mode_bounded_impl(
+        path,
+        no_auto_parallel,
+        no_optimize,
+        budget,
+        scratch,
+        &mut killed_pgid,
+    );
+    (result, killed_pgid)
+}
+
+fn run_ynz_mode_bounded_impl(
+    path: &Path,
+    no_auto_parallel: bool,
+    no_optimize: bool,
+    budget: Duration,
+    scratch: &Path,
+    killed_pgid_out: &mut Option<i32>,
 ) -> Option<(String, String, i32)> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("prog");
     let tag = format!("{stem}-{}{}", no_auto_parallel as u8, no_optimize as u8);
@@ -150,9 +202,15 @@ fn run_ynz_mode_bounded(
     let out_file = std::fs::File::create(&out_path).expect("create stdout capture file");
     let err_file = std::fs::File::create(&err_path).expect("create stderr capture file");
 
-    let mut child = ynz_cmd(path, no_auto_parallel, no_optimize)
-        .stdout(out_file)
-        .stderr(err_file)
+    let mut cmd = ynz_cmd(path, no_auto_parallel, no_optimize);
+    cmd.stdout(out_file).stderr(err_file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // pgid == this child's own pid — see the WHY above.
+        cmd.process_group(0);
+    }
+    let mut child = cmd
         .spawn()
         .unwrap_or_else(|e| panic!("failed to spawn ynz: {e}"));
 
@@ -161,7 +219,7 @@ fn run_ynz_mode_bounded(
         match child.try_wait().expect("try_wait on ynz child") {
             Some(status) => break status,
             None if started.elapsed() >= budget => {
-                let _ = child.kill();
+                *killed_pgid_out = Some(kill_process_tree(&mut child));
                 let _ = child.wait();
                 return None;
             }
@@ -169,11 +227,153 @@ fn run_ynz_mode_bounded(
         }
     };
 
+    // `String::from_utf8_lossy`, matching `run_ynz_mode` above — not `read_to_string`, which
+    // errs (and here, silently empties via `unwrap_or_default`) on non-UTF-8 bytes. This is the
+    // one path built to survive a real crash; a garbled dump getting silently discarded here
+    // could read as a spurious mode divergence instead of the crash it actually was.
+    let out_bytes = std::fs::read(&out_path).unwrap_or_default();
+    let err_bytes = std::fs::read(&err_path).unwrap_or_default();
     Some((
-        std::fs::read_to_string(&out_path).unwrap_or_default(),
-        std::fs::read_to_string(&err_path).unwrap_or_default(),
+        String::from_utf8_lossy(&out_bytes).into_owned(),
+        String::from_utf8_lossy(&err_bytes).into_owned(),
         status.code().unwrap_or(-1),
     ))
+}
+
+/// Kill the timed-out child AND every descendant it spawned, by signalling the whole process
+/// GROUP rather than just the direct child. See the WHY on `run_ynz_mode_bounded` above — the
+/// direct child (`ynz run`) is never the process actually doing the hanging work. Returns the
+/// pgid the kill signal was sent to, so a caller (currently only the test twin above) can verify
+/// nothing in that group survived.
+#[cfg(unix)]
+fn kill_process_tree(child: &mut std::process::Child) -> i32 {
+    use nix::sys::signal::{killpg, Signal};
+    use nix::unistd::Pid;
+    // Spawned with `process_group(0)`, so the child's own pid IS the group's pgid.
+    let pgid = child.id() as i32;
+    let _ = killpg(Pid::from_raw(pgid), Signal::SIGKILL);
+    pgid
+}
+
+#[cfg(not(unix))]
+fn kill_process_tree(child: &mut std::process::Child) -> i32 {
+    let pgid = child.id() as i32;
+    let _ = child.kill();
+    pgid
+}
+
+#[cfg(all(test, unix))]
+mod bounded_run_kills_the_whole_tree {
+    use super::run_ynz_mode_bounded_with_killed_pgid;
+    use std::time::{Duration, Instant};
+
+    // WHY this exists: `ynz run` itself blocks on `Command::status()` for the COMPILED BINARY it
+    // just built (`crates/ynz-driver/src/run.rs::run`) — a grandchild doing the actual hanging
+    // work. Killing only the direct `ynz run` child reparents that grandchild instead of ending
+    // it, so a hung generated program would outlive the very budget meant to bound it. This test
+    // proves the fix: the budget fires AND nothing in the killed process group is still RUNNING.
+    //
+    // WHY the check is "still running", not merely "still exists in the process table": a killed
+    // process can briefly remain as a zombie (state `Z`) until its new parent (the container's
+    // init, once the killed `ynz run` orphans it) reaps it — that is bookkeeping, not the bug.
+    // The bug this test exists to catch is a descendant that is still SCHEDULED and burning a
+    // core after the budget fired. `kill(pid, 0)` cannot tell those apart (a zombie still answers
+    // "I exist"); reading `/proc/<pid>/stat`'s state field can.
+    #[test]
+    fn timed_out_program_leaves_no_descendant_process_running() {
+        let dir = tempfile::Builder::new()
+            .prefix("ynz-hangtest-")
+            .tempdir()
+            .expect("create hang-test scratch dir");
+        let scratch = dir.path().join("capture");
+        std::fs::create_dir_all(&scratch).expect("create capture dir");
+
+        // A generated-shaped program that never halts on its own — no `background`, no channel,
+        // just an unconditional loop. `x` is read every iteration so nothing about it is
+        // optimized to a no-op.
+        let src = "function entrypoint() -> nothing {\n  \
+                    let x = 0\n  \
+                    while (true) {\n    \
+                    x = x + 1\n  \
+                    }\n\
+                    }\n";
+        let path = dir.path().join("hang.ynz");
+        std::fs::write(&path, src).expect("write hanging fixture");
+
+        // Well above the couple of seconds `ynz run` needs to compile+link this trivial program,
+        // and well below anything that would make a wedged CI job out of a broken fix.
+        let budget = Duration::from_secs(5);
+        let (result, killed_pgid) =
+            run_ynz_mode_bounded_with_killed_pgid(&path, false, false, budget, &scratch);
+
+        assert!(
+            result.is_none(),
+            "an unconditional infinite loop must never complete inside the budget"
+        );
+        let pgid = killed_pgid
+            .expect("a timed-out run must report the pgid `kill_process_tree` sent SIGKILL to");
+
+        // Poll for the group to go quiet rather than checking once at a fixed delay: under a
+        // fully loaded test binary (this file's OWN fuzz sweep runs concurrently in the same
+        // `cargo test` process and saturates every core), a genuinely-killed process can sit in
+        // uninterruptible I/O sleep (`D`) for longer than a single fixed pause before the
+        // pending SIGKILL is actually honored — that is scheduler contention, not survival. Per
+        // `~/.claude/rules/testing.md` this window is a LIVENESS bound (generous, catches a
+        // hang), not a performance assertion: 3s total, polled every 50ms, so the common case
+        // resolves in well under 300ms and only a genuinely-alive descendant burns the whole
+        // window. This is the exact BLOCKER 1 failure mode when the fix regresses: killing only
+        // the direct child reparents the grandchild instead of ending it, and it stays
+        // `R`/`S`/`D` for the ENTIRE window rather than settling.
+        let poll_deadline = Instant::now() + Duration::from_secs(3);
+        let mut survivor = live_member_of_process_group(pgid);
+        while survivor.is_some() && Instant::now() < poll_deadline {
+            std::thread::sleep(Duration::from_millis(50));
+            survivor = live_member_of_process_group(pgid);
+        }
+        assert!(
+            survivor.is_none(),
+            "process group {pgid} still has a RUNNING member ({:?}) 3s after the timeout kill \
+             — a descendant of the killed `ynz run` process survived the budget",
+            survivor
+        );
+    }
+
+    /// Scans `/proc` for any process whose `stat` reports process group `pgid` and a state OTHER
+    /// than zombie (`Z`) or stopped-for-tracing artifacts — i.e. anything still actually
+    /// scheduled. Returns `Some((pid, state))` for the first one found, `None` if the group has
+    /// no live member.
+    fn live_member_of_process_group(pgid: i32) -> Option<(i32, String)> {
+        let entries = std::fs::read_dir("/proc").ok()?;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if !name.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let Ok(pid) = name.parse::<i32>() else {
+                continue;
+            };
+            let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+                continue;
+            };
+            // `comm` (field 2) is parenthesized and may itself contain `)`, so skip to the LAST
+            // `)` before splitting the fixed-width fields that follow it.
+            let Some(after_comm) = stat.rfind(')') else {
+                continue;
+            };
+            let mut fields = stat[after_comm + 1..].split_whitespace();
+            let Some(state) = fields.next() else { continue };
+            let Some(_ppid) = fields.next() else { continue };
+            let Some(pgrp) = fields.next() else { continue };
+            let Ok(pgrp) = pgrp.parse::<i32>() else {
+                continue;
+            };
+            if pgrp == pgid && state != "Z" {
+                return Some((pid, state.to_string()));
+            }
+        }
+        None
+    }
 }
 
 /// True when a program's OUTPUT ORDERING is scheduler-dependent — i.e. it spawns `background`
@@ -865,7 +1065,8 @@ fn generated_corpus_byte_identical_across_mode_matrix() {
         let kept = dir.keep();
         panic!(
             "structured-fuzzing findings ({} across {programs} generated programs; corpus kept at \
-             {}):\n\n{}",
+             {}). A genuine finding here routes through the plan-amendment/FRAGO seam (risk R5) \
+             — see fuzz_grammar/README.md — not an inline fix in this round:\n\n{}",
             findings.len(),
             kept.display(),
             findings.join("\n\n")
@@ -873,11 +1074,19 @@ fn generated_corpus_byte_identical_across_mode_matrix() {
     }
 }
 
+/// Truncate `s` to at most `max` bytes, cutting on a char boundary rather than a raw byte
+/// index — `s[..max]` panics if `max` lands inside a multi-byte character, which would turn "here
+/// is your finding" into an unrelated harness crash in the diagnostic formatter itself.
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…<{} more bytes>", &s[..max], s.len() - max)
+        // Walk back from `max` to the nearest char boundary at-or-before it.
+        let mut cut = max;
+        while cut > 0 && !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}…<{} more bytes>", &s[..cut], s.len() - cut)
     }
 }
 

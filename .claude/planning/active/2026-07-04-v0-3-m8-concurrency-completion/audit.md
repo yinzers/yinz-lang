@@ -11,6 +11,77 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p8-fix1-20260904` — 2026-09-04 — **Phase 8 fix round: BLOCKER 1 (a hung generated program
+  survived its own timeout) and BLOCKER 2 (a false claim in the durable record) both closed, four
+  should-fixes done, nothing committed.**
+  Read: this fix-round dispatch, `cross_impl_consistency.rs` end to end, `run.rs::run`,
+  `fuzz_grammar/mod.rs` + `README.md`, `.github/workflows/ci.yml`'s fuzz-job comment,
+  `Cargo.toml`/`Cargo.lock` for `nix`/MSRV.
+  **BLOCKER 1.** `run_ynz_mode_bounded`'s `child.kill()` only reached the direct `ynz run`
+  process; `ynz run` itself blocks on `Command::status()` for the COMPILED BINARY it built
+  (`run.rs::run`) — a grandchild doing the actual hanging work, reparented (not ended) by a
+  direct-child-only kill. Fixed at the producer: the spawned `ynz run` now gets
+  `process_group(0)` (stable since Rust 1.64; workspace MSRV 1.80, verified in `Cargo.toml`) so
+  its own pid equals its pgid and every process it spawns inherits that group; the timeout path
+  now calls `killpg` via `nix` (already a normal, non-dev workspace dependency reachable from
+  integration tests — confirmed by a clean `cargo build -p ynz-driver --tests` with no Cargo.toml
+  change, so no new dependency was added). Refactored `run_ynz_mode_bounded` into a thin
+  production wrapper over `run_ynz_mode_bounded_impl` plus a `#[cfg(test)]` twin
+  (`run_ynz_mode_bounded_with_killed_pgid`) that also reports the killed pgid, per
+  `authoritative-derivation.md` — the test verifies the SAME kill path production uses, not a
+  re-derived copy. New test `bounded_run_kills_the_whole_tree::
+  timed_out_program_leaves_no_descendant_process_running` spawns a generated-shaped infinite loop
+  (`while (true) { x = x + 1 }`, no I/O, no channel), confirms the budget fires, then polls
+  `/proc/<pid>/stat` for the killed pgid up to 3s (a liveness-poll window, not a fixed sleep —
+  the first version used a single 300ms check and false-failed under full-suite CPU contention
+  because a genuinely-dead process can sit briefly in `D` state before SIGKILL is honored;
+  polling fixed it without weakening the assertion) for any member whose STATE is not `Z`
+  (zombie exists-but-reaped-pending is not the bug; still-scheduled is). **RED→GREEN, both
+  witnessed directly, not inferred**: reverted `kill_process_tree` in-place to the pre-fix
+  direct-child-only `child.kill()` (backed up first to the scratchpad, restored via `cp` after —
+  never `git checkout --`) and re-ran the new test: FAILED, `process group 173 still has a
+  RUNNING member (Some((177, "R")))` — the grandchild binary caught mid-execution. Restored the
+  fix from the scratchpad copy, re-ran: `ok`. Both runs captured in this session's transcript.
+  **BLOCKER 2.** The `m8-p8-20260904-a1` audit entry (~line 62) and the sealing commit body both
+  asserted parked item 41 was "a coverage gap named in the design note, not a silent pass" — it
+  was NOT named there; `fuzz_grammar/README.md`'s non-coverage list enumerated four unrelated
+  gaps and never mentioned spawn-site argument shapes. Fixed the ARTIFACT per the dispatch's
+  instruction (the append-only audit entry stands uncorrected in place; this paragraph is the
+  correction): added parked 41 to the README's "What it deliberately does NOT cover" list,
+  stating the grammar restricts spawn-site arguments to idents/literals so
+  `f(x, mutate(x))` (the shape parked 41 names) cannot be emitted and this harness does not
+  exercise the question.
+  **Should-fixes.** (1) `run_ynz_mode_bounded`'s capture switched from
+  `read_to_string(...).unwrap_or_default()` (silently empties on non-UTF-8) to
+  `fs::read` + `String::from_utf8_lossy`, matching `run_ynz_mode`'s sibling path — done. (2) The
+  R5 plan-amendment/FRAGO routing-seam rule, previously stated only in a `ci.yml` comment, now
+  also lives in `fuzz_grammar/README.md` (a dedicated paragraph beside the non-blocking-CI
+  explanation) and in the sweep's failure `panic!` text — done. (3) `truncate()` now walks back
+  to the nearest `is_char_boundary` before slicing instead of cutting on a raw byte index — done.
+  (4) `ChanState`/`pending` (always 0, never incremented — a tautological assertion) deleted
+  outright along with the `chans` field, all three push sites, and `assert_channels_balanced`
+  and its call site; git history is the archive. The README's determinism argument that cited
+  "the builder tracks pending sends... asserted at the end of generation" was ALSO stale after
+  this — reworded to describe the real, still-true mechanism (every channel composite is
+  self-balancing by construction; the corpus sweep's own liveness bound is the backstop) rather
+  than leave a doc pointing at deleted code — done, root-caused rather than patched around.
+  **Record obligations the dispatch named as previously missing from the durable trail:** the
+  `m8-p8-20260904-a1` entry's CHECKPOINT-after-step-3 was passed through, not stopped at, and
+  that decision (and its one-line reason — the checkpoint's condition was already met) IS
+  recorded in that entry, immediately after the CHECKPOINT line; nothing further to add there.
+  The cold-resume banner at the top of `plan.md` was NOT updated by this fix round — per the
+  `m8-p7-fix1-20260904` precedent, updating that banner is the conductor's job at phase-boundary
+  time, not a fix-round's. Both are noted here because this dispatch's instructions flagged them
+  as absent from the record rather than as wrong decisions, and the record now has them.
+  **Verification.** `cargo fmt --all --check` clean; `cargo clippy -p ynz-driver --all-targets --
+  -D warnings` clean; `fuzz_grammar::generator_contract::*` 7 passed / 1 ignored; full
+  `cargo test -p ynz-driver --test cross_impl_consistency` **16 passed / 1 ignored / 0 failed,
+  173.1s** (the new process-group test included); a bounded local fuzz run
+  (`YNZ_FUZZ_PROGRAMS=128`) reported `128 generated (128 distinct, 112 spawning background), 128
+  compiled and ran to exit 0, 0 findings, 29.1s` — same summary-line shape as the sealed Phase 8
+  run, zero findings. No `Cargo.toml`/`Cargo.lock` change (`nix` was already reachable). No
+  registry entries touched. Nothing committed.
+
 - `m8-p8-20260904-a1` — 2026-09-04 — **Phase 8 (Track 4b, structured fuzzing): spike GREEN,
   full grammar + oracle wiring + CI job + design note all landed; ZERO findings across 512
   generated programs; nothing committed.**

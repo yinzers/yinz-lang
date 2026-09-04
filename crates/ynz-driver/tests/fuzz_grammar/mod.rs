@@ -2,7 +2,7 @@
 //!
 //! WHAT: a combinator generator that emits whole `.ynz` programs which are **type-valid by
 //! construction** — it never emits a construct it has not already typed. Every statement is
-//! drawn from a typed environment (`ints`, `arrays`, `maps`, `chans`) and each
+//! drawn from a typed environment (`ints`, `arrays`, `maps`) and each
 //! emission updates that environment, so a generated program compiles or the GENERATOR has a
 //! bug. Token-level fuzzing is explicitly out of scope: it would spend its whole budget
 //! re-proving that typeck rejects garbage.
@@ -100,20 +100,6 @@ struct ShapeDecl {
     str_field: String,
 }
 
-/// The deadlock ledger for one generated channel.
-///
-/// Every channel composite below is self-balancing: it emits its own sends and its own matching
-/// receives in one statement, and registers the channel here with the residue. `pending` is
-/// therefore always 0, and `assert_channels_balanced` says so at the end of generation. It is
-/// carried as a live counter rather than dropped because a future grammar arm that separates a
-/// send from its receive across statements MUST have somewhere to record the debt — a generated
-/// program that parks forever would wedge CI with no fixture name to blame, which is the one
-/// outcome this harness must never produce.
-struct ChanState {
-    name: String,
-    pending: usize,
-}
-
 /// A feeder function: sends `values` into a `lend channel<int>` then closes it.
 struct FeedFn {
     name: String,
@@ -140,7 +126,6 @@ struct Builder {
     ints: Vec<String>,
     arrays: Vec<(String, usize)>, // name, current length
     maps: Vec<String>,
-    chans: Vec<ChanState>,
     next_id: usize,
     uses_background: bool,
 }
@@ -161,7 +146,6 @@ impl Builder {
             ints: Vec::new(),
             arrays: Vec::new(),
             maps: Vec::new(),
-            chans: Vec::new(),
             next_id: 0,
             uses_background: false,
         }
@@ -269,10 +253,6 @@ impl Builder {
         for _ in 0..target {
             self.emit_statement();
         }
-
-        // Drain every channel the program still owes a receive to, so nothing is left parked
-        // and nothing depends on shutdown timing for its observable output.
-        self.assert_channels_balanced();
     }
 
     fn emit_statement(&mut self) {
@@ -471,10 +451,6 @@ impl Builder {
             self.push("  print(`unexpected value after end of stream`)".to_string());
             self.push("}".to_string());
         }
-        self.chans.push(ChanState {
-            name: c,
-            pending: 0,
-        });
     }
 
     /// Handle form: `let h = background fetchN(k)`, then a BLOCKING `h.receive()`.
@@ -524,10 +500,6 @@ impl Builder {
         self.push(format!("print({total}.toString())"));
         self.ints.push(total);
         self.uses_background = true;
-        self.chans.push(ChanState {
-            name: c,
-            pending: 0,
-        });
     }
 
     /// Two `background` spawns handing the SAME read-only shape binding to the same reader,
@@ -575,24 +547,6 @@ impl Builder {
         self.ints.push(total);
         self.ints.push(v);
         self.uses_background = true;
-        self.chans.push(ChanState {
-            name: c,
-            pending: 0,
-        });
-    }
-
-    /// No channel is left owing a receive — every composite above balances its own sends, so
-    /// this is an assertion, not a cleanup. It exists because an unbalanced counter would
-    /// present as a CI hang rather than a failure, and a hang is the one outcome this harness
-    /// must never produce.
-    fn assert_channels_balanced(&self) {
-        for c in &self.chans {
-            assert_eq!(
-                c.pending, 0,
-                "generator left {} values un-received on `{}` — that program would park forever",
-                c.pending, c.name
-            );
-        }
     }
 
     // ── Assembly ──────────────────────────────────────────────────────────────

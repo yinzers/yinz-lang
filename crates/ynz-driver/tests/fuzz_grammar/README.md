@@ -67,6 +67,13 @@ Roughly 90% of generated programs spawn `background` work — the surface this m
 - Modules/imports, `errors`, `options`, `dynamic`, generics, `for`-in, nested functions. Each is
   a candidate for a later widening of the grammar; none is needed for the concurrency surface
   Track 4b exists to cover.
+- **`background` argument-evaluation order** (parked item 41). Every argument the grammar hands
+  to a `background`-spawned call is restricted to a plain identifier or a literal — never a call
+  expression with a side effect, so the grammar cannot emit a program shaped like
+  `f(x, mutate(x))` where a plain call and a `background` spawn are entitled to disagree on
+  whether the callee sees `x` before or after `mutate` runs. This harness does not exercise that
+  question at all; it is not a gap this generator closes by construction, it is a construct the
+  grammar never reaches for.
 
 ## Why the grammar is shaped this way (determinism)
 
@@ -74,10 +81,11 @@ The oracle compares programs byte-for-byte. Two properties make that legitimate 
 
 1. **Helpers never print.** Only `entrypoint` produces output, so a reordering the auto-parallel
    pass is entitled to make cannot move a print.
-2. **Every receive is accounted for.** The builder tracks pending sends per channel and never
-   emits a receive it cannot cover, so no generated program parks forever. That counter is
-   asserted at the end of generation — a hang would present as a wedged CI job rather than as a
-   finding, and a hang is the one outcome this harness must never produce.
+2. **Every receive is accounted for.** Every channel composite the grammar can emit is
+   self-balancing by construction — it emits its own sends and its own matching receives inside
+   one statement, so no generated program parks forever. (The corpus sweep also carries its own,
+   independent liveness bound — see "The budget" below — as a backstop against a future grammar
+   arm separating a send from its receive across statements.)
 
 Order relaxation itself is **not** re-derived here. The oracle's
 `output_order_is_scheduler_dependent` reads the SOURCE for `background`, so a generated
@@ -121,6 +129,12 @@ performance.
 The CI job is **non-blocking on first landing** (`continue-on-error: true`), with its
 promote-to-blocking trigger written beside the flag. It carries a three-part vacuity guard: zero
 programs generated, zero compiled, or zero tests matched all FAIL the step.
+
+**A genuine finding does not get an inline fix.** It routes through the plan-amendment/FRAGO seam
+(risk R5) instead — never a silent same-round patch — until the lane has proven it does not flake
+(the thirty-consecutive-clean-runs trigger above). This is the same rule stated beside the
+`continue-on-error` flag in `.github/workflows/ci.yml`; it lives here too because a finding is
+usually read first from a local run, not from that CI comment.
 
 ## Replay
 
