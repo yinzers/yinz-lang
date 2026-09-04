@@ -581,8 +581,14 @@ Source plan-id `2026-07-04-v0-3-m8-concurrency-completion`, `## Future Requireme
 49. **Two genuine pre-existing runtime defects the Phase 8 owned-heap-channel fuzz widening
     surfaced (plan FR #11) — the ONLY durable record; NOT fixed inline per this plan's CCIR item 5 /
     risk R5.** Both are PRE-EXISTING on `main` (`ec014d8`), independently reproduced twice in clean
-    worktrees, and are NOT M8 regressions. Neither is RED-pinned in the tree; repro is kept only in
-    this entry and the FR text.
+    worktrees, and are NOT M8 regressions. Neither is RED-pinned in the tree — no test fails today
+    on account of either — but the evidence is NOT confined to planning text: committed
+    doc-comment narrative in `crates/ynz-driver/tests/fuzz_grammar/mod.rs` describes both defects
+    at the generator guards that suppress them (the `Builder::suspension_seen` reuse guard for (a),
+    the `send_count`-versus-capacity floor for (b)), including the corrected symptom rates. What
+    lives ONLY in this entry and the FR text is the minimal reproducing `.ynz` shape and the
+    routing decision. Whoever picks this up should read `mod.rs`'s guards first — they are the
+    in-tree record of what was measured.
     - **(a) A crossing-local heap-channel-send corruption.** WHAT: an `array<int>`/`map<string,int>`
       LOCAL declared BEFORE any suspension point in the same function and later `.send()`-ed into a
       channel AFTER that suspension reads back corrupted on receive — `RUNTIME ERROR: killed by
