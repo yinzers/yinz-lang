@@ -233,6 +233,29 @@ sign-off applies them alongside the owed downstream plan edits** — the design 
     COST: none further. TRIGGER: n/a. **Status: CLOSED by the Phase 2 boundary commit (conductor,
     2026-09-03) — verify with `git log --grep=FRAGO-009` after it lands.**
 
+### Phase 3 — Loom substrate (round 2 close, 2026-09-04)
+
+29. **The round-2 audit entry overclaims the deterministic test's failure mode.** WHAT:
+    `audit.md` entry `m8-p3-fix1-20260904`, "Deviation, stated plainly" — says
+    `ladder_holding_last_reference_purges_parked_send_before_channel_teardown` "cannot in any
+    build" fail by assertion on the kind-2 order swap. `test-quality` ran the swap six times: 5
+    SIGABRT (misaligned-pointer UB check), **1 failed by the test's own sequence assertion**
+    (`[FILLER, PARKED]` vs `[PARKED, FILLER]`). The test catches the regression every run; the
+    record's certainty about the mechanism is wrong and would mislead a reader judging whether the
+    sanitizer lane is load-bearing. WHY deferred: `audit.md` is append-only; the correction is
+    recorded here and in the Phase 3 boundary commit body rather than by editing the entry. COST:
+    none further. TRIGGER: n/a — closed by this record. Source plan-id
+    `2026-07-04-v0-3-m8-concurrency-completion`.
+30. **`GLUE_SEQUENCE` has no guard against payload-pattern collision.** WHAT: the new
+    `m6_pending_send_aba` test in `crates/ynz-runtime/src/lib.rs` filters a process-global
+    `Mutex<Vec<i64>>` by two literal payloads (`0x5EED_F111`, `0x5EED_DEAD`) it asserts nothing
+    else in the crate mints; a future test reusing either pattern corrupts this test's sequence
+    with no diagnosable message. Stable across 15 × 16-thread runs today. WHY deferred: not a
+    defect now; a hygiene guard. COST: small — a crate-level `const` registry of test payload
+    tags with a uniqueness test, or per-test tagging as `loom_tests.rs` already does. TRIGGER: the
+    next test that mints a glue payload literal in `ynz-runtime`. Source plan-id
+    `2026-07-04-v0-3-m8-concurrency-completion`.
+
 ### Open exposure carrying a cheap in-scope guard — flagged under `no-duct-tape.md`
 
 11. **The `background-handle-close` deferral leaves a live window and names a cheap guard it does

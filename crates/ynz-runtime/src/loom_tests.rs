@@ -19,11 +19,14 @@
 //! |---|---|---|
 //! | P3-1 ABA: same reused token, new generation never matches a dead caller's entry | `aba_*` | the dead caller's value delivered |
 //! | P2-2 orphan purge at BOTH cancellation paths (frame ladder + `ynz_handle_free`) | `orphan_purge_*` | a `pending_sends` entry outliving its owner |
-//! | drop ladder kind-2 arm: purge THIS task's sends, then release its channel ref, concurrent with co-owners | `drop_ladder_*` | orphan / refcount imbalance / payload glued ≠ once |
+//! | drop ladder kind-2 arm: purge THIS task's sends, THEN release its channel ref, concurrent with co-owners | `drop_ladder_*` | orphan / refcount imbalance / payload glued ≠ once; and — the ORDER, asserted by [`assert_purged_before_released`] in both models — the ladder's own entry still parked after its reference is gone (the two calls swapped) |
 //! | P3-2 recv register-before-poll: no lost wakeup when a send lands mid-poll | `recv_register_before_poll_*` | a Pending receiver never woken while a value sits buffered |
 //!
-//! The revert-proofs were performed at introduction (M8 Phase 3 step 5, recorded in the plan's
-//! audit) — the harness catches each reverted fix, it does not merely run.
+//! The revert-proofs were performed at introduction (M8 Phase 3 step 5 and its fix round 2,
+//! recorded in the plan's audit) — the harness catches each reverted fix by its OWN assertion,
+//! it does not merely run. The ladder-order row earned that at fix round 2: before it, a
+//! swapped kind-2 arm passed the live-co-owner model clean and only killed the last-reference
+//! model by use-after-free (a crash, not a finding — round-1 `test-quality` blocker).
 //!
 //! # Boundary (named scoping decision, M8 Future Requirements)
 //!
@@ -45,9 +48,9 @@ use std::task::{Context, Wake, Waker};
 use loom::thread;
 
 use crate::channel::{
-    channel_send_poll_guarded, pending_send_count, purge_pending_sends, strong_count,
-    ynz_channel_create, ynz_channel_free, ynz_channel_recv_poll, ynz_channel_share, DriveGuard,
-    CHANNEL_CLOSED, CHANNEL_PENDING, CHANNEL_READY,
+    channel_send_poll_guarded, pending_send_contains, pending_send_count, purge_pending_sends,
+    strong_count, ynz_channel_create, ynz_channel_free, ynz_channel_recv_poll, ynz_channel_share,
+    DriveGuard, CHANNEL_CLOSED, CHANNEL_PENDING, CHANNEL_READY,
 };
 use crate::handle::{ynz_handle_free, ynz_handle_send_poll, ynz_rt_spawn_handle};
 use crate::runtime::{BgArgDropEntry, SpawnStateFnFuture};
@@ -390,10 +393,40 @@ unsafe fn park_task_send(fut: &SpawnStateFnFuture, chan: *mut u8, value: i64) {
 struct Fut(SpawnStateFnFuture);
 unsafe impl Send for Fut {}
 
+/// The key the task's parked send sits under: its frame pointer (the token the extern-C
+/// shim mints) and its generation — exactly what the ladder's purge sweeps.
+fn ladder_send_key(fut: &SpawnStateFnFuture) -> (u64, u64) {
+    (fut.frame_ptr as u64, fut.drive_identity().generation)
+}
+
+/// The kind-2 arm's ORDER, observed as a state invariant from a co-owner that still holds
+/// its own reference: if the ladder's reference is already gone (`strong_count` fell to
+/// this co-owner's 1), the ladder's purge must already have removed the ladder's entry.
+/// Loom schedules this probe at every point of the ladder's execution, so the window
+/// between a release and a purge in the WRONG order (release first) is an explored state,
+/// and it is reported by this assertion — not by whatever the dangling purge does to a
+/// freed channel afterwards. Both loom-tracked reads (the `Arc` count, the `pending_sends`
+/// lock) are what make the probe a preemption point loom explores.
+///
+/// Precondition: the calling thread holds one live reference itself (so `strong_count == 1`
+/// can only mean the ladder released), and no other owner may release before it does.
+unsafe fn assert_purged_before_released(chan: *mut u8, ladder_key: (u64, u64)) {
+    if strong_count(chan) == 1 {
+        assert!(
+            !pending_send_contains(chan, ladder_key.0, ladder_key.1),
+            "drop ladder kind-2 arm ORDER: the task's channel reference was released while \
+             its own suspended send was still parked — the arm must purge BEFORE \
+             ynz_channel_free (a last-reference release here would be a use-after-free in \
+             the purge that follows)"
+        );
+    }
+}
+
 /// The task is cancelled (its future dropped — the REAL ladder runs: purge its sends, then
 /// release its channel reference) while a co-owner drains and keeps using the channel. Under
 /// every interleaving: no orphan, the task's payload freed exactly once, exactly one reference
-/// released, and the channel still fully usable by the survivor.
+/// released, the channel still fully usable by the survivor — and the ORDER: the survivor
+/// never observes the ladder's reference gone while the ladder's send is still parked.
 #[test]
 fn loom_drop_ladder_kind2_arm_purges_before_release_with_live_co_owner() {
     model("drop_ladder_live_co_owner", |iteration| unsafe {
@@ -408,6 +441,7 @@ fn loom_drop_ladder_kind2_arm_purges_before_release_with_live_co_owner() {
         assert_eq!(strong_count(chan), 2);
         park_task_send(&fut, chan, dead);
         assert_eq!(pending_send_count(chan), 1);
+        let ladder_key = ladder_send_key(&fut);
 
         let f = Fut(fut);
         let c = P(chan);
@@ -418,6 +452,8 @@ fn loom_drop_ladder_kind2_arm_purges_before_release_with_live_co_owner() {
         let t_co = thread::spawn(move || {
             let (_w, waker) = make_waker();
             let got = recv(c.0, &waker);
+            // The survivor (holding main's reference) probes the ladder's order mid-flight.
+            assert_purged_before_released(c.0, ladder_key);
             // The survivor keeps sending on the same channel while the ladder may be running.
             let sent = send_as(c.0, 7, &waker, 0x77, 3);
             (got, sent)
@@ -453,7 +489,9 @@ fn loom_drop_ladder_kind2_arm_purges_before_release_with_live_co_owner() {
 /// Same cancellation, but the co-owner releases ITS reference concurrently — so whichever
 /// side runs last performs the channel's last-reference teardown. The dead payload must be
 /// freed exactly once regardless of who tears down (the purge glues it before the ladder's
-/// release; teardown's `Drop` walk must then find nothing left to glue).
+/// release; teardown's `Drop` walk must then find nothing left to glue), and the ORDER is
+/// probed by the co-owner right before it lets go of its own reference — the last moment it
+/// can still legally look.
 #[test]
 fn loom_drop_ladder_kind2_arm_when_ladder_may_hold_last_reference() {
     model("drop_ladder_last_reference", |iteration| unsafe {
@@ -466,6 +504,7 @@ fn loom_drop_ladder_kind2_arm_when_ladder_may_hold_last_reference() {
         );
         let fut = plant_shared_channel_ladder(chan);
         park_task_send(&fut, chan, dead);
+        let ladder_key = ladder_send_key(&fut);
 
         let f = Fut(fut);
         let c = P(chan);
@@ -476,6 +515,7 @@ fn loom_drop_ladder_kind2_arm_when_ladder_may_hold_last_reference() {
         let t_co = thread::spawn(move || {
             let (_w, waker) = make_waker();
             let got = recv(c.0, &waker);
+            assert_purged_before_released(c.0, ladder_key);
             ynz_channel_free(c.0); // the co-owner's (main's) reference — maybe the last
             got
         });

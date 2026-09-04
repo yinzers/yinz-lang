@@ -4401,6 +4401,75 @@ mod m6_pending_send_aba {
         (fut, frame, descs)
     }
 
+    /// Every payload the sequence glue below ever freed, in call order, process-wide (the
+    /// glue is an `extern "C" fn(i64)` with no closure context). Shared by every test in
+    /// the binary, so it is never cleared and never read whole: the one test using it
+    /// filters for its own two payload values, which nothing else in the crate mints.
+    static GLUE_SEQUENCE: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "C" fn sequence_glue(bits: i64) {
+        GLUE_SEQUENCE.lock().unwrap().push(bits);
+    }
+
+    /// **Drop ladder kind-2 arm ORDER, ladder holding the LAST reference** (M8 Phase 3 fix
+    /// round 2 — the deterministic half of the ladder-order proof; the loom half is
+    /// `loom_tests::assert_purged_before_released`). Main releases its reference FIRST, so
+    /// the cancelled task's ladder performs the channel's last-reference teardown itself:
+    /// its purge must run while the channel is still alive, then its `ynz_channel_free`
+    /// tears the channel down. The order is witnessed by the glue-call sequence — the purge
+    /// glues the parked payload; teardown's buffered-element drain glues the filler — so the
+    /// correct order is exactly `[parked, filler]`, each once. With the two calls swapped,
+    /// teardown runs first (filler glued, then the parked payload from the `Drop` walk) and
+    /// the purge then touches a freed channel: memory-unsafe, which is why this test is the
+    /// sanitizer lane's (CI job `sanitizers`, steps Miri / AddressSanitizer — whole-crate
+    /// `cargo +nightly miri test -p ynz-runtime` and `-Zsanitizer=address … --lib`) —
+    /// there the swap is reported as use-after-free at the purge, before any sequence
+    /// assertion could run. The existing sibling below keeps main's reference alive
+    /// throughout and so cannot see a swapped order at all.
+    #[test]
+    fn ladder_holding_last_reference_purges_parked_send_before_channel_teardown() {
+        /// Payload values unique to this test across the whole crate (see GLUE_SEQUENCE).
+        const FILLER: i64 = 0x5EED_F111;
+        const PARKED: i64 = 0x5EED_DEAD;
+        let waker = make_waker();
+        unsafe {
+            let chan = ynz_channel_create(1, sequence_glue as *mut u8);
+            prefill(chan, FILLER, &waker); // capacity-1 channel is FULL — the filler stays buffered
+
+            let (mut fut, _frame, _descs) = build_send_task(chan, PARKED);
+            let mut cx = Context::from_waker(&waker);
+            assert_eq!(
+                Pin::new(&mut fut).poll(&mut cx),
+                Poll::Pending,
+                "the task must suspend on the full channel"
+            );
+            assert_eq!(pending_send_count(chan), 1, "the task's send is parked");
+
+            // Main lets go FIRST: from here the task's frame slot holds the channel's LAST
+            // reference, and its ladder is the teardown path.
+            ynz_channel_free(chan);
+
+            // Cancel the task: the REAL ladder runs — kind-2 arm: purge, then free (= teardown).
+            drop(fut);
+        }
+
+        let sequence: Vec<i64> = GLUE_SEQUENCE
+            .lock()
+            .unwrap()
+            .iter()
+            .copied()
+            .filter(|b| *b == FILLER || *b == PARKED)
+            .collect();
+        assert_eq!(
+            sequence,
+            vec![PARKED, FILLER],
+            "drop ladder kind-2 arm ORDER (ladder holds the last reference): the parked \
+             payload must be glued by the PURGE (first) and the buffered filler by the \
+             TEARDOWN that follows the release (second), each exactly once — any other \
+             sequence means the arm released before it purged"
+        );
+    }
+
     /// **Frame-path ABA + orphan purge** (P3-1 root finding + P2-2), through the REAL drop
     /// ladder: cancel a task suspended on `send` under backpressure, force frame-address
     /// reuse, and assert (a) the cancelled task's `pending_sends` entry is purged (orphan

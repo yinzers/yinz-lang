@@ -94,10 +94,20 @@ jobs:
       # workspace observes the cfg (tokio gates its own loom paths on `all(test, loom)`, never
       # true for a dependency). Own target dir so the cfg'd rebuild never invalidates the main
       # cache. Unbounded (exhaustive) on purpose — the whole lane is ~2s; `LOOM_MAX_PREEMPTIONS`
-      # is a local bisecting knob, not a CI setting. The trailing grep is a vacuity guard: a
-      # drifted `loom_` filter would otherwise "pass" by matching zero tests.
+      # is a local bisecting knob, not a CI setting: every model completes exhaustively
+      # unbounded, and a preemption bound only PRUNES schedules from that same exploration, so
+      # a bounded run explores a strict subset of what this step already covers — a second,
+      # bounded run would add wall time and no coverage. The trailing grep is a vacuity guard:
+      # a drifted `loom_` filter would otherwise "pass" by matching zero tests.
+      #
+      # `pipefail` is load-bearing: without it the `tee` pipe discarded cargo's exit status and
+      # the grep was the accidental sole failure gate (a crashed lane with a stale "ok" line
+      # would have passed). Patrick ruled 2026-09-03 that this lane stays BLOCKING on the main
+      # job — no `continue-on-error`.
       - name: Loom (ynz-runtime model-checking harness, --cfg loom)
+        shell: bash
         run: |
+          set -euo pipefail
           RUSTFLAGS='--cfg loom' CARGO_TARGET_DIR=target/loom \
             cargo test -p ynz-runtime --release --lib -- loom_ --nocapture 2>&1 | tee loom.log
           grep -Eq 'test result: ok\. [1-9][0-9]* passed' loom.log

@@ -569,6 +569,12 @@ pub(crate) unsafe fn channel_send_poll_guarded(
                         // 028) — the entry is gone before `Drop` could see it, and a parked
                         // payload is never buffered, so this is its only drop.
                         let mut swept_bits: Vec<i64> = Vec::new();
+                        // Dropping a swept entry drops its parked Tokio `Send` future (a
+                        // mpsc-state mutation: the permit it was queued for is returned) —
+                        // witnessed like every other mpsc call so loom orders it against
+                        // the consumer's `poll_recv` rather than by lock accident.
+                        #[cfg(loom)]
+                        chan.mpsc_step();
                         pending.retain(|k, entry| {
                             let keep = k.0 != caller_token || k.1 == caller_generation;
                             if !keep {
@@ -749,6 +755,11 @@ pub(crate) unsafe fn purge_pending_sends(chan_ptr: *mut u8, caller_generation: u
     // SAFETY: chan_ptr is a live Arc-backed pointer (caller guarantee); shared &.
     let chan = &*(chan_ptr as *const YnzChannel);
     let mut purged_bits: Vec<i64> = Vec::new();
+    // Each purged entry's drop drops a parked Tokio `Send` future (returns its queued
+    // permit) — a mpsc-state mutation, witnessed so loom explores its order against the
+    // consumer's `poll_recv` (see `YnzChannel::mpsc_step`).
+    #[cfg(loom)]
+    chan.mpsc_step();
     lock_or_recover(&chan.pending_sends).retain(|k, entry| {
         let keep = k.1 != caller_generation;
         if !keep {
@@ -791,6 +802,23 @@ pub(crate) unsafe fn strong_count(chan_ptr: *mut u8) -> usize {
     // or releasing a reference (the ManuallyDrop keeps the borrowed Arc from decrementing).
     let arc = std::mem::ManuallyDrop::new(Arc::from_raw(chan_ptr as *const YnzChannel));
     Arc::strong_count(&arc)
+}
+
+/// Test-support: whether ONE caller identity's suspended send is still parked, by its exact
+/// `(caller_token, caller_generation)` key. The loom drop-ladder models observe the kind-2
+/// arm's purge→release ORDER through this: a co-owner that sees the ladder's reference
+/// already released (`strong_count` dropped) must never still see the ladder's own entry.
+///
+/// # Safety
+/// `chan_ptr` must be a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`].
+#[cfg(all(test, loom))]
+pub(crate) unsafe fn pending_send_contains(
+    chan_ptr: *mut u8,
+    caller_token: u64,
+    caller_generation: u64,
+) -> bool {
+    let chan = &*(chan_ptr as *const YnzChannel);
+    lock_or_recover(&chan.pending_sends).contains_key(&(caller_token, caller_generation))
 }
 
 #[cfg(test)]

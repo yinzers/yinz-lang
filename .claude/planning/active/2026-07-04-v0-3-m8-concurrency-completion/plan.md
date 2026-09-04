@@ -3,9 +3,9 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904"]
 created_at: "2026-07-04"
-updated_at: "2026-09-03"
+updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
 worktree: null
 metadata:
@@ -1125,10 +1125,14 @@ in-session, no handoff file):**
   ABA unsalted key → `loom_aba_*` reports the dead value delivered ✓ · `purge_pending_sends` made a
   no-op → BOTH `loom_orphan_purge_on_frame_cancellation` and `loom_orphan_purge_on_handle_free` report
   the surviving entry ✓ · kind-2 arm's purge removed → `loom_drop_ladder_*_with_live_co_owner` reports
-  the orphan ✓ · kind-2 arm's ORDER swapped (release ref, then purge) → the lane dies with **SIGSEGV**
-  (use-after-free when the ladder held the last reference) — red, but as a memory-safety crash, not a
-  loom assertion: the purge→free order is a sequential property, not an interleaving one, and its
-  proper home is the Miri/ASan sanitizer lane, named as such · recv poll-then-record → `loom_recv_*`
+  the orphan ✓ · kind-2 arm's ORDER swapped (release ref, then purge) → at round 1 the lane only
+  died with SIGSEGV (the live-co-owner model passed the swap clean); **since fix round 2 BOTH
+  `loom_drop_ladder_*` models report it by assertion** (`assert_purged_before_released` — a
+  co-owner probe: reference gone ⇒ the ladder's entry must already be purged, explored at every
+  point of the ladder by loom), and the last-reference sequential case has its own deterministic
+  test (`ladder_holding_last_reference_purges_parked_send_before_channel_teardown`, `lib.rs`)
+  which the sanitizer lane runs — under the swap Miri reports UB at the dangling purge
+  (`purge_pending_sends`, `channel.rs`), the class that lane exists for · recv poll-then-record → `loom_recv_*`
   reports `lost wakeup: consumer A is Pending with a value buffered and was never woken` ✓ (found in
   0.01 s). Two harness defects were found and fixed BY these teeth runs, both recorded so the next
   reader does not re-learn them: the drop-glue log was a process-global static shared by libtest's
@@ -1159,8 +1163,52 @@ in-session, no handoff file):**
   ran concurrently in one checkout; `code-reviewer` observed the ladder arm in its REVERTED order
   mid-grade. Tree restoration was sha256-verified so the grades stand, but from here any seat that
   reverts code runs ALONE. Fix round 2 answers `red:test-quality`.
+- **Round 2 (fix, executor `m8-p3-fix1-20260904`, 2026-09-04) — the blocker fixed at the producer.**
+  The models checked *purge happened* and *refcount balanced*, never *which came first*; now the
+  ORDER is an asserted state invariant: `loom_tests::assert_purged_before_released` (a co-owner
+  holding its own reference probes `strong_count == 1 ⇒ !pending_send_contains(ladder key)`, both
+  reads loom-tracked so loom schedules the probe at every point of the ladder), called in BOTH
+  kind-2 models. Revert-proof (kind-2 arm swapped in the working tree, restored, `git diff` sha256
+  identical before/after): live-co-owner model **FAILS BY ASSERTION** (was: passed clean),
+  last-reference model **FAILS BY ASSERTION** (was: SIGSEGV). New deterministic test
+  `ladder_holding_last_reference_purges_parked_send_before_channel_teardown` (`lib.rs`, module
+  `m6_pending_send_aba`; main releases first so the ladder tears down; asserts the glue sequence
+  `[parked, filler]` — purge glues the parked payload, teardown's drain glues the filler) passes
+  under `cargo test` and under Miri; **under the swap it does NOT fail by assertion in any build**
+  and cannot: the swap's first effect is a use-after-free inside `drop(fut)`, before any post-hoc
+  assertion runs, and the only pre-corruption observation point (the element glue) sits behind an
+  `extern "C"` boundary that cannot unwind. Observed: plain debug build → rustc's misaligned-pointer
+  UB check aborts inside the dangling purge (SIGABRT); Miri → "Undefined Behavior" at
+  `purge_pending_sends`'s `&*chan_ptr` (`channel.rs:756`) from `runtime.rs:1153`. That is the
+  sanitizer lane's finding, which is where the dispatch placed this test; the deviation from
+  "all three by assertion" is recorded, not smoothed. Should-fixes: `mpsc_step()` witness before
+  both `retain`s that drop parked `Send` futures (`purge_pending_sends`, the insert-time sweep) —
+  interleavings orphan_frame 3→9, orphan_handle 3→9, ladder_last 9→27, ladder_live 12→57 (probe +
+  witness), aba 987→11,079, recv 42,563 unchanged; lane 1.5s→1.7s · CI loom step: `shell: bash` +
+  `set -euo pipefail`, Patrick's 2026-09-03 blocking ruling recorded in the step comment, bounded
+  run documented as a strict subset of the exhaustive unbounded run rather than added ·
+  `IMP-concurrency.md` "one import site" scoped to `channel.rs`/`handle.rs` with the `RUNTIME`
+  exemption named. Production kind-2 arm untouched; every `channel.rs` line added is
+  `#[cfg(loom)]`/`#[cfg(all(test, loom))]`, so the round-1 no-op proof stands unchanged.
+- **Round 2 grading (conductor, 2026-09-04).** `green-check-low` (Haiku) → green (106 lib, 6 loom,
+  clippy both cfgs, release build, gitleaks clean) with `runner missing: miri` — **a false miss**:
+  `cargo +nightly miri` is installed in the dev image and the pre-existing CI `sanitizers` job runs
+  it on `ynz-runtime`; recorded, no halt. Seats: `code-reviewer-medium` (Sonnet, read-only, ran
+  first) → clean (probe implication sound, both reads loom-tracked, witness precedes every drop
+  path, every added line cfg-gated, `runtime.rs` zero-line diff); `test-quality-medium` (Sonnet,
+  ran ALONE after, reverting the kind-2 arm itself) → `VERDICT: findings`, **0 blockers** — both
+  kind-2 loom models now FAIL BY ASSERTION on the swap (`loom_tests.rs:415`); the deterministic
+  last-reference test fails on the swap every run (5/6 SIGABRT via the misaligned-pointer UB check,
+  1/6 by its own sequence assertion — the round-2 audit entry's "cannot in any build" is therefore
+  overclaimed, parked 29); Miri reports the swap as UB at `channel.rs:756` and passes the correct
+  tree; the probe's antecedent is reached (not vacuous); 15 × 16-thread runs stable; 1 minor parked
+  (30, `GLUE_SEQUENCE` payload-collision guard). `plan-adherence` NOT dispatched: the round's one
+  deviation was from the conductor's dispatch wording, not the plan — step 5 asks only that each
+  reverted fix be caught, and it is. **Phase 3 terminal state: CLEAN. Exit criteria MET. Boundary
+  commit on Patrick's standing go (2026-09-04, "if it all works out, move on"); frontier → Phase 4.**
 - **CI:** a `Loom` step added to `.github/workflows/ci.yml`'s main job (own `target/loom` dir; asserts
-  ≥1 test passed so a filter drift cannot pass vacuously).
+  ≥1 test passed so a filter drift cannot pass vacuously; since round 2, `pipefail` so cargo's own
+  exit status is the primary gate and the grep is only the vacuity guard).
 - **Registry:** no entries — nothing user-facing.
 
 #### Phase 4 — Implement: Channel Close Semantics + P2-3 Leak Fix

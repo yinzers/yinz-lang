@@ -11,6 +11,48 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p3-fix1-20260904` — 2026-09-04 — **Phase 3 fix round 2 (`red:test-quality`): the kind-2
+  drop-ladder purge→release ORDER made an asserted property; four should-fixes answered.** Read:
+  the Phase 3 block's round-1 grading, the `m8-p3-20260903-a1` entry (its revert-proof clause
+  "ladder purge/free ORDER swapped dies with SIGSEGV … named for the sanitizer lane, not a loom
+  finding" is SUPERSEDED by this round — the loom models now report the swap themselves), `loom_tests.rs`,
+  `channel.rs` (`mpsc_witness`/`mpsc_step`/`purge_pending_sends`/the parked-arm sweep), the kind-2
+  arm (`runtime.rs:1143-1154`), `test-parallelism.md`, `corpses.md`. **Producer named:** both models
+  observed the purge's *effect* and the release's *effect* after the joins, never the *state between*
+  them. Fix: `assert_purged_before_released(chan, ladder_key)` — a co-owner that still holds its own
+  reference asserts `strong_count == 1 ⇒ !pending_send_contains(frame_ptr, task_gen)`; both reads are
+  loom-tracked (`Arc` count, `pending_sends` mutex) so the probe is a preemption point loom places at
+  every step of the ladder, and the release-before-purge window becomes an explored, asserted state.
+  Wired into both kind-2 models (`pending_send_contains` added under `cfg(all(test, loom))`).
+  **Revert-proof** (throwaway script in the session scratchpad; kind-2 arm's two calls swapped, tree
+  restored, `git diff` sha256 `64edaba2…fb86` before = after; a second Miri pass `89e4b71c…4383`
+  before = after): live-co-owner → panicked at `loom_tests.rs:415` with the ORDER message (round 1:
+  passed clean, 12 interleavings); last-reference → same assertion (round 1: SIGSEGV); deterministic
+  test → plain debug build SIGABRT from rustc's misaligned-pointer UB check inside the dangling
+  purge; Miri → UB at `channel.rs:756` (`purge_pending_sends`) from `runtime.rs:1153`. **Deviation,
+  stated:** the dispatch asked for all three to fail by assertion; the deterministic last-reference
+  test cannot in any build — its swapped failure is a use-after-free inside `drop(fut)` before any
+  assertion runs, and the only pre-corruption observation point (the element glue) is behind an
+  `extern "C"` boundary that cannot unwind (every ABI shim on that path is `extern "C"`, so a
+  `cfg(test)` hook could not panic either — none added). It is the sanitizer lane's finding, which
+  is the lane the dispatch named for it. New test: `lib.rs::m6_pending_send_aba::
+  ladder_holding_last_reference_purges_parked_send_before_channel_teardown` (main releases first;
+  asserts glue sequence `[parked, filler]`, each once) — passes plain and under Miri (1 passed).
+  **Should-fixes:** (1) `mpsc_step()` before both `retain`s that drop parked `Send` futures;
+  interleavings orphan_frame 3→9, orphan_handle 3→9, ladder_last 9→27, ladder_live 12→57 (probe +
+  witness together), aba 987→11,079, recv 42,563 (no Tokio-future drop on that path); lane 1.53s→1.71s.
+  The count moved, so the witness measures something. (2) CI loom step: `shell: bash` +
+  `set -euo pipefail`; Patrick's 2026-09-03 BLOCKING ruling recorded in the comment; no
+  `continue-on-error`. (3) `IMP-concurrency.md` "one import site" scoped to `channel.rs`/`handle.rs`,
+  `RUNTIME`'s `std::sync::Mutex` named as the `sync.rs` exemption; the revert-proven clause gains the
+  ladder-order fix. (4) Bounded CI run NOT added — documented in the step comment: all six models
+  complete exhaustively unbounded and a preemption bound only prunes that exploration, so
+  `LOOM_MAX_PREEMPTIONS=2` would be a strict subset. **Production:** `runtime.rs` untouched; every
+  `channel.rs` addition is `cfg(loom)` / `cfg(all(test, loom))`, so round 1's byte-identical proof
+  stands without re-running. Clippy clean plain and `--cfg loom` (cargo exit 0 captured explicitly —
+  an earlier attempt piped through `grep|tail` and reported the pipe's status, the exact CI defect
+  of should-fix 2, redone); `cargo fmt --all --check` clean. No commit (conductor seals).
+
 - `m8-p3-20260903-a1` — 2026-09-03 — **Phase 3 executed end to end (loom substrate), one segment,
   no handoff.** Spike GREEN on both STOP halves (4,518 interleavings / 153 ms unbounded; the
   reintroduced unsalted-key ABA reported by the model's own assertion). Production no-op proven by
