@@ -1,0 +1,24 @@
+// WHY: v0.3-M8 Phase 4 — an owned-heap element left BUFFERED when the program ends: the task
+// sends an array and closes; the spawner never receives it. The channel object is never torn
+// down in a `.ynz` program today (the spawner's own reference is never released — no scope-exit
+// drop pass; only the task's shared reference is released by its drop ladder at retire), so
+// the buffered array is held to exit BY THE CHANNEL: alloc == free + 2 exactly, the same
+// "held, not leaked twice, not freed under the buffer" reading as
+// `bg_arg_channel_send_array_never_drained.ynz`. The teardown-glue path itself (the channel's
+// `Drop` freeing residual buffered elements) is the runtime crate's unit gate, unreachable
+// from source until locals are dropped at scope exit. RED today: `.close()` is unknown.
+//
+// Expected output:
+//   buffered
+function producer(lend wire: channel<array<int>>) -> nothing {
+  let rows: array<int> = [10, 20, 30]
+  wire.send(rows)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  background producer(wire)
+  wait sleep(40)
+  print(`buffered`)
+}

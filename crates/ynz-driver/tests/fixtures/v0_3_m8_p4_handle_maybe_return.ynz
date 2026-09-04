@@ -1,0 +1,35 @@
+// WHY: v0.3-M8 Phase 4 PRECONDITION pin (audit.md `conductor-2026-09-03-m8-execution`, "known
+// live bug"): `h.receive()` on a handle-spawned task that returns a plain `-> maybe<T>` dies
+// with SIGSEGV when the value is consumed. Root cause (probed 2026-09-04): codegen's
+// `lower_let_background_handle` classifies a plain `-> maybe<T>` return as
+// `HANDLE_RET_KIND_VALUE_WORD` ("an i64-slot value"), but a `maybe<T>` is a `{tag, payload}`
+// aggregate that lives in the TASK's frame/stack, not a word — the parent reads a dead-frame
+// address after the task retired. The `wait pick()` form of the same function is fine (the
+// direct-call ABI carries the aggregate). This matters for Phase 4 because bare-channel
+// `receive()` now returns `maybe<T>`, so a task whose whole body is "receive and hand back"
+// naturally returns `maybe<T>`. RED today: exit 139 (signal 11).
+//
+// Expected output:
+//   7
+//   done
+function pick() -> maybe<int> {
+  wait sleep(10)
+  let arr: array<int> = [7]
+  return arr.get(0)
+}
+
+function consume() -> nothing errors {
+  let h = background pick()
+  let m = h.receive()
+  if (m.exists()) {
+    print(m.value.toString())
+  }
+  print(`done`)
+}
+
+function entrypoint() -> nothing {
+  let r = consume()
+  if (r.failed()) {
+    print(`failed`)
+  }
+}

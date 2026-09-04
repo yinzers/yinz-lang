@@ -1,0 +1,32 @@
+// WHY: v0.3-M8 Phase 4 — contract item 4: a send issued BEFORE `close()` completes normally
+// even if it was parked on a full buffer when the close happened. Capacity 1: the producer's
+// first send buffers, its second PARKS holding its own cloned endpoint inside the boxed send
+// future; the spawner then closes (which only takes the object's shared endpoint) and drains —
+// the first receive frees the slot, the parked send lands, the second receive delivers it, the
+// third observes `none`. "Close" means no NEW sends, not "discard what was already on its
+// way". RED today: `.close()` is an unknown method.
+//
+// Expected output:
+//   1
+//   2
+//   end
+function pusher(lend wire: channel<int>) -> nothing {
+  wire.send(1)
+  wire.send(2)
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(1)
+  background pusher(wire)
+  wait sleep(30)
+  wire.close()
+  let stillOpen = true
+  while (stillOpen) {
+    let next = wire.receive()
+    if (next.exists()) {
+      print(next.value.toString())
+    }
+    stillOpen = next.exists()
+  }
+  print(`end`)
+}

@@ -11,6 +11,41 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p4-20260904-a1` — 2026-09-04 — **Phase 4 segment 1: the RED seal — 24 fixtures, one named
+  test each, the m8 gallery's Phase 4 section, the SIGSEGV precondition root-caused; no compiler
+  code.** Read in full: the Phase 4 block (steps 1–8, 3a–3d, 4b, CHECKPOINT); `IMP-concurrency.md`
+  "Channel Close — End-of-Stream Semantics" (all subsections through "What is signed off");
+  `IMP-ownership.md` "Transfer — Who Else Holds This Value"; this file's FRAGO 002/005/006/007,
+  both SIGN-OFF records, the `conductor-2026-09-03-m8-execution` entry; `parked.md` 5/7/8/13/15/
+  17/27/30; `corpses.md`; the test-parallelism, authoritative-derivation, feature-registry and
+  teaching-surfaces rules. Code read: `check.rs` (`check_conduit_method_call`,
+  `check_channel_construction`, the crossing analysis `collect_crossings_in_stmts` and the
+  `UnsupportedCrossingLocalType` guard), `scope.rs`, `channel.rs` (`channel_send_poll_guarded`,
+  case (c)), `emit.rs` (`channel_drop_glue`, `lower_let_background_handle`), `ynz-abi`
+  `HANDLE_RET_KIND_*`, `lib.rs` (`ynz_array_clone_primitive`, `YnzMap`), the registry's
+  `Consumed`/`copy`/`channel-element-heap-upgrade` entries, `integration.rs`'s alloc-counter and
+  handoff-parity helpers, `error_galleries.rs`, `cross_impl_consistency.rs`'s exclusion lists.
+  **Probes (12, run in the dev container from `target/probe/`, deleted):** the
+  `h.receive()`-on-`-> maybe<T>` SIGSEGV reproduces deterministically for a plain `maybe<int>`
+  return on the handle form consumed in an `errors` function (exit 139); the `maybe<int> errors`
+  twin prints `7`; the `wait pick()` form prints `7`. Root cause named in `handoff-phase-4.md`
+  (`lower_let_background_handle`'s `ret_kind` match has no `maybe<T>` arm → `VALUE_WORD`). Three
+  other findings from the probes, all recorded in the handoff rather than absorbed: Yinz has no
+  standalone `else` block (the signed design's consumer-loop sketch uses one — a "design doc says
+  A; language has B" the docs step must correct); `r.or(none)` does not type-check even under an
+  annotation; a pre-existing crossing-analysis over-approximation (a `let` after a suspension is
+  `declared`, and any later read is a crossing even with no further suspension) hard-rejects some
+  `maybe<T>` consumer shapes. **RED run** (`cargo test -p ynz-driver --no-fail-fast --test
+  v03_m8_channel_close --test error_galleries m8`, exit 101): 23 FAILED / 1 ok in the new file;
+  the gallery FAILED on count (15 observed vs 26–36) and on every new-diagnostic phrase. Each
+  failure's first line is tabulated in the handoff; every one is the intended reason (unknown
+  `close`, `.exists()` on the bare `T`, `channel<number>` rejected at construction, the false
+  "already given away", the alias no-op's `copy b: 99`, signal 11). The gallery output also
+  confirms the seven 2026-09-03 probe holes are live on this tree (no error today for the UFCS
+  non-receiver give, the three alias forms, or read-after-send). Tests run: only the scope above.
+  Deviations: none from the plan's text; the segment stops before step 2 by the dispatch's own
+  RED-commit protocol. Handoff: `handoff-phase-4.md`, resume-at `phase-4/step-2`.
+
 - `m8-p3-fix1-20260904` — 2026-09-04 — **Phase 3 fix round 2 (`red:test-quality`): the kind-2
   drop-ladder purge→release ORDER made an asserted property; four should-fixes answered.** Read:
   the Phase 3 block's round-1 grading, the `m8-p3-20260903-a1` entry (its revert-proof clause

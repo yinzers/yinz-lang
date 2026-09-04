@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1"]
 created_at: "2026-07-04"
 updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -1212,6 +1212,20 @@ in-session, no handoff file):**
 - **Registry:** no entries — nothing user-facing.
 
 #### Phase 4 — Implement: Channel Close Semantics + P2-3 Leak Fix
+
+> **Status (2026-09-04, dispatch `m8-p4-20260904-a1`, segment 1 of N — the RED seal):** step 1
+> confirmed (both sign-offs recorded in `audit.md`). Every RED fixture steps 3a/3d/5 and the
+> SIGSEGV precondition call for is authored and observed RED for its intended reason — 23 named
+> tests in `crates/ynz-driver/tests/v03_m8_channel_close.rs` over 24 fixtures (one, the
+> `maybe<T> errors` handle twin, is a GREEN lock), plus the m8 gallery's Phase 4 section (25
+> triggers) with `error_galleries.rs` asserting the new count and 13 key phrases. No compiler code
+> touched. The SIGSEGV precondition is root-caused (`lower_let_background_handle`'s `ret_kind` has
+> no `maybe<T>` arm → `VALUE_WORD` hands the parent a dead-frame aggregate address). Resume at
+> `phase-4/step-2` after the conductor seals the RED commit — `handoff-phase-4.md` beside this file
+> carries every fixture's observed failure line, the gap-constant derivations to confirm at GREEN,
+> and four design/plan divergences found while authoring (no standalone `else` block exists for the
+> design's consumer loop; `array<T>()` is not a parser form; a pre-existing crossing-analysis
+> over-approximation rejects some `maybe<T>` consumer shapes; `r.or(none)` does not type-check).
 
 - **Task + purpose:** implement Phase 1's signed-off design — the explicit close mechanism, the live
   typed channel-closed error, and P2-3's closed-send drop-glue leak fixed through M6's single choke

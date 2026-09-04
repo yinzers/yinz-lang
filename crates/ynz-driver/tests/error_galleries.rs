@@ -137,18 +137,87 @@ fn m8_gallery_fires_expected_diagnostics() {
     // v0.1-polish inline shape type errors (4+ errors). Expected: 5–10.
     // test-ratchet: v0.1-polish adds 3 inline-shape error triggers (unknown field,
     // missing field, hidden-in-inline) — count grows from 2 to ~6.
+    // v0.3-M8 Phase 4 (test-ratchet): the channel-close + transfer-rule section adds the
+    // four new compile diagnostics (ConsumedBySend ×5 incl. the three alias forms,
+    // ParamNeedsGive ×5 incl. both frames of the relay chain, TransferNeedsCopy ×5 incl. the
+    // dynamic-contract instance, HandleChannelArgNeedsBinding ×1), the extracted const-send
+    // refusal, the existing use-after-give error at two new sites, and the two diagnostics
+    // `.close()` extends (no-args, per-receiver unknown-method list) — 26–36 in all. Every
+    // new class is pinned by key phrase below so the count can never pass for the wrong reason.
     let (stderr, code) = compile_gallery(&gallery("m8_errors.ynz"));
     assert_ne!(code, 0, "m8 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert!(
-        (5..=12).contains(&error_count),
-        "m8 gallery must produce 5–12 errors; got {error_count}.\nstderr:\n{stderr}"
+        (26..=36).contains(&error_count),
+        "m8 gallery must produce 26–36 errors; got {error_count}.\nstderr:\n{stderr}"
     );
 
     assert!(
         stderr.contains("background"),
         "m8 gallery must include a background-share diagnostic; got:\n{stderr}"
+    );
+
+    // ConsumedBySend — the WHAT's fixed clause (IMP-ownership.md "Teaching text").
+    assert!(
+        stderr.contains("`send()` gave it away"),
+        "m8 gallery must include the ConsumedBySend diagnostic; got:\n{stderr}"
+    );
+    // ConsumedBySend through an alias class — the `{via}` slot names what was sent.
+    assert!(
+        stderr.contains("which is what was sent"),
+        "m8 gallery must include the alias-class `{{via}}` form of ConsumedBySend; got:\n{stderr}"
+    );
+    // ParamNeedsGive — the WHAT's fixed closing sentence.
+    assert!(
+        stderr.contains("Only a `give` parameter can be given away."),
+        "m8 gallery must include the ParamNeedsGive diagnostic; got:\n{stderr}"
+    );
+    // ParamNeedsGive fires for BOTH frames of the relay chain in one build.
+    assert!(
+        stderr.contains("parameter of `m8_hopB`") && stderr.contains("parameter of `m8_hopA`"),
+        "m8 gallery must report both m8_hopB's and m8_hopA's missing `give` in one build; got:\n{stderr}"
+    );
+    // TransferNeedsCopy — the WHAT's fixed clause, plus each `{reason}` form.
+    assert!(
+        stderr.contains("so someone here still holds it."),
+        "m8 gallery must include the TransferNeedsCopy diagnostic; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("is a field of `bucket`"),
+        "m8 gallery must include TransferNeedsCopy's field reason; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("one cell of `matrix`"),
+        "m8 gallery must include TransferNeedsCopy's loop-cell reason; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("returns a piece of its `b` argument"),
+        "m8 gallery must include TransferNeedsCopy's returns-a-piece reason; got:\n{stderr}"
+    );
+    // HandleChannelArgNeedsBinding — the WHAT's fixed clause.
+    assert!(
+        stderr.contains("which is not a named binding"),
+        "m8 gallery must include the HandleChannelArgNeedsBinding diagnostic; got:\n{stderr}"
+    );
+    // The extracted const refusal carries the send sink's WHAT-INSTEAD.
+    assert!(
+        stderr.contains("wire.send(rows.copy())"),
+        "m8 gallery must include the const-send refusal with the send-sink advice; got:\n{stderr}"
+    );
+    // `.close()` with arguments.
+    assert!(
+        stderr.contains("`.close()` takes no arguments"),
+        "m8 gallery must include the close-takes-no-arguments diagnostic; got:\n{stderr}"
+    );
+    // The unknown-method list split per receiver: channel gains close(), handle does not.
+    assert!(
+        stderr.contains("Available methods: send(value), receive(), close()."),
+        "m8 gallery must list close() among a channel's methods; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Available methods: send(value), receive()."),
+        "m8 gallery must keep the handle's method list without close(); got:\n{stderr}"
     );
 }
 

@@ -1,0 +1,26 @@
+// WHY: v0.3-M8 Phase 4 — revive-on-reassign, a correct program (IMP-ownership.md "Binding
+// events, origin and alias classes", `Stmt::Assign` row; Patrick's Phase 2 sign-off packet
+// item (k)): a consumed name that is REASSIGNED names a new value — the entry leaves its old
+// alias class and its consumed state is cleared. Today's tree wrongly refuses this program
+// ("already given away") because consumption is a flag on the name, not a property of the
+// binding event. RED today for exactly that false error; GREEN once the binding-event function
+// is the one place `Stmt::Let` and `Stmt::Assign` both go through.
+//
+// Expected output:
+//   3
+//   2
+//   4
+//   5
+function eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  eat(rows)
+  rows = [4, 5]
+  print(rows.count().toString())
+  for (r in rows) {
+    print(r.toString())
+  }
+}

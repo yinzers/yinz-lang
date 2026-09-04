@@ -1,0 +1,58 @@
+// WHY: v0.3-M8 Phase 4 — the FIRST `channel<map<K, V>>` end-to-end fixture, covering BOTH
+// correct shapes the design names (obligation (14)): (1) a map built INSIDE the sending task
+// and sent; (2) a map passed to the task as a **`give`** `background` argument and sent — the
+// `give` consumes the spawner's `table` at the spawn through the one transfer decision, so the
+// un-cloned aliased map (maps are never ladder-cloned — `prepare_bg_arg_for_ctx`'s fall-through)
+// has exactly one holder at every moment: spawner → task → channel → receiver. This is the
+// FR#9 channel-door instance CLOSED by the `give` rule; the `bucket.add` container door stays
+// RED-pinned elsewhere. The two spawns are sequenced (spawn, receive, spawn, receive) so the
+// output order is deterministic. Parity: two maps live at exit (held by `first`/`second`'s
+// values), 5 counted allocs each (header + ctrl + keys + vals + insert_order; growth reallocs
+// net to zero) — alloc == free + 10. RED today: `.exists()` on a `map`; `.close()` unknown.
+//
+// Expected output:
+//   2
+//   2
+//   3
+//   9
+//   end
+function buildAndSend(lend wire: channel<map<string, int>>) -> nothing {
+  let table: map<string, int> = {}
+  table.set(`a`, 1)
+  table.set(`b`, 2)
+  wire.send(table)
+}
+
+function forward(lend wire: channel<map<string, int>>, give table: map<string, int>) -> nothing {
+  wire.send(table)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<map<string, int>> = channel<map<string, int>>(2)
+  background buildAndSend(wire)
+  let first = wire.receive()
+  if (first.exists()) {
+    let built = first.value
+    print(built.count().toString())
+    let b = built.get(`b`).or(-1)
+    print(b.toString())
+  }
+  let table: map<string, int> = {}
+  table.set(`x`, 7)
+  table.set(`y`, 8)
+  table.set(`z`, 9)
+  background forward(wire, table)
+  let second = wire.receive()
+  if (second.exists()) {
+    let given = second.value
+    print(given.count().toString())
+    let z = given.get(`z`).or(-1)
+    print(z.toString())
+  }
+  let after = wire.receive()
+  if (after.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`end`)
+}

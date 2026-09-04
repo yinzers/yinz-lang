@@ -52,6 +52,251 @@ function polish_hidden_in_inline_shape() -> nothing {
     print(p)
 }
 
+// ────── v0.3-M8 Phase 4: channel close + the transfer rule ──────
+//
+// Every trigger below is one of the four compile-time diagnostics the v0.3-M8 design adds
+// (IMP-ownership.md "Teaching text" for the three transfer diagnostics — ConsumedBySend,
+// ParamNeedsGive, TransferNeedsCopy — and IMP-concurrency.md "Teaching text" for
+// HandleChannelArgNeedsBinding), plus the two existing diagnostics `.close()` extends. The
+// seven live-hole probe programs of 2026-09-03 (`.claude/corpses.md`, first entry) are here as
+// triggers so the class that took three review rounds to name can never silently reopen.
+
+shape Bucket {
+  rows: array<int>
+}
+
+// eat — a declared `give` position: the sink every "given to `eat`" trigger below hits.
+function m8_eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+
+// pick — returns a PIECE of its argument (`MayAlias` under the `returns_fresh` fixpoint fact),
+// so a `let` bound to its result is `Reaches(b)`, never transferable.
+function m8_pick(share b: Bucket) -> array<int> {
+  return b.rows
+}
+
+// stash — a `give` position that is NOT the receiver of a UFCS dot-call (probe 1: UFCS
+// non-receiver arguments used to bypass the ownership path entirely).
+function m8_stash(lend self: Bucket, give rows: array<int>) -> nothing {
+  self.rows = rows
+}
+
+// WHY: ConsumedBySend (array) — `send()` on an owned-heap channel GIVES its payload; reading
+// the sent binding afterward is refused. Nothing happens at runtime; the program does not
+// compile until the read moves above the send or the send takes `rows.copy()`.
+function m8_consumed_by_send_array() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  let rows: array<int> = [1, 2, 3]
+  wire.send(rows)
+  print(rows.count().toString())
+}
+
+// WHY: ConsumedBySend (map) — the same rule for the other owned-heap element kind. The
+// WHAT-INSTEAD's advice (`wire.send(table.copy())`) is executable only because `.copy()` on
+// `map<K, V>` ships in the same phase (Patrick's ruling, 2026-09-03).
+function m8_consumed_by_send_map() -> nothing {
+  let wire: channel<map<string, int>> = channel<map<string, int>>(2)
+  let table: map<string, int> = { `a`: 1 }
+  wire.send(table)
+  print(table.count().toString())
+}
+
+// WHY: ConsumedBySend through an ALIAS CLASS — `let other = rows` puts both names in one
+// class; sending `rows` consumes the class, so the read of `other` is refused and the
+// diagnostic's `{via}` slot names `rows` as what was sent (probe 4, alias-by-`let`).
+function m8_consumed_via_alias_let() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  let rows: array<int> = [1, 2, 3]
+  let other = rows
+  wire.send(rows)
+  print(other.count().toString())
+}
+
+// WHY: ConsumedBySend through REASSIGNMENT — `rows = other` moves `rows` out of its own class
+// and into `other`'s (a binding event, exhaustive over `Stmt`); the send then consumes both
+// (probe 5, alias-by-reassignment — the round-1 BLOCKER that made the rule `Stmt`-exhaustive).
+function m8_consumed_via_alias_reassign() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  let rows: array<int> = [1]
+  let other: array<int> = [2]
+  rows = other
+  wire.send(rows)
+  print(other.count().toString())
+}
+
+// WHY: ConsumedBySend through a SHADOWING `let` — a new entry joining `other`'s class; the
+// send consumes the class and the read of `other` is refused (probe 6, alias-by-shadow).
+function m8_consumed_via_alias_shadow() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  let other: array<int> = [2]
+  let rows = other
+  wire.send(rows)
+  print(other.count().toString())
+}
+
+// WHY: ParamNeedsGive at a SEND — `rows` is a parameter with no ownership word, and the body
+// gives it away into `wire`; only a `give` parameter can be given away. The word travels up:
+// the caller's own binding must be consumed too, and only `give` in this signature does that.
+function m8_param_needs_give_at_send(lend wire: channel<array<int>>, rows: array<int>) -> nothing {
+  wire.send(rows)
+}
+
+// WHY: ParamNeedsGive at a GIVE-PARAMETER CALL — `rows` is bare and is passed to `m8_eat`'s
+// `give` position. This is `check_arg_ownership`'s former silent consume of a bare parameter
+// (the relay hole), now the error; the `share` variant below is the retired share-refusal
+// folded into the same template.
+function m8_param_needs_give_at_call(rows: array<int>) -> nothing {
+  m8_eat(rows)
+}
+
+function m8_param_needs_give_share(share rows: array<int>) -> nothing {
+  m8_eat(rows)
+}
+
+// WHY: the whole relay chain in ONE compile — `m8_hopB` sends its bare parameter, so
+// `consumed[m8_hopB][1]` is true in the fixpoint before any body is checked; `m8_hopA`'s call
+// `m8_hopB(wire, rows)` is therefore a give position in the same build and A's own missing
+// `give` is reported beside B's. Two ParamNeedsGive errors, one build, each one word to fix.
+function m8_hopB(lend wire: channel<array<int>>, rows: array<int>) -> nothing {
+  wire.send(rows)
+}
+
+function m8_hopA(lend wire: channel<array<int>>, rows: array<int>) -> nothing {
+  m8_hopB(wire, rows)
+}
+
+// WHY: the reviewer's program with `give` declared — `wait m8_producer(wire, rows)` consumes
+// entrypoint-side `rows` through the one transfer decision, exactly as any other `give`
+// parameter would, so the later read is the existing use-after-give error (`Consumed`).
+function m8_producer(lend wire: channel<array<int>>, give rows: array<int>) -> nothing {
+  wire.send(rows)
+}
+
+function m8_given_then_read() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  let rows: array<int> = [1, 2, 3]
+  wait m8_producer(wire, rows)
+  print(rows.count().toString())
+}
+
+// WHY: TransferNeedsCopy — a FIELD (`bucket.rows` is `Reaches(bucket)`; `bucket` still holds
+// it). The fix is `m8_eat(bucket.rows.copy())` (probe 2).
+function m8_transfer_needs_copy_field() -> nothing {
+  let bucket: Bucket = { rows: [1, 2, 3] }
+  m8_eat(bucket.rows)
+}
+
+// WHY: TransferNeedsCopy — a LOOP CELL (`row` is one cell of `matrix`, which the loop is
+// walking — `Cell` origin, never transferable). Refusing `matrix[0]` while admitting its
+// loop-variable twin was probe 3's hole.
+function m8_transfer_needs_copy_loop_cell(lend wire: channel<array<int>>) -> nothing {
+  let matrix: array<array<int>> = [[1, 2], [3]]
+  for (row in matrix) {
+    wire.send(row)
+  }
+}
+
+// WHY: TransferNeedsCopy — a CALL RESULT THAT RETURNS A PIECE of its argument (`m8_pick`
+// returns `b.rows`, so `rows` is `Reaches(bucket)` under the `returns_fresh` fact — probe 7).
+function m8_transfer_needs_copy_returns_piece() -> nothing {
+  let bucket: Bucket = { rows: [1, 2, 3] }
+  let rows = m8_pick(bucket)
+  m8_eat(rows)
+}
+
+// WHY: TransferNeedsCopy — a NESTED LITERAL built from a named heap value (`[a]` is
+// `Reaches(a)`; `a` still holds its cells — probe 8). Literal elements as consuming sinks are
+// a four-field deferral; until then the outer literal cannot itself be transferred.
+function m8_transfer_needs_copy_nested_literal() -> nothing {
+  let wire: channel<array<array<int>>> = channel<array<array<int>>>(2)
+  let a: array<int> = [1, 2]
+  let outer = [a]
+  wire.send(outer)
+}
+
+// WHY: UFCS NON-RECEIVER give — `bucket.stash(rows)` passes `rows` to a `give` position that
+// is not the dot-call receiver; the shared call-form normalization now reaches it, `rows` is
+// consumed, and the read afterward is the use-after-give error (probe 1).
+function m8_ufcs_non_receiver_give() -> nothing {
+  let bucket: Bucket = { rows: [] }
+  let rows: array<int> = [1, 2, 3]
+  bucket.m8_stash(rows)
+  print(rows.count().toString())
+}
+
+// WHY: `dynamic Contract` dispatch, covered BY CONSTRUCTION — `ContractSigDef` carries the
+// contract's declared modifiers, so the dispatch site's `give` position runs the same transfer
+// decision: a field reaches through `bucket` → TransferNeedsCopy. Compile-time-only (codegen
+// refuses every dynamic-dispatch call site today); the eighth probe.
+shape Eater {
+  swallow(share self, give rows: array<int>) -> nothing
+}
+
+shape Goat follows Eater {
+  name: string
+}
+
+function swallow(share self: Goat, give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+
+function m8_dynamic_contract_give(d: dynamic Eater) -> nothing {
+  let bucket: Bucket = { rows: [1, 2, 3] }
+  d.swallow(bucket.rows)
+}
+
+// WHY: the cannot-give-const refusal, EXTRACTED with a sink-supplied WHAT-INSTEAD: at a send
+// the advice is `wire.send(rows.copy())` — "declare it with `let`" is wrong for a send, where
+// the caller keeping the value is the whole point.
+function m8_const_sent() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  const rows: array<int> = [1, 2, 3]
+  wire.send(rows)
+}
+
+// WHY: HandleChannelArgNeedsBinding — the handle form's command channel comes from a call, not
+// a named binding, so nothing outside the task could ever `close()` it: a hard compile ERROR
+// (FRAGO 009 ruling 2), because a warning would leave the hang class live for one spawn shape
+// while the fix costs one `let`.
+function m8_makeWire() -> channel<int> {
+  let w: channel<int> = channel<int>(4)
+  return w
+}
+
+function m8_doubler(lend commands: channel<int>) -> int errors {
+  let c = commands.receive()
+  if (c.exists()) {
+    return c.value + c.value
+  }
+  return 0
+}
+
+function m8_handle_channel_arg_needs_binding() -> nothing {
+  let h = background m8_doubler(m8_makeWire())
+  h.send(21)
+}
+
+// WHY: `.close()` takes no arguments — "Call it bare: wire.close()".
+function m8_close_with_args() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  wire.close(1)
+}
+
+// WHY: the unknown-method list SPLITS per receiver — a channel's reads
+// `send(value), receive(), close()`, a handle's stays `send(value), receive()` (there is no
+// `h.close()`: a handle is a message line to the child, not the channel's lifecycle).
+function m8_unknown_method_on_channel() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  wire.peek()
+}
+
+function m8_close_on_handle() -> nothing {
+  let commands: channel<int> = channel<int>(2)
+  let h = background m8_doubler(commands)
+  h.close()
+}
+
 // ────── positive reference case ──────
 
 function entrypoint() -> nothing {
