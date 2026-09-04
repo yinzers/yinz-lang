@@ -89,6 +89,19 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # Loom model-checking harness (v0.3-M8 Phase 3). `--cfg loom` swaps ynz-runtime's
+      # `crate::sync` primitives to loom's and compiles `src/loom_tests.rs`; nothing else in the
+      # workspace observes the cfg (tokio gates its own loom paths on `all(test, loom)`, never
+      # true for a dependency). Own target dir so the cfg'd rebuild never invalidates the main
+      # cache. Unbounded (exhaustive) on purpose — the whole lane is ~2s; `LOOM_MAX_PREEMPTIONS`
+      # is a local bisecting knob, not a CI setting. The trailing grep is a vacuity guard: a
+      # drifted `loom_` filter would otherwise "pass" by matching zero tests.
+      - name: Loom (ynz-runtime model-checking harness, --cfg loom)
+        run: |
+          RUSTFLAGS='--cfg loom' CARGO_TARGET_DIR=target/loom \
+            cargo test -p ynz-runtime --release --lib -- loom_ --nocapture 2>&1 | tee loom.log
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed' loom.log
+
       - name: Verify --version
         run: ./target/release/ynz --version
 

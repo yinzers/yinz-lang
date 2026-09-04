@@ -56,8 +56,11 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
+
+// `std::sync::{Arc, Mutex}` in every production build; loom's under `--cfg loom` (v0.3-M8
+// Phase 3 — see `crate::sync`). Never import these two from `std` here directly.
+use crate::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
@@ -469,6 +472,9 @@ pub unsafe extern "C" fn ynz_handle_free(handle_ptr: *mut u8) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    // Test wakers need a std `Arc` (`Waker: From<Arc<W>>`); the handle's own `shared` Arc is
+    // `crate::sync::Arc` (loom's under `--cfg loom`) and is addressed as such below.
+    use std::sync::Arc;
     use std::task::{Wake, Waker};
 
     struct CountingWaker(AtomicUsize);
@@ -767,7 +773,7 @@ mod tests {
             // The child is scheduled but NOT yet driven — the outbox is empty, so the
             // parent's first poll takes the Pending path (the registration under test).
             let probe = HandleOrderProbe {
-                shared: Arc::as_ptr(&(*(h as *const YnzTaskHandle)).shared),
+                shared: crate::sync::Arc::as_ptr(&(*(h as *const YnzTaskHandle)).shared),
                 registered_before_poll: AtomicBool::new(false),
                 mpsc_clone_seen: AtomicBool::new(false),
                 panic_at_mpsc_clone: AtomicBool::new(false),
@@ -839,7 +845,7 @@ mod tests {
                 std::ptr::null_mut(),
             );
             let probe = HandleOrderProbe {
-                shared: Arc::as_ptr(&(*(h as *const YnzTaskHandle)).shared),
+                shared: crate::sync::Arc::as_ptr(&(*(h as *const YnzTaskHandle)).shared),
                 registered_before_poll: AtomicBool::new(false),
                 mpsc_clone_seen: AtomicBool::new(false),
                 panic_at_mpsc_clone: AtomicBool::new(true),

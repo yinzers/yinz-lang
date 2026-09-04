@@ -92,12 +92,14 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
 use tokio::sync::mpsc;
 
 use crate::runtime::{release_ladder_payload, DriveIdentity};
+// `std::sync::{Arc, Mutex, MutexGuard}` in every production build; loom's under `--cfg loom`
+// (v0.3-M8 Phase 3 — see `crate::sync`). Never import these three from `std` here directly.
+use crate::sync::{Arc, Mutex, MutexGuard};
 
 /// Poll result: the operation completed (value accepted / value delivered).
 pub(crate) const CHANNEL_READY: i32 = 0;
@@ -136,6 +138,7 @@ pub(crate) fn next_caller_generation() -> u64 {
     CALLER_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
+#[cfg(not(loom))]
 thread_local! {
     /// The identity of the state-machine drive whose `poll` is currently running on THIS
     /// thread ([`DriveIdentity::NONE`] = none — a bare test call outside any drive): its
@@ -147,6 +150,15 @@ thread_local! {
     /// drive's generation, and a send of a ladder-owned payload can release it from the
     /// drive's ladder ([`crate::runtime::release_ladder_payload`]).
     static CURRENT_DRIVE: Cell<DriveIdentity> = const { Cell::new(DriveIdentity::NONE) };
+}
+
+#[cfg(loom)]
+loom::thread_local! {
+    /// The loom twin of `CURRENT_DRIVE` above (same contract): per-MODEL-thread storage, so
+    /// two loom threads each publishing a drive never see each other's — loom runs every
+    /// model thread on one OS thread, where a std thread-local would be shared. Separate
+    /// declaration only because loom's macro has no `const { .. }` initializer form.
+    static CURRENT_DRIVE: Cell<DriveIdentity> = Cell::new(DriveIdentity::NONE);
 }
 
 /// RAII publisher for [`CURRENT_DRIVE`]: saves the previous value on entry, restores it on
@@ -235,9 +247,33 @@ pub struct YnzChannel {
     /// `Arc`-shared cross-thread relying on AUTO `Send`/`Sync`, which a raw-pointer field
     /// would silently break (fn pointers are `Send + Sync`).
     drop_glue: Option<unsafe extern "C" fn(i64)>,
+    /// Loom-only witness of this channel's Tokio mpsc state (see [`YnzChannel::mpsc_step`]).
+    /// Absent from every production build.
+    #[cfg(loom)]
+    mpsc_witness: loom::sync::atomic::AtomicUsize,
 }
 
 impl YnzChannel {
+    /// Loom-only: make the Tokio mpsc call that follows a loom-VISIBLE step. Tokio's mpsc
+    /// internals are std under `--cfg loom` (see `crate::sync`), so its `try_send`/`poll_recv`/
+    /// endpoint-future polls are invisible to loom's DPOR, which distinguishes interleavings
+    /// ONLY by accesses to loom-tracked objects: two threads' mpsc calls count as commuting,
+    /// and which of their relative orders gets explored is an accident of the lock operations
+    /// around them, not a guarantee. One RMW on a per-channel atomic before each mpsc call
+    /// makes every pair of mpsc calls on this channel a dependent pair, so loom explores all
+    /// their orders — the black box modeled as one atomic object, which is what makes the
+    /// harness's "each Tokio call is one atomic step" claim true rather than approximate.
+    /// Measured at introduction: the P3-2 poll-then-record revert is caught with OR without
+    /// this witness (the surrounding `receiver`/`recv_waiters` locks happen to order the
+    /// decisive interleaving); the witness costs ~14x state space on that model (2,985 →
+    /// 42,563 interleavings, ~1.4s) and buys exhaustiveness over mpsc orderings the lock
+    /// pattern does not promise.
+    #[cfg(loom)]
+    fn mpsc_step(&self) {
+        self.mpsc_witness
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Wake every recorded receive-waiter (a value just landed, or capacity changed).
     /// O(n) wakes where n = suspended receivers (typically 0 or 1).
     fn wake_recv_waiters(&self) {
@@ -277,6 +313,8 @@ impl Drop for YnzChannel {
         };
         // `&mut self` is exclusive access: `get_mut` bypasses locking entirely, with the same
         // poison tolerance as `lock_or_recover` (which needs `&Mutex`, not owned access).
+        #[cfg(loom)]
+        self.mpsc_step();
         let receiver = self.receiver.get_mut().unwrap_or_else(|e| e.into_inner());
         while let Ok(bits) = receiver.try_recv() {
             // SAFETY: glue was registered at construction for exactly this channel's element
@@ -337,6 +375,8 @@ pub unsafe extern "C" fn ynz_channel_create(capacity: i64, drop_glue: *mut u8) -
         pending_sends: Mutex::new(HashMap::new()),
         recv_waiters: Mutex::new(Vec::new()),
         drop_glue: glue,
+        #[cfg(loom)]
+        mpsc_witness: loom::sync::atomic::AtomicUsize::new(0),
     });
     Arc::into_raw(chan) as *mut u8
 }
@@ -458,6 +498,8 @@ pub(crate) unsafe fn channel_send_poll_guarded(
         // token+generation keying is what makes the shared-channel model silent-wrong-proof).
         let mut pending = lock_or_recover(&chan.pending_sends);
         if let Some(entry) = pending.get_mut(&key) {
+            #[cfg(loom)]
+            chan.mpsc_step();
             return match entry.fut.as_mut().poll(cx) {
                 Poll::Pending => CHANNEL_PENDING,
                 Poll::Ready(Ok(())) => {
@@ -494,6 +536,8 @@ pub(crate) unsafe fn channel_send_poll_guarded(
         // First attempt: non-blocking try_send. On a non-full channel this is the fast Ready
         // path (mirrors the sleep first-poll-Ready fast path — no suspension state needed).
         let sender = lock_or_recover(&chan.sender).clone();
+        #[cfg(loom)]
+        chan.mpsc_step();
         match sender.try_send(value) {
             Ok(()) => {
                 release_taken_value();
@@ -508,6 +552,8 @@ pub(crate) unsafe fn channel_send_poll_guarded(
                 let fut_sender = sender.clone();
                 let mut fut: PendingSend =
                     Box::pin(async move { fut_sender.send(v).await.map_err(|_| ()) });
+                #[cfg(loom)]
+                chan.mpsc_step();
                 match fut.as_mut().poll(cx) {
                     Poll::Pending => {
                         // Parked: the entry (and, on cancellation, the purge/teardown glue)
@@ -620,6 +666,8 @@ pub unsafe extern "C" fn ynz_channel_recv_poll(
         // recv_waiters before the receiver lock below is taken — no nesting, no lock held
         // across the non-blocking poll).
         chan.record_recv_waiter(cx.waker());
+        #[cfg(loom)]
+        chan.mpsc_step();
         let poll = lock_or_recover(&chan.receiver).poll_recv(cx);
         match poll {
             Poll::Ready(Some(v)) => {
@@ -732,11 +780,28 @@ pub(crate) unsafe fn pending_send_count(chan_ptr: *mut u8) -> usize {
     lock_or_recover(&chan.pending_sends).len()
 }
 
+/// Test-support: the channel's current strong reference count. The loom drop-ladder models
+/// (`crate::loom_tests`) assert refcount balance after a concurrent cancellation through this.
+///
+/// # Safety
+/// `chan_ptr` must be a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`].
+#[cfg(all(test, loom))]
+pub(crate) unsafe fn strong_count(chan_ptr: *mut u8) -> usize {
+    // SAFETY: caller guarantees a live Arc-backed pointer; the count is read without taking
+    // or releasing a reference (the ManuallyDrop keeps the borrowed Arc from decrementing).
+    let arc = std::mem::ManuallyDrop::new(Arc::from_raw(chan_ptr as *const YnzChannel));
+    Arc::strong_count(&arc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::BgArgDropEntry;
+    // Test wakers are std `Waker`s built from a std `Arc` (`Waker: From<Arc<W>>`), which is
+    // never the channel's own `Arc` — under `--cfg loom` the glob import above would resolve
+    // `Arc` to loom's, so pin std's explicitly for the tests' own use.
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::task::Wake;
     use ynz_abi::{BG_ARG_KIND_HEAP_ARRAY, BG_ARG_KIND_RELEASED};
 

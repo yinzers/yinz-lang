@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1"]
 created_at: "2026-07-04"
 updated_at: "2026-09-03"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -14,7 +14,7 @@ metadata:
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) — **Phases 4 and 5 UNBLOCKED** (both design gates signed); **Phase 3 (loom substrate) is the frontier** — the plan's own sequencing (¶3.2 Concept, ¶3.4 Coordinating Instructions) lands loom before Phases 4/5's implementation work begins, so Phase 3 is next, not Phase 4/5 directly — read Phase 3's block before dispatching anything
+> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth; pending conductor review) — **Phases 4 and 5 are the frontier** (both design gates signed AND the loom substrate they build on exists); read Phase 3's completion block for the harness's shape (`crate::sync`, `src/loom_tests.rs`, the `--cfg loom` lane) before adding the close/Arc interleavings Phases 4/5 owe it
 >
 > ### 🔀 RESTRUCTURED 2026-09-03 — FRAGO 008: Phase 1's ownership scope MOVED to Phase 2
 >
@@ -1079,12 +1079,89 @@ suite/release-handoff).
      as a named scoping decision in this plan's Future Requirements, not a silent gap.
 - **Exit criteria:** GREEN spike verdict with a proven-tractable state space; production-path no-op
   confirmed; the real (non-scratch) sync logic covered with loom tests proven to have teeth (each
-  reverted fix caught); the Tokio-internals boundary named explicitly.
+  reverted fix caught); the Tokio-internals boundary named explicitly. **MET 2026-09-03** (executor
+  `m8-p3-20260903-a1`; completion block below) — pending the conductor's review round.
 - **Reviewer fan-out:** adversarial gate-checker (does the spike's GREEN verdict genuinely prove
   tractability and detection, not just "the harness compiled"); code-reviewer (the loom-swappable type
   pattern applied to the real code); design-doc-alignment reviewer (the harness sits in front of the
   existing reactive test suite as an ADDITIONAL check, never a replacement).
 - **Model tag:** `(coding, high, medium)` — checkpoint mark mandatory (>5 steps).
+
+**Phase 3 complete (executor `m8-p3-20260903-a1`, 2026-09-03; one segment, CHECKPOINT passed
+in-session, no handoff file):**
+
+- **Steps 1–2, spike verdict GREEN.** Throwaway `tests/loom_spike.rs` (self-contained minimal
+  mint/purge model on loom types; deleted after step 4 — a surviving second model of the same logic
+  would be the parallel-implementation class): 4,518 interleavings exhausted in 153 ms unbounded,
+  329 in 24 ms at `LOOM_MAX_PREEMPTIONS=2`; the unsalted-key (pre-M6 ABA) variant was reported by the
+  model's OWN assertion (`left: 111, right: 222` — the dead caller's value delivered), not by a harness
+  error. Both halves of the STOP condition held, so the phase proceeded.
+- **Step 3, production no-op PROVEN, not asserted.** Method: pre-refactor baseline of the release
+  `libynz_runtime.{rlib,a}` and a single-CGU LLVM-IR emit (`cargo rustc --release --lib --
+  --emit=llvm-ir -C codegen-units=1`, 48,336 lines), rebuilt after the swap and diffed. Raw IR diff:
+  78 lines, every one a `core::panic::Location` constant (`<{ ptr, [16 x i8] }>` = file/len/line/col)
+  whose line number shifted by the inserted `cfg` lines; masking only those 16 payload bytes and the
+  content-hash `@alloc_*` names gives a **0-line diff** (83 Location constants on both sides, same
+  line count). Disassembled `.text` of every object in the staticlib: 0 instruction lines differ (only
+  `.llvm.<module-hash>` section-name suffixes). Re-run after the loom-only `mpsc_witness` field was
+  added: still 0 masked lines. R3's mitigation is satisfied by construction — `crate::sync` is a bare
+  `pub(crate) use std::sync::{Arc, Mutex, MutexGuard}` in every non-loom build.
+- **Step 4, the real code behind the swap.** `crates/ynz-runtime/src/sync.rs` (the ONE import site);
+  `channel.rs`/`handle.rs` import `Arc`/`Mutex`/`MutexGuard` from it; `CURRENT_DRIVE` declared as two
+  cfg twins (loom's `thread_local!` has no `const {}` form and loom runs every model thread on one OS
+  thread, so a std thread-local would be shared); `CALLER_GENERATION` and `runtime.rs`'s Tokio
+  lifecycle statics deliberately NOT swapped (documented in `sync.rs`). Six models in
+  `src/loom_tests.rs`, all driving the real extern-C shims / the one keyed send core / the one purge
+  helper / the real `SpawnStateFnFuture` drop ladder, unbounded exhaustive counts: ABA same-token
+  new-generation 987 · orphan purge, frame producer 3 · orphan purge, handle producer (real
+  `ynz_handle_send_poll` → `ynz_handle_free`) 3 · drop-ladder kind-2 arm with a live co-owner 12 ·
+  drop-ladder kind-2 arm where the ladder may hold the last reference 9 · recv register-before-poll
+  42,563 — whole lane ~1.5 s. A loom-only per-channel `mpsc_witness` atomic (one RMW before each Tokio
+  mpsc call) makes the untracked Tokio calls dependent for loom's DPOR so their relative orders are
+  exhaustively explored rather than incidentally; measured optional for the teeth below (caught with
+  or without it), kept for the exhaustiveness guarantee, rationale on `YnzChannel::mpsc_step`.
+- **Step 5, teeth — each fix reverted in the working tree, loom run, tree restored (git-diff sha256
+  verified identical before/after every revert; script under the session scratchpad, not committed):**
+  ABA unsalted key → `loom_aba_*` reports the dead value delivered ✓ · `purge_pending_sends` made a
+  no-op → BOTH `loom_orphan_purge_on_frame_cancellation` and `loom_orphan_purge_on_handle_free` report
+  the surviving entry ✓ · kind-2 arm's purge removed → `loom_drop_ladder_*_with_live_co_owner` reports
+  the orphan ✓ · kind-2 arm's ORDER swapped (release ref, then purge) → the lane dies with **SIGSEGV**
+  (use-after-free when the ladder held the last reference) — red, but as a memory-safety crash, not a
+  loom assertion: the purge→free order is a sequential property, not an interleaving one, and its
+  proper home is the Miri/ASan sanitizer lane, named as such · recv poll-then-record → `loom_recv_*`
+  reports `lost wakeup: consumer A is Pending with a value buffered and was never woken` ✓ (found in
+  0.01 s). Two harness defects were found and fixed BY these teeth runs, both recorded so the next
+  reader does not re-learn them: the drop-glue log was a process-global static shared by libtest's
+  parallel test threads (fixed by per-iteration payload tagging, not by serializing), and the recv
+  model's post-join probe `recv` itself drained `recv_waiters` and re-woke the receiver the race had
+  lost (fixed by snapshotting wake counts before probing).
+- **Step 6, boundary named** — Future Requirements #4 below rewritten with the concrete mechanism.
+  Additional scoping: the handle-side P2-7 `ynz_handle_recv_poll` register-before-poll fix is a
+  panic-then-Pending robustness property, not an interleaving one (a single receiver's mpsc slot is
+  never clobbered), so it is NOT a loom model — its existing deterministic `HandleOrderProbe` test with
+  `panic_at_mpsc_clone` stays the coverage.
+- **Demo & Error Gallery:** considered, N/A — this phase adds no executable language surface (dev/CI
+  harness only; zero change to `libynz_runtime.a`, proven above).
+- **Round 1 grading (conductor, 2026-09-03).** `green-check-low` (Haiku) → `VERDICT: green` (27
+  lib + 4 integration + 6 loom non-vacuous; clippy clean plain and `--cfg loom`; release build;
+  gitleaks clean). Seats from the manifest: `plan-adherence-low` (Haiku) → clean; `test-quality-medium`
+  (Sonnet) → **1 BLOCKER** — the kind-2 drop-ladder purge→free ORDER is asserted by no model: the
+  last-reference loom model catches a swap only by SIGSEGV, the live-co-owner model
+  (`loom_tests.rs:398-451`) passes the swap clean (re-run by the seat, 12 interleavings); 1 minor
+  (CI runs unbounded only; bound-2 passes locally on all six); `code-reviewer-medium` (Fable) →
+  `VERDICT: findings`, 0 blockers, 3 should-fix (the same ORDER gap as a should-fix — one producer,
+  one fix; `mpsc_witness` has no `mpsc_step()` before the `retain` that drops parked `Send`
+  futures, so the orphan models explore 3 interleavings each; the CI loom step lacks `pipefail`,
+  making the grep the accidental sole failure gate), 1 minor (`IMP-concurrency.md:1019` overclaims
+  "one import site" — `runtime.rs:26` is a named exemption). The one-bullet IMP edit was graded
+  inside `code-reviewer`'s brief rather than earning a `doc-auditor` seat. **Conductor defect,
+  recorded:** two tree-mutating seats (`test-quality` revert experiments, `code-reviewer` reads)
+  ran concurrently in one checkout; `code-reviewer` observed the ladder arm in its REVERTED order
+  mid-grade. Tree restoration was sha256-verified so the grades stand, but from here any seat that
+  reverts code runs ALONE. Fix round 2 answers `red:test-quality`.
+- **CI:** a `Loom` step added to `.github/workflows/ci.yml`'s main job (own `target/loom` dir; asserts
+  ≥1 test passed so a filter drift cannot pass vacuously).
+- **Registry:** no entries — nothing user-facing.
 
 #### Phase 4 — Implement: Channel Close Semantics + P2-3 Leak Fix
 
@@ -1925,9 +2002,12 @@ pattern. Considered and declined.
   `docker compose run --rm dev cargo test --workspace`, `docker compose run --rm dev cargo clippy
   --workspace -- -D warnings`, `docker compose run --rm dev cargo fmt --all`. No `-it`; every dispatch
   non-interactive.
-- **Loom:** added as a dev-dependency behind `#[cfg(loom)]` / a `loom` cargo feature on `ynz-runtime`
-  (Phase 3); loom test runs are their own `cargo test --features loom` invocation inside the same
-  Docker `dev` service, never a separate toolchain.
+- **Loom:** a `[target.'cfg(loom)'.dependencies]` entry on `ynz-runtime` (Phase 3, landed) — reachable
+  only under `RUSTFLAGS='--cfg loom'`, deliberately NOT a Cargo feature (a feature is enableable by any
+  consumer; a cfg is not, and it keeps tokio's own `all(test, loom)` gate inert). Loom test runs are
+  their own invocation inside the same Docker `dev` service, never a separate toolchain:
+  `RUSTFLAGS='--cfg loom' CARGO_TARGET_DIR=/work/target/loom cargo test -p ynz-runtime --release --lib
+  -- loom_ --nocapture` (own target dir so the cfg'd rebuild never invalidates the main one).
 - **Reference artifacts:** the concurrency-release audit
   (`.claude/audits/2026-07-04-concurrency-release-audit.md`) is the primary evidence base, same as M6/M7.
   `registry/features.toml`'s `auto-arc-codegen-emission` / `auto-arc-cautionary-tint` /
@@ -1970,13 +2050,20 @@ pattern. Considered and declined.
 3. **(Contingent) Track 3 re-deferral, if Phase 7 takes Branch B** — the concrete four-field deferral
    text lands here at Phase 7 execution time, replacing this placeholder, with the updated
    `background-handle-cancel-injection` registry entry's `ships_in`/`triggers` fields cited as evidence.
-4. **Loom's Tokio-internals boundary** — **WHAT:** loom model-checks only the synchronization logic
-   ynz-runtime owns directly (`pending_sends`, the drop ladder, recv-poll ordering); it does NOT and
-   cannot model-check Tokio's own internal `mpsc`/scheduler implementation. **WHY not closed:**
-   structurally out of reach — loom cannot instrument code it doesn't control the compilation of.
-   **COST:** unbounded/not applicable — this is a permanent scoping boundary, not a deferred task.
-   **TRIGGER:** none; this is a named, permanent limitation, recorded so no future reader mistakes "loom-
-   verified" for "every layer, including Tokio's own internals, model-checked."
+4. **Loom's Tokio-internals boundary** (Phase 3, landed 2026-09-03) — **WHAT:** loom model-checks
+   only the synchronization logic ynz-runtime owns directly (`pending_sends`, `recv_waiters`, the
+   channel refcount, the published drive identity, the drop ladder's kind-2 arm, recv-poll ordering);
+   it does NOT and cannot model-check Tokio's own internal `mpsc`/semaphore/scheduler implementation.
+   **The mechanism, verified at Phase 3:** tokio gates its own loom paths on `cfg(all(test, loom))`,
+   which is never true for a dependency, so under ynz-runtime's `RUSTFLAGS='--cfg loom'` tokio compiles
+   as plain std and each `try_send`/`poll_recv`/endpoint-future poll is one opaque step; the
+   loom-only `YnzChannel::mpsc_witness` atomic makes those steps DEPENDENT for loom's DPOR so their
+   relative orders are exhaustively explored — the black box modeled as one atomic object — but
+   nothing inside a step is. **WHY not closed:** structurally out of reach — loom cannot instrument
+   code it doesn't control the compilation of. **COST:** unbounded/not applicable — this is a
+   permanent scoping boundary, not a deferred task. **TRIGGER:** none; this is a named, permanent
+   limitation, recorded so no future reader mistakes "loom-verified" for "every layer, including
+   Tokio's own internals, model-checked."
 5. **(Contingent) Any Auto-Arc topology residual Phase 5 step 7 names** — if Phase 2's decided topology
    covers a bounded slice (e.g. single-shared-value spawns but not full N-way fan-out), the concrete
    four-field deferral for the residual lands here at Phase 5 execution time, replacing this

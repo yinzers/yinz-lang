@@ -2,6 +2,12 @@ pub mod arc;
 pub mod channel;
 pub mod handle;
 pub mod runtime;
+pub(crate) mod sync;
+
+/// Loom model-checking harness (v0.3-M8 Phase 3) — compiled ONLY under
+/// `RUSTFLAGS='--cfg loom' cargo test`; see `sync.rs` for the swap and the boundary.
+#[cfg(all(test, loom))]
+mod loom_tests;
 pub use arc::{ynz_arc_clone, ynz_arc_free, ynz_arc_new};
 pub use channel::{
     ynz_channel_create, ynz_channel_free, ynz_channel_recv_poll, ynz_channel_send_poll, YnzChannel,

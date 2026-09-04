@@ -11,6 +11,31 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p3-20260903-a1` — 2026-09-03 — **Phase 3 executed end to end (loom substrate), one segment,
+  no handoff.** Spike GREEN on both STOP halves (4,518 interleavings / 153 ms unbounded; the
+  reintroduced unsalted-key ABA reported by the model's own assertion). Production no-op proven by
+  a pre/post single-CGU LLVM-IR diff: 0 lines after masking only `core::panic::Location` line/col
+  bytes and `@alloc_*` content-hash names (raw diff = 78 lines, all Location constants); 0 instruction
+  lines differ across the staticlib's disassembled `.text`. Landed: `crates/ynz-runtime/src/sync.rs`
+  (`Arc`/`Mutex`/`MutexGuard` re-export shim, std in every non-loom build), `channel.rs`/`handle.rs`
+  imports swapped, `CURRENT_DRIVE` cfg twins, loom-only `YnzChannel::mpsc_witness`, six models in
+  `src/loom_tests.rs`, `[target.'cfg(loom)'.dependencies] loom = "=0.7.2"` + `check-cfg` lint
+  declaration in `ynz-runtime/Cargo.toml`, a `Loom` CI step. Teeth: five reverts run in the working
+  tree and restored (git-diff sha256 identical before/after each) — ABA, orphan (both producers),
+  ladder purge removed, recv poll-then-record all reported by loom assertions; ladder purge/free
+  ORDER swapped dies with SIGSEGV (a memory-safety class, named for the sanitizer lane, not a loom
+  finding). Two harness bugs found by the teeth runs and fixed at the producer: a process-global
+  glue log shared by libtest's parallel threads (per-iteration payload tagging) and a post-join probe
+  that re-woke the lost receiver (wake counts snapshotted first). One hypothesis retracted in-session:
+  the `mpsc_witness` was added believing DPOR could not see the recv race; the revert is caught
+  without it — the witness stays for exhaustiveness over Tokio-call orderings with a corrected,
+  measured rationale on `mpsc_step` (2,985 → 42,563 interleavings). Scoping: handle-side P2-7 is a
+  panic-robustness property, not an interleaving, and is not a loom model. Throwaway spike file
+  deleted. Deviations from the step text: step 4's `runtime.rs:591-693` citation navigated by function
+  per FRAGO 002 (`SpawnStateFnFuture::drop`'s kind-2 arm); "dev-dependency / cargo feature" in
+  Sustainment replaced by the target-cfg dependency (lib code under `cfg(loom)` needs the crate; a
+  feature would be consumer-enableable) — plan text corrected. No commit (conductor seals).
+
 - `m8-p2-signoff-fix1-20260903` — 2026-09-03 — **Phase 2 sign-off fix round (docs only, six edits).**
   Plan step 6 no longer attributes `false` to packet item (h) — obligation + design leaning only.
   Plan's Teaching subsection repoints the stale `ConsumedBySend`-lives-in-`IMP-concurrency.md`
