@@ -78,10 +78,14 @@ use std::collections::{HashMap, HashSet};
 
 use ynz_ast::nodes::{
     Block, ContractSig, Expr, FunctionDecl, Item, Module, OwnershipModifier, PostfixOpKind,
-    ReceiverKind, Stmt,
+    ReceiverKind, Stmt, Type as AstType,
 };
 
-use crate::builtins::{array_method_is_mutating, fixed_method_is_mutating, map_method_is_mutating};
+use crate::builtins::{
+    array_method_is_mutating, builtin_method_returns_fresh, fixed_method_is_mutating,
+    map_method_is_mutating,
+};
+use crate::types::{channel_elem_drop, copy_is_independent, Type};
 
 // ── Public types ────────────────────────────────────────────────────────────────
 
@@ -127,15 +131,42 @@ impl EffectiveOwnership {
     }
 }
 
+/// Whether every `return` of a function yields a value nobody else reaches (v0.3-M8 Phase
+/// 4, `IMP-ownership.md` "Where the authority lives" fact 3). Bottom `Fresh`, raised to
+/// `MayAlias` in the same fixpoint loop as the ownership lattice; imported functions and
+/// functions the analysis never saw are `MayAlias`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Freshness {
+    /// Every return is a fresh expression, a `give` parameter, or an un-aliased local whose
+    /// initializer was fresh.
+    Fresh,
+    /// Some return reaches a value someone else holds. `param` names the parameter it
+    /// reaches through when one was found (`pick(share b) -> array<int> { return b.rows }`
+    /// → `Some("b")`), for the `TransferNeedsCopy` reason slot.
+    MayAlias { param: Option<String> },
+}
+
 /// The result of the effective-ownership fixpoint.
 ///
 /// `per_fn[name][i]` is the effective ownership of the `i`-th parameter of function
 /// `name`. Functions absent from the map (e.g. imported with no available body) are
 /// treated as all-`Unknown` by consumers — see [`EffectiveOwnershipReport::ownership_of`].
+///
+/// `consumed[name][i]` (v0.3-M8 Phase 4) is true when position `i` is a give position in
+/// fact — declared `give`, or passed whole by the body to a consumed position, or sent whole
+/// on an owned-heap channel — so a relay chain missing the `give` word is reported at every
+/// frame in ONE compile. It is a lower bound that only ever makes an error appear earlier;
+/// it never accepts a program whose signatures do not say `give`.
+///
+/// `returns_fresh[name]` is [`Freshness`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveOwnershipReport {
     /// Per function name → per-parameter effective ownership, indexed by position.
     pub per_fn: HashMap<String, Vec<EffectiveOwnership>>,
+    /// Per function name → per-parameter "is a consumed position" fact.
+    pub consumed: HashMap<String, Vec<bool>>,
+    /// Per function name → freshness of its return value.
+    pub returns_fresh: HashMap<String, Freshness>,
 }
 
 impl EffectiveOwnershipReport {
@@ -143,10 +174,13 @@ impl EffectiveOwnershipReport {
     ///
     /// For call sites that do not run the fixpoint (test harnesses that only inspect
     /// diagnostics, codegen paths with no auto-parallel candidate). A position the
-    /// analysis never saw is never treated as a proven read.
+    /// analysis never saw is never treated as a proven read; a callee the analysis never
+    /// saw is `MayAlias` and consumes nothing.
     pub fn empty() -> Self {
         EffectiveOwnershipReport {
             per_fn: HashMap::new(),
+            consumed: HashMap::new(),
+            returns_fresh: HashMap::new(),
         }
     }
 
@@ -161,6 +195,325 @@ impl EffectiveOwnershipReport {
             .and_then(|v| v.get(index).copied())
             .unwrap_or(EffectiveOwnership::Unknown)
     }
+
+    /// Is position `index` of `name` a consumed position (see the struct doc)? `false` for
+    /// an unknown function or position — the DECLARED `give` on the signature the call site
+    /// already reads is what accepts or rejects; this fact only adds the chain's frames.
+    pub fn consumed_of(&self, name: &str, index: usize) -> bool {
+        self.consumed
+            .get(name)
+            .and_then(|v| v.get(index).copied())
+            .unwrap_or(false)
+    }
+
+    /// Freshness of `name`'s return value; `MayAlias` for a function the analysis never saw.
+    pub fn returns_fresh_of(&self, name: &str) -> Freshness {
+        self.returns_fresh
+            .get(name)
+            .cloned()
+            .unwrap_or(Freshness::MayAlias { param: None })
+    }
+
+    /// True when `name` is a LOCAL function the fixpoint analyzed.
+    pub fn is_local_fn(&self, name: &str) -> bool {
+        self.per_fn.contains_key(name)
+    }
+}
+
+// ── Provenance: what does this expression denote, ownership-wise? ─────────────
+//
+// v0.3-M8 Phase 4 (`IMP-ownership.md` "Where the authority lives", fact 1). ONE exhaustive
+// `Expr` match with NO wildcard arm, in this module — the remedy for the corpse
+// `.claude/corpses.md` "Enumerating syntactic sites instead of threading the whole-program
+// ownership analysis": a new expression form is a compile error in exactly one function
+// until someone classifies it, and no sink inspects syntax again. Every transfer sink
+// (`check_transfer` in check.rs) consumes the four values below and nothing else.
+
+/// The ownership-level meaning of an expression's value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Provenance {
+    /// This evaluation is the value's only holder. Transferable; nothing to consume.
+    Fresh,
+    /// Exactly the value a binding names (`Ident` / `self`). Transferable iff the binding's
+    /// origin permits; consumes the binding's whole alias class.
+    Whole(String),
+    /// A value someone still reaches through the named roots — a field, an index, a loop
+    /// cell, a literal built from named values, a call that returns a piece of its argument.
+    /// Never transferable; the fix is `.copy()` on the reached piece. `Reaches([])` is a
+    /// piece of a fresh temporary (`makeBucket().rows`) — still not transferable.
+    Reaches(Vec<String>),
+    /// Cannot classify (function-value call, dynamic-dispatch result, imported non-fresh
+    /// callee, `.copy()` on a type whose copy is not yet independent). Never transferable.
+    Unknown,
+}
+
+/// What `provenance` needs from its caller: the whole-program facts (the report), the
+/// cross-module boundary, and a TYPE oracle (`None` = unknown). Typeck answers the oracle
+/// from `expr_types`; the fixpoint (which runs before any body is checked) answers it only
+/// for declared parameter types and value literals, and treats every other type as
+/// heap-typed — the conservative direction (a `Reaches` where typeck would say `Fresh`
+/// refuses a transfer, never admits one).
+pub struct ProvenanceCtx<'a> {
+    pub returns_fresh: &'a HashMap<String, Freshness>,
+    pub local_fns: &'a HashSet<String>,
+    pub imported_fn_names: &'a HashSet<String>,
+    pub type_of: &'a dyn Fn(&Expr) -> Option<Type>,
+}
+
+impl<'a> ProvenanceCtx<'a> {
+    /// The typeck-side context over a completed report.
+    pub fn from_report(
+        report: &'a EffectiveOwnershipReport,
+        local_fns: &'a HashSet<String>,
+        imported_fn_names: &'a HashSet<String>,
+        type_of: &'a dyn Fn(&Expr) -> Option<Type>,
+    ) -> Self {
+        ProvenanceCtx {
+            returns_fresh: &report.returns_fresh,
+            local_fns,
+            imported_fn_names,
+            type_of,
+        }
+    }
+
+    fn returns_fresh_of(&self, name: &str) -> Freshness {
+        self.returns_fresh
+            .get(name)
+            .cloned()
+            .unwrap_or(Freshness::MayAlias { param: None })
+    }
+}
+
+/// A type whose values are bits (or immortal string bytes) — holding one never aliases a
+/// heap allocation, so an element of that type contributes nothing to a literal's roots.
+/// `Error` counts as value-like so an earlier type error does not cascade into a transfer
+/// refusal. `None` (type unknown to the oracle) is treated as heap-typed by the callers.
+fn value_like(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::Number { .. }
+            | Type::String
+            | Type::Options { .. }
+            | Type::Nothing
+            | Type::Error
+    )
+}
+
+/// The roots a provenance reaches through, for folding into an aggregate. `None` = Unknown.
+fn roots_of(p: Provenance) -> Option<Vec<String>> {
+    match p {
+        Provenance::Fresh => Some(Vec::new()),
+        Provenance::Whole(n) => Some(vec![n]),
+        Provenance::Reaches(rs) => Some(rs),
+        Provenance::Unknown => None,
+    }
+}
+
+/// Fold the provenance of an aggregate's parts (a literal's elements, a call's arguments):
+/// `Fresh` iff every heap-typed part is `Fresh`; else `Reaches(∪ roots)`; `Unknown` if any
+/// part is. `skip_value_typed` drops parts the oracle proves value-like (a literal of ints
+/// is fresh; a call's int argument cannot be what the callee returns a piece of).
+fn fold_parts<'e>(
+    parts: impl Iterator<Item = &'e Expr>,
+    ctx: &ProvenanceCtx<'_>,
+    skip_value_typed: bool,
+) -> Provenance {
+    let mut roots: Vec<String> = Vec::new();
+    for part in parts {
+        if skip_value_typed {
+            if let Some(ty) = (ctx.type_of)(part) {
+                if value_like(&ty) {
+                    continue;
+                }
+            }
+        }
+        match roots_of(provenance(part, ctx)) {
+            Some(rs) => {
+                for r in rs {
+                    if !roots.contains(&r) {
+                        roots.push(r);
+                    }
+                }
+            }
+            None => return Provenance::Unknown,
+        }
+    }
+    if roots.is_empty() {
+        Provenance::Fresh
+    } else {
+        Provenance::Reaches(roots)
+    }
+}
+
+/// A user-function call result (plain call or UFCS): fresh iff the callee's every return is
+/// fresh, else a piece of whatever its arguments reach.
+fn call_result_provenance<'e>(
+    callee: &str,
+    args: impl Iterator<Item = &'e Expr>,
+    ctx: &ProvenanceCtx<'_>,
+) -> Provenance {
+    if ctx.imported_fn_names.contains(callee) && !ctx.local_fns.contains(callee) {
+        return Provenance::Unknown;
+    }
+    match ctx.returns_fresh_of(callee) {
+        Freshness::Fresh => Provenance::Fresh,
+        Freshness::MayAlias { .. } => match fold_parts(args, ctx, true) {
+            // A fresh-argument call to a may-alias callee still returns a piece of
+            // SOMETHING (a global, an argument's temporary) — never transferable.
+            Provenance::Fresh => Provenance::Reaches(Vec::new()),
+            other => other,
+        },
+    }
+}
+
+/// THE classification (`IMP-ownership.md` "Classification" table). Exhaustive over `Expr`
+/// — no wildcard arm, by design.
+pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
+    match expr {
+        // Value bits, or immortal string bytes.
+        Expr::IntLit(..)
+        | Expr::NumberLit(..)
+        | Expr::BoolLit(..)
+        | Expr::StringLit(..)
+        | Expr::NoneLit { .. }
+        | Expr::BinOp { .. }
+        | Expr::UnaryOp { .. }
+        | Expr::InterpolatedString(..)
+        | Expr::Is { .. } => Provenance::Fresh,
+        // Exactly the value a binding names — the binding's ORIGIN decides transferability.
+        Expr::Ident(name, _) => Provenance::Whole(name.clone()),
+        Expr::SelfValue { .. } => Provenance::Whole("self".to_string()),
+        // A piece of whatever the receiver chain roots in; a piece of a fresh temp is
+        // `Reaches([])` — still not transferable.
+        Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. } => {
+            Provenance::Reaches(
+                root_binding_name(receiver)
+                    .map(|r| vec![r.to_string()])
+                    .unwrap_or_default(),
+            )
+        }
+        Expr::ArrayLit { elements, .. } => fold_parts(elements.iter(), ctx, true),
+        Expr::MapLit { entries, .. } => {
+            fold_parts(entries.iter().flat_map(|(k, v)| [k, v]), ctx, true)
+        }
+        Expr::StructLit { fields, .. } => fold_parts(fields.iter().map(|f| &f.value), ctx, true),
+        Expr::PostfixOp { receiver, op, .. } => match op {
+            // `.copy()` is fresh iff the copy is genuinely independent for the receiver's
+            // type (parity-tested against codegen's `PostfixOpKind::Copy` arms); the FR#10
+            // alias-no-op types are `Unknown` and can never be transferred through it.
+            PostfixOpKind::Copy => match (ctx.type_of)(receiver) {
+                Some(ty) if copy_is_independent(&ty) => Provenance::Fresh,
+                _ => Provenance::Unknown,
+            },
+            // `.freeze()` is typed `nothing` (no sink can accept it, nothing to hold). If it
+            // is ever retyped to return its receiver, this row becomes `provenance(receiver)`
+            // in the same commit — the non-wildcard match is what brings the reader here.
+            PostfixOpKind::Freeze => Provenance::Fresh,
+        },
+        Expr::Call(call) => match &call.callee {
+            // `channel<T>()` is a constructor call — the sole reference. (`array<T>()` /
+            // `map<K, V>()` are not forms the parser accepts; an empty container is a
+            // literal, classified above.)
+            Expr::Ident(name, _) if name == "channel" => Provenance::Fresh,
+            Expr::Ident(name, _)
+                if ctx.local_fns.contains(name) || ctx.imported_fn_names.contains(name) =>
+            {
+                call_result_provenance(name, call.args.iter(), ctx)
+            }
+            // A free-function intrinsic (`range`, the string parsers, …) constructs its
+            // result; nothing it returns is a piece of an argument.
+            Expr::Ident(..) => Provenance::Fresh,
+            // Function-value call: unclassifiable.
+            _ => Provenance::Unknown,
+        },
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            // UFCS: a user function reachable by this name IS the callee, receiver first.
+            if ctx.local_fns.contains(method) || ctx.imported_fn_names.contains(method) {
+                return call_result_provenance(
+                    method,
+                    std::iter::once(receiver.as_ref()).chain(args.iter()),
+                    ctx,
+                );
+            }
+            // A `dynamic Contract` dispatch result cannot be classified.
+            if let Some(Type::Dynamic { .. }) = (ctx.type_of)(receiver) {
+                return Provenance::Unknown;
+            }
+            // Builtin method: a value-typed result is fresh bits; a heap-typed result comes
+            // from the ONE `builtins` table, default `Reaches([receiver root])`.
+            if let Some(ty) = (ctx.type_of)(expr) {
+                if value_like(&ty) {
+                    return Provenance::Fresh;
+                }
+            }
+            if builtin_method_returns_fresh(method) {
+                return Provenance::Fresh;
+            }
+            Provenance::Reaches(
+                root_binding_name(receiver)
+                    .map(|r| vec![r.to_string()])
+                    .unwrap_or_default(),
+            )
+        }
+        Expr::Wait(inner, _) => provenance(inner, ctx),
+        // A task handle — the spawn's sole reference.
+        Expr::Background(..) => Provenance::Fresh,
+        Expr::Error(..) => Provenance::Unknown,
+    }
+}
+
+/// True when `stmt` makes `name` denote a (new) value: a `let`/`const` declaration (first
+/// or shadowing), a reassignment, or a `for` loop variable. The three binding forms of the
+/// ten `Stmt` variants (`IMP-ownership.md` "Binding events"); the walker below treats a
+/// rebinding of the tracked name as `Writes` — the honest extension the Auto-Arc caller-side
+/// proof needs (a rebinding ends the value's read-only life under that name).
+pub fn stmt_rebinds(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Let { name: n, .. } => n == name,
+        Stmt::Assign { target, .. } => target == name,
+        Stmt::For { var, .. } => var == name,
+        Stmt::Expr(_)
+        | Stmt::If { .. }
+        | Stmt::Match { .. }
+        | Stmt::While { .. }
+        | Stmt::Return { .. }
+        | Stmt::FieldAssign { .. }
+        | Stmt::IndexAssign { .. } => false,
+    }
+}
+
+/// The per-name body classifier over an arbitrary statement suffix — the existing
+/// parameter classifier exposed for a LOCAL (it never cared that the name was a parameter).
+/// The Auto-Arc caller-side proof asks it about the statements between a group's spawns.
+pub fn classify_binding_in_stmts(
+    name: &str,
+    stmts: &[Stmt],
+    report: &EffectiveOwnershipReport,
+    declared_writes: &HashMap<String, HashSet<usize>>,
+    imported_fn_names: &HashSet<String>,
+) -> EffectiveOwnership {
+    let mut acc = EffectiveOwnership::Reads;
+    for stmt in stmts {
+        acc = acc.join(classify_param_in_stmt(
+            name,
+            stmt,
+            &report.per_fn,
+            declared_writes,
+            imported_fn_names,
+        ));
+        if acc == EffectiveOwnership::Writes {
+            return acc;
+        }
+    }
+    acc
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -184,8 +537,10 @@ pub fn analyze(
     module: &Module,
     declared_writes: &HashMap<String, HashSet<usize>>,
     imported_fn_names: &HashSet<String>,
+    resolve_ty: &dyn Fn(&AstType) -> Type,
 ) -> EffectiveOwnershipReport {
     let fns = local_functions(module);
+    let local_fn_names: HashSet<String> = fns.iter().map(|f| f.name.clone()).collect();
 
     // Map: fn name → parameter names (in order). The body walk matches a parameter by
     // name; this gives the name set + position index for each local function.
@@ -203,6 +558,15 @@ pub fn analyze(
     // walk and the fixpoint only ever raise these. Declared `lend`/`give` positions are
     // seeded to `Writes` directly (the author already committed to a write there).
     let mut report: HashMap<String, Vec<EffectiveOwnership>> = HashMap::new();
+    // v0.3-M8 Phase 4: `consumed` seeded from the declared `give` positions (false→true
+    // monotone); `returns_fresh` seeded at its bottom, `Fresh` (raised to `MayAlias`).
+    let mut consumed: HashMap<String, Vec<bool>> = HashMap::new();
+    let mut returns_fresh: HashMap<String, Freshness> = HashMap::new();
+    // The send-consumed fact is gated on the parameter's DECLARED type resolving to an
+    // owned-heap channel element kind — the fixpoint has no type environment, and the only
+    // builtin `send` that takes an `array`/`map` is the conduit send, so the element type
+    // IS the parameter's own declared type (`IMP-ownership.md` fact 2).
+    let mut param_transfers: HashMap<String, Vec<bool>> = HashMap::new();
     for f in &fns {
         let declared = declared_writes.get(&f.name);
         let row: Vec<EffectiveOwnership> = (0..f.params.len())
@@ -215,11 +579,30 @@ pub fn analyze(
             })
             .collect();
         report.insert(f.name.clone(), row);
+        consumed.insert(
+            f.name.clone(),
+            f.params
+                .iter()
+                .map(|p| p.ownership == Some(OwnershipModifier::Give))
+                .collect(),
+        );
+        param_transfers.insert(
+            f.name.clone(),
+            f.params
+                .iter()
+                .map(|p| {
+                    channel_elem_drop(&resolve_ty(&p.ty)).is_some_and(|k| k.transfers_source())
+                })
+                .collect(),
+        );
+        returns_fresh.insert(f.name.clone(), Freshness::Fresh);
     }
 
     // Kleene fixpoint: re-walk every body, joining in escalations discovered using the
     // CURRENT effective ownership of every callee (transitive). The height-3 lattice + the
-    // monotone JOIN guarantee termination (module doc "Termination").
+    // monotone JOIN guarantee termination (module doc "Termination"). The two Phase 4 facts
+    // ride the same loop: each is a finite monotone lattice (height 2), each depends only on
+    // callees' CURRENT values, so the same `changed` flag converges all three together.
     loop {
         let mut changed = false;
         for f in &fns {
@@ -227,21 +610,69 @@ pub fn analyze(
             for (i, param_name) in names.iter().enumerate() {
                 // A position already at the top cannot rise further — skip it.
                 let current = report[&f.name][i];
-                if current == EffectiveOwnership::Writes {
-                    continue;
+                if current != EffectiveOwnership::Writes {
+                    let discovered = classify_param_in_block(
+                        param_name,
+                        &f.body,
+                        &report,
+                        declared_writes,
+                        imported_fn_names,
+                    );
+                    let joined = current.join(discovered);
+                    if joined != current {
+                        // Safe: `report` was seeded with an entry for every local function
+                        // name (and the `i`th slot for every param) before the loop began.
+                        report.get_mut(&f.name).unwrap()[i] = joined;
+                        changed = true;
+                    }
                 }
-                let discovered = classify_param_in_block(
-                    param_name,
-                    &f.body,
-                    &report,
-                    declared_writes,
+                // consumed[f][i]: passed whole to a consumed position, or sent whole on an
+                // owned-heap channel.
+                if !consumed[&f.name][i] {
+                    let transfers = param_transfers[&f.name][i];
+                    let found = param_consumed_in_block(
+                        param_name,
+                        &f.body,
+                        &consumed,
+                        &local_fn_names,
+                        imported_fn_names,
+                        transfers,
+                    );
+                    if found {
+                        consumed.get_mut(&f.name).unwrap()[i] = true;
+                        changed = true;
+                    }
+                }
+            }
+            // returns_fresh[f]: every `return` fresh, else MayAlias (naming the parameter it
+            // reaches through when there is one).
+            if returns_fresh[&f.name] == Freshness::Fresh {
+                let type_of = fixpoint_type_oracle(f, resolve_ty);
+                let ctx = ProvenanceCtx {
+                    returns_fresh: &returns_fresh,
+                    local_fns: &local_fn_names,
                     imported_fn_names,
+                    type_of: &type_of,
+                };
+                let give_params: HashSet<&str> = f
+                    .params
+                    .iter()
+                    .filter(|p| p.ownership == Some(OwnershipModifier::Give))
+                    .map(|p| p.name.as_str())
+                    .collect();
+                let params: HashSet<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+                let mut fresh_locals: HashSet<String> = HashSet::new();
+                let mut verdict = Freshness::Fresh;
+                returns_freshness_in_block(
+                    &f.body,
+                    &ctx,
+                    &give_params,
+                    &params,
+                    &mut fresh_locals,
+                    &mut verdict,
                 );
-                let joined = current.join(discovered);
-                if joined != current {
-                    // Safe: `report` was seeded with an entry for every local function name
-                    // (and the `i`th slot for every param) before the fixpoint loop began.
-                    report.get_mut(&f.name).unwrap()[i] = joined;
+                if verdict != Freshness::Fresh {
+                    returns_fresh.insert(f.name.clone(), verdict);
                     changed = true;
                 }
             }
@@ -251,17 +682,348 @@ pub fn analyze(
         }
     }
 
-    EffectiveOwnershipReport { per_fn: report }
+    EffectiveOwnershipReport {
+        per_fn: report,
+        consumed,
+        returns_fresh,
+    }
 }
 
 /// Test-only entry point: run the fixpoint and return the report for exact assertions.
 ///
 /// Mirrors `may_block::suspends_set_for_test`. Computes `declared_writes` and
 /// `imported_fn_names` from the module itself (no imports), so tests can pass raw source.
+/// Declared parameter types resolve through an empty shape table (builtins only).
 pub fn analyze_for_test(module: &Module) -> EffectiveOwnershipReport {
     let declared_writes = declared_write_positions(module);
     let imported: HashSet<String> = HashSet::new();
-    analyze(module, &declared_writes, &imported)
+    let shapes = crate::shapes::ShapeTable::default();
+    analyze(module, &declared_writes, &imported, &|t| {
+        shapes.resolve_ast_type(t)
+    })
+}
+
+// ── v0.3-M8 Phase 4: the `consumed` and `returns_fresh` walkers ──────────────
+
+/// Does `f`'s body pass `param_name` WHOLE to a consumed position (a callee position whose
+/// `consumed` fact is true — declared `give` or discovered), or send it whole on a builtin
+/// conduit `send` when its declared type is an owned-heap element kind (`transfers`)?
+fn param_consumed_in_block(
+    param_name: &str,
+    block: &Block,
+    consumed: &HashMap<String, Vec<bool>>,
+    local_fns: &HashSet<String>,
+    imported_fn_names: &HashSet<String>,
+    transfers: bool,
+) -> bool {
+    block.stmts.iter().any(|s| {
+        param_consumed_in_stmt(
+            s,
+            param_name,
+            consumed,
+            local_fns,
+            imported_fn_names,
+            transfers,
+        )
+    })
+}
+
+fn param_consumed_in_stmt(
+    stmt: &Stmt,
+    param_name: &str,
+    consumed: &HashMap<String, Vec<bool>>,
+    local_fns: &HashSet<String>,
+    imported_fn_names: &HashSet<String>,
+    transfers: bool,
+) -> bool {
+    let in_expr = |e: &Expr| {
+        param_consumed_in_expr(
+            e,
+            param_name,
+            consumed,
+            local_fns,
+            imported_fn_names,
+            transfers,
+        )
+    };
+    let in_block = |b: &Block| {
+        param_consumed_in_block(
+            param_name,
+            b,
+            consumed,
+            local_fns,
+            imported_fn_names,
+            transfers,
+        )
+    };
+    match stmt {
+        Stmt::Expr(e) => in_expr(e),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => in_expr(value),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(&in_expr),
+        Stmt::FieldAssign { target, value, .. } => in_expr(target) || in_expr(value),
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => in_expr(receiver) || in_expr(index) || in_expr(value),
+        Stmt::If { cond, body, .. } => in_expr(cond) || in_block(body),
+        Stmt::While { cond, body, .. } => in_expr(cond) || in_block(body),
+        Stmt::For { iter, body, .. } => in_expr(iter) || in_block(body),
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            in_expr(scrutinee)
+                || arms.iter().any(|a| in_block(&a.body))
+                || else_arm.as_ref().is_some_and(&in_block)
+        }
+    }
+}
+
+fn param_consumed_in_expr(
+    expr: &Expr,
+    param_name: &str,
+    consumed: &HashMap<String, Vec<bool>>,
+    local_fns: &HashSet<String>,
+    imported_fn_names: &HashSet<String>,
+    transfers: bool,
+) -> bool {
+    let recurse = |e: &Expr| {
+        param_consumed_in_expr(
+            e,
+            param_name,
+            consumed,
+            local_fns,
+            imported_fn_names,
+            transfers,
+        )
+    };
+    let consumed_at = |callee: &str, i: usize| -> bool {
+        consumed
+            .get(callee)
+            .and_then(|row| row.get(i).copied())
+            .unwrap_or(false)
+    };
+    match expr {
+        Expr::Call(call) => {
+            if let Expr::Ident(callee, _) = &call.callee {
+                for (i, arg) in call.args.iter().enumerate() {
+                    if arg_is_binding(arg, param_name) && consumed_at(callee, i) {
+                        return true;
+                    }
+                }
+            } else if recurse(&call.callee) {
+                return true;
+            }
+            call.args.iter().any(recurse)
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            let is_user_fn = local_fns.contains(method) || imported_fn_names.contains(method);
+            if is_user_fn {
+                // UFCS: receiver is position 0, args are 1..
+                if arg_is_binding(receiver, param_name) && consumed_at(method, 0) {
+                    return true;
+                }
+                for (i, arg) in args.iter().enumerate() {
+                    if arg_is_binding(arg, param_name) && consumed_at(method, i + 1) {
+                        return true;
+                    }
+                }
+            } else if method == "send"
+                && transfers
+                && args.len() == 1
+                && arg_is_binding(&args[0], param_name)
+            {
+                // The builtin conduit send of an owned-heap payload — the parameter's declared
+                // type is the channel's element type (no receiver lookup needed).
+                return true;
+            }
+            recurse(receiver) || args.iter().any(recurse)
+        }
+        Expr::PostfixOp { receiver, .. } => recurse(receiver),
+        Expr::BinOp { lhs, rhs, .. } => recurse(lhs) || recurse(rhs),
+        Expr::UnaryOp { operand, .. } => recurse(operand),
+        Expr::FieldAccess { receiver, .. } => recurse(receiver),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => recurse(receiver) || recurse(index),
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => recurse(inner),
+        Expr::Is { expr: inner, .. } => recurse(inner),
+        Expr::StructLit { fields, .. } => fields.iter().any(|f| recurse(&f.value)),
+        Expr::ArrayLit { elements, .. } => elements.iter().any(recurse),
+        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| recurse(k) || recurse(v)),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| {
+            if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                recurse(e)
+            } else {
+                false
+            }
+        }),
+        Expr::Ident(..)
+        | Expr::IntLit(..)
+        | Expr::NumberLit(..)
+        | Expr::BoolLit(..)
+        | Expr::StringLit(..)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(..) => false,
+    }
+}
+
+/// The fixpoint's type oracle for `provenance`: it runs before any body is checked, so it
+/// knows only DECLARED parameter types (by name, unless a `let` in the body rebinds the
+/// name) and the value literals — everything else is `None` (treated as heap-typed, the
+/// conservative direction). Typeck's `check_transfer` answers from `expr_types` instead.
+fn fixpoint_type_oracle<'a>(
+    f: &'a FunctionDecl,
+    resolve_ty: &'a dyn Fn(&AstType) -> Type,
+) -> impl Fn(&Expr) -> Option<Type> + 'a {
+    let rebound: HashSet<String> = collect_let_names(&f.body);
+    move |e: &Expr| match e {
+        Expr::IntLit(..) => Some(Type::Int),
+        Expr::NumberLit(..) => Some(Type::Number { precision: 34 }),
+        Expr::BoolLit(..) => Some(Type::Bool),
+        Expr::StringLit(..) | Expr::InterpolatedString(..) => Some(Type::String),
+        Expr::Ident(name, _) if !rebound.contains(name) => f
+            .params
+            .iter()
+            .find(|p| &p.name == name)
+            .map(|p| resolve_ty(&p.ty)),
+        _ => None,
+    }
+}
+
+/// Every name a `let` in `block` (at any depth) binds — the names the declared-parameter
+/// oracle must NOT answer for, since a shadowing `let` can change the name's type.
+fn collect_let_names(block: &Block) -> HashSet<String> {
+    let mut out = HashSet::new();
+    fn walk(stmts: &[Stmt], out: &mut HashSet<String>) {
+        for s in stmts {
+            match s {
+                Stmt::Let { name, .. } => {
+                    out.insert(name.clone());
+                }
+                Stmt::For { var, body, .. } => {
+                    out.insert(var.clone());
+                    walk(&body.stmts, out);
+                }
+                Stmt::If { body, .. } | Stmt::While { body, .. } => walk(&body.stmts, out),
+                Stmt::Match { arms, else_arm, .. } => {
+                    for a in arms {
+                        walk(&a.body.stmts, out);
+                    }
+                    if let Some(eb) = else_arm {
+                        walk(&eb.stmts, out);
+                    }
+                }
+                Stmt::Expr(_)
+                | Stmt::Assign { .. }
+                | Stmt::Return { .. }
+                | Stmt::FieldAssign { .. }
+                | Stmt::IndexAssign { .. } => {}
+            }
+        }
+    }
+    walk(&block.stmts, &mut out);
+    out
+}
+
+/// Walk `block` tracking which locals are FRESH (initializer fresh, never aliased by another
+/// name) and lower `verdict` to `MayAlias` at the first `return` that yields a value someone
+/// else reaches. Branch bodies share the tracking state (conservative: an alias on any path
+/// un-freshens the name everywhere).
+fn returns_freshness_in_block(
+    block: &Block,
+    ctx: &ProvenanceCtx<'_>,
+    give_params: &HashSet<&str>,
+    params: &HashSet<&str>,
+    fresh_locals: &mut HashSet<String>,
+    verdict: &mut Freshness,
+) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Let { name, value, .. }
+            | Stmt::Assign {
+                target: name,
+                value,
+                ..
+            } => {
+                // The new value of `name`: fresh iff its initializer is fresh. A `Whole(b)`
+                // initializer aliases `b` — both names now hold one value; neither is fresh.
+                let p = provenance(value, ctx);
+                match p {
+                    Provenance::Fresh => {
+                        fresh_locals.insert(name.clone());
+                    }
+                    Provenance::Whole(b) => {
+                        fresh_locals.remove(&b);
+                        fresh_locals.remove(name);
+                    }
+                    Provenance::Reaches(_) | Provenance::Unknown => {
+                        fresh_locals.remove(name);
+                    }
+                }
+            }
+            Stmt::For { var, body, .. } => {
+                fresh_locals.remove(var);
+                returns_freshness_in_block(body, ctx, give_params, params, fresh_locals, verdict);
+            }
+            Stmt::If { body, .. } | Stmt::While { body, .. } => {
+                returns_freshness_in_block(body, ctx, give_params, params, fresh_locals, verdict);
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for a in arms {
+                    returns_freshness_in_block(
+                        &a.body,
+                        ctx,
+                        give_params,
+                        params,
+                        fresh_locals,
+                        verdict,
+                    );
+                }
+                if let Some(eb) = else_arm {
+                    returns_freshness_in_block(eb, ctx, give_params, params, fresh_locals, verdict);
+                }
+            }
+            Stmt::Return { value: Some(v), .. } => {
+                let fresh = match provenance(v, ctx) {
+                    Provenance::Fresh => true,
+                    Provenance::Whole(n) => {
+                        fresh_locals.contains(&n) || give_params.contains(n.as_str())
+                    }
+                    Provenance::Reaches(roots) => {
+                        if *verdict == Freshness::Fresh {
+                            let param = roots.iter().find(|r| params.contains(r.as_str())).cloned();
+                            *verdict = Freshness::MayAlias { param };
+                        }
+                        continue;
+                    }
+                    Provenance::Unknown => false,
+                };
+                if !fresh && *verdict == Freshness::Fresh {
+                    // A whole non-fresh name: name the parameter when it is one.
+                    let param = match provenance(v, ctx) {
+                        Provenance::Whole(n) if params.contains(n.as_str()) => Some(n),
+                        _ => None,
+                    };
+                    *verdict = Freshness::MayAlias { param };
+                }
+            }
+            Stmt::Return { value: None, .. }
+            | Stmt::Expr(_)
+            | Stmt::FieldAssign { .. }
+            | Stmt::IndexAssign { .. } => {}
+        }
+    }
 }
 
 /// Collect, for each LOCAL function, the parameter positions whose DECLARED modifier is
@@ -328,9 +1090,12 @@ fn classify_param_in_block(
 /// Classify how `param_name` is used in a single statement.
 ///
 /// Direct field-assign / index-assign whose root binding is `param_name` is the clearest
-/// `Writes`. Reassigning the binding itself (`param_name = ...`) is a local rebinding, not
-/// a write through the value — it does not escalate. Every expression position is then
-/// walked for flow into a call/method/give.
+/// `Writes`. A REBINDING of the tracked name (`name = …`, a shadowing `let name`, a `for
+/// (name in …)`) is `Writes` too (v0.3-M8 Phase 4, via [`stmt_rebinds`]): the name stops
+/// denoting the value whose read-only life the caller is proving — for a parameter this is
+/// unreachable (reassigning a parameter is a compile error) but for the local a
+/// `classify_binding_in_stmts` caller asks about it is the honest answer. Every expression
+/// position is then walked for flow into a call/method/give.
 fn classify_param_in_stmt(
     param_name: &str,
     stmt: &Stmt,
@@ -344,6 +1109,10 @@ fn classify_param_in_stmt(
     let classify_block = |b: &Block| {
         classify_param_in_block(param_name, b, report, declared_writes, imported_fn_names)
     };
+
+    if stmt_rebinds(stmt, param_name) {
+        return EffectiveOwnership::Writes;
+    }
 
     match stmt {
         // Direct mutation through the parameter: `param.field = v` or `param[i] = v`.
@@ -655,7 +1424,10 @@ fn arg_is_binding(arg: &Expr, param_name: &str) -> bool {
 /// `self.field = v` roots in `self`: the parser emits `self` as `Expr::SelfValue`, so a
 /// direct field/element write through `share self` is rooted to the name `"self"` here, the
 /// same way the named-parameter case roots to its `Expr::Ident`.
-fn root_binding_name(expr: &Expr) -> Option<&str> {
+///
+/// THE one definition (v0.3-M8 Phase 4 collapsed `check.rs`'s twin onto it — parked item
+/// 27): typeck's const-deep-immutability guards and `provenance` read this same function.
+pub(crate) fn root_binding_name(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Ident(name, _) => Some(name.as_str()),
         Expr::SelfValue { .. } => Some("self"),
@@ -1526,7 +2298,10 @@ function entrypoint() -> nothing { }
         // remoteOp is imported (in this unit only by name); it declares no write positions.
         let imported: HashSet<String> = ["remoteOp"].iter().map(|s| s.to_string()).collect();
         let declared = declared_write_positions(&module);
-        let report = analyze(&module, &declared, &imported);
+        let shapes = crate::shapes::ShapeTable::default();
+        let report = analyze(&module, &declared, &imported, &|t| {
+            shapes.resolve_ast_type(t)
+        });
         assert_eq!(
             report.ownership_of("fa", 0),
             EffectiveOwnership::Unknown,
@@ -1548,7 +2323,10 @@ function entrypoint() -> nothing { }
         let imported: HashSet<String> = ["remoteWrite"].iter().map(|s| s.to_string()).collect();
         let mut declared = declared_write_positions(&module);
         declared.insert("remoteWrite".to_string(), [0].into_iter().collect());
-        let report = analyze(&module, &declared, &imported);
+        let shapes = crate::shapes::ShapeTable::default();
+        let report = analyze(&module, &declared, &imported, &|t| {
+            shapes.resolve_ast_type(t)
+        });
         assert_eq!(
             report.ownership_of("fa", 0),
             EffectiveOwnership::Writes,
@@ -1571,7 +2349,10 @@ function entrypoint() -> nothing { }
         );
         let imported: HashSet<String> = ["remoteOp"].iter().map(|s| s.to_string()).collect();
         let declared = declared_write_positions(&module);
-        let report = analyze(&module, &declared, &imported);
+        let shapes = crate::shapes::ShapeTable::default();
+        let report = analyze(&module, &declared, &imported, &|t| {
+            shapes.resolve_ast_type(t)
+        });
         assert_eq!(
             report.ownership_of("fa", 0),
             EffectiveOwnership::Writes,

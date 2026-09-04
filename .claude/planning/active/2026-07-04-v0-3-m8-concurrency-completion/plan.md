@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904"]
 created_at: "2026-07-04"
 updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -14,7 +14,7 @@ metadata:
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth; pending conductor review) — **Phases 4 and 5 are the frontier** (both design gates signed AND the loom substrate they build on exists); read Phase 3's completion block for the harness's shape (`crate::sync`, `src/loom_tests.rs`, the `--cfg loom` lane) before adding the close/Arc interleavings Phases 4/5 owe it
+> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth) · **Phase 4 ✅ implementation complete 2026-09-04** (executors `m8-p4-20260904-a1` RED seal, `m8-p4-20260904-a2` implementation; pending conductor review) — **Phase 5 is the frontier** (both design gates signed AND the loom substrate they build on exists); read Phase 3's completion block for the harness's shape (`crate::sync`, `src/loom_tests.rs`, the `--cfg loom` lane) before adding the close/Arc interleavings Phases 4/5 owe it
 >
 > ### 🔀 RESTRUCTURED 2026-09-03 — FRAGO 008: Phase 1's ownership scope MOVED to Phase 2
 >
@@ -1213,19 +1213,65 @@ in-session, no handoff file):**
 
 #### Phase 4 — Implement: Channel Close Semantics + P2-3 Leak Fix
 
-> **Status (2026-09-04, dispatch `m8-p4-20260904-a1`, segment 1 of N — the RED seal):** step 1
-> confirmed (both sign-offs recorded in `audit.md`). Every RED fixture steps 3a/3d/5 and the
-> SIGSEGV precondition call for is authored and observed RED for its intended reason — 23 named
-> tests in `crates/ynz-driver/tests/v03_m8_channel_close.rs` over 24 fixtures (one, the
-> `maybe<T> errors` handle twin, is a GREEN lock), plus the m8 gallery's Phase 4 section (25
-> triggers) with `error_galleries.rs` asserting the new count and 13 key phrases. No compiler code
-> touched. The SIGSEGV precondition is root-caused (`lower_let_background_handle`'s `ret_kind` has
-> no `maybe<T>` arm → `VALUE_WORD` hands the parent a dead-frame aggregate address). Resume at
-> `phase-4/step-2` after the conductor seals the RED commit — `handoff-phase-4.md` beside this file
-> carries every fixture's observed failure line, the gap-constant derivations to confirm at GREEN,
-> and four design/plan divergences found while authoring (no standalone `else` block exists for the
-> design's consumer loop; `array<T>()` is not a parser form; a pre-existing crossing-analysis
-> over-approximation rejects some `maybe<T>` consumer shapes; `r.or(none)` does not type-check).
+> **Status (2026-09-04, dispatch `m8-p4-20260904-a2`, segment 2 — IMPLEMENTATION COMPLETE, steps
+> 2–8 done; pending conductor review):** every one of segment 1's 24 fixtures is GREEN
+> (`cargo test -p ynz-driver --test v03_m8_channel_close`: 24 passed), the m8 gallery renders all
+> 29 diagnostics with every pinned phrase, and the named suite is green — `ynz-driver`
+> `integration` (530), `error_galleries` (10), `cross_impl_consistency` (7, both modes),
+> `ynz-runtime --lib` (110 incl. the new `refuse_closed`/close/kind-parity gates), the loom lane
+> (8 models, the two new close models revert-proven), `ynz-typeck` (all targets incl. the new
+> `diagnostic_template_parity`), `ynz-registry`, `ynz-lsp`. Shipped: 3a `ynz_map_clone` + the
+> `BuiltinMap` copy arm; 3d `ChannelElemDrop { Array, Map, NumberCell }` + `transfers_source()`
+> + the send-minted / receive-freed cell; 3b the transfer rule (`provenance`, `consumed`,
+> `returns_fresh` in the hoisted fixpoint; `Origin`/`ConsumedBy`/alias classes; ONE
+> `check_transfer` at the closed sink list incl. UFCS non-receiver args and `dynamic Contract`
+> with `follows` parity; the three registry-rendered diagnostics; `root_binding_name` twin
+> collapsed; the `Consumed` template reconciled + the parity test); 2/3/4b `.close()` at the
+> three typeck sites, bare `receive()` → `maybe<T>` through the one entry-block envelope, the
+> 19-site rewrite + demo (new `m8_demo` section, golden regenerated) + spec; the SIGSEGV
+> producer fixed (`HANDLE_RET_KIND_VALUE_MAYBE`); 3c `HandleChannelArgNeedsBinding`; 4 the
+> runtime `refuse_closed` collapse, `bg_arg_kind_is_releasable_payload` + `ALL_BG_ARG_KINDS` +
+> the per-kind parity test; `param_ownership` with `build.rs` validation; the M6 divergence entry
+> retired; the registry entries. Deviations and "design says A; compiler has B" findings are in
+> `audit.md`'s `m8-p4-20260904-a2` entry (four hotfix fixtures were relay-through-bare-parameter
+> instances the design's corpus scan predated — corrected to `give`; two `number` fixtures used
+> `.or(0)`, a form the language rejects by a shipped gate — corrected to `.or(0.0)`; the
+> pre-existing maybe-cannot-cross-a-suspension limit shaped one fixture rewrite and stands).
+>
+> **Round 1 grading (conductor, 2026-09-04).** RED segment sealed at `6b8a34d` (green-check skipped —
+> red by construction; `test-quality-high` graded the RED set → clean, and resolved the two parity
+> "unknowns" from untouched runtime code). Implementation segment: `green-check-medium` (Sonnet) →
+> red on fmt + one `manual_contains`; `executor-low` fix (`m8-p4-fix1-20260904`); `green-check-low`
+> re-gate → fmt 0, all tests green (110 lib, 8 loom, 24/10/530/7 driver, typeck all targets, Miri 20),
+> and **workspace `clippy --all-targets` red on pre-existing test-target lint debt in files this
+> phase never touched** (`ynz-lsp/tests/*`, `ynz-numerics`, `ynz-diagnostics/tests/jargon_audit.rs`,
+> `ynz-watch`); CI (`ci.yml:78`) runs clippy WITHOUT `--all-targets`, so it never sees them. Treated
+> GREEN for this diff; the debt is parked (31). Seats from the manifest — four read-only in
+> parallel, `test-quality` deferred to round 2 against the post-fix test set (recorded, not skipped):
+> `ux-medium` (Sonnet) → **2 BLOCKERS**: every rendered m8-gallery diagnostic points 3–5 lines past
+> its trigger (landing in the next function's `// WHY:` comment, leaking dev vocabulary to the
+> user); a span past EOF silently drops the WHAT-INSTEAD/WHY block and the executor reordered ONE
+> trigger around it, leaving `m8_close_with_args` as the new victim — a duct-tape tell; 1 should-fix
+> (30+ snake_case gallery fn names), 2 minor. `doc-auditor-high` (Sonnet) → **1 BLOCKER**:
+> `REF-concurrency.md:285-293`'s new example reads `late.message` on an `errors` value, which
+> ICEs today (`field_gep: receiver is not a Shape, got ErrorsCapable` — no `.message` arm beside
+> `.failed()`/`.or()`); 3 should-fix (stale `IMP-concurrency.md:987` paragraph contradicting its
+> own header; milestone tag + internal path in `channel-element-heap-upgrade`'s `why`, LSP-rendered;
+> stale "cheap, trivially-copyable" comment at `REF-ownership.md:83`). `code-reviewer-medium` (Fable)
+> → **2 BLOCKERS**: `check_transfer` (`check.rs:5083`) returns silently on an already-consumed
+> entry, so same-call alias pairs slip — `let other = rows; eat2(rows, other)` compiles and prints
+> `3 3`, `background eat2(rows, other)` gives the ladder two descriptors for one allocation; the
+> `NumberCell` predicate is RE-DERIVED at `emit.rs:12691`/`:12708` as `Type::Number { precision <=
+> 34 }` instead of threading `channel_elem_drop` — the twin class the enum exists to kill; 3
+> should-fix (`fixpoint_type_oracle` answers `None` for `let` locals → false `MayAlias` refusal on
+> builders with a computed scalar; `copy_is_independent` claims "parity-tested" with no test; the
+> parity ratchet's tier-2 check is token-presence), 2 minor. `plan-adherence-high` (Sonnet) → 0
+> blockers, no `frago-needed`, every exit criterion independently re-run incl. the RED at `6b8a34d`
+> in a worktree; 3 should-fix (`IMP-ownership.md:277` overclaims receiver parity vs item (j) and the
+> code; the renderer-EOF bug had no durable record; the same untested "parity-tested" claim), 1
+> minor. **Five blockers, three producers**: the diagnostics renderer's span handling (ux ×2), a
+> missing `ErrorsCapable` `.message` codegen arm (doc), the transfer check's same-call ordering +
+> one `ChannelElemDrop` twin (code). Fix round 2 answers `red:code-reviewer`.
 
 - **Task + purpose:** implement Phase 1's signed-off design — the explicit close mechanism, the live
   typed channel-closed error, and P2-3's closed-send drop-glue leak fixed through M6's single choke

@@ -197,14 +197,19 @@ function entrypoint() -> nothing {
   let wire: channel<int> = channel<int>(1)
   background relayScores(wire)
   let first = wire.receive()
+  let firstScore = first.or(0)
   let second = wire.receive()
+  let secondScore = second.or(0)
   let third = wire.receive()
-  let total = first + second + third
+  let thirdScore = third.or(0)
+  let total = firstScore + secondScore + thirdScore
   print(`runs this game: ${total.toString()}`)
 }
 ```
 
 `relayScores` runs as a background task and pushes three scores into the channel. `entrypoint` pulls them out one at a time. If the channel is empty when you call `.receive()`, your task pauses until a value arrives. You never write any locking or waiting code — the channel handles it.
+
+**`.receive()` gives you a `maybe<T>`, not a bare `T`.** A channel can be closed (see "Closing a channel" below), and once it is closed and empty, `.receive()` returns `none` instead of waiting forever. So you read a delivery the way you read any `maybe` value: `.or(fallback)` when you know a value is there, or `.exists()` and `.value` when the end of the stream matters to you.
 
 **A channel is the one value you can hand to a background task and keep using yourself.** Both sides hold the same channel safely — that is the entire point of a channel. (Every other value must be given away or copied — see "Ownership with background tasks" below.)
 
@@ -239,7 +244,86 @@ let wire: channel<int> = channel<int>(0)
 
 **A channel operation gets its own line.** `.send()` and `.receive()` can pause your task, so each one must be its own statement — `wire.send(5)` on its own line, or `let value = wire.receive()`. Burying one inside a bigger expression is a compile error that tells you to pull it out into a named variable first.
 
-**Channels carry simple values in v0.3:** `int`, `float`, `boolean`, `string`, `array<T>`, and `map<K, V>`. Sending a `shape` value isn't supported yet — the compile error suggests sending its fields as separate values and rebuilding the shape on the receiving side.
+**Channels carry these values in v0.3:** `int`, `float`, `boolean`, `string`, `number`, `array<T>`, and `map<K, V>`. Sending a `shape` value isn't supported yet — the compile error suggests sending its fields as separate values and rebuilding the shape on the receiving side.
+
+### Closing a channel
+
+A producer tells the other side "nothing more is coming" with `.close()`:
+
+```ynz
+function relayScores(lend wire: channel<int>) -> nothing {
+  wire.send(2)
+  wire.send(5)
+  wire.send(3)
+  wire.close()
+}
+
+function tallyScores(lend wire: channel<int>) -> int {
+  let total = 0
+  let stillOpen = true
+  while (stillOpen) {
+    let next = wire.receive()
+    if (next.exists()) {
+      total = total + next.value
+    }
+    stillOpen = next.exists()
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(4)
+  background relayScores(wire)
+  let total = tallyScores(wire)
+  print(`total: ${total.toString()}`)
+}
+```
+
+After `close()`:
+
+- `.receive()` still delivers everything that was already sent, in order, and then returns `none`. That `none` is how `tallyScores` knows the game is over — no counting, no timers.
+- `.send()` is refused with the channel-closed error on the usual `send() -> nothing errors` surface. Check it with `.failed()` if a late send is something you want to notice:
+
+```ynz
+let late = wire.send(9)
+if (late.failed()) {
+  print(late.message)
+}
+// The channel is closed - close() was called, so this value cannot be delivered.
+// Check .failed() on the send, or send everything before close().
+```
+
+- Calling `.close()` again does nothing — it is safe to close twice.
+- A send that was already waiting for room when the channel closed still goes through. Close means no *new* sends, not "throw away what was on its way."
+- A channel you never close behaves exactly as before: `.receive()` waits until a value arrives.
+
+`.close()` never pauses your task and cannot fail, so it can sit anywhere in a function. It belongs to the channel, not to a task handle — if you spawned a task with `let h = background worker(commands)`, you close `commands`, not `h`. For that reason the handle form needs its channel in a named binding:
+
+```
+let h = background doubler(makeWire())
+// COMPILE ERROR: `doubler` gets its command channel from `makeWire()`, which is not a named
+// binding — nothing outside the task can ever close that channel.
+// Bind the channel first, then spawn: `let commands = makeWire()` and
+// `let h = background doubler(commands, …)`. Call `commands.close()` when you are done sending.
+```
+
+### Sending an array or a map gives it away
+
+An `int`, a `string`, or a `number` is copied into the channel — your binding keeps working after the send. An `array<T>` or a `map<K, V>` is different: the channel hands the *same* value to whichever task receives it, so `send()` gives it away and the compiler refuses any later read of that binding:
+
+```ynz
+let rows: array<int> = [1, 2, 3]
+wire.send(rows)
+print(rows.count())
+// COMPILE ERROR: `rows` was sent into `wire` and cannot be used here — `send()` gave it away.
+// If you still need `rows` after sending it, send a copy instead: `wire.send(rows.copy())`.
+// If you only need it before the send, put this line above the `send()`.
+```
+
+Two more rules follow from the same idea:
+
+- A parameter you send must be declared `give` on its function, so the caller's binding is given up too. Without the word, the compile error names the function and the one-word fix: `function producer(lend wire: channel<array<int>>, give rows: array<int>)`.
+- You can only send something you hold whole. A field (`bucket.rows`), an item (`rows[0]`), the loop variable of a `for`, or a value built from other named values still belongs to someone here — the compile error tells you to send `.copy()` of it instead.
 
 ---
 
@@ -249,7 +333,8 @@ Storing the result of `background` gives you a **handle** — a two-way line to 
 
 ```ynz
 function gradeProspect(lend requests: channel<int>) -> int errors {
-  let jerseyNumber = requests.receive()
+  let command = requests.receive()
+  let jerseyNumber = command.or(0)
   return jerseyNumber * 2
 }
 

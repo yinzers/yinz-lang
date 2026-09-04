@@ -277,10 +277,14 @@ function m8_handle_channel_arg_needs_binding() -> nothing {
   h.send(21)
 }
 
-// WHY: `.close()` takes no arguments — "Call it bare: wire.close()".
-function m8_close_with_args() -> nothing {
-  let wire: channel<int> = channel<int>(2)
-  wire.close(1)
+// WHY: there is no `h.close()` — a handle is a message line TO the child, not the channel's
+// lifecycle; the unknown-method list on a HANDLE stays `send(value), receive()` and points
+// at the channel binding (`commands.close()`) as the act. (Placed ahead of the last triggers
+// so its span renders — the renderer drops a block whose span lands past the file's end.)
+function m8_close_on_handle() -> nothing {
+  let commands: channel<int> = channel<int>(2)
+  let h = background m8_doubler(commands)
+  h.close()
 }
 
 // WHY: the unknown-method list SPLITS per receiver — a channel's reads
@@ -291,10 +295,11 @@ function m8_unknown_method_on_channel() -> nothing {
   wire.peek()
 }
 
-function m8_close_on_handle() -> nothing {
-  let commands: channel<int> = channel<int>(2)
-  let h = background m8_doubler(commands)
-  h.close()
+
+// WHY: `.close()` takes no arguments — "Call it bare: wire.close()".
+function m8_close_with_args() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  wire.close(1)
 }
 
 // ────── positive reference case ──────

@@ -840,7 +840,7 @@ never fusable before; it never narrows what already fired.
 
 ## Channel Close — End-of-Stream Semantics (v0.3-M8; Phase 1 SIGNED OFF 2026-09-03 as narrowed by FRAGO 008 — the ownership half moved to [`IMP-ownership.md`](IMP-ownership.md) "Transfer — Who Else Holds This Value," signed off 2026-09-03 as Phase 2; ships Phase 4)
 
-**Status**: designed in v0.3-M8 Phases 1 and 2, both signed off 2026-09-03 (`audit.md`'s two SIGN-OFF records; `git log --grep=m8-p1` / `git log --grep=m8-p2` for the design rounds); nothing in this section is in the tree yet — v0.3-M8 Phase 4 implements it. Until then the shipped behavior is the one the "Bare `channel<T>` never closes" Design-Divergence entry below describes. This section is promoted out of that entry's one-paragraph format because the design has seven load-bearing parts (mechanism, name, receive typing, send ownership, idempotency, wake propagation, the deferred non-mechanism). Two facts a reader needs before the subsections: the shipped RUNTIME pointer-identity release protocol on the spawn-argument drop ladder (`861fd4d`, merged at `ec014d8`) is substrate this design builds on — "Two mechanisms, one rule" below states how it and Phase 4's typeck consume divide the ownership question, and the closed-send free lives in the runtime because of it; and the authoritative statement of *who else holds this value* — provenance, binding events and alias classes, the sink list, whole-chain reporting, `dynamic Contract` coverage — lives in [`IMP-ownership.md`](IMP-ownership.md) "Transfer — Who Else Holds This Value" (v0.3-M8 Phase 2). The subsections below keep the CHANNEL-specific facts (which element kinds transfer, the runtime release protocol, the closed-path free) and cite that section for the rule rather than restating it. History — the drafts, the three Phase 1 review rounds and what each changed — is in git: `cd71f7f` carries the first draft and fix round 1 (also found via `git log --grep=m8-p1`); `de631bf` carries fix rounds 2–3 and the sign-off — cite the SHA directly, its message does not carry the `m8-p1` token (parked item 26); `git log --grep=m8-p2` for the Phase 2 re-derivation.
+**Status**: designed in v0.3-M8 Phases 1 and 2, both signed off 2026-09-03 (`audit.md`'s two SIGN-OFF records; `git log --grep=m8-p1` / `git log --grep=m8-p2` for the design rounds); **SHIPPED in v0.3-M8 Phase 4** (`crates/ynz-runtime/src/channel.rs` `ynz_channel_close` / `refuse_closed`, typeck's `close` arm and `maybe<T>` receive, codegen's `conduit_recv_env` envelope; the fixture class is `crates/ynz-driver/tests/v03_m8_channel_close.rs`). This section is promoted out of that entry's one-paragraph format because the design has seven load-bearing parts (mechanism, name, receive typing, send ownership, idempotency, wake propagation, the deferred non-mechanism). Two facts a reader needs before the subsections: the shipped RUNTIME pointer-identity release protocol on the spawn-argument drop ladder (`861fd4d`, merged at `ec014d8`) is substrate this design builds on — "Two mechanisms, one rule" below states how it and Phase 4's typeck consume divide the ownership question, and the closed-send free lives in the runtime because of it; and the authoritative statement of *who else holds this value* — provenance, binding events and alias classes, the sink list, whole-chain reporting, `dynamic Contract` coverage — lives in [`IMP-ownership.md`](IMP-ownership.md) "Transfer — Who Else Holds This Value" (v0.3-M8 Phase 2). The subsections below keep the CHANNEL-specific facts (which element kinds transfer, the runtime release protocol, the closed-path free) and cite that section for the rule rather than restating it. History — the drafts, the three Phase 1 review rounds and what each changed — is in git: `cd71f7f` carries the first draft and fix round 1 (also found via `git log --grep=m8-p1`); `de631bf` carries fix rounds 2–3 and the sign-off — cite the SHA directly, its message does not carry the `m8-p1` token (parked item 26); `git log --grep=m8-p2` for the Phase 2 re-derivation.
 
 ### The decision in one paragraph
 
@@ -896,7 +896,7 @@ This is the one breaking change, and it is deliberate. Today `let v = ch.receive
 
 **The handle's `receive()` stays `T errors` — do not "unify" the two.** `h.receive()` delivers a message reply or the task's completion value, and a task can FAIL; that failure has to travel somewhere, and the handle's error arm is where it goes. `ch.receive()` has no task behind it: a channel ends, it does not fail. The two share a name because they share a verb (take the next thing out) and differ in return type because a task can go wrong while a channel can only run out. A future reader proposing "one `.receive()` type" is proposing either to lose the task's error (handle → `maybe<T>`) or to manufacture a failure that never happened (channel → `T errors`); both are worse than two honest types.
 
-**The end-of-stream consumer loop, in real syntax.** There is no `break` keyword, so the loop runs on a flag — this is the form the spec and demo will teach:
+**The end-of-stream consumer loop, in real syntax.** There is no `break` keyword and no standalone `else` block (`REF-control-flow.md` — only `else =>` inside a multi-case `if`), so the loop runs on a flag that is re-read from the delivery — this is the form the spec and demo teach (Phase 4 corrected an earlier sketch here that used a standalone `} else {`):
 
 ```ynz
 function tallyScores(lend wire: channel<int>) -> int {
@@ -906,9 +906,8 @@ function tallyScores(lend wire: channel<int>) -> int {
     let next = wire.receive()          // maybe<int> — none means the stream ended
     if (next.exists()) {
       total = total + next.value
-    } else {
-      stillOpen = false
     }
+    stillOpen = next.exists()
   }
   return total
 }
@@ -1155,13 +1154,9 @@ This follows the golden rules directly: **Golden Rule 5 (compile-time soundness 
 
 **Reversal path**: a real type+alias-aware ownership analysis (M4 borrow-checker completion — receiver types threaded through the analysis + intra-procedural alias tracking) that can PROVE a heap argument is both read-only AND non-aliased re-enables narrowing the floor to permit proven-read mutable-heap arguments to overlap. Until that exists, the floor stands. (M3d CPU-parallel reuses this same type-based write-effect source — the floor transfers unchanged.)
 
-### Bare `channel<T>` never closes — `receive()` after all producers finish parks forever (DESIGN RESOLVED v0.3-M8; entry retires when Phase 4 ships)
+### Bare `channel<T>` closes with `.close()` (SHIPPED v0.3-M8 Phase 4 — the M6 Phase 7 "never closes" entry is retired)
 
-**Scope note**: a v0.3-M4/M6 gap in the channel primitive itself, not the M3b pass — kept here so the shipped-state record stays in the one "documented divergence" home until the fix lands.
-
-**What ships today**: `YnzChannel` holds BOTH endpoints for its whole life, so neither Tokio closure signal can fire while any holder is alive; the fan-in pattern (N producers, one `receive()` loop) parks forever after the producers finish, and closure observed by one receiver is not propagated to co-waiters. Full mechanism, and why it is structural rather than a missing check, is in the "Channel Close — End-of-Stream Semantics" section above.
-
-**Resolution**: designed in v0.3-M8 Phase 1 as an explicit `.close()` action (with `receive()` on a bare channel becoming `maybe<T>`, `send()` giving its owned-heap payload, close-wakes-all-waiters, idempotent double-close, and auto-close-on-last-producer as a named four-field deferral) — see that section for the contract. It ships in v0.3-M8 Phase 4, at which point this entry is deleted and [`REF-concurrency.md`](../../reference/REF-concurrency.md) gains its "Closing a channel" subsection (spec files show only what exists, per [`spec-writing.md`](../../../.claude/rules/spec-writing.md), so the user-facing text lands with the code).
+The v0.3-M4/M6 divergence recorded here — `YnzChannel` held both endpoints for its whole life, so a fan-in consumer's `receive()` parked forever after the producers finished — no longer describes the tree: v0.3-M8 Phase 4 shipped the explicit `.close()` action, bare-channel `receive()` typed `maybe<T>`, close-wakes-every-waiter, idempotent double-close, and the runtime `refuse_closed` free. The contract, the runtime shape, and the one named deferral (auto-close on last-producer drop) live in "Channel Close — End-of-Stream Semantics" above; the user-facing text is [`REF-concurrency.md`](../../reference/REF-concurrency.md) "Closing a channel". This pointer stays so a reader of the old entry lands on the current design rather than on two contradictory records.
 
 ### `share` read-only enforcement is best-effort (transitive teaching error)
 

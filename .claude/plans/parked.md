@@ -256,6 +256,27 @@ sign-off applies them alongside the owed downstream plan edits** — the design 
     next test that mints a glue payload literal in `ynz-runtime`. Source plan-id
     `2026-07-04-v0-3-m8-concurrency-completion`.
 
+### Phase 4 — environment debt surfaced by green-check (2026-09-04)
+
+31. **Workspace `cargo clippy --all-targets -- -D warnings` is red on pre-existing test-target
+    lints CI never runs.** WHAT: `ynz-lsp/tests/{code_action.rs:172,176,202,206,completion.rs:807,
+    regression.rs:180,rename.rs:178,inlay_hint_array_to_fixed_edit.rs:234}`,
+    `ynz-numerics/{src/decimal128/ops.rs:695,tests/differential.rs:12,126}`,
+    `ynz-diagnostics/tests/jargon_audit.rs:{69,97,236,563}`, `ynz-watch/tests/long_session.rs:117`,
+    `ynz-registry/tests/consistency.rs:6` — `manual_contains`, `unused_imports`, `len_zero`,
+    `unnecessary_map_or`, `implicit_saturating_sub`, `while_let_on_iterator`, `single_match`,
+    `dead_code`. None of these files are in Phase 4's diff (`git diff --name-only HEAD` confirms);
+    clippy aborts at a different first-failing crate per run, so two green-check passes reported
+    disjoint "NEW" sets — both wrong. `.github/workflows/ci.yml:78` runs `cargo clippy --workspace
+    -- -D warnings` WITHOUT `--all-targets`, so CI has never seen a test-target lint. WHY deferred:
+    out of this milestone's charter (test hygiene across four unrelated crates); fixing it inside a
+    concurrency phase's diff would bury a 15-site mechanical sweep in a memory-safety commit. COST:
+    one mechanical `executor-low` round (~15 one-line fixes) plus adding `--all-targets` to the CI
+    clippy step — and the CI edit is Patrick's hard-to-reverse class, so it rides a confirm gate.
+    TRIGGER: Phase 9 close-out's full-workspace gate, at the latest; earlier if any phase's
+    green-check needs `--all-targets` clean to distinguish its own lints from the debt. Source
+    plan-id `2026-07-04-v0-3-m8-concurrency-completion`.
+
 ### Open exposure carrying a cheap in-scope guard — flagged under `no-duct-tape.md`
 
 11. **The `background-handle-close` deferral leaves a live window and names a cheap guard it does

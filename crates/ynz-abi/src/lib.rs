@@ -93,6 +93,15 @@ pub const HANDLE_RET_KIND_VALUE_HEAP_PTR: i64 = 4;
 /// `-> array<T> errors` / `-> map<K, V> errors`: the `EC_WORD` twin of `VALUE_HEAP_PTR` —
 /// the ok-word is a heap-stable pointer released from the drop ladder on the ok path.
 pub const HANDLE_RET_KIND_EC_HEAP_PTR: i64 = 5;
+/// Plain `-> maybe<T>` (v0.3-M8 Phase 4): the return slot holds the envelope's `{flag, bits}`
+/// PAIR inline (the resume fn stores the pair, never a pointer into its own dead stack) — a
+/// 16-byte aggregate exactly like `VALUE_NUMBER`, so extraction copies the 16 bytes to the
+/// handle-owned buffer before the frame is freed; completion is `{0, buf}`, and the parent
+/// reads `buf` as its `maybe<T>` envelope. Before this kind existed the fallthrough classified
+/// it `VALUE_WORD` and handed the parent the FLAG word as a pointer (SIGSEGV on `.value`).
+/// (`-> maybe<T> errors` needs no twin: its ok-word is already a heap cell the resume fn
+/// promotes at the return, `EC_WORD` reads it as-is.)
+pub const HANDLE_RET_KIND_VALUE_MAYBE: i64 = 6;
 
 // ── `background` spawn-argument drop-ladder descriptor kinds ─────────────────
 //
@@ -115,3 +124,24 @@ pub const BG_ARG_KIND_SHARED_CHANNEL: u64 = 2;
 /// runtime at that hand-off, never by codegen; the drop ladder skips the slot. Without this the
 /// same pointer is owned twice (ladder + channel) and freed under the receiver's feet.
 pub const BG_ARG_KIND_RELEASED: u64 = 3;
+
+/// Every `BG_ARG_KIND_*` value, for the runtime's per-kind alloc/free parity test that links
+/// [`bg_arg_kind_is_releasable_payload`] to the drop ladder's free match: a kind added here
+/// without a ladder arm (or the reverse) fails that test rather than leaking or double-freeing.
+pub const ALL_BG_ARG_KINDS: &[u64] = &[
+    BG_ARG_KIND_HEAP_SHAPE,
+    BG_ARG_KIND_HEAP_ARRAY,
+    BG_ARG_KIND_SHARED_CHANNEL,
+    BG_ARG_KIND_RELEASED,
+];
+
+/// Is a ladder slot of this kind a heap PAYLOAD the task can hand off (send into a channel,
+/// return through its handle) — i.e. one `release_ladder_payload` may rewrite to
+/// [`BG_ARG_KIND_RELEASED`]? Defined by INVERSION so a new heap kind is releasable by default
+/// rather than silently skipped (v0.3-M8 Phase 4; the previous hand-listed
+/// `HEAP_SHAPE`/`HEAP_ARRAY` filter would have missed a future `HEAP_MAP` and reopened the
+/// spawn-arg use-after-free door). A shared-channel slot is the task's own refcount, never a
+/// channel element (typeck rejects `channel<channel<T>>`); a released slot is terminal.
+pub const fn bg_arg_kind_is_releasable_payload(kind: u64) -> bool {
+    kind != BG_ARG_KIND_SHARED_CHANNEL && kind != BG_ARG_KIND_RELEASED
+}

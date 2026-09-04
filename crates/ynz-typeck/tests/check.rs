@@ -2967,7 +2967,8 @@ fn channel_from_shape_field_annotated_accepted() {
          function drain(b: Box) -> nothing {\n\
            let c: channel<int> = b.wire\n\
            let first = c.receive()\n\
-           print(first)\n\
+           let value = first.or(0)\n\
+           print(value)\n\
          }\n\
          function entrypoint() -> nothing { }",
     );
@@ -2982,7 +2983,8 @@ fn channel_alias_of_derivable_binding_accepted() {
            let a: channel<int> = channel<int>(4)\n\
            let b2 = a\n\
            let first = b2.receive()\n\
-           print(first)\n\
+           let value = first.or(0)\n\
+           print(value)\n\
          }",
     );
 }

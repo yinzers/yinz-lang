@@ -174,10 +174,10 @@ impl Drop for PendingBlockingGuard {
 // the count and frees exactly that many slots. Normal (non-spike) SM frames leave bytes 4-7 as
 // zero (ynz_alloc_zeroed guarantee), so the high-bits tag never false-matches.
 use ynz_abi::{
-    BG_ARG_KIND_HEAP_ARRAY, BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_RELEASED,
-    BG_ARG_KIND_SHARED_CHANNEL, FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE,
-    SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET,
-    SPIKE_HANDLE_SLOT_BYTES,
+    bg_arg_kind_is_releasable_payload, BG_ARG_KIND_HEAP_ARRAY, BG_ARG_KIND_HEAP_SHAPE,
+    BG_ARG_KIND_RELEASED, BG_ARG_KIND_SHARED_CHANNEL, FRAME_OFFSET_RETURN_SLOT,
+    FRAME_OFFSET_SLEEP_HANDLE, SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG,
+    SPIKE_HANDLE_BASE_OFFSET, SPIKE_HANDLE_SLOT_BYTES,
 };
 
 /// Extract the spike tag (high 16 bits) and handle count (low 16 bits) from a
@@ -912,9 +912,11 @@ impl DriveIdentity {
 /// (the channel's element drop glue exists; the handle return kind is `*_HEAP_PTR`) so a
 /// plain `int` payload is never compared at all — an `int` can hold any bits.
 ///
-/// Only payload kinds ([`BG_ARG_KIND_HEAP_SHAPE`], [`BG_ARG_KIND_HEAP_ARRAY`]) are
-/// releasable; a [`BG_ARG_KIND_SHARED_CHANNEL`] slot is a refcount the task itself holds and
-/// is never a channel element (typeck rejects `channel<channel<T>>`).
+/// Which kinds are releasable is THE shared `ynz_abi::bg_arg_kind_is_releasable_payload`
+/// predicate (defined by inversion: everything but [`BG_ARG_KIND_SHARED_CHANNEL`] — a refcount
+/// the task itself holds, never a channel element, typeck rejects `channel<channel<T>>` — and
+/// the terminal [`BG_ARG_KIND_RELEASED`]), parity-tested per kind against the drop ladder's
+/// free match so a new heap kind cannot be releasable-but-unfreed or freed-but-unreleasable.
 ///
 /// Time: O(n) where n = the task's descriptor count (bounded by its parameter count,
 /// typically 0-3). Space: O(1).
@@ -930,7 +932,7 @@ pub(crate) unsafe fn release_ladder_payload(drive: &DriveIdentity, bits: i64) ->
     let descs = std::slice::from_raw_parts_mut(drive.arg_drop_ptr, drive.arg_drop_count);
     let mut released = 0;
     for desc in descs {
-        if desc.kind != BG_ARG_KIND_HEAP_SHAPE && desc.kind != BG_ARG_KIND_HEAP_ARRAY {
+        if !bg_arg_kind_is_releasable_payload(desc.kind) {
             continue;
         }
         let slot = drive.frame_ptr.add(desc.byte_offset as usize) as *const i64;
@@ -1153,7 +1155,17 @@ impl Drop for SpawnStateFnFuture {
                             crate::channel::ynz_channel_free(heap_ptr);
                         }
                         _ => {
-                            // Unknown kind — defensive no-op; avoids a bad free on future kind values.
+                            // Unknown kind — defensive no-op; avoids a bad free on future
+                            // kind values. A kind the shared predicate calls RELEASABLE
+                            // (`bg_arg_kind_is_releasable_payload` is defined by inversion,
+                            // so any new heap kind is) MUST have its own free arm above —
+                            // reaching here with one is a leak on every task retire, caught
+                            // on the first debug run instead of silently.
+                            debug_assert!(
+                                !bg_arg_kind_is_releasable_payload(desc.kind),
+                                "drop ladder: releasable payload kind {} has no free arm",
+                                desc.kind
+                            );
                         }
                     }
                 }

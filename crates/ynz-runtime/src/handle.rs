@@ -99,6 +99,7 @@ pub use ynz_abi::{
     HANDLE_RET_KIND_EC_HEAP_PTR as RET_KIND_EC_HEAP_PTR,
     HANDLE_RET_KIND_EC_NUMBER as RET_KIND_EC_NUMBER, HANDLE_RET_KIND_EC_WORD as RET_KIND_EC_WORD,
     HANDLE_RET_KIND_VALUE_HEAP_PTR as RET_KIND_VALUE_HEAP_PTR,
+    HANDLE_RET_KIND_VALUE_MAYBE as RET_KIND_VALUE_MAYBE,
     HANDLE_RET_KIND_VALUE_NUMBER as RET_KIND_VALUE_NUMBER,
     HANDLE_RET_KIND_VALUE_WORD as RET_KIND_VALUE_WORD,
 };
@@ -254,8 +255,10 @@ unsafe fn extract_completion(frame: *mut u8, ret_kind: i64, shared: &HandleShare
             }
             (err, ok)
         }
-        RET_KIND_VALUE_NUMBER => {
-            // The return slot itself holds the 16-byte decimal — copy it out.
+        RET_KIND_VALUE_NUMBER | RET_KIND_VALUE_MAYBE => {
+            // The return slot itself holds a 16-byte aggregate — the decimal128, or (v0.3-M8
+            // Phase 4) a plain `maybe<T>`'s `{flag, bits}` envelope pair — copy it out before
+            // the frame is freed; the parent reads the handle-owned buffer through `ok`.
             let mut buf = Box::new([0u8; 16]);
             std::ptr::copy_nonoverlapping(slot as *const u8, buf.as_mut_ptr(), 16);
             let ok = buf.as_ptr() as i64;

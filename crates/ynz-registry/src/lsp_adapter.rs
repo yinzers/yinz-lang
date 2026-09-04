@@ -250,6 +250,22 @@ pub fn lsp_hover_for_token(name: &str) -> Option<HoverContent> {
             detail.push_str("\n\n");
             detail.push_str(doc);
         }
+        // `param_ownership` (v0.3-M8 Phase 4, FRAGO 003): the hover states a `give`
+        // parameter FROM the registry field — never from a typeck constant — so "send gives
+        // its value" is data the build validated, not prose that can drift.
+        if e.param_ownership.contains(&"give") {
+            let words = e
+                .param_ownership
+                .iter()
+                .zip(e.param_types.iter())
+                .map(|(w, t)| format!("`{w} {t}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            detail.push_str(&format!(
+                "\n\nOwnership: {words} — a `give` parameter is given away by the call, so the \
+                 argument's binding cannot be used afterward (send `.copy()` to keep it)."
+            ));
+        }
         return Some(HoverContent {
             markdown_body: detail,
             kind: if e.receiver_type.is_some() {

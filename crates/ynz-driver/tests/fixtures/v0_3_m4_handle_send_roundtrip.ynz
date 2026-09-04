@@ -3,7 +3,8 @@
 // value comes back via h.receive() — one full parent->child->parent cycle.
 function doubler(lend commands: channel<int>) -> int errors {
   let c = commands.receive()
-  return c + c
+  let command = c.or(0)
+  return command + command
 }
 
 function entrypoint() -> nothing {

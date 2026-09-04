@@ -12,5 +12,6 @@ function entrypoint() -> nothing {
   let ch: channel<int> = makeChannel()
   background feed(ch)
   let first = ch.receive()
-  print(first)
+  let value = first.or(0)
+  print(value)
 }

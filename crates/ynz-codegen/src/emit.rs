@@ -12476,6 +12476,13 @@ fn lower_let_background_handle<'ctx>(
             Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
         )
     };
+    // The ONE `ret_kind` classification. Every 16-byte aggregate the resume fn stores INLINE
+    // in the return slot needs its copy-before-frame-free kind: `number` (the i128) and — since
+    // v0.3-M8 Phase 4 — a plain `maybe<T>` (the `{flag, bits}` pair `lower_stmt_return` stores;
+    // the `_ => VALUE_WORD` fallthrough used to hand the parent the flag word as a pointer, the
+    // SIGSEGV `v0_3_m8_p4_handle_maybe_return.ynz` pins). A `-> maybe<T> errors` ok-word is a
+    // heap cell already (`maybe_to_heap_cell` at the return) and stays `EC_WORD`. The word
+    // types are listed by name so a future aggregate return cannot fall through silently.
     let ret_kind = match &sig_ret {
         Type::ErrorsCapable { inner } => match inner.as_ref() {
             Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_EC_NUMBER,
@@ -12483,8 +12490,27 @@ fn lower_let_background_handle<'ctx>(
             _ => ynz_abi::HANDLE_RET_KIND_EC_WORD,
         },
         Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_VALUE_NUMBER,
+        Type::Maybe { .. } => ynz_abi::HANDLE_RET_KIND_VALUE_MAYBE,
         t if is_heap_ptr(t) => ynz_abi::HANDLE_RET_KIND_VALUE_HEAP_PTR,
-        _ => ynz_abi::HANDLE_RET_KIND_VALUE_WORD,
+        Type::Nothing
+        | Type::Int
+        | Type::Bool
+        | Type::Float
+        | Type::String
+        | Type::Number { .. }
+        | Type::Options { .. }
+        | Type::Union { .. }
+        | Type::Sensitive { .. }
+        | Type::BuiltinChannel { .. }
+        | Type::BackgroundHandle { .. }
+        | Type::Range { .. }
+        | Type::BuiltinFixed { .. } => ynz_abi::HANDLE_RET_KIND_VALUE_WORD,
+        other => {
+            return Err(format!(
+                "handle spawn: `{callee_name}` returns {other:?}, an aggregate with no \
+                 completion-extraction kind — refusing to classify it as an i64 word"
+            ))
+        }
     } as u64;
 
     let handle_val = lower_sm_background_spawn(cg, call, &callee_name, Some(ret_kind))?;
@@ -12621,8 +12647,9 @@ fn emit_conduit_stmt<'ctx, 'g>(
 ///
 /// Result value at `post`:
 /// - send ops → `{i64 err, i64 0}` EC struct (`nothing errors`, Lock 8);
-/// - `ch.receive()` → the elem-typed value (Closed is structurally unreachable in v0.3-M4 —
-///   the channel object holds a sender — and aborts loudly via `ynz_unhandled_error`);
+/// - `ch.receive()` → a `maybe<elem>` envelope pointer (v0.3-M8 Phase 4): the ready paths
+///   deliver `{1, payload}`; the closed paths — reachable once `close()` has been called and
+///   the buffer is drained — deliver `none` (`{0, 0}`), never an error and never a hang;
 /// - `h.receive()` → `{i64 err, i64 ok}` EC struct (`T errors`; Closed = the typed
 ///   task-already-finished error, never a hang).
 ///
@@ -12654,10 +12681,71 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         let arg = &args[0];
         let arg_ty = cg.expr_type(arg);
         let v = lower_expr(cg, arg)?;
-        cg.to_i64_bits(v, &arg_ty)
-            .map_err(|e| format!("conduit send value bits: {e}"))?
+        // fr12 (v0.3-M8 Phase 4 step 3d): a decimal128 payload lives on the sender's frame
+        // (a pointer to per-site i128 storage) and would dangle in the buffer. Mint a fresh
+        // counted 16-byte cell through the ONE `number_to_heap_cell` helper the `background`
+        // decimal128 bg-arg path already uses; the cell's pointer bits ride the slot and the
+        // receive side (below) copies out and frees it. Both send producers (`ch.send`,
+        // `h.send`) pass through here, so the handle form gets the marshalling for free. The
+        // sender's own binding is untouched — `number` is copy-through (never given away).
+        if matches!(cg.resolve_type(&arg_ty), Type::Number { precision } if precision <= 34) {
+            let cell = cg.number_to_heap_cell(v.into_pointer_value(), "conduit_send_num")?;
+            cg.builder
+                .build_ptr_to_int(cell, i64t, "conduit_send_num_bits")
+                .map_err(|e| format!("conduit send number cell bits: {e}"))?
+        } else {
+            cg.to_i64_bits(v, &arg_ty)
+                .map_err(|e| format!("conduit send value bits: {e}"))?
+        }
     } else {
         i64t.const_int(0, false)
+    };
+    // fr12 receive side: a `channel<number>` delivers cell-pointer bits; the receiver copies
+    // the 16 bytes into its OWN per-site storage (one entry-block i128 slot per receive site)
+    // and frees the cell immediately, BEFORE the `maybe<number>` envelope is built — the cell
+    // never outlives the receive statement. Shared by both ready paths.
+    let recv_number_own: Option<PointerValue<'ctx>> = match op {
+        ConduitOp::ChanRecv { elem } if matches!(cg.resolve_type(elem), Type::Number { precision } if precision <= 34) => {
+            Some(cg.alloca_in_entry_llvm(cg.i128(), "conduit_recv_num_own")?)
+        }
+        _ => None,
+    };
+    // Copy a delivered number cell into the receiver-owned slot and free the cell; returns
+    // the slot's pointer bits (what the `maybe<number>` envelope carries).
+    let unpack_number_cell = |cg: &mut Cg<'ctx, '_>,
+                              cell_bits: inkwell::values::IntValue<'ctx>,
+                              own: PointerValue<'ctx>,
+                              label: &str|
+     -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let cell = cg
+            .builder
+            .build_int_to_ptr(cell_bits, cg.ptr(), &format!("conduit_recv_cell_{label}"))
+            .map_err(|e| format!("conduit recv cell ptr {label}: {e}"))?;
+        let bits = cg
+            .builder
+            .build_load(cg.i128(), cell, &format!("conduit_recv_num_{label}"))
+            .map_err(|e| format!("conduit recv number load {label}: {e}"))?
+            .into_int_value();
+        // The cell is a counted heap allocation with the allocator's alignment (16 here),
+        // but claim only the frame floor — the same discipline every i128 load of
+        // non-alloca provenance follows.
+        state_machine::claim_frame_i128_align(
+            bits.as_instruction_value()
+                .ok_or_else(|| format!("conduit recv number load {label}: no instruction"))?,
+        )?;
+        cg.builder
+            .build_store(own, bits)
+            .map_err(|e| format!("conduit recv number store {label}: {e}"))?;
+        cg.builder
+            .build_call(
+                cg.rt.ynz_number_cell_free,
+                &[cell.into()],
+                &format!("conduit_recv_cell_free_{label}"),
+            )
+            .map_err(|e| format!("conduit recv cell free {label}: {e}"))?;
+        cg.builder
+            .build_ptr_to_int(own, cg.i64(), &format!("conduit_recv_num_bits_{label}"))
+            .map_err(|e| format!("conduit recv number bits {label}: {e}"))
     };
 
     // One poll emission (used for both the first poll and the resumed poll). Returns the
@@ -12760,18 +12848,29 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
 
     // Closed-path error text per op (WHAT/WHAT-INSTEAD/WHY lives in the typeck teaching
     // diagnostics; this is the RUNTIME error message the typed `errors` value carries).
-    let closed_msg: &str = match op {
-        ConduitOp::ChanSend | ConduitOp::HandleSend => {
-            "The channel is closed - the receiving side is gone, so this value cannot be delivered. \
-             Handle the error with .failed() or .or(), or keep the receiver alive."
-        }
-        ConduitOp::HandleRecv => {
+    // `ch.receive()` has NO message: after `close()` and a drained buffer it returns `none`
+    // — the end of a stream is a normal value, not a failure (v0.3-M8 Phase 4).
+    let closed_msg: Option<&str> = match op {
+        ConduitOp::ChanSend | ConduitOp::HandleSend => Some(
+            "The channel is closed - close() was called, so this value cannot be delivered. \
+             Check .failed() on the send, or send everything before close().",
+        ),
+        ConduitOp::HandleRecv => Some(
             "This task already finished and its value was already received. Store the first \
-             receive() result in a binding if you need it in more than one place."
-        }
+             receive() result in a binding if you need it in more than one place.",
+        ),
+        ConduitOp::ChanRecv { .. } => None,
+    };
+    // The `maybe<T>` envelope a bare-channel `receive()` returns: ONE slot per receive site,
+    // hoisted to the function's ENTRY block (`alloca_in_entry_llvm`) — `conduit_post` sits
+    // inside the consumer's `while` body, so an insertion-point alloca would grow the resume
+    // function's stack by 16 bytes per iteration (v0.3-M8 Phase 4 step 4b). Every
+    // `.exists()`/`.value`/`.or()` site reads this same `{i64 has, i64 bits}` layout.
+    let recv_envelope: Option<PointerValue<'ctx>> = match op {
         ConduitOp::ChanRecv { .. } => {
-            "receive() on a closed channel - every sender is gone and the buffer is empty."
+            Some(cg.alloca_in_entry_llvm(cg.maybe_type(), "conduit_recv_env")?)
         }
+        _ => None,
     };
 
     // ── first poll ──────────────────────────────────────────────────────────
@@ -12807,10 +12906,12 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         .build_unconditional_branch(pending_block)
         .map_err(|e| format!("conduit suspend branch: {e}"))?;
 
-    // A closed-path error value builder (shared by both closed blocks).
+    // A closed-path error value builder (shared by both closed blocks of the send/handle ops;
+    // never called for `ch.receive()`, which builds `none` instead).
     let build_closed_err =
         |cg: &mut Cg<'ctx, '_>, label: &str| -> Result<inkwell::values::IntValue<'ctx>, String> {
-            let msg_global = build_string_global(cg.ctx, cg.module, closed_msg, ".conduit.closed");
+            let msg = closed_msg.ok_or("conduit: closed error built for a message-less op")?;
+            let msg_global = build_string_global(cg.ctx, cg.module, msg, ".conduit.closed");
             let err_ptr = cg
                 .builder
                 .build_call(
@@ -12835,11 +12936,14 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         Option<inkwell::values::IntValue<'ctx>>,
     )> = match &outs1 {
         Some((a, b)) => {
-            let va = cg
+            let mut va = cg
                 .builder
                 .build_load(i64t, *a, "conduit_pl1_a")
                 .map_err(|e| format!("conduit payload1 a: {e}"))?
                 .into_int_value();
+            if let Some(own) = recv_number_own {
+                va = unpack_number_cell(cg, va, own, "first")?;
+            }
             let vb = match b {
                 Some(bp) => Some(
                     cg.builder
@@ -12857,27 +12961,15 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         .build_unconditional_branch(post_bb)
         .map_err(|e| format!("conduit ready1 branch: {e}"))?;
 
-    // closed1.
+    // closed1. For `ch.receive()` the closed path is the LIVE end-of-stream path (v0.3-M8
+    // Phase 4: `close()` exists): it carries no value and builds no error — `post` stores a
+    // `none` envelope. The send/handle ops build their typed error value and merge it.
     cg.builder.position_at_end(closed1_bb);
-    let closed1_terminates = matches!(op, ConduitOp::ChanRecv { .. });
-    let err1 = if closed1_terminates {
-        // Structurally unreachable in v0.3-M4 (the channel object holds a sender), kept as
-        // a LOUD abort — never a silent wrong value (verification discipline).
-        let e = build_closed_err(cg, "closed1")?;
-        let e_ptr = cg
-            .builder
-            .build_int_to_ptr(e, ctx.ptr_type(AddressSpace::default()), "conduit_c1_ptr")
-            .map_err(|e| format!("conduit closed1 int_to_ptr: {e}"))?;
+    let recv_returns_none = matches!(op, ConduitOp::ChanRecv { .. });
+    let err1 = if recv_returns_none {
         cg.builder
-            .build_call(
-                cg.rt.ynz_unhandled_error,
-                &[e_ptr.into()],
-                "conduit_c1_abort",
-            )
-            .map_err(|e| format!("conduit closed1 abort: {e}"))?;
-        cg.builder
-            .build_unreachable()
-            .map_err(|e| format!("conduit closed1 unreachable: {e}"))?;
+            .build_unconditional_branch(post_bb)
+            .map_err(|e| format!("conduit closed1 branch: {e}"))?;
         None
     } else {
         let e = build_closed_err(cg, "closed1")?;
@@ -12910,11 +13002,14 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         Option<inkwell::values::IntValue<'ctx>>,
     )> = match &outs2 {
         Some((a, b)) => {
-            let va = cg
+            let mut va = cg
                 .builder
                 .build_load(i64t, *a, "conduit_pl2_a")
                 .map_err(|e| format!("conduit payload2 a: {e}"))?
                 .into_int_value();
+            if let Some(own) = recv_number_own {
+                va = unpack_number_cell(cg, va, own, "resume")?;
+            }
             let vb = match b {
                 Some(bp) => Some(
                     cg.builder
@@ -12933,22 +13028,10 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         .map_err(|e| format!("conduit ready2 branch: {e}"))?;
 
     cg.builder.position_at_end(closed2_bb);
-    let err2 = if closed1_terminates {
-        let e = build_closed_err(cg, "closed2")?;
-        let e_ptr = cg
-            .builder
-            .build_int_to_ptr(e, ctx.ptr_type(AddressSpace::default()), "conduit_c2_ptr")
-            .map_err(|e| format!("conduit closed2 int_to_ptr: {e}"))?;
+    let err2 = if recv_returns_none {
         cg.builder
-            .build_call(
-                cg.rt.ynz_unhandled_error,
-                &[e_ptr.into()],
-                "conduit_c2_abort",
-            )
-            .map_err(|e| format!("conduit closed2 abort: {e}"))?;
-        cg.builder
-            .build_unreachable()
-            .map_err(|e| format!("conduit closed2 unreachable: {e}"))?;
+            .build_unconditional_branch(post_bb)
+            .map_err(|e| format!("conduit closed2 branch: {e}"))?;
         None
     } else {
         let e = build_closed_err(cg, "closed2")?;
@@ -12988,16 +13071,51 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
                 .into_struct_value();
             Ok(r.into())
         }
-        ConduitOp::ChanRecv { elem } => {
-            // The delivered i64 payload from whichever ready path ran (closed paths abort).
+        ConduitOp::ChanRecv { .. } => {
+            // `maybe<T>`: the ready paths deliver `{1, payload}`, the closed paths (after
+            // `close()` and a drained buffer) deliver `{0, 0}` = `none`. Stored into the ONE
+            // entry-block envelope slot every `.exists()`/`.value`/`.or()` site reads; the
+            // result value is the envelope pointer, exactly what a non-SM maybe call yields.
+            let env = recv_envelope.expect("recv envelope slot");
+            let has_phi = cg
+                .builder
+                .build_phi(i64t, "conduit_recv_has")
+                .map_err(|e| format!("conduit recv has phi: {e}"))?;
             let val_phi = cg
                 .builder
                 .build_phi(i64t, "conduit_recv_val")
                 .map_err(|e| format!("conduit recv val phi: {e}"))?;
             let (p1, _) = payload1.expect("recv first-poll payload");
             let (p2, _) = payload2.expect("recv resume payload");
-            val_phi.add_incoming(&[(&p1, ready1_bb), (&p2, ready2_bb)]);
-            cg.i64_bits_to(val_phi.as_basic_value().into_int_value(), elem)
+            let one = i64t.const_int(1, false);
+            let zero = i64t.const_int(0, false);
+            has_phi.add_incoming(&[
+                (&one, ready1_bb),
+                (&zero, closed1_bb),
+                (&one, ready2_bb),
+                (&zero, closed2_bb),
+            ]);
+            val_phi.add_incoming(&[
+                (&p1, ready1_bb),
+                (&zero, closed1_bb),
+                (&p2, ready2_bb),
+                (&zero, closed2_bb),
+            ]);
+            let has_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env, 0, "conduit_recv_env_has")
+                .map_err(|e| format!("conduit recv env has gep: {e}"))?;
+            cg.builder
+                .build_store(has_gep, has_phi.as_basic_value().into_int_value())
+                .map_err(|e| format!("conduit recv env has store: {e}"))?;
+            let val_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env, 1, "conduit_recv_env_val")
+                .map_err(|e| format!("conduit recv env val gep: {e}"))?;
+            cg.builder
+                .build_store(val_gep, val_phi.as_basic_value().into_int_value())
+                .map_err(|e| format!("conduit recv env val store: {e}"))?;
+            Ok(env.into())
         }
         ConduitOp::HandleRecv => {
             // {err, ok} EC struct — ready paths deliver the task's (err, ok); closed paths
@@ -15497,15 +15615,19 @@ fn extract_range_bounds<'ctx>(
 ///
 /// The glue is registered ONCE at construction — the single authoritative element-drop choke
 /// point (authoritative-derivation.md); the runtime's `YnzChannel::drop` invokes it on each
-/// residual buffered element / suspended-send payload at last-ref teardown. Typeck
-/// (`check_channel_construction`) admits only int/float/bool/string/array/map element types,
-/// so exactly TWO non-null arms exist:
-///   - `array<T>` → `void glue(i64 bits) { ynz_array_drop(bits as ptr) }`
-///   - `map<K,V>` → `void glue(i64 bits) { ynz_map_drop(bits as ptr) }`
+/// residual buffered element / suspended-send payload at last-ref teardown, and
+/// `refuse_closed` on a refused send. The element-kind classification is THE one in
+/// `ynz_typeck::types::channel_elem_drop` (v0.3-M8 Phase 4): `None` → null glue (int/float/
+/// bool value bits; `string`'s DELIBERATELY glue-less immortal bytes — raw-malloc'd, invisible
+/// to the alloc counter, freeing would be unsound); `Some(kind)` → an EXHAUSTIVE match whose
+/// arms are function values, so a new kind cannot register a null:
+///   - `Array`      → `void glue(i64 bits) { ynz_array_drop(bits as ptr) }`
+///   - `Map`        → `void glue(i64 bits) { ynz_map_drop(bits as ptr) }`
+///   - `NumberCell` → `void glue(i64 bits) { ynz_number_cell_free(bits as ptr) }` (fr12: the
+///     16-byte cell a `number` send mints)
 ///
-/// int/float/bool are value bits (nothing to drop) and `string` is DELIBERATELY glue-less
-/// (raw-malloc'd immortal bytes, invisible to the alloc counter — freeing would be unsound):
-/// all pass null. A shape arm would be dead code (typeck rejects shape elements) — none exists.
+/// Typeck's construction gate is DERIVED from the same function (`channel_elem_supported`),
+/// so a shape arm would be dead code — none exists.
 fn channel_drop_glue<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     expr: &Expr,
@@ -15520,10 +15642,13 @@ fn channel_drop_glue<'ctx>(
             ))
         }
     };
-    let drop_fn = match &elem {
-        Type::BuiltinArray { .. } => cg.rt.ynz_array_drop,
-        Type::BuiltinMap { .. } => cg.rt.ynz_map_drop,
-        _ => return Ok(cg.ptr().const_null()),
+    let drop_fn = match ynz_typeck::types::channel_elem_drop(&elem) {
+        None => return Ok(cg.ptr().const_null()),
+        Some(kind) => match kind {
+            ynz_typeck::types::ChannelElemDrop::Array => cg.rt.ynz_array_drop,
+            ynz_typeck::types::ChannelElemDrop::Map => cg.rt.ynz_map_drop,
+            ynz_typeck::types::ChannelElemDrop::NumberCell => cg.rt.ynz_number_cell_free,
+        },
     };
     let name = format!("ynz_chan_drop_glue_{}", mangle_type(&elem));
     let glue_fn = match cg.module.get_function(&name) {
@@ -16137,6 +16262,25 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 Type::Dynamic { .. } => {
                     // Dynamic dispatch via vtable — deferred post-P5.
                     Err("codegen: dynamic dispatch call sites not yet lowered in M4 P4".to_string())
+                }
+                // v0.3-M8 Phase 4: `ch.close()` — the first NON-suspending conduit method
+                // (typeck keeps it out of `CHANNEL_SUSPENDING_METHODS`, so it never routes
+                // through `emit_conduit_stmt`): a thin call to `ynz_channel_close`, typed
+                // `nothing`. The suspending `send`/`receive` are conduit statements and are
+                // lowered by `emit_conduit_stmt`; reaching them here is a routing bug.
+                Type::BuiltinChannel { .. } => {
+                    if method == "close" {
+                        cg.builder
+                            .build_call(cg.rt.ynz_channel_close, &[recv_val.into()], "")
+                            .map_err(|e| format!("channel close: {e}"))?;
+                        Ok(cg.i32().const_int(0, false).into())
+                    } else {
+                        Err(format!(
+                            "codegen: conduit method `{method}` on a channel reached the \
+                             expression lowerer — suspending conduit methods are statements \
+                             lowered by emit_conduit_stmt"
+                        ))
+                    }
                 }
                 Type::BuiltinArray { elem } => {
                     let elem = elem.as_ref().clone();
@@ -19356,7 +19500,32 @@ fn lower_postfix_op<'ctx>(
                         Ok(cloned)
                     }
                 }
-                // For primitives, the value is already by-value — just return it.
+                // v0.3-M8 Phase 4 step 3a: `map<K, V>` `.copy()` is the same ONE-LEVEL
+                // deep copy as the array arm — a fresh header + fresh
+                // ctrl/keys/vals/insert_order buffers (`ynz_map_clone`, five counted
+                // allocs). Before this arm `table.copy()` fell through the catch-all
+                // below and returned `table` ITSELF, so `wire.send(table.copy())` would
+                // have sent the original allocation and silently reintroduced the
+                // cross-task aliasing the ConsumedBySend advice exists to close
+                // (independence lock: `v0_3_m8_p4_map_copy_independent.ynz`).
+                Type::BuiltinMap { .. } => {
+                    let map = recv_val.into_pointer_value();
+                    let cloned = cg
+                        .builder
+                        .build_call(cg.rt.ynz_map_clone, &[map.into()], "map_copy_clone")
+                        .map_err(|e| format!(".copy map clone: {e}"))?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| ".copy map clone: returned void".to_string())?;
+                    Ok(cloned)
+                }
+                // Value-bit primitives (int/float/bool/number/string) are already by-value
+                // (or immortal bytes) — the receiver is the copy. The types that still fall
+                // through here as an alias no-op — `maybe`, union, `fixed`, `dynamic` — are
+                // the FR#10 stub class the v0.3-M8 plan records; provenance classifies their
+                // `.copy()` as `Unknown` so they can never be transferred through it
+                // (`copy_is_independent` in ynz_typeck::types is the parity-tested twin of
+                // the arms above).
                 _ => Ok(recv_val),
             }
         }

@@ -87,10 +87,8 @@ fn ynz_run(name: &str) -> (String, String, i32) {
 /// env vars are read by the RUNTIME at process start (`ynz_rt_init`), so they reach the
 /// compiled program through `ynz run` unchanged.
 fn ynz_run_with_alloc_counter(name: &str) -> (u64, u64) {
-    let count_file = std::env::temp_dir().join(format!(
-        "ynz_m8_p4_alloc_{name}_{}.txt",
-        std::process::id()
-    ));
+    let count_file =
+        std::env::temp_dir().join(format!("ynz_m8_p4_alloc_{name}_{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&count_file);
     let mut cmd = Command::new(ynz_binary());
     cmd.args(["run", fixture(name).to_str().expect("utf-8 fixture path")])
@@ -134,7 +132,12 @@ fn assert_runs(name: &str, expected_stdout: &str) {
 /// received or buffered value is held to exit by its binding or by the channel). A smaller gap
 /// is a double free (the ladder, the glue, or `refuse_closed` freed a value someone still
 /// holds); a larger gap is a leak (P2-3's class).
-fn assert_runs_with_parity(name: &str, expected_stdout: &str, expected_gap: u64, gap_explained: &str) {
+fn assert_runs_with_parity(
+    name: &str,
+    expected_stdout: &str,
+    expected_gap: u64,
+    gap_explained: &str,
+) {
     assert_runs(name, expected_stdout);
     let (alloc, free) = ynz_run_with_alloc_counter(name);
     assert!(

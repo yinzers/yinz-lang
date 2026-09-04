@@ -245,3 +245,80 @@ pub fn is_trivially_copyable(ty: &Type) -> bool {
         Type::Int | Type::Float | Type::Bool | Type::Number { .. }
     )
 }
+
+// ── v0.3-M8 Phase 4: the ONE channel element-kind classification ─────────────
+//
+// `IMP-concurrency.md` "Which element types" / "Two mechanisms, one rule": the set of
+// channel element kinds whose payload the runtime must free is defined ONCE, here, as an
+// `Option<enum>` — typeck reads it for the transfer decision (`transfers_source`), codegen
+// reads it for the drop-glue function (an exhaustive match whose arms are function values,
+// never a nullable pointer), and `check_channel_construction`'s admitted set is DERIVED from
+// it (`channel_elem_supported`). Adding an element kind is a new variant; the compiler then
+// asks both questions of it — where the glue is, and whether the source binding is consumed
+// — and neither can be satisfied with a null or a default (authoritative-derivation.md).
+
+/// A channel element kind whose payload carries a runtime-owned heap allocation the
+/// channel must free (at teardown, on a purged/refused send) — i.e. the element kinds for
+/// which `ynz_channel_create` registers drop glue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelElemDrop {
+    /// `array<T>`: the payload IS the sender's allocation (`ynz_array_drop`).
+    Array,
+    /// `map<K, V>`: the payload IS the sender's allocation (`ynz_map_drop`).
+    Map,
+    /// `number` (decimal128, precision ≤ 34): the payload is a fresh 16-byte cell the SEND
+    /// mints (`number_to_heap_cell`) and the RECEIVE frees — never the sender's own storage
+    /// (fr12, `IMP-concurrency.md`). Glue: `ynz_number_cell_free`.
+    NumberCell,
+}
+
+impl ChannelElemDrop {
+    /// Does sending a value of this kind transfer the SOURCE binding — i.e. is the payload
+    /// the sender's own allocation, so the binding must be consumed at the send? `Array`/`Map`
+    /// hand over their allocation; a `NumberCell` is minted at the send, so the sender's
+    /// `number` binding stays its own 16 bytes and remains usable (copy-through, like `int`).
+    /// Exhaustive so a new kind must answer both questions.
+    pub fn transfers_source(self) -> bool {
+        match self {
+            ChannelElemDrop::Array | ChannelElemDrop::Map => true,
+            ChannelElemDrop::NumberCell => false,
+        }
+    }
+}
+
+/// THE classification of a channel element type into its drop kind (`None` = no
+/// runtime-owned payload: `int`/`float`/`bool` value bits, or `string`'s immortal bytes).
+pub fn channel_elem_drop(elem: &Type) -> Option<ChannelElemDrop> {
+    match elem {
+        Type::BuiltinArray { .. } => Some(ChannelElemDrop::Array),
+        Type::BuiltinMap { .. } => Some(ChannelElemDrop::Map),
+        Type::Number { precision } if *precision <= 34 => Some(ChannelElemDrop::NumberCell),
+        _ => None,
+    }
+}
+
+/// The element types `channel<T>()` admits — DERIVED from [`channel_elem_drop`] (glue-bearing
+/// kinds) plus the value-bit scalars and `string`, never a third hand-maintained list.
+/// `shape` elements and bignum `number` (precision > 34) stay rejected
+/// (`channel-element-heap-upgrade` in the feature registry).
+pub fn channel_elem_supported(elem: &Type) -> bool {
+    matches!(elem, Type::Int | Type::Float | Type::Bool | Type::String)
+        || channel_elem_drop(elem).is_some()
+}
+
+/// Is `.copy()` on a value of this type a genuinely INDEPENDENT copy (a fresh allocation
+/// nobody else reaches), so provenance may classify the result `Fresh`?
+///
+/// Parity-tested against codegen's `PostfixOpKind::Copy` arms (`emit.rs`): `array`
+/// (`ynz_array_clone_primitive` / SoA gather), `map` (`ynz_map_clone`, v0.3-M8 step 3a), and
+/// an inline `shape` (memcpy into a fresh alloca). Every other type still falls through
+/// codegen's `_ => Ok(recv_val)` alias no-op (the FR#10 stub class — `maybe`, union,
+/// `fixed`, `dynamic`), so its `.copy()` is `Unknown` and can never be transferred.
+/// Value-bit primitives are trivially independent.
+pub fn copy_is_independent(ty: &Type) -> bool {
+    is_trivially_copyable(ty)
+        || matches!(
+            ty,
+            Type::String | Type::Shape { .. } | Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+        )
+}

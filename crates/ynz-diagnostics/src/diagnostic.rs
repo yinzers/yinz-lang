@@ -34,6 +34,18 @@ pub enum DiagnosticKind {
     ImportNotFound,
     /// Value was already consumed (use-after-give).
     Consumed,
+    /// Value was sent into a channel and read afterward (use-after-send) — v0.3-M8 Phase 4.
+    ConsumedBySend,
+    /// A parameter is given away (sent, or passed to a `give` position) without being
+    /// declared `give` — v0.3-M8 Phase 4.
+    ParamNeedsGive,
+    /// A payload someone else still reaches (a field, an item, a loop cell, a literal built
+    /// from named values, a call result that is a piece of its argument) is given away —
+    /// v0.3-M8 Phase 4.
+    TransferNeedsCopy,
+    /// A handle-form spawn's command channel is not a named binding, so nothing outside the
+    /// task could ever close it — v0.3-M8 Phase 4.
+    HandleChannelArgNeedsBinding,
     /// Value is already borrowed.
     Borrowed,
     /// Function does not return on all paths.
@@ -67,6 +79,10 @@ impl DiagnosticKind {
             DiagnosticKind::HiddenAccess => "HiddenAccess",
             DiagnosticKind::ImportNotFound => "ImportNotFound",
             DiagnosticKind::Consumed => "Consumed",
+            DiagnosticKind::ConsumedBySend => "ConsumedBySend",
+            DiagnosticKind::ParamNeedsGive => "ParamNeedsGive",
+            DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
+            DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
             DiagnosticKind::Borrowed => "Borrowed",
             DiagnosticKind::MissingReturn => "MissingReturn",
             DiagnosticKind::BannedKeyword { .. } => "BannedKeyword",
@@ -75,6 +91,29 @@ impl DiagnosticKind {
             DiagnosticKind::LintRule { rule } => rule,
         }
     }
+
+    /// Every PascalCase (`[[diagnostic_template]]`-class) kind name — the list the
+    /// registry-parity test walks so a template whose `kind_name` names no variant (dead
+    /// data, parked item 7's class) is caught at build time. Pinned by that test's count
+    /// assertion; extend it when a variant is added.
+    pub const TEMPLATE_KIND_NAMES: &'static [&'static str] = &[
+        "TypeMismatch",
+        "MutationOfConst",
+        "NotDefined",
+        "MissingField",
+        "HiddenAccess",
+        "ImportNotFound",
+        "Consumed",
+        "ConsumedBySend",
+        "ParamNeedsGive",
+        "TransferNeedsCopy",
+        "HandleChannelArgNeedsBinding",
+        "Borrowed",
+        "MissingReturn",
+        "BannedKeyword",
+        "BannedJargon",
+        "UnusedImport",
+    ];
 
     /// Generate the terse caret tag shown inline at the error site.
     pub fn tag(&self) -> String {
@@ -86,6 +125,10 @@ impl DiagnosticKind {
             DiagnosticKind::HiddenAccess => "hidden".to_string(),
             DiagnosticKind::ImportNotFound => "not found".to_string(),
             DiagnosticKind::Consumed => "consumed".to_string(),
+            DiagnosticKind::ConsumedBySend => "sent away".to_string(),
+            DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
+            DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),
+            DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),
             DiagnosticKind::Borrowed => "borrowed".to_string(),
             DiagnosticKind::MissingReturn => "missing return".to_string(),
             DiagnosticKind::BannedKeyword { keyword } => format!("`{keyword}` not valid here"),

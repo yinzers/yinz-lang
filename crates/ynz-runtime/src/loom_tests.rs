@@ -580,3 +580,192 @@ fn loom_recv_register_before_poll_no_lost_wakeup() {
         ynz_channel_free(chan);
     });
 }
+
+// ── v0.3-M8 Phase 4: channel close ───────────────────────────────────────────────────────
+//
+// Two models on the same substrate. Both drive the REAL `ynz_channel_close` /
+// `channel_send_poll_guarded` / drop ladder; the payload tag keeps their glue counts apart.
+
+const TAG_CLOSE_SEND: i64 = 6;
+const TAG_REFUSE_CLOSED: i64 = 7;
+const CLOSE_SEND_TOKEN: u64 = 0xC105E;
+const CLOSE_SEND_GEN: u64 = 3;
+
+/// Contract item 2 — `close()` vs `send()` are linearized at the SENDER-LOCK clone, not at
+/// the `try_send`: a send that cloned the endpoint before `close()` took the `Option` is a
+/// pre-close send and LANDS (its value is buffered, never glued); a send that reached the
+/// lock after the take is refused and its payload is freed by `refuse_closed` exactly once.
+/// Under every interleaving exactly one of the two happens — never both, never neither —
+/// and the channel reports closed once drained. The model deliberately does NOT assert
+/// "refused whenever `close()` returned first": that ordering is neither provided nor
+/// needed (the clone is the linearization point).
+#[test]
+fn loom_close_vs_send_linearizes_at_the_sender_lock_clone() {
+    model("close_vs_send_sender_lock", |iteration| unsafe {
+        let v = payload(TAG_CLOSE_SEND, iteration, 7);
+        let chan = make_glued_chan(2);
+        let c = P(chan);
+        let t_send = thread::spawn(move || {
+            let (_w, waker) = make_waker();
+            send_as(c.0, v, &waker, CLOSE_SEND_TOKEN, CLOSE_SEND_GEN)
+        });
+        let t_close = thread::spawn(move || crate::channel::ynz_channel_close(c.0));
+        let code = t_send.join().unwrap();
+        t_close.join().unwrap();
+
+        let (_w, waker) = make_waker();
+        match code {
+            CHANNEL_READY => {
+                // Pre-close send: the value landed, the channel owns it, nothing freed it.
+                assert_eq!(
+                    recv(chan, &waker),
+                    (CHANNEL_READY, v),
+                    "a send that cloned before the take must LAND"
+                );
+                assert_eq!(
+                    glue_count(v),
+                    0,
+                    "a landed payload is never glued by the send"
+                );
+            }
+            CHANNEL_CLOSED => {
+                // Post-close send: refused, nothing buffered, payload freed exactly once.
+                assert_eq!(
+                    recv(chan, &waker).0,
+                    CHANNEL_CLOSED,
+                    "a refused send must leave nothing buffered"
+                );
+                assert_eq!(
+                    glue_count(v),
+                    1,
+                    "refuse_closed must free the refused payload exactly once (P2-3)"
+                );
+            }
+            other => panic!(
+                "first-poll send returned {other} — a send never parks on a non-full channel"
+            ),
+        }
+        // Either way the stream has ended.
+        assert_eq!(
+            recv(chan, &waker).0,
+            CHANNEL_CLOSED,
+            "after close + drain: none"
+        );
+        ynz_channel_free(chan);
+    });
+}
+
+/// A spawned task's future with the ladder codegen emits for `background f(wire, cell)`: frame
+/// slot 32 holds the task's shared channel reference (kind 2), slot 40 a 16-byte heap cell the
+/// task owns (kind 0 / HEAP_SHAPE, size 16). Returns the future and its descriptor array.
+unsafe fn plant_channel_and_cell_ladder(
+    chan: *mut u8,
+    cell_bits: i64,
+) -> (SpawnStateFnFuture, *mut BgArgDropEntry) {
+    unsafe extern "C-unwind" fn never_polled(_frame: *mut u8, _waker: *mut u8) -> i32 {
+        1
+    }
+    const CHAN_SLOT: u64 = 32;
+    const CELL_SLOT: u64 = 40;
+    let frame_size = CELL_SLOT as usize + 8;
+    let frame = crate::ynz_alloc_zeroed(frame_size);
+    *(frame.add(CHAN_SLOT as usize) as *mut i64) = ynz_channel_share(chan) as i64;
+    *(frame.add(CELL_SLOT as usize) as *mut i64) = cell_bits;
+    let descs = crate::ynz_alloc(std::mem::size_of::<BgArgDropEntry>() * 2) as *mut BgArgDropEntry;
+    descs.write(BgArgDropEntry {
+        byte_offset: CHAN_SLOT,
+        kind: BG_ARG_KIND_SHARED_CHANNEL,
+        size: 0,
+    });
+    descs.add(1).write(BgArgDropEntry {
+        byte_offset: CELL_SLOT,
+        kind: ynz_abi::BG_ARG_KIND_HEAP_SHAPE,
+        size: 16,
+    });
+    (
+        SpawnStateFnFuture::new(never_polled, frame, frame_size as i64, -1, descs, 2),
+        descs,
+    )
+}
+
+/// The `refuse_closed` release+glue two-step under a concurrent `close()`: a TASK sends its
+/// ladder-owned payload (published as the current drive, exactly as `SpawnStateFnFuture::
+/// poll` publishes it) while another thread closes the channel. Under every interleaving the
+/// payload has exactly ONE owner at every moment and is freed exactly once — landed: the
+/// ladder's slot is RELEASED and teardown glue frees it; refused: the ladder's slot is
+/// RELEASED and `refuse_closed` freed it — and the ladder (the task's drop) never touches it
+/// on either path. A `refuse_closed` that glues WITHOUT releasing is the ladder+glue double
+/// free (kind stays HEAP_SHAPE); one that releases WITHOUT gluing is P2-3's leak
+/// (`glue_count == 0`).
+#[test]
+fn loom_refuse_closed_releases_the_ladder_slot_then_glues_exactly_once() {
+    model("refuse_closed_release_then_glue", |iteration| unsafe {
+        // The payload is a REAL counted 16-byte cell (the ladder's HEAP_SHAPE arm would
+        // `ynz_free` it if it were not released — a double free the process would feel);
+        // the channel's glue only LOGS, so "freed by the channel" is observable as a count
+        // and the cell is reclaimed by the test at the end.
+        let cell = crate::ynz_alloc(16);
+        *(cell as *mut i64) = payload(TAG_REFUSE_CLOSED, iteration, 1);
+        let bits = cell as i64;
+        let chan = make_glued_chan(1);
+        let (fut, descs) = plant_channel_and_cell_ladder(chan, bits);
+        let c = P(chan);
+        let f = Fut(fut);
+        let t_send = thread::spawn(move || {
+            let f = f;
+            let (_w, waker) = make_waker();
+            let _drive = DriveGuard::enter(f.0.drive_identity());
+            let mut cx = Context::from_waker(&waker);
+            let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
+            let code = channel_send_poll_guarded(
+                c.0,
+                bits,
+                cx_ptr,
+                f.0.frame_ptr as u64,
+                f.0.drive_identity().generation,
+            );
+            (code, f)
+        });
+        let t_close = thread::spawn(move || crate::channel::ynz_channel_close(c.0));
+        let (code, f) = t_send.join().unwrap();
+        t_close.join().unwrap();
+
+        let released = (*descs.add(1)).kind == ynz_abi::BG_ARG_KIND_RELEASED;
+        let (_w, waker) = make_waker();
+        match code {
+            CHANNEL_READY => {
+                assert!(
+                    released,
+                    "a landed ladder payload must be RELEASED from the ladder"
+                );
+                assert_eq!(glue_count(bits), 0, "landed: nothing freed it yet");
+                // Teardown below is the channel's free (it owns the buffered cell).
+            }
+            CHANNEL_CLOSED => {
+                assert!(
+                    released,
+                    "refuse_closed must release the ladder slot BEFORE gluing — otherwise the \
+                     task's drop ladder frees the payload a second time"
+                );
+                assert_eq!(
+                    glue_count(bits),
+                    1,
+                    "refuse_closed must free the refused payload through the glue exactly once"
+                );
+                assert_eq!(recv(chan, &waker).0, CHANNEL_CLOSED);
+            }
+            other => panic!("first-poll send returned {other}"),
+        }
+        // The task retires: its ladder must skip the released cell (a HEAP_SHAPE arm here
+        // would `ynz_free` the cell — with loom's std allocator that is a real double free).
+        drop(f);
+        // The survivor releases the last reference: teardown glue frees a landed payload.
+        ynz_channel_free(chan);
+        assert_eq!(
+            glue_count(bits),
+            1,
+            "exactly one free across refuse_closed / teardown glue / the ladder"
+        );
+        crate::ynz_free(cell, 16);
+    });
+}

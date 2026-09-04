@@ -97,6 +97,13 @@ pub struct RuntimeDecls<'ctx> {
     // key_out receives the stored key POINTER as i64 bits
     pub ynz_map_iter_get_str: FunctionValue<'ctx>,
     pub ynz_map_drop: FunctionValue<'ctx>,
+    // ynz_map_clone(ptr src) -> ptr: one-level deep copy (fresh header + four fresh
+    // buffers, five counted allocs) — the `map<K, V>` arm of `.copy()` (v0.3-M8 Phase 4).
+    pub ynz_map_clone: FunctionValue<'ctx>,
+    // ynz_number_cell_free(ptr cell) -> void: counted free of one 16-byte decimal128 cell a
+    // conduit `send` minted (fr12, v0.3-M8 Phase 4) — the `NumberCell` drop-glue arm and the
+    // receive side's free-after-load.
+    pub ynz_number_cell_free: FunctionValue<'ctx>,
 
     // Channel runtime (v0.3-M4 Phase 1) — bounded task-communication channels over
     // `tokio::sync::mpsc`. Phase 1 lowers construction only; the suspending send/recv poll ABI
@@ -111,6 +118,9 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_channel_share: FunctionValue<'ctx>,
     // ynz_channel_free(chan: ptr) -> void (release one refcounted reference)
     pub ynz_channel_free: FunctionValue<'ctx>,
+    // ynz_channel_close(chan: ptr) -> void — `ch.close()` (v0.3-M8 Phase 4): takes the object's
+    // shared sender endpoint and wakes parked receivers; idempotent; never suspends.
+    pub ynz_channel_close: FunctionValue<'ctx>,
     // ynz_channel_send_poll(chan: ptr, value: i64, waker_ctx: ptr, caller_token: i64) -> i32
     pub ynz_channel_send_poll: FunctionValue<'ctx>,
     // ynz_channel_recv_poll(chan: ptr, out: ptr, waker_ctx: ptr) -> i32
@@ -474,6 +484,12 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 i64.fn_type(&[ptr.into(), i64.into(), ptr.into(), ptr.into()], false),
             ),
             ynz_map_drop: declare_fn(module, "ynz_map_drop", void.fn_type(&[ptr.into()], false)),
+            ynz_map_clone: declare_fn(module, "ynz_map_clone", ptr.fn_type(&[ptr.into()], false)),
+            ynz_number_cell_free: declare_fn(
+                module,
+                "ynz_number_cell_free",
+                void.fn_type(&[ptr.into()], false),
+            ),
             ynz_channel_create: declare_fn(
                 module,
                 "ynz_channel_create",
@@ -487,6 +503,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_channel_free: declare_fn(
                 module,
                 "ynz_channel_free",
+                void.fn_type(&[ptr.into()], false),
+            ),
+            ynz_channel_close: declare_fn(
+                module,
+                "ynz_channel_close",
                 void.fn_type(&[ptr.into()], false),
             ),
             ynz_channel_send_poll: declare_fn(

@@ -420,6 +420,51 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         }
     }
 
+    // Transitive effective-ownership fixpoint (v0.3-M3b Phase 4) — HOISTED above the body
+    // check in v0.3-M8 Phase 4: it depends only on the parse and the signature tables, both
+    // in hand here, and the body check now CONSUMES it (the transfer decision reads
+    // `consumed[fn][i]` so a relay chain missing `give` is reported at every frame in one
+    // compile, and `returns_fresh[fn]` so a call result bound by `let` has a provenance —
+    // `IMP-ownership.md` "Where the authority lives"). Classifies every parameter as
+    // `Reads`/`Unknown`/`Writes` across the whole local call graph. Consumers:
+    //   - `check(...)` below: `check_transfer` at every transfer sink;
+    //   - Part 2 further below: reject `share` params that are written transitively (the
+    //     `design/concurrency.md` line 651 no-escalation rule, extended past the direct
+    //     cases `check.rs` already catches).
+    //
+    // Codegen does NOT consume this fixpoint. The auto-parallel write-effect decision uses
+    // the type-based conservative floor in `ynz-codegen/src/independence.rs` (any mutable-heap
+    // arg is a potential write, Golden Rule 5 > Rule 10) — sound by construction, with no
+    // name-based classifier to drift out of sync with this fixpoint.
+    //
+    // `declared_writes` seeds the fixpoint with each function's explicit `lend`/`give`
+    // positions (local AND imported — an imported declared-write position is a definite
+    // write even without a body). `imported_fn_names` marks the cross-module boundary so a
+    // flow into an imported callee at a non-declared position resolves to `Unknown` (sound
+    // conservative), never a spurious `Reads`.
+    let mut declared_writes = effective_ownership::declared_write_positions(&parse.module);
+    for (name, sig) in &sig_output.imported_fns {
+        // Local definitions already have their declared writes from the module walk.
+        if declared_writes.contains_key(name) {
+            continue;
+        }
+        let mut set = std::collections::HashSet::new();
+        for (i, ownership) in sig.param_ownerships.iter().enumerate() {
+            if matches!(
+                ownership,
+                Some(ynz_ast::nodes::OwnershipModifier::Lend)
+                    | Some(ynz_ast::nodes::OwnershipModifier::Give)
+            ) {
+                set.insert(i);
+            }
+        }
+        declared_writes.insert(name.clone(), set);
+    }
+    let effective_ownership_report =
+        effective_ownership::analyze(&parse.module, &declared_writes, &imported_fn_names, &|t| {
+            sig_output.shape_table.resolve_ast_type(t)
+        });
+
     let (typed, mono_table, check_diags, referenced_names) = check(
         &parse.module,
         &merged_sig_table,
@@ -428,6 +473,8 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         &sig_output.generic_shape_table,
         &PrimitiveIntrinsicTable::m6().with_m2_internals(),
         &sig_output.imported_options,
+        &effective_ownership_report,
+        &imported_fn_names,
     );
     for d in check_diags.into_iter() {
         all_diags.push(d);
@@ -463,44 +510,6 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
             }
         }
     }
-
-    // Transitive effective-ownership fixpoint (v0.3-M3b Phase 4). Classifies every
-    // parameter as `Reads`/`Unknown`/`Writes` across the whole local call graph. One
-    // consumer reads it:
-    //   - Part 2 below: reject `share` params that are written transitively (the
-    //     `design/concurrency.md` line 651 no-escalation rule, extended past the direct
-    //     cases `check.rs` already catches).
-    //
-    // Codegen does NOT consume this fixpoint. The auto-parallel write-effect decision uses
-    // the type-based conservative floor in `ynz-codegen/src/independence.rs` (any mutable-heap
-    // arg is a potential write, Golden Rule 5 > Rule 10) — sound by construction, with no
-    // name-based classifier to drift out of sync with this fixpoint.
-    //
-    // `declared_writes` seeds the fixpoint with each function's explicit `lend`/`give`
-    // positions (local AND imported — an imported declared-write position is a definite
-    // write even without a body). `imported_fn_names` marks the cross-module boundary so a
-    // flow into an imported callee at a non-declared position resolves to `Unknown` (sound
-    // conservative), never a spurious `Reads`.
-    let mut declared_writes = effective_ownership::declared_write_positions(&parse.module);
-    for (name, sig) in &sig_output.imported_fns {
-        // Local definitions already have their declared writes from the module walk.
-        if declared_writes.contains_key(name) {
-            continue;
-        }
-        let mut set = std::collections::HashSet::new();
-        for (i, ownership) in sig.param_ownerships.iter().enumerate() {
-            if matches!(
-                ownership,
-                Some(ynz_ast::nodes::OwnershipModifier::Lend)
-                    | Some(ynz_ast::nodes::OwnershipModifier::Give)
-            ) {
-                set.insert(i);
-            }
-        }
-        declared_writes.insert(name.clone(), set);
-    }
-    let effective_ownership_report =
-        effective_ownership::analyze(&parse.module, &declared_writes, &imported_fn_names);
 
     // Part 2 — reject `share` params written TRANSITIVELY through a callee (full
     // `design/concurrency.md` line 651 enforcement). The DIRECT cases (a `share` body that

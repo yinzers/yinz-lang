@@ -1168,6 +1168,71 @@ pub unsafe extern "C" fn ynz_map_drop(map: *mut YnzMap) {
     ynz_free(map as *mut u8, std::mem::size_of::<YnzMap>());
 }
 
+/// Free one 16-byte decimal128 cell minted by a channel/handle `send` of a `number` (fr12,
+/// v0.3-M8 Phase 4 step 3d). A named C-ABI entry so the channel drop-glue table's arms are
+/// all function values (`ChannelElemDrop::NumberCell → ynz_number_cell_free`); it performs
+/// exactly the counted `ynz_free(ptr, 16)` the bg-arg ladder's `HeapShape { byte_size: 16 }`
+/// arm performs for the same cell shape. Compiler-internal glue — registry-invisible
+/// (feature-registry carve-out).
+///
+/// # Safety
+/// `cell` must be a live pointer from a counted 16-byte `ynz_alloc` (a `number_to_heap_cell`
+/// cell) not yet freed, or null (a no-op, matching the other free entries).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_number_cell_free(cell: *mut u8) {
+    if cell.is_null() {
+        return;
+    }
+    ynz_free(cell, 16);
+}
+
+/// One-level deep copy of a map — the `map<K, V>` half of `.copy()` (v0.3-M8 Phase 4 step
+/// 3a; Patrick's ruling 2026-09-03). Mirrors [`ynz_array_clone_primitive`]: a fresh header
+/// and fresh `ctrl`/`keys`/`vals`/`insert_order` buffers through counted [`ynz_alloc`] (five
+/// counted allocs, so the alloc counter's parity gates see the copy exactly as they see a
+/// `ynz_map_new`), each byte-copied from `src`, with `count`/`capacity`/`order_cap`/
+/// `elem_size` preserved. Pointer-valued cells (a `string` value, a `maybe` cell) copy as
+/// pointers — one level, the same D12/D13 stance as arrays.
+///
+/// Before this entry existed `table.copy()` fell through codegen's `_ => Ok(recv_val)`
+/// catch-all and returned `table` itself (FRAGO 014's alias-no-op stub class); the
+/// independence lock `v0_3_m8_p4_map_copy_independent.ynz` was committed RED on that stub.
+///
+/// # Safety
+/// `src` must be a valid non-null pointer returned by `ynz_map_new` and not yet dropped.
+/// Returns null if `src` is null (caller should treat null as a bug, but this avoids UB).
+/// The returned map must be freed with [`ynz_map_drop`].
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_clone(src: *mut YnzMap) -> *mut YnzMap {
+    if src.is_null() {
+        return std::ptr::null_mut();
+    }
+    let s = &*src;
+    let cap = s.capacity as usize;
+    let elem_size = s.elem_size as usize;
+    let order_cap = s.order_cap as usize;
+    let hdr = ynz_alloc(std::mem::size_of::<YnzMap>()) as *mut YnzMap;
+    let ctrl = ynz_alloc(cap);
+    let keys = ynz_alloc(cap * 8) as *mut i64;
+    let vals = ynz_alloc(cap * elem_size);
+    let order = ynz_alloc(order_cap * 8) as *mut i64;
+    std::ptr::copy_nonoverlapping(s.ctrl, ctrl, cap);
+    std::ptr::copy_nonoverlapping(s.keys, keys, cap);
+    std::ptr::copy_nonoverlapping(s.vals, vals, cap * elem_size);
+    std::ptr::copy_nonoverlapping(s.insert_order, order, order_cap);
+    *hdr = YnzMap {
+        ctrl,
+        keys,
+        vals,
+        insert_order: order,
+        count: s.count,
+        capacity: s.capacity,
+        order_cap: s.order_cap,
+        elem_size: s.elem_size,
+    };
+    hdr
+}
+
 // ── Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) ──────────
 //
 // array<T> is a heap-allocated growable list storing elements BY VALUE, inline in

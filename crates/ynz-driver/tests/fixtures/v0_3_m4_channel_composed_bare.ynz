@@ -11,10 +11,16 @@ function producer(lend out: channel<int>) -> nothing {
 function entrypoint() -> nothing {
   let ch: channel<int> = channel<int>(1)
   background producer(ch)
+  // v0.3-M8: a bare `receive()` is `maybe<int>` (`none` once the channel is closed and
+  // drained) — narrow each delivery right away; this producer never closes, so `.or` is
+  // never taken.
   let a = ch.receive()
+  let aValue = a.or(0)
   let b = ch.receive()
+  let bValue = b.or(0)
   let c = ch.receive()
-  let total = a + b + c
+  let cValue = c.or(0)
+  let total = aValue + bValue + cValue
   print(total.toString())
   print(`bare done`)
 }

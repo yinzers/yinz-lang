@@ -4,7 +4,7 @@ use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPatternKind, Module,
     OwnershipModifier, PostfixOpKind, Stmt, StructLitField, Type as AstType, UnaryOpKind,
 };
-use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
+use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind, SourceSpan};
 
 use crate::{
     builtins::{
@@ -12,6 +12,7 @@ use crate::{
         fixed_method_is_mutating, fixed_method_return, map_method_is_mutating, map_method_return,
         maybe_method_return, sensitive_method_return, string_method_return,
     },
+    effective_ownership::{provenance, Freshness, Provenance, ProvenanceCtx},
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
@@ -19,12 +20,185 @@ use crate::{
     intrinsics::PrimitiveIntrinsicTable,
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
-    scope::{Scope, ScopeEntry},
+    scope::{ConsumedBy, Origin, Scope, ScopeEntry},
     shapes::ShapeTable,
     signatures::SignatureTable,
     suspension_source::is_base_suspension_intrinsic,
-    types::{type_name, Type},
+    types::{channel_elem_drop, type_name, Type},
 };
+
+/// A transfer sink — where a value is about to leave this frame for a holder that will free
+/// it (`IMP-ownership.md` "The transfer decision"). The list of sinks is closed and small;
+/// the list of argument SHAPES is not, which is why sinks never inspect syntax.
+enum TransferSink<'s> {
+    /// `channel.send(v)` / `h.send(v)` of an owned-heap payload; `channel` is the binding.
+    Send { channel: &'s str },
+    /// A `give` position of `callee`. `chain_param` is `Some(p)` when the position is not
+    /// declared `give` but the fixpoint found `callee`'s parameter `p` gives it away — the
+    /// chain form of `{act}` that reports every frame in one compile.
+    Give {
+        callee: &'s str,
+        chain_param: Option<&'s str>,
+    },
+}
+
+impl TransferSink<'_> {
+    /// The cause recorded on the consumed alias class; `sent` is the binding named at the
+    /// sink (the `{sent}` slot when a class-mate is read later).
+    fn cause(&self, sent: &str) -> ConsumedBy {
+        match self {
+            TransferSink::Send { channel } => ConsumedBy::Sent {
+                channel: channel.to_string(),
+                sent: sent.to_string(),
+            },
+            TransferSink::Give { callee, .. } => ConsumedBy::Given {
+                callee: callee.to_string(),
+            },
+        }
+    }
+
+    /// The `{act}` and `{copy_form}` slots for a value named `name` at this sink.
+    fn render(&self, name: &str) -> (String, String) {
+        match self {
+            TransferSink::Send { channel } => (
+                format!("sent into `{channel}`"),
+                format!("{channel}.send({name}.copy())"),
+            ),
+            TransferSink::Give {
+                callee,
+                chain_param: None,
+            } => (
+                format!("given to `{callee}`"),
+                format!("{callee}({name}.copy(), …)"),
+            ),
+            TransferSink::Give {
+                callee,
+                chain_param: Some(p),
+            } => (
+                format!("given to `{callee}`, whose `{p}` parameter gives it away"),
+                format!("{callee}({name}.copy(), …)"),
+            ),
+        }
+    }
+}
+
+/// Render a registry `[[diagnostic_template]]` for `kind` with its `{slot}`s filled — the
+/// registry is the ONE source of the text (parked items 7/8: the `Consumed` template used to
+/// be dead data beside a hand-written twin). A missing template is a build-time invariant
+/// (`diagnostic_templates_render_from_the_registry` in the tests) — panicking here names it.
+fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)]) -> Diagnostic {
+    let kind_name = kind.kind_name();
+    let template = ynz_registry::diagnostic_template_lookup(kind_name).unwrap_or_else(|| {
+        panic!(
+            "registry/features.toml has no [[diagnostic_template]] with kind_name = {kind_name:?}"
+        )
+    });
+    let fill = |text: &str| -> String {
+        let mut out = text.to_string();
+        for (slot, value) in slots {
+            out = out.replace(&format!("{{{slot}}}"), value);
+        }
+        out
+    };
+    Diagnostic::error(
+        span,
+        fill(template.what_template),
+        fill(template.what_instead_template),
+        fill(template.why_template),
+    )
+    .with_kind(kind)
+}
+
+/// Source-shaped text for an expression in a diagnostic slot (`bucket.rows`, `matrix[0]`,
+/// `pick(bucket)`, `[a]`, …). Typeck has no source buffer, so this renders from the AST;
+/// it only needs to be recognizable, never byte-exact.
+fn expr_source_text(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(n, _) => n.clone(),
+        Expr::SelfValue { .. } => "self".to_string(),
+        Expr::FieldAccess {
+            receiver, field, ..
+        } => format!("{}.{field}", expr_source_text(receiver)),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => format!(
+            "{}[{}]",
+            expr_source_text(receiver),
+            expr_source_text(index)
+        ),
+        Expr::Call(call) => format!(
+            "{}({})",
+            expr_source_text(&call.callee),
+            call.args
+                .iter()
+                .map(expr_source_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => format!(
+            "{}.{method}({})",
+            expr_source_text(receiver),
+            args.iter()
+                .map(expr_source_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expr::ArrayLit { elements, .. } => format!(
+            "[{}]",
+            elements
+                .iter()
+                .map(expr_source_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expr::MapLit { .. } => "{ … }".to_string(),
+        Expr::StructLit { .. } => "{ … }".to_string(),
+        Expr::PostfixOp { receiver, op, .. } => match op {
+            PostfixOpKind::Copy => format!("{}.copy()", expr_source_text(receiver)),
+            PostfixOpKind::Freeze => format!("{}.freeze()", expr_source_text(receiver)),
+        },
+        Expr::IntLit(n, _) => n.to_string(),
+        Expr::NumberLit(s, _) => s.clone(),
+        Expr::BoolLit(b, _) => b.to_string(),
+        Expr::StringLit(bytes, _) => format!("`{}`", String::from_utf8_lossy(bytes)),
+        Expr::NoneLit { .. } => "none".to_string(),
+        Expr::Wait(inner, _) => format!("wait {}", expr_source_text(inner)),
+        Expr::Background(inner, _) => format!("background {}", expr_source_text(inner)),
+        Expr::BinOp { .. }
+        | Expr::UnaryOp { .. }
+        | Expr::Is { .. }
+        | Expr::InterpolatedString(..)
+        | Expr::Error(..) => "this value".to_string(),
+    }
+}
+
+/// A contract receiver's declared kind as the ownership word an implementing function's
+/// `self` parameter carries.
+fn receiver_kind_modifier(kind: &ynz_ast::nodes::ReceiverKind) -> OwnershipModifier {
+    match kind {
+        ynz_ast::nodes::ReceiverKind::Share => OwnershipModifier::Share,
+        ynz_ast::nodes::ReceiverKind::Lend => OwnershipModifier::Lend,
+        ynz_ast::nodes::ReceiverKind::Give => OwnershipModifier::Give,
+    }
+}
+
+/// The names of the functions `module` defines — the local half of the call-graph boundary
+/// `provenance` reads (an imported name is the other half).
+fn local_fn_names(module: &Module) -> HashSet<String> {
+    module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(f) => Some(f.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
 
 /// P0-locked default channel capacity — the ONE authoritative source every consumer
 /// threads from (authoritative-derivation.md): typeck's teaching diagnostics here,
@@ -120,6 +294,8 @@ pub fn check(
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
     imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
+    ownership: &crate::effective_ownership::EffectiveOwnershipReport,
+    imported_fn_names: &HashSet<String>,
 ) -> (
     TypedModule,
     MonomorphizationTable,
@@ -143,9 +319,13 @@ pub fn check(
         generic_fn_table,
         generic_shape_table,
         options_table: &options_table,
+        ownership,
+        imported_fn_names,
+        local_fn_names: local_fn_names(module),
         expr_types: HashMap::new(),
         diags,
         scope: Scope::new(),
+        current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
         current_shape: None,
         type_param_scope: HashMap::new(),
@@ -209,6 +389,10 @@ pub fn check_with_kernel_mode(
             .entry(name.clone())
             .or_insert_with(|| entry.clone());
     }
+    // Test-only entry: no fixpoint ran, so the transfer decision reads the conservative
+    // empty report (an unseen callee consumes nothing and returns `MayAlias`).
+    let empty_report = crate::effective_ownership::EffectiveOwnershipReport::empty();
+    let no_imports: HashSet<String> = HashSet::new();
     let mut checker = Checker {
         intrinsics,
         sig_table,
@@ -216,9 +400,13 @@ pub fn check_with_kernel_mode(
         generic_fn_table,
         generic_shape_table,
         options_table: &options_table,
+        ownership: &empty_report,
+        imported_fn_names: &no_imports,
+        local_fn_names: local_fn_names(module),
         expr_types: HashMap::new(),
         diags,
         scope: Scope::new(),
+        current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
         current_shape: None,
         type_param_scope: HashMap::new(),
@@ -298,6 +486,17 @@ struct Checker<'b> {
     generic_fn_table: &'b GenericFnTable,
     generic_shape_table: &'b GenericShapeTable,
     options_table: &'b OptionsTable,
+    /// The whole-program effective-ownership fixpoint (hoisted above the body check in
+    /// v0.3-M8 Phase 4): `consumed[fn][i]` and `returns_fresh[fn]` feed the ONE transfer
+    /// decision (`check_transfer`); never re-derived here.
+    ownership: &'b crate::effective_ownership::EffectiveOwnershipReport,
+    /// Names defined in OTHER modules — the cross-module boundary `provenance` reads.
+    imported_fn_names: &'b HashSet<String>,
+    /// Names of the functions this module defines (a UFCS `value.method()` whose method is
+    /// one of these is a user call, receiver first).
+    local_fn_names: HashSet<String>,
+    /// The function whose body is being checked — the `{fn}` slot of `ParamNeedsGive`.
+    current_fn_name: String,
 
     // ── Mutable module-level output ───────────────────────────────────────────
     //
@@ -592,6 +791,7 @@ impl<'b> Checker<'b> {
         // ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner } already.
         let ret_ty = self.ast_type_to_type(&f.return_type);
         self.current_fn_ret = ret_ty.clone();
+        self.current_fn_name = f.name.clone();
 
         // M7 P3a: track whether the current function is errors-capable.
         self.current_fn_errors_capable = f.errors_capable;
@@ -631,6 +831,7 @@ impl<'b> Checker<'b> {
                     self.current_shape = Some(name.clone());
                 }
             }
+            let alias_class = self.scope.new_class();
             self.scope.insert(
                 param.name.clone(),
                 ScopeEntry {
@@ -639,7 +840,9 @@ impl<'b> Checker<'b> {
                     is_param: true,
                     param_ownership: param.ownership.clone(),
                     is_loop_var: false,
-                    is_consumed: false,
+                    consumed: None,
+                    origin: Origin::Param(param.ownership.clone()),
+                    alias_class,
                     defined_at: param.name_span.clone(),
                 },
             );
@@ -1383,6 +1586,7 @@ impl<'b> Checker<'b> {
 
         let ret_ty = self.ast_type_to_type(&f.return_type);
         self.current_fn_ret = ret_ty;
+        self.current_fn_name = f.name.clone();
         self.current_shape = None;
 
         self.scope.push();
@@ -1395,6 +1599,7 @@ impl<'b> Checker<'b> {
         }
         for param in &f.params {
             let param_ty = self.ast_type_to_type(&param.ty);
+            let alias_class = self.scope.new_class();
             self.scope.insert(
                 param.name.clone(),
                 ScopeEntry {
@@ -1403,7 +1608,9 @@ impl<'b> Checker<'b> {
                     is_param: true,
                     param_ownership: param.ownership.clone(),
                     is_loop_var: false,
-                    is_consumed: false,
+                    consumed: None,
+                    origin: Origin::Param(param.ownership.clone()),
+                    alias_class,
                     defined_at: param.name_span.clone(),
                 },
             );
@@ -1451,6 +1658,10 @@ impl<'b> Checker<'b> {
                             .map(|(_, args)| args);
                         if let Some(bg_args) = bg_args {
                             let remaining = &stmts[i + 1..];
+                            let spawn_callee: String = self
+                                .background_spawn_call_form(inner.as_ref())
+                                .and_then(|(c, _)| c.map(str::to_string))
+                                .unwrap_or_else(|| "the task".to_string());
                             // Only infer for plain Expr::Ident args — explicit .give/.copy()
                             // postfix args are handled by the postfix-op path; explicit wins.
                             let mut gives: Vec<String> = Vec::new();
@@ -1467,13 +1678,32 @@ impl<'b> Checker<'b> {
                                             .insert((span.start, span.end), BgOwnership::Channel);
                                         continue;
                                     }
-                                    let used_after = remaining
-                                        .iter()
-                                        .any(|s| ident_read_in_stmt(s, name.as_str()));
-                                    let inferred = if used_after {
-                                        BgOwnership::Copy
-                                    } else {
+                                    // v0.3-M8 Phase 4, class-aware (`IMP-ownership.md` sink
+                                    // 3): infer `Give` iff the binding's origin is `Owned`
+                                    // or `Param(give)` AND no member of its alias class is
+                                    // read in any remaining statement; otherwise `Copy`. A
+                                    // `Copy` entry is still RECORDED (never nothing) —
+                                    // codegen's `is_heap_arg` gate reads the PRESENCE of an
+                                    // entry to heap-upgrade the argument (parked item 19,
+                                    // the fr23 use-after-free class).
+                                    let (origin_ok, members) = match self.scope.lookup(name) {
+                                        Some(e) => (
+                                            matches!(
+                                                e.origin,
+                                                Origin::Owned
+                                                    | Origin::Param(Some(OwnershipModifier::Give))
+                                            ),
+                                            self.scope.visible_members_of(e.alias_class),
+                                        ),
+                                        None => (false, vec![name.clone()]),
+                                    };
+                                    let used_after = remaining.iter().any(|s| {
+                                        members.iter().any(|m| ident_read_in_stmt(s, m.as_str()))
+                                    });
+                                    let inferred = if origin_ok && !used_after {
                                         BgOwnership::Give
+                                    } else {
+                                        BgOwnership::Copy
                                     };
                                     self.bg_inferred
                                         .insert((span.start, span.end), inferred.clone());
@@ -1507,8 +1737,13 @@ impl<'b> Checker<'b> {
                                 // changes that might re-derive give candidates without the
                                 // const distinction.
                                 if let Some(entry) = self.scope.lookup(name.as_str()) {
-                                    if !entry.is_const && !entry.is_consumed {
-                                        self.scope.consume(name.as_str());
+                                    if !entry.is_const && entry.consumed.is_none() {
+                                        self.scope.consume(
+                                            name.as_str(),
+                                            ConsumedBy::Given {
+                                                callee: spawn_callee.clone(),
+                                            },
+                                        );
                                     }
                                 }
                             }
@@ -1612,6 +1847,8 @@ impl<'b> Checker<'b> {
             // v0.3-M4 conduit-origin discipline: a spawn binding is a derivable conduit —
             // mirrors the resolver's `Expr::Background` arm in `let_binds_derivable_conduit`.
             self.derivable_conduits.insert(name.to_string());
+            // A task handle is the spawn's sole reference: `Fresh` → `Owned`, its own class.
+            let alias_class = self.scope.new_class();
             self.scope.insert(
                 name.to_string(),
                 ScopeEntry {
@@ -1620,7 +1857,9 @@ impl<'b> Checker<'b> {
                     is_param: false,
                     param_ownership: None,
                     is_loop_var: false,
-                    is_consumed: false,
+                    consumed: None,
+                    origin: Origin::Owned,
+                    alias_class,
                     defined_at: name_span.clone(),
                 },
             );
@@ -1649,6 +1888,7 @@ impl<'b> Checker<'b> {
             ) {
                 // Bind the name at the annotated `number` type so later uses don't
                 // cascade into spurious unknown-variable diagnostics.
+                let alias_class = self.scope.new_class();
                 self.scope.insert(
                     name.to_string(),
                     ScopeEntry {
@@ -1657,7 +1897,9 @@ impl<'b> Checker<'b> {
                         is_param: false,
                         param_ownership: None,
                         is_loop_var: false,
-                        is_consumed: false,
+                        consumed: None,
+                        origin: Origin::Owned,
+                        alias_class,
                         defined_at: name_span.clone(),
                     },
                 );
@@ -1712,6 +1954,11 @@ impl<'b> Checker<'b> {
             self.derivable_conduits.insert(name.to_string());
         }
 
+        // The binding EVENT (v0.3-M8 Phase 4, `IMP-ownership.md` "Binding events"): origin
+        // and alias class come from the initializer's provenance — a NEW entry; a shadowed
+        // outer entry keeps its own origin, class and consumed state (it still names its
+        // old value). The same rule `check_assign` applies on a reassignment.
+        let (origin, alias_class) = self.binding_event_origin(value);
         self.scope.insert(
             name.to_string(),
             ScopeEntry {
@@ -1720,7 +1967,9 @@ impl<'b> Checker<'b> {
                 is_param: false,
                 param_ownership: None,
                 is_loop_var: false,
-                is_consumed: false,
+                consumed: None,
+                origin,
+                alias_class,
                 defined_at: name_span.clone(),
             },
         );
@@ -2352,7 +2601,9 @@ impl<'b> Checker<'b> {
         // Resolve the spawned callee's signature for the handle type — from the SAME
         // Call-form normalization (a UFCS spawn's callee is the method name: `haul` in
         // `let h = background barge.haul()`).
-        let callee_name = call_form.and_then(|(callee, _)| callee.map(str::to_string));
+        let callee_name = call_form
+            .as_ref()
+            .and_then(|(callee, _)| callee.map(str::to_string));
         let Some(callee_name) = callee_name else {
             // No user-defined callee to derive a handle type from: a non-call target
             // (the Background arm's must-wrap-a-call error already fired), a non-ident
@@ -2402,13 +2653,31 @@ impl<'b> Checker<'b> {
             Type::ErrorsCapable { inner } => inner.clone(),
             other => Box::new(other.clone()),
         };
-        let msg_elem = params.iter().find_map(|(_, t)| {
-            if let Type::BuiltinChannel { elem } = t {
-                Some(elem.clone())
-            } else {
-                None
-            }
+        let msg_param_index = params
+            .iter()
+            .position(|(_, t)| matches!(t, Type::BuiltinChannel { .. }));
+        let msg_elem = msg_param_index.and_then(|i| match &params[i].1 {
+            Type::BuiltinChannel { elem } => Some(elem.clone()),
+            _ => None,
         });
+        // v0.3-M8 Phase 4 (`HandleChannelArgNeedsBinding`, a hard compile ERROR — FRAGO 009
+        // ruling 2): the argument that binds the callee's FIRST `channel<T>` parameter — the
+        // channel `h.send` feeds — must be a named binding, or nothing outside the task can
+        // ever `close()` it (a handle has no `close()`; `commands.close()` is the act). Only
+        // the handle form: the statement form with a call-materialized channel is a
+        // single-holder degenerate shape the child alone produces and consumes.
+        if let (Some(i), Some((_, args))) = (msg_param_index, &call_form) {
+            if let Some(arg) = args.get(i) {
+                if !matches!(arg, Expr::Ident(..)) {
+                    let text = expr_source_text(arg);
+                    self.diags.push(registry_diag(
+                        arg.span().clone(),
+                        DiagnosticKind::HandleChannelArgNeedsBinding,
+                        &[("callee", &callee_name), ("expr", &text)],
+                    ));
+                }
+            }
+        }
         let handle_ty = Type::BackgroundHandle { result, msg_elem };
         // Overwrite the Background expression's recorded type (the generic arm stored
         // `nothing`) so codegen and later reads see the handle type.
@@ -2463,6 +2732,20 @@ impl<'b> Checker<'b> {
             }
             Some(entry) => {
                 let bound_ty = entry.ty.clone();
+                // The binding EVENT for a reassignment (`IMP-ownership.md` "Binding
+                // events", `Stmt::Assign` row — the SECOND caller of the one rule
+                // `check_let` applies): the entry LEAVES its old alias class (the class
+                // keeps its other members and their consumed state — they still hold the
+                // old value), its consumed state is CLEARED (a consumed name that is
+                // reassigned names a NEW value — revive-on-reassign: `eat(rows); rows =
+                // [4, 5]; rows.count()` is a correct program), and it joins the new value's
+                // class per the initializer table.
+                let (origin, alias_class) = self.binding_event_origin(value);
+                if let Some(e) = self.scope.lookup_mut(target) {
+                    e.origin = origin;
+                    e.alias_class = alias_class;
+                    e.consumed = None;
+                }
                 if value_ty != Type::Error && value_ty != bound_ty {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -2792,6 +3075,20 @@ impl<'b> Checker<'b> {
         };
 
         self.scope.push();
+        // A loop variable is one CELL of the iterated value — never transferable — and joins
+        // the iterated root's alias class (if a root is given away, the cells go with it).
+        let iterated_root = root_binding_name(iter).map(str::to_string);
+        let alias_class = match iterated_root
+            .as_deref()
+            .and_then(|r| self.scope.class_of(r))
+        {
+            Some(c) => c,
+            None => self.scope.new_class(),
+        };
+        let cell_reason = match &iterated_root {
+            Some(r) => format!("one cell of `{r}`, which this loop is walking"),
+            None => "one cell of the value this loop is walking".to_string(),
+        };
         self.scope.insert(
             var.to_string(),
             ScopeEntry {
@@ -2800,7 +3097,9 @@ impl<'b> Checker<'b> {
                 is_param: false,
                 param_ownership: None,
                 is_loop_var: true,
-                is_consumed: false,
+                consumed: None,
+                origin: Origin::Cell(cell_reason),
+                alias_class,
                 defined_at: var_span.clone(),
             },
         );
@@ -3620,13 +3919,35 @@ impl<'b> Checker<'b> {
             }
         }
         if let Some(entry) = self.scope.lookup(name) {
-            if entry.is_consumed {
-                self.diags.push(Diagnostic::error(
-                    span.clone(),
-                    format!("`{name}` was already given away and cannot be used here."),
-                    "Create a new value or use `.copy()` before passing if you need it in both places.",
-                    "When a function takes ownership of a value, the caller no longer holds it. Using it afterward would be a memory safety violation.",
-                ));
+            // THE consumed-read site: the one place a use-after-give / use-after-send is
+            // reported. The cause on the entry (set class-wide by `Scope::consume`) selects
+            // the registry template — `Consumed` for a give, `ConsumedBySend` for a send —
+            // and fills its slots (v0.3-M8 Phase 4; parked items 7/8 reconciled the
+            // `Consumed` template with this site by rendering FROM the registry).
+            if let Some(cause) = entry.consumed.clone() {
+                let diag = match cause {
+                    ConsumedBy::Given { .. } => {
+                        registry_diag(span.clone(), DiagnosticKind::Consumed, &[("name", name)])
+                    }
+                    ConsumedBy::Sent { channel, sent } => {
+                        let via = if sent == name {
+                            String::new()
+                        } else {
+                            format!(" — it shares its value with `{sent}`, which is what was sent")
+                        };
+                        registry_diag(
+                            span.clone(),
+                            DiagnosticKind::ConsumedBySend,
+                            &[
+                                ("name", name),
+                                ("channel", &channel),
+                                ("sent", &sent),
+                                ("via", &via),
+                            ],
+                        )
+                    }
+                };
+                self.diags.push(diag);
                 return Type::Error;
             }
 
@@ -3986,26 +4307,69 @@ impl<'b> Checker<'b> {
         }
 
         // Method-name check first (unknown methods shouldn't trip the position rules).
-        // The known-method set IS the authoritative suspending-method set (every conduit
-        // method suspends in v0.3) — threaded from `suspension_source`, never a re-derived
-        // local list (authoritative-derivation.md). If a future non-suspending conduit
-        // method ships (e.g. `.tryReceive()`), extend THIS site to union it in explicitly.
+        // The suspending-method set is threaded from `suspension_source` — never a
+        // re-derived local list (authoritative-derivation.md). `close` (v0.3-M8 Phase 4) is
+        // the first NON-suspending conduit method: it is unioned in explicitly HERE, for
+        // channel receivers only (a task handle has no `close()` — a handle is a message
+        // line to the child, not the channel's lifecycle; `commands.close()` is the act),
+        // and stays OUT of `CHANNEL_SUSPENDING_METHODS` so the may-block fixpoint never
+        // over-approximates a function that only closes a channel into a state machine.
+        let is_channel = matches!(receiver_ty, Type::BuiltinChannel { .. });
+        let suspending = crate::suspension_source::channel_method_suspends(true, method);
+        let is_close = is_channel && method == "close";
         let known = match receiver_ty {
-            Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. } => {
-                crate::suspension_source::channel_method_suspends(true, method)
-            }
+            Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. } => suspending || is_close,
             _ => false,
         };
         if !known {
+            // The available-methods list is split per receiver: a channel's names close(),
+            // a handle's does not.
+            let (what_instead, why): (&str, &str) = if is_channel {
+                (
+                    "Available methods: send(value), receive(), close().",
+                    "A channel carries values between tasks: `send(value)` puts a value in \
+                     (suspending when the buffer is full — backpressure), `receive()` takes \
+                     the next value out (suspending until one arrives, or `none` once the \
+                     channel is closed and empty), and `close()` marks the channel finished \
+                     so a receiver knows when to stop.",
+                )
+            } else {
+                (
+                    "Available methods: send(value), receive().",
+                    "A task handle carries values to and from one task: `send(value)` puts a \
+                     value into the task's channel (suspending when the buffer is full — \
+                     backpressure), `receive()` takes the next thing the task delivers \
+                     (suspending until one arrives). A handle cannot close the task's \
+                     channel — call `close()` on the channel binding you passed at the spawn.",
+                )
+            };
             self.diags.push(Diagnostic::error(
                 method_span.clone(),
                 format!("`{receiver_display}` does not have a method called `{method}`."),
-                "Available methods: send(value), receive().",
-                "Channels and task handles carry values between tasks: `send(value)` puts a \
-                 value in (suspending when the buffer is full — backpressure), `receive()` \
-                 takes the next value out (suspending until one arrives).",
+                what_instead,
+                why,
             ));
             return Type::Error;
+        }
+
+        // `close()` never suspends: the receiver/statement-position disciplines below exist
+        // because a SUSPENDING operation needs its receiver held across the suspension and
+        // must sit at a statement boundary — neither applies. Any `channel<T>`-typed
+        // receiver expression is fine; it takes no arguments and returns `nothing`.
+        if is_close {
+            if !args.is_empty() {
+                self.diags.push(Diagnostic::error(
+                    call_span.clone(),
+                    format!("`.close()` takes no arguments, but got {}.", args.len()),
+                    "Call it bare: wire.close()",
+                    "close() only marks the channel finished — there is nothing to pass in.",
+                ));
+                for a in args {
+                    self.infer_expr(a, None);
+                }
+                return Type::Error;
+            }
+            return Type::Nothing;
         }
 
         // Receiver discipline: plain identifier only.
@@ -4140,6 +4504,16 @@ impl<'b> Checker<'b> {
                              is full, `send` suspends this task until the receiver drains a \
                              slot — that is backpressure working, not a deadlock.",
                         ));
+                    } else if channel_elem_drop(elem).is_some_and(|k| k.transfers_source()) {
+                        // v0.3-M8 Phase 4: `send()` GIVES its payload for an owned-heap
+                        // element kind (`array`/`map`) — the ONE transfer decision; the arm
+                        // inspects no syntax of its own. `number` is copy-through (a fresh
+                        // cell is minted at the send), `int`/`float`/`bool`/`string` are
+                        // value bits or immortal bytes — none reach here.
+                        let sink = TransferSink::Send {
+                            channel: receiver_name.as_str(),
+                        };
+                        self.check_transfer(&args[0], &sink);
                     }
                     // Lock 8: `.send()` is `-> nothing errors` — a dropped/closed receiver
                     // yields a typed channel-closed error, never a silent drop.
@@ -4160,7 +4534,15 @@ impl<'b> Checker<'b> {
                             self.infer_expr(a, None);
                         }
                     }
-                    (**elem).clone()
+                    // v0.3-M8 Phase 4: a bare channel's `receive()` is `maybe<T>` — `none`
+                    // once the channel is closed and drained. The end of a stream is a
+                    // normal value the consumer checks with `.exists()`/`.value`/`.or()`,
+                    // never an error (running out is not failing) and never a hang. The
+                    // handle's `receive()` stays `T errors` (its error arm carries the
+                    // task's OWN failure) — the two are deliberately distinct.
+                    Type::Maybe {
+                        inner: elem.clone(),
+                    }
                 }
                 _ => unreachable!("known-method check above"),
             },
@@ -4236,6 +4618,13 @@ impl<'b> Checker<'b> {
                              parameter, so the value's type must match that channel's \
                              element type.",
                         ));
+                    } else if channel_elem_drop(elem).is_some_and(|k| k.transfers_source()) {
+                        // `h.send` funnels into the SAME send core as `ch.send` (the child's
+                        // channel takes the payload and will free it) — same transfer sink.
+                        let sink = TransferSink::Send {
+                            channel: receiver_name.as_str(),
+                        };
+                        self.check_transfer(&args[0], &sink);
                     }
                     Type::ErrorsCapable {
                         inner: Box::new(Type::Nothing),
@@ -4279,21 +4668,15 @@ impl<'b> Checker<'b> {
 
         // v0.3-M4 Phase 2: the element type must survive crossing a task boundary. Values
         // travel through the channel as one 64-bit slot: scalars by value (int, float,
-        // boolean) and heap-stable pointers (string, array, map). A `shape` value or a
-        // `number` is backed by SENDER-STACK storage that is gone by the time the receiver
-        // reads it — rejected until per-type heap-upgrade ships (mirrors the
-        // UnsupportedCrossingLocalType discipline: a clean teaching error, never a silent
-        // dangling read).
-        let elem_supported = matches!(
-            elem,
-            Type::Error // already diagnosed upstream — don't cascade
-                | Type::Int
-                | Type::Float
-                | Type::Bool
-                | Type::String
-                | Type::BuiltinArray { .. }
-                | Type::BuiltinMap { .. }
-        );
+        // boolean), heap-stable pointers (string, array, map), and — since v0.3-M8 (fr12) —
+        // a `number` as a 16-byte cell the send mints. A `shape` value is backed by
+        // SENDER-STACK storage that is gone by the time the receiver reads it — rejected
+        // until per-type heap-upgrade ships (mirrors the UnsupportedCrossingLocalType
+        // discipline: a clean teaching error, never a silent dangling read). The admitted
+        // set is DERIVED from the ONE element-kind classification (`channel_elem_supported`
+        // over `channel_elem_drop`) — never a third hand-maintained list.
+        let elem_supported = elem == Type::Error /* already diagnosed upstream — don't cascade */
+                || crate::types::channel_elem_supported(&elem);
         if !elem_supported {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
@@ -4301,14 +4684,14 @@ impl<'b> Checker<'b> {
                     "`channel<{}>` is not supported yet — this element type cannot cross a task boundary.",
                     type_name(&elem)
                 ),
-                "Use one of: int, float, boolean, string, array<T>, map<K, V>. For a shape, \
-                 send its fields as separate values or as an array, and rebuild the shape on \
-                 the receiving side.",
+                "Use one of: int, float, boolean, string, number, array<T>, map<K, V>. For a \
+                 shape, send its fields as separate values or as an array, and rebuild the \
+                 shape on the receiving side.",
                 "Channel values travel between tasks as a single 64-bit slot: numbers-by-value \
-                 or a pointer to heap memory that both tasks can safely read. A `shape` or \
-                 `number` value lives in the SENDING task's stack frame, which can be freed \
-                 while the value still sits in the channel — the receiver would read freed \
-                 memory. Per-type heap-copying for these ships in a later milestone.",
+                 or a pointer to heap memory that both tasks can safely read. A `shape` value \
+                 lives in the SENDING task's stack frame, which can be freed while the value \
+                 still sits in the channel — the receiver would read freed memory. Per-type \
+                 heap-copying for shapes ships in a later version.",
             ));
             return Type::Error;
         }
@@ -4580,70 +4963,367 @@ impl<'b> Checker<'b> {
         Type::Nothing
     }
 
-    /// Check ownership constraints when a binding is passed to a function parameter.
-    ///
-    /// Called from BOTH the UFCS dot-call path AND the regular function-call path to ensure
-    /// the same ownership rules apply and the same diagnostic text is produced in both cases.
-    /// Per `design/ide-hints.md` shared-wording rule, the error text must be byte-identical
-    /// between the two call forms (e.g., `p.heal(20)` and `heal(p, 20)` produce the same error).
-    ///
-    /// Time: O(1) scope lookup.  Space: O(1).
-    fn check_arg_ownership(
+    // ── v0.3-M8 Phase 4: the transfer rule ──────────────────────────────────
+    //
+    // `IMP-ownership.md` "Transfer — Who Else Holds This Value". ONE emit site
+    // (`check_transfer`) for the three transfer diagnostics, fed by ONE provenance
+    // classification (`effective_ownership::provenance`, exhaustive over `Expr`) and the
+    // binding-event rule (`binding_event_origin`, exhaustive over the statement forms that
+    // bind a name). No sink inspects syntax; the closed sink list is: a channel/handle
+    // `send` of an owned-heap payload, every declared-`give` (or fixpoint-`consumed`)
+    // position of every call form, and — as an INFERENCE, not a call — the `background`
+    // spawn liveness pass.
+
+    /// THE provenance of an expression under typeck's full type knowledge (`expr_types`
+    /// answers the oracle; the fixpoint's report answers `returns_fresh`).
+    fn provenance_of(&self, expr: &Expr) -> Provenance {
+        let type_of = |e: &Expr| -> Option<Type> {
+            let s = e.span();
+            self.expr_types.get(&(s.start, s.end)).cloned()
+        };
+        let ctx = ProvenanceCtx::from_report(
+            self.ownership,
+            &self.local_fn_names,
+            self.imported_fn_names,
+            &type_of,
+        );
+        provenance(expr, &ctx)
+    }
+
+    /// The initializer table (`IMP-ownership.md` "Binding events"): the origin and alias
+    /// class a `let`/`const`/reassignment gives its name, from the bound value's provenance.
+    /// `Fresh` → `Owned`, own class; `Whole(b)` → b's origin, JOINS b's class (two names, one
+    /// value); `Reaches(roots)` → `Reaches`, joins every root's class (giving a root away
+    /// consumes this name with it); `Unknown` → `Unknown`, own class.
+    fn binding_event_origin(&mut self, value: &Expr) -> (Origin, u64) {
+        match self.provenance_of(value) {
+            Provenance::Fresh => (Origin::Owned, self.scope.new_class()),
+            Provenance::Whole(b) => match self.scope.lookup(&b) {
+                Some(entry) => (entry.origin.clone(), entry.alias_class),
+                // An undefined name — already diagnosed by `resolve_ident`.
+                None => (Origin::Unknown, self.scope.new_class()),
+            },
+            Provenance::Reaches(roots) => {
+                let reason = self.reaches_reason(value, &roots);
+                // Join the first root's class (the roots of one initializer denote one
+                // value's holders; `[a, b]` joins `a`'s — consuming either root consumes
+                // this name because both roots are consumed through the same sink rule).
+                let class = roots
+                    .iter()
+                    .find_map(|r| self.scope.class_of(r))
+                    .unwrap_or_else(|| self.scope.new_class());
+                (Origin::Reaches(reason), class)
+            }
+            Provenance::Unknown => (Origin::Unknown, self.scope.new_class()),
+        }
+    }
+
+    /// The `{reason}` slot of `TransferNeedsCopy` for a `Reaches` expression: who still
+    /// holds the value, said from the expression's own shape.
+    fn reaches_reason(&self, expr: &Expr, roots: &[String]) -> String {
+        match expr {
+            Expr::FieldAccess { receiver, .. } => match root_binding_name(receiver) {
+                Some(r) => format!("a field of `{r}`"),
+                None => "a field of a value that is not held in a named binding".to_string(),
+            },
+            Expr::IndexAccess { receiver, .. } => match root_binding_name(receiver) {
+                Some(r) => format!("an item inside `{r}`"),
+                None => "an item inside a value that is not held in a named binding".to_string(),
+            },
+            Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
+                let names = roots
+                    .iter()
+                    .map(|r| format!("`{r}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("built from {names}, which are still named here")
+            }
+            Expr::Call(call) => match &call.callee {
+                Expr::Ident(callee, _) => self.returns_piece_reason(callee),
+                _ => "a value the compiler cannot trace to one owner".to_string(),
+            },
+            Expr::MethodCall { method, .. }
+                if self.local_fn_names.contains(method)
+                    || self.imported_fn_names.contains(method) =>
+            {
+                self.returns_piece_reason(method)
+            }
+            Expr::MethodCall { receiver, .. } => match root_binding_name(receiver) {
+                Some(r) => format!("an item inside `{r}`"),
+                None => "a value the compiler cannot trace to one owner".to_string(),
+            },
+            Expr::Wait(inner, _) => self.reaches_reason(inner, roots),
+            _ => "a value the compiler cannot trace to one owner".to_string(),
+        }
+    }
+
+    fn returns_piece_reason(&self, callee: &str) -> String {
+        match self.ownership.returns_fresh_of(callee) {
+            Freshness::MayAlias { param: Some(p) } => format!(
+                "what `{callee}` returns, and `{callee}` returns a piece of its `{p}` argument"
+            ),
+            _ => format!("what `{callee}` returns, and `{callee}` may return a piece of something someone else holds"),
+        }
+    }
+
+    /// The ONE transfer decision (`IMP-ownership.md` "The transfer decision — ONE emit
+    /// site"). Returns true when the transfer is admitted (the caller may proceed as if the
+    /// value moved). Emits `ParamNeedsGive` / `TransferNeedsCopy` / the const refusal;
+    /// consumes an admitted `Whole` binding's whole alias class with the sink's cause. A read
+    /// of an already-consumed name was reported by `resolve_ident` when the argument was
+    /// inferred, so nothing is re-reported here.
+    fn check_transfer(&mut self, expr: &Expr, sink: &TransferSink<'_>) -> bool {
+        let span = expr.span().clone();
+        match self.provenance_of(expr) {
+            Provenance::Fresh => true,
+            Provenance::Whole(name) => {
+                let Some(entry) = self.scope.lookup(&name) else {
+                    return false; // undefined — already diagnosed
+                };
+                if entry.consumed.is_some() {
+                    return false; // the consumed-read site already fired on this read
+                }
+                if entry.is_const {
+                    let what_instead = match sink {
+                        TransferSink::Send { channel } => format!(
+                            "Send a copy instead: `{channel}.send({name}.copy())`. A `const` \
+                             binding keeps its value for its whole life, so the copy is what \
+                             the channel gets."
+                        ),
+                        TransferSink::Give { callee, .. } => format!(
+                            "Declare `{name}` with `let` if you need to hand it over for good, \
+                             or give `{callee}` a copy: `{name}.copy()`."
+                        ),
+                    };
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        format!("`{name}` is `const` and cannot be given away."),
+                        what_instead,
+                        "`const` bindings are fully read-only — the compiler cannot transfer \
+                         ownership of a value that may not change.",
+                    ));
+                    return false;
+                }
+                let ty = type_name(&entry.ty);
+                let origin = entry.origin.clone();
+                let class = entry.alias_class;
+                // A parameter anywhere in the class (the name itself, or an alias of a
+                // parameter) that is not declared `give` refuses the transfer: the caller
+                // keeps the value.
+                let non_give_param = {
+                    let mut found: Option<(String, Option<OwnershipModifier>, String)> = None;
+                    for member in self.scope.visible_members_of(class) {
+                        if let Some(e) = self.scope.lookup(&member) {
+                            if let Origin::Param(m) = &e.origin {
+                                if *m != Some(OwnershipModifier::Give) {
+                                    found = Some((member.clone(), m.clone(), type_name(&e.ty)));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    found
+                };
+                if let Some((pname, modifier, ptype)) = non_give_param {
+                    self.emit_param_needs_give(span, &pname, modifier.as_ref(), &ptype, sink);
+                    return false;
+                }
+                match origin {
+                    Origin::Owned | Origin::Param(Some(OwnershipModifier::Give)) => {
+                        let cause = sink.cause(&name);
+                        self.scope.consume(&name, cause);
+                        true
+                    }
+                    Origin::Param(_) => unreachable!("non-give parameter handled above"),
+                    Origin::Cell(reason) | Origin::Reaches(reason) => {
+                        self.emit_transfer_needs_copy(
+                            span,
+                            &name,
+                            &ty,
+                            &reason,
+                            &format!("{name}.copy()"),
+                            sink,
+                        );
+                        false
+                    }
+                    Origin::Unknown => {
+                        self.emit_transfer_needs_copy(
+                            span,
+                            &name,
+                            &ty,
+                            "a value the compiler cannot trace to one owner",
+                            &format!("{name}.copy()"),
+                            sink,
+                        );
+                        false
+                    }
+                }
+            }
+            Provenance::Reaches(roots) => {
+                let text = expr_source_text(expr);
+                let ty = self.expr_type_name(expr);
+                let reason = self.reaches_reason(expr, &roots);
+                let fix = match expr {
+                    Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
+                        let parts = roots
+                            .iter()
+                            .map(|r| format!("{r}.copy()"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("[{parts}, …]")
+                    }
+                    _ => format!("{text}.copy()"),
+                };
+                self.emit_transfer_needs_copy(span, &text, &ty, &reason, &fix, sink);
+                false
+            }
+            Provenance::Unknown => {
+                let text = expr_source_text(expr);
+                let ty = self.expr_type_name(expr);
+                self.emit_transfer_needs_copy(
+                    span,
+                    &text,
+                    &ty,
+                    "a value the compiler cannot trace to one owner",
+                    &format!("{text}.copy()"),
+                    sink,
+                );
+                false
+            }
+        }
+    }
+
+    fn expr_type_name(&self, expr: &Expr) -> String {
+        let s = expr.span();
+        self.expr_types
+            .get(&(s.start, s.end))
+            .map(type_name)
+            .unwrap_or_else(|| "value".to_string())
+    }
+
+    fn emit_param_needs_give(
         &mut self,
-        binding_name: &str,
-        ownership: Option<&ynz_ast::nodes::OwnershipModifier>,
-        fn_name: &str,
-        arg_span: &SourceSpan,
+        span: SourceSpan,
+        name: &str,
+        modifier: Option<&OwnershipModifier>,
+        ty: &str,
+        sink: &TransferSink<'_>,
     ) {
-        match ownership {
-            Some(ynz_ast::nodes::OwnershipModifier::Give) => {
-                if let Some(entry) = self.scope.lookup(binding_name) {
-                    if entry.is_const {
-                        self.diags.push(Diagnostic::error(
-                            arg_span.clone(),
-                            format!("`{binding_name}` is `const` and cannot be given away."),
-                            format!("Declare `{binding_name}` with `let` if you need to transfer ownership."),
-                            "`const` bindings are fully read-only — the compiler cannot transfer ownership of a value that may not change.",
-                        ));
-                    } else if entry.param_ownership
-                        == Some(ynz_ast::nodes::OwnershipModifier::Share)
-                    {
-                        self.diags.push(Diagnostic::error(
-                            arg_span.clone(),
-                            format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to take ownership of it (`give`)."),
-                            format!("Declare `{binding_name}` as `give` to pass it here."),
-                            "A `share` parameter is a read-only borrow — the caller still owns the value and trusts it is unchanged after the call. A function that takes ownership of a value would consume it, which a read-only borrow does not permit.",
-                        ));
-                    } else if !entry.is_consumed {
-                        self.scope.consume(binding_name);
+        let modifier_text = match modifier {
+            None => "has no ownership word".to_string(),
+            Some(OwnershipModifier::Share) => "is declared `share`".to_string(),
+            Some(OwnershipModifier::Lend) => "is declared `lend`".to_string(),
+            Some(OwnershipModifier::Give) => "is declared `give`".to_string(),
+        };
+        let fn_name = self.current_fn_name.clone();
+        let (act, copy_form) = sink.render(name);
+        self.diags.push(registry_diag(
+            span,
+            DiagnosticKind::ParamNeedsGive,
+            &[
+                ("name", name),
+                ("fn", &fn_name),
+                ("type", ty),
+                ("modifier", &modifier_text),
+                ("act", &act),
+                ("copy_form", &copy_form),
+            ],
+        ));
+    }
+
+    fn emit_transfer_needs_copy(
+        &mut self,
+        span: SourceSpan,
+        expr_text: &str,
+        ty: &str,
+        reason: &str,
+        fix: &str,
+        sink: &TransferSink<'_>,
+    ) {
+        let (act, _) = sink.render(expr_text);
+        self.diags.push(registry_diag(
+            span,
+            DiagnosticKind::TransferNeedsCopy,
+            &[
+                ("expr", expr_text),
+                ("act", &act),
+                ("type", ty),
+                ("reason", reason),
+                ("fix", fix),
+            ],
+        ));
+    }
+
+    /// Every declared-`give` (or fixpoint-`consumed`) position of one call form, over the
+    /// ONE normalized argument list `[receiver?, args…]` — the plain call, the generic call,
+    /// the UFCS dot-call (receiver AND non-receiver arguments), the `dynamic Contract`
+    /// dispatch and the `background` spawn's inner call all reach the transfer decision here.
+    /// `ownerships[i]` is the callee's declared modifier at position `i` of the normalized
+    /// list; `param_names[i]` its parameter name (for the chain form of `{act}`).
+    fn check_call_transfers(
+        &mut self,
+        callee: &str,
+        normalized_args: &[&Expr],
+        ownerships: &[Option<OwnershipModifier>],
+        param_names: &[String],
+    ) {
+        for (i, arg) in normalized_args.iter().enumerate() {
+            let declared = ownerships.get(i).and_then(|o| o.as_ref());
+            match declared {
+                Some(OwnershipModifier::Give) => {
+                    let sink = TransferSink::Give {
+                        callee,
+                        chain_param: None,
+                    };
+                    self.check_transfer(arg, &sink);
+                }
+                _ if self.ownership.consumed_of(callee, i) => {
+                    // Not declared `give`, but the callee's body gives this position away:
+                    // report the caller's frame in the SAME compile, naming the callee's
+                    // parameter (the chain form). The program is already rejected by the
+                    // callee's own error; this only changes what is reported.
+                    let chain = param_names.get(i).cloned();
+                    let sink = TransferSink::Give {
+                        callee,
+                        chain_param: chain.as_deref(),
+                    };
+                    self.check_transfer(arg, &sink);
+                }
+                Some(OwnershipModifier::Lend) => {
+                    if let Some(binding_name) = simple_ident_name(arg) {
+                        self.check_lend_arg(binding_name, callee, arg.span());
                     }
                 }
+                _ => {} // share or bare: no restrictions
             }
-            Some(ynz_ast::nodes::OwnershipModifier::Lend) => {
-                if let Some(entry) = self.scope.lookup(binding_name) {
-                    if entry.is_const {
-                        self.diags.push(Diagnostic::error(
-                            arg_span.clone(),
-                            format!("`{binding_name}` is `const` — `{fn_name}` needs to mutate it but `const` blocks mutation."),
-                            format!("Declare `{binding_name}` with `let` if you need `{fn_name}` to modify it."),
-                            "`const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.",
-                        ));
-                    } else if entry.param_ownership
-                        == Some(ynz_ast::nodes::OwnershipModifier::Share)
-                    {
-                        // share→lend escalation (`design/concurrency.md` line 651): a function
-                        // that receives a value as `share` (read-only) cannot lend it mutably
-                        // to a callee. This is the load-bearing auto-parallel soundness rule.
-                        self.diags.push(Diagnostic::error(
-                            arg_span.clone(),
-                            format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to modify it (`lend`)."),
-                            format!("Declare `{binding_name}` as `lend` to pass it here."),
-                            "A `share` parameter is a read-only borrow — the caller keeps ownership and trusts the value is unchanged after the call. Passing it where the value will be modified would break that promise; declare `lend` so the change is visible at every call site.",
-                        ));
-                    }
-                }
-            }
-            _ => {} // share or unspecified: no restrictions
+        }
+    }
+
+    /// The `lend` half of the old `check_arg_ownership` (unchanged): a `const` binding
+    /// cannot be lent for mutation, and a `share` parameter cannot be escalated to `lend`.
+    /// Called from every call form with the same wording (`p.heal(20)` and `heal(p, 20)`
+    /// render byte-identical text — `design/ide-hints.md`'s shared-wording rule).
+    fn check_lend_arg(&mut self, binding_name: &str, fn_name: &str, arg_span: &SourceSpan) {
+        let Some(entry) = self.scope.lookup(binding_name) else {
+            return;
+        };
+        if entry.is_const {
+            self.diags.push(Diagnostic::error(
+                arg_span.clone(),
+                format!("`{binding_name}` is `const` — `{fn_name}` needs to mutate it but `const` blocks mutation."),
+                format!("Declare `{binding_name}` with `let` if you need `{fn_name}` to modify it."),
+                "`const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.",
+            ));
+        } else if entry.param_ownership == Some(OwnershipModifier::Share) {
+            // share→lend escalation (`design/concurrency.md` line 651): a function
+            // that receives a value as `share` (read-only) cannot lend it mutably
+            // to a callee. This is the load-bearing auto-parallel soundness rule.
+            self.diags.push(Diagnostic::error(
+                arg_span.clone(),
+                format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to modify it (`lend`)."),
+                format!("Declare `{binding_name}` as `lend` to pass it here."),
+                "A `share` parameter is a read-only borrow — the caller keeps ownership and trusts the value is unchanged after the call. Passing it where the value will be modified would break that promise; declare `lend` so the change is visible at every call site.",
+            ));
         }
     }
 
@@ -4786,17 +5466,24 @@ impl<'b> Checker<'b> {
             }
             return Type::Error;
         }
+        // Ownership at every position, over the normalized argument list (a plain call's
+        // list IS its argument list) — the transfer decision for `give`/consumed positions,
+        // the lend checks for `lend` positions. Runs after every argument is inferred so
+        // the provenance oracle sees each argument's type.
+        let arg_refs: Vec<&Expr> = call.args.iter().collect();
+        let param_names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+        let actual_tys: Vec<Type> = call
+            .args
+            .iter()
+            .zip(params.iter())
+            .map(|(arg, (_, expected_ty))| self.infer_expr(arg, Some(expected_ty)))
+            .collect();
+        self.check_call_transfers(name, &arg_refs, ownerships, &param_names);
         for (i, (arg, (_, expected_ty))) in call.args.iter().zip(params.iter()).enumerate() {
-            let ownership = ownerships.get(i).and_then(|o| o.as_ref());
-            let actual_ty = self.infer_expr(arg, Some(expected_ty));
+            let actual_ty = actual_tys[i].clone();
 
             if self.reject_int_literal_number_arg(name, expected_ty, arg) {
                 continue;
-            }
-
-            // Ownership enforcement on direct identifier arguments.
-            if let Some(binding_name) = simple_ident_name(arg) {
-                self.check_arg_ownership(binding_name, ownership, name, arg.span());
             }
 
             // Can't-infer: UFCS free-fn form of dynamic dispatch. When the EXPECTED param
@@ -5102,19 +5789,21 @@ impl<'b> Checker<'b> {
         let non_self_ownerships: Vec<Option<ynz_ast::nodes::OwnershipModifier>> =
             sig.param_ownerships.iter().skip(skip).cloned().collect();
         let mut arg_types = Vec::new();
-        for (i, (arg, (_, param_ty))) in call.args.iter().zip(non_self_params.iter()).enumerate() {
+        for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params.iter()) {
             let actual = self.infer_expr(arg, None);
             arg_types.push(actual.clone());
 
             if actual != Type::Error {
                 let _ = unify_param(param_ty, &actual, &mut subst);
             }
-            // Ownership enforcement via shared helper (same as check_user_fn_call and UFCS path).
-            let ownership = non_self_ownerships.get(i).and_then(|o| o.as_ref());
-            if let Some(binding_name) = simple_ident_name(arg) {
-                self.check_arg_ownership(binding_name, ownership, name, arg.span());
-            }
         }
+        // Ownership over the normalized argument list — the same transfer decision as
+        // `check_user_fn_call` and the UFCS path (the generic call's list is its
+        // non-`self` arguments; `consumed[callee]` is indexed the same way, since a generic
+        // function's fixpoint row follows its declared parameter order minus `self`).
+        let arg_refs: Vec<&Expr> = call.args.iter().collect();
+        let non_self_names: Vec<String> = non_self_params.iter().map(|(n, _)| n.clone()).collect();
+        self.check_call_transfers(name, &arg_refs, &non_self_ownerships, &non_self_names);
 
         // Int literal into a `number` param of a generic fn — CONCRETE
         // (`tag(`x`, 5)` with a declared `number` param), EXPLICIT
@@ -5417,6 +6106,23 @@ impl<'b> Checker<'b> {
                              ships in a future version.",
                         ));
                     }
+                    // v0.3-M8 Phase 4: ownership over the same normalized `[receiver,
+                    // args…]` list, using the CONTRACT's declared modifiers — the only static
+                    // truth for a runtime-resolved callee (`IMP-ownership.md` "`dynamic
+                    // Contract` dispatch — covered by construction"). `follows` conformance
+                    // checks the implementer's modifiers equal the contract's.
+                    if let Some(recv_expr) = receiver_expr {
+                        let sig = sig.clone();
+                        let normalized: Vec<&Expr> =
+                            std::iter::once(recv_expr).chain(args.iter()).collect();
+                        let mut ownerships: Vec<Option<OwnershipModifier>> =
+                            vec![sig.receiver.as_ref().map(receiver_kind_modifier)];
+                        ownerships.extend(sig.param_ownerships.iter().cloned());
+                        let mut names: Vec<String> = vec!["self".to_string()];
+                        names.extend(sig.param_names.iter().cloned());
+                        self.check_call_transfers(method, &normalized, &ownerships, &names);
+                        return sig.ret_ty.clone();
+                    }
                     return sig.ret_ty.clone();
                 }
             }
@@ -5434,21 +6140,24 @@ impl<'b> Checker<'b> {
                 if let Some((_, first_ty)) = sig.params.first() {
                     if first_ty == receiver_ty || *first_ty == Type::Error {
                         self.referenced_names.insert(method.to_string());
-                        // Receiver ownership check via the shared helper — called from BOTH
-                        // this UFCS dot-call path AND the regular function-call arg loop so
-                        // the diagnostic text is byte-identical between `p.heal(20)` and
-                        // `heal(p, 20)` per design/ide-hints.md shared-wording rule.
-                        let receiver_ownership =
-                            sig.param_ownerships.first().and_then(|o| o.as_ref());
+                        // Ownership over the ONE normalized argument list `[receiver,
+                        // args…]` — the same transfer decision the plain call form runs,
+                        // so `p.heal(20)` and `heal(p, 20)` render byte-identical text
+                        // (design/ide-hints.md shared-wording rule), and a `give` position
+                        // that is NOT the receiver (`bucket.stash(rows)`) is reached too —
+                        // the round-3 probe hole that used to bypass ownership entirely.
                         if let Some(recv_expr) = receiver_expr {
-                            if let Some(binding_name) = simple_ident_name(recv_expr) {
-                                self.check_arg_ownership(
-                                    binding_name,
-                                    receiver_ownership,
-                                    method,
-                                    recv_expr.span(),
-                                );
-                            }
+                            let normalized: Vec<&Expr> =
+                                std::iter::once(recv_expr).chain(args.iter()).collect();
+                            let ownerships = sig.param_ownerships.clone();
+                            let param_names: Vec<String> =
+                                sig.params.iter().map(|(n, _)| n.clone()).collect();
+                            self.check_call_transfers(
+                                method,
+                                &normalized,
+                                &ownerships,
+                                &param_names,
+                            );
                         }
                         // Int literal into a `number` param through the UFCS
                         // dot-call form (`p.f(5)` — sugar for `f(p, 5)`): the
@@ -6183,6 +6892,39 @@ impl<'b> Checker<'b> {
                             // Check first param matches the implementing shape.
                             match fn_sig.params.first() {
                                 Some((_, first_ty)) if *first_ty == shape_ty => {
+                                    // v0.3-M8 Phase 4: ownership PARITY between the contract
+                                    // and its implementer — the dispatch site trusts the
+                                    // contract's declared modifiers, so an implementer that
+                                    // takes `give` where the contract is bare (or the
+                                    // reverse) would make the vtable promise one thing and
+                                    // the body do another. Non-receiver positions match
+                                    // exactly; the receiver: an explicit contract modifier
+                                    // must match exactly, and a bare contract receiver is
+                                    // never a give position (the parser folds a bare `self`
+                                    // into `receiver: None`, the same value as "no self", so
+                                    // the safety-relevant half is what can be checked there).
+                                    let impl_recv =
+                                        fn_sig.param_ownerships.first().cloned().flatten();
+                                    let recv_mismatch = match &sig.receiver {
+                                        Some(k) => {
+                                            impl_recv.as_ref() != Some(&receiver_kind_modifier(k))
+                                        }
+                                        None => impl_recv == Some(OwnershipModifier::Give),
+                                    };
+                                    let params_mismatch = fn_sig
+                                        .param_ownerships
+                                        .iter()
+                                        .skip(1)
+                                        .zip(sig.param_ownerships.iter())
+                                        .any(|(i, c)| i != c);
+                                    if recv_mismatch || params_mismatch {
+                                        self.diags.push(Diagnostic::error(
+                                            shape_def_span.clone(),
+                                            format!("Function `{}` for `{shape_name}` does not use the same ownership words as `{contract_name}` declares for `{}`.", sig.name, sig.name),
+                                            format!("Write `{}`'s parameters with exactly the `share`/`lend`/`give` words the contract uses — a bare position in the contract stays bare in the function.", sig.name),
+                                            "A value called through the contract is handed over the way the contract says: only a `give` position in the contract makes the caller give the value up. If the function took ownership where the contract does not say so, the caller would keep using a value the function had already freed.",
+                                        ));
+                                    }
                                     // Return type must match.
                                     if fn_sig.ret != sig.ret_ty
                                         && fn_sig.ret != Type::Error
@@ -11856,19 +12598,9 @@ fn simple_ident_name(expr: &Expr) -> Option<&str> {
     }
 }
 
-/// Walk a field-access chain to find the root binding name.
-///
-/// `player.inner.health` → `Some("player")`
-/// `self.field` → `Some("self")`
-/// Anything not rooted in a simple identifier → `None`.
-fn root_binding_name(expr: &Expr) -> Option<&str> {
-    match expr {
-        Expr::Ident(name, _) => Some(name.as_str()),
-        Expr::SelfValue { .. } => Some("self"),
-        Expr::FieldAccess { receiver, .. } => root_binding_name(receiver),
-        _ => None,
-    }
-}
+// `root_binding_name` is THE one in `effective_ownership` (v0.3-M8 Phase 4 collapsed the
+// twin that lived here — it lacked the `IndexAccess` arm; parked item 27).
+use crate::effective_ownership::root_binding_name;
 
 #[cfg(test)]
 mod tests {
@@ -11942,6 +12674,8 @@ mod tests {
             &generic_shape_table,
             &intrinsics,
             &std::collections::HashMap::new(),
+            &crate::effective_ownership::EffectiveOwnershipReport::empty(),
+            &HashSet::new(),
         );
         let diags: Vec<_> = diags.into_iter().collect();
         assert_eq!(

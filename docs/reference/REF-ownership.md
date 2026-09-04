@@ -84,7 +84,7 @@ const backup = original.copy()    // produces a new owned value (cheap, triviall
 saveForever(backup)                // backup is given to saveForever; original is unchanged
 ```
 
-`.copy()` is only allowed when every field of the value's type is trivially copyable (primitives all the way down). For shapes containing arrays, maps, or other heap-owned data, you write a standalone `copy()` function that does the deep copy explicitly and call it as a normal function. This prevents silent expensive copies.
+`.copy()` works on a shape whose fields are all simple values (numbers, strings, booleans — all the way down), on an `array<T>`, and on a `map<K, V>`. For an array or a map you get a new container with the same items; changing one afterward never changes the other. The copy is one level deep: if an item is itself an array or a map, the copy holds the same inner item, not a second one. For a shape that holds arrays or maps inside it, write a standalone `copy()` function that copies the pieces you need and call it as a normal function — that keeps an expensive copy visible in your code.
 
 ---
 
