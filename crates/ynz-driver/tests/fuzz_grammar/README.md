@@ -26,7 +26,7 @@ Declarations, emitted per program from the seed:
 | Shapes | 0–2 × `shape CrateN { weight: int, label: string }` |
 | Pure helpers | 1–2 × `function tallyN(a: int, b: int) -> int` |
 | Suspending helpers | 1–2 × `function fetchN(n: int) -> int { wait sleep(1) … }` |
-| Channel feeders | 1–2 × `function feedN(lend wire: channel<int>)` — sends 1–3 values, then `close()` |
+| Channel feeders | 1–2 × `function feedN(lend wire: channel<T>)` — sends 1–3 values of `T`, then `close()`; `T` is drawn from `{int, array<int>, map<string,int>, number}` |
 | Shape readers | one per declared shape — `function weighN(item: CrateN, out: channel<int>)` |
 
 `entrypoint` body statements, drawn by weight from a 14-way menu, 10–19 statements per program:
@@ -38,24 +38,61 @@ Declarations, emitted per program from the seed:
 - `array<int>` literals, `.add()`, `.count()`, in-range `arr[i].or(-1)`;
 - `map<string, int>` literals, index read `.or(0)`, index assign, `.count()`;
 - shape literals and field reads;
-- inline channels: `channel<int>(cap)`, `send`, `receive` + `.or(0)`, and — half the time —
-  `close()` followed by a receive past end-of-stream (the v0.3-M8 Phase 4 contract: `none`, never
-  a hang, never an error);
+- inline channels: `channel<T>(cap)`, `send`, `receive`, and — half the time — `close()` followed
+  by a receive past end-of-stream (the v0.3-M8 Phase 4 contract: `none`, never a hang, never an
+  error). `T` is drawn from `{int, array<int>, map<string,int>, number}` (v0.3-M8 Phase 8 fix
+  round 3 — see "The owned-heap widening" below); `int` receives use `.or(0)`, the other three
+  kinds use `.exists()`/`.value`;
 - **handle-form spawn**: `let h = background fetchN(k)` then a blocking `h.receive()`;
 - **the taught drain-loop idiom**: `background feedN(wire)` + a `while` loop on
-  `.exists()`/`.value` until end-of-stream;
+  `.exists()`/`.value` until end-of-stream, `wire`'s element kind matching `feedN`'s;
 - **the two-spawn Auto-Arc topology**: the same read-only shape binding handed to two
   `background` spawns with no write between them, each task reporting through one channel, and
   the caller reading its own view of the shape afterwards.
 
 Roughly 90% of generated programs spawn `background` work — the surface this milestone is about.
 
+## The owned-heap widening (v0.3-M8 Phase 8 fix round 3)
+
+Channel element types were, until this round, locked to `int` — the prior text here claimed
+`array<int>`/`map<string,int>` payloads "would produce correctly-REJECTED programs" because
+v0.3-M8's transfer rules (`ConsumedBySend`, `TransferNeedsCopy`, `ParamNeedsGive`) "require
+`.copy()`/`give` plumbing the grammar does not model." **That claim was checked directly and was
+false.** A `let` built inside a feeder function (or directly in `entrypoint`, never read again
+after its send) needs neither: nothing else in the program reads it back, so no consume-tracking
+diagnostic can fire. The only real bookkeeping the widening needed was keeping a SENT binding out
+of the pool a later statement could read from (`take_or_make_array`/`take_or_make_map` in
+`mod.rs`) — verified by hand with three programs in the generator's own idiom before the widening
+landed (a `background` feeder + drain loop for `channel<array<int>>`; a `channel<map<…>>` and a
+`channel<number>` in one program; an inline `channel<array<int>>` send with no `background`
+involved at all), all three compiling and running clean, byte-identical across the full mode
+matrix. `channel<number>` exercises fr12's copy-through contract directly: the SAME `number`
+binding is sent more than once and is still readable afterward, proving it never joins the give
+set.
+
+**The widening surfaced two genuine runtime defects**, not generator bugs — full repro, bisection,
+and disposition in Future Requirements #11 (`plan.md`) and FRAGO 015 (`audit.md`):
+
+1. An `array<int>`/`map<string,int>` LOCAL declared before ANY suspension point in `entrypoint`
+   (a `wait`, a `background`-handle `.receive()`, a channel `.receive()`) and later `.send()`-ed
+   into a channel AFTER that suspension reads back corrupted (`SIGABRT`, null/misaligned pointer
+   in `ynz_map_count`/`ynz_array_count`). A fresh local built and sent immediately, or the same
+   local declared AFTER the suspension, is unaffected — confirmed both ways.
+2. A `channel<number>(1)` fed by a `background` producer sending the SAME `number` binding 3
+   times loses one value under `--no-optimize`/`--no-auto-parallel`, but only when the producer
+   is forced to actually BLOCK on a full buffer (`send_count > capacity`); 2 sends into
+   capacity 1, or 3 sends into capacity 4, are both unaffected.
+
+Neither is fixed inline (per this plan's CCIR item 5 / risk R5 — a genuine finding routes through
+the plan-amendment seam, never a same-round patch). Both are avoided at the generator level with
+narrow, evidence-backed guards documented at their exact code sites (`take_or_make_array`'s doc
+comment for #1; the capacity computation in `stmt_background_drain_loop` for #2) — neither guard
+narrows an entire element kind or construct; each targets only the specific shape that reproduces.
+Verified with two independent 256-program local runs (seed bases 0 and 31337000) after landing
+both guards: 256/256 compiled and ran, 0 findings, both runs.
+
 ## What it deliberately does NOT cover, and why
 
-- **Owned-heap channel payloads** (`channel<array<int>>`, `channel<map<…>>`). v0.3-M8's transfer
-  rules (`ConsumedBySend`, `TransferNeedsCopy`, `ParamNeedsGive`) require `.copy()`/`give`
-  plumbing the grammar does not model; emitting them would produce correctly-REJECTED programs
-  that read as harness failures. Every channel is `channel<int>`, locked by a generator test.
 - **Un-`wait`ed adjacent suspending calls.** Two of those form an auto-parallel I/O group whose
   members may legitimately finish in either order — the documented Model-A intended reorder
   (`IMP-concurrency.md`; the hand-written corpus carries `v0_3_m3b_p4_model_a_intended_reorder.ynz`

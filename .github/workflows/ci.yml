@@ -191,12 +191,27 @@ jobs:
           grep -Eq 'fuzz corpus: .* [1-9][0-9]* generated \([1-9][0-9]* distinct' fuzz.log
           grep -Eq '[1-9][0-9]* compiled and ran to exit 0' fuzz.log
 
-      - name: Upload generated corpus on failure (replay input)
+      - name: Upload fuzz.log on failure (the summary + embedded finding sources)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-log
           path: fuzz.log
+          if-no-files-found: warn
+
+      # The README presents the KEPT scratch directory as the durable replay artifact (full,
+      # untruncated per-mode stdout/stderr capture files — fuzz.log above only carries the
+      # panic message's truncated 600/1600-byte excerpts). `generated_corpus_byte_identical_
+      # across_mode_matrix` calls `tempfile::Builder::new().prefix("ynz-fuzz-").tempdir()` with
+      # no `tempdir_in`, so it lands in the OS temp dir — `/tmp` on this runner — and `dir.keep()`
+      # on failure leaves it there rather than deleting it. Upload it too, so the README's own
+      # claim and what CI actually keeps agree.
+      - name: Upload kept fuzz corpus on failure (full per-mode capture files, replay input)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus
+          path: /tmp/ynz-fuzz-*
           if-no-files-found: warn
 
   sanitizers:

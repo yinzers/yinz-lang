@@ -62,6 +62,48 @@ impl Rng {
     }
 }
 
+// ── Channel element kinds (v0.3-M8 Phase 8 fix round 3 — the owned-heap widening) ─────────────
+//
+// v0.3-M8's transfer rules (`ConsumedBySend`, `TransferNeedsCopy`, `ParamNeedsGive`) and fr12's
+// copy-through `number` marshalling were, until this round, exercised only by six hand-written
+// fixtures. The claim that emitting them "would produce correctly-REJECTED programs" (the prior
+// README wording) was checked directly against the generator's own idiom and was FALSE — a
+// task-local `let` built and immediately sent needs no `.copy()`/`give` plumbing at all, because
+// nothing else in the program ever reads it again. The only real bookkeeping is keeping a sent
+// binding OUT of the pool other statements draw from (`Builder::arrays`/`Builder::maps`) — this
+// generator achieves that by never registering a send-only local into either pool in the first
+// place, and by removing a POOLED binding from its pool at the moment it is chosen to be sent
+// (see `stmt_channel_inline_kind`'s reuse branch below).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ElemKind {
+    Int,
+    Array,
+    Map,
+    Number,
+}
+
+impl ElemKind {
+    const ALL: [ElemKind; 4] = [
+        ElemKind::Int,
+        ElemKind::Array,
+        ElemKind::Map,
+        ElemKind::Number,
+    ];
+
+    fn type_name(self) -> &'static str {
+        match self {
+            ElemKind::Int => "int",
+            ElemKind::Array => "array<int>",
+            ElemKind::Map => "map<string, int>",
+            ElemKind::Number => "number",
+        }
+    }
+
+    fn channel_type(self) -> String {
+        format!("channel<{}>", self.type_name())
+    }
+}
+
 // ── Generated program ─────────────────────────────────────────────────────────
 
 /// One generated program plus the facts a caller needs without re-parsing it.
@@ -77,10 +119,35 @@ pub struct Program {
     /// concurrent/sequential split of a corpus, and it is asserted to agree with the
     /// authoritative classifier in this module's own tests.
     pub uses_background: bool,
-    /// Number of statements emitted into `entrypoint`'s body — a non-triviality signal the
-    /// harness reports, so "a meaningful hit rate" cannot be met by emitting `print(1)` a
-    /// thousand times.
-    pub body_stmts: usize,
+    /// Number of TOP-LEVEL statements emitted into `entrypoint`'s body (the seed `let` plus
+    /// every `emit_statement()` draw) — NOT a line count. A composite statement (the drain
+    /// loop, the two-spawn topology) emits many source lines for ONE statement; counting lines
+    /// instead of statements let this field average 43.9 against a 10-19 draw, so `>= 10` could
+    /// never fail regardless of what the generator actually does. This field is now tied to the
+    /// real invariant `build_body` guarantees (`stmt_count` is always `10..=19`).
+    pub stmt_count: usize,
+    /// The names of every suspending (`fetchN`) helper this program declared — the authoritative
+    /// list the wait-prefix contract test checks against, instead of a hardcoded guess at what
+    /// `declare_helpers` might have produced.
+    pub io_fn_names: Vec<String>,
+    /// True when `stmt_channel_inline_kind`'s optional close-then-receive-past-end-of-stream tail
+    /// fired (the "close() in body" construct the per-construct floor test tracks).
+    pub fired_inline_close: bool,
+    /// True when the taught end-of-stream drain-loop composite fired (menu arm 12).
+    pub fired_drain_loop: bool,
+    /// True when the two-spawn Auto-Arc sharing topology fired (menu arm 13).
+    pub fired_two_spawn_arc: bool,
+    /// True when a standalone `map<string, int>` declaration statement fired (menu arm 7).
+    pub fired_map_decl: bool,
+    /// True when an array intrinsic statement (`.add()`/`.count()`/index) fired (menu arm 6).
+    pub fired_array_intrinsic: bool,
+    /// True when a shape-literal-plus-field-read statement fired (menu arm 9).
+    pub fired_shape_field_read: bool,
+    /// True when this program actually RUNS (not merely declares) a `channel<array<int>>`,
+    /// `channel<map<string, int>>`, or `channel<number>` composite — i.e. the owned-heap/fr12
+    /// widening this round adds was genuinely exercised, not just present in an uncalled
+    /// helper's signature.
+    pub fired_owned_heap_channel: bool,
 }
 
 /// Generate one type-valid program from `seed`.
@@ -100,10 +167,22 @@ struct ShapeDecl {
     str_field: String,
 }
 
-/// A feeder function: sends `values` into a `lend channel<int>` then closes it.
+/// A feeder function: sends a small run of values of `kind` into a `lend channel<kind>` then
+/// closes it. `body_lines` are pre-rendered (everything between the signature's `{` and the
+/// trailing `wire.close()`) because a feeder function is its OWN scope — it has no access to the
+/// entrypoint's `arrays`/`maps` pools, so every value it sends is a fresh local built and sent
+/// immediately, never registered anywhere a later statement could read it back.
 struct FeedFn {
     name: String,
-    values: Vec<i64>,
+    kind: ElemKind,
+    body_lines: Vec<String>,
+    /// How many `wire.send(...)` calls `body_lines` contains. `stmt_background_drain_loop`
+    /// reads this to keep the consumer's channel capacity `>= send_count` — see the long
+    /// comment there for why: a CONFIRMED, reproducible defect (backpressure-blocked
+    /// `channel<number>` sends losing a value under `--no-optimize`/`--no-auto-parallel`),
+    /// bisected to `send_count > capacity` specifically, general to Int too by construction
+    /// (untested, not confirmed safe) so the cap floor applies to every kind.
+    send_count: usize,
 }
 
 /// A shape-reading function: `(S, channel<int>) -> nothing`, sends one int derived from the
@@ -127,7 +206,23 @@ struct Builder {
     arrays: Vec<(String, usize)>, // name, current length
     maps: Vec<String>,
     next_id: usize,
+    stmt_count: usize,
     uses_background: bool,
+    fired_inline_close: bool,
+    fired_drain_loop: bool,
+    fired_two_spawn_arc: bool,
+    fired_map_decl: bool,
+    fired_array_intrinsic: bool,
+    fired_shape_field_read: bool,
+    fired_owned_heap_channel: bool,
+    /// v0.3-M8 Phase 8 fix round 3 — a CONFIRMED runtime defect, not a speculative avoidance (see
+    /// `take_or_make_array`'s doc comment for the full repro). Set true the moment ANY statement
+    /// introduces a genuine suspension point in `entrypoint`'s own frame (`wait`, a
+    /// `background`-handle `.receive()`, a channel `.receive()`). Consulted ONLY by
+    /// `take_or_make_array`/`take_or_make_map`, which refuse to reuse a PRE-EXISTING pooled
+    /// binding for a channel send once this is true (a FRESH local, built and sent in the same
+    /// composite with no suspension in between, is always safe and unaffected).
+    suspension_seen: bool,
 }
 
 const MAP_KEYS: [&str; 3] = ["alice", "bob", "cam"];
@@ -147,7 +242,16 @@ impl Builder {
             arrays: Vec::new(),
             maps: Vec::new(),
             next_id: 0,
+            stmt_count: 0,
             uses_background: false,
+            fired_inline_close: false,
+            fired_drain_loop: false,
+            fired_two_spawn_arc: false,
+            fired_map_decl: false,
+            fired_array_intrinsic: false,
+            fired_shape_field_read: false,
+            fired_owned_heap_channel: false,
+            suspension_seen: false,
         }
     }
 
@@ -163,7 +267,14 @@ impl Builder {
     // ── Declarations ──────────────────────────────────────────────────────────
 
     fn declare_shapes(&mut self) {
-        let n = self.rng.below(3); // 0..=2
+        // Always at least one shape. The pre-widening draw (`below(3)`, i.e. 0..=2) left ~1/3 of
+        // the corpus with ZERO shapes — and two whole menu arms (9, the shape-field-read
+        // statement; 13, the two-spawn Auto-Arc topology) silently fall through to
+        // `stmt_int_let` whenever `shapes` is empty. A shapeless program isn't a distinct code
+        // path anywhere else in this grammar, so that 1/3 was starving both arms for no
+        // compensating coverage value. 1..=2 keeps the "how many shapes" variety without ever
+        // zeroing it out.
+        let n = 1 + self.rng.below(2);
         for i in 0..n {
             self.shapes.push(ShapeDecl {
                 name: format!("Crate{i}"),
@@ -183,11 +294,13 @@ impl Builder {
                 .push((format!("fetch{i}"), self.rng.range(1, 9)));
         }
         for i in 0..1 + self.rng.below(2) {
-            let count = 1 + self.rng.below(3);
-            let values = (0..count).map(|_| self.rng.range(1, 12)).collect();
+            let kind = *self.rng.pick(&ElemKind::ALL);
+            let (body_lines, send_count) = self.build_feed_body(kind);
             self.feed_fns.push(FeedFn {
                 name: format!("feed{i}"),
-                values,
+                kind,
+                body_lines,
+                send_count,
             });
         }
         // A reader per declared shape (needs a shape to read).
@@ -201,6 +314,65 @@ impl Builder {
         for i in 0..self.reader_fns.len() {
             self.reader_fns[i].bump = self.rng.range(1, 9);
         }
+    }
+
+    /// Build a feeder function's body (everything before the always-present `wire.close()`):
+    /// 1-3 values of `kind`, each sent the moment it exists. Every binding here is LOCAL to this
+    /// function and consumed by its own send — there is no cross-statement pool to bookkeep
+    /// inside a fresh function scope. Returns the body lines plus the number of `wire.send(...)`
+    /// calls emitted, so the caller (`stmt_background_drain_loop`) can size the consumer's
+    /// channel capacity to never fall below it — see that method's doc comment for the confirmed
+    /// defect this avoids.
+    fn build_feed_body(&mut self, kind: ElemKind) -> (Vec<String>, usize) {
+        let count = 1 + self.rng.below(3);
+        let lines = match kind {
+            ElemKind::Int => (0..count)
+                .map(|_| format!("wire.send({})", self.rng.range(1, 12)))
+                .collect(),
+            ElemKind::Number => {
+                // `number` is copy-through (fr12) — the SAME binding survives repeated sends,
+                // which is the property this composite exists to exercise, not merely "some
+                // number values got sent."
+                let v = self.fresh("price");
+                let whole = self.rng.range(0, 9);
+                let frac = self.rng.range(0, 9);
+                let mut lines = vec![format!("let {v}: number = {whole}.{frac}")];
+                for _ in 0..count {
+                    lines.push(format!("wire.send({v})"));
+                }
+                lines
+            }
+            ElemKind::Array => {
+                let mut lines = Vec::new();
+                for _ in 0..count {
+                    let a = self.fresh("rows");
+                    let n = 1 + self.rng.below(3);
+                    let elems: Vec<String> = (0..n).map(|_| self.int_lit()).collect();
+                    lines.push(format!("let {a}: array<int> = [{}]", elems.join(", ")));
+                    lines.push(format!("wire.send({a})"));
+                }
+                lines
+            }
+            ElemKind::Map => {
+                let mut lines = Vec::new();
+                for _ in 0..count {
+                    let m = self.fresh("book");
+                    let n = 1 + self.rng.below(MAP_KEYS.len());
+                    let mut entries = Vec::new();
+                    for k in MAP_KEYS.iter().take(n) {
+                        let v = self.int_lit();
+                        entries.push(format!("`{k}`: {v}"));
+                    }
+                    lines.push(format!(
+                        "let {m}: map<string, int> = {{ {} }}",
+                        entries.join(", ")
+                    ));
+                    lines.push(format!("wire.send({m})"));
+                }
+                lines
+            }
+        };
+        (lines, count)
     }
 
     // ── Expressions ───────────────────────────────────────────────────────────
@@ -248,10 +420,12 @@ impl Builder {
         let e = self.int_lit();
         self.push(format!("let {v} = {e}"));
         self.ints.push(v);
+        self.stmt_count += 1;
 
         let target = 9 + self.rng.below(10); // 9..=18 statements after the seed
         for _ in 0..target {
             self.emit_statement();
+            self.stmt_count += 1;
         }
     }
 
@@ -323,6 +497,9 @@ impl Builder {
         // documented Model-A intended reorder (`IMP-concurrency.md`), not a miscompile, and
         // this generator has no business manufacturing one for the oracle to flag.
         self.push(format!("let {v} = wait {f}({a})"));
+        // A genuine suspension point in `entrypoint`'s own frame — see `take_or_make_array`'s
+        // doc comment.
+        self.suspension_seen = true;
         self.ints.push(v);
     }
 
@@ -338,6 +515,7 @@ impl Builder {
         if self.arrays.is_empty() {
             return self.stmt_array_decl();
         }
+        self.fired_array_intrinsic = true;
         let idx = self.rng.below(self.arrays.len());
         let name = self.arrays[idx].0.clone();
         let len = self.arrays[idx].1;
@@ -364,6 +542,7 @@ impl Builder {
     }
 
     fn stmt_map_decl(&mut self) {
+        self.fired_map_decl = true;
         let m = self.fresh("book");
         let n = 1 + self.rng.below(MAP_KEYS.len());
         let mut entries = Vec::new();
@@ -408,6 +587,7 @@ impl Builder {
         if self.shapes.is_empty() {
             return self.stmt_int_let();
         }
+        self.fired_shape_field_read = true;
         let i = self.rng.below(self.shapes.len());
         let name = self.shapes[i].name.clone();
         let int_field = self.shapes[i].int_field.clone();
@@ -424,32 +604,171 @@ impl Builder {
     }
 
     /// An inline (no `background`) channel: construct, send, receive. Fully sequential and
-    /// therefore byte-order-strict under the oracle.
+    /// therefore byte-order-strict under the oracle. Element kind is drawn from the full
+    /// `{int, array<int>, map<string,int>, number}` space (v0.3-M8 Phase 8 fix round 3). Every
+    /// element kind fires unconditionally here — the hazard this widening found (see
+    /// `take_or_make_array`/`take_or_make_map`'s doc comment) is narrower than "this composite,"
+    /// and is contained at the one place it can actually occur: reusing a PRE-EXISTING pooled
+    /// binding for a send.
     fn stmt_channel_inline(&mut self) {
+        let kind = *self.rng.pick(&ElemKind::ALL);
+        self.stmt_channel_inline_kind(kind);
+    }
+
+    fn stmt_channel_inline_kind(&mut self, kind: ElemKind) {
+        if kind != ElemKind::Int {
+            self.fired_owned_heap_channel = true;
+        }
+        // Every receive below is a genuine suspension point in `entrypoint`'s own frame — set
+        // BEFORE the composite's body so a send earlier in THIS SAME composite (there are none;
+        // sends always precede receives within one composite) is unaffected, and so a LATER
+        // composite's `take_or_make_*` correctly treats anything still pooled at this point as
+        // suspension-crossing if it gets picked after this composite returns.
+        self.suspension_seen = true;
         let c = self.fresh("wire");
-        let cap = 1 + self.rng.below(8);
-        self.push(format!("let {c}: channel<int> = channel<int>({cap})"));
-        let sends = 1 + self.rng.below(cap.min(3));
-        for _ in 0..sends {
-            let e = self.int_lit();
-            self.push(format!("{c}.send({e})"));
+        let cap = 1 + self.rng.below(4);
+        let chan_ty = kind.channel_type();
+        self.push(format!("let {c}: {chan_ty} = {chan_ty}({cap})"));
+
+        match kind {
+            ElemKind::Int => {
+                let sends = 1 + self.rng.below(cap.min(3));
+                for _ in 0..sends {
+                    let e = self.int_lit();
+                    self.push(format!("{c}.send({e})"));
+                }
+                for _ in 0..sends {
+                    let m = self.fresh("got");
+                    let v = self.fresh("v");
+                    self.push(format!("let {m} = {c}.receive()"));
+                    self.push(format!("let {v} = {m}.or(0)"));
+                    self.ints.push(v);
+                }
+            }
+            ElemKind::Number => {
+                // Same copy-through property as the feeder: one binding, sent more than once,
+                // and STILL readable afterward — the fr12 "number never joins the give set"
+                // contract, exercised inline rather than across a task boundary.
+                let v = self.fresh("price");
+                let whole = self.rng.range(0, 9);
+                let frac = self.rng.range(0, 9);
+                self.push(format!("let {v}: number = {whole}.{frac}"));
+                let sends = 1 + self.rng.below(cap.min(2));
+                for _ in 0..sends {
+                    self.push(format!("{c}.send({v})"));
+                }
+                for _ in 0..sends {
+                    let got = self.fresh("got");
+                    self.push(format!("let {got} = {c}.receive()"));
+                    self.push(format!("if ({got}.exists()) {{"));
+                    self.push(format!("  print({got}.value.toString())"));
+                    self.push("}".to_string());
+                }
+                // Prove copy-through: `v` is still usable after being sent — a compile error
+                // here (`ConsumedBySend`) would mean `number` wrongly joined the give set.
+                self.push(format!("print({v}.toString())"));
+            }
+            ElemKind::Array => {
+                let sends = 1 + self.rng.below(cap.min(2));
+                for _ in 0..sends {
+                    let name = self.take_or_make_array();
+                    self.push(format!("{c}.send({name})"));
+                }
+                for _ in 0..sends {
+                    let got = self.fresh("got");
+                    self.push(format!("let {got} = {c}.receive()"));
+                    self.push(format!("if ({got}.exists()) {{"));
+                    self.push(format!("  print({got}.value.count().toString())"));
+                    self.push("}".to_string());
+                }
+            }
+            ElemKind::Map => {
+                let sends = 1 + self.rng.below(cap.min(2));
+                for _ in 0..sends {
+                    let name = self.take_or_make_map();
+                    self.push(format!("{c}.send({name})"));
+                }
+                for _ in 0..sends {
+                    let got = self.fresh("got");
+                    self.push(format!("let {got} = {c}.receive()"));
+                    self.push(format!("if ({got}.exists()) {{"));
+                    self.push(format!("  print({got}.value.count().toString())"));
+                    self.push("}".to_string());
+                }
+            }
         }
-        for _ in 0..sends {
-            let m = self.fresh("got");
-            let v = self.fresh("v");
-            self.push(format!("let {m} = {c}.receive()"));
-            self.push(format!("let {v} = {m}.or(0)"));
-            self.ints.push(v);
-        }
+
         // Close, then one receive past end-of-stream: the v0.3-M8 Phase 4 contract says the
-        // drained-and-closed channel answers `none`, never a hang and never an error.
+        // drained-and-closed channel answers `none`, never a hang and never an error. Same
+        // contract for every element kind.
         if self.rng.one_in(2) {
+            self.fired_inline_close = true;
             self.push(format!("{c}.close()"));
             let m = self.fresh("got");
             self.push(format!("let {m} = {c}.receive()"));
             self.push(format!("if ({m}.exists()) {{"));
             self.push("  print(`unexpected value after end of stream`)".to_string());
             self.push("}".to_string());
+        }
+    }
+
+    /// Half the time, reuse an array ALREADY declared earlier in the body — UNLESS
+    /// `suspension_seen` is set, in which case always build fresh. Same real bookkeeping either
+    /// way: a pooled binding must leave `self.arrays` the moment it is chosen to be sent, or a
+    /// later `stmt_array_op` draw would read it back and the compiler would correctly refuse the
+    /// program with `ConsumedBySend`.
+    ///
+    /// The `suspension_seen` gate is not speculative: it is the direct product of a reproducible
+    /// finding this same fix round made BY doing the widening. A generated program (seed 3 of
+    /// the widened corpus) crashed with `RUNTIME ERROR: killed by signal 6 (SIGABRT)` —
+    /// `crates/ynz-runtime/src/lib.rs:1058`/`:1411`, a null/misaligned pointer dereference in
+    /// `ynz_map_count`/`ynz_array_count`. Bisected to a minimal, deterministic repro
+    /// (`.scratch-repro/min21` vs `min20` in this fix round's session — not committed, see the
+    /// audit entry for the exact source): a plain `array<int>`/`map<string,int>` LOCAL declared
+    /// BEFORE any suspension point (`wait`, a `background`-handle `.receive()`, a channel
+    /// `.receive()`) in the SAME function, later `.send()`-ed into a channel AFTER that
+    /// suspension, corrupts on read. Declaring AFTER the suspension and sending immediately is
+    /// safe (confirmed both orders directly); crossing a suspension while merely READ (never
+    /// sent into a channel) was not implicated — this is specific to the channel-transfer path.
+    /// This is a genuine runtime defect — not a generator/grammar bug — and per this plan's CCIR
+    /// item 5 (R5) it is NOT fixed inline here. See Future Requirements #11 (`plan.md`) and
+    /// FRAGO 015 (`audit.md`) for the full repro and the tracked follow-up. Gating ONLY the
+    /// reuse-from-pool branch (not the whole element kind, and not the whole composite) keeps
+    /// the fuzz corpus green while preserving the widening's actual value: a FRESH local built
+    /// and sent immediately never crosses a suspension by construction, so it fires regardless
+    /// of what happened earlier in the program.
+    fn take_or_make_array(&mut self) -> String {
+        if !self.suspension_seen && !self.arrays.is_empty() && self.rng.one_in(2) {
+            let idx = self.rng.below(self.arrays.len());
+            self.arrays.remove(idx).0
+        } else {
+            let a = self.fresh("rows");
+            let n = 1 + self.rng.below(4);
+            let elems: Vec<String> = (0..n).map(|_| self.int_lit()).collect();
+            self.push(format!("let {a}: array<int> = [{}]", elems.join(", ")));
+            a
+        }
+    }
+
+    /// The `map<string, int>` sibling of `take_or_make_array` — same reuse-or-fresh choice, same
+    /// `suspension_seen` gate, same pool-removal-on-send bookkeeping.
+    fn take_or_make_map(&mut self) -> String {
+        if !self.suspension_seen && !self.maps.is_empty() && self.rng.one_in(2) {
+            let idx = self.rng.below(self.maps.len());
+            self.maps.remove(idx)
+        } else {
+            let m = self.fresh("book");
+            let n = 1 + self.rng.below(MAP_KEYS.len());
+            let mut entries = Vec::new();
+            for k in MAP_KEYS.iter().take(n) {
+                let v = self.int_lit();
+                entries.push(format!("`{k}`: {v}"));
+            }
+            self.push(format!(
+                "let {m}: map<string, int> = {{ {} }}",
+                entries.join(", ")
+            ));
+            m
         }
     }
 
@@ -467,38 +786,77 @@ impl Builder {
         let v = self.fresh("v");
         self.push(format!("let {h} = background {f}({a})"));
         self.push(format!("let {r} = {h}.receive()"));
+        // `.receive()` is a genuine suspension point in `entrypoint`'s own frame — see
+        // `take_or_make_array`'s doc comment for why later composites need to know about it.
+        self.suspension_seen = true;
         self.push(format!("let {v} = {r}.or(0)"));
         self.ints.push(v);
         self.uses_background = true;
     }
 
     /// The taught end-of-stream idiom: a `background` producer sends then closes; the consumer
-    /// drains with `.exists()`/`.value` until the stream ends. The printed total is the sum of
-    /// the feeder's literal values — deterministic regardless of interleaving.
+    /// drains with `.exists()`/`.value` until the stream ends. `total` accumulates the printed
+    /// count deterministically regardless of interleaving. The producer's element kind is drawn
+    /// from the full `{int, array<int>, map<string,int>, number}` space, UNRESTRICTED — a
+    /// feeder's array/map/number locals live entirely inside the FEEDER's own function, which
+    /// never suspends internally (no `wait` call in `build_feed_body`), so they cannot cross a
+    /// suspension the way an `entrypoint`-local reused by `take_or_make_array`/`take_or_make_map`
+    /// can. The drain arithmetic switches on the picked kind (an owned-heap payload contributes
+    /// its `.count()`, not its bytes; `number` contributes itself, exactly like `int`).
     fn stmt_background_drain_loop(&mut self) {
         if self.feed_fns.is_empty() {
             return self.stmt_int_let();
         }
+        self.fired_drain_loop = true;
         let i = self.rng.below(self.feed_fns.len());
+        let kind = self.feed_fns[i].kind;
+        if kind != ElemKind::Int {
+            self.fired_owned_heap_channel = true;
+        }
+        // The `while`/`.exists()` loop below calls `.receive()` — a genuine suspension point in
+        // `entrypoint`'s own frame. See `take_or_make_array`'s doc comment.
+        self.suspension_seen = true;
         let f = self.feed_fns[i].name.clone();
         let c = self.fresh("wire");
         let total = self.fresh("total");
         let open = self.fresh("open");
         let nx = self.fresh("nx");
-        let cap = 1 + self.rng.below(4);
-        self.push(format!("let {c}: channel<int> = channel<int>({cap})"));
+        // CONFIRMED, reproducible defect avoided: `channel<number>(1)` fed by a `background`
+        // producer sending the SAME `number` binding 3 times loses one value under
+        // `--no-optimize`/`--no-auto-parallel` (25.8 vs 17.2 for `8.6 * 3`), bisected precisely
+        // to `send_count > capacity` (2 sends into cap-1 is fine; 3 sends into cap-4 is fine; 3
+        // sends into cap-1 — the only combination that forces the producer to actually BLOCK on
+        // a full buffer — is not). This is a genuine runtime defect, not a generator bug, and
+        // per this plan's CCIR item 5 (R5) it is not fixed inline here — see Future
+        // Requirements #11 (`plan.md`) / FRAGO 015 (`audit.md`). `int`'s backpressure path was
+        // never bisected as safe either (it happens to share the SAME capacity/count draw the
+        // pre-widening generator already used without incident, which is evidence, not proof),
+        // so the floor applies to every kind: never let this composite's producer block.
+        let cap = self.feed_fns[i].send_count.max(1 + self.rng.below(4));
+        let chan_ty = kind.channel_type();
+        self.push(format!("let {c}: {chan_ty} = {chan_ty}({cap})"));
         self.push(format!("background {f}({c})"));
-        self.push(format!("let {total} = 0"));
+        let total_init = if kind == ElemKind::Number { "0.0" } else { "0" };
+        self.push(format!("let {total} = {total_init}"));
         self.push(format!("let {open} = true"));
         self.push(format!("while ({open}) {{"));
         self.push(format!("  let {nx} = {c}.receive()"));
         self.push(format!("  if ({nx}.exists()) {{"));
-        self.push(format!("    {total} = {total} + {nx}.value"));
+        let addend = match kind {
+            ElemKind::Int | ElemKind::Number => format!("{nx}.value"),
+            ElemKind::Array | ElemKind::Map => format!("{nx}.value.count()"),
+        };
+        self.push(format!("    {total} = {total} + {addend}"));
         self.push("  }".to_string());
         self.push(format!("  {open} = {nx}.exists()"));
         self.push("}".to_string());
         self.push(format!("print({total}.toString())"));
-        self.ints.push(total);
+        // `total` is `number`-typed when the feeder is `number`-kinded — do NOT register it
+        // into `self.ints` (an int-typed pool) or a later `int_expr()` draw would emit a
+        // number-plus-int expression the compiler correctly refuses.
+        if kind != ElemKind::Number {
+            self.ints.push(total);
+        }
         self.uses_background = true;
     }
 
@@ -509,6 +867,7 @@ impl Builder {
         if self.reader_fns.is_empty() {
             return self.stmt_int_let();
         }
+        self.fired_two_spawn_arc = true;
         let i = self.rng.below(self.reader_fns.len());
         let reader = self.reader_fns[i].name.clone();
         let shape = self.reader_fns[i].shape.clone();
@@ -534,6 +893,9 @@ impl Builder {
         for _ in 0..2 {
             let m = self.fresh("got");
             self.push(format!("let {m} = {c}.receive()"));
+            // A genuine suspension point in `entrypoint`'s own frame — see
+            // `take_or_make_array`'s doc comment.
+            self.suspension_seen = true;
             self.push(format!("if ({m}.exists()) {{"));
             self.push(format!("  {total} = {total} + {m}.value"));
             self.push("}".to_string());
@@ -576,13 +938,15 @@ impl Builder {
                 "function {name}(n: int) -> int {{\n  wait sleep(1)\n  return n + {k}\n}}\n\n"
             ));
         }
+        let io_fn_names: Vec<String> = self.io_fns.iter().map(|(n, _)| n.clone()).collect();
         for f in &self.feed_fns {
             out.push_str(&format!(
-                "function {}(lend wire: channel<int>) -> nothing {{\n",
-                f.name
+                "function {}(lend wire: {}) -> nothing {{\n",
+                f.name,
+                f.kind.channel_type()
             ));
-            for v in &f.values {
-                out.push_str(&format!("  wire.send({v})\n"));
+            for l in &f.body_lines {
+                out.push_str(&format!("  {l}\n"));
             }
             out.push_str("  wire.close()\n}\n\n");
         }
@@ -605,18 +969,33 @@ impl Builder {
         }
         out.push_str("}\n");
 
-        let body_stmts = self.body.len();
         // Prune helpers the body never called? No — an uncalled helper is itself coverage
         // (it still lexes, parses, typechecks, and lowers), and pruning would make the
         // program a function of the body draw rather than of the seed.
         let uses_background = self.uses_background;
         let seed = self.seed;
+        let stmt_count = self.stmt_count;
+        let fired_inline_close = self.fired_inline_close;
+        let fired_drain_loop = self.fired_drain_loop;
+        let fired_two_spawn_arc = self.fired_two_spawn_arc;
+        let fired_map_decl = self.fired_map_decl;
+        let fired_array_intrinsic = self.fired_array_intrinsic;
+        let fired_shape_field_read = self.fired_shape_field_read;
+        let fired_owned_heap_channel = self.fired_owned_heap_channel;
         self.body.clear();
         Program {
             source: out,
             seed,
             uses_background,
-            body_stmts,
+            stmt_count,
+            io_fn_names,
+            fired_inline_close,
+            fired_drain_loop,
+            fired_two_spawn_arc,
+            fired_map_decl,
+            fired_array_intrinsic,
+            fired_shape_field_read,
+            fired_owned_heap_channel,
         }
     }
 }
@@ -652,8 +1031,8 @@ mod generator_contract {
             .unwrap_or(0);
         let p = generate(seed);
         println!(
-            "// seed {seed} — {} body lines, background = {}\n{}",
-            p.body_stmts, p.uses_background, p.source
+            "// seed {seed} — {} statements, background = {}\n{}",
+            p.stmt_count, p.uses_background, p.source
         );
     }
 
@@ -687,10 +1066,13 @@ mod generator_contract {
                 p.source.contains("function entrypoint() -> nothing {"),
                 "seed {seed} emitted no entrypoint"
             );
+            // `build_body` GUARANTEES `stmt_count` is `10..=19` (the seed `let` plus a
+            // `9 + below(10)` draw) — this asserts the real invariant, not a line count that
+            // happened to always be large regardless of the generator's actual statement mix.
             assert!(
-                p.body_stmts >= 10,
-                "seed {seed} emitted only {} body lines",
-                p.body_stmts
+                (10..=19).contains(&p.stmt_count),
+                "seed {seed} emitted {} statements, outside the guaranteed 10..=19 range",
+                p.stmt_count
             );
         }
     }
@@ -722,30 +1104,17 @@ mod generator_contract {
     }
 
     #[test]
-    fn no_program_sends_an_owned_heap_payload_into_a_channel() {
-        // v0.3-M8's transfer rules (`ConsumedBySend`, `TransferNeedsCopy`, `ParamNeedsGive`)
-        // apply to owned-heap payloads. This generator keeps every channel `channel<int>` on
-        // purpose: an `array`/`map` payload would need `.copy()`/`give` plumbing the grammar
-        // does not model, and a correctly-REJECTED program reads as a harness failure.
-        for seed in 0..128u64 {
-            let src = generate(seed).source;
-            assert!(
-                !src.contains("channel<array") && !src.contains("channel<map"),
-                "seed {seed} emitted an owned-heap channel payload"
-            );
-        }
-    }
-
-    #[test]
     fn suspending_calls_in_the_body_are_always_wait_prefixed() {
         // An un-prefixed adjacent pair would form an auto-parallel I/O group whose member
         // finish order legitimately differs between modes (the M3b Model-A intended reorder).
-        // The oracle would flag that as a divergence; it is not one.
+        // The oracle would flag that as a divergence; it is not one. `io_fn_names` is read from
+        // the PROGRAM this exact seed produced — not a hardcoded guess that happens to be
+        // complete only by coincidence with `declare_helpers`' `1 + below(2)` draw.
         for seed in 0..128u64 {
             let p = generate(seed);
             for line in p.source.lines() {
                 let t = line.trim();
-                for (name, _) in [("fetch0", 0), ("fetch1", 0)] {
+                for name in &p.io_fn_names {
                     let call = format!("{name}(");
                     if t.contains(&call) && !t.starts_with("function ") {
                         assert!(
@@ -757,5 +1126,81 @@ mod generator_contract {
                 }
             }
         }
+    }
+
+    /// Per-construct corpus floors (v0.3-M8 Phase 8 fix round 3, should-fix 2). The
+    /// pre-existing anti-triviality asserts (`a_seed_range_produces_many_distinct_programs`,
+    /// `a_meaningful_share_of_programs_exercise_concurrency`, and the two above) measure
+    /// distinctness and the substring `background` — never WHICH menu arm fired. Proven by the
+    /// gate-check this round answers: deleting `emit_statement`'s arms 12 and 13 (the taught
+    /// drain-loop idiom and the two-spawn Auto-Arc topology — the two arms Phases 4 and 5 exist
+    /// for) left every existing assertion green. These floors bind to the SAME counters the
+    /// composites themselves set (`Program::fired_*`), not to a source-text substring search —
+    /// a substring search over the FULL source is unsound here regardless (an unconditionally
+    /// emitted, uncalled `feedN` helper always contains `.close()` in ITS OWN body, so a
+    /// whole-source substring count for "close() in body" would read close to 100% no matter
+    /// what the entrypoint's own statements did).
+    ///
+    /// Floors are set comfortably below the values measured over this exact 256-seed corpus on
+    /// the widened generator (see the fix-round dispatch record for the measured numbers) — a
+    /// starved or deleted arm collapses its share toward 0%, which trips the floor long before
+    /// ordinary RNG variance would.
+    #[test]
+    fn per_construct_floors_hold_over_a_fixed_corpus() {
+        let n = 256usize;
+        let mut inline_close = 0usize;
+        let mut drain_loop = 0usize;
+        let mut two_spawn_arc = 0usize;
+        let mut map_decl = 0usize;
+        let mut array_intrinsic = 0usize;
+        let mut shape_field_read = 0usize;
+        let mut owned_heap_channel = 0usize;
+
+        for seed in 0..n as u64 {
+            let p = generate(seed);
+            inline_close += p.fired_inline_close as usize;
+            drain_loop += p.fired_drain_loop as usize;
+            two_spawn_arc += p.fired_two_spawn_arc as usize;
+            map_decl += p.fired_map_decl as usize;
+            array_intrinsic += p.fired_array_intrinsic as usize;
+            shape_field_read += p.fired_shape_field_read as usize;
+            owned_heap_channel += p.fired_owned_heap_channel as usize;
+        }
+
+        let floor = |count: usize, pct: usize, label: &str| {
+            assert!(
+                count * 100 >= n * pct,
+                "{label}: only {count}/{n} ({:.1}%) fired — floor is {pct}%; a menu arm may \
+                 have been deleted, starved, or a precondition arm is silently falling \
+                 through to `stmt_int_let`",
+                count as f64 * 100.0 / n as f64
+            );
+        };
+
+        floor(
+            inline_close,
+            20,
+            "close() + receive-past-end-of-stream (inline channel)",
+        );
+        floor(drain_loop, 20, "taught end-of-stream drain loop (arm 12)");
+        floor(two_spawn_arc, 20, "two-spawn Auto-Arc topology (arm 13)");
+        floor(
+            map_decl,
+            40,
+            "standalone map<string, int> declaration (arm 7)",
+        );
+        floor(
+            array_intrinsic,
+            15,
+            "array intrinsic .add()/.count()/index (arm 6)",
+        );
+        floor(shape_field_read, 25, "shape literal + field read (arm 9)");
+        // This round's flagship construct — treated like the other three flagships above (a
+        // floor comfortably below the measured ~77%, not merely "present at all").
+        floor(
+            owned_heap_channel,
+            25,
+            "a channel<array<int>>/channel<map<string,int>>/channel<number> composite actually ran",
+        );
     }
 }

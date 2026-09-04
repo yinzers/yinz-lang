@@ -11,6 +11,176 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p8-fix2-20260904` — 2026-09-04 — **Phase 8 fix round 3: the owned-heap-channel widening
+  landed, the false-claim lock test deleted, per-construct corpus floors added — and the
+  widening itself surfaced TWO genuine runtime defects (FRAGO 015 / Future Requirements #11),
+  neither fixed inline, both contained at the generator level with narrow, evidence-backed
+  guards. Nothing committed.**
+  Read: this fix-round dispatch, `fuzz_grammar/mod.rs` and `README.md` end to end,
+  `cross_impl_consistency.rs`'s oracle/mode-matrix machinery, `.github/workflows/ci.yml`'s fuzz
+  job, `crates/ynz-runtime/src/lib.rs` (`ynz_map_count`/`ynz_array_count`, the panic sites the
+  two new crashes landed in), `plan.md`'s Future Requirements section (numbering continuity),
+  hand-written `v0_3_m8_p4_chan_array_roundtrip.ynz`/`chan_map_roundtrip.ynz`/
+  `number_chan_roundtrip.ynz`/`flow_two_hop_give.ynz`/`flow_admitted_forms.ynz` (the send/receive
+  idiom the widening's composites were modelled on).
+
+  **Item 1 — the widening, and what it found.** The prior README claim ("owned-heap payloads
+  would produce correctly-REJECTED programs") was false, exactly as the dispatch's own probe
+  showed: a `let` built and sent immediately needs no `.copy()`/`give` plumbing since nothing
+  reads it back. Widened `ElemKind::{Int, Array, Map, Number}` across three composites
+  (`stmt_channel_inline_kind`, `build_feed_body`/`stmt_background_drain_loop`'s feeder, and —
+  new this round, matching the dispatch's explicit ask — a reuse-from-pool path in
+  `take_or_make_array`/`take_or_make_map` that POPS a picked binding out of `self.arrays`/
+  `self.maps` so a later `stmt_array_op`/`stmt_map_op` draw cannot read it back). `number`
+  exercises fr12's copy-through contract directly (the same binding sent 2-3 times, still
+  readable afterward). Deleted the false lock test
+  `no_program_sends_an_owned_heap_payload_into_a_channel`.
+
+  **Two defects found BY doing the widening, not before.** A 256-seed local run (`YNZ_FUZZ_
+  PROGRAMS=256`) immediately surfaced a `SIGABRT` (seed 3) that survived one round of narrowing.
+  Bisection (full transcript of ~20 minimal `.ynz` repros run against `./target/debug/ynz run`
+  directly, not committed — kept only as text in this entry and the session transcript) found
+  TWO independent, precisely-characterized, deterministic runtime defects, both new to this
+  widening's construct space:
+  1. **Crossing-local heap-channel-send corruption.** An `array<int>`/`map<string,int>` LOCAL
+     declared BEFORE any suspension point (`wait`, a `background`-handle `.receive()`, a channel
+     `.receive()`) in the SAME function, later `.send()`-ed into a channel AFTER that suspension,
+     reads back corrupted — `RUNTIME ERROR: killed by signal 6 (SIGABRT)`,
+     `crates/ynz-runtime/src/lib.rs:1058` (`ynz_map_count`) or `:1411` (`ynz_array_count`), a
+     null or misaligned pointer. Minimal repro:
+     ```
+     function fetch1(n: int) -> int { wait sleep(1); return n + 6 }
+     function entrypoint() -> nothing {
+       let rows12: array<int> = [0]
+       let v13 = wait fetch1(5)
+       let wire15: channel<array<int>> = channel<array<int>>(1)
+       wire15.send(rows12)
+       let got16 = wire15.receive()
+       if (got16.exists()) { print(got16.value.count().toString()) }
+     }
+     ```
+     Swapping the order (array declared AFTER the `wait`) is confirmed SAFE, both ways, run
+     three times each. Confirmed general to array AND map; confirmed NOT reproduced by
+     `channel<number>`, by an inline (non-`background`) channel's own close-then-drain, or by a
+     `background`-handle spawn with no channel at all; confirmed NOT present with an all-`int`
+     channel sequence in the same shape (ruling out "any two channels in one program," narrowing
+     to the transfer-into-a-channel path specifically). First surfaced through a much larger
+     program (seed 3's full ~110-line source, then seed 102's, both saved in the fix-round
+     session transcript) and narrowed by direct deletion of unrelated statements, re-running
+     `./target/debug/ynz run` after each cut, until the six-line repro above was the smallest
+     form that still crashed.
+  2. **Capacity-forced-blocking `number` send loses a value.** `channel<number>(1)` fed by a
+     `background` producer sending the SAME `number` binding 3 times prints `17.2` (`8.6 * 2`)
+     instead of `25.8` (`8.6 * 3`) under `YNZ_NO_OPTIMIZE=1 YNZ_NO_AUTO_PARALLEL=1` — but ONLY
+     when `send_count > capacity` forces the producer to actually block on a full buffer: 2
+     sends into capacity 1 matches both modes; 3 sends into capacity 4 (no blocking needed)
+     matches both modes; 3 sends into capacity 1 diverges. Confirmed with a direct minimal repro
+     run under both env-var combinations, default and `--no-optimize`/`--no-auto-parallel`,
+     three capacity/count combinations each.
+  Both are genuine runtime defects, not generator bugs, and per this plan's own CCIR item 5 /
+  risk R5 ("route through the plan-amendment/FRAGO seam... never fix inline unless it is
+  trivially the SAME class an earlier phase in THIS plan already fixed") neither is fixed here —
+  neither matches any already-fixed class in this plan (checked against FR#8's alias-container
+  door, FR#10's `.copy()` catch-all, and the P2-3/P2-1 channel-close work; none share this shape).
+  **FRAGO 015 minted; Future Requirements #11 written with full WHAT/WHY/COST/TRIGGER for both,
+  plus an open clustering question (root-cause.md: are these one producer or two? bisection did
+  not settle it — left for whoever picks this up).**
+
+  **Containment, at the generator level, narrow and evidence-backed (not a repeat of the
+  false-claim exclusion this round started by deleting).** `Builder::suspension_seen: bool`, set
+  true the moment ANY statement introduces a real suspension in `entrypoint`'s frame (`wait`, a
+  handle receive, a channel receive, the drain loop's own receive, the two-spawn topology's two
+  receives). `take_or_make_array`/`take_or_make_map` refuse to REUSE a pooled binding once it is
+  true (a FRESH local, built and sent in the same composite with zero suspension in between, is
+  unaffected and always fires). This is deliberately narrower than an earlier draft of this fix
+  (a `channel_close_seen` flag that pinned an entire LATER composite to `ElemKind::Int` once any
+  drain loop had fired) — that draft was tried FIRST, found the map/array-after-drain-loop case,
+  but a SECOND 256-seed run at that point still found seed 102's crash (the true trigger:
+  ANY suspension, not specifically a drain-loop's close+drain), which is what led to the deeper
+  bisection above and the more precise `suspension_seen` gate that replaced it. For defect #2,
+  `stmt_background_drain_loop`'s channel capacity is now `send_count.max(1 + rng.below(4))` —
+  `FeedFn` gained a `send_count: usize` field so the consumer can read how many sends its own
+  feeder will make. Both guards are documented in full at their exact code sites, not just here.
+
+  **Verification the widening is otherwise clean.** Two independent 256-program local runs after
+  both guards landed, seed bases 0 and 31337000: **256/256 compiled and ran, 0 findings, both
+  runs** (60.0s and 59.9s). `owned_heap_channel` (a program actually RAN a non-`int` channel
+  composite) measured 197/256 = 77.0% over the fixed 0..256 corpus — well above the floor below.
+  Full `cargo test -p ynz-driver --test cross_impl_consistency` (all 16 tests, unbounded): **16
+  passed / 0 failed / 1 ignored, 172.7s** — including the default 24-program fuzz lane and the
+  BLOCKER-1 process-group-kill test from the prior fix round, both green together (an EARLIER
+  full-suite run this session saw the kill test fail once under the same full-corpus-plus-sweep
+  CPU contention the prior round's own comment already documents as expected; re-run alone it is
+  green, and it is not touched by anything in this round).
+
+  **Item 2 — per-construct corpus floors.** The four pre-existing anti-triviality asserts
+  (distinctness, `background` substring, entrypoint presence, `body_stmts >= 10`) never checked
+  WHICH menu arm fired — confirmed exactly as the dispatch described: deleting arms 12/13 from
+  `emit_statement`'s `below(14)` draw left every one of them green. Added
+  `per_construct_floors_hold_over_a_fixed_corpus`, keyed off NEW counters set directly at each
+  composite's own fire site (`Program::fired_inline_close`/`fired_drain_loop`/
+  `fired_two_spawn_arc`/`fired_map_decl`/`fired_array_intrinsic`/`fired_shape_field_read`/
+  `fired_owned_heap_channel`) — deliberately NOT a source-text substring search, because a
+  substring search is unsound here regardless of floor value: an unconditionally-emitted,
+  UNCALLED `feedN` helper always contains `.close()` in its own body (every feeder closes,
+  whether or not the entrypoint ever calls it — "an uncalled helper is itself coverage," the
+  existing design's own stated rule), so a whole-source `.close()` count would read close to
+  100% no matter what `stmt_channel_inline`'s own conditional close branch did. Measured over
+  0..256 (post-widening, post-both-guards): inline-close 97/256 (37.9%), drain-loop 164/256
+  (64.1%), two-spawn-Arc 165/256 (64.5%), map-decl 224/256 (87.5%), array-intrinsic 106/256
+  (41.4%), shape-field-read 161/256 (62.9%), owned-heap-channel 197/256 (77.0%). Floors set per
+  the dispatch's own guidance (20% for the three flagship constructs — inline-close, drain-loop,
+  two-spawn-Arc — plus this round's OWN flagship, owned-heap-channel, treated the same way at
+  25%; sensible values for the rest: map-decl 40%, array-intrinsic 15%, shape-field-read 25%).
+  **Root-cause bullet the dispatch named:** `declare_shapes`' `below(3)` (0-2 shapes, 1/3 chance
+  of zero) starved arms 9/13 for no compensating coverage value — fixed at the producer:
+  `1 + below(2)` (always 1-2 shapes; the "how many" variety survives, the "none at all" case,
+  which is not a distinct code path anywhere else in the grammar, does not). This is WHY
+  two-spawn-Arc's measured share (64.5%) is meaningfully higher than the dispatch's own
+  pre-widening baseline (39.6%) even before counting the widening's own effect.
+
+  **Minors.** (a) `body_stmts` counted emitted LINES (including `}`), not statements — mean 43.9
+  against a 10-19 draw, so `>= 10` was accidentally-always-true regardless of what the generator
+  did. Replaced with `stmt_count: usize`, incremented once per the seed `let` and once per
+  `emit_statement()` call (never per `push()`), so it is genuinely bound to `build_body`'s own
+  guarantee (`1 + (9 + below(10))` = `10..=19`) — a real invariant a future edit to `target`'s
+  range would actually break. (b) The `wait`-prefix lock's `[("fetch0", 0), ("fetch1", 0)]` was
+  complete only by coincidence with `declare_helpers`' `1 + below(2)` — replaced with
+  `Program::io_fn_names: Vec<String>`, read from `self.io_fns` at `finish()` time, so the check
+  is now genuinely derived from what THIS seed actually declared, and the dead tuple `0` element
+  is gone. (c) `.github/workflows/ci.yml`'s fuzz job uploaded only `fuzz.log` on failure while
+  the README calls the KEPT scratch directory (full untruncated per-mode capture files) the
+  durable replay artifact — added a second `actions/upload-artifact` step uploading
+  `/tmp/ynz-fuzz-*` (the OS temp dir `tempfile::Builder`'s `prefix("ynz-fuzz-")` lands in on this
+  runner, since the call has no `tempdir_in`), so CI now keeps what the README promises it keeps.
+
+  **Mutation re-proof.** Backed up `cross_impl_consistency.rs` to the session scratchpad first
+  (`cp`, never `git checkout --`); sha256 before mutating:
+  `63d41a65a871da716482a24e4ba3ade1fcbb0605ee3ed4e6a878ec7e0fe4ee0d`. Planted a one-line,
+  `no_optimize`-gated corruption in `run_ynz_mode_bounded_impl` (`out_bytes.push(b'X')` when
+  `no_optimize` is true) — deliberately in the HARNESS's own capture path, not the compiler,
+  mirroring the prior fix round's own BLOCKER-1 re-proof style (mutate the mechanism under test,
+  not an unrelated stand-in). Ran `YNZ_FUZZ_PROGRAMS=32`: **RED, 64 findings** (every one of the
+  32 programs' two `no_optimize` corners, `[parallel+no-optimize]` and
+  `[sequential+no-optimize]`, both flagged `MODE-DIVERGENT`) — confirmed 176 occurrences of
+  `channel<array`/`channel<map<`/`channel<number` substrings across the failure text, and
+  specifically confirmed at least one flagged finding (`gen_...00001.ynz`, `[parallel+
+  no-optimize]`) embeds a `channel<array<int>>` composite in its source, so the widened oracle
+  demonstrably still classifies a heap-payload program's mode divergence correctly, not just an
+  `int`-only one. Restored from the scratchpad copy via `cp`; sha256 after restore:
+  `63d41a65a871da716482a24e4ba3ade1fcbb0605ee3ed4e6a878ec7e0fe4ee0d` — byte-identical to the
+  pre-mutation copy. Re-ran the same command: **GREEN, 0 findings** (`test result: ok`).
+
+  **Verification, full.** `cargo fmt --all --check` clean; `cargo clippy -p ynz-driver
+  --all-targets -- -D warnings` clean; `fuzz_grammar::generator_contract::*` 7 passed / 1
+  ignored; full `cargo test -p ynz-driver --test cross_impl_consistency` 16 passed / 0 failed /
+  1 ignored, 172.7s; two independent 256-seed `generated_corpus_byte_identical_across_mode_
+  matrix` runs (seed bases 0 and 31337000), both 256/256 compiled-and-ran / 0 findings; the
+  mutation RED→GREEN re-proof above. No `Cargo.toml`/`Cargo.lock` change. Registry entries
+  touched: none. Scratch repro files (~20 `.ynz` probes, `.scratch-repro/` in the working tree)
+  were deleted before this entry was written — none were committed; the ones load-bearing for
+  this record are reproduced verbatim above. Nothing committed.
+
 - `m8-p8-fix1-20260904` — 2026-09-04 — **Phase 8 fix round: BLOCKER 1 (a hung generated program
   survived its own timeout) and BLOCKER 2 (a false claim in the durable record) both closed, four
   should-fixes done, nothing committed.**
