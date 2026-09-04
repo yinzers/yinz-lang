@@ -663,3 +663,51 @@ Source plan-id `2026-07-04-v0-3-m8-concurrency-completion`, `## Future Requireme
     contention that produced this red is what that migration makes permanent), or the next
     full-workspace gate that has to distinguish a real red from this one — whichever comes first.
     Source plan: `2026-07-04-v0-3-m8-concurrency-completion`, Phase 9 cumulative gate.
+
+### Close-out gate — two detection gaps the cumulative green-check exposed (2026-09-04)
+
+51. **The registry's affected-test lane names two of its THREE consumers — `ynz-tmgrammar` was
+    never in it.** WHAT: `registry/features.toml` is the SSOT for user-facing feature
+    inventories, and a diff touching it has, since FRAGO 014, carried a lane rule naming
+    `jargon_audit` and `ynz-registry`. It has a third consumer: `crates/ynz-tmgrammar`
+    regenerates `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` from the registry, and
+    `grammar_snapshot.rs::committed_grammar_matches_generator_output` fails when the committed
+    file drifts. M8 Phase 4 (`2be2244`) added three `[[deferred_language_feature]]` entries —
+    `channel-auto-close-on-last-producer`, `background-handle-close`, `maybe-move-out` — and
+    never regenerated the grammar, which had last been regenerated back in M6 (`c409557`).
+    The drift then survived five phases and every affected-lane gate in between, because no
+    lane ever named the crate that would catch it. Fixed at close-out (regenerated, snapshot
+    test green), but the LANE RULE is the producer and it is still wrong. WHY not fixed here:
+    the rule lives in this project's `.claude/` docs and the FRAGO-014 record, and rewriting a
+    process rule at a milestone's close-out gate is the wrong moment — it wants doing
+    deliberately, with all three consumers derived from what actually reads the registry rather
+    than from memory. COST: small — enumerate the registry's real consumers once (grep for what
+    reads `ynz_registry` and what a `build.rs` generates from it), then correct the lane rule in
+    one place. TRIGGER: the next plan that edits `registry/features.toml`, or the next FRAGO
+    that restates the lane. Source plan: `2026-07-04-v0-3-m8-concurrency-completion`, close-out.
+
+52. **`cargo test --workspace` fail-fasts across test binaries, so the planned-RED file masks
+    every target after it.** WHAT: this repo has a deliberate planned-RED test file
+    (`crates/ynz-driver/tests/fr23_uaf_planned_red.rs`, 3 failures that are SUPPOSED to fail —
+    they lock known defects and flip when fixed). Cargo stops at the first failing test target
+    unless `--no-fail-fast` is passed, so a plain `cargo test --workspace` on this branch stops
+    there and never runs the targets ordered after it. Directly observed at close-out: the first
+    run stopped early and a second run with `--no-fail-fast` was needed to see the rest of the
+    workspace — which is how the `ynz-tmgrammar` drift in item 51 surfaced, five phases late.
+    Every gate here that shells `cargo test --workspace` without `--no-fail-fast` has therefore
+    been reporting on a PREFIX of the suite while reading like a full-suite verdict. WHY not
+    fixed here: the fix is one flag, but it belongs everywhere a gate is defined — the
+    green-check agent's own command set, the `/execute-plan` per-phase lane, and `ci.yml` — and
+    changing CI is separately confirm-gated. Correcting one and not the others would leave the
+    same false-green live where it is least visible. COST: small — add `--no-fail-fast` to each
+    gate definition, then confirm on this branch that the run reports MORE targets than it did
+    before (proof the flag actually changed what was observed, not just what was typed).
+    TRIGGER: before the next milestone's first cumulative gate; or immediately, if a green gate
+    is ever again contradicted by a red found later on the same tree. Source plan:
+    `2026-07-04-v0-3-m8-concurrency-completion`, close-out.
+    - **Related, recorded here so it is not lost:** the close-out `plan-adherence` pass hit a
+      SECOND pre-existing contention flake beyond entry 50's —
+      `v0_3_m4_p3_cross_give_generic_not_over_rejected` — which passes in isolation and is
+      already tracked in the roadmap's own `audit.md` and in M7's. Entry 50 names one flake;
+      the real flake surface on this branch is at least two. Same class, same producer
+      (`.claude/rules/test-parallelism.md`'s wall-clock-budget corpse), same trigger.
