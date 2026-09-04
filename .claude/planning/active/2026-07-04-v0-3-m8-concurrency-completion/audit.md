@@ -11,6 +11,8 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p7-fix1-20260904` — 2026-09-04 — **Phase 7 text fixes (teaching-surfaces + vocabulary rules applied): deferred feature registry entries rewritten for 18-year-old-JS-dev audience, file-path citations in IMP-concurrency.md replaced with function-name references, Future Requirements #3 paragraph appended re: cheap muted-hint guard, plan frontmatter session-id updated, no commits made.**
+
 - `m8-p7-20260904-a1` — 2026-09-04 — **Phase 7 (Track 3, scope-drop cancellation): recon done,
   verdict Branch B — RE-DEFER; four-field re-deferral authored, registry entry updated, current
   state pinned in-suite; STATUS PARTIAL awaiting Patrick's sign-off; nothing committed.**
@@ -1213,6 +1215,24 @@ settled by it.** The next conductor asks him before the phase that needs each:
   fr12 step, Phase 5 steps 2–3, the Invariants subsections, FR#9/#10, Phase 9, `plan.md:818`) —
   each edit traces to this record. It also applies parked items 19–27 (text-accuracy corrections on
   the signed design) so Phase 4 never reads a known-false claim.
+
+### FRAGO 014 — 2026-09-04 — Gate-coverage defect (conductor): Phase 5 sealed with `jargon_audit` red; the rule that closes it — PENDING Patrick's ratification
+
+- **Trigger:** Phase 7's `plan-adherence` seat tagged `frago-needed`. Phase 5's registry edit
+  (`auto-arc-codegen-emission`, landed `0f62869`) used the banned word "alias"
+  (`[[banned_jargon]]` since `4aef3b8`); `jargon_audit::no_banned_jargon_in_deferred_feature_user_
+  facing_fields` was 9/10 at Phase 5's boundary `d1c4294`. Neither Phase 5 gate ran
+  `ynz-diagnostics` — the conductor's affected lanes named the crates the diff touched and never
+  the crate whose TEST reads the registry. The Phase 7 executor found it and fixed the word
+  (`alias` → `share`, no semantic change); the gate-coverage gap is the conductor's.
+- **The rule, adopted immediately for every remaining gate and proposed for the skill:** any diff
+  that touches `registry/features.toml` puts `cargo test -p ynz-diagnostics --test jargon_audit`
+  and `cargo test -p ynz-registry` in the affected lane, regardless of which crates the diff
+  names — the registry's consumers are the lane, not just its editors. Phase 9's full-workspace
+  gate catches anything the same class hid elsewhere.
+- **Authority:** Patrick's ratification owed (asleep at the time); the rule is applied meanwhile as
+  conductor discipline, since applying it can only widen a gate. Tagged `frago-needed` by the seat
+  because a sealed phase boundary carried a red test the plan's own gating promised it wouldn't.
 
 ### FRAGO 012 — 2026-09-04 — M8 PAUSES after Phase 5 seals; a shape-with-`number` `background` SIGSEGV on `main` takes priority as its own hotfix
 

@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904", "m8-p7-20260904-a1"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904", "m8-p7-20260904-a1", "m8-p7-fix1-20260904"]
 created_at: "2026-07-04"
 updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -2448,6 +2448,8 @@ pattern. Considered and declined.
      (its trigger stands; remaining blockers unchanged — the producer-role analysis, the producer/holder
      refcount split, and the pass itself); `background-handle-close` never depended on the pass (its
      trigger is a real program that cannot bind the channel first) — unaffected.
+   - **(round-1 grading, 2026-09-04)** **Cheap guard considered, OPEN for Patrick at the sign-off:** the deferred behavior has live exposure — a task keeps running after its handle's binding leaves scope. `inference.md`'s Informational muted-hint category fits: a comment-style hint at the spawn, `// this task keeps running after `h` goes out of scope — `wait` on it or send it a stop signal to end it sooner`, from the same spawn walker the `auto_arc` hint uses. Cost: one LSP pass, no compiler change. Patrick decides at the re-deferral signature whether it ships with this milestone (Phase 9) or rides the pass.
+
 4. **Loom's Tokio-internals boundary** (Phase 3, landed 2026-09-03) — **WHAT:** loom model-checks
    only the synchronization logic ynz-runtime owns directly (`pending_sends`, `recv_waiters`, the
    channel refcount, the published drive identity, the drop ladder's kind-2 arm, recv-poll ordering);
