@@ -14,7 +14,7 @@ metadata:
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth) · **Phase 4 ✅ CLOSED BY CEILING 2026-09-04** (executors `m8-p4-20260904-a1` RED seal at `6b8a34d`, `m8-p4-20260904-a2` implementation, fix rounds `m8-p4-fix1/fix2/fix3-20260904`; three grading rounds; two `errors`-surface blockers re-homed to a post-M8 hotfix branch per FRAGO 011 — parked 32/33/34 — none a channel-close defect) · **Phase 5 ✅ EXECUTED 2026-09-04** (executor `m8-p5-20260904-a1` — spike GREEN, the full beneficial-emission condition shipped, one-spawn IR byte-identical, `auto_arc` hint firing, hammer + parity + loom model with a revert-proof, registry narrowed; see the Phase 5 STATUS block and `audit.md`) — **pending the conductor's review round; Phase 7 is next**
+> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth) · **Phase 4 ✅ CLOSED BY CEILING 2026-09-04** (executors `m8-p4-20260904-a1` RED seal at `6b8a34d`, `m8-p4-20260904-a2` implementation, fix rounds `m8-p4-fix1/fix2/fix3-20260904`; three grading rounds; two `errors`-surface blockers re-homed to a post-M8 hotfix branch per FRAGO 011 — parked 32/33/34 — none a channel-close defect) · **Phase 5 ✅ CLOSED 2026-09-04** (executor `m8-p5-20260904-a1`, fix rounds `m8-p5-fix1/fix2-20260904`; two grading rounds, terminal state CLEAN; spike GREEN, full beneficial condition shipped with the caller-side proof covering the member spawns themselves, one-spawn IR byte-identical, `auto_arc` hint firing on both spawn forms, R2 stays HIGH under its signed override) — **Phase 7 is next, AFTER the parked-40 hotfix merges back**: `fix/bg-arg-number-field` (FRAGO 012) runs in its own worktree `../ynz-lang-hotfix-bgarg`; sequence = hotfix PR → merge to `main` → merge `main` into this branch → author parked 43's fixture in that merge commit → dispatch Phase 7 (receipt already minted, `m8-p7-20260904-a1`)
 >
 > ### 🔀 RESTRUCTURED 2026-09-03 — FRAGO 008: Phase 1's ownership scope MOVED to Phase 2
 >
@@ -1752,6 +1752,28 @@ in-session, no handoff file):**
 > twin shape), 2 minor; every refcount path (panic, cancel, transient placement, early return)
 > traced clean, (h)'s pin genuinely pins. `test-quality` DEFERRED to after the fix (grades the
 > shipped set, alone, on a sealed tree). Fix round 2 answers `red:code-reviewer`.
+>
+> **Round 2 grading (fix round `m8-p5-fix2-20260904`, Fable medium, sealed `9af3883` BEFORE any
+> seat; conductor, 2026-09-04).** The range fix landed with a RED-reproduced fixture (task 2 read
+> stale bytes with 4 `ynz_arc_*` calls → declined, 0 calls, correct output); the executor
+> corrected round 1's own finding on the record (a write in a member's LATER argument does not
+> diverge — arg 0 is snapshotted first on both paths; the FIRST member's list is the divergent
+> case); every should-fix from all four seats landed, plus one the round found itself — the LSP
+> hint walker never visited the handle form, so parked 16's `give` label had no reader.
+> `green-check-medium` (Fable) → green on every lane (typeck all targets incl. the new
+> `suspends_parity_tests` with its floor asserted, codegen, lsp 28, driver 12/31/10/530/7,
+> registry, runtime 110 + loom 9, release builds, the fixture's direct run and 0 `ynz_arc_` in its
+> IR, gitleaks); `--all-targets` red only on parked-31 files. `code-reviewer-medium` (Fable,
+> probed both member orders) → 0 blockers, both shapes decline with correct output, the twin is
+> gone, the predicate walks the right side; 1 should-fix + 1 minor parked (42).
+> `test-quality-medium` (Fable, ALONE, restoring from saved copies) → **0 blockers**, all five
+> revert-proofs caught (a dropped clone crashed the compiled program; a skipped release showed as
+> `alloc 6 != free 5`; (h) flipped failed the parity test; the old range re-admitted the group;
+> `number` admitted failed the unit pin), 2 should-fix + 5 minor parked (43, 44). **Phase 5
+> terminal state: CLEAN. Exit criteria MET. R2 stays HIGH under the signed override — the GREEN
+> spike is evidence toward a re-score, never a self-score. Boundary commit on Patrick's standing
+> go; frontier → Phase 7 once the parked-40 hotfix (FRAGO 012, own worktree, in flight) merges
+> back.**
 
 #### Phase 6 — P2-7: `ynz_handle_recv_poll` Panic-Then-Pending Hang — ❌ **RETIRED, FRAGO 001 (2026-09-03)**
 

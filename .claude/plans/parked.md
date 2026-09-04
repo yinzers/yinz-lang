@@ -394,8 +394,66 @@ byte-span renderer via `byte_spans.rs` + the gallery caret check). 0 blockers. E
     `prepare_bg_arg_for_ctx`'s Shape arm — the crash is a silent-until-run miscompile on a
     plausible user program.
     **Status (2026-09-04): ROUTED by Patrick to its OWN hotfix branch, `fix/bg-arg-number-field`,
-    NOW — M8 pauses at the Phase 5 boundary (FRAGO 012, the FRAGO 004 precedent). Different
-    ancestor from `fix/errors-fields`; not bundled. RED pin first.**
+    NOW (FRAGO 012, the FRAGO 004 precedent) — running in a parallel worktree, M8 does not pause.
+    Different ancestor from `fix/errors-fields`; not bundled. RED pin first.**
+
+41. **`background` argument evaluation snapshots argument 0 before a later argument runs — the
+    copy path and the Arc path agree with each other and disagree with a plain call.** WHAT:
+    `f(scene, bump(scene))` with `bump(lend scene)`: a plain call reads the post-`bump` value
+    through the pointer; a `background` spawn (explicit `scene.copy()` OR the inferred copy) hands
+    the task the PRE-`bump` bytes because `prepare_bg_arg_for_ctx` materializes argument 0 before
+    argument 1 evaluates. Found by the Phase 5 round-2 executor while pinning the Arc-range
+    blocker; not an Arc defect — Phase 5's fix DECLINES sharing for that shape, and the copy path
+    behaves the same as before M8. WHY deferred: a left-to-right evaluation-order question for the
+    language design (`IMP-concurrency.md` "Ownership with Background Tasks" says nothing about
+    when spawn arguments are evaluated relative to each other); not this milestone's charter.
+    COST: a design ruling (evaluate all arguments, THEN copy/share; or document the snapshot
+    order) plus one codegen reorder and a fixture. TRIGGER: the next design pass over `background`
+    argument semantics, or a user report of the pre-`bump` value — whichever first; a gallery
+    trigger would be premature before the ruling. Source plan-id
+    `2026-07-04-v0-3-m8-concurrency-completion`.
+42. **The give/copy inlay-hint walker renders `Expr::Call` arguments only; its Arc sibling also
+    handles UFCS receivers.** WHAT: `inlay_hint_passes.rs::collect_background_ownership_hints_block`
+    (`~:799`) enumerates Call args; `collect_auto_arc_hints_block` (`~:978-984`, same file)
+    enumerates Call + MethodCall(receiver, args) over the same recorded-position map. Typeck's
+    `background_spawn_call_form` records a UFCS receiver as position 0, so `background
+    scene.render(r)` records a `Copy`/`Give` no hint renders. Pre-existing narrowness; Phase 5
+    round 2 edited exactly this arm (added the handle form) and left the second position
+    enumeration beside the first. WHY deferred: a hint gap, not a compiler defect; no user-visible
+    wrong text, only missing text. COST: small — lift one shared position-enumeration helper both
+    walkers call. TRIGGER: Phase 9's teaching-surface pass, or the next edit to either walker.
+    Also minor: `queries.rs::find_transitive_share_violations` still takes `&declared_writes` as a
+    parameter although the same map rides on the report — two handles, one map; collapse when
+    touched. Source plan-id `2026-07-04-v0-3-m8-concurrency-completion`.
+
+### Phase 5 — final `test-quality` grade (2026-09-04, phase close)
+
+All five revert-proofs the seat ran itself failed loud (a dropped clone crashed the compiled
+program before the IR count could fail; a skipped transient release showed as `alloc 6 != free
+5`; (h) flipped failed the per-kind parity test; the old range re-admitted the stale-read group;
+`number` admitted failed the unit pin). 0 blockers. Source plan-id
+`2026-07-04-v0-3-m8-concurrency-completion`.
+
+43. **No END-TO-END fixture pins the `number`-field exclusion from Arc sharing.** WHAT: revert 5
+    (`arc_shareable` admits `Number`) fails only the unit pin `types.rs::every_excluded_field_kind_
+    declines`; the driver suite stays 12/12. The two-spawn twin was deleted in Phase 5 because it
+    crashes today (parked 40). WHY deferred: until `fix/bg-arg-number-field` merges back, the
+    fixture can only pin a crash. COST: one `m8_arc_number_field_declines.ynz` through
+    `assert_declined_fixture` (correct output, 0 `ynz_arc_*`). TRIGGER: the merge-back of the
+    hotfix into this branch — author it in the same commit that merges, so the parked-40 crash
+    becomes a named GREEN.
+44. **No fixture exercises a caller write AFTER the group.** WHAT: condition 3 covers
+    `first..=last`; a write after the last spawn is allowed and must not reach the tasks' block
+    (a snapshot minted at `first`). If a future change makes the transient alias the caller's
+    storage instead of copying (`emit.rs` Arc arm), the leak is invisible to every current
+    fixture. COST: two spawns, then `scene.width = 100`; tasks report the ORIGINAL product,
+    the caller prints the new value, IR `(1,2,1)`. TRIGGER: the next edit to the Arc arm or
+    Phase 9's fixture pass.
+    Minors (one line each): `ynz_run_counted` parses the counter file before checking the exit
+    code, so a crashing child reports as a missing counter line; `emit_ir_no_optimize` has no
+    watchdog; the hammer's `bridge.depth * 0` / `bridge.name` reads contribute nothing to the
+    asserted total; the LSP label tests assert presence, not position; `m8_arc_rebind_boundary`
+    covers `Stmt::Assign` only (no `let`-shadow / `for` arm fixture).
 
 ### Open exposure carrying a cheap in-scope guard — flagged under `no-duct-tape.md`
 
