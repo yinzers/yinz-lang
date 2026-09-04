@@ -71,17 +71,22 @@ binding is sent more than once and is still readable afterward, proving it never
 set.
 
 **The widening surfaced two genuine runtime defects**, not generator bugs — full repro, bisection,
-and disposition in Future Requirements #11 (`plan.md`) and FRAGO 015 (`audit.md`):
+and disposition in Future Requirements #11 (`plan.md`) and the v0.3-M8 plan's `audit.md`,
+FRAGO 015:
 
 1. An `array<int>`/`map<string,int>` LOCAL declared before ANY suspension point in `entrypoint`
    (a `wait`, a `background`-handle `.receive()`, a channel `.receive()`) and later `.send()`-ed
    into a channel AFTER that suspension reads back corrupted (`SIGABRT`, null/misaligned pointer
    in `ynz_map_count`/`ynz_array_count`). A fresh local built and sent immediately, or the same
    local declared AFTER the suspension, is unaffected — confirmed both ways.
-2. A `channel<number>(1)` fed by a `background` producer sending the SAME `number` binding 3
-   times loses one value under `--no-optimize`/`--no-auto-parallel`, but only when the producer
-   is forced to actually BLOCK on a full buffer (`send_count > capacity`); 2 sends into
-   capacity 1, or 3 sends into capacity 4, are both unaffected.
+2. A `background` producer forced to actually BLOCK on a full channel buffer
+   (`send_count > capacity`) can read back a HEAP ADDRESS where a sent value belongs — an
+   uninitialized-or-freed read, general to both `int` and `number` (NOT `number`-specific as
+   first recorded) and non-deterministic (~17-30% of runs, NOT the fixed rate first recorded). 2
+   sends into capacity 1, or 3 sends into capacity 4 (neither forces the producer to block), are
+   both unaffected. v0.3-M8 Phase 8 fix round 4 corrected this record against fix round 3's
+   original claim, which had all three of those wrong (`number`-only, deterministic, an
+   arithmetic "lost value" rather than a garbage read).
 
 Neither is fixed inline (per this plan's CCIR item 5 / risk R5 — a genuine finding routes through
 the plan-amendment seam, never a same-round patch). Both are avoided at the generator level with
@@ -90,6 +95,15 @@ comment for #1; the capacity computation in `stmt_background_drain_loop` for #2)
 narrows an entire element kind or construct; each targets only the specific shape that reproduces.
 Verified with two independent 256-program local runs (seed bases 0 and 31337000) after landing
 both guards: 256/256 compiled and ran, 0 findings, both runs.
+
+**Fix round 4, BLOCKER 1: the reuse-from-pool branch this round's defect #1 guard was built
+around was dead code from the moment it landed.** `stmt_channel_inline_kind` set
+`Builder::suspension_seen` at the TOP of the composite — before the Array/Map arms below it ran
+— so `take_or_make_array`/`take_or_make_map`'s `!suspension_seen` reuse check was already false
+by the time either function's only caller reached it. Fixed by moving the assignment to AFTER
+the composite's own sends and receives (see the comment at that call site in `mod.rs`); a
+`fired_pool_reuse` counter and its floor in `per_construct_floors_hold_over_a_fixed_corpus` now
+guard against this construct silently going dead again.
 
 ## What it deliberately does NOT cover, and why
 
@@ -111,6 +125,18 @@ both guards: 256/256 compiled and ran, 0 findings, both runs.
   whether the callee sees `x` before or after `mutate` runs. This harness does not exercise that
   question at all; it is not a gap this generator closes by construction, it is a construct the
   grammar never reaches for.
+- **A blocked channel send (producer forced to wait for buffer space).** v0.3-M8 Phase 8 fix
+  round 3's guard against defect #2 above (`stmt_background_drain_loop`'s
+  `send_count.max(1 + below(4))` capacity floor) guarantees the consumer's channel capacity is
+  never smaller than the producer's own send count — so that composite's producer can never
+  block. The other two channel composites already couldn't block by construction
+  (`stmt_channel_inline_kind` draws its send count FROM the capacity; the two-spawn Auto-Arc
+  topology hardcodes `channel<int>(4)` against 2 sends). Corpus-wide, that leaves ZERO coverage
+  of the blocked-send path — coverage this generator HAD before this round, and lost as the
+  direct cost of containing defect #2. Restoring it is exactly the trigger recorded for defect
+  #2 in Future Requirements #11 / FRAGO 015: fix the blocked-send path, then let
+  `stmt_background_drain_loop`'s capacity floor go back to drawing independently of
+  `send_count`.
 
 ## Why the grammar is shaped this way (determinism)
 

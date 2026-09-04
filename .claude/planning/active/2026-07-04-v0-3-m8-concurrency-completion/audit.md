@@ -11,6 +11,98 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p8-fix3-20260904` — 2026-09-04 — **Phase 8 fix round 4 (the ceiling round): all 3 blockers
+  and 5 should-fixes from the round-3 review closed. Nothing committed.**
+  Read: this fix-round dispatch, `fuzz_grammar/mod.rs` and `README.md` end to end, `plan.md`'s
+  Future Requirements #11, `audit.md`'s FRAGO log (confirmed 015 was free), `main` (`ec014d8`) via
+  a throwaway `git worktree`.
+  **BLOCKER 1 — the reuse-from-pool branch was dead code.** `stmt_channel_inline_kind` set
+  `suspension_seen = true` BEFORE the composite's own Array/Map sends ran — the composite is the
+  ONLY caller of `take_or_make_array`/`take_or_make_map`, so their `!suspension_seen` reuse check
+  was already false by construction. Fixed by moving the assignment to AFTER the composite's sends
+  and receives complete. **Proof, both directions, panic-probe + 8,192 seeds**: with the OLD
+  (pre-round-4, `ccbaa6b`) code, replacing the reuse branch body with `panic!` and generating
+  seeds `0..8192` — 0 panics (dead, confirmed). With the FIXED code, the identical probe panics on
+  the FIRST seed (seed 0). Added `Program::fired_pool_reuse` (set at both reuse sites) and a
+  raw-count floor (`>= 1`, not a percentage — the construct needs four preconditions to align in
+  one statement, measured 2/256 over the fixed 0..256 corpus) in
+  `per_construct_floors_hold_over_a_fixed_corpus`, so this cannot silently die again without a red
+  test.
+  **BLOCKER 2 — two doc comments asserted the opposite of what shipped.** `take_or_make_array`'s
+  "Half the time, reuse..." and the "preserving the widening's actual value" claim were both
+  false as shipped (BLOCKER 1). Rewrote both doc comments to describe the actual gate (`one_in(2)`
+  reuse ONLY when `suspension_seen` is false and the pool is non-empty; unconditional fresh once
+  it's true) and to record BLOCKER 1's history directly at the site.
+  **BLOCKER 3 — FRAGO 015 did not exist; four durable pointers cited it.** Confirmed by direct
+  read: this plan's `audit.md` FRAGO log ran 001–014, no 015. Minted the real
+  `### FRAGO 015 — 2026-09-04 — The record MINTED THIS round...` entry (placed at the top of the
+  FRAGO log, newest-first) with trigger, both defects' full repro, both defects confirmed
+  PRE-EXISTING on `main`, the containing guards, and the disposition (routed via standing CCIR
+  item 5 / risk R5 policy, not fixed — no fresh ruling needed). Fixed all four citations
+  (`mod.rs` twice, `README.md` once, this file's own round-3 entry is corrected here rather than
+  edited in place, append-only) to say "the v0.3-M8 plan's `audit.md`, FRAGO 015" — the trap
+  named in the dispatch (a DIFFERENT plan, `2026-07-03-v0-3-m5-auto-soa/audit.md`, already has its
+  own unrelated FRAGO 015) is now named explicitly in the new record so a future citation can't
+  repeat it. **Self-correction on the round-3 entry above:** it claims "FRAGO 015 minted" — that
+  claim was false at the time it was written; this record is the actual mint. The prior entry
+  stands uncorrected in place per append-only discipline.
+  **Sanity-checked one of the two `main`-vs-branch evidence items myself** (defect a, per the
+  dispatch's instruction — not re-derived from the reviewer's numbers, independently reproduced):
+  built `main` (`ec014d8`) in a throwaway `git worktree` (removed after), ran the exact minimal
+  repro 3×: `misaligned pointer dereference: address must be a multiple of 0x8 but is 0xb` at
+  `ynz_array_count` (`lib.rs:1340` on `main` — line-shift-only match to the branch's `:1411`),
+  3/3 crashes; the safe-order variant (array declared after the `wait`) printed `1`, 3/3. Matches
+  the dispatch's recorded evidence exactly.
+  **Should-fixes.** (1) `plan.md` FR#11(b) rewritten: NOT `number`-specific (the `int` variant
+  shows it too), NOT deterministic (~17-30% across runs), NOT a lost value (a heap-address/
+  garbage read) — pointer moved from `number_to_heap_cell` to the blocked-send path
+  (`send_count > capacity`). (2) FR#11(a) now records that the dominant symptom with the guard
+  removed is silent wrong output (28/35 non-crashing `MODE-DIVERGENT`, exit 0) in the DEFAULT
+  mode, not the SIGABRT. (3) This entry is the append-only correction of round-3's "FRAGO 015
+  minted" claim (round-3's own entry is left as written, per append-only). (4) Backpressure
+  coverage loss (guard for defect b makes every generated producer non-blocking, corpus-wide, with
+  no prior non-coverage note) added to `fuzz_grammar/README.md`'s "What it deliberately does NOT
+  cover" list, naming defect (b) and the restoration trigger. (5) DRY: collapsed the three
+  drifted array-literal builders into `fresh_array_literal()` (the drift itself — `below(3)` in
+  `build_feed_body`'s Array arm vs `below(4)` in the other two — is fixed at the producer, now one
+  source drawing `below(4)`), the three map-literal builders into `fresh_map_literal()` (these
+  three had NOT drifted from each other), and the three near-identical Number/Array/Map
+  receive-print blocks into `emit_receive_prints()`.
+  **Minors.** The falsified "without incident" parenthetical (`stmt_background_drain_loop`'s old
+  comment, claiming `int`'s capacity/count draw was safe "without incident") removed as part of
+  the should-fix-1 comment rewrite — the `int` repro directly disproves it. Shape-free programs no
+  longer generatable (`declare_shapes`'s `1 + below(2)`): already documented in place as a
+  considered choice (round 3's own comment at that site); no further edit needed.
+  **Parked, not done — named per the dispatch's own escape valve ("if under an hour... otherwise
+  record as a four-field parked entry"):** the `suspension_seen`-is-hand-maintained-at-5-sites
+  lesson the dispatch itself named. **WHAT:** derive the suspension flag from `push()`'s own
+  emitted line, or carry one `suspends: bool` per composite in a lookup table, instead of five
+  hand-set call sites (`~502, 627(moved), 791, 818, 898` post-this-round). **WHY:** this is a
+  syntactic-site enumeration — the exact detection signature `.claude/graveyard.md`'s twin-
+  derivation entries warn about — and a future suspending composite that forgets its own
+  assignment silently reopens defect (a)'s corpus blind spot; doing it right needs a design
+  decision (derive-from-`push()` vs. a lookup table) this round's time budget (already at the
+  three-blocker-plus-five-should-fix ceiling) does not have room to make well. **COST to fix
+  later:** small — a single-session refactor once the derivation approach is picked; the five call
+  sites are already each individually documented. **TRIGGER:** the next new suspending composite
+  added to this generator, OR a `per_construct_floors_hold_over_a_fixed_corpus` regression that
+  traces to a missed `suspension_seen` site.
+  **Verification.** `cargo fmt --all --check` clean; `cargo clippy -p ynz-driver --all-targets --
+  -D warnings` clean; `fuzz_grammar::generator_contract::*` 7 passed / 1 ignored (including the
+  new floor); full `cargo test -p ynz-driver --test cross_impl_consistency --include-ignored`: 17
+  passed / 0 failed, 176.2s; two independent 256-seed `generated_corpus_byte_identical_across_
+  mode_matrix` runs (seed bases 0 and 31337000): both 256/256 compiled-and-ran / 0 findings
+  (60.4s, 59.7s). **Guard-removal re-measurement (both restored via `cp` + sha256 before/after,
+  never `git checkout --`):** `suspension_seen` guard removed entirely, `YNZ_FUZZ_PROGRAMS=256`
+  seed base 0 — **35 findings**, exact match to FRAGO 015's recorded number, all `SIGABRT`/
+  `MODE-DIVERGENT` at `ynz-runtime/src/lib.rs:1058`/`:1411`. Capacity floor removed
+  (`stmt_background_drain_loop`'s `cap` reverted to a plain `1 + below(4)` draw, no `send_count`
+  max), same corpus — **6 findings** (FRAGO 015 recorded 7; within the same run-to-run noise band
+  the record itself documents for defect (b), ~17-30% non-deterministic — not re-run further since
+  the dispatch asked to confirm the numbers still hold, not to chase an exact match on a
+  documented-nondeterministic count). No `Cargo.toml`/`Cargo.lock` change. Registry entries
+  touched: none. Nothing committed.
+
 - `m8-p8-fix2-20260904` — 2026-09-04 — **Phase 8 fix round 3: the owned-heap-channel widening
   landed, the false-claim lock test deleted, per-construct corpus floors added — and the
   widening itself surfaced TWO genuine runtime defects (FRAGO 015 / Future Requirements #11),
@@ -1319,6 +1411,81 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
   throwaway — created, run in the dev container, deleted). No handoff file.
 
 ## FRAGO log
+
+### FRAGO 015 — 2026-09-04 — The record MINTED THIS round: two genuine runtime defects the Phase 8 owned-heap widening surfaced, both PRE-EXISTING on `main`, routed not fixed
+
+- **Trigger:** fix round 3 (`m8-p8-fix2-20260904`)'s own entry (above, this log's Session log)
+  claimed **"FRAGO 015 minted"** for the two defects its widening surfaced. That claim was false —
+  no `### FRAGO 015` record existed anywhere in this plan's `audit.md` (highest prior number was
+  014) until this fix round (`m8-p8-fix3-20260904`) wrote it, per an adversarial review that
+  caught the dangling citation (four sites: this file, `plan.md`'s Future Requirements #11,
+  `fuzz_grammar/mod.rs` twice, `fuzz_grammar/README.md` once). **Note the trap:** "FRAGO 015"
+  already denotes an unrelated item in a DIFFERENT plan's audit
+  (`2026-07-03-v0-3-m5-auto-soa/audit.md`) — every citation to this record must name which plan's
+  `audit.md` it means ("the v0.3-M8 plan's `audit.md`, FRAGO 015"), never "FRAGO 015" bare.
+- **Finding — two independent, precisely-characterized, deterministic-or-not runtime defects**,
+  both surfaced by widening the fuzz generator to owned-heap channel payloads (v0.3-M8 Phase 8
+  fix round 3), neither a generator/grammar bug:
+  1. **Crossing-local heap-channel-send corruption.** An `array<int>`/`map<string,int>` LOCAL
+     declared BEFORE any suspension point (`wait`, a `background`-handle `.receive()`, a channel
+     `.receive()`) in the SAME function, later `.send()`-ed into a channel AFTER that suspension,
+     reads back corrupted — `RUNTIME ERROR: killed by signal 6 (SIGABRT)`, a null/misaligned
+     pointer dereference inside `ynz_map_count`/`ynz_array_count`
+     (`crates/ynz-runtime/src/lib.rs:1058`/`:1411`). Minimal repro:
+     ```
+     function fetch1(n: int) -> int { wait sleep(1); return n + 6 }
+     function entrypoint() -> nothing {
+       let rows12: array<int> = [0]           // declared BEFORE the wait — CRASHES
+       let v13 = wait fetch1(5)
+       let wire15: channel<array<int>> = channel<array<int>>(1)
+       wire15.send(rows12)
+       let got16 = wire15.receive()
+       if (got16.exists()) { print(got16.value.count().toString()) }
+     }
+     ```
+     Swapping the two `let` lines (array declared AFTER the `wait`) is confirmed SAFE. General to
+     both owned-heap kinds; NOT reproduced by `channel<number>`, by reading the local WITHOUT
+     sending it into a channel, or by an inline (non-`background`) channel's own close-then-drain
+     in isolation.
+  2. **Capacity-forced-blocking channel send reads back garbage.** A `background` producer forced
+     to actually BLOCK on a full channel buffer (`send_count > capacity`) can read back a HEAP
+     ADDRESS where a sent value belongs — an uninitialized-or-freed read. NOT `number`-specific
+     (the `int` variant of the same shape shows it); NOT deterministic (~17-30% of runs); NOT an
+     arithmetic shortfall. 2 sends into capacity 1, or 3 sends into capacity 4 (neither forces
+     blocking), are unaffected.
+- **PRE-EXISTING on `main` — both confirmed, not assumed (fix round 4's own re-verification,
+  recorded here verbatim per the dispatch instruction, one of the two independently sanity-checked
+  this round):**
+  - **(a) reproduces on `main` (`ec014d8`)**: same panic, same address, same function —
+    `misaligned pointer dereference: address must be a multiple of 0x8 but is 0xb` at
+    `ynz_array_count` (branch `lib.rs:1411`, `main` `lib.rs:1340` — line shift only), 3/3 runs;
+    the same program with the array declared AFTER the wait prints `1` on both. **Fires in the
+    DEFAULT optimized mode** — the mode `target/release` consumers run.
+  - **(b) also reproduces on `main`**, and is NOT what the round-3 record claimed: not
+    `number`-specific (the `int` variant of the same shape shows it), not deterministic
+    (~17–30% across runs), not an arithmetic shortfall — the bad runs print HEAP ADDRESSES
+    (`139853207069028` etc.) where `258` belongs. On `main`, `channel<int>(1)` with 3 sends under
+    `--no-optimize --no-auto-parallel`: 6 of 36 runs printed garbage, 30 printed `258`; the
+    default optimized mode was 36/36 correct; `cap=4` (producer never blocks) was 36/36 correct.
+- **Guards containing them (generator-level, not a fix):** `take_or_make_array`/
+  `take_or_make_map`'s `suspension_seen` gate in `fuzz_grammar/mod.rs` (defect a); the
+  `send_count.max(1 + below(4))` capacity floor in `stmt_background_drain_loop` (defect b — costs
+  the corpus its blocked-send coverage entirely, recorded in `fuzz_grammar/README.md`'s
+  non-coverage list). Neither guard narrows an entire element kind or construct.
+- **Disposition: routed, not fixed.** Per this plan's own CCIR item 5 / risk R5 — a genuine
+  finding routes through the plan-amendment/FRAGO seam, never a same-round inline patch — this is
+  standing plan policy set at Gate-4 authoring, not a fresh ruling this fix round. Full
+  WHAT/WHY/COST/TRIGGER for both defects lives in `plan.md`'s Future Requirements #11 (kept in
+  sync with the corrections this fix round made to (a)'s dominant-symptom claim and (b)'s three
+  wrong claims — see that section, not restated here). **Open clustering question, unresolved**:
+  are (a) and (b) the same producer (a general "value crossing a suspension/blocking-send
+  boundary" bug with two symptoms) or two independent ones? Bisection did not settle it — (a)
+  needs no backpressure and no `--no-optimize`; (b) needs both. Whoever picks this up checks that
+  first, per `root-cause.md`'s "cluster findings before fixing any."
+- **Authority:** no new ruling needed — this record documents facts already true (the defects'
+  existence, their pre-existence on `main`) and applies standing plan policy (R5 routing) that was
+  already signed at Gate-4. The prior round's false "minted" claim is corrected by this record's
+  existence, not by editing the append-only prior entry.
 
 (the note below this pair predates execution; FRAGO 001/002 are the first real mid-execution
 delta-records against this running plan)

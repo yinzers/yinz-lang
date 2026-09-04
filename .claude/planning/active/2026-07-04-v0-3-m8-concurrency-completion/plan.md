@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904", "m8-p7-20260904-a1", "m8-p7-fix1-20260904", "m8-p8-20260904-a1", "m8-p8-fix1-20260904", "m8-p8-fix2-20260904"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904", "m8-p5-20260904-a1", "m8-p5-fix1-20260904", "m8-p5-fix2-20260904", "m8-p7-20260904-a1", "m8-p7-fix1-20260904", "m8-p8-20260904-a1", "m8-p8-fix1-20260904", "m8-p8-fix2-20260904", "m8-p8-fix3-20260904"]
 created_at: "2026-07-04"
 updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -2603,7 +2603,12 @@ pattern. Considered and declined.
     array`/`take_or_make_map`'s `suspension_seen` gate in `mod.rs`; the `send_count.max(...)`
     capacity floor in `stmt_background_drain_loop`) so the fuzz corpus and `cargo test
     --workspace` stay green while these are triaged — neither guard narrows an entire element
-    kind or construct, each targets only the bisected shape.
+    kind or construct, each targets only the bisected shape. **Cost of guard (b), named
+    explicitly rather than left silent (fix round 4):** the capacity floor guarantees every
+    generated program's producer can never block, which removes ALL corpus coverage of the
+    blocked-send path itself — coverage the generator had before this round. Recorded in
+    `fuzz_grammar/README.md`'s "What it deliberately does NOT cover" list; the trigger to restore
+    it is the same as (b)'s own trigger below.
     - **(a) A crossing-local heap-channel-send corruption.** **WHAT:** an `array<int>`/
       `map<string,int>` LOCAL declared BEFORE any suspension point in the SAME function (a
       `wait`, a `background`-handle `.receive()`, a channel `.receive()`) and later `.send()`-ed
@@ -2625,7 +2630,13 @@ pattern. Considered and declined.
       Swapping the two `let` lines (array declared AFTER the `wait`) is confirmed SAFE. Confirmed
       general to both owned-heap kinds; NOT reproduced by `channel<number>`, by reading the local
       WITHOUT sending it into a channel, or by an inline (non-`background`) channel's own
-      close-then-drain in isolation. **WHY not fixed here:** this is exactly the frame-crossing /
+      close-then-drain in isolation. **The SIGABRT is not the dominant symptom — silent wrong
+      output in the DEFAULT (optimized) mode is** (fix round 4, `m8-p8-fix3-20260904`): with the
+      `suspension_seen` guard removed entirely, an `YNZ_FUZZ_PROGRAMS=256` sweep produced 35
+      findings, of which 28 were non-crashing `MODE-DIVERGENT` (exit 0, a heap address printed
+      where a count belonged) rather than a `SIGABRT` — the SIGABRT is the loud minority case,
+      the silent divergence is the majority and the more dangerous half since nothing signals a
+      failure. **WHY not fixed here:** this is exactly the frame-crossing /
       suspension-boundary hazard family M3a/M3d/M3e/M3g's twin-derivation corpses warned about
       (`authoritative-derivation.md`) — diagnosing which choke point (the channel-send transfer
       lowering, or the crossing-local frame-slot machinery itself) needs the fix is real
@@ -2635,19 +2646,25 @@ pattern. Considered and declined.
       per this class's usual shape. **TRIGGER:** the next milestone touching channel-send
       lowering or the crossing-local/suspension-frame machinery, OR a real workload hitting it
       (any program that builds an `array`/`map` before an I/O call and sends it afterward).
-    - **(b) A capacity-forced-blocking `number` channel send loses a value.** **WHAT:** a
-      `channel<number>(1)` fed by a `background` producer sending the SAME `number` binding 3
-      times loses one value under `--no-optimize`/`--no-auto-parallel` (`8.6 * 3` prints `17.2`
-      instead of `25.8`) — but ONLY when the producer is forced to actually BLOCK on a full
-      buffer (`send_count > capacity`); 2 sends into capacity 1, or 3 sends into capacity 4, are
-      both confirmed safe. **WHY not fixed here:** fr12's `number_to_heap_cell` marshalling
-      interacting with the channel's backpressure/blocked-send path under `-O0` is a codegen or
-      runtime diagnosis, not a fuzzing-harness-round task. **COST to fix later:** a diagnosis
-      session (the backpressure/retry path for a blocked `ynz_channel_send` under `-O0`, cross-
-      referenced against `number_to_heap_cell`) plus a fix of unknown size until diagnosed.
-      **TRIGGER:** the next milestone touching `channel<number>` marshalling or the channel
-      send/backpressure path, OR a real workload sending a repeated `number` value into a
-      near-full channel.
+    - **(b) A capacity-forced-blocking channel send reads back garbage.** **WHAT (corrected, fix
+      round 4, `m8-p8-fix3-20260904` — the round-3 record had all three of the following wrong):
+      NOT `number`-specific** — the `int` variant of the same shape shows it too. **NOT
+      deterministic** — the bad-run rate measured ~17–30% across runs, not a fixed value. **NOT
+      an arithmetic shortfall** — the bad runs print a HEAP ADDRESS (e.g. `139853207069028`)
+      where the expected sum belongs, i.e. an uninitialized-or-freed read, not a lost addend. It
+      fires ONLY when a `background` producer is forced to actually BLOCK on a full channel
+      buffer (`send_count > capacity`): under `--no-optimize`/`--no-auto-parallel`, a
+      `channel<int>(1)` fed 3 sends measured 6/36 garbage runs, 30/36 correct; capacity 4 (never
+      blocks) measured 36/36 correct; the DEFAULT optimized mode measured 36/36 correct on the
+      same shape (the defect needs `-O0` to reproduce). **WHY not fixed here:** this is the
+      channel's blocked-send path under `-O0` — a runtime diagnosis (`crates/ynz-runtime/src/
+      channel.rs`'s blocked-send retry/wake logic, not fr12's `number_to_heap_cell` marshalling,
+      which the round-3 record wrongly pointed at — the defect is not `number`-specific and
+      `number_to_heap_cell` is not on the `int` path at all), not a fuzzing-harness-round task.
+      **COST to fix later:** a diagnosis session (the blocked-send retry/wake path in
+      `channel.rs` under `-O0`, for both `int` and `number`) plus a fix of unknown size until
+      diagnosed. **TRIGGER:** the next milestone touching the channel send/backpressure path, OR
+      a real workload whose producer blocks on a full channel under `-O0`.
     - **Both share one open question worth naming:** are these the SAME producer (a general
       "value crossing a suspension/blocking-send boundary" bug with two symptoms) or two
       independent ones? Bisection did not settle it — (a) needs no backpressure and no

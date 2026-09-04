@@ -87,6 +87,33 @@ pointer resolves the moment the commit lands. If a doc must name a future token,
 
 ---
 
+## Relaying an executor's claim ABOUT AN ARTIFACT into a durable record without opening the artifact
+
+**Found:** 2026-09-04, v0.3-M8 Phase 8, twice in one conductor session — by the conductor, not an
+executor.
+
+| Instance | The claim, relayed into a sealed commit body | What the artifact actually held |
+|---|---|---|
+| Phase 8 round 1 (`ff8859e`) | "parked 41 … recorded in the design note's non-coverage list rather than passing silently" | the README's non-coverage list named four unrelated gaps and never mentioned spawn-site argument shapes |
+| Phase 8 round 3 (`ccbaa6b`) | "routed through this plan's own CCIR-5 / R5 seam (FRAGO 015, Future Requirements #11)" | `audit.md`'s FRAGO log ran 001–014; no FRAGO 015 record existed, and four code/README/audit pointers cited it — while "FRAGO 015" already denoted an unrelated item in the M5 plan's audit |
+
+**The producer.** An executor's return says "recorded in X" / "FRAGO N minted". The conductor is a
+router and does not read work product — correctly — but a claim ABOUT A DURABLE ARTIFACT is not
+work product, it is a fact about the repo, and checking it is one grep. Sealing it unread mints a
+second false record that outlives the first: the commit body is now evidence for the untruth, and a
+later reader finds two sources agreeing.
+
+**Detection signature.** Any executor return sentence of the form "recorded in / named in / minted
+as / written to <artifact>", where the artifact is a file the conductor can open. Especially:
+FRAGO numbers, parked-item numbers, "the design note says", "the non-coverage list names".
+
+**The rule.** Before a claim about an artifact enters a commit body, a plan bookkeeping line, or a
+FRAGO: open the artifact and grep for the thing. One command. If the claim is about a FRAGO
+number, also confirm the number is free IN THIS PLAN'S audit — FRAGO numbering is per-plan, so a
+citation must name the plan whose `audit.md` it means. A conductor never relays "recorded in" — it
+verifies or it writes "the executor reports X; unverified" and moves the verification into the
+next round's brief.
+
 ## Sending a tree-mutating seat into an UNSEALED checkout
 
 **Found:** 2026-09-04, v0.3-M8, twice — Phase 3 round 1 and Phase 4 round 3.

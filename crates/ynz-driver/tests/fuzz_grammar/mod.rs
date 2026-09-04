@@ -148,6 +148,13 @@ pub struct Program {
     /// widening this round adds was genuinely exercised, not just present in an uncalled
     /// helper's signature.
     pub fired_owned_heap_channel: bool,
+    /// True when `take_or_make_array`/`take_or_make_map` actually REUSED a pooled binding
+    /// (rather than building a fresh one) for at least one channel send — v0.3-M8 Phase 8 fix
+    /// round 4, BLOCKER 1. Until this round, the reuse branch was unreachable dead code (see
+    /// `take_or_make_array`'s doc comment); this counter and its floor in
+    /// `per_construct_floors_hold_over_a_fixed_corpus` are what keep it from silently dying
+    /// again.
+    pub fired_pool_reuse: bool,
 }
 
 /// Generate one type-valid program from `seed`.
@@ -215,6 +222,9 @@ struct Builder {
     fired_array_intrinsic: bool,
     fired_shape_field_read: bool,
     fired_owned_heap_channel: bool,
+    /// True once `take_or_make_array`/`take_or_make_map` has actually reused a pooled binding —
+    /// see `Program::fired_pool_reuse`.
+    fired_pool_reuse: bool,
     /// v0.3-M8 Phase 8 fix round 3 — a CONFIRMED runtime defect, not a speculative avoidance (see
     /// `take_or_make_array`'s doc comment for the full repro). Set true the moment ANY statement
     /// introduces a genuine suspension point in `entrypoint`'s own frame (`wait`, a
@@ -251,6 +261,7 @@ impl Builder {
             fired_array_intrinsic: false,
             fired_shape_field_read: false,
             fired_owned_heap_channel: false,
+            fired_pool_reuse: false,
             suspension_seen: false,
         }
     }
@@ -345,10 +356,8 @@ impl Builder {
             ElemKind::Array => {
                 let mut lines = Vec::new();
                 for _ in 0..count {
-                    let a = self.fresh("rows");
-                    let n = 1 + self.rng.below(3);
-                    let elems: Vec<String> = (0..n).map(|_| self.int_lit()).collect();
-                    lines.push(format!("let {a}: array<int> = [{}]", elems.join(", ")));
+                    let (a, line, _n) = self.fresh_array_literal();
+                    lines.push(line);
                     lines.push(format!("wire.send({a})"));
                 }
                 lines
@@ -356,17 +365,8 @@ impl Builder {
             ElemKind::Map => {
                 let mut lines = Vec::new();
                 for _ in 0..count {
-                    let m = self.fresh("book");
-                    let n = 1 + self.rng.below(MAP_KEYS.len());
-                    let mut entries = Vec::new();
-                    for k in MAP_KEYS.iter().take(n) {
-                        let v = self.int_lit();
-                        entries.push(format!("`{k}`: {v}"));
-                    }
-                    lines.push(format!(
-                        "let {m}: map<string, int> = {{ {} }}",
-                        entries.join(", ")
-                    ));
+                    let (m, line) = self.fresh_map_literal();
+                    lines.push(line);
                     lines.push(format!("wire.send({m})"));
                 }
                 lines
@@ -504,10 +504,8 @@ impl Builder {
     }
 
     fn stmt_array_decl(&mut self) {
-        let a = self.fresh("rows");
-        let n = 1 + self.rng.below(4);
-        let elems: Vec<String> = (0..n).map(|_| self.int_lit()).collect();
-        self.push(format!("let {a}: array<int> = [{}]", elems.join(", ")));
+        let (a, line, n) = self.fresh_array_literal();
+        self.push(line);
         self.arrays.push((a, n));
     }
 
@@ -543,17 +541,8 @@ impl Builder {
 
     fn stmt_map_decl(&mut self) {
         self.fired_map_decl = true;
-        let m = self.fresh("book");
-        let n = 1 + self.rng.below(MAP_KEYS.len());
-        let mut entries = Vec::new();
-        for k in MAP_KEYS.iter().take(n) {
-            let v = self.int_lit();
-            entries.push(format!("`{k}`: {v}"));
-        }
-        self.push(format!(
-            "let {m}: map<string, int> = {{ {} }}",
-            entries.join(", ")
-        ));
+        let (m, line) = self.fresh_map_literal();
+        self.push(line);
         self.maps.push(m);
     }
 
@@ -619,12 +608,6 @@ impl Builder {
         if kind != ElemKind::Int {
             self.fired_owned_heap_channel = true;
         }
-        // Every receive below is a genuine suspension point in `entrypoint`'s own frame — set
-        // BEFORE the composite's body so a send earlier in THIS SAME composite (there are none;
-        // sends always precede receives within one composite) is unaffected, and so a LATER
-        // composite's `take_or_make_*` correctly treats anything still pooled at this point as
-        // suspension-crossing if it gets picked after this composite returns.
-        self.suspension_seen = true;
         let c = self.fresh("wire");
         let cap = 1 + self.rng.below(4);
         let chan_ty = kind.channel_type();
@@ -657,13 +640,7 @@ impl Builder {
                 for _ in 0..sends {
                     self.push(format!("{c}.send({v})"));
                 }
-                for _ in 0..sends {
-                    let got = self.fresh("got");
-                    self.push(format!("let {got} = {c}.receive()"));
-                    self.push(format!("if ({got}.exists()) {{"));
-                    self.push(format!("  print({got}.value.toString())"));
-                    self.push("}".to_string());
-                }
+                self.emit_receive_prints(&c, sends, |got| format!("{got}.value.toString()"));
                 // Prove copy-through: `v` is still usable after being sent — a compile error
                 // here (`ConsumedBySend`) would mean `number` wrongly joined the give set.
                 self.push(format!("print({v}.toString())"));
@@ -674,13 +651,9 @@ impl Builder {
                     let name = self.take_or_make_array();
                     self.push(format!("{c}.send({name})"));
                 }
-                for _ in 0..sends {
-                    let got = self.fresh("got");
-                    self.push(format!("let {got} = {c}.receive()"));
-                    self.push(format!("if ({got}.exists()) {{"));
-                    self.push(format!("  print({got}.value.count().toString())"));
-                    self.push("}".to_string());
-                }
+                self.emit_receive_prints(&c, sends, |got| {
+                    format!("{got}.value.count().toString()")
+                });
             }
             ElemKind::Map => {
                 let sends = 1 + self.rng.below(cap.min(2));
@@ -688,15 +661,23 @@ impl Builder {
                     let name = self.take_or_make_map();
                     self.push(format!("{c}.send({name})"));
                 }
-                for _ in 0..sends {
-                    let got = self.fresh("got");
-                    self.push(format!("let {got} = {c}.receive()"));
-                    self.push(format!("if ({got}.exists()) {{"));
-                    self.push(format!("  print({got}.value.count().toString())"));
-                    self.push("}".to_string());
-                }
+                self.emit_receive_prints(&c, sends, |got| {
+                    format!("{got}.value.count().toString()")
+                });
             }
         }
+
+        // Every receive above (Number/Array/Map's `emit_receive_prints`, Int's own inline
+        // receive loop) is a genuine suspension point in `entrypoint`'s own frame. Set AFTER the
+        // composite's sends and receives complete, not before: setting it before the composite's
+        // OWN body ran made `take_or_make_array`/`take_or_make_map`'s reuse branch permanently
+        // unreachable (this exact statement is the ONLY caller of either), because their `!self.
+        // suspension_seen` guard was already false by the time the Array/Map arm above called
+        // them. Placing the assignment here means THIS composite's own sends still see whatever
+        // `suspension_seen` was BEFORE this statement ran (correct — reuse is fine for a pool
+        // entry that predates any suspension), while any LATER composite correctly sees this
+        // composite's own receives as a suspension that happened first.
+        self.suspension_seen = true;
 
         // Close, then one receive past end-of-stream: the v0.3-M8 Phase 4 contract says the
         // drained-and-closed channel answers `none`, never a hang and never an error. Same
@@ -712,11 +693,62 @@ impl Builder {
         }
     }
 
-    /// Half the time, reuse an array ALREADY declared earlier in the body — UNLESS
-    /// `suspension_seen` is set, in which case always build fresh. Same real bookkeeping either
-    /// way: a pooled binding must leave `self.arrays` the moment it is chosen to be sent, or a
-    /// later `stmt_array_op` draw would read it back and the compiler would correctly refuse the
-    /// program with `ConsumedBySend`.
+    /// Emit `sends` `receive()`-then-print-if-present blocks against channel `c` — the shared
+    /// tail of `stmt_channel_inline_kind`'s Number/Array/Map arms (v0.3-M8 Phase 8 fix round 4,
+    /// should-fix 5: these three were near-identical five-line blocks, differing only in what
+    /// gets printed). `render` turns the bound `got` name into the printed expression:
+    /// `number`/`int` print the value directly (`.value.toString()`); `array`/`map` print
+    /// `.count()` instead of the payload itself.
+    fn emit_receive_prints(&mut self, c: &str, sends: usize, render: impl Fn(&str) -> String) {
+        for _ in 0..sends {
+            let got = self.fresh("got");
+            self.push(format!("let {got} = {c}.receive()"));
+            self.push(format!("if ({got}.exists()) {{"));
+            self.push(format!("  print({})", render(&got)));
+            self.push("}".to_string());
+        }
+    }
+
+    /// Build one `array<int>` literal: a fresh binding name, its `let NAME: array<int> = [...]`
+    /// source line, and the element count (needed by `stmt_array_decl`, which tracks pool
+    /// lengths in `self.arrays` — the other two callers discard it). v0.3-M8 Phase 8 fix round 4,
+    /// should-fix 5: this was three separately-maintained copies (`build_feed_body`'s Array arm,
+    /// `stmt_array_decl`, and this function's own fresh-branch), and they had already drifted —
+    /// `build_feed_body`'s copy drew `1 + below(3)` while the other two drew `1 + below(4)`. One
+    /// source now; the element-count draw below is the one every caller gets.
+    fn fresh_array_literal(&mut self) -> (String, String, usize) {
+        let a = self.fresh("rows");
+        let n = 1 + self.rng.below(4);
+        let elems: Vec<String> = (0..n).map(|_| self.int_lit()).collect();
+        let line = format!("let {a}: array<int> = [{}]", elems.join(", "));
+        (a, line, n)
+    }
+
+    /// The `map<string, int>` sibling of `fresh_array_literal` — one source for the three
+    /// previously-separate copies (`build_feed_body`'s Map arm, `stmt_map_decl`,
+    /// `take_or_make_map`'s fresh-branch). These three had not drifted from each other (all three
+    /// already drew `1 + below(MAP_KEYS.len())`), but leaving three copies standing is exactly
+    /// the shape that let the array trio drift silently.
+    fn fresh_map_literal(&mut self) -> (String, String) {
+        let m = self.fresh("book");
+        let n = 1 + self.rng.below(MAP_KEYS.len());
+        let mut entries = Vec::new();
+        for k in MAP_KEYS.iter().take(n) {
+            let v = self.int_lit();
+            entries.push(format!("`{k}`: {v}"));
+        }
+        let line = format!("let {m}: map<string, int> = {{ {} }}", entries.join(", "));
+        (m, line)
+    }
+
+    /// When `suspension_seen` is false (no suspension — `wait`, a `background`-handle
+    /// `.receive()`, or a channel `.receive()` — has happened yet in `entrypoint`'s frame) and
+    /// the pool has at least one entry, a coin flip (`one_in(2)`) decides whether to REUSE an
+    /// array ALREADY declared earlier in the body instead of building a fresh one. Once
+    /// `suspension_seen` is true, reuse is refused unconditionally and every array sent here is
+    /// fresh. Same real bookkeeping either way: a pooled binding must leave `self.arrays` the
+    /// moment it is chosen to be sent, or a later `stmt_array_op` draw would read it back and the
+    /// compiler would correctly refuse the program with `ConsumedBySend`.
     ///
     /// The `suspension_seen` gate is not speculative: it is the direct product of a reproducible
     /// finding this same fix round made BY doing the widening. A generated program (seed 3 of
@@ -731,43 +763,45 @@ impl Builder {
     /// safe (confirmed both orders directly); crossing a suspension while merely READ (never
     /// sent into a channel) was not implicated — this is specific to the channel-transfer path.
     /// This is a genuine runtime defect — not a generator/grammar bug — and per this plan's CCIR
-    /// item 5 (R5) it is NOT fixed inline here. See Future Requirements #11 (`plan.md`) and
-    /// FRAGO 015 (`audit.md`) for the full repro and the tracked follow-up. Gating ONLY the
-    /// reuse-from-pool branch (not the whole element kind, and not the whole composite) keeps
-    /// the fuzz corpus green while preserving the widening's actual value: a FRESH local built
-    /// and sent immediately never crosses a suspension by construction, so it fires regardless
-    /// of what happened earlier in the program.
+    /// item 5 (R5) it is NOT fixed inline here. See Future Requirements #11 (`plan.md`) and the
+    /// v0.3-M8 plan's `audit.md`, FRAGO 015, for the full repro and the tracked follow-up. Gating
+    /// ONLY the reuse-from-pool branch (not the whole element kind, and not the whole composite)
+    /// keeps the fuzz corpus green while preserving the widening's actual value: a FRESH local
+    /// built and sent immediately never crosses a suspension by construction, so it fires
+    /// regardless of what happened earlier in the program.
+    ///
+    /// v0.3-M8 Phase 8 fix round 4, BLOCKER 1: until this round, `suspension_seen` was set at the
+    /// TOP of `stmt_channel_inline_kind` — the ONLY caller of this function — so by the time this
+    /// function's `!self.suspension_seen` check ran, the flag this SAME statement had just set
+    /// was already true. The reuse branch below was dead code; every generated program built a
+    /// fresh array here regardless of the coin flip. Confirmed both ways: replacing the reuse
+    /// branch's body with `panic!` and generating 8,192 programs never fired it; with the flag's
+    /// assignment moved to `stmt_channel_inline_kind`'s end (see that function), the same probe
+    /// fires on the first seeds. `per_construct_floors_hold_over_a_fixed_corpus` now floors
+    /// `fired_pool_reuse` so this cannot silently die again without a red test.
     fn take_or_make_array(&mut self) -> String {
         if !self.suspension_seen && !self.arrays.is_empty() && self.rng.one_in(2) {
+            self.fired_pool_reuse = true;
             let idx = self.rng.below(self.arrays.len());
             self.arrays.remove(idx).0
         } else {
-            let a = self.fresh("rows");
-            let n = 1 + self.rng.below(4);
-            let elems: Vec<String> = (0..n).map(|_| self.int_lit()).collect();
-            self.push(format!("let {a}: array<int> = [{}]", elems.join(", ")));
+            let (a, line, _n) = self.fresh_array_literal();
+            self.push(line);
             a
         }
     }
 
     /// The `map<string, int>` sibling of `take_or_make_array` — same reuse-or-fresh choice, same
-    /// `suspension_seen` gate, same pool-removal-on-send bookkeeping.
+    /// `suspension_seen` gate, same pool-removal-on-send bookkeeping, same BLOCKER-1 history (see
+    /// that function's doc comment).
     fn take_or_make_map(&mut self) -> String {
         if !self.suspension_seen && !self.maps.is_empty() && self.rng.one_in(2) {
+            self.fired_pool_reuse = true;
             let idx = self.rng.below(self.maps.len());
             self.maps.remove(idx)
         } else {
-            let m = self.fresh("book");
-            let n = 1 + self.rng.below(MAP_KEYS.len());
-            let mut entries = Vec::new();
-            for k in MAP_KEYS.iter().take(n) {
-                let v = self.int_lit();
-                entries.push(format!("`{k}`: {v}"));
-            }
-            self.push(format!(
-                "let {m}: map<string, int> = {{ {} }}",
-                entries.join(", ")
-            ));
+            let (m, line) = self.fresh_map_literal();
+            self.push(line);
             m
         }
     }
@@ -821,17 +855,19 @@ impl Builder {
         let total = self.fresh("total");
         let open = self.fresh("open");
         let nx = self.fresh("nx");
-        // CONFIRMED, reproducible defect avoided: `channel<number>(1)` fed by a `background`
-        // producer sending the SAME `number` binding 3 times loses one value under
-        // `--no-optimize`/`--no-auto-parallel` (25.8 vs 17.2 for `8.6 * 3`), bisected precisely
-        // to `send_count > capacity` (2 sends into cap-1 is fine; 3 sends into cap-4 is fine; 3
-        // sends into cap-1 — the only combination that forces the producer to actually BLOCK on
-        // a full buffer — is not). This is a genuine runtime defect, not a generator bug, and
-        // per this plan's CCIR item 5 (R5) it is not fixed inline here — see Future
-        // Requirements #11 (`plan.md`) / FRAGO 015 (`audit.md`). `int`'s backpressure path was
-        // never bisected as safe either (it happens to share the SAME capacity/count draw the
-        // pre-widening generator already used without incident, which is evidence, not proof),
-        // so the floor applies to every kind: never let this composite's producer block.
+        // CONFIRMED, reproducible defect avoided: a `background` producer sending more values
+        // into a channel than its capacity (`send_count > capacity`, forcing the producer to
+        // actually BLOCK on a full buffer) can read back a HEAP ADDRESS where a sent value
+        // belongs — an uninitialized-or-freed read, not an arithmetic shortfall, non-
+        // deterministic (~17-30% of runs across a fix round's own measurement), and general to
+        // BOTH `int` and `number` (v0.3-M8 Phase 8 fix round 4 corrected all three of these
+        // against the round-3 record, which claimed `number`-only, deterministic, "loses one
+        // value" — none of the three held up). This is a genuine runtime defect in the blocked-
+        // send path (`send_count > capacity`), not a generator bug and not `number_to_heap_cell`
+        // specifically, and per this plan's CCIR item 5 (R5) it is not fixed inline here — see
+        // Future Requirements #11 (`plan.md`) and the v0.3-M8 plan's `audit.md`, FRAGO 015. The
+        // floor below applies to every kind (never let this composite's producer block) because
+        // the defect is general to the blocked-send path, not one element kind.
         let cap = self.feed_fns[i].send_count.max(1 + self.rng.below(4));
         let chan_ty = kind.channel_type();
         self.push(format!("let {c}: {chan_ty} = {chan_ty}({cap})"));
@@ -982,6 +1018,7 @@ impl Builder {
         let fired_array_intrinsic = self.fired_array_intrinsic;
         let fired_shape_field_read = self.fired_shape_field_read;
         let fired_owned_heap_channel = self.fired_owned_heap_channel;
+        let fired_pool_reuse = self.fired_pool_reuse;
         self.body.clear();
         Program {
             source: out,
@@ -996,6 +1033,7 @@ impl Builder {
             fired_array_intrinsic,
             fired_shape_field_read,
             fired_owned_heap_channel,
+            fired_pool_reuse,
         }
     }
 }
@@ -1155,6 +1193,7 @@ mod generator_contract {
         let mut array_intrinsic = 0usize;
         let mut shape_field_read = 0usize;
         let mut owned_heap_channel = 0usize;
+        let mut pool_reuse = 0usize;
 
         for seed in 0..n as u64 {
             let p = generate(seed);
@@ -1165,6 +1204,7 @@ mod generator_contract {
             array_intrinsic += p.fired_array_intrinsic as usize;
             shape_field_read += p.fired_shape_field_read as usize;
             owned_heap_channel += p.fired_owned_heap_channel as usize;
+            pool_reuse += p.fired_pool_reuse as usize;
         }
 
         let floor = |count: usize, pct: usize, label: &str| {
@@ -1201,6 +1241,23 @@ mod generator_contract {
             owned_heap_channel,
             25,
             "a channel<array<int>>/channel<map<string,int>>/channel<number> composite actually ran",
+        );
+        // v0.3-M8 Phase 8 fix round 4, BLOCKER 1: this round's flagship construct was dead code
+        // (see `take_or_make_array`'s doc comment) — a raw-count floor here, not a percentage
+        // one, is the direct guard against it silently dying again. A percentage floor doesn't
+        // fit this construct: reuse needs FOUR preconditions to align in the SAME statement (an
+        // Array/Map inline-channel draw; a non-empty `arrays`/`maps` pool; the composite running
+        // before ANY suspension anywhere earlier in the body; a `one_in(2)` coin flip), so it is
+        // genuinely rare by construction — measured 2/256 over this exact fixed corpus. `>= 1`
+        // is what "not dead" means here; `floor`'s percentage semantics would need `pct == 0` to
+        // admit a measured value this small, which would silently accept 0 too and defeat the
+        // guard's entire purpose.
+        assert!(
+            pool_reuse >= 1,
+            "pool-reuse (take_or_make_array/take_or_make_map picking a PRE-EXISTING pooled \
+             binding for a send) fired 0/{n} times — the reuse branch has gone dead again (this \
+             is exactly the v0.3-M8 Phase 8 fix round 4 BLOCKER 1 shape: `suspension_seen` set \
+             too early makes `!self.suspension_seen` permanently false)"
         );
     }
 }
