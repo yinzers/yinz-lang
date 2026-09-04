@@ -587,6 +587,52 @@ function entrypoint() -> nothing {
     );
 }
 
+#[test]
+fn test_inlay_hint_background_handle_form_renders_the_inferred_give_label() {
+    // WHY: parked item 16 (v0.3-M8 Phase 5) — the handle form `let h = background f(v)` used
+    // to record `Copy` unconditionally, so a hint would say "copy" for a value the callee's
+    // signature declares `give` (the handle form has no remaining-statement view, so the
+    // liveness-Give rule does not run there; the DECLARED `give` is what parked 16 restores).
+    // Both spawn forms now record through the ONE `record_spawn_arg_ownership`, and the hint
+    // walker visits the handle form too (before fix round 2 it never did, so the recorded
+    // label had no reader). The label on the argument is `give`; no `copy` label may sit there.
+    let src = "\
+shape Scene {
+  name: string
+  width: int
+}
+function render(give scene: Scene) -> int {
+  wait sleep(1)
+  return scene.width
+}
+function run() -> nothing {
+  let scene: Scene = { name: `Three Rivers`, width: 6 }
+  let h = background render(scene)
+  let got = h.receive()
+  print(got.or(0))
+}
+";
+    let (state, uri) = state_single("/tmp/ynz_ih_bg_handle_give.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+    let labels: Vec<String> = hints
+        .iter()
+        .filter_map(|h| match &h.label {
+            lsp_types::InlayHintLabel::String(s) => Some(s.trim().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        labels.iter().any(|l| l == "give"),
+        "the handle-form spawn's dead-after argument must carry the inferred `give` label; \
+         got labels: {labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|l| l == "copy"),
+        "a given argument must not also be labelled `copy` (the pre-fix handle-form record); \
+         got labels: {labels:?}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Domain 10: channel_capacity — muted `64` inside `channel<T>()` empty parens
 // ─────────────────────────────────────────────────────────────────────────────

@@ -11,6 +11,84 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p5-fix2-20260904` — 2026-09-04 — **Phase 5 fix round 2 (`red:code-reviewer`): the R2-class
+  blocker fixed at the producer, RED→GREEN; eight should-fix/minor items done; nothing committed.**
+  Read: the Phase 5 STATUS block's round-1 grading, entry `m8-p5-20260904-a1` below,
+  `IMP-ownership.md` "Auto-Arc", `corpses.md`, `authoritative-derivation.md`,
+  `teaching-surfaces.md`, `vocabulary.md`. **The blocker.** `check.rs::admit_arc_group_for`
+  classified the caller side over `&stmts[first + 1..last]` — strictly between the members — so a
+  `lend` write inside a member's OWN argument list was invisible. Fix: the range is
+  `&stmts[first..=last]` (the members themselves plus everything between); the walker's `Call`
+  arm already returns `Writes` for a declared `lend`/`give` position and the whole-binding member
+  positions classify `Reads` from the same report the task-side proof read — no second
+  classifier. Fixture `m8_arc_write_in_member_arg_declines.ynz` (`background render(scene,
+  results, bump(scene))` then `background render(scene, results, 0)`, `bump` declared `lend`):
+  **RED** on the old range, reproduced by flipping the one line back and rebuilding — stdout
+  `task saw 6` / `task saw 112` / `caller keeps Wagner 106x7` with 4 `ynz_arc_*` calls in the
+  IR (task 2 read the block minted before `bump` ran); **GREEN** on the fix — `task saw 106` /
+  `task saw 112` / `caller keeps Wagner 106x7`, 0 `ynz_arc_*` calls AND 0 declarations
+  (`assert_declined_fixture`), alloc==free. `check.rs` restored from the scratchpad copy
+  (sha256 `19e4240d…` identical before the flip and after). Note for the record: a write in a
+  member's LATER argument (`render(scene, results, bump(scene))` as the SECOND member) does not
+  change output either way, because both the Arc mint and the copy path snapshot argument 0
+  before a later argument runs; the divergent case is the write inside the FIRST member's list
+  (or any member before the last), which the fixture pins. Driver test
+  `caller_side_write_inside_a_member_spawns_own_argument_declines`; the suite is 12/12 with every
+  admitted group still admitted. **Should-fixes.** (1) `declared_writes_from_sigs` deleted; the
+  one map `check_query` builds now rides on `EffectiveOwnershipReport.declared_writes` (set by
+  `effective_ownership::analyze`, empty on `::empty()`), and `classify_binding_in_stmts` reads it
+  from the report — one fewer parameter, no twin; an orphaned doc comment that had been sitting
+  on the twin ("Returns true if stmt contains ANY read…", describing a function that no longer
+  exists) went with it. (2) Registry: `auto_arc` `hover_what`/`hover_what_instead` and
+  `auto-arc-codegen-emission` `substitute`/`why` no longer say "spawn"; `hover_why`'s "atomic
+  bump" is "a tiny bookkeeping step"; `channel` added to the excluded-field list in both. (3)
+  `IMP-ownership.md` Auto-Arc: every line-number cite replaced by a function name (the
+  parked-21 rule; the Transfer section's four `check.rs`/`emit.rs`/`inlay_hint_passes.rs` line
+  cites on the spawn-inference paragraph went the same way), "Code is cited by function name;
+  line numbers drift." at the top, condition 3 rewritten to the `first..=last` range with the
+  member-argument case, `channel` in the residual, parked 40 recorded as the SECOND reason
+  `number` stays out, the `string` rationale softened to what the tree shows (the copy path's
+  struct `memcpy` already shares the pointer; the runtime has no string release), and — the
+  **audit correction**: entry `m8-p5-20260904-a1` says all four deviations were recorded in
+  `IMP-ownership.md`; deviation (3), the M7-attribute premise, was NOT. It is now, one sentence
+  beside the lazy-declaration fact ("Phase 5 declared them for the FIRST time … M7's own FRAGO
+  001 recording that no `ynz_arc_*` symbol was declared or called from codegen"). (4)
+  `inlay_hint_passes.rs` module doc: `auto_arc_hints` listed as a firing domain; the "no
+  emission yet" paragraph rewritten. (5) `IMP-no-function-coloring.md` P2-6 disposition:
+  CLOSED by Phase 5, topology cited, the entry narrowed not deferred; anchor `git log
+  --grep=m8-p5` (resolves: `0f62869`, `561476a`). (6) `plan.md`: FR#5's placeholder replaced by
+  the four fields (WHAT/WHY/COST/TRIGGER, citing the narrowed registry entry's `triggers`); the
+  false M7-attribute premise annotated at Weather, Friendly forces and step 2 with the
+  bracketed note, each tagged `(FRAGO 013 — Phase 5 round 2)`; prose untouched. (7) this entry.
+  (8) minors: `shape_types.rs::llvm_field_type` carries the cross-reference to `arc_shareable`
+  ("a new inline-stored field kind must opt in"); parked 16 pinned by
+  `test_inlay_hint_background_handle_form_renders_the_inferred_give_label` — which found that
+  `inlay_hint_passes.rs::collect_background_ownership_hints_block` never visited the handle form
+  (`let h = background f(v)`), so the label parked 16 restored had no reader; the walker now
+  matches both spawn forms (28/28); the parity test `check::suspends_parity_tests::every_
+  suspending_fn_has_a_stmt_the_conservative_predicate_flags` sweeps every standalone driver
+  fixture (≥100 files, ≥50 suspending functions, asserted non-vacuous) and asserts each
+  fixpoint-suspending function has a statement `stmt_may_suspend_conservative` flags — it
+  FAILED first on `v0_3_m2_background_subexpr_error.ynz` (`background add(inner(), 4)`: the
+  predicate's `Expr::Background(..) => false` leaned on typeck's rejection of a suspending
+  spawn argument), so the predicate now walks a spawn's ARGUMENTS (never the callee) and is a
+  true over-approximation on every input; on an accepted program it returns exactly what it
+  did. **Verification (exit codes seen):** `cargo fmt --all --check` clean; clippy `-D warnings`
+  clean on `ynz-typeck`/`ynz-codegen` libs and the touched `v03_m8_auto_arc`/`inlay_hint` test
+  targets (`ynz-typeck --tests` red only in untouched `tests/check.rs`/`tests/inlay_hint_passes.rs`
+  — parked 31); `ynz-typeck --all-targets` green (99 lib incl. the parity test); `ynz-driver
+  --test v03_m8_auto_arc` 12/12, `v03_m8_channel_close` 31/31, `integration` 530/530;
+  `ynz-lsp --test inlay_hint` 28/28; `ynz-registry` green; `ynz-runtime --lib` 110/110; loom
+  lane 9/9 exhaustive, non-vacuous; `ynz-driver` + `ynz-lsp` rebuilt `--release`. **Deviations
+  from the dispatch:** none in substance; the parity minor was well under an hour so it landed
+  rather than parking, and it moved one line of production code (the `Background` arm) to make
+  the link hold on every input. **Found, out of scope:** an explicit `scene.copy()` at argument 0
+  and the inferred copy both snapshot before a later argument runs, i.e. `f(scene, bump(scene))`
+  hands the task the PRE-bump value while a plain (non-`background`) call would see the
+  post-bump value through the pointer — a left-to-right-evaluation question for the
+  language design, not an Arc defect; noted for the conductor, no fix attempted. **No commit; no
+  grep token minted.**
+
 - `m8-p5-fix1-20260904` — 2026-09-04 — **Fix round 1: two clippy dead-code issues from parallel tests. Item 1:** `arc_strong_count` / `ARC_BLOCK_FREES` cfg gates — `arc_strong_count` changed to `#[cfg(test)]` (only test callers); `ARC_BLOCK_FREES` unchanged (correctly gates only the test observer line, line 143). Item 2:** `v03_m8_auto_arc.rs` counter file race — `ynz_run_counted` now uses `tempfile::NamedTempFile` for per-call uniqueness; `read_to_string` and counter parse failures now loud (no masking on missing file). Tests run 5×, 11/11 each, exit codes collected.
 
 - `m8-p5-20260904-a1` — 2026-09-04 — **Phase 5 executed in one segment: the Auto-Arc emission
@@ -1084,8 +1162,16 @@ settled by it.** The next conductor asks him before the phase that needs each:
   layout for shapes with a 16-byte `number` field vs the `errors`-value field surface. Two root
   causes do not share a branch.
 - **Applied:** this record; parked 40 annotated ROUTED; the Phase 5 boundary commit body carries
-  `FRAGO-012`; the plan's cold-resume banner names the pause and the resume point (Phase 7) once
-  Phase 5 closes.
+  `FRAGO-012`.
+- **Amended the same day — M8 does NOT pause.** The hotfix runs in its own linked worktree
+  (`/home/redacted/development/ynz-lang-hotfix-bgarg`, branch `fix/bg-arg-number-field` off `main`
+  at `ec014d8`, compose project `ynz-lang-hotfix-bgarg-be028ff7`, provisioned by
+  `worktree-birth.sh --no-deps` — the host has no `cargo`; everything builds in Docker), in
+  parallel with Phase 5's fix round in the main checkout. Two executors, two trees, no shared
+  state — the `one live checkout per branch` rule holds because the branches differ. Hotfix
+  dispatch `bgarg-number-20260904-a1`. Sequence from here: hotfix PR → merge to `main` → merge
+  `main` into `feat/v0-3-m8-concurrency-completion` before Phase 7 dispatches (the same shape as
+  PR #89's merge-back at `6143c1d`). The worktree is removed after the merge-back.
 
 ### FRAGO 011 — 2026-09-04 — Phase 4 CLOSED BY CEILING; the `errors`-value field surface is re-homed to its own hotfix branch after M8
 

@@ -167,6 +167,12 @@ pub struct EffectiveOwnershipReport {
     pub consumed: HashMap<String, Vec<bool>>,
     /// Per function name → freshness of its return value.
     pub returns_fresh: HashMap<String, Freshness>,
+    /// The seed the fixpoint ran on: for each function name visible in this unit (local or
+    /// imported), the parameter positions whose DECLARED modifier is `lend`/`give`.
+    /// Carried on the report so every later consumer of the walker
+    /// (`classify_binding_in_stmts` for the Auto-Arc caller-side proof) reads the ONE map
+    /// `check_query` built, never a re-derived twin (`authoritative-derivation.md`).
+    pub declared_writes: HashMap<String, HashSet<usize>>,
 }
 
 impl EffectiveOwnershipReport {
@@ -181,6 +187,7 @@ impl EffectiveOwnershipReport {
             per_fn: HashMap::new(),
             consumed: HashMap::new(),
             returns_fresh: HashMap::new(),
+            declared_writes: HashMap::new(),
         }
     }
 
@@ -492,12 +499,12 @@ pub fn stmt_rebinds(stmt: &Stmt, name: &str) -> bool {
 
 /// The per-name body classifier over an arbitrary statement suffix — the existing
 /// parameter classifier exposed for a LOCAL (it never cared that the name was a parameter).
-/// The Auto-Arc caller-side proof asks it about the statements between a group's spawns.
+/// The Auto-Arc caller-side proof asks it about a group's spawn statements and everything
+/// between them. The declared-write seed is the report's own (`report.declared_writes`).
 pub fn classify_binding_in_stmts(
     name: &str,
     stmts: &[Stmt],
     report: &EffectiveOwnershipReport,
-    declared_writes: &HashMap<String, HashSet<usize>>,
     imported_fn_names: &HashSet<String>,
 ) -> EffectiveOwnership {
     let mut acc = EffectiveOwnership::Reads;
@@ -506,7 +513,7 @@ pub fn classify_binding_in_stmts(
             name,
             stmt,
             &report.per_fn,
-            declared_writes,
+            &report.declared_writes,
             imported_fn_names,
         ));
         if acc == EffectiveOwnership::Writes {
@@ -687,6 +694,7 @@ pub fn analyze(
         per_fn: report,
         consumed,
         returns_fresh,
+        declared_writes: declared_writes.clone(),
     }
 }
 

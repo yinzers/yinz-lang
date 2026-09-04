@@ -14,14 +14,18 @@
 //! - `background_routing_hints`       — routing comment at `background` spawn sites (Informational)
 //! - `parallel_group_hints`           — overlap comment on auto-parallelized statements (Informational)
 //! - `channel_capacity_hints`         — muted default capacity inside `channel<T>()` empty parens (Addition)
+//! - `auto_arc_hints`                 — shared-by-reference-count comment after every member of an
+//!   admitted Auto-Arc group (Informational; live since v0.3-M8 Phase 5, reading the same
+//!   `BgOwnership::Arc` record codegen emits the shared block from)
 //!
 //! # Registered-but-not-firing domains
 //!
 //! `function_param_type` and `lifetimes` are handled by the LSP layer but return empty
 //! hint lists.  `allocators` is registered but fires when arena allocation lands (v0.2+).
-//! `auto_arc` is registered but fires when the auto-Arc codegen emission lands
-//! (`[[deferred_language_feature]]` `auto-arc-codegen-emission`, v0.4+) — there is no
-//! emission yet, so there is no compiler decision to annotate.
+//! The `auto_arc` hint renders in the normal muted style; its red-tinted variant stays under
+//! `[[deferred_tooling_feature]]` `auto-arc-cautionary-tint` (no per-hint tint path in
+//! `ynz-lsp`), and the cases the emission does not yet cover are the narrowed
+//! `auto-arc-codegen-emission` residual — no hint fires there because no block is shared.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -782,7 +786,16 @@ fn collect_background_ownership_hints_block(
 ) {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Expr(Expr::Background(inner, _)) => {
+            // Both spawn statement forms — the bare `background f(v)` and the handle form
+            // `let h = background f(v)` — record through the ONE `record_spawn_arg_ownership`
+            // in typeck (parked item 16), so both render the recorded label here. Before
+            // v0.3-M8 Phase 5 fix round 2 the handle form was never visited: the recorded
+            // `give` on a handle-form spawn had no reader.
+            Stmt::Expr(Expr::Background(inner, _))
+            | Stmt::Let {
+                value: Expr::Background(inner, _),
+                ..
+            } => {
                 if let Expr::Call(call) = inner.as_ref() {
                     for arg in &call.args {
                         if let Expr::Ident(_, span) = arg {

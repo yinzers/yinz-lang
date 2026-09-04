@@ -350,9 +350,14 @@ pub fn copy_is_independent(ty: &Type) -> bool {
 /// `background` boundary as ONE refcounted block whose bytes every task reads?
 ///
 /// A `shape` whose fields are all `int`/`float`/`bool`/`string` — the field kinds a byte copy
-/// of the struct shares soundly: value bits, or (`string`) a pointer to immutable heap bytes
-/// that outlive every frame. Excluded, each for a reason the block cannot express:
-/// - `number` fields: 16-byte alignment; the block's data starts 8-aligned (`arc.rs`).
+/// of the struct shares soundly: value bits, or (`string`) a pointer the shipped copy path (a
+/// byte `memcpy` of the struct into `ynz_alloc`'d storage) ALREADY shares between the caller
+/// and every task, and which the runtime never releases today (no string free exists), so
+/// sharing it by count changes nothing. Excluded, each for a reason the block cannot express:
+/// - `number` fields: 16-byte alignment; the block's data starts 8-aligned (`arc.rs`). ALSO:
+///   a shape with a `number` field SIGSEGVs on ANY `background` spawn today on the copy path
+///   (parked item 40 / FRAGO 012, hotfix pending) — do not widen the floor to `number` until
+///   that lands.
 /// - `array`/`map`/`maybe`/union/`channel` fields: pointer cells whose ownership the block
 ///   does not count — sharing the outer bytes would alias the inner allocation between tasks.
 /// - nested `shape` fields: stored as an opaque POINTER inside the struct

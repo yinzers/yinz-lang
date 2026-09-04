@@ -416,7 +416,6 @@ pub fn check(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         next_arc_group: 0,
-        declared_writes: declared_writes_from_sigs(sig_table),
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
@@ -500,7 +499,6 @@ pub fn check_with_kernel_mode(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         next_arc_group: 0,
-        declared_writes: declared_writes_from_sigs(sig_table),
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
@@ -687,12 +685,6 @@ struct Checker<'b> {
 
     /// v0.3-M8 Phase 5: the next Auto-Arc group id (minted per admitted group, module-wide).
     next_arc_group: u32,
-
-    /// v0.3-M8 Phase 5: declared `lend`/`give` positions of every function this unit can
-    /// see (local + imported, from the merged signature table) — the seed
-    /// `classify_binding_in_stmts` takes for the Auto-Arc caller-side proof. Same derivation
-    /// `check_query` feeds the fixpoint (`declared_write_positions` + imported modifiers).
-    declared_writes: HashMap<String, HashSet<usize>>,
 
     /// v0.3-M4 Phase 2: spans at which a suspending conduit-method call (`ch.send(v)`,
     /// `ch.receive()`, `h.send(v)`, `h.receive()`) is allowed to appear — the ROOT of a
@@ -1857,9 +1849,16 @@ impl<'b> Checker<'b> {
     ///    "Caller + 1 task" is out by construction (one statement is not a group).
     /// 2. Task-side: `report.ownership_of(callee, position) == Reads` for every member —
     ///    `effective_ownership`'s whole-program fixpoint, never a second classifier.
-    /// 3. Caller-side: `classify_binding_in_stmts(name, between first and last) == Reads` —
-    ///    the same walker over the statements between the spawns (a rebinding INSIDE a nested
-    ///    block is `Writes` there, per the walker's `stmt_rebinds` arm).
+    /// 3. Caller-side: `classify_binding_in_stmts(name, stmts[first..=last]) == Reads` — the
+    ///    same walker over the member spawn statements themselves AND everything between
+    ///    them (a rebinding INSIDE a nested block is `Writes` there, per the walker's
+    ///    `stmt_rebinds` arm). The members are INCLUDED because a write can hide inside a
+    ///    member's own argument list — `background render(scene, bump(scene))` with `bump`
+    ///    declared `lend` — and arguments are prepared in order, so the block would be
+    ///    minted from `scene` BEFORE `bump` ran and a later member's clone would read stale
+    ///    bytes (fix round 2, `red:code-reviewer`; the walker's `Call` arm already returns
+    ///    `Writes` for a declared `lend`/`give` position, and the whole-binding positions
+    ///    classify `Reads` from the same report the task-side proof read).
     /// 4. `arc_shareable(type)` — the compile-time floor in `types.rs`.
     fn admit_arc_group_for(&mut self, stmts: &[Stmt], start: usize, name: &str) {
         let shareable = self
@@ -1907,14 +1906,9 @@ impl<'b> Checker<'b> {
         }
         let first = members[0].0;
         let last = members[members.len() - 1].0;
-        let between = &stmts[first + 1..last];
-        if classify_binding_in_stmts(
-            name,
-            between,
-            report,
-            &self.declared_writes,
-            self.imported_fn_names,
-        ) != EffectiveOwnership::Reads
+        let members_and_between = &stmts[first..=last];
+        if classify_binding_in_stmts(name, members_and_between, report, self.imported_fn_names)
+            != EffectiveOwnership::Reads
         {
             return;
         }
@@ -9615,39 +9609,6 @@ pub(crate) fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool 
     false
 }
 
-/// Returns `true` if `stmt` contains ANY read of the identifier `name` — conservative
-/// (may report true for shadowed names in nested scopes).
-///
-/// Used for `background` give/copy inference: safe direction is `.copy` (do not
-/// consume the binding) whenever we cannot PROVE the name is dead after the spawn.
-/// A false positive here only costs a copy (the safe choice); a false negative
-/// (`.give` on a still-live binding) would be a use-after-move bug.
-///
-/// Time: O(stmt nodes).  Space: O(1).
-/// The declared `lend`/`give` positions of every function in the merged signature table —
-/// the `declared_writes` seed `classify_binding_in_stmts` reads (v0.3-M8 Phase 5).
-fn declared_writes_from_sigs(sig_table: &SignatureTable) -> HashMap<String, HashSet<usize>> {
-    sig_table
-        .fns
-        .iter()
-        .map(|(name, sig)| {
-            let set: HashSet<usize> = sig
-                .param_ownerships
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| {
-                    matches!(
-                        o,
-                        Some(OwnershipModifier::Lend) | Some(OwnershipModifier::Give)
-                    )
-                })
-                .map(|(i, _)| i)
-                .collect();
-            (name.clone(), set)
-        })
-        .collect()
-}
-
 /// Does `stmt` contain a `return` at any nesting depth? An Auto-Arc group boundary: the
 /// caller-side transient is released by straight-line code after the last spawn, and an
 /// early exit between two spawns would skip that release (a leaked count, never a free-early).
@@ -9717,9 +9678,16 @@ fn expr_may_suspend_conservative(expr: &Expr, sigs: &SignatureTable) -> bool {
     };
     match expr {
         Expr::Wait(..) => true,
-        // A spawn is not a suspension of the parent; its arguments cannot suspend either
-        // (typeck rejects a suspending call in sub-expression position).
-        Expr::Background(..) => false,
+        // A spawn is not a suspension of the parent: the spawned CALLEE's suspension belongs
+        // to the task. Its ARGUMENTS are evaluated by the parent — typeck rejects a suspending
+        // call there, but walking them anyway keeps this predicate a true over-approximation of
+        // the may-block fixpoint on EVERY input (`suspends_parity_tests`), not only on accepted
+        // programs; on an accepted program the walk returns `false` exactly as before.
+        Expr::Background(inner, _) => match inner.as_ref() {
+            Expr::Call(c) => c.args.iter().any(r),
+            Expr::MethodCall { receiver, args, .. } => r(receiver) || args.iter().any(r),
+            other => r(other),
+        },
         Expr::Call(c) => match &c.callee {
             Expr::Ident(name, _) => fn_suspends(name) || c.args.iter().any(r),
             _ => true,
@@ -13210,5 +13178,111 @@ mod tests {
         assert!(!d.what.is_empty(), "what must be non-empty");
         assert!(!d.what_instead.is_empty(), "what_instead must be non-empty");
         assert!(!d.why.is_empty(), "why must be non-empty");
+    }
+}
+
+/// v0.3-M8 Phase 5 (fix round 2) — the compile-time link between the may-block fixpoint and
+/// the Auto-Arc admission's conservative suspension boundary (`authoritative-derivation.md`
+/// "If two predicates genuinely must live apart, give them a compile-time link").
+///
+/// `may_block::analyze` is THE producer of "which functions suspend"; `stmt_may_suspend_
+/// conservative` is a syntactic OVER-approximation of "does this statement contain a
+/// suspension" that the admission consults before expression types exist. The one direction
+/// that matters for soundness: every function the fixpoint marks suspending must contain at
+/// least one statement the conservative predicate flags — otherwise a group could be admitted
+/// across a real suspension the boundary test did not see (R2's hazard: the caller-side
+/// transient crossing a frame). The other direction (the predicate flags a statement the
+/// fixpoint does not) is the intended over-approximation and is not asserted.
+#[cfg(test)]
+mod suspends_parity_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Every single-file fixture the driver suite ships, parsed standalone. Files that do not
+    /// parse alone or import another module are skipped (their suspends set depends on a unit
+    /// this test does not assemble); the non-vacuity floor below keeps the skip honest.
+    #[test]
+    fn every_suspending_fn_has_a_stmt_the_conservative_predicate_flags() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ynz-driver/tests/fixtures");
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("fixture dir {}: {e}", dir.display()))
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "ynz"))
+            .collect();
+        paths.sort();
+        let mut checked_fns = 0usize;
+        let mut checked_files = 0usize;
+        let mut failures: Vec<String> = Vec::new();
+        for path in &paths {
+            let src = std::fs::read_to_string(path).expect("fixture readable");
+            let db = ynz_parser::CompilerDb::default();
+            let sf = ynz_parser::SourceFile::new(
+                &db,
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                src,
+            );
+            let parsed = ynz_parser::parse_query(&db, sf);
+            if parsed.diagnostics.iter().next().is_some() {
+                continue;
+            }
+            let module = parsed.module.clone();
+            if module
+                .items
+                .iter()
+                .any(|i| matches!(i, Item::ImportDecl(_)))
+            {
+                continue;
+            }
+            let no_imports: HashSet<String> = HashSet::new();
+            let suspends = crate::may_block::analyze(&module, &no_imports, &no_imports).suspends;
+            let shape_table = crate::shapes::collect_shapes(
+                &module,
+                &Default::default(),
+                &Default::default(),
+                &mut DiagnosticBucket::new(),
+            );
+            let mut sigs = crate::signatures::collect_signatures(
+                &module,
+                &mut DiagnosticBucket::new(),
+                &shape_table,
+            );
+            // Mirror `check_query`: the fixpoint's answer is what `FunctionSig.suspends` carries.
+            for (name, sig) in sigs.fns.iter_mut() {
+                sig.suspends = sig.suspends || suspends.contains(name.as_str());
+            }
+            checked_files += 1;
+            for item in &module.items {
+                let Item::Function(f) = item else {
+                    continue;
+                };
+                if !suspends.contains(&f.name) {
+                    continue;
+                }
+                checked_fns += 1;
+                let flagged = f
+                    .body
+                    .stmts
+                    .iter()
+                    .any(|s| stmt_may_suspend_conservative(s, &sigs));
+                if !flagged {
+                    failures.push(format!(
+                        "{}::{} is in the may-block suspends set but no statement of its body \
+                         is flagged by stmt_may_suspend_conservative",
+                        path.file_name().unwrap().to_string_lossy(),
+                        f.name
+                    ));
+                }
+            }
+        }
+        assert!(
+            checked_files >= 100 && checked_fns >= 50,
+            "vacuous parity sweep: {checked_files} files / {checked_fns} suspending fns checked"
+        );
+        assert!(
+            failures.is_empty(),
+            "suspends-set / conservative-predicate parity broken:\n{}",
+            failures.join("\n")
+        );
     }
 }

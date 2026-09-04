@@ -310,6 +310,21 @@ fn caller_side_write_between_spawns_declines_and_second_task_sees_the_update() {
 }
 
 #[test]
+fn caller_side_write_inside_a_member_spawns_own_argument_declines() {
+    // WHY: condition 3's range — the caller-side proof walks the member spawn statements
+    // THEMSELVES (`stmts[first..=last]`), not just the statements between them. `bump` is
+    // declared `lend`, so `bump(scene)` inside the first spawn's argument list is `Writes`.
+    // RED (fix round 2 of Phase 5, `red:code-reviewer`): with the range `first + 1..last` the
+    // write was invisible, the group was admitted with 4 `ynz_arc_*` calls in the IR, and task
+    // 2's clone read the block minted BEFORE `bump` ran — stdout carried `task saw 6` where the
+    // copy path gives task 2 its own copy of the bumped value (`task saw 106`).
+    assert_declined_fixture(
+        "m8_arc_write_in_member_arg_declines.ynz",
+        "task saw 112\ntask saw 106\ncaller keeps Wagner 106x7\n",
+    );
+}
+
+#[test]
 fn suspension_between_spawns_declines() {
     // WHY: condition 1 — a `wait` between the spawns would force the transient across a
     // frame boundary (the registry's residual); the group declines to the copy path.
