@@ -252,6 +252,23 @@ fn local_fn_names(module: &Module) -> HashSet<String> {
 /// (real workload evidence) — see the v0.3-M4 plan's Future Requirements.
 pub const DEFAULT_CHANNEL_CAPACITY: i64 = 64;
 
+/// The `errors`-capable member names whose *dispatch* requires the receiver's un-stripped
+/// `Type::ErrorsCapable` — `resolve_ident`'s auto-propagation may already have narrowed a
+/// bare-ident receiver to its success type on THIS exact read (first use of an
+/// `ErrorsCapable` binding inside an `errors` function narrows immediately, before either
+/// dispatch path below sees it). ONE list feeds both `Expr::MethodCall` (`.failed()`,
+/// `.or(...)` — parens) and `Expr::FieldAccess` (`.message`, `.suggestions`, `.trace`,
+/// `.source` — no parens, per dot-postfix.md) dispatch, via `restore_ec_receiver_ty`, so the
+/// two call forms cannot drift on which names need the restore (authoritative-derivation.md —
+/// a second, hand-copied list here would be exactly the twin-derivation class it bans).
+const EC_MEMBER_NAMES: &[&str] = &["or", "failed", "message", "suggestions", "trace", "source"];
+
+/// The four fields REF-errors.md gates behind an explicit `.failed()` check
+/// ("`.message` and other error fields require a `.failed()` check first",
+/// `REF-errors.md:171-175`). `.failed()` itself and `.or(default)` are NOT gated —
+/// `.failed()` IS the check, and `.or(default)` supplies its own fallback.
+const EC_FIELDS_REQUIRE_FAILED_CHECK: &[&str] = &["message", "suggestions", "trace", "source"];
+
 /// Inferred ownership for a plain-ident argument at a `background` call site.
 ///
 /// `OwnershipModifier` (from ynz-ast) covers `Share / Lend / Give` — the three
@@ -377,6 +394,7 @@ pub fn check(
         union_aliases: collect_union_aliases(module, shape_table),
         errors_success_narrowed: HashSet::new(),
         errors_consumed: HashSet::new(),
+        errors_failed_true_branch: Vec::new(),
         current_fn_errors_capable: false,
         referenced_names: HashSet::new(),
         kernel_mode: false,
@@ -458,6 +476,7 @@ pub fn check_with_kernel_mode(
         union_aliases: collect_union_aliases(module, shape_table),
         errors_success_narrowed: HashSet::new(),
         errors_consumed: HashSet::new(),
+        errors_failed_true_branch: Vec::new(),
         current_fn_errors_capable: false,
         referenced_names: HashSet::new(),
         kernel_mode: true,
@@ -597,6 +616,16 @@ struct Checker<'b> {
     /// a `.failed()` check. After consumption, calling `.failed()` is a compile
     /// error ("check-after-use").
     errors_consumed: HashSet<String>,
+    /// Names currently inside the TRUE branch of `if (name.failed())` — the one shape
+    /// `REF-errors.md:171-183` documents as legal for reading `.message`/`.suggestions`/
+    /// `.trace`/`.source`. Pushed by `check_stmt_if` right before checking the if-body,
+    /// popped right after: lexical and block-scoped, unlike `errors_success_narrowed`/
+    /// `errors_consumed` above (function-scoped auto-propagation bookkeeping that answers
+    /// a different question — "has this binding EVER been checked" — not "am I textually
+    /// inside its guarded block right now"). A `Vec`, not a `HashSet`, so a nested
+    /// `if (x.failed()) { if (x.failed()) { … } }` pops correctly (v0.3-M8 Phase 4 fix
+    /// round 3).
+    errors_failed_true_branch: Vec<String>,
     /// Names that were actually resolved via the signature table or shape table
     /// during this check pass. Used by `check_query` to detect unused imports —
     /// any imported name absent from this set after the pass was never referenced.
@@ -839,6 +868,7 @@ impl<'b> Checker<'b> {
         self.current_fn_errors_capable = f.errors_capable;
         self.errors_success_narrowed.clear();
         self.errors_consumed.clear();
+        self.errors_failed_true_branch.clear();
         // Track whether the caller transitively suspends (analysis result). The can't-infer
         // diagnostic gates on this: a function that independently reaches a suspension point
         // (intra-unit `sleep`) AND makes an unanalyzable boundary call gets the error.
@@ -2834,10 +2864,27 @@ impl<'b> Checker<'b> {
         for name in &failed_binding {
             self.errors_consumed.insert(name.clone());
         }
+        // v0.3-M8 Phase 4 fix round 3: `name` is inside the TRUE branch of its own
+        // `.failed()` check for the extent of this body — the one shape REF-errors.md
+        // admits for reading `.message`/`.suggestions`/`.trace`/`.source` (see
+        // `errors_failed_true_branch`'s doc comment). Pushed here, popped below —
+        // strictly nested with the `check_stmts(body)` call between them.
+        for name in &failed_binding {
+            self.errors_failed_true_branch.push(name.clone());
+        }
 
         self.scope.push();
         self.check_stmts(&body.stmts);
         self.scope.pop();
+
+        for name in &failed_binding {
+            debug_assert_eq!(
+                self.errors_failed_true_branch.last(),
+                Some(name),
+                "errors_failed_true_branch push/pop must nest strictly around check_stmts(body)"
+            );
+            self.errors_failed_true_branch.pop();
+        }
 
         // Remove narrowing flags after the block exits.
         for name in &narrowed {
@@ -3328,44 +3375,11 @@ impl<'b> Checker<'b> {
                 // errors-capable function: resolve_ident auto-propagates the binding from
                 // ErrorsCapable<T> → T (so the compiler can insert early-return IR). That
                 // means receiver_ty here is the bare inner type, and check_method_call
-                // cannot find .or/.failed/.message etc. on it.
-                //
-                // Restore the full ErrorsCapable<T> for dispatch when ALL of:
-                //   (a) the method is one of the EC-specific set,
-                //   (b) the inferred receiver_ty is NOT already ErrorsCapable (was auto-stripped),
-                //   (c) the receiver is a bare Ident whose SCOPE ENTRY still carries ErrorsCapable.
-                //
-                // This is a narrow, targeted fix — it does not affect normal value-context
-                // auto-propagation (check_user_fn_call etc.) or non-EC method dispatch.
-                const EC_METHODS: &[&str] =
-                    &["or", "failed", "message", "suggestions", "trace", "source"];
-                let effective_receiver_ty = if !matches!(receiver_ty, Type::ErrorsCapable { .. })
-                    && EC_METHODS.contains(&method.as_str())
-                {
-                    if let Expr::Ident(ident_name, ident_span) = receiver.as_ref() {
-                        if let Some(entry) = self.scope.lookup(ident_name) {
-                            if matches!(entry.ty, Type::ErrorsCapable { .. }) {
-                                // Restore the ErrorsCapable type for EC-method dispatch.
-                                // Auto-propagation in resolve_ident already stripped the type
-                                // and wrote the bare inner type into expr_types. Overwrite that
-                                // entry with the full ErrorsCapable type so codegen reads the
-                                // right ABI ({i64,i64} pair) when lowering the EC method call.
-                                let ec_ty = entry.ty.clone();
-                                self.expr_types
-                                    .insert((ident_span.start, ident_span.end), ec_ty.clone());
-                                ec_ty
-                            } else {
-                                receiver_ty
-                            }
-                        } else {
-                            receiver_ty
-                        }
-                    } else {
-                        receiver_ty
-                    }
-                } else {
-                    receiver_ty
-                };
+                // cannot find .or/.failed/.message etc. on it. `restore_ec_receiver_ty`
+                // undoes the strip for dispatch (shared with `infer_field_access` — see its
+                // doc comment and `EC_MEMBER_NAMES`).
+                let effective_receiver_ty =
+                    self.restore_ec_receiver_ty(receiver, receiver_ty, method);
                 // v0.3-M4 Phase 2: suspending conduit-method surface — `.send()`/`.receive()`
                 // on a `channel<T>` value or a background task handle. Dispatched BEFORE the
                 // generic method paths so the element-typed argument check and the
@@ -6279,7 +6293,7 @@ impl<'b> Checker<'b> {
         // M7 P3a: errors-capable value method dispatch.
         if let Type::ErrorsCapable { inner } = receiver_ty {
             let inner = inner.as_ref().clone();
-            return self.check_errors_capable_method(method, method_span, &inner);
+            return self.check_errors_capable_method(receiver_expr, method, method_span, &inner);
         }
 
         // M6: options type method dispatch.
@@ -6341,12 +6355,75 @@ impl<'b> Checker<'b> {
         Type::Error
     }
 
+    /// Restore the un-stripped `Type::ErrorsCapable` for EC member dispatch
+    /// (`EC_MEMBER_NAMES`) when `resolve_ident`'s auto-propagation already narrowed a
+    /// bare-ident receiver to its success type on THIS exact read (see `EC_MEMBER_NAMES`'s
+    /// doc comment for why that happens). The scope entry's stored type is never mutated by
+    /// that narrowing — only the read's return value and the `expr_types` cache are — so it
+    /// stays the one authoritative source to restore from. Shared by `Expr::MethodCall` and
+    /// `Expr::FieldAccess` dispatch so the two call forms answer "is this receiver still
+    /// ErrorsCapable" the same way (authoritative-derivation.md).
+    fn restore_ec_receiver_ty(&mut self, receiver: &Expr, receiver_ty: Type, member: &str) -> Type {
+        if matches!(receiver_ty, Type::ErrorsCapable { .. }) || !EC_MEMBER_NAMES.contains(&member) {
+            return receiver_ty;
+        }
+        let Expr::Ident(ident_name, ident_span) = receiver else {
+            return receiver_ty;
+        };
+        let Some(entry) = self.scope.lookup(ident_name) else {
+            return receiver_ty;
+        };
+        if !matches!(entry.ty, Type::ErrorsCapable { .. }) {
+            return receiver_ty;
+        }
+        let ec_ty = entry.ty.clone();
+        self.expr_types
+            .insert((ident_span.start, ident_span.end), ec_ty.clone());
+        ec_ty
+    }
+
+    /// v0.3-M8 Phase 4 fix round 3: compile-error gate for `REF-errors.md:171-175` —
+    /// `.message`/`.suggestions`/`.trace`/`.source` require the receiver to have been
+    /// checked with `.failed()` first. Shared by `check_errors_capable_method`
+    /// (`Expr::MethodCall` dispatch — the parenthesized form) and `infer_field_access`
+    /// (`Expr::FieldAccess` — the real dot-postfix form). Returns `true` (and pushes the
+    /// diagnostic) when the read is refused; `false` when admitted — currently inside the
+    /// receiver's own `if (name.failed()) { … }` true branch, per `errors_failed_true_branch`.
+    /// A non-`Ident` receiver (e.g. a call result read without ever being bound) is never
+    /// admitted: `extract_failed_binding` only recognizes bare-ident receivers too, so there
+    /// is no way such a read could have been legally checked.
+    fn check_errors_field_needs_failed_check(
+        &mut self,
+        receiver: Option<&Expr>,
+        field: &str,
+        field_span: &SourceSpan,
+    ) -> bool {
+        if !EC_FIELDS_REQUIRE_FAILED_CHECK.contains(&field) {
+            return false;
+        }
+        let checked = matches!(receiver, Some(Expr::Ident(name, _))
+            if self.errors_failed_true_branch.iter().any(|n| n == name));
+        if checked {
+            return false;
+        }
+        let name = receiver
+            .map(expr_source_text)
+            .unwrap_or_else(|| "this value".to_string());
+        self.diags.push(registry_diag(
+            field_span.clone(),
+            DiagnosticKind::MessageBeforeFailedCheck,
+            &[("name", &name), ("field", field)],
+        ));
+        true
+    }
+
     /// M7 P3a: type-check a method call on an `errors`-capable value.
     ///
     /// Available methods: `.failed()`, `.or(default)`, `.message`, `.suggestions`,
     /// `.trace`, `.source`. All other method names are a compile error.
     fn check_errors_capable_method(
         &mut self,
+        receiver: Option<&Expr>,
         method: &str,
         method_span: &SourceSpan,
         inner: &Type,
@@ -6360,6 +6437,11 @@ impl<'b> Checker<'b> {
                 // .or(default) — returns the success type. Arg checking happens
                 // at the call site where args are inferred; here return inner.
                 inner.clone()
+            }
+            "message" | "suggestions" | "trace" | "source"
+                if self.check_errors_field_needs_failed_check(receiver, method, method_span) =>
+            {
+                Type::Error
             }
             "message" => Type::String,
             "suggestions" => Type::BuiltinArray {
@@ -7042,11 +7124,22 @@ impl<'b> Checker<'b> {
         field_span: &SourceSpan,
     ) -> Type {
         let receiver_ty = self.infer_expr(receiver, None);
+        // `resolve_ident`'s auto-propagation may already have stripped ErrorsCapable → inner
+        // on this exact read (inside an `errors` function, on the binding's first use — see
+        // `EC_MEMBER_NAMES`'s doc comment). Restore it before dispatch, exactly as the
+        // `Expr::MethodCall` arm does for `.failed()`/`.or()`.
+        let receiver_ty = self.restore_ec_receiver_ty(receiver, receiver_ty, field);
 
         // M7 P3a: errors-capable value property access (message, suggestions, trace, source).
         // These are dot-property accesses (no parens) per the Yinz dot-postfix rule.
         if let Type::ErrorsCapable { inner } = &receiver_ty {
             let inner = inner.as_ref().clone();
+            // v0.3-M8 Phase 4 fix round 3: REF-errors.md:171-175 — these four fields require
+            // a `.failed()` check first. Gate before returning a type so a not-yet-checked
+            // read is a compile error, not a silently-typed `string`/`array`/etc.
+            if self.check_errors_field_needs_failed_check(Some(receiver), field, field_span) {
+                return Type::Error;
+            }
             return match field {
                 "message" => Type::String,
                 "suggestions" => Type::BuiltinArray {

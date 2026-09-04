@@ -46,6 +46,10 @@ pub enum DiagnosticKind {
     /// A handle-form spawn's command channel is not a named binding, so nothing outside the
     /// task could ever close it — v0.3-M8 Phase 4.
     HandleChannelArgNeedsBinding,
+    /// `.message`/`.suggestions`/`.trace`/`.source` read on an `errors`-capable value before
+    /// it was checked with `.failed()` — `REF-errors.md:171-175` requires the check first;
+    /// this is that requirement enforced at compile time — v0.3-M8 Phase 4 fix round 3.
+    MessageBeforeFailedCheck,
     /// Value is already borrowed.
     Borrowed,
     /// Function does not return on all paths.
@@ -83,6 +87,7 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "ParamNeedsGive",
             DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
+            DiagnosticKind::MessageBeforeFailedCheck => "MessageBeforeFailedCheck",
             DiagnosticKind::Borrowed => "Borrowed",
             DiagnosticKind::MissingReturn => "MissingReturn",
             DiagnosticKind::BannedKeyword { .. } => "BannedKeyword",
@@ -108,6 +113,7 @@ impl DiagnosticKind {
         "ParamNeedsGive",
         "TransferNeedsCopy",
         "HandleChannelArgNeedsBinding",
+        "MessageBeforeFailedCheck",
         "Borrowed",
         "MissingReturn",
         "BannedKeyword",
@@ -129,6 +135,7 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
             DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),
             DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),
+            DiagnosticKind::MessageBeforeFailedCheck => "needs `.failed()` first".to_string(),
             DiagnosticKind::Borrowed => "borrowed".to_string(),
             DiagnosticKind::MissingReturn => "missing return".to_string(),
             DiagnosticKind::BannedKeyword { keyword } => format!("`{keyword}` not valid here"),

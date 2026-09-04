@@ -143,15 +143,17 @@ fn m8_gallery_fires_expected_diagnostics() {
     // dynamic-contract instance, HandleChannelArgNeedsBinding ×1), the extracted const-send
     // refusal, the existing use-after-give error at two new sites (+2 same-call alias-pair
     // sites, fix round 2), and the two diagnostics
-    // `.close()` extends (no-args, per-receiver unknown-method list) — 26–36 in all. Every
-    // new class is pinned by key phrase below so the count can never pass for the wrong reason.
+    // `.close()` extends (no-args, per-receiver unknown-method list) — 26–36 in all.
+    // v0.3-M8 Phase 4 fix round 3 (test-ratchet): +1 MessageBeforeFailedCheck trigger —
+    // 26–37 in all. Every new class is pinned by key phrase below so the count can never
+    // pass for the wrong reason.
     let (stderr, code) = compile_gallery(&gallery("m8_errors.ynz"));
     assert_ne!(code, 0, "m8 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert!(
-        (26..=36).contains(&error_count),
-        "m8 gallery must produce 26–36 errors; got {error_count}.\nstderr:\n{stderr}"
+        (26..=37).contains(&error_count),
+        "m8 gallery must produce 26–37 errors; got {error_count}.\nstderr:\n{stderr}"
     );
 
     assert!(
@@ -238,6 +240,11 @@ fn m8_gallery_fires_expected_diagnostics() {
     assert!(
         stderr.contains("Available methods: send(value), receive()."),
         "m8 gallery must keep the handle's method list without close(); got:\n{stderr}"
+    );
+    // MessageBeforeFailedCheck (fix round 3, Producer A) — `.message` read before `.failed()`.
+    assert!(
+        stderr.contains("hasn't been checked with `.failed()` yet"),
+        "m8 gallery must include the MessageBeforeFailedCheck diagnostic; got:\n{stderr}"
     );
 }
 

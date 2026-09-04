@@ -175,6 +175,26 @@ mod bg_arg_kind_tests {
             !declared.is_empty(),
             "found no `pub const BG_ARG_KIND_*: u64 = N;` lines — the parser drifted from the source"
         );
+        // v0.3-M8 Phase 4 fix round 3, should-fix 6: the parse above requires the ENTIRE
+        // `pub const BG_ARG_KIND_NAME: u64 = N;` on one line — a multi-line declaration (the
+        // value wrapped to its own line) would silently disappear from `declared` instead of
+        // failing loudly. Count lines whose trimmed text STARTS WITH the declaration marker —
+        // that survives a wrapped value (the marker itself is still line-initial) while never
+        // matching this test's own doc comments or string literals (which start with `//` or
+        // `"`, never `pub const`) — and hold it to the same count.
+        let marker_count = src
+            .lines()
+            .filter(|l| l.trim_start().starts_with("pub const BG_ARG_KIND_"))
+            .count();
+        assert_eq!(
+            marker_count,
+            declared.len(),
+            "found {marker_count} `pub const BG_ARG_KIND_` declaration markers but the \
+             line-based parser only extracted {} — a declaration spans multiple lines (or some \
+             other shape this parser does not handle) and silently dropped out of the parity \
+             check",
+            declared.len()
+        );
         for (name, value) in &declared {
             assert!(
                 ALL_BG_ARG_KINDS.contains(value),

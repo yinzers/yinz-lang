@@ -11,6 +11,98 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p4-fix3-20260904` — 2026-09-04 — **Phase 4 fix round 3: the blocker closed, two
+  producers, both fixed; seven should-fix/minor items done; nothing committed.** Read: the
+  Phase 4 block's round-2 grading, `REF-errors.md:155-180` (the `.message` contract),
+  `teaching-surfaces.md`, `corpses.md`. **The blocker — two producers, both named upstream.**
+  `check.rs`'s `check_errors_capable_method`/`infer_field_access` typed `.message`/
+  `.suggestions`/`.trace`/`.source` as their success type UNCONDITIONALLY — REF-errors.md:171-
+  175 requires a `.failed()` check first, and nothing enforced it. Fix: a new flow-sensitive
+  set, `errors_failed_true_branch: Vec<String>`, pushed by `check_stmt_if` right before
+  checking an `if (x.failed())` body and popped right after (block-scoped, unlike the existing
+  function-scoped `errors_consumed`/`errors_success_narrowed` auto-propagation bookkeeping,
+  which answers a different question); a new shared gate,
+  `check_errors_field_needs_failed_check`, consulted from BOTH the `Expr::MethodCall` dispatch
+  (`check_errors_capable_method`, the parenthesized form) and `Expr::FieldAccess` dispatch
+  (`infer_field_access`, the real dot-postfix form) so the two call forms cannot drift on the
+  rule. A new registry `[[diagnostic_template]]` + `DiagnosticKind::MessageBeforeFailedCheck`
+  renders it, `{name}` filled from `expr_source_text(receiver)` (works for both a bound
+  identifier and an anonymous call result — `readFile().message` is always refused, since
+  `extract_failed_binding` only recognizes bare-ident receivers, so no such read could ever
+  have been legally checked). Codegen (defense): `emit.rs`'s `.message` arm called
+  `ynz_error_message` unconditionally then `select`ed the empty string on a null error pointer
+  — LLVM `select` evaluates BOTH operands eagerly, so the call ran on a null pointer even on
+  the not-failed path and SIGABRT'd; replaced with a real `br i1 %ec_msg_failed` / `phi`, the
+  call moved inside the conditional block. Since typeck now refuses every source program that
+  reaches the not-failed path, that path is unreachable from source; verified instead at the
+  IR level (`--emit-ir --no-optimize`, asserting no `select` and a real `br i1`/`phi` around
+  the `ynz_error_message` call). **A genuinely separate pre-existing bug surfaced while wiring
+  the typeck fix, named and left OUT OF SCOPE.** `resolve_ident`'s auto-propagation strips
+  `ErrorsCapable` → inner on the FIRST use of a binding inside an `errors`-capable function —
+  including the very `x.failed()` condition-check read itself. A compensating restore existed
+  for the `Expr::MethodCall` dispatch path only (the `EC_METHODS` inline block); `infer_field_
+  access` had none, so `.message` inside `if (x.failed()) {...}` in an ERRORS function ICE'd
+  ("`string` values do not have fields") before this round — hoisted both restores into one
+  shared `restore_ec_receiver_ty` helper, closing that half. But a SEPARATE, deeper bug
+  remains, confirmed independent of every change this round makes (reproduced identically on
+  the pre-round base commit `d0c46b3` via `git stash`): repeated `.failed()` checks on a
+  binding INSIDE an errors-capable function both evaluate true regardless of the actual
+  failure state (two `if` blocks, `raw.failed()` then `!raw.failed()`, each printing a
+  distinct marker string) inside `function loadConfig() -> nothing errors` prints BOTH markers
+  for an always-succeeding `raw`. Not exercised by any existing fixture — the two pre-existing
+  `.failed()` fixtures
+  (`v0_3_m3f_ec_failed_then_ok.ynz`, `m7_errors_failed_check.ynz`) both call `.failed()` only
+  from a NON-errors `entrypoint()`. Flagged for a future FRAGO/fix round; not fixed here — out
+  of this round's named scope and orthogonal to both producers above. **Corpus sweep** (task
+  mandate): `.message`/`.suggestions`/`.trace`/`.source` across `crates/ynz-driver/tests/
+  fixtures/*.ynz` and `examples/`: exactly one instance
+  (`v0_3_m8_p4_errors_message_after_failed.ynz`), already inside `if (late.failed())`,
+  legitimate, admitted unchanged (re-verified GREEN). A separate sweep of `ynz-typeck`'s own
+  embedded-source Rust test corpus (missed by the fixture-only grep — caught only by running
+  `cargo test -p ynz-typeck --all-targets`) found four LATENT BUGS:
+  `ec_method_{message,suggestions,trace,source}_resolves_in_ec_fn` in
+  `crates/ynz-typeck/tests/check.rs` asserted the UNCHECKED read compiled clean — literally the
+  class this round closes. Corrected to read inside `if (x.failed()) {...}`, preserving each
+  test's original EC_METHODS-restoration-coverage intent. **Should-fix / minor items 3–9, all
+  done, none declined.** (3) parity-sampler duplication: built ONE exhaustive per-`Type`-
+  variant sampler (`ynz_typeck::type_variant_sampler`, not `#[cfg(test)]` — `ynz-codegen`'s
+  test binary consumes it across the crate boundary), consumed by BOTH `types.rs`'s
+  `channel_elem_supported_names_match_the_predicate` (now asserts every non-supported variant
+  is rejected, sampled once each, plus a targeted bignum-precision regression the whole-variant
+  sweep can't see) and `emit.rs`'s `copy_parity_tests` (the duplicate `all_variants` + hand
+  `TYPE_VARIANT_COUNT` deleted). (4) `IMP-ownership.md:277`'s stale sentence ("Typeck drops the
+  modifiers at resolution… checks no ownership at all", dead cite `check.rs:5391`) rewritten to
+  current state — `ContractSigDef` DOES carry `param_ownerships`/`receiver`
+  (`shapes.rs`), the dispatch site is `check.rs:~6153-6209`, calling `check_call_transfers`
+  (`check.rs:5320`) — verified by reading both sites, not inferred. (5) `copy_lowering_arm`
+  classified every `Type::Number` as `ByValue`; bignum (precision > 34) lowers as a POINTER
+  (`llvm_type_for`) — split the arm, bignum falls to `AliasNoOp`; `is_trivially_copyable`
+  (`ynz-typeck`) split the same way so `copy_is_independent` agrees; a targeted
+  `bignum_number_is_not_by_value` test added (unreachable from source today — the parser defers
+  non-34 precision — pinned honest anyway). (6) `ALL_BG_ARG_KINDS`'s source parser required a
+  single-line `pub const … = N;`; added a second, line-START-based marker count that survives a
+  wrapped value and asserted it equals the line-parsed count (first attempt used a whole-file
+  substring count and self-matched the new assertion strings' own quoted text — corrected to a
+  per-line `starts_with` check, which cannot self-match a comment or a string literal). (7)
+  `call_argument_text` skipped only `"…"` strings; now panics loudly on an un-skipped `'` (char
+  literal/lifetime) or `//` (line comment) inside a `registry_diag(...)` argument list rather
+  than silently mis-scoping — verified none of the real call sites trip it. (8)+(9) the
+  `Consumed` template's comment (`registry/features.toml`): finished the truncated `{via}`
+  sentence and trimmed the decision narrative (parked items 7/8, "move"-wording retirement) to
+  current state + a `git log --grep=m8-p4` anchor per `decision-records.md`. **Verified** (exit
+  0 each): fmt; clippy `-D warnings` on every touched lib/test target individually (ynz-
+  diagnostics lib; ynz-typeck lib + `diagnostic_template_parity` test; ynz-codegen lib; ynz-abi
+  lib; ynz-driver's three named test targets — the parked-31 debt in untouched files, incl.
+  `jargon_audit.rs`, stays, confirmed still present and still out of `-D warnings`' blast radius
+  when scoped correctly); `ynz-typeck --all-targets` (222 in `check.rs`, 95 lib, 13
+  `diagnostic_template_parity`, the rest unchanged — all green after the four latent-bug
+  fixture fixes); `ynz-codegen --lib` (17, 2 new); `ynz-abi` (1); `ynz-diagnostics --all-
+  targets` (unchanged, `jargon_audit` passes as a TEST target — its clippy debt is a lint-only
+  gap); `ynz-driver` `v03_m8_channel_close` 31 (2 new), `error_galleries` 10 (1 new phrase,
+  count ceiling 36→37), `integration` 530; `ynz-runtime --lib` 110 + the loom lane 8 (both
+  untouched by this diff, confirmed green); `ynz-driver --release` rebuilt. Demo golden
+  unchanged (pirates-roster never reads `.message`).
+
 - `m8-p4-fix2-20260904` — 2026-09-04 — **Phase 4 fix round 2: five blockers, three producers,
   all closed; eight should-fixes and four minors done; nothing committed.** Read: the Phase 4
   block's round-1 grading, the `m8-p4-20260904-a2` entry, `corpses.md`, root-cause /
@@ -927,6 +1019,31 @@ settled by it.** The next conductor asks him before the phase that needs each:
   fr12 step, Phase 5 steps 2–3, the Invariants subsections, FR#9/#10, Phase 9, `plan.md:818`) —
   each edit traces to this record. It also applies parked items 19–27 (text-accuracy corrections on
   the signed design) so Phase 4 never reads a known-false claim.
+
+### FRAGO 011 — 2026-09-04 — Phase 4 CLOSED BY CEILING; the `errors`-value field surface is re-homed to its own hotfix branch after M8
+
+- **Trigger:** Phase 4's fix loop reached the three-round cap with two blockers open
+  (`code-reviewer-high`, round 3): the new `.failed()` guard is name-keyed and admits a shadowed
+  rebinding; `.trace`/`.suggestions`/`.source` inside a `.failed()` check ICE (codegen lowers
+  `.message` only). Round 2's blocker (`.message` null-deref on the not-failed path) and parked 32
+  (`.failed()` twice both true inside an errors-capable function) share the same ancestor.
+- **The producer, named:** the `errors`-value field surface was never finished end-to-end — typeck
+  typed the four fields unconditionally, codegen lowered none of them. Phase 4 met it only because
+  a REF example read `.message`. Three rounds patched instances of that one producer; per
+  `root-cause.md` a recurring class is a diagnosis failure, and per `execute-plan` a fix that opens
+  a gap earns one round, not a reset. Neither open blocker is memory-unsafe: the guard hole prints
+  `""` (codegen's `br`/`phi` defense holds), and the sibling-field ICE is loud and pre-dates M8.
+- **Patrick's rulings, 2026-09-04:**
+  1. **Close Phase 4 by ceiling.** Round 3 seals as-is; both blockers parked four-field (33, 34);
+     Phase 4's exit criteria are met for its own charter (close live, typed closed error reachable,
+     P2-3 through the one choke point, RED→GREEN class committed at `6b8a34d`, stale entry retired,
+     registry entries added, named suite + loom green).
+  2. **One hotfix branch, `fix/errors-fields`, for all three** (parked 32, 33, 34) — the FRAGO 004
+     precedent — **after M8 closes** (milestone PR up first). Exposure meanwhile: a compile-time
+     guard with one shadowing hole that yields `""`, and a loud ICE on a gap older than this
+     milestone. Each defect gets a RED pin before its fix.
+- **Applied:** this record; parked 32 annotated ROUTED, 33/34 written; the Phase 4 block's round-3
+  bookkeeping; the boundary commit carries `FRAGO-011` and `m8-p4-fix3` so every pointer resolves.
 
 ### FRAGO 009 — 2026-09-03 — The three items Phase 1's sign-off left open are RULED; Phase 2 begins
 

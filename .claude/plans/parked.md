@@ -281,6 +281,96 @@ sign-off applies them alongside the owed downstream plan edits** — the design 
     green-check needs `--all-targets` clean to distinguish its own lints from the debt. Source
     plan-id `2026-07-04-v0-3-m8-concurrency-completion`.
 
+### Phase 4 — pre-existing correctness bug surfaced by fix round 3 (2026-09-04)
+
+32. **Repeated `.failed()` checks on one binding INSIDE an errors-capable function both evaluate
+    true regardless of the actual failure state.** WHAT: reproduced by the round-3 executor
+    (`m8-p4-fix3-20260904`) on the pre-round base `d0c46b3` via `git stash`, so it is independent
+    of every Phase 4 change; surfaced while wiring the `.message`-after-`.failed()` guard because
+    `resolve_ident`'s auto-propagation strips `ErrorsCapable` on first use inside an `errors`
+    function (that half is fixed this round by the shared `restore_ec_receiver_ty` helper); the
+    remaining half is a real logic bug in `errors` handling — a second `if (x.failed())` in the
+    same function body takes the true branch on a value that did not fail. No existing fixture
+    exercises `.failed()` from inside an errors-capable function, which is why it never showed.
+    WHY deferred: outside Phase 4's charter (channel close / transfer rule); a fix inside this
+    round's diff would bury an `errors`-semantics change in a concurrency commit. It is NOT
+    memory-unsafe (wrong branch, not wrong pointer). COST: root-cause in `check.rs`'s errors
+    propagation / `emit.rs`'s ok-word handling (likely a stale `ErrorsCapable` flag after the
+    first check) — one focused round with a RED fixture first. TRIGGER: **Patrick's call at the
+    Phase 4 boundary — hotfix on its own branch (the FRAGO 004 precedent) or a Phase 9 close-out
+    item.** Whichever he picks, a RED fixture pinning the wrong branch is authored FIRST so the bug
+    can't hide again. Source plan-id `2026-07-04-v0-3-m8-concurrency-completion`.
+    **Status (2026-09-04): ROUTED by Patrick to the `errors`-surface hotfix branch, with items 33
+    and 34 — after M8 closes (FRAGO 011).**
+
+### Phase 4 — closed by ceiling (round 3, 2026-09-04); two blockers re-homed to the `errors`-surface hotfix
+
+Patrick's ruling (FRAGO 011): Phase 4's fix loop closed at the three-round cap with two open
+blockers that share one ancestor with parked 32 — **the `errors`-value field surface was never
+finished end-to-end** (typeck typed `.message`/`.suggestions`/`.trace`/`.source` unconditionally;
+codegen lowered none of them until round 2 added `.message`). None is a channel-close defect;
+Phase 4 tripped over it through a REF example. All three ride ONE branch, `fix/errors-fields`,
+after M8's milestone PR is up — the FRAGO 004 precedent. Each gets a RED pin FIRST.
+
+33. **The `.failed()` guard is keyed by name, so a shadowed rebinding inside the guarded block
+    inherits checked status.** WHAT: `check.rs:~619` `errors_failed_true_branch: Vec<String>`;
+    `if (x.failed()) { let x = computeB(); print(x.message) }` compiles (`code-reviewer-high`,
+    round 3, direct build) — the inner `x` was never checked. Exposure: codegen's `br`/`phi`
+    defense (round 3) means the read prints `""` rather than dereferencing null — a compile-time
+    rule with a hole, not a crash. WHY deferred: closed-by-ceiling; the fix (key the set by scope
+    entry / invalidate on re-declaration — the same push/pop point one level deeper) belongs with
+    its siblings. COST: small. TRIGGER: the `fix/errors-fields` branch, RED pin first.
+34. **`.trace` / `.suggestions` / `.source` inside a `.failed()` check ICE** — `emit.rs:~19281`
+    "not lowered yet (only .message)". WHAT: typeck admits all four siblings post-check
+    (`EC_FIELDS_REQUIRE_FAILED_CHECK`), `REF-errors.md` documents all four, codegen has an arm for
+    `.message` only. Pre-existing (they ICEd via `field_gep` before M8) and LOUD ("This is a
+    compiler bug"), not silent — not a regression. Round 3's corpus sweep claimed all four and
+    did not name this gap. WHY deferred: same ancestor, same branch. COST: three arms mirroring
+    the `.message` `br`/`phi` shape + fixtures. TRIGGER: `fix/errors-fields`, RED pin first.
+
+### Phase 4 — final `test-quality` grade (2026-09-04, phase close)
+
+Five revert-proofs run by the seat itself all failed loud (release-before-glue via loom + runtime
+unit test; close-vs-send linearization; the alias snapshot via `give_twice_is_use_after_give` +
+`a_class_consumed_before_the_call_is_not_reported_twice`; `NumberCell` `transfers_source`; the
+byte-span renderer via `byte_spans.rs` + the gallery caret check). 0 blockers. Everything below is
+`should-fix`, source plan-id `2026-07-04-v0-3-m8-concurrency-completion`.
+
+35. **The two open blockers (33, 34) have NO RED pin in the tree.** WHAT: the hotfix branch
+    `fix/errors-fields` would start with no failing test. The seat reproduced both live: `if
+    (x.failed()) { let x = <fresh EC call>; print(x.message) }` compiles and prints `""`;
+    `x.trace` inside a correct guard ICEs "This is a compiler bug". WHY deferred: Patrick routed
+    both defects to the hotfix branch (FRAGO 011); the pins are that branch's FIRST commit, not
+    this milestone's. COST: two fixtures, each asserting today's wrong behavior so the fix flips
+    them. TRIGGER: the first commit on `fix/errors-fields` — before any fix lands.
+36. **`m8_p4_chan_array_send_after_close_frees_the_refused_payload_once` cannot see a
+    `release_taken_value()` regression.** WHAT: `v03_m8_channel_close.rs:~244` — the fixture
+    builds `rows` inside the background task, so no ladder slot is at stake; the runtime unit test
+    and loom model catch the revert, the driver fixture passes unchanged. WHY deferred: coverage
+    exists one layer down; the fixture's WHY comment overclaims. COST: one sibling fixture passing
+    `rows` as a `give` bg-arg, or a corrected comment. TRIGGER: the `fix/errors-fields` branch's
+    test sweep, or Phase 9's gallery/fixture pass — whichever comes first.
+37. **The three `same_call_alias_*` fixtures' WHY comments claim to lock the pre-call snapshot;
+    they lock alias DETECTION only.** WHAT: `v03_m8_channel_close.rs:~418-442` — forcing the
+    snapshot empty leaves all three green; the snapshot's real regression class (duplicate
+    diagnostics on a legitimate consume-then-reuse) is caught by `give_twice_is_use_after_give`
+    (`typeck/tests/check.rs:1450`) and `a_class_consumed_before_the_call_is_not_reported_twice`.
+    WHY deferred: coverage exists; attribution is wrong. COST: comment fix. TRIGGER: Phase 9.
+38. **The `.message` IR-level test scans the whole module for `select`.** WHAT:
+    `v03_m8_channel_close.rs:~498-502` `!ir.contains("select")` — any unrelated `select` in the
+    fixture's output flips it red for the wrong reason; the same test's `br i1 %ec_msg_failed`
+    check shows the name-scoped pattern to reuse. WHY deferred: brittle, not wrong today. COST:
+    scope the assertion to the `ec_msg_*` block. TRIGGER: Phase 9, or the first false red.
+39. **Close-wakes-every-receiver is tested with exactly one receiver.** WHAT:
+    `channel.rs:~280-287` `wake_recv_waiters()` drains the whole Vec; the only fixture
+    (`v0_3_m8_p4_close_wakes_parked_receiver.ynz`) parks one — a `.pop()`-instead-of-`.drain(..)`
+    regression goes uncaught. WHY deferred: contract is implemented; the multi-waiter case has
+    no fixture. COST: one fixture parking two receivers on one channel, or a loom model. TRIGGER:
+    Phase 9's fixture pass; the loom model is the better home if Phase 5's Arc work touches
+    `recv_waiters`.
+    Also: the four `ec_method_*_resolves_in_ec_fn` tests assert only the guarded form compiles —
+    the refusal half exists only for `.message` (driver-level). Rides item 35's branch.
+
 ### Open exposure carrying a cheap in-scope guard — flagged under `no-duct-tape.md`
 
 11. **The `background-handle-close` deferral leaves a live window and names a cheap guard it does

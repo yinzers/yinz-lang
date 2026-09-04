@@ -62,6 +62,7 @@ pub mod soa;
 pub mod suspension_source;
 pub mod symbol_lookup;
 pub mod type_at_offset;
+pub mod type_variant_sampler;
 pub mod types;
 
 pub use check::{

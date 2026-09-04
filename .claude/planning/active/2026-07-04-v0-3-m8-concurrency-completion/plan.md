@@ -3,7 +3,7 @@ name: "v0-3-m8-concurrency-completion"
 plan-id: "2026-07-04-v0-3-m8-concurrency-completion"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904"]
+session-id: ["plan-producer-2026-07-04-m8-concurrency-completion", "plan-producer-2026-07-04-m8-amend1", "gate4-signatures-2026-07-04", "executor-2026-07-16-patrick-triage-application", "conductor-2026-09-03-m7-merge-and-precondition-clear", "m8-p1-20260903-a1", "m8-p1-fix1-20260903", "m8-p1-fix2-20260903", "m8-p1-fix3-20260903", "conductor-2026-09-03-m8-execution", "conductor-2026-09-03-m8-phase2", "m8-p2-20260903-a1", "m8-p2-fix1-20260903", "m8-p2-signoff-20260903", "m8-p2-signoff-fix1-20260903", "m8-p3-20260903-a1", "m8-p3-fix1-20260904", "m8-p4-20260904-a1", "m8-p4-20260904-a2", "m8-p4-fix1-20260904", "m8-p4-fix2-20260904", "m8-p4-fix3-20260904"]
 created_at: "2026-07-04"
 updated_at: "2026-09-04"
 branch: "feat/v0-3-m8-concurrency-completion"
@@ -14,7 +14,7 @@ metadata:
 
 # PLAN: v0.3-M8 — Concurrency Completion
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth) · **Phase 4 ✅ implementation complete 2026-09-04** (executors `m8-p4-20260904-a1` RED seal, `m8-p4-20260904-a2` implementation; pending conductor review) — **Phase 5 is the frontier** (both design gates signed AND the loom substrate they build on exists); read Phase 3's completion block for the harness's shape (`crate::sync`, `src/loom_tests.rs`, the `--cfg loom` lane) before adding the close/Arc interleavings Phases 4/5 owe it
+> ## ⏭️ COLD-RESUME ENTRY POINT — Phase 0 ✅ done · Phase 1 ✅ signed off (narrowed) · **Phase 2 ✅ signed off 2026-09-03** (executors `m8-p2-20260903-a1`, `m8-p2-fix1-20260903`, `m8-p2-signoff-20260903`) · **Phase 3 ✅ complete 2026-09-03** (executor `m8-p3-20260903-a1` — loom substrate landed, spike GREEN, production no-op proven, six loom models with revert-proven teeth) · **Phase 4 ✅ CLOSED BY CEILING 2026-09-04** (executors `m8-p4-20260904-a1` RED seal at `6b8a34d`, `m8-p4-20260904-a2` implementation, fix rounds `m8-p4-fix1/fix2/fix3-20260904`; three grading rounds; two `errors`-surface blockers re-homed to a post-M8 hotfix branch per FRAGO 011 — parked 32/33/34 — none a channel-close defect) — **Phase 5 is the frontier** (both design gates signed AND the loom substrate they build on exists); read Phase 3's completion block for the harness's shape (`crate::sync`, `src/loom_tests.rs`, the `--cfg loom` lane) before adding the close/Arc interleavings Phases 4/5 owe it
 >
 > ### 🔀 RESTRUCTURED 2026-09-03 — FRAGO 008: Phase 1's ownership scope MOVED to Phase 2
 >
@@ -1301,6 +1301,39 @@ in-session, no handoff file):**
 > `call_argument_text` string-skip fragility; a truncated registry comment). `test-quality` still
 > DEFERRED — round 3 changes the test set again; it grades once, on the final set. **A fix that
 > opened a gap earns exactly one more round: fix round 3 answers `red:code-reviewer`.**
+>
+> **Round 3 grading (fix round `m8-p4-fix3-20260904`, Sonnet high; conductor, 2026-09-04).**
+> Both producers landed: the spec's `.message`-after-`.failed()` rule as a flow-sensitive typeck
+> guard shared by both dispatch paths (`MessageBeforeFailedCheck`, registry-rendered, gallery
+> trigger), and codegen's `select` replaced by a real `br`/`phi`; four latent typeck tests that
+> asserted the UNCHECKED read compiled clean were corrected; one shared `type_variant_sampler`
+> replaced two hand-written per-variant lists. `green-check-medium` (Sonnet) → green on every lane
+> (typeck 222/95/13, codegen 17, driver 31/10/530/7, runtime 110 + loom 8, lsp, registry, release
+> builds, gitleaks); `clippy --all-targets` red only on parked-31 files/lines outside every
+> changed hunk. Seats: `ux-low` (Haiku) → clean; `code-reviewer-high` (Sonnet, probes) → **2
+> BLOCKERS**: the guard is name-keyed, so `if (x.failed()) { let x = computeB(); print(x.message)
+> }` admits an unchecked rebinding (prints `""` via the new codegen branch — no crash);
+> `.trace`/`.suggestions`/`.source` inside a check ICE (`emit.rs:~19281`, "only .message") —
+> pre-existing, loud; everything else (wrong binding, nesting, compound conditions, non-ident
+> receiver, early-return refused-but-unpromised) held. **CEILING REACHED — Patrick's ruling (FRAGO
+> 011): close Phase 4 by ceiling; both blockers + parked 32 share one ancestor (the `errors`-value
+> field surface was never finished) and ride ONE hotfix branch `fix/errors-fields` AFTER M8
+> closes; parked 33/34.** `test-quality-high` (Sonnet) dispatched ALONE on the final Phase 4 test
+> set (the seat held back through three rounds so it grades what ships) → `VERDICT: findings`,
+> **0 blockers**, five revert-proofs run by the seat all failed loud (release-before-glue;
+> linearization; alias snapshot via the two exact-count typeck tests; `NumberCell`
+> `transfers_source`; byte-span renderer + gallery caret check), 5 should-fix parked (35–39: the
+> two open blockers have no RED pin — the hotfix branch's first commit; one fixture can't see the
+> ladder slot; three alias fixtures overclaim in their comments; a whole-module `select` scan;
+> close-wakes-all tested with one waiter), 2 minor. **Conductor incident, recovered:** that seat
+> restored its reverts with `git checkout --`, which on the UNSEALED round-3 tree reset
+> `check.rs`/`types.rs` to round 2's seal and wiped round 3's typeck work; recovered from the
+> seat's own pre-experiment `git stash` object (`d624246`, dangling), verified by re-running the
+> typeck (222/95/13) and driver (31/10) lanes to the counts green-check had observed, and by both
+> revert fingerprints reading pristine. Third `.claude/corpses.md` entry written: a mutating seat
+> runs only on a sealed tree and never restores via `git checkout --`. **Phase 4 terminal state:
+> CLOSED BY CEILING (FRAGO 011). Exit criteria MET for its charter. Boundary commit on Patrick's standing go;
+> frontier → Phase 5.**
 
 > **Fix round 2 (dispatch `m8-p4-fix2-20260904`, 2026-09-04 — all five blockers closed, all
 > eight should-fixes done, four minors done; uncommitted, pending conductor review).**
@@ -1335,6 +1368,52 @@ in-session, no handoff file):**
 > clippy clean on every touched lib/test target (the parked-31 test-target debt in
 > `jargon_audit.rs` / `independence.rs` / typeck's older test files is untouched, as instructed);
 > `ynz-driver --release` rebuilt. Demo golden unchanged (the demo prints no `.message`).
+
+> **Fix round 3 (dispatch `m8-p4-fix3-20260904`, 2026-09-04 — the blocker closed, both
+> producers fixed, all seven should-fix/minor items done; uncommitted, pending conductor
+> review).** Producer A (upstream, typeck): `.message`/`.suggestions`/`.trace`/`.source` were
+> typed unconditionally regardless of whether `.failed()` had been checked
+> (`check_errors_capable_method`/`infer_field_access`); implemented the spec's rule
+> (`REF-errors.md:171-175`) as a flow-sensitive guard — a new `errors_failed_true_branch: Vec
+> <String>` pushed/popped strictly around `check_stmt_if`'s body-check for `if (x.failed())`,
+> consulted by a new shared gate (`check_errors_field_needs_failed_check`) both dispatch paths
+> call; a new `MessageBeforeFailedCheck` registry template + `DiagnosticKind` variant renders
+> it. A genuinely separate, pre-existing bug surfaced while wiring the fix (see Deviations):
+> `resolve_ident`'s auto-propagation stripped `ErrorsCapable` on FIRST use inside an `errors`-
+> capable function for the `Expr::MethodCall` path only (a compensating restore existed there);
+> `Expr::FieldAccess` had no equivalent, so `.message` inside `if (x.failed()) {...}` in an
+> `errors`-capable function ICE'd ("`string` values do not have fields") before this fix — a
+> new shared `restore_ec_receiver_ty` helper (replacing the duplicated inline block the
+> MethodCall arm carried) fixes both dispatch paths the same way. Producer B (codegen defense):
+> `emit.rs`'s `.message` arm called `ynz_error_message` unconditionally then `select`ed "" on
+> null — `select` evaluates both operands, so the call ran on a null pointer on the success
+> path; replaced with a real `br i1`/`phi` (call only inside the failed block). Corpus sweep
+> (`.message`/`.suggestions`/`.trace`/`.source` across `crates/ynz-driver/tests/fixtures/*.ynz`
+> and `examples/`): one prior instance, already inside `if (late.failed())`, legitimate,
+> admitted unchanged. A SEPARATE sweep of `ynz-typeck`'s own embedded-source test corpus
+> (missed by the fixture-only grep, caught by running `--all-targets`) found four latent-bug
+> instances: `ec_method_{message,suggestions,trace,source}_resolves_in_ec_fn` in
+> `crates/ynz-typeck/tests/check.rs` asserted the UNCHECKED read compiled clean — exactly the
+> class this round closes — corrected to read inside `if (x.failed()) {...}`, preserving their
+> original EC_METHODS-restoration intent. RED→GREEN: the blocker probe
+> (`v0_3_m8_p4_fix3_message_before_failed_check.ynz`) ICEs→SIGABRT→refused across the three
+> fix rounds; a new IR-level test
+> (`m8_p4_fix3_message_call_sits_in_a_real_conditional_block_not_a_select`) asserts codegen's
+> defense directly (`--emit-ir --no-optimize`, no `select`, a real `br i1`/`phi`) since typeck
+> now refuses every source program that would reach the not-failed codegen path, making it
+> unreachable from source. Should-fixes: items 3–9 all done (see Deviations for the full list
+> and the one declined-as-unnecessary item). Verified (exit 0 each): fmt; clippy `-D warnings`
+> on every touched lib/test target (ynz-diagnostics lib, ynz-typeck lib + the two touched test
+> targets, ynz-codegen lib, ynz-abi lib, ynz-driver's three named test targets — the parked-31
+> debt in untouched files, incl. `jargon_audit.rs`, stays); `ynz-typeck --all-targets` (222 in
+> `check.rs` alone, 95 lib, 13 diagnostic_template_parity, rest unchanged); `ynz-codegen --lib`
+> (17, incl. 2 new); `ynz-abi` (1); `ynz-diagnostics --all-targets` (unchanged, incl.
+> jargon_audit passing as a TEST even though its clippy lint debt is parked); `ynz-driver`
+> `v03_m8_channel_close` 31 (2 new), `error_galleries` 10 (1 new phrase, count 26→37 ceiling),
+> `integration` 530; `ynz-runtime --lib` 110 + loom 8 (both untouched, confirmed green);
+> `ynz-driver --release` rebuilt. Demo golden unchanged (pirates-roster never reads `.message`).
+> A newly-discovered, OUT-OF-SCOPE defect is named, not fixed, in the Deviations note below —
+> it predates this round and is independent of both producers this round closes.
 
 - **Task + purpose:** implement Phase 1's signed-off design — the explicit close mechanism, the live
   typed channel-closed error, and P2-3's closed-send drop-glue leak fixed through M6's single choke

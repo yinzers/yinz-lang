@@ -330,6 +330,18 @@ function m8CloseOnHandle() -> nothing {
   h.close()
 }
 
+// WHY: MessageBeforeFailedCheck — `REF-errors.md:171-175` requires a `.failed()` check
+// before reading `.message` (and `.suggestions`/`.trace`/`.source`). `late` here is never
+// checked, so the read is refused at compile time rather than reading garbage at runtime
+// (v0.3-M8 Phase 4 fix round 3, Producer A: this exact read used to `select` past a null
+// error pointer and SIGABRT at runtime instead of failing the build).
+function m8MessageBeforeFailedCheck() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  wire.close()
+  let late = wire.send(9)
+  print(late.message)
+}
+
 // ────── positive reference case ──────
 
 function entrypoint() -> nothing {

@@ -240,10 +240,15 @@ pub fn type_name(t: &Type) -> String {
 /// The auto-parallelization independence analysis uses this to decide whether a call
 /// argument is a potential aliased write: only heap-typed, non-`share` arguments can be.
 pub fn is_trivially_copyable(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Int | Type::Float | Type::Bool | Type::Number { .. }
-    )
+    matches!(ty, Type::Int | Type::Float | Type::Bool)
+        // N ≤ 34: decimal128, an i128 value — trivially copyable. N > 34: bignum, a pointer
+        // to a heap decimal string (`llvm_type_for`, `ynz-codegen/src/emit.rs:2161-2162`) — a
+        // bit-copy would alias the pointer, not copy the string. Deliberately not `Number { .. }`
+        // (v0.3-M8 Phase 4 fix round 3, should-fix 5): bignum is unreachable from source today
+        // (the parser defers non-34 precision), so this arm was never exercised, but codegen's
+        // `copy_lowering_arm` must classify it the same way — `copy_parity_tests` in
+        // `ynz-codegen/src/emit.rs` holds the two to that agreement.
+        || matches!(ty, Type::Number { precision } if *precision <= 34)
 }
 
 // ── v0.3-M8 Phase 4: the ONE channel element-kind classification ─────────────
@@ -343,10 +348,14 @@ pub fn copy_is_independent(ty: &Type) -> bool {
 #[cfg(test)]
 mod channel_elem_tests {
     use super::*;
+    use crate::type_variant_sampler::{all_type_variants, variant_tag};
 
-    /// One sample per supported name, in the constant's order, plus the rejected kinds the
-    /// registry deferral names (`channel-element-heap-upgrade`: shape and bignum) and the
-    /// other non-element types.
+    /// One sample per supported name, in the constant's order, plus — driven by the ONE
+    /// authoritative variant sampler rather than a hand-picked `rejected` list (v0.3-M8 Phase 4
+    /// fix round 3, should-fix 3) — every OTHER `Type` variant is asserted rejected:
+    /// `supported ⊕ (all variants) == rejected`. Before this, `rejected` was hand-picked here
+    /// while `channel_elem_drop` kept a `_ => None` wildcard, so a new variant could slip into
+    /// "silently admitted" without either list noticing.
     #[test]
     fn channel_elem_supported_names_match_the_predicate() {
         let supported: Vec<(&str, Type)> = vec![
@@ -380,40 +389,31 @@ mod channel_elem_tests {
                 "`{name}` is listed as supported but channel_elem_supported({ty:?}) is false"
             );
         }
-        let rejected = [
-            Type::Shape {
-                name: "Player".to_string(),
-            },
-            Type::Number { precision: 40 },
-            Type::Maybe {
-                inner: Box::new(Type::Int),
-            },
-            Type::BuiltinFixed {
-                elem: Box::new(Type::Int),
-                size: None,
-            },
-            Type::BuiltinChannel {
-                elem: Box::new(Type::Int),
-            },
-            Type::Options {
-                name: "Status".to_string(),
-            },
-            Type::Union {
-                variants: vec![Type::Int, Type::String],
-            },
-            Type::Sensitive {
-                inner: Box::new(Type::String),
-            },
-            Type::Dynamic {
-                contract: "Eater".to_string(),
-            },
-            Type::Nothing,
-        ];
-        for ty in &rejected {
+
+        // Every variant NOT in the supported set, sampled once each from the one authoritative
+        // sampler, must be rejected.
+        let supported_tags: std::collections::BTreeSet<&str> =
+            supported.iter().map(|(_, ty)| variant_tag(ty)).collect();
+        for ty in all_type_variants() {
+            let tag = variant_tag(&ty);
+            if supported_tags.contains(tag) {
+                continue;
+            }
             assert!(
-                !channel_elem_supported(ty),
-                "{ty:?} is admitted as a channel element but is not in CHANNEL_ELEM_SUPPORTED_NAMES"
+                !channel_elem_supported(&ty),
+                "{tag} ({ty:?}) is admitted as a channel element but is not one of the \
+                 CHANNEL_ELEM_SUPPORTED_NAMES tags — either add it there and to \
+                 channel_elem_drop, or channel_elem_drop must keep refusing it"
             );
         }
+
+        // Bignum `number` (precision > 34) is a within-variant edge case the whole-variant
+        // sweep above cannot see (it samples one `Number { precision: 34 }`, which IS
+        // supported) — the registry deferral (`channel-element-heap-upgrade`) still rejects it.
+        assert!(
+            !channel_elem_supported(&Type::Number { precision: 40 }),
+            "bignum `number` (precision > 34) must stay rejected per the \
+             channel-element-heap-upgrade deferral"
+        );
     }
 }

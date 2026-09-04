@@ -19203,9 +19203,15 @@ fn lower_field_access<'ctx>(
     // valid after a `.failed()` check"). The receiver is a pointer to the {i64 error_ptr,
     // i64 success_val} result struct, exactly as `.failed()`/`.or()` read it
     // (`lower_errors_capable_method`); the message is the null-terminated bytes
-    // `ynz_error_new` stored (a Yinz `string` at the ABI). A null error pointer (read on the
-    // success path) yields the empty string rather than a null dereference. Before this arm
-    // the field fell through to `field_gep` and ICEd (v0.3-M8 Phase 4 fix round 2, Producer B).
+    // `ynz_error_new` stored (a Yinz `string` at the ABI). Typeck now refuses every source
+    // program that reaches this arm on a not-yet-failed value (the flow-sensitive
+    // `.failed()`-guard in `check.rs`), so the not-failed path is unreachable FROM SOURCE —
+    // but codegen still defends it: `ynz_error_message` is called ONLY inside a real
+    // conditional block gated on `err_ptr != 0`, never unconditionally. `select` was tried
+    // first and was wrong: LLVM `select` evaluates BOTH operands eagerly, so the call ran
+    // on a null pointer even on the success path and SIGABRT'd (v0.3-M8 Phase 4 fix round 3).
+    // Before this arm existed at all the field fell through to `field_gep` and ICEd
+    // (v0.3-M8 Phase 4 fix round 2, Producer B).
     if let Type::ErrorsCapable { .. } = &recv_ty {
         if field_name == "message" {
             let result_ty = errors_result_type(cg.ctx);
@@ -19228,6 +19234,17 @@ fn lower_field_access<'ctx>(
                     "ec_msg_failed",
                 )
                 .map_err(|e| format!("{e}"))?;
+            let pre_bb = cg
+                .builder
+                .get_insert_block()
+                .ok_or_else(|| "ec_msg: builder has no insert block".to_string())?;
+            let call_bb = cg.append_block("ec_msg_call_bb");
+            let merge_bb = cg.append_block("ec_msg_merge");
+            cg.builder
+                .build_conditional_branch(is_failed, call_bb, merge_bb)
+                .map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(call_bb);
             let err_ptr = cg
                 .builder
                 .build_int_to_ptr(err_bits, cg.ptr(), "ec_msg_err_ptr")
@@ -19239,16 +19256,26 @@ fn lower_field_access<'ctx>(
                 .try_as_basic_value()
                 .basic()
                 .ok_or_else(|| "ynz_error_message returned void".to_string())?;
+            cg.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(|e| format!("{e}"))?;
+            let call_end_bb = cg
+                .builder
+                .get_insert_block()
+                .ok_or_else(|| "ec_msg: builder has no insert block after call".to_string())?;
+
+            cg.builder.position_at_end(merge_bb);
             let empty = cg
                 .builder
                 .build_global_string_ptr("", "ec_msg_empty")
                 .map_err(|e| format!("{e}"))?
                 .as_pointer_value();
-            return cg
+            let phi = cg
                 .builder
-                .build_select(is_failed, msg.into_pointer_value(), empty, "ec_msg")
-                .map_err(|e| format!("{e}"))
-                .map(|v| v.as_basic_value_enum());
+                .build_phi(cg.ptr(), "ec_msg")
+                .map_err(|e| format!("{e}"))?;
+            phi.add_incoming(&[(&msg.into_pointer_value(), call_end_bb), (&empty, pre_bb)]);
+            return Ok(phi.as_basic_value());
         }
         return Err(format!(
             "codegen: `.{field_name}` on an `errors` value is not lowered yet (only `.message`)"
@@ -19630,10 +19657,17 @@ pub fn copy_lowering_arm(ty: &Type) -> CopyLowering {
         Type::Shape { .. } => CopyLowering::ShapeMemcpy,
         Type::BuiltinArray { .. } => CopyLowering::ArrayClone,
         Type::BuiltinMap { .. } => CopyLowering::MapClone,
-        Type::Int | Type::Float | Type::Bool | Type::Number { .. } | Type::String => {
-            CopyLowering::ByValue
-        }
-        Type::Nothing
+        Type::Int | Type::Float | Type::Bool | Type::String => CopyLowering::ByValue,
+        // N ≤ 34: decimal128, an i128 value — the receiver bits ARE the copy. N > 34: bignum,
+        // a pointer to a heap decimal string (`llvm_type_for` above, `Type::Number { .. } =>
+        // Some(self.ptr().into())`) — returning the receiver unchanged would alias the same
+        // string, not copy it, so it falls to the alias arm like every other not-yet-lowered
+        // pointer type (v0.3-M8 Phase 4 fix round 3, should-fix 5). Unreachable from source
+        // today (the parser defers non-34 precision) — `copy_parity_tests` and
+        // `ynz_typeck::types::is_trivially_copyable` must classify it the same way regardless.
+        Type::Number { precision } if *precision <= 34 => CopyLowering::ByValue,
+        Type::Number { .. }
+        | Type::Nothing
         | Type::Error
         | Type::Range { .. }
         | Type::Dynamic { .. }
@@ -19654,100 +19688,20 @@ pub fn copy_lowering_arm(ty: &Type) -> CopyLowering {
 #[cfg(test)]
 mod copy_parity_tests {
     use super::{copy_lowering_arm, CopyLowering};
+    use ynz_typeck::type_variant_sampler::{all_type_variants, TYPE_VARIANT_COUNT};
     use ynz_typeck::types::Type;
 
-    /// One representative per `Type` variant. `copy_lowering_arm` is the exhaustiveness
-    /// driver: a variant missing here is still matched by an arm with no `_` fallback, so
-    /// the compiler forces a classification — and `every_variant_is_sampled` below forces a
-    /// sample for it.
-    fn all_variants() -> Vec<Type> {
-        vec![
-            Type::Nothing,
-            Type::String,
-            Type::Error,
-            Type::Int,
-            Type::Float,
-            Type::Number { precision: 34 },
-            Type::Bool,
-            Type::Range {
-                element: Box::new(Type::Int),
-                end_inclusive: false,
-            },
-            Type::Shape {
-                name: "Player".to_string(),
-            },
-            Type::Dynamic {
-                contract: "Damageable".to_string(),
-            },
-            Type::TypeParam {
-                name: "T".to_string(),
-            },
-            Type::Generic {
-                name: "Pair".to_string(),
-                args: vec![Type::Int, Type::Int],
-            },
-            Type::BuiltinArray {
-                elem: Box::new(Type::Int),
-            },
-            Type::BuiltinFixed {
-                elem: Box::new(Type::Int),
-                size: None,
-            },
-            Type::Maybe {
-                inner: Box::new(Type::Int),
-            },
-            Type::BuiltinMap {
-                key: Box::new(Type::String),
-                val: Box::new(Type::Int),
-            },
-            Type::MapEntry {
-                key: Box::new(Type::String),
-                val: Box::new(Type::Int),
-            },
-            Type::BuiltinChannel {
-                elem: Box::new(Type::Int),
-            },
-            Type::BackgroundHandle {
-                result: Box::new(Type::Int),
-                msg_elem: None,
-            },
-            Type::Options {
-                name: "Status".to_string(),
-            },
-            Type::Union {
-                variants: vec![Type::Int, Type::String],
-            },
-            Type::ErrorsCapable {
-                inner: Box::new(Type::Int),
-            },
-            Type::Sensitive {
-                inner: Box::new(Type::String),
-            },
-        ]
-    }
-
-    /// The variant count `copy_lowering_arm` matches. Bump it when a `Type` variant is added
-    /// (the classifier's non-exhaustive-pattern error is what brings you here) and add the
-    /// variant's sample above.
-    const TYPE_VARIANT_COUNT: usize = 23;
-
+    /// v0.3-M8 Phase 4 fix round 3, should-fix 3: this used to be a second, independently
+    /// typed copy of `ynz-typeck`'s per-variant sample list (plus its own hand-counted
+    /// `TYPE_VARIANT_COUNT`) — exactly the twin-derivation class `authoritative-derivation.md`
+    /// bans. Both now thread the ONE sampler in `ynz_typeck::type_variant_sampler`.
     #[test]
     fn every_variant_is_sampled() {
-        let samples = all_variants();
-        let distinct: std::collections::BTreeSet<String> = samples
-            .iter()
-            .map(|t| {
-                format!("{t:?}")
-                    .split(['{', ' '])
-                    .next()
-                    .unwrap()
-                    .to_string()
-            })
-            .collect();
         assert_eq!(
-            distinct.len(),
+            all_type_variants().len(),
             TYPE_VARIANT_COUNT,
-            "one sample per Type variant: {distinct:?}"
+            "ynz_typeck::type_variant_sampler::all_type_variants must have one sample per \
+             Type variant"
         );
     }
 
@@ -19756,7 +19710,7 @@ mod copy_parity_tests {
         // WHY: `copy_is_independent` (typeck provenance: "is `x.copy()` Fresh?") and the
         // codegen arm that lowers `.copy()` used to be linked only by a comment claiming a
         // parity test that did not exist (v0.3-M8 Phase 4 round-1 finding). This is the test.
-        for ty in all_variants() {
+        for ty in all_type_variants() {
             let arm = copy_lowering_arm(&ty);
             let independent = arm != CopyLowering::AliasNoOp;
             assert_eq!(
@@ -19768,6 +19722,26 @@ mod copy_parity_tests {
                 ynz_typeck::types::copy_is_independent(&ty)
             );
         }
+    }
+
+    #[test]
+    fn bignum_number_is_not_by_value() {
+        // WHY: v0.3-M8 Phase 4 fix round 3, should-fix 5 — bignum (precision > 34) lowers as a
+        // POINTER to a heap decimal string (`llvm_type_for`), not an i128 value; the whole-
+        // variant sweep above only samples `Number { precision: 34 }` (a value), so it cannot
+        // see this within-variant edge case. Unreachable from source today (the parser defers
+        // non-34 precision) — this pins the classification honest anyway, same as the
+        // `channel_elem` bignum regression test in `ynz-typeck`'s `types.rs`.
+        let bignum = Type::Number { precision: 40 };
+        assert_ne!(
+            copy_lowering_arm(&bignum),
+            CopyLowering::ByValue,
+            "bignum `number` (a pointer) must not lower `.copy()` as a bit-copy"
+        );
+        assert!(
+            !ynz_typeck::types::is_trivially_copyable(&bignum),
+            "bignum `number` must not be trivially copyable — it is a pointer, not a value"
+        );
     }
 }
 

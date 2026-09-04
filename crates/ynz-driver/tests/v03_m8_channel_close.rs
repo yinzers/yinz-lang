@@ -400,6 +400,21 @@ fn m8_p4_fix2_errors_value_message_reads_the_runtime_error_text() {
 }
 
 #[test]
+fn m8_p4_fix3_message_before_failed_check_is_refused() {
+    // WHY: fix round 2's blocker — `.message` on a NOT-failed value SIGABRT'd (codegen
+    // `select` evaluates both operands; the call ran on a null error pointer). Producer
+    // named upstream: typeck typed `.message` as `string` unconditionally, so the compiler
+    // never should have accepted this program. Round 3 fixes both: typeck refuses it here,
+    // and codegen's `.message` arm is a real conditional branch as defense (see the IR-level
+    // test below — the not-failed path is unreachable from any typeck-accepted program, so
+    // codegen's defense can only be checked at the IR level, not by a runtime fixture).
+    assert_refused(
+        "v0_3_m8_p4_fix3_message_before_failed_check.ynz",
+        "hasn't been checked with `.failed()` yet",
+    );
+}
+
+#[test]
 fn m8_p4_fix2_same_call_alias_pair_at_two_give_positions_is_refused() {
     // WHY: RED at `2be2244` — compiled and printed `3 3` (Producer C1).
     assert_refused(
@@ -436,5 +451,63 @@ fn m8_p4_fix2_builder_with_a_computed_scalar_local_is_fresh_and_sends() {
         4,
         "the received one-element array (2 counted allocs) held by the consumer, plus the \
          bucket's rows array (2 counted allocs) held by `bucket` — nothing is freed at scope exit",
+    );
+}
+
+/// Build a fixture with `--emit-ir --no-optimize` (isolated in a tmpdir so parallel tests
+/// never race on a shared `.ll` path) and return the emitted IR text. `--no-optimize` pins the
+/// codegen-emission anchor: the default build's O2 pipeline may fold the `br i1`/`phi` shape
+/// this test asserts on into something else entirely (constant-fold `is_failed`, inline the
+/// call) — the assertion is about what CODEGEN EMITS, not about the optimized artifact.
+fn emit_ir_no_optimize(name: &str) -> String {
+    let src = fixture(name);
+    let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
+    let isolated_src = tmp.path().join(src.file_name().expect("fixture filename"));
+    std::fs::copy(&src, &isolated_src).expect("failed to copy fixture to tmpdir");
+    let build_out = Command::new(ynz_binary())
+        .args([
+            "build",
+            "--no-optimize",
+            isolated_src.to_str().unwrap(),
+            "--emit-ir",
+        ])
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("failed to spawn ynz build");
+    assert!(
+        build_out.status.success(),
+        "fixture `{name}` must build clean; stderr:\n{}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+    std::fs::read_to_string(isolated_src.with_extension("ll"))
+        .expect("emitted .ll must be readable")
+}
+
+#[test]
+fn m8_p4_fix3_message_call_sits_in_a_real_conditional_block_not_a_select() {
+    // WHY: fix round 3's codegen defense (Producer B redux) — `ynz_error_message` must be
+    // called ONLY inside a block reached by a real `br i1`, never behind a `select` (LLVM
+    // `select` evaluates BOTH operands eagerly, so a `select` shape here calls the runtime
+    // function on a possibly-null pointer even on the success path — the exact SIGABRT this
+    // round fixes). Typeck now refuses every source program that reaches this codegen arm on
+    // a not-yet-failed value (see `m8_p4_fix3_message_before_failed_check_is_refused` above),
+    // so the not-failed path is unreachable FROM SOURCE and this can only be checked at the
+    // IR level, on the one fixture that legitimately reaches the `.message` arm at all
+    // (inside `if (late.failed()) { ... }`).
+    let ir = emit_ir_no_optimize("v0_3_m8_p4_errors_message_after_failed.ynz");
+    assert!(
+        !ir.contains("select"),
+        "the `.message` lowering must not use `select` (both operands evaluate eagerly); \
+         emitted IR:\n{ir}"
+    );
+    assert!(
+        ir.contains("br i1 %ec_msg_failed, label %ec_msg_call_bb"),
+        "the `.message` lowering must branch on the failed flag before calling \
+         ynz_error_message; emitted IR:\n{ir}"
+    );
+    assert!(
+        ir.contains("call ptr @ynz_error_message"),
+        "the `.message` lowering must still call ynz_error_message on the failed path; \
+         emitted IR:\n{ir}"
     );
 }

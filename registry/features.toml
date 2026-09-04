@@ -1623,11 +1623,10 @@ what_template = "Imported module `{path}` was not found."
 what_instead_template = "Check that the path is correct (paths are root-relative, starting from the project's entry file)."
 why_template = "Yinz import paths are root-relative, not relative to the current file."
 
-# Rendered FROM this entry by typeck's consumed-read rendering since v0.3-M8 Phase 4 (before
-# that the emit site carried a hand-written twin and this entry was dead data — parked
-# items 7/8; the "move" wording is retired, `give` is the Yinz word). `{via}` is empty when the
-# name read is the name that was given; otherwise it names the alias-class mate that was
-# (" — it shares its value with `rows`, which is what was given away"), mirroring ConsumedBySend.
+# Rendered from this entry by typeck's consumed-read rendering (`consumed_read_diag`). `{via}`
+# is empty when the name read is the name that was given; otherwise it names the alias-class
+# mate that was given away instead (e.g. " — it shares its value with `rows`, which is what
+# was given away"), mirroring ConsumedBySend. Decided v0.3-M8 Phase 4: `git log --grep=m8-p4`.
 [[diagnostic_template]]
 kind_name = "Consumed"
 what_template = "`{name}` was already given away and cannot be used here{via}."
@@ -1661,6 +1660,16 @@ kind_name = "HandleChannelArgNeedsBinding"
 what_template = "`{callee}` gets its command channel from `{expr}`, which is not a named binding — nothing outside the task can ever close that channel."
 what_instead_template = "Bind the channel first, then spawn: `let commands = {expr}` and `let h = background {callee}(commands, …)`. Call `commands.close()` when you are done sending."
 why_template = "A task handle can send into its channel (`h.send(value)`) but cannot close it — only the channel binding can. Without a binding, a task waiting on `receive()` can never be told the stream has ended, so it waits forever."
+
+# v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
+# `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
+# source text (`expr_source_text` — an identifier for the common bound-value case, the full
+# expression otherwise); `{field}` is whichever of the four was read.
+[[diagnostic_template]]
+kind_name = "MessageBeforeFailedCheck"
+what_template = "`{name}.{field}` is read here, but `{name}` hasn't been checked with `.failed()` yet."
+what_instead_template = "Check `.failed()` on `{name}` first — store it in a `let`/`const` binding if it isn't one already, then write `if ({name}.failed()) { … {name}.{field} … }`. Or call `{name}.or(<default>)` for a fallback value instead of `.{field}`."
+why_template = "`.message`, `.suggestions`, `.trace`, and `.source` only carry meaningful data once `.failed()` is true — reading one before the check would report details for a call that might have succeeded. Yinz catches this at compile time instead of returning garbage at runtime."
 
 [[diagnostic_template]]
 kind_name = "Borrowed"

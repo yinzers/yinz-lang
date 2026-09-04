@@ -125,23 +125,46 @@ fn kinds_rendered_via_registry_diag(src: &str) -> BTreeSet<String> {
 }
 
 /// The text between the `(` at byte `open` and its matching `)`, skipping over string
-/// literals (a `)` inside a slot value must not close the call early).
+/// literals (a `)` inside a slot value must not close the call early). Does NOT handle `//`
+/// line comments or char literals (`'a'`) inside the argument list — v0.3-M8 Phase 4 fix
+/// round 3, should-fix 7: rather than silently mis-scoping a `)` inside either (a comment's
+/// `)` would close the call early; a char literal's `'` would fall through untouched, which
+/// happens to be harmless for `'`, but the mis-scoping risk is the same class), this fails
+/// loudly the moment it sees either, so a future `registry_diag(...)` call written with a
+/// comment or char literal in its argument list is a compile-time-obvious test failure, not a
+/// wrong parse nobody notices.
 fn call_argument_text(src: &str, open: usize) -> String {
     debug_assert_eq!(&src[open..open + 1], "(");
     let mut depth = 0usize;
     let mut in_str = false;
     let mut escaped = false;
-    for (i, c) in src[open..].char_indices() {
+    let chars: Vec<(usize, char)> = src[open..].char_indices().collect();
+    let mut idx = 0;
+    while idx < chars.len() {
+        let (i, c) = chars[idx];
         if in_str {
             match c {
                 '\\' if !escaped => escaped = true,
                 '"' if !escaped => in_str = false,
                 _ => escaped = false,
             }
+            idx += 1;
             continue;
         }
         match c {
             '"' => in_str = true,
+            '\'' => panic!(
+                "call_argument_text hit a `'` (char literal or lifetime) at byte {} in \
+                 check.rs's registry_diag(...) argument list — this scanner does not handle \
+                 char literals; extend it or rewrite the call site to avoid one",
+                open + i
+            ),
+            '/' if chars.get(idx + 1).map(|(_, c)| *c) == Some('/') => panic!(
+                "call_argument_text hit a `//` line comment at byte {} in check.rs's \
+                 registry_diag(...) argument list — this scanner does not handle comments; \
+                 extend it or rewrite the call site to avoid one",
+                open + i
+            ),
             '(' => depth += 1,
             ')' => {
                 depth -= 1;
@@ -151,6 +174,7 @@ fn call_argument_text(src: &str, open: usize) -> String {
             }
             _ => {}
         }
+        idx += 1;
     }
     panic!("unbalanced parentheses after byte {open} in check.rs");
 }
@@ -435,5 +459,61 @@ fn handle_channel_arg_needs_binding_is_rendered_from_the_registry() {
            h.send(21)\n\
          }",
         &[("callee", "doubler"), ("expr", "makeWire()")],
+    );
+}
+
+#[test]
+fn message_before_failed_check_is_rendered_from_the_registry() {
+    // WHY: v0.3-M8 Phase 4 fix round 3, Producer A — `.message` read on an errors-capable
+    // value that was never checked with `.failed()` used to type as `string` unconditionally
+    // (REF-errors.md:171-175 requires the check first). Not gated at typeck, this reached
+    // codegen's `select` on a possibly-null error pointer and SIGABRT'd at runtime on any
+    // not-yet-failed value.
+    assert_rendered(
+        DiagnosticKind::MessageBeforeFailedCheck,
+        "function entrypoint() -> nothing {\n\
+           let wire: channel<int> = channel<int>(2)\n\
+           let ok = wire.send(9)\n\
+           print(ok.message)\n\
+         }",
+        &[("name", "ok"), ("field", "message")],
+    );
+}
+
+#[test]
+fn message_is_admitted_inside_its_own_failed_check() {
+    // The one shape REF-errors.md documents as legal: `.message` read INSIDE the true
+    // branch of `if (name.failed())`. Must compile with NO MessageBeforeFailedCheck.
+    let errors = errors_for(
+        "function entrypoint() -> nothing {\n\
+           let wire: channel<int> = channel<int>(2)\n\
+           wire.close()\n\
+           let late = wire.send(9)\n\
+           if (late.failed()) {\n\
+             print(late.message)\n\
+           }\n\
+         }",
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|d| d.kind == Some(DiagnosticKind::MessageBeforeFailedCheck)),
+        "a `.message` read inside `if (late.failed()) {{ ... }}` must be admitted; got:\n{:#?}",
+        errors.iter().map(|d| &d.what).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn message_before_failed_check_refuses_a_non_ident_receiver() {
+    // A `.message` read on a receiver that was never bound to a name can never have been
+    // legally checked (`extract_failed_binding` only recognizes bare-ident receivers) —
+    // always refused, with a source-shaped `{name}` rendered from the expression itself.
+    assert_rendered(
+        DiagnosticKind::MessageBeforeFailedCheck,
+        "function freshResult() -> string errors { return `hello` }\n\
+         function entrypoint() -> nothing {\n\
+           print(freshResult().message)\n\
+         }",
+        &[("name", "freshResult()"), ("field", "message")],
     );
 }

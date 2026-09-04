@@ -84,3 +84,32 @@ SHA that already exists). The CONDUCTOR owns grep tokens: every round-seal and p
 commit body carries every FRAGO number, dispatch id and session id the round's docs cite, so the
 pointer resolves the moment the commit lands. If a doc must name a future token, it says so
 ("resolves once the Phase N boundary commit lands") instead of pretending it already does.
+
+---
+
+## Sending a tree-mutating seat into an UNSEALED checkout
+
+**Found:** 2026-09-04, v0.3-M8, twice — Phase 3 round 1 and Phase 4 round 3.
+
+| Instance | What the seat did | What it cost |
+|---|---|---|
+| Phase 3 r1 | `test-quality` reverted `runtime.rs` while `code-reviewer` was reading it, both on the unsealed round-1 tree | `code-reviewer` observed the ladder arm in its REVERTED order mid-grade; graded the restored tree by luck of timing |
+| Phase 4 r3 | `test-quality` restored its reverts with `git checkout -- check.rs types.rs` on the unsealed round-3 tree | HEAD was round 2's seal, so the restore **wiped round 3's uncommitted typeck work** (the `.failed()` guard, `restore_ec_receiver_ty`, the bignum split); its "sha256 matched before/after" was true of a diff that had just been zeroed |
+
+**The producer.** The conductor graded a round BEFORE sealing it, and let a seat that mutates
+source (revert-proofs) loose in that checkout. `git checkout -- <file>` restores to HEAD, not to
+"the state before my experiment" — on a sealed tree those are the same; on an unsealed tree the
+seat destroys the very work it is grading and reports a clean restore. The execute-plan skill's
+order ("seal each round once reviewers have returned") is what makes this possible: the seal
+comes AFTER grading, so grading always runs on an unsealed tree.
+
+**Detection signature.** A reviewer brief containing "revert", "restore", `git checkout --`,
+`git stash`, or "apply the swap" dispatched while `git status --porcelain` is non-empty. Or a
+post-grade `git status` that lists FEWER modified files than the executor's manifest.
+
+**The rule.** (1) A seat that mutates source runs ONLY on a sealed tree: seal the round's
+executor output first (a WIP seal is still a seal — the grading seats' verdicts ride the next
+commit's body), THEN dispatch revert-proof seats, THEN fix-round on top. (2) A mutating seat
+restores from a copy it saved (`cp` to the scratchpad, or `git stash push -- <file>` + `pop`),
+never `git checkout --`. (3) Before any commit after a mutating seat, diff `git status` against
+the executor's touched-paths manifest; a missing file is a wiped file.
