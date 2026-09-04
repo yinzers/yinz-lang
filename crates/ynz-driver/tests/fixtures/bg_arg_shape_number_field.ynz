@@ -1,0 +1,38 @@
+// Hotfix `bgarg-number` RED pin (parked item 40 / M8 FRAGO 012): a shape carrying a
+// `number` (decimal128) field, passed to ONE `background` spawn of a SUSPENDING callee
+// (the `ynz_rt_spawn` state-machine arm) on the ordinary inferred-COPY path — the
+// caller keeps reading `scene` after the spawn, so `scene` is a crossing local
+// frame-embedded in `entrypoint`'s state-machine frame. No Auto-Arc, no handle.
+// Correct behavior: the task prints every field of its heap copy intact, the caller
+// prints the ratio it received plus its own `scale` field, exit 0:
+//   Point 800 600 1.5
+//   1 1.5
+//
+// Pre-fix failure (probe-confirmed on released v0.3.3 / `main` at ec014d8, default
+// optimized build): signal 11 (SIGSEGV), no stdout. `YNZ_NO_OPTIMIZE=1` runs clean —
+// the tell of the alignment class: the frame-embedded `Scene` region sits at an
+// 8-mod-16 frame offset (`base + 40`: `results` takes slot 0), the i128 `scale` field
+// lands at `+192` inside it, and both the spawn-site whole-struct copy
+// (`bg_shape_src` load) and the caller's post-resume `scene.scale` read claim the
+// struct's ABI `align 16` → optimized ISel emits `movaps` → #GP. The identical
+// program without the `scale` field runs (no 16-aligned field, no `movaps`).
+shape Scene {
+  name: string
+  width: int
+  height: int
+  scale: number
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(5)
+  print(`${scene.name} ${scene.width} ${scene.height} ${scene.scale}`)
+  results.send(scene.width / scene.height)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>(4)
+  let scene: Scene = { name: `Point`, width: 800, height: 600, scale: 1.5 }
+  background render(scene, results)
+  let ratio = results.receive()
+  print(`${ratio} ${scene.scale}`)
+}

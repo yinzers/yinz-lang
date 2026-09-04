@@ -26,7 +26,7 @@ use std::{
 
 use ynz_abi::FRAME_HEADER_SIZE;
 use ynz_codegen::emit::{build_frame_layouts_with_resolver, SuspendSet};
-use ynz_codegen::state_machine::own_locals_size;
+use ynz_codegen::state_machine::{own_locals_size, FRAME_SHAPE_REGION_SLACK_SLOTS};
 use ynz_codegen::{codegen_query, frame_layouts_query};
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, module_signatures_query};
@@ -650,23 +650,30 @@ function entrypoint() -> nothing {
     });
 
     // `caller` has no params and 1 crossing local (`pos: Point3D`).
-    // Point3D is { i64, i64, i64 } in LLVM — 24 bytes ABI → 3 frame slots.
-    // Fallback (shape missing from shape_abi_sizes) would give 1 slot — wrong.
-    // n_locals = 0 params + 3 shape slots = 3.
+    // Point3D is { i64, i64, i64 } in LLVM — 24 bytes ABI → 3 frame slots, plus the
+    // FRAME_SHAPE_REGION_SLACK_SLOTS every frame-embedded shape reserves so its region
+    // pointer can be rounded up to FRAME_SHAPE_REGION_ALIGN at runtime (hotfix
+    // `bgarg-number`). Fallback (shape missing from shape_abi_sizes) would give
+    // 1 + slack slots — still distinguishable from 3 + slack.
+    // n_locals = 0 params + 3 shape slots + slack.
+    let expected_slots = 3 + FRAME_SHAPE_REGION_SLACK_SLOTS;
     assert_eq!(
-        layout.n_locals, 3,
-        "Point3D (3×i64, 24 bytes ABI) crossing local occupies 3 LLVM slots. \
-         n_locals = 0 params + 3 shape slots = 3. \
-         Got n_locals = {}; a value of 1 means the shape_frame_slots fallback fired \
+        layout.n_locals,
+        expected_slots,
+        "Point3D (3×i64, 24 bytes ABI) crossing local occupies 3 LLVM slots + \
+         {FRAME_SHAPE_REGION_SLACK_SLOTS} alignment slack. \
+         n_locals = 0 params + 3 shape slots + slack = {expected_slots}. \
+         Got n_locals = {}; a value of {} means the shape_frame_slots fallback fired \
          (LLVM sizing failed silently).",
-        layout.n_locals
+        layout.n_locals,
+        1 + FRAME_SHAPE_REGION_SLACK_SLOTS
     );
 
-    // total_size: header(32) + own_locals(3 × 8 = 24) + no children = 56 bytes.
-    let expected_total = FRAME_HEADER_SIZE + own_locals_size(3);
+    // total_size: header(32) + own_locals((3 + slack) × 8) + no children.
+    let expected_total = FRAME_HEADER_SIZE + own_locals_size(expected_slots);
     assert_eq!(
         layout.total_size, expected_total,
-        "caller total_size should be {expected_total} (header + 3 shape slots = 32 + 24); got {}",
+        "caller total_size should be {expected_total} (header + 3 shape slots + slack); got {}",
         layout.total_size
     );
 }
@@ -721,21 +728,26 @@ function entrypoint() -> nothing {
 
     // `caller` has no params and 1 crossing local (`flags: Flags`).
     // Flags is { i1, i1 } in LLVM (boolean → ctx.bool_type() → i1).
-    // x86_64 ABI: two i1 fields → struct size = 2 bytes → max(2, 8) = 8 → ceil(8/8) = 1 slot.
-    // n_locals = 0 params + 1 slot = 1.
+    // x86_64 ABI: two i1 fields → struct size = 2 bytes → max(2, 8) = 8 → ceil(8/8) = 1 slot,
+    // plus the FRAME_SHAPE_REGION_SLACK_SLOTS every frame-embedded shape reserves
+    // (hotfix `bgarg-number`). The typeck field-count approximation this test guards
+    // against would count 2 + slack — still distinguishable from 1 + slack.
+    // n_locals = 0 params + 1 slot + slack.
+    let expected_slots = 1 + FRAME_SHAPE_REGION_SLACK_SLOTS;
     assert_eq!(
-        layout.n_locals, 1,
-        "bool×bool shape crossing local occupies 1 LLVM slot (8 bytes ABI), not 2 (typeck field count). \
-         n_locals = 0 params + 1 shape slot = 1. \
+        layout.n_locals, expected_slots,
+        "bool×bool shape crossing local occupies 1 LLVM slot (8 bytes ABI) + \
+         {FRAME_SHAPE_REGION_SLACK_SLOTS} alignment slack, not 2 + slack (typeck field count). \
+         n_locals = 0 params + 1 shape slot + slack = {expected_slots}. \
          Got n_locals = {}; this indicates the typeck field-count approximation leaked into the query.",
         layout.n_locals
     );
 
-    // total_size: header(32) + own_locals(1 × 8 = 8) + no children = 40 bytes.
-    let expected_total = FRAME_HEADER_SIZE + own_locals_size(1);
+    // total_size: header(32) + own_locals((1 + slack) × 8) + no children.
+    let expected_total = FRAME_HEADER_SIZE + own_locals_size(expected_slots);
     assert_eq!(
         layout.total_size, expected_total,
-        "caller total_size should be {expected_total} (header + 1 shape slot); got {}",
+        "caller total_size should be {expected_total} (header + 1 shape slot + slack); got {}",
         layout.total_size
     );
 }

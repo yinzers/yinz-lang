@@ -367,6 +367,99 @@ pub fn claim_i128_align_by_provenance<'ctx>(
     claim_frame_i128_align(inst)
 }
 
+/// The alignment every frame-embedded SHAPE region is rounded up to at runtime.
+///
+/// A shape crossing local lives INLINE in the composed frame's 8-byte slot region
+/// (`shape_frame_slots` sizes it; `shape_frame_region_ptr` wires it), but the pointer
+/// to that region escapes: field GEPs, whole-struct load/store copies (the
+/// `background` spawn heap copy, `.copy()`), and every callee the shape is passed to
+/// all read through it at the shape struct's LLVM ABI alignment — `align 16` the
+/// moment the shape carries a `number` (i128) field. i128 slots at fixed frame offsets
+/// downgrade to [`FRAME_I128_SLOT_ALIGN`] via `claim_i128_align_by_provenance` once the
+/// pointer is known to be frame-interior. But shape consumers are type-generic field
+/// loads shared with heap callers, which have no provenance proof and must respect the
+/// ABI claim globally. The return slot at fixed ABI offset 16 and the staging slot
+/// cannot move. So the frame honors the ABI claim instead of downgrading it: the region
+/// pointer is rounded up to this alignment at wire time and the layout reserves
+/// [`FRAME_SHAPE_REGION_SLACK_SLOTS`] of slack so the rounded region still fits. Optimized X86 ISel selects `movaps` for an `align 16` i128
+/// field load; at a frame offset that is 8 mod 16 (`region = base + 40`, field at
+/// `+192`) that is the hotfix `bgarg-number` SIGSEGV (a shape with a `number` field,
+/// copied for a `background` spawn from the spawner's frame; `--no-optimize` hid it
+/// because `-O0` lowers i128 ops alignment-indifferently — the same tell as the
+/// v0.3-M7 Phase-1 class above).
+///
+/// 16 is the ceiling: every field payload is ≤ 16 bytes (the widest, i128, has ABI
+/// alignment 16) and the false-sharing pad wrapper `{ T, [pad x i8] }` inherits `T`'s
+/// alignment, so no shape struct can demand more. `build_module` refuses to lower a
+/// shape whose measured ABI alignment exceeds this (the compile-time link between this
+/// constant and the TargetData truth).
+pub const FRAME_SHAPE_REGION_ALIGN: u32 = 16;
+
+/// Extra 8-byte slots reserved per frame-embedded shape so a region rounded up to
+/// [`FRAME_SHAPE_REGION_ALIGN`] still fits: rounding moves the start by at most
+/// `FRAME_SHAPE_REGION_ALIGN - FRAME_LOCAL_SLOT_SIZE` bytes.
+pub const FRAME_SHAPE_REGION_SLACK_SLOTS: usize =
+    ((FRAME_SHAPE_REGION_ALIGN as u64 - FRAME_LOCAL_SLOT_SIZE) / FRAME_LOCAL_SLOT_SIZE) as usize;
+
+/// The ONE producer of a frame-embedded shape's region pointer: `frame_ptr + byte_offset`
+/// rounded up to [`FRAME_SHAPE_REGION_ALIGN`].
+///
+/// Every consumer (field GEPs, embed memcpys, the `background` heap copy, callee
+/// arguments) reads the pointer this returns from the crossing local's ptr alloca — no
+/// site recomputes the region from the slot index. The rounding is done on the address
+/// at runtime rather than statically in the layout because a composed child sub-frame
+/// is embedded at an arbitrary 8-multiple offset inside its parent, so only the final
+/// address knows its own alignment; the result is stable across resumes because the
+/// frame allocation never moves for a task's lifetime.
+///
+/// # Side effects
+///
+/// Emits a GEP, a ptr→int, an add, an and-mask, and an int→ptr; no memory access.
+pub fn shape_frame_region_ptr<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    byte_offset: u64,
+    name: &str,
+) -> Result<PointerValue<'ctx>, String> {
+    debug_assert_eq!(byte_offset % FRAME_LOCAL_SLOT_SIZE, 0, "shape frame region offset must be slot-aligned; the slack slot covers a round-up of at most one slot");
+    let i64t = ctx.i64_type();
+    let raw = unsafe {
+        builder
+            .build_gep(
+                ctx.i8_type(),
+                frame_ptr,
+                &[i64t.const_int(byte_offset, false)],
+                &format!("{name}_frame_region"),
+            )
+            .map_err(|e| format!("sm shape frame GEP {name}: {e}"))?
+    };
+    let bits = builder
+        .build_ptr_to_int(raw, i64t, &format!("{name}_frame_region_bits"))
+        .map_err(|e| format!("sm shape frame region ptr_to_int {name}: {e}"))?;
+    let bumped = builder
+        .build_int_add(
+            bits,
+            i64t.const_int(u64::from(FRAME_SHAPE_REGION_ALIGN) - 1, false),
+            &format!("{name}_frame_region_bump"),
+        )
+        .map_err(|e| format!("sm shape frame region bump {name}: {e}"))?;
+    let aligned_bits = builder
+        .build_and(
+            bumped,
+            i64t.const_int(!(u64::from(FRAME_SHAPE_REGION_ALIGN) - 1), false),
+            &format!("{name}_frame_region_mask"),
+        )
+        .map_err(|e| format!("sm shape frame region mask {name}: {e}"))?;
+    builder
+        .build_int_to_ptr(
+            aligned_bits,
+            ctx.ptr_type(AddressSpace::default()),
+            &format!("{name}_frame_region_aligned"),
+        )
+        .map_err(|e| format!("sm shape frame region int_to_ptr {name}: {e}"))
+}
+
 /// Store a decimal128 (i128) return value in the 16-byte return slot at offset 16.
 ///
 /// The i128 exactly fills the 16-byte slot. It is stored as a single i128 load rather
