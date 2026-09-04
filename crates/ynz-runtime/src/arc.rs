@@ -151,7 +151,7 @@ pub unsafe extern "C" fn ynz_arc_free(data_ptr: *mut u8, size: usize) {
 /// # Safety
 ///
 /// Same contract as [`ynz_arc_clone`]: `data_ptr` is live.
-#[cfg(any(test, loom))]
+#[cfg(test)]
 pub(crate) unsafe fn arc_strong_count(data_ptr: *mut u8) -> u64 {
     header(data_ptr).load(Ordering::Acquire)
 }

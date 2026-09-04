@@ -26,6 +26,7 @@ use std::{
     process::{Command, Output},
     time::Duration,
 };
+use tempfile::NamedTempFile;
 
 /// Liveness ceiling for one compiled fixture run — a trip is a hang or a deadlocked receive,
 /// never a slow test. Generous by an order of magnitude over the observed run.
@@ -77,29 +78,43 @@ fn run_with_watchdog(mut cmd: Command) -> Output {
 /// `ynz run <fixture>` with the runtime alloc counter on → (stdout, stderr, exit code,
 /// (alloc, free)). The counter env vars are read by the RUNTIME at `ynz_rt_init`, so they reach
 /// the compiled program through `ynz run` unchanged.
+///
+/// Uses `tempfile::NamedTempFile` to ensure a unique counter file per call, preventing races
+/// between parallel tests running the same fixture.
 fn ynz_run_counted(name: &str) -> (String, String, i32, (u64, u64)) {
-    let count_file =
-        std::env::temp_dir().join(format!("ynz_m8_p5_alloc_{name}_{}.txt", std::process::id()));
-    let _ = std::fs::remove_file(&count_file);
+    let count_file = NamedTempFile::new().expect("failed to create temp counter file");
+    let count_path = count_file
+        .path()
+        .to_str()
+        .expect("utf-8 count path")
+        .to_string();
+
     let mut cmd = Command::new(ynz_binary());
     cmd.args(["run", fixture(name).to_str().expect("utf-8 fixture path")])
         .env("CLICOLOR", "0")
         .env("YNZ_ALLOC_COUNTER", "1")
-        .env(
-            "YNZ_ALLOC_COUNTER_OUTPUT",
-            count_file.to_str().expect("utf-8 count path"),
-        );
+        .env("YNZ_ALLOC_COUNTER_OUTPUT", &count_path);
     let out = run_with_watchdog(cmd);
-    let content =
-        std::fs::read_to_string(&count_file).unwrap_or_else(|_| "alloc=0\nfree=0\n".to_string());
-    let _ = std::fs::remove_file(&count_file);
+
+    let content = std::fs::read_to_string(&count_path).unwrap_or_else(|err| {
+        panic!(
+            "alloc counter file must exist and be readable at {}: {}",
+            count_path, err
+        )
+    });
+
     let parse = |prefix: &str| -> u64 {
         content
             .lines()
             .find(|l| l.starts_with(prefix))
             .and_then(|l| l.split('=').nth(1))
             .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(0)
+            .unwrap_or_else(|| {
+                panic!(
+                    "counter file at {} must contain '{prefix}=N' line; got:\n{}",
+                    count_path, content
+                )
+            })
     };
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),

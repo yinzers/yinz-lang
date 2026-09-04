@@ -11,6 +11,8 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Session log
 
+- `m8-p5-fix1-20260904` — 2026-09-04 — **Fix round 1: two clippy dead-code issues from parallel tests. Item 1:** `arc_strong_count` / `ARC_BLOCK_FREES` cfg gates — `arc_strong_count` changed to `#[cfg(test)]` (only test callers); `ARC_BLOCK_FREES` unchanged (correctly gates only the test observer line, line 143). Item 2:** `v03_m8_auto_arc.rs` counter file race — `ynz_run_counted` now uses `tempfile::NamedTempFile` for per-call uniqueness; `read_to_string` and counter parse failures now loud (no masking on missing file). Tests run 5×, 11/11 each, exit codes collected.
+
 - `m8-p5-20260904-a1` — 2026-09-04 — **Phase 5 executed in one segment: the Auto-Arc emission
   (topology (B)) is live for the full beneficial-emission condition; nothing committed.** Read:
   the Phase 5 block (FRAGO 010 rewrite), R2's RISK OVERRIDE, `IMP-ownership.md` "Auto-Arc",
@@ -1066,6 +1068,24 @@ settled by it.** The next conductor asks him before the phase that needs each:
   fr12 step, Phase 5 steps 2–3, the Invariants subsections, FR#9/#10, Phase 9, `plan.md:818`) —
   each edit traces to this record. It also applies parked items 19–27 (text-accuracy corrections on
   the signed design) so Phase 4 never reads a known-false claim.
+
+### FRAGO 012 — 2026-09-04 — M8 PAUSES after Phase 5 seals; a shape-with-`number` `background` SIGSEGV on `main` takes priority as its own hotfix
+
+- **Trigger:** Phase 5's executor (`m8-p5-20260904-a1`), building the Arc fixture class, found that a
+  shape carrying a `number` field SIGSEGVs on ANY `background` spawn — one spawn, the ordinary
+  copy path, zero Arc involvement (parked 40, repro recorded). It is live in released v0.3.3 and
+  reachable from the consumer projects that mount `target/release`.
+- **Patrick's ruling, 2026-09-04:** hotfix NOW on its own branch (`fix/bg-arg-number-field`),
+  the FRAGO 004 precedent — a memory-safety bug on a consumer-mounted release does not wait for
+  the remaining phases. M8 pauses at the Phase 5 boundary; the hotfix branches from `main`, lands
+  by PR, merges back into `feat/v0-3-m8-concurrency-completion` before Phase 7 dispatches. RED pin
+  first. No tagged release unless Patrick says so (the UAF hotfix rode M8's eventual release).
+- **Why its own branch and not `fix/errors-fields`:** different ancestor — the bg-arg heap-clone
+  layout for shapes with a 16-byte `number` field vs the `errors`-value field surface. Two root
+  causes do not share a branch.
+- **Applied:** this record; parked 40 annotated ROUTED; the Phase 5 boundary commit body carries
+  `FRAGO-012`; the plan's cold-resume banner names the pause and the resume point (Phase 7) once
+  Phase 5 closes.
 
 ### FRAGO 011 — 2026-09-04 — Phase 4 CLOSED BY CEILING; the `errors`-value field surface is re-homed to its own hotfix branch after M8
 

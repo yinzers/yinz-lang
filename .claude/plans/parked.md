@@ -267,7 +267,9 @@ sign-off applies them alongside the owed downstream plan edits** — the design 
     earlier-aborting crates) `ynz-typeck/tests/{strings_typeck.rs ×15 incl. 14 non-snake-case test
     fns, builtins.rs:11, inlay_hint_passes.rs:6, iterables_typeck.rs:13, maps.rs:11,
     generics_typeck.rs:410, check.rs:1027}` + `ynz-typeck/src/independence.rs:{981,995,1009,1026,
-    1117}` (unused `susp` ×5; all last changed at `3b7e6e9`, pre-M8) — `manual_contains`, `unused_imports`, `len_zero`,
+    1117}` (unused `susp` ×5; all last changed at `3b7e6e9`, pre-M8), and (Phase 5's gate)
+    `ynz-lsp/src/{code_action.rs:365,semantic_tokens.rs:345}` (unused imports inside `#[cfg(test)]`
+    modules, blame 2026-05-21) — `manual_contains`, `unused_imports`, `len_zero`,
     `unnecessary_map_or`, `implicit_saturating_sub`, `while_let_on_iterator`, `single_match`,
     `dead_code`. None of these files are in Phase 4's diff (`git diff --name-only HEAD` confirms);
     clippy aborts at a different first-failing crate per run, so two green-check passes reported
@@ -391,6 +393,9 @@ byte-span renderer via `byte_spans.rs` + the gallery caret check). 0 blockers. E
     TRIGGER: the post-M8 hotfix branch (FRAGO 011) or the next milestone touching
     `prepare_bg_arg_for_ctx`'s Shape arm — the crash is a silent-until-run miscompile on a
     plausible user program.
+    **Status (2026-09-04): ROUTED by Patrick to its OWN hotfix branch, `fix/bg-arg-number-field`,
+    NOW — M8 pauses at the Phase 5 boundary (FRAGO 012, the FRAGO 004 precedent). Different
+    ancestor from `fix/errors-fields`; not bundled. RED pin first.**
 
 ### Open exposure carrying a cheap in-scope guard — flagged under `no-duct-tape.md`
 
