@@ -18,7 +18,7 @@ metadata:
 
 **Conductor's hazard sweep** (facts grounded in M8 Phase 7 completion, Phase 8 fuzzer findings, and roadmap FR audit):
 
-- **Data / heap-value corruption**: crossing locals sent into channels after suspension read back corrupted; capacity-forced-blocking sends read garbage; no scope-exit release pass exists. **Verified**: `crates/ynz-codegen/src/emit.rs` emits free calls at only three places — the background-arg glue, the channel element-glue table, and the spike trampoline — and `ynz_handle_free` has zero call sites. **NOT yet verified, and it is Phase 2 question (a), not a premise of this plan**: whether an ordinary `array`/`map`/`string` local's heap buffer therefore leaks at function return. Treat the shared-producer reading of these symptoms as the hypothesis under test, not as a finding. **Evidence**: M8 FR #11(a), FR #11(b), and `.claude/plans/parked.md` entry 49. **Neither defect is RED-pinned — there is no committed fixture for either**; `crates/ynz-driver/tests/fuzz_grammar/` holds only `README.md` and `mod.rs`. They reproduce by removing that file's two generator guards, and its doc comments there are the committed record of what was measured.
+- **Data / heap-value corruption**: crossing locals sent into channels after suspension read back corrupted; capacity-forced-blocking sends read garbage; no scope-exit release pass exists. **Verified**: `crates/ynz-codegen/src/emit.rs` emits free calls at only three places — the background-arg glue, the channel element-glue table, and the spike trampoline — and `ynz_handle_free` has zero call sites. **VERIFIED 2026-09-05 (FRAGO 001)**: an ordinary `array`/`map`/`string`/promoted-`maybe` local is NEVER released at scope exit — not at function return, not at block exit, not per loop iteration. 2,000 iterations produced 4,000 allocations and zero frees, growing exactly linearly. It is an unbounded leak inside a single run, not a long-lived-server problem. **And FRAGO 002 established it is the ancestor of NONE of the corruption defects** — a missing free is a leak; those are reads of wrong bytes. It is Phase 4's target, alone. **Evidence**: M8 FR #11(a), FR #11(b), and `.claude/plans/parked.md` entry 49. **Neither defect is RED-pinned — there is no committed fixture for either**; `crates/ynz-driver/tests/fuzz_grammar/` holds only `README.md` and `mod.rs`. They reproduce by removing that file's two generator guards, and its doc comments there are the committed record of what was measured.
 
 - **Money / irreversibility**: live defects in the released compiler that corrupt user data on send/receive. **Evidence**: M8 Phase 8 fuzzer, FRAGO 015 findings 1–2.
 
@@ -64,7 +64,7 @@ Trace every concurrency blocker discovered in v0.3-M2 through M8 to its named pr
 
 **Phase 2** — diagnosis phase answering two questions (exact questions given in Phase 2 task block): does an ordinary heap local EVER get freed at scope exit, and do several Phase 8 findings share one ancestor producer. Two probes (alloc counter, IR read) plus two optional follow-up probes (call-chain verify, owner-type classification). Output: one FRAGO per confirmed root cause, appended to this plan's `audit.md`. Phases 3 and 4 are **blocked** on Phase 2's FRAGO list — neither phase executes until the producer list is settled.
 
-**Phase 3** — execute the FRAGOs. Phase 3's steps are **determined by Phase 2's output** and cannot be pre-specified here. Discipline: one RED pin per FRAGO before any fix; fix at the most upstream reachable point (the producer, not a symptom); one fix per ancestor, never one patch per symptom. One session minimum per FRAGO (diagnosis from Phase 2 already done).
+**Phase 3** — execute the FRAGOs. Phase 2 has delivered (FRAGO 001, FRAGO 002), so Phase 3's steps are now **written out as a checklist in its own section below** — three clusters and one singleton, ordered by what a user experiences. Discipline: one RED pin per FRAGO before any fix; fix at the most upstream reachable point (the producer, not a symptom); one fix per ancestor, never one patch per symptom. One session minimum per FRAGO (diagnosis from Phase 2 already done).
 
 **Phase 4** — the scope-exit release pass. Every local released at scope exit, with `background` handles as ONE ARM of the general mechanism — never a handle-only pass. Retires the Tier 3 lint from v0.3-M8 Phase 7's guard, flips the two pin tests in `crates/ynz-driver/tests/v03_m8_handle_scope_pin.rs`, and retires the `background-handle-cancel-injection` registry entry. **RISK GATE (HIGH, signed override required if Phase 4 overruns Phase 3)**: v0.3-M8 Phase 7 concluded this pass is "a milestone of its own, not a phase." Phase 4 may split into its own milestone once Phase 2 sizes it; decide at Phase 3 close before entering Phase 4.
 
@@ -112,7 +112,98 @@ Trace every concurrency blocker discovered in v0.3-M2 through M8 to its named pr
 
 #### Phase 3 — Execute the FRAGOs
 
-**Task & Purpose**: Deliver one fix per FRAGO at its identified producer. Steps cannot be pre-specified because they depend on Phase 2's diagnosis.
+**Task & Purpose**: Deliver one fix per FRAGO at its identified producer.
+
+**Phase 2 has now delivered its diagnosis** (FRAGO 001 and FRAGO 002 in this plan's `audit.md`),
+so the steps below are no longer unspecifiable. Six reported defects resolved into **three
+clusters and one singleton**; the checklist is ordered by what a user actually experiences, which
+is the ordering FRAGO 002 recommends and its reasoning is recorded there.
+
+Everything NOT on this list stays parked and is explicitly out of Phase 3's scope — the ten
+M2–M7 items recovered as `.claude/plans/parked.md` entries 53–65 cost parallelism, not
+correctness, and no program breaks because of them. Patrick's ruling, 2026-09-05: as long as they
+are in parked, they stay in parked.
+
+**The fixes, in order:**
+
+- [ ] **3.0 — RED pins first, before any fix.** Commit five probe programs from
+      `target/p2b-probe/` (gitignored) into `crates/ynz-driver/tests/fixtures/` as failing tests:
+      **A** (array before `wait`, sent after → SIGABRT in the default mode), **D** (no channel at
+      all — array arg to a suspending user function → prints 6 for 3, exit 0), **G** (`number`
+      into a capacity-1 channel with blocking sends → wrong value at `-O0`), **J** (int-local twin
+      of G → prints heap addresses), **N** (`.copy()` on `fixed<T>` then mutate the copy → the
+      source changes). Each must FAIL on today's tree before its fix lands; a pin that passes
+      before the fix is measuring nothing.
+
+- [ ] **3.1 — C1: the crossing scan skips a suspending statement's own operands.** THE priority
+      and it is not close: silent wrong output, exit 0, **default optimized mode, ordinary code**
+      (probe D — no channel, no `background`, no `.copy()`, no `errors`). Producer:
+      `collect_crossings_in_stmts` in `crates/ynz-typeck/src/check.rs` — once `past_wait` is true,
+      a statement that is itself a suspension point records its result-binding but never has its
+      own operands scanned; the direct suspending forms fall through `_ => {}` while only the
+      `If`/`While`/`For`/`Match` arms call `collect_ident_refs_in_stmt`. Closes **M8 FR #11(a) AND
+      FR #11(b)** — one fix, both symptoms, proven by the shared control (one harmless read of the
+      local before the suspending statement fixes both).
+      - [ ] **Precondition, measure before landing:** widening the crossing set pushes more locals
+            through `suspension_guards_fire_for_fn`, and types that cannot be frame-backed
+            (`fixed`, `maybe`, union, `dynamic`, nested shape) currently force a decline. The fix
+            may convert today's silent miscompiles into new declines or compile errors on programs
+            that build today. Measure the delta on the existing corpus; do not assume it is free.
+      - [ ] **After the fix:** delete both fuzz-generator suppression guards
+            (`Builder::suspension_seen`'s reuse gate and the `send_count`-versus-capacity floor in
+            `crates/ynz-driver/tests/fuzz_grammar/mod.rs`) and run `YNZ_FUZZ_PROGRAMS=256`.
+            Findings should go to zero. This also settles FRAGO 002's open question 2.
+      - [ ] **Correct the record while here:** `mod.rs::take_or_make_array`'s doc comment claims
+            this is "specific to the channel-transfer path" — false (probe D). And `mod.rs`
+            contradicts itself on Int; the cautious `FeedFn::send_count` comment was right and
+            parked 49(b) relays the wrong one. The discriminator is not the element type, it is
+            whether a local is read by a statement that suspends.
+
+- [ ] **3.2 — C2: no authoritative per-type owned-copy operation.** Two independent per-type
+      dispatches answer "give me an independent copy of this heap value" and both default to
+      returning the receiver's own pointer: `prepare_bg_arg_for_ctx`'s `array<pointer-elem>`
+      branch and `_` arm, and `copy_lowering_arm`'s `AliasNoOp`. Closes **M8 FR #9** (a live UAF,
+      RED-pinned) and **M8 FR #10** (live silent-wrong today — probe N).
+      - [ ] **Blocked on a decision only Patrick can make:** what an owned, independent copy means
+            for each of `maybe<T>`, union, `fixed<T>`, `dynamic`, bignum `number`, options,
+            channel, handle, sensitive. Start this decision in PARALLEL with 3.1's code rather
+            than queueing it behind.
+      - [ ] **One shared clone routine, two call sites rewired** — not two new per-type tables.
+            Two fresh tables rebuild exactly the twin `.claude/rules/authoritative-derivation.md`
+            forbids, and that is the reason these are one cluster rather than two items.
+      - [ ] **HARD ORDERING CONSTRAINT — C2 closes before Phase 4 opens.** FR #9 is a *premature
+            free*: the ladder frees a clone the parent still points at. If Phase 4's scope-exit
+            release pass lands first it will emit frees on aliased pointers and upgrade a dangling
+            read into a double-free.
+
+- [ ] **3.3 — C3: flow-sensitive `errors` state keyed by name, not by binding identity.**
+      `errors_failed_true_branch` and its siblings key on a bare `String`; `check_stmt_if`
+      push/pops `self.scope` around the body while the errors sets are not scope-aware, so a
+      shadowing inner `let` inherits the outer binding's checked status. Closes **parked 33**.
+      Compile-time hole, no memory-unsafety — codegen's `br`/`phi` defense makes the observable an
+      empty string rather than a crash.
+
+- [ ] **3.4 — S1: the `errors`-field surface is two unbound lists.**
+      `EC_FIELDS_REQUIRE_FAILED_CHECK` admits four fields; codegen's `Type::ErrorsCapable` field
+      arm lowers one and hard-errors on the rest. Closes **parked 34**. Ranked last despite being
+      the easiest because it is LOUD and self-identifying ("This is a compiler bug") — nobody is
+      silently misled. Pair it with 3.3 in one session; same surface.
+      - [ ] **Fix upstream, not by adding three arms.** Make the field list ONE shared enumeration
+            with a parity test mirroring `copy_parity_tests` (which already binds
+            `copy_lowering_arm` to typeck's `copy_is_independent`), so a fifth
+            admitted-but-unlowered field becomes a build failure instead of a user-facing ICE.
+
+- [ ] **3.5 — parked 32: an archival read BEFORE any session is budgeted.** Two shaped repro
+      attempts in Phase 2 both produced correct output, and parked 32's own record says half was
+      fixed in round 3 by `restore_ec_receiver_ty`. Recover the round-3 executor's exact repro
+      from the M8 plan's `audit.md` (`m8-p4-fix3-20260904`, base `d0c46b3`) and re-run it on HEAD.
+      **It may not exist.** Do not budget a fix session before this read.
+
+**NOT in Phase 3, stated so it is not mistaken for dropped:** FRAGO 001's finding — that no heap
+local is ever released at scope exit — is a real, verified producer, but it is **Phase 4's**
+target, not Phase 3's. It is the ancestor of none of the defects above (a missing free is a leak;
+these are reads of wrong bytes), and FRAGO 002 records why in full.
+
 
 **Discipline**:
 - One RED pin per FRAGO before any fix (a failing test that will pass after the fix, used to verify the fix is real and not a no-op).
