@@ -1024,7 +1024,7 @@ fn module_signatures_query_is_separate_from_check_query() {
     // check_query should also have the error (it includes sig diags)
     let check_out = check_query(&db, sf);
     assert!(
-        check_out.diagnostics.len() >= 1,
+        !check_out.diagnostics.is_empty(),
         "Missing main must appear in check output"
     );
 }
@@ -2967,7 +2967,8 @@ fn channel_from_shape_field_annotated_accepted() {
          function drain(b: Box) -> nothing {\n\
            let c: channel<int> = b.wire\n\
            let first = c.receive()\n\
-           print(first)\n\
+           let value = first.or(0)\n\
+           print(value)\n\
          }\n\
          function entrypoint() -> nothing { }",
     );
@@ -2982,7 +2983,8 @@ fn channel_alias_of_derivable_binding_accepted() {
            let a: channel<int> = channel<int>(4)\n\
            let b2 = a\n\
            let first = b2.receive()\n\
-           print(first)\n\
+           let value = first.or(0)\n\
+           print(value)\n\
          }",
     );
 }
@@ -4864,6 +4866,13 @@ fn ec_method_message_resolves_in_ec_fn() {
     // test covers `.failed` and `.message` together; this test asserts `.message` alone
     // compiles clean so a narrow regression (removing "message" from EC_METHODS) is caught
     // even if `.failed` still passes.
+    //
+    // v0.3-M8 Phase 4 fix round 3: the field access is now wrapped in `if (x.failed())` —
+    // REF-errors.md:171-175 requires the check before reading `.message`; this test used to
+    // assert the UNCHECKED read compiled clean, which was the exact class of bug fix round 3
+    // closes (the same read, unguarded, SIGABRT'd at runtime on a not-failed value before the
+    // codegen fix landed — this test's own shape was one of the corpus instances the round-3
+    // sweep found and corrected, not a fixture that needed no change).
     assert_clean(
         r#"
 function compute() -> int errors {
@@ -4872,8 +4881,10 @@ function compute() -> int errors {
 
 function entrypoint() -> nothing {
   let x = compute()
-  const msg = x.message
-  print(msg)
+  if (x.failed()) {
+    const msg = x.message
+    print(msg)
+  }
 }
 "#,
     );
@@ -4886,6 +4897,9 @@ fn ec_method_suggestions_resolves_in_ec_fn() {
     // on the stripped inner-type dispatch. Isolated test ensures the sibling is independently
     // covered — a single combined test cannot pinpoint which EC_METHODS entry was dropped.
     // `.suggestions` returns array<string> — printable directly (BuiltinArray is printable).
+    //
+    // v0.3-M8 Phase 4 fix round 3: wrapped in `if (x.failed())` — see
+    // `ec_method_message_resolves_in_ec_fn`'s WHY for why the unguarded form is now refused.
     assert_clean(
         r#"
 function compute() -> int errors {
@@ -4894,8 +4908,10 @@ function compute() -> int errors {
 
 function entrypoint() -> nothing {
   let x = compute()
-  const sug = x.suggestions
-  print(sug)
+  if (x.failed()) {
+    const sug = x.suggestions
+    print(sug)
+  }
 }
 "#,
     );
@@ -4907,6 +4923,9 @@ fn ec_method_trace_resolves_in_ec_fn() {
     // Same rationale as the `.suggestions` test above — each EC_METHODS sibling must have
     // its own isolated test so a narrow removal is caught by exactly one failure.
     // `.trace` returns array<Frame> — BuiltinArray is printable; Frame is a compiler shape.
+    //
+    // v0.3-M8 Phase 4 fix round 3: wrapped in `if (x.failed())` — see
+    // `ec_method_message_resolves_in_ec_fn`'s WHY for why the unguarded form is now refused.
     assert_clean(
         r#"
 function compute() -> int errors {
@@ -4915,8 +4934,10 @@ function compute() -> int errors {
 
 function entrypoint() -> nothing {
   let x = compute()
-  const t = x.trace
-  print(t)
+  if (x.failed()) {
+    const t = x.trace
+    print(t)
+  }
 }
 "#,
     );
@@ -4927,6 +4948,9 @@ fn ec_method_source_resolves_in_ec_fn() {
     // WHY: guards that `.source` resolves on an EC value inside an errors-capable function.
     // Same rationale as the `.trace` test above. Completes the sibling coverage for all six
     // members of EC_METHODS: or, failed, message, suggestions, trace, source.
+    //
+    // v0.3-M8 Phase 4 fix round 3: wrapped in `if (x.failed())` — see
+    // `ec_method_message_resolves_in_ec_fn`'s WHY for why the unguarded form is now refused.
     assert_clean(
         r#"
 function compute() -> int errors {
@@ -4935,8 +4959,10 @@ function compute() -> int errors {
 
 function entrypoint() -> nothing {
   let x = compute()
-  const src = x.source
-  print(src)
+  if (x.failed()) {
+    const src = x.source
+    print(src)
+  }
 }
 "#,
     );

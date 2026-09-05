@@ -1,0 +1,30 @@
+// v0.3-M8 Phase 5 — the CPU-arm twin of the spike: three NON-suspending callees route to
+// `ynz_rt_spawn_blocking`, so the task's Arc reference is released by the closure-body free
+// (`emit_bg_arg_frees` ArcShape arm) rather than the state-machine ladder. Both arms must
+// balance the same block. Each task prints an identical line, so output order is irrelevant
+// (the driver test sorts).
+//
+// Expected output (3 identical task lines + the caller line):
+//   cpu task saw 42
+//   cpu task saw 42
+//   cpu task saw 42
+//   caller keeps Smithfield 6x7
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function tally(scene: Scene) -> nothing {
+  let area = scene.width * scene.height
+  print(`cpu task saw ${area}`)
+}
+
+function entrypoint() -> nothing {
+  let scene: Scene = { name: `Smithfield`, width: 6, height: 7 }
+  background tally(scene)
+  background tally(scene)
+  background tally(scene)
+  sleepBlocking(200)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}

@@ -1172,11 +1172,11 @@ triggers = "A local binding of type `union`, `maybe<T>`, or `dynamic Contract` t
 # --- Handle-drop cancel wiring (docs/internal/implementation/IMP-no-function-coloring.md "Task Cancellation") ---
 [[deferred_language_feature]]
 name = "background-handle-cancel-injection"
-substitute = "In v0.3 a spawned task always runs to completion, even when its handle goes out of scope - it is never silently killed, and every channel/handle reference is refcount-guarded (no dangling reads, no double-free). To stop a long-running task on request, have it read a command channel (`h.send(...)` into the task's `channel<T>` parameter) and return when told."
-why = "The locked cancel-via-drop model delivers a cancellation signal at the task's next suspension point, propagated as a normal `errors` value with every in-scope value cleaned up in order. The RUNTIME half exists and is proven: `ynz_handle_free` stops the child at its next suspension point, and the frame plus the handle-owned value buffer are each freed exactly once (substrate-tested). The LANGUAGE half - calling it automatically when a handle binding's scope ends, and surfacing the cancellation as a typed `errors` value inside the child - needs the language-wide automatic scope-cleanup mechanism, which does not exist in v0.3; wiring a handle-only cleanup pass now would create a second cleanup mechanism the general one would have to unify later. Until then a handle object is small, bounded (one per spawn), and reclaimed when the program ends."
-ships_in = "v0.4+"
+substitute = "A task keeps running after the binding that holds its handle goes out of scope; it finishes on its own, or stops when the program ends. To stop it earlier, give it a channel to read a stop signal from, or `wait` on its handle so your code continues only after it is done."
+why = "Yinz does not yet release anything automatically when a binding goes out of scope — not arrays, not maps, not task handles. Stopping a task when its handle goes out of scope needs that general end-of-scope cleanup first; adding it for task handles alone would build a second, separate cleanup rule that the general one would then have to replace."
+ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
-triggers = "The language-wide automatic scope-cleanup mechanism shipping (`ynz_handle_free` is the ready-made runtime hook), OR a real workload needing to cancel a running task before then."
+triggers = "Yinz releasing values automatically at the end of a block ships (task handles join that rule), or a real program needs to stop a running task before then."
 
 # --- Conduit-op expression position (v0.3-M4 Phase 2 statement discipline) ---
 [[deferred_language_feature]]
@@ -1199,11 +1199,38 @@ triggers = "`let h = background crunch()` where `crunch` never suspends - reject
 # --- Channel element-type restriction: per-type heap-upgrade (v0.3-M4 Phase 2 restriction) ---
 [[deferred_language_feature]]
 name = "channel-element-heap-upgrade"
-substitute = "Use one of the supported element types: int, float, boolean, string, array<T>, map<K, V>. For a `shape`, send its fields as separate values (or pack them into an array or map) and rebuild the shape on the receiving side; the same field-wise pattern covers a `number` value. Alternatively, put the value in a heap-allocated container you manage (an `array<T>` of one element) and send that."
-why = "Channel values travel between tasks as a single 64-bit slot: scalars by value (int, float, boolean) and heap-stable pointers (string, array, map). A `shape` or `number` value is backed by the SENDING task's stack frame, which can be freed while the value still sits in the channel - the receiver would read freed memory. This is the same dangling-pointer class the UnsupportedCrossingLocalType discipline (shipped in M3a) rejects for locals crossing a `wait`. Lifting the restriction needs a per-type heap-upgrade at the send site - copying the shape/number bytes into channel-owned heap storage the receiver frees after reading - which is real ABI + codegen work, not a missing check. Until it ships, these element types are rejected at channel construction with a clean teaching error, never a silent dangling read."
-ships_in = "v0.4+"
+substitute = "Use one of the supported element types: int, float, boolean, string, number, array<T>, map<K, V>. For a `shape`, send its fields as separate values (or pack them into an array or map) and rebuild the shape on the receiving side. Alternatively, put the value in a heap-allocated container you manage (an `array<T>` of one element) and send that."
+why = "Channel values travel between tasks as a single 64-bit slot: scalars by value (int, float, boolean), heap-stable pointers (string, array, map), and a `number` as a 16-byte heap cell the send mints and the receive frees (the sender's binding stays usable; `number` is copy-through, never given away). What is still deferred is narrower: a `shape` element, and a bignum `number` (more than 34 digits of precision). A `shape` value is backed by the SENDING task's stack frame, which can be freed while the value still sits in the channel — the receiver would read freed memory — and an inline copy of it would share any pointer-cell field (an `array` field) between sender and receiver, which is a question of handing over a value that holds other values, not a marshalling question. Until that ships, shape and bignum elements are rejected at channel construction with a clean teaching error, never a silent dangling read."
+ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-concurrency.md"
-triggers = "`channel<Player>()` or `channel<number>()` - any channel construction whose element type is a shape or `number` - rejected today with a teaching error (crates/ynz-typeck/src/check.rs, channel-construction element check). Lift when the per-type heap-upgrade (heap-copying sender-stack-backed values into channel-owned storage at the send site) ships."
+triggers = "`channel<Player>()` - a channel construction whose element type is a shape (or a bignum `number`) - rejected today with a teaching error (crates/ynz-typeck/src/check.rs, channel-construction element check, derived from `ynz_typeck::types::channel_elem_supported`). Lift when the depth-two transfer rule for container stores lands and a shape's pointer-cell fields can be handed over soundly."
+
+# --- Channel auto-close on last-producer drop (IMP-concurrency.md "Deferred: auto-close on last-producer drop") ---
+[[deferred_language_feature]]
+name = "channel-auto-close-on-last-producer"
+substitute = "Call `wire.close()` yourself when a producer is done sending — one line per producer, and the consumer's `receive()` returns `none` once the buffer drains. Closing twice is a safe no-op, so every producer may close."
+why = "Auto-close — the channel closing itself when the last binding that can send goes out of scope — requires three things the compiler does not have: a per-binding producer/consumer role analysis, the scope-exit drop-insertion pass (no local is released at scope end today), and a runtime refcount split into producer vs holder counts. Shipping explicit close() first costs one line per producer and is correct today; shipping auto-close first would be a refcount redesign with a dead-on-arrival trigger until the drop pass lands. Cost to add later: medium — the role analysis, one producer counter decremented from the drop ladder, and a compose rule with explicit close() (close-once semantics make that trivial)."
+ships_in = "a later version"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
+triggers = "The general scope-exit drop pass shipping (Track 3 / the drop-story milestone), AND a real workload where forgetting close() produced a hang in practice — the explicit form is the teaching-correct default until the compiler can prove the producer set."
+
+# --- Handle-side close (IMP-concurrency.md "The gap that decision leaves") ---
+[[deferred_language_feature]]
+name = "background-handle-close"
+substitute = "Bind the channel first, then spawn — `let commands = channel<int>(4)` and `let h = background worker(commands)` — and call `commands.close()` when you are done sending. The compiler requires the binding on the handle form (HandleChannelArgNeedsBinding), so the channel binding is always there to close."
+why = "A handle is a message line TO the child (`h.send`), not the channel's lifecycle; a task can finish with its channel open and a channel can close with its task still running, so `h.close()` would make two lifetimes read as one. With the binding guard, every handle spawn's command channel has a spawner binding, so `commands.close()` is always available and `h.close()` would add only that conflation for the common case. Cost to add later: small — one non-suspending conduit method on the handle receiver forwarding to the channel's close entry, its typeck arm and one fixture."
+ships_in = "a later version"
+design_doc = "docs/internal/implementation/IMP-concurrency.md"
+triggers = "A real program for which binding the channel first is genuinely the wrong shape (none is known), or the demo work finding it needs `h.close()`."
+
+# --- Consuming move-out-of-maybe (IMP-ownership.md "Deferred (four fields, packet item (g))") ---
+[[deferred_language_feature]]
+name = "maybe-move-out"
+substitute = "Call `.copy()` on the accessed value at the relay site instead — e.g. `other.send(got.value.copy())`. `got.value` reaches through the `maybe` envelope, so it cannot be given away whole."
+why = "A consuming accessor on `maybe<T>` — a form that yields the wrapped value as the sole holder, moving it out of the `maybe` rather than reaching through it — is a language-wide `maybe` semantics addition outside a concurrency milestone's charter: `maybe<T>` is used everywhere in the language, not only at channel receives, so the accessor's naming, what happens to the `maybe` binding afterward, and whether it generalizes to every `maybe`-producing site is its own design pass, not a corollary of the transfer rule. Cost to add later: a `maybe` design addendum (name and semantics), one new provenance arm for it, and one codegen path to move the wrapped value out instead of reading through the envelope."
+ships_in = "a later version"
+design_doc = "docs/internal/implementation/IMP-ownership.md"
+triggers = "A measured relay workload where the extra `.copy()` per hop is a real cost, or the general move/drop story (Track 3 / FR 7(2)) landing and settling what 'consuming' means for `maybe<T>` alongside every other heap type."
 
 # --- Sequential-consistency atomic-ordering opt-in (docs/internal/implementation/IMP-no-function-coloring.md "Atomic Ordering Default") ---
 [[deferred_language_feature]]
@@ -1214,25 +1241,24 @@ ships_in = "v0.4+"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "A real workload whose correctness contract requires a global total order across multiple concurrent atomic operations (seq-cst), OR the v0.4 concurrency-polish milestone — at which point the named opt-in surface (`.withGlobalOrdering()` or its final name) is designed and shipped."
 
-# --- Auto-Arc CODEGEN EMISSION for read-only cross-`background` shared state ---
-# (docs/internal/implementation/IMP-no-function-coloring.md §Runtime item 4)
+# --- Auto-Arc CODEGEN EMISSION — SHIPPED for the beneficial case; NARROWED to its residual ---
+# (docs/internal/implementation/IMP-ownership.md "Auto-Arc — Sharing Topology Across
+# `background` Boundaries" — topology (B), signed 2026-09-03)
 #
-# SURFACED to deviation-judge / conductor by the Phase 3 executor: the plan's Phase 3 exit
-# criteria ("auto-Arc programs correct under repeated runs"; "alloc=free — Arc control
-# blocks freed") assume the Arc codegen EMISSION ships this phase. It does NOT — and this is
-# a scope deviation, not a silent skip. The SAFETY half of R3 (boundary exactness — the
-# reject fires where it must, safe crossings are not falsely rejected, the generic
-# silent-skip gap is closed, the channel exemption holds) ships and is build-blocking. The
-# runtime SUBSTRATE (ynz-runtime/src/arc.rs: ynz_arc_new/clone/free, acquire-release
-# refcount discipline, concurrency-hammer-tested) ships. Only the codegen that EMITS the
-# Arc-wrap at the spawn site is deferred — see WHY.
+# The emission is LIVE: two or more `background` spawns in one block that pass the same
+# whole shape binding, with nothing changing it between them, every spawned function only
+# reading it, and a shape made of `int`/`float`/`bool`/`string` fields, share ONE
+# reference-counted block (`ynz_arc_new` at the first spawn, `ynz_arc_clone` per task, the
+# caller's transient released after the last spawn, each task's reference released when it
+# retires). The `auto_arc` muted hint fires at every member spawn. What remains deferred is
+# exactly the residual the design names — this entry now describes THAT, nothing wider.
 [[deferred_language_feature]]
 name = "auto-arc-codegen-emission"
-substitute = "A read-only value shared across a `background` boundary crosses SAFELY today via the independent-copy path (the compiler infers `.copy` when the value is used after the spawn; the task reads its own copy, the caller keeps its own). This is correct and race-free — auto-Arc is a performance optimization of this exact crossing (refcount-share one copy instead of deep-copying per task), not a correctness fix. Nothing is unsafe in the meantime."
-why = "Auto-Arc is an auto-promotion perf-form of the already-safe copy crossing (Golden Rule 10 'efficiency first'; the safe form already ships). A BENEFICIAL emission (Golden Rule 8 zero-cost: Arc must be cheaper than the copy it replaces, which only holds when one allocation is genuinely SHARED across the caller and/or multiple tasks) requires (a) a topology decision the design docs leave underspecified — IMP-no-function-coloring:58 points to IMP-ownership.md for the mechanism, but that doc does not actually specify it, and IMP-concurrency:189 locks `.share`-across-background as a hard error, so the caller/task sharing topology (repoint-caller-binding vs multi-task-share) is a design call, not an executor call — and (b) a SOUND read-only proof for the receiving callee, which the authoritative `ynz_typeck::effective_ownership` analysis (EffectiveOwnership::Reads) already provides and MUST be reused rather than re-deriving the fragile name-based mutation analysis that was built-and-removed for auto-parallel (IMP-concurrency:878, the authoritative-derivation.md corpse). A minimal single-task emission is a pessimization (adds an atomic + 8-byte header for zero sharing benefit), so there is no small sound-and-beneficial slice; shipping a speculative one risks R3's false-Arc silent data race (dormant override #3 class). The disciplined call: ship the safe boundary + substrate + teaching hint, defer the emission for a design decision on topology."
-ships_in = "v0.4+"
-design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
-triggers = "A design decision on the caller/task Arc-sharing topology (recorded in IMP-ownership.md / IMP-no-function-coloring.md), enabling a sound-AND-beneficial emission that reuses `ynz_typeck::effective_ownership` (EffectiveOwnership::Reads) as the read-only proof and `ynz-runtime/src/arc.rs` as the runtime hook — OR the v0.4 concurrency-polish milestone. On landing: wire the `auto_arc` muted-hint domain to fire in `crates/ynz-lsp/src/inlay_hint.rs`, and add the `should-Arc-and-emits-Arc` cells to the R3 matrix (the boundary/safety cells already ship)."
+substitute = "In the three shapes the shared block does not yet cover, each `background` task takes its own independent copy — the same safe, race-free path every `background` argument used before sharing existed: (1) `background` statements passing the same value but separated by a suspension point (`wait`, a suspending call, a channel `send`/`receive`); (2) a `background` statement inside a loop body (one statement, run once per iteration); (3) `array`/`map` values, and shapes with a `number`, `array`, `map`, `maybe`, union, `channel`, or nested-shape field. Nothing is unsafe in the meantime; only the per-task copy is paid."
+why = "Sharing one block across a group of `background` statements is sound only while the caller's transient reference is a straight-line temporary: it is minted at the first `background` statement of the group and released right after the last, and never lives in a state-machine frame. (1) A suspension between the `background` statements would have to carry that temporary across a frame boundary — the frame-layout plumbing for a compiler-owned temporary does not exist yet, and the shape-copy path is correct there. (2) A loop runs ONE `background` statement many times, so no group of statements forms; sharing across iterations needs a caller-held reference that outlives the statement, which needs the scope-exit cleanup mechanism the language does not have yet. (3) The block is a byte copy of the shape with an 8-byte-aligned refcount in front: a `number` field needs 16-byte alignment, and a field that is itself a pointer (an array, a map, a maybe, a union, a channel, a nested shape) would share the inner allocation between tasks with no count on it; an `array`/`map` value is a header-plus-buffer pair, a different sharing substrate. Each of these declines to the copy path by construction rather than sharing unsoundly."
+ships_in = "a later version"
+design_doc = "docs/internal/implementation/IMP-ownership.md"
+triggers = "(1) The compiler gains frame-backed storage for compiler-owned temporaries across a suspension point, so a group's transient can straddle a `wait`; (2) the language-wide scope-exit cleanup mechanism lands, so a caller-held reference can outlive one loop iteration; (3) a counted sharing substrate for pointer-carrying values (arrays, maps, shapes with pointer or 16-byte-aligned fields) is designed. Each slice widens the admission independently; the copy path stays the fallback for whatever remains."
 
 # --- Stored range variable as a suspending for-loop iterator (docs/internal/implementation/IMP-concurrency.md) ---
 [[deferred_language_feature]]
@@ -1596,11 +1622,53 @@ what_template = "Imported module `{path}` was not found."
 what_instead_template = "Check that the path is correct (paths are root-relative, starting from the project's entry file)."
 why_template = "Yinz import paths are root-relative, not relative to the current file."
 
+# Rendered from this entry by typeck's consumed-read rendering (`consumed_read_diag`). `{via}`
+# is empty when the name read is the name that was given; otherwise it names the alias-class
+# mate that was given away instead (e.g. " — it shares its value with `rows`, which is what
+# was given away"), mirroring ConsumedBySend. Decided v0.3-M8 Phase 4: `git log --grep=m8-p4`.
 [[diagnostic_template]]
 kind_name = "Consumed"
-what_template = "`{name}` was already given away and cannot be used again."
-what_instead_template = "Use `.copy()` before giving a value away if you need to keep using it."
-why_template = "Once a value is given (ownership transferred), the original binding no longer holds a valid value. Using it would be a use-after-move bug."
+what_template = "`{name}` was already given away and cannot be used here{via}."
+what_instead_template = "Create a new value, or use `.copy()` before giving `{given}` away if you need it in both places."
+why_template = "When a function takes ownership of a value, the caller no longer holds it. Using it afterward would read memory the new owner may already have freed."
+
+# ── v0.3-M8 Phase 4: the transfer rule's three diagnostics (IMP-ownership.md "Teaching
+# text") and the handle-spawn guard (IMP-concurrency.md "Teaching text"). One emit site
+# (`check_transfer`) renders the first three; the consumed-read site renders ConsumedBySend.
+
+[[diagnostic_template]]
+kind_name = "ConsumedBySend"
+what_template = "`{name}` was sent into `{channel}` and cannot be used here — `send()` gave it away{via}."
+what_instead_template = "If you still need `{name}` after sending it, send a copy instead: `{channel}.send({sent}.copy())`. If you only need it before the send, put this line above the `send()`."
+why_template = "A channel hands the value to whichever task receives it, and that task may already be reading or changing it by the time this line runs. If both sides kept the same value, two tasks could change it at once and neither would know. So `send()` gives `{sent}` away, and the compiler refuses to build any line that reads it afterward. Nothing happens at runtime — `{name}` is not cleared or set to `none`; the program simply does not compile until this read is placed above the `send()` or the send takes a copy."
+
+[[diagnostic_template]]
+kind_name = "ParamNeedsGive"
+what_template = "`{name}` is a parameter of `{fn}` that {modifier}, but this line gives it away — it is {act}. Only a `give` parameter can be given away."
+what_instead_template = "Declare it `give` in `{fn}`'s signature — `function {fn}(give {name}: {type}, …)` — so every caller hands the value over for good. If `{fn}` should leave its caller's value usable, give away a copy instead: `{copy_form}`."
+why_template = "A parameter without `give` still belongs to the caller — the caller's own binding stays usable after `{fn}` returns. If `{fn}` could hand that value onward anyway, the caller and the new holder would both have it, and when the new holder is done with it and frees it, the caller would be reading memory that is already gone. `give` in the signature makes the caller's binding unusable after the call, so the value has exactly one holder at every step. If the caller's value is itself a parameter, that function needs `give` too — every function on the chain that lacks the word is reported in this same build."
+
+[[diagnostic_template]]
+kind_name = "TransferNeedsCopy"
+what_template = "This line gives `{expr}` away — it is {act} — but `{expr}` is {reason}, so someone here still holds it."
+what_instead_template = "Give away a copy instead: `{fix}`. If you meant to hand over the whole thing, give the whole thing: the binding that owns it."
+why_template = "Whoever receives a `{type}` will eventually free it. If this side could still reach the same value afterward — through the field, the item, the loop, or the name it was built from — two places would hold one value and one of them would free it under the other. A `.copy()` belongs to nobody else, so it is safe to hand over."
+
+[[diagnostic_template]]
+kind_name = "HandleChannelArgNeedsBinding"
+what_template = "`{callee}` gets its command channel from `{expr}`, which is not a named binding — nothing outside the task can ever close that channel."
+what_instead_template = "Bind the channel first, then spawn: `let commands = {expr}` and `let h = background {callee}(commands, …)`. Call `commands.close()` when you are done sending."
+why_template = "A task handle can send into its channel (`h.send(value)`) but cannot close it — only the channel binding can. Without a binding, a task waiting on `receive()` can never be told the stream has ended, so it waits forever."
+
+# v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
+# `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
+# source text (`expr_source_text` — an identifier for the common bound-value case, the full
+# expression otherwise); `{field}` is whichever of the four was read.
+[[diagnostic_template]]
+kind_name = "MessageBeforeFailedCheck"
+what_template = "`{name}.{field}` is read here, but `{name}` hasn't been checked with `.failed()` yet."
+what_instead_template = "Check `.failed()` on `{name}` first — store it in a `let`/`const` binding if it isn't one already, then write `if ({name}.failed()) { … {name}.{field} … }`. Or call `{name}.or(<default>)` for a fallback value instead of `.{field}`."
+why_template = "`.message`, `.suggestions`, `.trace`, and `.source` only carry meaningful data once `.failed()` is true — reading one before the check would report details for a call that might have succeeded. Yinz catches this at compile time instead of returning garbage at runtime."
 
 [[diagnostic_template]]
 kind_name = "Borrowed"
@@ -2157,6 +2225,54 @@ param_types = []
 return_type = "fixed<T>"
 since = "M4"
 
+# ── channel<T> methods (v0.3-M8 Phase 4) ──
+# `send`/`receive` shipped in v0.3-M4 but lived only as typeck's CHANNEL_SUSPENDING_METHODS
+# — a pre-existing SSOT gap the feature-registry rule closes at the moment of discovery, so
+# all three conduit methods are registered together (IMP-concurrency.md "Registry entries
+# this design needs"). `param_ownership` is the optional per-parameter ownership list
+# (FRAGO 003): `send` GIVES its value for an owned-heap element kind (`array`/`map`); the
+# transfer rule in IMP-ownership.md is the authority on what that consumes.
+[[primitive_intrinsic]]
+name = "send"
+kind = "method_1arg"
+receiver_type = "channel"
+param_types = ["T"]
+param_ownership = ["give"]
+return_type = "nothing errors"
+since = "v0.3-M4"
+doc = "Puts one value into the channel, waiting for room when it is full (backpressure). Fails with the channel-closed error after close(). Sending an array or a map gives it away — the binding cannot be read afterward; send `.copy()` to keep it."
+
+[[primitive_intrinsic]]
+name = "receive"
+kind = "method"
+receiver_type = "channel"
+param_types = []
+return_type = "maybe<T>"
+since = "v0.3-M4"
+doc = "Takes the next value out of the channel, waiting until one arrives. After close(), delivers whatever was already sent and then returns none — that none is how a consumer loop knows the stream ended."
+
+[[primitive_intrinsic]]
+name = "close"
+kind = "method"
+receiver_type = "channel"
+param_types = []
+return_type = "nothing"
+since = "v0.3-M8"
+doc = "Marks the channel finished: no more values will be sent. Later sends are refused with the channel-closed error; receive() drains what is buffered and then returns none. Never waits, cannot fail, and closing twice is a safe no-op."
+
+# v0.3-M8 Phase 4 step 3a (Patrick's ruling, 2026-09-03): `.copy()` on `map<K, V>` is a
+# one-level deep copy (`ynz_map_clone`), the same shape as the `array`/`fixed` entries above,
+# so the ConsumedBySend advice `{channel}.send({name}.copy())` is executable for every
+# element kind the transfer rule names.
+[[primitive_intrinsic]]
+name = "copy"
+kind = "method"
+receiver_type = "map"
+param_types = []
+return_type = "map<K, V>"
+since = "v0.3-M8"
+doc = "A new map with the same keys and values. Changing the original afterward does not change the copy (and the other way round). Values that are themselves heap values are copied one level deep."
+
 [[primitive_intrinsic]]
 name = "append"
 kind = "method_1arg"
@@ -2330,18 +2446,21 @@ hover_why = "64 is the locked default. A channel is always bounded, so send() ma
 # reference counting has cost"). The red-TINT visual is staged behind
 # `[[deferred_tooling_feature]]` `auto-arc-cautionary-tint` (no per-hint tint path exists in
 # ynz-lsp today); the teaching text below ships now and renders as a normal muted hint.
-# The domain is REGISTERED here in Phase 3; LSP inlay-firing wiring waits on the auto-Arc
-# codegen emission (`[[deferred_language_feature]]` `auto-arc-codegen-emission`) — the
-# `channel_capacity` registered-not-yet-firing precedent (its wiring lands in P5).
+# The domain FIRES since the auto-Arc codegen emission landed: `ynz_typeck::auto_arc_hints`
+# reads the same `BgOwnership::Arc` group record codegen mints the shared block from, and
+# `crates/ynz-lsp/src/inlay_hint.rs` renders it after every member spawn with the group's
+# task count in the label. The hover text is the signed design's wording
+# (IMP-ownership.md "The muted hint") — the label carries the exact count; the hover speaks
+# of "each `background` task started here" because hover text is static registry markdown.
 [[muted_hint_domain]]
 domain = "auto_arc"
 placement_category = "Informational"
-description = "Shows where the compiler shares a read-only value across a `background` boundary by reference-counting it (auto-Arc) instead of deep-copying it. A codegen choice with no typeable source form, so it is informational only; the hover carries the reference-counting-has-cost caution."
+description = "Shows where the compiler shares a read-only value across a `background` boundary by reference-counting one copy (auto-Arc) instead of deep-copying it per task. A codegen choice with no typeable source form, so it is informational only; the hover carries the reference-counting-has-cost caution."
 example_source = "background render(scene)"
-example_hint_rendered = "// shared by reference count across tasks — read-only"
-hover_what = "This value is shared with the background task by counting references to one copy, instead of making a separate deep copy for each task."
-hover_what_instead = "There is nothing to write in source — the compiler picks this automatically when the value is only read across the boundary. If you need each task to change its own version, pass `.copy` so they get independent copies."
-hover_why = "Reference counting is not free — each task that takes or drops a reference does a small atomic bump. The compiler only does this when the value is read-only across the boundary, where sharing one copy is cheaper than copying it for every task."
+example_hint_rendered = "// shared by reference count with 2 tasks — read-only"
+hover_what = "This value is copied once into a shared block, and each `background` task started here holds a counted reference to that one copy instead of getting its own full copy. Your own binding is untouched — you keep reading your original."
+hover_what_instead = "Nothing to type — the compiler picks this when two or more tasks only read the value and nothing changes it between the `background` statements. If one task needs its own version to change, pass `scene.copy()` at that `background` statement so it gets an independent copy."
+hover_why = "Several tasks read this value, so one shared copy saves a full copy per task. Each task pays a tiny bookkeeping step when it takes and drops its reference — cheaper than a copy here, which is why the compiler shares only when at least two tasks read it."
 
 # Cross-module frame serialization shipped in v0.3-M3e.
 # The deferred_language_feature entry has been retired — the feature is live.
@@ -2412,3 +2531,26 @@ what_instead_template = "Nothing to change — there is no source form for this 
 why_template = "The hot loops over `{array}` ({len} `{shape}` values) read only {fields}, so grouping each field's values together lets those loops load just the bytes they use. Honest measurement: under the optimizer the compiler now runs by default, this layout measured about 1.49x faster on a comparable large loop of this shape — a real, shipped speedup, not a projected one. The layout costs nothing in correctness, and the speedup is already in the binaries `ynz build` produces today."
 since = "v0.3-M5"
 design_doc = "docs/internal/implementation/IMP-collections.md"
+
+# v0.3-M8 Phase 7 no-duct-tape guard: Patrick re-deferred the real scope-drop-cancellation
+# fix (codegen calling `ynz_handle_free` when a handle binding's scope ends — the
+# `background-handle-cancel-injection` deferred_language_feature entry above) on condition
+# that the live exposure ships with a LOUD guard rather than a muted one ("i dont like
+# shipping silent errors i prefer loud ones that remind us we need to fix it" — audit.md
+# m8-p7-20260904-a1). Nothing releases a local of any type at scope exit today (see that
+# entry's `why`), so a task whose handle goes out of scope keeps running unseen; this fires
+# a dismissable SUGGESTION (never a build gate) at the spawn site whenever a bound handle is
+# never received anywhere in the rest of its own scope. Fires from `check_stmts`'s
+# `Stmt::Let` arm in crates/ynz-typeck/src/check.rs — narrowed to bound spawns only (an
+# unbound `background f()` has no handle to mislead anyone) and suppressed the moment a
+# `.receive()` call on the same binding appears anywhere later in scope, including inside a
+# following nested block. Retires the moment `background-handle-cancel-injection` ships.
+[[lint_rule]]
+name = "background-handle-not-waited"
+severity = "suggestion"
+description = "A `background` task handle is bound to a name but never received anywhere in its scope, so its task's completion is never waited on. Nothing frees the task when the handle's binding goes out of scope — it keeps running on its own."
+what_template = "`{handle}` never gets received anywhere below this spawn — nothing here ever waits for the task it started."
+what_instead_template = "Call `{handle}.receive()` before this scope ends to wait for the task, or give the task its own way to stop — for example, close the channel it reads its work from."
+why_template = "Yinz does not yet release a local when its scope ends, so `{handle}` going out of scope does not stop the task it started — that task keeps running on its own, even after `{handle}` is gone."
+since = "v0.3-M8"
+design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"

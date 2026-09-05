@@ -14,14 +14,18 @@
 //! - `background_routing_hints`       — routing comment at `background` spawn sites (Informational)
 //! - `parallel_group_hints`           — overlap comment on auto-parallelized statements (Informational)
 //! - `channel_capacity_hints`         — muted default capacity inside `channel<T>()` empty parens (Addition)
+//! - `auto_arc_hints`                 — shared-by-reference-count comment after every member of an
+//!   admitted Auto-Arc group (Informational; live since v0.3-M8 Phase 5, reading the same
+//!   `BgOwnership::Arc` record codegen emits the shared block from)
 //!
 //! # Registered-but-not-firing domains
 //!
 //! `function_param_type` and `lifetimes` are handled by the LSP layer but return empty
 //! hint lists.  `allocators` is registered but fires when arena allocation lands (v0.2+).
-//! `auto_arc` is registered but fires when the auto-Arc codegen emission lands
-//! (`[[deferred_language_feature]]` `auto-arc-codegen-emission`, v0.4+) — there is no
-//! emission yet, so there is no compiler decision to annotate.
+//! The `auto_arc` hint renders in the normal muted style; its red-tinted variant stays under
+//! `[[deferred_tooling_feature]]` `auto-arc-cautionary-tint` (no per-hint tint path in
+//! `ynz-lsp`), and the cases the emission does not yet cover are the narrowed
+//! `auto-arc-codegen-emission` residual — no hint fires there because no block is shared.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -782,15 +786,26 @@ fn collect_background_ownership_hints_block(
 ) {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Expr(Expr::Background(inner, _)) => {
+            // Both spawn statement forms — the bare `background f(v)` and the handle form
+            // `let h = background f(v)` — record through the ONE `record_spawn_arg_ownership`
+            // in typeck (parked item 16), so both render the recorded label here. Before
+            // v0.3-M8 Phase 5 fix round 2 the handle form was never visited: the recorded
+            // `give` on a handle-form spawn had no reader.
+            Stmt::Expr(Expr::Background(inner, _))
+            | Stmt::Let {
+                value: Expr::Background(inner, _),
+                ..
+            } => {
                 if let Expr::Call(call) = inner.as_ref() {
                     for arg in &call.args {
                         if let Expr::Ident(_, span) = arg {
                             let key = (span.start, span.end);
-                            if let Some(own) = bg_inferred.get(&key) {
+                            if let Some(modifier) =
+                                bg_inferred.get(&key).and_then(bg_ownership_modifier_str)
+                            {
                                 out.push(OwnershipHint {
                                     position: span.end,
-                                    modifier: bg_ownership_modifier_str(own).to_string(),
+                                    modifier: modifier.to_string(),
                                 });
                             }
                         }
@@ -883,13 +898,118 @@ fn ownership_modifier_str(own: &OwnershipModifier) -> &'static str {
 }
 
 /// Map a `BgOwnership` (inferred modifier for `background` args) to the hint string.
-fn bg_ownership_modifier_str(own: &crate::check::BgOwnership) -> &'static str {
+/// `None` for an Auto-Arc group member: that decision renders through the `auto_arc`
+/// domain's comment-style hint ([`auto_arc_hints`]) instead, so one spawn argument never
+/// carries two annotations for one compiler decision.
+fn bg_ownership_modifier_str(own: &crate::check::BgOwnership) -> Option<&'static str> {
     match own {
-        crate::check::BgOwnership::Give => "give",
-        crate::check::BgOwnership::Copy => "copy",
+        crate::check::BgOwnership::Give => Some("give"),
+        crate::check::BgOwnership::Copy => Some("copy"),
         // v0.3-M4: a channel argument is shared with the task (refcounted alias) — both
         // sides operate on the same bounded buffer.
-        crate::check::BgOwnership::Channel => "shared channel",
+        crate::check::BgOwnership::Channel => Some("shared channel"),
+        crate::check::BgOwnership::Arc { .. } => None,
+    }
+}
+
+/// Auto-Arc sharing hint at a `background` spawn whose shape argument is a member of an
+/// admitted spawn group (v0.3-M8 Phase 5; `auto_arc` muted-hint domain, Informational
+/// placement per `.claude/rules/inference.md` — a codegen choice with no typeable source
+/// form, rendered as a passive comment after the spawn expression).
+///
+/// Reads the SAME `background_arg_inferred_ownership` record codegen emits from
+/// (`BgOwnership::Arc { group, .. }`), so the hint and the binary can never disagree on
+/// which spawns share a block (authoritative-derivation.md — never re-derived).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutoArcHint {
+    /// Byte offset at the end of the `background` expression — where the comment renders.
+    pub position: usize,
+    /// The rendered muted comment label, e.g.
+    /// `"// shared by reference count with 2 tasks — read-only"`.
+    pub label: String,
+}
+
+/// Collect [`AutoArcHint`]s: one per group member spawn, labelled with the group's task
+/// count (`{n}` in the registry's `auto_arc` hover text).
+pub fn auto_arc_hints(db: &dyn SourceFileRegistry, source: SourceFile) -> Vec<AutoArcHint> {
+    let parse = parse_query(db, source);
+    let check = check_query(db, source);
+    let bg_inferred = &check.typed_module.background_arg_inferred_ownership;
+    if bg_inferred.is_empty() {
+        return Vec::new();
+    }
+    // Group id → member count, from the one record.
+    let mut group_sizes: HashMap<u32, usize> = HashMap::new();
+    for own in bg_inferred.values() {
+        if let crate::check::BgOwnership::Arc { group, .. } = own {
+            *group_sizes.entry(*group).or_insert(0) += 1;
+        }
+    }
+    if group_sizes.is_empty() {
+        return Vec::new();
+    }
+    let mut hints = Vec::new();
+    for item in &parse.module.items {
+        if let Item::Function(f) = item {
+            collect_auto_arc_hints_block(&f.body, bg_inferred, &group_sizes, &mut hints);
+        }
+    }
+    hints.sort_by_key(|h| h.position);
+    hints.dedup();
+    hints
+}
+
+fn collect_auto_arc_hints_block(
+    block: &Block,
+    bg_inferred: &HashMap<(usize, usize), crate::check::BgOwnership>,
+    group_sizes: &HashMap<u32, usize>,
+    out: &mut Vec<AutoArcHint>,
+) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Expr(Expr::Background(inner, bg_span))
+            | Stmt::Let {
+                value: Expr::Background(inner, bg_span),
+                ..
+            } => {
+                // Both spawn forms; a UFCS receiver is argument 0 in typeck's record, and
+                // its span is the receiver's own span, so scanning receiver + args covers
+                // every recorded position without a second normalization.
+                let positions: Vec<&Expr> = match inner.as_ref() {
+                    Expr::Call(call) => call.args.iter().collect(),
+                    Expr::MethodCall { receiver, args, .. } => std::iter::once(receiver.as_ref())
+                        .chain(args.iter())
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                for arg in positions {
+                    let sp = arg.span();
+                    if let Some(crate::check::BgOwnership::Arc { group, .. }) =
+                        bg_inferred.get(&(sp.start, sp.end))
+                    {
+                        let n = group_sizes.get(group).copied().unwrap_or(0);
+                        out.push(AutoArcHint {
+                            position: bg_span.end,
+                            label: format!(
+                                "// shared by reference count with {n} tasks — read-only"
+                            ),
+                        });
+                    }
+                }
+            }
+            Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                collect_auto_arc_hints_block(body, bg_inferred, group_sizes, out);
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    collect_auto_arc_hints_block(&arm.body, bg_inferred, group_sizes, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_auto_arc_hints_block(eb, bg_inferred, group_sizes, out);
+                }
+            }
+            _ => {}
+        }
     }
 }
 

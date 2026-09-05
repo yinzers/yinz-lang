@@ -1,0 +1,16 @@
+// WHY: v0.3-M8 Phase 4 fix round 2 (Producer C1) — the same-call alias pair through a
+// `background` spawn: `background eat2(rows, other)` hands the drop ladder TWO descriptors
+// for ONE allocation (each `give` argument is heap-upgraded and freed at task retire), a
+// double free. The spawn's inner call runs the same `check_call_transfers` as a plain call,
+// so the same-call fix closes this door too.
+// RED today: compiles. GREEN: refused with the use-after-give error naming `other` and `rows`.
+function eat2(give a: array<int>, give b: array<int>) -> nothing {
+  wait sleep(1)
+  print(`${a.count()} ${b.count()}`)
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [1, 2, 3]
+  let other = rows
+  background eat2(rows, other)
+}

@@ -4,7 +4,6 @@
 // ban-list and their plain-English replacements.
 
 use std::path::{Path, PathBuf};
-use ynz_registry;
 
 fn crates_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR points to crates/ynz-diagnostics/
@@ -23,7 +22,7 @@ fn collect_rs_files(dir: &Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 files.extend(collect_rs_files(&path));
-            } else if path.extension().map_or(false, |e| e == "rs") {
+            } else if path.extension().is_some_and(|e| e == "rs") {
                 files.push(path);
             }
         }
@@ -61,12 +60,12 @@ fn find_diagnostic_strings(source: &str, filename: &str) -> Vec<(String, usize, 
         }
 
         if in_ctx {
-            let mut chars = line.chars().peekable();
+            let chars = line.chars();
             let mut in_str = false;
             let mut escaped = false;
             let mut current = String::new();
 
-            while let Some(c) = chars.next() {
+            for c in chars {
                 if escaped {
                     escaped = false;
                     if in_str {
@@ -94,9 +93,7 @@ fn find_diagnostic_strings(source: &str, filename: &str) -> Vec<(String, usize, 
                         depth += 1;
                     }
                     ')' if !in_str => {
-                        if depth > 0 {
-                            depth -= 1;
-                        }
+                        depth = depth.saturating_sub(1);
                         if depth == 0 {
                             in_ctx = false;
                         }
@@ -212,7 +209,6 @@ fn no_banned_jargon_in_lsp_rendered_messages() {
         let mut site_strings: Vec<String> = Vec::new();
         let mut in_ctx = false;
         let mut depth: usize = 0;
-        let mut site_count = 0;
 
         for line in content.lines() {
             if line.contains("Diagnostic::error(")
@@ -221,21 +217,17 @@ fn no_banned_jargon_in_lsp_rendered_messages() {
             {
                 in_ctx = true;
                 depth = 0;
-                site_count = 0;
             }
 
             if in_ctx {
                 for (_, _, s) in find_diagnostic_strings(line, &filename) {
                     site_strings.push(s);
-                    site_count += 1;
                 }
                 for c in line.chars() {
                     match c {
                         '(' => depth += 1,
                         ')' => {
-                            if depth > 0 {
-                                depth -= 1;
-                            }
+                            depth = depth.saturating_sub(1);
                             if depth == 0 {
                                 in_ctx = false;
                                 // Build LSP message if we collected at least 3 strings
@@ -560,9 +552,7 @@ fn no_infer_jargon_in_lsp_inlay_hint_hover_why_source() {
         match ch {
             '{' => depth += 1,
             '}' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
                 if depth == 0 {
                     fn_end = i + 1;
                     break;

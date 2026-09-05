@@ -1,7 +1,7 @@
 //! Tests that `lex_with_trivia` produces the same token stream as `lex` for the same
 //! input, with a parallel `Vec<Comment>` capturing every `//` and `///` comment.
 
-use ynz_parser::{lex_with_trivia, lexer::lex, Comment, CommentKind};
+use ynz_parser::{lex_with_trivia, lexer::lex, CommentKind};
 
 const FILE: &str = "<trivia_test>";
 

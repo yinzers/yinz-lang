@@ -1,0 +1,34 @@
+// WHY: v0.3-M8 Phase 4 — contract item 7: a channel that is NEVER closed behaves exactly as it
+// did before close existed — the producer's three values arrive in order, the consumer takes
+// exactly three, and the program exits with the channel still open (no teardown, no hang,
+// nothing new). The whole pre-existing M4/M6 channel corpus is the wider regression gate; this
+// fixture is the one that reads the retyped `maybe<int>` on a never-closed channel so the
+// `.exists()`/`.value` narrowing is exercised on the pre-close path too. RED today only because
+// bare `receive()` still returns `int` (no `.exists()` on it).
+//
+// Expected output:
+//   10
+function relayScores(lend wire: channel<int>) -> nothing {
+  wire.send(2)
+  wire.send(5)
+  wire.send(3)
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(1)
+  background relayScores(wire)
+  let total = 0
+  let first = wire.receive()
+  if (first.exists()) {
+    total = total + first.value
+  }
+  let second = wire.receive()
+  if (second.exists()) {
+    total = total + second.value
+  }
+  let third = wire.receive()
+  if (third.exists()) {
+    total = total + third.value
+  }
+  print(total.toString())
+}

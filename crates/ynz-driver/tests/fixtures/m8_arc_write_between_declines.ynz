@@ -1,0 +1,35 @@
+// v0.3-M8 Phase 5 — a caller-side WRITE between two spawns declines the group
+// (`classify_binding_in_stmts` returns `Writes` for the field assignment): each spawn takes
+// its own copy on the shipped path, so task 2 sees the updated value. No `ynz_arc_*` call may
+// be emitted for this program.
+//
+// Expected output:
+//   tasks total 112
+//   caller keeps Stargell 10x7
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(5)
+  results.send(scene.width * scene.height)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let scene: Scene = { name: `Stargell`, width: 6, height: 7 }
+  background render(scene, results)
+  scene.width = 10
+  background render(scene, results)
+  let total = 0
+  for (k in range(0, 2)) {
+    let got = results.receive()
+    if (got.exists()) {
+      total = total + got.value
+    }
+  }
+  print(`tasks total ${total}`)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}

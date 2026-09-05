@@ -804,7 +804,6 @@ fn public_may_block_intrinsics_visible_internal_not_visible() {
 // symbol, get "No suggestions", and have to manually write the import — exactly
 // the friction the feature exists to eliminate.
 fn cross_file_items_appear_in_completion_with_import_edit() {
-    use lsp_types::Position;
     use ynz_lsp::{
         capabilities::PositionEncoding, completion::cross_file_completion_items,
         position::LineTable, state::ServerState,

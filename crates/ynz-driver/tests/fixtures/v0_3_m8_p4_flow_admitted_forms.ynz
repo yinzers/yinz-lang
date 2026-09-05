@@ -1,0 +1,57 @@
+// WHY: v0.3-M8 Phase 4 — every payload form the transfer decision ADMITS at a send, in one
+// program (IMP-ownership.md "The transfer decision" / the classification table): a whole owned
+// binding (`Whole` + `Owned` origin — consumed); a `.copy()` (`Fresh` — the copied-from binding
+// `keep` stays usable and is itself sent afterwards); a literal of fresh elements (`Fresh`); an
+// empty literal bound to a binding (the design's "constructor call" row — note `array<int>()`
+// is not a form the parser accepts, so the fresh empty container is written `[]`; surfaced in
+// the Phase 4 report); a `returns_fresh` user-function result bound by `let` (`makeRows` builds
+// and returns a local nobody else reaches). The refused forms are the m8 gallery's. The
+// producer never prints, so the output order is the receive order. Parity: six arrays are
+// received and held at exit (2 counted allocs each; `.add` growth nets to zero) — alloc ==
+// free + 12. RED today: `.close()` is unknown; `.exists()` on an `array<int>`.
+//
+// Expected output:
+//   3
+//   4
+//   4
+//   2
+//   0
+//   5
+//   end
+function makeRows(n: int) -> array<int> {
+  let out: array<int> = []
+  let i = 0
+  while (i < n) {
+    out.add(i)
+    i = i + 1
+  }
+  return out
+}
+
+function producer(lend wire: channel<array<int>>) -> nothing {
+  let owned: array<int> = [1, 2, 3]
+  wire.send(owned)
+  let keep: array<int> = [1, 2, 3, 4]
+  wire.send(keep.copy())
+  wire.send(keep)
+  wire.send([1, 2])
+  let empty: array<int> = []
+  wire.send(empty)
+  let fresh = makeRows(5)
+  wire.send(fresh)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(8)
+  background producer(wire)
+  let stillOpen = true
+  while (stillOpen) {
+    let next = wire.receive()
+    if (next.exists()) {
+      print(next.value.count().toString())
+    }
+    stillOpen = next.exists()
+  }
+  print(`end`)
+}

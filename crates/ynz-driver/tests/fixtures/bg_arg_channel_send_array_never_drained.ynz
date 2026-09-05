@@ -2,7 +2,7 @@
 // channel NOBODY drains. Ownership of the payload now rests with the channel — its last-ref
 // teardown drop glue frees the buffered element exactly once. The task's ladder must NOT
 // free it as well (pre-fix: ladder free + channel-teardown glue = a double free).
-function producer(wire: channel<array<int>>, rows: array<int>) -> nothing {
+function producer(wire: channel<array<int>>, give rows: array<int>) -> nothing {
   wire.send(rows)
 }
 

@@ -1,0 +1,34 @@
+// WHY: v0.3-M8 Phase 4 — the `give` obligation transits the WHOLE chain: A relays to B relays
+// to C, and C sends. Every frame between the owner and the send declares `give` on that
+// parameter, so each caller's binding is consumed in turn and the value has exactly one holder
+// at every step. With `give` missing on the middle frame the build reports BOTH B's and A's
+// errors in ONE compile (the `consumed[fn][i]` fixpoint fact) — that is the gallery trigger;
+// this fixture is the correct program. RED today: `.close()` is unknown; `.exists()` on an
+// `array<int>`.
+//
+// Expected output:
+//   4
+//   end
+function hopC(lend wire: channel<array<int>>, give rows: array<int>) -> nothing {
+  wire.send(rows)
+}
+
+function hopB(lend wire: channel<array<int>>, give rows: array<int>) -> nothing {
+  hopC(wire, rows)
+}
+
+function hopA(lend wire: channel<array<int>>, give rows: array<int>) -> nothing {
+  hopB(wire, rows)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  let rows: array<int> = [4, 5, 6, 7]
+  wait hopA(wire, rows)
+  let got = wire.receive()
+  if (got.exists()) {
+    print(got.value.count().toString())
+  }
+  print(`end`)
+}

@@ -86,14 +86,14 @@ main done with v0.3-M1
 
 v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):
 scheduling 8 pirates...
+Wagner: done
 McCutchen: done
-Clemente: done
 Stargell: done
-Mazeroski: done
 Bonds: done
 Kiner: done
-Wagner: done
+Mazeroski: done
 Beaumont: done
+Clemente: done
 all 8 pirates done
 
 v0.3-M2 — inferred wait (no explicit wait written):
@@ -151,6 +151,17 @@ v0.3-M4 — channels + the background handle-form:
 runs relayed inning by inning: 10
 scout graded jersey 21 at: 42
 inning tally (padded across tasks): 7
+
+v0.3-M8 — closing a channel:
+  innings scored: 3
+  runs after the wire closed: 7
+  a run sent after close() is refused — the scorer already went home
+  lineup received with 3 jerseys
+  the lineup wire is closed and empty
+
+v0.3-M8 — one shared copy for three background scouts:
+  three scouts graded Paul Skenes: combined 1095
+  the front office still holds the original: 60/70/45
 
 v0.3-M5 — per-field array layout: 128-cannonball volley, hot loop on x/y:
   height integral over 64 steps:

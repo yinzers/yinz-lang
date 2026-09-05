@@ -1061,3 +1061,35 @@ Idempotency-Key: 2026-07-04-v0-3-m7-optimizer-pipeline: crates-ynz-typeck-src-ch
 - **WHY** — the predicate must stay side-effect-free (`&self`, never `&mut self`) because it runs speculatively on EVERY background-spawn argument regardless of eventual match; `ast_type_to_type` is `&mut self` and mutates `referenced_names`/diagnostics as a side effect, so calling it directly here would spuriously pollute compiler state for args that never end up spawn-relevant. This is a genuine architectural constraint, not an excuse — but the result is a second, narrower reimplementation of one arm of the authoritative conversion, the exact drift class `authoritative-derivation.md` exists to prevent (this repo has paid for this class of bug 4+ times across M3a/M3d/M3e/M3g).
 - **COST to fix later** — small: add two more match arms to the hand-rolled check mirroring `ast_type_to_type`'s Frame/SourceLoc special case (`"Frame" | "SourceLoc" => true`), or factor a shared, side-effect-free classification helper both `ast_type_to_type` and this predicate call into. Under half a session.
 - **TRIGGER** — (a) a real user-reported repro of a generic call over `Frame`/`SourceLoc` spawned in `background` producing wrong output, OR (b) the day someone fixes the orthogonal, pre-existing compiler ICEs in `emit.rs`'s shape-ABI registration path (`abi_return_type: no LLVM struct type for shape`, `cannot alloca for type Error`) that currently make Frame/SourceLoc unusable as any function's param/return type — at that point this gap reactivates as a live UAF vector with no new review catching it, since the two bugs are orthogonal and nothing currently links them.
+
+## 2026-09-04 — Session log: v0.3-M8 Phase 9 step 3 Capability Ledger reconciliation sealed (`9d8e4da`), including the fr12 deviation
+
+- **What happened.** v0.3-M8's Phase 9 (close-out) step 3 replaced both duplicate `## Capability
+  Ledger` tables' single placeholder row ("Concurrency completion... status: being authored") with
+  four granular rows, in lockstep: channel close / end-of-stream semantics (ABSORBED, M8 Phases 1
+  & 4); Auto-Arc codegen emission (ABSORBED, M8 Phases 2 & 5, narrowed residual named in Notes);
+  source-level scope-drop cancellation (NOT fully absorbed — Branch B re-deferral, worded "pending
+  Patrick's sign-off" because M8 Phase 7's exit criterion was still open at the time); loom +
+  structured fuzzing verification (ABSORBED, M8 Phases 3 & 8, the Tokio-internals-boundary
+  permanent-scope limitation named in Notes rather than framed as a deferred task). The "Selective
+  hot-field-only element materialization" row and `background.cpuBound` (P4-2) were re-confirmed
+  still correctly un-absorbed, for M8's own charter-boundary reason (independent of M7's prior
+  non-absorption).
+- **Dispatch history.** The edit was landed by `m8-p9-20260904-a1` (executor-medium), which reached
+  only this step before the worktree-ask gate halted it; sealed unreviewed and ungraded by the
+  conductor per corpse #3 discipline, commit `9d8e4da`. Re-dispatch `m8-p9-20260904-b1` completed
+  the remaining Phase 9 steps (4 and 5) in the M8 plan's own checkout.
+- **The fr12 deviation, disclosed rather than folded in silently.** `m8-p9-20260904-a1` also flipped
+  the "Conduit-send decimal128 marshalling" row (this roadmap's fr12) from "scheduled — assigned to
+  M8" to "ABSORBED (narrowed)" — not part of its four-row brief. **Verified against the artifact
+  before acceptance, not relayed** (corpse #4 discipline): `registry/features.toml`'s narrowed
+  `channel-element-heap-upgrade` entry (`name = "channel-element-heap-upgrade"`, ~line 1201)
+  confirms `number` at precision ≤ 34 now ships copy-through via a fresh `NumberCell` — never
+  joining the give/heap-upgrade set — and scopes the remaining deferral to `shape` elements and
+  bignum `number` (precision > 34), matching the row's new text exactly. This resolves fr12 per
+  M8's FRAGO 010 (signed 2026-09-03) rather than the heap-marshalling design the row originally
+  scoped — a narrower resolution than originally planned, not the original scope shipped early.
+  Accepted.
+- No code touched by this reconciliation. Session-ids `m8-p9-20260904-a1` and `m8-p9-20260904-b1`
+  are recorded in the M8 plan's own frontmatter chain (`.claude/planning/active/
+  2026-07-04-v0-3-m8-concurrency-completion/plan.md`), not duplicated into this roadmap's chain.

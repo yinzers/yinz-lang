@@ -2,6 +2,12 @@ pub mod arc;
 pub mod channel;
 pub mod handle;
 pub mod runtime;
+pub(crate) mod sync;
+
+/// Loom model-checking harness (v0.3-M8 Phase 3) — compiled ONLY under
+/// `RUSTFLAGS='--cfg loom' cargo test`; see `sync.rs` for the swap and the boundary.
+#[cfg(all(test, loom))]
+mod loom_tests;
 pub use arc::{ynz_arc_clone, ynz_arc_free, ynz_arc_new};
 pub use channel::{
     ynz_channel_create, ynz_channel_free, ynz_channel_recv_poll, ynz_channel_send_poll, YnzChannel,
@@ -1160,6 +1166,71 @@ pub unsafe extern "C" fn ynz_map_drop(map: *mut YnzMap) {
         ((*map).order_cap as usize) * 8,
     );
     ynz_free(map as *mut u8, std::mem::size_of::<YnzMap>());
+}
+
+/// Free one 16-byte decimal128 cell minted by a channel/handle `send` of a `number` (fr12,
+/// v0.3-M8 Phase 4 step 3d). A named C-ABI entry so the channel drop-glue table's arms are
+/// all function values (`ChannelElemDrop::NumberCell → ynz_number_cell_free`); it performs
+/// exactly the counted `ynz_free(ptr, 16)` the bg-arg ladder's `HeapShape { byte_size: 16 }`
+/// arm performs for the same cell shape. Compiler-internal glue — registry-invisible
+/// (feature-registry carve-out).
+///
+/// # Safety
+/// `cell` must be a live pointer from a counted 16-byte `ynz_alloc` (a `number_to_heap_cell`
+/// cell) not yet freed, or null (a no-op, matching the other free entries).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_number_cell_free(cell: *mut u8) {
+    if cell.is_null() {
+        return;
+    }
+    ynz_free(cell, 16);
+}
+
+/// One-level deep copy of a map — the `map<K, V>` half of `.copy()` (v0.3-M8 Phase 4 step
+/// 3a; Patrick's ruling 2026-09-03). Mirrors [`ynz_array_clone_primitive`]: a fresh header
+/// and fresh `ctrl`/`keys`/`vals`/`insert_order` buffers through counted [`ynz_alloc`] (five
+/// counted allocs, so the alloc counter's parity gates see the copy exactly as they see a
+/// `ynz_map_new`), each byte-copied from `src`, with `count`/`capacity`/`order_cap`/
+/// `elem_size` preserved. Pointer-valued cells (a `string` value, a `maybe` cell) copy as
+/// pointers — one level, the same D12/D13 stance as arrays.
+///
+/// Before this entry existed `table.copy()` fell through codegen's `_ => Ok(recv_val)`
+/// catch-all and returned `table` itself (FRAGO 014's alias-no-op stub class); the
+/// independence lock `v0_3_m8_p4_map_copy_independent.ynz` was committed RED on that stub.
+///
+/// # Safety
+/// `src` must be a valid non-null pointer returned by `ynz_map_new` and not yet dropped.
+/// Returns null if `src` is null (caller should treat null as a bug, but this avoids UB).
+/// The returned map must be freed with [`ynz_map_drop`].
+#[no_mangle]
+pub unsafe extern "C" fn ynz_map_clone(src: *mut YnzMap) -> *mut YnzMap {
+    if src.is_null() {
+        return std::ptr::null_mut();
+    }
+    let s = &*src;
+    let cap = s.capacity as usize;
+    let elem_size = s.elem_size as usize;
+    let order_cap = s.order_cap as usize;
+    let hdr = ynz_alloc(std::mem::size_of::<YnzMap>()) as *mut YnzMap;
+    let ctrl = ynz_alloc(cap);
+    let keys = ynz_alloc(cap * 8) as *mut i64;
+    let vals = ynz_alloc(cap * elem_size);
+    let order = ynz_alloc(order_cap * 8) as *mut i64;
+    std::ptr::copy_nonoverlapping(s.ctrl, ctrl, cap);
+    std::ptr::copy_nonoverlapping(s.keys, keys, cap);
+    std::ptr::copy_nonoverlapping(s.vals, vals, cap * elem_size);
+    std::ptr::copy_nonoverlapping(s.insert_order, order, order_cap);
+    *hdr = YnzMap {
+        ctrl,
+        keys,
+        vals,
+        insert_order: order,
+        count: s.count,
+        capacity: s.capacity,
+        order_cap: s.order_cap,
+        elem_size: s.elem_size,
+    };
+    hdr
 }
 
 // ── Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) ──────────
@@ -4393,6 +4464,75 @@ mod m6_pending_send_aba {
             1,
         );
         (fut, frame, descs)
+    }
+
+    /// Every payload the sequence glue below ever freed, in call order, process-wide (the
+    /// glue is an `extern "C" fn(i64)` with no closure context). Shared by every test in
+    /// the binary, so it is never cleared and never read whole: the one test using it
+    /// filters for its own two payload values, which nothing else in the crate mints.
+    static GLUE_SEQUENCE: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "C" fn sequence_glue(bits: i64) {
+        GLUE_SEQUENCE.lock().unwrap().push(bits);
+    }
+
+    /// **Drop ladder kind-2 arm ORDER, ladder holding the LAST reference** (M8 Phase 3 fix
+    /// round 2 — the deterministic half of the ladder-order proof; the loom half is
+    /// `loom_tests::assert_purged_before_released`). Main releases its reference FIRST, so
+    /// the cancelled task's ladder performs the channel's last-reference teardown itself:
+    /// its purge must run while the channel is still alive, then its `ynz_channel_free`
+    /// tears the channel down. The order is witnessed by the glue-call sequence — the purge
+    /// glues the parked payload; teardown's buffered-element drain glues the filler — so the
+    /// correct order is exactly `[parked, filler]`, each once. With the two calls swapped,
+    /// teardown runs first (filler glued, then the parked payload from the `Drop` walk) and
+    /// the purge then touches a freed channel: memory-unsafe, which is why this test is the
+    /// sanitizer lane's (CI job `sanitizers`, steps Miri / AddressSanitizer — whole-crate
+    /// `cargo +nightly miri test -p ynz-runtime` and `-Zsanitizer=address … --lib`) —
+    /// there the swap is reported as use-after-free at the purge, before any sequence
+    /// assertion could run. The existing sibling below keeps main's reference alive
+    /// throughout and so cannot see a swapped order at all.
+    #[test]
+    fn ladder_holding_last_reference_purges_parked_send_before_channel_teardown() {
+        /// Payload values unique to this test across the whole crate (see GLUE_SEQUENCE).
+        const FILLER: i64 = 0x5EED_F111;
+        const PARKED: i64 = 0x5EED_DEAD;
+        let waker = make_waker();
+        unsafe {
+            let chan = ynz_channel_create(1, sequence_glue as *mut u8);
+            prefill(chan, FILLER, &waker); // capacity-1 channel is FULL — the filler stays buffered
+
+            let (mut fut, _frame, _descs) = build_send_task(chan, PARKED);
+            let mut cx = Context::from_waker(&waker);
+            assert_eq!(
+                Pin::new(&mut fut).poll(&mut cx),
+                Poll::Pending,
+                "the task must suspend on the full channel"
+            );
+            assert_eq!(pending_send_count(chan), 1, "the task's send is parked");
+
+            // Main lets go FIRST: from here the task's frame slot holds the channel's LAST
+            // reference, and its ladder is the teardown path.
+            ynz_channel_free(chan);
+
+            // Cancel the task: the REAL ladder runs — kind-2 arm: purge, then free (= teardown).
+            drop(fut);
+        }
+
+        let sequence: Vec<i64> = GLUE_SEQUENCE
+            .lock()
+            .unwrap()
+            .iter()
+            .copied()
+            .filter(|b| *b == FILLER || *b == PARKED)
+            .collect();
+        assert_eq!(
+            sequence,
+            vec![PARKED, FILLER],
+            "drop ladder kind-2 arm ORDER (ladder holds the last reference): the parked \
+             payload must be glued by the PURGE (first) and the buffered filler by the \
+             TEARDOWN that follows the release (second), each exactly once — any other \
+             sequence means the arm released before it purged"
+        );
     }
 
     /// **Frame-path ABA + orphan purge** (P3-1 root finding + P2-2), through the REAL drop

@@ -25,6 +25,17 @@ pub struct ContractSigDef {
     pub name: String,
     /// Param types (not including self).
     pub param_tys: Vec<Type>,
+    /// Param names (not including self) — the `{param}` slot of a chain-form transfer error.
+    pub param_names: Vec<String>,
+    /// The DECLARED ownership modifier of each non-`self` param, straight from the AST
+    /// (`ContractSig.params[i].ownership`; `None` = bare). v0.3-M8 Phase 4: the `dynamic
+    /// Contract` dispatch site runs the transfer decision on the contract's own modifiers —
+    /// the only static truth for a runtime-resolved callee — and `follows` conformance
+    /// checks the implementer's modifiers equal these.
+    pub param_ownerships: Vec<Option<ynz_ast::nodes::OwnershipModifier>>,
+    /// The declared receiver kind (`share self` / `lend self` / `give self`); `None` when the
+    /// receiver is bare (the parser folds a bare `self` and "no self" into the same value).
+    pub receiver: Option<ynz_ast::nodes::ReceiverKind>,
     pub ret_ty: Type,
 }
 
@@ -530,6 +541,9 @@ pub fn collect_shapes(
                 ContractSigDef {
                     name: sig.name.clone(),
                     param_tys,
+                    param_names: sig.params.iter().map(|p| p.name.clone()).collect(),
+                    param_ownerships: sig.params.iter().map(|p| p.ownership.clone()).collect(),
+                    receiver: sig.receiver.clone(),
                     ret_ty,
                 }
             })

@@ -1,0 +1,31 @@
+// WHY: v0.3-M8 Phase 4 — P2-3's leak, fixed IN THE RUNTIME (FRAGO 006 / audit.md, and the
+// design's "Two mechanisms, one rule — the CLOSED-first-poll path"): the task's `send()` after
+// `close()` is refused, and because `send()` GAVE the payload (the task's `rows` is consumed
+// at typeck), nobody holds it any more — `channel_send_poll_guarded`'s single `refuse_closed`
+// fallthrough calls `release_taken_value()` then the channel's registered drop glue, so the
+// refused array is freed exactly once. Codegen's closed arms free NOTHING. Parity: the array's
+// 2 counted allocs are matched by 2 counted frees — alloc == free + 0 at exit. A gap of 2 is
+// P2-3's leak back; a negative gap is a double free. RED today: `.close()` is unknown.
+//
+// Expected output:
+//   refused
+//   end
+function producer(lend wire: channel<array<int>>) -> nothing {
+  let rows: array<int> = [10, 20, 30]
+  wire.close()
+  let sent = wire.send(rows)
+  if (sent.failed()) {
+    print(`refused`)
+  }
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  background producer(wire)
+  wait sleep(40)
+  let got = wire.receive()
+  if (got.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`end`)
+}

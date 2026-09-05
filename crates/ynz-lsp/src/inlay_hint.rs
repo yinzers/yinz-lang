@@ -1,6 +1,6 @@
 //! `textDocument/inlayHint` LSP handler — teaching annotations for the editor.
 //!
-//! Fires 9 of the registry-defined muted-hint domains; the rest return
+//! Fires 10 of the registry-defined muted-hint domains; the rest return
 //! empty lists (protocol-only or awaiting their underlying analysis).
 //!
 //! # Firing domains
@@ -16,6 +16,7 @@
 //! | `background_routing` | Informational | I/O-pool vs CPU-pool routing comment |
 //! | `parallel_groups` | Informational | concurrent-statement overlap comment |
 //! | `channel_capacity` | Addition | muted default capacity inside `channel<T>()` empty parens |
+//! | `auto_arc` | Informational | shared-by-reference-count comment after a group-member spawn |
 //!
 //! Every firing hint carries a WHAT / WHAT-INSTEAD / WHY hover tooltip sourced
 //! from the registry via `ynz_registry::lsp_inlay_hint_hover_for`.  Per Golden
@@ -26,11 +27,15 @@
 //!
 //! `function_param_type`, `lifetimes` — handled here but returning `[]` until the
 //! underlying analysis lands.  `allocators` — registered but fires when arena
-//! allocation lands (v0.2+).  `auto_arc` — registered with its full cautionary
-//! WHAT/WHY hover text, but firing requires the auto-Arc codegen emission
-//! (`[[deferred_language_feature]]` `auto-arc-codegen-emission`, v0.4+): with no
-//! emission there is no compiler decision to annotate.  When future milestones add
-//! the analysis, those branches emit real hints with no further LSP change.
+//! allocation lands (v0.2+).  When future milestones add the analysis, those
+//! branches emit real hints with no further LSP change.
+//!
+//! `auto_arc` fires since v0.3-M8 Phase 5, reading the SAME
+//! `background_arg_inferred_ownership` record codegen emits the Arc calls from
+//! (`ynz_typeck::auto_arc_hints`), in the normal muted style — the red-tinted
+//! cautionary styling stays behind `[[deferred_tooling_feature]]`
+//! `auto-arc-cautionary-tint` (no per-hint tint path exists); the caution is in
+//! the hover's words.
 //!
 //! # Viewport filtering
 //!
@@ -44,9 +49,10 @@ use lsp_types::{
 use ynz_diagnostics::{Severity, SourceSpan};
 use ynz_typeck::queries::check_query;
 use ynz_typeck::{
-    array_to_fixed_promotion_hints, background_routing_hints, channel_capacity_hints,
-    copy_point_hints, let_to_const_promotion_hints, ownership_call_site_hints,
-    parallel_group_hints, variable_type_hints, wait_points_hints, DEFAULT_CHANNEL_CAPACITY,
+    array_to_fixed_promotion_hints, auto_arc_hints, background_routing_hints,
+    channel_capacity_hints, copy_point_hints, let_to_const_promotion_hints,
+    ownership_call_site_hints, parallel_group_hints, variable_type_hints, wait_points_hints,
+    DEFAULT_CHANNEL_CAPACITY,
 };
 
 use crate::{capabilities::PositionEncoding, position::LineTable, state::ServerState};
@@ -395,9 +401,30 @@ pub fn inlay_hint_response(
         }
     }
 
-    // ── Registered-but-not-firing domains (function_param_type, lifetimes,
-    //    auto_arc) — return empty until a future milestone adds the underlying
-    //    analysis (auto_arc: the auto-Arc codegen emission, v0.4+).
+    // ── Domain 11: auto_arc (Informational) — "shared by reference count with N tasks —
+    //    read-only" after each spawn that is a member of an admitted Auto-Arc group.
+    //    Comment-style passive annotation per inference.md (a codegen choice with no
+    //    typeable source form; no click-to-insert). Threads typeck's ONE recorded
+    //    `BgOwnership::Arc` group analysis — the same record codegen mints the block from —
+    //    never a re-derivation (authoritative-derivation.md). Normal muted style: the
+    //    cautionary red tint is `auto-arc-cautionary-tint`, still deferred.
+
+    for h in auto_arc_hints(&state.db, sf) {
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
+        if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
+            hints.push(make_hint(
+                pos,
+                format!("  {}", h.label),
+                InlayHintKind::PARAMETER,
+                "auto_arc",
+            ));
+        }
+    }
+
+    // ── Registered-but-not-firing domains (function_param_type, lifetimes) —
+    //    return empty until a future milestone adds the underlying analysis.
     //    No code needed: no data → no hints appended → Vec unchanged.
 
     hints

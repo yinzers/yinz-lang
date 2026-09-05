@@ -1,0 +1,29 @@
+// WHY: v0.3-M8 Phase 4 step 3d — fr12's refused cell: a `number` sent after `close()` is
+// refused, and the 16-byte cell the send minted is freed by `refuse_closed` through
+// `ChannelElemDrop::NumberCell → ynz_number_cell_free` (`release_taken_value()` finds no ladder
+// slot holding these bits — the cell is fresh, never a ladder-owned clone — a harmless no-op).
+// The producer's `price` is untouched (copy-through). Parity: alloc == free + 0. RED today:
+// `channel<number>` is rejected at construction.
+//
+// Expected output:
+//   refused
+//   end
+function producer(lend wire: channel<number>) -> nothing {
+  let price: number = 2.5
+  wire.close()
+  let sent = wire.send(price)
+  if (sent.failed()) {
+    print(`refused`)
+  }
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<number> = channel<number>(4)
+  background producer(wire)
+  wait sleep(40)
+  let got = wire.receive()
+  if (got.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`end`)
+}

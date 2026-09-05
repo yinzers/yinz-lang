@@ -25,3 +25,17 @@ num_cpus = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+# Loom model-checking substrate (v0.3-M8 Phase 3). Reachable ONLY when rustc is invoked with
+# `--cfg loom` (RUSTFLAGS='--cfg loom'); a plain `cargo build`/`cargo test` never resolves,
+# downloads, or links it — zero production dependency. Under `cfg(loom)` the `crate::sync`
+# shim re-exports loom's `Arc`/`Mutex`/`thread_local!` in place of std's so loom can
+# exhaustively schedule the runtime-owned channel synchronization state (see src/sync.rs).
+[target.'cfg(loom)'.dependencies]
+loom = "=0.7.2"
+
+# `cfg(loom)` is set by RUSTFLAGS, not by a Cargo feature — declare it so rustc's check-cfg
+# lint knows it is intentional (otherwise every `#[cfg(loom)]` warns, and clippy -D warnings
+# would fail the workspace).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

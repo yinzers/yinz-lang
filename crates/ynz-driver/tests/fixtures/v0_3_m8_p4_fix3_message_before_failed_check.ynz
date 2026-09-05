@@ -1,0 +1,12 @@
+// WHY: v0.3-M8 Phase 4 fix round 3, Producer A/B — `.message` read on an `errors`-capable
+// value that was never checked with `.failed()`. `REF-errors.md:171-175` requires the check
+// first; before this fix typeck typed `.message` as `string` unconditionally, and codegen's
+// `select` on the (possibly null) error pointer evaluated BOTH operands eagerly — so this
+// exact program compiled and SIGABRT'd calling `ynz_error_message` on a null pointer on the
+// OPEN-channel success path. RED before the fix: SIGABRT. RED at the earlier fix's own gate
+// gap: this program compiled at all. GREEN: refused at compile time.
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  let ok = wire.send(9)
+  print(ok.message)
+}

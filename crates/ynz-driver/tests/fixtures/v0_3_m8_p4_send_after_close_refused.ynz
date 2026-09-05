@@ -1,0 +1,24 @@
+// WHY: v0.3-M8 Phase 4 — contract item 2: a `send()` after `close()` is refused at RUNTIME with
+// the typed channel-closed error on the existing `send() -> nothing errors` surface (the M4
+// Lock-8 arm that was dead code until close existed). No compile-time diagnostic — cross-task
+// flow is undecidable ("Send-after-close is a runtime error, not a compile-time diagnostic").
+// The refused value is an `int` (no drop glue), so nothing is freed here; the owned-heap
+// refusal path is the `chan_array_send_after_close` / `chan_map_send_after_close` fixtures.
+// RED today: `.close()` is an unknown method.
+//
+// Expected output:
+//   refused
+//   end
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  wire.close()
+  let sent = wire.send(7)
+  if (sent.failed()) {
+    print(`refused`)
+  }
+  let got = wire.receive()
+  if (got.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`end`)
+}

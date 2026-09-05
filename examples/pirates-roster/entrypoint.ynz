@@ -264,8 +264,14 @@ function entrypoint() -> nothing {
   // ────── v0.3-M4: channels + the background handle-form ──────
   // m4_demo suspends (channel receives), so `wait` orders it after m3g's story finishes.
   wait m4_demo()
+  // ────── v0.3-M8: closing a channel — end of stream ──────
+  // m8_demo suspends (its consumer loop receives), so `wait` orders it after m4_demo.
+  wait m8_demo()
+  // ────── v0.3-M8: one shared copy for a group of background readers (auto-Arc) ──────
+  // m8_arc_demo suspends (it receives the scouts' reports), so `wait` orders it after m8_demo.
+  wait m8_arc_demo()
   // ────── v0.3-M5: per-field array layout — cannonball volley ──────
-  // m5_soa_demo is pure CPU (it never suspends); m4_demo above was waited, so
+  // m5_soa_demo is pure CPU (it never suspends); m8_demo above was waited, so
   // this final section runs strictly after the channel story finishes.
   m5_soa_demo()
 }
@@ -1080,7 +1086,10 @@ function relayScores(lend wire: channel<int>) -> nothing {
 // channel parameter (fed by `scout.send(...)` through the handle), evaluates it, and its
 // completion value is delivered back through the SAME handle via `scout.receive()`.
 function gradeProspect(lend requests: channel<int>) -> int errors {
-  let jerseyNumber = requests.receive()
+  // A bare channel's `receive()` is `maybe<int>` (v0.3-M8): `none` means the channel was
+  // closed and drained. One command is always sent here, so `.or(0)` is never taken.
+  let command = requests.receive()
+  let jerseyNumber = command.or(0)
   return jerseyNumber * 2
 }
 
@@ -1117,10 +1126,15 @@ function m4_demo() -> nothing {
   // function drains it. Capacity 1 forces genuine backpressure inside relayScores.
   let wire: channel<int> = channel<int>(1)
   background relayScores(wire)
+  // Each `receive()` hands back a `maybe<int>` (v0.3-M8) — narrow it right away; this
+  // producer never closes the wire, so the fallback is never taken.
   let first = wire.receive()
+  let firstRuns = first.or(0)
   let second = wire.receive()
+  let secondRuns = second.or(0)
   let third = wire.receive()
-  let runsTotal = first + second + third
+  let thirdRuns = third.or(0)
+  let runsTotal = firstRuns + secondRuns + thirdRuns
   print(`runs relayed inning by inning: ${runsTotal.toString()}`)
 
   // Handle form: STORE the spawn to communicate with it (don't store = fire-and-forget —
@@ -1143,7 +1157,8 @@ function m4_demo() -> nothing {
   let inning: InningTally = { hits: 4, outs: 3 }
   let tallyWire: channel<int> = channel<int>(2)
   background tallyInning(inning, tallyWire)
-  let inningTotal = tallyWire.receive()
+  let inningReply = tallyWire.receive()
+  let inningTotal = inningReply.or(0)
   print(`inning tally (padded across tasks): ${inningTotal.toString()}`)
 
   // v0.3-M4 Phase 3 — auto-Arc across a `background` boundary.
@@ -1160,6 +1175,127 @@ function m4_demo() -> nothing {
   // (`auto-arc-codegen-emission`) and its LSP hint wiring + red-tint (`auto_arc` domain /
   // `auto-arc-cautionary-tint`) are recorded deferrals in registry/features.toml. This block
   // grows into a live auto-Arc demo when the emission lands.
+}
+
+// ────── v0.3-M8: closing a channel — the end of a stream is a value, not a hang ──────
+//
+// A producer says "nothing more is coming" with `wire.close()`. After that, every `send()` on
+// the wire is refused with the typed channel-closed error, and `receive()` keeps delivering
+// whatever was already buffered, then returns `none`. That `none` is how a consumer loop ends —
+// no counting, no timeouts, no special error. Closing twice is a safe no-op.
+//
+// Sending an owned-heap value (an `array<T>` or a `map<K, V>`) GIVES it away: the sender's
+// binding can't be read afterward (use it before the send, or send `.copy()`), so the receiver
+// is the value's only holder — two tasks never share one changing value.
+
+// relayInnings — sends one run total per inning, then closes the wire so tallyRuns knows
+// the game is over. A second close() is harmless.
+function relayInnings(lend wire: channel<int>) -> nothing {
+  wire.send(2)
+  wire.send(0)
+  wire.send(5)
+  wire.close()
+  wire.close()
+}
+
+// tallyRuns — the canonical consumer loop: `receive()` is `maybe<int>`; the loop runs while
+// values keep arriving and stops on the first `none`.
+function tallyRuns(lend wire: channel<int>) -> int {
+  let total = 0
+  let innings = 0
+  let stillOpen = true
+  while (stillOpen) {
+    let next = wire.receive()
+    if (next.exists()) {
+      total = total + next.value
+      innings = innings + 1
+    }
+    stillOpen = next.exists()
+  }
+  print(`  innings scored: ${innings.toString()}`)
+  return total
+}
+
+// shipLineup — sends a whole lineup (an array) across the wire. `send()` gives the array
+// away: `lineup` is not usable after this line (the compiler refuses a read — see the m8
+// error gallery), so the receiving side is its only holder.
+function shipLineup(lend wire: channel<array<int>>) -> nothing {
+  let lineup: array<int> = [21, 7, 13]
+  wire.send(lineup)
+  wire.close()
+}
+
+function m8_demo() -> nothing {
+  print(``)
+  print(`v0.3-M8 — closing a channel:`)
+  let wire: channel<int> = channel<int>(2)
+  background relayInnings(wire)
+  let runs = tallyRuns(wire)
+  print(`  runs after the wire closed: ${runs.toString()}`)
+  // The consumer loop ended, so close() has happened: a send now is refused with the typed
+  // channel-closed error on the usual `send() -> nothing errors` surface.
+  let late = wire.send(1)
+  if (late.failed()) {
+    print(`  a run sent after close() is refused — the scorer already went home`)
+  }
+
+  let lineupWire: channel<array<int>> = channel<array<int>>(1)
+  background shipLineup(lineupWire)
+  let delivered = lineupWire.receive()
+  if (delivered.exists()) {
+    let lineup = delivered.value
+    print(`  lineup received with ${lineup.count().toString()} jerseys`)
+  }
+  let after = lineupWire.receive()
+  if (after.exists()) {
+    print(`  unexpected: a lineup after the wire closed`)
+  }
+  print(`  the lineup wire is closed and empty`)
+}
+
+// ────── v0.3-M8: one shared copy for a group of background readers (auto-Arc) ──────
+//
+// Three scouts read the SAME scouting file at the same time. Because the three spawns
+// below sit in one block, pass the same whole `file` binding, nothing changes `file`
+// between them, `scoutFile` only reads its parameter, and `ScoutingFile` is made of
+// string/int fields, the compiler copies the file ONCE into a shared reference-counted
+// block and hands each scout a counted reference — instead of three full copies. The
+// caller keeps reading its own original. Hover a spawn line in VSCode: the muted
+// `// shared by reference count with 3 tasks — read-only` comment is the compiler telling
+// you it did this; the hover explains the cost it weighed. Write `file.copy()` at a spawn to
+// give that one scout an independent copy instead.
+
+shape ScoutingFile {
+  prospect: string
+  contactGrade: int
+  powerGrade: int
+  speedGrade: int
+}
+
+// A scout reads every grade of the shared file (read-only) and reports a weighted total.
+function scoutFile(file: ScoutingFile, reports: channel<int>) -> nothing {
+  wait sleep(5)
+  let total = file.contactGrade * 3 + file.powerGrade * 2 + file.speedGrade
+  reports.send(total)
+}
+
+function m8_arc_demo() -> nothing {
+  print(``)
+  print(`v0.3-M8 — one shared copy for three background scouts:`)
+  let reports: channel<int> = channel<int>()
+  let file: ScoutingFile = { prospect: `Paul Skenes`, contactGrade: 60, powerGrade: 70, speedGrade: 45 }
+  background scoutFile(file, reports)
+  background scoutFile(file, reports)
+  background scoutFile(file, reports)
+  let combined = 0
+  for (k in range(0, 3)) {
+    let report = reports.receive()
+    if (report.exists()) {
+      combined = combined + report.value
+    }
+  }
+  print(`  three scouts graded ${file.prospect}: combined ${combined.toString()}`)
+  print(`  the front office still holds the original: ${file.contactGrade.toString()}/${file.powerGrade.toString()}/${file.speedGrade.toString()}`)
 }
 
 // ────── v0.3-M5: per-field array layout — cannonball volley from Fort Pitt ──────

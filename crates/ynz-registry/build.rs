@@ -261,12 +261,34 @@ fn emit_primitive_intrinsics(table: &TomlTable, out: &mut String) {
             .unwrap_or("");
         let since = get_str(entry, "since", kind, name);
         let doc = entry.get("doc").and_then(|v| v.as_str());
+        // `param_ownership` (v0.3-M8 Phase 4, FRAGO 003; validated per parked item 5): when
+        // present, every value is one of the AST `OwnershipModifier` names and the list is
+        // aligned with `param_types` — a typo or a misalignment fails the build here rather
+        // than shipping as hover text.
+        let param_ownership = get_str_array(entry, "param_ownership", kind, name);
+        if entry.get("param_ownership").is_some() {
+            for word in &param_ownership {
+                if !matches!(*word, "share" | "lend" | "give") {
+                    panic!(
+                        "registry/features.toml: [[{kind}]] entry '{name}': param_ownership value {word:?} is not one of share | lend | give"
+                    );
+                }
+            }
+            if param_ownership.len() != param_types.len() {
+                panic!(
+                    "registry/features.toml: [[{kind}]] entry '{name}': param_ownership has {} entries but param_types has {} — the two lists must align",
+                    param_ownership.len(),
+                    param_types.len()
+                );
+            }
+        }
 
         let receiver_expr = match receiver_type {
             Some(rt) => format!("Some({rt:?})"),
             None => "None".to_string(),
         };
         let params_expr = escape_str_array(&param_types);
+        let ownership_expr = escape_str_array(&param_ownership);
         let doc_expr = match doc {
             Some(d) => format!("Some({d:?})"),
             None => "None".to_string(),
@@ -274,7 +296,7 @@ fn emit_primitive_intrinsics(table: &TomlTable, out: &mut String) {
 
         writeln!(
             out,
-            "    crate::PrimitiveIntrinsicEntry {{ name: {name:?}, kind: {intr_kind:?}, receiver_type: {receiver_expr}, param_types: {params_expr}, return_type: {return_type:?}, since: {since:?}, doc: {doc_expr} }},",
+            "    crate::PrimitiveIntrinsicEntry {{ name: {name:?}, kind: {intr_kind:?}, receiver_type: {receiver_expr}, param_types: {params_expr}, param_ownership: {ownership_expr}, return_type: {return_type:?}, since: {since:?}, doc: {doc_expr} }},",
         )
         .unwrap();
     }

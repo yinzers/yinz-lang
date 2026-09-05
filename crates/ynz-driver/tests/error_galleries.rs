@@ -137,18 +137,127 @@ fn m8_gallery_fires_expected_diagnostics() {
     // v0.1-polish inline shape type errors (4+ errors). Expected: 5–10.
     // test-ratchet: v0.1-polish adds 3 inline-shape error triggers (unknown field,
     // missing field, hidden-in-inline) — count grows from 2 to ~6.
+    // v0.3-M8 Phase 4 (test-ratchet): the channel-close + transfer-rule section adds the
+    // four new compile diagnostics (ConsumedBySend ×5 incl. the three alias forms,
+    // ParamNeedsGive ×5 incl. both frames of the relay chain, TransferNeedsCopy ×5 incl. the
+    // dynamic-contract instance, HandleChannelArgNeedsBinding ×1), the extracted const-send
+    // refusal, the existing use-after-give error at two new sites (+2 same-call alias-pair
+    // sites, fix round 2), and the two diagnostics
+    // `.close()` extends (no-args, per-receiver unknown-method list) — 26–36 in all.
+    // v0.3-M8 Phase 4 fix round 3 (test-ratchet): +1 MessageBeforeFailedCheck trigger —
+    // 26–37 in all. Every new class is pinned by key phrase below so the count can never
+    // pass for the wrong reason.
     let (stderr, code) = compile_gallery(&gallery("m8_errors.ynz"));
     assert_ne!(code, 0, "m8 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert!(
-        (5..=12).contains(&error_count),
-        "m8 gallery must produce 5–12 errors; got {error_count}.\nstderr:\n{stderr}"
+        (26..=37).contains(&error_count),
+        "m8 gallery must produce 26–37 errors; got {error_count}.\nstderr:\n{stderr}"
     );
 
     assert!(
         stderr.contains("background"),
         "m8 gallery must include a background-share diagnostic; got:\n{stderr}"
+    );
+
+    // ConsumedBySend — the WHAT's fixed clause (IMP-ownership.md "Teaching text").
+    assert!(
+        stderr.contains("`send()` gave it away"),
+        "m8 gallery must include the ConsumedBySend diagnostic; got:\n{stderr}"
+    );
+    // ConsumedBySend through an alias class — the `{via}` slot names what was sent.
+    assert!(
+        stderr.contains("which is what was sent"),
+        "m8 gallery must include the alias-class `{{via}}` form of ConsumedBySend; got:\n{stderr}"
+    );
+    // ParamNeedsGive — the WHAT's fixed closing sentence.
+    assert!(
+        stderr.contains("Only a `give` parameter can be given away."),
+        "m8 gallery must include the ParamNeedsGive diagnostic; got:\n{stderr}"
+    );
+    // ParamNeedsGive fires for BOTH frames of the relay chain in one build.
+    assert!(
+        stderr.contains("parameter of `m8HopB`") && stderr.contains("parameter of `m8HopA`"),
+        "m8 gallery must report both m8HopB's and m8HopA's missing `give` in one build; got:\n{stderr}"
+    );
+    // TransferNeedsCopy — the WHAT's fixed clause, plus each `{reason}` form.
+    assert!(
+        stderr.contains("so someone here still holds it."),
+        "m8 gallery must include the TransferNeedsCopy diagnostic; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("is a field of `bucket`"),
+        "m8 gallery must include TransferNeedsCopy's field reason; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("one cell of `matrix`"),
+        "m8 gallery must include TransferNeedsCopy's loop-cell reason; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("returns a piece of its `b` argument"),
+        "m8 gallery must include TransferNeedsCopy's returns-a-piece reason; got:\n{stderr}"
+    );
+    // HandleChannelArgNeedsBinding — the WHAT's fixed clause.
+    assert!(
+        stderr.contains("which is not a named binding"),
+        "m8 gallery must include the HandleChannelArgNeedsBinding diagnostic; got:\n{stderr}"
+    );
+    // The extracted const refusal carries the send sink's WHAT-INSTEAD.
+    assert!(
+        stderr.contains("wire.send(rows.copy())"),
+        "m8 gallery must include the const-send refusal with the send-sink advice; got:\n{stderr}"
+    );
+    // `.close()` with arguments — WHAT and WHAT-INSTEAD both render (fix round 2: the renderer
+    // read byte spans as char offsets and dropped the teaching block of any span that landed
+    // past the file's char count; trigger order is irrelevant now).
+    assert!(
+        stderr.contains("`.close()` takes no arguments"),
+        "m8 gallery must include the close-takes-no-arguments diagnostic; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Call it bare: wire.close()"),
+        "m8 gallery must render the close-takes-no-arguments WHAT-INSTEAD; got:\n{stderr}"
+    );
+    // The same-call alias pair (fix round 2, Producer C1): the use-after-give error's `{via}`
+    // slot names the class-mate that was given.
+    assert!(
+        stderr.contains("which is what was given away"),
+        "m8 gallery must include the same-call alias-pair use-after-give; got:\n{stderr}"
+    );
+    // Every rendered diagnostic points at its own trigger line, never into a `// WHY:` comment
+    // (fix round 2, Producer A: byte spans were read as char offsets).
+    for line in stderr.lines() {
+        if line.contains(" │ ") && line.contains("// WHY:") && !line.contains("─▶") {
+            panic!("a diagnostic's caret line landed inside a `// WHY:` comment:\n{line}\n\nfull stderr:\n{stderr}");
+        }
+    }
+    // The unknown-method list split per receiver: channel gains close(), handle does not.
+    assert!(
+        stderr.contains("Available methods: send(value), receive(), close()."),
+        "m8 gallery must list close() among a channel's methods; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Available methods: send(value), receive()."),
+        "m8 gallery must keep the handle's method list without close(); got:\n{stderr}"
+    );
+    // MessageBeforeFailedCheck (fix round 3, Producer A) — `.message` read before `.failed()`.
+    assert!(
+        stderr.contains("hasn't been checked with `.failed()` yet"),
+        "m8 gallery must include the MessageBeforeFailedCheck diagnostic; got:\n{stderr}"
+    );
+
+    // ── Phase 7: the `background-handle-not-waited` Tier 3 lint (SUGGESTION severity —
+    //    must be present in stderr WITHOUT raising the Error count above: the no-duct-tape
+    //    guard for the re-deferred scope-drop cancellation fix is a teaching surface, never
+    //    a build gate) ──
+    assert!(
+        stderr.contains("lint: background-handle-not-waited"),
+        "m8 gallery must fire background-handle-not-waited with its rule code; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("h.receive()"),
+        "background-handle-not-waited must name the actual binding in its WHAT-INSTEAD; got:\n{stderr}"
     );
 }
 

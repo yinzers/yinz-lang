@@ -978,7 +978,6 @@ mod tests {
         // sequentially. Wrong analysis would mark them as Parallel, corrupting output
         // and proving the cross-impl gate RED.
         let effects: WriteEffectMap = HashMap::new();
-        let susp = suspend_set(&["fetcher"]);
         let a = let_stmt("x", "fetcher", vec![]);
         let b = call_stmt("fetcher", vec![ident("x")]);
         assert!(
@@ -992,7 +991,6 @@ mod tests {
         // WHY: Two stmts that both define the same name would shadow each other.
         // Conservative: not independent.
         let effects: WriteEffectMap = HashMap::new();
-        let susp = suspend_set(&["fa", "fb"]);
         let a = let_stmt("x", "fa", vec![]);
         let b = let_stmt("x", "fb", vec![]);
         assert!(
@@ -1006,7 +1004,6 @@ mod tests {
         // WHY: Stmts with no data dep and no write conflict must be marked independent
         // so the parallel pass can group them.
         let effects: WriteEffectMap = HashMap::new();
-        let susp = suspend_set(&["fa", "fb"]);
         let a = let_stmt("x", "fa", vec![]);
         let b = let_stmt("y", "fb", vec![]);
         assert!(
@@ -1023,7 +1020,6 @@ mod tests {
         // write).
         let table = table_only(&[("writer", vec![heap_ty()])]);
         let effects = build_write_effect_summary(&table, &HashMap::new());
-        let susp = suspend_set(&["writer"]);
         let a = call_stmt("writer", vec![ident("counter")]);
         let b = call_stmt("writer", vec![ident("counter")]);
         assert!(
@@ -1114,7 +1110,6 @@ mod tests {
         // This confirms the aliasing-soundness guard only blocks write-arg pairs, not
         // read-only pairs (the common case for parallel I/O reads).
         let effects: WriteEffectMap = HashMap::new(); // no write positions
-        let susp = suspend_set(&["fa", "fb"]);
         let a = let_stmt("x", "fa", vec![ident("data_a")]);
         let b = let_stmt("y", "fb", vec![ident("data_b")]);
         assert!(

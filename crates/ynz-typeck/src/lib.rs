@@ -62,6 +62,7 @@ pub mod soa;
 pub mod suspension_source;
 pub mod symbol_lookup;
 pub mod type_at_offset;
+pub mod type_variant_sampler;
 pub mod types;
 
 pub use check::{
@@ -80,11 +81,11 @@ pub use false_sharing::{
 };
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use inlay_hint_passes::{
-    array_to_fixed_promotion_hints, background_routing_hints, channel_capacity_hints,
-    copy_point_hints, let_to_const_promotion_hints, ownership_call_site_hints,
-    parallel_group_hints, variable_type_hints, wait_points_hints, BackgroundRoutingHint,
-    ChannelCapacityHint, CopyHint, OwnershipHint, ParallelGroupHint, PromotionHint, PromotionKind,
-    TypeHint, WaitPointHint,
+    array_to_fixed_promotion_hints, auto_arc_hints, background_routing_hints,
+    channel_capacity_hints, copy_point_hints, let_to_const_promotion_hints,
+    ownership_call_site_hints, parallel_group_hints, variable_type_hints, wait_points_hints,
+    AutoArcHint, BackgroundRoutingHint, ChannelCapacityHint, CopyHint, OwnershipHint,
+    ParallelGroupHint, PromotionHint, PromotionKind, TypeHint, WaitPointHint,
 };
 pub use intrinsics::PrimitiveIntrinsicTable;
 pub use lints::lint_diagnostic;
