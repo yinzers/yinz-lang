@@ -123,3 +123,199 @@ permissions) as a likely injection and declined it. That reminder is genuine har
 configuration, not an injection — the conductor received the same one. This is the second
 consecutive dispatch to make that call. The instinct is correct and worth keeping; the resolution
 is simply that the repo's `tooling.md` already governs the choice and reaches the same answer.
+
+---
+
+## FRAGO 002 — Phase 2 question (b) ANSWERED: three clusters, one singleton, and FRAGO 001 is the ancestor of none of them
+
+**Dispatch** `hardening-p2b-20260905-a1` (executor-medium/opus), 2026-09-05. Diagnosis only; tree
+left clean, nothing fixed, no fixture committed.
+
+Six defects went in. The answer is **not one ancestor and not six**: three clusters plus a
+singleton. Each cluster carries the observable-change test `root-cause.md` demands.
+
+### The negative result first, because it was the tempting answer
+
+**FRAGO 001's missing scope-exit release is the ancestor of NOTHING on this list.** A missing free
+is a *leak*; every defect here is a *read of the wrong bytes*. C1 is an analysis gap in typeck —
+the local is never frame-slotted, so the resume reads an uninitialised alloca; releasing memory at
+scope exit changes nothing about it. C2's FR #9 is the *opposite* of a leak (a premature free
+through an alias). C3 and S1 never touch the heap at all. FRAGO 001 remains a real, verified
+producer of its own class. It is not this list's ancestor, and collapsing the two would have been
+precisely the error `root-cause.md` names.
+
+---
+
+### C1 — FR #11(a) and FR #11(b) are ONE bug, and the class is wider than either filing
+
+**Producer.** `collect_crossings_in_stmts` (`crates/ynz-typeck/src/check.rs`): once `past_wait` is
+true, a statement that is *itself* a suspension point has its result-binding recorded but its own
+operands are never scanned. The `If`/`While`/`For`/`Match` arms call
+`collect_ident_refs_in_stmt`; the direct suspending forms — `Stmt::Expr(conduit send)`,
+`Stmt::Expr(suspending call)`, `Stmt::Let{value: Call|Wait|MethodCall}` — fall through `_ => {}`.
+A pre-suspension local read only by such a statement never enters the crossing set, gets no frame
+slot, and is read from an uninitialised alloca in the resume invocation. The arg-escape collector
+does not cover the hole: `collect_aggregate_args_in_expr` fires only on `is_suspending_call` /
+`expr_is_ufcs_suspending_call` (a conduit `ch.send` is neither), and `mark_aggregate_arg` admits
+only stack-backed types, never `array`/`map`.
+
+*Conductor-verified independently:* the suspending forms are classified at the top of that
+function and the `collect_ident_refs_in_stmt` calls appear only in the `If`/`While`/`For` arms; the
+direct forms reach `_ => {}`.
+
+**Members.** M8 FR #11(a), FR #11(b).
+
+**Evidence — 6 probes, `target/p2b-probe/` (gitignored, left for Phase 3):**
+
+| Probe | Shape | Result |
+|---|---|---|
+| A | `array<int>` before `wait sleep`, `wire.send(rows)` after | SIGABRT 3/3, **default mode** |
+| B | same, declared *after* the suspension | correct 3/3 — control holds |
+| C | **A plus one harmless `print(rows.count())` before the send** | correct 12/12 — **the read alone fixes it** |
+| D | **no channel at all** — array arg to a suspending user function | prints **6** instead of 3, **exit 0, default mode** |
+| E | the `let sent = wire.send(rows)` form | misaligned-pointer abort |
+| G | `number` sent 3× into `channel<number>(1)` (sends 2–3 block) | `6.8` in 6/12 at `-O0`; clean 5/5 at default |
+| H | **G plus one harmless `print(price)`** | correct **12/12** |
+| J | int-**local** twin of G | prints heap addresses 5/12 |
+| I | the fuzzer's literal-Int feeder, no local | clean 12/12 |
+
+IR: probe A emits `rows.0` only; probe C emits `rows_slot`, `rows_flush_p2i`, `rows_reload_i2p`.
+The only difference is one harmless read.
+
+**Probe H is the argument.** The same one-line control that fixes (a) also fixes (b). Two
+symptoms, one producer.
+
+**Probe D is the severity.** No channel, no `background`, no `.copy()`, no `errors` — an array
+declared before an I/O call and passed to a function after it. Silent wrong output, exit 0,
+default optimized mode. That is ordinary code, and it is worse than FR #11(a)'s own filing.
+
+**Three committed claims overturned, each independently checkable:**
+1. `fuzz_grammar/mod.rs::take_or_make_array`'s "specific to the channel-transfer path" — **false**
+   (probe D has no channel).
+2. `mod.rs` contradicts itself on Int: the `FeedFn::send_count` comment says "untested, not
+   confirmed safe"; the `stmt_background_drain_loop` comment says "general to BOTH `int` and
+   `number`". Parked 49(b) relays the second. Probes I and J show the discriminator is not the
+   element type — it is **whether a local is read by a statement that suspends**. The cautious
+   comment was the honest one.
+3. Parked 48 understates FR #10 — see C2.
+
+**What dies when fixed.** A prints 3; D prints 3; E runs; G prints 10.2 at `-O0`; J stops printing
+addresses; **both fuzz-generator suppression guards become deletable.**
+
+**Precondition for the fix, not a reason to defer.** Widening the crossing set pushes more locals
+through `suspension_guards_fire_for_fn`, and types that cannot be frame-backed (`fixed`, `maybe`,
+union, `dynamic`, nested shape) currently make a function decline. The fix may convert today's
+silent miscompiles into new declines or compile errors on programs that build today. Measure the
+delta on the existing corpus before landing.
+
+---
+
+### C2 — FR #9 and FR #10 share a design ancestor, not a code line
+
+**Producer.** Two independent per-type dispatches answer "give me an independent copy of this heap
+value," and both default to returning the receiver's own pointer:
+`prepare_bg_arg_for_ctx`'s `array<pointer-elem>` branch and `_` arm, and `copy_lowering_arm`'s
+`AliasNoOp`. Same type set. The bg-arg arms' own comments cite `.copy()` as justification; parked
+47 and 48 name the identical trigger.
+
+**Members.** FR #9 (bg-arg escape door #4), FR #10 (`.copy()` alias arm).
+
+**Honest boundary.** Fixing one does not fix the other. This is **one decision and one shared
+clone routine, two call sites rewired** — not one edit. Two fresh per-type tables would rebuild
+exactly the twin `authoritative-derivation.md` forbids, which is *why* it is one cluster.
+
+**FR #10 has live user-visible exposure today.** Probe N: `let b = a.copy(); b.set(0, 99);
+print(a[0])` prints **99**. No transfer, no diagnostic, silent wrong answer in the default mode.
+Parked 48 says the residual is "auditing what `.copy()` SHOULD mean" on the grounds that
+provenance refuses the transfer — that understates it.
+
+**Record correction.** `.copy()`'s lowering is no longer `_ => Ok(recv_val)`. It is an exhaustive
+`copy_lowering_arm` over `Type` with **no `_` arm**, a named `AliasNoOp` variant, and
+`copy_parity_tests` binding it to typeck's `copy_is_independent`. Same defect, better fenced.
+
+**CROSS-PHASE ORDERING CONSTRAINT — load-bearing.** FR #9's defect is a *premature free*: the
+ladder frees a clone the parent still points at. **Phase 4's scope-exit release pass must NOT land
+before C2 closes**, or it will emit frees on aliased pointers and convert a dangling read into a
+double-free.
+
+---
+
+### C3 — parked 33 confirmed; parked 32 unsettled
+
+**Producer.** Every flow-sensitive `errors` fact in `check.rs` keys on a bare name —
+`errors_failed_true_branch`, `errors_consumed`, `errors_success_narrowed` — and
+`check_errors_field_needs_failed_check` admits a read by matching `Expr::Ident(name)` against that
+list. `check_stmt_if` push/pops `self.scope` around the body, but the errors sets are not
+scope-aware, so a shadowing inner `let` inherits the outer binding's checked status.
+
+**Reproduced** (probe L3): `let x = mayFail(1); if (x.failed()) { let x = mayFail(3);
+print(x.message) }` compiles and runs. The inner `x` was never checked.
+
+**parked 32 is a CANDIDATE, not a member.** Two shaped repro attempts both produced correct
+output; parked 32's own record says half was fixed in round 3 by `restore_ec_receiver_ty`.
+**Settling experiment, cheap and named:** recover the round-3 executor's exact repro from the M8
+`audit.md` (`m8-p4-fix3-20260904`, base `d0c46b3`) and re-run on HEAD *before* budgeting a session
+for it.
+
+**What dies when fixed.** Probe L3 stops compiling; `MessageBeforeFailedCheck` fires on the inner
+`x`.
+
+---
+
+### S1 (singleton) — parked 34
+
+**Producer.** `EC_FIELDS_REQUIRE_FAILED_CHECK` admits `message`/`suggestions`/`trace`/`source`;
+codegen's `Type::ErrorsCapable` field arm lowers `message` and hard-errors on the rest. Two lists,
+nothing binding them.
+
+**Not C3's**, against parked's own filing. Parked 33/34 are recorded as sharing one ancestor ("the
+`errors`-value field surface was never finished end-to-end") — true as narrative, false under
+`root-cause.md`'s test: fixing the name-keying kills nothing in 34, and adding codegen arms kills
+nothing in 33.
+
+**Reproduced** (probe M): `late.trace` inside a *correct* guard → "not lowered yet (only
+.message) / This is a compiler bug."
+
+**The upstream form, already invented one function away.** `copy_parity_tests` binds
+`copy_lowering_arm` to typeck's `copy_is_independent` over an exhaustive sampler, so a type
+codegen cannot copy fails to compile. The errors-field surface has no equivalent. Make the field
+list one shared enumeration with a parity test, and a fifth admitted-but-unlowered field becomes a
+build failure instead of a user-facing ICE.
+
+---
+
+### Recommended Phase 3 ordering
+
+1. **C1 — first, and it is not close.** Silent wrong output in the default mode on ordinary code
+   (probe D). Single function, well-understood place, and closing it deletes two fuzz-generator
+   suppression guards currently hiding findings from every future round.
+2. **C2 — decision starts now, in parallel with C1's code.** FR #9 is a live UAF, FR #10 live
+   silent-wrong. Both block on one call Patrick owns: what an owned, independent copy of each heap
+   type means. **Must close before Phase 4 opens.**
+3. **C3 (33)** — compile-time hole, no memory-unsafety.
+4. **S1 (34)** — easiest, but LOUD and self-identifying, so nobody is silently misled. Pair with 33.
+5. **parked 32** — archival read before any session is budgeted. It may not exist.
+
+### Not settled, with the settling evidence named
+
+1. parked 32's live status — recover the round-3 repro, re-run on HEAD.
+2. Whether C1's fix alone closes all 35 findings from the 256-seed sweep — belongs in Phase 3's
+   RED-pin step: after the fix, remove both generator guards and run `YNZ_FUZZ_PROGRAMS=256`;
+   findings should go to zero.
+3. Why (b) is `-O0`-only — **labelled inference**: LLVM likely folds the poison load to something
+   benign at `-O2` while an array pointer is fatal at any level. Optimized IR not read. Does not
+   change the fix.
+4. The exact size of C2's per-type decision — deliberately not pre-empted; it is Patrick's call.
+
+### Dispatch deviations, flagged
+
+- **Did not modify `fuzz_grammar/mod.rs`** as the brief prescribed. Read the guard doc comments,
+  then reproduced both defects from first principles with 15-line hand-written programs —
+  deterministic for (a), ~50% for (b), far tighter than a 256-seed sweep. The tree never went
+  dirty, so the "confirm the revert" step is vacuous rather than skipped. **Better than the method
+  I specified.**
+- Did not commit the minimal programs as RED pins; the brief forbade tree writes. A, D, G, J and N
+  are the five that belong in `crates/ynz-driver/tests/fixtures/` as Phase 3's first commit.
+- Graded parked 32/33/34 as two producers rather than the one their own entry claims.
+- Ran three probes the brief did not ask for (D, I/J, N); each overturned or upgraded a committed
+  claim.

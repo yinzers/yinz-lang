@@ -3,7 +3,7 @@ name: "v0-3-concurrency-hardening"
 plan-id: "2026-09-04-v0-3-concurrency-hardening"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["hardening-p1-20260905-a1"]
+session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1"]
 tier: "hasty"
 tier-reason: "Concurrency is a blocking gate on using Yinz at all; every known blocker is traced to a named producer and fixed at that producer, not patched per symptom. Scope is fixed (four phases, non-negotiable), deferral is forbidden, ambiguity is decided upstream. Small committed work riding Patrick's settled order."
 created_at: "2026-09-04"
