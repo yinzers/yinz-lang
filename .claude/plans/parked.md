@@ -711,3 +711,309 @@ Source plan-id `2026-07-04-v0-3-m8-concurrency-completion`, `## Future Requireme
       already tracked in the roadmap's own `audit.md` and in M7's. Entry 50 names one flake;
       the real flake surface on this branch is at least two. Same class, same producer
       (`.claude/rules/test-parallelism.md`'s wall-clock-budget corpse), same trigger.
+
+### Recovered from the deleted `.claude/todos.md` — M2-M7 concurrency deferrals with no surviving home (added 2026-09-05, plan 2026-09-04-v0-3-concurrency-hardening Phase 1)
+
+`.claude/todos.md` was deleted in `1b83fcb` ("chore: remove state.md/todos.md — superseded by
+the .claude/planning system") — 403 deletions, zero insertions, no migration. Six M2-M7 plans
+still cite that file as the recorded home for a deferral; the home no longer exists. Recovered
+from `git show 1b83fcb^:.claude/todos.md`. Every WHAT/WHY/COST/TRIGGER below is sourced from
+that recovered text (never paraphrased from a summary), cross-checked against the current
+tree where the item touches live code — two of the thirteen turned out to be already closed by
+later, unrelated work (entries 59 and 64 below); that verification is recorded inline rather
+than silently carried forward as still-live.
+
+53. **`param_read_after_join` still declines any post-join param read on a CPU spike-host.**
+    WHAT: a CPU spike-host that reads a parameter in a statement AFTER its group's join still
+    declines to sequential lowering. Confirmed still live and unfixed: `param_read_after_join`
+    (`crates/ynz-typeck/src/cpu_admission.rs`), consumed by `admitted_cpu_group` /
+    `spike_cpu_candidates` (`crates/ynz-codegen/src/emit.rs`), and that codegen function's own
+    doc comment still points at ".claude/todos.md" for the deferred fix — the exact dead
+    pointer this section exists to close. The wrapper writes param slot 0 at the byte offset
+    where the first CPU handle begins (`ynz_abi::SPIKE_HANDLE_BASE_OFFSET`), so the spawn's
+    handle store clobbers the param's frame slot; a post-join param read reloads the handle
+    pointer's bytes instead of the param's value — a silent wrong answer. A param used only in
+    spawn args round-trips safely (loaded into a stack alloca before the spawn runs), so that
+    narrower subset fires; any post-join read declines. WHY not fixed here: needs param-slot
+    reservation past the CPU-handle region — the wrapper's param-store must write past the
+    spike reserve, and the resume path's param-load must offset to match — real frame-layout
+    machinery, not a gate flip. COST: param-slot reservation in the wrapper param-store + an
+    offsetting resume param-load, per the original finding's own estimate — real but modest,
+    scoped to this one interaction. TRIGGER: when param-read-post-join host parallelism is
+    wanted. Locked by (still in tree): `v0_3_m3d_param_host_declines.ynz` (the read-after-join
+    DECLINE) vs `v0_3_m3d_param_host_spawn_args_only.ynz` (the spawn-args-only FIRE). Source:
+    plan `2026-06-11-v0-3-m3d-cpu-parallelization` (sub-slice 4e, 2026-06-15) +
+    `.claude/todos.md` at `1b83fcb^`.
+
+54. **Loop-body CPU groups decline to sequential at every placement.** WHAT: a CPU group
+    inside ANY `for`/`while` loop body declines to sequential lowering, at every placement
+    (top-level loop, loop-under-branch, inner-of-nested-loop) — `spike_nested_blocks`
+    (`crates/ynz-codegen/src/emit.rs`) excludes `For`/`While` bodies from candidacy entirely,
+    so a loop-body CPU group is never detected and never fires; the program runs
+    byte-identical to `--no-auto-parallel`. WHY not fixed: a loop-body CPU group needs the
+    loop index AND every loop-carried local frame-backed across the group's join (the state
+    machine resumes inside the body without re-running the loop header), plus multi-level
+    synthetic-index reservation for nested placements — none of which the spike path provides
+    today. M3d's own sub-slice 4b PROVED two of three attempted partial-admit shapes either
+    silently miscompile or hard-abort codegen (a group in a for-body nested under an `if`; a
+    group in the inner of two nested for-loops), so ALL loop-body placements were declined
+    rather than shipping a partial, hand-listed envelope. COST: a dedicated
+    loop-placement-matrix slice — multi-level synthetic loop-index slots (outer + inner),
+    loop-carried-local frame-backing, threaded through the spike spawn/poll lowering, and
+    re-including loop bodies in `spike_nested_blocks` only once every placement (top-level
+    loop, loop-under-branch, inner-of-nested-loop) is proven byte-identical + abort-free.
+    TRIGGER: when loop-body CPU parallelism is wanted. Locked by (still in tree):
+    `v03_m3d_nested_for_body_group_declines_byte_identical`,
+    `v03_m3d_for_under_if_group_declines_byte_identical`,
+    `v03_m3d_inner_nested_for_group_declines_byte_identical` — all 0 spawns / byte-identical /
+    abort-free. Source: plan `2026-06-11-v0-3-m3d-cpu-parallelization` (sub-slice 4b,
+    2026-06-14) + `.claude/todos.md` at `1b83fcb^`. **Note**: the roadmap at
+    `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md` (M3d section) had
+    implied this was "owned elsewhere per the Capability Ledger" — no such ledger row exists;
+    the roadmap text is corrected as part of this same Phase 1 pass to point here instead.
+
+55. **A function with 2+ CPU groups declines ALL spiking, not just the extras.** WHAT: a
+    function with two-or-more CPU groups (top-level plus nested, or two nested, in ANY source
+    order) declines ALL spiking to sequential lowering — `admitted_cpu_group` /
+    `spike_cpu_candidates` require exactly one CPU group across all depths
+    (`count_cpu_groups_all_depths == 1`); the frame reserves exactly one group-0 handle/result
+    slot region, so firing two groups would alias the first group's handles. The decline is
+    order-independent (a nested-group-before-top-level function declines identically to
+    top-level-before-nested) — this order-independence is itself the fix for an earlier
+    corrupt-binary regression the order-DEPENDENT version produced. WHY not fixed: partial
+    hosting (fire one group, decline the rest) or full per-group hosting needs handle/result
+    slots keyed per (group-index, member-index), threaded through the spike spawn/poll
+    lowering, plus a per-group fired-set replacing the current single-fire guard — real
+    frame-layout machinery, not a gate flip. COST: per-group slot keying + fired-set, per the
+    original finding's own estimate. TRIGGER: when multi-group CPU/mixed parallelism is
+    wanted, or when the spike frame-slot reservation is next reworked. Locked by (still in
+    tree): `v03_m3d_nested_multi_group_declines_byte_identical` (top-first) +
+    `v03_m3d_nested_group_before_top_declines_byte_identical` (nested-first) — both 0 spawns /
+    byte-identical. Source: plan `2026-06-11-v0-3-m3d-cpu-parallelization` (sub-slice 4b fix
+    round, 2026-06-14) + `.claude/todos.md` at `1b83fcb^`. **Note**: same roadmap
+    misattribution as entry 54 above — corrected in the same Phase 1 pass.
+
+56. **Wide-value-EC (`number errors` / `Shape errors`) CPU-parallel join-bind dereferences a
+    dead worker-thread stack pointer — a genuine UAF, dormant only because the return class is
+    excluded from CPU admission.** WHAT: a non-SM `number errors` (or any wide-value-EC)
+    callee, if ever admitted to a CPU group, returns its ok-word as a pointer to a
+    worker-thread stack i128 (`is_number_errors_callee` / the Number arm of `to_i64_bits`,
+    `crates/ynz-codegen/src/emit.rs`); the parent's join-bind (`bind_sm_result_and_flush`)
+    would dereference that pointer AFTER the worker frame is dead. Confirmed still dormant,
+    not live: `ec_inner_fits_cpu_result_abi` (emit.rs) explicitly excludes `Number` from the
+    set of `T errors` inner types safe to carry in the CPU-result ABI's ok-word — its own doc
+    comment states the exact reason ("number → dead-worker-stack pointer... that pointer
+    dangles the instant the worker frame dies"), so no program can admit this shape to a CPU
+    group today. WHY not fixed: the fix is heap-stabilizing the wide-EC ok-word (malloc the
+    i128, store a heap pointer in the ok-word, free at bind, alloc==free accounting) —
+    mirroring bare-`number`'s SM-wrapper heap-stabilization — or a wider CPU-result ABI; same
+    staging-slot family as the `ec-wrapper-collect-on-completion` lift already SHIPPED for the
+    `background`-handle path in v0.3-M4 Phase 2 (`registry/features.toml`), but NOT yet done
+    for this CPU-parallel join-bind path. COST: 1-2 sessions, shared with any future wide-EC
+    CPU-parallelism work — per M3g's own Future Requirements row E7. TRIGGER: when CPU
+    parallelism for wide-value-EC returns is wanted. Source: plan
+    `2026-07-01-v0-3-m3g-mixed-cpu-io-overlap` (Future Requirements row E7) +
+    `.claude/todos.md` at `1b83fcb^` (M3d P3 sub-slice-4d gate, 2026-06-14).
+
+57. **`spike_host_subset` probe vs. emit-time `suspends_with_promotions` disagree on
+    host-calls-host chains — benign over-allocation, tradeoff genuinely unquantified.** WHAT:
+    `spike_host_subset` (`crates/ynz-codegen/src/emit.rs`) probes each candidate against the
+    EFFECTIVE suspend set, computed BEFORE spike-host names are unioned in; the emit-time
+    re-probe in `lower_function_with_waits` instead reads `suspends_with_promotions` (effective
+    ∪ spike-hosts). For a host whose post-pair statement calls ANOTHER host, the probe admits
+    (that callee isn't yet a known-suspending name) while the emit-time gate declines (the
+    callee is now in the host union) — the probe then reserves the 48-byte handle/result
+    region for a host the emitter runs sequentially: a dead reserve. Confirmed still live: the
+    function's own current doc comment names this "Probe/emit-time asymmetry (benign
+    over-allocation; tracked residual)" in the exact same terms. WHY not fixed, stated plainly
+    rather than left thin per the audit's own instruction: the over-allocation itself is
+    confirmed benign (the embedded child sub-frame still fits; no aliasing, no corruption;
+    alloc==free verified on a probe host chain), but the cost of leaving it unreconciled is
+    genuinely UNQUANTIFIED — nobody has measured how common host-calls-host chains are in real
+    Yinz programs, so "dead-reserve waste" has no known magnitude. Reconciling the two sets
+    needs a fixpoint (removing a host can re-admit a function that declined only because that
+    host was suspending, which can in turn re-decline a third function) — a single
+    reconciliation pass is not enough, and a naive full-promoted-union probe risks
+    reintroducing the M3d slice-1 union-poisoning class, so this is not an opportunistic fix.
+    COST: a fixpoint reconciliation pass + adversarial fixtures re-proving no under-allocation
+    is introduced — unscoped in sessions because the fixpoint's convergence behavior on a real
+    host-chain corpus has never been characterized. TRIGGER: when the dead-reserve waste
+    matters on a real large host-chain program, or when the spike host-set computation is next
+    reworked. Source: plan `2026-07-01-v0-3-m3g-mixed-cpu-io-overlap` (referenced by the
+    current `spike_host_subset` doc comment as a tracked residual) + `.claude/todos.md` at
+    `1b83fcb^` (M3d P3 sub-slice-4a, 2026-06-14).
+
+58. **`background` + CPU-group shutdown can panic a worker mid-join — benign, pre-existing,
+    timing-dependent.** WHAT: `ynz_rt_shutdown` (`crates/ynz-runtime/src/runtime.rs`)
+    force-aborts in-flight tasks at program shutdown; when a `background`-spawned task owns a
+    still-mid-join CPU child, the abort can surface as a Tokio-worker panic (confirmed still
+    present: `panic!("ynz runtime: CPU child task was aborted before it could produce a
+    result")` in the non-panic JoinError arm of `ynz_rt_join_poll`). Confirmed pre-existing
+    (reproduces identically at the base commit and after the M3d sub-slice-4d change originally
+    suspected of introducing it), timing-dependent (~25% of runs in the original measurement),
+    and benign — the program has already produced its correct output and exits 0 before the
+    panic fires on the detached worker thread. WHY not fixed: no stable byte-identical Yinz-
+    source fixture can be constructed for a timing-dependent shutdown race (tested via
+    deterministic runtime unit tests instead of an integration fixture); the fix — graceful
+    drain of in-flight background-task CPU joins on `ynz_rt_shutdown`, or a silent detach
+    instead of an abort-arm panic when the program is already terminating — is runtime work
+    crossing the `background` (M1/M3e) and CPU-group (M3d) boundaries, outside any single
+    milestone's charter to date. COST: not sized in the original finding — a runtime-only
+    change to `ynz_rt_shutdown`'s abort path. TRIGGER: when `background` + CPU-group
+    composition is hardened (a dedicated background-CPU slice). Source: plan
+    `2026-07-01-v0-3-m3g-mixed-cpu-io-overlap` (Future Requirements table row) +
+    `.claude/todos.md` at `1b83fcb^` (M3d P3 sub-slice-4d verify-first, 2026-06-14).
+
+59. **State-machine frame-header offsets, dual-defined with only a prose comment — CLOSED-BY,
+    not a live deferral.** WHAT the audit flagged: general SM frame-header offsets
+    (`sleep_handle`@8, `return_slot`@16) allegedly dual-defined across
+    `crates/ynz-codegen/src/state_machine.rs` and `crates/ynz-runtime/src/runtime.rs` with only
+    a prose "must stay in sync" comment and no compile-time binding — the exact twin-derivation
+    class [`.claude/rules/authoritative-derivation.md`](../rules/authoritative-derivation.md)
+    exists to prevent. **VERIFIED CLOSED, not live**: `crates/ynz-abi/src/lib.rs` defines
+    `FRAME_OFFSET_SLEEP_HANDLE`, `FRAME_OFFSET_RETURN_SLOT`, and `FRAME_HEADER_SIZE` EXACTLY
+    ONCE, with a doc comment stating the move happened "v0.3-M3g Phase 1 ... the same drift
+    class sub-slice 4d closed for the spike-frame offsets." Both `state_machine.rs` and
+    `runtime.rs` import all three constants from `ynz_abi` (grep-confirmed:
+    `use ynz_abi::{FRAME_HEADER_SIZE, FRAME_OFFSET_RETURN_SLOT, FRAME_OFFSET_SLEEP_HANDLE};` in
+    `state_machine.rs`; the same three names imported in `runtime.rs`). A repo-wide grep for a
+    second, locally-defined constant of the same byte values (`FRAME_SLEEP_HANDLE_OFFSET`,
+    `FRAME_RETURN_SLOT_OFFSET`, or any other local `pub const` at 8/16 for these fields) returns
+    zero hits outside `ynz-abi`. The finding was true when `.claude/todos.md` recorded it
+    (2026-06-15) and is FALSE today — v0.3-M3g Phase 1 closed it as a byproduct of its own
+    frame-ABI consolidation, before M3g's own plan or Future Requirements table ever named it
+    as a residual. **Ruling on fold-vs-standalone** (the question this dispatch posed): moot —
+    there is no live risk left to fold into the roadmap's "Authoritative-derivation write-time
+    guard" unscoped-capability row (`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`
+    ledger row 438/439) or to park as a standalone live deferral. Recorded here as CLOSED-BY
+    rather than silently dropped, so a future reader who finds the same stale
+    `.claude/todos.md`-sourced description elsewhere does not re-open a non-issue.
+    **Correcting the dispatching brief's own framing**: this is NOT this plan's blocker —
+    Phase 2/4 will find this specific frame-slot layer already load-bearing-safe when they
+    reach it. Source: plan `2026-07-01-v0-3-m3g-mixed-cpu-io-overlap` Phase 1 +
+    `crates/ynz-abi/src/lib.rs` (read 2026-09-05) + `.claude/todos.md` at `1b83fcb^` (M3d P3
+    sub-slice-4d gate round 4, 2026-06-15 — the original finding).
+
+60. **`options` (i8 tag) crossing `wait` still works by coincidence, not by an explicit
+    classified arm.** WHAT: confirmed still true — `flush_var_slot_to_frame`
+    (`crates/ynz-codegen/src/emit.rs`) dispatches crossing-local flush behavior on
+    `cg.sm_crossing_scalar_set` / `_bool_set` / `_float_set` / `_decimal128_set` /
+    `_errors_capable_set` / `_shape_embed_set`; there is no `sm_crossing_options_set` anywhere
+    in the file (grep-verified, zero hits). An `options` value therefore falls into whatever
+    generic path handles everything not explicitly classified, and small i8 tag values happen
+    to round-trip through the i64 frame slot. WHY not fixed: correct-by-coincidence, not by
+    design — a future change widening `options` or altering slot conventions could silently
+    break it with no test catching the assumption until it does. COST: add an explicit
+    `Type::Options` branch to `flush_var_slot_to_frame` (i8 zext-on-write / trunc-on-read,
+    mirroring the existing bool arm), OR add an explicit comment + guard documenting why the
+    else-path is safe for i8 tags today. TRIGGER: any change to options representation OR the
+    frame-slot classifier, or a v0.3 follow-up hardening pass. Source: plan
+    `2026-06-01-v0-3-m3a-suspension-codegen` (cumulative review, 2026-06-04) +
+    `.claude/todos.md` at `1b83fcb^`.
+
+61. **A NESTED mixed (fused CPU+I/O) group stays declined to sequential.** WHAT:
+    `admitted_fused_group` (`crates/ynz-typeck/src/cpu_admission.rs`) is TOP-LEVEL ONLY by
+    construction (its own doc comment) — a mixed group inside an `if`/`while`/`for`/`match`
+    body never fuses, even where the pure-CPU path's nested-branch machinery would admit a
+    pure-CPU-only group at the same position. WHY not fixed, scoped at authoring time per
+    M3g's own disciplined-initiative rule 4: the existing pure-CPU nested-group frame-slot
+    reasoning (`nested_group_member_path`, the branch-arm block-path descent) was proven
+    against a SINGLE-KIND (CPU-only) reserve; a nested FUSED group would ALSO need to embed
+    I/O child sub-frames inside that same nested block's byte layout, which has not been
+    derived or fixture-proven. COST: ~1 session — extend the nested-branch admission +
+    frame-layout machinery to a fused (dual-kind) reserve at depth > 0, mirroring how
+    `cpu_group_slots_and_reserve`'s fused branch already does it at depth 0, plus adversarial
+    fixtures for the newly-admitted nested+fused shapes. TRIGGER: a real workload needs a
+    mixed CPU+I/O group inside a branch arm (no current M3g fixture is blocked — every fixture
+    exercising fusion is top-level). Locked by (still in tree):
+    `v03_m3g_nested_mixed_group_declines_byte_identical`
+    (`crates/ynz-driver/tests/integration.rs`) + fixture
+    `v0_3_m3g_nested_mixed_group_declines.ynz` — 0 spawns, byte-identical to
+    `--no-auto-parallel`. Source: plan `2026-07-01-v0-3-m3g-mixed-cpu-io-overlap`, Future
+    Requirements / Revisit table.
+
+62. **`admitted_fused_group`'s `!f.params.is_empty()` restriction is coarser than
+    `param_read_after_join`'s precision.** WHAT: the pure-CPU top-level branch tolerates SOME
+    params (via the narrower "no post-join READ" gate, entry 53 above); the fused-group gate
+    (`admitted_fused_group`, `crates/ynz-typeck/src/cpu_admission.rs`) declines ALL params,
+    zero exceptions. WHY not fixed, a real safety tradeoff not a shortcut: the CPU
+    handle/result reserve AND the fused group's embedded I/O sub-frames both depend on the
+    same byte-32-relative `own_base` computation a param-host's param slots also use —
+    narrowing to `param_read_after_join`'s precision for the fused+I/O-embedding case has not
+    been re-derived (the I/O sub-frame layout interaction with param slots is a materially
+    different shape than the pure-CPU case `param_read_after_join` was proven against), so the
+    conservative "no params at all" bar was chosen for this first fused-group codegen consumer
+    rather than risk an unproven narrower gate. COST: ~1 session — re-derive the byte-offset
+    interaction for a param-host embedding both a CPU reserve AND an I/O sub-frame, prove it
+    under `param_read_after_join`'s discipline, add adversarial fixtures for the newly-admitted
+    param+fused-group shapes. TRIGGER: a real workload needs a parameterized mixed-group host
+    (every current M3g fixture has zero params; none is blocked today). Source: plan
+    `2026-07-01-v0-3-m3g-mixed-cpu-io-overlap`, Future Requirements / Revisit table.
+
+63. **CPU-heavy code in a plain non-state-machine function has no cooperative-yield mechanism
+    at all — COST genuinely unscoped.** WHAT: the back-edge poll-yield mechanism
+    (`ynz_rt_check_preempt`, `crates/ynz-runtime/src/runtime.rs`, called from
+    `crates/ynz-codegen/src/emit.rs`) only exists for loops inside state-machine
+    (`wait`-containing) functions. A plain synchronous function's hot loop can never
+    cooperatively yield this way; its only protection is the existing CPU-admission routing to
+    the blocking pool, which is a heuristic (admission), not a guarantee. WHY not fixed: no
+    cooperative-yield mechanism exists for non-SM functions in this language's design (per
+    `docs/internal/implementation/IMP-no-function-coloring.md` — plain functions are, by
+    design, synchronous and non-suspending); closing this residual needs either a new
+    function-coloring-adjacent mechanism (a real design change) or provably tightening
+    admission's classification — neither was in the optimizer-pipeline milestone's charter.
+    COST: UNSCOPED — the source plan states this explicitly ("unknown until scoped — likely a
+    dedicated design session revisiting `cpu_admission.rs`'s classification boundary"); no
+    number is invented here. TRIGGER: a real, reproduced starvation incident traced to a
+    non-SM CPU-bound function that admission misclassified, or the next milestone revisiting
+    `cpu_admission.rs`/scheduler design. Source: plan `2026-07-04-v0-3-m7-optimizer-pipeline`,
+    Future Requirements / Revisit #8.
+
+64. **`array<boolean>` literal ICE — CLOSED-BY, not a live deferral, and NOT a concurrency
+    defect.** WHAT the audit flagged: `array<boolean> = [true, true, true]` allegedly ICEs at
+    LLVM-verify time (a raw i1 passed to the i64 `ynz_array_push`/`ynz_array_set` ABI),
+    reproducing with or without a `wait` — confirmed NOT a concurrency defect even at the time
+    it was found (2026-06-04, M3a cumulative review; the no-wait control was the proof).
+    **VERIFIED CLOSED, not live**: `crates/ynz-driver/tests/fixtures/m5_p2_byval_bool_literal.ynz`
+    (`array<boolean> = [true, false, true]` plus `.add()`/`.set()`/index-assign) is a committed,
+    currently-green integration test (`m5_p2_byval_bool_literal`,
+    `crates/ynz-driver/tests/integration.rs`) whose own WHY comment names this exact bug by
+    description — "RED-today cell #1: the pointer ABI miscompiles boolean arrays outright — raw
+    i1 passed to the i64 push/set ABI; LLVM module verify fails" — and asserts `code == 0` plus
+    exact correct stdout. The by-value array element rewrite (`array_elem_src_ptr` /
+    `zext_bits64` in `crates/ynz-codegen/src/emit.rs`, which zero-extends any sub-64-bit int
+    generically before marshalling) closed this as part of v0.3-M5 P2's general array-ABI
+    work — the same milestone the original finding named as its own natural trigger ("OR the
+    `m3c-array-by-value` work... fix it there since it touches the same lowering"). Labeled
+    plainly per this section's own instruction: this was never a concurrency defect; recorded
+    here only because it was equally homeless once `.claude/todos.md` was deleted, and would
+    otherwise have vanished silently. Source: `.claude/todos.md` at `1b83fcb^` (M3a cumulative
+    review, 2026-06-04 — the original finding) + `crates/ynz-driver/tests/fixtures/m5_p2_byval_bool_literal.ynz`
+    and `crates/ynz-driver/tests/integration.rs::m5_p2_byval_bool_literal` (read 2026-09-05 —
+    the closing evidence).
+
+65. **The `number` return ABI's "caller copies immediately" contract had no compile-time
+    enforcement — CLOSED-BY, not a live gap.** WHAT the audit flagged: the bare-`number`
+    (decimal128) return ABI allegedly returned a pointer to a callee-owned stack alloca with no
+    compile-time enforcement that the caller copies its value before any intervening call could
+    clobber the dead frame — a structural fragility, not a live bug, per the original
+    2026-06-19 finding. **VERIFIED ABSORBED, not a live gap**: `abi_return_type` and its
+    module-level doc comment "The dangling-stack-return fix (R9)"
+    (`crates/ynz-codegen/src/emit.rs`) show `number` (precision ≤ 34) now returns `i128` BY
+    VALUE (register-based — "no memory at all," per the comment), never a pointer to
+    callee-owned memory; `maybe<T>` returns `{i64,i64}` by value; `Shape` returns its LLVM
+    struct by value. `wrap_abi_call_result` is the ONE authoritative reception wrapper every
+    C-ABI call site routes through (per `.claude/rules/authoritative-derivation.md`): it
+    allocas a CALLER-OWNED slot, stores the by-value result into it, and yields the slot
+    pointer — there is no longer a window where a returned pointer aliases dying callee memory,
+    because the callee never returns a pointer into its own frame for these classes at all.
+    This is the R9/FRAGO 005 fix shipped in v0.3-M7 Phase 3 ("eliminate ret-of-own-alloca on
+    `maybe<T>`/`number` returns... via a caller-provided out-slot/sret or a by-value return").
+    **Ruling**: this closes the general class — return-by-value structurally removes the
+    timing dependency for `number`/`maybe`/`Shape` — so the specific gap named in the original
+    finding no longer exists. NOT re-opening `errors`-capable wide-value returns here — those
+    still carry a pointer into worker/staging memory and are the separate, still-live entry 56
+    above. Source: `.claude/todos.md` at `1b83fcb^` (M3d Phase-5 gate, 2026-06-19 — the
+    original finding) + plan `2026-07-04-v0-3-m7-optimizer-pipeline` (R9/FRAGO 005) +
+    `crates/ynz-codegen/src/emit.rs::abi_return_type` / `::wrap_abi_call_result` (read
+    2026-09-05 — the closing evidence).
