@@ -164,10 +164,31 @@ are in parked, they stay in parked.
       returning the receiver's own pointer: `prepare_bg_arg_for_ctx`'s `array<pointer-elem>`
       branch and `_` arm, and `copy_lowering_arm`'s `AliasNoOp`. Closes **M8 FR #9** (a live UAF,
       RED-pinned) and **M8 FR #10** (live silent-wrong today — probe N).
-      - [ ] **Blocked on a decision only Patrick can make:** what an owned, independent copy means
-            for each of `maybe<T>`, union, `fixed<T>`, `dynamic`, bignum `number`, options,
-            channel, handle, sensitive. Start this decision in PARALLEL with 3.1's code rather
-            than queueing it behind.
+      - [x] **DECIDED by Patrick, 2026-09-06 — no longer blocking.** The ruling, in one line:
+            **`.copy()` returns a genuinely independent value, copied all the way down, for every
+            type where independence is meaningful — and is a COMPILE ERROR where it is not.
+            Nothing silently aliases, ever.**
+            - **Deep, not shallow.** A copy that shares an inner value is the exact defect this
+              cluster exists to remove; shipping a shallow copy would re-introduce it one level
+              down and call it a design. Golden Rule 2 decides the tie against Golden Rule 10
+              here: a junior developer must be able to predict what the line does without reading
+              documentation, and "sometimes independent, sometimes not, depending on how nested
+              your value is" fails that outright. If deep copying ever proves too slow on a real
+              workload, the answer is an explicit cheaper operation with its own name — never a
+              silent reinterpretation of `.copy()`.
+            - **Refusal is a real answer, and it must be loud.** Where an independent copy is
+              meaningless or unsafe — a `channel`, a task handle — `.copy()` is rejected at
+              compile time with three-slot teaching text (WHAT / WHAT-INSTEAD / WHY) per
+              `.claude/rules/teaching-surfaces.md`, naming what to do instead. A refusal the user
+              can see beats an alias they cannot.
+            - **`AliasNoOp` does not survive as a silent behavior.** Every type currently in that
+              arm becomes either a real deep copy or a ratified compile-time refusal. There is no
+              third bucket, and "returns the receiver's own pointer while claiming to copy" is not
+              a design position — `.claude/rules/no-duct-tape.md` makes leaving it a deferral that
+              would need all four fields, and it has none.
+            - **One routine, two call sites** (unchanged from below): the same clone routine feeds
+              `prepare_bg_arg_for_ctx`, so the background-argument path and `.copy()` can never
+              again disagree about what an owned copy is.
       - [ ] **One shared clone routine, two call sites rewired** — not two new per-type tables.
             Two fresh tables rebuild exactly the twin `.claude/rules/authoritative-derivation.md`
             forbids, and that is the reason these are one cluster rather than two items.
