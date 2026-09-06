@@ -1,6 +1,6 @@
 // fr23 regression fixture — shape C2, GENERIC-callee variant whose argument is a
 // UFCS METHOD-CALL CHAIN (M7 completion-gate FRAGO 020):
-// `background identity(makeCargo().reroute()).haul()`.
+// `background identity(makeCargo().reroute().copy()).haul()`.
 //
 // Rounds 2/3 (FRAGO 018/019) made the nested-argument resolver recursive for
 // `Call` expressions (a nested call to a concrete OR generic function, at any
@@ -47,7 +47,7 @@ function haul(self: Cargo) -> nothing {
 }
 
 function spawner() -> nothing {
-  background identity(makeCargo().reroute()).haul()
+  background identity(makeCargo().reroute().copy()).haul()
 }
 
 function stomp() -> nothing {

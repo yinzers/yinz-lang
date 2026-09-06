@@ -1017,3 +1017,33 @@ than silently carried forward as still-live.
     original finding) + plan `2026-07-04-v0-3-m7-optimizer-pipeline` (R9/FRAGO 005) +
     `crates/ynz-codegen/src/emit.rs::abi_return_type` / `::wrap_abi_call_result` (read
     2026-09-05 — the closing evidence).
+
+66. **`fr23_generic_maybe_payload_spawn_receiver_reads_live_values` — SUPERSEDED, coverage
+    migrated, not silently dropped.** WHAT is deferred: the GENERIC-container B' fixture
+    (`v0_3_m7_fr23_generic_maybe_payload_spawn_receiver.ynz`, `let first = identity(m)` with
+    `identity<T>(give T) -> T` producing an un-annotated `maybe<Cargo>` binding) and the test
+    that ran it, both deleted. WHY, a real tradeoff: the test's original purpose was proving the
+    B' admission arm (`bg_arg_is_materialized_shape_temp`'s `FieldAccess` arm) read
+    `binding_ty_narrowed` — the concrete instantiated scope type — rather than a function table,
+    so it stayed generic-safe by construction (Phase 9 security fix-round, 2026-07-18). FRAGO
+    022's default-deny redesign made that specific proof moot: `Expr::FieldAccess` now falls
+    through `bg_arg_is_provably_safe`'s trailing wildcard regardless of how its type was
+    derived, so there is no table lookup left for the deleted test to regress-guard. Its fixture
+    also stopped compiling under v0.3-M8 Phase 4's transfer rule (`TransferNeedsCopy`) once that
+    rule shipped, and three independent attempts to construct a legal replacement — an owned
+    `maybe<Cargo>` reaching a generic `give` parameter — all failed for documented reasons: a
+    direct return is a type error, a `give` accessor has `returns_fresh` correctly propagate
+    `Reaches` (refusing the copy), and `channel<Cargo>.receive()`'s element type is unsupported.
+    The tradeoff is real, not "acceptable for now": there is currently no legal Yinz program
+    that reaches this exact shape, so keeping the test would mean maintaining dead, uncompilable
+    fixture code. COST to restore later: small and concrete — one fixture rewritten around
+    whatever accessor `maybe-move-out` ships, and one test re-added with the WHY reasoning
+    below, migrated back out of the two surviving B' locks. TRIGGER: the `maybe-move-out`
+    `[[deferred_language_feature]]` (`registry/features.toml`, `IMP-ownership.md` "Deferred
+    (four fields, packet item (g))") landing — at that point a consuming accessor on
+    `maybe<T>` exists and the generic-container B' shape becomes expressible again. The B' class
+    itself is NOT unguarded in the meantime: `fr23_red_maybe_payload_spawn_receiver_reads_live_values`
+    and `fr23_sm_arm_maybe_payload_spawn_receiver_reads_live_values`
+    (`crates/ynz-driver/tests/fr23_uaf_planned_red.rs`) carry the migrated reasoning and stay
+    green. Source: dispatch `hardening-fr23fix-20260906-a1`, FRAGO 003
+    (`.claude/planning/active/2026-09-04-v0-3-concurrency-hardening/audit.md`).
