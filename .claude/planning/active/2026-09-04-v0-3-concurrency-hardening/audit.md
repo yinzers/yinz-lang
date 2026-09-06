@@ -637,3 +637,140 @@ both, so both directions need a lock or the next fix trades one failure for the 
 - `fr23_uaf_planned_red` **17/17**. `cargo test -p ynz-driver`: 779 passed, 0 failed, 4 ignored
   (pin N, two D5 planned-REDs, one replay tool). `-p ynz-typeck -p ynz-codegen`: all green.
   `clippy --workspace --all-targets -D warnings` clean; `fmt --all --check` clean.
+
+---
+
+## FRAGO 003 — Phase 3 step 3.2 (dispatch `hardening-p3.2-20260906-a1`): cluster C2 closed
+
+Base `c3988ab`. Closes **M8 FR #9** (a live use-after-free) and **M8 FR #10** (a live silent wrong
+answer) at one producer, under Patrick's 2026-09-06 ruling.
+
+### The producer, and what replaced it
+
+Two per-type dispatches answered "give me an independent copy of this heap value", agreeing only
+by comment, and both DEFAULTED to handing back the receiver's own pointer:
+`copy_lowering_arm`'s `AliasNoOp` and `prepare_bg_arg_for_ctx`'s `array<pointer-elem>` branch plus
+its `_` arm.
+
+One table now answers it: `ynz_typeck::owned_copy::owned_copy_plan`, exhaustive over `Type` with
+no `_` arm, with exactly two answers per type — a copy strategy, or a `CopyRefusal` carrying its
+own WHAT-detail / WHAT-INSTEAD / WHY. One emitter turns that answer into machine code:
+`ynz_codegen::emit::emit_owned_copy`, exhaustive over `OwnedCopy` with no `_` arm, taking a
+`CopyMode` (`Body` for `.copy()`, `SpawnArg` for a `background` argument) because the two consumers
+share a plan but not a lifetime. `copy_lowering_arm`, `CopyLowering` and `AliasNoOp` are deleted;
+`types::copy_is_independent` is a `pub use` re-export of the derived predicate, so it cannot grow a
+body of its own again.
+
+### The per-type ruling
+
+| Type | Answer | Reason |
+|---|---|---|
+| `int` `float` `bool` `string` `options` | copy = the receiver | nothing can change the contents, so a second name cannot disagree with the first |
+| `number` (≤34 digits) | copy = the receiver in a body; heap cell at a spawn | immutable, but in frame-owned storage |
+| `range` | same, and REFUSED at a spawn | immutable; no spawn-side re-homing exists, so passing it would dangle |
+| `shape` | struct bytes into fresh storage | unchanged; the pointer-field residual is named below |
+| `fixed<T>` | N cells into fresh storage | the cells hold the items outright — this is FR #10 / pin N |
+| `array<T>` | fresh header + buffer, items copied through the same emitter when the cells hold pointers | one level would leave both lists sharing their rows — this is FR #9 |
+| `map<K, V>` | fresh header + four buffers | unchanged; the value-cell residual is named below |
+| `maybe<T>` | fresh envelope cell | refused when the inner needs its own fresh allocation |
+| `sensitive<T>` | the inner's answer | the copy KEEPS the label, so it is still redacted; refusing would push people to `.reveal()` just to get a copyable value — worse for the secret |
+| `channel<T>` | REFUSED | a channel is shared on purpose; a copy is a line nobody is listening on |
+| task handle | REFUSED | a handle names one running task; a second one names the same task |
+| `dynamic C` | REFUSED | which shape is inside is only settled at run time, so there is no byte count to copy |
+| union | REFUSED (both faces — `.copy()` and a `Copy` spawn argument) | which choice is live is only settled at run time, and they are different sizes |
+| bignum `number` (>34) | REFUSED | unratified representation; an alias would be silent the moment it ships |
+| `nothing` | REFUSED | there is no value |
+| map entry | REFUSED | the loop rewrites the view next turn; copy `entry.key` / `entry.value` |
+| `errors`-capable | REFUSED | until `.failed()` runs it is either the answer or a failure |
+| generic instantiation | REFUSED | copying one is not supported; aliasing it silently is what this replaces |
+| type parameter | not a type yet — no diagnostic at the body; the refusal fires at the call site where the real type is known |
+
+### Residuals, named rather than hidden
+
+- **`shape` copies are one level.** A pointer-valued field (nested shape, `array`, `map`, `maybe`)
+  is copied as a pointer. Pre-existing, unchanged, and out of this cluster's scope; making it deep
+  needs a per-shape recursive clone with a release story.
+- **`map` copies are one level**, same shape of gap; iterating a map's occupied slots from
+  generated code is the missing machinery.
+- **A deep array copy's items are not released**, and a `map` cloned at a spawn is not released.
+  Both are four-field deferrals written at their emitter arms, both triggered by Phase 4's release
+  pass, and both are strictly better than the alias they replace.
+- **`fixed<T>` parameters lose their length** — indexing a `fixed<int>` parameter always yields
+  `none`. Confirmed PRE-EXISTING against the `c3988ab` binary (identical output), unrelated to this
+  change, and the reason no `fixed<T>` spawn fixture ships here.
+
+### The corpus delta, and what it is NOT evidence of
+
+750 files (`crates/ynz-driver/tests/fixtures` + `examples`), `ynz build`,
+`<file> <exit> <first-diagnostic>`, `c3988ab` binary versus the fixed tree: **587 clean / 162 build
+error / 1 exit-2 on both, byte-identical, zero delta.** Re-measured after the spawn-side refusal
+landed: **588 / 163 / 1 over 752 files** — the baseline plus exactly the two files this change
+adds (one clean fixture, one gallery). That second reading is aggregate rather than per-file; the
+per-file guarantee for it comes from `cross_impl_consistency`, which builds and runs the whole
+fixture corpus and is green.
+
+Said plainly: **a zero delta is evidence about the corpus, not proof about the language.** Nothing
+in the corpus called `.copy()` on a channel, a handle, a union or a `dynamic` value, and nothing
+copied a nested container — which is exactly why an alias sat in the default path across two
+milestones without a single test noticing. The programs that DO move are the ones committed here as
+fixtures, and each was verified against the `c3988ab` binary before its pin was written.
+
+### Pins and fixtures
+
+- **Pin N** (`frago002_c2_red_fixed_copy_aliases_source`) — `#[ignore]` removed, prints `1`. The
+  file now has no ignored test at all.
+- **FR #9's pin** — `bg_arg_alias_container_add_is_a_known_uaf_red_pin` became
+  `bg_arg_alias_container_add_no_longer_aliases_the_parents_container`, and its fixture was rewritten
+  from "observe the defect through the alloc counter, do NOT dereference" to three green-world
+  readings: the parent still sees 1 row, the parent's row 0 still starts at 1 (a one-level clone
+  fails here), and the parent DEREFERENCES `bucket[0]`, which is what the defect made unsafe. Both
+  `cross_impl_consistency` exclusions for this fixture removed, as their own text instructed.
+- **New** `v0_3_hardening_c2_deep_copy_independence.ynz` + `copy_of_a_container_owns_its_items_too`
+  — the depth lock with no `background` in it. Verified RED against `c3988ab`: printed
+  `original row 0 starts at 99` where `1` is correct.
+- **New** `examples/primantis-orders/v0_3_hardening_errors.ynz` + gallery test — all seven refusals
+  in one file (six `.copy()` sites plus the `background`-argument one), asserted by their own WHAT
+  phrase AND their own WHAT-INSTEAD, so a refusal cannot regress into a generic message.
+- `examples/pirates-roster/entrypoint.ynz` grew a `.copy()` section (nested manifest, `fixed` bell,
+  and the channel refusal shown as a comment); golden regenerated, appended lines only.
+
+### The `background` face of the ruling, found by making the alias loud
+
+Closing the alias arm turned one previously-miscompiling program shape into a BACKEND error
+string: a union `background` argument the spawner keeps reading. Before, it silently shared one
+value between the task and the spawner; after, codegen hit "no independent copy exists … this is
+a compiler bug", which is both ugly and a lie — the program is a user program, not a compiler
+fault. The ruling says a refusal must be loud AND readable, so the refusal moved to typeck as
+`SpawnArgNotIndependent`: same per-type `{fix}`/`{why}` fills, a spawn-shaped WHAT and WHY.
+
+The first cut of that check was too wide and refused `MapEntry`, a shipped and working spawn
+argument — because "can this be copied?" is not the spawn path's question. The spawn path
+re-homes three types with mechanisms of its own (a `channel` is shared by design, a map-entry
+loop view is stabilized, a decimal number goes to a heap cell), and those pre-gates were a match
+in codegen that typeck knew nothing about. That list is now ONE function,
+`owned_copy::spawn_rehoming`, which `prepare_bg_arg_for_ctx` dispatches its pre-gates off and
+`spawn_arg_can_be_independent` reads — a twin removed on the way past rather than papered over
+with an exemption.
+
+### Two failures this change caused, and what they taught
+
+- `hotfix_bg_arg_number_field` greps the IR for `%bg_shape_src`. The shared emitter had renamed it.
+  IR value names are now mode-stable by construction (`copy_src` / `bg_shape_src`,
+  `arr_copy_clone` / `bg_arr_clone`) — the two call sites' historic names, preserved.
+- `v03_m8_channel_close::m8_p4_chan_map_roundtrip` went from gap 10 to gap 15: a `give` `map`
+  argument was newly cloned, leaking the spawner's original. The fix is not an exemption but the
+  authoritative fact — typeck's recorded `BgOwnership::Give` means the spawner's binding was
+  consumed, so the task is the sole holder and there is nothing to be independent from. That gate
+  is deliberately NOT extended to `array`, whose `give`-path clone is what the drop ladder owns.
+
+### Verification
+
+- `cargo test -p ynz-driver --no-fail-fast`: all targets green, including
+  `cross_impl_consistency` 16/16 (1 ignored). `fr23_uaf_planned_red` **17/17**;
+  `post_suspension_local_not_crossing` 3/3; `frago002_c1_c2_planned_red` **5/5, none ignored**.
+- `-p ynz-typeck -p ynz-codegen -p ynz-registry -p ynz-diagnostics -p ynz-tmgrammar`: all green.
+- `clippy --workspace --all-targets -- -D warnings` clean; `fmt --all -- --check` clean.
+- One earlier run of the full driver suite tripped
+  `bounded_run_kills_the_whole_tree::timed_out_program_leaves_no_descendant_process_running`;
+  passes in isolation every time (verified twice) and passed one of three full runs — parked
+  entry 50's known contention flake, not this diff.

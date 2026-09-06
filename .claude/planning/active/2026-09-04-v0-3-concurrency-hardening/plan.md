@@ -3,7 +3,7 @@ name: "v0-3-concurrency-hardening"
 plan-id: "2026-09-04-v0-3-concurrency-hardening"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1", "hardening-p3.1-fix1-20260906-a1"]
+session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1", "hardening-p3.1-fix1-20260906-a1", "hardening-p3.2-20260906-a1"]
 tier: "hasty"
 tier-reason: "Concurrency is a blocking gate on using Yinz at all; every known blocker is traced to a named producer and fixed at that producer, not patched per symptom. Scope is fixed (four phases, non-negotiable), deferral is forbidden, ambiguity is decided upstream. Small committed work riding Patrick's settled order."
 created_at: "2026-09-04"
@@ -169,7 +169,7 @@ are in parked, they stay in parked.
             parked 49(b) relays the wrong one. The discriminator is not the element type, it is
             whether a local is read by a statement that suspends.
 
-- [ ] **3.2 — C2: no authoritative per-type owned-copy operation.** Two independent per-type
+- [x] **3.2 — C2: no authoritative per-type owned-copy operation.** Two independent per-type
       dispatches answer "give me an independent copy of this heap value" and both default to
       returning the receiver's own pointer: `prepare_bg_arg_for_ctx`'s `array<pointer-elem>`
       branch and `_` arm, and `copy_lowering_arm`'s `AliasNoOp`. Closes **M8 FR #9** (a live UAF,
@@ -199,10 +199,20 @@ are in parked, they stay in parked.
             - **One routine, two call sites** (unchanged from below): the same clone routine feeds
               `prepare_bg_arg_for_ctx`, so the background-argument path and `.copy()` can never
               again disagree about what an owned copy is.
-      - [ ] **One shared clone routine, two call sites rewired** — not two new per-type tables.
+      - [x] **One shared clone routine, two call sites rewired** — not two new per-type tables.
             Two fresh tables rebuild exactly the twin `.claude/rules/authoritative-derivation.md`
             forbids, and that is the reason these are one cluster rather than two items.
-      - [ ] **HARD ORDERING CONSTRAINT — C2 closes before Phase 4 opens.** FR #9 is a *premature
+            **DONE** (dispatch `hardening-p3.2-20260906-a1`): the table is
+            `ynz_typeck::owned_copy::owned_copy_plan` (exhaustive over `Type`, no `_` arm, two
+            answers per type — a copy strategy or a `CopyRefusal` carrying its three teaching
+            slots). The emitter is `ynz_codegen::emit::emit_owned_copy` (exhaustive over
+            `OwnedCopy`, no `_` arm), consumed by BOTH `lower_postfix_op`'s `.copy()` arm and
+            `prepare_bg_arg_for_ctx`. `copy_lowering_arm` / `CopyLowering` / `AliasNoOp` are
+            deleted; `types::copy_is_independent` is now a `pub use` re-export of the derived
+            predicate, not a body. `copy_parity_tests` kept and extended with the binding the
+            compiler cannot give: every plan matches the `Type` shape its emitter destructures.
+      - [x] **HARD ORDERING CONSTRAINT — C2 closes before Phase 4 opens.** HONOURED: no
+            scope-exit release was implemented; C2 closed first. FR #9 is a *premature
             free*: the ladder frees a clone the parent still points at. If Phase 4's scope-exit
             release pass lands first it will emit frees on aliased pointers and upgrade a dangling
             read into a double-free.
@@ -354,6 +364,7 @@ Phase 3 may retire registry entries (e.g., `background-handle-cancel-injection` 
 - **Retiring**: (deferred_language_feature — verified against `registry/features.toml`) `background-handle-cancel-injection` — Phase 4 closes the underlying defect; the Tier 3 lint is no longer needed.
 - **Modifying**: (deferred_language_feature) entries named by Phase 1's blocker audit may be modified with corrected descriptions if Phase 2's diagnosis changes their trigger or scope. Record each modification.
 - **No new entries** expected from Phases 1–2 (diagnosis, no language surface). Phase 3 may add entries if a FRAGO introduces new muted-hint domains or lint rules (record if it happens).
+- **Added by step 3.2** (dispatch `hardening-p3.2-20260906-a1`): two `[[diagnostic_template]]` entries, `CopyNotIndependent` and `SpawnArgNotIndependent` — the two sentence shells for the ruling's refusals (`.copy()` and a `background` argument the spawner keeps reading). Both take their per-type `{detail}` / `{fix}` / `{why}` fills from the ONE owned-copy table, so the registry carries the canonical shell and never a second copy of the per-type text. No new keyword, banned_jargon, primitive_intrinsic, type_attached_constant, deferred_* or muted_hint_domain entries.
 
 ---
 

@@ -174,3 +174,7 @@ v0.3-M5 — per-field array layout: 128-cannonball volley, hot loop on x/y:
   lead ball final height:
 136.00
   gun-crew career hits (side-by-side layout by design): 2211
+  captain's fore hold, first crate: 12
+  quartermaster's fore hold, first crate: 99
+  ship's bell, first watch: 4
+  spare bell, first watch: 1

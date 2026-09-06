@@ -246,8 +246,10 @@ pub fn is_trivially_copyable(ty: &Type) -> bool {
         // bit-copy would alias the pointer, not copy the string. Deliberately not `Number { .. }`
         // (v0.3-M8 Phase 4 fix round 3, should-fix 5): bignum is unreachable from source today
         // (the parser defers non-34 precision), so this arm was never exercised, but codegen's
-        // `copy_lowering_arm` must classify it the same way — `copy_parity_tests` in
-        // `ynz-codegen/src/emit.rs` holds the two to that agreement.
+        // `owned_copy_plan` (`ynz-typeck/src/owned_copy.rs`) must classify it the same way.
+        // `copy_parity_tests` in `ynz-codegen/src/emit.rs` holds them to that agreement.
+        // (Was `copy_lowering_arm`, deleted in Phase 3 step 3.2 along with `AliasNoOp` — one
+        // routine now answers what an owned copy is, so there is no second arm to agree with.)
         || matches!(ty, Type::Number { precision } if *precision <= 34)
 }
 
@@ -325,25 +327,15 @@ pub const CHANNEL_ELEM_SUPPORTED_NAMES: &[&str] = &[
     "map<K, V>",
 ];
 
-/// Is `.copy()` on a value of this type a genuinely INDEPENDENT copy (a fresh allocation
-/// nobody else reaches), so provenance may classify the result `Fresh`?
+/// Is `.copy()` on a value of this type a genuinely INDEPENDENT copy (a value nobody else
+/// reaches), so provenance may classify the result `Fresh`?
 ///
-/// Held to parity with codegen's `copy_lowering_arm` (`ynz_codegen::emit`, the ONE
-/// classification the `PostfixOpKind::Copy` lowering dispatches on) by
-/// `copy_parity_tests::copy_is_independent_matches_the_copy_lowering_arm_for_every_type_variant`
-/// over one sample of every `Type` variant: `true` here ⇔ the lowering yields an independent
-/// value — `array` (`ynz_array_clone_primitive` / SoA gather), `map` (`ynz_map_clone`,
-/// v0.3-M8 step 3a), an inline `shape` (memcpy into a fresh alloca), and the value-bit
-/// primitives / immortal `string` bytes, which are already by-value. Every other type is
-/// codegen's alias no-op (the FR#10 stub class — `maybe`, union, `fixed`, `dynamic`, …), so its
-/// `.copy()` is `Unknown` and can never be transferred.
-pub fn copy_is_independent(ty: &Type) -> bool {
-    is_trivially_copyable(ty)
-        || matches!(
-            ty,
-            Type::String | Type::Shape { .. } | Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
-        )
-}
+/// A RE-EXPORT, not a second predicate: the one answer lives in
+/// [`crate::owned_copy::copy_is_independent`], derived from `owned_copy_plan` — the same table
+/// codegen's `.copy()` lowering and its `background`-argument path both consume. This name is
+/// kept because it is what every existing caller imports; it must never grow a body of its own
+/// (`.claude/rules/authoritative-derivation.md`).
+pub use crate::owned_copy::copy_is_independent;
 
 /// v0.3-M8 Phase 5 — THE Auto-Arc compile-time floor (`IMP-ownership.md` "The
 /// beneficial-emission condition", item 4): can a value of this type be shared across a

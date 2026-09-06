@@ -11180,50 +11180,81 @@ fn bg_arg_handle_return_map_heap_ptr_kind_is_a_clean_no_op() {
 }
 
 #[test]
-fn bg_arg_alias_container_add_is_a_known_uaf_red_pin() {
-    // KNOWN DEFECT — this test asserts TODAY'S WRONG behavior on purpose, so the fix flips it
-    // loudly. Do not "fix" the test by widening it; flip the expected gap to the correct-world
-    // value (and add a dereferencing read of `bucket[0]`) when the producer is closed.
+fn copy_of_a_container_owns_its_items_too() {
+    // WHY: the DEPTH half of the v0.3 concurrency-hardening `.copy()` ruling, with no
+    // `background` in the program at all — so a regression here is about `.copy()` itself
+    // rather than about the spawn path that shares its routine. `outer.copy()` used to be a
+    // one-level clone: a fresh container whose cells still pointed at the original's rows, so
+    // writing through the copy changed the original. Verified RED against the pre-fix binary
+    // (2026-09-06): `original row 0 starts at 99` instead of `1`.
     //
-    // WHAT: `stash(bucket, rows)` stores its ladder-owned `rows` clone into `bucket`, an
-    // `array<array<int>>` bg arg that ALIASES the parent's container (`prepare_bg_arg_for_ctx`
-    // passes `array<pointer-elem>` / `map` args through un-cloned). The ladder frees the clone
-    // at retire; the parent's `bucket[0]` dangles. Dereferencing it printed garbage
-    // (`471878446419399850`, `-924992314359518642`) or SIGSEGV'd across 5 runs, so the fixture
-    // observes the defect through the deterministic alloc counter instead of a dereference.
+    // The `maybe` line locks a second type the same routine newly copies for real: a fresh
+    // envelope that still carries its payload, rather than the receiver's own envelope.
+    let fixture_name = "v0_3_hardening_c2_deep_copy_independence.ynz";
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_eq!(code, 0, "{fixture_name} must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "original row 0 starts at 1\nclone row 0 starts at 99\nheld copy is 2\n",
+        "{fixture_name}: `original row 0 starts at 99` means the copy shared its rows with the \
+         original — a one-level clone, which is the same alias one level down. `held copy is \
+         -1` means the copied `maybe` envelope lost its payload; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
+    // GREEN-WORLD LOCK. This test used to assert TODAY'S WRONG behaviour on purpose
+    // (`bg_arg_alias_container_add_is_a_known_uaf_red_pin`), because the producer was open:
+    // an `array<pointer-elem>` `background` argument was passed through un-cloned, so the task
+    // wrote into the PARENT's container and then its drop ladder freed a clone the parent
+    // still pointed at. The pin's own text named the fix as "closing that alias fall-through";
+    // that is what the shared owned-copy routine did (M8 Future Requirements #9, FRAGO 002
+    // cluster C2), so the assertions here are the correct-world ones the pin described.
     //
-    // The pointer-identity release protocol deliberately does NOT hook `ynz_array_push` for
-    // this: the escape exists because the container was aliased rather than cloned, so the fix
-    // is closing that alias fall-through — recorded as a four-field deferral in the v0.3-M8
-    // plan (`.claude/planning/active/2026-07-04-v0-3-m8-concurrency-completion/plan.md`,
-    // Future Requirements #8).
+    // Three readings, because the old defect had three separable halves:
+    //   1. the task's container is its own — the parent still sees 1 row;
+    //   2. the task's ITEMS are its own — a ONE-LEVEL clone would leave both sides sharing
+    //      `seed`, and the task's `mine.set(0, 999)` would show up in the parent's row 0;
+    //   3. the parent dereferences `bucket[0]`, which is precisely what the old defect made
+    //      unsafe (garbage / SIGSEGV across runs) and why the old pin refused to do it.
     //
-    // Gap accounting TODAY (4): 2 = the parent's `bucket` literal, 2 = the parent's `rows`
-    // literal; the `rows` clone (2 allocs) is freed by the ladder while `bucket` still holds
-    // it — that free IS the defect. In the correct world the clone is held to exit with
-    // `bucket` (gap 6), or, if the fix clones the container instead, `bucket.count()` reads 0.
+    // Gap accounting (8): the parent's own three locals (`seed`, `bucket`, `rows` — 2 counted
+    // allocations each) are never released, which is the separate, pre-existing "nothing frees
+    // a heap local at scope exit" class, and the task's deep-copied item is not freed by the
+    // element-blind `ynz_array_drop` (a documented four-field deferral at the emitter). The
+    // task's own container clone and its `rows` clone ARE freed — the old defect was that the
+    // ladder freed something the PARENT still held, and that is gone.
     let fixture_name = "bg_arg_alias_container_add_red.ynz";
     let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
     assert_eq!(
         code, 0,
-        "{fixture_name} must exit 0 (no dereference of the dangling slot); stderr:\n{stderr}"
+        "{fixture_name} must exit 0 — the parent now dereferences `bucket[0]`, which the old \
+         defect made unsafe; stderr:\n{stderr}"
     );
-    assert_eq!(
-        stdout, "1\n",
-        "{fixture_name}: the task pushed into the PARENT's aliased bucket; stdout:\n{stdout}\nstderr:\n{stderr}"
+    assert!(
+        stdout.contains("parent sees 1 rows"),
+        "{fixture_name}: the task added a row to ITS OWN container; the parent must still see \
+         exactly the one row it started with. Seeing 2 means the `background` argument aliased \
+         the parent's container again; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("parent row 0 starts at 1"),
+        "{fixture_name}: the task overwrote ITS OWN row 0 with 999. Seeing 999 here means the \
+         container was copied but its ITEMS were shared — a one-level clone, which is the same \
+         alias one level down; stdout:\n{stdout}\nstderr:\n{stderr}"
     );
     let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
     assert!(
         alloc > 0,
-        "{fixture_name}: alloc=0 — the counter saw nothing, the pin is vacuous"
+        "{fixture_name}: alloc=0 — the counter saw nothing, the lock is vacuous"
     );
     assert_eq!(
         alloc,
-        free + 4,
-        "{fixture_name}: RED PIN FLIPPED — the alias-container escape door has changed behavior. \
-         Expected today's defective gap 4 (the ladder frees the clone `bucket` still holds); a gap \
-         of 6 means the clone is now correctly held to exit — the defect is FIXED: flip this test \
-         to the correct-world assertions, add a `bucket[0]` dereference, and close M8 Future \
-         Requirements #8; alloc={alloc} free={free}"
+        free + 8,
+        "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
+         being freed — check it is not the parent's container or its items, which is the \
+         use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \
+         alloc={alloc} free={free}"
     );
 }

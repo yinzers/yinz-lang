@@ -1,0 +1,71 @@
+// Error gallery — v0.3 concurrency hardening, Phase 3 step 3.2.
+//
+// One rule produces every diagnostic in this file: `.copy()` gives you a genuinely separate
+// value, or it refuses out loud. It never hands back the thing you asked it to copy while
+// saying it copied it. Before this, six of the types below quietly did exactly that — you got
+// a second name for the same value, and changing one changed the other with no warning at all.
+//
+// Run it and read the seven refusals as a set: each one names what you can do instead, and why a
+// copy of that particular thing could not mean anything.
+
+shape Delivery { miles: int }
+shape Pickup { slot: int }
+
+function bake(give ticket: Delivery) -> nothing {
+  wait sleep(10)
+  print(`baking ${ticket.miles.toString()}`)
+}
+
+function sort(job: Delivery | Pickup) -> nothing {
+  sleepBlocking(10)
+}
+
+function nothingAtAll() -> nothing {
+  print(`no value came back from here`)
+}
+
+function ticketsSold(share neighborhood: string) -> int errors {
+  return 12
+}
+
+function entrypoint() -> nothing {
+  // WHY: CopyNotIndependent on `channel<T>` — a channel is shared on purpose. A copy would be
+  // a line nobody is listening on, and the messages you sent into it would vanish silently.
+  let orders: channel<int> = channel<int>(4)
+  let sameLine = orders.copy()
+
+  // WHY: CopyNotIndependent on a task handle — a handle names one running task, so a second
+  // handle would name the same task rather than a second one.
+  let handle = background bake({ miles: 3 })
+  let sameTask = handle.copy()
+
+  // WHY: CopyNotIndependent on a union — which choice is live is only settled while the
+  // program runs, and the two choices are different sizes.
+  const run: Delivery = { miles: 9 }
+  let either: Delivery | Pickup = run
+  let bothWays = either.copy()
+
+  // WHY: CopyNotIndependent on a map entry — the loop rewrites that view on its next turn, so
+  // the copy would stop being about the slot you were looking at.
+  let counts: map<string, int> = { }
+  for (entry in counts) {
+    let savedView = entry.copy()
+  }
+
+  // WHY: CopyNotIndependent on an `errors` value read before its `.failed()` check — until the
+  // check runs it is either the answer or a failure, and those are not the same thing to copy.
+  let attempt = ticketsSold(`strip district`)
+  let savedAttempt = attempt.copy()
+
+  // WHY: CopyNotIndependent on `nothing` — there is no value here at all to make a second of.
+  let void = nothingAtAll().copy()
+
+  // WHY: SpawnArgNotIndependent — the `background` face of the same rule. This line still
+  // reads `parcel` after the task starts, so the task would need its own separate one, and a
+  // union has no separate one to give. Hand it over instead, or read it before the spawn.
+  let parcel: Delivery | Pickup = run
+  background sort(parcel)
+  if (parcel is Delivery) {
+    print(`still a delivery`)
+  }
+}

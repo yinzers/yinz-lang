@@ -1803,6 +1803,37 @@ impl<'b> Checker<'b> {
                 BgOwnership::Give
             }
         };
+        // A `Copy` spawn argument means the spawner keeps reading the binding, so the task
+        // must get a value of its OWN. When neither the spawn path's own re-homing nor the
+        // shared owned-copy table can produce one, refuse the spawn here instead of letting
+        // codegen hand both sides the same pointer — the `background` face of the same ruling `.copy()` obeys,
+        // reading the SAME table rather than a second opinion about it
+        // (`.claude/rules/authoritative-derivation.md`). A `Give` argument is untouched: the
+        // spawner's binding is consumed at the spawn, so nothing needs to be independent.
+        if matches!(label, BgOwnership::Copy) {
+            if let Some(name) = ident {
+                let arg_ty = self.scope.lookup(name).map(|e| e.ty.clone());
+                if let Some(ty) =
+                    arg_ty.filter(|t| !crate::owned_copy::spawn_arg_can_be_independent(t))
+                {
+                    if let crate::owned_copy::OwnedCopy::Refused(refusal) =
+                        crate::owned_copy::owned_copy_plan(&ty)
+                    {
+                        self.diags.push(registry_diag(
+                            span.clone(),
+                            DiagnosticKind::SpawnArgNotIndependent,
+                            &[
+                                ("name", name),
+                                ("type", &type_name(&ty)),
+                                ("detail", &refusal.detail),
+                                ("fix", &refusal.fix),
+                                ("why", &refusal.why),
+                            ],
+                        ));
+                    }
+                }
+            }
+        }
         self.bg_inferred.insert(key, label.clone());
         Some(label)
     }
@@ -8109,10 +8140,36 @@ impl<'b> Checker<'b> {
         let receiver_ty = self.infer_expr(receiver, None);
         match op {
             PostfixOpKind::Copy => {
-                // P3c will enforce trivially-copyable requirement.
-                // P3a: just return the receiver type.
                 if receiver_ty == Type::Error {
                     return Type::Error;
+                }
+                // THE refusal gate (v0.3 concurrency hardening Phase 3, FRAGO 002 cluster C2).
+                // `.copy()` either produces a genuinely independent value or says out loud
+                // that it cannot — there is no third answer where it hands the receiver back
+                // while claiming to have copied it. The decision is read from the ONE
+                // owned-copy table (`owned_copy_plan`), the same table codegen's `.copy()`
+                // lowering and its `background`-argument path consume; nothing here re-derives
+                // it (`.claude/rules/authoritative-derivation.md`).
+                //
+                // A type parameter is exempt: it is not a real type until the call site fills
+                // it in, and the body is checked before that happens. The refusal that matters
+                // fires where the concrete type is known.
+                if !matches!(receiver_ty, Type::TypeParam { .. }) {
+                    if let crate::owned_copy::OwnedCopy::Refused(refusal) =
+                        crate::owned_copy::owned_copy_plan(&receiver_ty)
+                    {
+                        self.diags.push(registry_diag(
+                            span.clone(),
+                            DiagnosticKind::CopyNotIndependent,
+                            &[
+                                ("type", &type_name(&receiver_ty)),
+                                ("detail", &refusal.detail),
+                                ("fix", &refusal.fix),
+                                ("why", &refusal.why),
+                            ],
+                        ));
+                        return Type::Error;
+                    }
                 }
                 receiver_ty
             }

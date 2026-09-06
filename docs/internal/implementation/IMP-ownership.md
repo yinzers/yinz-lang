@@ -196,8 +196,10 @@ pub enum Provenance {
     /// of its argument. Never transferable; the fix is `.copy()` on the reached piece.
     Reaches(Vec<String>),
     /// Cannot classify (function-value call, dynamic-dispatch result, imported
-    /// non-fresh callee, `.copy()` on a type whose copy is not yet independent).
-    /// Never transferable.
+    /// non-fresh callee). Never transferable.
+    ///
+    /// `.copy()` no longer lands here: since the v0.3 concurrency-hardening owned-copy
+    /// fix, a `.copy()` that would not be independent does not compile at all.
     Unknown,
 }
 ```
@@ -210,7 +212,7 @@ Classification (one function; listed here so a reader can check it, not so a cal
 | `Ident`, `self` | `Whole(name)` — always; the binding's ORIGIN decides transferability |
 | `FieldAccess` / `IndexAccess` | `Reaches(root_binding_name(receiver))`; a piece of a fresh temp (`makeBucket().rows`) is `Reaches([])` — still not transferable |
 | array / map / shape literal | `Fresh` iff every heap-typed element/value is `Fresh`; else `Reaches(∪ roots of the non-fresh elements)` |
-| `.copy()` | `Fresh` iff `copy_is_independent(type)` (ONE predicate in `types.rs`, parity-tested against the codegen `PostfixOpKind::Copy` arms — `array`, `map` after Phase 4 step 3a, inline `shape`); else `Unknown` (the FR#10 alias-no-op types) |
+| `.copy()` | `Fresh` iff `copy_is_independent(type)` — since the v0.3 concurrency-hardening owned-copy fix that predicate is a RE-EXPORT of `owned_copy::copy_is_independent`, derived from `owned_copy_plan`, the ONE per-type table codegen's `.copy()` lowering and its `background`-argument path both consume (`ynz_typeck::owned_copy`). It is `false` for exactly the types the table REFUSES, and a refused `.copy()` is a compile error with teaching text, so `Unknown` is unreachable from this row in a program that builds |
 | `.freeze()` (the other `PostfixOpKind` arm) | `Fresh` — it is typed `nothing` (`check.rs:6947`, the P3c mutability flip never shipped; codegen lowers it as the bare receiver, `emit.rs:19297`), so no sink can ever accept it and there is no value to hold. Exhaustiveness is variant-level, so the arm is written; if `.freeze()` is ever retyped to return its receiver, this row becomes `provenance(receiver)` in the same commit — the non-wildcard match is what forces that reader here |
 | constructor call — `channel<T>()` (the only constructor-call form the parser accepts; `array<T>()` / `map<K, V>()` are not forms the parser has, an empty container is the literal `[]` / `{}`, classified in the literal row); `.receive()` on a channel or handle | `Fresh` (the receiver's `maybe<T>` is the sole reference — [`IMP-concurrency.md`](IMP-concurrency.md) "What this makes sound") |
 | builtin method call | from the ONE `builtins` table (`builtin_method_returns_fresh(name)`); **default `Reaches([receiver root])`** — `.get`/`.first`/`.last` return a cell; `.sort`/`.filter`/`.map`/`.concat` are widened one at a time with evidence, never by default (parked item 18 is this table, recorded as a deliberate conservative omission) |
@@ -280,7 +282,22 @@ A contract method's parameters carry ownership modifiers in the AST (`ContractSi
 
 With every sink threaded through `check_transfer`, a transferred allocation has exactly one source-level holder at every moment: the owner (and its alias class) until the transfer, then the sink. The receiver of a channel is the sole reference; a `give` callee is the sole reference; a `background` task's ladder-owned clone is released by the shipped runtime protocol when the task sends it on ([`IMP-concurrency.md`](IMP-concurrency.md) "Two mechanisms, one rule" — unchanged by this section, and still not redundant with it: it answers allocation-level ladder ownership; this section answers source-level readability).
 
-Outside the guarantee, named: FR#9's container door (`bucket.add(rows)` into an aliased container — the deferred sink class above; RED-pinned); `.copy()` on the FR#10 types (`maybe`, union, `fixed`, `dynamic`) which provenance classifies `Unknown` so they cannot be transferred at all until their copy is independent; and relaying a RECEIVED owned-heap value — `let got = wire.receive()` then `other.send(got.value)` — where `got.value` is a piece of `got` (a `maybe<T>` field access, `Provenance::Reaches`), so `TransferNeedsCopy` fires and the relay pays `.copy()` this milestone (packet item (g), signed 2026-09-03).
+Outside the guarantee, named: relaying a RECEIVED owned-heap value — `let got = wire.receive()` then `other.send(got.value)` — where `got.value` is a piece of `got` (a `maybe<T>` field access, `Provenance::Reaches`), so `TransferNeedsCopy` fires and the relay pays `.copy()` this milestone (packet item (g), signed 2026-09-03).
+
+**Two doors this section used to name as outside the guarantee are closed** (v0.3 concurrency
+hardening Phase 3, FRAGO 002 cluster C2 — M8 Future Requirements #9 and #10, one fix at one
+producer). Both came from the same design gap: two per-type dispatches answering "give me an
+independent copy of this heap value", agreeing only by comment, and both defaulting to handing
+back the receiver's own pointer.
+
+- **FR#9's container door.** `bucket.add(rows)` into an aliased container was reachable because
+  an `array<pointer-elem>` `background` argument was passed through un-cloned. Such an argument
+  is now copied — items included — so the task's container and its rows are its own, and the
+  ladder can no longer free something the spawner still points at.
+- **FR#10's `.copy()` types.** `maybe`, union, `fixed`, `dynamic` and the rest no longer sit in
+  an alias arm. Each is either a real copy or a compile-time refusal (`ynz_typeck::owned_copy`),
+  so there is no type whose `.copy()` compiles into an alias for provenance to hold at arm's
+  length.
 
 **Deferred (four fields, packet item (g)): a consuming move-out-of-`maybe<T>` form.**
 - **WHAT**: a consuming accessor on `maybe<T>` — some form that yields the wrapped value as `Provenance::Fresh` (moving it out of the `maybe` rather than reaching through it), so a relay of a received owned-heap value would not need `.copy()`.

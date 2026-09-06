@@ -16908,17 +16908,13 @@ enum BgArgFreeKind {
 /// copies the ctx bytes — the i64 pointer value — before returning; the pointed-to
 /// heap data is what must survive).
 ///
-/// Per-type decisions:
-/// - `Shape`: `ynz_alloc(struct_bytes)` + memcpy. BgArgFreeKind::HeapShape.
-/// - `String`: immutable heap bytes, already outlive the spawner frame. BgArgFreeKind::None.
-/// - `array<Int|Float|Bool>`: `ynz_array_clone_primitive`. BgArgFreeKind::HeapArrayPrimitive.
-/// - `maybe<T>` (v0.3-M5 P2 fix round 3): `maybe_to_heap_cell` — heap-cloned envelope
-///   (+ payload for shape inners). BgArgFreeKind::HeapMaybeEnv.
-/// - Primitives (Int/Bool/Float): by-value i64, no pointer. BgArgFreeKind::None.
-/// - Other heap types (array<heap_elem>, map, union): not yet supported here;
-///   these fall through unchanged (same pointer-alias behavior as today — the caller
-///   is responsible for not mutating these after the spawn, which the typeck enforces
-///   by consuming give bindings and producing a copy warning for inferred-copy cases).
+/// Per-type decisions are NOT made here. They come from `emit_owned_copy`, which reads
+/// `ynz_typeck::owned_copy::owned_copy_plan` — the same single table `.copy()`'s lowering
+/// consumes, so the spawn path and `.copy()` can never again disagree about what an owned copy
+/// is (v0.3 concurrency hardening Phase 3, FRAGO 002 cluster C2). The two `background`-only
+/// decisions this function still makes for itself are deliberately NOT copy questions: a
+/// `channel` argument is SHARED with the task by design (`ynz_channel_share`), and an
+/// Auto-Arc group member shares ONE counted block by design.
 fn prepare_bg_arg_for_ctx<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     arg: &ynz_ast::nodes::Expr,
@@ -16945,58 +16941,64 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // ynz_channel_share (both sides must operate on the SAME bounded buffer; neither give
     // nor copy is correct for a conduit). The task's drop ladder releases the reference
     // (BgArgDropEntry kind 2 / the closure-body free arm).
-    if matches!(cg.resolve_type(ty), Type::BuiltinChannel { .. }) {
-        let shared = cg
-            .builder
-            .build_call(cg.rt.ynz_channel_share, &[val.into()], "bg_chan_share")
-            .map_err(|e| format!("bg channel share: {e}"))?
-            .try_as_basic_value()
-            .basic()
-            .ok_or_else(|| "bg channel share: returned void".to_string())?;
-        return Ok((shared, BgArgFreeKind::SharedChannel));
-    }
-
-    // v0.3-M5 P3 step 5(b): a MapEntry arg ALWAYS needs stabilization — an
-    // UNCONDITIONAL pre-gate, independent of give/copy inference (the map
-    // loop var may not be in `background_arg_inferred_ownership` at all).
-    // The value is a pointer to the loop arm's per-site entry struct,
-    // rewritten every iteration and dead with the spawner's frame (sweep
-    // probe: the task read the ADVANCED slot — 2/20 vs expected 1/10).
-    // Route through the ONE stable-bits choke point (`value_to_stable_bits`
-    // — no bg-side marshalling twin); the free ladder reuses `HeapShape` for
-    // the 16-byte entry cell (`ynz_free` ignores its size arg today). The
-    // deep-copied VALUE sub-cell is deliberately NOT freed — the FRAGO 011
-    // accounted persist-cell class, deferred to the drop story.
-    if matches!(cg.resolve_type(ty), Type::MapEntry { .. }) {
-        let bits = cg.value_to_stable_bits(val, ty, "bg_mapentry")?;
-        let cell_ptr = cg
-            .builder
-            .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_ptr")
-            .map_err(|e| format!("bg mapentry inttoptr: {e}"))?;
-        return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
-    }
-
-    // v0.3-M6 Phase 1d (FRAGO 009 defect A): a decimal128 (`number`, N ≤ 34) arg
-    // ALWAYS needs stabilization — an UNCONDITIONAL pre-gate, independent of
-    // give/copy inference (mirroring the MapEntry pre-gate above), because the
-    // value is a POINTER to per-site i128 storage on the spawner's frame — a
-    // hardware-decimal128 stack alloca or the staged pointer bits of an SM number
-    // param — regardless of whether the ident lands in
-    // `background_arg_inferred_ownership`. That storage dies with the spawner's
-    // frame; the task (CPU-spawn arm via `ynz_rt_spawn_blocking`, or SM-spawn arm
-    // via `ynz_rt_spawn`) reads dangling bits after the spawner returns/suspends
-    // (probe: deterministic `0.000...` vs `2.5`). Copy the i128 into a counted
-    // heap cell via the ONE `number_to_heap_cell` mechanism the cpu-member path
-    // also consumes (authoritative-derivation). The 16-byte cell rides the free
-    // ladder's `HeapShape` protocol — closure-body `emit_bg_arg_frees` (CPU arm)
-    // and `BgArgDropEntry` kind-0 (SM arm) both free it exactly once. The SM
-    // child-side read is unchanged: `load()`'s `sm_number_param_set` indirection
-    // now derefs the heap cell instead of the dead stack temp. N > 34 (bignum, a
-    // heap/global string pointer that already survives the frame) is deliberately
-    // out of scope — it falls through to the by-pointer default arm below.
-    if matches!(cg.resolve_type(ty), Type::Number { precision } if precision <= 34) {
-        let cell = cg.number_to_heap_cell(val.into_pointer_value(), "bg_number")?;
-        return Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+    // ── The `background` path's OWN unconditional pre-gates ─────────────────────────────
+    //
+    // For these three types "give the task its own value" is not a copy question, so they are
+    // answered before the shared owned-copy routine is ever consulted, and independently of
+    // give/copy inference. WHICH types those are is read from the ONE list
+    // (`ynz_typeck::owned_copy::spawn_rehoming`) rather than matched a second time here —
+    // typeck's spawn-side refusal reads the same list, which is why a shipped-and-working
+    // `MapEntry` spawn argument cannot be refused by a rule that only knows about copying.
+    match ynz_typeck::owned_copy::spawn_rehoming(&cg.resolve_type(ty)) {
+        // v0.3-M4: a channel argument is SHARED with the task — a refcounted alias via
+        // `ynz_channel_share`. Both sides must operate on the SAME bounded buffer (that is the
+        // whole point of a channel), so neither give nor copy is correct for a conduit. The
+        // task's drop ladder releases the reference (`BgArgDropEntry` kind 2 / the closure-body
+        // free arm).
+        Some(ynz_typeck::owned_copy::SpawnRehoming::ShareChannel) => {
+            let shared = cg
+                .builder
+                .build_call(cg.rt.ynz_channel_share, &[val.into()], "bg_chan_share")
+                .map_err(|e| format!("bg channel share: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "bg channel share: returned void".to_string())?;
+            return Ok((shared, BgArgFreeKind::SharedChannel));
+        }
+        // v0.3-M5 P3 step 5(b): a MapEntry arg ALWAYS needs stabilization — the value is a
+        // pointer to the loop arm's per-site entry struct, rewritten every iteration and dead
+        // with the spawner's frame (sweep probe: the task read the ADVANCED slot — 2/20 vs
+        // expected 1/10). Route through the ONE stable-bits choke point
+        // (`value_to_stable_bits` — no bg-side marshalling twin); the free ladder reuses
+        // `HeapShape` for the 16-byte entry cell (`ynz_free` ignores its size arg today). The
+        // deep-copied VALUE sub-cell is deliberately NOT freed — the FRAGO 011 accounted
+        // persist-cell class, deferred to the drop story.
+        Some(ynz_typeck::owned_copy::SpawnRehoming::StabilizeLoopView) => {
+            let bits = cg.value_to_stable_bits(val, ty, "bg_mapentry")?;
+            let cell_ptr = cg
+                .builder
+                .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_ptr")
+                .map_err(|e| format!("bg mapentry inttoptr: {e}"))?;
+            return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+        }
+        // v0.3-M6 Phase 1d (FRAGO 009 defect A): a decimal128 (`number`, N ≤ 34) arg ALWAYS
+        // needs stabilization, because the value is a POINTER to per-site i128 storage on the
+        // spawner's frame — a hardware-decimal128 stack alloca or the staged pointer bits of an
+        // SM number param — regardless of what the ownership record says. That storage dies
+        // with the spawner's frame; the task (CPU-spawn arm via `ynz_rt_spawn_blocking`, or
+        // SM-spawn arm via `ynz_rt_spawn`) reads dangling bits after the spawner returns or
+        // suspends (probe: deterministic `0.000...` vs `2.5`). Copy the i128 into a counted heap
+        // cell via the ONE `number_to_heap_cell` mechanism the cpu-member path also consumes
+        // (authoritative-derivation). The 16-byte cell rides the free ladder's `HeapShape`
+        // protocol — closure-body `emit_bg_arg_frees` (CPU arm) and `BgArgDropEntry` kind-0 (SM
+        // arm) both free it exactly once. The SM child-side read is unchanged: `load()`'s
+        // `sm_number_param_set` indirection derefs the heap cell instead of the dead stack temp.
+        // N > 34 (bignum) is not on this list — the owned-copy table refuses it outright.
+        Some(ynz_typeck::owned_copy::SpawnRehoming::DecimalCell) => {
+            let cell = cg.number_to_heap_cell(val.into_pointer_value(), "bg_number")?;
+            return Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+        }
+        None => {}
     }
 
     // v0.3-M8 Phase 5 Auto-Arc, topology (B) (`IMP-ownership.md` "Auto-Arc — Sharing
@@ -17102,164 +17104,95 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         return Ok((val, BgArgFreeKind::None));
     }
 
+    // ── The ONE owned-copy question, asked once ─────────────────────────────────────────
+    //
+    // Everything below this point used to be a SECOND per-type dispatch answering "give me an
+    // independent copy of this heap value", parallel to `.copy()`'s own — and both defaulted
+    // to handing back the receiver's own pointer (this function's `array<pointer-elem>` branch
+    // and its `_` arm; `.copy()`'s `AliasNoOp`). Their arms' comments cited each other as
+    // justification, with nothing forcing them to agree. One live use-after-free (a task's
+    // ladder-owned clone stored into an ALIASED outer container, then freed at retire while
+    // the spawner still pointed at it) and one live silent wrong answer came out of the pair.
+    //
+    // Now both consume `emit_owned_copy`, which consumes `ynz_typeck::owned_copy`'s single
+    // per-type table (`.claude/rules/authoritative-derivation.md`). The two `background`-only
+    // decisions ABOVE this point stay where they are because they are not copy questions at
+    // all: a channel is deliberately SHARED with the task, and an Auto-Arc group member
+    // deliberately shares one counted block.
+    //
+    // One `background`-only exception remains, and it is a de-duplication rather than a second
+    // classification: an explicit spawn-site `.copy()` on an array has ALREADY produced an
+    // independent heap array through this very emitter, so re-copying it here would both
+    // double-copy and leak the intermediate (nothing frees what `.copy()` allocated — an E8
+    // clone/drop imbalance). Transfer ownership of that copy to the task instead; its drop
+    // ladder frees it exactly as it freed the clone this path used to mint.
     let resolved = cg.resolve_type(ty);
-    match &resolved {
-        Type::Shape { name } => {
-            // Shape: the val is a pointer to struct data on the spawner's stack (whether the
-            // copy came from an alloca+memcpy in inferred-copy or explicit .copy() codegen,
-            // or from the original shape allocation in a give path). Heap-allocate the struct
-            // bytes so the task's pointer survives the spawner's frame return.
-            let name = name.clone();
-            let struct_ty = cg
-                .shape_types
-                .get(&name)
-                .ok_or_else(|| format!("bg heap copy: LLVM type for `{}` not found", name))?;
-            // Byte size from the ONE authoritative shape-size source
-            // (`shape_abi_sizes` via `shape_abi_size_const`) — the FRAGO 010
-            // twin (`struct_ty.size_of()` + zext, plus this site's documented
-            // free-side fallback-to-0) unified away (P3 step 5(c)).
-            let abi_size = cg.shape_abi_sizes.get(&name).copied().ok_or_else(|| {
-                format!("bg heap copy: shape `{name}` missing from shape_abi_sizes")
-            })?;
-            let byte_size_i64 = cg.i64().const_int(abi_size, false);
-            let heap_ptr = cg
-                .builder
-                .build_call(cg.rt.ynz_alloc, &[byte_size_i64.into()], "bg_shape_heap")
-                .map_err(|e| format!("bg heap copy: ynz_alloc call: {e}"))?
-                .try_as_basic_value()
-                .basic()
-                .ok_or_else(|| "bg heap copy: ynz_alloc returned void".to_string())?
-                .into_pointer_value();
-            let struct_val = cg
-                .builder
-                .build_load(struct_ty, val.into_pointer_value(), "bg_shape_src")
-                .map_err(|e| format!("bg heap copy: load src: {e}"))?;
-            cg.builder
-                .build_store(heap_ptr, struct_val)
-                .map_err(|e| format!("bg heap copy: store to heap: {e}"))?;
-            // Byte size for the BgArgFreeKind free call: the REAL size from
-            // `shape_abi_sizes` (this closed the @follow-up that documented a
-            // fallback-to-0 here — `ynz_free` still ignores its size argument
-            // today, so the change is behavior-neutral now and correct when
-            // kernel-mode sized-dealloc lands; P3 step 5(c), FRAGO 010).
-            Ok((
-                heap_ptr.into(),
-                BgArgFreeKind::HeapShape {
-                    byte_size: abi_size,
-                },
-            ))
-        }
-        Type::BuiltinArray { elem } => {
-            // FRAGO 014 follow-through (P5 step 4b — the bg-arg double-copy
-            // hazard): an explicit spawn-site `.copy()` has ALREADY produced an
-            // independent heap array (both layout modes, every element class —
-            // the alias-no-op is closed). Re-cloning it here would (a) double-
-            // copy and (b) LEAK the intermediate: nothing ever frees the value
-            // `.copy()` allocated (an E8 clone→drop imbalance — the FRAGO 009
-            // zero-tolerance class; measured gap 4→6 on
-            // m5_p3_sweep_bg_array_shape_give_wait pre-fix). Transfer ownership
-            // of the copy to the task instead: its drop ladder frees it
-            // (HeapArrayPrimitive → ynz_array_drop), exactly as it freed the
-            // clone this branch used to mint.
-            if matches!(
-                arg,
-                ynz_ast::nodes::Expr::PostfixOp {
-                    op: ynz_ast::nodes::PostfixOpKind::Copy,
-                    ..
-                }
-            ) {
-                return Ok((val, BgArgFreeKind::HeapArrayPrimitive));
+    if matches!(resolved, Type::BuiltinArray { .. })
+        && matches!(
+            arg,
+            ynz_ast::nodes::Expr::PostfixOp {
+                op: ynz_ast::nodes::PostfixOpKind::Copy,
+                ..
             }
-            // Clone the array so the task gets an independent copy. Primitive
-            // elements (i64 cells) and — since the v0.3-M5 P3 by-value cut —
-            // SHAPE elements (inline bytes in the heap buffer) both clone
-            // correctly via `ynz_array_clone_primitive`, which is elem_size-
-            // aware (byte-copies len × elem_size; the `_primitive` name records
-            // its original call-site class). The M5 cut IS the "m3c ABI work"
-            // trigger the old fall-through comment deferred to: pre-fix, an
-            // array<Shape> bg arg ALIASED the caller's buffer (P3 step 5 sweep
-            // probe: task read the caller's post-spawn mutation, 119 vs 30).
-            // Remaining fall-through (alias, unchanged): string/maybe/map/union
-            // element arrays — element cells hold pointers whose deep-copy
-            // semantics are not defined by the by-value cut.
-            let is_inline_elem = matches!(
-                cg.resolve_type(elem.as_ref()),
-                Type::Int | Type::Bool | Type::Float | Type::Shape { .. }
-            );
-            if is_inline_elem {
-                let clone_ptr = cg
-                    .builder
-                    .build_call(
-                        cg.rt.ynz_array_clone_primitive,
-                        &[val.into_pointer_value().into()],
-                        "bg_arr_clone",
-                    )
-                    .map_err(|e| format!("bg arr clone: {e}"))?
-                    .try_as_basic_value()
-                    .basic()
-                    .ok_or_else(|| "bg arr clone: returned void".to_string())?;
-                Ok((clone_ptr, BgArgFreeKind::HeapArrayPrimitive))
-            } else {
-                // array<pointer_elem> (string/maybe/map/union cells): pass as-is —
-                // same pointer-alias behavior as explicit `.copy()` on these types.
-                // Deep-copy semantics for pointer-cell elements are a separate
-                // design question (FR #6-adjacent), not part of the by-value cut.
-                Ok((val, BgArgFreeKind::None))
-            }
-        }
-        Type::String => {
-            // String bytes are heap-allocated and immutable — the pointer itself survives the
-            // spawner's frame independently of the stack. No heap copy needed.
-            Ok((val, BgArgFreeKind::None))
-        }
-        Type::Maybe { inner } => {
-            // v0.3-M5 P2 fix round 3: a maybe value is a pointer to the
-            // BINDING's envelope storage — entry-block storage the producing
-            // site rewrites on every execution and that dies with the
-            // spawner's frame. Passing it through stored stale/dangling
-            // envelope-pointer bits in the spawn ctx/frame (tripwire
-            // `m5_p2_byval_bg_maybe_arg_escape`: expected 1, observed 3).
-            // Clone the envelope — and, for a shape payload, the payload
-            // bytes — into counted heap cells via the ONE maybe heap-cell
-            // core the map/array/field persist surfaces share
-            // (authoritative-derivation: no per-surface twin).
-            let cell = cg.maybe_to_heap_cell(val.into_pointer_value(), inner, "bg_maybe")?;
-            // Envelope byte size for the free ladder: same documented
-            // fallback-to-0 pattern as HeapShape above (`ynz_free` ignores
-            // its size argument today; the honest constant folds in practice
-            // for the fixed `{i64, i64}` envelope).
-            let byte_size = cg
-                .maybe_type()
-                .size_of()
-                .and_then(|s| s.get_zero_extended_constant())
-                .unwrap_or(0);
-            Ok((cell.into(), BgArgFreeKind::HeapMaybeEnv { byte_size }))
-        }
-        // fr23 tracking guard (v0.3-M7, FRAGO 025): `dynamic Contract` receivers are
-        // CURRENTLY unreachable here — dynamic-dispatch call sites abort earlier with
-        // "codegen: dynamic dispatch call sites not yet lowered in M4 P4" (this file,
-        // Expr::MethodCall's dynamic-dispatch arm), so no `background`-spawn ever
-        // reaches this match with `resolved = Type::Dynamic` today. But the moment a
-        // future milestone lowers dynamic-dispatch codegen, a fat-pointer/vtable
-        // receiver spawned via `background` would silently fall through to the `_`
-        // arm below (`BgArgFreeKind::None` — no heap-upgrade) and reopen the entire
-        // fr23 UAF class for dynamic receivers, exactly as it did for Shape/Maybe/
-        // array before FRAGO 016 closed those. Fail loudly instead of silently: this
-        // arm must be replaced with a real heap-upgrade path (mirroring the Shape arm
-        // above, sized for the fat-pointer + vtable layout) BEFORE dynamic-dispatch
-        // codegen ships — see FRAGO 024/025, roadmap fr23 history.
-        Type::Dynamic { contract } => Err(format!(
+        )
+    {
+        return Ok((val, BgArgFreeKind::HeapArrayPrimitive));
+    }
+
+    // fr23 tracking guard (v0.3-M7, FRAGO 025): `dynamic Contract` receivers are CURRENTLY
+    // unreachable here — dynamic-dispatch call sites abort earlier with "codegen: dynamic
+    // dispatch call sites not yet lowered in M4 P4" (this file, `Expr::MethodCall`'s
+    // dynamic-dispatch arm). The shared table refuses `dynamic` outright, so this arm no
+    // longer decides anything the table does not; it survives only to keep the fr23 wording,
+    // which names what must be built (a real heap-upgrade path sized for the fat pointer and
+    // its function table) BEFORE dynamic-dispatch codegen ships.
+    if let Type::Dynamic { contract } = &resolved {
+        return Err(format!(
             "codegen: `background`-spawn heap-upgrade for `dynamic {contract}` receivers is \
              not yet implemented (fr23 tracking guard, FRAGO 025) — dynamic-dispatch codegen \
              must not ship until prepare_bg_arg_for_ctx gets a real heap-upgrade arm here"
-        )),
-        _ => {
-            // Primitives (Int/Bool/Float) are i64 by-value — no pointer involved.
-            // Other heap types (map, union) alias today on explicit .copy() too;
-            // that is the m3c scope, not changed here.
-            Ok((val, BgArgFreeKind::None))
+        ));
+    }
+
+    // A value handed over with `give` needs NO copy, and must not get one.
+    //
+    // The copy question this function asks the shared table is "does the task need a value of
+    // its own?" — and for a `map` the answer turns on typeck's OWN recorded ownership, which is
+    // read here rather than re-derived (`background_arg_inferred_ownership`, the same record
+    // the Auto-Arc arm above consults). `Give` means the spawner's binding was consumed at the
+    // spawn: the task is the sole holder, nothing can observe a shared value, and
+    // `IMP-concurrency.md` ("What this makes sound — and its precondition") states exactly that
+    // soundness for an aliased `map` argument arriving through a `give` parameter. Copying it
+    // anyway would leave the spawner's original map held by nobody — a leak, minted to protect
+    // against a hazard that cannot occur.
+    //
+    // The same reasoning covers a type the table REFUSES (a union today): under `give` there is
+    // nothing to be independent from, so the pre-existing pass-through is sound and stays. Under
+    // `Copy` typeck refuses the spawn outright with `SpawnArgNotIndependent`, so this arm never
+    // sees one — the loud answer is a teaching diagnostic at the spawn, never a backend error.
+    //
+    // This gate is deliberately NOT extended to `array`: an array argument is cloned on the
+    // `give` path too today, and its clone is what the task's drop ladder owns and frees
+    // (`HeapArrayPrimitive`). Removing that clone would change which allocation the ladder
+    // releases, which is a larger change than this one and belongs with the release work.
+    let give_needs_no_copy = matches!(resolved, Type::BuiltinMap { .. })
+        || matches!(
+            ynz_typeck::owned_copy::owned_copy_plan(&resolved),
+            ynz_typeck::owned_copy::OwnedCopy::Refused(_)
+        );
+    if give_needs_no_copy {
+        let s = arg.span();
+        if matches!(
+            cg.typed
+                .background_arg_inferred_ownership
+                .get(&(s.start, s.end)),
+            Some(ynz_typeck::check::BgOwnership::Give)
+        ) {
+            return Ok((val, BgArgFreeKind::None));
         }
     }
+
+    emit_owned_copy(cg, Some(arg), val, &resolved, CopyMode::SpawnArg, "bg_arg")
 }
 
 /// Emit the free calls for heap-copied `background` args inside the closure body.
@@ -19768,160 +19701,431 @@ fn lower_postfix_op<'ctx>(
         PostfixOpKind::Copy => {
             let recv_ty = cg.expr_type(receiver);
             let recv_val = lower_expr(cg, receiver)?;
-            // Dispatch on the ONE classification of what `.copy()` does for this type
-            // (`copy_lowering_arm`, exhaustive over `Type`) — never on the type directly, so
-            // the arm set here and typeck's `copy_is_independent` are held to parity by
-            // `copy_parity_tests` below (v0.3-M8 Phase 4 fix round 2, should-fix 6).
-            match copy_lowering_arm(&recv_ty) {
-                CopyLowering::ShapeMemcpy => {
-                    // Trivially-copyable shape: memcpy into a fresh alloca.
-                    let Type::Shape { name } = &recv_ty else {
-                        unreachable!(
-                            "copy_lowering_arm: ShapeMemcpy is only classified for Type::Shape"
-                        )
-                    };
-                    let name = name.clone();
-                    let struct_ty = cg
-                        .shape_types
-                        .get(&name)
-                        .ok_or_else(|| format!(".copy(): LLVM type for `{}` not found", name))?;
-                    let new_slot = cg
-                        .builder
-                        .build_alloca(struct_ty, &format!("{}_copy", name))
-                        .map_err(|e| format!(".copy alloca: {e}"))?;
-                    // Load the struct value and store into the new slot.
-                    let val = cg
-                        .builder
-                        .build_load(struct_ty, recv_val.into_pointer_value(), "copy_src")
-                        .map_err(|e| format!(".copy load: {e}"))?;
-                    cg.builder
-                        .build_store(new_slot, val)
-                        .map_err(|e| format!(".copy store: {e}"))?;
-                    Ok(new_slot.into())
-                }
-                // FRAGO 014: array `.copy()` is a genuine ONE-LEVEL deep copy in
-                // BOTH layout modes — closing the M4-era alias-no-op stub (the
-                // old catch-all returned the receiver's own pointer, so
-                // `arr2 = arr1.copy(); arr2.set(...)` also mutated `arr1`).
-                // One-level = the same semantics as the `Type::Shape` arm above:
-                // a fresh buffer, element cells byte-copied; pointer cells
-                // (string/maybe elements) copy as pointers, so nested data still
-                // aliases (consistent with D12/D13's recorded stance).
-                CopyLowering::ArrayClone => {
-                    let arr = recv_val.into_pointer_value();
-                    if let Some(info) = cg.soa_expr_info(receiver) {
-                        // SoA receiver: gather into a fresh AoS buffer — the
-                        // copy's binding is authority-declined, so its reads
-                        // lower AoS (see soa_copy_to_aos's header).
-                        let copied = cg.soa_copy_to_aos(&info, arr, "arr_copy")?;
-                        Ok(copied.into())
-                    } else {
-                        // AoS receiver: elem_size-aware byte deep copy
-                        // (len × elem_size; clone/drop are E7-exempt like count).
-                        let cloned = cg
-                            .builder
-                            .build_call(
-                                cg.rt.ynz_array_clone_primitive,
-                                &[arr.into()],
-                                "arr_copy_clone",
-                            )
-                            .map_err(|e| format!(".copy array clone: {e}"))?
-                            .try_as_basic_value()
-                            .basic()
-                            .ok_or_else(|| ".copy array clone: returned void".to_string())?;
-                        Ok(cloned)
-                    }
-                }
-                // v0.3-M8 Phase 4 step 3a: `map<K, V>` `.copy()` is the same ONE-LEVEL
-                // deep copy as the array arm — a fresh header + fresh
-                // ctrl/keys/vals/insert_order buffers (`ynz_map_clone`, five counted
-                // allocs). Before this arm `table.copy()` fell through the catch-all
-                // below and returned `table` ITSELF, so `wire.send(table.copy())` would
-                // have sent the original allocation and silently reintroduced the
-                // cross-task aliasing the ConsumedBySend advice exists to close
-                // (independence lock: `v0_3_m8_p4_map_copy_independent.ynz`).
-                CopyLowering::MapClone => {
-                    let map = recv_val.into_pointer_value();
-                    let cloned = cg
-                        .builder
-                        .build_call(cg.rt.ynz_map_clone, &[map.into()], "map_copy_clone")
-                        .map_err(|e| format!(".copy map clone: {e}"))?
-                        .try_as_basic_value()
-                        .basic()
-                        .ok_or_else(|| ".copy map clone: returned void".to_string())?;
-                    Ok(cloned)
-                }
-                // Value-bit primitives (int/float/bool/number/string) are already by-value
-                // (or immortal bytes) — the receiver is the copy.
-                CopyLowering::ByValue => Ok(recv_val),
-                // The types that still fall through as an alias no-op — `maybe`, union,
-                // `fixed`, `dynamic`, … — are the FR#10 stub class the v0.3-M8 plan records;
-                // provenance classifies their `.copy()` as `Unknown` so they can never be
-                // transferred through it (`copy_is_independent` in ynz_typeck::types answers
-                // `false` for exactly this arm — `copy_parity_tests` holds the two together).
-                CopyLowering::AliasNoOp => Ok(recv_val),
-            }
+            // ONE owned-copy emitter, shared with the `background`-argument path
+            // (`prepare_bg_arg_for_ctx`). Before v0.3 concurrency hardening Phase 3 these were
+            // two per-type dispatches that both defaulted to handing back the receiver's own
+            // pointer; the pair produced one use-after-free and one silent wrong answer. See
+            // `emit_owned_copy` and `ynz_typeck::owned_copy`.
+            let (val, _free) = emit_owned_copy(
+                cg,
+                Some(receiver),
+                recv_val,
+                &recv_ty,
+                CopyMode::Body,
+                "copy",
+            )?;
+            Ok(val)
         }
     }
 }
 
-/// What the `PostfixOpKind::Copy` lowering above does for a receiver type — THE
-/// classification the match dispatches on, exhaustive over `Type` with no `_` arm, so a new
-/// `Type` variant fails to compile here until someone says what its `.copy()` does. Typeck's
-/// `copy_is_independent` (`ynz_typeck::types`) must answer `true` for exactly the arms that
-/// yield an independent value (everything but `AliasNoOp`); `copy_parity_tests` below holds
-/// the two to that contract over one sample of every variant, so adding a real clone arm here
-/// without teaching provenance about it — or the reverse — fails loudly.
+/// Which consumer is asking [`emit_owned_copy`] for a copy. The per-type PLAN is the same for
+/// both (`owned_copy_plan` — one table, no twin); what differs is where the copy has to live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CopyLowering {
-    /// A trivially-copyable shape: memcpy into a fresh alloca.
-    ShapeMemcpy,
-    /// `array<T>`: `ynz_array_clone_primitive` / SoA gather — a one-level deep copy.
-    ArrayClone,
-    /// `map<K, V>`: `ynz_map_clone` — a one-level deep copy.
-    MapClone,
-    /// Value bits or immortal bytes: the receiver IS the copy.
-    ByValue,
-    /// Not yet lowered: the receiver is returned unchanged (an alias, FR#10's stub class).
-    AliasNoOp,
+enum CopyMode {
+    /// `.copy()` in a function body. The copy lives as long as the frame does, so a type whose
+    /// contents can never change may hand back the receiver.
+    Body,
+    /// A `background` argument. The spawner's frame dies while the task still holds the value,
+    /// so anything that points into that frame must be re-homed onto the heap first.
+    SpawnArg,
 }
 
-pub fn copy_lowering_arm(ty: &Type) -> CopyLowering {
-    match ty {
-        Type::Shape { .. } => CopyLowering::ShapeMemcpy,
-        Type::BuiltinArray { .. } => CopyLowering::ArrayClone,
-        Type::BuiltinMap { .. } => CopyLowering::MapClone,
-        Type::Int | Type::Float | Type::Bool | Type::String => CopyLowering::ByValue,
-        // N ≤ 34: decimal128, an i128 value — the receiver bits ARE the copy. N > 34: bignum,
-        // a pointer to a heap decimal string (`llvm_type_for` above, `Type::Number { .. } =>
-        // Some(self.ptr().into())`) — returning the receiver unchanged would alias the same
-        // string, not copy it, so it falls to the alias arm like every other not-yet-lowered
-        // pointer type (v0.3-M8 Phase 4 fix round 3, should-fix 5). Unreachable from source
-        // today (the parser defers non-34 precision) — `copy_parity_tests` and
-        // `ynz_typeck::types::is_trivially_copyable` must classify it the same way regardless.
-        Type::Number { precision } if *precision <= 34 => CopyLowering::ByValue,
-        Type::Number { .. }
-        | Type::Nothing
-        | Type::Error
-        | Type::Range { .. }
-        | Type::Dynamic { .. }
-        | Type::TypeParam { .. }
-        | Type::Generic { .. }
-        | Type::BuiltinFixed { .. }
-        | Type::Maybe { .. }
-        | Type::MapEntry { .. }
-        | Type::BuiltinChannel { .. }
-        | Type::BackgroundHandle { .. }
-        | Type::Options { .. }
-        | Type::Union { .. }
-        | Type::ErrorsCapable { .. }
-        | Type::Sensitive { .. } => CopyLowering::AliasNoOp,
+/// THE owned-copy emitter: given a value and its type, produce a genuinely independent copy.
+///
+/// This is the single place that turns `ynz_typeck::owned_copy::owned_copy_plan`'s answer into
+/// machine code, and it is what makes "one routine, two call sites" true rather than
+/// aspirational — `lower_postfix_op`'s `.copy()` arm and `prepare_bg_arg_for_ctx`'s
+/// heap-upgrade path both call it. Neither classifies a type itself.
+///
+/// The returned [`BgArgFreeKind`] tells the spawn path what the task must release at retire;
+/// `CopyMode::Body` callers ignore it (nothing releases a body-local heap value yet — the
+/// scope-exit release pass is separate, later work).
+///
+/// The `match` below is exhaustive over `OwnedCopy` with NO `_` arm on purpose: a plan added to
+/// the shared table fails to compile here until someone says how to emit it, which is the same
+/// forcing function `owned_copy_plan` itself uses over `Type`.
+fn emit_owned_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    receiver: Option<&Expr>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    mode: CopyMode,
+    site: &str,
+) -> Result<(BasicValueEnum<'ctx>, BgArgFreeKind), String> {
+    use ynz_typeck::owned_copy::{owned_copy_plan, ElemCopy, HeapCell, OwnedCopy};
+    let resolved = cg.resolve_type(ty);
+    match owned_copy_plan(&resolved) {
+        // Contents nothing can change: a second name for the same bits cannot disagree with
+        // the first, so the receiver IS the copy — in a body and across a spawn alike.
+        OwnedCopy::ReceiverIsCopy => Ok((val, BgArgFreeKind::None)),
+
+        // Immutable, but living in storage the producing frame owns.
+        OwnedCopy::FrameLocalImmutable { heap_cell } => match (mode, heap_cell) {
+            (CopyMode::Body, _) => Ok((val, BgArgFreeKind::None)),
+            (CopyMode::SpawnArg, HeapCell::Number) => {
+                // Reached only if the unconditional decimal pre-gate in
+                // `prepare_bg_arg_for_ctx` is ever bypassed; kept honest rather than left to
+                // pass a pointer into the dying frame.
+                let cell = cg.number_to_heap_cell(val.into_pointer_value(), site)?;
+                Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }))
+            }
+            (CopyMode::SpawnArg, HeapCell::None) => Err(format!(
+                "codegen: a `{}` argument cannot be handed to a `background` task — its \
+                 storage belongs to the spawning function's frame and no re-homing path \
+                 exists for it ({site})",
+                ynz_typeck::types::type_name(&resolved)
+            )),
+        },
+
+        // A shape's own bytes. Its pointer-valued fields (a nested shape, an `array`, a `map`,
+        // a `maybe`) are copied as pointers — the named residual in `ynz_typeck::owned_copy`'s
+        // header, pre-existing behaviour, unchanged here.
+        OwnedCopy::ShapeMemcpy => {
+            let Type::Shape { name } = &resolved else {
+                return Err(format!(
+                    "{site}: owned_copy_plan classified a non-shape as ShapeMemcpy"
+                ));
+            };
+            let struct_ty = cg
+                .shape_types
+                .get(name)
+                .ok_or_else(|| format!("{site}: LLVM type for `{name}` not found"))?;
+            let abi_size =
+                cg.shape_abi_sizes.get(name).copied().ok_or_else(|| {
+                    format!("{site}: shape `{name}` missing from shape_abi_sizes")
+                })?;
+            let dst = match mode {
+                CopyMode::Body => cg
+                    .builder
+                    .build_alloca(struct_ty, &format!("{name}_copy"))
+                    .map_err(|e| format!("{site} alloca: {e}"))?,
+                CopyMode::SpawnArg => {
+                    let size_val = cg.i64().const_int(abi_size, false);
+                    cg.builder
+                        .build_call(cg.rt.ynz_alloc, &[size_val.into()], "bg_shape_heap")
+                        .map_err(|e| format!("{site}: ynz_alloc call: {e}"))?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| format!("{site}: ynz_alloc returned void"))?
+                        .into_pointer_value()
+                }
+            };
+            // IR value names are mode-stable on purpose: `copy_src` / `bg_shape_src` are the
+            // names the two call sites emitted before they shared this emitter, and IR-shape
+            // tests grep for them (`hotfix_bg_arg_number_field`).
+            let load_name = match mode {
+                CopyMode::Body => "copy_src",
+                CopyMode::SpawnArg => "bg_shape_src",
+            };
+            let struct_val = cg
+                .builder
+                .build_load(struct_ty, val.into_pointer_value(), load_name)
+                .map_err(|e| format!("{site} load: {e}"))?;
+            cg.builder
+                .build_store(dst, struct_val)
+                .map_err(|e| format!("{site} store: {e}"))?;
+            let free = match mode {
+                CopyMode::Body => BgArgFreeKind::None,
+                CopyMode::SpawnArg => BgArgFreeKind::HeapShape {
+                    byte_size: abi_size,
+                },
+            };
+            Ok((dst.into(), free))
+        }
+
+        // `fixed<T>`: N inline i64 cells. Before this, `.copy()` handed back the receiver's own
+        // cells, so `b = a.copy(); b.set(0, 99)` changed `a` too — the silent wrong answer this
+        // emitter's whole existence is about.
+        OwnedCopy::FixedMemcpy => {
+            let Type::BuiltinFixed { size, .. } = &resolved else {
+                return Err(format!(
+                    "{site}: owned_copy_plan classified a non-fixed as FixedMemcpy"
+                ));
+            };
+            let n = size.ok_or_else(|| {
+                format!(
+                    "{site}: the length of this `fixed` list is not known here, so its copy \
+                     cannot be sized — this is a compiler bug"
+                )
+            })? as u64;
+            let bytes = n * 8;
+            let cells_ty = cg.i64().array_type(n as u32);
+            let dst = match mode {
+                CopyMode::Body => cg
+                    .builder
+                    .build_alloca(cells_ty, &format!("{site}_fixed"))
+                    .map_err(|e| format!("{site} fixed alloca: {e}"))?,
+                CopyMode::SpawnArg => {
+                    let size_val = cg.i64().const_int(bytes, false);
+                    cg.builder
+                        .build_call(cg.rt.ynz_alloc, &[size_val.into()], "bg_fixed_heap")
+                        .map_err(|e| format!("{site}: ynz_alloc call: {e}"))?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| format!("{site}: ynz_alloc returned void"))?
+                        .into_pointer_value()
+                }
+            };
+            cg.builder
+                .build_memcpy(
+                    dst,
+                    8,
+                    val.into_pointer_value(),
+                    8,
+                    cg.i64().const_int(bytes, false),
+                )
+                .map_err(|e| format!("{site} fixed memcpy: {e}"))?;
+            let free = match mode {
+                CopyMode::Body => BgArgFreeKind::None,
+                CopyMode::SpawnArg => BgArgFreeKind::HeapShape { byte_size: bytes },
+            };
+            Ok((dst.into(), free))
+        }
+
+        // `array<T>`: a fresh header and buffer, and — when the cells hold pointers to
+        // separately-allocated items — every item copied through this same emitter. That
+        // second half is what makes an `array<array<int>>` genuinely independent instead of
+        // two containers sharing their inner arrays.
+        OwnedCopy::ArrayClone { elem } => {
+            let Type::BuiltinArray { elem: elem_ty } = &resolved else {
+                return Err(format!(
+                    "{site}: owned_copy_plan classified a non-array as ArrayClone"
+                ));
+            };
+            let elem_ty = elem_ty.as_ref().clone();
+            let src = val.into_pointer_value();
+            // SoA receivers gather into a fresh AoS buffer; the copy's binding is
+            // authority-declined, so its reads lower AoS (see `soa_copy_to_aos`'s header).
+            let cloned = match receiver.and_then(|r| cg.soa_expr_info(r)) {
+                Some(info) => cg.soa_copy_to_aos(&info, src, "arr_copy")?,
+                None => cg
+                    .builder
+                    .build_call(
+                        cg.rt.ynz_array_clone_primitive,
+                        &[src.into()],
+                        match mode {
+                            CopyMode::Body => "arr_copy_clone",
+                            CopyMode::SpawnArg => "bg_arr_clone",
+                        },
+                    )
+                    .map_err(|e| format!("{site} array clone: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| format!("{site} array clone: returned void"))?
+                    .into_pointer_value(),
+            };
+            if elem == ElemCopy::Nested {
+                emit_array_elem_deep_copy(cg, cloned, &elem_ty, mode, site)?;
+            }
+            let free = match mode {
+                CopyMode::Body => BgArgFreeKind::None,
+                CopyMode::SpawnArg => BgArgFreeKind::HeapArrayPrimitive,
+            };
+            Ok((cloned.into(), free))
+        }
+
+        // `map<K, V>`: a fresh header plus its four buffers.
+        OwnedCopy::MapClone => {
+            let cloned = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_map_clone,
+                    &[val.into_pointer_value().into()],
+                    "map_copy_clone",
+                )
+                .map_err(|e| format!("{site} map clone: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| format!("{site} map clone: returned void"))?;
+            // DEFERRED, four fields, for the SpawnArg case only.
+            // WHAT: the task's own copy of a `map` argument is not released when the task
+            //   retires, so a spawn that passes a map leaks that copy.
+            // WHY: releasing it needs a new `BG_ARG_KIND_*` wire value, which the runtime's
+            //   retire ladder, the channel-side release rewrite, and both of their
+            //   kind-enumerating parity tests all read. That is a wire-format change, and
+            //   this change is a correctness fix that must land BEFORE the scope-exit release
+            //   pass (a release pass landing first would emit frees on the pointers this fix
+            //   exists to stop aliasing). Shipping the wire change here would invert that
+            //   order for a leak, to fix an alias.
+            // COST to fix later: one `BG_ARG_KIND_HEAP_MAP` constant, one arm in the runtime
+            //   retire ladder calling `ynz_map_drop`, one arm here, and the `ALL_BG_ARG_KINDS`
+            //   / releasable-payload parity tests that enumerate the kinds.
+            // TRIGGER: the scope-exit release pass, which owns the release ladder — or the
+            //   first program that spawns with a `map` argument from inside a loop.
+            // Until then this is strictly better than what it replaces: the task used to
+            //   share the spawner's map outright.
+            Ok((cloned, BgArgFreeKind::None))
+        }
+
+        // `maybe<T>`: a fresh envelope cell through the ONE maybe-ownership core the map,
+        // array and field persist surfaces already share.
+        OwnedCopy::MaybeCellClone => {
+            let Type::Maybe { inner } = &resolved else {
+                return Err(format!(
+                    "{site}: owned_copy_plan classified a non-maybe as MaybeCellClone"
+                ));
+            };
+            let inner = inner.as_ref().clone();
+            let cell = cg.maybe_to_heap_cell(val.into_pointer_value(), &inner, site)?;
+            let byte_size = cg
+                .maybe_type()
+                .size_of()
+                .and_then(|s| s.get_zero_extended_constant())
+                .unwrap_or(0);
+            let free = match mode {
+                CopyMode::Body => BgArgFreeKind::None,
+                CopyMode::SpawnArg => BgArgFreeKind::HeapMaybeEnv { byte_size },
+            };
+            Ok((cell.into(), free))
+        }
+
+        // Typeck refuses `.copy()` on these before codegen runs, and the spawn path's own
+        // admission never records one. Reaching here means a compiler bug, so say so.
+        OwnedCopy::Refused(_) => Err(format!(
+            "codegen: no independent copy exists for `{}` ({site}) — this should have been \
+             refused with a teaching diagnostic before codegen; this is a compiler bug",
+            ynz_typeck::types::type_name(&resolved)
+        )),
     }
+}
+
+/// Copy every element of an already-cloned array whose cells hold pointers to separately
+/// allocated items, through [`emit_owned_copy`] — so the clone and the original do not share
+/// their items. Emitted as a counted loop over the clone's own length.
+///
+/// Called only for [`ElemCopy::Nested`] element kinds, which is exactly the set whose plan
+/// produces a fresh allocation (`array`, `map`, `maybe`); an element that cannot be copied
+/// makes the whole container a refusal in the shared table, so it never reaches here.
+///
+/// DEFERRED, four fields:
+/// - WHAT: the items this loop allocates are not released when the copy is dropped —
+///   `ynz_array_drop` is element-blind by design (recorded decision D6), so it frees the
+///   buffer and the header and nothing else.
+/// - WHY: an element-aware drop needs the element TYPE at the drop site. The runtime does not
+///   have it, and a task's retire ladder carries only a wire kind — so giving it one is the
+///   same `BG_ARG_KIND_*` wire-format change the `MapClone` arm's deferral names, and this
+///   change must land BEFORE the scope-exit release pass, not carry a piece of it. The
+///   alternative in the meantime is leaving the items SHARED, which is the alias this loop
+///   exists to remove and the thing that produced a use-after-free; a leak is the strictly
+///   less harmful of the two.
+/// - COST to fix later: per-element-kind drop glue, which codegen already mints for channel
+///   payloads (`channel_elem_drop` is the pattern), plus a way for the drop site to reach it.
+/// - TRIGGER: the scope-exit release pass, which is where a body-local array's own release
+///   lands and where this element walk has to exist anyway.
+fn emit_array_elem_deep_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arr: PointerValue<'ctx>,
+    elem_ty: &Type,
+    mode: CopyMode,
+    site: &str,
+) -> Result<(), String> {
+    let i64_ty = cg.i64();
+    let len = cg
+        .builder
+        .build_call(cg.rt.ynz_array_count, &[arr.into()], &format!("{site}_len"))
+        .map_err(|e| format!("{site} deep count: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| format!("{site} deep count: returned void"))?
+        .into_int_value();
+    let idx_slot = cg
+        .builder
+        .build_alloca(i64_ty, &format!("{site}_deep_i"))
+        .map_err(|e| format!("{site} deep idx alloca: {e}"))?;
+    cg.builder
+        .build_store(idx_slot, i64_ty.const_zero())
+        .map_err(|e| format!("{site} deep idx init: {e}"))?;
+    let cell_slot = cg
+        .builder
+        .build_alloca(i64_ty, &format!("{site}_deep_cell"))
+        .map_err(|e| format!("{site} deep cell alloca: {e}"))?;
+
+    let head = cg.append_block(&format!("{site}_deep_head"));
+    let body = cg.append_block(&format!("{site}_deep_body"));
+    let done = cg.append_block(&format!("{site}_deep_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| format!("{site} deep br: {e}"))?;
+
+    cg.builder.position_at_end(head);
+    let i = cg
+        .builder
+        .build_load(i64_ty, idx_slot, &format!("{site}_deep_i_v"))
+        .map_err(|e| format!("{site} deep idx load: {e}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(IntPredicate::SLT, i, len, &format!("{site}_deep_more"))
+        .map_err(|e| format!("{site} deep cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|e| format!("{site} deep cond: {e}"))?;
+
+    cg.builder.position_at_end(body);
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_get,
+            &[arr.into(), i.into(), cell_slot.into()],
+            &format!("{site}_deep_get"),
+        )
+        .map_err(|e| format!("{site} deep get: {e}"))?;
+    let bits = cg
+        .builder
+        .build_load(i64_ty, cell_slot, &format!("{site}_deep_bits"))
+        .map_err(|e| format!("{site} deep bits load: {e}"))?
+        .into_int_value();
+    let item_ptr = cg
+        .builder
+        .build_int_to_ptr(bits, cg.ptr(), &format!("{site}_deep_item"))
+        .map_err(|e| format!("{site} deep inttoptr: {e}"))?;
+    // The recursion: the item is copied by the SAME emitter, so a three-deep nesting is
+    // handled by the same rule as a one-deep one and neither can drift from the other.
+    let (copied, _free) = emit_owned_copy(
+        cg,
+        None,
+        item_ptr.into(),
+        elem_ty,
+        mode,
+        &format!("{site}_item"),
+    )?;
+    let copied_bits = cg
+        .builder
+        .build_ptr_to_int(
+            copied.into_pointer_value(),
+            i64_ty,
+            &format!("{site}_deep_new_bits"),
+        )
+        .map_err(|e| format!("{site} deep ptrtoint: {e}"))?;
+    cg.builder
+        .build_store(cell_slot, copied_bits)
+        .map_err(|e| format!("{site} deep cell store: {e}"))?;
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_set,
+            &[arr.into(), i.into(), cell_slot.into()],
+            &format!("{site}_deep_set"),
+        )
+        .map_err(|e| format!("{site} deep set: {e}"))?;
+    let next = cg
+        .builder
+        .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_deep_next"))
+        .map_err(|e| format!("{site} deep add: {e}"))?;
+    cg.builder
+        .build_store(idx_slot, next)
+        .map_err(|e| format!("{site} deep idx store: {e}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| format!("{site} deep loop br: {e}"))?;
+
+    cg.builder.position_at_end(done);
+    Ok(())
 }
 
 #[cfg(test)]
 mod copy_parity_tests {
-    use super::{copy_lowering_arm, CopyLowering};
+    use super::CopyMode;
+    use ynz_typeck::owned_copy::{owned_copy_plan, ElemCopy, HeapCell, OwnedCopy};
     use ynz_typeck::type_variant_sampler::{all_type_variants, TYPE_VARIANT_COUNT};
     use ynz_typeck::types::Type;
 
@@ -19940,37 +20144,122 @@ mod copy_parity_tests {
     }
 
     #[test]
-    fn copy_is_independent_matches_the_copy_lowering_arm_for_every_type_variant() {
-        // WHY: `copy_is_independent` (typeck provenance: "is `x.copy()` Fresh?") and the
-        // codegen arm that lowers `.copy()` used to be linked only by a comment claiming a
-        // parity test that did not exist (v0.3-M8 Phase 4 round-1 finding). This is the test.
+    fn copy_is_independent_matches_the_owned_copy_plan_for_every_type_variant() {
+        // WHY: `copy_is_independent` (typeck provenance: "is `x.copy()` Fresh?") and the arm
+        // that lowers `.copy()` used to be linked only by a comment claiming a parity test
+        // that did not exist (v0.3-M8 Phase 4 round-1 finding). Since v0.3 concurrency
+        // hardening Phase 3 the two are the SAME table — `copy_is_independent` is derived from
+        // `owned_copy_plan` — so this test is now a lock on that derivation rather than a
+        // bridge between two lists: if anyone gives `copy_is_independent` a body of its own
+        // again, this fails.
         for ty in all_type_variants() {
-            let arm = copy_lowering_arm(&ty);
-            let independent = arm != CopyLowering::AliasNoOp;
+            let plan = owned_copy_plan(&ty);
+            let independent = !matches!(plan, OwnedCopy::Refused(_));
             assert_eq!(
                 ynz_typeck::types::copy_is_independent(&ty),
                 independent,
-                "{ty:?}: codegen lowers `.copy()` as {arm:?} but typeck's copy_is_independent \
-                 says {} — a `.copy()` provenance would admit or refuse a transfer the machine \
-                 code does not honor",
+                "{ty:?}: the owned-copy table plans {plan:?} but copy_is_independent says {} — \
+                 a `.copy()` provenance would admit or refuse a transfer the machine code does \
+                 not honor",
                 ynz_typeck::types::copy_is_independent(&ty)
             );
         }
     }
 
     #[test]
-    fn bignum_number_is_not_by_value() {
+    fn every_plan_matches_the_type_shape_its_emitter_destructures() {
+        // WHY: this is the binding the shared emitter needs and the compiler cannot give it.
+        // `emit_owned_copy`'s exhaustiveness over `OwnedCopy` is a BUILD failure for a new
+        // plan variant, and `owned_copy_plan`'s exhaustiveness over `Type` is a build failure
+        // for a new type. Neither catches the third mistake: a plan handed out for a type
+        // whose payload the emitter's `let … else` cannot destructure. That one compiles fine
+        // and reaches a user as an internal-error string at the moment they call `.copy()`.
+        // Asserted here for every sampled variant so it fails the build instead.
+        for ty in all_type_variants() {
+            match owned_copy_plan(&ty) {
+                OwnedCopy::ShapeMemcpy => assert!(
+                    matches!(ty, Type::Shape { .. }),
+                    "{ty:?}: planned ShapeMemcpy, which the emitter destructures as Type::Shape"
+                ),
+                OwnedCopy::FixedMemcpy => assert!(
+                    matches!(ty, Type::BuiltinFixed { .. }),
+                    "{ty:?}: planned FixedMemcpy, which the emitter destructures as \
+                     Type::BuiltinFixed"
+                ),
+                OwnedCopy::ArrayClone { .. } => assert!(
+                    matches!(ty, Type::BuiltinArray { .. }),
+                    "{ty:?}: planned ArrayClone, which the emitter destructures as \
+                     Type::BuiltinArray"
+                ),
+                OwnedCopy::MapClone => assert!(
+                    matches!(ty, Type::BuiltinMap { .. }),
+                    "{ty:?}: planned MapClone, which the emitter calls ynz_map_clone for"
+                ),
+                OwnedCopy::MaybeCellClone => assert!(
+                    matches!(ty, Type::Maybe { .. }),
+                    "{ty:?}: planned MaybeCellClone, which the emitter destructures as \
+                     Type::Maybe"
+                ),
+                OwnedCopy::ReceiverIsCopy
+                | OwnedCopy::FrameLocalImmutable { .. }
+                | OwnedCopy::Refused(_) => {}
+            }
+        }
+    }
+
+    #[test]
+    fn a_spawn_argument_never_carries_frame_storage_into_a_task() {
+        // WHY: the spawn path and `.copy()` share one table but not one lifetime. A type whose
+        // contents cannot change may hand back the receiver INSIDE a frame; handing the same
+        // pointer to a task that outlives the frame is the defect class that produced the
+        // decimal-number spawn bug. Every `FrameLocalImmutable` type therefore names its
+        // re-homing mechanism, and `HeapCell::None` means the spawn path must refuse rather
+        // than pass the pointer. This asserts the two consumers read the same field and that
+        // `CopyMode` still has both sides.
+        assert_ne!(CopyMode::Body, CopyMode::SpawnArg);
+        for ty in all_type_variants() {
+            if let OwnedCopy::FrameLocalImmutable { heap_cell } = owned_copy_plan(&ty) {
+                match heap_cell {
+                    HeapCell::Number => assert!(
+                        matches!(ty, Type::Number { .. }),
+                        "{ty:?}: claims the decimal heap-cell path, which is number-only"
+                    ),
+                    HeapCell::None => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_container_of_containers_copies_its_items() {
+        // WHY: FR #9's own type. A one-level clone leaves the two containers sharing their
+        // inner arrays, which is the alias the ruling removes one level down — and, when the
+        // task's drop ladder frees an item the spawner still points at, the use-after-free
+        // this whole cluster came from.
+        assert_eq!(
+            owned_copy_plan(&Type::BuiltinArray {
+                elem: Box::new(Type::BuiltinArray {
+                    elem: Box::new(Type::Int)
+                })
+            }),
+            OwnedCopy::ArrayClone {
+                elem: ElemCopy::Nested
+            }
+        );
+    }
+
+    #[test]
+    fn bignum_number_is_refused_not_aliased() {
         // WHY: v0.3-M8 Phase 4 fix round 3, should-fix 5 — bignum (precision > 34) lowers as a
-        // POINTER to a heap decimal string (`llvm_type_for`), not an i128 value; the whole-
-        // variant sweep above only samples `Number { precision: 34 }` (a value), so it cannot
-        // see this within-variant edge case. Unreachable from source today (the parser defers
-        // non-34 precision) — this pins the classification honest anyway, same as the
-        // `channel_elem` bignum regression test in `ynz-typeck`'s `types.rs`.
+        // POINTER to a heap decimal string (`llvm_type_for`), not an i128 value; the
+        // whole-variant sweep above only samples `Number { precision: 34 }` (a value), so it
+        // cannot see this within-variant edge case. It used to sit in the alias arm; under the
+        // 2026-09-06 ruling an alias is not an answer, so it is a refusal until the design for
+        // wider numbers lands.
         let bignum = Type::Number { precision: 40 };
-        assert_ne!(
-            copy_lowering_arm(&bignum),
-            CopyLowering::ByValue,
-            "bignum `number` (a pointer) must not lower `.copy()` as a bit-copy"
+        assert!(
+            matches!(owned_copy_plan(&bignum), OwnedCopy::Refused(_)),
+            "bignum `number` (a pointer) must not be copied by handing back the pointer"
         );
         assert!(
             !ynz_typeck::types::is_trivially_copyable(&bignum),

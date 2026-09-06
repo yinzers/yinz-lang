@@ -1,0 +1,31 @@
+// WHY: locks the DEPTH half of the v0.3 concurrency-hardening `.copy()` ruling, in a plain
+// function body with no `background` anywhere — the sibling of the spawn-side lock in
+// `bg_arg_alias_container_add_red.ynz`.
+//
+// `outer.copy()` used to be a ONE-LEVEL clone: a fresh container whose cells still held the
+// original's inner arrays. Writing through the copy's row 0 therefore changed the original's
+// row 0, which is the same silent aliasing the ruling removes, just one level down. Both
+// containers must now own their rows.
+//
+// The `maybe` line is here for the same reason at a different type: `maybe<T>.copy()` used to
+// hand back the receiver's own envelope. Reading the value back through the copy proves the
+// fresh envelope carries the payload rather than being empty.
+//
+// Correct output:
+//   original row 0 starts at 1
+//   clone row 0 starts at 99
+//   held copy is 2
+function entrypoint() -> nothing {
+  let inner: array<int> = [1, 2, 3]
+  let outer: array<array<int>> = [inner]
+  let clone: array<array<int>> = outer.copy()
+  let cloneRow: array<int> = clone[0].or(inner)
+  cloneRow.set(0, 99)
+  let originalRow: array<int> = outer[0].or(inner)
+  print(`original row 0 starts at ${originalRow[0].or(-1).toString()}`)
+  print(`clone row 0 starts at ${cloneRow[0].or(-1).toString()}`)
+
+  let held: maybe<int> = inner[1]
+  let heldCopy: maybe<int> = held.copy()
+  print(`held copy is ${heldCopy.or(-1).toString()}`)
+}

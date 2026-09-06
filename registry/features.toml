@@ -1670,6 +1670,28 @@ what_template = "`{name}.{field}` is read here, but `{name}` hasn't been checked
 what_instead_template = "Check `.failed()` on `{name}` first — store it in a `let`/`const` binding if it isn't one already, then write `if ({name}.failed()) { … {name}.{field} … }`. Or call `{name}.or(<default>)` for a fallback value instead of `.{field}`."
 why_template = "`.message`, `.suggestions`, `.trace`, and `.source` only carry meaningful data once `.failed()` is true — reading one before the check would report details for a call that might have succeeded. Yinz catches this at compile time instead of returning garbage at runtime."
 
+# v0.3 concurrency hardening Phase 3 step 3.2 (FRAGO 002 cluster C2): `.copy()` returns a
+# genuinely independent value for every type where independence is meaningful, and is refused
+# at compile time where it is not — nothing silently aliases. This is the ONE shell for every
+# such refusal; the per-type `{detail}` / `{fix}` / `{why}` fills come from
+# `ynz_typeck::owned_copy::owned_copy_plan`, the single table both `.copy()` lowering and the
+# `background`-argument path consume.
+[[diagnostic_template]]
+kind_name = "CopyNotIndependent"
+what_template = "`.copy()` cannot make a separate `{type}` value{detail}."
+what_instead_template = "{fix}"
+why_template = "{why}"
+
+# The `background`-argument face of the same rule. A spawn whose spawner keeps reading the
+# binding needs the task to have its OWN value; when the owned-copy table refuses that type,
+# the spawn is refused here rather than silently handing both sides one value. `{fix}` and
+# `{why}` are the same per-type fills `CopyNotIndependent` uses — one table, two surfaces.
+[[diagnostic_template]]
+kind_name = "SpawnArgNotIndependent"
+what_template = "`{name}` is a `{type}`, and this line still reads it after the task starts — so the task would need a separate `{type}`, and a separate `{type}` cannot be made{detail}."
+what_instead_template = "Hand `{name}` over instead of keeping it: move every later read of `{name}` above the `background` line, and the task takes it with nothing left to copy. {fix}"
+why_template = "A `background` task runs alongside the rest of this function. If both sides held the one value, either could change it while the other was reading, and neither would know. {why}"
+
 [[diagnostic_template]]
 kind_name = "Borrowed"
 what_template = "`{name}` is already borrowed and cannot be given or reassigned while the borrow is active."

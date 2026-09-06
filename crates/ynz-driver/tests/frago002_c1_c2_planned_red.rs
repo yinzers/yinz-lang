@@ -8,11 +8,12 @@
 // committed here as fixtures by step 3.0. All five were `#[ignore]`d and failing
 // then — a pin that passes before its fix lands is measuring nothing.
 //
-// STATE AFTER Phase 3 step 3.1 (dispatch hardening-p3.1-20260906-a1): the four C1
-// pins (A, D, G, J) are FIXED and LIVE — no `#[ignore]`, run by a plain
-// `cargo test -p ynz-driver`, and a red in any of them is a real re-opening of
-// cluster C1, not a planned RED. The one C2 pin (N) is still `#[ignore]`d and still
-// failing on purpose: it belongs to step 3.2, which has not run.
+// STATE AFTER Phase 3 step 3.2 (dispatch hardening-p3.2-20260906-a1): ALL FIVE pins
+// are FIXED and LIVE — no `#[ignore]` anywhere in this file, every one run by a plain
+// `cargo test -p ynz-driver`, and a red in any of them is a real re-opening of its
+// cluster rather than a planned RED. Step 3.1 closed C1 (A, D, G, J); step 3.2 closed
+// C2 (N) by replacing the two parallel per-type owned-copy dispatches with one shared
+// routine (`ynz_typeck::owned_copy`).
 //
 // ── C1 (probes A, D, G, J) ──────────────────────────────────────────────────────
 // Producer: `collect_crossings_in_stmts` (crates/ynz-typeck/src/check.rs). Once
@@ -28,12 +29,12 @@
 // symptoms.
 //
 // ── C2 (probe N) ────────────────────────────────────────────────────────────────
-// Producer: the exhaustive `copy_lowering_arm`'s `AliasNoOp` variant returns the
-// receiver's OWN pointer for `fixed<T>` instead of an independent copy. Closes M8
-// FR #10. Patrick's 2026-09-06 ruling (plan.md Phase 3 step 3.2) requires every type
-// in that arm to become a real deep copy or a compile-time refusal — `AliasNoOp`
-// does not survive either way, so this pin's fixed-tree contract is documented as
-// EITHER outcome in its own WHY comment (see the fixture file).
+// Producer: `.copy()`'s per-type lowering had an `AliasNoOp` arm that returned the
+// receiver's OWN pointer for `fixed<T>` instead of an independent copy — one of two
+// parallel per-type dispatches that both defaulted to aliasing. Both now consume the
+// single owned-copy table in `ynz_typeck::owned_copy`, which has exactly two answers
+// per type: a real copy, or a compile-time refusal with teaching text. Closes M8
+// FR #10.
 //
 // One file for both clusters, not two: `fr23_uaf_planned_red.rs` and
 // `d5_frame_slot_collision_planned_red.rs` are each scoped to ONE defect family
@@ -49,12 +50,13 @@
 // a failure (nextest fail-fast is a per-target failure; see
 // `.claude/plans/parked.md` entry 52), is run explicitly with `-- --ignored` to
 // observe the RED, and its fixing FRAGO removes the `#[ignore]` mark rather than
-// deleting or weakening the assertion. Step 3.1 did exactly that for A, D, G and J;
-// their assertions are byte-identical to the ones that were failing.
+// deleting or weakening the assertion. Step 3.1 did exactly that for A, D, G and J,
+// and step 3.2 for N; every assertion is byte-identical to the one that was failing,
+// except N's WHY comment, which drops its "or a refusal" branch now that the ruling
+// has been applied and `fixed<T>` landed on the copy side of it.
 //
-// Run the whole file including the still-RED C2 pin (dev container):
-//   docker compose exec dev \
-//     cargo test -p ynz-driver --test frago002_c1_c2_planned_red -- --include-ignored
+// Run the whole file (dev container) — nothing here is ignored any more:
+//   docker compose exec dev cargo test -p ynz-driver --test frago002_c1_c2_planned_red
 
 use std::{
     path::PathBuf,
@@ -298,21 +300,20 @@ fn frago002_c1_red_int_local_blocking_channel_send() {
     );
 }
 
+// LIVE REGRESSION LOCK since Phase 3 step 3.2 (dispatch hardening-p3.2-20260906-a1) — the
+// `AliasNoOp` arm is gone; `fixed<T>` copies its cells into fresh storage.
 #[test]
-#[ignore = "planned-RED: FRAGO 002 cluster C2 — .copy()'s AliasNoOp arm returns fixed<T>'s own \
-pointer instead of an independent copy; mutating the copy mutates the source (probe N)"]
 fn frago002_c2_red_fixed_copy_aliases_source() {
     // WHY: `b = a.copy()` on a `fixed<int>` aliases `a`'s own storage; `b.set(0,
     // 99)` then mutates `a`. Observed 2026-09-06: "99" (wrong, correct is "1") at
     // BOTH tiers, deterministically — no transfer, no diagnostic, silent wrong
     // answer in the default mode. Shares a design ancestor (not a code line) with
     // M8 FR #9's bg-arg escape door. Patrick's 2026-09-06 ruling (plan.md Phase 3
-    // step 3.2) requires every type in `AliasNoOp` to become a real deep copy OR a
-    // compile-time refusal — `AliasNoOp` survives as neither, so the fix may instead
-    // make this fixture's build step itself fail with a refusal diagnostic. If that
-    // is the chosen shape, this test's fixed-tree replacement asserts the refusal,
-    // not a runtime value; either outcome retires the aliasing this pin locks.
-    // Closes M8 FR #10.
+    // step 3.2) required every type in `AliasNoOp` to become a real deep copy OR a
+    // compile-time refusal. `fixed<T>` became a real copy — its cells are inline
+    // values, so copying them into fresh storage IS an independent list — which is
+    // why this stays a VALUE contract (`1`) rather than a refusal assertion. Closes
+    // M8 FR #10.
     assert_both_tiers_print_correct(
         "v0_3_hardening_c2_fixed_copy_alias.ynz",
         "1\n",

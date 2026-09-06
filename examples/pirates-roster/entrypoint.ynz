@@ -1485,4 +1485,40 @@ function m5_soa_demo() -> nothing {
     careerTotal = careerTotal + mate.careerHits
   }
   print(`  gun-crew career hits (side-by-side layout by design): ${careerTotal.toString()}`)
+
+  // ── .copy() gives you a value nobody else can reach ────────────────────────
+  //
+  // A copy is separate all the way down. The manifest below holds one list per
+  // hold; copying the manifest copies the holds too, so the quartermaster can
+  // rewrite his own tally without touching the captain's.
+  //
+  // This used to be a one-level copy: you got a fresh manifest whose holds were
+  // still the captain's, and the quartermaster's edit silently landed in the
+  // captain's book. Nothing warned you.
+  let foreHold: array<int> = [12, 8, 3]
+  let captainsManifest: array<array<int>> = [foreHold]
+  let quartermastersManifest: array<array<int>> = captainsManifest.copy()
+  let quartermastersFore: array<int> = quartermastersManifest[0].or(foreHold)
+  quartermastersFore.set(0, 99)
+  let captainsFore: array<int> = captainsManifest[0].or(foreHold)
+  print(`  captain's fore hold, first crate: ${captainsFore[0].or(-1).toString()}`)
+  print(`  quartermaster's fore hold, first crate: ${quartermastersFore[0].or(-1).toString()}`)
+
+  // The same rule at a fixed-size list: `fixed<T>` holds its items in one block
+  // of cells, so copying the cells copies the list.
+  let watchBell: fixed<int> = [4, 8, 12]
+  let sparebell: fixed<int> = watchBell.copy()
+  sparebell.set(0, 1)
+  print(`  ship's bell, first watch: ${watchBell[0].or(-1).toString()}`)
+  print(`  spare bell, first watch: ${sparebell[0].or(-1).toString()}`)
+
+  // And where a separate copy could not mean anything, `.copy()` refuses at
+  // compile time instead of handing back the same thing. A channel is the line
+  // two tasks talk over, so there is nothing to copy:
+  //   let secondLine = orders.copy()
+  //   COMPILE ERROR: `.copy()` cannot make a separate `channel<int>` value —
+  //   a channel is the line two tasks talk over, not a value you hold.
+  // The same goes for a task handle, a union, a map entry from a loop, and an
+  // `errors` value you have not checked yet. See
+  // examples/primantis-orders/v0_3_hardening_errors.ynz for all six.
 }

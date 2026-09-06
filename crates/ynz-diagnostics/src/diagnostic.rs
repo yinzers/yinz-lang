@@ -46,6 +46,17 @@ pub enum DiagnosticKind {
     /// A handle-form spawn's command channel is not a named binding, so nothing outside the
     /// task could ever close it — v0.3-M8 Phase 4.
     HandleChannelArgNeedsBinding,
+    /// `.copy()` was called on a type that has no independent copy — a channel, a task
+    /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
+    /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
+    /// `.copy()` either produces a genuinely independent value or refuses out loud; this is
+    /// the refusal. The three teaching slots come from
+    /// `ynz_typeck::owned_copy::owned_copy_plan`, the single owned-copy table.
+    CopyNotIndependent,
+    /// A `background` argument whose spawner keeps reading the binding, of a type the
+    /// owned-copy table refuses — the task would need its own value and none can be made.
+    /// The `background` face of `CopyNotIndependent`, same table, same per-type text.
+    SpawnArgNotIndependent,
     /// `.message`/`.suggestions`/`.trace`/`.source` read on an `errors`-capable value before
     /// it was checked with `.failed()` — `REF-errors.md:171-175` requires the check first;
     /// this is that requirement enforced at compile time — v0.3-M8 Phase 4 fix round 3.
@@ -87,6 +98,8 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "ParamNeedsGive",
             DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
+            DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
+            DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::MessageBeforeFailedCheck => "MessageBeforeFailedCheck",
             DiagnosticKind::Borrowed => "Borrowed",
             DiagnosticKind::MissingReturn => "MissingReturn",
@@ -113,6 +126,8 @@ impl DiagnosticKind {
         "ParamNeedsGive",
         "TransferNeedsCopy",
         "HandleChannelArgNeedsBinding",
+        "CopyNotIndependent",
+        "SpawnArgNotIndependent",
         "MessageBeforeFailedCheck",
         "Borrowed",
         "MissingReturn",
@@ -135,6 +150,8 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
             DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),
             DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),
+            DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
+            DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::MessageBeforeFailedCheck => "needs `.failed()` first".to_string(),
             DiagnosticKind::Borrowed => "borrowed".to_string(),
             DiagnosticKind::MissingReturn => "missing return".to_string(),

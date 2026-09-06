@@ -609,3 +609,62 @@ fn v0_3_m7_gallery_fires_expected_diagnostics() {
         "v0_3_m7 aliasing diagnostic must carry its WHAT-INSTEAD/WHY teaching text; got:\n{stderr}"
     );
 }
+
+#[test]
+fn v0_3_hardening_gallery_fires_every_copy_refusal() {
+    // WHY: the v0.3 concurrency-hardening ruling gave `.copy()` exactly two answers — a
+    // genuinely separate value, or a refusal the user can read. Six types landed on the
+    // refusal side, and every one of them USED to compile and quietly hand back the receiver
+    // instead. This gallery is the only place a human reads all six refusals together, which
+    // is what the teaching quality actually depends on; a count-only assertion would let one
+    // of them regress into a generic message without failing.
+    let (stderr, code) = compile_gallery(&gallery("v0_3_hardening_errors.ynz"));
+    assert_ne!(code, 0, "v0_3 hardening gallery must exit non-zero");
+
+    let error_count = count_errors(&stderr);
+    assert_eq!(
+        error_count, 7,
+        "v0_3 hardening gallery must produce exactly 7 errors, one per refusal trigger; got \
+         {error_count}.\nstderr:\n{stderr}"
+    );
+
+    for (label, phrase) in [
+        ("channel", "a channel is the line two tasks talk over"),
+        ("task handle", "a handle names one running task"),
+        ("union", "cannot make a separate `Delivery | Pickup` value"),
+        ("map entry", "the loop's view of one slot"),
+        (
+            "unchecked `errors` value",
+            "it has not been checked for failure yet",
+        ),
+        ("`nothing`", "there is no value here to copy"),
+        (
+            "`background` argument the spawner keeps reading",
+            "this line still reads it after the task starts",
+        ),
+    ] {
+        assert!(
+            stderr.contains(phrase),
+            "v0_3 hardening gallery must refuse `.copy()` on a {label} with its own WHAT \
+             text ({phrase:?}); got:\n{stderr}"
+        );
+    }
+
+    // Every refusal must carry a real WHAT-INSTEAD, not just a WHAT. These are the concrete
+    // things the six refusals tell the reader to do instead; a refusal that loses its fix is
+    // a dead end, which is the failure mode Golden Rule 11 exists to prevent.
+    for phrase in [
+        "let replies: channel<int> = channel<int>()",
+        "let second = background worker(orders)",
+        "if (order is Delivery) { const backup = order.copy() }",
+        "const savedKey = entry.key",
+        "if (result.failed()) { return }",
+        "store the value you actually meant to copy in a binding first",
+        "move every later read of `parcel` above the `background` line",
+    ] {
+        assert!(
+            stderr.contains(phrase),
+            "a copy refusal lost its WHAT-INSTEAD ({phrase:?}); got:\n{stderr}"
+        );
+    }
+}

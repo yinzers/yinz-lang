@@ -80,11 +80,43 @@ rename(player)
 
 ```ynz
 const original: Player = { name: `Patrick`, health: 100 }
-const backup = original.copy()    // a new value of your own — one level deep for an array or a map
+const backup = original.copy()    // a new value of your own
 saveForever(backup)                // backup is given to saveForever; original is unchanged
 ```
 
-`.copy()` works on a shape whose fields are all simple values (numbers, strings, booleans — all the way down), on an `array<T>`, and on a `map<K, V>`. For an array or a map you get a new container with the same items; changing one afterward never changes the other. The copy is one level deep: if an item is itself an array or a map, the copy holds the same inner item, not a second one. For a shape that holds arrays or maps inside it, write a standalone `copy()` function that copies the pieces you need and call it as a normal function — that keeps an expensive copy visible in your code.
+`.copy()` gives you a value nobody else can reach. Change the copy and the original does not move; change the original and the copy does not move.
+
+For a list, that includes the items. Copying an `array<array<int>>` gives you a new outer list holding new inner lists, so writing into the copy's first row leaves the original's first row alone:
+
+```ynz
+let inner: array<int> = [1, 2, 3]
+let outer: array<array<int>> = [inner]
+let clone: array<array<int>> = outer.copy()
+let cloneRow: array<int> = clone[0].or(inner)
+cloneRow.set(0, 99)
+// outer's first row still starts at 1
+```
+
+`.copy()` works on a shape, on an `array<T>`, on a `fixed<T>`, on a `map<K, V>`, on a `maybe<T>`, and on every simple value (numbers, strings, booleans, an `options` value, a `sensitive` value). For a shape that holds arrays or maps inside it, write a standalone `copy()` function that copies those pieces and call it as a normal function — that keeps an expensive copy visible in your code.
+
+### When `.copy()` refuses
+
+Some things cannot be copied, and Yinz says so while you build rather than handing you back the same thing and letting you find out later:
+
+```ynz
+let orders: channel<int> = channel<int>(4)
+let secondLine = orders.copy()
+// COMPILE ERROR: `.copy()` cannot make a separate `channel<int>` value — a channel is the
+// line two tasks talk over, not a value you hold.
+//   Pass the channel itself to the task and every task holding it reads and writes the same
+//   line. If you want a second, separate line, make one:
+//     let replies: channel<int> = channel<int>()
+//   Why: a second channel holding the same messages would not help you — the task on the
+//   other end is listening on the first one. Anything you sent into the copy would go
+//   nowhere, and nothing would tell you.
+```
+
+The same happens for a task handle (it names one running task), for a value written with `|` (which of the two it is, is only settled while the program runs), for a `dynamic` value, for a loop's map entry, and for an `errors` value you have not checked with `.failed()` yet. Every one of those errors tells you what to do instead.
 
 ---
 
@@ -109,7 +141,7 @@ After `.freeze()`, the binding behaves like `const` for the rest of its scope. T
 | What | Where it lives | When you type it |
 |---|---|---|
 | `share` / `lend` / `give` | Function signatures only | Always at signatures; never at call sites (compiler infers there) |
-| `.copy()` | Body expression | When you want a cheap independent copy of a trivially-copyable value |
+| `.copy()` | Body expression | When you need a value of your own that nobody else can reach |
 | `.freeze()` | Body expression | When you want to lock a binding from further mutation mid-function |
 
 The compiler does the heavy lifting at call sites. The IDE shows what was inferred. You learn ownership by reading your own code with hints turned on.
