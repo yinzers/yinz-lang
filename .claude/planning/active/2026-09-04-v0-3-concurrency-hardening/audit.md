@@ -343,3 +343,95 @@ one, silent wrong value at the other) rather than being the same symptom read tw
 `cargo test -p ynz-driver --test frago002_c1_c2_planned_red` (no `--ignored`) reports `5 ignored,
 0 failed` — the new target is invisible to a normal or `--no-fail-fast` workspace run, so this
 diff changes nothing about what a workspace run currently reports as failing.
+
+---
+
+## FRAGO 003 — the `fr23` red is a STALE TEST, not a live use-after-free; and the conductor's own hypothesis named the wrong culprit
+
+**Dispatch** `hardening-fr23-20260906-a1` (executor-medium/opus), 2026-09-06. Read-only; tree clean.
+
+### Verdict
+
+**STALE TEST.** All three failures are **compile-time rejections**. No binary is produced, no
+bytes are read, no runtime behaviour is involved. The language deliberately made these three
+fixture programs illegal and nobody updated the tests.
+
+Fresh run: `cargo test -p ynz-driver --test fr23_uaf_planned_red` → **15 passed, 3 failed**. Every
+failure panics at `assert_tier_prints_correct_haul`'s `build_out.status.success()` assertion, on
+the first tier attempted, before a binary exists.
+
+### The culprit — and the conductor's brief was wrong about it
+
+I briefed this dispatch to suspect **FRAGO 022/023's default-deny redesign**. Wrong. FRAGO 023's
+own verification record shows the suite at **15/15 green** when it landed; that change did not
+break these.
+
+The actual producer is **v0.3-M8 Phase 4's transfer rule**, three weeks later. Conductor-verified
+independently: `git log -S "TransferNeedsCopy" -- registry/features.toml` returns exactly one
+commit, `2be2244` — "M8 Phase 4 round 1 — channel close, `maybe<T>` receive, **the transfer rule**,
+fr12 cells, refuse_closed".
+
+It was deliberate and signed. `IMP-ownership.md`'s "Transfer — Who Else Holds This Value" records
+the rule as designed in M8 Phase 2, **signed off 2026-09-03**, shipped in Phase 4. Each failure
+maps onto `check_transfer`'s documented contract:
+
+- `first.value` — a `FieldAccess` → `Provenance::Reaches` → `TransferNeedsCopy`.
+- `makeCargo().reroute()` — a call not returning fresh → same arm; the diagnostic's enumerated
+  `{reason}` form appears verbatim in the design doc.
+- `m` — originates from `ships[0]`, an item inside a container → `Reaches` → same arm.
+
+The sink in all three is the callee's own declared `give` — the design doc's sink 2, where
+`TransferNeedsCopy` is explicitly correct "because the callee's author wrote the word." Each
+fixture declares `function identity<T>(give value: T) -> T`.
+
+**Nobody diagnosed it.** M8's own audit logged these three as "give/copy-inference failures,
+unrelated to background-handle code" — correct as far as it went, never followed up.
+
+### The memory-safety question, answered independently of the tests
+
+**The UAF is genuinely fixed, not merely unreachable.** `bg_arg_is_provably_safe` is intact as
+FRAGO 022's default-deny (safe set, then a trailing `_ => false`), `SelfValue` still removed per
+FRAGO 024, and `prepare_bg_arg_for_ctx`'s `is_heap_arg` gate still reads *presence* in
+`background_arg_inferred_ownership` rather than its variant — one authoritative record, no
+codegen-side twin. Fifteen live green locks exercise it today.
+
+Empirically confirmed rather than code-read alone: rewriting the two lost shapes with the `.copy()`
+the diagnostic asks for compiles and prints correct values at **both** tiers, and these genuinely
+exercise the gate rather than sidestepping it (`bg_expr_resolved_type` returns `None` for
+`Expr::PostfixOp`, so `T` stays unresolved, the `Call` arm reads fail-closed, the record is
+written, codegen heap-upgrades).
+
+**One honest caveat, named rather than buried.** Test 3's shape — a `maybe<Shape>` transferred
+through a generic `give` — is currently **unreachable-by-construction**, which is a weaker
+guarantee than fixed. `m.copy()` is refused because provenance classifies it `Unknown`, exactly the
+documented FR#10 deferral. Three separate attempts to produce an owned `maybe<Cargo>` all failed
+(direct return: type error; `give` accessor: `returns_fresh` correctly propagates `Reaches`;
+`channel<Cargo>.receive()`: element type unsupported). A documented deferral with a named trigger,
+not a silent hole — and the B′ class it belonged to stays reachable and green via two other locks.
+
+### What must change (remediation dispatched separately; nothing changed here)
+
+1. **Tests 1 and 2 — UPDATE, not delete.** Add the `.copy()` the diagnostic asks for. Proven to
+   compile and print correctly at both tiers. The assertion strings stay byte-identical; only the
+   fixtures become legal Yinz again. That is not weakening — the regression they lock (a nested
+   `FieldAccess`/`MethodCall` inside a generic callee's argument must heap-upgrade) still routes
+   through the default-deny wildcard and keeps its teeth.
+2. **Test 3 — SUPERSEDE with its reasoning migrated.** Its purpose was to prove the B′ admission
+   arm read `binding_ty_narrowed` rather than a function table; FRAGO 022 made that moot —
+   `FieldAccess` now falls through the wildcard regardless of how its type was derived, so there
+   is no table lookup left to regress. Its fixture is inexpressible until the `maybe-move-out`
+   deferred feature lands. Delete **with** rationale folded into the surviving B′ locks, plus a
+   parked entry tying restoration to that trigger.
+3. **THE HEADER MUST BE CORRECTED, and this is the fix that stops the recurrence.** It currently
+   asserts categorically that "a red here is a live use-after-free in the flagship concurrency
+   surface." That sentence is what turned four gates into rubber stamps: it is true of a
+   runtime-value red and false of a build-rejection red, and it does not distinguish them. It
+   needs that clause.
+
+### The conductor's error, on the record
+
+Four gate dispatches were told to expect these three failures as intended planned REDs. That
+instruction originated with me and was wrong — the file is not a planned-RED file, carries no
+`#[ignore]`, and its own header says the opposite. Each gate did what it was told and confirmed the
+diagnostic class; none was positioned to know the brief contradicted the file. The failure was not
+in the gates. It was in briefing them from memory instead of from the file.
