@@ -150,7 +150,7 @@ pub struct Program {
     pub fired_owned_heap_channel: bool,
     /// True when `take_or_make_array`/`take_or_make_map` actually REUSED a pooled binding
     /// (rather than building a fresh one) for at least one channel send — v0.3-M8 Phase 8 fix
-    /// round 4, BLOCKER 1. Until this round, the reuse branch was unreachable dead code (see
+    /// round 4, BLOCKER 1. That round found the reuse branch was unreachable dead code (see
     /// `take_or_make_array`'s doc comment); this counter and its floor in
     /// `per_construct_floors_hold_over_a_fixed_corpus` are what keep it from silently dying
     /// again.
@@ -184,11 +184,23 @@ struct FeedFn {
     kind: ElemKind,
     body_lines: Vec<String>,
     /// How many `wire.send(...)` calls `body_lines` contains. `stmt_background_drain_loop`
-    /// reads this to keep the consumer's channel capacity `>= send_count` — see the long
-    /// comment there for why: a CONFIRMED, reproducible defect (backpressure-blocked
-    /// `channel<number>` sends losing a value under `--no-optimize`/`--no-auto-parallel`),
-    /// bisected to `send_count > capacity` specifically, general to Int too by construction
-    /// (untested, not confirmed safe) so the cap floor applies to every kind.
+    /// draws the consumer's channel capacity in `1..=send_count`, so a feeder with more than
+    /// one send frequently BLOCKS on a full buffer — deliberately, because that is the shape
+    /// this generator used to be forbidden from producing.
+    ///
+    /// History, corrected: v0.3-M8 Phase 8 recorded a confirmed defect here (a blocked send
+    /// reading back a heap address where a value belongs) and suppressed it with a
+    /// `capacity >= send_count` FLOOR, then disagreed with itself about scope — this comment
+    /// said `int` was "untested, not confirmed safe" while `stmt_background_drain_loop`'s said
+    /// the defect was "general to BOTH int and number." The cautious reading here was the
+    /// honest one, and the v0.3 hardening plan's FRAGO 002 settled the question: the
+    /// discriminator was never the element type, it is **whether a local is read by a
+    /// statement that suspends**. `price` is read by three `wire.send(price)` statements, each
+    /// itself a suspension point once the buffer is full, and `collect_crossings_in_stmts`
+    /// never scanned a suspending statement's own operands — so `price` got no frame slot at
+    /// any element type. Fixed in that plan's Phase 3 step 3.1 and locked by
+    /// `crates/ynz-driver/tests/frago002_c1_c2_planned_red.rs` (probes G and J, the `number`
+    /// and `int` twins). The floor is gone with it.
     send_count: usize,
 }
 
@@ -225,14 +237,6 @@ struct Builder {
     /// True once `take_or_make_array`/`take_or_make_map` has actually reused a pooled binding —
     /// see `Program::fired_pool_reuse`.
     fired_pool_reuse: bool,
-    /// v0.3-M8 Phase 8 fix round 3 — a CONFIRMED runtime defect, not a speculative avoidance (see
-    /// `take_or_make_array`'s doc comment for the full repro). Set true the moment ANY statement
-    /// introduces a genuine suspension point in `entrypoint`'s own frame (`wait`, a
-    /// `background`-handle `.receive()`, a channel `.receive()`). Consulted ONLY by
-    /// `take_or_make_array`/`take_or_make_map`, which refuse to reuse a PRE-EXISTING pooled
-    /// binding for a channel send once this is true (a FRESH local, built and sent in the same
-    /// composite with no suspension in between, is always safe and unaffected).
-    suspension_seen: bool,
 }
 
 const MAP_KEYS: [&str; 3] = ["alice", "bob", "cam"];
@@ -262,7 +266,6 @@ impl Builder {
             fired_shape_field_read: false,
             fired_owned_heap_channel: false,
             fired_pool_reuse: false,
-            suspension_seen: false,
         }
     }
 
@@ -497,9 +500,6 @@ impl Builder {
         // documented Model-A intended reorder (`IMP-concurrency.md`), not a miscompile, and
         // this generator has no business manufacturing one for the oracle to flag.
         self.push(format!("let {v} = wait {f}({a})"));
-        // A genuine suspension point in `entrypoint`'s own frame — see `take_or_make_array`'s
-        // doc comment.
-        self.suspension_seen = true;
         self.ints.push(v);
     }
 
@@ -667,18 +667,6 @@ impl Builder {
             }
         }
 
-        // Every receive above (Number/Array/Map's `emit_receive_prints`, Int's own inline
-        // receive loop) is a genuine suspension point in `entrypoint`'s own frame. Set AFTER the
-        // composite's sends and receives complete, not before: setting it before the composite's
-        // OWN body ran made `take_or_make_array`/`take_or_make_map`'s reuse branch permanently
-        // unreachable (this exact statement is the ONLY caller of either), because their `!self.
-        // suspension_seen` guard was already false by the time the Array/Map arm above called
-        // them. Placing the assignment here means THIS composite's own sends still see whatever
-        // `suspension_seen` was BEFORE this statement ran (correct — reuse is fine for a pool
-        // entry that predates any suspension), while any LATER composite correctly sees this
-        // composite's own receives as a suspension that happened first.
-        self.suspension_seen = true;
-
         // Close, then one receive past end-of-stream: the v0.3-M8 Phase 4 contract says the
         // drained-and-closed channel answers `none`, never a hang and never an error. Same
         // contract for every element kind.
@@ -741,46 +729,41 @@ impl Builder {
         (m, line)
     }
 
-    /// When `suspension_seen` is false (no suspension — `wait`, a `background`-handle
-    /// `.receive()`, or a channel `.receive()` — has happened yet in `entrypoint`'s frame) and
-    /// the pool has at least one entry, a coin flip (`one_in(2)`) decides whether to REUSE an
-    /// array ALREADY declared earlier in the body instead of building a fresh one. Once
-    /// `suspension_seen` is true, reuse is refused unconditionally and every array sent here is
-    /// fresh. Same real bookkeeping either way: a pooled binding must leave `self.arrays` the
-    /// moment it is chosen to be sent, or a later `stmt_array_op` draw would read it back and the
-    /// compiler would correctly refuse the program with `ConsumedBySend`.
+    /// When the pool has at least one entry, a coin flip (`one_in(2)`) decides whether to
+    /// REUSE an array ALREADY declared earlier in the body instead of building a fresh one.
+    /// Either way the same real bookkeeping applies: a pooled binding must leave `self.arrays`
+    /// the moment it is chosen to be sent, or a later `stmt_array_op` draw would read it back
+    /// and the compiler would correctly refuse the program with `ConsumedBySend`.
     ///
-    /// The `suspension_seen` gate is not speculative: it is the direct product of a reproducible
-    /// finding this same fix round made BY doing the widening. A generated program (seed 3 of
-    /// the widened corpus) crashed with `RUNTIME ERROR: killed by signal 6 (SIGABRT)` —
-    /// `crates/ynz-runtime/src/lib.rs:1058`/`:1411`, a null/misaligned pointer dereference in
-    /// `ynz_map_count`/`ynz_array_count`. Bisected to a minimal, deterministic repro
-    /// (`.scratch-repro/min21` vs `min20` in this fix round's session — not committed, see the
-    /// audit entry for the exact source): a plain `array<int>`/`map<string,int>` LOCAL declared
-    /// BEFORE any suspension point (`wait`, a `background`-handle `.receive()`, a channel
-    /// `.receive()`) in the SAME function, later `.send()`-ed into a channel AFTER that
-    /// suspension, corrupts on read. Declaring AFTER the suspension and sending immediately is
-    /// safe (confirmed both orders directly); crossing a suspension while merely READ (never
-    /// sent into a channel) was not implicated — this is specific to the channel-transfer path.
-    /// This is a genuine runtime defect — not a generator/grammar bug — and per this plan's CCIR
-    /// item 5 (R5) it is NOT fixed inline here. See Future Requirements #11 (`plan.md`) and the
-    /// v0.3-M8 plan's `audit.md`, FRAGO 015, for the full repro and the tracked follow-up. Gating
-    /// ONLY the reuse-from-pool branch (not the whole element kind, and not the whole composite)
-    /// keeps the fuzz corpus green while preserving the widening's actual value: a FRESH local
-    /// built and sent immediately never crosses a suspension by construction, so it fires
-    /// regardless of what happened earlier in the program.
+    /// There USED to be a `suspension_seen` gate here refusing reuse once anything in
+    /// `entrypoint`'s frame had suspended. It was suppressing a real defect, not avoiding a
+    /// generator bug: v0.3-M8 Phase 8 found a generated program (seed 3 of the widened corpus)
+    /// crashing with `RUNTIME ERROR: killed by signal 6 (SIGABRT)` — a null/misaligned pointer
+    /// dereference inside `ynz_map_count`/`ynz_array_count` — and bisected it to an
+    /// `array<int>`/`map<string,int>` LOCAL declared BEFORE a suspension and `.send()`-ed into
+    /// a channel after it. That round's conclusion that the defect was "specific to the
+    /// channel-transfer path" was WRONG, and the v0.3 hardening plan's FRAGO 002 disproved it
+    /// with a program containing no channel at all: an `array<int>` local declared before a
+    /// `wait`, then passed as a plain argument to a suspending function, printed 6 where 3 was
+    /// correct — exit 0, default optimized mode. That fixture is committed as probe D in
+    /// `crates/ynz-driver/tests/frago002_c1_c2_planned_red.rs`.
     ///
-    /// v0.3-M8 Phase 8 fix round 4, BLOCKER 1: until this round, `suspension_seen` was set at the
-    /// TOP of `stmt_channel_inline_kind` — the ONLY caller of this function — so by the time this
-    /// function's `!self.suspension_seen` check ran, the flag this SAME statement had just set
-    /// was already true. The reuse branch below was dead code; every generated program built a
-    /// fresh array here regardless of the coin flip. Confirmed both ways: replacing the reuse
-    /// branch's body with `panic!` and generating 8,192 programs never fired it; with the flag's
-    /// assignment moved to `stmt_channel_inline_kind`'s end (see that function), the same probe
-    /// fires on the first seeds. `per_construct_floors_hold_over_a_fixed_corpus` now floors
-    /// `fired_pool_reuse` so this cannot silently die again without a red test.
+    /// The real producer was `collect_crossings_in_stmts` in `crates/ynz-typeck/src/check.rs`:
+    /// once a suspension had happened, a statement that was ITSELF a suspension point never had
+    /// its own operands scanned, so a local read only by such a statement got no frame slot and
+    /// the resumed continuation read an uninitialised alloca. Fixed at that producer in the
+    /// hardening plan's Phase 3 step 3.1, which is why the gate is gone rather than merely
+    /// loosened: reuse across a suspension is a shape this generator SHOULD produce.
+    ///
+    /// v0.3-M8 Phase 8 fix round 4, BLOCKER 1 (kept as the reason the floor exists): that round
+    /// found this reuse branch was dead code, because `suspension_seen` was being set at the TOP
+    /// of `stmt_channel_inline_kind`, the ONLY caller, so the gate was always already closed by
+    /// the time this function read it. Confirmed both ways: a `panic!` in the reuse branch never
+    /// fired across 8,192 generated programs. `per_construct_floors_hold_over_a_fixed_corpus`
+    /// floors `fired_pool_reuse` so the branch cannot silently die again without a red test —
+    /// that floor outlives the gate it was written against.
     fn take_or_make_array(&mut self) -> String {
-        if !self.suspension_seen && !self.arrays.is_empty() && self.rng.one_in(2) {
+        if !self.arrays.is_empty() && self.rng.one_in(2) {
             self.fired_pool_reuse = true;
             let idx = self.rng.below(self.arrays.len());
             self.arrays.remove(idx).0
@@ -792,10 +775,10 @@ impl Builder {
     }
 
     /// The `map<string, int>` sibling of `take_or_make_array` — same reuse-or-fresh choice, same
-    /// `suspension_seen` gate, same pool-removal-on-send bookkeeping, same BLOCKER-1 history (see
-    /// that function's doc comment).
+    /// pool-removal-on-send bookkeeping, same removed-gate and BLOCKER-1 history (see that
+    /// function's doc comment).
     fn take_or_make_map(&mut self) -> String {
-        if !self.suspension_seen && !self.maps.is_empty() && self.rng.one_in(2) {
+        if !self.maps.is_empty() && self.rng.one_in(2) {
             self.fired_pool_reuse = true;
             let idx = self.rng.below(self.maps.len());
             self.maps.remove(idx)
@@ -820,9 +803,6 @@ impl Builder {
         let v = self.fresh("v");
         self.push(format!("let {h} = background {f}({a})"));
         self.push(format!("let {r} = {h}.receive()"));
-        // `.receive()` is a genuine suspension point in `entrypoint`'s own frame — see
-        // `take_or_make_array`'s doc comment for why later composites need to know about it.
-        self.suspension_seen = true;
         self.push(format!("let {v} = {r}.or(0)"));
         self.ints.push(v);
         self.uses_background = true;
@@ -831,11 +811,10 @@ impl Builder {
     /// The taught end-of-stream idiom: a `background` producer sends then closes; the consumer
     /// drains with `.exists()`/`.value` until the stream ends. `total` accumulates the printed
     /// count deterministically regardless of interleaving. The producer's element kind is drawn
-    /// from the full `{int, array<int>, map<string,int>, number}` space, UNRESTRICTED — a
-    /// feeder's array/map/number locals live entirely inside the FEEDER's own function, which
-    /// never suspends internally (no `wait` call in `build_feed_body`), so they cannot cross a
-    /// suspension the way an `entrypoint`-local reused by `take_or_make_array`/`take_or_make_map`
-    /// can. The drain arithmetic switches on the picked kind (an owned-heap payload contributes
+    /// from the full `{int, array<int>, map<string,int>, number}` space, UNRESTRICTED — and a
+    /// feeder's own locals DO cross a suspension whenever the channel fills and its next
+    /// `wire.send(...)` blocks, which is the shape the capacity draw below now aims at
+    /// deliberately. The drain arithmetic switches on the picked kind (an owned-heap payload contributes
     /// its `.count()`, not its bytes; `number` contributes itself, exactly like `int`).
     fn stmt_background_drain_loop(&mut self) {
         if self.feed_fns.is_empty() {
@@ -847,28 +826,27 @@ impl Builder {
         if kind != ElemKind::Int {
             self.fired_owned_heap_channel = true;
         }
-        // The `while`/`.exists()` loop below calls `.receive()` — a genuine suspension point in
-        // `entrypoint`'s own frame. See `take_or_make_array`'s doc comment.
-        self.suspension_seen = true;
         let f = self.feed_fns[i].name.clone();
         let c = self.fresh("wire");
         let total = self.fresh("total");
         let open = self.fresh("open");
         let nx = self.fresh("nx");
-        // CONFIRMED, reproducible defect avoided: a `background` producer sending more values
-        // into a channel than its capacity (`send_count > capacity`, forcing the producer to
-        // actually BLOCK on a full buffer) can read back a HEAP ADDRESS where a sent value
-        // belongs — an uninitialized-or-freed read, not an arithmetic shortfall, non-
-        // deterministic (~17-30% of runs across a fix round's own measurement), and general to
-        // BOTH `int` and `number` (v0.3-M8 Phase 8 fix round 4 corrected all three of these
-        // against the round-3 record, which claimed `number`-only, deterministic, "loses one
-        // value" — none of the three held up). This is a genuine runtime defect in the blocked-
-        // send path (`send_count > capacity`), not a generator bug and not `number_to_heap_cell`
-        // specifically, and per this plan's CCIR item 5 (R5) it is not fixed inline here — see
-        // Future Requirements #11 (`plan.md`) and the v0.3-M8 plan's `audit.md`, FRAGO 015. The
-        // floor below applies to every kind (never let this composite's producer block) because
-        // the defect is general to the blocked-send path, not one element kind.
-        let cap = self.feed_fns[i].send_count.max(1 + self.rng.below(4));
+        // Capacity is drawn in `1..=send_count`, so a multi-send feeder BLOCKS on a full
+        // buffer — ON PURPOSE. This used to be a FLOOR (`capacity >= send_count`) that made
+        // blocking impossible, suppressing a confirmed defect from every seed the fuzzer ever
+        // ran: a blocked send could read back a HEAP ADDRESS where a value belongs,
+        // non-deterministic at ~17-30% of runs, recorded in v0.3-M8 Phase 8 fix round 4 and
+        // deferred there (`plan.md` FR #11(b), that plan's `audit.md` FRAGO 015).
+        //
+        // The v0.3 hardening plan fixed it at its producer in Phase 3 step 3.1:
+        // `collect_crossings_in_stmts` never scanned a suspending statement's own operands, so
+        // the feeder's `price` local — read by three `wire.send(price)` statements that block
+        // once the buffer fills — never entered the crossing set and got no frame slot. It was
+        // never about the element kind (round 4's "general to BOTH int and number" and this
+        // field's own "int untested" were arguing about the wrong variable); it was about a
+        // local being read by a statement that suspends. Both twins are pinned in
+        // `crates/ynz-driver/tests/frago002_c1_c2_planned_red.rs` (probes G and J).
+        let cap = 1 + self.rng.below(self.feed_fns[i].send_count.max(1));
         let chan_ty = kind.channel_type();
         self.push(format!("let {c}: {chan_ty} = {chan_ty}({cap})"));
         self.push(format!("background {f}({c})"));
@@ -929,9 +907,6 @@ impl Builder {
         for _ in 0..2 {
             let m = self.fresh("got");
             self.push(format!("let {m} = {c}.receive()"));
-            // A genuine suspension point in `entrypoint`'s own frame — see
-            // `take_or_make_array`'s doc comment.
-            self.suspension_seen = true;
             self.push(format!("if ({m}.exists()) {{"));
             self.push(format!("  {total} = {total} + {m}.value"));
             self.push("}".to_string());
@@ -1243,22 +1218,22 @@ mod generator_contract {
             25,
             "a channel<array<int>>/channel<map<string,int>>/channel<number> composite actually ran",
         );
-        // v0.3-M8 Phase 8 fix round 4, BLOCKER 1: this round's flagship construct was dead code
-        // (see `take_or_make_array`'s doc comment) — a raw-count floor here, not a percentage
-        // one, is the direct guard against it silently dying again. A percentage floor doesn't
-        // fit this construct: reuse needs FOUR preconditions to align in the SAME statement (an
-        // Array/Map inline-channel draw; a non-empty `arrays`/`maps` pool; the composite running
-        // before ANY suspension anywhere earlier in the body; a `one_in(2)` coin flip), so it is
-        // genuinely rare by construction — measured 13/1024 (base 0), 17/1024 (bases 10000,
-        // 1000000) over this widened 1024-seed corpus. `>= 1` is what "not dead" means here;
-        // `floor`'s percentage semantics would need `pct == 0` to admit a measured value this
+        // v0.3-M8 Phase 8 fix round 4, BLOCKER 1: this construct was dead code then (see
+        // `take_or_make_array`'s doc comment) — a raw-count floor here, not a percentage one, is
+        // the direct guard against it silently dying again. It needs THREE preconditions to
+        // align in the same statement (an Array/Map inline-channel draw; a non-empty
+        // `arrays`/`maps` pool; a `one_in(2)` coin flip). A fourth — "the composite runs before
+        // ANY suspension earlier in the body" — was dropped in the v0.3 hardening plan's Phase 3
+        // step 3.1 along with the `suspension_seen` gate that imposed it, which raises the rate
+        // well above the 13-17/1024 measured under that gate. `>= 1` is still what "not dead"
+        // means here; `floor`'s percentage semantics would need `pct == 0` to admit a value that
         // small, which would silently accept 0 too and defeat the guard's entire purpose.
         assert!(
             pool_reuse >= 1,
             "pool-reuse (take_or_make_array/take_or_make_map picking a PRE-EXISTING pooled \
-             binding for a send) fired 0/{n} times — the reuse branch has gone dead again (this \
-             is exactly the v0.3-M8 Phase 8 fix round 4 BLOCKER 1 shape: `suspension_seen` set \
-             too early makes `!self.suspension_seen` permanently false)"
+             binding for a send) fired 0/{n} times — the reuse branch has gone dead again (the \
+             v0.3-M8 Phase 8 fix round 4 BLOCKER 1 shape: a gate closing before the branch that \
+             reads it, making its condition permanently false)"
         );
     }
 }

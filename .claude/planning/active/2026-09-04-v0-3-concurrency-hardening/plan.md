@@ -3,7 +3,7 @@ name: "v0-3-concurrency-hardening"
 plan-id: "2026-09-04-v0-3-concurrency-hardening"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1"]
+session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1"]
 tier: "hasty"
 tier-reason: "Concurrency is a blocking gate on using Yinz at all; every known blocker is traced to a named producer and fixed at that producer, not patched per symptom. Scope is fixed (four phases, non-negotiable), deferral is forbidden, ambiguity is decided upstream. Small committed work riding Patrick's settled order."
 created_at: "2026-09-04"
@@ -135,7 +135,7 @@ are in parked, they stay in parked.
       source changes). Each must FAIL on today's tree before its fix lands; a pin that passes
       before the fix is measuring nothing.
 
-- [ ] **3.1 — C1: the crossing scan skips a suspending statement's own operands.** THE priority
+- [x] **3.1 — C1: the crossing scan skips a suspending statement's own operands.** THE priority
       and it is not close: silent wrong output, exit 0, **default optimized mode, ordinary code**
       (probe D — no channel, no `background`, no `.copy()`, no `errors`). Producer:
       `collect_crossings_in_stmts` in `crates/ynz-typeck/src/check.rs` — once `past_wait` is true,
@@ -144,16 +144,16 @@ are in parked, they stay in parked.
       `If`/`While`/`For`/`Match` arms call `collect_ident_refs_in_stmt`. Closes **M8 FR #11(a) AND
       FR #11(b)** — one fix, both symptoms, proven by the shared control (one harmless read of the
       local before the suspending statement fixes both).
-      - [ ] **Precondition, measure before landing:** widening the crossing set pushes more locals
+      - [x] **Precondition, measure before landing:** widening the crossing set pushes more locals
             through `suspension_guards_fire_for_fn`, and types that cannot be frame-backed
             (`fixed`, `maybe`, union, `dynamic`, nested shape) currently force a decline. The fix
             may convert today's silent miscompiles into new declines or compile errors on programs
             that build today. Measure the delta on the existing corpus; do not assume it is free.
-      - [ ] **After the fix:** delete both fuzz-generator suppression guards
+      - [x] **After the fix:** delete both fuzz-generator suppression guards
             (`Builder::suspension_seen`'s reuse gate and the `send_count`-versus-capacity floor in
             `crates/ynz-driver/tests/fuzz_grammar/mod.rs`) and run `YNZ_FUZZ_PROGRAMS=256`.
             Findings should go to zero. This also settles FRAGO 002's open question 2.
-      - [ ] **Correct the record while here:** `mod.rs::take_or_make_array`'s doc comment claims
+      - [x] **Correct the record while here:** `mod.rs::take_or_make_array`'s doc comment claims
             this is "specific to the channel-transfer path" — false (probe D). And `mod.rs`
             contradicts itself on Int; the cautious `FeedFn::send_count` comment was right and
             parked 49(b) relays the wrong one. The discriminator is not the element type, it is

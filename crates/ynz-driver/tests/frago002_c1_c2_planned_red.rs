@@ -5,9 +5,14 @@
 //
 // These are the five probe programs FRAGO 002 built and verified
 // (`target/p2b-probe/`, gitignored — never committed there) as A, D, G, J, N,
-// committed here as fixtures for the first time. Nothing is fixed by this dispatch;
-// every test below is `#[ignore]`d and MUST fail if run — that is the point. A pin
-// that passes before its fix lands is measuring nothing.
+// committed here as fixtures by step 3.0. All five were `#[ignore]`d and failing
+// then — a pin that passes before its fix lands is measuring nothing.
+//
+// STATE AFTER Phase 3 step 3.1 (dispatch hardening-p3.1-20260906-a1): the four C1
+// pins (A, D, G, J) are FIXED and LIVE — no `#[ignore]`, run by a plain
+// `cargo test -p ynz-driver`, and a red in any of them is a real re-opening of
+// cluster C1, not a planned RED. The one C2 pin (N) is still `#[ignore]`d and still
+// failing on purpose: it belongs to step 3.2, which has not run.
 //
 // ── C1 (probes A, D, G, J) ──────────────────────────────────────────────────────
 // Producer: `collect_crossings_in_stmts` (crates/ynz-typeck/src/check.rs). Once
@@ -39,14 +44,17 @@
 // finer split the audit itself doesn't draw. C3/S1 (parked 33/34) are NOT here:
 // Phase 3's checklist schedules them after C1/C2 and they have no probe fixture yet.
 //
-// test-ratchet: mirrors the fr23 / d5 planned-RED precedent exactly — `#[ignore]`d
-// so a plain `cargo test` / `cargo nextest` run does not see these as failures
-// (nextest fail-fast is a per-target failure; see `.claude/plans/parked.md` entry
-// 52), run explicitly with `-- --ignored` to observe the RED, and the fixing FRAGO
-// removes the `#[ignore]` mark rather than deleting or weakening the assertion.
+// test-ratchet: mirrors the fr23 / d5 planned-RED precedent exactly — a still-planned
+// RED is `#[ignore]`d so a plain `cargo test` / `cargo nextest` run does not see it as
+// a failure (nextest fail-fast is a per-target failure; see
+// `.claude/plans/parked.md` entry 52), is run explicitly with `-- --ignored` to
+// observe the RED, and its fixing FRAGO removes the `#[ignore]` mark rather than
+// deleting or weakening the assertion. Step 3.1 did exactly that for A, D, G and J;
+// their assertions are byte-identical to the ones that were failing.
 //
-// Run explicitly (dev container): docker compose exec dev \
-//   cargo test -p ynz-driver --test frago002_c1_c2_planned_red -- --ignored
+// Run the whole file including the still-RED C2 pin (dev container):
+//   docker compose exec dev \
+//     cargo test -p ynz-driver --test frago002_c1_c2_planned_red -- --include-ignored
 
 use std::{
     path::PathBuf,
@@ -212,9 +220,10 @@ fn assert_o0_always_correct(fixture_name: &str, expected: &str) {
     );
 }
 
+// LIVE REGRESSION LOCK since Phase 3 step 3.1 (dispatch hardening-p3.1-20260906-a1) —
+// `collect_crossings_in_stmts` now scans EVERY suspending statement's own operands, so
+// `rows` gets its frame slot. A red here is a real re-opening of FRAGO 002 cluster C1.
 #[test]
-#[ignore = "planned-RED: FRAGO 002 cluster C1 — collect_crossings_in_stmts skips a channel-send \
-statement's own operands once past_wait is true; SIGABRT at default, wrong value at -O0 (probe A)"]
 fn frago002_c1_red_array_before_wait_channel_send() {
     // WHY: `rows` (array<int>) is declared before `wait sleep(20)` and read only by
     // `wire.send(rows)`, itself a suspension point. Observed 2026-09-06: SIGABRT
@@ -229,10 +238,10 @@ fn frago002_c1_red_array_before_wait_channel_send() {
     );
 }
 
+// LIVE REGRESSION LOCK since Phase 3 step 3.1 (dispatch hardening-p3.1-20260906-a1) —
+// the severity case of cluster C1 (no channel, no `background`, ordinary code). A red
+// here is silent wrong output at exit 0 in the default mode; treat it as a stop-ship.
 #[test]
-#[ignore = "planned-RED: FRAGO 002 cluster C1 — same producer as the channel-send probe, reached \
-through a plain function argument with no channel at all; wrong value at default, SIGABRT at -O0 \
-(probe D)"]
 fn frago002_c1_red_array_before_wait_suspending_call() {
     // WHY: `rows` is passed as a plain argument to `useRows`, whose OWN body
     // suspends (`wait sleep(1)`) — no channel, no `background`, no `.copy()`, no
@@ -250,9 +259,11 @@ fn frago002_c1_red_array_before_wait_suspending_call() {
     );
 }
 
+// LIVE REGRESSION LOCK since Phase 3 step 3.1 (dispatch hardening-p3.1-20260906-a1) —
+// 30/30 correct at -O0 after the fix (was ~half wrong). A red here means a blocked
+// send's resume is reading a stale slot again; the run count makes flakiness in the
+// pass direction vanishingly unlikely, so one red run is a real defect.
 #[test]
-#[ignore = "planned-RED: FRAGO 002 cluster C1 — number local sent 3x into a capacity-1 channel; \
-sends 2-3 block, and a blocked send's resume reads a stale slot in ~40-50% of -O0 runs (probe G)"]
 fn frago002_c1_red_number_local_blocking_channel_send() {
     // WHY: `price` (number) is read by three `wire.send(price)` statements into a
     // capacity-1 channel, so sends 2 and 3 block (a suspension). Observed
@@ -267,9 +278,10 @@ fn frago002_c1_red_number_local_blocking_channel_send() {
     );
 }
 
+// LIVE REGRESSION LOCK since Phase 3 step 3.1 (dispatch hardening-p3.1-20260906-a1) —
+// 30/30 correct at -O0 after the fix (was printing raw heap addresses in a majority of
+// runs). Confirms in the tree that the discriminator was never the element type.
 #[test]
-#[ignore = "planned-RED: FRAGO 002 cluster C1 — int-local twin of the number probe; prints raw \
-heap addresses instead of the total in a majority of -O0 runs (probe J)"]
 fn frago002_c1_red_int_local_blocking_channel_send() {
     // WHY: int-local twin of the number probe (same producer, same shape) — added
     // because `fuzz_grammar/mod.rs` disagreed with itself about whether `int` was

@@ -10447,10 +10447,13 @@ pub fn crossing_local_names_with_cpu_spike(
 /// (`maybe`, and `union` from Phase 1c step 3c) while still rejecting the same types when
 /// they lexically cross a `wait` — a read-after-wait reload the promotion does not cover.
 ///
-/// The split is by construction, not by a second scan: a lexically-crossing name enters
-/// the dedupe set BEFORE the arg-escape collector runs (so it can never land in the
-/// arg-escape slice), and for-loop synthetics are appended after the snapshot window
-/// closes. One producer, provenance threaded to every consumer — never a re-derived twin
+/// The split is by SPAN, not by a second scan and not by collector order: the arg-escape
+/// collector records the exact `Ident` span of every argument position it qualifies
+/// ([`ArgEscapeSink`]), and a name is `arg_escape_only` when every crossing read the ONE
+/// lexical scan recorded for it lands on one of those spans (names with no lexical
+/// crossing at all qualify vacuously, which is the original case). For-loop synthetics are
+/// appended afterwards and have no spans, so they are never arg-escape-only. One producer,
+/// provenance threaded to every consumer — never a re-derived twin
 /// (authoritative-derivation.md).
 pub struct CrossingNames {
     /// Sorted, deduplicated crossing-local names — byte-identical to what
@@ -10483,10 +10486,10 @@ pub fn crossing_local_names_with_provenance(
     );
     let mut seen = std::collections::HashSet::new();
     let mut names: Vec<String> = crossings
-        .into_iter()
+        .iter()
         .filter_map(|c| {
             if seen.insert(c.name.clone()) {
-                Some(c.name)
+                Some(c.name.clone())
             } else {
                 None
             }
@@ -10510,20 +10513,52 @@ pub fn crossing_local_names_with_provenance(
     // bind-time promotion to a counted heap cell (its alloca then holds a stable heap
     // pointer, so the default pointer flush stays correct across suspension).
     //
-    // Everything this collector appends is, by construction, crossing ONLY via
-    // arg-escape: lexical crossings are already in `seen` (collected above), so the
-    // snapshot window below IS the provenance split — no second scan.
+    // Provenance split, by SPAN rather than by collector order (see `ArgEscapeSink`).
+    // A name is arg-escape-only when the collector qualified at least one of its
+    // argument positions AND every crossing read the lexical scan recorded for it sits
+    // at one of those qualified positions — i.e. the value escapes through a suspending
+    // callee's frame and is never additionally read after a suspension in this function,
+    // which is precisely the case bind-time heap-cell promotion covers.
+    //
+    // Ordering alone used to stand in for this ("appended after the lexical names, so it
+    // must be arg-escape-only"), which held only while the lexical scan could not see an
+    // arg-position read. Once that scan was corrected to visit a suspending statement's
+    // own operands (FRAGO 002 cluster C1), the two collectors began describing ONE event
+    // for the same span, and the order-based split silently withdrew the `maybe`/`union`
+    // skip from programs it had always covered — `v0_3_m6_maybe_arg_pure_call.ynz` and
+    // `v0_3_m6_union_arg_pure_call.ynz` turned from correct programs into
+    // `UnsupportedCrossingLocalType` errors. The span comparison asks the question the
+    // ordering was proxying for, so the two facts cannot drift apart again.
     let before_arg_escape = names.len();
+    let mut sink = ArgEscapeSink {
+        seen: &mut seen,
+        names: &mut names,
+        arg_spans: std::collections::HashSet::new(),
+    };
     collect_aggregate_args_to_suspending_calls(
         stmts,
         param_names,
         suspending,
         expr_types,
-        &mut seen,
-        &mut names,
+        &mut sink,
     );
-    let arg_escape_only: std::collections::HashSet<String> =
-        names[before_arg_escape..].iter().cloned().collect();
+    let arg_spans = sink.arg_spans;
+    let arg_escape_qualified: std::collections::HashSet<&str> = crossings
+        .iter()
+        .filter(|c| arg_spans.contains(&(c.use_span.start, c.use_span.end)))
+        .map(|c| c.name.as_str())
+        .chain(names[before_arg_escape..].iter().map(String::as_str))
+        .collect();
+    let arg_escape_only: std::collections::HashSet<String> = arg_escape_qualified
+        .into_iter()
+        .filter(|name| {
+            crossings
+                .iter()
+                .filter(|c| c.name == *name)
+                .all(|c| arg_spans.contains(&(c.use_span.start, c.use_span.end)))
+        })
+        .map(str::to_string)
+        .collect();
     // Collect synthetic frame slots for for-loops whose bodies contain a suspension.
     // For-loop iteration requires an internal index counter that must survive suspension;
     // giving it a named frame slot (prefixed `__ynz_for_idx_`) integrates it with the
@@ -10616,8 +10651,7 @@ fn collect_aggregate_args_to_suspending_calls(
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
-    seen: &mut std::collections::HashSet<String>,
-    names: &mut Vec<String>,
+    sink: &mut ArgEscapeSink<'_>,
 ) {
     collect_aggregate_args_in_stmts(
         stmts_topmost,
@@ -10625,9 +10659,31 @@ fn collect_aggregate_args_to_suspending_calls(
         param_names,
         suspending,
         expr_types,
-        seen,
-        names,
+        sink,
     );
+}
+
+/// Output sink for the arg-escape collector: the shared crossing-name accumulator it
+/// appends to, PLUS the exact `Ident` spans it qualified.
+///
+/// The spans are what make the provenance split in
+/// [`crossing_local_names_with_provenance`] independent of collector ORDER. A local
+/// passed by pointer to a suspending callee is read at that argument position, and the
+/// lexical scan in [`collect_crossings_in_stmts`] sees that same read once a prior
+/// suspension has happened in the enclosing sequence — the two collectors then describe
+/// ONE event, not two. Splitting provenance by "who saw the name first" misfiles that
+/// single event as a lexical crossing and withdraws the arg-escape skip that
+/// bind-time heap-cell promotion earns (`maybe`, `union`). Comparing SPANS asks the
+/// real question instead: is every crossing read of this name an arg-escape read?
+struct ArgEscapeSink<'a> {
+    /// Shared name-dedupe set (already holds every lexically-crossing name).
+    seen: &'a mut std::collections::HashSet<String>,
+    /// Shared crossing-name accumulator.
+    names: &'a mut Vec<String>,
+    /// Every `Ident` span this collector qualified as an arg escape — recorded even when
+    /// the name was already in `seen`, because that is exactly the overlap case the
+    /// provenance split has to recognize.
+    arg_spans: std::collections::HashSet<(usize, usize)>,
 }
 
 /// Statement-level walker for [`collect_aggregate_args_to_suspending_calls`].
@@ -10640,44 +10696,32 @@ fn collect_aggregate_args_in_stmts(
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
-    seen: &mut std::collections::HashSet<String>,
-    names: &mut Vec<String>,
+    sink: &mut ArgEscapeSink<'_>,
 ) {
-    let walk_block =
-        |block: &Block, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
-            collect_aggregate_args_in_stmts(
-                &block.stmts,
-                stmts_topmost,
-                param_names,
-                suspending,
-                expr_types,
-                seen,
-                names,
-            );
-        };
-    let walk_expr =
-        |e: &Expr, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
-            collect_aggregate_args_in_expr(
-                e,
-                stmts_topmost,
-                param_names,
-                suspending,
-                expr_types,
-                seen,
-                names,
-            );
-        };
+    let walk_block = |block: &Block, sink: &mut ArgEscapeSink<'_>| {
+        collect_aggregate_args_in_stmts(
+            &block.stmts,
+            stmts_topmost,
+            param_names,
+            suspending,
+            expr_types,
+            sink,
+        );
+    };
+    let walk_expr = |e: &Expr, sink: &mut ArgEscapeSink<'_>| {
+        collect_aggregate_args_in_expr(e, stmts_topmost, param_names, suspending, expr_types, sink);
+    };
     for stmt in stmts {
         match stmt {
-            Stmt::Expr(e) => walk_expr(e, seen, names),
-            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => walk_expr(value, seen, names),
+            Stmt::Expr(e) => walk_expr(e, sink),
+            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => walk_expr(value, sink),
             Stmt::If { cond, body, .. } | Stmt::While { cond, body, .. } => {
-                walk_expr(cond, seen, names);
-                walk_block(body, seen, names);
+                walk_expr(cond, sink);
+                walk_block(body, sink);
             }
             Stmt::For { iter, body, .. } => {
-                walk_expr(iter, seen, names);
-                walk_block(body, seen, names);
+                walk_expr(iter, sink);
+                walk_block(body, sink);
             }
             Stmt::Match {
                 scrutinee,
@@ -10685,22 +10729,22 @@ fn collect_aggregate_args_in_stmts(
                 else_arm,
                 ..
             } => {
-                walk_expr(scrutinee, seen, names);
+                walk_expr(scrutinee, sink);
                 for arm in arms {
-                    walk_block(&arm.body, seen, names);
+                    walk_block(&arm.body, sink);
                 }
                 if let Some(eb) = else_arm {
-                    walk_block(eb, seen, names);
+                    walk_block(eb, sink);
                 }
             }
             Stmt::Return { value, .. } => {
                 if let Some(v) = value {
-                    walk_expr(v, seen, names);
+                    walk_expr(v, sink);
                 }
             }
             Stmt::FieldAssign { target, value, .. } => {
-                walk_expr(target, seen, names);
-                walk_expr(value, seen, names);
+                walk_expr(target, sink);
+                walk_expr(value, sink);
             }
             Stmt::IndexAssign {
                 receiver,
@@ -10708,9 +10752,9 @@ fn collect_aggregate_args_in_stmts(
                 value,
                 ..
             } => {
-                walk_expr(receiver, seen, names);
-                walk_expr(index, seen, names);
-                walk_expr(value, seen, names);
+                walk_expr(receiver, sink);
+                walk_expr(index, sink);
+                walk_expr(value, sink);
             }
         }
     }
@@ -10729,91 +10773,75 @@ fn collect_aggregate_args_in_expr(
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
-    seen: &mut std::collections::HashSet<String>,
-    names: &mut Vec<String>,
+    sink: &mut ArgEscapeSink<'_>,
 ) {
-    let walk = |e: &Expr, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
-        collect_aggregate_args_in_expr(
-            e,
-            stmts_topmost,
-            param_names,
-            suspending,
-            expr_types,
-            seen,
-            names,
-        );
+    let walk = |e: &Expr, sink: &mut ArgEscapeSink<'_>| {
+        collect_aggregate_args_in_expr(e, stmts_topmost, param_names, suspending, expr_types, sink);
     };
     match expr {
-        Expr::Wait(inner, _) => walk(inner, seen, names),
+        Expr::Wait(inner, _) => walk(inner, sink),
         // Background args are independently staged by the spawn path — safe, and
         // deliberately NOT a crossing source (matching the pre-fix passing fixture).
         Expr::Background(_, _) => {}
         Expr::Call(c) => {
             if is_suspending_call(c, suspending) {
                 for arg in &c.args {
-                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, seen, names);
+                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, sink);
                 }
             }
-            walk(&c.callee, seen, names);
+            walk(&c.callee, sink);
             for arg in &c.args {
-                walk(arg, seen, names);
+                walk(arg, sink);
             }
         }
         Expr::MethodCall { receiver, args, .. } => {
             if expr_is_ufcs_suspending_call(expr, expr_types, &|n| suspending.contains(n)) {
                 // UFCS: the receiver is arg 0 of the desugared call.
-                mark_aggregate_arg(
-                    receiver,
-                    stmts_topmost,
-                    param_names,
-                    expr_types,
-                    seen,
-                    names,
-                );
+                mark_aggregate_arg(receiver, stmts_topmost, param_names, expr_types, sink);
                 for arg in args {
-                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, seen, names);
+                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, sink);
                 }
             }
-            walk(receiver, seen, names);
+            walk(receiver, sink);
             for arg in args {
-                walk(arg, seen, names);
+                walk(arg, sink);
             }
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            walk(lhs, seen, names);
-            walk(rhs, seen, names);
+            walk(lhs, sink);
+            walk(rhs, sink);
         }
-        Expr::UnaryOp { operand, .. } => walk(operand, seen, names),
+        Expr::UnaryOp { operand, .. } => walk(operand, sink),
         Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
-            walk(receiver, seen, names);
+            walk(receiver, sink);
         }
         Expr::StructLit { fields, .. } => {
             for field in fields {
-                walk(&field.value, seen, names);
+                walk(&field.value, sink);
             }
         }
         Expr::IndexAccess {
             receiver, index, ..
         } => {
-            walk(receiver, seen, names);
-            walk(index, seen, names);
+            walk(receiver, sink);
+            walk(index, sink);
         }
         Expr::ArrayLit { elements, .. } => {
             for el in elements {
-                walk(el, seen, names);
+                walk(el, sink);
             }
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                walk(k, seen, names);
-                walk(v, seen, names);
+                walk(k, sink);
+                walk(v, sink);
             }
         }
-        Expr::Is { expr: inner, .. } => walk(inner, seen, names),
+        Expr::Is { expr: inner, .. } => walk(inner, sink),
         Expr::InterpolatedString(parts, _) => {
             for part in parts {
                 if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
-                    walk(e, seen, names);
+                    walk(e, sink);
                 }
             }
         }
@@ -10848,8 +10876,7 @@ fn mark_aggregate_arg(
     stmts_topmost: &[Stmt],
     param_names: &[&str],
     expr_types: &HashMap<(usize, usize), Type>,
-    seen: &mut std::collections::HashSet<String>,
-    names: &mut Vec<String>,
+    sink: &mut ArgEscapeSink<'_>,
 ) {
     let Expr::Ident(name, span) = arg else {
         return;
@@ -10872,9 +10899,14 @@ fn mark_aggregate_arg(
     );
     if is_stack_backed_aggregate
         && find_crossing_local_typeck_type_in_map(stmts_topmost, name, expr_types).is_some()
-        && seen.insert(name.clone())
     {
-        names.push(name.clone());
+        // Record the span FIRST and unconditionally: a name the lexical scan already
+        // collected still escapes through THIS argument position, and that overlap is
+        // exactly what the provenance split needs to see (see `ArgEscapeSink`).
+        sink.arg_spans.insert((span.start, span.end));
+        if sink.seen.insert(name.clone()) {
+            sink.names.push(name.clone());
+        }
     }
 }
 
@@ -11664,6 +11696,36 @@ fn collect_crossings_in_stmts(
                         declared.push(name);
                     }
                 }
+                // ROOT-CAUSE FIX (v0.3 concurrency hardening, FRAGO 002 cluster C1):
+                // scan THIS statement's own operands against `declared` — for EVERY
+                // suspending statement shape, not just the control-flow ones.
+                //
+                // A suspending statement's operands are evaluated strictly AFTER the
+                // prior suspension in this sequence (that is the only way execution
+                // reaches this arm), so a read of a pre-suspension local in them is a
+                // real crossing, identical in kind to a read in a non-suspending
+                // statement (the `else` branch below, which has always scanned). Until
+                // this fix only the `If`/`While`/`For`/`Match` arms below called
+                // `collect_ident_refs_in_stmt`; the DIRECT suspending forms —
+                // `Stmt::Expr(conduit send)`, `Stmt::Expr(suspending call)`,
+                // `Stmt::Let { value: Call | Wait | MethodCall }` — recorded their
+                // result-binding and then fell through `_ => {}` with their own
+                // operands never visited. A local read ONLY by such a statement never
+                // entered the crossing set, got no frame slot, and the resumed
+                // continuation read an uninitialised alloca: silent wrong output at
+                // exit 0 in the default optimized mode (`useRows(rows)` after a
+                // `wait`, no channel involved), a misaligned-pointer SIGABRT for an
+                // `array` payload, and raw heap addresses out of a capacity-blocked
+                // `ch.send(local)`. Pinned by
+                // `crates/ynz-driver/tests/frago002_c1_c2_planned_red.rs` (probes A, D,
+                // G, J); diagnosis in this plan's `audit.md` FRAGO 002 cluster C1.
+                //
+                // Hoisted here rather than added arm-by-arm on purpose: one scan for
+                // the one question ("does this statement read a pre-suspension local?")
+                // per `.claude/rules/authoritative-derivation.md`. The three per-arm
+                // calls that used to live below are gone — a fourth shape added to
+                // `this_stmt_suspends` can no longer arrive without its scan.
+                collect_ident_refs_in_stmt(stmt, declared, out);
                 match stmt {
                     // Collect the new result-binding (if any) into pending.
                     // The MethodCall arm covers v0.3-M4 conduit-suspend bindings
@@ -11688,27 +11750,27 @@ fn collect_crossings_in_stmts(
                     {
                         pending_result_bindings.push(name.clone());
                     }
-                    // A control-flow statement whose body suspends: scan the condition for
-                    // references to already-`declared` (pre-suspension) locals FIRST — unlike
-                    // the not-yet-suspended top-level `Stmt::If` handling below (which
-                    // deliberately skips this scan because NOTHING has suspended yet at that
-                    // point, so no read there could possibly be crossing), we are HERE only
-                    // because an EARLIER suspension already happened in this sequence, so the
-                    // condition genuinely runs strictly after that prior suspension and a read
-                    // of a pre-suspension local in it IS a real crossing (caught by a real
-                    // regression this session: `v0_3_m3a_p1_disjoint_sibling_scope_shadow.ynz`'s
-                    // second `if (flag2)`, where `flag2` is declared before the FIRST if's wait
-                    // and read only in the SECOND if's condition — the codegen-emitted alloca
-                    // for `flag2` correctly disappeared from the frame and the second if-arm's
-                    // print silently never ran until this scan was added back). Mirrors the
+                    // A control-flow statement whose body suspends. Its condition was
+                    // already scanned by the hoisted `collect_ident_refs_in_stmt` above —
+                    // unlike the not-yet-suspended top-level `Stmt::If` handling below
+                    // (which deliberately skips that scan because NOTHING has suspended yet
+                    // at that point, so no read there could possibly be crossing), we are
+                    // HERE only because an EARLIER suspension already happened in this
+                    // sequence, so the condition genuinely runs strictly after that prior
+                    // suspension and a read of a pre-suspension local in it IS a real
+                    // crossing (caught by a real regression in v0.3-M3g:
+                    // `v0_3_m3a_p1_disjoint_sibling_scope_shadow.ynz`'s second `if (flag2)`,
+                    // where `flag2` is declared before the FIRST if's wait and read only in
+                    // the SECOND if's condition — the codegen-emitted alloca for `flag2`
+                    // correctly disappeared from the frame and the second if-arm's print
+                    // silently never ran until this scan was added back). Mirrors the
                     // pre-existing "else" (not-yet-suspended) branch, which unconditionally
-                    // called `collect_ident_refs_in_stmt` on every statement type BEFORE the
-                    // now-removed dead-code nested-suspension recursion. Then recurse into the
-                    // suspending sub-block with the now-FLUSHED `declared` (sub-case (b) — a
-                    // local declared INSIDE the branch, before the branch's OWN inner
-                    // suspension, still needs its own crossing detection).
+                    // calls `collect_ident_refs_in_stmt` on every statement type. What
+                    // remains arm-specific is only the recursion into the suspending
+                    // sub-block with the now-FLUSHED `declared` (sub-case (b) — a local
+                    // declared INSIDE the branch, before the branch's OWN inner suspension,
+                    // still needs its own crossing detection).
                     Stmt::If { body, .. } => {
-                        collect_ident_refs_in_stmt(stmt, declared, out);
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
@@ -11722,7 +11784,6 @@ fn collect_crossings_in_stmts(
                         );
                     }
                     Stmt::While { body, .. } | Stmt::For { body, .. } => {
-                        collect_ident_refs_in_stmt(stmt, declared, out);
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
@@ -11736,7 +11797,6 @@ fn collect_crossings_in_stmts(
                         );
                     }
                     Stmt::Match { arms, else_arm, .. } => {
-                        collect_ident_refs_in_stmt(stmt, declared, out);
                         for arm in arms {
                             if block_suspends_m3d(
                                 &arm.body,

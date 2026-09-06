@@ -594,8 +594,17 @@ Source plan-id `2026-07-04-v0-3-m8-concurrency-completion`, `## Future Requireme
     at the generator guards that suppress them (the `Builder::suspension_seen` reuse guard for (a),
     the `send_count`-versus-capacity floor for (b)), including the corrected symptom rates. What
     lives ONLY in this entry and the FR text is the minimal reproducing `.ynz` shape and the
-    routing decision. Whoever picks this up should read `mod.rs`'s guards first — they are the
-    in-tree record of what was measured.
+    routing decision.
+    **STATUS: CLOSED 2026-09-06 by plan `2026-09-04-v0-3-concurrency-hardening` Phase 3 step 3.1.**
+    Both defects were ONE producer — `collect_crossings_in_stmts` never scanned the operands of a
+    statement that itself suspends, so a pre-suspension local read only there got no frame slot and
+    was read from an uninitialised alloca on resume (FRAGO 002, and FRAGO 003 for the fix). Both
+    are now live regression locks in `crates/ynz-driver/tests/frago002_c1_c2_planned_red.rs` (pins
+    A/D/G/J), and two 256-seed fuzz sweeps at different seed bases return zero findings with the
+    generator's suppression guards deleted. **The pointer this entry used to carry — "read
+    `mod.rs`'s guards first, they are the in-tree record" — is dead: those guards no longer exist,
+    because the defect they hid is fixed.** Patrick's separate-chat routing is moot; it was fixed
+    here instead.
     - **(a) A crossing-local heap-channel-send corruption.** WHAT: an `array<int>`/`map<string,int>`
       LOCAL declared BEFORE any suspension point in the same function and later `.send()`-ed into a
       channel AFTER that suspension reads back corrupted on receive — `RUNTIME ERROR: killed by

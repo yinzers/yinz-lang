@@ -435,3 +435,103 @@ instruction originated with me and was wrong — the file is not a planned-RED f
 `#[ignore]`, and its own header says the opposite. Each gate did what it was told and confirmed the
 diagnostic class; none was positioned to know the brief contradicted the file. The failure was not
 in the gates. It was in briefing them from memory instead of from the file.
+
+---
+
+## Phase 3 step 3.1 — C1 FIXED at its producer; four pins live; both fuzz guards deleted; zero corpus regressions
+
+**Dispatch** `hardening-p3.1-20260906-a1`, 2026-09-06. Tree left dirty for the conductor to seal;
+three files touched (`crates/ynz-typeck/src/check.rs`,
+`crates/ynz-driver/tests/frago002_c1_c2_planned_red.rs`,
+`crates/ynz-driver/tests/fuzz_grammar/mod.rs`).
+
+### The fix, in two parts — the second was NOT anticipated by FRAGO 002
+
+**Part 1 — the producer.** In `collect_crossings_in_stmts`, the `collect_ident_refs_in_stmt` call
+is HOISTED out of the `If`/`While`/`For`/`Match` arms and runs for EVERY statement classified as
+`this_stmt_suspends`, immediately after the pending-result-binding flush. A suspending statement's
+operands run strictly after the prior suspension in the sequence, so a read of a pre-suspension
+local there is a real crossing. The three per-arm calls are deleted; there is now ONE scan for the
+one question, so a fifth shape added to `this_stmt_suspends` cannot arrive without its scan — the
+arm-by-arm alternative would have rebuilt the same omission the next time the classifier grew.
+
+**Part 2 — the provenance split had to become span-based.** Part 1 alone regressed exactly two
+corpus programs from *builds and runs correctly* to *compile error*:
+`v0_3_m6_maybe_arg_pure_call.ynz` and `v0_3_m6_union_arg_pure_call.ynz`, both
+`UnsupportedCrossingLocalType`. Diagnosed rather than accepted: `arg_escape_only` was computed by
+COLLECTOR ORDER (`names[before_arg_escape..]`), which is a proxy that held only while the lexical
+scan could not see an argument-position read. After Part 1 the two collectors describe ONE event at
+ONE span for `pick(m)`, the order-based split misfiled it as a lexical crossing, and the
+`maybe`/`union` skip that bind-time heap-cell promotion earns was silently withdrawn. Fix: the
+arg-escape collector now records the exact `Ident` span of every argument position it qualifies
+(new `ArgEscapeSink`), and a name is `arg_escape_only` when every crossing span the ONE lexical
+scan recorded for it is one of those spans. Names with no lexical crossing qualify vacuously — the
+original case, unchanged. The two facts can no longer drift apart, because one is now defined in
+terms of the other rather than in terms of the order they were computed in.
+
+Both parts live inside the single authoritative producer (`locals_crossing_wait` /
+`crossing_local_names_with_provenance`), which typeck's Check 2/2b, the M3d decline probe
+(`suspension_guards_fire_for_fn`) and codegen's `crossing_local_names_with_cpu_spike` all read. No
+second derivation was added anywhere.
+
+### The precondition, measured rather than assumed
+
+626-fixture corpus, `ynz build` at the default tier, before and after, recorded as
+`<fixture> <exit> <first-diagnostic>`:
+
+| | builds clean | build error | exit 2 |
+|---|---|---|---|
+| baseline (pre-fix) | 504 | 121 | 1 |
+| after Part 1 only | 502 | **123** | 1 |
+| after Parts 1+2 (landed) | 504 | 121 | 1 |
+
+**Landed delta: ZERO** — the two files are byte-identical. The two-program regression was real,
+was caught by measuring instead of assuming, and was fixed upstream rather than absorbed. No
+program that built before fails to build now; no new decline is user-observable in the corpus.
+
+### Results
+
+- **Pins A, D, G, J: GREEN**, `#[ignore]` removed, reasons rewritten as live regression locks.
+  A and D print `3\nend` at both tiers (were SIGABRT / silent `6`). G is 30/30 `10.2` and J is
+  30/30 `102` at `-O0` (were wrong in roughly half and a majority of runs).
+- **Pin N (C2) stays ignored and stays RED** — verified with `-- --ignored`: still prints `99`.
+  The clustering in FRAGO 002 holds; step 3.2 still has its job.
+- **Two corpus tests that were RED on the baseline are now GREEN** — and nobody had noticed they
+  were red: step 3.0's own committed fixtures are inside the sweep corpus, so
+  `corpus_produces_deterministic_output_across_runs` and
+  `corpus_byte_identical_across_mode_matrix` had been failing (1 determinism finding, 8
+  mode-matrix divergences, all four C1 fixtures) since that commit.
+- **FRAGO 002 open question 2 is SETTLED: the fix alone closes the findings.** Both generator
+  suppression guards deleted (`Builder::suspension_seen` in its entirety — field, five
+  assignments, and both reuse gates — and the `send_count`-versus-capacity floor). Two independent
+  `YNZ_FUZZ_PROGRAMS=256` sweeps: **0 findings** at seed base 0 and **0 findings** at seed base
+  777000, 256/256 compiled and ran to exit 0 in each.
+- **Non-vacuity checked, not assumed** (throwaway probe over the same 256 seeds, deleted after
+  reading): 166 programs fire the drain loop, 367 channels are drawn at a capacity below the
+  maximum send count, and pool reuse fires 32/256 — against 13-17/**1024** measured under the
+  deleted gate. The sweep genuinely exercises the shapes the guards used to forbid.
+
+### The record corrections
+
+- `take_or_make_array`'s "specific to the channel-transfer path" — replaced with the disproof
+  (probe D: no channel anywhere) and the real producer, named.
+- The `int`/`number` self-contradiction — `FeedFn::send_count`'s cautious "untested, not confirmed
+  safe" was the honest one; both it and `stmt_background_drain_loop`'s "general to BOTH int and
+  number" now say the discriminator is **whether a local is read by a statement that suspends**,
+  not the element type. The `pool_reuse` floor's rationale and assertion message were also
+  de-staled (they described the deleted gate).
+
+### Residual for the conductor, NOT actioned here
+
+`.claude/plans/parked.md` entry 49 is now closed by this fix — both (a) and (b). Its text still
+routes a future reader to "read `mod.rs`'s guards first — they are the in-tree record," and those
+guards no longer exist. Left untouched because parked.md is the conductor's ledger and outside
+this dispatch's named files; it needs a close-out pass.
+
+### Known-red, pre-existing, NOT this dispatch
+
+`cross_impl_consistency::bounded_run_kills_the_whole_tree::timed_out_program_leaves_no_descendant_process_running`
+failed in the PRE-FIX baseline run of the same target and fails intermittently after; it passes
+3/3 in isolation and fails only when the target's own fuzz sweep saturates every core. That is the
+wall-clock-budget-calibrated-on-an-idle-machine corpse class `.claude/rules/test-parallelism.md`
+already names — a 3s poll window, not a value assertion. Unrelated to this diff.
