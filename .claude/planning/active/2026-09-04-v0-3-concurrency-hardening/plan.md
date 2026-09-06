@@ -3,7 +3,7 @@ name: "v0-3-concurrency-hardening"
 plan-id: "2026-09-04-v0-3-concurrency-hardening"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1"]
+session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1"]
 tier: "hasty"
 tier-reason: "Concurrency is a blocking gate on using Yinz at all; every known blocker is traced to a named producer and fixed at that producer, not patched per symptom. Scope is fixed (four phases, non-negotiable), deferral is forbidden, ambiguity is decided upstream. Small committed work riding Patrick's settled order."
 created_at: "2026-09-04"
@@ -126,7 +126,7 @@ are in parked, they stay in parked.
 
 **The fixes, in order:**
 
-- [ ] **3.0 — RED pins first, before any fix.** Commit five probe programs from
+- [x] **3.0 — RED pins first, before any fix.** Commit five probe programs from
       `target/p2b-probe/` (gitignored) into `crates/ynz-driver/tests/fixtures/` as failing tests:
       **A** (array before `wait`, sent after → SIGABRT in the default mode), **D** (no channel at
       all — array arg to a suspending user function → prints 6 for 3, exit 0), **G** (`number`

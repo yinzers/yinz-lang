@@ -1,0 +1,41 @@
+// WHY: locks FRAGO 002 cluster C1 — same producer as the array probes in this
+// cluster, on the `number` shape M8 FR #11(b) actually filed and the shape the
+// fuzzer's `stmt_background_drain_loop` generates. `price` is a `number` local read
+// by three `wire.send(price)` statements into a capacity-1 channel, so sends 2 and 3
+// BLOCK (a suspension). Each `wire.send(price)` is itself a suspension point whose
+// own operand (`price`) is never scanned by `collect_crossings_in_stmts` once
+// `past_wait` is true for that statement.
+//
+// Observed today (2026-09-06, `-O0` / --no-optimize, ynz-lang HEAD): wrong total in
+// roughly half of runs — 6/12 observed by dispatch hardening-p2b-20260905-a1 (probe
+// G, target/p2b-probe/g_numblock.ynz, gitignored) printing 6.8 instead of the
+// correct 10.2 (one blocked send's resume reads a stale/uninitialised slot instead
+// of re-reading `price`). Clean at the default optimized tier — labelled inference
+// in FRAGO 002: LLVM likely folds the poison load to something benign at -O2 while
+// an array pointer (probe A) is fatal at any level. This fixture therefore locks the
+// defect at `-O0` ONLY; see the test harness for how the non-determinism is handled
+// without a flaky assertion. Closes M8 FR #11(b).
+//
+// When C1's fix lands: exit 0, stdout exactly "10.2" on every run, at every tier.
+function feed(wire: channel<number>) -> nothing {
+  let price: number = 3.4
+  wire.send(price)
+  wire.send(price)
+  wire.send(price)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<number> = channel<number>(1)
+  background feed(wire)
+  let total: number = 0.0
+  let open = true
+  while (open) {
+    let nx = wire.receive()
+    if (nx.exists()) {
+      total = total + nx.value
+    }
+    open = nx.exists()
+  }
+  print(total.toString())
+}

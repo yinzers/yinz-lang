@@ -1,0 +1,26 @@
+// WHY: locks FRAGO 002 cluster C2 — `.copy()`'s exhaustive `copy_lowering_arm`
+// (crates/ynz-typeck's copy-independence table / codegen's lowering) has an
+// `AliasNoOp` arm for `fixed<T>` that returns the RECEIVER'S OWN pointer instead of
+// an independent copy. `b = a.copy()` therefore aliases `a`; mutating `b` mutates
+// `a`. No transfer, no diagnostic — silent wrong answer in the default mode.
+//
+// Observed today (2026-09-06, default optimized mode, ynz-lang HEAD): prints "99"
+// where "1" is correct (`a[0]` reads the mutation made through `b`). Confirmed-live
+// by dispatch hardening-p2b-20260905-a1 as probe N
+// (target/p2b-probe/n_copy_fixed.ynz, gitignored). Shares a design ancestor (not a
+// code line) with M8 FR #9's bg-arg escape door — Patrick's 2026-09-06 ruling
+// requires EVERY type in this arm to become either a real deep copy or a compile-time
+// refusal; `AliasNoOp` does not survive as a silent behavior. Closes M8 FR #10.
+//
+// When C2's fix lands: exit 0, stdout exactly "1" (a is untouched by mutating the
+// copy) — OR the ruling instead makes `.copy()` on `fixed<T>` a compile-time
+// refusal, in which case this fixture's own build step will start failing and the
+// test locking it must be re-shaped to assert the refusal diagnostic instead of a
+// runtime value. Either outcome is a real fix; silent aliasing is the only wrong
+// answer this pin exists to catch.
+function entrypoint() -> nothing {
+  let a: fixed<int> = [1, 2, 3]
+  let b = a.copy()
+  b.set(0, 99)
+  print(a[0].or(-1).toString())
+}

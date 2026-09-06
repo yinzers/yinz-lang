@@ -1,0 +1,37 @@
+// WHY: locks FRAGO 002 cluster C1 — the `int`-local twin of the `number` probe in
+// this cluster, added because `fuzz_grammar/mod.rs` disagreed with itself about
+// whether the `int` element shape was ever confirmed safe (`FeedFn::send_count`'s
+// comment said "untested, not confirmed safe"; `stmt_background_drain_loop`'s said
+// "general to BOTH int and number" — parked 49(b) relayed the second, wrong, one).
+// Same producer, same shape: `price` is an `int` local read by three
+// `wire.send(price)` statements into a capacity-1 channel, sends 2 and 3 block.
+//
+// Observed today (2026-09-06, `-O0` / --no-optimize, ynz-lang HEAD): raw heap
+// addresses printed instead of the correct total, in roughly 5/12 runs observed by
+// dispatch hardening-p2b-20260905-a1 (probe J, target/p2b-probe/j_intlocalblock.ynz,
+// gitignored) — confirms the discriminator is not element type, it is whether a
+// local is read by a statement that suspends. Closes M8 FR #11(b) (int variant).
+//
+// When C1's fix lands: exit 0, stdout exactly "102" on every run, at every tier.
+function feed(wire: channel<int>) -> nothing {
+  let price = 34
+  wire.send(price)
+  wire.send(price)
+  wire.send(price)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(1)
+  background feed(wire)
+  let total = 0
+  let open = true
+  while (open) {
+    let nx = wire.receive()
+    if (nx.exists()) {
+      total = total + nx.value
+    }
+    open = nx.exists()
+  }
+  print(total.toString())
+}

@@ -1,0 +1,27 @@
+// WHY: locks FRAGO 002 cluster C1's SEVERITY case — no channel, no `background`, no
+// `.copy()`, no `errors`. `rows` is an ordinary `array<int>` local declared before a
+// `wait sleep(20)`, then passed as a plain argument to a function whose OWN body
+// suspends (`wait sleep(1)`). Same producer as the channel-send probe in this
+// cluster (`collect_crossings_in_stmts` skipping a suspending statement's own
+// operands), reached through the plainest possible call form. This is ordinary
+// code — the severity finding FRAGO 002 ranks ahead of the channel-transfer shape.
+//
+// Observed today (2026-09-06, default optimized mode, ynz-lang HEAD): silent wrong
+// output, EXIT 0 — prints "6" where "3" is correct. Confirmed-live by dispatch
+// hardening-p2b-20260905-a1 as probe D (target/p2b-probe/d_suspcall.ynz, gitignored).
+// Closes M8 FR #11(a) via the same producer as the channel-send shape (also proves
+// the defect is not "specific to the channel-transfer path" —
+// `fuzz_grammar/mod.rs::take_or_make_array`'s doc comment claim is false).
+//
+// When C1's fix lands: exit 0, stdout exactly "3\nend\n".
+function useRows(rows: array<int>) -> nothing {
+  wait sleep(1)
+  print(rows.count().toString())
+}
+
+function entrypoint() -> nothing {
+  let rows: array<int> = [10, 20, 30]
+  wait sleep(20)
+  useRows(rows)
+  print(`end`)
+}

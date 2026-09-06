@@ -319,3 +319,27 @@ build failure instead of a user-facing ICE.
 - Graded parked 32/33/34 as two producers rather than the one their own entry claims.
 - Ran three probes the brief did not ask for (D, I/J, N); each overturned or upgraded a committed
   claim.
+
+---
+
+## Phase 3 step 3.0 — RED pins committed, nothing fixed
+
+**Dispatch** `hardening-p3.0-20260906-a1`, 2026-09-06. Committed the five probes named above (A,
+D, G, J, N) as fixtures under `crates/ynz-driver/tests/fixtures/` plus one new `#[ignore]`d test
+file, `crates/ynz-driver/tests/frago002_c1_c2_planned_red.rs`, mirroring the
+`fr23_uaf_planned_red.rs` / `d5_frame_slot_collision_planned_red.rs` planned-RED convention
+exactly (`#[ignore = "planned-RED: ..."]`, WHY comments naming the producer and cluster, run
+explicitly with `-- --ignored`). One file for both C1 and C2, since FRAGO 002 itself is the shared
+filing all five probes came out of. No fix landed; the compiler is untouched.
+
+All five confirmed to FAIL on today's tree (verbatim output in the dispatch report). G and J
+(non-deterministic at `-O0`, ~1/3–1/2 corruption rate observed) are pinned by running the built
+`-O0` binary 30 times and asserting every run matches the correct value — false today with
+overwhelming probability, true with certainty once the real fix lands, so neither direction is a
+coin-flip. A and D are pinned at BOTH tiers because the failure SHAPE differs by tier (SIGABRT at
+one, silent wrong value at the other) rather than being the same symptom read twice.
+
+`fuzz_grammar/mod.rs` and `.github/workflows/ci.yml` were not touched, per the brief. A plain
+`cargo test -p ynz-driver --test frago002_c1_c2_planned_red` (no `--ignored`) reports `5 ignored,
+0 failed` — the new target is invisible to a normal or `--no-fail-fast` workspace run, so this
+diff changes nothing about what a workspace run currently reports as failing.
