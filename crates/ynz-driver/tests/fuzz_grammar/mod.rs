@@ -184,9 +184,10 @@ struct FeedFn {
     kind: ElemKind,
     body_lines: Vec<String>,
     /// How many `wire.send(...)` calls `body_lines` contains. `stmt_background_drain_loop`
-    /// draws the consumer's channel capacity in `1..=send_count`, so a feeder with more than
+    /// draws the consumer's channel capacity in `1..=send_count+1`, so a feeder with more than
     /// one send frequently BLOCKS on a full buffer — deliberately, because that is the shape
-    /// this generator used to be forbidden from producing.
+    /// this generator used to be forbidden from producing — while the slack-buffer regime
+    /// (`cap > send_count`, nothing suspends) stays reachable too.
     ///
     /// History, corrected: v0.3-M8 Phase 8 recorded a confirmed defect here (a blocked send
     /// reading back a heap address where a value belongs) and suppressed it with a
@@ -334,9 +335,9 @@ impl Builder {
     /// 1-3 values of `kind`, each sent the moment it exists. Every binding here is LOCAL to this
     /// function and consumed by its own send — there is no cross-statement pool to bookkeep
     /// inside a fresh function scope. Returns the body lines plus the number of `wire.send(...)`
-    /// calls emitted, so the caller (`stmt_background_drain_loop`) can size the consumer's
-    /// channel capacity to never fall below it — see that method's doc comment for the confirmed
-    /// defect this avoids.
+    /// calls emitted, so the caller (`stmt_background_drain_loop`) can draw a consumer channel
+    /// capacity ON EITHER SIDE of it — see that method's comment for why both the blocking and
+    /// the slack regime have to stay reachable.
     fn build_feed_body(&mut self, kind: ElemKind) -> (Vec<String>, usize) {
         let count = 1 + self.rng.below(3);
         let lines = match kind {
@@ -831,12 +832,21 @@ impl Builder {
         let total = self.fresh("total");
         let open = self.fresh("open");
         let nx = self.fresh("nx");
-        // Capacity is drawn in `1..=send_count`, so a multi-send feeder BLOCKS on a full
-        // buffer — ON PURPOSE. This used to be a FLOOR (`capacity >= send_count`) that made
-        // blocking impossible, suppressing a confirmed defect from every seed the fuzzer ever
-        // ran: a blocked send could read back a HEAP ADDRESS where a value belongs,
-        // non-deterministic at ~17-30% of runs, recorded in v0.3-M8 Phase 8 fix round 4 and
-        // deferred there (`plan.md` FR #11(b), that plan's `audit.md` FRAGO 015).
+        // Capacity is drawn in `1..=send_count+1`: BOTH regimes stay reachable — a blocking
+        // buffer (`cap < send_count`, the shape the old floor forbade) and a slack buffer
+        // (`cap > send_count`, where no send ever suspends). One draw, so seed streams stay
+        // comparable across this change.
+        //
+        // Two corrections in one line. The FLOOR came first (`capacity >= send_count`, v0.3-M8
+        // Phase 8 fix round 4): it made blocking impossible and suppressed a confirmed defect
+        // from every seed the fuzzer ever ran — a blocked send could read back a HEAP ADDRESS
+        // where a value belongs, non-deterministic at ~17-30% of runs (`plan.md` FR #11(b),
+        // that plan's `audit.md` FRAGO 015). Deleting the floor in this plan's step 3.1
+        // replaced it with `1..=send_count`, which fixed the blocking blind spot and opened a
+        // new one at the other end: the slack-buffer regime became UNREACHABLE. A fuzzer that
+        // explores less while reporting zero findings is worse than one that reports findings,
+        // so the window is widened by one rather than clamped at either end. Its ceiling
+        // (`cap = 4` on a 3-send feeder) is the old pre-floor draw's ceiling.
         //
         // The v0.3 hardening plan fixed it at its producer in Phase 3 step 3.1:
         // `collect_crossings_in_stmts` never scanned a suspending statement's own operands, so
@@ -846,7 +856,7 @@ impl Builder {
         // field's own "int untested" were arguing about the wrong variable); it was about a
         // local being read by a statement that suspends. Both twins are pinned in
         // `crates/ynz-driver/tests/frago002_c1_c2_planned_red.rs` (probes G and J).
-        let cap = 1 + self.rng.below(self.feed_fns[i].send_count.max(1));
+        let cap = 1 + self.rng.below(self.feed_fns[i].send_count.max(1) + 1);
         let chan_ty = kind.channel_type();
         self.push(format!("let {c}: {chan_ty} = {chan_ty}({cap})"));
         self.push(format!("background {f}({c})"));

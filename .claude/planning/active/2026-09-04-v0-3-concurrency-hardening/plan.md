@@ -3,7 +3,7 @@ name: "v0-3-concurrency-hardening"
 plan-id: "2026-09-04-v0-3-concurrency-hardening"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1"]
+session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1", "hardening-p3.1-fix1-20260906-a1"]
 tier: "hasty"
 tier-reason: "Concurrency is a blocking gate on using Yinz at all; every known blocker is traced to a named producer and fixed at that producer, not patched per symptom. Scope is fixed (four phases, non-negotiable), deferral is forbidden, ambiguity is decided upstream. Small committed work riding Patrick's settled order."
 created_at: "2026-09-04"
@@ -153,6 +153,16 @@ are in parked, they stay in parked.
             (`Builder::suspension_seen`'s reuse gate and the `send_count`-versus-capacity floor in
             `crates/ynz-driver/tests/fuzz_grammar/mod.rs`) and run `YNZ_FUZZ_PROGRAMS=256`.
             Findings should go to zero. This also settles FRAGO 002's open question 2.
+      - [x] **Fix round (dispatch `hardening-p3.1-fix1-20260906-a1`, review of `eb0aa0c`):** the
+            hoisted scan compared a suspending statement's operands against the WHOLE `declared`
+            set, and nothing asked whether a suspension actually fell between a local's
+            declaration and the read — so a local declared after a suspension and read only in
+            operands evaluated before the next one was rejected
+            (`a maybe<int> value cannot yet cross a wait`). Fixed at the same producer, which
+            also kills the pre-existing instance of the same imprecision (no later suspension at
+            all). Three fixtures + `tests/post_suspension_local_not_crossing.rs` pin the
+            false-rejection direction; the fuzz generator's capacity draw regains the
+            slack-buffer regime it lost while widening.
       - [x] **Correct the record while here:** `mod.rs::take_or_make_array`'s doc comment claims
             this is "specific to the channel-transfer path" — false (probe D). And `mod.rs`
             contradicts itself on Int; the cautious `FeedFn::send_count` comment was right and

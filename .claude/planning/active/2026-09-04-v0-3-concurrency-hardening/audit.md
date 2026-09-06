@@ -535,3 +535,105 @@ failed in the PRE-FIX baseline run of the same target and fails intermittently a
 3/3 in isolation and fails only when the target's own fuzz sweep saturates every core. That is the
 wall-clock-budget-calibrated-on-an-idle-machine corpse class `.claude/rules/test-parallelism.md`
 already names — a 3s poll window, not a value assertion. Unrelated to this diff.
+
+---
+
+## Phase 3 step 3.1 FIX ROUND — the widened scan was rejecting correct programs; fixed at the same producer
+
+**Dispatch** `hardening-p3.1-fix1-20260906-a1`, 2026-09-06, answering a confirmed reviewer finding
+against `eb0aa0c`. Tree left dirty for the conductor to seal.
+
+### The regression, and why it is the same producer rather than a new one
+
+```ynz
+wait sleep(1)
+let m: maybe<int> = `42`.toInt()
+const v = wait consume(m.or(0))     // Error: a `maybe<int>` value cannot yet cross a `wait`.
+```
+
+Delete the leading `wait sleep(1)` and the identical read compiles. `m` is declared AFTER the
+suspension and read only in operands evaluated BEFORE the next one — it crosses nothing. Same with
+`fixed<int>`, since index access returns a `maybe`.
+
+Producer, named: `collect_crossings_in_stmts` kept ONE set (`declared`) that accumulated every
+local declared since the most recent suspension, and **nothing asked whether a suspension actually
+fell between a local's declaration and the read being scanned** — which is the crossing
+precondition. Step 3.1's hoisted `collect_ident_refs_in_stmt` did not create that imprecision, it
+extended its reach: the pre-existing `else` branch had it too, and
+`wait sleep(1)  let m: maybe<int> = ...  print(m.or(0))` was rejected on every tree since the
+analysis was written. Both instances die at one fix, which is the check `root-cause.md` asks for.
+
+### The fix
+
+The mechanism that was already correct for result-bindings is generalized to every post-suspension
+binding. `pending_result_bindings` becomes `declared_since_suspension` and now stages EVERY local
+bound since the last suspension; `declared` holds exactly the names a suspension separates from the
+current position. One flush point, at the next suspension.
+
+Ordering is decided by WHERE the statement's suspension sits, derived once as a new
+`SuspensionSite` enum returned by the single classifying `match` (was a bare `bool`) and read from
+there — no second derivation of "is there a suspension between here and there":
+
+- **`AtRoot`** (`f()`, `let x = wait f()`, `ch.send(v)`) — operands all run before the statement
+  suspends, and typeck **Check 3** (`suspending_calls_in_subexpr_position`) rejects a nested
+  suspending call inside them, so "before the root suspension" is "before every suspension in this
+  statement". Scan against `declared`, THEN flush. Verified live: both `outer(inner(), m)` and
+  `wait outer(wait inner(), m)` are compile errors today.
+- **`InControlFlow`** (`if`/`while`/`for`/`match` with a suspending body) — a loop back edge
+  re-evaluates the condition after the body suspends, and the scan walks the body. Flush FIRST,
+  scan against the widened set: unchanged, deliberately conservative behavior.
+
+### Proof it narrowed precisely rather than loosening the guard
+
+| program | before | after |
+|---|---|---|
+| `wait` · `let m: maybe` · `wait consume(m.or(0))` | rejected | **prints 42** |
+| `wait` · `let f: fixed` · `wait consume(f[2].or(0))` | rejected | **prints 3** |
+| `wait` · `let m: maybe` · `print(m.or(0))` (pre-existing instance) | rejected | **prints 42** |
+| `let m: maybe` · `wait` · `print(m.or(0))` | rejected | **still rejected** |
+| `wait` · `let m: maybe` · `wait` · `print(m.or(0))` | rejected | **still rejected** (the flush) |
+| `wait` · `let m: maybe` · `while { wait  print(m.or(0)) }` | rejected | **still rejected** |
+| `wait` · `let m: maybe` · `if { wait  print(m.or(0)) }` | rejected | **still rejected** |
+
+### The corpus delta, and what it is NOT evidence of
+
+626 fixtures, `ynz build` at the default tier, `<fixture> <exit> <first-diagnostic>`, baseline
+binary built from `eb0aa0c` versus the fixed tree: **504 clean / 121 build error / 1 exit-2 on
+both, files byte-identical.**
+
+Said plainly, because the number invites the wrong reading: **a zero delta is evidence about the
+corpus, not proof about the language.** The corpus contains no program of this shape — that is
+precisely why the rejection shipped through a 626-fixture sweep and two 256-seed fuzz sweeps. The
+three programs that DO move are the three committed here as fixtures; all three were verified RED
+against the `eb0aa0c` binary before the pins were written.
+
+### New pins
+
+`crates/ynz-driver/tests/post_suspension_local_not_crossing.rs` — three tests, one per fixture,
+both tiers each. It is the deliberate mirror of `frago002_c1_c2_planned_red.rs`: that file locks
+the direction where this producer reports too LITTLE (missed crossing → silent wrong output), this
+one locks where it reports too MUCH (false `UnsupportedCrossingLocalType`). One producer answers
+both, so both directions need a lock or the next fix trades one failure for the other.
+
+### The other two review findings
+
+- **Check 2 / Check 2b's safety rationale in `check_function` was false by construction** under
+  Part 2's span rule (it claimed lexical crossings "never enter `arg_escape_only`"; under the span
+  rule one whose span IS a qualified argument position does). Comments corrected to state the span
+  rule and what actually disqualifies a name — a crossing read at any non-argument span. Code
+  unchanged; it was right.
+- **The fuzz generator's capacity draw had narrowed while widening.** `1 + below(send_count)` gives
+  `cap ∈ [1, send_count]`: blocking well covered, slack buffer (`cap > send_count`) UNREACHABLE,
+  where the pre-floor draw could reach 4. Now `1 + below(send_count + 1)`, one draw so seed streams
+  stay comparable. Measured over 256 seeds (throwaway probe, deleted): 252 drain-loop channels —
+  **28.2% blocking, 35.7% exact, 36.1% slack**, capacities 1–4 reachable.
+
+### Verification
+
+- Two `YNZ_FUZZ_PROGRAMS=256` sweeps after the capacity change: **0 findings** at seed base 0 and
+  **0 findings** at 777000; 256/256 compiled and ran to exit 0 in each, 256 distinct.
+- Pins **A, D, G, J green**; pin **N still `#[ignore]`d and still RED** (prints `99`, want `1`) —
+  cluster C2 is step 3.2's job.
+- `fr23_uaf_planned_red` **17/17**. `cargo test -p ynz-driver`: 779 passed, 0 failed, 4 ignored
+  (pin N, two D5 planned-REDs, one replay tool). `-p ynz-typeck -p ynz-codegen`: all green.
+  `clippy --workspace --all-targets -D warnings` clean; `fmt --all --check` clean.

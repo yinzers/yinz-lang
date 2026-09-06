@@ -1,0 +1,25 @@
+// WHY: `m` is declared AFTER a suspension and read only in the operands of the next
+// suspending statement — operands that are evaluated BEFORE that statement suspends.
+// `m` therefore crosses nothing and this program is correct Yinz.
+//
+// It was rejected ("a `maybe<int>` value cannot yet cross a `wait`") from
+// v0.3-hardening step 3.1's first landing until the fix in this dispatch: the crossing
+// scan compared a suspending statement's operands against every local declared since
+// the last suspension, without ever asking whether a suspension actually fell between
+// a local's declaration and the read. Deleting the leading `wait sleep(1)` compiled the
+// identical read, which is what gave the false premise away.
+//
+// Regression lock for `collect_crossings_in_stmts`'s `declared_since_suspension`
+// staging list (crates/ynz-typeck/src/check.rs).
+
+function consume(n: int) -> int {
+  wait sleep(10)
+  return n
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  let m: maybe<int> = `42`.toInt()
+  const v = wait consume(m.or(0))
+  print(v.toString())
+}

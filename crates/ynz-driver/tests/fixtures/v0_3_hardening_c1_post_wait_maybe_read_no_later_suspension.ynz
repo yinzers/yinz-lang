@@ -1,0 +1,15 @@
+// WHY: the pre-existing instance of the same producer — this one was rejected BEFORE
+// v0.3-hardening step 3.1 as well, so it proves the fix landed at the producer rather
+// than at the shape step 3.1 happened to widen. Here the read is in an ordinary
+// non-suspending statement and there is no later suspension at all; `m` still cannot
+// cross anything, because the only suspension in the function happens before `m`
+// exists.
+//
+// Rejected as "a `maybe<int>` value cannot yet cross a `wait`" on every tree from the
+// crossing analysis's introduction until this dispatch.
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  let m: maybe<int> = `42`.toInt()
+  print(m.or(0).toString())
+}

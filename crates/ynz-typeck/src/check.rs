@@ -1219,11 +1219,18 @@ impl<'b> Checker<'b> {
                 // `union_to_heap_cell`) — nothing is frame-embedded, so the nested-shape
                 // limitation this check guards cannot apply. Its RHS resolves to the
                 // CONCRETE variant shape (`let fig: Figure = s` types as `Square`),
-                // which is exactly why this check would otherwise fire on it. Lexical
-                // (read-after-wait) union crossings never enter `arg_escape_only` and
-                // stay subject to this check. Mirrored in
-                // `suspension_guards_fire_for_fn` (the M3d decline probe — both touch
-                // points or the verdicts drift).
+                // which is exactly why this check would otherwise fire on it.
+                // Membership is the SPAN rule (`crossing_local_names_with_provenance`):
+                // a name is `arg_escape_only` when EVERY crossing span the one lexical
+                // scan recorded for it is an argument position the arg-escape collector
+                // qualified. So a lexical crossing DOES land in `arg_escape_only` when
+                // its span is such an argument position — that is the two collectors
+                // describing one event, and it is the case bind-time promotion covers.
+                // What still disqualifies a name is a crossing read anywhere ELSE: one
+                // post-wait read at a non-argument span puts it back under this check,
+                // because promotion does not make the parent's own reload safe.
+                // Mirrored in `suspension_guards_fire_for_fn` (the M3d decline probe —
+                // both touch points or the verdicts drift).
                 // A nested-shape variant payload is safe under this flat one-level ABI-size
                 // memcpy: since v0.3-M5 P2, `store_field` (emit.rs ~20154) heap-cells EVERY
                 // shape-typed field store, so a nested-shape field is already a pointer to a
@@ -1361,10 +1368,14 @@ impl<'b> Checker<'b> {
                 // promotes the binding to a counted heap cell at bind time
                 // (`maybe_to_heap_cell` / `union_to_heap_cell`), so the pointer the
                 // callee holds across its own suspension targets surviving heap, not the
-                // dead resume-fn stack. Lexical (read-after-wait) crossings are collected
-                // BEFORE the arg-escape pass and therefore never appear in
-                // `arg_escape_only` — they stay rejected here, because the promotion does
-                // not make the parent's own post-wait reload safe. The union skip keys on
+                // dead resume-fn stack. Membership is the SPAN rule, not collector
+                // order (`crossing_local_names_with_provenance`): every crossing span the
+                // lexical scan recorded for the name must be an argument position the
+                // arg-escape collector qualified. A lexical crossing sitting exactly on
+                // such an argument position therefore DOES qualify — the two collectors
+                // are describing one event — while a crossing read at any other span
+                // disqualifies the name and it stays rejected here, because the promotion
+                // does not make the parent's own post-wait reload safe. The union skip keys on
                 // the ANNOTATION resolving to Union (step 3c): the union-ctor arm that
                 // performs the promotion keys on that same annotation, and the RHS types
                 // as the concrete variant shape.
@@ -11542,12 +11553,38 @@ fn block_suspends_m3d(
         || (back_edge_yield && block_contains_back_edge_yield(block, expr_types))
 }
 
+/// Whether a statement is a suspension point for its enclosing statement sequence, and
+/// WHERE inside the statement that suspension sits.
+///
+/// The distinction decides one thing and one thing only: whether the statement's own
+/// operands are evaluated strictly before the suspension it carries (`AtRoot`) or can
+/// also be evaluated after it (`InControlFlow` — a loop back edge re-runs the condition
+/// after the body suspends; a branch body's later statements run after its inner
+/// suspension). It is derived ONCE, by the single `match` in
+/// [`collect_crossings_in_stmts`], and read from there — never re-derived
+/// (`.claude/rules/authoritative-derivation.md`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SuspensionSite {
+    /// The suspending call / `wait` / conduit method IS the statement's root form
+    /// (`f()`, `let x = f()`, `wait f()`, `ch.send(v)`, `let x = ch.receive()`).
+    /// Every operand of such a statement is evaluated before it suspends, and typeck
+    /// Check 3 (`suspending_calls_in_subexpr_position`, in [`Checker::check_function`])
+    /// rejects any program that nests a second suspending call inside those operands —
+    /// so "before the root suspension" means "before EVERY suspension in this statement."
+    AtRoot,
+    /// The suspension is inside a control-flow statement's body (`if` / `while` / `for`
+    /// / `match`). Operand evaluation is NOT confined to before it.
+    InControlFlow,
+}
+
 /// Recursive crossing-analysis kernel.
 ///
-/// `declared` accumulates all local names declared before any suspension point seen
-/// so far in this statement sequence. When a suspension point (explicit `wait` node
-/// OR an inferred-suspension call) is encountered, subsequent statements are scanned
-/// for references to those accumulated names.
+/// `declared` holds exactly the local names whose declaration is separated from the
+/// current scan position by AT LEAST ONE suspension point — that separation IS the
+/// crossing precondition, so a read of a `declared` name is a crossing and a read of
+/// anything else is not. Names bound since the most recent suspension live in the
+/// local `declared_since_suspension` staging list instead, and move into `declared`
+/// at the one flush point (see that binding's comment and [`SuspensionSite`]).
 ///
 /// Time: O(N) where N = AST nodes scanned  Space: O(D) recursion depth + O(L) declared locals
 #[allow(clippy::too_many_arguments)]
@@ -11568,19 +11605,32 @@ fn collect_crossings_in_stmts(
     let spike_first_idx = cpu_spike_pair_first_index(stmts, suspending, cpu_supported);
     // Whether a reachable suspension point has been seen in this statement list.
     let mut past_wait = false;
-    // Result-binding names from the most-recent suspension step, not yet flushed
-    // into `declared`. A result-binding is safe across its OWN producing suspension
-    // (the state machine stores it in the frame and resumes with it), but becomes
-    // a crossing candidate for any LATER suspension. We defer adding it to
-    // `declared` until the next suspension so that reads between the producing
-    // suspension and the next one are not falsely flagged.
-    let mut pending_result_bindings: Vec<String> = Vec::new();
+    // Every local bound since the most-recent suspension point, not yet flushed into
+    // `declared`. NOTHING in this list can be a crossing yet: no suspension separates
+    // its declaration from the current position, which is the crossing precondition.
+    // It flushes into `declared` at exactly one place — the next suspension point —
+    // after which its names ARE separated by a suspension and become crossings on any
+    // later read.
+    //
+    // ROOT-CAUSE FIX (v0.3 concurrency hardening, FRAGO 002 review round 1): this list
+    // used to hold ONLY suspension result-bindings (`let x = wait f()`), while a plain
+    // `let` appearing after a suspension was pushed straight into `declared`. Nothing
+    // then asked whether a suspension actually fell between that declaration and a
+    // later read, so every read of such a local was reported as a crossing — rejecting
+    // correct programs. `wait sleep(1)  let m: maybe<int> = ...  print(m.or(0))` failed
+    // with "a `maybe<int>` value cannot yet cross a `wait`" although `m` crosses
+    // nothing; deleting the leading `wait` compiled the identical read. Result-bindings
+    // were always handled correctly BECAUSE they were staged here — the fix is to stage
+    // every post-suspension binding the same way, so one list answers one question
+    // ("has a suspension happened since this name was bound?") for both.
+    // Pinned by `crates/ynz-driver/tests/fixtures/v0_3_hardening_c1_*.ynz`.
+    let mut declared_since_suspension: Vec<String> = Vec::new();
 
     for (idx, stmt) in stmts.iter().enumerate() {
         // CPU spike-group join: the first member of the adjacent pair marks the suspension.
         // Before the pair, mark `past_wait` so every prior `declared` local is checked against
         // post-join reads (the accumulator bug). The two member binds are deferred into
-        // `pending_result_bindings` (safe across their own join, crossing candidates only for a
+        // `declared_since_suspension` (safe across their own join, crossing candidates only for a
         // LATER suspension), and the second member is consumed here so it is not re-processed as
         // a plain `let` that would push it into `declared` prematurely.
         if !past_wait && spike_first_idx == Some(idx) {
@@ -11588,9 +11638,9 @@ fn collect_crossings_in_stmts(
             for member_idx in [idx, idx + 1] {
                 if let Stmt::Let { name, .. } = &stmts[member_idx] {
                     if !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name)
+                        && !declared_since_suspension.contains(name)
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
                 }
             }
@@ -11601,15 +11651,11 @@ fn collect_crossings_in_stmts(
             continue;
         }
         if past_wait {
-            // Before checking references, flush any result-binding names from the
-            // PREVIOUS suspension that were deferred. At this point we are inside a
-            // body that already has `past_wait = true`, which means there could be
-            // another suspension ahead — so these names are now real crossing
-            // candidates if read after that next suspension.
-            //
-            // We check for a NEW suspension first; if this statement IS a suspension,
-            // flush before scanning so the binding isn't falsely flagged for being
-            // read by its own producing step.
+            // Classify this statement first. Names staged in
+            // `declared_since_suspension` become crossing candidates only once a
+            // suspension separates them from the read being scanned, so WHERE this
+            // statement's suspension sits decides whether the flush happens before or
+            // after the scan (see [`SuspensionSite`] and the `if let Some(site)` arm).
             //
             // ROOT-CAUSE FIX (v0.3-M3g): a control-flow statement (`if`/`while`/`for`/`match`)
             // whose BODY suspends is ITSELF a reachable suspension point for THIS statement
@@ -11626,19 +11672,26 @@ fn collect_crossings_in_stmts(
             // used to carry a narrow residual decline for this shape
             // (`stmt_control_flow_body_suspends`); that decline is removed now that the real
             // crossing-analysis gap is fixed here directly.
-            let this_stmt_suspends = match stmt {
-                Stmt::Expr(Expr::Wait(_, _)) => true,
-                Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => true,
+            //
+            // The match yields WHERE the suspension sits, not merely whether one exists
+            // ([`SuspensionSite`]) — the two cases order the operand scan and the
+            // `declared_since_suspension` flush differently, and this is the ONE place
+            // that classification is derived.
+            let stmt_suspension: Option<SuspensionSite> = match stmt {
+                Stmt::Expr(Expr::Wait(_, _)) => Some(SuspensionSite::AtRoot),
+                Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => {
+                    Some(SuspensionSite::AtRoot)
+                }
                 // v0.3-M4: conduit-method suspension statements.
-                s if stmt_is_conduit_suspend(s, expr_types) => true,
+                s if stmt_is_conduit_suspend(s, expr_types) => Some(SuspensionSite::AtRoot),
                 Stmt::Let {
                     value: Expr::Wait(_, _),
                     ..
-                } => true,
+                } => Some(SuspensionSite::AtRoot),
                 Stmt::Let {
                     value: Expr::Call(c),
                     ..
-                } if is_suspending_call(c, suspending) => true,
+                } if is_suspending_call(c, suspending) => Some(SuspensionSite::AtRoot),
                 Stmt::If { body, .. }
                     if block_suspends_m3d(
                         body,
@@ -11648,7 +11701,7 @@ fn collect_crossings_in_stmts(
                         back_edge_yield,
                     ) =>
                 {
-                    true
+                    Some(SuspensionSite::InControlFlow)
                 }
                 // v0.3-M7 Phase 6: under the admitted widening, a QUALIFYING loop is a
                 // suspension point in its own right (its back edge yields) even when its
@@ -11663,7 +11716,7 @@ fn collect_crossings_in_stmts(
                             back_edge_yield,
                         ) =>
                 {
-                    true
+                    Some(SuspensionSite::InControlFlow)
                 }
                 Stmt::Match { arms, else_arm, .. }
                     if arms.iter().any(|a| {
@@ -11684,17 +11737,39 @@ fn collect_crossings_in_stmts(
                         )
                     }) =>
                 {
-                    true
+                    Some(SuspensionSite::InControlFlow)
                 }
-                _ => false,
+                _ => None,
             };
-            if this_stmt_suspends {
-                // Flush pending result-bindings from the prior suspension into
-                // `declared` so they are live for any suspension AFTER this one.
-                for name in pending_result_bindings.drain(..) {
-                    if !declared.contains(&name) {
-                        declared.push(name);
+            if let Some(site) = stmt_suspension {
+                // Scan and flush, in the order this statement's evaluation demands.
+                //
+                // `AtRoot` — the suspending call IS the statement (`useRows(rows)`,
+                // `let v = wait consume(x)`, `ch.send(v)`). Its operands all run before
+                // it suspends, and typeck Check 3 forbids a second suspending call
+                // nested inside them, so a read here is separated from a declaration
+                // made since the last suspension by NOTHING: scan against `declared`
+                // BEFORE the flush, then flush.
+                //
+                // `InControlFlow` — the suspension is inside the body. A `while`/`for`
+                // back edge re-evaluates the condition after that body suspends, and
+                // `collect_ident_refs_in_stmt` walks the body as well as the condition,
+                // so reads here can genuinely follow the inner suspension: flush FIRST
+                // and scan against the widened set. Conservative by construction (it
+                // can over-report a body read that textually precedes the inner
+                // suspension), which is the safe direction — see this arm's ROOT-CAUSE
+                // note below and the `Stmt::If` sub-case (b) recursion, which is what
+                // actually catches the after-inner-suspension reads precisely.
+                let flush = |declared_since_suspension: &mut Vec<String>,
+                             declared: &mut Vec<String>| {
+                    for name in declared_since_suspension.drain(..) {
+                        if !declared.contains(&name) {
+                            declared.push(name);
+                        }
                     }
+                };
+                if site == SuspensionSite::InControlFlow {
+                    flush(&mut declared_since_suspension, declared);
                 }
                 // ROOT-CAUSE FIX (v0.3 concurrency hardening, FRAGO 002 cluster C1):
                 // scan THIS statement's own operands against `declared` — for EVERY
@@ -11721,16 +11796,24 @@ fn collect_crossings_in_stmts(
                 // G, J); diagnosis in this plan's `audit.md` FRAGO 002 cluster C1.
                 //
                 // Hoisted here rather than added arm-by-arm on purpose: one scan for
-                // the one question ("does this statement read a pre-suspension local?")
-                // per `.claude/rules/authoritative-derivation.md`. The three per-arm
-                // calls that used to live below are gone — a fourth shape added to
-                // `this_stmt_suspends` can no longer arrive without its scan.
+                // the one question ("does this statement read a local that a suspension
+                // separates from its declaration?") per
+                // `.claude/rules/authoritative-derivation.md`. The three per-arm calls
+                // that used to live below are gone — a fourth shape added to
+                // `stmt_suspension` can no longer arrive without its scan.
                 collect_ident_refs_in_stmt(stmt, declared, out);
+                if site == SuspensionSite::AtRoot {
+                    // Post-scan flush: the names bound since the last suspension were
+                    // NOT crossings for the operands just scanned (those run first), but
+                    // this statement's own suspension does separate them from everything
+                    // after it.
+                    flush(&mut declared_since_suspension, declared);
+                }
                 match stmt {
                     // Collect the new result-binding (if any) into pending.
                     // The MethodCall arm covers v0.3-M4 conduit-suspend bindings
                     // (`let x = ch.receive()`) — reachable here only when
-                    // `this_stmt_suspends` already classified the statement.
+                    // `stmt_suspension` already classified the statement.
                     Stmt::Let {
                         name,
                         value: Expr::Wait(_, _),
@@ -11746,9 +11829,9 @@ fn collect_crossings_in_stmts(
                         value: Expr::MethodCall { .. },
                         ..
                     } if !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name) =>
+                        && !declared_since_suspension.contains(name) =>
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
                     // A control-flow statement whose body suspends. Its condition was
                     // already scanned by the hoisted `collect_ident_refs_in_stmt` above —
@@ -11847,12 +11930,22 @@ fn collect_crossings_in_stmts(
                 // already-declared (pre-suspension) locals. Pending result-bindings are NOT
                 // yet in `declared`, so reads of the just-produced binding are not flagged.
                 collect_ident_refs_in_stmt(stmt, declared, out);
-                // A new `let` binding introduced BETWEEN two suspension points is itself
-                // a crossing candidate for any suspension that follows it. Add it to
-                // `declared` so the next suspension will catch any reads after it.
+                // A new `let` binding introduced BETWEEN two suspension points is a
+                // crossing candidate for any suspension that FOLLOWS it, and for no
+                // earlier one — no suspension separates it from a read before the next
+                // suspension. Stage it in `declared_since_suspension`, which the next
+                // suspension point flushes into `declared`; pushing it straight into
+                // `declared` here is the false-positive producer this fix removed (see
+                // that binding's ROOT-CAUSE note). A name already in `declared` (a
+                // shadowing re-`let` of a pre-suspension binding) stays there: codegen
+                // frame slots are keyed by name, so the conservative reading is the
+                // correct one for a re-used name.
                 if let Stmt::Let { name, .. } = stmt {
-                    if !declared.contains(name) && !param_names.contains(&name.as_str()) {
-                        declared.push(name.clone());
+                    if !declared.contains(name)
+                        && !declared_since_suspension.contains(name)
+                        && !param_names.contains(&name.as_str())
+                    {
+                        declared_since_suspension.push(name.clone());
                     }
                 }
                 // NOTE: a control-flow statement (`if`/`while`/`for`/`match`) only reaches
@@ -11883,15 +11976,15 @@ fn collect_crossings_in_stmts(
                     past_wait = true;
                     if !declared.contains(name)
                         && !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name)
+                        && !declared_since_suspension.contains(name)
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
                 }
                 // `let name = wait expr` — name is safe across its OWN producing suspension
                 // (the state machine writes it to the frame, resumes with it available), but
                 // is a crossing candidate for every LATER suspension. Defer tracking to
-                // `pending_result_bindings`; it flushes into `declared` when the next
+                // `declared_since_suspension`; it flushes into `declared` when the next
                 // suspension is encountered, making it catchable only then.
                 Stmt::Let {
                     name,
@@ -11901,14 +11994,14 @@ fn collect_crossings_in_stmts(
                     past_wait = true;
                     if !declared.contains(name)
                         && !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name)
+                        && !declared_since_suspension.contains(name)
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
                 }
                 // `let name = suspending_call()` — same semantics as the explicit-wait form.
                 // Safe across its OWN producing suspension; a crossing candidate only for
-                // subsequent suspensions. Defer into `pending_result_bindings` for the same
+                // subsequent suspensions. Defer into `declared_since_suspension` for the same
                 // reason as the `wait` arm above.
                 Stmt::Let {
                     name,
@@ -11918,9 +12011,9 @@ fn collect_crossings_in_stmts(
                     past_wait = true;
                     if !declared.contains(name)
                         && !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name)
+                        && !declared_since_suspension.contains(name)
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
                 }
                 Stmt::Let { name, value, .. } => {
