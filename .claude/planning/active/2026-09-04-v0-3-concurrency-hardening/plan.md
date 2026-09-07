@@ -14,6 +14,61 @@ metadata:
 
 # HASTY PLAN: v0.3 Concurrency Hardening
 
+> ## ⏭️ COLD-RESUME ENTRY POINT — updated 2026-09-07
+>
+> **Branch** `feat/v0-3-m8-concurrency-completion`, tree clean, PR #91 open into `main` (that PR
+> carries v0.3-M8; this plan's commits ride the same branch behind it).
+>
+> **Phase 1 ✅** — M2–M7 swept. Thirteen deferrals recovered from `.claude/todos.md`, deleted in
+> `1b83fcb` with 403 deletions and zero insertions; parked entries 53–65. Three of the thirteen
+> turned out already fixed.
+>
+> **Phase 2 ✅** — two questions answered, both sealed as FRAGOs in this plan's `audit.md`.
+> **FRAGO 001**: no heap local is EVER released at scope exit — an unbounded leak inside a single
+> run, verified structurally and empirically. **FRAGO 002**: the six reported defects are three
+> clusters and one singleton, and FRAGO 001's leak is the ancestor of NONE of them.
+> **FRAGO 003**: the `fr23` red was a stale test, not a live use-after-free; the conductor's own
+> hypothesis named the wrong culprit and was corrected.
+>
+> **Phase 3 — steps 3.0, 3.1, 3.2 DONE. Steps 3.3, 3.4, 3.5 OPEN.**
+> - `3.0` five RED pins committed (`frago002_c1_c2_planned_red.rs`).
+> - `3.1` the crossing-scan gap closed at its producer (`eb0aa0c`), then a false-rejection
+>   regression it introduced fixed at a producer OLDER than the change (`c3988ab`) after a
+>   reviewer caught it. Pins A/D/G/J live and green. Two 256-seed fuzz sweeps: zero findings.
+> - `3.2` one authoritative owned-copy operation (`6be6773`) — `owned_copy_plan` in
+>   `crates/ynz-typeck/src/owned_copy.rs`, `emit_owned_copy` in codegen, `AliasNoOp` deleted.
+>   Pin N green, FR #9's pin rewritten and green.
+>
+> ### ⚠️ OWED BEFORE 3.3 STARTS — the one thing not visible from the checkboxes
+>
+> **Step 3.2 (`6be6773`) is SEALED BUT UNGRADED.** Its dispatch self-declared FIRE on five
+> dimensions: plan-adherence (a spawn-side refusal and a `give`-map pass-through the phase never
+> named), correctness/authoritative-derivation (the "one routine, two call sites" claim),
+> teaching-surface quality (seven new user-facing refusal texts), memory-safety/concurrency (what a
+> `background` task now owns, plus two documented leak deferrals), and performance (`.copy()` on a
+> nested container is now O(items) where it was O(1)). No reviewer seat has run against it.
+>
+> This is not optional bookkeeping: step 3.1's equivalent review found a **real regression** in a
+> commit that had already been sealed with a green suite and a zero corpus delta. Do not start 3.3
+> until 3.2 is graded.
+>
+> ### Standing facts a resumer needs
+>
+> - **Expected test conditions on this branch: NONE.** Every pin is live and green; `fr23` is
+>   17/17. Parked entries 50 and 52 record two contention flakes
+>   (`timed_out_program_leaves_no_descendant_process_running`,
+>   `v0_3_m4_p3_cross_give_generic_not_over_rejected`) that pass in isolation. Anything else red is
+>   real.
+> - **`cargo test --workspace` needs `--no-fail-fast`** (parked 52) — without it cargo stops at the
+>   first failing TARGET and reports on a prefix while reading like a full-suite verdict.
+> - **A `registry/features.toml` edit puts `jargon_audit`, `ynz-registry` AND `ynz-tmgrammar` in the
+>   lane** (parked 51). The third is the one every previous lane rule omitted.
+> - **A zero corpus delta is evidence about the corpus, not proof about the language.** Stated
+>   because the conductor reported one as the latter and a reviewer caught it.
+> - **Phase 4 is BLOCKED until C2 closes** — FR #9 was a premature free, so a scope-exit release
+>   pass landing first would turn a dangling read into a double-free. 3.2 landing satisfies this,
+>   pending its grading.
+
 ## 1. Situation
 
 **Conductor's hazard sweep** (facts grounded in M8 Phase 7 completion, Phase 8 fuzzer findings, and roadmap FR audit):
