@@ -1,22 +1,26 @@
 ---
 name: "v0-3-concurrency-hardening"
 plan-id: "2026-09-04-v0-3-concurrency-hardening"
-status: "active"
+status: "done"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1", "hardening-p3.1-fix1-20260906-a1", "hardening-p3.2-20260906-a1", "hardening-p3.2-fix1-20260907-a1", "hardening-p3.345-20260907-a1"]
+session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1", "hardening-p3.1-fix1-20260906-a1", "hardening-p3.2-20260906-a1", "hardening-p3.2-fix1-20260907-a1", "hardening-p3.345-20260907-a1", "hardening-p4-sizing-20260907-a1", "hardening-p4-defer-20260907-a1"]
 tier: "hasty"
 tier-reason: "Concurrency is a blocking gate on using Yinz at all; every known blocker is traced to a named producer and fixed at that producer, not patched per symptom. Scope is fixed (four phases, non-negotiable), deferral is forbidden, ambiguity is decided upstream. Small committed work riding Patrick's settled order."
 created_at: "2026-09-04"
-updated_at: "2026-09-04"
+updated_at: "2026-09-07"
 metadata:
   type: "plan"
 ---
 
 # HASTY PLAN: v0.3 Concurrency Hardening
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — updated 2026-09-07, written for a FRESH SESSION
+> ## ✅ PLAN CLOSED — 2026-09-07. Phases 1-3 delivered; Phase 4 carved out to v0.3-M9.
 >
-> **Phases 1, 2 and 3 are COMPLETE. Phase 4 is next and is unblocked.** Branch
+> **Phases 1, 2 and 3 are COMPLETE. Phase 4 was SIZED, found to be a milestone, and moved out of
+> this plan under Patrick's signed override — the decision and its evidence are in `#### Phase 4`
+> and `## Future Requirements / Revisit` below. The scope-exit release pass is now v0.3-M9's
+> mission, and every section of this banner still applies to whoever picks that milestone up.**
+> Branch
 > `feat/v0-3-m8-concurrency-completion`, tree clean, PR #91 open into `main` (that PR carries
 > v0.3-M8; this plan's commits ride the same branch behind it and are not in that PR's body).
 >
@@ -44,7 +48,7 @@ metadata:
 >   instead of matching syntax; `errors` checked-ness follows binding identity; and the
 >   `errors`-field list is one table both typeck and codegen consume.
 >
-> ### ⚠️ Phase 4 — read these three before starting
+> ### ⚠️ Phase 4 — SIZED AND MOVED OUT; these three are now v0.3-M9's inheritance
 >
 > 1. **It may not be a phase.** M8 Phase 7's evidence called the scope-exit release pass "a
 >    milestone of its own, not a phase," and this plan's own Phase 4 section carries that as a
@@ -348,7 +352,28 @@ these are reads of wrong bytes), and FRAGO 002 records why in full.
 
 ---
 
-#### Phase 4 — The Scope-Exit Release Pass
+#### Phase 4 — The Scope-Exit Release Pass — **NOT EXECUTED HERE; CARVED OUT TO v0.3-M9**
+
+> **Signed override, 2026-09-07 (Patrick).** The HIGH risk gate below fired. Phase 4 was sized
+> before entry, per that gate's own instruction, and the sizing confirmed M8 Phase 7's original
+> call: this is a milestone, not a phase. It is deferred WHOLE to **v0.3-M9 (the "drop-story"
+> milestone)**, which opens immediately — this is a re-carve, not a park. The four deferral fields
+> and the sizing evidence live in `## Future Requirements / Revisit` below and in this plan's
+> close-out commit (`git log --grep=drop-story`). Everything from here down is v0.3-M9's inherited
+> mission statement, kept verbatim and unexecuted.
+>
+> Two corrections v0.3-M9 must carry, both found by the sizing pass:
+> - The two test names in **Key outputs** below **do not exist in this repo**. The real pins are
+>   `v03_m8_handle_scope_pin.rs::handle_leaving_its_block_does_not_cancel_the_child_today` and
+>   `::no_handle_free_is_emitted_at_a_handle_bindings_scope_exit_today`, both currently PASSING as
+>   deliberate pins of today's behaviour. They go RED when the pass lands and are then REWRITTEN,
+>   not flipped. Do not go hunting for XFAIL markers that were never there.
+> - **`string` has no release symbol at all**, deliberately: its bytes are raw-`malloc`'d, invisible
+>   to the alloc counter, and freeing them may be unsound as currently built. That decision exists
+>   only as an inline code comment in `emit.rs` and is absent from
+>   `docs/internal/implementation/IMP-strings.md`. It is a design question and is v0.3-M9's FIRST
+>   decision, before any release code is written.
+
 
 **Task & Purpose**: Emit free/release calls at every scope exit for every heap-backed local type (`array<T>`, `map<K,V>`, `string`, `channel<T>`, promoted `maybe<T>` and union cells, `background` handle bindings). Handles are one arm of the general mechanism.
 
@@ -397,7 +422,7 @@ these are reads of wrong bytes), and FRAGO 002 records why in full.
 
 **Cold-resume pointer**: Read this file top-to-bottom. Then read `.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md` Capability Ledger to understand what "one consolidated blocker register" means. Then read M8's plan `## Future Requirements` section for the exact deferrals this plan inherits. Then Phase 1 begins.
 
-**Audit trail**: Commit messages follow `Co-Authored-By: Claude Opus 5 (1M context)` convention + `Claude-Session: https://claude.ai/code/session_...`. Phase 2 findings and FRAGOs are written to `.claude/planning/active/2026-09-04-v0-3-concurrency-hardening/audit.md` (created at Phase 2 close-out, appended through Phase 3). Each FRAGO landing is recorded by session ID and executor name (e.g., `m8-p2-signoff-20260903`). Risk decisions (Phase 4 size gate) are recorded with Patrick's signature if a deferral is chosen.
+**Audit trail**: Commit messages follow `Co-Authored-By: Claude Opus 5 (1M context)` convention + `Claude-Session: https://claude.ai/code/session_...`. Phase 2 findings and FRAGOs are written to `.claude/planning/done/2026-09-04-v0-3-concurrency-hardening/audit.md` (this plan moved `active/` → `done/` at close-out, 2026-09-07) (created at Phase 2 close-out, appended through Phase 3). Each FRAGO landing is recorded by session ID and executor name (e.g., `m8-p2-signoff-20260903`). Risk decisions (Phase 4 size gate) are recorded with Patrick's signature if a deferral is chosen.
 
 ---
 
@@ -453,7 +478,7 @@ Phase 3's new compile errors are added to `examples/primantis-orders/m8_errors.y
 ### Feature Registry Entries
 
 Phase 3 may retire registry entries (e.g., `background-handle-cancel-injection` if Phase 4 ships, else stays deferred with new trigger). Phase 4 retires `background-handle-cancel-injection` if it ships. Record all entries touched by phase:
-- **Retiring**: (deferred_language_feature — verified against `registry/features.toml`) `background-handle-cancel-injection` — Phase 4 closes the underlying defect; the Tier 3 lint is no longer needed.
+- **Retiring**: (deferred_language_feature — verified against `registry/features.toml`) `background-handle-cancel-injection` — Phase 4 closes the underlying defect; the Tier 3 lint is no longer needed. **DID NOT HAPPEN — Phase 4 never shipped (carved out to v0.3-M9, 2026-09-07). The entry was RETAGGED, not retired: its `triggers` field now names v0.3-M9, every other field byte-identical. Retiring it while the capability is still deferred would assert a false fact. The retirement above is v0.3-M9's to perform, when the pass actually lands.**
 - **Modifying**: (deferred_language_feature) entries named by Phase 1's blocker audit may be modified with corrected descriptions if Phase 2's diagnosis changes their trigger or scope. Record each modification.
 - **No new entries** expected from Phases 1–2 (diagnosis, no language surface). Phase 3 may add entries if a FRAGO introduces new muted-hint domains or lint rules (record if it happens).
 - **Added by step 3.2's fix round** (dispatch `hardening-p3.2-fix1-20260907-a1`): one `[[diagnostic_template]]` entry, `SpawnArgStorageDiesWithTheFrame` — the OTHER `background`-argument refusal, which needed its own sentence shell rather than a reuse of `SpawnArgNotIndependent`'s: that shell says "this line still reads it after the task starts" and tells the reader to hand the value over instead, and both are false when the problem is that the value is kept with the frame (handing it over does not move it). Fires under either ownership label for that reason, where `SpawnArgNotIndependent` is `Copy`-only. No new keyword, banned_jargon, primitive_intrinsic, type_attached_constant, deferred_* or muted_hint_domain entries.
@@ -465,7 +490,17 @@ Phase 3 may retire registry entries (e.g., `background-handle-cancel-injection` 
 
 **Phase 2 gate (before Phase 3 starts)**: Patrick reviews the FRAGO list and signs off on the producer clustering. If Phase 2 discovers that a blocker is unfixable in this plan's scope (e.g., requires redesigning the ownership system), it is re-deferred with explicit evidence and a new trigger.
 
-**Phase 4 size gate (before Phase 4 starts)**: Estimate scope-exit release effort. If the pass requires more sessions than the per-phase budget allows, escalate to Patrick for deferral approval. Deferral outcome: defer the pass to v0.3-M9 ("drop-story" milestone), update the roadmap status, retire `background-handle-cancel-injection` registry entry with deferred-to-M9 trigger. If deferred, M8's re-deferral of handle cancellation (Phase 7 FR #3) is unaffected (it has its own separate trigger).
+**Phase 4 size gate — FIRED AND RESOLVED, 2026-09-07. Outcome: DEFERRED to v0.3-M9, opening immediately.**
+
+- **WHAT**: the entire scope-exit release pass — every heap-backed local (`array<T>`, `map<K,V>`, `string`, `channel<T>`, promoted `maybe<T>`/union cells, `background` handle bindings) released on every scope-exit edge, with handles as one arm of the general mechanism.
+- **WHY** (the real tradeoff, not "saves time today"): a read-only sizing pass measured **6+ distinct insertion-site classes across two parallel codegen implementations** (plain-`alloca` and state-machine frame-slot), per-local transfer tracking that exists in typeck (`Scope::consumed_classes`) but is **never surfaced to codegen**, recursive per-element release machinery that **does not exist for any container type** (the copy side recurses; the free side is flat), and an **unresolved soundness question on `string`**. 3-5 sessions minimum. Forced into this plan's remaining budget it yields a PARTIAL pass — and a partial pass converts a bounded, safe, per-run leak into use-after-free and double-free, which is strictly worse than the leak and is the exact defect class Phase 3 just closed. Golden Rule 3 (ownership-based memory management, no GC) makes this load-bearing, not cosmetic: a compiler that releases nothing is not doing ownership-based management. Load-bearing plus 3-5 sessions is a milestone by definition.
+- **COST to fix later**: FRAGO 001's leak stays live and unbounded within a single run (2,000 iterations → 4,000 allocations, zero frees, exactly linear); parked 67-71's two deferrals — a deep array copy's items unreleased, a spawn-cloned map unreleased — stay live, and the map one grows heap per iteration in a spawn-in-a-loop.
+- **GUARD CLAUSE — considered and declined, deliberately.** `no-duct-tape.md` requires that when a deferred risk has live exposure before its trigger and a **cheap in-scope guard exists**, the guard is taken now, alongside the deferral. The exposure is real (the leak is live from this commit until v0.3-M9 lands), so the clause was evaluated rather than skipped. **No such guard exists here.** The obvious candidate — mirroring M8 Phase 7's `background-handle-not-waited` Tier 3 lint for the general case — fails on signal, not on cost: that lint works because handles are RARE, whereas a "this local is never released" lint fires on every `array`, `map` and `string` in every program ever written in Yinz. A diagnostic that fires on all code teaches nothing and trains the reader to ignore the channel it arrives on, which fails Golden Rule 11 (the compiler is a teacher; the WHY must be specific and contextual) and inverts the teaching mission the lint tier exists to serve. The leak is also **bounded per run and memory-safe** — FRAGO 002 established it is the ancestor of none of the corruption defects — so the exposure it carries is resource growth inside one process lifetime, not a wrong answer. **The honest guard is the milestone opening immediately, which is the trigger below.** Recorded rather than built, per this rule's own "a deferral names the future fix" discipline.
+- **TRIGGER**: v0.3-M9 opens **now**, not on a future condition. Its first decision is the `string` soundness question above; its first commit is a RED fixture, since **no committed fixture pins the leak today**.
+
+Deferral mechanics executed alongside this close-out: roadmap Capability Ledger status updated, and the `background-handle-cancel-injection` registry entry retagged to a v0.3-M9 trigger. M8's re-deferral of handle cancellation (Phase 7 FR #3) is unaffected — it has its own separate trigger.
+
+**Parked 32 stays parked, deliberately.** It is LIVE and its producer is fully named (see the banner), but it is an `errors`-surface defect — a wrong branch, not a wrong pointer — already routed by Patrick to the `errors`-surface hotfix branch. Folding it into a memory-management milestone is the scope drift `no-duct-tape.md` exists to prevent. Its own trigger stands: the next `errors`-surface session, RED fixture first.
 
 **Phase 3 regression gate (after Phase 3 closes)**: If any FRAGO fix introduces a regression (a test that was green goes red), the fix is reverted and the blocker is re-deferred with the regression documented and a new trigger (e.g., "fix the regression before retrying").
 

@@ -1131,7 +1131,7 @@ than silently carried forward as still-live.
     and `fr23_sm_arm_maybe_payload_spawn_receiver_reads_live_values`
     (`crates/ynz-driver/tests/fr23_uaf_planned_red.rs`) carry the migrated reasoning and stay
     green. Source: dispatch `hardening-fr23fix-20260906-a1`, FRAGO 003
-    (`.claude/planning/active/2026-09-04-v0-3-concurrency-hardening/audit.md`).
+    (`.claude/planning/done/2026-09-04-v0-3-concurrency-hardening/audit.md`).
 
 ### Step 3.2 fix round — findings recorded rather than fixed (2026-09-07, `hardening-p3.2-fix1-20260907-a1`)
 

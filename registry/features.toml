@@ -1176,7 +1176,7 @@ substitute = "A task keeps running after the binding that holds its handle goes 
 why = "Yinz does not yet release anything automatically when a binding goes out of scope — not arrays, not maps, not task handles. Stopping a task when its handle goes out of scope needs that general end-of-scope cleanup first; adding it for task handles alone would build a second, separate cleanup rule that the general one would then have to replace."
 ships_in = "a later version"
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
-triggers = "Yinz releasing values automatically at the end of a block ships (task handles join that rule), or a real program needs to stop a running task before then."
+triggers = "v0.3-M9 (the drop-story milestone, plan-id `v0-3-m9-drop-story`) ships Yinz releasing values automatically at the end of a block — task handles join that rule then — or a real program needs to stop a running task before then. Re-tagged 2026-09-07: this capability was sized inside `2026-09-04-v0-3-concurrency-hardening` Phase 4 and deferred to its own milestone (Patrick-signed override; 3-5 sessions, 6+ exit-path insertion classes, string-byte-freeing soundness question still open)."
 
 # --- Conduit-op expression position (v0.3-M4 Phase 2 statement discipline) ---
 [[deferred_language_feature]]

@@ -1067,3 +1067,117 @@ green (see Verification).
 - `ynz-driver --release` rebuilt (external `target/release` consumer contract, `CLAUDE.md`).
 - End-to-end CLI render checked directly (not just the internal `check_query` harness): both new
   refusals render full three-slot teaching text with correct carets on a live multi-error file.
+
+---
+
+## Phase 4 — SIZED, NOT EXECUTED. Carved out to v0.3-M9 under a signed override; plan closed at three phases
+
+Dispatches: `hardening-p4-sizing-20260907-a1` (read-only recon), `hardening-p4-defer-20260907-a1`
+(deferral mechanics). Conductor session: see the close-out commit's `Claude-Session` trailer.
+
+### The size gate fired, which is the outcome it was written to allow
+
+Phase 4's HIGH risk gate required sizing before entry, and its own text carried M8 Phase 7's
+conclusion that the scope-exit release pass is "a milestone of its own, not a phase." A read-only
+recon confirmed it and sharpened it. What it found, all cited to code at the time of reading:
+
+- **6+ distinct insertion-site classes**, each of which must be hit in TWO parallel codegen
+  implementations (plain-`alloca` and state-machine frame-slot): block/function end, loop-iteration
+  end, `errors` auto-propagation early-return (which scales with CALL-SITE COUNT, not a fixed
+  handful — `lower_ec_auto_propagate` emits a conditional return at every errors-capable call site),
+  state-machine frame retirement (`free_frame`, 10 call sites, all freeing the frame CONTAINER and
+  none of the heap values its slots hold), and the spawned-parent drop ladder.
+- **No `break`/`continue` exist in Yinz** — confirmed absent from the parser's token set, the
+  registry and the control-flow spec. One exit-path class other languages would owe, that Yinz does
+  not.
+- **Transfer tracking exists but is not reachable.** `effective_ownership::provenance` answers
+  "was this identifier's whole value consumed here" and codegen already consumes it — but the
+  finer-grained "has this specific local already been moved away earlier in this scope" lives only
+  in typeck's `Scope::consumed_classes`, transiently, for use-after-give diagnostics, and is
+  persisted into no report codegen reads. Per `authoritative-derivation.md` the release pass must
+  thread that answer rather than re-derive it, which makes surfacing it real new plumbing.
+- **Recursive release machinery does not exist for any container type.** `ynz_array_drop` and
+  `ynz_map_drop` are flat — buffer plus header, no per-element recursion. The COPY side already
+  recurses per-item (`emit_array_elem_deep_copy`); the FREE side has no counterpart and must be
+  built, along with an inverse-of-`owned_copy_plan` predicate for "does this element type carry
+  anything needing release."
+- **`string` has no release symbol at all, deliberately** — its bytes are raw-`malloc`'d, invisible
+  to the alloc counter, and freeing them may be unsound as currently built. That decision exists
+  only as an inline comment in `emit.rs` and is absent from `IMP-strings.md`. It is a DESIGN
+  question, and it is v0.3-M9's first decision, before any release code is written.
+- **Two runtime symbols exist and were never wired**: `ynz_handle_free` and
+  `ynz_rt_join_handle_free`, zero call sites anywhere.
+
+Estimate: **3-5 sessions minimum**, with `string` scoped out as its own sub-decision.
+
+### Two corrections the sizing pass found in the plan's own Phase 4 text
+
+Both are written into the signed-override block so v0.3-M9 inherits them instead of tripping on them:
+
+1. The two test names Phase 4's **Key outputs** promises will flip green **do not exist in this
+   repo**. The real pins are `v03_m8_handle_scope_pin.rs::handle_leaving_its_block_does_not_cancel_the_child_today`
+   and `::no_handle_free_is_emitted_at_a_handle_bindings_scope_exit_today`, both currently PASSING
+   as deliberate pins of today's behaviour. They go RED when the pass lands and are then REWRITTEN,
+   not flipped. There were never XFAIL markers to find.
+2. `string`'s deliberate no-release decision, above.
+
+### The decision, and the guard clause it had to answer
+
+Patrick signed the override: Phase 4 is deferred WHOLE to v0.3-M9, which opens immediately — a
+re-carve, not a park. The argument, on the record:
+
+- **Golden Rule 3** makes it load-bearing rather than cosmetic. Ownership-based memory management
+  with no garbage collector IS the memory model; a compiler that releases nothing is not doing
+  ownership-based management. Load-bearing plus 3-5 sessions is a milestone by definition.
+- **`no-duct-tape.md`** points the same way from the other side. Forced into this plan's remaining
+  budget the pass ships PARTIAL — and a partial release pass converts a bounded, safe, per-run leak
+  into use-after-free and double-free, which is strictly worse than the leak and is the exact defect
+  class Phase 3 just closed. "Build the simple version now, do it right later" is a named trigger
+  phrase in that rule.
+- **The guard clause was evaluated, not skipped**, and declined on the record. Full reasoning in the
+  plan's `## Future Requirements / Revisit`; the short of it is that the only candidate guard —
+  a general "never released" Tier 3 lint mirroring M8's handle lint — fails on SIGNAL, not cost:
+  handles are rare, heap locals are universal, and a diagnostic that fires on every `array`, `map`
+  and `string` in every program teaches nothing and trains the reader to ignore the channel. That
+  fails Golden Rule 11. The honest guard is the milestone opening now.
+
+**Parked 32 stays parked, deliberately** — LIVE, producer fully named, but an `errors`-surface
+defect (wrong branch, not wrong pointer) already routed by Patrick to the `errors`-surface hotfix
+branch. Folding it into a memory-management milestone is the scope drift `no-duct-tape.md` exists to
+prevent. Its own trigger stands: the next `errors`-surface session, RED fixture first.
+
+### Deferral mechanics, and what was NOT done
+
+Roadmap Capability Ledger updated (both duplicate ledger tables, kept in sync), a
+`### Milestone 9` narrative section added mirroring the M1-M8 format, and the
+`background-handle-cancel-injection` registry entry **RETAGGED, not retired** — its `triggers` field
+now names v0.3-M9 and the sizing evidence; every other field byte-identical. The plan's original
+text said "retire," but that instruction was explicitly conditioned on Phase 4 SHIPPING. It did not
+ship; the capability is still deferred; deleting the entry now would assert a false fact. The
+retirement is v0.3-M9's to perform when the pass lands. Graded and confirmed correct by
+`plan-adherence-medium`, not self-declared.
+
+### Verification
+
+- Sizing recon's two load-bearing claims were independently re-verified by the adherence seat rather
+  than taken on report: the two pin tests were RUN in the dev container (both pass, name-for-name),
+  and the `string` comment was read at `emit.rs:15672` verbatim with `IMP-strings.md` confirmed
+  silent on it.
+- `green-check-low`: `ynz-registry` (12), `ynz-diagnostics::jargon_audit` (10), `ynz-tmgrammar`
+  including `committed_grammar_matches_generator_output` (1) all green — the committed TextMate
+  artifact did NOT go stale, and the registry's third consumer was checked rather than assumed
+  (parked 51). `fmt --all --check` clean. Two secret scans clean. **VERDICT: green.**
+- The `triggers` field carries a milestone tag, which is banned in user-facing text. Checked before
+  writing: no consumer outside `ynz-registry` reads `.triggers` — it is internal metadata, same
+  class as the `design_doc` path beside it. No teaching surface is touched.
+- **Zero code changed this round.** `.claude/planning/**`, `.claude/plans/parked.md` and
+  `registry/features.toml` only — no `crates/`, no `examples/`, no `docs/`. Confirmed by the
+  adherence seat, so no Phase 4 work was silently absorbed.
+
+### Index rot, fixed by hand
+
+`~/.claude/tools/plan-lifecycle.py` does not exist in this environment, so `.claude/planning/_index.md`
+is generated by nothing despite CLAUDE.md saying otherwise. Both index files were hand-edited: the
+closed plan's `active` row dropped, its `done` row added to the archive — and a PRE-EXISTING gap
+closed, `v0-3-m8-concurrency-completion`, which has been sitting in `done/` while listed in neither
+index file.
