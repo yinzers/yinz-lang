@@ -14,64 +14,79 @@ metadata:
 
 # HASTY PLAN: v0.3 Concurrency Hardening
 
-> ## ⏭️ COLD-RESUME ENTRY POINT — updated 2026-09-07
+> ## ⏭️ COLD-RESUME ENTRY POINT — updated 2026-09-07, written for a FRESH SESSION
 >
-> **Branch** `feat/v0-3-m8-concurrency-completion`, tree clean, PR #91 open into `main` (that PR
-> carries v0.3-M8; this plan's commits ride the same branch behind it).
+> **Phases 1, 2 and 3 are COMPLETE. Phase 4 is next and is unblocked.** Branch
+> `feat/v0-3-m8-concurrency-completion`, tree clean, PR #91 open into `main` (that PR carries
+> v0.3-M8; this plan's commits ride the same branch behind it and are not in that PR's body).
 >
-> **Phase 1 ✅** — M2–M7 swept. Thirteen deferrals recovered from `.claude/todos.md`, deleted in
-> `1b83fcb` with 403 deletions and zero insertions; parked entries 53–65. Three of the thirteen
-> turned out already fixed.
+> ### Verified state — a full gate ran at Phase 3 close
 >
-> **Phase 2 ✅** — two questions answered, both sealed as FRAGOs in this plan's `audit.md`.
-> **FRAGO 001**: no heap local is EVER released at scope exit — an unbounded leak inside a single
-> run, verified structurally and empirically. **FRAGO 002**: the six reported defects are three
-> clusters and one singleton, and FRAGO 001's leak is the ancestor of NONE of them.
-> **FRAGO 003**: the `fr23` red was a stale test, not a live use-after-free; the conductor's own
-> hypothesis named the wrong culprit and was corrected.
+> `fmt --check` clean · `clippy --workspace --all-targets -D warnings` clean · `test --workspace
+> --no-fail-fast` **135 test targets observed, zero failures** · `build --workspace --release`
+> clean. **There are NO expected test conditions on this branch. No planned-RED files, no ignored
+> pins. Anything red is real.**
 >
-> **Phase 3 — steps 3.0, 3.1, 3.2 DONE. Steps 3.3, 3.4, 3.5 OPEN.**
-> - `3.0` five RED pins committed (`frago002_c1_c2_planned_red.rs`).
-> - `3.1` the crossing-scan gap closed at its producer (`eb0aa0c`), then a false-rejection
->   regression it introduced fixed at a producer OLDER than the change (`c3988ab`) after a
->   reviewer caught it. Pins A/D/G/J live and green. Two 256-seed fuzz sweeps: zero findings.
-> - `3.2` one authoritative owned-copy operation (`6be6773`) — `owned_copy_plan` in
->   `crates/ynz-typeck/src/owned_copy.rs`, `emit_owned_copy` in codegen, `AliasNoOp` deleted.
->   Pin N green, FR #9's pin rewritten and green.
+> ### What Phases 1–3 established and fixed
 >
-> ### ⚠️ OWED BEFORE 3.3 STARTS — the one thing not visible from the checkboxes
+> - **FRAGO 001** — no heap local is EVER released at scope exit. Verified structurally (three
+>   free-emission sites in codegen, none a scope exit) and empirically (2,000 iterations → 4,000
+>   allocations, zero frees, exactly linear). An unbounded leak **inside a single run**, not a
+>   long-lived-server problem. **This is Phase 4's target and nothing else's.**
+> - **FRAGO 002** — the six reported defects were three clusters and one singleton, and FRAGO 001's
+>   leak is the ancestor of NONE of them. A missing free is a leak; those were reads of wrong bytes.
+> - **FRAGO 003** — the `fr23` red was a stale test, not a live use-after-free. That file is now a
+>   green regression lock at 17/17 despite its name.
+> - **Phase 3 fixed, at producers:** the crossing scan now scans a suspending statement's own
+>   operands (both M8 fuzzer defects, one fix — two 256-seed sweeps return zero findings); the
+>   language has ONE authoritative owned-copy operation (`owned_copy_plan` / `emit_owned_copy`,
+>   `AliasNoOp` deleted); the spawn path reads ownership from `effective_ownership::provenance`
+>   instead of matching syntax; `errors` checked-ness follows binding identity; and the
+>   `errors`-field list is one table both typeck and codegen consume.
 >
-> **UPDATE 2026-09-07:** 3.2 has now been graded (three seats) and its fix round is landed
-> — dispatch `hardening-p3.2-fix1-20260907-a1`, recorded as FRAGO 004 in `audit.md`. The
-> paragraph below is kept as the record of what the gap was. **3.3 is unblocked.**
+> ### ⚠️ Phase 4 — read these three before starting
 >
-> **Step 3.2 (`6be6773`) is SEALED BUT UNGRADED.** Its dispatch self-declared FIRE on five
-> dimensions: plan-adherence (a spawn-side refusal and a `give`-map pass-through the phase never
-> named), correctness/authoritative-derivation (the "one routine, two call sites" claim),
-> teaching-surface quality (seven new user-facing refusal texts), memory-safety/concurrency (what a
-> `background` task now owns, plus two documented leak deferrals), and performance (`.copy()` on a
-> nested container is now O(items) where it was O(1)). No reviewer seat has run against it.
+> 1. **It may not be a phase.** M8 Phase 7's evidence called the scope-exit release pass "a
+>    milestone of its own, not a phase," and this plan's own Phase 4 section carries that as a
+>    signed risk gate. **Size it before entering it**, and if it is a milestone, say so rather than
+>    absorbing it.
+> 2. **Two deferrals trigger ON Phase 4** — parked 67–71 record them. A deep array copy's items are
+>    not released, and a spawn-cloned map is not released. Both are strictly better than the alias
+>    they replaced, but **if Phase 4 splits into its own milestone those deferrals outlive "next
+>    phase" by a lot**, and the map one grows heap per iteration in a spawn-in-a-loop.
+> 3. **The ordering constraint is SATISFIED.** C2 (the owned-copy work) closed before Phase 4
+>    opens, which was required: one of its members was a premature free, and a release pass landing
+>    first would have turned a dangling read into a double-free.
 >
-> This is not optional bookkeeping: step 3.1's equivalent review found a **real regression** in a
-> commit that had already been sealed with a green suite and a zero corpus delta. Do not start 3.3
-> until 3.2 is graded.
+> ### Open, deliberately, with no FRAGO authorising a fix
 >
-> ### Standing facts a resumer needs
+> **Parked 32 is LIVE.** Repeated `.failed()` checks on one binding inside an errors-capable
+> function both evaluate. Confirmed on base `d0c46b3` AND on HEAD. Its producer is now named for
+> the first time: `resolve_ident` auto-narrows an `ErrorsCapable` binding on ANY read — including
+> the read that is itself a `.failed()` receiver — and codegen caches the extracted success value
+> and hands it to the second `.failed()`, which dereferences a string's own bytes as an error
+> pointer. It is NOT the sibling of the defect Phase 3 fixed; different producer entirely. The
+> exact repro is in parked 32. It was deliberately not fixed: 3.5's charter was read-only and no
+> FRAGO authorised it.
 >
-> - **Expected test conditions on this branch: NONE.** Every pin is live and green; `fr23` is
->   17/17. Parked entries 50 and 52 record two contention flakes
->   (`timed_out_program_leaves_no_descendant_process_running`,
->   `v0_3_m4_p3_cross_give_generic_not_over_rejected`) that pass in isolation. Anything else red is
->   real.
-> - **`cargo test --workspace` needs `--no-fail-fast`** (parked 52) — without it cargo stops at the
->   first failing TARGET and reports on a prefix while reading like a full-suite verdict.
-> - **A `registry/features.toml` edit puts `jargon_audit`, `ynz-registry` AND `ynz-tmgrammar` in the
->   lane** (parked 51). The third is the one every previous lane rule omitted.
-> - **A zero corpus delta is evidence about the corpus, not proof about the language.** Stated
->   because the conductor reported one as the latter and a reviewer caught it.
-> - **Phase 4 is BLOCKED until C2 closes** — FR #9 was a premature free, so a scope-exit release
->   pass landing first would turn a dangling read into a double-free. 3.2 landing satisfies this,
->   pending its grading.
+> ### Standing traps — each of these cost a round to learn
+>
+> - **`cargo test --workspace` needs `--no-fail-fast`** (parked 52). Without it cargo stops at the
+>   first failing TARGET and reports on a prefix while reading like a full-suite verdict. That is
+>   how a five-phase-old defect survived nine gates.
+> - **A `registry/features.toml` edit puts THREE consumers in the lane** — `jargon_audit`,
+>   `ynz-registry` and `ynz-tmgrammar` (parked 51). The third is the one every earlier lane rule
+>   omitted, and its omission left a committed artifact stale for five phases.
+> - **A zero corpus delta is evidence about the corpus, not proof about the language.** Recorded
+>   because the conductor reported one as the latter, shipped a false rejection behind it, and a
+>   reviewer caught it.
+> - **Two contention flakes are known and recorded** (parked 50, 52):
+>   `timed_out_program_leaves_no_descendant_process_running` and
+>   `v0_3_m4_p3_cross_give_generic_not_over_rejected`. Both pass in isolation; both passed in the
+>   Phase 3 closing gate. If one fails, rerun it alone before calling it a regression.
+> - **`~/.claude/tools/plan-lifecycle.py` does not exist in this environment**, so
+>   `.claude/planning/_index.md` is not regenerated by anything despite CLAUDE.md saying it is.
+>   Edit it by hand when a plan changes status, or the index rots.
 
 ## 1. Situation
 
