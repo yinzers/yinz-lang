@@ -124,15 +124,23 @@ Trace every concurrency blocker discovered in v0.3-M2 through M8 to its named pr
 
 ### 3.1 Intent & End State
 
+> **CLOSE-OUT CORRECTION, 2026-09-07.** Of the three behaviours the Purpose names, **the first was
+> delivered and the second and third were NOT.** An ordinary local is still never released at scope
+> exit, and a handle binding's scope end still does not stop its task. Both belong to the scope-exit
+> release pass, which was sized at close, found to be a milestone rather than a phase, and carved out
+> whole to **v0.3-M9**. Key task 4 below and the second half of "What done looks like" describe that
+> milestone's mission, not this plan's delivered result. This plan closed at three phases, honestly
+> and deliberately — see `## Future Requirements / Revisit`.
+
 **Purpose**: Concurrency works. A program using `wait` and `background` with channels produces correct output; an ordinary local is released when its scope exits; a handle binding's scope end stops the task (or schedules cancellation at its next suspension). Every finding from M2–M8's deferral sections and audit is the producer of itself, not a downstream symptom being patched elsewhere.
 
 **Key tasks**:
 1. Audit every concurrency plan (M2–M8) into one consolidated blocker register with durable homes.
 2. Diagnose each blocker to its producer with evidence-backed probes; output FRAGOs one per producer.
 3. Execute each FRAGO (steps will be defined by Phase 2's diagnosis; cannot pre-specify).
-4. Land the scope-exit release pass as the general mechanism for cleaning up locals on all control-flow edges.
+4. ~~Land the scope-exit release pass as the general mechanism for cleaning up locals on all control-flow edges.~~ **CARVED OUT to v0.3-M9, 2026-09-07 — NOT delivered by this plan.**
 
-**What done looks like**: M2–M8 deferrals are either fixed or re-deferred with a new trigger in the roadmap's own registry; M8 Phase 8's two fuzzer-surfaced defects (neither RED-pinned today — pinning them is Phase 2's own output) are diagnosed to their producers and RED-pinned (no finding remains undiagnosed); Phase 7's re-deferral stands with Patrick's signature and a durable record of its evidence; scope-exit releases are emitted at every block exit, loop-iteration end, and function return for every local type (handles, arrays, maps, strings, channels, promoted maybe/union cells); background tasks can be stopped at language level, not by manual channel workarounds.
+**What done looks like**: M2–M8 deferrals are either fixed or re-deferred with a new trigger in the roadmap's own registry; M8 Phase 8's two fuzzer-surfaced defects (neither RED-pinned today — pinning them is Phase 2's own output) are diagnosed to their producers and RED-pinned (no finding remains undiagnosed); Phase 7's re-deferral stands with Patrick's signature and a durable record of its evidence; ~~scope-exit releases are emitted at every block exit, loop-iteration end, and function return for every local type (handles, arrays, maps, strings, channels, promoted maybe/union cells); background tasks can be stopped at language level, not by manual channel workarounds.~~ **CARVED OUT to v0.3-M9, 2026-09-07 — NOT delivered by this plan.**
 
 ---
 
@@ -430,11 +438,11 @@ these are reads of wrong bytes), and FRAGO 002 records why in full.
 
 **Governing design docs**:
 
-1. **`docs/internal/implementation/IMP-no-function-coloring.md`** — the no-function-coloring model and Task Cancellation section. **Specifies**: (a) whole-program may-block analysis (M2 scope completed); (b) auto-inserted suspension points at call sites (M2 completed); (c) preemption-check insertion at loop back-edges and function calls (M1 completed as per Architectural Decisions); (d) auto-Arc sharing topology across `background` boundaries with read-only proof (M8 Phase 2 specified, Phase 5 implemented the BENEFICIAL-EMISSION subset). **Silent on**: the scope-exit drop mechanism for handles (Phase 7 re-deferred its entire design; Task Cancellation section says "tasks stop at scope end" but names zero codegen path to implement it). This plan's Phase 2 diagnosis and Phase 4 execution answer the silence.
+1. **`docs/internal/implementation/IMP-no-function-coloring.md`** — the no-function-coloring model and Task Cancellation section. **Specifies**: (a) whole-program may-block analysis (M2 scope completed); (b) auto-inserted suspension points at call sites (M2 completed); (c) preemption-check insertion at loop back-edges and function calls (M1 completed as per Architectural Decisions); (d) auto-Arc sharing topology across `background` boundaries with read-only proof (M8 Phase 2 specified, Phase 5 implemented the BENEFICIAL-EMISSION subset). **Silent on**: the scope-exit drop mechanism for handles (Phase 7 re-deferred its entire design; Task Cancellation section says "tasks stop at scope end" but names zero codegen path to implement it). This plan's Phase 2 diagnosis answers half the silence (the producer is named and proven). **The other half — the codegen path itself — is v0.3-M9's, not this plan's**: Phase 4 was carved out and never executed, so the design doc's silence on the drop MECHANISM still stands, unanswered, and is M9's to close.
 
-2. **`docs/internal/implementation/IMP-concurrency.md`** — core concurrency semantics (Suspension vs. Ordering, Reads vs. Writes, Loop Iterations). **Specifies**: auto-parallelization for independent operations; data-dependency and ownership-based ordering; `wait` as explicit ordering only (not suspension). **Silent on**: scope-exit release (the authoritative-derivation class — one drop-insertion pass, never two parallel implementations). This plan's Phase 4 is the implementation of the unspecified mechanism.
+2. **`docs/internal/implementation/IMP-concurrency.md`** — core concurrency semantics (Suspension vs. Ordering, Reads vs. Writes, Loop Iterations). **Specifies**: auto-parallelization for independent operations; data-dependency and ownership-based ordering; `wait` as explicit ordering only (not suspension). **Silent on**: scope-exit release (the authoritative-derivation class — one drop-insertion pass, never two parallel implementations). ~~This plan's Phase 4 is the implementation of the unspecified mechanism.~~ **CARVED OUT to v0.3-M9, 2026-09-07 — NOT delivered by this plan.** The mechanism remains unimplemented and unspecified; v0.3-M9 owns both.
 
-3. **`docs/internal/implementation/IMP-ownership.md`** — call-site ownership inference (`share`/`lend`/`give`), `.copy()` semantics, auto-Arc sharing-topology section (M8 Phase 2 added it). **Specifies**: transfer rule (sent, given, returned); effective-ownership proof for read-only inference. **Silent on**: scope-exit transfer handling (when a binding is transferred via `send`, does the scope-exit release apply to the original binding or does ownership move? The transfer rule is silent on where transfer happens in the control-flow edges). This plan's Phase 4 must define the transfer-rule intersection with scope-exit enumeration.
+3. **`docs/internal/implementation/IMP-ownership.md`** — call-site ownership inference (`share`/`lend`/`give`), `.copy()` semantics, auto-Arc sharing-topology section (M8 Phase 2 added it). **Specifies**: transfer rule (sent, given, returned); effective-ownership proof for read-only inference. **Silent on**: scope-exit transfer handling (when a binding is transferred via `send`, does the scope-exit release apply to the original binding or does ownership move? The transfer rule is silent on where transfer happens in the control-flow edges). ~~This plan's Phase 4 must define the transfer-rule intersection with scope-exit enumeration.~~ **CARVED OUT to v0.3-M9, 2026-09-07 — NOT delivered by this plan.** v0.3-M9 must define it — and the sizing pass found the raw material is already there but out of reach: `Scope::consumed_classes` in typeck answers the question transiently and is persisted into no report codegen can read. Per `authoritative-derivation.md` M9 threads that answer rather than re-deriving it.
 
 **Verification of cited specifications**:
 
@@ -450,10 +458,14 @@ these are reads of wrong bytes), and FRAGO 002 records why in full.
 
 ### Safety
 
-- No use-after-free on local bindings (Phase 4's scope-exit release catches this).
-- No double-free on local bindings (transfer rule skip + parity test).
-- Channel send does not corrupt the payload (Phase 3's FRAGO for crossing-local + blocked-send).
-- Handle scope exit does not cause use-after-free in the parent (Phase 4 proves this via the two pin tests).
+> **CLOSE-OUT CORRECTION, 2026-09-07.** Two of the four rows below were written as satisfied ON THE
+> STRENGTH OF PHASE 4, which never ran. They are marked NOT ESTABLISHED and inherited by v0.3-M9.
+> A closed plan must not hand its successor a safety floor it never poured.
+
+- **NOT ESTABLISHED — inherited by v0.3-M9.** ~~No use-after-free on local bindings (Phase 4's scope-exit release catches this).~~ Phase 4 was carved out; nothing releases a local at scope exit today, so this plan neither establishes nor tests this invariant. What IS true is narrower and worth saying exactly: FRAGO 002 established the leak is the ancestor of none of the corruption defects, and Phase 3 fixed those at their producers — so today's failure mode is a leak (memory retained), not a use-after-free (memory read after release). The invariant becomes live to PROVE the moment v0.3-M9 starts emitting releases.
+- **PARTIALLY ESTABLISHED.** No double-free on local bindings. The transfer-rule skip and parity test this row names belong to Phase 4 and do not exist. What Phase 3 did deliver is upstream of it and load-bearing for it: ONE authoritative owned-copy operation (`owned_copy_plan` / `emit_owned_copy`, `AliasNoOp` deleted), which removed the premature-free member that would have turned a release pass into a double-free. That is why C2 had to close before Phase 4 could open — see the HARD ORDERING CONSTRAINT in step 3.2.
+- **ESTABLISHED.** Channel send does not corrupt the payload (Phase 3's FRAGO for crossing-local + blocked-send — the crossing scan now scans a suspending statement's own operands; two 256-seed sweeps return zero findings).
+- **NOT ESTABLISHED — inherited by v0.3-M9.** ~~Handle scope exit does not cause use-after-free in the parent (Phase 4 proves this via the two pin tests).~~ The two pin tests in `crates/ynz-driver/tests/v03_m8_handle_scope_pin.rs` currently assert the OPPOSITE of this row: they pin today's behaviour (the child is NOT cancelled, no `ynz_handle_free` is emitted) and pass. They go RED when v0.3-M9 lands and are then rewritten.
 
 ### Performance
 
@@ -473,7 +485,7 @@ Phase 3's FRAGOs: each new runtime call is classified by whether it's allowed in
 
 ### Demo & Error Gallery
 
-Phase 3's new compile errors are added to `examples/primantis-orders/m8_errors.ynz` with `// WHY: <diagnostic-class>` comments (or higher milestone's gallery if Phase 3 slip causes it to ship in M9). Phase 4's handle-cancellation behavior is demonstrated in `examples/pirates-roster/entrypoint.ynz` with a spawned task that prints before the handle scope ends, showing the task actually stops (vs. running to completion).
+Phase 3's new compile errors are added to `examples/primantis-orders/m8_errors.ynz` with `// WHY: <diagnostic-class>` comments (or higher milestone's gallery if Phase 3 slip causes it to ship in M9). ~~Phase 4's handle-cancellation behavior is demonstrated in `examples/pirates-roster/entrypoint.ynz` with a spawned task that prints before the handle scope ends, showing the task actually stops (vs. running to completion).~~ **CARVED OUT to v0.3-M9, 2026-09-07 — NOT delivered by this plan.** **This demo does NOT exist** — verified absent from `entrypoint.ynz` at close-out. It could not exist: the behaviour it would demonstrate is not implemented. Building it is v0.3-M9's obligation under `plan-invariants.md`'s `### Demo & Error Gallery` rule, not a debt this plan discharged.
 
 ### Feature Registry Entries
 
