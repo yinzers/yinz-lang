@@ -504,6 +504,160 @@ fn message_is_admitted_inside_its_own_failed_check() {
 }
 
 #[test]
+fn message_before_failed_check_fires_on_a_shadowed_rebinding_inside_the_guard() {
+    // WHY: v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C3, closes parked 33). RED
+    // before the fix: `errors_failed_true_branch`/`errors_consumed`/`errors_success_narrowed`
+    // keyed on the bare name "x", so a shadowing inner `let x = ...` INSIDE the guarded block
+    // inherited the outer `x`'s checked status and this compiled clean, printing `""` at
+    // runtime instead of refusing at compile time. GREEN after the fix: the sets are keyed by
+    // `ScopeEntry::alias_class` (binding identity), so the inner `x` — a fresh alias class —
+    // is never a member and is correctly refused.
+    assert_rendered(
+        DiagnosticKind::MessageBeforeFailedCheck,
+        "function mayFail(n: int) -> string errors { return `v${n}` }\n\
+         function entrypoint() -> nothing {\n\
+           let x = mayFail(1)\n\
+           if (x.failed()) {\n\
+             let x = mayFail(3)\n\
+             print(x.message)\n\
+           }\n\
+         }",
+        &[("name", "x"), ("field", "message")],
+    );
+}
+
+#[test]
+fn a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch() {
+    // WHY: the plan's own note — `for ((k, v) in m)` desugars its destructure names to
+    // synthetic `Stmt::Let`s (`ynz-parser`'s `parse_for_destructure`), which go through the
+    // SAME binding-event path (`binding_event_origin`, a fresh `alias_class` per binding
+    // event) as a source-level `let` — no special-casing needed, only verification. `v` here
+    // shadows the outer `.failed()`-checked `v`; `map<string,int>`'s value type means the
+    // inner `v` is `int`, which correctly refuses `.message` for an ordinary reason (`int` has
+    // no fields) — a DIFFERENT diagnostic than `MessageBeforeFailedCheck`. That difference is
+    // the point: it proves the inner `v`'s alias class was never a member of
+    // `errors_failed_true_branch` in the first place (had the old bare-name key survived,
+    // `.message` would have been evaluated as an EC field access at all, not stopped one step
+    // earlier by ordinary field-lookup on `int`).
+    let errors = errors_for(
+        "function mayFail(n: int) -> string errors { return `v${n}` }\n\
+         function entrypoint() -> nothing {\n\
+           let v = mayFail(1)\n\
+           let m: map<string, int> = { a: 1 }\n\
+           if (v.failed()) {\n\
+             for ((k, v) in m) {\n\
+               print(v.toString())\n\
+             }\n\
+             print(v.message)\n\
+           }\n\
+         }",
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|d| d.kind == Some(DiagnosticKind::MessageBeforeFailedCheck)),
+        "the OUTER `v`, checked with `.failed()` and read AFTER the for-destructure loop's \
+         scope pops, must still be admitted — the loop's own scope push/pop must not disturb \
+         `errors_failed_true_branch`'s bookkeeping for a name it shadowed and released; \
+         got:\n{:#?}",
+        errors.iter().map(|d| &d.what).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn message_is_still_admitted_for_the_outer_binding_after_a_shadow_pops() {
+    // WHY: the fix must not overcorrect — after the shadowing inner block exits and its
+    // alias class goes out of scope, the OUTER `x` (the one actually checked) must still be
+    // admitted. Guards against a fix that empties the checked-set on any shadow rather than
+    // scoping it correctly.
+    let errors = errors_for(
+        "function mayFail(n: int) -> string errors { return `v${n}` }\n\
+         function entrypoint() -> nothing {\n\
+           let x = mayFail(1)\n\
+           if (x.failed()) {\n\
+             { let x = mayFail(3); print(x.toString()) }\n\
+             print(x.message)\n\
+           }\n\
+         }",
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|d| d.kind == Some(DiagnosticKind::MessageBeforeFailedCheck)),
+        "the outer `x`, still in scope and still checked after the inner shadow's block \
+         exits, must be admitted; got:\n{:#?}",
+        errors.iter().map(|d| &d.what).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn ec_field_not_yet_available_is_rendered_from_the_registry() {
+    // WHY: v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1, closes parked 34). RED
+    // before the fix: `.trace` inside a CORRECT `.failed()` guard compiled clean (typeck typed
+    // it as `array<Frame>` unconditionally) and reached codegen's `Type::ErrorsCapable` field
+    // arm, which has no lowering for anything but `.message` — an internal-error string
+    // ("This is a compiler bug") reached a user who wrote a correct program. GREEN after the
+    // fix: refused at compile time, with real teaching text, before codegen ever sees it.
+    assert_rendered(
+        DiagnosticKind::EcFieldNotYetAvailable,
+        "function loadConfig() -> string errors { return `hello` }\n\
+         function entrypoint() -> nothing {\n\
+           let late = loadConfig()\n\
+           if (late.failed()) {\n\
+             print(late.trace.count().toString())\n\
+           }\n\
+         }",
+        &[("field", "trace")],
+    );
+}
+
+#[test]
+fn ec_field_not_yet_available_fires_for_suggestions_and_source_too() {
+    // WHY: same producer as `.trace` above — all three refused fields share ONE table
+    // (`ynz_typeck::errors_fields::ec_field_lowering`). One example each closes the class
+    // rather than leaving `.suggestions`/`.source` unverified.
+    assert_rendered(
+        DiagnosticKind::EcFieldNotYetAvailable,
+        "function loadConfig() -> string errors { return `hello` }\n\
+         function entrypoint() -> nothing {\n\
+           let late = loadConfig()\n\
+           if (late.failed()) {\n\
+             print(late.suggestions.count().toString())\n\
+           }\n\
+         }",
+        &[("field", "suggestions")],
+    );
+    assert_rendered(
+        DiagnosticKind::EcFieldNotYetAvailable,
+        "function loadConfig() -> string errors { return `hello` }\n\
+         function entrypoint() -> nothing {\n\
+           let late = loadConfig()\n\
+           if (late.failed()) {\n\
+             print(late.source.file)\n\
+           }\n\
+         }",
+        &[("field", "source")],
+    );
+}
+
+#[test]
+fn ec_field_not_yet_available_does_not_shadow_the_failed_check_gate() {
+    // WHY: ordering matters — an UNCHECKED read of `.trace` must still get
+    // `MessageBeforeFailedCheck` (teach the `.failed()` rule first), not
+    // `EcFieldNotYetAvailable`. `check_errors_field_is_lowered` only runs after
+    // `check_errors_field_needs_failed_check` admits the read.
+    assert_rendered(
+        DiagnosticKind::MessageBeforeFailedCheck,
+        "function loadConfig() -> string errors { return `hello` }\n\
+         function entrypoint() -> nothing {\n\
+           let late = loadConfig()\n\
+           print(late.trace.count().toString())\n\
+         }",
+        &[("name", "late"), ("field", "trace")],
+    );
+}
+
+#[test]
 fn message_before_failed_check_refuses_a_non_ident_receiver() {
     // A `.message` read on a receiver that was never bound to a name can never have been
     // legally checked (`extract_failed_binding` only recognizes bare-ident receivers) —

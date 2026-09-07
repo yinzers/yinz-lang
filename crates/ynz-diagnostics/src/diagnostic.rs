@@ -66,6 +66,13 @@ pub enum DiagnosticKind {
     /// it was checked with `.failed()` — `REF-errors.md:171-175` requires the check first;
     /// this is that requirement enforced at compile time — v0.3-M8 Phase 4 fix round 3.
     MessageBeforeFailedCheck,
+    /// `.suggestions`/`.trace`/`.source` read on an `errors`-capable value that WAS checked
+    /// with `.failed()` first, but has no real codegen lowering yet — refused at compile time
+    /// instead of reaching codegen as an admitted-but-unlowered field. v0.3 concurrency
+    /// hardening Phase 3 (FRAGO 002 singleton S1): the three teaching slots come from
+    /// `ynz_typeck::errors_fields::ec_field_lowering`, the single table both the admission
+    /// gate and codegen's field arm consume.
+    EcFieldNotYetAvailable,
     /// Value is already borrowed.
     Borrowed,
     /// Function does not return on all paths.
@@ -107,6 +114,7 @@ impl DiagnosticKind {
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
             DiagnosticKind::MessageBeforeFailedCheck => "MessageBeforeFailedCheck",
+            DiagnosticKind::EcFieldNotYetAvailable => "EcFieldNotYetAvailable",
             DiagnosticKind::Borrowed => "Borrowed",
             DiagnosticKind::MissingReturn => "MissingReturn",
             DiagnosticKind::BannedKeyword { .. } => "BannedKeyword",
@@ -136,6 +144,7 @@ impl DiagnosticKind {
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
         "MessageBeforeFailedCheck",
+        "EcFieldNotYetAvailable",
         "Borrowed",
         "MissingReturn",
         "BannedKeyword",
@@ -163,6 +172,7 @@ impl DiagnosticKind {
                 "cannot outlive this function".to_string()
             }
             DiagnosticKind::MessageBeforeFailedCheck => "needs `.failed()` first".to_string(),
+            DiagnosticKind::EcFieldNotYetAvailable => "not available yet".to_string(),
             DiagnosticKind::Borrowed => "borrowed".to_string(),
             DiagnosticKind::MissingReturn => "missing return".to_string(),
             DiagnosticKind::BannedKeyword { keyword } => format!("`{keyword}` not valid here"),

@@ -266,11 +266,14 @@ pub const DEFAULT_CHANNEL_CAPACITY: i64 = 64;
 /// a second, hand-copied list here would be exactly the twin-derivation class it bans).
 const EC_MEMBER_NAMES: &[&str] = &["or", "failed", "message", "suggestions", "trace", "source"];
 
-/// The four fields REF-errors.md gates behind an explicit `.failed()` check
-/// ("`.message` and other error fields require a `.failed()` check first",
-/// `REF-errors.md:171-175`). `.failed()` itself and `.or(default)` are NOT gated —
-/// `.failed()` IS the check, and `.or(default)` supplies its own fallback.
-const EC_FIELDS_REQUIRE_FAILED_CHECK: &[&str] = &["message", "suggestions", "trace", "source"];
+// The four fields REF-errors.md gates behind an explicit `.failed()` check
+// ("`.message` and other error fields require a `.failed()` check first",
+// `REF-errors.md:171-175`) are no longer a separate hand-written list here — v0.3
+// concurrency hardening Phase 3 (FRAGO 002 singleton S1) folded the admission list into
+// `ynz_typeck::errors_fields::EcField::from_field_name`, the SAME table
+// `check_errors_field_is_lowered` consults for whether codegen can build the field at all.
+// `.failed()` itself and `.or(default)` are NOT gated — `.failed()` IS the check, and
+// `.or(default)` supplies its own fallback, so neither is an `EcField` variant.
 
 /// Inferred ownership for a plain-ident argument at a `background` call site.
 ///
@@ -668,24 +671,32 @@ struct Checker<'b> {
     /// M6: binding names narrowed to a specific union variant inside an `is`-arm body.
     /// Maps binding name → narrowed type (the specific variant type).
     union_narrowed: HashMap<String, Type>,
-    /// Flow-sensitive: binding names known to be in the success state after a
-    /// `.failed() == false` check or after auto-propagation fired. These bindings
-    /// have narrowed from `ErrorsCapable<T>` to `T`.
-    errors_success_narrowed: HashSet<String>,
-    /// Bindings that have been consumed by auto-propagation at first use or by
+    /// Flow-sensitive: binding IDENTITIES (`ScopeEntry::alias_class`, not names) known to be
+    /// in the success state after a `.failed() == false` check or after auto-propagation
+    /// fired. These bindings have narrowed from `ErrorsCapable<T>` to `T`.
+    ///
+    /// Keyed by alias class, not name (v0.3 concurrency hardening Phase 3, FRAGO 002 cluster
+    /// C3): a bare-`String` key let a shadowing inner `let x = ...` inside the guarded block
+    /// inherit the outer `x`'s checked status, since both bindings share the name "x" but are
+    /// different values with different alias classes. `alias_class` is the SAME
+    /// binding-identity signal `Scope`'s use-after-give tracking already uses — threading it
+    /// here instead of inventing a second identity scheme is the
+    /// `.claude/rules/authoritative-derivation.md` discipline.
+    errors_success_narrowed: HashSet<u64>,
+    /// Binding identities that have been consumed by auto-propagation at first use or by
     /// a `.failed()` check. After consumption, calling `.failed()` is a compile
-    /// error ("check-after-use").
-    errors_consumed: HashSet<String>,
-    /// Names currently inside the TRUE branch of `if (name.failed())` — the one shape
-    /// `REF-errors.md:171-183` documents as legal for reading `.message`/`.suggestions`/
+    /// error ("check-after-use"). Keyed by alias class — see `errors_success_narrowed`.
+    errors_consumed: HashSet<u64>,
+    /// Binding identities currently inside the TRUE branch of `if (name.failed())` — the one
+    /// shape `REF-errors.md:171-183` documents as legal for reading `.message`/`.suggestions`/
     /// `.trace`/`.source`. Pushed by `check_stmt_if` right before checking the if-body,
     /// popped right after: lexical and block-scoped, unlike `errors_success_narrowed`/
     /// `errors_consumed` above (function-scoped auto-propagation bookkeeping that answers
     /// a different question — "has this binding EVER been checked" — not "am I textually
     /// inside its guarded block right now"). A `Vec`, not a `HashSet`, so a nested
     /// `if (x.failed()) { if (x.failed()) { … } }` pops correctly (v0.3-M8 Phase 4 fix
-    /// round 3).
-    errors_failed_true_branch: Vec<String>,
+    /// round 3). Keyed by alias class, not name — see `errors_success_narrowed`.
+    errors_failed_true_branch: Vec<u64>,
     /// Names that were actually resolved via the signature table or shape table
     /// during this check pass. Used by `check_query` to detect unused imports —
     /// any imported name absent from this set after the pass was never referenced.
@@ -3273,27 +3284,39 @@ impl<'b> Checker<'b> {
 
         // M7 P3a: if condition is `x.failed()`, mark `x` as "consumed by failed check"
         // inside the if body. After the block, `x` is narrowed to success.
+        //
+        // v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C3): resolved to the CURRENT
+        // binding's alias class here, before `self.scope.push()` opens the guarded block. A
+        // shadowing inner `let x = ...` inside that block mints its own fresh alias class
+        // (`binding_event_origin`, same mechanism `Scope`'s use-after-give tracking uses), so
+        // it is never a member of `failed_binding_classes` and cannot inherit the outer `x`'s
+        // checked status — the compile-time hole `check_errors_field_needs_failed_check` used
+        // to have when this was keyed by the bare name "x".
         let failed_binding = self.extract_failed_binding(cond);
-        for name in &failed_binding {
-            self.errors_consumed.insert(name.clone());
+        let failed_binding_classes: Vec<u64> = failed_binding
+            .iter()
+            .filter_map(|name| self.scope.lookup(name).map(|e| e.alias_class))
+            .collect();
+        for class in &failed_binding_classes {
+            self.errors_consumed.insert(*class);
         }
-        // v0.3-M8 Phase 4 fix round 3: `name` is inside the TRUE branch of its own
+        // v0.3-M8 Phase 4 fix round 3: the binding is inside the TRUE branch of its own
         // `.failed()` check for the extent of this body — the one shape REF-errors.md
         // admits for reading `.message`/`.suggestions`/`.trace`/`.source` (see
         // `errors_failed_true_branch`'s doc comment). Pushed here, popped below —
         // strictly nested with the `check_stmts(body)` call between them.
-        for name in &failed_binding {
-            self.errors_failed_true_branch.push(name.clone());
+        for class in &failed_binding_classes {
+            self.errors_failed_true_branch.push(*class);
         }
 
         self.scope.push();
         self.check_stmts(&body.stmts);
         self.scope.pop();
 
-        for name in &failed_binding {
+        for class in &failed_binding_classes {
             debug_assert_eq!(
                 self.errors_failed_true_branch.last(),
-                Some(name),
+                Some(class),
                 "errors_failed_true_branch push/pop must nest strictly around check_stmts(body)"
             );
             self.errors_failed_true_branch.pop();
@@ -3305,8 +3328,8 @@ impl<'b> Checker<'b> {
         }
 
         // M7 P3a: after `if (x.failed()) { ... }`, narrow `x` to success for subsequent code.
-        for name in &failed_binding {
-            self.errors_success_narrowed.insert(name.clone());
+        for class in &failed_binding_classes {
+            self.errors_success_narrowed.insert(*class);
         }
     }
 
@@ -4400,8 +4423,9 @@ impl<'b> Checker<'b> {
                 let inner = inner.as_ref().clone();
 
                 // Already narrowed to success type (after .failed() check or prior use) —
-                // return the success type directly.
-                if self.errors_success_narrowed.contains(name) {
+                // return the success type directly. Keyed by alias class, not name
+                // (FRAGO 002 cluster C3) — see `errors_success_narrowed`'s doc comment.
+                if self.errors_success_narrowed.contains(&entry.alias_class) {
                     return inner;
                 }
 
@@ -4409,8 +4433,8 @@ impl<'b> Checker<'b> {
                     // Inside an errors function: auto-propagation fires — narrow the
                     // binding to its success type. The compiler will insert early-return-
                     // on-failure IR at P4a; for typeck, just return the inner type.
-                    self.errors_success_narrowed.insert(name.to_string());
-                    self.errors_consumed.insert(name.to_string());
+                    self.errors_success_narrowed.insert(entry.alias_class);
+                    self.errors_consumed.insert(entry.alias_class);
                     return inner;
                 }
                 // Outside an errors function: return the full ErrorsCapable type.
@@ -6797,17 +6821,31 @@ impl<'b> Checker<'b> {
     /// A non-`Ident` receiver (e.g. a call result read without ever being bound) is never
     /// admitted: `extract_failed_binding` only recognizes bare-ident receivers too, so there
     /// is no way such a read could have been legally checked.
+    ///
+    /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C3): "checked" is now read by
+    /// resolving `receiver` to its CURRENT binding identity (`ScopeEntry::alias_class`) and
+    /// testing membership in `errors_failed_true_branch` by that identity, not by name. A
+    /// shadowing inner `let x = ...` inside the guarded block mints its own alias class
+    /// (`binding_event_origin`), so it is never a member here and is correctly refused — see
+    /// `errors_success_narrowed`'s doc comment for why alias class is the binding-identity
+    /// signal to thread rather than re-derive.
     fn check_errors_field_needs_failed_check(
         &mut self,
         receiver: Option<&Expr>,
         field: &str,
         field_span: &SourceSpan,
     ) -> bool {
-        if !EC_FIELDS_REQUIRE_FAILED_CHECK.contains(&field) {
+        if crate::errors_fields::EcField::from_field_name(field).is_none() {
             return false;
         }
-        let checked = matches!(receiver, Some(Expr::Ident(name, _))
-            if self.errors_failed_true_branch.iter().any(|n| n == name));
+        let checked = match receiver {
+            Some(Expr::Ident(name, _)) => self
+                .scope
+                .lookup(name)
+                .map(|e| e.alias_class)
+                .is_some_and(|class| self.errors_failed_true_branch.contains(&class)),
+            _ => false,
+        };
         if checked {
             return false;
         }
@@ -6818,6 +6856,33 @@ impl<'b> Checker<'b> {
             field_span.clone(),
             DiagnosticKind::MessageBeforeFailedCheck,
             &[("name", &name), ("field", field)],
+        ));
+        true
+    }
+
+    /// v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): compile-error gate for a
+    /// field `check_errors_field_needs_failed_check` just admitted, but that codegen cannot
+    /// build a value for yet (`ynz_typeck::errors_fields::ec_field_lowering`). Before this gate
+    /// existed, `.trace`/`.suggestions`/`.source` compiled cleanly inside a correct guard and
+    /// then reached codegen's `Type::ErrorsCapable` field arm, which has a real lowering only
+    /// for `.message` and returned `"This is a compiler bug"` for the other three — a lie about
+    /// a correct user program. Refusing here means codegen NEVER sees an unlowered field: the
+    /// driver does not run codegen when typeck's diagnostics are non-empty
+    /// (`crates/ynz-driver/src/build.rs`). Returns `true` (and pushes the diagnostic) when the
+    /// field is refused; `false` when it has a real lowering.
+    fn check_errors_field_is_lowered(&mut self, field: &str, field_span: &SourceSpan) -> bool {
+        let Some(ec_field) = crate::errors_fields::EcField::from_field_name(field) else {
+            return false;
+        };
+        if crate::errors_fields::ec_field_lowering(ec_field)
+            != crate::errors_fields::EcFieldLowering::Refused
+        {
+            return false;
+        }
+        self.diags.push(registry_diag(
+            field_span.clone(),
+            DiagnosticKind::EcFieldNotYetAvailable,
+            &[("field", field)],
         ));
         true
     }
@@ -6845,6 +6910,15 @@ impl<'b> Checker<'b> {
             }
             "message" | "suggestions" | "trace" | "source"
                 if self.check_errors_field_needs_failed_check(receiver, method, method_span) =>
+            {
+                Type::Error
+            }
+            // v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): a field admitted by
+            // the check above but with no real codegen lowering is refused HERE, at compile
+            // time — never typed as if it were shippable. See
+            // `check_errors_field_is_lowered`'s doc comment.
+            "message" | "suggestions" | "trace" | "source"
+                if self.check_errors_field_is_lowered(method, method_span) =>
             {
                 Type::Error
             }
@@ -7543,6 +7617,12 @@ impl<'b> Checker<'b> {
             // a `.failed()` check first. Gate before returning a type so a not-yet-checked
             // read is a compile error, not a silently-typed `string`/`array`/etc.
             if self.check_errors_field_needs_failed_check(Some(receiver), field, field_span) {
+                return Type::Error;
+            }
+            // v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): refuse a checked
+            // read of a field with no real codegen lowering, at compile time — see
+            // `check_errors_field_is_lowered`'s doc comment.
+            if self.check_errors_field_is_lowered(field, field_span) {
                 return Type::Error;
             }
             return match field {

@@ -3,7 +3,7 @@ name: "v0-3-concurrency-hardening"
 plan-id: "2026-09-04-v0-3-concurrency-hardening"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1", "hardening-p3.1-fix1-20260906-a1", "hardening-p3.2-20260906-a1", "hardening-p3.2-fix1-20260907-a1"]
+session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1", "hardening-p3.1-fix1-20260906-a1", "hardening-p3.2-20260906-a1", "hardening-p3.2-fix1-20260907-a1", "hardening-p3.345-20260907-a1"]
 tier: "hasty"
 tier-reason: "Concurrency is a blocking gate on using Yinz at all; every known blocker is traced to a named producer and fixed at that producer, not patched per symptom. Scope is fixed (four phases, non-negotiable), deferral is forbidden, ambiguity is decided upstream. Small committed work riding Patrick's settled order."
 created_at: "2026-09-04"
@@ -289,28 +289,33 @@ are in parked, they stay in parked.
             release pass lands first it will emit frees on aliased pointers and upgrade a dangling
             read into a double-free.
 
-- [ ] **3.3 — C3: flow-sensitive `errors` state keyed by name, not by binding identity.**
+- [x] **3.3 — C3: flow-sensitive `errors` state keyed by name, not by binding identity.**
       `errors_failed_true_branch` and its siblings key on a bare `String`; `check_stmt_if`
       push/pops `self.scope` around the body while the errors sets are not scope-aware, so a
       shadowing inner `let` inherits the outer binding's checked status. Closes **parked 33**.
       Compile-time hole, no memory-unsafety — codegen's `br`/`phi` defense makes the observable an
       empty string rather than a crash.
 
-- [ ] **3.4 — S1: the `errors`-field surface is two unbound lists.**
+- [x] **3.4 — S1: the `errors`-field surface is two unbound lists.**
       `EC_FIELDS_REQUIRE_FAILED_CHECK` admits four fields; codegen's `Type::ErrorsCapable` field
       arm lowers one and hard-errors on the rest. Closes **parked 34**. Ranked last despite being
       the easiest because it is LOUD and self-identifying ("This is a compiler bug") — nobody is
       silently misled. Pair it with 3.3 in one session; same surface.
-      - [ ] **Fix upstream, not by adding three arms.** Make the field list ONE shared enumeration
+      - [x] **Fix upstream, not by adding three arms.** Make the field list ONE shared enumeration
             with a parity test mirroring `copy_parity_tests` (which already binds
             `copy_lowering_arm` to typeck's `copy_is_independent`), so a fifth
             admitted-but-unlowered field becomes a build failure instead of a user-facing ICE.
 
-- [ ] **3.5 — parked 32: an archival read BEFORE any session is budgeted.** Two shaped repro
+- [x] **3.5 — parked 32: an archival read BEFORE any session is budgeted.** Two shaped repro
       attempts in Phase 2 both produced correct output, and parked 32's own record says half was
       fixed in round 3 by `restore_ec_receiver_ty`. Recover the round-3 executor's exact repro
       from the M8 plan's `audit.md` (`m8-p4-fix3-20260904`, base `d0c46b3`) and re-run it on HEAD.
       **It may not exist.** Do not budget a fix session before this read.
+      **RESULT (2026-09-07): it LIVES — reproduced on `d0c46b3` and again on HEAD (both markers
+      print for an always-succeeding `errors` call). NOT C3's sibling — a distinct producer in
+      `resolve_ident` + codegen's `Expr::Ident`/`errors_capable_locals` handling, named in full
+      in `parked.md` entry 32. No fix budgeted here per the read-only charter; left for its own
+      diagnosis-then-FRAGO cycle.**
 
 **NOT in Phase 3, stated so it is not mistaken for dropped:** FRAGO 001's finding — that no heap
 local is ever released at scope exit — is a real, verified producer, but it is **Phase 4's**

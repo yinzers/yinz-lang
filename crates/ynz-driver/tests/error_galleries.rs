@@ -617,14 +617,16 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
     // refusal side, and every one of them USED to compile and quietly hand back the receiver
     // instead. This gallery is the only place a human reads all six refusals together, which
     // is what the teaching quality actually depends on; a count-only assertion would let one
-    // of them regress into a generic message without failing.
+    // of them regress into a generic message without failing. Phase 3 steps 3.3/3.4 (FRAGO 002
+    // cluster C3 and singleton S1) added two more triggers to the same file — a shadowed
+    // `.failed()`-checked binding, and a checked-but-unlowered `errors` field.
     let (stderr, code) = compile_gallery(&gallery("v0_3_hardening_errors.ynz"));
     assert_ne!(code, 0, "v0_3 hardening gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert_eq!(
-        error_count, 8,
-        "v0_3 hardening gallery must produce exactly 8 errors, one per refusal trigger; got \
+        error_count, 10,
+        "v0_3 hardening gallery must produce exactly 10 errors, one per refusal trigger; got \
          {error_count}.\nstderr:\n{stderr}"
     );
 
@@ -648,6 +650,14 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         (
             "`background` argument kept with the frame",
             "a `range` cannot be handed to a background task",
+        ),
+        (
+            "shadowed `.failed()`-checked binding (FRAGO 002 C3, parked 33)",
+            "hasn't been checked with `.failed()` yet",
+        ),
+        (
+            "checked-but-unlowered `errors` field (FRAGO 002 S1, parked 34)",
+            "isn't available yet on an `errors` value",
         ),
     ] {
         assert!(
@@ -673,6 +683,8 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         "Drop the `.copy()` and call the function on its own",
         "move every later read of `parcel` above the `background` line",
         "for a `range`, its start and end as two `int` values",
+        "Check `.failed()` on `count` first",
+        "Use `.message` to read what went wrong",
     ] {
         assert!(
             stderr.contains(phrase),

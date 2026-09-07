@@ -4891,16 +4891,16 @@ function entrypoint() -> nothing {
 }
 
 #[test]
-fn ec_method_suggestions_resolves_in_ec_fn() {
-    // WHY: guards that `.suggestions` resolves on an EC value inside an errors-capable function.
-    // Removing "suggestions" from EC_METHODS drops the restoration and produces a type error
-    // on the stripped inner-type dispatch. Isolated test ensures the sibling is independently
-    // covered — a single combined test cannot pinpoint which EC_METHODS entry was dropped.
-    // `.suggestions` returns array<string> — printable directly (BuiltinArray is printable).
-    //
-    // v0.3-M8 Phase 4 fix round 3: wrapped in `if (x.failed())` — see
-    // `ec_method_message_resolves_in_ec_fn`'s WHY for why the unguarded form is now refused.
-    assert_clean(
+fn ec_method_suggestions_refused_even_when_checked() {
+    // WHY: v0.3 concurrency hardening Phase 3 step 3.4 (FRAGO 002 singleton S1). This test
+    // used to be named `ec_method_suggestions_resolves_in_ec_fn` and asserted the read below
+    // compiled clean — LITERALLY the class of bug this fix closes: `.suggestions` type-checked
+    // fine but codegen had no lowering for it, so a correct, properly-guarded program reached
+    // codegen and ICEd "This is a compiler bug." The correct behavior is a compile-time
+    // refusal, with real teaching text, at THIS site — never a green result and never an ICE.
+    // `ynz_typeck::errors_fields::ec_field_lowering` is the one table this and `.trace`/
+    // `.source`'s sibling tests below all read.
+    let out = assert_errors(
         r#"
 function compute() -> int errors {
   return 42
@@ -4914,19 +4914,26 @@ function entrypoint() -> nothing {
   }
 }
 "#,
+        1,
+    );
+    let errs: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert_eq!(
+        errs[0].kind,
+        Some(ynz_diagnostics::DiagnosticKind::EcFieldNotYetAvailable),
+        "expected EcFieldNotYetAvailable; got: {:#?}",
+        errs
     );
 }
 
 #[test]
-fn ec_method_trace_resolves_in_ec_fn() {
-    // WHY: guards that `.trace` resolves on an EC value inside an errors-capable function.
-    // Same rationale as the `.suggestions` test above — each EC_METHODS sibling must have
-    // its own isolated test so a narrow removal is caught by exactly one failure.
-    // `.trace` returns array<Frame> — BuiltinArray is printable; Frame is a compiler shape.
-    //
-    // v0.3-M8 Phase 4 fix round 3: wrapped in `if (x.failed())` — see
-    // `ec_method_message_resolves_in_ec_fn`'s WHY for why the unguarded form is now refused.
-    assert_clean(
+fn ec_method_trace_refused_even_when_checked() {
+    // WHY: same producer as `ec_method_suggestions_refused_even_when_checked` — see its WHY.
+    // Was `ec_method_trace_resolves_in_ec_fn`, asserting the pre-fix (wrong) behavior.
+    let out = assert_errors(
         r#"
 function compute() -> int errors {
   return 42
@@ -4940,18 +4947,29 @@ function entrypoint() -> nothing {
   }
 }
 "#,
+        1,
+    );
+    let errs: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert_eq!(
+        errs[0].kind,
+        Some(ynz_diagnostics::DiagnosticKind::EcFieldNotYetAvailable),
+        "expected EcFieldNotYetAvailable; got: {:#?}",
+        errs
     );
 }
 
 #[test]
-fn ec_method_source_resolves_in_ec_fn() {
-    // WHY: guards that `.source` resolves on an EC value inside an errors-capable function.
-    // Same rationale as the `.trace` test above. Completes the sibling coverage for all six
-    // members of EC_METHODS: or, failed, message, suggestions, trace, source.
-    //
-    // v0.3-M8 Phase 4 fix round 3: wrapped in `if (x.failed())` — see
-    // `ec_method_message_resolves_in_ec_fn`'s WHY for why the unguarded form is now refused.
-    assert_clean(
+fn ec_method_source_refused_even_when_checked() {
+    // WHY: same producer as `ec_method_suggestions_refused_even_when_checked` — see its WHY.
+    // Was `ec_method_source_resolves_in_ec_fn`, asserting the pre-fix (wrong) behavior.
+    // Completes the sibling coverage for all six members of EC_METHODS: or, failed, message
+    // (still `Lowered` — see `ec_method_message_resolves_in_ec_fn` above), suggestions, trace,
+    // source (both `Refused`).
+    let out = assert_errors(
         r#"
 function compute() -> int errors {
   return 42
@@ -4965,6 +4983,18 @@ function entrypoint() -> nothing {
   }
 }
 "#,
+        1,
+    );
+    let errs: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert_eq!(
+        errs[0].kind,
+        Some(ynz_diagnostics::DiagnosticKind::EcFieldNotYetAvailable),
+        "expected EcFieldNotYetAvailable; got: {:#?}",
+        errs
     );
 }
 

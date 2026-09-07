@@ -1670,6 +1670,17 @@ what_template = "`{name}.{field}` is read here, but `{name}` hasn't been checked
 what_instead_template = "Check `.failed()` on `{name}` first — store it in a `let`/`const` binding if it isn't one already, then write `if ({name}.failed()) { … {name}.{field} … }`. Or call `{name}.or(<default>)` for a fallback value instead of `.{field}`."
 why_template = "`.message`, `.suggestions`, `.trace`, and `.source` only carry meaningful data once `.failed()` is true — reading one before the check would report details for a call that might have succeeded. Yinz catches this at compile time instead of returning garbage at runtime."
 
+# v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): `.suggestions`/`.trace`/`.source`
+# type-check fine (they have real types) but have no working codegen yet. Refusing here, at the
+# SAME compile step that admits the `.failed()` check, means a correct user program never
+# reaches codegen's unlowered field arm — see `ynz_typeck::errors_fields`'s module doc for the
+# full producer.
+[[diagnostic_template]]
+kind_name = "EcFieldNotYetAvailable"
+what_template = "`.{field}` isn't available yet on an `errors` value."
+what_instead_template = "Use `.message` to read what went wrong, after checking `.failed()`."
+why_template = "Only `.message` is wired up to a real value right now — `.{field}` doesn't have one yet."
+
 # v0.3 concurrency hardening Phase 3 step 3.2 (FRAGO 002 cluster C2): `.copy()` returns a
 # genuinely independent value for every type where independence is meaningful, and is refused
 # at compile time where it is not — nothing silently aliases. This is the ONE shell for every

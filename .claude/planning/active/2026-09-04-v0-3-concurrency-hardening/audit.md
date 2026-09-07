@@ -900,3 +900,170 @@ that genuinely returns `nothing` — names a value that does not exist; it now s
 - `cargo test -p ynz-driver -p ynz-typeck -p ynz-codegen -p ynz-registry -p ynz-diagnostics
   -p ynz-tmgrammar --no-fail-fast`, `clippy --workspace --all-targets -- -D warnings`,
   `fmt --all -- --check`: see the dispatch's report for the run.
+
+## Phase 3 steps 3.5, 3.3, 3.4 — parked 32 confirmed LIVE and distinct; C3 and S1 both fixed at their producers
+
+**Dispatch** `hardening-p3.345-20260907-a1`, 2026-09-07. Order per the brief: 3.5 (archival read)
+first, then 3.3 (C3), then 3.4 (S1). Tree left dirty for the conductor to seal. Files touched:
+`crates/ynz-typeck/src/check.rs`, `crates/ynz-typeck/src/lib.rs`,
+`crates/ynz-typeck/src/errors_fields.rs` (new), `crates/ynz-codegen/src/emit.rs`,
+`crates/ynz-diagnostics/src/diagnostic.rs`, `registry/features.toml`,
+`crates/ynz-typeck/tests/{diagnostic_template_parity.rs,check.rs,errors_typeck.rs}`,
+`crates/ynz-driver/tests/error_galleries.rs`, `examples/primantis-orders/v0_3_hardening_errors.ynz`,
+`.claude/plans/parked.md`, this plan's `plan.md`.
+
+### Step 3.5 — parked 32 LIVES, and it is NOT C3's sibling
+
+Recovered the round-3 executor's exact repro shape from `m8-p4-fix3-20260904` (an
+always-succeeding `errors`-capable function, checked twice inside a caller: `if (raw.failed())`
+then `if (!raw.failed())`, each printing a distinct marker). Built a worktree at `d0c46b3` (the
+round-3 base, confirmed reachable) and re-ran the reconstructed program there: **both markers
+print** — reproduces exactly as the round-3 audit recorded, confirming the repro is faithful.
+Ran the identical program against HEAD (`2c624ce`, before this session's own C3/S1 changes):
+**still both markers print.** Neither `6be6773` (C2) nor anything upstream of this dispatch
+touches the producer.
+
+Root cause, read (not inferred), named in full in `parked.md` entry 32: `resolve_ident`
+(`check.rs`) auto-narrows an `ErrorsCapable` binding to its inner type on ANY read inside an
+`errors`-capable function — including the read that IS ITSELF a `.failed()`/`.message`
+receiver (already self-documented at `EC_MEMBER_NAMES`'s doc comment). `restore_ec_receiver_ty`
+patches typeck's own dispatch so `.failed()` isn't rejected as "unknown method on string," but
+does not stop `cg.expr_type` from recording the narrowed type for that specific `Ident` AST
+node. Codegen's `Expr::Ident` arm (`emit.rs`, the `errors_capable_locals` block) reads that
+recorded type: on the first `.failed()` receiver it takes the "already narrowed" branch (no
+error-bit check at all) and replaces `cg.locals[name]` with the extracted success value,
+dropping the binding from `errors_capable_locals`; the second `.failed()` receiver then hands
+that success-typed value to `lower_errors_capable_method`'s `"failed"` arm, which unconditionally
+calls `.into_pointer_value()` and dereferences offset 0 as if it were the `{i64,i64}` result
+struct — reading the string's own bytes as a bogus error pointer.
+
+**Verdict: it lives, and it does NOT belong in step 3.3's fix.** C3 is about whether typeck
+ADMITS a read (a compile-time gate, keyed on binding identity); this defect is about the RUNTIME
+VALUE `.failed()` computes on a repeat read of the SAME binding, with no shadowing anywhere in
+the reproduction. Fixing C3's name→alias-class keying changes nothing about this producer (typeck
+still restores dispatch correctly for both reads; the bug is entirely in codegen's per-read
+narrowing cache colliding with typeck's per-read type record). Not fixed here — no FRAGO
+authorized it, Phase 2 never diagnosed this mechanism, and the brief's own charter for 3.5 was
+read-only. `parked.md` entry 32 carries the full producer and a RED-repro program for whichever
+session picks it up next.
+
+### Step 3.3 — C3 fixed at its producer: alias class, not name
+
+**Producer.** `errors_failed_true_branch: Vec<String>` and its siblings `errors_consumed` /
+`errors_success_narrowed` (`HashSet<String>`) keyed on the bare binding name.
+`check_errors_field_needs_failed_check` admitted a read by matching `Expr::Ident(name)` against
+that list — so a shadowing inner `let x = ...` inside the guarded block, sharing the outer `x`'s
+name, inherited its checked status.
+
+**RED pinned first**: `message_before_failed_check_fires_on_a_shadowed_rebinding_inside_the_guard`
+(`crates/ynz-typeck/tests/diagnostic_template_parity.rs`) — confirmed failing by reverting
+`check.rs` to `HEAD` (via `git show HEAD:... > check.rs`, restored after) and re-running: `no
+diagnostic rendered; got []`. Restored the fix; GREEN.
+
+**Fix, one producer, both call forms.** `errors_success_narrowed` / `errors_consumed` /
+`errors_failed_true_branch` are now keyed by `ScopeEntry::alias_class` (`u64`) — the SAME
+binding-identity signal `Scope`'s use-after-give tracking already mints fresh per binding event
+(`binding_event_origin`), threaded rather than re-derived (`authoritative-derivation.md`).
+Touch points: `check_stmt_if` (resolves the checked name to its alias class BEFORE
+`self.scope.push()` opens the guarded block, so a later shadow mints its own class and is never a
+member); `resolve_ident` (the same substitution on its two set operations); and
+`check_errors_field_needs_failed_check`, the ONE gate shared by both `Expr::MethodCall` and
+`Expr::FieldAccess` dispatch (unchanged sharing — one fix, both call forms, per the pattern
+`EC_MEMBER_NAMES`'s own doc comment already names).
+
+**`for`-destructure verification** (the plan's own note): `parse_for_destructure` desugars
+`(k, v)` to synthetic `Stmt::Let`s, which go through the identical `binding_event_origin` path a
+source-level `let` does — no special-casing needed. Since `ErrorsCapable` cannot be a
+container's element type (it exists only as a transient call-result wrapper), the meaningful
+verification is that a for-destructured name sharing an outer checked binding's NAME shadows by
+IDENTITY (never inherits the outer's alias class) and that the outer binding is still correctly
+admitted after the loop's scope pops —
+`a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch`.
+
+**Also added**: `message_is_still_admitted_for_the_outer_binding_after_a_shadow_pops` (no
+overcorrection — the outer, still-checked binding must remain admitted after an inner shadow's
+scope exits).
+
+### Step 3.4 — S1 fixed at its producer, by REFUSAL not lowering
+
+**Producer.** `EC_FIELDS_REQUIRE_FAILED_CHECK` (a hand-written list) admitted
+`message`/`suggestions`/`trace`/`source`; codegen's `Type::ErrorsCapable` field arm
+(`emit.rs`) lowered only `message` and returned a raw `Err` string ("This is a compiler bug")
+for the other three. Two lists, nothing binding them — the exact `authoritative-derivation.md`
+class.
+
+**RED pinned first**: `ec_field_not_yet_available_is_rendered_from_the_registry` +
+`ec_field_not_yet_available_fires_for_suggestions_and_source_too` +
+`ec_field_not_yet_available_does_not_shadow_the_failed_check_gate`
+(`diagnostic_template_parity.rs`) — confirmed failing against the reverted `check.rs` (the last
+one also caught `variant_backed_templates_are_rendered_from_the_registry_or_on_the_shrinking_
+ratchet` failing for the right reason: a dead template with no render site). Restored; GREEN.
+
+**Decision (per `no-duct-tape.md`): refuse, do not lower.** Lowering `.trace`/`.source` needs new
+`array<Frame>`/`SourceLoc` shape-value construction from the runtime's already-captured trace
+data (`ynz_error_trace_len`/`ynz_error_trace_frame` exist; nothing in codegen builds a Yinz value
+from them). `.suggestions` has NO producer anywhere in the compiler — the runtime's
+`suggestions_ptr`/`_len` fields are permanently null; even a "successful" lowering would always
+yield `[]`. This is a separate, feature-shaped piece of work (new shape-construction machinery,
+a design question for whether/how suggestions ever get populated), not a producer-alignment fix,
+and this branch is concurrency hardening, not an errors-surface feature branch. A refusal is
+loud, actionable (points at `.message`), and honest (never claims a bug that isn't one); an ICE
+reached by a correct, properly-guarded program is none of those.
+
+**Fix.** New module `crates/ynz-typeck/src/errors_fields.rs`: `EcField` (four variants,
+`from_field_name` IS the admission list — no separate array) and `ec_field_lowering: EcField ->
+EcFieldLowering` (`Lowered` for `Message`, `Refused` for the other three), exhaustive, no `_`
+arm. Both `check_errors_capable_method` and `infer_field_access` (`check.rs`) now call a new
+shared gate, `check_errors_field_is_lowered`, right after the existing `.failed()`-check gate —
+ordering verified by
+`ec_field_not_yet_available_does_not_shadow_the_failed_check_gate` (an UNCHECKED read still gets
+`MessageBeforeFailedCheck` first, never `EcFieldNotYetAvailable`). Codegen's field arm consumes
+the same `ec_field_lowering` table; the `Refused` arm is now a defensive "typeck should have
+caught this" error (mirrors `emit_owned_copy`'s `OwnedCopy::Refused` arm precedent) rather than
+the reachable-from-source ICE it replaced. New `errors_field_parity_tests` module in
+`emit.rs` mirrors `copy_parity_tests`'s binding pattern
+(`every_ec_field_lowered_has_a_codegen_arm`): a field reclassified `Lowered` without matching
+codegen fails a TEST, not a user's build. New `[[diagnostic_template]]` `EcFieldNotYetAvailable`
++ `DiagnosticKind` variant carry the three-slot refusal text (`{field}` only — no per-field
+customization needed, since all three share one reason).
+
+**Fallout from the fix, corrected not weakened.** Three pre-existing tests asserted the WRONG
+(pre-fix) behavior as `assert_clean` — `ec_method_{suggestions,trace,source}_resolves_in_ec_fn`
+(`crates/ynz-typeck/tests/check.rs`) and `m7_suggestions_method_returns_array_of_string`
+(`crates/ynz-typeck/tests/errors_typeck.rs`). Renamed and rewritten to assert the correct
+refusal (`EcFieldNotYetAvailable`), with a WHY pointing at this FRAGO. `.message`'s own sibling
+test (`ec_method_message_resolves_in_ec_fn`) is unchanged — `Message` stays `Lowered`.
+
+### Gallery + registry lane
+
+`examples/primantis-orders/v0_3_hardening_errors.ynz` gained two triggers (a shadowed `count`
+inside a correct guard; a checked-but-refused `.trace`), each with a `// WHY:` naming its FRAGO
+cluster. `crates/ynz-driver/tests/error_galleries.rs`'s
+`v0_3_hardening_gallery_fires_every_copy_refusal` count bumped 8 → 10 with new phrase assertions
+for both. Registry lane (parked 51): `ynz-registry`, `jargon_audit`, and `ynz-tmgrammar` all run
+green (see Verification).
+
+### Verification
+
+- `cargo test -p ynz-typeck --all-targets`: every target green (222 in `check.rs`,
+  29 in `errors_typeck.rs`, 19 in `diagnostic_template_parity.rs`, rest unchanged).
+- `cargo test -p ynz-codegen --lib`: 24 green, including the new `errors_field_parity_tests`
+  (3 tests).
+- `cargo test -p ynz-driver --no-fail-fast`: **785 passed, 0 failed**, including
+  `error_galleries` (11) and `cross_impl_consistency`'s full corpus/fuzz suite.
+- `cargo test -p ynz-registry --all-targets` (44), `cargo test -p ynz-diagnostics --test
+  jargon_audit` (10), `cargo test -p ynz-tmgrammar --all-targets` (6): all green.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `cargo fmt --check`: clean (one file needed `cargo fmt` to apply; re-checked clean after).
+- **Corpus delta: zero, byte-identical.** 756 files (`crates/ynz-driver/tests/fixtures` +
+  `examples`, flat-copied to a scratch dir so `ynz build`'s single-file mode has a stable target),
+  a `d0c46b3`-adjacent pre-session binary (built from this session's own starting `HEAD`,
+  `2c624ce`) versus the post-fix binary: 517 clean / 199 build error / 40 infra error (broken
+  relative imports from the flat copy, identical both sides), byte-identical exit code AND first
+  diagnostic line on every file. Stated as evidence about the corpus, not proof about the
+  language: nothing in the corpus exercises either shadowing-inside-a-guard or a checked
+  `.trace`/`.suggestions`/`.source` read, which is exactly why both defects shipped invisible
+  until named.
+- `ynz-driver --release` rebuilt (external `target/release` consumer contract, `CLAUDE.md`).
+- End-to-end CLI render checked directly (not just the internal `check_query` harness): both new
+  refusals render full three-slot teaching text with correct carets on a live multi-error file.

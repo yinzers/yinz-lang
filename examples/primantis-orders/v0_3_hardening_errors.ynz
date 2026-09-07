@@ -1,14 +1,13 @@
-// Error gallery — v0.3 concurrency hardening, Phase 3 step 3.2.
+// Error gallery — v0.3 concurrency hardening, Phase 3.
 //
-// One rule produces every diagnostic in this file: `.copy()` gives you a genuinely separate
-// value, or it refuses out loud. It never hands back the thing you asked it to copy while
-// saying it copied it. Before this, six of the types below quietly did exactly that — you got
-// a second name for the same value, and changing one changed the other with no warning at all.
-//
-// Run it and read the eight refusals as a set: each one names what you can do instead, and why a
-// copy of that particular thing could not mean anything. The last one is a different rule with
-// the same manners: some values are kept with the function that made them, so a background task
-// — which outlives that function — cannot be handed one at all.
+// Two sections, two rules. The first eight refusals (step 3.2): `.copy()` gives you a
+// genuinely separate value, or it refuses out loud. It never hands back the thing you asked it
+// to copy while saying it copied it. Before this, six of the types below quietly did exactly
+// that — you got a second name for the same value, and changing one changed the other with no
+// warning at all. The last two triggers (steps 3.3 and 3.4) are a different rule with the same
+// manners, both about an `errors` value's dot-property surface: reading `.message` and its
+// siblings only means something once you've proven the call actually failed, and only
+// `.message` itself has a real value to hand back today.
 
 shape Delivery { miles: int }
 shape Pickup { slot: int }
@@ -81,4 +80,26 @@ function entrypoint() -> nothing {
   // be gone. Handing it over instead does not help, which is why this refusal never says to.
   let stroll: range = range(0, 3)
   background walk(stroll)
+
+  // WHY: MessageBeforeFailedCheck fires here even though `.failed()` WAS checked — on a
+  // DIFFERENT `count`. The inner `let count = ...` shadows the outer checked one, so the
+  // compiler has no proof THIS `count` ever failed. (v0.3 concurrency hardening Phase 3 step
+  // 3.3 — closes parked item 33: before this fix, the checked-status tracking was keyed by
+  // NAME, so the shadowed inner binding silently inherited the outer one's checked status and
+  // this compiled clean, printing an empty string at runtime instead of refusing here.)
+  let count = ticketsSold(`bloomfield`)
+  if (count.failed()) {
+    let count = ticketsSold(`lawrenceville`)
+    print(count.message)
+  }
+
+  // WHY: EcFieldNotYetAvailable fires here even INSIDE a correct `.failed()` guard — `.trace`
+  // type-checks fine (it really is `array<Frame>`) but has no working codegen yet. (v0.3
+  // concurrency hardening Phase 3 step 3.4 — closes parked item 34: before this fix the
+  // program below compiled clean and reached codegen as "This is a compiler bug," a lie about
+  // a program that did everything REF-errors.md asks.)
+  let lastOrder = ticketsSold(`squirrel hill`)
+  if (lastOrder.failed()) {
+    let history = lastOrder.trace
+  }
 }

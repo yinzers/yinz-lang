@@ -258,10 +258,15 @@ function entrypoint() -> nothing {
 // ── 7. .suggestions returns array<string> ────────────────────────────────────
 
 #[test]
-fn m7_suggestions_method_returns_array_of_string() {
-    // WHY: `.suggestions` must return `array<string>` to support iterating over
-    // fix hints. Wrong type breaks loops like `for (s in r.suggestions)`.
-    assert_clean(
+fn m7_suggestions_method_refused_even_when_checked() {
+    // WHY: v0.3 concurrency hardening Phase 3 step 3.4 (FRAGO 002 singleton S1). This test
+    // used to be `m7_suggestions_method_returns_array_of_string` and asserted the read below
+    // compiled clean, which is `.suggestions` typing correctly (`array<string>`, unchanged)
+    // while having NO working codegen — a correct, properly `.failed()`-guarded program used
+    // to reach codegen and ICE "This is a compiler bug." `ec_field_lowering` now refuses
+    // `.suggestions` at THIS site, at compile time, with real teaching text, before codegen
+    // ever runs. See `ynz_typeck::errors_fields`'s module doc for the full producer.
+    let out = assert_errors(
         r#"
 function readFile() -> string errors {
   return `hello`
@@ -275,6 +280,18 @@ function entrypoint() -> nothing {
   }
 }
 "#,
+        1,
+    );
+    let errs: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert_eq!(
+        errs[0].kind,
+        Some(ynz_diagnostics::DiagnosticKind::EcFieldNotYetAvailable),
+        "expected EcFieldNotYetAvailable; got: {:#?}",
+        errs
     );
 }
 

@@ -19423,7 +19423,33 @@ fn lower_field_access<'ctx>(
     // Before this arm existed at all the field fell through to `field_gep` and ICEd
     // (v0.3-M8 Phase 4 fix round 2, Producer B).
     if let Type::ErrorsCapable { .. } = &recv_ty {
-        if field_name == "message" {
+        // v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): `EC_FIELDS_REQUIRE_
+        // FAILED_CHECK` (typeck's admission list) and this arm's field-name check used to be
+        // two hand-written lists nothing bound together — a field admitted by the first and
+        // unhandled by the second reached a real user as "This is a compiler bug"
+        // (`ynz_typeck::errors_fields`'s module doc has the full producer). Both typeck's
+        // admission gate and this arm now consume the SAME table
+        // (`ynz_typeck::errors_fields::ec_field_lowering`), and typeck refuses every
+        // `Refused` field before codegen runs (`check_errors_field_is_lowered`) — the driver
+        // never invokes codegen while diagnostics are non-empty
+        // (`crates/ynz-driver/src/build.rs`). The `Refused` arm below is defensive, mirroring
+        // `emit_owned_copy`'s `OwnedCopy::Refused` arm: reaching it means typeck's gate was
+        // bypassed, which is a compiler bug, not a user's mistake.
+        let ec_field =
+            ynz_typeck::errors_fields::EcField::from_field_name(field_name).ok_or_else(|| {
+                format!("codegen: `.{field_name}` is not a recognized `errors`-capable field")
+            })?;
+        match ynz_typeck::errors_fields::ec_field_lowering(ec_field) {
+            ynz_typeck::errors_fields::EcFieldLowering::Refused => {
+                return Err(format!(
+                    "codegen: `.{field_name}` on an `errors` value reached codegen despite \
+                     having no lowering — typeck must refuse this before codegen ever sees \
+                     it; this is a compiler bug"
+                ));
+            }
+            ynz_typeck::errors_fields::EcFieldLowering::Lowered => {}
+        }
+        if ec_field == ynz_typeck::errors_fields::EcField::Message {
             let result_ty = errors_result_type(cg.ctx);
             let recv_ptr = lower_expr(cg, receiver)?.into_pointer_value();
             let err_gep = cg
@@ -19487,8 +19513,14 @@ fn lower_field_access<'ctx>(
             phi.add_incoming(&[(&msg.into_pointer_value(), call_end_bb), (&empty, pre_bb)]);
             return Ok(phi.as_basic_value());
         }
+        // `ec_field_lowering` classified this field `Lowered` but the match above only has a
+        // real arm for `EcField::Message` — a future field marked `Lowered` needs its codegen
+        // written HERE before the classification changes. `every_ec_field_lowered_has_a_
+        // codegen_arm` in `errors_field_parity_tests` catches this at build time; this is the
+        // defensive runtime twin (same pattern as `emit_owned_copy`'s `OwnedCopy::Refused` arm).
         return Err(format!(
-            "codegen: `.{field_name}` on an `errors` value is not lowered yet (only `.message`)"
+            "codegen: `.{field_name}` is classified Lowered but has no codegen arm — add one \
+             before marking it Lowered in ec_field_lowering"
         ));
     }
 
@@ -20401,6 +20433,72 @@ mod copy_parity_tests {
             !ynz_typeck::types::is_trivially_copyable(&bignum),
             "bignum `number` must not be trivially copyable — it is a pointer, not a value"
         );
+    }
+}
+
+/// v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): mirrors `copy_parity_tests` —
+/// the binding the shared `EcField`/`EcFieldLowering` table needs and the compiler cannot give
+/// it. `ec_field_lowering`'s exhaustiveness over `EcField` is a BUILD failure for a new field
+/// name; this test is the binding the compiler cannot enforce on its own: a field marked
+/// `Lowered` must be one this arm's inner match actually has codegen for (today, only
+/// `EcField::Message`). A fifth field admitted-but-unlowered fails THIS test rather than
+/// reaching a user as "This is a compiler bug".
+#[cfg(test)]
+mod errors_field_parity_tests {
+    use ynz_typeck::errors_fields::{ec_field_lowering, EcField, EcFieldLowering};
+
+    const ALL_EC_FIELDS: &[EcField] = &[
+        EcField::Message,
+        EcField::Suggestions,
+        EcField::Trace,
+        EcField::Source,
+    ];
+
+    #[test]
+    fn every_ec_field_lowered_has_a_codegen_arm() {
+        // WHY: `lower_field_access`'s `Type::ErrorsCapable` branch has a real codegen arm for
+        // exactly `EcField::Message` today. If a future field is reclassified `Lowered` in
+        // `ec_field_lowering` without writing its codegen, this catches it at build/test time
+        // instead of a user reaching the defensive "classified Lowered but has no codegen arm"
+        // runtime error string.
+        for field in ALL_EC_FIELDS {
+            if ec_field_lowering(*field) == EcFieldLowering::Lowered {
+                assert_eq!(
+                    *field,
+                    EcField::Message,
+                    "{field:?}: classified Lowered, but `lower_field_access`'s ErrorsCapable \
+                     arm only has real codegen for EcField::Message — write the codegen before \
+                     reclassifying"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn message_is_the_only_field_lowered_today() {
+        // WHY: names the current state plainly so a reviewer sees at a glance which three
+        // fields are refused and why (see `ynz_typeck::errors_fields`'s module doc) rather
+        // than inferring it from the absence of a codegen arm.
+        assert_eq!(
+            ec_field_lowering(EcField::Message),
+            EcFieldLowering::Lowered
+        );
+        assert_eq!(
+            ec_field_lowering(EcField::Suggestions),
+            EcFieldLowering::Refused
+        );
+        assert_eq!(ec_field_lowering(EcField::Trace), EcFieldLowering::Refused);
+        assert_eq!(ec_field_lowering(EcField::Source), EcFieldLowering::Refused);
+    }
+
+    #[test]
+    fn from_field_name_round_trips_every_variant() {
+        for field in ALL_EC_FIELDS {
+            assert_eq!(EcField::from_field_name(field.name()), Some(*field));
+        }
+        assert_eq!(EcField::from_field_name("failed"), None);
+        assert_eq!(EcField::from_field_name("or"), None);
+        assert_eq!(EcField::from_field_name("notAField"), None);
     }
 }
 

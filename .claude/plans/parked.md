@@ -334,6 +334,45 @@ sign-off applies them alongside the owed downstream plan edits** — the design 
     can't hide again. Source plan-id `2026-07-04-v0-3-m8-concurrency-completion`.
     **Status (2026-09-04): ROUTED by Patrick to the `errors`-surface hotfix branch, with items 33
     and 34 — after M8 closes (FRAGO 011).**
+    **Status (2026-09-07, hardening Phase 3 step 3.5): LIVE, confirmed by re-running the exact
+    round-3 shape on HEAD (`loadConfig() -> nothing errors` calling an always-succeeding
+    `errors` function, then `if (raw.failed()) { print("marker1") }` followed by
+    `if (!raw.failed()) { print("marker2") }`) — reproduced first on base `d0c46b3` (both
+    markers print, matching the round-3 finding exactly, confirming the repro is faithful),
+    then on HEAD (`2c624ce` + this session's C3/S1 fixes): STILL both markers print. C2's
+    landing (`6be6773`) and this session's C3/S1 fixes touch none of the machinery below.
+    **NOT C3's sibling — a distinct, deeper producer, named here so it is not silently folded
+    into a fix that would not touch it.** C3 (`errors_failed_true_branch`/`errors_consumed`/
+    `errors_success_narrowed` keyed by name instead of `alias_class`) is about WHETHER typeck
+    ADMITS a read; this defect is about the RUNTIME VALUE `.failed()` computes on a SECOND read
+    of the SAME binding, and reproduces with no shadowing anywhere in the program. Root cause,
+    confirmed by reading (not inferred): `resolve_ident` (`check.rs`) auto-narrows an
+    `ErrorsCapable` binding to its inner type on ANY read inside an `errors`-capable function —
+    including the read that IS itself a `.failed()`/`.message` receiver — already self-
+    documented at `EC_MEMBER_NAMES`'s doc comment ("resolve_ident's auto-propagation may
+    already have narrowed a bare-ident receiver to its success type on THIS exact read").
+    `restore_ec_receiver_ty` patches typeck's OWN dispatch (so `.failed()` isn't rejected as
+    "unknown method on string") but does not stop `cg.expr_type` from recording the narrowed
+    type for that specific `Ident` AST node. Codegen's `Expr::Ident` arm
+    (`crates/ynz-codegen/src/emit.rs`, the `errors_capable_locals` block) reads that recorded
+    type: on the FIRST `.failed()`'s receiver it takes the "already narrowed" branch (no error
+    check at all — pulls field-1 bits directly) and REPLACES `cg.locals[name]` with the
+    extracted success value, removing the binding from `errors_capable_locals`; the SECOND
+    `.failed()`'s receiver then loads that success-typed value directly and hands it to
+    `lower_errors_capable_method`'s `"failed"` arm, which unconditionally calls
+    `.into_pointer_value()` and dereferences offset 0 as if it were the `{i64,i64}` result
+    struct — reading the STRING's own bytes as a bogus error pointer. Two independent
+    almost-correct pieces (typeck's dispatch-only restore; codegen's per-read narrowing cache)
+    each assume the other closes the gap; neither does, for the SAME reason
+    `authoritative-derivation.md` names: no single producer decides "is this specific read the
+    checking read or a later one." COST: this is NOT a one-function fix like C3/S1 — it needs
+    either (a) `resolve_ident` to skip auto-narrowing when the current read is itself the
+    receiver of an EC-member dispatch (a lookahead `check_stmt_if`/`check_errors_capable_method`
+    do not currently have), or (b) codegen's `errors_capable_locals` removal to preserve a
+    pointer-shaped representation across repeat reads instead of an eagerly-extracted success
+    value. Needs its own diagnosis-then-FRAGO cycle, not a fold into C3's fix. TRIGGER: the next
+    `errors`-surface session; a RED fixture pinning the two-marker shape (given above) is that
+    session's first commit, per this item's own established pattern.**
 
 ### Phase 4 — closed by ceiling (round 3, 2026-09-04); two blockers re-homed to the `errors`-surface hotfix
 
@@ -352,6 +391,21 @@ after M8's milestone PR is up — the FRAGO 004 precedent. Each gets a RED pin F
     rule with a hole, not a crash. WHY deferred: closed-by-ceiling; the fix (key the set by scope
     entry / invalidate on re-declaration — the same push/pop point one level deeper) belongs with
     its siblings. COST: small. TRIGGER: the `fix/errors-fields` branch, RED pin first.
+    **CLOSED (2026-09-07, hardening Phase 3 step 3.3 / FRAGO 002 cluster C3).** RED pinned first
+    (`message_before_failed_check_fires_on_a_shadowed_rebinding_inside_the_guard`,
+    `crates/ynz-typeck/tests/diagnostic_template_parity.rs` — confirmed failing against the
+    pre-fix `check.rs` by reverting the file to `HEAD` and re-running, then restored). Fixed at
+    the producer named above: `errors_failed_true_branch`/`errors_consumed`/
+    `errors_success_narrowed` now key on `ScopeEntry::alias_class` (binding identity), not the
+    bare name — the SAME identity signal `Scope`'s use-after-give tracking already mints per
+    binding event (`binding_event_origin`), threaded rather than re-derived
+    (`authoritative-derivation.md`). `check_stmt_if` (`check.rs`), `resolve_ident` (`check.rs`),
+    and `check_errors_field_needs_failed_check` (`check.rs`, the one shared gate both
+    `Expr::MethodCall` and `Expr::FieldAccess` dispatch consult) are the three touch points; one
+    fix, both call forms. Verified for the `for`-destructure case the plan named (desugared
+    `Stmt::Let`s go through the same `binding_event_origin` path, no special-casing needed) via
+    `a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch`. Gallery trigger
+    added to `examples/primantis-orders/v0_3_hardening_errors.ynz`.
 34. **`.trace` / `.suggestions` / `.source` inside a `.failed()` check ICE** — `emit.rs:~19281`
     "not lowered yet (only .message)". WHAT: typeck admits all four siblings post-check
     (`EC_FIELDS_REQUIRE_FAILED_CHECK`), `REF-errors.md` documents all four, codegen has an arm for
@@ -359,6 +413,28 @@ after M8's milestone PR is up — the FRAGO 004 precedent. Each gets a RED pin F
     compiler bug"), not silent — not a regression. Round 3's corpus sweep claimed all four and
     did not name this gap. WHY deferred: same ancestor, same branch. COST: three arms mirroring
     the `.message` `br`/`phi` shape + fixtures. TRIGGER: `fix/errors-fields`, RED pin first.
+    **CLOSED (2026-09-07, hardening Phase 3 step 3.4 / FRAGO 002 singleton S1) — by REFUSAL, not
+    by lowering.** RED pinned first (`ec_field_not_yet_available_is_rendered_from_the_registry`
+    + siblings, same file — confirmed failing against the pre-fix `check.rs`, then restored).
+    Decided against `no-duct-tape.md`: lowering `.trace`/`.source` needs new `array<Frame>`/
+    `SourceLoc` shape-value construction from the runtime's already-captured trace data
+    (`ynz_error_trace_len`/`ynz_error_trace_frame` exist; nothing in codegen builds a Yinz value
+    from them) and `.suggestions` has NO producer anywhere in the compiler (the runtime's
+    `suggestions_ptr`/`_len` fields are permanently null) — a separate, feature-shaped piece of
+    work, not a producer-alignment fix. Refusing is loud, actionable, and honest; an ICE
+    reached by a correct program is none of those. Fixed at the producer: `EC_FIELDS_REQUIRE_
+    FAILED_CHECK` (a hand-written list) and codegen's raw `field_name == "message"` string
+    check (the second, unbound list) are both replaced by ONE shared table,
+    `ynz_typeck::errors_fields::{EcField, ec_field_lowering}` — exhaustive over `EcField`, no
+    `_` arm, so a fifth field is a build failure in `ec_field_lowering` itself. A new
+    `EcFieldNotYetAvailable` `[[diagnostic_template]]` + `DiagnosticKind` variant carries the
+    three-slot refusal text. `errors_field_parity_tests` in `crates/ynz-codegen/src/emit.rs`
+    mirrors `copy_parity_tests`'s `every_plan_matches_the_type_shape_its_emitter_destructures`
+    binding. Three pre-existing tests that asserted the WRONG (pre-fix) behavior — corrected,
+    not left red or weakened: `ec_method_{suggestions,trace,source}_resolves_in_ec_fn`
+    (`crates/ynz-typeck/tests/check.rs`) and `m7_suggestions_method_returns_array_of_string`
+    (`crates/ynz-typeck/tests/errors_typeck.rs`). Gallery trigger added to
+    `examples/primantis-orders/v0_3_hardening_errors.ynz`.
 
 ### Phase 4 — final `test-quality` grade (2026-09-04, phase close)
 
