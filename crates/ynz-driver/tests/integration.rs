@@ -11114,6 +11114,70 @@ fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
     );
 }
 
+// ── v0.3 hardening step 3.2 fix round: the spawn asks ONE question, not a syntactic one ───
+//
+// `prepare_bg_arg_for_ctx` used to decide "does the task need a value of its own?" by matching
+// an `Expr::` variant against a `Type::` variant — an explicit `.copy()` of an `array`, and a
+// bare `BgOwnership::Give` on a `map`. Both were wrong in the way `.claude/corpses.md`
+// "Enumerating syntactic sites instead of threading the whole-program ownership analysis"
+// predicts, and the three fixtures below are the three ways they were wrong. Each was verified
+// RED against the pre-fix binary; the numbers in each WHY are that measurement.
+
+#[test]
+fn spawning_with_a_copied_map_mints_one_clone_not_two() {
+    // WHY: `m.copy()` had already produced an independent map; the array-shaped de-dup guard
+    // did not recognise a map, so the spawn glue cloned it AGAIN and nothing freed the first.
+    // Measured pre-fix: 16 allocs against the no-`.copy()` twin's 11 — a whole extra map
+    // (header + four buffers) leaked per spawn. Asserted as a COMPARISON rather than a
+    // constant: asking for a copy before a spawn must cost what the spawn already costs.
+    let (copied_alloc, copied_free) =
+        ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_copied_map.ynz");
+    let (plain_alloc, plain_free) =
+        ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_plain_map.ynz");
+    assert!(
+        plain_alloc > 0,
+        "alloc=0 — the counter saw nothing (FRAGO 005)"
+    );
+    assert_eq!(
+        (copied_alloc, copied_free),
+        (plain_alloc, plain_free),
+        "`background eat(m.copy())` must cost exactly what `background eat(m)` costs; a higher \
+         alloc = the spawn copied a value that was already an independent copy, and leaked the \
+         first one"
+    );
+}
+
+#[test]
+fn spawning_with_a_copied_maybe_frees_everything_it_allocates() {
+    // WHY: this leak went from ZERO to one per spawn when `maybe` stopped aliasing — `.copy()`
+    // minted an envelope, the spawn glue minted a second, and only the second rode the task's
+    // drop ladder. Measured pre-fix: 3 allocs / 2 frees. The balance is the assertion, because
+    // "allocated one more than it freed" is the whole defect.
+    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_copied_maybe.ynz");
+    assert!(alloc > 0, "alloc=0 — the counter saw nothing (FRAGO 005)");
+    assert_eq!(
+        alloc, free,
+        "a `maybe` spawn argument must free every envelope it allocates; alloc={alloc} \
+         free={free} — a gap of 1 is the second envelope nothing owns"
+    );
+}
+
+#[test]
+fn a_map_reached_through_a_field_is_not_shared_with_the_task() {
+    // WHY: `background eat(b.items)` records `Give` by default-deny, and that route consumes
+    // NOTHING — `b` still holds the map. The old gate read the `Give` label as proof of sole
+    // ownership and handed the map over untouched, so the task's write landed in the parent's
+    // map: pre-fix stdout was `99` / `99`. The task must get its own.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_hardening_c2_spawn_field_map_not_shared.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "99\n1\n",
+        "the task writes 99 into its OWN map and the parent still reads 1; `99\\n99\\n` means \
+         both sides hold one map. stderr:\n{stderr}"
+    );
+}
+
 #[test]
 fn bg_arg_handle_send_grandchild_reads_intact_array_after_relay_retired() {
     // WHY: the OTHER send producer. `relay` forwards its heap-cloned `rows` through

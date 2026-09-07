@@ -1692,6 +1692,17 @@ what_template = "`{name}` is a `{type}`, and this line still reads it after the 
 what_instead_template = "Hand `{name}` over instead of keeping it: move every later read of `{name}` above the `background` line, and the task takes it with nothing left to copy. {fix}"
 why_template = "A `background` task runs alongside the rest of this function. If both sides held the one value, either could change it while the other was reading, and neither would know. {why}"
 
+# The OTHER `background`-argument refusal, and it needed its own shell rather than a reuse of the
+# one above. `SpawnArgNotIndependent` says "the spawner keeps reading it", and its WHAT-INSTEAD
+# says "hand it over instead" — both true when the problem is two holders, both FALSE when the
+# problem is that the value is kept with the frame: handing it over does not move it, so the task
+# would still be reading storage that is gone. Fires under either ownership label for that reason.
+[[diagnostic_template]]
+kind_name = "SpawnArgStorageDiesWithTheFrame"
+what_template = "`{name}` is a `{type}`, and a `{type}` cannot be handed to a background task{detail}."
+what_instead_template = "{fix}"
+why_template = "{why}"
+
 [[diagnostic_template]]
 kind_name = "Borrowed"
 what_template = "`{name}` is already borrowed and cannot be given or reassigned while the borrow is active."

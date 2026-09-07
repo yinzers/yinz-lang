@@ -97,7 +97,22 @@ cloneRow.set(0, 99)
 // outer's first row still starts at 1
 ```
 
-`.copy()` works on a shape, on an `array<T>`, on a `fixed<T>`, on a `map<K, V>`, on a `maybe<T>`, and on every simple value (numbers, strings, booleans, an `options` value, a `sensitive` value). For a shape that holds arrays or maps inside it, write a standalone `copy()` function that copies those pieces and call it as a normal function — that keeps an expensive copy visible in your code.
+`.copy()` works on every simple value (numbers, strings, booleans, an `options` value, a `sensitive` value — a copied `sensitive` value stays hidden when it is printed, same as the original), on a shape, on an `array<T>`, and on a `map<K, V>`.
+
+For the three that hold other values inside them, it depends on what is inside:
+
+- **`array<T>`** copies its items too, however deep they go — unless an item is something that cannot be copied at all (a `channel`, say), and then the whole copy is refused.
+- **`fixed<T>`** holds its items in one block with no separate piece to follow, so it copies lists of simple values and shapes, and refuses a `fixed` of lists or maps.
+- **`maybe<T>`** copies when what is inside is a simple value, a number, or a shape. `maybe<array<int>>`, `maybe<map<string, int>>`, `maybe<fixed<int>>` and a `maybe` of a `maybe` are refused today — those are the natural things to wrap, so you will meet this. Copy the piece instead:
+
+```ynz
+let rows: maybe<array<int>> = loadRows()
+// let backup = rows.copy()          // COMPILE ERROR — see below
+let theRows: array<int> = rows.or([])
+let backup: array<int> = theRows.copy()   // copy the list itself
+```
+
+For a shape that holds arrays or maps inside it, `.copy()` copies the shape's own fields and the inner list stays shared. Write a standalone `copy()` function that copies those pieces and call it as a normal function — that keeps an expensive copy visible in your code.
 
 ### When `.copy()` refuses
 

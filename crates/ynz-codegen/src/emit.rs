@@ -17120,24 +17120,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // all: a channel is deliberately SHARED with the task, and an Auto-Arc group member
     // deliberately shares one counted block.
     //
-    // One `background`-only exception remains, and it is a de-duplication rather than a second
-    // classification: an explicit spawn-site `.copy()` on an array has ALREADY produced an
-    // independent heap array through this very emitter, so re-copying it here would both
-    // double-copy and leak the intermediate (nothing frees what `.copy()` allocated — an E8
-    // clone/drop imbalance). Transfer ownership of that copy to the task instead; its drop
-    // ladder frees it exactly as it freed the clone this path used to mint.
     let resolved = cg.resolve_type(ty);
-    if matches!(resolved, Type::BuiltinArray { .. })
-        && matches!(
-            arg,
-            ynz_ast::nodes::Expr::PostfixOp {
-                op: ynz_ast::nodes::PostfixOpKind::Copy,
-                ..
-            }
-        )
-    {
-        return Ok((val, BgArgFreeKind::HeapArrayPrimitive));
-    }
 
     // fr23 tracking guard (v0.3-M7, FRAGO 025): `dynamic Contract` receivers are CURRENTLY
     // unreachable here — dynamic-dispatch call sites abort earlier with "codegen: dynamic
@@ -17154,40 +17137,100 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         ));
     }
 
-    // A value handed over with `give` needs NO copy, and must not get one.
+    // ── Does the task need a value of its OWN? ──────────────────────────────────────────
     //
-    // The copy question this function asks the shared table is "does the task need a value of
-    // its own?" — and for a `map` the answer turns on typeck's OWN recorded ownership, which is
-    // read here rather than re-derived (`background_arg_inferred_ownership`, the same record
-    // the Auto-Arc arm above consults). `Give` means the spawner's binding was consumed at the
-    // spawn: the task is the sole holder, nothing can observe a shared value, and
-    // `IMP-concurrency.md` ("What this makes sound — and its precondition") states exactly that
-    // soundness for an aliased `map` argument arriving through a `give` parameter. Copying it
-    // anyway would leave the spawner's original map held by nobody — a leak, minted to protect
-    // against a hazard that cannot occur.
+    // Two facts decide it, and each is READ from its one producer rather than answered here:
     //
-    // The same reasoning covers a type the table REFUSES (a union today): under `give` there is
-    // nothing to be independent from, so the pre-existing pass-through is sound and stays. Under
-    // `Copy` typeck refuses the spawn outright with `SpawnArgNotIndependent`, so this arm never
-    // sees one — the loud answer is a teaching diagnostic at the spawn, never a backend error.
+    // 1. Is the task the SOLE holder — does nothing the spawner can still name reach this
+    //    value? Typeck's `background_arg_sole_holder`, derived from
+    //    `effective_ownership::provenance` plus the one spawn route that actually consumes a
+    //    binding. This replaces two syntactic guesses at the same question: an
+    //    `Expr::PostfixOp{Copy}`-plus-`Type::BuiltinArray` match (which stayed array-shaped
+    //    while `map`, `maybe` and `fixed` started allocating, so each of those double-copied
+    //    and leaked the first copy), and a bare `BgOwnership::Give` test (which is true on a
+    //    route that consumes nothing — `background eat(b.items)` left the task and `b` sharing
+    //    one map while the comment claimed sole ownership).
+    // 2. Does the value's storage already outlive the spawner's frame? Answered per PLAN by
+    //    `sole_holder_transfer_free_kind`, a non-wildcard match over the same `OwnedCopy` the
+    //    emitter destructures. Freshness alone is NOT enough here: `makeCargo()` is fresh and
+    //    sits in a return temp on the dying frame, and handing that to a task is the fr23
+    //    use-after-free.
     //
-    // This gate is deliberately NOT extended to `array`: an array argument is cloned on the
-    // `give` path too today, and its clone is what the task's drop ladder owns and frees
-    // (`HeapArrayPrimitive`). Removing that clone would change which allocation the ladder
-    // releases, which is a larger change than this one and belongs with the release work.
-    let give_needs_no_copy = matches!(resolved, Type::BuiltinMap { .. })
+    // Both true: hand the value over as it is, with the free kind that plan's own SpawnArg
+    // copy would have carried, so the task's drop ladder releases it exactly once.
+    let sole_holder = {
+        let s = arg.span();
+        cg.typed
+            .background_arg_sole_holder
+            .get(&(s.start, s.end))
+            .copied()
+    };
+
+    // ── A. A temporary nobody names: hand it over, do not copy it again ──────────────────
+    //
+    // An SoA-laid-out binding is the one value whose bits are not what an ordinary reader of
+    // this type expects (`emit_owned_copy`'s ArrayClone arm gathers it into a fresh AoS
+    // buffer). Never transfer one — the task reads AoS. (An SoA binding is an `Ident`, which
+    // is never `FreshTemporary`; the guard is belt for a future fresh SoA expression form.)
+    if matches!(
+        sole_holder,
+        Some(ynz_typeck::check::SoleHolder::FreshTemporary)
+    ) && cg.soa_expr_info(arg).is_none()
+    {
+        let minted_here = matches!(
+            arg,
+            ynz_ast::nodes::Expr::PostfixOp {
+                op: ynz_ast::nodes::PostfixOpKind::Copy,
+                ..
+            }
+        );
+        if let Some(free) = sole_holder_transfer_free_kind(cg, &resolved, minted_here) {
+            return Ok((val, free));
+        }
+    }
+
+    // ── B. A binding this spawn CONSUMES, for the two shapes that already shipped this way ─
+    //
+    // A `map` the task solely holds needs no copy: copying it would leave the spawner's
+    // original held by nobody — a leak minted against a hazard that cannot occur. A type the
+    // table REFUSES has no copy to make at all, so the value itself is the only thing there is
+    // to hand over (a union today).
+    //
+    // What CHANGED here is the gate, not the type list. It used to read `BgOwnership::Give`,
+    // and justify itself with "Give means the spawner's binding was consumed at the spawn."
+    // That is false for one of the three routes to that label: FRAGO 022's default-deny arm
+    // records `Give` for any non-ident argument it cannot prove safe, consuming nothing — so
+    // `background eat(b.items)` handed the task a map `b` still holds, and both sides wrote to
+    // it. The gate now reads the record that states the fact the arm actually needs.
+    //
+    // The type list stays exactly what shipped, deliberately: extending it to `array` would
+    // change WHICH allocation the task's drop ladder releases (today it owns and frees the
+    // clone, and the several exact-gap E8 pins over the hand-off path encode that), which is
+    // release-pass work and not a copy fix. That boundary is the one commit `6be6773` drew and
+    // this round keeps; the residual sharing left in the REFUSED arm — a default-deny `Give` of
+    // a union, where no copy exists to make — is named in parked entry 71 rather than left
+    // resting on the false claim above.
+    let consumed_shape_needs_no_copy = matches!(resolved, Type::BuiltinMap { .. })
         || matches!(
             ynz_typeck::owned_copy::owned_copy_plan(&resolved),
             ynz_typeck::owned_copy::OwnedCopy::Refused(_)
         );
-    if give_needs_no_copy {
+    if consumed_shape_needs_no_copy {
+        let refused = matches!(
+            ynz_typeck::owned_copy::owned_copy_plan(&resolved),
+            ynz_typeck::owned_copy::OwnedCopy::Refused(_)
+        );
         let s = arg.span();
-        if matches!(
+        let recorded_give = matches!(
             cg.typed
                 .background_arg_inferred_ownership
                 .get(&(s.start, s.end)),
             Some(ynz_typeck::check::BgOwnership::Give)
-        ) {
+        );
+        // For a REFUSED type the old `Give` test stands unchanged: there is no copy to fall
+        // back to, so narrowing the gate here would only turn a shipped pass-through into a
+        // backend error. For a `map` the fallback is a real clone, so the honest gate applies.
+        if (refused && recorded_give) || (!refused && sole_holder.is_some()) {
             return Ok((val, BgArgFreeKind::None));
         }
     }
@@ -19990,6 +20033,61 @@ fn emit_owned_copy<'ctx>(
     }
 }
 
+/// A `background` argument whose task is the SOLE holder needs no second copy — IF the value
+/// it already is will outlive the spawner's frame. This says whether it will, per plan, and
+/// with what the task's drop ladder must then release.
+///
+/// Derived from the same [`OwnedCopy`] the emitter destructures, with no `_` arm: a new plan
+/// fails the build here until someone says where its values live. The free kind each arm
+/// returns is the one that plan's own `CopyMode::SpawnArg` emission returns, so a transferred
+/// value and a freshly-copied one ride the ladder identically.
+///
+/// `minted_here` says the argument expression is an explicit `.copy()`, which is the one form
+/// whose value THIS emitter produced in `CopyMode::Body` — the only way to know a `maybe`
+/// envelope is a heap cell rather than the entry-block alloca every other `maybe` lives in.
+/// It is not a re-derivation of who holds the value (that is fact 1, read from typeck); it is
+/// the emitter recognising its own output.
+fn sole_holder_transfer_free_kind<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    resolved: &Type,
+    minted_here: bool,
+) -> Option<BgArgFreeKind> {
+    match ynz_typeck::owned_copy::owned_copy_plan(resolved) {
+        // An `array` and a `map` are runtime-minted headers with their own buffers, whatever
+        // expression produced them — no value of either type is frame storage. A sole-held one
+        // is the task's to own.
+        ynz_typeck::owned_copy::OwnedCopy::ArrayClone { .. } => {
+            Some(BgArgFreeKind::HeapArrayPrimitive)
+        }
+        // `BgArgFreeKind::None` is what the `MapClone` SpawnArg emission returns too: the drop
+        // ladder still has no map kind (that arm's own four-field deferral). Transferring is
+        // strictly better than copying anyway — one allocation instead of two, and the one
+        // that leaks is the one the program already made.
+        ynz_typeck::owned_copy::OwnedCopy::MapClone => Some(BgArgFreeKind::None),
+        // A `maybe` envelope is an entry-block alloca unless `emit_owned_copy` heap-celled it.
+        ynz_typeck::owned_copy::OwnedCopy::MaybeCellClone if minted_here => {
+            let byte_size = cg
+                .maybe_type()
+                .size_of()
+                .and_then(|s| s.get_zero_extended_constant())
+                .unwrap_or(0);
+            Some(BgArgFreeKind::HeapMaybeEnv { byte_size })
+        }
+        ynz_typeck::owned_copy::OwnedCopy::MaybeCellClone => None,
+        // A shape's and a `fixed`'s body-mode copies are allocas on the spawner's frame, and a
+        // fresh one of either (`makeCargo()`) is a return temp on that same frame. Both must be
+        // re-homed; this is the fr23 class.
+        ynz_typeck::owned_copy::OwnedCopy::ShapeMemcpy
+        | ynz_typeck::owned_copy::OwnedCopy::FixedMemcpy => None,
+        // Nothing was allocated to transfer: the receiver either IS the bits, or is a pointer
+        // into frame storage the SpawnArg path must re-home (or refuse) for itself.
+        ynz_typeck::owned_copy::OwnedCopy::ReceiverIsCopy
+        | ynz_typeck::owned_copy::OwnedCopy::FrameLocalImmutable { .. } => None,
+        // No copy exists; the caller's own refusal arm handles it.
+        ynz_typeck::owned_copy::OwnedCopy::Refused(_) => None,
+    }
+}
+
 /// Copy every element of an already-cloned array whose cells hold pointers to separately
 /// allocated items, through [`emit_owned_copy`] — so the clone and the original do not share
 /// their items. Emitted as a counted loop over the clone's own length.
@@ -20154,7 +20252,14 @@ mod copy_parity_tests {
         // again, this fails.
         for ty in all_type_variants() {
             let plan = owned_copy_plan(&ty);
-            let independent = !matches!(plan, OwnedCopy::Refused(_));
+            // Two plans are not an independent value. `Refused` never produces one at all;
+            // `FrameLocalImmutable` hands back the RECEIVER's own pointer in body mode, so the
+            // receiver still reaches it (v0.3 hardening 3.2 fix round: `r.copy()` on a `range`
+            // was `Fresh` while aliasing).
+            let independent = !matches!(
+                plan,
+                OwnedCopy::Refused(_) | OwnedCopy::FrameLocalImmutable { .. }
+            );
             assert_eq!(
                 ynz_typeck::types::copy_is_independent(&ty),
                 independent,
@@ -20226,6 +20331,37 @@ mod copy_parity_tests {
                     ),
                     HeapCell::None => {}
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn spawn_refusal_matches_the_emitters_own_refusals() {
+        // WHY: typeck decides whether a `background` argument CAN be made the task's own, and
+        // the emitter decides how. Those were two predicates with no link: typeck admitted
+        // anything the copy table did not refuse, while the emitter carried a refusal of its
+        // own — `(CopyMode::SpawnArg, HeapCell::None)`, a bare error string with no teaching
+        // slots — that `range` reaches. `spawn_arg_refusal` is now the one producer of both,
+        // and this holds them to it: everything typeck admits must have a plan the SpawnArg
+        // path can actually emit.
+        for ty in all_type_variants() {
+            if !ynz_typeck::owned_copy::spawn_arg_can_be_independent(&ty) {
+                continue;
+            }
+            if ynz_typeck::owned_copy::spawn_rehoming(&ty).is_some() {
+                continue;
+            }
+            match owned_copy_plan(&ty) {
+                OwnedCopy::Refused(_) => panic!(
+                    "{ty:?}: admitted as a spawn argument, but the emitter has no copy for it"
+                ),
+                OwnedCopy::FrameLocalImmutable {
+                    heap_cell: HeapCell::None,
+                } => panic!(
+                    "{ty:?}: admitted as a spawn argument, but emit_owned_copy's \
+                     (SpawnArg, HeapCell::None) arm refuses it with a backend error string"
+                ),
+                _ => {}
             }
         }
     }

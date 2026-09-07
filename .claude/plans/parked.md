@@ -1056,3 +1056,95 @@ than silently carried forward as still-live.
     (`crates/ynz-driver/tests/fr23_uaf_planned_red.rs`) carry the migrated reasoning and stay
     green. Source: dispatch `hardening-fr23fix-20260906-a1`, FRAGO 003
     (`.claude/planning/active/2026-09-04-v0-3-concurrency-hardening/audit.md`).
+
+### Step 3.2 fix round — findings recorded rather than fixed (2026-09-07, `hardening-p3.2-fix1-20260907-a1`)
+
+Raised by the review seats on commit `6be6773` (the one authoritative owned-copy operation).
+Entries 67–69 are the performance seat's, recorded on the dispatch's explicit instruction;
+entry 70 is a residual the `number`-cell reconciliation surfaced and could not close in scope.
+
+67. **A nested container handed to a `background` task now costs one allocation per leaf item,
+    per spawn — at a call site the user never opted into.** WHAT is deferred: nothing about the
+    deep-copy ruling changes; what is recorded is that the ruling now also lands on
+    COMPILER-INFERRED spawn copies, not only on a typed `.copy()`. `background eat(rows)` where
+    `rows: array<array<int>>` and `rows` is read after the spawn is labelled `Copy` by the
+    liveness inference, and the copy walks every item (`emit_array_elem_deep_copy`), where
+    before it passed one pointer. WHY, a real tradeoff with a concrete cost: the alternative is
+    the alias that produced the use-after-free this cluster exists to remove, and the ruling
+    (Patrick, 2026-09-06) already weighed depth against speed and chose depth — Golden Rule 2
+    over Golden Rule 10. The NEW information is only that the cost appears without the user
+    typing anything, so the "if deep copying proves too slow, add an explicit cheaper operation"
+    escape hatch is reached through an inferred site, where there is no source text to attach a
+    cheaper name to. Measured order of magnitude, from the seat: 1,000,000 small allocations
+    cost more than moving 10× the data in one memcpy, and `background` inside a loop is a
+    shipped shape (`examples/`, the fuzz corpus). COST to fix later: medium — either a spawn-side
+    "the callee only reads it" analysis that can share instead of copy (the Auto-Arc admission
+    is the existing precedent and already answers exactly this question for shapes), or the
+    named cheaper operation the ruling anticipates plus a way to select it at an inferred site.
+    TRIGGER: a measured workload where a `background` spawn of a nested container inside a loop
+    is the bottleneck — or Auto-Arc's admission being widened past `Type::Shape`, which would
+    make the sharing answer available to containers for free.
+
+68. **The spawn-cloned `map` is still released by nobody, and its trigger may be further out
+    than "next phase."** WHAT is deferred: `emit_owned_copy`'s `MapClone` arm returns
+    `BgArgFreeKind::None` for a `CopyMode::SpawnArg` copy, so a `map` argument the task received
+    a clone of is never freed — the four-field deferral written on that arm. WHY: unchanged from
+    that arm's own text (releasing it is a `BG_ARG_KIND_*` WIRE-FORMAT change the runtime retire
+    ladder, the channel-side release rewrite, and both of their kind-enumerating parity tests
+    read; shipping it inside a correctness fix would invert the ordering constraint C2 was
+    required to satisfy). COST to fix later: unchanged — one wire constant, one runtime retire
+    arm, one emitter arm, two parity tests. TRIGGER — **this is the part that is new**: that arm
+    names "the scope-exit release pass" (Phase 4 of
+    `2026-09-04-v0-3-concurrency-hardening`), and Phase 4 is itself flagged as possibly
+    splitting into its own milestone. If it splits, this deferral lives materially longer than
+    "the next phase" implies, so the second half of that arm's trigger — "or the first program
+    that spawns with a `map` argument from inside a loop" — is the one that should be watched.
+    Note the fix round of 2026-09-07 REDUCED this leak's rate rather than widening it: a
+    `background eat(m.copy())` used to mint two map clones and free neither (measured: 16 allocs
+    / 1 free), and now mints one (11 allocs / 1 free, identical to the no-`.copy()` spawn).
+
+69. **`emit_array_elem_deep_copy` recurses with no depth cap.** WHAT is deferred: the
+    element-copy loop calls `emit_owned_copy` on each item, which re-enters this function for a
+    nested container, and nothing bounds the nesting. WHY: the recursion is bounded by the
+    SOURCE type's nesting depth, which a program spells out by hand (`array<array<array<int>>>`)
+    — it is compile-time recursion over a finite written type, not a runtime walk over data, so
+    there is no runtime pathology to hit and no attacker-controlled depth. The seat found none.
+    COST to fix later: trivial — a depth counter threaded through `emit_owned_copy` plus a
+    teaching refusal past the limit. TRIGGER: a type-level recursion becoming expressible
+    (a self-referential shape, `SCRATCH-future-self-references.md`), which would turn a bounded
+    walk into a potentially unbounded one.
+
+70. **An `array<number>`'s cells carry pointers into the producing frame, and no per-cell
+    re-homing exists for a spawn.** WHAT is deferred: `elem_copy` classifies a `number` element
+    as `ElemCopy::Inline`, which is correct for INDEPENDENCE (the cell's 8 pointer bits address
+    storage nothing can change, so two cells reading it can never disagree — `Cg::array_elem_size`
+    sizes the cell at 8, and `Cg::to_i64_bits` is what puts a pointer there). What is NOT closed
+    is LIFETIME: that storage belongs to the frame that produced the number
+    (`value_to_stable_bits` has no `Number` arm, so nothing re-homes it), so an `array<number>`
+    handed to a `background` task carries the same dangling exposure with or without a copy.
+    WHY: a copy cannot fix it — this is a property of how an `array<number>` is built, one
+    producer upstream of the copy table, and the fix is a `Number` arm in the ONE stable-bits
+    choke point plus a matching release story for the per-cell decimal cells, which is the same
+    wire-format/release work entry 68 names. Fixing it inside the copy table would mean the
+    copy table minting cells nothing frees. COST to fix later: small-to-medium — one
+    `value_to_stable_bits` arm reusing the existing `number_to_heap_cell`, plus the per-cell
+    release story. TRIGGER: the scope-exit release pass (which owns per-cell release), or the
+    first reproduction — the review seat could NOT turn this into a failing program, so it is
+    recorded as a named residual on `elem_copy`'s own comment rather than as a confirmed defect.
+    Source: dispatch `hardening-p3.2-fix1-20260907-a1`, should-fix 4.
+
+71. **A default-deny `Give` of a REFUSED type still shares the spawner's value.** WHAT is
+    deferred: `prepare_bg_arg_for_ctx`'s refusal arm passes a union-typed `background` argument
+    through untouched when typeck labelled it `Give`. That label is reached by three routes and
+    only the ident routes consume anything, so `background eat(b.choice)` (a `FieldAccess`,
+    default-deny `Give`, FRAGO 022) hands the task a value `b` still reaches. WHY: there is no
+    copy to make — the shared table REFUSES the type outright, so the only alternatives are the
+    pass-through that shipped or a new compile-time refusal at the spawn, and designing that
+    refusal is the same "what does `background` do with a union" question the union work owns,
+    not a corollary of a copy fix. This is pre-existing and UNCHANGED by the 2026-09-07 fix
+    round, which narrowed the same arm for `map` (where a copy does exist) and left this one
+    named instead of silently inheriting the old comment's false soundness claim. COST to fix
+    later: small — extend `spawn_arg_refusal` to fire under `Give` for `NoIndependentCopy` too,
+    plus the fixture corpus re-run for any program that spawns with a union argument today.
+    TRIGGER: the first program that spawns with a union/`dynamic` argument and reads it
+    afterwards, or the union `background` design landing — whichever comes first.

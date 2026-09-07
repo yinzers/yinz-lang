@@ -623,8 +623,8 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
 
     let error_count = count_errors(&stderr);
     assert_eq!(
-        error_count, 7,
-        "v0_3 hardening gallery must produce exactly 7 errors, one per refusal trigger; got \
+        error_count, 8,
+        "v0_3 hardening gallery must produce exactly 8 errors, one per refusal trigger; got \
          {error_count}.\nstderr:\n{stderr}"
     );
 
@@ -641,6 +641,13 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         (
             "`background` argument the spawner keeps reading",
             "this line still reads it after the task starts",
+        ),
+        // The 2026-09-07 fix round's own trigger, and it is here because it needed a SECOND
+        // shell: "hand it over instead" is the wrong advice for a value kept with the frame,
+        // so a reuse of the row above would have taught the reader something that does not work.
+        (
+            "`background` argument kept with the frame",
+            "a `range` cannot be handed to a background task",
         ),
     ] {
         assert!(
@@ -659,8 +666,13 @@ fn v0_3_hardening_gallery_fires_every_copy_refusal() {
         "if (order is Delivery) { const backup = order.copy() }",
         "const savedKey = entry.key",
         "if (result.failed()) { return }",
-        "store the value you actually meant to copy in a binding first",
+        // `nothing`'s WHAT-INSTEAD cannot name "the value you meant" — when a function hands
+        // back `nothing` there is none — so it names what the reader CAN do instead (fix
+        // round 2026-09-07, should-fix 5: the previous text was a dead end at this very
+        // trigger).
+        "Drop the `.copy()` and call the function on its own",
         "move every later read of `parcel` above the `background` line",
+        "for a `range`, its start and end as two `int` values",
     ] {
         assert!(
             stderr.contains(phrase),

@@ -279,6 +279,16 @@ const EC_FIELDS_REQUIRE_FAILED_CHECK: &[&str] = &["message", "suggestions", "tra
 /// needs `Copy` (the argument is cloned because the caller reads the binding again
 /// after the spawn).  Rather than extend the AST enum (which is shared across all
 /// compiler passes), we keep this typeck-local enum.
+/// How a `background` argument came to be one the task solely holds
+/// (`TypedModule::background_arg_sole_holder`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoleHolder {
+    /// A temporary nobody names: `provenance` says `Fresh`.
+    FreshTemporary,
+    /// A plain binding this spawn consumes, so no name reaches the value afterwards.
+    ConsumedBinding,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BgOwnership {
     /// Transfer ownership to the background task — the caller does not read the
@@ -336,6 +346,37 @@ pub struct TypedModule {
     /// all thread its `padded_shapes`); a direct read outside that authority is
     /// the E3 twin-derivation corpse (authoritative-derivation.md).
     pub cross_thread_padded_shapes: std::collections::HashSet<String>,
+    /// v0.3 concurrency hardening Phase 3 step 3.2 fix round: for each `background` argument
+    /// where, after the spawn, the TASK IS THE SOLE HOLDER of the value — nothing the spawner
+    /// can still name reaches it — WHICH of the two ways that came about.
+    ///
+    /// Codegen's spawn path asks exactly one question of this record: does the task need a
+    /// value of its OWN, or can it take the one that already exists? Before this, that
+    /// question was answered by matching an `Expr::` variant against a `Type::` variant at the
+    /// call site (an explicit `.copy()` of an `array`, and a `Give` label on a `map`) — the
+    /// corpse `.claude/corpses.md` "Enumerating syntactic sites instead of threading the
+    /// whole-program ownership analysis", which behaved exactly as that corpse predicts: when
+    /// `map`, `maybe` and `fixed` started allocating, the array-shaped enumeration did not
+    /// widen with them, so every one of those spawns copied a value that had already been
+    /// copied and leaked the first one.
+    ///
+    /// The two ways are recorded APART because codegen does different things with them, and
+    /// the difference is a deliberate scope line rather than a property of the values: a
+    /// [`SoleHolder::FreshTemporary`] is handed straight to the task, while a
+    /// [`SoleHolder::ConsumedBinding`] only skips its copy for the types that already shipped
+    /// that way (see `prepare_bg_arg_for_ctx`, which carries the reason).
+    ///
+    /// Membership is derived, never re-derived here:
+    /// - `effective_ownership::provenance(arg) == Fresh` — a temporary nobody names (an
+    ///   explicit `.copy()`, a call whose every return is fresh, a literal built from fresh
+    ///   parts). The SAME classification every transfer sink consumes.
+    /// - or the argument is a plain binding this spawn CONSUMES: a `Give` recorded by the
+    ///   statement-form route, which pushes the name onto `gives` and consumes its alias class
+    ///   immediately after. The handle form (`let h = background f(x)`) has no
+    ///   remaining-statement view and consumes nothing, so it is deliberately NOT a member —
+    ///   and neither is the default-deny `Give` a non-ident argument gets, which consumes
+    ///   nothing either (`background eat(b.items)` leaves `b` holding the map).
+    pub background_arg_sole_holder: std::collections::HashMap<(usize, usize), SoleHolder>,
     /// v0.3-M7 Phase 6: function names ADMITTED to the back-edge poll-yield transform —
     /// state-machine functions whose loops become poll-yield suspension points.
     ///
@@ -415,6 +456,7 @@ pub fn check(
         inside_background: false,
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
+        bg_sole_holder: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
@@ -429,6 +471,7 @@ pub fn check(
         module: module.clone(),
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
+        background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
     };
@@ -498,6 +541,7 @@ pub fn check_with_kernel_mode(
         inside_background: false,
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
+        bg_sole_holder: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
@@ -512,6 +556,7 @@ pub fn check_with_kernel_mode(
         module: module.clone(),
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
+        background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
     };
@@ -682,6 +727,11 @@ struct Checker<'b> {
     /// Only plain `Expr::Ident` args are recorded — explicit `.give`/`.copy()` postfix
     /// args are handled by the postfix-op path; explicit always wins over inferred.
     bg_inferred: HashMap<(usize, usize), BgOwnership>,
+
+    /// Spans whose spawned task is the value's SOLE holder — the record
+    /// `TypedModule::background_arg_sole_holder` is moved from. Written by the ONE spawn-arg
+    /// recording function (`record_spawn_arg_ownership`).
+    bg_sole_holder: HashMap<(usize, usize), SoleHolder>,
 
     /// v0.3-M8 Phase 5: the next Auto-Arc group id (minted per admitted group, module-wide).
     next_arc_group: u32,
@@ -1754,6 +1804,25 @@ impl<'b> Checker<'b> {
     ) -> Option<BgOwnership> {
         let span = arg.span();
         let key = (span.start, span.end);
+        // The sole-holder record (`TypedModule::background_arg_sole_holder`), written BEFORE
+        // either early return below so it covers every spawn argument this function sees —
+        // including the ones it records no ownership label for (a `.copy()` argument is
+        // "provably safe" and returns early, and it is exactly the argument codegen was
+        // double-copying).
+        //
+        // Half one: a temporary nobody names. `provenance` is the whole-program
+        // classification every transfer sink already consumes; asking it here is what stops
+        // the spawn path from having a syntactic opinion of its own about who holds a value.
+        // Called on EVERY visit rather than once: the three recording sites run at different
+        // points in the check, and only the `Expr::Background` backstop runs after
+        // `infer_expr` has typed the argument's own sub-expressions. A visit with less type
+        // knowledge can only answer LESS freshly (`provenance`'s type oracle is consulted to
+        // SKIP value-typed parts and to type a `.copy()` receiver; an absent answer degrades
+        // to `Reaches`/`Unknown`), so a union across visits cannot manufacture a false
+        // `Fresh`.
+        if matches!(self.provenance_of(arg), Provenance::Fresh) {
+            self.bg_sole_holder.insert(key, SoleHolder::FreshTemporary);
+        }
         if let Some(existing) = self.bg_inferred.get(&key) {
             if fill_only || matches!(existing, BgOwnership::Arc { .. }) {
                 return Some(existing.clone());
@@ -1810,29 +1879,67 @@ impl<'b> Checker<'b> {
         // reading the SAME table rather than a second opinion about it
         // (`.claude/rules/authoritative-derivation.md`). A `Give` argument is untouched: the
         // spawner's binding is consumed at the spawn, so nothing needs to be independent.
-        if matches!(label, BgOwnership::Copy) {
-            if let Some(name) = ident {
-                let arg_ty = self.scope.lookup(name).map(|e| e.ty.clone());
-                if let Some(ty) =
-                    arg_ty.filter(|t| !crate::owned_copy::spawn_arg_can_be_independent(t))
-                {
-                    if let crate::owned_copy::OwnedCopy::Refused(refusal) =
-                        crate::owned_copy::owned_copy_plan(&ty)
-                    {
-                        self.diags.push(registry_diag(
-                            span.clone(),
-                            DiagnosticKind::SpawnArgNotIndependent,
-                            &[
-                                ("name", name),
-                                ("type", &type_name(&ty)),
-                                ("detail", &refusal.detail),
-                                ("fix", &refusal.fix),
-                                ("why", &refusal.why),
-                            ],
-                        ));
+        if let Some(name) = ident {
+            let arg_ty = self.scope.lookup(name).map(|e| e.ty.clone());
+            if let Some(ty) = arg_ty {
+                if let Some((cause, refusal)) = crate::owned_copy::spawn_arg_refusal(&ty) {
+                    // `NoIndependentCopy` is a `Copy`-only refusal: under `Give` there is
+                    // nothing to be independent FROM. `StorageDiesWithTheFrame` fires under
+                    // either label, because a consumed binding's storage dies with the frame
+                    // exactly as an unconsumed one's does — and the alternative for it is the
+                    // emitter's own bare error string with no teaching slots at all.
+                    let fires = matches!(label, BgOwnership::Copy)
+                        || matches!(
+                            cause,
+                            crate::owned_copy::SpawnRefusalCause::StorageDiesWithTheFrame
+                        );
+                    if fires {
+                        let fills = [
+                            ("name", name),
+                            ("type", &type_name(&ty)),
+                            ("detail", &refusal.detail),
+                            ("fix", &refusal.fix),
+                            ("why", &refusal.why),
+                        ];
+                        // Two calls rather than one over a computed kind: each template's own
+                        // name has to appear literally inside a `registry_diag(...)` argument
+                        // list, which is what `diagnostic_template_parity` scans for to prove
+                        // no shipped template is dead.
+                        let diag = match cause {
+                            crate::owned_copy::SpawnRefusalCause::NoIndependentCopy => {
+                                registry_diag(
+                                    span.clone(),
+                                    DiagnosticKind::SpawnArgNotIndependent,
+                                    &fills,
+                                )
+                            }
+                            crate::owned_copy::SpawnRefusalCause::StorageDiesWithTheFrame => {
+                                registry_diag(
+                                    span.clone(),
+                                    DiagnosticKind::SpawnArgStorageDiesWithTheFrame,
+                                    &fills,
+                                )
+                            }
+                        };
+                        self.diags.push(diag);
                     }
                 }
             }
+        }
+        // Half two of the sole-holder record: a plain binding this spawn CONSUMES. `Give`
+        // alone is NOT that fact — `record_spawn_arg_ownership` reaches `Give` by three routes
+        // and only the statement-form ident routes consume anything. The `ident.is_none()`
+        // default-deny route (FRAGO 022) records `Give` for any non-ident argument it cannot
+        // prove safe while consuming NOTHING, so `background eat(b.items)` would otherwise
+        // claim the task is the sole holder of a map `b` still owns. `remaining.is_some()`
+        // identifies the one caller with the following statements in hand — the
+        // `check_stmts` statement form, which pushes every ident `Give` onto `gives` and
+        // consumes its alias class immediately after this returns. The handle form passes
+        // `None` and consumes nothing, so it is not a sole-holder route either.
+        if ident.is_some() && remaining.is_some() && matches!(label, BgOwnership::Give) {
+            self.bg_sole_holder
+                .entry(key)
+                .or_insert(SoleHolder::ConsumedBinding);
         }
         self.bg_inferred.insert(key, label.clone());
         Some(label)

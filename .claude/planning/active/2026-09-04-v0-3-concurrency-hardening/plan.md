@@ -3,7 +3,7 @@ name: "v0-3-concurrency-hardening"
 plan-id: "2026-09-04-v0-3-concurrency-hardening"
 status: "active"
 roadmap-id: "2026-05-21-v0-3-concurrency-perf"
-session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1", "hardening-p3.1-fix1-20260906-a1", "hardening-p3.2-20260906-a1"]
+session-id: ["hardening-p1-20260905-a1", "hardening-p2a-20260905-a1", "hardening-p2b-20260905-a1", "hardening-p3.0-20260906-a1", "hardening-p3.1-20260906-a1", "hardening-p3.1-fix1-20260906-a1", "hardening-p3.2-20260906-a1", "hardening-p3.2-fix1-20260907-a1"]
 tier: "hasty"
 tier-reason: "Concurrency is a blocking gate on using Yinz at all; every known blocker is traced to a named producer and fixed at that producer, not patched per symptom. Scope is fixed (four phases, non-negotiable), deferral is forbidden, ambiguity is decided upstream. Small committed work riding Patrick's settled order."
 created_at: "2026-09-04"
@@ -40,6 +40,10 @@ metadata:
 >   Pin N green, FR #9's pin rewritten and green.
 >
 > ### ⚠️ OWED BEFORE 3.3 STARTS — the one thing not visible from the checkboxes
+>
+> **UPDATE 2026-09-07:** 3.2 has now been graded (three seats) and its fix round is landed
+> — dispatch `hardening-p3.2-fix1-20260907-a1`, recorded as FRAGO 004 in `audit.md`. The
+> paragraph below is kept as the record of what the gap was. **3.3 is unblocked.**
 >
 > **Step 3.2 (`6be6773`) is SEALED BUT UNGRADED.** Its dispatch self-declared FIRE on five
 > dimensions: plan-adherence (a spawn-side refusal and a `give`-map pass-through the phase never
@@ -266,6 +270,19 @@ are in parked, they stay in parked.
             deleted; `types::copy_is_independent` is now a `pub use` re-export of the derived
             predicate, not a body. `copy_parity_tests` kept and extended with the binding the
             compiler cannot give: every plan matches the `Type` shape its emitter destructures.
+      - [x] **Fix round (dispatch `hardening-p3.2-fix1-20260907-a1`, review of `6be6773`):**
+            three seats fired. The spawn path's de-dup guard was keyed to `Expr::PostfixOp{Copy}`
+            plus `Type::BuiltinArray` while `map`, `maybe` and `fixed` had just started
+            allocating, so each of those double-copied and leaked the first copy (measured: a
+            `map` spawn went 11 → 16 allocs, a `maybe` spawn 2/2 → 3/2 — a leak from zero).
+            Both facts the guard was guessing at now come from their producers: typeck records
+            `background_arg_sole_holder` from `effective_ownership::provenance`, and the
+            per-plan storage answer is one non-wildcard match over the same `OwnedCopy` the
+            emitter destructures. The `give_needs_no_copy` arm's invariant ("`Give` means the
+            binding was consumed") was FALSE on the default-deny route and let
+            `background eat(b.items)` share the parent's map (99/99 → 99/1); it now reads the
+            consuming route. `IMP-ownership.md` and `REF-ownership.md` both stated things this
+            commit made false and were rewritten. Three RED-verified pins added; parked 67–71.
       - [x] **HARD ORDERING CONSTRAINT — C2 closes before Phase 4 opens.** HONOURED: no
             scope-exit release was implemented; C2 closed first. FR #9 is a *premature
             free*: the ladder frees a clone the parent still points at. If Phase 4's scope-exit
@@ -419,6 +436,7 @@ Phase 3 may retire registry entries (e.g., `background-handle-cancel-injection` 
 - **Retiring**: (deferred_language_feature — verified against `registry/features.toml`) `background-handle-cancel-injection` — Phase 4 closes the underlying defect; the Tier 3 lint is no longer needed.
 - **Modifying**: (deferred_language_feature) entries named by Phase 1's blocker audit may be modified with corrected descriptions if Phase 2's diagnosis changes their trigger or scope. Record each modification.
 - **No new entries** expected from Phases 1–2 (diagnosis, no language surface). Phase 3 may add entries if a FRAGO introduces new muted-hint domains or lint rules (record if it happens).
+- **Added by step 3.2's fix round** (dispatch `hardening-p3.2-fix1-20260907-a1`): one `[[diagnostic_template]]` entry, `SpawnArgStorageDiesWithTheFrame` — the OTHER `background`-argument refusal, which needed its own sentence shell rather than a reuse of `SpawnArgNotIndependent`'s: that shell says "this line still reads it after the task starts" and tells the reader to hand the value over instead, and both are false when the problem is that the value is kept with the frame (handing it over does not move it). Fires under either ownership label for that reason, where `SpawnArgNotIndependent` is `Copy`-only. No new keyword, banned_jargon, primitive_intrinsic, type_attached_constant, deferred_* or muted_hint_domain entries.
 - **Added by step 3.2** (dispatch `hardening-p3.2-20260906-a1`): two `[[diagnostic_template]]` entries, `CopyNotIndependent` and `SpawnArgNotIndependent` — the two sentence shells for the ruling's refusals (`.copy()` and a `background` argument the spawner keeps reading). Both take their per-type `{detail}` / `{fix}` / `{why}` fills from the ONE owned-copy table, so the registry carries the canonical shell and never a second copy of the per-type text. No new keyword, banned_jargon, primitive_intrinsic, type_attached_constant, deferred_* or muted_hint_domain entries.
 
 ---

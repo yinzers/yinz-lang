@@ -57,6 +57,11 @@ pub enum DiagnosticKind {
     /// owned-copy table refuses — the task would need its own value and none can be made.
     /// The `background` face of `CopyNotIndependent`, same table, same per-type text.
     SpawnArgNotIndependent,
+    /// A `background` argument whose value is kept with the frame that made it (a `range`
+    /// today) — the task outlives that frame, so there is nothing to hand it and nothing a
+    /// copy could fix. Separate from `SpawnArgNotIndependent` because "hand it over instead"
+    /// is the wrong advice here: handing it over does not move the storage.
+    SpawnArgStorageDiesWithTheFrame,
     /// `.message`/`.suggestions`/`.trace`/`.source` read on an `errors`-capable value before
     /// it was checked with `.failed()` — `REF-errors.md:171-175` requires the check first;
     /// this is that requirement enforced at compile time — v0.3-M8 Phase 4 fix round 3.
@@ -100,6 +105,7 @@ impl DiagnosticKind {
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
+            DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
             DiagnosticKind::MessageBeforeFailedCheck => "MessageBeforeFailedCheck",
             DiagnosticKind::Borrowed => "Borrowed",
             DiagnosticKind::MissingReturn => "MissingReturn",
@@ -128,6 +134,7 @@ impl DiagnosticKind {
         "HandleChannelArgNeedsBinding",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
+        "SpawnArgStorageDiesWithTheFrame",
         "MessageBeforeFailedCheck",
         "Borrowed",
         "MissingReturn",
@@ -152,6 +159,9 @@ impl DiagnosticKind {
             DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
+            DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {
+                "cannot outlive this function".to_string()
+            }
             DiagnosticKind::MessageBeforeFailedCheck => "needs `.failed()` first".to_string(),
             DiagnosticKind::Borrowed => "borrowed".to_string(),
             DiagnosticKind::MissingReturn => "missing return".to_string(),

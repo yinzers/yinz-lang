@@ -1,0 +1,16 @@
+// The spawn de-dup pin, `maybe` half — a leak that went from zero to one per spawn.
+// Before the owned-copy table shipped, `.copy()` on a `maybe` handed back the receiver and
+// allocated nothing. After it, `.copy()` mints a heap envelope AND the spawn glue minted a
+// second one; only the second rode the task's drop ladder, so the first leaked — unbounded
+// inside a loop. Measured: 3 allocs / 2 frees, against 2 / 2 for the same program with no
+// `.copy()`. This pin asserts the balance itself: nothing here may allocate what it does not
+// free.
+function eat(v: maybe<int>) -> nothing {
+  print(v.or(0))
+}
+
+function entrypoint() -> nothing {
+  let mb: maybe<int> = `7`.toInt()
+  background eat(mb.copy())
+  print(1)
+}

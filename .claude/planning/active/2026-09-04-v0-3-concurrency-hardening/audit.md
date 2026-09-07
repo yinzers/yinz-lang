@@ -774,3 +774,129 @@ with an exemption.
   `bounded_run_kills_the_whole_tree::timed_out_program_leaves_no_descendant_process_running`;
   passes in isolation every time (verified twice) and passed one of three full runs — parked
   entry 50's known contention flake, not this diff.
+
+---
+
+## FRAGO 004 — Phase 3 step 3.2 fix round (dispatch `hardening-p3.2-fix1-20260907-a1`): the guard that stayed array-shaped
+
+Three review seats fired on `6be6773`. One blocker was a real leak that the commit itself
+doubled, one was two design docs the commit made false, and the rest were should-fixes. Nothing
+here reverses the 2026-09-06 ruling; it is the ruling being finished at the places the commit
+generalised the copy but not the things reading it.
+
+### The producer: two facts guessed at syntactically, now read from their sources
+
+`prepare_bg_arg_for_ctx` asks one question of every argument — **does the task need a value of
+its own?** It answered with two syntactic guesses:
+
+- an `Expr::PostfixOp{Copy}` **plus** `Type::BuiltinArray` match ("this is already a copy"), and
+- a bare `BgOwnership::Give` test on `Type::BuiltinMap` ("the binding was consumed").
+
+`6be6773` made `MapClone`, `MaybeCellClone` and `FixedMemcpy` allocate. Neither guess widened
+with them, which is precisely the failure `.claude/corpses.md` "Enumerating syntactic sites
+instead of threading the whole-program ownership analysis" predicts: *each new expression form
+silently reopens the hole*. Measured on the pre-fix binary:
+
+| Program | before | after |
+|---|---|---|
+| `background eat(m.copy())`, `m: map<string,int>` | 16 allocs / 1 free (two full map clones, neither freed) | **11 / 1** — identical to the same spawn with no `.copy()` |
+| `background eat(mb.copy())`, `mb: maybe<int>` | 3 / 2 — **a leak from zero**; pre-`6be6773` a `maybe` copy aliased and allocated nothing | **2 / 2** — balanced |
+| `background eat(b.items)`, `b: Box { items: map }` | prints `99` / `99` — task and parent writing ONE map | **`99` / `1`** |
+
+Both facts now come from a producer:
+
+1. **"Is the task the sole holder?"** — `TypedModule::background_arg_sole_holder`, written by
+   the ONE spawn-arg recording function (`record_spawn_arg_ownership`) from
+   `effective_ownership::provenance` — the same classification every transfer sink consumes —
+   plus the one `Give` route that actually consumes a binding. It records WHICH of the two
+   (`SoleHolder::FreshTemporary` / `ConsumedBinding`), because codegen does different things
+   with them.
+2. **"Does the value's storage outlive the spawner's frame?"** —
+   `sole_holder_transfer_free_kind`, a non-wildcard match over the same `OwnedCopy` the emitter
+   destructures, returning the free kind that plan's own `SpawnArg` emission returns. Freshness
+   alone is NOT sufficient and that is the subtle half: `makeCargo()` is `Fresh` and sits in a
+   return temp on the dying frame, so a fresh-only rule would have re-opened fr23.
+
+### What was deliberately NOT widened, and why
+
+The consuming-`Give` arm's TYPE list stays what shipped (`map`, plus the refused types).
+Extending it to `array` was implemented first and measured: it removes four allocations from
+`bg_arg_two_arrays_send_one.ynz` and turns three exact-gap E8 pins red, because it changes WHICH
+allocation the task's drop ladder releases. That is release-pass work, and `6be6773` declined it
+for that stated reason; a fix round is not the place to overturn it. The arm's split shape (a
+`FreshTemporary` transfer for every allocating plan, a `ConsumedBinding` pass-through only for
+the shipped types) is that boundary made explicit rather than inherited by accident.
+
+### The invariant that was false, and the ruling on it
+
+`give_needs_no_copy` justified itself as "`Give` means the spawner's binding was consumed at the
+spawn: the task is the sole holder." `record_spawn_arg_ownership` reaches `Give` by three routes
+and only the statement-form ident routes consume anything — FRAGO 022's `ident.is_none()`
+default-deny arm records `Give` for any non-ident argument it cannot prove safe, consuming
+nothing. **Ruling: gate on the consuming route, not on the label.** Stating the precondition
+honestly and leaving the sharing was the alternative, and it loses to a fix that costs one
+`map` clone (already the recorded MapClone deferral's leak class) and removes a case of two
+tasks writing one map. The handle form (`let h = background f(x)`) has no remaining-statement
+view and consumes nothing either, so it is not a sole-holder route.
+
+### The two docs that stated things the commit made false
+
+- `IMP-ownership.md` "`.copy()` — produce a new owned value" still carried the r4 strict
+  cheap-only rule ("only legal when every field is transitively trivially copyable; write a
+  standalone `copy()` for anything deeper") — a compiler that never shipped, contradicted two
+  headings above the "Transfer" section the same commit updated correctly. Rewritten to the
+  2026-09-06 ruling, with the per-type table and the `sensitive` ruling (copies and KEEPS its
+  label, because refusing would push people to `.reveal()` for a copyable value) recorded where
+  a reader will find it instead of only in a source comment.
+- `REF-ownership.md` claimed `.copy()` works on `maybe<T>` unqualified. It refuses
+  `maybe<array<T>>`, `maybe<map<K,V>>`, `maybe<fixed<T>>` and `maybe<maybe<T>>` — the most
+  natural things to wrap. Qualified, with the copy-the-piece-instead fix shown.
+
+### The `number` cell: two statements reconciled, no defect found
+
+`elem_copy` said "a `number` cell is immutable bits"; `Cg::array_elem_size` sizes that cell at 8
+bytes, which for a decimal128 means POINTER bits. Both were partly right and the comment is now
+the reconciliation: the cell holds pointer bits, `ElemCopy::Inline` is still correct because the
+copy question is INDEPENDENCE and nothing can change what those bits address — but the copy does
+not MOVE that storage, which belongs to the producing frame (`value_to_stable_bits` has no
+`Number` arm). An `array<number>` handed to a task carries that exposure with or without a copy;
+it is a property of the container, one producer upstream, and it is recorded as parked 70 rather
+than papered over with an `ElemCopy` distinction that would claim to solve it. The review seat
+could not turn it into a failing program and neither could this round.
+
+### A second refusal predicate, and a diagnostic that had to be split
+
+`spawn_arg_can_be_independent` admitted anything the copy table did not refuse, while
+`emit_owned_copy` carried a THIRD refusal — `(CopyMode::SpawnArg, HeapCell::None)`, reachable by
+`range`. Both now derive from `spawn_arg_refusal`, and `spawn_refusal_matches_the_emitters_own_refusals`
+fails the build if the emitter ever refuses something typeck admits. Verified against the pre-fix
+binary: `background eat(r)` with `r: range` used to reach codegen and die with **"The compiler
+failed to produce machine code: cannot alloca for type Error"**; it is now a three-slot teaching
+refusal at the spawn.
+
+That refusal needed its OWN diagnostic template (`SpawnArgStorageDiesWithTheFrame`).
+`SpawnArgNotIndependent`'s shell says "this line still reads it after the task starts" and tells
+the reader to hand the value over instead — both false here, since handing a frame-kept value
+over does not move it. Shipping the misleading text would have been the same defect the `nothing`
+refusal was fixed for in this same round (its WHAT-INSTEAD told the reader to "store the value
+you actually meant to copy in a binding first", which at its own gallery trigger — a function
+that genuinely returns `nothing` — names a value that does not exist; it now says to drop the
+`.copy()`, or give the function a return type).
+
+### Verification
+
+- Probes, foreground, in the dev container, `YNZ_ALLOC_COUNTER=1`: the three before/after
+  readings in the table above. All three are now committed fixtures with tests
+  (`spawning_with_a_copied_map_mints_one_clone_not_two`,
+  `spawning_with_a_copied_maybe_frees_everything_it_allocates`,
+  `a_map_reached_through_a_field_is_not_shared_with_the_task`), each verified RED against a
+  binary built from `1bdbd00` in a scratch worktree.
+- **Corpus delta: zero.** 752 files (`crates/ynz-driver/tests/fixtures` + `examples`),
+  `ynz build`, `<file> <exit-code> <first-diagnostic>`, the `1bdbd00` binary versus this tree:
+  588 clean / 163 build error / 1 exit-2, byte-identical. Said plainly again: **a zero delta is
+  evidence about the corpus, not proof about the language** — nothing in the corpus spawned with
+  a copied map, a copied maybe, or a map reached through a field, which is exactly why the
+  double-clone shipped green. The three programs that DO move are the three fixtures added here.
+- `cargo test -p ynz-driver -p ynz-typeck -p ynz-codegen -p ynz-registry -p ynz-diagnostics
+  -p ynz-tmgrammar --no-fail-fast`, `clippy --workspace --all-targets -- -D warnings`,
+  `fmt --all -- --check`: see the dispatch's report for the run.

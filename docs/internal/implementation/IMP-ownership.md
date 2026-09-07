@@ -28,7 +28,7 @@ Rust ownership semantics, Yinz surface syntax. Three modes for passing a value i
 - **`give`** — ownership transfer. Caller loses the value; receiver gains it.
 
 Plus two body-level operations on values:
-- **`.copy()`** — produce a new owned value (only on transitively-trivially-copyable types per r4).
+- **`.copy()`** — produce a new owned value: a genuinely independent one for every type where independence is meaningful, and a compile error for the types where it is not.
 - **`.freeze()`** — lock a binding from further mutation for the rest of its scope.
 
 **Why English keywords instead of `&T`/`&mut T`/`move`**: Rust's `&'a mut T` syntax is the single biggest usability barrier in Rust adoption. Yinz uses plain English signature keywords (`share`/`lend`/`give`) declared at the function definition; the compiler infers them at every call site so the developer rarely types ownership at all. `.copy()` and `.freeze()` use dot-postfix-with-parens per [`.claude/rules/dot-postfix.md`](../../../.claude/rules/dot-postfix.md).
@@ -85,11 +85,29 @@ These two are the only body-level dot-postfix ownership operations. They use par
 ### `.copy()` — produce a new owned value
 
 ```ynz
-const backup = original.copy()       // strict: only legal on transitively-trivially-copyable types
+const backup = original.copy()       // a value nobody else reaches
 saveForever(backup)                   // backup consumed (give inferred), original unchanged
 ```
 
-Strict cheap-only per r4: `.copy()` is only legal when every field of the value's type is transitively trivially copyable. For non-trivial deep copies, the user defines a standalone function (typically also named `copy`) and calls it via normal function/UFCS syntax — Yinz prefers explicit user-defined deep-copy semantics over silent expensive copies.
+**The ruling (Patrick, 2026-09-06; superseded the r4 "strict cheap-only" rule this section used to state).** `.copy()` returns a genuinely independent value for every type where independence is meaningful, and is a COMPILE ERROR where it is not. Nothing silently aliases, ever. There are exactly two buckets, no third.
+
+The r4 text this replaced — "`.copy()` is only legal when every field is transitively trivially copyable; write a standalone `copy()` function for anything deeper" — described a compiler that never shipped. What shipped instead was an alias: `maybe`, `fixed`, union and `dynamic` all fell into a `.copy()` arm that handed back the receiver's own pointer while the type checker admitted the call, which produced one use-after-free and one silent wrong answer (v0.3 concurrency hardening, cluster C2). Deep-and-refuse is what removes that; a shallow copy would have re-introduced the same defect one level down and called it a design. Golden Rule 2 decides the tie against Golden Rule 10: "sometimes independent, sometimes not, depending on how nested your value is" is not something a junior developer can predict without documentation. If deep copying ever proves too slow on a real workload, the answer is an explicit cheaper operation with its own name — never a silent reinterpretation of `.copy()`.
+
+**The one table.** `ynz_typeck::owned_copy::owned_copy_plan` is exhaustive over `Type` with no `_` arm, and both consumers read it: `.copy()`'s lowering and the `background`-argument path (`emit_owned_copy`, also exhaustive, no `_` arm). Neither classifies a type itself, so the two can never again disagree about what an owned copy is (`.claude/rules/authoritative-derivation.md`).
+
+| Type | What `.copy()` does |
+|---|---|
+| `int`, `float`, `bool`, `string`, an `options` value, `sensitive string` | The receiver's bits ARE the copy — nothing can change what is behind them |
+| `number` (≤ 34 digits), `range` | Immutable contents in storage the producing frame owns: the receiver, inside a body. A `background` argument of one is re-homed onto the heap first (`number`) or refused (`range` — no re-homing path exists) |
+| `shape` | Its own bytes into fresh storage. A pointer-valued FIELD (a nested shape, an `array`, a `map`, a `maybe`) is still copied as a pointer — a named residual, not a claim |
+| `fixed<T>` | Its N inline cells into a fresh slot, when the items are inline ones. `fixed` of a pointer-item type is refused: a `fixed` has no per-item pointer to follow |
+| `array<T>` | A fresh header and buffer, and — when the cells hold pointers — every item copied through the same table, all the way down |
+| `map<K, V>` | A fresh header and its four buffers. A value cell holding a pointer is copied as a pointer, the same residual as a shape field |
+| `maybe<T>` | A fresh envelope cell, for the inner types the shared maybe-ownership core can follow: a simple value, a `number`/`range`, or a `shape`. `maybe<array<T>>`, `maybe<map<K, V>>`, `maybe<fixed<T>>` and `maybe<maybe<T>>` are refused |
+| `sensitive<T>` | Copies and KEEPS the label, so the copy is still redacted wherever it is printed. Refusing would push people to call `.reveal()` just to get a copyable value, which is strictly worse for the secret. Only inner kinds whose copy IS the receiver's bits qualify, and `sensitive` wraps only `string` today |
+| `channel<T>`, a task handle, a union, `dynamic C`, a loop's `MapEntry`, an unchecked `errors` value, a bignum, `nothing`, a type placeholder, a generic shape | **Compile error**, with WHAT / WHAT-INSTEAD / WHY naming what to do instead |
+
+A refusal is a real answer and it is loud: a user who can see the refusal is better off than a user handed an alias they cannot see. The refusal text lives with the plan (`CopyRefusal`, three slots) and renders through the `CopyNotIndependent` diagnostic template; the `background` face of the same ruling renders through `SpawnArgNotIndependent`.
 
 ### `.freeze()` — lock a binding from further mutation
 

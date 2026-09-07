@@ -240,6 +240,7 @@ fn check_query_cycle_initial(
             expr_types: std::collections::HashMap::new(),
             back_edge_yield_admitted: std::collections::HashSet::new(),
             background_arg_inferred_ownership: std::collections::HashMap::new(),
+            background_arg_sole_holder: std::collections::HashMap::new(),
             cross_thread_padded_shapes: std::collections::HashSet::new(),
         },
         mono_table: crate::generics::MonomorphizationTable {

@@ -264,11 +264,15 @@ pub fn owned_copy_plan(ty: &Type) -> OwnedCopy {
              not be made honestly.",
         )),
 
+        // The WHAT-INSTEAD here cannot point at "the value you meant" the way the other
+        // refusals can — when a function hands back `nothing` there IS no such value to name.
+        // So it names the two things the reader can actually do: drop the `.copy()`, or change
+        // the function to hand something back.
         Type::Nothing => OwnedCopy::Refused(CopyRefusal::new(
             " — there is no value here to copy",
-            "Call `.copy()` on a value instead. If this came from a function call, that \
-             function hands back `nothing`, so store the value you actually meant to copy in \
-             a binding first.",
+            "Drop the `.copy()` and call the function on its own: `saveOrder(order)`. If you \
+             wanted something back from it, give it a return type and return the value: \
+             `function saveOrder(order: Order) -> int { return order.id }`, then copy that.",
             "`nothing` means no value was produced at all, so there is nothing here to make a \
              second one of.",
         )),
@@ -333,7 +337,19 @@ fn elem_copy(ty: &Type) -> Option<ElemCopy> {
         // The cell holds the element outright (an int, a shape's inline bytes, an options
         // tag) or a pointer to bytes nothing can change (a string).
         OwnedCopy::ReceiverIsCopy | OwnedCopy::ShapeMemcpy => Some(ElemCopy::Inline),
-        // A `number` cell is immutable bits; copying the cell copies the value.
+        // A `number` cell is 8 bytes of POINTER bits, not the 16-byte decimal itself
+        // (`Cg::array_elem_size` sizes it at 8, and `Cg::to_i64_bits` is what puts it there) —
+        // and the storage it points at belongs to whichever frame produced the number, which
+        // is the same fact [`OwnedCopy::FrameLocalImmutable`] states. Copying the cell is
+        // still the right answer, because the copy question is INDEPENDENCE and nothing can
+        // change what those bits point at: two cells reading one unchanging decimal can never
+        // disagree, exactly as for a `string`. What copying does NOT do is move that storage
+        // anywhere, so an `array<number>` handed to a task carries the same frame-storage
+        // exposure it would have carried with no copy in sight — a property of the container,
+        // not something the copy introduces, and not something this table can fix (there is no
+        // per-cell re-homing path today; `value_to_stable_bits` has no `Number` arm). Recorded
+        // as parked entry 70 rather than smuggled in here as an `ElemCopy` distinction that
+        // would claim to solve it.
         OwnedCopy::FrameLocalImmutable { .. } => Some(ElemCopy::Inline),
         // The cell is a pointer to a separate allocation — follow it.
         OwnedCopy::ArrayClone { .. } | OwnedCopy::MapClone | OwnedCopy::MaybeCellClone => {
@@ -377,23 +393,85 @@ pub fn spawn_rehoming(ty: &Type) -> Option<SpawnRehoming> {
     }
 }
 
+/// Why a `background` task cannot be handed a value of this type that the spawner does not
+/// share. Two different failures with two different explanations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpawnRefusalCause {
+    /// No independent copy of this type exists at all — the same refusal `.copy()` gives.
+    NoIndependentCopy,
+    /// A copy exists, but it is the receiver's own storage and that storage belongs to the
+    /// spawning function's frame. The task outlives the frame, so the pointer would dangle.
+    StorageDiesWithTheFrame,
+}
+
+/// THE spawn-side refusal: why (if at all) a `background` argument of this type cannot be made
+/// the task's own, plus the teaching text for saying so.
+///
+/// This exists because the refusal used to be computed TWICE and the two did not agree:
+/// typeck admitted anything the copy table did not refuse, while the emitter had a THIRD
+/// refusal of its own — `(CopyMode::SpawnArg, HeapCell::None)`, a backend error string with no
+/// teaching slots, reachable by `range`. That is the twin-derivation class
+/// `.claude/rules/authoritative-derivation.md` bans; both facts now come from here, and
+/// `spawn_refusal_matches_the_emitters_own_refusals` in `ynz-codegen` fails the build if the
+/// emitter ever refuses something this function admits.
+pub fn spawn_arg_refusal(ty: &Type) -> Option<(SpawnRefusalCause, CopyRefusal)> {
+    if spawn_rehoming(ty).is_some() {
+        return None;
+    }
+    match owned_copy_plan(ty) {
+        OwnedCopy::Refused(r) => Some((SpawnRefusalCause::NoIndependentCopy, r)),
+        OwnedCopy::FrameLocalImmutable {
+            heap_cell: HeapCell::None,
+        } => Some((
+            SpawnRefusalCause::StorageDiesWithTheFrame,
+            CopyRefusal::new(
+                format!(
+                    " — a `{}` value is kept with the function that made it",
+                    type_name(ty)
+                ),
+                "Hand the task the pieces it needs as values of their own — for a `range`, its \
+                 start and end as two `int` values — or work the value out again inside the \
+                 task.",
+                "A background task keeps running after the function that started it has \
+                 finished. This value is kept with that function, so by the time the task \
+                 looked at it there would be nothing left there to read.",
+            ),
+        )),
+        OwnedCopy::ReceiverIsCopy
+        | OwnedCopy::FrameLocalImmutable { .. }
+        | OwnedCopy::ShapeMemcpy
+        | OwnedCopy::FixedMemcpy
+        | OwnedCopy::ArrayClone { .. }
+        | OwnedCopy::MapClone
+        | OwnedCopy::MaybeCellClone => None,
+    }
+}
+
 /// Can a `background` task be given a value of this type that the spawner does NOT share?
 ///
-/// True when the spawn path re-homes the type itself ([`spawn_rehoming`]), or when the shared
-/// owned-copy table can produce an independent copy of it. False is a compile-time refusal at
-/// the spawn — the `background` face of the same ruling `.copy()` obeys.
+/// DERIVED from [`spawn_arg_refusal`], never a second predicate.
 pub fn spawn_arg_can_be_independent(ty: &Type) -> bool {
-    spawn_rehoming(ty).is_some() || !matches!(owned_copy_plan(ty), OwnedCopy::Refused(_))
+    spawn_arg_refusal(ty).is_none()
 }
 
 /// Is `.copy()` on a value of this type a genuinely INDEPENDENT copy — a value nobody else
 /// reaches — so provenance may classify the result `Fresh`?
 ///
-/// DERIVED from [`owned_copy_plan`], never a second predicate: every plan but
-/// [`OwnedCopy::Refused`] produces an independent value, and a refused type never produces a
-/// value at all (the program does not build).
+/// DERIVED from [`owned_copy_plan`], never a second predicate. TWO plans are not independent
+/// values, and for opposite reasons:
+///
+/// - [`OwnedCopy::Refused`] never produces a value at all (the program does not build).
+/// - [`OwnedCopy::FrameLocalImmutable`] hands back the RECEIVER's own pointer in body mode
+///   (`emit_owned_copy`'s `(CopyMode::Body, _)` arm). The receiver still reaches it, so
+///   `r.copy()` on a `range` is not a second value however immutable it is — calling it
+///   `Fresh` would let a transfer sink hand away something the source still names. Ordinary
+///   `int`/`string` copies are unaffected: those are [`OwnedCopy::ReceiverIsCopy`], where the
+///   bits are the value and there is no storage for anyone to still reach.
 pub fn copy_is_independent(ty: &Type) -> bool {
-    !matches!(owned_copy_plan(ty), OwnedCopy::Refused(_))
+    !matches!(
+        owned_copy_plan(ty),
+        OwnedCopy::Refused(_) | OwnedCopy::FrameLocalImmutable { .. }
+    )
 }
 
 #[cfg(test)]
