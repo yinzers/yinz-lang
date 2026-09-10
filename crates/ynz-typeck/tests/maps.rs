@@ -8,7 +8,7 @@
 // in the lexer; every `check_no_diags` test would fail with unexpected diagnostics.
 
 use ynz_parser::{CompilerDb, SourceFile};
-use ynz_typeck::{check_query, CheckOutput, Type};
+use ynz_typeck::{check_query, CheckOutput};
 
 const FILE: &str = "test.ynz";
 

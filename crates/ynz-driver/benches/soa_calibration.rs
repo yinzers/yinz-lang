@@ -9,23 +9,30 @@
 // two, once per layout mode via the harness-only YNZ_SOA_FORCE override (D8).
 //
 // Every workload binary passes three gates BEFORE it is benched:
-//   1. checksum — one run must print exactly R·3·N(N+1)/2 (E13 tripwire: the
-//      pre-existing O0 stack-growth SIGSEGV corrupts nothing silently here);
+//   1. checksum — one run must print exactly R·3·N(N+1)/2 (correctness tripwire;
+//      historically also the E13 stack-growth-SIGSEGV canary — fixed, see below);
 //   2. byte-identical stdout across the two layout modes (the dual-mode oracle);
 //   3. IR gate — the soa-mode .ll must contain the SoA lowering symbols
 //      (soa_ctor/soa_new) and the aos-mode .ll must contain ZERO (the M3d
 //      silent-decline tripwire; without it this would measure AoS vs AoS).
 //
 // TOTAL_VISITS is held constant across N so per-point totals compare per-visit
-// cost directly; R = TOTAL_VISITS / N. The 131072 cap is risk E13's mitigation:
-// the crash envelope is 2-dimensional (visits AND for-in loop entries), per the
-// corrected segment-3 bracket in soa-threshold-raw-2026-07-04.md — on a healthy
-// toolchain, N=8/R=65536 (524,288 visits) SIGSEGVs while N=512/R=1000 (512,000
-// visits) and N=8/R=32768 (262,144 visits) both pass clean. (The earlier
-// "SIGABRT at 262144 visits at N=8" reading was the stale-runtime-archive bug,
-// FRAGO 018 — not this stack-growth class.) 131072 visits keeps BOTH axes at
-// proven-good points (max entries = 16384, at N=8). Do NOT raise either axis
-// until the underlying stack-growth bug is fixed (plan Future Requirements #13).
+// cost directly; R = TOTAL_VISITS / N.
+//
+// Cap re-evaluated 2026-07-17 (v0.3-M7 Phase 4): the underlying hot-loop O0
+// stack-growth SIGSEGV (roadmap ledger row 439 / risk E13's crash envelope —
+// historically N=8/R=65536 = 524,288 visits SIGSEGV'd at -O0) is FIXED: plain-loop
+// back-edges now release each iteration's allocas via llvm.stacksave/stackrestore
+// (ynz-codegen/src/emit.rs `loop_stack_save`/`loop_stack_restore`). Fresh evidence:
+// N=8/R=8,388,608 (67.1M visits — 16x the old ~4.19M envelope, 128x the old N=8
+// crash point) runs green with the exact checksum at BOTH tiers, and 33.5M visits
+// completes under a 1 MB stack ulimit at -O0 (flat frame). Permanent lock:
+// crates/ynz-driver/tests/hot_loop_stack_stress.rs. 131,072 therefore remains ONLY
+// as a bench-runtime budget (it keeps each criterion process-spawn iteration fast
+// across all 20 points) — no longer a safety cap on either axis; raising it is a
+// bench-cost decision, not a crash-envelope one. (The earlier "SIGABRT at 262144
+// visits at N=8" reading was the stale-runtime-archive bug, FRAGO 018 — not this
+// stack-growth class.)
 //
 // Each criterion iteration spawns the compiled binary; spawn overhead is identical
 // across modes so it cancels in the crossover comparison, and the `overhead`
@@ -45,7 +52,16 @@ use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 
-/// E13 cap: total element visits per process run (2-axis rationale in header).
+#[path = "bench_common.rs"]
+mod bench_common;
+use bench_common::{compile_workload, run_once_checked, scratch_dir};
+
+/// The knob-not-to-reach-for tail of run_once_checked's crash panic: this
+/// harness's budget axis is the visit cap (TOTAL_VISITS), not workload shape.
+const CRASH_HINT: &str = "lower the cap";
+
+/// Total element visits per process run — a bench-runtime budget since the v0.3-M7
+/// Phase 4 stack-growth fix (re-evaluation record + evidence in the header).
 const TOTAL_VISITS: i64 = 131_072;
 
 /// Calibration points: powers of two bracketing SOA_SIZE_THRESHOLD = 64.
@@ -84,34 +100,12 @@ fn expected_checksum(n: i64, reps: i64) -> i64 {
     reps * 3 * n * (n + 1) / 2
 }
 
-/// Workspace-target scratch dir for generated sources, binaries, and .ll files.
-fn scratch_dir() -> PathBuf {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/p6-soa-calibration");
-    fs::create_dir_all(&dir).expect("create scratch dir");
-    dir
-}
-
-/// Compile one workload under one forced layout; returns the binary path.
-/// The force var is set on the CHILD process only (never set_var — the bench
-/// binary itself may share the process with other criterion machinery).
+/// Compile one workload under one forced layout (harness-only YNZ_SOA_FORCE
+/// override); returns the binary path. Spawn-and-assert plumbing is shared —
+/// see bench_common::compile_workload.
 fn compile(dir: &Path, n: i64, reps: i64, mode: &str) -> PathBuf {
     let stem = format!("n{n}_{mode}");
-    let src = dir.join(format!("{stem}.ynz"));
-    fs::write(&src, workload_source(n, reps)).expect("write workload source");
-    let out = Command::new(env!("CARGO_BIN_EXE_ynz"))
-        .arg("build")
-        .arg(&src)
-        .arg("--emit-ir")
-        .env("YNZ_SOA_FORCE", mode)
-        .output()
-        .expect("spawn ynz build");
-    assert!(
-        out.status.success(),
-        "ynz build failed for {stem}: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    dir.join(stem)
+    compile_workload(dir, &stem, &workload_source(n, reps), "YNZ_SOA_FORCE", mode)
 }
 
 /// IR gate: soa-mode IR must carry the SoA lowering symbols; aos-mode must not.
@@ -137,33 +131,14 @@ fn assert_ir_gate(bin: &Path, mode: &str) {
     }
 }
 
-/// Checksum gate: one run, stdout must be exactly the closed-form checksum.
-fn run_once_checked(bin: &Path, expected: i64) -> String {
-    let out = Command::new(bin).output().expect("spawn workload binary");
-    assert!(
-        out.status.success(),
-        "workload {} exited non-zero ({:?}) — E13 tripwire: is the visit count over the cap?",
-        bin.display(),
-        out.status
-    );
-    let stdout = String::from_utf8(out.stdout).expect("utf8 stdout");
-    assert_eq!(
-        stdout.trim(),
-        expected.to_string(),
-        "checksum gate failed for {}",
-        bin.display()
-    );
-    stdout
-}
-
 fn soa_threshold_bench(c: &mut Criterion) {
-    let dir = scratch_dir();
+    let dir = scratch_dir("p6-soa-calibration");
 
     // Process-overhead baseline: reps = 0 (touches nothing, prints 0). Recorded
     // in the provenance file so per-point totals can be read net of spawn cost.
     {
         let bin = compile(&dir, 8, 0, "aos");
-        run_once_checked(&bin, 0);
+        run_once_checked(&bin, 0, CRASH_HINT);
         let mut overhead = c.benchmark_group("overhead");
         overhead.sample_size(12);
         overhead.sampling_mode(SamplingMode::Flat);
@@ -195,7 +170,7 @@ fn soa_threshold_bench(c: &mut Criterion) {
         for &mode in MODES {
             let bin = compile(&dir, n, reps, mode);
             assert_ir_gate(&bin, mode);
-            outputs.push(run_once_checked(&bin, expected));
+            outputs.push(run_once_checked(&bin, expected, CRASH_HINT));
             bins.push((mode, bin));
         }
         assert_eq!(

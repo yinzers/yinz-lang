@@ -19,7 +19,8 @@ function pump(seed: int) -> int {
   let ch: channel<int> = channel<int>(4)
   ch.send(seed)
   let got = ch.receive()
-  return got + 1
+  let value = got.or(0)
+  return value + 1
 }
 
 function host() -> int {

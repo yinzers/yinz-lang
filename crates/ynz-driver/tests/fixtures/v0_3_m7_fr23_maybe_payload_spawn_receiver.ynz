@@ -1,0 +1,56 @@
+// fr23 planned-RED fixture — shape B': MAYBE-PAYLOAD background-spawn receiver
+// (FRAGO 011, plan 2026-07-04-v0-3-m7-optimizer-pipeline; roadmap ledger row
+// 2026-07-04-v0-3-m6-concurrency-hotfix#8-fr23). CONFIRMED-LIVE UAF at BOTH tiers.
+//
+// The literal `background ships[0].haul()` is typeck-rejected today (indexing returns
+// maybe<Cargo>; expression-level narrowing is untracked), so this is the nearest
+// expressible index-materialized variant: the maybe payload is copied into a stack
+// alloca (%first_pay_own) and `first.value` hands THAT stack pointer into the bg ctx
+// (ptrtoint -> ctx slot) with no heap upgrade — the receiver is not Expr::Ident, so
+// emit.rs's is_heap_arg gate (Ident / explicit .copy() only) never upgrades it.
+// spawner() returns immediately; the task sleeps 150ms then reads the dead frame;
+// stomp() reuses the stack.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed today (gate run 2026-07-17, HEAD 3e3bf6c): O0 prints stomp-function
+// sentinels (777777/777888 or 888888/777777, nondeterministic); optimized prints
+// 0/0 deterministically. Goes green when the give/copy machinery for non-ident
+// spawn receivers lands.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  let ships: array<Cargo> = [{ weight: 111, tag: 222 }, { weight: 333, tag: 444 }]
+  let first: maybe<Cargo> = ships[0]
+  if (first.exists()) {
+    background first.value.haul()
+  }
+}
+
+function stomp() -> nothing {
+  let junk: array<Cargo> = [{ weight: 777777, tag: 777888 }, { weight: 888777, tag: 888888 }]
+  let ja: maybe<Cargo> = junk[0]
+  let jb: maybe<Cargo> = junk[1]
+  if (ja.exists()) {
+    if (jb.exists()) {
+      let sum: int = ja.value.weight + jb.value.tag
+      print(`stomp: ${sum}`)
+    }
+  }
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

@@ -1,0 +1,48 @@
+// fr23 planned-RED fixture — shape C2: CALL-MATERIALIZED background-spawn receiver
+// `background makeCargo().haul()` (FRAGO 011, plan 2026-07-04-v0-3-m7-optimizer-pipeline;
+// roadmap ledger row 2026-07-04-v0-3-m6-concurrency-hotfix#8-fr23). CONFIRMED-LIVE UAF.
+//
+// The receiver is a call expression whose shape return value materializes in
+// spawner()'s frame (%call_shape_ret alloca); not Expr::Ident, so emit.rs's
+// is_heap_arg gate never heap-upgrades it — its ptrtoint is stored to the bg ctx and
+// spawner returns immediately. The task rides the raw pointer to the dead temp.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed today (gate run 2026-07-17, HEAD 3e3bf6c): O0 prints `haul: 0/777777`
+// 6/6 (partially stomped dead temp); the optimized tier printed the correct values
+// by stack-layout luck ONLY — its IR carries the byte-identical dangling ride, so
+// the O0 tier is where this fixture manifests red today. Goes green when the
+// give/copy machinery for non-ident spawn receivers lands.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  background makeCargo().haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

@@ -82,6 +82,14 @@ enum Command {
         /// channel-synchronization semantics, not from thread suppression.
         #[arg(long, hide = true)]
         no_auto_parallel: bool,
+        /// Disables the LLVM optimization pipeline (mid-end passes + backend -O2)
+        /// and compiles at -O0 — the exact pre-optimizer `ynz build` behavior.
+        ///
+        /// The default build optimizes. Use this escape hatch to compare against
+        /// unoptimized output or to shave compile time during rapid iteration;
+        /// program behavior is identical in both modes.
+        #[arg(long)]
+        no_optimize: bool,
     },
     /// Compile and immediately run a Yinz source file or project.
     ///
@@ -211,6 +219,7 @@ fn main() {
             emit_ir,
             json,
             no_auto_parallel,
+            no_optimize,
         } => {
             if json {
                 // --json mode: run check_query only (no codegen/link); emit NDJSON to stdout.
@@ -226,6 +235,14 @@ fn main() {
             // The env var is set BEFORE the build call so it is visible during salsa dispatch.
             if no_auto_parallel {
                 std::env::set_var("YNZ_NO_AUTO_PARALLEL", "1");
+            }
+
+            // Thread --no-optimize through the salsa barrier via env var — the exact
+            // same plumbing shape as --no-auto-parallel above (emit_artifact reads it
+            // via `pipeline_config_from_env` inside codegen_query). Set BEFORE the
+            // build call so it is visible during salsa dispatch.
+            if no_optimize {
+                std::env::set_var("YNZ_NO_OPTIMIZE", "1");
             }
 
             let result = build::build(&file);

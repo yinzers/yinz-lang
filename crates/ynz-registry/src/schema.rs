@@ -45,6 +45,13 @@ pub struct PrimitiveIntrinsicEntry {
     /// `Some("int")` for method/method_1arg kinds; `None` for print_type/free_fn.
     pub receiver_type: Option<&'static str>,
     pub param_types: &'static [&'static str],
+    /// The ownership word of each parameter, aligned with `param_types` (`"share"` |
+    /// `"lend"` | `"give"`), or EMPTY for today's by-value/shared semantics. v0.3-M8 Phase
+    /// 4 (FRAGO 003): `send` carries `["give"]` so the LSP hover says "send gives its value"
+    /// from the registry rather than from a typeck constant. `build.rs` validates every
+    /// value and the alignment, so a typo or a misaligned list fails the build, never
+    /// ships as hover text (parked item 5).
+    pub param_ownership: &'static [&'static str],
     pub return_type: &'static str,
     pub since: &'static str,
     /// Optional teaching note shown in IDE completion documentation.

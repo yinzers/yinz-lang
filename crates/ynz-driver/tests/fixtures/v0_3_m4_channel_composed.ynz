@@ -25,9 +25,11 @@ function entrypoint() -> nothing {
   // The parent receives both values. The first receive frees capacity, which is what lets
   // the child's suspended second send() finally complete — the two endpoints wake each other.
   let first = ch.receive()
-  print(first.toString())
+  let firstValue = first.or(0)
+  print(firstValue.toString())
   let second = ch.receive()
-  print(second.toString())
+  let secondValue = second.or(0)
+  print(secondValue.toString())
 
   print(`done`)
 }

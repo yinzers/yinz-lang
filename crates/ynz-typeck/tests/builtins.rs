@@ -8,7 +8,7 @@
 // replaced with backtick strings. Double-quotes now produce an error diagnostic.
 
 use ynz_parser::{CompilerDb, SourceFile};
-use ynz_typeck::{check_query, CheckOutput, Type};
+use ynz_typeck::{check_query, CheckOutput};
 
 const FILE: &str = "test.ynz";
 

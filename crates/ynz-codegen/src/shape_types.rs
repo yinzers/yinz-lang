@@ -115,6 +115,12 @@ fn pad_field_to_cache_line<'ctx>(
 /// dynamic values) is stored as an opaque pointer.
 pub fn llvm_field_type<'ctx>(ctx: &'ctx Context, ty: &Type) -> BasicTypeEnum<'ctx> {
     let ptr = ctx.ptr_type(AddressSpace::default());
+    // Auto-Arc coupling (v0.3-M8 Phase 5): `ynz_typeck::types::arc_shareable` shares a shape
+    // across `background` tasks as ONE byte copy of this struct layout, so its allowlist is
+    // exactly the field kinds stored INLINE here (`int`/`float`/`bool` value bits, plus the
+    // `string` pointer the copy path already shares). A NEW inline-stored field kind added to
+    // this match must opt in at `arc_shareable` deliberately — and a kind that becomes a
+    // pointer cell here (like nested shapes today) must stay out of it.
     match ty {
         Type::Int => ctx.i64_type().into(),
         Type::Float => ctx.f64_type().into(),

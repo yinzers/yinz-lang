@@ -1,0 +1,21 @@
+// WHY: the `fixed<T>` twin of
+// `v0_3_hardening_c1_post_wait_maybe_read_by_suspending_call.ynz` — same shape, a
+// different unsupported-crossing type, so the pin proves the fix is in the crossing
+// analysis and not in one type's guard. `f` is declared after the suspension and read
+// only in the operands of the next suspending statement, which run before it suspends.
+//
+// Was rejected with "a `fixed<int>` value cannot yet cross a `wait`" until the fix in
+// this dispatch. Both diagnostics were correct about their own rule and wrong about
+// this program: nothing crosses.
+
+function consume(n: int) -> int {
+  wait sleep(10)
+  return n
+}
+
+function entrypoint() -> nothing {
+  wait sleep(1)
+  let f: fixed<int> = [1, 2, 3]
+  const v = wait consume(f[2].or(0))
+  print(v.toString())
+}

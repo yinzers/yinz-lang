@@ -1,0 +1,44 @@
+// v0.3-M8 Phase 5 (fix round 2, `red:code-reviewer`) — a caller-side WRITE inside a MEMBER
+// spawn's own argument list declines the group. `bump` is declared `lend`, so `bump(scene)`
+// in the first spawn's argument list is `Writes` in `classify_binding_in_stmts` — but only
+// when the caller-side proof covers the member statements themselves (`stmts[first..=last]`),
+// not merely the statements strictly between them. Before this fix the range was
+// `first + 1..last`, the write was invisible, the group was admitted, and `ynz_arc_new`
+// copied `scene` at the first spawn's argument 0 BEFORE `bump` ran (arguments are prepared
+// in order): task 2's clone then read the STALE block (`task saw 6`) while the caller kept
+// 106. Declined, each spawn takes its own copy on the shipped path, so task 2 copies the
+// CURRENT value (106).
+//
+// Expected output (order relaxed — the tasks print concurrently):
+//   task saw 112      (width 6, snapshotted at argument 0 before `bump` ran, + the 106 tag)
+//   task saw 106      (task 2's own copy of the bumped width, + tag 0)
+//   caller keeps Wagner 106x7
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function bump(lend scene: Scene) -> int {
+  scene.width = scene.width + 100
+  return scene.width
+}
+
+function render(scene: Scene, results: channel<int>, tag: int) -> nothing {
+  wait sleep(5)
+  results.send(scene.width + tag)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let scene: Scene = { name: `Wagner`, width: 6, height: 7 }
+  background render(scene, results, bump(scene))
+  background render(scene, results, 0)
+  for (k in range(0, 2)) {
+    let got = results.receive()
+    if (got.exists()) {
+      print(`task saw ${got.value}`)
+    }
+  }
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}

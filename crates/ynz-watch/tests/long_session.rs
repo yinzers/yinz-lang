@@ -114,12 +114,10 @@ fn check_rss_warn_is_rate_limited() {
     // Second call immediately after — if first warned, second must NOT warn.
     if last_warn.is_some() {
         let result = check_rss(&config, &mut last_warn);
-        match result {
-            RssCheckResult::Warn { .. } => {
-                panic!("second immediate call should not warn — rate limit broken")
-            }
-            _ => {} // Ok, Stop, or Unavailable all acceptable
+        if let RssCheckResult::Warn { .. } = result {
+            panic!("second immediate call should not warn — rate limit broken")
         }
+        // Ok, Stop, or Unavailable all acceptable
     }
 }
 

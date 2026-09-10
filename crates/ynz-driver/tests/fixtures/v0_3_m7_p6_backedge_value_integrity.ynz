@@ -1,0 +1,55 @@
+// v0.3-M7 Phase 6 fixture (c) — crossing-local VALUE integrity across REAL back-edge
+// yield/resume cycles (R8's silent-miscompile hazard class: the four-time M3a/M3d/M3e/M3g
+// frame flush/reload drift history).
+//
+// The starvation fixtures (a)/(b) prove the yield FIRES and prove scheduling ORDER; this
+// fixture proves the VALUES survive: tallyAcrossYields is a state-machine function (it
+// contains a real `wait`) whose while loop runs 2,400,000 iterations — past TWO full
+// PREEMPT_YIELD_INTERVAL budgets (2^20 = 1,048,576 back-edge polls each, the real shipped
+// interval in crates/ynz-runtime/src/runtime.rs), so the loop back edge takes the REAL
+// yield/resume path (store_resume_point -> Pending -> wake -> reload_params_from_frame
+// with reload_crossing=true) at least twice, deterministically (the budget is a pure call
+// count, never a clock).
+//
+// Every local below is live across the loop's back edge, so each MUST be flushed to the
+// frame and reloaded on resume — one per value class the frame machinery dispatches on
+// (int accumulator, int counter, number, string; the M3a corpse was exactly a per-type
+// flush-dispatch drift). The printed values are closed-form deterministic regardless of
+// WHERE in the loop the yields fire; a wrong value is a silent flush/reload miscompile,
+// not scheduling noise. frac mutates at i == 1500000 — BETWEEN the first (~1,048,576) and
+// second (~2,097,152) yields — so its printed value proves the CURRENT value is flushed,
+// not the initial one.
+//
+// Contract (asserted byte-exact by v03_m7_p6_backedge_value_integrity.rs at both tiers):
+//   crossing-intact
+//   2879998800000        (sum 0..2399999 = 2399999 * 2400000 / 2)
+//   2400000
+//   0.75                 (0.25 + 0.5, mutated between the two yields)
+//   main done
+
+function tallyAcrossYields() -> nothing {
+  let label = `crossing-intact`
+  let total = 0
+  let i = 0
+  let frac = 0.25
+  // Make this a state-machine function with the locals already frame-crossing BEFORE the
+  // loop runs: the back-edge yield below must resume through the same widened crossing-set
+  // machinery, not a freshly-classified path.
+  wait sleep(0)
+  while (i < 2400000) {
+    total = total + i
+    if (i == 1500000) {
+      frac = frac + 0.5
+    }
+    i = i + 1
+  }
+  print(label)
+  print(total.toString())
+  print(i.toString())
+  print(frac.toString())
+}
+
+function entrypoint() -> nothing {
+  tallyAcrossYields()
+  print(`main done`)
+}

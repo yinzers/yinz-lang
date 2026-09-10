@@ -8,277 +8,42 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 target triple = "x86_64-pc-linux-gnu"
 
 @.str.true = private unnamed_addr constant [5 x i8] c"true\00"
-@.str.false = private unnamed_addr constant [6 x i8] c"false\00"
-@.dec.zero = private unnamed_addr constant i128 45235290231555418299757684020165476352
-@.panic.iadd = private unnamed_addr constant [20 x i8] c"int overflow in '+'\00"
-@.panic.isub = private unnamed_addr constant [20 x i8] c"int overflow in '-'\00"
-@.panic.imul = private unnamed_addr constant [20 x i8] c"int overflow in '*'\00"
-@.panic.idiv = private unnamed_addr constant [23 x i8] c"division by zero (int)\00"
-@.panic.irem = private unnamed_addr constant [24 x i8] c"remainder by zero (int)\00"
-@.panic.ddiv = private unnamed_addr constant [26 x i8] c"division by zero (number)\00"
-@.panic.drem = private unnamed_addr constant [27 x i8] c"remainder by zero (number)\00"
-@.source.file = private unnamed_addr constant [13 x i8] c"m2_smoke.ynz\00"
 
-declare i32 @puts(ptr)
+; Function Attrs: nofree nounwind
+declare noundef i32 @puts(ptr nocapture noundef readonly) local_unnamed_addr #0
 
-declare void @ynz_decimal_add(ptr, ptr, ptr)
+declare void @ynz_decimal_add(ptr, ptr, ptr) local_unnamed_addr
 
-declare void @ynz_decimal_sub(ptr, ptr, ptr)
+declare ptr @ynz_decimal_to_string(ptr) local_unnamed_addr
 
-declare void @ynz_decimal_mul(ptr, ptr, ptr)
+declare ptr @ynz_int_to_string(i64) local_unnamed_addr
 
-declare void @ynz_decimal_div(ptr, ptr, ptr)
+declare void @ynz_siphash_init() local_unnamed_addr
 
-declare i32 @ynz_decimal_compare(ptr, ptr)
+declare void @ynz_rt_init() local_unnamed_addr
 
-declare void @ynz_decimal_from_int(i64, ptr)
+declare void @ynz_rt_shutdown() local_unnamed_addr
 
-declare void @ynz_decimal_from_float(double, ptr)
-
-declare ptr @ynz_decimal_to_string(ptr)
-
-declare ptr @ynz_int_to_string(i64)
-
-declare ptr @ynz_float_to_string(double)
-
-declare void @ynz_panic_overflow(ptr, ptr, i32, i32)
-
-declare void @ynz_panic_div_by_zero(ptr, ptr, i32, i32)
-
-; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
-declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64) #0
-
-; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
-declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64) #0
-
-; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
-declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64) #0
-
-declare i32 @ynz_string_eq(ptr, ptr)
-
-declare ptr @ynz_alloc(i64)
-
-declare ptr @ynz_alloc_zeroed(i64)
-
-declare void @ynz_free(ptr, i64)
-
-declare ptr @ynz_array_new(i64)
-
-declare ptr @ynz_array_new_sized(i64, i64)
-
-declare void @ynz_array_push(ptr, ptr)
-
-declare i64 @ynz_array_get(ptr, i64, ptr)
-
-declare void @ynz_array_set(ptr, i64, ptr)
-
-declare i64 @ynz_array_count(ptr)
-
-declare void @ynz_array_drop(ptr)
-
-declare ptr @ynz_array_clone_primitive(ptr)
-
-declare void @ynz_siphash_init()
-
-declare ptr @ynz_map_new(i64)
-
-declare i64 @ynz_map_get(ptr, i64, ptr)
-
-declare i64 @ynz_map_get_str(ptr, ptr, ptr)
-
-declare void @ynz_map_set(ptr, i64, ptr)
-
-declare void @ynz_map_set_str(ptr, ptr, ptr)
-
-declare i64 @ynz_map_count(ptr)
-
-declare i64 @ynz_map_has(ptr, i64)
-
-declare i64 @ynz_map_iter_get(ptr, i64, ptr, ptr)
-
-declare i64 @ynz_map_iter_get_str(ptr, i64, ptr, ptr)
-
-declare void @ynz_map_drop(ptr)
-
-declare ptr @ynz_channel_create(i64, ptr)
-
-declare ptr @ynz_channel_share(ptr)
-
-declare void @ynz_channel_free(ptr)
-
-declare i32 @ynz_channel_send_poll(ptr, i64, ptr, i64)
-
-declare i32 @ynz_channel_recv_poll(ptr, ptr, ptr)
-
-declare ptr @ynz_rt_spawn_handle(ptr, ptr, i64, i64, ptr, i64, i64, ptr)
-
-declare i32 @ynz_handle_recv_poll(ptr, ptr, ptr, ptr)
-
-declare i32 @ynz_handle_send_poll(ptr, i64, ptr)
-
-declare void @ynz_handle_free(ptr)
-
-declare void @ynz_string_to_int(ptr, i64, ptr)
-
-declare void @ynz_string_to_float(ptr, i64, ptr)
-
-declare void @ynz_string_to_number(ptr, i64, ptr)
-
-declare ptr @ynz_string_from_static(ptr, i64)
-
-declare void @ynz_frame_push(ptr, i64, ptr)
-
-declare void @ynz_frame_pop()
-
-declare ptr @ynz_error_new(ptr)
-
-declare void @ynz_error_drop(ptr)
-
-declare ptr @ynz_error_message(ptr)
-
-declare void @ynz_unhandled_error(ptr)
-
-declare i32 @ynz_string_validate_utf8(ptr, i64)
-
-declare ptr @ynz_string_concat(ptr, ptr)
-
-declare i64 @ynz_string_count(ptr)
-
-declare i64 @ynz_string_byte_count(ptr)
-
-declare ptr @ynz_string_codepoint_at(ptr, i64)
-
-declare i64 @ynz_string_byte_at(ptr, i64)
-
-declare i32 @ynz_string_contains(ptr, ptr)
-
-declare i64 @ynz_string_index_of(ptr, ptr)
-
-declare i32 @ynz_string_starts_with(ptr, ptr)
-
-declare i32 @ynz_string_ends_with(ptr, ptr)
-
-declare ptr @ynz_string_to_upper(ptr)
-
-declare ptr @ynz_string_to_lower(ptr)
-
-declare ptr @ynz_string_substring(ptr, i64, i64)
-
-declare ptr @ynz_string_trim(ptr)
-
-declare i64 @ynz_string_grapheme_count(ptr)
-
-declare ptr @ynz_string_grapheme_at(ptr, i64)
-
-declare ptr @ynz_string_split(ptr, ptr)
-
-declare ptr @ynz_string_replace(ptr, ptr, ptr)
-
-declare ptr @ynz_string_builder_new()
-
-declare void @ynz_string_builder_append(ptr, ptr)
-
-declare ptr @ynz_string_builder_finalize(ptr)
-
-declare void @ynz_string_builder_drop(ptr)
-
-declare ptr @ynz_sensitive_to_string(ptr)
-
-declare ptr @ynz_bignum_add(ptr, ptr, i32)
-
-declare ptr @ynz_bignum_sub(ptr, ptr, i32)
-
-declare ptr @ynz_bignum_mul(ptr, ptr, i32)
-
-declare ptr @ynz_bignum_div(ptr, ptr, i32)
-
-declare void @ynz_rt_init()
-
-declare void @ynz_rt_spawn_blocking(ptr, ptr, i64)
-
-declare void @ynz_rt_check_preempt()
-
-declare void @ynz_rt_shutdown()
-
-declare void @ynz_thread_sleep_ms(i64)
-
-declare void @ynz_rt_spawn(ptr, ptr, i64, i64, ptr, i64)
-
-declare ptr @ynz_rt_async_sleep_create(i64)
-
-declare i32 @ynz_rt_async_sleep_poll(ptr, ptr)
-
-declare i32 @ynz_rt_run_entrypoint(ptr, ptr, i64)
-
-declare ptr @ynz_rt_spawn_blocking_joinable(ptr, ptr, i64)
-
-declare i32 @ynz_rt_join_poll(ptr, ptr, ptr)
-
-declare void @ynz_rt_join_handle_free(ptr)
-
-define i32 @main() {
+define noundef i32 @main() local_unnamed_addr {
 entry:
-  call void @ynz_siphash_init()
-  call void @ynz_rt_init()
+  tail call void @ynz_siphash_init()
+  tail call void @ynz_rt_init()
   %dec_lit = alloca i128, align 16
   store i128 45233992157340784592850551396083171329, ptr %dec_lit, align 16
   %dec_lit1 = alloca i128, align 16
   store i128 45233992157340784592850551396083171330, ptr %dec_lit1, align 16
   %dadd = alloca i128, align 16
-  call void @ynz_decimal_add(ptr %dec_lit, ptr %dec_lit1, ptr %dadd)
-  %price = alloca i128, align 16
+  call void @ynz_decimal_add(ptr nonnull %dec_lit, ptr nonnull %dec_lit1, ptr nonnull %dadd)
   %dec_bits = load i128, ptr %dadd, align 16
-  store i128 %dec_bits, ptr %price, align 16
-  %count = alloca i64, align 8
-  store i64 42, ptr %count, align 8
-  %active = alloca i1, align 1
-  store i1 true, ptr %active, align 1
-  %dec_ld = load i128, ptr %price, align 16
   %price2 = alloca i128, align 16
-  store i128 %dec_ld, ptr %price2, align 16
-  %dec_str = call ptr @ynz_decimal_to_string(ptr %price2)
-  %puts = call i32 @puts(ptr %dec_str)
-  %count3 = load i64, ptr %count, align 8
-  %count4 = load i64, ptr %count, align 8
-  %ov_res = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %count3, i64 %count4)
-  %sum = extractvalue { i64, i1 } %ov_res, 0
-  %ov = extractvalue { i64, i1 } %ov_res, 1
-  br i1 %ov, label %ov_panic, label %ov_ok
-
-ov_ok:                                            ; preds = %entry
-  %ov_res5 = call { i64, i1 } @llvm.ssub.with.overflow.i64(i64 %sum, i64 1)
-  %sum6 = extractvalue { i64, i1 } %ov_res5, 0
-  %ov7 = extractvalue { i64, i1 } %ov_res5, 1
-  br i1 %ov7, label %ov_panic9, label %ov_ok8
-
-ov_panic:                                         ; preds = %entry
-  call void @ynz_panic_overflow(ptr @.panic.imul, ptr @.source.file, i32 124, i32 0)
-  unreachable
-
-ov_ok8:                                           ; preds = %ov_ok
-  %int_str = call ptr @ynz_int_to_string(i64 %sum6)
-  %puts10 = call i32 @puts(ptr %int_str)
-  %active11 = load i1, ptr %active, align 1
-  br i1 %active11, label %and_rhs, label %and_short
-
-ov_panic9:                                        ; preds = %ov_ok
-  call void @ynz_panic_overflow(ptr @.panic.isub, ptr @.source.file, i32 124, i32 0)
-  unreachable
-
-and_rhs:                                          ; preds = %ov_ok8
-  %count12 = load i64, ptr %count, align 8
-  %igt = icmp sgt i64 %count12, 0
-  br label %and_merge
-
-and_short:                                        ; preds = %ov_ok8
-  br label %and_merge
-
-and_merge:                                        ; preds = %and_short, %and_rhs
-  %and_r = phi i1 [ %igt, %and_rhs ], [ false, %and_short ]
-  %bstr = select i1 %and_r, ptr @.str.true, ptr @.str.false
-  %puts13 = call i32 @puts(ptr %bstr)
+  store i128 %dec_bits, ptr %price2, align 16
+  %dec_str = call ptr @ynz_decimal_to_string(ptr nonnull %price2)
+  %puts = call i32 @puts(ptr nonnull dereferenceable(1) %dec_str)
+  %int_str = call ptr @ynz_int_to_string(i64 1763)
+  %puts10 = call i32 @puts(ptr nonnull dereferenceable(1) %int_str)
+  %puts13 = call i32 @puts(ptr nonnull dereferenceable(1) @.str.true)
   call void @ynz_rt_shutdown()
   ret i32 0
 }
 
-attributes #0 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #0 = { nofree nounwind }

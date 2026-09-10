@@ -43,6 +43,7 @@ pub mod builtins;
 pub mod check;
 pub mod cpu_admission;
 pub mod effective_ownership;
+pub mod errors_fields;
 pub mod exports;
 pub mod false_sharing;
 pub mod generics;
@@ -52,6 +53,7 @@ pub mod intrinsics;
 pub mod lints;
 pub mod may_block;
 pub mod options_table;
+pub mod owned_copy;
 pub mod queries;
 pub mod resolve_import;
 pub mod return_paths;
@@ -62,14 +64,16 @@ pub mod soa;
 pub mod suspension_source;
 pub mod symbol_lookup;
 pub mod type_at_offset;
+pub mod type_variant_sampler;
 pub mod types;
 
 pub use check::{
-    check, check_with_kernel_mode, crossing_local_names, crossing_local_names_with_cpu_spike,
-    crossing_local_names_with_provenance, expr_is_conduit_suspend, expr_is_ufcs_suspending_call,
-    find_let_annotation_type_in_stmts, stmt_contains_conduit_suspend, stmt_is_conduit_suspend,
-    type_attached_const_type, CrossingNames, LocalCrossesWait, TypedModule,
-    DEFAULT_CHANNEL_CAPACITY,
+    block_contains_back_edge_yield, check, check_with_kernel_mode, crossing_local_names,
+    crossing_local_names_with_cpu_spike, crossing_local_names_with_provenance,
+    expr_is_conduit_suspend, expr_is_ufcs_suspending_call, find_let_annotation_type_in_stmts,
+    loop_stmt_back_edge_yields, stmt_contains_back_edge_yield, stmt_contains_conduit_suspend,
+    stmt_is_conduit_suspend, type_attached_const_type, CrossingNames, LocalCrossesWait,
+    TypedModule, DEFAULT_CHANNEL_CAPACITY,
 };
 pub use effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
 pub use exports::ExportTable;
@@ -79,11 +83,11 @@ pub use false_sharing::{
 };
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use inlay_hint_passes::{
-    array_to_fixed_promotion_hints, background_routing_hints, channel_capacity_hints,
-    copy_point_hints, let_to_const_promotion_hints, ownership_call_site_hints,
-    parallel_group_hints, variable_type_hints, wait_points_hints, BackgroundRoutingHint,
-    ChannelCapacityHint, CopyHint, OwnershipHint, ParallelGroupHint, PromotionHint, PromotionKind,
-    TypeHint, WaitPointHint,
+    array_to_fixed_promotion_hints, auto_arc_hints, background_routing_hints,
+    channel_capacity_hints, copy_point_hints, let_to_const_promotion_hints,
+    ownership_call_site_hints, parallel_group_hints, variable_type_hints, wait_points_hints,
+    AutoArcHint, BackgroundRoutingHint, ChannelCapacityHint, CopyHint, OwnershipHint,
+    ParallelGroupHint, PromotionHint, PromotionKind, TypeHint, WaitPointHint,
 };
 pub use intrinsics::PrimitiveIntrinsicTable;
 pub use lints::lint_diagnostic;

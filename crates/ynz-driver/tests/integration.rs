@@ -2612,6 +2612,22 @@ fn examples_basics_runs_end_to_end() {
         code, 0,
         "examples/pirates-roster must compile and run; stderr:\n{stderr}"
     );
+    // The M1 section's `background recordPittsburghAnalytics(...)` is fire-and-forget
+    // ("Main never waits for it" — entrypoint.ynz), so its completion line lands at a
+    // scheduler-dependent point: under full-suite parallel load it drifts across
+    // section boundaries (observed: from the inferred-wait section into the nested-SM
+    // section) while every value stays identical. Check PRESENCE exactly once, then
+    // strip the line from both sides before the positional comparisons — the same
+    // relaxation the 8 pirate lines get above, applied to the one other
+    // scheduler-positioned line in the demo.
+    let analytics_line = "background analytics done\n";
+    assert_eq!(
+        stdout.matches(analytics_line).count(),
+        1,
+        "demo must print 'background analytics done' exactly once; stdout: {stdout:?}"
+    );
+    let stdout = stdout.replace(analytics_line, "");
+    let golden = golden.replace(analytics_line, "");
     // Split at the M2 concurrent section: everything before the first pirate's
     // ": done" line is deterministic and must byte-match the golden prefix.
     // Everything after "all 8 pirates done" is deterministic again.
@@ -7343,11 +7359,32 @@ fn v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged() {
             "run {run_idx}: main must always exit 0 regardless of background-task timing; \
              stderr:\n{stderr}"
         );
-        assert_eq!(
-            stdout.trim(),
-            "main-done",
-            "run {run_idx}: main thread's own output must be unaffected by the detached \
-             background task's timing; stdout:\n{stdout}"
+        // Two documented-legal regimes of the detached task's shutdown race (the sibling
+        // `..._completes_before_exit_no_leak` test below pins the COMPLETED regime
+        // deterministically with a 10x head start): (a) ABORTED — the task dies at
+        // shutdown drain and only main's own `main-done` lands; (b) COMPLETED — under
+        // load (e.g. full-suite CPU contention) the detached task legitimately finishes
+        // during shutdown drain and its fused-group completion marker (`1229`, a + b)
+        // lands too, in either order relative to `main-done`. Both are correct; the
+        // previous exact `main-done` assertion pinned regime (a) alone and flaked
+        // whenever (b) occurred. Anything beyond these two line sets is a real output
+        // corruption and still fails.
+        let lines: Vec<&str> = stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        let aborted_regime = lines == ["main-done"];
+        let completed_regime = lines == ["1229", "main-done"] || lines == ["main-done", "1229"];
+        // test-ratchet: widened from the exact `main-done` pin per FRAGO 009 (plan
+        // 2026-07-04-v0-3-m7-optimizer-pipeline) — the old assertion pinned one regime of a
+        // two-regime documented race; the sibling test below proves the other regime legal.
+        assert!(
+            aborted_regime || completed_regime,
+            "run {run_idx}: stdout must match one of the two documented-legal regimes of \
+             the detached-task shutdown race (aborted: exactly `main-done`; completed: \
+             `main-done` plus the fused group's `1229` completion marker) — anything else \
+             is a real output corruption; stdout:\n{stdout}"
         );
         if stderr.contains("panicked") {
             panic_count += 1;
@@ -10998,5 +11035,290 @@ fn m5_p5_bg_copy_alloc_gap_pin() {
         "bg-arg copy alloc gap drifted: expected alloc-free == 4 (2 never-drop \
          local arrays × 2 cells); gap 6 = the spawn-path re-clone leak returned \
          (seg-4 4b regression); alloc={alloc} free={free}"
+    );
+}
+
+// ── background spawn-arg ownership hand-off: channel send / handle send / handle return ───
+//
+// A `background` task is handed a HEAP CLONE of each `array<...>` argument, owned by the
+// task's drop ladder (`BgArgDropEntry` kind HEAP_ARRAY, freed at task retire). When the task
+// hands that pointer to something that outlives it — a channel (`ch.send`, `h.send`) or the
+// parent via `h.receive()` — the runtime releases it from the ladder at the hand-off
+// (`release_ladder_payload`). Pre-fix the ladder freed it and the receiver read a freed
+// header: `got.count()` printed `-4760032263271174595` / SIGSEGV on this exact fixture.
+//
+// The alloc gap follows the M5 exact-gap accounting (`m3d_assert_fires_byte_identical_alloc_gap`
+// doc): local arrays are never dropped at scope exit, so every array a local ends up holding
+// costs 2 counted allocs held to process exit. The gap is pinned EXACTLY because it is the
+// mutation tripwire for both failure directions: the ladder freeing a sent payload again
+// shrinks it by 2 (the double-owner regression); a payload nobody frees grows it.
+
+/// Byte-exact stdout + exact alloc gap for one hand-off fixture. `gap_explained` names every
+/// held-to-exit array the pin counts so a drift is diagnosable from the failure message.
+fn assert_bg_arg_handoff_fixture(
+    fixture_name: &str,
+    expected_stdout: &str,
+    expected_gap: u64,
+    gap_explained: &str,
+) {
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_eq!(
+        code, 0,
+        "{fixture_name} must exit 0 (a SIGSEGV here = the receiver read the ladder-freed \
+         payload); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, expected_stdout,
+        "{fixture_name}: the receiver must read the INTACT array after the sending task \
+         retired; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert!(
+        alloc > 0,
+        "{fixture_name}: alloc=0 — the counter saw nothing, parity is vacuous (FRAGO 005)"
+    );
+    assert_eq!(
+        alloc,
+        free + expected_gap,
+        "{fixture_name}: alloc must equal free + {expected_gap} ({gap_explained}); a gap \
+         2 smaller = the ladder freed the handed-off payload again (double owner); a gap \
+         larger = a new leak; alloc={alloc} free={free}"
+    );
+}
+
+#[test]
+fn bg_arg_channel_send_receiver_reads_intact_array_after_task_retired() {
+    // WHY: the reported UAF — `producer(wire, rows)` sends its heap-cloned `rows`; the
+    // spawner receives it AFTER the task (and its ladder) retired.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_channel_send_array.ynz",
+        "3\n10\n30\n",
+        4,
+        "2 = the spawner's `rows` literal, 2 = the sent clone now held by the receiver's `got`",
+    );
+}
+
+#[test]
+fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
+    // WHY: the never-drained sibling. Ownership rests with the channel (its teardown glue is
+    // the payload's one drop — `send_of_ladder_owned_payload_releases_ladder_alloc_free_parity`
+    // proves that path in the runtime). The spawner's channel local is itself never released
+    // today (no scope-exit `ynz_channel_free` is emitted — the pre-existing never-drop-locals
+    // class), so the payload is held to exit WITH the channel: gap 4, not the pre-fix 2 that
+    // meant the ladder had freed a pointer still sitting in the channel's buffer.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_channel_send_array_never_drained.ynz",
+        "never drained\n",
+        4,
+        "2 = the spawner's `rows` literal, 2 = the sent clone held by the never-torn-down channel",
+    );
+}
+
+// ── v0.3 hardening step 3.2 fix round: the spawn asks ONE question, not a syntactic one ───
+//
+// `prepare_bg_arg_for_ctx` used to decide "does the task need a value of its own?" by matching
+// an `Expr::` variant against a `Type::` variant — an explicit `.copy()` of an `array`, and a
+// bare `BgOwnership::Give` on a `map`. Both were wrong in the way `.claude/corpses.md`
+// "Enumerating syntactic sites instead of threading the whole-program ownership analysis"
+// predicts, and the three fixtures below are the three ways they were wrong. Each was verified
+// RED against the pre-fix binary; the numbers in each WHY are that measurement.
+
+#[test]
+fn spawning_with_a_copied_map_mints_one_clone_not_two() {
+    // WHY: `m.copy()` had already produced an independent map; the array-shaped de-dup guard
+    // did not recognise a map, so the spawn glue cloned it AGAIN and nothing freed the first.
+    // Measured pre-fix: 16 allocs against the no-`.copy()` twin's 11 — a whole extra map
+    // (header + four buffers) leaked per spawn. Asserted as a COMPARISON rather than a
+    // constant: asking for a copy before a spawn must cost what the spawn already costs.
+    let (copied_alloc, copied_free) =
+        ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_copied_map.ynz");
+    let (plain_alloc, plain_free) =
+        ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_plain_map.ynz");
+    assert!(
+        plain_alloc > 0,
+        "alloc=0 — the counter saw nothing (FRAGO 005)"
+    );
+    assert_eq!(
+        (copied_alloc, copied_free),
+        (plain_alloc, plain_free),
+        "`background eat(m.copy())` must cost exactly what `background eat(m)` costs; a higher \
+         alloc = the spawn copied a value that was already an independent copy, and leaked the \
+         first one"
+    );
+}
+
+#[test]
+fn spawning_with_a_copied_maybe_frees_everything_it_allocates() {
+    // WHY: this leak went from ZERO to one per spawn when `maybe` stopped aliasing — `.copy()`
+    // minted an envelope, the spawn glue minted a second, and only the second rode the task's
+    // drop ladder. Measured pre-fix: 3 allocs / 2 frees. The balance is the assertion, because
+    // "allocated one more than it freed" is the whole defect.
+    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_copied_maybe.ynz");
+    assert!(alloc > 0, "alloc=0 — the counter saw nothing (FRAGO 005)");
+    assert_eq!(
+        alloc, free,
+        "a `maybe` spawn argument must free every envelope it allocates; alloc={alloc} \
+         free={free} — a gap of 1 is the second envelope nothing owns"
+    );
+}
+
+#[test]
+fn a_map_reached_through_a_field_is_not_shared_with_the_task() {
+    // WHY: `background eat(b.items)` records `Give` by default-deny, and that route consumes
+    // NOTHING — `b` still holds the map. The old gate read the `Give` label as proof of sole
+    // ownership and handed the map over untouched, so the task's write landed in the parent's
+    // map: pre-fix stdout was `99` / `99`. The task must get its own.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_hardening_c2_spawn_field_map_not_shared.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "99\n1\n",
+        "the task writes 99 into its OWN map and the parent still reads 1; `99\\n99\\n` means \
+         both sides hold one map. stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn bg_arg_handle_send_grandchild_reads_intact_array_after_relay_retired() {
+    // WHY: the OTHER send producer. `relay` forwards its heap-cloned `rows` through
+    // `h.send(rows)` (the handle outbox, which funnels into the same channel core); the
+    // grandchild `sink` reads it and reports `count * 100 + first` = 307.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_handle_send_array.ynz",
+        "307\n",
+        4,
+        "2 = the spawner's `rows` literal, 2 = the forwarded clone now held by sink's `got`",
+    );
+}
+
+#[test]
+fn bg_arg_handle_return_parent_reads_intact_array_after_child_retired() {
+    // WHY: the return-slot door. `echo(rows)` returns its heap-cloned argument; the parent
+    // takes it through `h.receive()` after the child retired. The `*_HEAP_PTR` return kinds
+    // are what let the runtime release it at completion extraction.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_handle_return_array.ynz",
+        "3\n4\n",
+        6,
+        "2 = the spawner's `rows` literal, 2 = the returned clone now held by `arr`, \
+         2 = the `fallback` empty-array literal",
+    );
+}
+
+#[test]
+fn bg_arg_two_arrays_send_one_releases_only_the_sent_slot() {
+    // WHY: multi-descriptor selectivity. Every other hand-off fixture spawns a callee with ONE
+    // heap-cloned argument, so `release_ladder_payload`'s descriptor walk never faced 2+ live
+    // descriptors where exactly one must match. Here `producer` holds clones of `rows` AND
+    // `scratch` and sends only `rows`. The two assertions together cover both wrong-walk
+    // directions: releasing the WRONG slot frees `rows` under the receiver (stdout garbage)
+    // while leaking `scratch`; releasing EVERY slot leaks `scratch` (gap 8, not 6). The task
+    // reads `scratch` after the send to prove the un-sent clone is still intact.
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_two_arrays_send_one.ynz",
+        "2\n7\n3\n10\n",
+        6,
+        "2 = the spawner's `rows` literal, 2 = the spawner's `scratch` literal, 2 = the sent \
+         `rows` clone now held by the receiver's `got` (the `scratch` clone is freed by the \
+         ladder at retire — it was never handed off)",
+    );
+}
+
+#[test]
+fn bg_arg_handle_return_map_heap_ptr_kind_is_a_clean_no_op() {
+    // WHY: the `BuiltinMap` half of the `*_HEAP_PTR` return-kind classification had zero
+    // coverage. Maps are not ladder-cloned today (`prepare_bg_arg_for_ctx`'s per-type table),
+    // so the release walk at completion extraction must find nothing and change nothing —
+    // this pins that the kind is delivered like `VALUE_WORD` (intact map, exit 0) and disturbs
+    // no ownership (exact gap). Gap components were each measured standalone: the sync
+    // `build(21)` control costs alloc 6 / free 1 (gap 5 — header, table, two entry cells, one
+    // grow); an empty `{}` literal alone costs alloc 5 / free 0; an `-> int` handle spawn +
+    // receive nets 0 (alloc 2 / free 2).
+    assert_bg_arg_handoff_fixture(
+        "bg_arg_handle_return_map.ynz",
+        "2\n42\n",
+        10,
+        "5 = the returned map now held by `m` (header, table, two entry cells, one grow — \
+         identical to the synchronous control), 5 = the parent's `fallback` empty-map literal",
+    );
+}
+
+#[test]
+fn copy_of_a_container_owns_its_items_too() {
+    // WHY: the DEPTH half of the v0.3 concurrency-hardening `.copy()` ruling, with no
+    // `background` in the program at all — so a regression here is about `.copy()` itself
+    // rather than about the spawn path that shares its routine. `outer.copy()` used to be a
+    // one-level clone: a fresh container whose cells still pointed at the original's rows, so
+    // writing through the copy changed the original. Verified RED against the pre-fix binary
+    // (2026-09-06): `original row 0 starts at 99` instead of `1`.
+    //
+    // The `maybe` line locks a second type the same routine newly copies for real: a fresh
+    // envelope that still carries its payload, rather than the receiver's own envelope.
+    let fixture_name = "v0_3_hardening_c2_deep_copy_independence.ynz";
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_eq!(code, 0, "{fixture_name} must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "original row 0 starts at 1\nclone row 0 starts at 99\nheld copy is 2\n",
+        "{fixture_name}: `original row 0 starts at 99` means the copy shared its rows with the \
+         original — a one-level clone, which is the same alias one level down. `held copy is \
+         -1` means the copied `maybe` envelope lost its payload; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
+    // GREEN-WORLD LOCK. This test used to assert TODAY'S WRONG behaviour on purpose
+    // (`bg_arg_alias_container_add_is_a_known_uaf_red_pin`), because the producer was open:
+    // an `array<pointer-elem>` `background` argument was passed through un-cloned, so the task
+    // wrote into the PARENT's container and then its drop ladder freed a clone the parent
+    // still pointed at. The pin's own text named the fix as "closing that alias fall-through";
+    // that is what the shared owned-copy routine did (M8 Future Requirements #9, FRAGO 002
+    // cluster C2), so the assertions here are the correct-world ones the pin described.
+    //
+    // Three readings, because the old defect had three separable halves:
+    //   1. the task's container is its own — the parent still sees 1 row;
+    //   2. the task's ITEMS are its own — a ONE-LEVEL clone would leave both sides sharing
+    //      `seed`, and the task's `mine.set(0, 999)` would show up in the parent's row 0;
+    //   3. the parent dereferences `bucket[0]`, which is precisely what the old defect made
+    //      unsafe (garbage / SIGSEGV across runs) and why the old pin refused to do it.
+    //
+    // Gap accounting (8): the parent's own three locals (`seed`, `bucket`, `rows` — 2 counted
+    // allocations each) are never released, which is the separate, pre-existing "nothing frees
+    // a heap local at scope exit" class, and the task's deep-copied item is not freed by the
+    // element-blind `ynz_array_drop` (a documented four-field deferral at the emitter). The
+    // task's own container clone and its `rows` clone ARE freed — the old defect was that the
+    // ladder freed something the PARENT still held, and that is gone.
+    let fixture_name = "bg_arg_alias_container_add_red.ynz";
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_eq!(
+        code, 0,
+        "{fixture_name} must exit 0 — the parent now dereferences `bucket[0]`, which the old \
+         defect made unsafe; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("parent sees 1 rows"),
+        "{fixture_name}: the task added a row to ITS OWN container; the parent must still see \
+         exactly the one row it started with. Seeing 2 means the `background` argument aliased \
+         the parent's container again; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("parent row 0 starts at 1"),
+        "{fixture_name}: the task overwrote ITS OWN row 0 with 999. Seeing 999 here means the \
+         container was copied but its ITEMS were shared — a one-level clone, which is the same \
+         alias one level down; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert!(
+        alloc > 0,
+        "{fixture_name}: alloc=0 — the counter saw nothing, the lock is vacuous"
+    );
+    assert_eq!(
+        alloc,
+        free + 8,
+        "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
+         being freed — check it is not the parent's container or its items, which is the \
+         use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \
+         alloc={alloc} free={free}"
     );
 }

@@ -364,7 +364,6 @@ fn run_corpus_line(line: &str, op_name: &str) -> Option<Result<(), String>> {
         return None;
     }
 
-    let _op = parts[1].to_lowercase();
     let operands = &parts[2..arrow_pos];
 
     if operands.is_empty() {

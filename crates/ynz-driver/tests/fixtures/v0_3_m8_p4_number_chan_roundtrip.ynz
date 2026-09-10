@@ -1,0 +1,37 @@
+// WHY: v0.3-M8 Phase 4 step 3d — fr12, `channel<number>` decimal128 marshalling
+// (IMP-concurrency.md "fr12"): a `number` crosses the channel's one 64-bit slot as a counted
+// 16-byte heap cell the send mints (`number_to_heap_cell`) and the receive frees BEFORE the
+// `maybe<number>` envelope is built. `number` is copy-through — it does NOT join the give set
+// (`ChannelElemDrop::NumberCell.transfers_source() == false`) — so the producer's `price`
+// binding stays usable after the first send and is sent AGAIN. The receiver's value crosses a
+// `wait` on the receiving side so the decimal128 two-slot frame path is exercised. Parity: one
+// counted 16-byte alloc per send, one counted free per receive — alloc == free + 0. RED
+// today: `channel<number>` is rejected at construction ("cannot cross a task boundary").
+//
+// Expected output:
+//   2.5
+//   2.5
+//   end
+function producer(lend wire: channel<number>) -> nothing {
+  let price: number = 2.5
+  wire.send(price)
+  wire.send(price)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<number> = channel<number>(4)
+  background producer(wire)
+  let got = wire.receive()
+  let first = got.or(0.0)
+  wait sleep(5)
+  print(first)
+  let got2 = wire.receive()
+  let second = got2.or(0.0)
+  print(second)
+  let after = wire.receive()
+  if (after.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`end`)
+}

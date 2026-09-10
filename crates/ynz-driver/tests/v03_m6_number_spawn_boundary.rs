@@ -322,8 +322,19 @@ fn emit_fixture_ir(name: &str) -> String {
     let isolated_src = tmp.path().join(src.file_name().expect("fixture filename"));
     std::fs::copy(&src, &isolated_src).expect("failed to copy fixture to tmpdir");
 
+    // --no-optimize pins the CODEGEN-emission anchor tier (v0.3-M7 Phase 3): since the
+    // default build optimizes, --emit-ir prints POST-`default<O2>` IR, where the local
+    // value-name markers these tests assert (e.g. `_num_ld`) are legally renamed or
+    // folded away. The markers are claims about what CODEGEN emits (does the spawn
+    // pre-gate interpose a heap cell?), not about the optimized artifact — same
+    // anchor-pinning move as optimizer_red_gate.rs's differential harness.
     let build_out = Command::new(env!("CARGO_BIN_EXE_ynz"))
-        .args(["build", isolated_src.to_str().unwrap(), "--emit-ir"])
+        .args([
+            "build",
+            "--no-optimize",
+            isolated_src.to_str().unwrap(),
+            "--emit-ir",
+        ])
         .env("CLICOLOR", "0")
         .output()
         .expect("failed to spawn ynz build");

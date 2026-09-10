@@ -137,18 +137,127 @@ fn m8_gallery_fires_expected_diagnostics() {
     // v0.1-polish inline shape type errors (4+ errors). Expected: 5–10.
     // test-ratchet: v0.1-polish adds 3 inline-shape error triggers (unknown field,
     // missing field, hidden-in-inline) — count grows from 2 to ~6.
+    // v0.3-M8 Phase 4 (test-ratchet): the channel-close + transfer-rule section adds the
+    // four new compile diagnostics (ConsumedBySend ×5 incl. the three alias forms,
+    // ParamNeedsGive ×5 incl. both frames of the relay chain, TransferNeedsCopy ×5 incl. the
+    // dynamic-contract instance, HandleChannelArgNeedsBinding ×1), the extracted const-send
+    // refusal, the existing use-after-give error at two new sites (+2 same-call alias-pair
+    // sites, fix round 2), and the two diagnostics
+    // `.close()` extends (no-args, per-receiver unknown-method list) — 26–36 in all.
+    // v0.3-M8 Phase 4 fix round 3 (test-ratchet): +1 MessageBeforeFailedCheck trigger —
+    // 26–37 in all. Every new class is pinned by key phrase below so the count can never
+    // pass for the wrong reason.
     let (stderr, code) = compile_gallery(&gallery("m8_errors.ynz"));
     assert_ne!(code, 0, "m8 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert!(
-        (5..=12).contains(&error_count),
-        "m8 gallery must produce 5–12 errors; got {error_count}.\nstderr:\n{stderr}"
+        (26..=37).contains(&error_count),
+        "m8 gallery must produce 26–37 errors; got {error_count}.\nstderr:\n{stderr}"
     );
 
     assert!(
         stderr.contains("background"),
         "m8 gallery must include a background-share diagnostic; got:\n{stderr}"
+    );
+
+    // ConsumedBySend — the WHAT's fixed clause (IMP-ownership.md "Teaching text").
+    assert!(
+        stderr.contains("`send()` gave it away"),
+        "m8 gallery must include the ConsumedBySend diagnostic; got:\n{stderr}"
+    );
+    // ConsumedBySend through an alias class — the `{via}` slot names what was sent.
+    assert!(
+        stderr.contains("which is what was sent"),
+        "m8 gallery must include the alias-class `{{via}}` form of ConsumedBySend; got:\n{stderr}"
+    );
+    // ParamNeedsGive — the WHAT's fixed closing sentence.
+    assert!(
+        stderr.contains("Only a `give` parameter can be given away."),
+        "m8 gallery must include the ParamNeedsGive diagnostic; got:\n{stderr}"
+    );
+    // ParamNeedsGive fires for BOTH frames of the relay chain in one build.
+    assert!(
+        stderr.contains("parameter of `m8HopB`") && stderr.contains("parameter of `m8HopA`"),
+        "m8 gallery must report both m8HopB's and m8HopA's missing `give` in one build; got:\n{stderr}"
+    );
+    // TransferNeedsCopy — the WHAT's fixed clause, plus each `{reason}` form.
+    assert!(
+        stderr.contains("so someone here still holds it."),
+        "m8 gallery must include the TransferNeedsCopy diagnostic; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("is a field of `bucket`"),
+        "m8 gallery must include TransferNeedsCopy's field reason; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("one cell of `matrix`"),
+        "m8 gallery must include TransferNeedsCopy's loop-cell reason; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("returns a piece of its `b` argument"),
+        "m8 gallery must include TransferNeedsCopy's returns-a-piece reason; got:\n{stderr}"
+    );
+    // HandleChannelArgNeedsBinding — the WHAT's fixed clause.
+    assert!(
+        stderr.contains("which is not a named binding"),
+        "m8 gallery must include the HandleChannelArgNeedsBinding diagnostic; got:\n{stderr}"
+    );
+    // The extracted const refusal carries the send sink's WHAT-INSTEAD.
+    assert!(
+        stderr.contains("wire.send(rows.copy())"),
+        "m8 gallery must include the const-send refusal with the send-sink advice; got:\n{stderr}"
+    );
+    // `.close()` with arguments — WHAT and WHAT-INSTEAD both render (fix round 2: the renderer
+    // read byte spans as char offsets and dropped the teaching block of any span that landed
+    // past the file's char count; trigger order is irrelevant now).
+    assert!(
+        stderr.contains("`.close()` takes no arguments"),
+        "m8 gallery must include the close-takes-no-arguments diagnostic; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Call it bare: wire.close()"),
+        "m8 gallery must render the close-takes-no-arguments WHAT-INSTEAD; got:\n{stderr}"
+    );
+    // The same-call alias pair (fix round 2, Producer C1): the use-after-give error's `{via}`
+    // slot names the class-mate that was given.
+    assert!(
+        stderr.contains("which is what was given away"),
+        "m8 gallery must include the same-call alias-pair use-after-give; got:\n{stderr}"
+    );
+    // Every rendered diagnostic points at its own trigger line, never into a `// WHY:` comment
+    // (fix round 2, Producer A: byte spans were read as char offsets).
+    for line in stderr.lines() {
+        if line.contains(" │ ") && line.contains("// WHY:") && !line.contains("─▶") {
+            panic!("a diagnostic's caret line landed inside a `// WHY:` comment:\n{line}\n\nfull stderr:\n{stderr}");
+        }
+    }
+    // The unknown-method list split per receiver: channel gains close(), handle does not.
+    assert!(
+        stderr.contains("Available methods: send(value), receive(), close()."),
+        "m8 gallery must list close() among a channel's methods; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Available methods: send(value), receive()."),
+        "m8 gallery must keep the handle's method list without close(); got:\n{stderr}"
+    );
+    // MessageBeforeFailedCheck (fix round 3, Producer A) — `.message` read before `.failed()`.
+    assert!(
+        stderr.contains("hasn't been checked with `.failed()` yet"),
+        "m8 gallery must include the MessageBeforeFailedCheck diagnostic; got:\n{stderr}"
+    );
+
+    // ── Phase 7: the `background-handle-not-waited` Tier 3 lint (SUGGESTION severity —
+    //    must be present in stderr WITHOUT raising the Error count above: the no-duct-tape
+    //    guard for the re-deferred scope-drop cancellation fix is a teaching surface, never
+    //    a build gate) ──
+    assert!(
+        stderr.contains("lint: background-handle-not-waited"),
+        "m8 gallery must fire background-handle-not-waited with its rule code; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("h.receive()"),
+        "background-handle-not-waited must name the actual binding in its WHAT-INSTEAD; got:\n{stderr}"
     );
 }
 
@@ -454,4 +563,132 @@ fn v0_3_m4_gallery_fires_expected_diagnostics() {
         stderr.contains("wait sleep(5)"),
         "prefer-yielding-sleep must echo the literal ms into WHAT-INSTEAD; got:\n{stderr}"
     );
+}
+
+// WHY: v0_3_m7_errors.ynz exercises the aliasing-call rejection class v0.3-M7 Phase 2
+// added (FRAGO 002): a call passing the same value — or overlapping pieces of one
+// value — into two parameter positions where at least one position modifies it is an
+// ownership-contract violation caught at compile time (`lend` = exclusive access).
+// Three triggers: share+lend same value, lend+lend same value, whole+part overlap.
+// If the error count drops, a trigger regressed (the miscompile class the rejection
+// closes — false LLVM `noalias` under an optimizing pipeline — is reachable again).
+#[test]
+fn v0_3_m7_gallery_fires_expected_diagnostics() {
+    let (stderr, code) = compile_gallery(&gallery("v0_3_m7_errors.ynz"));
+    // Gallery has intentional errors; must exit non-zero.
+    assert_ne!(code, 0, "v0_3_m7 gallery must exit non-zero");
+
+    let error_count = count_errors(&stderr);
+    // Expected 3 errors (one per trigger block). Range gives headroom for incidental
+    // diagnostic refinements without masking a trigger regression.
+    assert!(
+        (3..=5).contains(&error_count),
+        "v0_3_m7 gallery must produce 3–5 errors; got {error_count}.\nstderr:\n{stderr}"
+    );
+
+    // share + lend, same value.
+    assert!(
+        stderr.contains("passed to `copyQuantity` twice in the same call")
+            && stderr.contains("`share` (a read-only view)")
+            && stderr.contains("`lend` (the function modifies it)"),
+        "v0_3_m7 gallery must include the share+lend aliasing diagnostic; got:\n{stderr}"
+    );
+    // lend + lend, same value.
+    assert!(
+        stderr.contains("passed to `swapQuantities` twice in the same call"),
+        "v0_3_m7 gallery must include the lend+lend aliasing diagnostic; got:\n{stderr}"
+    );
+    // Whole + part overlap (`order.slip` is part of `order`).
+    assert!(
+        stderr.contains("`order.slip` is part of `order`"),
+        "v0_3_m7 gallery must include the whole-vs-part overlap diagnostic; got:\n{stderr}"
+    );
+    // Teaching shape: the copyable fix and the non-circular WHY must render.
+    assert!(
+        stderr.contains(".copy()") && stderr.contains("only way that value is reached"),
+        "v0_3_m7 aliasing diagnostic must carry its WHAT-INSTEAD/WHY teaching text; got:\n{stderr}"
+    );
+}
+
+#[test]
+fn v0_3_hardening_gallery_fires_every_copy_refusal() {
+    // WHY: the v0.3 concurrency-hardening ruling gave `.copy()` exactly two answers — a
+    // genuinely separate value, or a refusal the user can read. Six types landed on the
+    // refusal side, and every one of them USED to compile and quietly hand back the receiver
+    // instead. This gallery is the only place a human reads all six refusals together, which
+    // is what the teaching quality actually depends on; a count-only assertion would let one
+    // of them regress into a generic message without failing. Phase 3 steps 3.3/3.4 (FRAGO 002
+    // cluster C3 and singleton S1) added two more triggers to the same file — a shadowed
+    // `.failed()`-checked binding, and a checked-but-unlowered `errors` field.
+    let (stderr, code) = compile_gallery(&gallery("v0_3_hardening_errors.ynz"));
+    assert_ne!(code, 0, "v0_3 hardening gallery must exit non-zero");
+
+    let error_count = count_errors(&stderr);
+    assert_eq!(
+        error_count, 10,
+        "v0_3 hardening gallery must produce exactly 10 errors, one per refusal trigger; got \
+         {error_count}.\nstderr:\n{stderr}"
+    );
+
+    for (label, phrase) in [
+        ("channel", "a channel is the line two tasks talk over"),
+        ("task handle", "a handle names one running task"),
+        ("union", "cannot make a separate `Delivery | Pickup` value"),
+        ("map entry", "the loop's view of one slot"),
+        (
+            "unchecked `errors` value",
+            "it has not been checked for failure yet",
+        ),
+        ("`nothing`", "there is no value here to copy"),
+        (
+            "`background` argument the spawner keeps reading",
+            "this line still reads it after the task starts",
+        ),
+        // The 2026-09-07 fix round's own trigger, and it is here because it needed a SECOND
+        // shell: "hand it over instead" is the wrong advice for a value kept with the frame,
+        // so a reuse of the row above would have taught the reader something that does not work.
+        (
+            "`background` argument kept with the frame",
+            "a `range` cannot be handed to a background task",
+        ),
+        (
+            "shadowed `.failed()`-checked binding (FRAGO 002 C3, parked 33)",
+            "hasn't been checked with `.failed()` yet",
+        ),
+        (
+            "checked-but-unlowered `errors` field (FRAGO 002 S1, parked 34)",
+            "isn't available yet on an `errors` value",
+        ),
+    ] {
+        assert!(
+            stderr.contains(phrase),
+            "v0_3 hardening gallery must refuse `.copy()` on a {label} with its own WHAT \
+             text ({phrase:?}); got:\n{stderr}"
+        );
+    }
+
+    // Every refusal must carry a real WHAT-INSTEAD, not just a WHAT. These are the concrete
+    // things the six refusals tell the reader to do instead; a refusal that loses its fix is
+    // a dead end, which is the failure mode Golden Rule 11 exists to prevent.
+    for phrase in [
+        "let replies: channel<int> = channel<int>()",
+        "let second = background worker(orders)",
+        "if (order is Delivery) { const backup = order.copy() }",
+        "const savedKey = entry.key",
+        "if (result.failed()) { return }",
+        // `nothing`'s WHAT-INSTEAD cannot name "the value you meant" — when a function hands
+        // back `nothing` there is none — so it names what the reader CAN do instead (fix
+        // round 2026-09-07, should-fix 5: the previous text was a dead end at this very
+        // trigger).
+        "Drop the `.copy()` and call the function on its own",
+        "move every later read of `parcel` above the `background` line",
+        "for a `range`, its start and end as two `int` values",
+        "Check `.failed()` on `count` first",
+        "Use `.message` to read what went wrong",
+    ] {
+        assert!(
+            stderr.contains(phrase),
+            "a copy refusal lost its WHAT-INSTEAD ({phrase:?}); got:\n{stderr}"
+        );
+    }
 }

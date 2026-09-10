@@ -1,0 +1,39 @@
+// v0.3-M7 Phase 3 RED fixture — dangling-stack-return ABI class (the THIRD confirmed
+// O0-reliant codegen class, discovered when the default tier flipped; CCIR item 3).
+//
+// WHY: a plain (non-SM) function returning `maybe<int>` compiles to `ret ptr %slot`
+// where `%slot` is the callee's OWN stack alloca (`build_maybe_none`, emit.rs; the
+// "stack-backed, copy-and-forget ABI" the emit.rs `Number` wrapper comment documents).
+// The caller reads the pair out of the callee's DEAD frame. At -O0 the bytes happen
+// to survive; under `default<O2>` LLVM legally deletes the stores to the dying alloca
+// (and/or reuses the slot), so the caller reads garbage: the for-loop below prints
+// garbage values and never sees the `none` terminator (has-tag never 0) — an
+// infinite-loop miscompile. Manifestation is inlining-dependent: when the callee
+// inlines, the alloca becomes a caller slot and the bug vanishes, which is exactly
+// why the Phase 1 sweep's fixtures did not catch this class.
+//
+// Reduced from examples/pirates-roster's InningClock user-iterable demo, which hangs
+// (infinite `3`s / garbage) when built with the optimized-by-default pipeline.
+
+shape InningClock {
+  startOuts: int
+  hidden current: int = 0
+}
+
+function next(lend self: InningClock) -> maybe<int> {
+  if (self.current >= self.startOuts) {
+    return none
+  }
+  let outs: fixed<int> = [3, 2, 1]
+  let result = outs.get(self.current)
+  self.current = self.current + 1
+  return result
+}
+
+function entrypoint() -> nothing {
+  let clock: InningClock = { startOuts: 3, current: 0 }
+  for (n in clock) {
+    print(n.toString())
+  }
+  print(`done`)
+}

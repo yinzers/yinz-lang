@@ -6,8 +6,6 @@
 // Counts are pinned. When you add a keyword: add it to registry/features.toml AND bump the
 // count here. The compile error from the count mismatch is the nudge that prevents forgetting.
 
-use ynz_registry;
-
 // ---------------------------------------------------------------------------
 // Expected counts — pin these; update both when adding keywords
 // ---------------------------------------------------------------------------

@@ -632,42 +632,53 @@ below, never a generic claim. The DAP debugger unified-view over SoA storage is 
 
 ### Honest performance provenance (E14)
 
+**Current shipped reality (v0.3-M7 onward — see the CHANGELOG entry and the
+`2026-07-04-v0-3-m7-optimizer-pipeline` plan): `ynz build` now runs a real LLVM `default<O2>` pass
+pipeline by default.** The measured -O2 win described below is therefore the win shipped binaries
+actually get today, not a projected/unreached one. `--no-optimize` / `YNZ_NO_OPTIMIZE` remain as an
+opt-out back to the old unoptimized codegen, for anyone who deliberately wants it.
+
 The correctness win is unconditional: byte-identical dual-mode output at every measured point, all
 checksum/IR gates green, on the one elem_size-aware representation. The performance claim carries
 a hard caveat, with both measured results stated separately and **never conflated**
 (provenance: [`soa-threshold-raw-2026-07-04.md`](../../../crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md),
-"Step 3 calibration verdict"):
+"Step 3 calibration verdict"). **These two measurements are historical, pre-M7 methodology** — taken
+back when `ynz build` still emitted at `OptimizationLevel::None` with zero LLVM pass pipeline, to
+separate the correctness win from the (then-unreached) optimizer win:
 
-- **Shipped O0 binaries** (`ynz build` emits at OptimizationLevel::None with zero LLVM pass
-  pipeline): net SoA/AoS ratios **1.00–1.18** at every N in {8..4096} — no crossover anywhere;
-  9 of 10 points trend 4–18% slower with N=16 at parity (0.997), each individually below the ~15%
-  noise floor. Net effect ≈ **1.0x — no detectable benefit**.
+- **Baseline measured at the OLD `OptimizationLevel::None` default** (pre-v0.3-M7): net SoA/AoS
+  ratios **1.00–1.18** at every N in {8..4096} — no crossover anywhere; 9 of 10 points trend 4–18%
+  slower with N=16 at parity (0.997), each individually below the ~15% noise floor. Net effect ≈
+  **1.0x — no detectable benefit** at that old baseline.
 - **Identical generated IR under `opt-18 -O2`** (diagnostic, N=4096): SoA wins ≈ **3.3x** net of
   spawn (10.77 ms AoS vs 3.29 ms SoA), consistent with the 4x theoretical bandwidth edge for
-  2-of-8 hot fields. The 10-40x-class win is real and IR-confirmed but lives entirely in an
-  optimization pipeline shipped binaries never run.
+  2-of-8 hot fields. As of v0.3-M7, this is no longer a diagnostic-only, unreached number — it is
+  the class of win `default<O2>` now delivers in shipped binaries by default.
 
-`SOA_SIZE_THRESHOLD = 64` therefore ships as a **documented conservative default, NOT a
-crossover-calibrated constant** — there is no O0 crossover to calibrate against, and the honest
-verdict beats a derived number wearing unearned precision.
+`SOA_SIZE_THRESHOLD = 64` shipped at M5 as a **documented conservative default, NOT a
+crossover-calibrated constant** — at the time, there was no O0 crossover to calibrate against, and
+the honest verdict beat a derived number wearing unearned precision. Re-deriving this threshold
+against real -O2 crossover data (now that the pipeline is live) is tracked as forward work — see
+FR #2's revisit trigger below.
 
-Two identified paths toward realizing the win in shipped binaries, both recorded in plan
+Two identified paths toward fully realizing the win, both recorded in plan
 `2026-07-03-v0-3-m5-auto-soa`'s Future Requirements (in prose by FR number — the plan directory
-moves buckets on completion):
+moves buckets on completion). FR #14 is now moot for the O0 case but the selective-gather fix in
+FR #15 still applies under the live optimizer:
 
 - **FR #15 — selective hot-field-only element materialization**: current codegen gathers ALL
   declared fields per element access, ignoring the analysis's already-computed hot-field set; a
-  selective gather is the directly perf-relevant, independently-actionable-at-O0 fix (requires
-  re-auditing every full-element consumer, so it is its own session, evaluated alongside any
-  optimization-pipeline milestone).
+  selective gather is a directly perf-relevant fix independent of the optimizer pipeline (requires
+  re-auditing every full-element consumer, so it is its own session).
 - **FR #14 — stale-runtime-archive ABI-check footgun**: the driver embeds
   `target/{profile}/libynz_runtime.a` with no ABI/version check, so a stale archive silently
   miscompiles by resolving old-signature symbols by name — an operational guard until the
   versioned-symbol fix lands (it burned a full Phase 6 diagnosis round).
 
-The optimizer-pipeline dependency itself (risk E14 / FR #2's revisit trigger) is the third,
-larger-scope lever: the moment shipped builds run an LLVM pass pipeline, the measured -O2 win
-becomes the shipped win and the threshold gets re-derived from real crossover data.
+The optimizer-pipeline dependency (risk E14 / FR #2's revisit trigger) has now landed as of
+v0.3-M7: shipped builds run the LLVM pass pipeline by default, so the measured -O2 win above IS the
+shipped win. The threshold (`SOA_SIZE_THRESHOLD = 64`) still awaits re-derivation from real -O2
+crossover data — that re-calibration is the remaining half of FR #2's trigger.
 
 ---
 

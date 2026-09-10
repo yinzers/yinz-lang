@@ -1,0 +1,25 @@
+// v0.3-M8 Phase 7 (Track 3, Branch B — RE-DEFER) — pins TODAY's handle-scope-exit semantics.
+//
+// The handle `h` is bound inside a block that exits while the child is still mid-work. No
+// scope-exit release pass exists for any local (registry `background-handle-cancel-injection`),
+// so leaving the block does NOT cancel the child: it runs to completion and prints
+// `child: done` while the parent is still alive. When the drop-story milestone lands its
+// scope-exit release pass, the handle arm calls `ynz_handle_free` here and the child is stopped
+// at its next suspension — `child: done` disappears, and this fixture's pin flips.
+function worker() -> int errors {
+  wait sleep(20)
+  print(`child: after first sleep`)
+  wait sleep(20)
+  print(`child: done`)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  if (true) {
+    let h = background worker()
+    print(`parent: leaving block`)
+  }
+  print(`parent: block exited`)
+  wait sleep(150)
+  print(`parent: done`)
+}

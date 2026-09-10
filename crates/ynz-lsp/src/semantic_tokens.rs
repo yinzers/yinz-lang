@@ -342,7 +342,7 @@ fn char_len(text: &str, start: usize, end: usize, encoding: PositionEncoding) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{capabilities::PositionEncoding, position::LineTable};
+    use crate::capabilities::PositionEncoding;
 
     // ─── Legend / options sanity ─────────────────────────────────────────────
 

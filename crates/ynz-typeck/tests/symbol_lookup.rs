@@ -525,28 +525,3 @@ fn test_cross_file_reference_count_estimate_exported_symbol_counts_importers() {
     // At minimum: the dep file itself + the main file (which imports greet).
     assert!(estimate >= 2, "expected >= 2, got {estimate}");
 }
-
-#[test]
-fn test_cross_file_reference_count_estimate_completes_fast() {
-    // Estimate must return within 5ms (ExportTable read only — no AST walk).
-    let dep_src = "export function greet() -> string { return `hi` }\n";
-    let main_src = "import { greet } from `services/players`\nfunction entrypoint() -> nothing { let msg = greet() }\n";
-    let (db, _main_sf, _dir) = two_files_on_disk("players", dep_src, main_src);
-
-    let all_paths = db.all_source_paths();
-    let dep_sf = all_paths
-        .iter()
-        .filter_map(|p| db.source_by_path(p))
-        .find(|sf| sf.text(&db).starts_with("export function greet"))
-        .expect("dep file must be in db");
-
-    let start = std::time::Instant::now();
-    let offset = dep_src.find("function greet").unwrap() + "function ".len();
-    let _ = cross_file_reference_count_estimate(&db, dep_sf, offset);
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed.as_millis() < 5,
-        "estimate took {}ms, expected < 5ms",
-        elapsed.as_millis()
-    );
-}

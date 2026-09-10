@@ -50,7 +50,7 @@ use inkwell::{
     context::Context,
     module::Module,
     targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine},
-    values::{FunctionValue, PointerValue},
+    values::{BasicValue, FunctionValue, PointerValue},
     AddressSpace, OptimizationLevel,
 };
 
@@ -309,6 +309,157 @@ pub fn load_return_value_f64<'ctx>(
     Ok(f_val)
 }
 
+/// The strongest alignment ANY frame-interior i128 slot can honestly claim.
+///
+/// The composed state-machine frame is a raw `ynz_alloc_zeroed` (malloc) block laid
+/// out at 8-byte slot granularity (`build_frame_layouts`): the return slot sits at
+/// byte offset 16 and the `number errors` staging slot at an arbitrary 8-multiple
+/// offset, so a 16-byte i128 slot is guaranteed 8-aligned — and no more. Without an
+/// explicit claim, LLVM defaults an i128 load/store to the type's ABI alignment
+/// (datalayout `i128:128` → `align 16`); optimized X86 ISel honors that claim,
+/// selects `movaps` (alignment-requiring), and faults on an odd-multiple-of-8 slot —
+/// the v0.3-M7 Phase-1 root-caused SIGSEGV class (plan
+/// `2026-07-04-v0-3-m7-optimizer-pipeline`, audit.md Phase-1 Paper-Trace). Every
+/// i128 load/store whose pointer is a frame byte-offset GEP — or an EC ok-word that
+/// points at such a slot — MUST claim exactly this alignment. Backend `-O0` happens
+/// to lower i128 memory ops alignment-indifferently (movq pairs), which is the only
+/// reason the false claim ever looked green.
+pub const FRAME_I128_SLOT_ALIGN: u32 = 8;
+
+/// Claim [`FRAME_I128_SLOT_ALIGN`] on a frame-interior i128 load/store instruction.
+///
+/// # Side effects
+///
+/// Mutates the instruction's alignment metadata; no IR is added or removed.
+pub fn claim_frame_i128_align(inst: inkwell::values::InstructionValue<'_>) -> Result<(), String> {
+    inst.set_alignment(FRAME_I128_SLOT_ALIGN)
+        .map_err(|e| format!("set i128 frame-slot alignment: {e}"))
+}
+
+/// Claim the correct alignment on an i128 memory op whose SOURCE pointer has
+/// ARBITRARY provenance (it may or may not be frame-interior).
+///
+/// Keeps LLVM's ABI `align 16` only when `source` is the direct result of an
+/// `alloca` that itself carries alignment >= 16 — the one provenance test that is
+/// airtight (an alloca's own alignment IS the address guarantee). Every other
+/// provenance (frame byte-offset GEPs, SM staged-param pointers, values laundered
+/// through phi/select/calls) downgrades to the [`FRAME_I128_SLOT_ALIGN`] floor via
+/// [`claim_frame_i128_align`]. A false negative here only costs an unaligned-tolerant
+/// lowering; a false positive would be the v0.3-M7 Phase-1 SIGSEGV class — so the
+/// test stays deliberately narrow.
+///
+/// # Side effects
+///
+/// May mutate `inst`'s alignment metadata; no IR is added or removed.
+pub fn claim_i128_align_by_provenance<'ctx>(
+    inst: inkwell::values::InstructionValue<'ctx>,
+    source: PointerValue<'ctx>,
+) -> Result<(), String> {
+    let is_16_aligned_alloca = source
+        .as_instruction()
+        .filter(|def| def.get_opcode() == inkwell::values::InstructionOpcode::Alloca)
+        .and_then(|def| def.get_alignment().ok())
+        .is_some_and(|align| align >= 16);
+    if is_16_aligned_alloca {
+        // ABI `align 16` is provably honest: the address is a >=16-aligned alloca.
+        return Ok(());
+    }
+    claim_frame_i128_align(inst)
+}
+
+/// The alignment every frame-embedded SHAPE region is rounded up to at runtime.
+///
+/// A shape crossing local lives INLINE in the composed frame's 8-byte slot region
+/// (`shape_frame_slots` sizes it; `shape_frame_region_ptr` wires it), but the pointer
+/// to that region escapes: field GEPs, whole-struct load/store copies (the
+/// `background` spawn heap copy, `.copy()`), and every callee the shape is passed to
+/// all read through it at the shape struct's LLVM ABI alignment — `align 16` the
+/// moment the shape carries a `number` (i128) field. i128 slots at fixed frame offsets
+/// downgrade to [`FRAME_I128_SLOT_ALIGN`] via `claim_i128_align_by_provenance` once the
+/// pointer is known to be frame-interior. But shape consumers are type-generic field
+/// loads shared with heap callers, which have no provenance proof and must respect the
+/// ABI claim globally. The return slot at fixed ABI offset 16 and the staging slot
+/// cannot move. So the frame honors the ABI claim instead of downgrading it: the region
+/// pointer is rounded up to this alignment at wire time and the layout reserves
+/// [`FRAME_SHAPE_REGION_SLACK_SLOTS`] of slack so the rounded region still fits. Optimized X86 ISel selects `movaps` for an `align 16` i128
+/// field load; at a frame offset that is 8 mod 16 (`region = base + 40`, field at
+/// `+192`) that is the hotfix `bgarg-number` SIGSEGV (a shape with a `number` field,
+/// copied for a `background` spawn from the spawner's frame; `--no-optimize` hid it
+/// because `-O0` lowers i128 ops alignment-indifferently — the same tell as the
+/// v0.3-M7 Phase-1 class above).
+///
+/// 16 is the ceiling: every field payload is ≤ 16 bytes (the widest, i128, has ABI
+/// alignment 16) and the false-sharing pad wrapper `{ T, [pad x i8] }` inherits `T`'s
+/// alignment, so no shape struct can demand more. `build_module` refuses to lower a
+/// shape whose measured ABI alignment exceeds this (the compile-time link between this
+/// constant and the TargetData truth).
+pub const FRAME_SHAPE_REGION_ALIGN: u32 = 16;
+
+/// Extra 8-byte slots reserved per frame-embedded shape so a region rounded up to
+/// [`FRAME_SHAPE_REGION_ALIGN`] still fits: rounding moves the start by at most
+/// `FRAME_SHAPE_REGION_ALIGN - FRAME_LOCAL_SLOT_SIZE` bytes.
+pub const FRAME_SHAPE_REGION_SLACK_SLOTS: usize =
+    ((FRAME_SHAPE_REGION_ALIGN as u64 - FRAME_LOCAL_SLOT_SIZE) / FRAME_LOCAL_SLOT_SIZE) as usize;
+
+/// The ONE producer of a frame-embedded shape's region pointer: `frame_ptr + byte_offset`
+/// rounded up to [`FRAME_SHAPE_REGION_ALIGN`].
+///
+/// Every consumer (field GEPs, embed memcpys, the `background` heap copy, callee
+/// arguments) reads the pointer this returns from the crossing local's ptr alloca — no
+/// site recomputes the region from the slot index. The rounding is done on the address
+/// at runtime rather than statically in the layout because a composed child sub-frame
+/// is embedded at an arbitrary 8-multiple offset inside its parent, so only the final
+/// address knows its own alignment; the result is stable across resumes because the
+/// frame allocation never moves for a task's lifetime.
+///
+/// # Side effects
+///
+/// Emits a GEP, a ptr→int, an add, an and-mask, and an int→ptr; no memory access.
+pub fn shape_frame_region_ptr<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    byte_offset: u64,
+    name: &str,
+) -> Result<PointerValue<'ctx>, String> {
+    debug_assert_eq!(byte_offset % FRAME_LOCAL_SLOT_SIZE, 0, "shape frame region offset must be slot-aligned; the slack slot covers a round-up of at most one slot");
+    let i64t = ctx.i64_type();
+    let raw = unsafe {
+        builder
+            .build_gep(
+                ctx.i8_type(),
+                frame_ptr,
+                &[i64t.const_int(byte_offset, false)],
+                &format!("{name}_frame_region"),
+            )
+            .map_err(|e| format!("sm shape frame GEP {name}: {e}"))?
+    };
+    let bits = builder
+        .build_ptr_to_int(raw, i64t, &format!("{name}_frame_region_bits"))
+        .map_err(|e| format!("sm shape frame region ptr_to_int {name}: {e}"))?;
+    let bumped = builder
+        .build_int_add(
+            bits,
+            i64t.const_int(u64::from(FRAME_SHAPE_REGION_ALIGN) - 1, false),
+            &format!("{name}_frame_region_bump"),
+        )
+        .map_err(|e| format!("sm shape frame region bump {name}: {e}"))?;
+    let aligned_bits = builder
+        .build_and(
+            bumped,
+            i64t.const_int(!(u64::from(FRAME_SHAPE_REGION_ALIGN) - 1), false),
+            &format!("{name}_frame_region_mask"),
+        )
+        .map_err(|e| format!("sm shape frame region mask {name}: {e}"))?;
+    builder
+        .build_int_to_ptr(
+            aligned_bits,
+            ctx.ptr_type(AddressSpace::default()),
+            &format!("{name}_frame_region_aligned"),
+        )
+        .map_err(|e| format!("sm shape frame region int_to_ptr {name}: {e}"))
+}
+
 /// Store a decimal128 (i128) return value in the 16-byte return slot at offset 16.
 ///
 /// The i128 exactly fills the 16-byte slot. It is stored as a single i128 load rather
@@ -325,16 +476,19 @@ pub fn store_return_value_i128<'ctx>(
     value: inkwell::values::IntValue<'ctx>,
 ) -> Result<(), String> {
     let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
-    builder
+    let st = builder
         .build_store(slot, value)
         .map_err(|e| format!("store_return_value_i128: {e}"))?;
+    // The return slot is only 8-aligned (frame-interior) — claim that, not ABI 16.
+    claim_frame_i128_align(st)?;
     Ok(())
 }
 
 /// Load the decimal128 (i128) return value from the 16-byte return slot at offset 16.
 ///
 /// The inverse of `store_return_value_i128`. The slot is 16 bytes = exactly the size
-/// of an i128, so this is a direct aligned load — no GEP arithmetic needed.
+/// of an i128, so this is a direct load with no GEP arithmetic — but only 8-aligned
+/// (see [`FRAME_I128_SLOT_ALIGN`]), which the load claims explicitly.
 ///
 /// # Side effects
 ///
@@ -350,6 +504,11 @@ pub fn load_return_value_i128<'ctx>(
         .build_load(ctx.i128_type(), slot, name)
         .map_err(|e| format!("load_return_value_i128: {e}"))?
         .into_int_value();
+    // The return slot is only 8-aligned (frame-interior) — claim that, not ABI 16.
+    let inst = v
+        .as_instruction_value()
+        .ok_or("load_return_value_i128: load has no instruction value")?;
+    claim_frame_i128_align(inst)?;
     Ok(v)
 }
 
@@ -733,7 +892,133 @@ pub fn emit_sleep_poll_branch<'ctx>(
     Ok(())
 }
 
-/// Construct the default LLVM `TargetMachine` used for x86 codegen and frame-layout queries.
+/// Pipeline configuration for [`default_target_machine`] and
+/// [`run_mid_end_pipeline`] (v0.3-M7 Phases 2–3).
+///
+/// One config drives BOTH optimization stages so they can never disagree on tier:
+/// the backend level passed to `create_target_machine` (ISel / regalloc /
+/// scheduling) and the mid-end new-PM pipeline string derived by
+/// [`PipelineConfig::mid_end_pipeline`] (mem2reg / SROA / DCE / inlining via
+/// `Module::run_passes`). It is threaded through the ONE authoritative constructor;
+/// it never grows a second, independently-configured `TargetMachine` construction
+/// (risk R4 — the authoritative-derivation twin-drift class the single constructor
+/// eliminates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineConfig {
+    /// Backend (ISel / regalloc / scheduling) optimization level for the machine.
+    /// The mid-end IR pipeline rides this same field via
+    /// [`PipelineConfig::mid_end_pipeline`] — one tier knob, two stages.
+    pub opt_level: OptimizationLevel,
+}
+
+impl PipelineConfig {
+    /// The escape-hatch tier: no backend optimization, no mid-end pipeline —
+    /// byte-for-byte the pre-v0.3-M7 `ynz build` behavior. Selected by
+    /// `ynz build --no-optimize` (via `YNZ_NO_OPTIMIZE=1`).
+    pub fn o0() -> Self {
+        PipelineConfig {
+            opt_level: OptimizationLevel::None,
+        }
+    }
+
+    /// The shipped default tier (v0.3-M7 Phase 3): backend `-O2`
+    /// (`OptimizationLevel::Default`) + mid-end `default<O2>`.
+    ///
+    /// Recorded tier choice: `default<O2>` over `Os`/`O1`. NO tier met the
+    /// roadmap's original <10% wall-clock budget on `examples/pirates-roster/`
+    /// (O2 +137%, Os +126%, O1 +122% over the 320ms O0 baseline); the budget was
+    /// renegotiated to an absolute ~+400ms / ~2.2x frame (Patrick-signed FRAGO 008,
+    /// plan 2026-07-04-v0-3-m7-optimizer-pipeline audit.md). O2 ships within that
+    /// frame because Os saves only ~5% compile time and O1's inlining masks the
+    /// R9 UB class.
+    pub fn optimized() -> Self {
+        PipelineConfig {
+            opt_level: OptimizationLevel::Default,
+        }
+    }
+
+    /// The new-PM pipeline string for the mid-end stage, in `opt -passes=` syntax
+    /// (the exact API shape the Phase 0 spike proved against inkwell 0.9.0 —
+    /// `scratch/opt-pipeline-spike/api-shape.md`). `None` means "skip `run_passes`
+    /// entirely" — the O0 escape hatch must reproduce the pre-M7 artifact
+    /// byte-for-byte, and even `default<O0>` is not a guaranteed no-op.
+    pub fn mid_end_pipeline(&self) -> Option<&'static str> {
+        match self.opt_level {
+            OptimizationLevel::None => None,
+            _ => Some("default<O2>"),
+        }
+    }
+}
+
+/// Resolve the pipeline tier from the process environment — the single authoritative
+/// reader every emission path consults (mirrors `ynz_typeck::no_auto_parallel_env` /
+/// `soa_force_env`: main.rs sets the vars BEFORE the first salsa call, this helper is
+/// the one predicate).
+///
+/// Precedence (highest first):
+/// 1. `YNZ_NO_OPTIMIZE=1` — set by the user-facing `ynz build --no-optimize` flag;
+///    explicit user intent outranks the harness hint (the same subordination
+///    `YNZ_SOA_FORCE` documents against `--no-auto-parallel`).
+/// 2. `YNZ_OPT_FORCE` — dev/bench-only harness override (v0.3-M7 Phase 7's A/B
+///    benchmark rides it), never a shipped user surface. Accepted values:
+///    `0`/`o0`/`none` force the O0 tier; `2`/`o2`/`default` force the optimized
+///    tier; anything else is ignored (dev-only surface — fail open to the default).
+/// 3. Default: [`PipelineConfig::optimized`] — `ynz build` optimizes by default.
+///
+/// Latent hazard (same class as the documented `YNZ_NO_AUTO_PARALLEL` note in
+/// `emit.rs`): long-lived `ynz watch` / LSP processes would not invalidate memoized
+/// codegen when these vars change between rebuilds — salsa has no env visibility.
+/// Same deferral, same trigger (`ynz watch --no-optimize` or LSP codegen).
+pub fn pipeline_config_from_env() -> PipelineConfig {
+    if std::env::var("YNZ_NO_OPTIMIZE").is_ok_and(|v| v == "1") {
+        return PipelineConfig::o0();
+    }
+    match std::env::var("YNZ_OPT_FORCE").as_deref() {
+        Ok("0") | Ok("o0") | Ok("none") => PipelineConfig::o0(),
+        Ok("2") | Ok("o2") | Ok("default") => PipelineConfig::optimized(),
+        _ => PipelineConfig::optimized(),
+    }
+}
+
+/// Run the mid-end LLVM pass pipeline over `module` per `config` — the sibling of
+/// [`default_target_machine`] (v0.3-M7 Phase 3), consuming the API shape the Phase 0
+/// spike recorded (`scratch/opt-pipeline-spike/api-shape.md`): inkwell 0.9.0's
+/// `Module::run_passes(passes, &TargetMachine, PassBuilderOptions)`.
+///
+/// Call AFTER IR emission + `module.verify()` and BEFORE object emission
+/// (`write_to_memory_buffer`). A no-op at the O0 tier (`mid_end_pipeline() == None`)
+/// so the `--no-optimize` escape hatch reproduces the pre-M7 pipeline exactly.
+pub fn run_mid_end_pipeline(
+    module: &Module,
+    machine: &TargetMachine,
+    config: PipelineConfig,
+) -> Result<(), String> {
+    let Some(passes) = config.mid_end_pipeline() else {
+        return Ok(());
+    };
+    module
+        .run_passes(
+            passes,
+            machine,
+            inkwell::passes::PassBuilderOptions::create(),
+        )
+        .map_err(|e| {
+            format!(
+                "LLVM: mid-end pass pipeline `{passes}` failed: {}",
+                e.to_string()
+            )
+        })
+}
+
+/// Construct THE LLVM `TargetMachine` — the single authoritative constructor for the
+/// whole crate (v0.3-M7 Phase 2 closes risk R4: exactly ONE `create_target_machine`
+/// call site exists, here).
+///
+/// `target_triple` is `None` for the host default triple (the normal `ynz build`
+/// path and the frame-layout sizing query) or `Some(triple)` for an explicit
+/// cross-compilation/test override — the former `emit_artifact` inline override
+/// branch now routes through here too, so the two paths can never drift on
+/// CPU/features/reloc/code-model/opt-level.
 ///
 /// Both `emit_artifact` and `frame_layouts_query` must use this single constructor so their
 /// data-layout strings are byte-identical. A divergent data-layout string between the emitter
@@ -741,10 +1026,16 @@ pub fn emit_sleep_poll_branch<'ctx>(
 /// silent frame mis-sizing (Guard G1 — see design/future/cross-module-frame-serialization.md).
 ///
 /// Always initializes x86 targets before creating the machine. Callers that already initialize
-/// x86 (e.g. `emit_artifact`) may call it redundantly — double-init is a no-op per LLVM.
-pub fn default_target_machine() -> Result<TargetMachine, String> {
+/// x86 may call it redundantly — double-init is a no-op per LLVM.
+pub fn default_target_machine(
+    target_triple: Option<&str>,
+    config: PipelineConfig,
+) -> Result<TargetMachine, String> {
     Target::initialize_x86(&InitializationConfig::default());
-    let triple = TargetMachine::get_default_triple();
+    let triple = match target_triple {
+        None => TargetMachine::get_default_triple(),
+        Some(t) => inkwell::targets::TargetTriple::create(t),
+    };
     let target = Target::from_triple(&triple)
         .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
     target
@@ -752,7 +1043,7 @@ pub fn default_target_machine() -> Result<TargetMachine, String> {
             &triple,
             "generic",
             "",
-            OptimizationLevel::None,
+            config.opt_level,
             RelocMode::Default,
             CodeModel::Default,
         )

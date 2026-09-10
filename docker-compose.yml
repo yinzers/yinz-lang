@@ -14,6 +14,33 @@ services:
       - cargo-registry:/home/ubuntu/.cargo/registry
     working_dir: /work
     command: ["sleep", "infinity"]
+    # `/tmp` in RAM, not on the host disk. `ynz run` builds every program into a
+    # per-invocation temp directory (`tempfile::tempdir()`, see crates/ynz-driver/src/run.rs)
+    # — object file, linked binary — executes it once, then deletes it. Those artifacts are
+    # ephemeral by construction and have no reason to reach physical storage.
+    #
+    # WHY it matters, measured 2026-09-02 on the corpus sweep
+    # (crates/ynz-driver/tests/cross_impl_consistency.rs, ~3,342 compile+link+execute cycles):
+    # serially the full workspace suite pushed ~155GB of writes and spent 2,291s in that one
+    # test file. Parallelizing the sweep moved the bottleneck straight off the CPU and onto the
+    # disk — 81% iowait, 385ms write latency, `sda` at 89% utilization, 34 processes parked in
+    # D-state. More workers cannot fix that; they only deepen the queue. Routing the transient
+    # build artifacts to tmpfs removes the write stream instead of scheduling around it.
+    #
+    # SIZE: 8g against 62GB of host RAM. Artifacts are deleted per invocation, so this caps
+    # concurrent-in-flight build output, not cumulative churn. A tmpfs that fills returns
+    # ENOSPC rather than spilling, so this is deliberately generous.
+    #
+    # NOT for `target/`: that stays on the `.:/work` bind mount above — external projects
+    # (trading-v4 et al.) read `target/release` from the host, and a RAM-backed target/ would
+    # both vanish on container exit and blow past this size cap.
+    # `exec` is REQUIRED and is not the default: Docker mounts tmpfs `noexec`, and `ynz run`
+    # does exactly the thing `noexec` forbids — it links a binary into this directory and then
+    # executes it. Without `exec` every driver test that runs a fixture dies with EACCES/
+    # "Permission denied" at spawn, before a single assertion evaluates. Verified live here,
+    # not inferred: a compiled binary was executed from this mount as part of adding it.
+    tmpfs:
+      - /tmp:size=8g,mode=1777,exec
     # ThreadSanitizer (v0.3-M6 Phase 6b) tries to lower its own ASLR entropy via
     # personality(ADDR_NO_RANDOMIZE) on every run — Docker's default seccomp profile denies
     # that EXACT syscall+argument combination, which aborts EVERY TSan-instrumented binary

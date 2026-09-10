@@ -3,7 +3,7 @@
 // the conservative aliasing suppression logic fires in both directions
 // (suppressed when mutated/passed; fires when genuinely never mutated).
 
-use ynz_parser::{CompilerDb, SourceFile, SourceFileRegistry};
+use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{
     array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
     variable_type_hints, PromotionKind,

@@ -47,6 +47,11 @@ pub struct RuntimeDecls<'ctx> {
     // Heap deallocator (M4): (ptr: *mut u8, size: usize) → void
     pub ynz_free: FunctionValue<'ctx>,
 
+    // v0.3-M8 Phase 5 — the Auto-Arc substrate (`ynz_arc_new`/`clone`/`free`, ynz-runtime
+    // arc.rs) is NOT declared here: it is declared on first use by emit.rs `arc_decls`, so a
+    // module with no admitted spawn group emits byte-identical IR to the pre-emission
+    // compiler (the single-reader no-op the M8 plan's Phase 5 step 3 requires).
+
     // Array runtime (M5 P4a; by-value elem_size ABI since v0.3-M5 P2) — all operate
     // on the heap YnzArray header pointer. Element loads/stores go through byte
     // pointers (`*const u8` src / `*mut u8` out) sized by the header's elem_size;
@@ -97,6 +102,13 @@ pub struct RuntimeDecls<'ctx> {
     // key_out receives the stored key POINTER as i64 bits
     pub ynz_map_iter_get_str: FunctionValue<'ctx>,
     pub ynz_map_drop: FunctionValue<'ctx>,
+    // ynz_map_clone(ptr src) -> ptr: one-level deep copy (fresh header + four fresh
+    // buffers, five counted allocs) — the `map<K, V>` arm of `.copy()` (v0.3-M8 Phase 4).
+    pub ynz_map_clone: FunctionValue<'ctx>,
+    // ynz_number_cell_free(ptr cell) -> void: counted free of one 16-byte decimal128 cell a
+    // conduit `send` minted (fr12, v0.3-M8 Phase 4) — the `NumberCell` drop-glue arm and the
+    // receive side's free-after-load.
+    pub ynz_number_cell_free: FunctionValue<'ctx>,
 
     // Channel runtime (v0.3-M4 Phase 1) — bounded task-communication channels over
     // `tokio::sync::mpsc`. Phase 1 lowers construction only; the suspending send/recv poll ABI
@@ -111,6 +123,9 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_channel_share: FunctionValue<'ctx>,
     // ynz_channel_free(chan: ptr) -> void (release one refcounted reference)
     pub ynz_channel_free: FunctionValue<'ctx>,
+    // ynz_channel_close(chan: ptr) -> void — `ch.close()` (v0.3-M8 Phase 4): takes the object's
+    // shared sender endpoint and wakes parked receivers; idempotent; never suspends.
+    pub ynz_channel_close: FunctionValue<'ctx>,
     // ynz_channel_send_poll(chan: ptr, value: i64, waker_ctx: ptr, caller_token: i64) -> i32
     pub ynz_channel_send_poll: FunctionValue<'ctx>,
     // ynz_channel_recv_poll(chan: ptr, out: ptr, waker_ctx: ptr) -> i32
@@ -218,7 +233,12 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_rt_spawn_blocking(fn_ptr: ptr, ctx_ptr: ptr, ctx_size: i64) → void
     // fn_ptr: extern "C" fn(*mut u8); ctx_ptr + ctx_size describe heap-copy of arg struct.
     pub ynz_rt_spawn_blocking: FunctionValue<'ctx>,
-    // ynz_rt_check_preempt() → void  — v0.3-M1 stub (no-op); loop back-edge cooperative yield
+    // ynz_rt_check_preempt(waker_ctx: ptr) → i8 (bool) — v0.3-M7 Phase 6: cheap synchronous
+    // budget check consumed by the codegen-emitted back-edge poll-yield branch. Returns
+    // true when the worker's quantum expired (and, given a non-null waker_ctx, has already
+    // woken the task so the Pending the codegen returns is a yield-and-requeue). Plain
+    // (non-state-machine) loop back edges pass null and DISCARD the result — one function,
+    // one signature, no SM-only twin entry point.
     pub ynz_rt_check_preempt: FunctionValue<'ctx>,
     // ynz_rt_shutdown() → void  — drain runtime at main exit (shutdown_timeout 5s)
     pub ynz_rt_shutdown: FunctionValue<'ctx>,
@@ -281,6 +301,7 @@ impl<'ctx> RuntimeDecls<'ctx> {
     pub fn declare(ctx: &'ctx inkwell::context::Context, module: &Module<'ctx>) -> Self {
         let void = ctx.void_type();
         let i1 = ctx.bool_type();
+        let i8t = ctx.i8_type();
         let i32 = ctx.i32_type();
         let i64 = ctx.i64_type();
         let f64 = ctx.f64_type();
@@ -468,6 +489,12 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 i64.fn_type(&[ptr.into(), i64.into(), ptr.into(), ptr.into()], false),
             ),
             ynz_map_drop: declare_fn(module, "ynz_map_drop", void.fn_type(&[ptr.into()], false)),
+            ynz_map_clone: declare_fn(module, "ynz_map_clone", ptr.fn_type(&[ptr.into()], false)),
+            ynz_number_cell_free: declare_fn(
+                module,
+                "ynz_number_cell_free",
+                void.fn_type(&[ptr.into()], false),
+            ),
             ynz_channel_create: declare_fn(
                 module,
                 "ynz_channel_create",
@@ -481,6 +508,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_channel_free: declare_fn(
                 module,
                 "ynz_channel_free",
+                void.fn_type(&[ptr.into()], false),
+            ),
+            ynz_channel_close: declare_fn(
+                module,
+                "ynz_channel_close",
                 void.fn_type(&[ptr.into()], false),
             ),
             ynz_channel_send_poll: declare_fn(
@@ -721,10 +753,12 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 // fn_ptr: opaque function pointer (ptr), ctx_ptr: *mut u8 (ptr), ctx_size: i64
                 void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
             ),
+            // Rust `extern "C" fn(*mut u8) -> bool` — C ABI bool is i8; the SM back-edge
+            // branch compares the i8 against zero for its i1 condition.
             ynz_rt_check_preempt: declare_fn(
                 module,
                 "ynz_rt_check_preempt",
-                void.fn_type(&[], false),
+                i8t.fn_type(&[ptr.into()], false),
             ),
             ynz_rt_shutdown: declare_fn(module, "ynz_rt_shutdown", void.fn_type(&[], false)),
             ynz_thread_sleep_ms: declare_fn(
@@ -800,7 +834,7 @@ impl<'ctx> RuntimeDecls<'ctx> {
     }
 }
 
-fn declare_fn<'ctx>(
+pub(crate) fn declare_fn<'ctx>(
     module: &Module<'ctx>,
     name: &str,
     ty: FunctionType<'ctx>,

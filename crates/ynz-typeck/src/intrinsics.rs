@@ -78,9 +78,11 @@ fn build_table(since_filter: impl Fn(&str) -> bool) -> PrimitiveIntrinsicTable {
         // completion system can match them via prefix stripping. Their type-checker
         // dispatch is handled by builtins.rs pattern matching, not by this scalar
         // intrinsic table — skip them here to avoid parse_type() panics.
+        // `channel` (v0.3-M8) likewise: its methods dispatch through
+        // `check_conduit_method_call` and `suspension_source`, not this scalar table.
         if matches!(
             entry.receiver_type,
-            Some("array") | Some("fixed") | Some("maybe") | Some("map")
+            Some("array") | Some("fixed") | Some("maybe") | Some("map") | Some("channel")
         ) {
             continue;
         }

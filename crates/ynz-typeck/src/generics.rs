@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use ynz_ast::nodes::OwnershipModifier;
 use ynz_diagnostics::SourceSpan;
@@ -76,7 +76,7 @@ pub fn apply_substitution(ty: &Type, subst: &Substitution) -> Type {
 // ── MonomorphizationTable ─────────────────────────────────────────────────────
 
 /// Key into the MonomorphizationTable: the function name + the concrete type args.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MonoKey {
     pub fn_name: String,
     pub type_args: Vec<Type>,
@@ -93,9 +93,15 @@ pub struct MonoSignature {
 ///
 /// Keyed by `(fn_name, concrete_type_args)`. Codegen (P4a) consumes this to
 /// emit one LLVM function per unique instantiation.
+///
+/// `BTreeMap`, not `HashMap`: codegen's Pass 1.5/2.5 emission ORDER (and its
+/// first-match-by-name fallback lookup) follow this table's iteration order, which
+/// therefore reaches the object bytes. A per-process-seeded `HashMap` here made
+/// multi-file builds flap between orderings run-to-run (v0.3-M7 R10 — the
+/// pirates-roster two-hash flap). Ordered iteration is load-bearing; do not switch back.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MonomorphizationTable {
-    pub entries: HashMap<MonoKey, MonoSignature>,
+    pub entries: BTreeMap<MonoKey, MonoSignature>,
 }
 
 impl MonomorphizationTable {

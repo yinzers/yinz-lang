@@ -10,7 +10,8 @@ function entrypoint() -> nothing {
   let ch: channel<int> = channel<int>(4)
   background feed(ch)
   sleepBlocking(60)
-  let v = ch.receive()
+  let got = ch.receive()
+  let v = got.or(0)
   print(v.toString())
   print(`cross-channel-done`)
 }

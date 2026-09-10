@@ -1,0 +1,30 @@
+// v0.3-M8 Phase 5 — the single-reader / "caller + 1 task" case is NOT a sharing case under
+// topology (B) (`IMP-ownership.md` "The beneficial-emission condition", item 1): the caller
+// reads its own original, the one task reads its own copy — the shipped one-copy path. The
+// emitted IR for this program must be BYTE-IDENTICAL before and after the Auto-Arc emission
+// landed (no `ynz_arc_*` call anywhere), which `v03_m8_auto_arc.rs` pins against the
+// committed pre-emission IR digest.
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(10)
+  let area = scene.width * scene.height
+  results.send(area)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let scene: Scene = { name: `Three Rivers`, width: 6, height: 7 }
+  background render(scene, results)
+  let a = results.receive()
+  let total = 0
+  if (a.exists()) {
+    total = total + a.value
+  }
+  print(`task saw ${total}`)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}

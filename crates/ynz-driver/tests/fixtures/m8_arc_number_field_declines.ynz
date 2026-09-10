@@ -1,0 +1,47 @@
+// v0.3-M8 — parked item 43: the `number`-field exclusion from Arc sharing, pinned END-TO-END.
+// `arc_shareable` (`ynz-typeck/src/types.rs`) admits only `Int | Float | Bool | String` fields;
+// `Number` (decimal128) is excluded because its LLVM representation is an i128 whose ABI
+// alignment (16) does not match the byte layout the shared block's copy assumes for the other
+// primitive kinds — see `types.rs::every_excluded_field_kind_declines` for the unit-level pin.
+// Until `fix/bg-arg-number-field` merged back (parked item 40 / M8 FRAGO 012), the two-spawn
+// TWIN of this fixture crashed on ANY spawn of a shape with a `number` field (SIGSEGV — the
+// frame-region alignment bug), so no end-to-end fixture could exist to prove the decline
+// actually runs correctly rather than merely failing to emit `ynz_arc_*`. That hotfix is now on
+// this branch; this fixture is the named GREEN the parked item's TRIGGER called for.
+//
+// Shape: identical topology to `m8_arc_two_spawn_group.ynz` (two `background` spawns of the
+// same read-only shape binding, nothing writes to `scene` between them) — the ONLY difference
+// is the added `ratio: number` field. If `arc_shareable` did not exclude `number`, this would
+// be an admitted group exactly like `m8_arc_two_spawn_group.ynz`. Because it DOES exclude it,
+// the group declines to the copy path: no `ynz_arc_*` call anywhere in the IR, each task gets
+// its own heap copy of `scene`, and the caller's own read after the spawns sees the original.
+shape Scene {
+  name: string
+  width: int
+  height: int
+  ratio: number
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(10)
+  let area = scene.width * scene.height
+  results.send(area)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let scene: Scene = { name: `Three Rivers`, width: 6, height: 7, ratio: 1.5 }
+  background render(scene, results)
+  background render(scene, results)
+  let total = 0
+  let a = results.receive()
+  if (a.exists()) {
+    total = total + a.value
+  }
+  let b = results.receive()
+  if (b.exists()) {
+    total = total + b.value
+  }
+  print(`tasks saw ${total}`)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height} ${scene.ratio}`)
+}

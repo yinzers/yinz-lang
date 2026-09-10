@@ -24,19 +24,47 @@ use ynz_parser::{Comment, CommentKind};
 pub struct CommentContext<'a> {
     pub comments: &'a [Comment],
     pub source: &'a str,
+    /// Byte offset of every `\n` in `source`, ascending. Built once in [`Self::new`] so
+    /// [`Self::line_of`] is a binary search rather than a rescan — see that method.
+    newlines: Vec<usize>,
 }
 
 impl<'a> CommentContext<'a> {
     pub fn new(comments: &'a [Comment], source: &'a str) -> Self {
-        Self { comments, source }
+        // One linear pass over the source, once per format() call.
+        let newlines = source
+            .bytes()
+            .enumerate()
+            .filter(|(_, b)| *b == b'\n')
+            .map(|(i, _)| i)
+            .collect();
+        Self {
+            comments,
+            source,
+            newlines,
+        }
     }
 
     /// Line number (0-indexed) of the given byte offset in the source.
+    ///
+    /// PERF (2026-09-02): this was `source[..byte].bytes().filter(|b| *b == b'\n').count()` —
+    /// a full rescan from byte 0 on EVERY call, O(file length) each time. `between()` calls it
+    /// once per comment inside a filter and again in its backwards scan, and
+    /// `inline_comment_after()` calls it once per comment inside a `find()`, with both invoked
+    /// per emitted AST node. That compounded to O(nodes × comments × filesize) — measured
+    /// cubic: 246 lines formatted in 0.18s while 1,352 lines took 91.18s (5.5x the input,
+    /// 506x the time), making `ynz fmt` and LSP format-on-save unusable on any real file and
+    /// accounting for 100% of two test suites' runtime (`idempotency.rs` calls format() twice,
+    /// `semantic_roundtrip.rs` once).
+    ///
+    /// Counting newlines strictly before `byte` is exactly `partition_point` over the
+    /// precomputed offsets, so the result is identical to the old scan — including the
+    /// `min(len)` clamp, preserved below. It also removes a latent panic: the old version
+    /// sliced `source[..byte]`, which aborts if `byte` is not a UTF-8 char boundary; indexing
+    /// a `Vec<usize>` of newline offsets cannot.
     pub fn line_of(&self, byte: usize) -> usize {
-        self.source[..byte.min(self.source.len())]
-            .bytes()
-            .filter(|&b| b == b'\n')
-            .count()
+        let byte = byte.min(self.source.len());
+        self.newlines.partition_point(|&nl| nl < byte)
     }
 
     /// Collect leading + floating comments in the range `[prev_end, node_start)`.

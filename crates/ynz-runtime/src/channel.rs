@@ -72,10 +72,10 @@
 //! send therefore wakes EVERY recorded receive-waiter (they re-poll; one wins, the rest
 //! re-register) — sound because every producer in a Yinz program goes through this C-ABI.
 //! Each receiver records itself BEFORE polling (v0.3-M6 P3-2), so a send can never land in an
-//! unregistered gap between a receiver's poll and a late registration. Closure observed by one
-//! receiver is NOT propagated to recorded co-waiters — presently unreachable in production (bare
-//! channels never close; every close-simulation is `#[cfg(test)]`-only), left for the M8
-//! channel-close-semantics design pass rather than fixed piecemeal here.
+//! unregistered gap between a receiver's poll and a late registration. Closure (v0.3-M8 Phase
+//! 4, [`ynz_channel_close`]) wakes EVERY recorded receive-waiter exactly like a send does, and
+//! the `Ready(None)` receive exit drains the waiter list too, so no registration can outlive
+//! closure unwoken — closure observed by one receiver IS propagated to its co-waiters.
 //!
 //! # The poll ABI (mirrors `ynz_rt_async_sleep_poll`)
 //!
@@ -92,10 +92,14 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
 use tokio::sync::mpsc;
+
+use crate::runtime::{release_ladder_payload, DriveIdentity};
+// `std::sync::{Arc, Mutex, MutexGuard}` in every production build; loom's under `--cfg loom`
+// (v0.3-M8 Phase 3 — see `crate::sync`). Never import these three from `std` here directly.
+use crate::sync::{Arc, Mutex, MutexGuard};
 
 /// Poll result: the operation completed (value accepted / value delivered).
 pub(crate) const CHANNEL_READY: i32 = 0;
@@ -134,41 +138,58 @@ pub(crate) fn next_caller_generation() -> u64 {
     CALLER_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
+#[cfg(not(loom))]
 thread_local! {
-    /// The generation of the state-machine drive whose `poll` is currently running on THIS
-    /// thread (0 = none — a bare test call outside any drive). Published by
-    /// [`TaskGenGuard`] around every drive's resume-fn call — `SpawnStateFnFuture::poll`
-    /// (spawned tasks) AND `SyncStateFnFuture::poll` (entrypoint / sync-wrapper drives) —
-    /// so the extern-C `ynz_channel_send_poll` signature stays unchanged (no codegen
-    /// change) while every frame token the drive mints — root, embedded-child,
-    /// chain-child — carries the drive's generation.
-    static CURRENT_TASK_GEN: Cell<u64> = const { Cell::new(0) };
+    /// The identity of the state-machine drive whose `poll` is currently running on THIS
+    /// thread ([`DriveIdentity::NONE`] = none — a bare test call outside any drive): its
+    /// generation, plus its spawn-arg drop ladder. Published by [`DriveGuard`] around every
+    /// drive's resume-fn call — `SpawnStateFnFuture::poll` (spawned tasks) AND
+    /// `SyncStateFnFuture::poll` (entrypoint / sync-wrapper drives, ladder-less) — so the
+    /// extern-C `ynz_channel_send_poll` signature stays unchanged (no codegen change) while
+    /// every frame token the drive mints — root, embedded-child, chain-child — carries the
+    /// drive's generation, and a send of a ladder-owned payload can release it from the
+    /// drive's ladder ([`crate::runtime::release_ladder_payload`]).
+    static CURRENT_DRIVE: Cell<DriveIdentity> = const { Cell::new(DriveIdentity::NONE) };
 }
 
-/// RAII publisher for [`CURRENT_TASK_GEN`]: saves the previous value on entry, restores it on
-/// drop (panic-safe, nesting-safe). Re-entered from the future's own field at every poll, so
+#[cfg(loom)]
+loom::thread_local! {
+    /// The loom twin of `CURRENT_DRIVE` above (same contract): per-MODEL-thread storage, so
+    /// two loom threads each publishing a drive never see each other's — loom runs every
+    /// model thread on one OS thread, where a std thread-local would be shared. Separate
+    /// declaration only because loom's macro has no `const { .. }` initializer form.
+    static CURRENT_DRIVE: Cell<DriveIdentity> = Cell::new(DriveIdentity::NONE);
+}
+
+/// RAII publisher for [`CURRENT_DRIVE`]: saves the previous value on entry, restores it on
+/// drop (panic-safe, nesting-safe). Re-entered from the future's own fields at every poll, so
 /// work-stealing across threads is safe by construction.
-pub(crate) struct TaskGenGuard {
-    prev: u64,
+pub(crate) struct DriveGuard {
+    prev: DriveIdentity,
 }
 
-impl TaskGenGuard {
-    pub(crate) fn enter(task_generation: u64) -> Self {
-        let prev = CURRENT_TASK_GEN.with(|c| c.replace(task_generation));
-        TaskGenGuard { prev }
+impl DriveGuard {
+    pub(crate) fn enter(drive: DriveIdentity) -> Self {
+        let prev = CURRENT_DRIVE.with(|c| c.replace(drive));
+        DriveGuard { prev }
     }
 }
 
-impl Drop for TaskGenGuard {
+impl Drop for DriveGuard {
     fn drop(&mut self) {
         let prev = self.prev;
-        CURRENT_TASK_GEN.with(|c| c.set(prev));
+        CURRENT_DRIVE.with(|c| c.set(prev));
     }
+}
+
+/// The drive currently being polled on this thread ([`DriveIdentity::NONE`] = unstamped).
+fn current_drive() -> DriveIdentity {
+    CURRENT_DRIVE.with(|c| c.get())
 }
 
 /// The generation of the task currently being polled on this thread (0 = unstamped).
 fn current_task_generation() -> u64 {
-    CURRENT_TASK_GEN.with(|c| c.get())
+    current_drive().generation
 }
 
 /// Extract a human-readable message from a caught-panic payload (the same `&str`/`String`
@@ -198,9 +219,12 @@ pub(crate) fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Holds BOTH endpoints of one bounded mpsc channel. `Arc`-shared across tasks; every field is
 /// either immutable-per-`&self` or guarded by a short non-blocking-critical-section `Mutex`.
 pub struct YnzChannel {
-    /// Cloneable multi-producer endpoint. In a `Mutex` so substrate tests can swap it to
-    /// simulate all-senders-dropped closure; production paths only clone/try_send through it.
-    sender: Mutex<mpsc::Sender<i64>>,
+    /// Cloneable multi-producer endpoint. `Some` until [`ynz_channel_close`] `.take()`s it
+    /// (v0.3-M8 Phase 4 — the same convention `HandleStateFnFuture::outbox_tx` already uses):
+    /// a send that finds `None` under this lock is refused as closed; a send that cloned the
+    /// endpoint before the take holds its own reference and LANDS. The lock section is the
+    /// send's linearization point against `close()` — see `channel_send_poll_guarded`.
+    sender: Mutex<Option<mpsc::Sender<i64>>>,
     /// The single-consumer endpoint. `poll_recv` needs `&mut` — guarded.
     receiver: Mutex<mpsc::Receiver<i64>>,
     /// In-flight suspended sends, keyed per suspended caller by
@@ -226,9 +250,33 @@ pub struct YnzChannel {
     /// `Arc`-shared cross-thread relying on AUTO `Send`/`Sync`, which a raw-pointer field
     /// would silently break (fn pointers are `Send + Sync`).
     drop_glue: Option<unsafe extern "C" fn(i64)>,
+    /// Loom-only witness of this channel's Tokio mpsc state (see [`YnzChannel::mpsc_step`]).
+    /// Absent from every production build.
+    #[cfg(loom)]
+    mpsc_witness: loom::sync::atomic::AtomicUsize,
 }
 
 impl YnzChannel {
+    /// Loom-only: make the Tokio mpsc call that follows a loom-VISIBLE step. Tokio's mpsc
+    /// internals are std under `--cfg loom` (see `crate::sync`), so its `try_send`/`poll_recv`/
+    /// endpoint-future polls are invisible to loom's DPOR, which distinguishes interleavings
+    /// ONLY by accesses to loom-tracked objects: two threads' mpsc calls count as commuting,
+    /// and which of their relative orders gets explored is an accident of the lock operations
+    /// around them, not a guarantee. One RMW on a per-channel atomic before each mpsc call
+    /// makes every pair of mpsc calls on this channel a dependent pair, so loom explores all
+    /// their orders — the black box modeled as one atomic object, which is what makes the
+    /// harness's "each Tokio call is one atomic step" claim true rather than approximate.
+    /// Measured at introduction: the P3-2 poll-then-record revert is caught with OR without
+    /// this witness (the surrounding `receiver`/`recv_waiters` locks happen to order the
+    /// decisive interleaving); the witness costs ~14x state space on that model (2,985 →
+    /// 42,563 interleavings, ~1.4s) and buys exhaustiveness over mpsc orderings the lock
+    /// pattern does not promise.
+    #[cfg(loom)]
+    fn mpsc_step(&self) {
+        self.mpsc_witness
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Wake every recorded receive-waiter (a value just landed, or capacity changed).
     /// O(n) wakes where n = suspended receivers (typically 0 or 1).
     fn wake_recv_waiters(&self) {
@@ -268,6 +316,8 @@ impl Drop for YnzChannel {
         };
         // `&mut self` is exclusive access: `get_mut` bypasses locking entirely, with the same
         // poison tolerance as `lock_or_recover` (which needs `&Mutex`, not owned access).
+        #[cfg(loom)]
+        self.mpsc_step();
         let receiver = self.receiver.get_mut().unwrap_or_else(|e| e.into_inner());
         while let Ok(bits) = receiver.try_recv() {
             // SAFETY: glue was registered at construction for exactly this channel's element
@@ -323,11 +373,13 @@ pub unsafe extern "C" fn ynz_channel_create(capacity: i64, drop_glue: *mut u8) -
         ))
     };
     let chan = Arc::new(YnzChannel {
-        sender: Mutex::new(sender),
+        sender: Mutex::new(Some(sender)),
         receiver: Mutex::new(receiver),
         pending_sends: Mutex::new(HashMap::new()),
         recv_waiters: Mutex::new(Vec::new()),
         drop_glue: glue,
+        #[cfg(loom)]
+        mpsc_witness: loom::sync::atomic::AtomicUsize::new(0),
     });
     Arc::into_raw(chan) as *mut u8
 }
@@ -346,6 +398,45 @@ pub unsafe extern "C" fn ynz_channel_share(chan_ptr: *mut u8) -> *mut u8 {
     // SAFETY: caller guarantees a live Arc-backed pointer.
     Arc::increment_strong_count(chan_ptr as *const YnzChannel);
     chan_ptr
+}
+
+/// `ch.close()` (v0.3-M8 Phase 4): "no more values will be sent." Takes the object's shared
+/// `Sender` out of its `Option` under the sender lock, releases the lock, then wakes every
+/// recorded receive-waiter so a task parked on `receive()` re-polls and observes either a
+/// remaining buffered value or the closed state (`CHANNEL_CLOSED` → `none`) — never stays
+/// parked (contract item 6).
+///
+/// Idempotent by construction: a second `close()` finds `None`, `take()` does nothing, the
+/// wake is a harmless drain of an empty (or soon-served) waiter list — no error, no panic,
+/// no log line (contract item 5). A null pointer is a no-op (matches `ynz_channel_free`).
+///
+/// In-flight sends are untouched: a producer parked on a full channel holds its OWN cloned
+/// `Sender` inside its boxed endpoint future, so its value still lands once the consumer
+/// drains a slot — close means no NEW sends, not "discard what was already on its way"
+/// (contract item 4). Closed-ness is state on the object, not the payload, so every element
+/// kind closes identically (contract item 8).
+///
+/// Never suspends, never fails; O(w) where w = parked receivers (typically 0 or 1).
+///
+/// # Safety
+/// `chan_ptr` must be null or a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`].
+#[no_mangle]
+pub unsafe extern "C" fn ynz_channel_close(chan_ptr: *mut u8) {
+    if chan_ptr.is_null() {
+        return;
+    }
+    // SAFETY: caller guarantees a live Arc-backed pointer; shared &.
+    let chan = &*(chan_ptr as *const YnzChannel);
+    let taken = {
+        let mut guard = lock_or_recover(&chan.sender);
+        guard.take()
+    };
+    // Drop the endpoint OUTSIDE the lock (a Tokio mpsc state mutation — witnessed under loom
+    // like every other mpsc call), then wake the parked receivers.
+    #[cfg(loom)]
+    chan.mpsc_step();
+    drop(taken);
+    chan.wake_recv_waiters();
 }
 
 /// Poll a `send(value)` on the channel `chan_ptr`, forwarding the enclosing task's waker.
@@ -393,14 +484,42 @@ pub unsafe extern "C" fn ynz_channel_send_poll(
 /// Never makes a synchronous blocking call — a full channel yields [`CHANNEL_PENDING`] and the
 /// task suspends via the state machine. This is the R1 no-blocking-call guarantee in code.
 ///
+/// # Ownership hand-off (the spawn-arg use-after-free fix)
+/// The moment the channel TAKES `value` — buffered by `try_send`, or captured by the parked
+/// endpoint future on a full channel — it owns the payload: the receiver (or the channel's
+/// teardown glue, or the pending-send purge) frees it. If the sending task was handed that
+/// payload as a heap-cloned `background` argument, the task's drop ladder ALSO owned it and
+/// freed it at task retire, under the receiver's feet. So on every accepting path this core
+/// releases `value` from the current drive's ladder (`release_ladder_payload`) — gated on the
+/// channel carrying a heap-pointer element type (`drop_glue.is_some()`; an `int` payload is
+/// never compared). Both send producers (`ch.send`, `h.send`) funnel through here, so the
+/// link is made exactly once.
+///
+/// **`send()` gives its payload on EVERY outcome** (v0.3-M8 Phase 4; `IMP-concurrency.md`
+/// "Two mechanisms, one rule — the CLOSED-first-poll path"). Typeck consumes the sender's
+/// binding for an owned-heap element kind BEFORE the outcome is knowable, so a payload the
+/// channel refuses has no source-level holder and MUST be freed here or it leaks (P2-3). The
+/// THREE first-poll CLOSED outcomes — (i) `None` under the sender lock (after
+/// [`ynz_channel_close`]); (ii) `try_send → Closed`; (iii) `try_send → Full` then the
+/// freshly-boxed endpoint future's first poll `Ready(Err)` — collapse into ONE
+/// `refuse_closed` fallthrough that, when the channel carries drop glue, calls
+/// `release_taken_value()` (the ladder lets go) and then `glue(value)` (the payload's only
+/// drop), and returns [`CHANNEL_CLOSED`]. No arm returns [`CHANNEL_CLOSED`] except through
+/// it. The re-poll of a PARKED send that observes CLOSED already performed the same two-step
+/// for its orphaned entry (the `Poll::Ready(Err(()))` arm below). Codegen's closed arms build
+/// the typed error and free NOTHING — a codegen free of a ladder-owned clone beside a
+/// runtime release would be a double free at task retire.
+///
 /// # Failure modes
-/// - Receiver dropped → [`CHANNEL_CLOSED`] (the caller maps this to a typed Yinz channel-closed
-///   `errors` value — never the raw Tokio `SendError`, Lock 8). The unsent value is dropped by
-///   ownership; never a silent success.
+/// - Channel closed (`close()` was called, or — unreachable in production, the object holds
+///   its receiver — the receiver dropped) → [`CHANNEL_CLOSED`] (the caller maps this to a
+///   typed Yinz channel-closed `errors` value — never the raw Tokio `SendError`, Lock 8). The
+///   unsent heap payload is freed through the registered glue; never a silent success.
 ///
 /// # Side effects
 /// Time: O(1) + O(w) receive-waiter wakes + O(p) insert-time stale sweep where p = in-flight
-/// suspended sends (typically 0 or 1)  Space: O(1); boxes one future on first suspension.
+/// suspended sends (typically 0 or 1) + O(d) ladder release where d = the sending task's
+/// heap-cloned argument count  Space: O(1); boxes one future on first suspension.
 ///
 /// # Safety
 /// Same contract as [`ynz_channel_send_poll`].
@@ -419,11 +538,22 @@ pub(crate) unsafe fn channel_send_poll_guarded(
         // SAFETY: waker_ctx was cast from &mut Context<'_> by the enclosing state-machine poll.
         let cx = &mut *(waker_ctx as *mut Context<'_>);
         let key = (caller_token, caller_generation);
+        // The channel now owns `value` (buffered or parked) — see "Ownership hand-off" above.
+        // Runs on the SENDING task's poll thread, so `current_drive()` is the sender.
+        let release_taken_value = || {
+            if chan.drop_glue.is_some() {
+                // SAFETY: the published drive is the future whose poll is running on this
+                // thread; its ladder is exclusively its own for the duration of that poll.
+                unsafe { release_ladder_payload(&current_drive(), value) };
+            }
+        };
 
         // Re-poll THIS caller's already-suspended send (never another caller's — the
         // token+generation keying is what makes the shared-channel model silent-wrong-proof).
         let mut pending = lock_or_recover(&chan.pending_sends);
         if let Some(entry) = pending.get_mut(&key) {
+            #[cfg(loom)]
+            chan.mpsc_step();
             return match entry.fut.as_mut().poll(cx) {
                 Poll::Pending => CHANNEL_PENDING,
                 Poll::Ready(Ok(())) => {
@@ -433,22 +563,71 @@ pub(crate) unsafe fn channel_send_poll_guarded(
                     CHANNEL_READY
                 }
                 Poll::Ready(Err(())) => {
-                    pending.remove(&key);
+                    // The receiver closed while this send was PARKED. The park already
+                    // released the payload from the sender's ladder (the entry owned it), and
+                    // the endpoint future discarded its `SendError(v)` — so the entry's
+                    // `value_bits` mirror is the payload's LAST owner. Free it through the
+                    // channel's glue here, exactly as the purge/teardown paths do for a parked
+                    // entry, or nobody ever does (a leak, not a double free). Unreachable in
+                    // production until channels can close (M8 Phase 4); guarded now because
+                    // the park-time release above already assumes this path pays its debt.
+                    let orphaned_bits = pending.remove(&key).map(|entry| entry.value_bits);
+                    drop(pending);
+                    // Glue OUTSIDE the pending_sends lock (never run an arbitrary extern fn
+                    // under a channel-internal lock).
+                    if let (Some(glue), Some(bits)) = (chan.drop_glue, orphaned_bits) {
+                        // SAFETY: glue was registered at construction for exactly this
+                        // channel's element type; the parked payload was never buffered and
+                        // its entry is gone, so this is its only drop.
+                        unsafe { glue(bits) };
+                    }
                     CHANNEL_CLOSED
                 }
             };
         }
         drop(pending);
 
+        // The ONE refusal path for a first-poll CLOSED outcome (all three arms — see the fn
+        // doc). Runs with NO channel-internal lock held (never run an arbitrary extern glue
+        // fn under one; the `None`-under-the-lock arm drops its guard before calling this).
+        let refuse_closed = || {
+            if let Some(glue) = chan.drop_glue {
+                release_taken_value();
+                // SAFETY: glue was registered at construction for exactly this channel's
+                // element type; typeck consumed the sender's binding at the send, so the
+                // refused payload has no other holder — this is its only drop.
+                unsafe { glue(value) };
+            }
+            CHANNEL_CLOSED
+        };
+
         // First attempt: non-blocking try_send. On a non-full channel this is the fast Ready
         // path (mirrors the sleep first-poll-Ready fast path — no suspension state needed).
-        let sender = lock_or_recover(&chan.sender).clone();
+        //
+        // The sender-lock section is the send's LINEARIZATION POINT against `close()`
+        // (contract item 2): `close()` takes the `Option` under this same lock, so a send
+        // that finds `None` here is a post-close send and is refused; a send that clones the
+        // endpoint first holds its own reference — a later `close()` cannot stop it, the
+        // value lands, and that is a pre-close send by definition.
+        let sender = {
+            let guard = lock_or_recover(&chan.sender);
+            match guard.as_ref() {
+                Some(s) => s.clone(),
+                None => {
+                    drop(guard);
+                    return refuse_closed();
+                }
+            }
+        };
+        #[cfg(loom)]
+        chan.mpsc_step();
         match sender.try_send(value) {
             Ok(()) => {
+                release_taken_value();
                 chan.wake_recv_waiters();
                 CHANNEL_READY
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => CHANNEL_CLOSED,
+            Err(mpsc::error::TrySendError::Closed(_)) => refuse_closed(),
             Err(mpsc::error::TrySendError::Full(v)) => {
                 // Backpressure: the channel is full. Create the endpoint future owning a cloned
                 // sender + the value, poll it once to register the forwarded waker, and suspend
@@ -456,8 +635,14 @@ pub(crate) unsafe fn channel_send_poll_guarded(
                 let fut_sender = sender.clone();
                 let mut fut: PendingSend =
                     Box::pin(async move { fut_sender.send(v).await.map_err(|_| ()) });
+                #[cfg(loom)]
+                chan.mpsc_step();
                 match fut.as_mut().poll(cx) {
                     Poll::Pending => {
+                        // Parked: the entry (and, on cancellation, the purge/teardown glue)
+                        // owns the payload from here — release it from the sender's ladder
+                        // now, not at the resumed poll (whose `value` argument is 0).
+                        release_taken_value();
                         let mut pending = lock_or_recover(&chan.pending_sends);
                         // Missed-path leak backstop: two LIVE caller identities can never
                         // share a token address, so any same-token / different-generation
@@ -467,6 +652,12 @@ pub(crate) unsafe fn channel_send_poll_guarded(
                         // 028) — the entry is gone before `Drop` could see it, and a parked
                         // payload is never buffered, so this is its only drop.
                         let mut swept_bits: Vec<i64> = Vec::new();
+                        // Dropping a swept entry drops its parked Tokio `Send` future (a
+                        // mpsc-state mutation: the permit it was queued for is returned) —
+                        // witnessed like every other mpsc call so loom orders it against
+                        // the consumer's `poll_recv` rather than by lock accident.
+                        #[cfg(loom)]
+                        chan.mpsc_step();
                         pending.retain(|k, entry| {
                             let keep = k.0 != caller_token || k.1 == caller_generation;
                             if !keep {
@@ -491,10 +682,14 @@ pub(crate) unsafe fn channel_send_poll_guarded(
                         CHANNEL_PENDING
                     }
                     Poll::Ready(Ok(())) => {
+                        release_taken_value();
                         chan.wake_recv_waiters();
                         CHANNEL_READY
                     }
-                    Poll::Ready(Err(())) => CHANNEL_CLOSED,
+                    // Arm (iii): the value was moved into the fresh future, the future is
+                    // dropped here, and only `value` (its bits) remains — the same
+                    // fallthrough as arms (i)/(ii), or this is P2-3's leak again.
+                    Poll::Ready(Err(())) => refuse_closed(),
                 }
             }
         }
@@ -520,11 +715,11 @@ pub(crate) unsafe fn channel_send_poll_guarded(
 /// [`CHANNEL_CLOSED`]; on `Pending` return [`CHANNEL_PENDING`] — the task suspends until a
 /// value arrives (its waker is already recorded). The `Ready(Some)` exit drains the
 /// registration via [`YnzChannel::wake_recv_waiters`] (a self-wake is a harmless spurious
-/// re-poll). The `Ready(None)` exit leaves the register-first entry recorded and wakes
-/// nobody — closure is unreachable in production today (bare channels never close; every
-/// close-simulation is `#[cfg(test)]`-only), and closed-channel wake propagation is an M8
-/// channel-close-semantics design question, not fixed piecemeal here; the stale entry is
-/// freed with the channel.
+/// re-poll). The `Ready(None)` exit (v0.3-M8 Phase 4: reachable after [`ynz_channel_close`]
+/// drained the buffer — codegen maps it to `none`) ALSO drains the waiter list, so no
+/// registration can outlive closure unwoken (`close()` itself already woke every waiter
+/// recorded before it ran; a receiver registering afterward polls immediately and sees the
+/// closed state — this drain is the harmless-if-empty third leg of contract item 6).
 ///
 /// Register-before-poll ordering (v0.3-M6 P3-2): `poll_recv` parks the waker in mpsc's
 /// SINGLE slot, where a later consumer's poll clobbers it. With the old poll-then-record
@@ -563,6 +758,8 @@ pub unsafe extern "C" fn ynz_channel_recv_poll(
         // recv_waiters before the receiver lock below is taken — no nesting, no lock held
         // across the non-blocking poll).
         chan.record_recv_waiter(cx.waker());
+        #[cfg(loom)]
+        chan.mpsc_step();
         let poll = lock_or_recover(&chan.receiver).poll_recv(cx);
         match poll {
             Poll::Ready(Some(v)) => {
@@ -575,7 +772,10 @@ pub unsafe extern "C" fn ynz_channel_recv_poll(
                 chan.wake_recv_waiters();
                 CHANNEL_READY
             }
-            Poll::Ready(None) => CHANNEL_CLOSED,
+            Poll::Ready(None) => {
+                chan.wake_recv_waiters();
+                CHANNEL_CLOSED
+            }
             Poll::Pending => CHANNEL_PENDING,
         }
     });
@@ -644,6 +844,11 @@ pub(crate) unsafe fn purge_pending_sends(chan_ptr: *mut u8, caller_generation: u
     // SAFETY: chan_ptr is a live Arc-backed pointer (caller guarantee); shared &.
     let chan = &*(chan_ptr as *const YnzChannel);
     let mut purged_bits: Vec<i64> = Vec::new();
+    // Each purged entry's drop drops a parked Tokio `Send` future (returns its queued
+    // permit) — a mpsc-state mutation, witnessed so loom explores its order against the
+    // consumer's `poll_recv` (see `YnzChannel::mpsc_step`).
+    #[cfg(loom)]
+    chan.mpsc_step();
     lock_or_recover(&chan.pending_sends).retain(|k, entry| {
         let keep = k.1 != caller_generation;
         if !keep {
@@ -675,11 +880,47 @@ pub(crate) unsafe fn pending_send_count(chan_ptr: *mut u8) -> usize {
     lock_or_recover(&chan.pending_sends).len()
 }
 
+/// Test-support: the channel's current strong reference count. The loom drop-ladder models
+/// (`crate::loom_tests`) assert refcount balance after a concurrent cancellation through this.
+///
+/// # Safety
+/// `chan_ptr` must be a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`].
+#[cfg(all(test, loom))]
+pub(crate) unsafe fn strong_count(chan_ptr: *mut u8) -> usize {
+    // SAFETY: caller guarantees a live Arc-backed pointer; the count is read without taking
+    // or releasing a reference (the ManuallyDrop keeps the borrowed Arc from decrementing).
+    let arc = std::mem::ManuallyDrop::new(Arc::from_raw(chan_ptr as *const YnzChannel));
+    Arc::strong_count(&arc)
+}
+
+/// Test-support: whether ONE caller identity's suspended send is still parked, by its exact
+/// `(caller_token, caller_generation)` key. The loom drop-ladder models observe the kind-2
+/// arm's purge→release ORDER through this: a co-owner that sees the ladder's reference
+/// already released (`strong_count` dropped) must never still see the ladder's own entry.
+///
+/// # Safety
+/// `chan_ptr` must be a live pointer from [`ynz_channel_create`]/[`ynz_channel_share`].
+#[cfg(all(test, loom))]
+pub(crate) unsafe fn pending_send_contains(
+    chan_ptr: *mut u8,
+    caller_token: u64,
+    caller_generation: u64,
+) -> bool {
+    let chan = &*(chan_ptr as *const YnzChannel);
+    lock_or_recover(&chan.pending_sends).contains_key(&(caller_token, caller_generation))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::BgArgDropEntry;
+    // Test wakers are std `Waker`s built from a std `Arc` (`Waker: From<Arc<W>>`), which is
+    // never the channel's own `Arc` — under `--cfg loom` the glob import above would resolve
+    // `Arc` to loom's, so pin std's explicitly for the tests' own use.
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::task::Wake;
+    use ynz_abi::{BG_ARG_KIND_HEAP_ARRAY, BG_ARG_KIND_RELEASED};
 
     // ─────────────────────────────────────────────────────────────────────
     // Test isolation for the three `*_alloc_free_parity` gates below (search
@@ -1117,11 +1358,9 @@ mod tests {
         let (_arc, waker) = make_waker();
         let chan_ptr = make_chan(2);
         unsafe {
-            // Drop the real sender so the receiver observes closure once drained.
-            let chan = &*(chan_ptr as *const YnzChannel);
-            let (dead_tx, _dead_rx) = mpsc::channel::<i64>(1);
-            let real_tx = std::mem::replace(&mut *lock_or_recover(&chan.sender), dead_tx);
-            drop(real_tx); // all real senders gone
+            // Close the channel through the real C-ABI so the receiver observes closure
+            // once drained (v0.3-M8: the production close path, no endpoint swap needed).
+            ynz_channel_close(chan_ptr);
 
             let (code, _) = recv(chan_ptr, &waker);
             assert_eq!(
@@ -1478,6 +1717,736 @@ mod tests {
             "cancellation-path removal must glue-free each parked payload exactly once \
              (FRAGO 028): alloc_delta={alloc_delta} free_delta={free_delta}"
         );
+    }
+
+    // ── spawn-arg ownership hand-off: a sent ladder-owned payload leaves the ladder ──────
+    //
+    // A `background` task's heap-cloned array argument is owned by the task's drop ladder
+    // (`BgArgDropEntry` kind HEAP_ARRAY → `ynz_array_drop` at task retire). When the task
+    // sends that pointer into a channel, the channel owns it too — and pre-fix the ladder
+    // freed it under the receiver (`got.count()` read a freed header). These tests plant the
+    // exact ladder shape codegen emits (frame slot + descriptor), publish the task as the
+    // current drive the way `SpawnStateFnFuture::poll` does, send through the real C-ABI,
+    // and assert the ladder let go — by descriptor kind AND by exact alloc=free parity
+    // (a double free or a leak each breaks parity).
+
+    /// The ladder codegen would emit for `background f(wire, rows)`: a 48-byte frame (32-byte
+    /// header + 2 param slots) with `payload_bits` in slot 1 (byte offset 40), and ONE
+    /// HEAP_ARRAY descriptor naming that slot. Returns the descriptor pointer (readable while
+    /// the future is alive — the future frees it on drop) and the future that owns both.
+    unsafe fn plant_array_ladder(
+        payload_bits: i64,
+    ) -> (*mut BgArgDropEntry, crate::runtime::SpawnStateFnFuture) {
+        plant_array_ladders(&[payload_bits])
+    }
+
+    /// N-descriptor form of [`plant_array_ladder`] — what codegen emits for
+    /// `background f(wire, a, b, ...)`: one HEAP_ARRAY descriptor per heap-cloned array, in
+    /// consecutive 8-byte frame slots starting at byte offset 40 (slot 0 at 32 is the channel).
+    /// `payloads[i]` lands in slot `1 + i`; the returned descriptor pointer indexes the same way.
+    unsafe fn plant_array_ladders(
+        payloads: &[i64],
+    ) -> (*mut BgArgDropEntry, crate::runtime::SpawnStateFnFuture) {
+        const FIRST_PAYLOAD_SLOT_OFFSET: u64 = 40;
+        let frame_size = FIRST_PAYLOAD_SLOT_OFFSET as usize + 8 * payloads.len();
+        let frame = crate::ynz_alloc_zeroed(frame_size);
+        let descs = crate::ynz_alloc(std::mem::size_of::<BgArgDropEntry>() * payloads.len())
+            as *mut BgArgDropEntry;
+        for (i, bits) in payloads.iter().enumerate() {
+            let byte_offset = FIRST_PAYLOAD_SLOT_OFFSET + 8 * i as u64;
+            *(frame.add(byte_offset as usize) as *mut i64) = *bits;
+            descs.add(i).write(BgArgDropEntry {
+                byte_offset,
+                kind: BG_ARG_KIND_HEAP_ARRAY,
+                size: 0,
+            });
+        }
+        unsafe extern "C-unwind" fn never_polled(_frame: *mut u8, _waker: *mut u8) -> i32 {
+            1
+        }
+        let fut = crate::runtime::SpawnStateFnFuture::new(
+            never_polled,
+            frame,
+            frame_size as i64,
+            -1,
+            descs,
+            payloads.len() as i64,
+        );
+        (descs, fut)
+    }
+
+    /// Single-descriptor ladder of an arbitrary kind — the per-kind form of
+    /// [`plant_array_ladder`] for the kind-parity gate below.
+    unsafe fn plant_ladder_of_kind(
+        kind: u64,
+        payload_bits: i64,
+        size: u64,
+    ) -> (*mut BgArgDropEntry, crate::runtime::SpawnStateFnFuture) {
+        let (descs, fut) = plant_array_ladders(&[payload_bits]);
+        (*descs).kind = kind;
+        (*descs).size = size;
+        (descs, fut)
+    }
+
+    /// v0.3-M8 Phase 4: the compile-time link between `ynz_abi::bg_arg_kind_is_releasable_payload`
+    /// (the filter `release_ladder_payload` consumes) and the drop ladder's free match, pinned
+    /// per kind over `ynz_abi::ALL_BG_ARG_KINDS`: a kind is RELEASABLE iff the ladder frees a
+    /// counted payload of that kind at retire. A new heap kind added to the ABI without a
+    /// ladder arm (releasable by inversion, freed by nobody) fails here — and its
+    /// `debug_assert!` in the ladder's `_ => {}` arm fails the first debug retire; a kind the
+    /// ladder frees but the predicate skips (freed-but-unreleasable — the pre-Phase-4
+    /// `HEAP_MAP` hazard) fails here too.
+    ///
+    /// v0.3-M8 Phase 5 pins packet item (h): `BG_ARG_KIND_ARC_SHAPE` is staged the way the
+    /// codegen-emitted protocol actually leaves it — the ladder's slot is ONE count on a block
+    /// a CO-OWNER (another task, or the caller's transient) still counts — so the ladder's
+    /// retire frees NO counted allocation (`ladder_freed == 0`) and the predicate must say
+    /// `false`; the co-owner's release afterwards frees the block, keeping alloc=free exact.
+    /// Flipping the predicate to `true` for the Arc kind fails the `releasable ==` assertion
+    /// below; dropping the ladder arm fails the exact-parity assertion (the block leaks).
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "process re-exec isolation unsupported under Miri (posix_spawn); see \
+                  run_isolated_or_return's doc comment — behavior is still covered by \
+                  cargo test/nextest"
+    )]
+    fn every_bg_arg_kind_is_releasable_iff_the_ladder_frees_it_alloc_free_parity() {
+        if run_isolated_or_return(
+            "channel::tests::every_bg_arg_kind_is_releasable_iff_the_ladder_frees_it_alloc_free_parity",
+        ) {
+            return;
+        }
+        use ynz_abi::{
+            bg_arg_kind_is_releasable_payload, ALL_BG_ARG_KINDS, BG_ARG_KIND_ARC_SHAPE,
+            BG_ARG_KIND_HEAP_SHAPE, BG_ARG_KIND_SHARED_CHANNEL,
+        };
+        crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
+        let alloc_before = crate::ynz_alloc_count();
+        let free_before = crate::ynz_free_count();
+        for &kind in ALL_BG_ARG_KINDS {
+            unsafe {
+                // The payload the slot holds, and how many COUNTED allocations it is.
+                // `co_owner_arc`: for the Auto-Arc kind, the co-owner's reference to the
+                // shared block (released after the ladder retires); null otherwise.
+                let (bits, size, payload_allocs, base_chan, co_owner_arc): (
+                    i64,
+                    u64,
+                    u64,
+                    *mut u8,
+                    *mut u8,
+                ) = if kind == BG_ARG_KIND_HEAP_SHAPE {
+                    (
+                        crate::ynz_alloc(16) as i64,
+                        16,
+                        1,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_HEAP_ARRAY {
+                    (
+                        crate::ynz_array_new(8) as i64,
+                        0,
+                        2,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_SHARED_CHANNEL {
+                    // The task's own refcount: an `Arc` (uncounted) the ladder releases.
+                    let base = make_chan(1);
+                    (
+                        ynz_channel_share(base) as i64,
+                        0,
+                        0,
+                        base,
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_RELEASED {
+                    // A cell whose ownership already left the task — whoever holds it
+                    // now (here: this test) frees it; the ladder must not.
+                    (
+                        crate::ynz_alloc(16) as i64,
+                        16,
+                        1,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } else if kind == BG_ARG_KIND_ARC_SHAPE {
+                    // The task's counted reference to a block a co-owner still counts
+                    // (exactly what `ynz_arc_clone` at a group spawn leaves in the slot).
+                    // The block is ONE counted allocation; the ladder's release must free
+                    // NOTHING while the co-owner lives.
+                    let base = crate::arc::ynz_arc_new(16);
+                    (
+                        crate::arc::ynz_arc_clone(base) as i64,
+                        16,
+                        0,
+                        std::ptr::null_mut(),
+                        base,
+                    )
+                } else {
+                    panic!(
+                        "ALL_BG_ARG_KINDS has a kind ({kind}) this test does not stage — add it"
+                    );
+                };
+                let free_at_plant = crate::ynz_free_count();
+                let (_descs, fut) = plant_ladder_of_kind(kind, bits, size);
+                drop(fut); // the ladder: frame + descriptor (2 counted frees) + its arm
+                let ladder_freed = crate::ynz_free_count() - free_at_plant - 2;
+                let releasable = bg_arg_kind_is_releasable_payload(kind);
+                assert_eq!(
+                    releasable,
+                    payload_allocs > 0 && ladder_freed == payload_allocs,
+                    "kind {kind}: releasable={releasable} but the ladder freed {ladder_freed} \
+                     counted allocation(s) of a {payload_allocs}-allocation payload — the ABI \
+                     predicate and the drop ladder's free match disagree"
+                );
+                if !releasable {
+                    assert_eq!(
+                        ladder_freed, 0,
+                        "kind {kind}: a non-releasable slot is never freed by the ladder"
+                    );
+                    if kind == BG_ARG_KIND_RELEASED {
+                        crate::ynz_free(bits as *mut u8, 16); // the holder frees it
+                    }
+                    if !base_chan.is_null() {
+                        ynz_channel_free(base_chan); // the base reference; the share was released
+                    }
+                    if !co_owner_arc.is_null() {
+                        // The co-owner's release is the LAST reference: this frees the block
+                        // (one counted free) — the ladder's own release above must have
+                        // dropped exactly one count and freed nothing.
+                        assert_eq!(
+                            crate::arc::arc_strong_count(co_owner_arc),
+                            1,
+                            "kind {kind}: the ladder must release exactly one Arc count"
+                        );
+                        crate::arc::ynz_arc_free(co_owner_arc, 16);
+                    }
+                }
+            }
+        }
+        let alloc_delta = crate::ynz_alloc_count() - alloc_before;
+        let free_delta = crate::ynz_free_count() - free_before;
+        assert!(
+            alloc_delta >= 8,
+            "vacuous parity run: saw {alloc_delta} counted allocs"
+        );
+        assert_eq!(
+            alloc_delta, free_delta,
+            "every kind's payload freed exactly once across the ladder and its holder: \
+             alloc_delta={alloc_delta} free_delta={free_delta}"
+        );
+    }
+
+    /// Multi-descriptor selectivity: a task holding TWO ladder-owned arrays sends ONE. The
+    /// release walk must flip exactly the descriptor whose slot holds the sent bits — the other
+    /// stays HEAP_ARRAY and is freed by the ladder at retire, the sent one by the channel. Every
+    /// other test here plants a single descriptor, so this is the only place the walk faces a
+    /// live non-matching sibling (releasing it too = a leak; releasing it INSTEAD = a UAF plus a
+    /// leak; both break exact parity, and the kind assertions name which one happened).
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "process re-exec isolation unsupported under Miri (posix_spawn); see \
+                  run_isolated_or_return's doc comment — behavior is still covered by \
+                  cargo test/nextest"
+    )]
+    fn send_of_one_of_two_ladder_owned_payloads_releases_only_that_slot_alloc_free_parity() {
+        if run_isolated_or_return(
+            "channel::tests::send_of_one_of_two_ladder_owned_payloads_releases_only_that_slot_alloc_free_parity",
+        ) {
+            return;
+        }
+        crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
+        let (_arc, waker) = make_waker();
+        let alloc_before = crate::ynz_alloc_count();
+        let free_before = crate::ynz_free_count();
+        unsafe {
+            let rows = crate::ynz_array_new(8); // sent: 2 counted allocs
+            let scratch = crate::ynz_array_new(8); // kept by the task: 2 counted allocs
+            let (descs, fut) = plant_array_ladders(&[rows as i64, scratch as i64]);
+            let chan = make_chan_with_glue(4, array_elem_glue);
+            {
+                let _drive = DriveGuard::enter(fut.drive_identity());
+                assert_eq!(send(chan, rows as i64, &waker), CHANNEL_READY);
+            }
+            assert_eq!(
+                (*descs).kind,
+                BG_ARG_KIND_RELEASED,
+                "the SENT array's descriptor must be released"
+            );
+            assert_eq!(
+                (*descs.add(1)).kind,
+                BG_ARG_KIND_HEAP_ARRAY,
+                "the UN-SENT sibling's descriptor must be untouched — the ladder still owns it"
+            );
+            drop(fut); // ladder: skips `rows`, frees `scratch` + frame + descriptors
+            ynz_channel_free(chan); // teardown glue: frees `rows` — its ONLY drop
+        }
+        let alloc_delta = crate::ynz_alloc_count() - alloc_before;
+        let free_delta = crate::ynz_free_count() - free_before;
+        assert!(
+            alloc_delta >= 6,
+            "vacuous parity run: expected >= 6 counted allocs (2 arrays + frame + descriptors), \
+             saw {alloc_delta}"
+        );
+        assert_eq!(
+            alloc_delta, free_delta,
+            "exactly one owner per payload: the channel frees the sent array, the ladder frees \
+             the kept one; alloc_delta={alloc_delta} free_delta={free_delta}"
+        );
+    }
+
+    /// RELEASED is terminal: releasing the same bits a second time (the same payload handed
+    /// off twice — a repeat send, or a send followed by a handle return of the same pointer)
+    /// matches nothing. `release_ladder_payload` only considers HEAP_SHAPE / HEAP_ARRAY
+    /// descriptors, so an already-RELEASED slot can never be re-counted or re-flipped.
+    #[test]
+    fn release_ladder_payload_is_idempotent_released_is_terminal() {
+        unsafe {
+            let rows = crate::ynz_array_new(8);
+            let (descs, fut) = plant_array_ladder(rows as i64);
+            let drive = fut.drive_identity();
+            assert_eq!(
+                release_ladder_payload(&drive, rows as i64),
+                1,
+                "first hand-off releases the one matching slot"
+            );
+            assert_eq!((*descs).kind, BG_ARG_KIND_RELEASED);
+            assert_eq!(
+                release_ladder_payload(&drive, rows as i64),
+                0,
+                "a repeat hand-off of the same payload must match nothing — RELEASED is terminal"
+            );
+            assert_eq!((*descs).kind, BG_ARG_KIND_RELEASED);
+            // Bits that match no slot never touch a descriptor either.
+            assert_eq!(release_ladder_payload(&drive, 0x5EED), 0);
+            // The ladder skips the released slot; the test frees `rows` as its owner now.
+            drop(fut);
+            crate::ynz_array_drop(rows);
+        }
+    }
+
+    /// Parked → CLOSED: the send parks on a full channel (the park RELEASES the payload from the
+    /// sender's ladder — the pending entry owns it from here), then the receiver drops, and the
+    /// task's re-poll observes `Poll::Ready(Err(()))`. The endpoint future discarded its
+    /// `SendError(v)`, and the ladder has already let go — so the entry's `value_bits` mirror is
+    /// the payload's LAST owner and the re-poll must free it through the channel's glue. Pre-fix
+    /// the entry was `remove`d with no glue call: nobody owned the payload (a leak the parity
+    /// gate catches: alloc = free + 2). Unreachable in production until channels can close
+    /// (M8 Phase 4) — guarded now because the park-time release already assumes this debt is paid.
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "process re-exec isolation unsupported under Miri (posix_spawn); see \
+                  run_isolated_or_return's doc comment — behavior is still covered by \
+                  cargo test/nextest"
+    )]
+    fn parked_send_closed_on_repoll_frees_the_orphaned_payload_alloc_free_parity() {
+        if run_isolated_or_return(
+            "channel::tests::parked_send_closed_on_repoll_frees_the_orphaned_payload_alloc_free_parity",
+        ) {
+            return;
+        }
+        crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
+        let (_arc, waker) = make_waker();
+        let alloc_before = crate::ynz_alloc_count();
+        let free_before = crate::ynz_free_count();
+        unsafe {
+            let chan_ptr = make_chan_with_glue(1, array_elem_glue);
+            let filler = crate::ynz_array_new(8); // fills the single slot: 2 counted allocs
+            assert_eq!(send(chan_ptr, filler as i64, &waker), CHANNEL_READY);
+            let rows = crate::ynz_array_new(8); // the task's heap clone: 2 counted allocs
+            let (descs, fut) = plant_array_ladder(rows as i64);
+            {
+                let _drive = DriveGuard::enter(fut.drive_identity());
+                assert_eq!(
+                    send(chan_ptr, rows as i64, &waker),
+                    CHANNEL_PENDING,
+                    "a send on a full channel must park, not block"
+                );
+            }
+            assert_eq!(pending_send_count(chan_ptr), 1);
+            assert_eq!(
+                (*descs).kind,
+                BG_ARG_KIND_RELEASED,
+                "the park released the payload"
+            );
+
+            // The receiver goes away (what a closed channel will do once M8 ships close
+            // semantics). Its buffered i64 words — `filler` — are dropped by Tokio WITHOUT
+            // glue; the test frees `filler` by hand below so the parity assertion is about the
+            // PARKED payload alone.
+            let chan = &*(chan_ptr as *const YnzChannel);
+            let (_dead_tx, dead_rx) = mpsc::channel::<i64>(1);
+            let real_rx = std::mem::replace(&mut *lock_or_recover(&chan.receiver), dead_rx);
+            drop(real_rx);
+            crate::ynz_array_drop(filler);
+
+            // The task's re-poll of ITS parked send (same token/generation; value 0, as the
+            // resumed poll passes) observes the closed receiver.
+            {
+                let _drive = DriveGuard::enter(fut.drive_identity());
+                assert_eq!(
+                    send(chan_ptr, 0, &waker),
+                    CHANNEL_CLOSED,
+                    "the re-poll of a parked send on a closed channel reports CLOSED"
+                );
+            }
+            assert_eq!(
+                pending_send_count(chan_ptr),
+                0,
+                "the closed entry must be removed — and, being the payload's last owner, glued"
+            );
+            drop(fut); // ladder: skips `rows` (RELEASED at park), frees frame + descriptor
+            ynz_channel_free(chan_ptr); // nothing buffered, nothing parked: glue runs for nobody
+        }
+        let alloc_delta = crate::ynz_alloc_count() - alloc_before;
+        let free_delta = crate::ynz_free_count() - free_before;
+        assert!(
+            alloc_delta >= 6,
+            "vacuous parity run: expected >= 6 counted allocs, saw {alloc_delta}"
+        );
+        assert_eq!(
+            alloc_delta, free_delta,
+            "a parked payload whose receiver closed must be freed exactly once — by the \
+             re-poll's glue call (a +2 gap = the pre-fix orphan leak); alloc_delta={alloc_delta} \
+             free_delta={free_delta}"
+        );
+    }
+
+    /// Ready path: `try_send` accepts the ladder-owned array → the descriptor flips to
+    /// RELEASED, the ladder skips it at task retire, and the channel's teardown glue frees it
+    /// exactly once. Pre-fix: ladder free + glue free = a double free (parity breaks or the
+    /// process dies on the second `ynz_array_drop`).
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "process re-exec isolation unsupported under Miri (posix_spawn); see \
+                  run_isolated_or_return's doc comment — behavior is still covered by \
+                  cargo test/nextest"
+    )]
+    fn send_of_ladder_owned_payload_releases_ladder_alloc_free_parity() {
+        if run_isolated_or_return(
+            "channel::tests::send_of_ladder_owned_payload_releases_ladder_alloc_free_parity",
+        ) {
+            return;
+        }
+        crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
+        let (_arc, waker) = make_waker();
+        let alloc_before = crate::ynz_alloc_count();
+        let free_before = crate::ynz_free_count();
+        unsafe {
+            let rows = crate::ynz_array_new(8); // the task's heap clone: 2 counted allocs
+            let (descs, fut) = plant_array_ladder(rows as i64); // frame + descriptor: 2 more
+            let chan = make_chan_with_glue(4, array_elem_glue);
+            {
+                // What `SpawnStateFnFuture::poll` publishes around the resume-fn call.
+                let _drive = DriveGuard::enter(fut.drive_identity());
+                assert_eq!(send(chan, rows as i64, &waker), CHANNEL_READY);
+            }
+            assert_eq!(
+                (*descs).kind,
+                BG_ARG_KIND_RELEASED,
+                "an accepted send of a ladder-owned payload must rewrite its descriptor to \
+                 RELEASED — otherwise the ladder frees what the channel now owns"
+            );
+            drop(fut); // ladder: skips `rows`, frees frame + descriptor
+            ynz_channel_free(chan); // last ref: teardown glue frees `rows` — its ONLY drop
+        }
+        let alloc_delta = crate::ynz_alloc_count() - alloc_before;
+        let free_delta = crate::ynz_free_count() - free_before;
+        assert!(
+            alloc_delta >= 4,
+            "vacuous parity run: expected >= 4 counted allocs (array 2 + frame + descriptor), \
+             saw {alloc_delta}"
+        );
+        assert_eq!(
+            alloc_delta, free_delta,
+            "a sent spawn-arg payload must be freed exactly once (by the channel, not the \
+             ladder): alloc_delta={alloc_delta} free_delta={free_delta}"
+        );
+    }
+
+    /// Parked path: the channel is full, so the send suspends and the parked entry owns the
+    /// payload from that moment (purge/teardown glue frees it). The release must happen at
+    /// park time — the resumed poll passes value 0 and could never match the slot.
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "process re-exec isolation unsupported under Miri (posix_spawn); see \
+                  run_isolated_or_return's doc comment — behavior is still covered by \
+                  cargo test/nextest"
+    )]
+    fn parked_send_of_ladder_owned_payload_releases_ladder_alloc_free_parity() {
+        if run_isolated_or_return(
+            "channel::tests::parked_send_of_ladder_owned_payload_releases_ladder_alloc_free_parity",
+        ) {
+            return;
+        }
+        crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
+        let (_arc, waker) = make_waker();
+        let alloc_before = crate::ynz_alloc_count();
+        let free_before = crate::ynz_free_count();
+        unsafe {
+            let chan = make_chan_with_glue(1, array_elem_glue);
+            let filler = crate::ynz_array_new(8); // fills the single slot: 2 counted allocs
+            assert_eq!(send(chan, filler as i64, &waker), CHANNEL_READY);
+            let rows = crate::ynz_array_new(8); // the task's heap clone: 2 counted allocs
+            let (descs, fut) = plant_array_ladder(rows as i64);
+            {
+                let _drive = DriveGuard::enter(fut.drive_identity());
+                assert_eq!(
+                    send(chan, rows as i64, &waker),
+                    CHANNEL_PENDING,
+                    "a send on a full channel must park, not block"
+                );
+            }
+            assert_eq!(pending_send_count(chan), 1);
+            assert_eq!(
+                (*descs).kind,
+                BG_ARG_KIND_RELEASED,
+                "a PARKED send has handed the payload to the channel's pending entry — the \
+                 ladder must release it at park time"
+            );
+            drop(fut); // ladder: skips `rows`
+            ynz_channel_free(chan); // teardown glue: buffered `filler` + parked `rows`, once each
+        }
+        let alloc_delta = crate::ynz_alloc_count() - alloc_before;
+        let free_delta = crate::ynz_free_count() - free_before;
+        assert!(
+            alloc_delta >= 6,
+            "vacuous parity run: expected >= 6 counted allocs, saw {alloc_delta}"
+        );
+        assert_eq!(
+            alloc_delta, free_delta,
+            "buffered + parked spawn-arg payloads must each be freed exactly once: \
+             alloc_delta={alloc_delta} free_delta={free_delta}"
+        );
+    }
+
+    /// Non-release cases — the ladder keeps ownership and frees the payload itself:
+    /// (a) a drive with no ladder (the sync entrypoint) sends the same bits — nothing to
+    ///     release; (b) a glue-less (`channel<int>`) channel never compares bits at all, so an
+    ///     `int` that happens to equal a live pointer cannot release anything.
+    /// Plus the one case that FLIPPED in v0.3-M8 Phase 4: (c) a CLOSED first-poll send GIVES
+    ///     its payload like every other outcome — `refuse_closed` releases the ladder slot and
+    ///     frees the payload through the glue, exactly once (typeck consumed the sender's
+    ///     binding, so nobody else holds it). Pre-M8 this case asserted the opposite ("the
+    ///     sender still owns it"); the parity gate below pins the new contract per arm.
+    #[test]
+    fn ladder_is_untouched_when_the_channel_does_not_take_ownership() {
+        let (_arc, waker) = make_waker();
+        unsafe {
+            // (a) ladder-less drive.
+            let rows = crate::ynz_array_new(8);
+            let (descs, fut) = plant_array_ladder(rows as i64);
+            let chan = make_chan_with_glue(4, array_elem_glue);
+            {
+                let _drive = DriveGuard::enter(DriveIdentity::ladderless(7));
+                assert_eq!(send(chan, rows as i64, &waker), CHANNEL_READY);
+            }
+            assert_eq!((*descs).kind, BG_ARG_KIND_HEAP_ARRAY);
+            // Take the value back out so the channel does not also own it at teardown.
+            assert_eq!(recv(chan, &waker), (CHANNEL_READY, rows as i64));
+            drop(fut); // the ladder frees `rows`
+            ynz_channel_free(chan);
+
+            // (b) glue-less channel: the payload is an int by type; bits are never compared.
+            let rows = crate::ynz_array_new(8);
+            let (descs, fut) = plant_array_ladder(rows as i64);
+            let int_chan = make_chan(4);
+            {
+                let _drive = DriveGuard::enter(fut.drive_identity());
+                assert_eq!(send(int_chan, rows as i64, &waker), CHANNEL_READY);
+            }
+            assert_eq!(
+                (*descs).kind,
+                BG_ARG_KIND_HEAP_ARRAY,
+                "a channel without element drop glue carries no heap payload — it must never \
+                 release a ladder slot on a coincidental bit match"
+            );
+            assert_eq!(recv(int_chan, &waker), (CHANNEL_READY, rows as i64));
+            drop(fut);
+            ynz_channel_free(int_chan);
+
+            // (c) closed channel (arm i — `None` under the sender lock after `close()`): the
+            // send is refused AND the payload is given away — released from the ladder and
+            // freed by `refuse_closed` through the glue. The ladder must then skip it.
+            let rows = crate::ynz_array_new(8);
+            let (descs, fut) = plant_array_ladder(rows as i64);
+            let closed_ptr = make_chan_with_glue(4, array_elem_glue);
+            ynz_channel_close(closed_ptr);
+            {
+                let _drive = DriveGuard::enter(fut.drive_identity());
+                assert_eq!(send(closed_ptr, rows as i64, &waker), CHANNEL_CLOSED);
+            }
+            assert_eq!(
+                (*descs).kind,
+                BG_ARG_KIND_RELEASED,
+                "a CLOSED first-poll send gives its payload: refuse_closed must release the \
+                 ladder slot before freeing the payload, or the ladder frees it a second time"
+            );
+            drop(fut); // the ladder skips `rows` (already freed by refuse_closed)
+            ynz_channel_free(closed_ptr);
+        }
+    }
+
+    /// v0.3-M8 Phase 4 (P2-3, in the runtime): a CLOSED first-poll send of a ladder-owned
+    /// payload frees it exactly once, through the ONE `refuse_closed` fallthrough, on both
+    /// production-reachable arms — (i) `None` under the sender lock after `close()`, and (ii)
+    /// `try_send → Closed` (receiver gone — unreachable in production, the object holds its
+    /// receiver, but the arm exists and must pay the same debt). Arm (iii) — `Full`, then the
+    /// fresh endpoint future's first poll `Ready(Err)` — is the same closure by construction
+    /// (a receiver dropped between the `try_send` and the poll, which the object's own
+    /// receiver ownership makes impossible to stage single-threaded); reading the send core
+    /// confirms no arm returns `CHANNEL_CLOSED` except through `refuse_closed`.
+    /// Alloc/free parity is the gate: a smaller free count is P2-3's leak back, a larger one
+    /// is a double free (ladder + glue).
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "process re-exec isolation unsupported under Miri (posix_spawn); see \
+                  run_isolated_or_return's doc comment — behavior is still covered by \
+                  cargo test/nextest"
+    )]
+    fn closed_first_poll_send_frees_the_refused_payload_once_alloc_free_parity() {
+        if run_isolated_or_return(
+            "channel::tests::closed_first_poll_send_frees_the_refused_payload_once_alloc_free_parity",
+        ) {
+            return;
+        }
+        crate::ALLOC_COUNTER_ENABLED.store(true, Ordering::Relaxed);
+        let (_arc, waker) = make_waker();
+        let alloc_before = crate::ynz_alloc_count();
+        let free_before = crate::ynz_free_count();
+        unsafe {
+            // Arm (i): closed through the real C-ABI.
+            let rows = crate::ynz_array_new(8);
+            let (descs, fut) = plant_array_ladder(rows as i64);
+            let chan = make_chan_with_glue(4, array_elem_glue);
+            ynz_channel_close(chan);
+            {
+                let _drive = DriveGuard::enter(fut.drive_identity());
+                assert_eq!(send(chan, rows as i64, &waker), CHANNEL_CLOSED);
+            }
+            assert_eq!(
+                (*descs).kind,
+                BG_ARG_KIND_RELEASED,
+                "arm (i): slot released"
+            );
+            drop(fut);
+            ynz_channel_free(chan);
+
+            // Arm (ii): the receiver is gone (test-only endpoint swap — the production object
+            // never drops its receiver while a holder is alive).
+            let rows2 = crate::ynz_array_new(8);
+            let (descs2, fut2) = plant_array_ladder(rows2 as i64);
+            let chan2 = make_chan_with_glue(4, array_elem_glue);
+            let c2 = &*(chan2 as *const YnzChannel);
+            let (_dead_tx, dead_rx) = mpsc::channel::<i64>(1);
+            let real_rx = std::mem::replace(&mut *lock_or_recover(&c2.receiver), dead_rx);
+            drop(real_rx);
+            {
+                let _drive = DriveGuard::enter(fut2.drive_identity());
+                assert_eq!(send(chan2, rows2 as i64, &waker), CHANNEL_CLOSED);
+            }
+            assert_eq!(
+                (*descs2).kind,
+                BG_ARG_KIND_RELEASED,
+                "arm (ii): slot released"
+            );
+            drop(fut2);
+            ynz_channel_free(chan2);
+
+            // A glue-less channel refuses WITHOUT touching anything: an `int` payload has no
+            // owner to release and nothing to free.
+            let plain = make_chan(2);
+            ynz_channel_close(plain);
+            assert_eq!(send(plain, 7, &waker), CHANNEL_CLOSED);
+            ynz_channel_free(plain);
+        }
+        let alloc_delta = crate::ynz_alloc_count() - alloc_before;
+        let free_delta = crate::ynz_free_count() - free_before;
+        assert!(
+            alloc_delta >= 8,
+            "vacuous parity run: expected >= 8 counted allocs (2 arrays × 2 + 2 frames + 2 \
+             descriptors), saw {alloc_delta}"
+        );
+        assert_eq!(
+            alloc_delta, free_delta,
+            "a refused payload must be freed exactly once by refuse_closed: \
+             alloc_delta={alloc_delta} free_delta={free_delta} (smaller = P2-3's leak, larger \
+             = ladder + glue double free)"
+        );
+    }
+
+    /// v0.3-M8 Phase 4 contract items 3, 5 and 6 at the runtime layer: `close()` is
+    /// idempotent; a value buffered before it is still delivered; the drained receive then
+    /// reports CLOSED (→ `none`); and a receiver parked BEFORE the close is woken by it.
+    #[test]
+    fn close_is_idempotent_drains_then_closed_and_wakes_parked_receiver() {
+        let (arc, waker) = make_waker();
+        let chan = make_chan(2);
+        unsafe {
+            // Park a receiver on the empty channel: recorded in recv_waiters, no wake yet.
+            assert_eq!(recv(chan, &waker).0, CHANNEL_PENDING);
+            assert_eq!(arc.0.load(Ordering::SeqCst), 0);
+            // A send before the close lands and wakes the parked receiver.
+            assert_eq!(send(chan, 41, &waker), CHANNEL_READY);
+            let wakes_after_send = arc.0.load(Ordering::SeqCst);
+            assert!(
+                wakes_after_send >= 1,
+                "the send must wake the parked receiver"
+            );
+            // Close twice — the second is a no-op; both wake the recorded waiters (drained
+            // by the send, so nothing to wake here — that is the harmless empty drain).
+            ynz_channel_close(chan);
+            ynz_channel_close(chan);
+            // Buffered value survives the close and is delivered in order.
+            assert_eq!(recv(chan, &waker), (CHANNEL_READY, 41));
+            // Drained → CLOSED, and a send after the close is refused.
+            assert_eq!(recv(chan, &waker).0, CHANNEL_CLOSED);
+            assert_eq!(send(chan, 42, &waker), CHANNEL_CLOSED);
+            // Third close after everything: still a safe no-op.
+            ynz_channel_close(chan);
+            ynz_channel_free(chan);
+        }
+        // Wake-on-close: a receiver parked with NOTHING buffered must be woken by close().
+        let (arc2, waker2) = make_waker();
+        let chan2 = make_chan(2);
+        unsafe {
+            assert_eq!(recv(chan2, &waker2).0, CHANNEL_PENDING);
+            assert_eq!(arc2.0.load(Ordering::SeqCst), 0);
+            ynz_channel_close(chan2);
+            assert!(
+                arc2.0.load(Ordering::SeqCst) >= 1,
+                "close() must wake every recorded receive-waiter (contract item 6)"
+            );
+            assert_eq!(recv(chan2, &waker2).0, CHANNEL_CLOSED);
+            ynz_channel_free(chan2);
+        }
+    }
+
+    /// Contract item 4: a send PARKED on a full channel before `close()` holds its own cloned
+    /// endpoint inside the pending entry, so the close does not stop it — once the consumer
+    /// drains a slot it lands, and the receiver sees both values then CLOSED.
+    #[test]
+    fn in_flight_send_parked_before_close_still_lands() {
+        let (_arc, waker) = make_waker();
+        let chan = make_chan(1);
+        unsafe {
+            assert_eq!(send_tok(chan, 1, &waker, 0xB1), CHANNEL_READY);
+            assert_eq!(send_tok(chan, 2, &waker, 0xB2), CHANNEL_PENDING); // parked
+            ynz_channel_close(chan);
+            assert_eq!(recv(chan, &waker), (CHANNEL_READY, 1));
+            // The parked send's re-poll completes (its clone kept the endpoint alive).
+            assert_eq!(send_tok(chan, 0, &waker, 0xB2), CHANNEL_READY);
+            assert_eq!(recv(chan, &waker), (CHANNEL_READY, 2));
+            assert_eq!(recv(chan, &waker).0, CHANNEL_CLOSED);
+            ynz_channel_free(chan);
+        }
     }
 
     /// Refcount balance: share bumps, free releases; the object survives until the LAST free.

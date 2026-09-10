@@ -1,0 +1,48 @@
+// v0.3-M7 FRAGO 024 round 8 — CONTROL fixture for Bug 2 (the `SelfValue`
+// false-safe finding). Identical shape to
+// `v0_3_m7_fr24_nested_self_spawn_receiver.ynz` except the receiver parameter is
+// named `cargo` instead of `self` — a plain `Expr::Ident`, not `Expr::SelfValue`.
+// This construction was ALREADY correct 6/6 before the FRAGO 024 fix (the `Ident`
+// liveness path in `check_stmts` always records SOME ownership entry, forcing
+// heap-upgrade regardless of the `SelfValue` classification bug) — locked here so
+// a future change cannot silently regress the `Ident` path while working on the
+// `SelfValue` one.
+//
+// Correct output must contain: `haul: 111/222`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function relay(give cargo: Cargo) -> nothing {
+  background cargo.haul()
+}
+
+function spawner() -> nothing {
+  background relay(makeCargo())
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

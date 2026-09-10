@@ -1,0 +1,59 @@
+// fr23 regression fixture — shape C2, GENERIC-callee variant whose argument is
+// ITSELF a generic call, two levels deep (M7 completion-gate round 3, FRAGO 019):
+// `background identity(identity(makeCargo())).haul()`.
+//
+// FRAGO 018 (round 2) fixed the case where a generic callee's type param is
+// resolvable only from a NESTED CONCRETE call argument (`identity(makeCargo())`),
+// via `bg_arg_type_readonly` — but that helper's own nested-call arm read ONLY
+// `sig_table` (concrete signatures), never `generic_fn_table`. So when the nested
+// argument call is ITSELF a call to a GENERIC function (the outer `identity`'s
+// argument is `identity(makeCargo())`, also generic), `bg_arg_type_readonly`
+// couldn't resolve it either, `T` stayed unresolved, and the receiver fell through
+// un-admitted — the exact fr23 UAF class, one level deeper than round 2 closed.
+//
+// This is the live repro that motivated collapsing the whole predicate into ONE
+// authoritative, RECURSIVE resolver (`bg_call_return_type_readonly`) instead of
+// patching a 4th narrow special case: recursion closes this depth AND every depth
+// beyond it in one definition.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed before this fix (2026-07-18, live-reproduced, both tiers): garbage —
+// default tier nondeterministic garbage across repeated runs; O0 the `stomp()`
+// sentinel values.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  background identity(identity(makeCargo())).haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

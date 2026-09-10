@@ -8,8 +8,19 @@
 // the process's main thread; the raw kernel SIGSEGV reaches `ynz run`'s child-process
 // wait unmodified. Used by `tests/run_cli.rs` to prove `ynz run` reports "killed by
 // signal 11 (SIGSEGV)" instead of masking the crash as exit code 1.
+//
+// v0.3-M7 Phase 3 repair: the original body was `return recurse(n + 1)` — a TAIL call,
+// contradicting this fixture's own "non-tail" premise. It only overflowed because the
+// pre-M7 default backend (-O0) performs no tail-call elimination; under the now-default
+// `default<O2>` pipeline LLVM legally turns it into an infinite LOOP (no stack growth,
+// no SIGSEGV, 100% CPU forever — it wedged the whole run_cli suite, which has no
+// watchdog). The accumulate-AFTER-the-call form below is genuinely non-tail (the frame
+// must survive the callee to add 1), so the stack grows and the kernel SIGSEGV fires at
+// EVERY optimization tier (verified: exit 139 at both --no-optimize and the optimized
+// default). The feature under test — signal reporting, not stack behavior — is unchanged.
 function recurse(n: int) -> int {
-  return recurse(n + 1)
+  let deeper = recurse(n + 1)
+  return deeper + 1
 }
 
 function entrypoint() -> nothing {

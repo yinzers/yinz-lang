@@ -1,0 +1,27 @@
+// Hotfix `bgarg-number` sweep pin: the HANDLE spawn form (`let h = background f(scene)`)
+// of bg_arg_shape_number_field.ynz — same shape with a `number` field, same inferred-
+// COPY path (the caller reads `scene.name` after the spawn, so `scene` is frame-
+// embedded in `entrypoint`'s state-machine frame at an 8-mod-16 offset once `h` takes
+// slot 0). Correct output:
+//   task sees 1.5
+//   handle saw 6 Three Rivers
+// Pre-fix (default optimized build, `main` at ec014d8): signal 11 — same `movaps`
+// fault on the whole-struct spawn copy from the misaligned frame region.
+shape Scene {
+  name: string
+  width: int
+  scale: number
+}
+
+function render(scene: Scene) -> int {
+  wait sleep(5)
+  print(`task sees ${scene.scale}`)
+  return scene.width
+}
+
+function entrypoint() -> nothing {
+  let scene: Scene = { name: `Three Rivers`, width: 6, scale: 1.5 }
+  let h = background render(scene)
+  let a = h.receive()
+  print(`handle saw ${a.or(-1)} ${scene.name}`)
+}

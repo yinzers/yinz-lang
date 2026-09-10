@@ -1,10 +1,11 @@
 use std::{collections::HashMap, fmt, io::Write as _};
 
-use ariadne::{Config, Label, Report, ReportKind, Source};
+use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
 
 use crate::{
     bucket::DiagnosticBucket,
     diagnostic::{Diagnostic, Severity},
+    span::SourceSpan,
 };
 
 /// Lazily-parsed source cache: Source objects are only built for files that
@@ -48,6 +49,31 @@ impl<'a> ariadne::Cache<str> for SourceCache<'a> {
     }
 }
 
+/// Keep a span inside its file so ariadne always renders the label (and with it the
+/// WHAT-INSTEAD/WHY note). ariadne drops any label whose offset lies past the source's end,
+/// so a span attached past EOF — the lexer's end-of-input token, a parser recovery that ran
+/// off the last line — would print a bare `Error: …` header and lose its teaching text. A span
+/// that starts past the end is pinned to the file's final byte; an in-range span is untouched
+/// (a genuine zero-width span mid-file stays zero-width). An unknown file is left as-is —
+/// ariadne reports the missing source itself.
+fn clamp_to_source(span: &SourceSpan, sources: &HashMap<String, String>) -> SourceSpan {
+    let Some(text) = sources.get(&span.file) else {
+        return span.clone();
+    };
+    let len = text.len();
+    if span.end <= len {
+        return span.clone();
+    }
+    let (start, end) = if span.start >= len {
+        // Wholly past the end: point at the last byte (or an empty file's start).
+        let start = len.saturating_sub(1);
+        (start, len)
+    } else {
+        (span.start, len)
+    };
+    SourceSpan::new(span.file.clone(), start, end)
+}
+
 fn severity_to_kind(severity: Severity, colors: bool) -> ReportKind<'static> {
     match severity {
         Severity::Error => ReportKind::Error,
@@ -79,7 +105,16 @@ pub fn render(
 ) -> String {
     let mut cache = SourceCache::new(sources);
 
-    let config = Config::default().with_color(colors);
+    // `SourceSpan` offsets are BYTE offsets (the lexer's). ariadne's default index type is
+    // CHAR offsets, so every multi-byte character before a span (an em dash or a box-drawing
+    // rule in a comment, a `→` in a string) pushed the rendered caret forward by the byte
+    // surplus — 3–5 lines into the wrong function in a comment-heavy file — and a span whose
+    // byte offset exceeded the file's CHAR count was silently dropped by ariadne together
+    // with its WHAT-INSTEAD/WHY block (the "last diagnostic loses its teaching text" quirk).
+    // One producer, one fix: tell ariadne the offsets are bytes. `git log --grep=m8-p4`.
+    let config = Config::default()
+        .with_color(colors)
+        .with_index_type(IndexType::Byte);
 
     let mut sorted: Vec<&Diagnostic> = bucket.iter().collect();
     sorted.sort_by_key(|d| (d.severity as u8, d.span.start));
@@ -88,6 +123,7 @@ pub fn render(
 
     for diag in &sorted {
         let report_kind = severity_to_kind(diag.severity, colors);
+        let span = clamp_to_source(&diag.span, sources);
 
         // When a DiagnosticKind is present: use its terse tag as the caret label
         // and move the full what_instead prose into the note alongside why.
@@ -99,14 +135,15 @@ pub fn render(
             (diag.what_instead.clone(), diag.why.clone())
         };
 
-        let mut builder = Report::build(report_kind, diag.span.clone())
+        let mut builder = Report::build(report_kind, span.clone())
             .with_config(config)
             .with_message(&diag.what)
-            .with_label(Label::new(diag.span.clone()).with_message(caret_label))
+            .with_label(Label::new(span).with_message(caret_label))
             .with_note(note_text);
 
         for rel in &diag.related {
-            builder = builder.with_label(Label::new(rel.span.clone()).with_message(&rel.label));
+            let rel_span = clamp_to_source(&rel.span, sources);
+            builder = builder.with_label(Label::new(rel_span).with_message(&rel.label));
         }
 
         if let Err(e) = builder.finish().write(&mut cache, &mut out) {

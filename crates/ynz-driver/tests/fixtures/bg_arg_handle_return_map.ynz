@@ -1,0 +1,23 @@
+// Pin for the `map<K, V>` half of the `HANDLE_RET_KIND_VALUE_HEAP_PTR` classification: a
+// handle-spawned task returns a map it BUILT (maps are never ladder-cloned today — see
+// `prepare_bg_arg_for_ctx`'s per-type table — so this is a release walk that must find
+// nothing). The parent reads the intact map through `h.receive()`; the exact alloc gap proves
+// the heap-pointer return kind neither double-frees nor leaks the delivered map.
+function build(seed: int) -> map<string, int> {
+  wait sleep(1)
+  let m: map<string, int> = {}
+  m.set(`a`, seed)
+  m.set(`b`, seed * 2)
+  return m
+}
+
+function entrypoint() -> nothing {
+  let h = background build(21)
+  wait sleep(50)
+  let got = h.receive()
+  let fallback: map<string, int> = {}
+  let m = got.or(fallback)
+  print(m.count().toString())
+  let b = m.get(`b`).or(-1)
+  print(b.toString())
+}

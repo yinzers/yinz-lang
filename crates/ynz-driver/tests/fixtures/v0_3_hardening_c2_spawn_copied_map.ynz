@@ -1,0 +1,16 @@
+// The spawn de-dup pin, `map` half. `m.copy()` at a `background` argument has ALREADY made
+// the task an independent map; copying it a second time inside the spawn glue minted a whole
+// second clone (header + four buffers) that nothing ever freed. Measured before the fix:
+// 16 allocs / 1 free, against 11 / 1 for the same program without the `.copy()`.
+//
+// The pin is the COMPARISON, not a magic constant: this file and its `_plain` twin must cost
+// the same, because `.copy()` before a spawn asks for exactly what the spawn already does.
+function eat(counts: map<string, int>) -> nothing {
+  print(counts.count())
+}
+
+function entrypoint() -> nothing {
+  let m: map<string, int> = { `a`: 1, `b`: 2 }
+  background eat(m.copy())
+  print(m.count())
+}

@@ -1,7 +1,8 @@
 function entrypoint() -> nothing {
   let ch: channel<int> = channel<int>(4)
   ch.send(7)
-  let v = ch.receive()
+  let got = ch.receive()
+  let v = got.or(0)
   print(v.toString())
   print(`smoke done`)
 }

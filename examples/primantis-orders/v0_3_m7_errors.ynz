@@ -1,0 +1,51 @@
+// v0.3-M7 compile-error gallery (Phase 2 — aliasing-call rejection, FRAGO 002)
+//
+// Every block below intentionally triggers a diagnostic class added in v0.3-M7.
+// Run `ynz build v0_3_m7_errors.ynz` to see all diagnostics.
+// Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
+//
+// Each block has a // WHY: comment naming the diagnostic class.
+
+// An order slip a worker reads while another parameter of the SAME call rewrites it.
+shape OrderSlip {
+  quantity: int
+}
+
+// A sandwich order holding a nested slip — the whole-vs-part overlap trigger below.
+shape SandwichOrder {
+  table: int
+  slip: OrderSlip
+}
+
+function copyQuantity(share source: OrderSlip, lend target: OrderSlip) -> nothing {
+  target.quantity = source.quantity
+}
+
+function swapQuantities(lend first: OrderSlip, lend second: OrderSlip) -> nothing {
+  let held: int = first.quantity
+  first.quantity = second.quantity
+  second.quantity = held
+}
+
+function tallyOrder(lend whole: SandwichOrder, share part: OrderSlip) -> nothing {
+  whole.table = whole.table + part.quantity
+}
+
+function entrypoint() -> nothing {
+  let slip: OrderSlip = { quantity: 2 }
+  let order: SandwichOrder = { table: 6, slip: { quantity: 3 } }
+
+  // WHY: aliasing-call rejection (share + lend) — the same value passed to one call as
+  // both a read-only view and a modified parameter; `lend` means exclusive access.
+  copyQuantity(slip, slip)
+
+  // WHY: aliasing-call rejection (lend + lend) — both positions modify, so each needs
+  // to be the only way the value is reached during the call.
+  swapQuantities(slip, slip)
+
+  // WHY: aliasing-call rejection (whole + part) — `order.slip` is part of `order`, so
+  // a write through the whole reaches the part mid-call.
+  tallyOrder(order, order.slip)
+
+  print(slip.quantity.toString())
+}

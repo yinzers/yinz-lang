@@ -56,6 +56,15 @@ pub struct CheckOutput {
     /// Carried cross-module the same way `suspends_set` is (via the per-fn flag on
     /// the export table).
     pub does_real_work_set: std::collections::HashSet<String>,
+    /// The transitive effective-ownership fixpoint (v0.3-M7 Phase 2, FRAGO 002).
+    ///
+    /// Codegen's `declare_function` consults this — never the raw AST ownership
+    /// modifier — when emitting LLVM `readonly`/`noalias` parameter attributes
+    /// (authoritative-derivation: consume the computed answer downstream). A bare
+    /// parameter the body mutates is `Writes` here; defaulting it to `share` in
+    /// codegen emitted a FALSE `readonly` the optimizer exploited into a silent
+    /// miscompile (RED fixture `v0_3_m7_p1_bare_param_mutation.ynz`).
+    pub effective_ownership: crate::effective_ownership::EffectiveOwnershipReport,
 }
 
 /// Cycle-initial placeholder returned by salsa when `module_signatures_query` is the
@@ -229,15 +238,18 @@ fn check_query_cycle_initial(
                 span: ynz_diagnostics::SourceSpan::new("", 0, 0),
             },
             expr_types: std::collections::HashMap::new(),
+            back_edge_yield_admitted: std::collections::HashSet::new(),
             background_arg_inferred_ownership: std::collections::HashMap::new(),
+            background_arg_sole_holder: std::collections::HashMap::new(),
             cross_thread_padded_shapes: std::collections::HashSet::new(),
         },
         mono_table: crate::generics::MonomorphizationTable {
-            entries: std::collections::HashMap::new(),
+            entries: std::collections::BTreeMap::new(),
         },
         diagnostics: DiagnosticBucket::new(),
         suspends_set: std::collections::HashSet::new(),
         does_real_work_set: std::collections::HashSet::new(),
+        effective_ownership: crate::effective_ownership::EffectiveOwnershipReport::empty(),
     })
 }
 
@@ -409,6 +421,51 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         }
     }
 
+    // Transitive effective-ownership fixpoint (v0.3-M3b Phase 4) — HOISTED above the body
+    // check in v0.3-M8 Phase 4: it depends only on the parse and the signature tables, both
+    // in hand here, and the body check now CONSUMES it (the transfer decision reads
+    // `consumed[fn][i]` so a relay chain missing `give` is reported at every frame in one
+    // compile, and `returns_fresh[fn]` so a call result bound by `let` has a provenance —
+    // `IMP-ownership.md` "Where the authority lives"). Classifies every parameter as
+    // `Reads`/`Unknown`/`Writes` across the whole local call graph. Consumers:
+    //   - `check(...)` below: `check_transfer` at every transfer sink;
+    //   - Part 2 further below: reject `share` params that are written transitively (the
+    //     `design/concurrency.md` line 651 no-escalation rule, extended past the direct
+    //     cases `check.rs` already catches).
+    //
+    // Codegen does NOT consume this fixpoint. The auto-parallel write-effect decision uses
+    // the type-based conservative floor in `ynz-codegen/src/independence.rs` (any mutable-heap
+    // arg is a potential write, Golden Rule 5 > Rule 10) — sound by construction, with no
+    // name-based classifier to drift out of sync with this fixpoint.
+    //
+    // `declared_writes` seeds the fixpoint with each function's explicit `lend`/`give`
+    // positions (local AND imported — an imported declared-write position is a definite
+    // write even without a body). `imported_fn_names` marks the cross-module boundary so a
+    // flow into an imported callee at a non-declared position resolves to `Unknown` (sound
+    // conservative), never a spurious `Reads`.
+    let mut declared_writes = effective_ownership::declared_write_positions(&parse.module);
+    for (name, sig) in &sig_output.imported_fns {
+        // Local definitions already have their declared writes from the module walk.
+        if declared_writes.contains_key(name) {
+            continue;
+        }
+        let mut set = std::collections::HashSet::new();
+        for (i, ownership) in sig.param_ownerships.iter().enumerate() {
+            if matches!(
+                ownership,
+                Some(ynz_ast::nodes::OwnershipModifier::Lend)
+                    | Some(ynz_ast::nodes::OwnershipModifier::Give)
+            ) {
+                set.insert(i);
+            }
+        }
+        declared_writes.insert(name.clone(), set);
+    }
+    let effective_ownership_report =
+        effective_ownership::analyze(&parse.module, &declared_writes, &imported_fn_names, &|t| {
+            sig_output.shape_table.resolve_ast_type(t)
+        });
+
     let (typed, mono_table, check_diags, referenced_names) = check(
         &parse.module,
         &merged_sig_table,
@@ -417,6 +474,8 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         &sig_output.generic_shape_table,
         &PrimitiveIntrinsicTable::m6().with_m2_internals(),
         &sig_output.imported_options,
+        &effective_ownership_report,
+        &imported_fn_names,
     );
     for d in check_diags.into_iter() {
         all_diags.push(d);
@@ -452,44 +511,6 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
             }
         }
     }
-
-    // Transitive effective-ownership fixpoint (v0.3-M3b Phase 4). Classifies every
-    // parameter as `Reads`/`Unknown`/`Writes` across the whole local call graph. One
-    // consumer reads it:
-    //   - Part 2 below: reject `share` params that are written transitively (the
-    //     `design/concurrency.md` line 651 no-escalation rule, extended past the direct
-    //     cases `check.rs` already catches).
-    //
-    // Codegen does NOT consume this fixpoint. The auto-parallel write-effect decision uses
-    // the type-based conservative floor in `ynz-codegen/src/independence.rs` (any mutable-heap
-    // arg is a potential write, Golden Rule 5 > Rule 10) — sound by construction, with no
-    // name-based classifier to drift out of sync with this fixpoint.
-    //
-    // `declared_writes` seeds the fixpoint with each function's explicit `lend`/`give`
-    // positions (local AND imported — an imported declared-write position is a definite
-    // write even without a body). `imported_fn_names` marks the cross-module boundary so a
-    // flow into an imported callee at a non-declared position resolves to `Unknown` (sound
-    // conservative), never a spurious `Reads`.
-    let mut declared_writes = effective_ownership::declared_write_positions(&parse.module);
-    for (name, sig) in &sig_output.imported_fns {
-        // Local definitions already have their declared writes from the module walk.
-        if declared_writes.contains_key(name) {
-            continue;
-        }
-        let mut set = std::collections::HashSet::new();
-        for (i, ownership) in sig.param_ownerships.iter().enumerate() {
-            if matches!(
-                ownership,
-                Some(ynz_ast::nodes::OwnershipModifier::Lend)
-                    | Some(ynz_ast::nodes::OwnershipModifier::Give)
-            ) {
-                set.insert(i);
-            }
-        }
-        declared_writes.insert(name.clone(), set);
-    }
-    let effective_ownership_report =
-        effective_ownership::analyze(&parse.module, &declared_writes, &imported_fn_names);
 
     // Part 2 — reject `share` params written TRANSITIVELY through a callee (full
     // `design/concurrency.md` line 651 enforcement). The DIRECT cases (a `share` body that
@@ -527,6 +548,50 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         ));
     }
 
+    // v0.3-M7 Phase 2 (FRAGO 002, Patrick-directed 2026-07-16) — reject calls that pass
+    // the same value (or overlapping pieces of one value) into two parameter positions
+    // where at least one position can modify it. `lend` means exclusive mutable access
+    // for the duration of the call (Golden Rule 5: wrong = caught at compile time).
+    // Typeck previously accepted `relay(h, h)` against `(share, lend)` while codegen
+    // claimed LLVM `noalias` on both parameters — a false claim the optimizer exploits
+    // into a silent miscompile (RED fixture `v0_3_m7_p1_share_lend_alias.ynz`).
+    let aliasing_violations = effective_ownership::find_aliasing_call_violations(
+        &parse.module,
+        &effective_ownership_report,
+        &sig_output.sig_table.fns,
+        &sig_output.imported_fns,
+    );
+    for v in aliasing_violations {
+        let what = if v.first_path == v.second_path {
+            format!(
+                "`{path}` is passed to `{callee}` twice in the same call — once as {d1} and once as {d2}.",
+                path = v.first_path,
+                callee = v.callee_name,
+                d1 = v.first_kind.describe(),
+                d2 = v.second_kind.describe(),
+            )
+        } else {
+            format!(
+                "`{longer}` is part of `{shorter}`, and both are passed to `{callee}` in the same call — one as {d1}, the other as {d2}.",
+                longer = if v.first_path.len() >= v.second_path.len() { &v.first_path } else { &v.second_path },
+                shorter = if v.first_path.len() >= v.second_path.len() { &v.second_path } else { &v.first_path },
+                callee = v.callee_name,
+                d1 = v.first_kind.describe(),
+                d2 = v.second_kind.describe(),
+            )
+        };
+        all_diags.push(Diagnostic::error(
+            v.span,
+            what,
+            format!(
+                "Give one of the two arguments its own copy — call `.copy()` on it — or restructure so `{path}` reaches `{callee}` only once.",
+                path = v.first_path,
+                callee = v.callee_name,
+            ),
+            "A parameter that modifies or takes over a value needs to be the only way that value is reached during the call. Because both arguments lead to the same value, a change through one would show up through the other mid-call — the compiler builds fast code on the promise that this cannot happen, so it reports the conflict here instead of letting the program's results become unpredictable.",
+        ));
+    }
+
     // Export the suspends set so codegen can read it directly instead of deriving
     // it from sig_table (which is from module_signatures_query, pre-analysis).
     let suspends_set: std::collections::HashSet<String> = may_block_result
@@ -541,6 +606,7 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         diagnostics: all_diags,
         suspends_set,
         does_real_work_set: does_real_work_result,
+        effective_ownership: effective_ownership_report,
     })
 }
 
@@ -1057,6 +1123,9 @@ pub(crate) fn compute_cpu_promotions(
                 &union_aliases,
                 expr_types,
                 kernel_mode,
+                // M3d decline probe: baseline crossing set, never the Phase 6 widening
+                // (only back_edge_yield_admission probes with true).
+                false,
             ) {
                 // Every promoted candidate reachable from `f` is a cause; remove all.
                 let reachable =

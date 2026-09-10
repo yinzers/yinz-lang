@@ -1,0 +1,23 @@
+// WHY: v0.3-M8 Phase 4 — contract item 6: `close()` wakes every recorded receive-waiter. The
+// spawner parks on `receive()` with nothing buffered; a task closes the channel 30ms later.
+// The parked receiver must re-poll and observe `none` — never stay parked. Without the wake
+// this program hangs forever (the pre-M8 "bare channel never closes" class this milestone
+// exists to remove); the test's watchdog is the liveness gate. RED today: `.close()` is an
+// unknown method.
+//
+// Expected output:
+//   woken by close
+function closer(lend wire: channel<int>) -> nothing {
+  wait sleep(30)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  background closer(wire)
+  let got = wire.receive()
+  if (got.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`woken by close`)
+}

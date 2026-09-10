@@ -1,0 +1,50 @@
+// WHY: multi-vtable determinism fixture (v0.3-M7 R10 / FRAGO 013). Three (shape, contract)
+// pairs make `emit_vtable_globals`'s iteration order observable in the emitted IR/binary:
+// unsorted HashMap iteration flapped the vtable-global emission order run-to-run. Built
+// under --no-optimize by build_determinism.rs so DCE cannot mask the unreferenced-global
+// ordering. Each shape follows its OWN contract (distinct method names) so every vtable
+// slot resolves to a distinct standalone function.
+shape Sailable {
+  sail(share self) -> nothing
+}
+
+shape Haulable {
+  haul(share self) -> nothing
+}
+
+shape Dockable {
+  dock(share self) -> nothing
+}
+
+shape Boat follows Sailable {
+  name: string
+}
+
+shape Barge follows Haulable {
+  cargo: string
+}
+
+shape Pier follows Dockable {
+  address: string
+}
+
+function sail(share self: Boat) -> nothing {
+  print(self.name)
+}
+
+function haul(share self: Barge) -> nothing {
+  print(self.cargo)
+}
+
+function dock(share self: Pier) -> nothing {
+  print(self.address)
+}
+
+function entrypoint() -> nothing {
+  let boat: Boat = { name: `gertrude` }
+  let barge: Barge = { cargo: `steel coils` }
+  let pier: Pier = { address: `1 Water St` }
+  boat.sail()
+  barge.haul()
+  pier.dock()
+}

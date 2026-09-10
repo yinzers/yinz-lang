@@ -1,0 +1,48 @@
+// fr23 regression fixture — shape C2, GENERIC-callee variant: a call-materialized
+// background-spawn receiver whose callee is a GENERIC function returning a shape
+// (`background identity(c).haul()` with `identity<T>(give T) -> T`). Phase 9 security
+// fix-round, live-reproduced 2026-07-18: generic functions live in
+// `generic_fn_table.fns` (signatures.rs), NOT `sig_table.fns`, so typeck's C2
+// admission predicate (`bg_arg_is_materialized_shape_temp`, check.rs) silently missed
+// the callee, the receiver fell through to `BgArgFreeKind::None`, and the task rode a
+// raw pointer into the spawner's dead frame — the exact fr23 UAF Phase 9 closed for
+// the non-generic callee.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed before the fix (2026-07-18): O0 printed stomp-junk values
+// (`haul: 888777/888888` / `haul: 0/888777`); optimized printed nondeterministic
+// garbage (`haul: 1/140723670713856`-class values).
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  let c: Cargo = { weight: 111, tag: 222 }
+  background identity(c).haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

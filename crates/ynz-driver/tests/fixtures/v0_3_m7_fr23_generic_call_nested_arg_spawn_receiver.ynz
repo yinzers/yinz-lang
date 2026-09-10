@@ -1,0 +1,56 @@
+// fr23 regression fixture — shape C2, GENERIC-callee variant with a NON-IDENT
+// argument (M7 cumulative completion-gate round 2, item 3, 2026-07-18): a
+// call-materialized background-spawn receiver whose callee is a GENERIC function
+// (`identity<T>`) and whose type param `T` is resolvable ONLY from a NESTED CALL
+// argument (`makeCargo()`), never from a plain ident.
+//
+// `bg_arg_is_materialized_shape_temp`'s C2 admission arm seeds its substitution from
+// argument expressions via `bg_arg_type_readonly` (check.rs). Before this fix, that
+// seeding loop consulted ONLY `Expr::Ident` args (`binding_ty_narrowed`), so a
+// non-ident argument like `makeCargo()` left `T` an unresolved TypeParam, the C2
+// predicate returned false, the receiver was never recorded `Give`, and it rode a raw
+// pointer into the spawned task's dead frame — the exact fr23 UAF class the sibling
+// `v0_3_m7_fr23_generic_call_materialized_spawn_receiver.ynz` fixture already locks
+// for the plain-ident-argument case.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed before this fix (2026-07-18, live-reproduced): default/optimized tier
+// printed nondeterministic garbage (`haul: 958864480/958864448`, `haul: 0/1` across
+// repeated runs); O0 printed `haul: 0/1`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  background identity(makeCargo()).haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

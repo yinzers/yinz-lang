@@ -1,0 +1,43 @@
+// fr23 regression fixture — shape C2 through the STATE-MACHINE spawn arm: the callee
+// `haul` genuinely suspends (`wait sleep`), so `background makeCargo().haul()` routes
+// through `lower_sm_background_spawn` (emit.rs — the `suspend_set` routing in
+// `lower_expr_background`), NOT the CPU spawn arm the original
+// `v0_3_m7_fr23_call_materialized_spawn_receiver.ynz` fixture exercises. Phase 9
+// fix-round (code-reviewer, 2026-07-18): both arms call the same
+// `prepare_bg_arg_for_ctx` heap-upgrade gate, but until this fixture that was an
+// inspection claim for the B'/C2 receiver shapes, not a test.
+//
+// Correct output must contain: `haul: 111/222`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function makeCargo() -> Cargo {
+  return { weight: 111, tag: 222 }
+}
+
+function haul(self: Cargo) -> nothing {
+  wait sleep(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner() -> nothing {
+  background makeCargo().haul()
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  spawner()
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

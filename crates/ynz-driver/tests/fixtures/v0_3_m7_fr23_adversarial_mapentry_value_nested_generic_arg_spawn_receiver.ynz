@@ -1,0 +1,59 @@
+// fr23 ADVERSARIAL construction — FRAGO 022 verify step 3 (2026-07-18). A
+// genuinely NEW shape not covered by any prior fr23 fixture: a `MapEntry<K,
+// Cargo>.value` used as the ARGUMENT of a GENERIC call
+// (`identity(entry.value).haul()`), rather than as the UFCS spawn RECEIVER
+// itself (FRAGO 021 finding 2's `entry.value.haul()`). This exercises the
+// SUBSTITUTION-SEEDING path, not the top-level/UFCS-receiver admission path
+// finding 2 exercised.
+//
+// `bg_expr_resolved_type`'s `FieldAccess { field: "value", .. }` arm is (and
+// remains, unchanged by FRAGO 022) narrowly scoped to a `maybe<Shape>`
+// producer — `entry`'s narrowed type is `Type::MapEntry`, not `Type::Maybe`, so
+// the arm's match falls to `_ => None`, exactly the same gap finding 2
+// diagnosed, just reached from a different call site (seeding a generic's type
+// parameter instead of the top-level admission question). Under FRAGO 022,
+// that `None` is read FAIL-CLOSED: `identity`'s `T` never gets seeded, and the
+// outer call defaults to `Give` — no special-case arm added for this exact
+// shape.
+//
+// Correct output must contain: `haul: 111/222`.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner(fleet: map<int, Cargo>) -> nothing {
+  for (entry in fleet) {
+    if (entry.key == 1) {
+      background identity(entry.value).haul()
+    }
+  }
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  let ca: Cargo = { weight: 111, tag: 222 }
+  let fleet: map<int, Cargo> = {}
+  fleet.set(1, ca)
+  spawner(fleet)
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

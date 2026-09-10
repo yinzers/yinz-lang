@@ -33,7 +33,7 @@ proptest! {
         // Semantic round-trip: parse(format(emit(ast))) ~= parse(emit(ast)) modulo trivia.
         let db_orig = ynz_parser::CompilerDb::default();
         let sf_orig =
-            ynz_parser::SourceFile::new(&db_orig, "<orig>".into(), source.clone().into());
+            ynz_parser::SourceFile::new(&db_orig, "<orig>".into(), source.clone());
         let orig_parse = ynz_parser::parse_query(&db_orig, sf_orig);
 
         if !orig_parse.diagnostics.is_empty() {
@@ -41,7 +41,7 @@ proptest! {
         }
 
         let db_fmt = ynz_parser::CompilerDb::default();
-        let sf_fmt = ynz_parser::SourceFile::new(&db_fmt, "<fmt>".into(), formatted.clone().into());
+        let sf_fmt = ynz_parser::SourceFile::new(&db_fmt, "<fmt>".into(), formatted.clone());
         let fmt_parse = ynz_parser::parse_query(&db_fmt, sf_fmt);
 
         prop_assert!(

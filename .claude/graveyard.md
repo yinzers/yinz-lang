@@ -666,3 +666,49 @@ array_elem_get_into
 **Severity**: warning (silent perf forfeiture, not a miscompile — the output is correct, just coarser than the analysis proved necessary; promote to critical if a future consumer relies on the selective path for correctness rather than only perf).
 
 **Originating incident**: 2026-07-04, v0.3-M5 Phase 6 boundary review (FRAGO 020). The performance reviewer found `hot_fields` computed by Phase 4 but ignored by Phase 5's full-element gather; the CODE choice was ruled JUSTIFIED (a true selective gather needs every full-fidelity consumer re-audited against a "cold fields may be garbage" invariant — out of Phase 5's charter), but the Future-Requirements ledger's SILENCE on the narrower fix was the real gap, filed as FR#15. See [`.claude/planning/active/2026-07-03-v0-3-m5-auto-soa/audit.md`](planning/active/2026-07-03-v0-3-m5-auto-soa/audit.md) FRAGO 020.
+
+---
+
+## Background-Spawn Callee Resolver Reads `sig_table` Only, Skips the `generic_fn_table` Fallback — 2026-07-19
+
+**Scope**: `crates/ynz-typeck/src/check.rs` — any resolver/predicate function whose job is "resolve a callee name (or a nested call's callee) to its signature/return type," specifically the `background`-spawn admission family (`bg_arg_is_materialized_shape_temp`, `bg_arg_type_readonly`, `bg_call_return_type_readonly`, `bg_ufcs_return_type`) and any FUTURE resolver added to that family or elsewhere in the file that needs the same "what does calling this name return" answer. This is a project-scoped SUB-PATTERN of [`.claude/rules/authoritative-derivation.md`](rules/authoritative-derivation.md) — narrower than that rule's general "don't re-derive" principle: specifically, a resolver that consults only ONE half of a required PAIRED lookup (concrete `sig_table.fns` + generic `generic_fn_table.fns`), silently treating the unconsulted table as if it doesn't exist.
+
+**Exemption**:
+- A resolver that documents (in a comment on the function) an invariant that its input can never be a generic callee — e.g. it runs downstream of a check that already rejected generic callees — so `sig_table`-only lookup is provably complete for that call site.
+- A resolver that DELEGATES to an already-two-table-aware resolver (calls `bg_call_return_type_readonly`, `bg_ufcs_return_type`, or the borrow-reject check's `resolved` lookup at line ~3408) rather than performing its own `.fns.get` — delegation is the correct shape, not a second derivation.
+- A lookup whose purpose is NOT "resolve this callee's signature/return type" but something orthogonal (e.g. "does this exact name exist as a concrete signature at all," used for a diagnostic candidate list) — `sig_table`-only is correct there because the generic table is a genuinely different question.
+
+**Last verified**: 2026-07-19
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-typeck/src/check\.rs$
+fn bg_
+self\.sig_table\.fns\.get
+self\.generic_fn_table\.fns\.get
+```
+
+**Cause**: during the fr23 confirmed-live use-after-free saga (`background`-spawn argument handling, plan-id `2026-07-04-v0-3-m7-optimizer-pipeline`, FRAGO 016 through 025), the SAME sub-mistake shipped twice in a row, independent of the saga's other (enumeration-vs-default-deny) architecture problem:
+- **FRAGO 018** (`executor-2026-07-18-completion-gate-round2-cleanup`): `bg_arg_type_readonly`'s nested-call arm resolved a nested-call argument's callee via `self.sig_table.fns.get(fname)` ONLY. It admitted the narrow case it was built for (a nested call whose callee is CONCRETE), but any nested call whose callee is itself GENERIC still fell through un-admitted — even though a SIBLING function in the same file (the outer `Expr::Call` arm, `crates/ynz-typeck/src/check.rs:3833` and `:3891`; the borrow-reject check's `resolved` lookup, `:3408`–`:3418`) already resolved exactly this kind of name via the two-table `.or_else` split.
+- **FRAGO 019** (`executor-2026-07-18-completion-gate-round3-fr23-recursive`): confirmed the SAME shape recurred one call-nesting level deeper — `background identity(identity(makeCargo())).haul()` reproduced the identical fr23 UAF signature (`haul: 888888/222`, `haul: 0/0`, etc. — nondeterministic garbage / stomp-sentinel values across 3+ repeated runs at both optimizer tiers) because `bg_arg_type_readonly`'s nested-call arm STILL only checked `sig_table.fns.get`, with no `generic_fn_table` fallback, even after FRAGO 018's fix. The eventual close (`bg_call_return_type_readonly`, a single recursive resolver reusing the SAME `sig_table` → `generic_fn_table` two-table split already used by the outer `Expr::Call` arm and the borrow-reject check) is now the correct template — see `crates/ynz-typeck/src/check.rs:2052`–`:2068`.
+
+Both instances are diff-visible, mechanical omissions: a resolver reads one table, a sibling in the same file already reads both, and nobody cross-checked the two against each other before shipping. The saga's final default-deny redesign (FRAGO 022/023) closed the OTHER flavor of this saga (unclassified/misclassified `Expr` shapes via a non-exhaustive match) but does **not** structurally prevent this two-table-pair flavor — a brand-new resolver checking only `sig_table` still compiles clean today. This corpse is the standing check against that residual, still-open gap.
+
+**Detection signature**: a new or edited function in `crates/ynz-typeck/src/check.rs` calls `self.sig_table.fns.get(...)` to resolve a callee name to a signature/return type, and the SAME function body contains NO corresponding `self.generic_fn_table.fns.get(...)` call (directly, or via `.or_else(...)` on the `sig_table` lookup, or via delegation to a resolver that itself does the two-table split) — while at least one other function in the file already performs the two-table split for the same "resolve callee name → signature" job (the outer `Expr::Call` arm at `:3833`/`:3891`, the borrow-reject check's `resolved` at `:3408`–`:3418`, or `bg_call_return_type_readonly` at `:2052`–`:2068`). Grep for `sig_table.fns.get` or `.fns.get` calls inside a function whose body has no sibling `generic_fn_table.fns.get`/`.or_else` within the same function.
+
+**Constraint**: any resolver in `check.rs` that must answer "what does calling this name return" (or an equivalent callee-signature question) consults BOTH `sig_table.fns` (concrete) and `generic_fn_table.fns` (generic), using the established `.or_else` fallback template already used at the borrow-reject check (`:3408`–`:3418`) and centralized in `bg_call_return_type_readonly` (`:2052`–`:2068`):
+```rust
+self.sig_table.fns.get(name)
+    .map(|s| /* concrete answer */)
+    .or_else(|| self.generic_fn_table.fns.get(name).map(|s| /* generic answer, substituted */))
+```
+A new resolver either follows this template directly or delegates to a function that already does — never a THIRD, narrower hand-roll that reads `sig_table` alone "because the generic case doesn't come up in the case I'm fixing today." That reasoning is exactly what produced FRAGO 018 (narrow to a concrete-callee bugfix) and let FRAGO 019 (a generic callee, one level deeper) slip through unnoticed.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] For each diff to `crates/ynz-typeck/src/check.rs` adding or editing a function whose body contains `self.sig_table.fns.get(`: check whether the SAME function body also contains `self.generic_fn_table.fns.get(` (directly or via `.or_else`) OR calls `bg_call_return_type_readonly`/`bg_ufcs_return_type` (a resolver already known to do the two-table split). Neither present → WARNING: "resolver consults sig_table only — does a generic callee need the generic_fn_table fallback too? See the FRAGO 018/019 precedent."
+- [ ] For each diff adding a NEW function whose name or doc-comment implies it resolves a callee's type/signature (name matches `bg_.*type|bg_.*return|resolve.*callee|resolve.*call`): verify it either reuses `bg_call_return_type_readonly`/`bg_ufcs_return_type` or independently implements the `sig_table` → `generic_fn_table` `.or_else` pair. Missing both → WARNING.
+
+**Severity**: critical — this is the fr23 use-after-free class: a background-spawned argument's temporary gets freed while the parent frame still expects it live, producing nondeterministic garbage output (confirmed via 3-7 repeated live runs at both optimizer tiers in both FRAGO 018 and FRAGO 019). Not a lint nitpick — a silently un-admitted case reopens a confirmed-live memory-safety bug for that specific callee shape.
+
+**Originating incident**: 2026-07-18, plan `2026-07-04-v0-3-m7-optimizer-pipeline` (`.claude/planning/active/2026-07-04-v0-3-m7-optimizer-pipeline/audit.md`, FRAGO 018 and FRAGO 019 — read alongside the `## AAR — 2026-07-19` section for full saga context). An 8-round memory-safety fix saga (FRAGO 016 through 025) on `background`-spawn argument admission hit the SAME sub-mistake twice: FRAGO 018 extended `bg_arg_type_readonly`'s nested-call arm to resolve a CONCRETE nested callee via `sig_table.fns.get` only, closing the confirmed-live repro `background identity(makeCargo()).haul()`; FRAGO 019, one round later, found the identical helper still fell through for a GENERIC nested callee (`background identity(identity(makeCargo())).haul()`) because the `generic_fn_table` fallback that the file's OTHER callee-resolution sites (the outer `Expr::Call` arm, the borrow-reject check) already had was never added to this one. FRAGO 019 fixed it for good by collapsing both hand-rolled derivations into one recursive, two-table-aware function (`bg_call_return_type_readonly`) — but the underlying human/agent tendency ("just add the fallback here, for this one case") is what this corpse exists to catch on the NEXT resolver, before a third occurrence needs a third fix round.

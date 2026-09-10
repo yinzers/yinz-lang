@@ -1,0 +1,33 @@
+# v0.3-M7 Phase 7 Step 3 — hand-authored Rust equivalents of the A/B workloads.
+#
+# Placement decision (recorded per the Phase 7 provenance convention): this
+# package is deliberately NOT a member of the root cargo workspace. Workspace
+# membership means "binaries that ship together" in this repo, and these three
+# programs are bench-comparison scaffolding — driven by
+# opt_pipeline_calibration.rs at bench run time, never shipped. The empty
+# [workspace] table below is what detaches it: cargo treats this manifest as its
+# own workspace root, so the parent workspace neither builds, tests, nor lints
+# it, and `cargo {test,clippy,build} --workspace` behavior is unchanged. The
+# bench builds it explicitly via `cargo build --manifest-path`.
+#
+# Two profiles, both benched and both reported (labeled) in the raw-numbers
+# record — the overflow-semantics decision:
+#   - `release`: idiomatic Rust as actually shipped (overflow-checks off). This
+#     is the PRIMARY comparison: "as fast as Rust" means Rust as real projects
+#     build it.
+#   - `release-checked`: overflow-checks = true — the semantics-matched
+#     SECONDARY comparison, because Yinz always overflow-checks int arithmetic;
+#     this quantifies how much of any gap is that semantic difference rather
+#     than optimizer quality.
+
+[package]
+name = "rust-equivalents"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[profile.release-checked]
+inherits = "release"
+overflow-checks = true

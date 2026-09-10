@@ -1,0 +1,75 @@
+// fr23 CONFIRMED-LIVE UAF — round 6 (FRAGO 021), a NEW shape found by this
+// round's mandated exhaustive semantic audit of `bg_expr_resolved_type`
+// (`crates/ynz-typeck/src/check.rs`), NOT the originally-reported StructLit bug.
+//
+// `bg_expr_resolved_type`'s `FieldAccess { field: "value", .. }` arm only
+// resolves a `maybe<Shape>.value` access on an `Expr::Ident` base (the B'
+// shape, FRAGO 016) — but `field == "value"` ALSO matches `MapEntry<K,
+// Shape>.value` (a for-loop's map-iteration entry variable, `infer_field_access`
+// ~check.rs:5970-5985), a COMPLETELY DIFFERENT non-flow-sensitive field access
+// with no `.exists()` narrowing requirement. The classifier's guard pattern
+// (`let Expr::Ident(base, _) = receiver.as_ref() else { return None }` then
+// `match self.binding_ty_narrowed(base) { Some(Type::Maybe{inner}) ... _ =>
+// None }`) silently falls through to `None` for a `MapEntry`-typed base,
+// because `binding_ty_narrowed("entry")` resolves to `Type::MapEntry{..}`, not
+// `Type::Maybe{..}`.
+//
+// Root cause (codegen side, confirmed by reading `crates/ynz-codegen/src/emit.rs`
+// lines ~14663-14730): a `for (entry in someMap)` loop's Shape-typed `.value`
+// bits are the pointer to a PER-SITE out-buffer allocated ONCE in the function's
+// entry block (`cg.array_elem_out_buffer`, "mf_val") and REWRITTEN every
+// iteration by `map_iter_get_into` — the exact same "per-site slot rewritten
+// every iteration and dead with the spawner's frame" hazard already documented
+// (and fixed, for the MapEntry-as-a-whole-arg case) at emit.rs ~16747-16765.
+// `entry.value` used AS A SPAWN RECEIVER (rather than `entry` itself) rides this
+// same dead/rewritten buffer's raw pointer into the task, un-upgraded.
+//
+// Correct output must contain: `haul: 111/222`.
+// Observed live (2026-07-18, FRAGO 021, this exact fixture, 6 runs each tier):
+// O0 deterministic 6/6 `haul: 777888/222` (spawner()'s per-site value out-buffer
+// is reused by the corresponding named-return-position bytes stomp() writes,
+// deterministically overwriting `weight` while `tag` survives in this repro's
+// exact layout). Optimized tier: leaked stack addresses, nondeterministic
+// across runs (classic UAF signature, e.g. `haul: 140723349999696/508376256`).
+//
+// NOT YET FIXED — see FRAGO 021 (this is one of 3 additional distinct
+// wrong/incomplete arms found beyond the originally-reported StructLit bug,
+// crossing this round's own "3+ wrong arms" STOP condition). Deferred pending
+// the conductor's architectural decision. Documented RED per no-duct-tape.md's
+// legitimate-inverse pattern.
+
+shape Cargo {
+  weight: int
+  tag: int
+}
+
+function haul(self: Cargo) -> nothing {
+  sleepBlocking(150)
+  print(`haul: ${self.weight}/${self.tag}`)
+}
+
+function spawner(fleet: map<int, Cargo>) -> nothing {
+  for (entry in fleet) {
+    if (entry.key == 1) {
+      background entry.value.haul()
+    }
+  }
+}
+
+function stomp() -> nothing {
+  let junkA: Cargo = { weight: 777777, tag: 777888 }
+  let junkB: Cargo = { weight: 888777, tag: 888888 }
+  let sum: int = junkA.weight + junkB.tag
+  print(`stomp: ${sum}`)
+}
+
+function entrypoint() -> nothing {
+  let ca: Cargo = { weight: 111, tag: 222 }
+  let fleet: map<int, Cargo> = {}
+  fleet.set(1, ca)
+  spawner(fleet)
+  stomp()
+  stomp()
+  sleepBlocking(400)
+  print(`main done`)
+}

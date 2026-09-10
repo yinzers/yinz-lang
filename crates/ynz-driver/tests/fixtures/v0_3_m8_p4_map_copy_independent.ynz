@@ -1,0 +1,26 @@
+// WHY: v0.3-M8 Phase 4 step 3a — the `map<K, V>` `.copy()` INDEPENDENCE lock, in the shape of
+// `m5_p5_copy_aos_independent.ynz` (the array lock). Before `ynz_map_clone` and the
+// `Type::BuiltinMap` arm of the `PostfixOpKind::Copy` lowering land, `table.copy()` falls
+// through codegen's `_ => Ok(recv_val)` catch-all and returns the receiver's OWN pointer — an
+// alias no-op (FRAGO 014's stub class, still open for maps). A fixture that only checks
+// `.copy()` compiles proves nothing; this one mutates the ORIGINAL after the copy and asserts
+// the copy kept the PRE-mutation values. Authored and committed RED on the alias no-op (the
+// copy observes the mutation: `copy b: 99`), flipped GREEN by the commit that lands the clone.
+//
+// Expected output:
+//   original b: 99
+//   copy b: 20
+//   original count: 3
+//   copy count: 2
+function entrypoint() -> nothing {
+  let table: map<string, int> = { `a`: 10, `b`: 20 }
+  let snapshot = table.copy()
+  table.set(`b`, 99)
+  table.set(`c`, 30)
+  let ob = table.get(`b`).or(-1)
+  let cb = snapshot.get(`b`).or(-1)
+  print(`original b: ${ob.toString()}`)
+  print(`copy b: ${cb.toString()}`)
+  print(`original count: ${table.count().toString()}`)
+  print(`copy count: ${snapshot.count().toString()}`)
+}

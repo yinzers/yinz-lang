@@ -131,29 +131,41 @@ impl FileWatcher {
     }
 }
 
-/// Read the debounce window from `YNZ_WATCH_DEBOUNCE_MS`, falling back to 100ms.
+/// The debounce window used when `YNZ_WATCH_DEBOUNCE_MS` is unset or unusable.
+const DEFAULT_DEBOUNCE_MS: u64 = 100;
+
+/// Read the debounce window from `YNZ_WATCH_DEBOUNCE_MS`, falling back to
+/// [`DEFAULT_DEBOUNCE_MS`].
 ///
-/// Invalid values (non-numeric, zero) are silently ignored and the default is used.
-/// A warning is printed so the user knows their env var didn't take effect.
+/// Invalid values (non-numeric, zero) fall back to the default, and a warning is printed so
+/// the user knows their env var didn't take effect. This is the only place the process
+/// environment is touched; the decision itself lives in the pure [`debounce_ms_from`], which
+/// is what the unit tests exercise — so no test ever mutates the process-global environment
+/// (that shared state made the old tests race each other under the parallel runner).
 pub fn read_debounce_ms() -> u64 {
-    const DEFAULT: u64 = 100;
-    match std::env::var("YNZ_WATCH_DEBOUNCE_MS") {
-        Ok(s) => match s.parse::<u64>() {
-            Ok(0) => {
-                eprintln!(
-                    "ynz watch: YNZ_WATCH_DEBOUNCE_MS=0 is not valid (minimum 1); using {DEFAULT}ms"
-                );
-                DEFAULT
-            }
-            Ok(v) => v,
-            Err(_) => {
-                eprintln!(
-                    "ynz watch: YNZ_WATCH_DEBOUNCE_MS={s:?} is not a valid number; using {DEFAULT}ms"
-                );
-                DEFAULT
-            }
-        },
-        Err(_) => DEFAULT,
+    let raw = std::env::var("YNZ_WATCH_DEBOUNCE_MS").ok();
+    match debounce_ms_from(raw.as_deref()) {
+        Ok(ms) => ms,
+        Err(warning) => {
+            eprintln!("ynz watch: {warning}; using {DEFAULT_DEBOUNCE_MS}ms");
+            DEFAULT_DEBOUNCE_MS
+        }
+    }
+}
+
+/// Decide the debounce window from the raw `YNZ_WATCH_DEBOUNCE_MS` value (`None` = unset).
+///
+/// Pure: no I/O, no environment access. `Ok(ms)` is the window to use (the default when the
+/// variable is unset); `Err(reason)` means the value was present but unusable — the caller
+/// warns with `reason` and falls back to [`DEFAULT_DEBOUNCE_MS`].
+fn debounce_ms_from(raw: Option<&str>) -> std::result::Result<u64, String> {
+    let Some(s) = raw else {
+        return Ok(DEFAULT_DEBOUNCE_MS);
+    };
+    match s.parse::<u64>() {
+        Ok(0) => Err("YNZ_WATCH_DEBOUNCE_MS=0 is not valid (minimum 1)".to_string()),
+        Ok(v) => Ok(v),
+        Err(_) => Err(format!("YNZ_WATCH_DEBOUNCE_MS={s:?} is not a valid number")),
     }
 }
 
@@ -166,35 +178,44 @@ pub fn single_file_paths(path: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
-    // WHY (all read_debounce_ms tests): the debounce window controls event coalescing —
-    //      too small = spurious rebuilds; invalid env var must fall back silently (not panic).
+    // WHY (all debounce_ms_from tests): the debounce window controls event coalescing —
+    //      too small = spurious rebuilds; an invalid env var must fall back (not panic).
     //      If the fallback breaks, a misconfigured env var crashes the watcher before the
     //      first file event. Tests cover the default, custom, invalid, and zero cases.
+    //
+    //      They test the pure decision function with the raw value passed in, NEVER
+    //      `read_debounce_ms` itself: that would require `set_var`/`remove_var` on the
+    //      process-global environment, and cargo runs these tests concurrently in one
+    //      process — the old env-mutating versions failed nondeterministically (0 or 1
+    //      failures across identical runs). Removing the shared state is the fix; a
+    //      `#[serial]` guard would only have hidden it.
 
     #[test]
-    fn read_debounce_ms_default() {
-        std::env::remove_var("YNZ_WATCH_DEBOUNCE_MS");
-        assert_eq!(read_debounce_ms(), 100);
+    fn debounce_ms_from_unset_uses_default() {
+        assert_eq!(debounce_ms_from(None), Ok(DEFAULT_DEBOUNCE_MS));
+        assert_eq!(DEFAULT_DEBOUNCE_MS, 100, "the documented default is 100ms");
     }
 
     #[test]
-    fn read_debounce_ms_custom() {
-        std::env::set_var("YNZ_WATCH_DEBOUNCE_MS", "250");
-        assert_eq!(read_debounce_ms(), 250);
-        std::env::remove_var("YNZ_WATCH_DEBOUNCE_MS");
+    fn debounce_ms_from_custom_value() {
+        assert_eq!(debounce_ms_from(Some("250")), Ok(250));
     }
 
     #[test]
-    fn read_debounce_ms_invalid_falls_back() {
-        std::env::set_var("YNZ_WATCH_DEBOUNCE_MS", "notanumber");
-        assert_eq!(read_debounce_ms(), 100);
-        std::env::remove_var("YNZ_WATCH_DEBOUNCE_MS");
+    fn debounce_ms_from_invalid_falls_back_with_a_reason() {
+        let err = debounce_ms_from(Some("notanumber")).expect_err("non-numeric must fall back");
+        assert!(
+            err.contains("notanumber") && err.contains("not a valid number"),
+            "the warning must name the bad value and why it was rejected; got {err:?}"
+        );
     }
 
     #[test]
-    fn read_debounce_ms_zero_falls_back() {
-        std::env::set_var("YNZ_WATCH_DEBOUNCE_MS", "0");
-        assert_eq!(read_debounce_ms(), 100);
-        std::env::remove_var("YNZ_WATCH_DEBOUNCE_MS");
+    fn debounce_ms_from_zero_falls_back_with_a_reason() {
+        let err = debounce_ms_from(Some("0")).expect_err("zero must fall back");
+        assert!(
+            err.contains("minimum 1"),
+            "the warning must state the minimum; got {err:?}"
+        );
     }
 }

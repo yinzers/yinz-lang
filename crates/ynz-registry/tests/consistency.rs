@@ -3,8 +3,6 @@
 // schema invariant. If a test fails after editing registry/features.toml,
 // the entry is malformed — fix the TOML, not the test.
 
-use ynz_registry;
-
 // ---------------------------------------------------------------------------
 // [[banned_jargon]] invariants
 // ---------------------------------------------------------------------------

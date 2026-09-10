@@ -1,0 +1,32 @@
+// WHY: the `-> maybe<T> errors` sibling of `v0_3_m8_p4_handle_maybe_return.ynz`. Probed
+// 2026-09-04: this shape prints `7 / done` on today's tree while the plain `-> maybe<T>` shape
+// SIGSEGVs — the `HANDLE_RET_KIND_EC_WORD` path reads `{err, ok}` from the return slot and the
+// ok-word happens to survive. It is locked here so the Phase 4 fix for the plain-return kind
+// (a maybe-aware completion extraction) cannot regress the errors-capable twin, and so the fix
+// is judged against BOTH return shapes, not the one that crashed. GREEN today (a lock, not a
+// RED fixture); its sibling is the RED one.
+//
+// Expected output:
+//   7
+//   done
+function pick() -> maybe<int> errors {
+  wait sleep(10)
+  let arr: array<int> = [7]
+  return arr.get(0)
+}
+
+function consume() -> nothing errors {
+  let h = background pick()
+  let m = h.receive()
+  if (m.exists()) {
+    print(m.value.toString())
+  }
+  print(`done`)
+}
+
+function entrypoint() -> nothing {
+  let r = consume()
+  if (r.failed()) {
+    print(`failed`)
+  }
+}

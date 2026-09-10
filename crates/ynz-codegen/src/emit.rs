@@ -18,10 +18,13 @@ use inkwell::{
     basic_block::BasicBlock,
     context::Context,
     module::Module,
-    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple},
+    targets::FileType,
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
-    values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
-    AddressSpace, IntPredicate, OptimizationLevel,
+    values::{
+        BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+        PointerValue,
+    },
+    AddressSpace, IntPredicate,
 };
 use ynz_ast::nodes::{
     BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt, UnaryOpKind,
@@ -31,8 +34,9 @@ use ynz_typeck::{
     build_effective_suspend_set, crossing_local_names_with_cpu_spike,
     find_let_annotation_type_in_stmts,
     independence::{partition_independent_groups, IndependentGroup},
-    is_base_suspension_intrinsic, type_attached_const_type, GenericFnTable, MonomorphizationTable,
-    ShapeTable, SignatureTable, Type, TypedModule,
+    is_base_suspension_intrinsic, type_attached_const_type,
+    types::{channel_elem_drop, ChannelElemDrop},
+    GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable, Type, TypedModule,
 };
 
 use crate::{
@@ -331,6 +335,9 @@ pub fn build_frame_layouts_with_resolver(
                 &suspending_refs,
                 &cpu_supported_refs,
                 &typed.expr_types,
+                // Phase 6: frame layout must reserve slots for the SAME widened
+                // crossing set the resume fn flushes/reloads — one producer verdict.
+                typed.back_edge_yield_admitted.contains(&f.name),
             );
             let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
 
@@ -775,6 +782,9 @@ fn compute_frame_size(
                         &suspending_refs,
                         &cpu_supported_refs,
                         &typed.expr_types,
+                        // Phase 6: the child-frame-size memo must match the layout's
+                        // widened crossing reservation exactly — same producer verdict.
+                        typed.back_edge_yield_admitted.contains(&f.name),
                     );
                     let crossing_slots =
                         crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
@@ -874,38 +884,31 @@ pub fn emit_artifact(
     // (shape-type emission + padded-alloca alignment); ZERO consumers of
     // `layout.arrays` exist until Phase 5's SoA lowering lands.
     layout: &ynz_typeck::soa::LayoutDecisions,
+    // The transitive effective-ownership fixpoint from `check_query` (v0.3-M7 Phase 2,
+    // FRAGO 002). `declare_function` consults THIS — never the raw AST ownership
+    // modifier — when emitting `readonly`/`noalias` parameter attributes
+    // (authoritative-derivation: consume the computed answer downstream).
+    effective_ownership: &ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<CompiledArtifact, String> {
     let context = Context::create();
     let module_id = module_identifier(source_path);
     let module = context.create_module(&module_id);
 
-    // Use the shared target-machine constructor for the default triple (Guard G1: same
-    // triple/CPU/data-layout as frame_layouts_query — byte-identical shape ABI sizes
-    // between the emitter and the query). For explicit target_triple overrides (cross-
-    // compilation and tests), construct the machine from the supplied triple directly.
-    let machine = match target_triple {
-        None => crate::state_machine::default_target_machine()?,
-        Some(t) => {
-            // Override-branch init: default_target_machine() handles it for the None branch.
-            Target::initialize_x86(&InitializationConfig::default());
-            let triple = TargetTriple::create(t);
-            module.set_triple(&triple);
-            let target = Target::from_triple(&triple)
-                .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
-            target
-                .create_target_machine(
-                    &triple,
-                    "generic",
-                    "",
-                    OptimizationLevel::None,
-                    RelocMode::Default,
-                    CodeModel::Default,
-                )
-                .ok_or_else(|| "LLVM: failed to create target machine".to_string())?
-        }
-    };
-    // Always set triple and data-layout from the machine (the shared constructor uses the
-    // default triple; the override branch already set the triple above).
+    // THE one authoritative target-machine constructor (v0.3-M7 Phase 2, risk R4):
+    // both the default-triple path (Guard G1: same triple/CPU/data-layout as
+    // frame_layouts_query — byte-identical shape ABI sizes between the emitter and
+    // the query) and the explicit target_triple override (cross-compilation and
+    // tests) route through `state_machine::default_target_machine` — never a second
+    // inline `create_target_machine` that could drift on pipeline config.
+    //
+    // Tier resolution (v0.3-M7 Phase 3): optimized by default; `YNZ_NO_OPTIMIZE=1`
+    // (set by `ynz build --no-optimize` before the first salsa call, same barrier
+    // pattern as YNZ_NO_AUTO_PARALLEL below) selects the exact pre-M7 O0 path;
+    // `YNZ_OPT_FORCE` is the dev/bench harness override. One env read, one config,
+    // driving BOTH the backend level here and the mid-end `run_passes` stage below.
+    let pipeline_config = crate::state_machine::pipeline_config_from_env();
+    let machine = crate::state_machine::default_target_machine(target_triple, pipeline_config)?;
+    // Always set triple and data-layout from the machine (covers both triple paths).
     module.set_triple(&machine.get_triple());
     module.set_data_layout(&machine.get_target_data().get_data_layout());
 
@@ -962,11 +965,19 @@ pub fn emit_artifact(
         no_auto_parallel,
         m3d_spike,
         layout,
+        effective_ownership,
     )?;
 
     module
         .verify()
         .map_err(|e| format!("LLVM module verify failed: {}", e.to_string()))?;
+
+    // Mid-end pipeline (v0.3-M7 Phase 3): after emission + verify, before object
+    // emission — the ordering the Phase 0 spike locked. No-op at the O0 tier, so
+    // `--no-optimize` reproduces the pre-M7 artifact byte-for-byte. `ir_text` is
+    // printed AFTER the passes: `--emit-ir` and the IR goldens show the IR the
+    // object was actually lowered from, never a pre-pipeline draft.
+    crate::state_machine::run_mid_end_pipeline(&module, &machine, pipeline_config)?;
 
     let ir_text = module.print_to_string().to_string();
     let obj_buf = machine
@@ -1031,6 +1042,7 @@ fn build_module<'ctx, 'g>(
     no_auto_parallel: bool,
     m3d_spike: bool,
     layout: &'g ynz_typeck::soa::LayoutDecisions,
+    effective_ownership: &'g ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<(), String> {
     // E5 compile-time-adjacent link (should-fix, cumulative M3g review): cross-check codegen's
     // AST-level CPU-ABI-support gate against typeck's resolved-level gate for every function in
@@ -1114,7 +1126,14 @@ fn build_module<'ctx, 'g>(
     // For suspending imported functions: the SM inline-poll mechanism calls the callee's
     // RESUME FUNCTION (`ynz_sm_<name>_resume`), not the outer wrapper. Both declarations
     // are emitted here — the wrapper for non-SM callers, the resume fn for SM callers.
-    for (local_name, sig) in imported_fns {
+    // Iterate in sorted order: this loop's iteration order is DECLARATION EMISSION ORDER
+    // in the module's IR text, and `imported_fns` is a per-process-seeded HashMap — unsorted
+    // iteration made multi-file `--emit-ir` output flap run-to-run (v0.3-M7 R10 determinism
+    // fix; the mono-table twin lives in typeck's MonomorphizationTable as a BTreeMap).
+    let mut imported_fns_ordered: Vec<(&String, &ynz_typeck::signatures::FunctionSig)> =
+        imported_fns.iter().collect();
+    imported_fns_ordered.sort_by_key(|(local_name, _)| local_name.as_str());
+    for (local_name, sig) in imported_fns_ordered {
         // Use the exported symbol name for the LLVM declaration. When the import is aliased
         // (`import { getValue as fetchVal }`), the exporting module compiled and exported
         // `getValue` — the LLVM external declaration must use that name so the linker
@@ -1134,20 +1153,15 @@ fn build_module<'ctx, 'g>(
                     _ => ptr.into(),
                 })
                 .collect();
-            let fn_ty = match &sig.ret {
-                Type::Nothing => ctx.void_type().fn_type(&param_types, false),
-                Type::Int => ctx.i64_type().fn_type(&param_types, false),
-                Type::Float => ctx.f64_type().fn_type(&param_types, false),
-                Type::Bool => ctx.bool_type().fn_type(&param_types, false),
-                Type::Number { precision } if *precision <= 34 => {
-                    ctx.i128_type().fn_type(&param_types, false)
-                }
-                // Errors-capable functions return `{i64, i64}` — the same ABI as the
-                // errors_result_type struct. Using ptr here produces an ABI mismatch:
-                // the importer reads an i64 where the callee returns a {i64,i64} struct,
-                // silently returning 0 instead of the real value.
-                Type::ErrorsCapable { .. } => errors_result_type(ctx).fn_type(&param_types, false),
-                _ => ptr.fn_type(&param_types, false),
+            // Return ABI from the ONE authoritative mapping (`abi_return_type`) — the
+            // same producer `declare_function` (local defs) and the mono declarations
+            // read, so the importer's declaration can never drift from the exporting
+            // module's definition (v0.3-M7 R9 by-value return ABI; this site already
+            // declared `number` returns as by-value i128 pre-fix, which the local
+            // definition path now matches instead of contradicting).
+            let fn_ty = match abi_return_type(ctx, &shape_types, &sig.ret)? {
+                None => ctx.void_type().fn_type(&param_types, false),
+                Some(t) => t.fn_type(&param_types, false),
             };
             module.add_function(llvm_name, fn_ty, None);
         }
@@ -1191,6 +1205,27 @@ fn build_module<'ctx, 'g>(
                 (name.clone(), bytes)
             })
             .collect();
+        // Compile-time link for `FRAME_SHAPE_REGION_ALIGN` (hotfix `bgarg-number`): a
+        // frame-embedded shape region is rounded up to that alignment and no further,
+        // so a shape struct whose measured ABI alignment exceeds it would be read
+        // through the region pointer with a claim the frame cannot honor — the exact
+        // `movaps`-on-an-8-aligned-address SIGSEGV this constant exists to close.
+        // Refuse to lower rather than ship the miscompile; a new wider field type
+        // must raise the constant (and the slack) in the same change.
+        for (name, &struct_ty) in &shape_types.named {
+            let align = u64::from(target_data.get_abi_alignment(&struct_ty));
+            // Unreachable from any Yinz program today (the widest field type is i128); fires
+            // loudly the first time a wider field type is lowered — no test exercises it.
+            if align > u64::from(state_machine::FRAME_SHAPE_REGION_ALIGN) {
+                return Err(format!(
+                    "codegen: shape `{name}` has LLVM ABI alignment {align}, wider than the \
+                     {} bytes a frame-embedded shape region is rounded to \
+                     (FRAME_SHAPE_REGION_ALIGN) — raise the constant and its slack before \
+                     lowering a field type this wide",
+                    state_machine::FRAME_SHAPE_REGION_ALIGN
+                ));
+            }
+        }
         // v0.3-M5 P5: per-field (abi_size, abi_align) in DECLARED field order, from
         // the SAME TargetData as shape_abi_sizes — the one ABI derivation both the
         // AoS elem-size and the SoA segment offsets read (authoritative-derivation:
@@ -1256,9 +1291,14 @@ fn build_module<'ctx, 'g>(
     // Pass 1 — forward-declare every non-generic function so vtables and bodies can reference them.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) if f.generics.is_empty() => {
-                declare_function(ctx, module, f, shape_table)?
-            }
+            Item::Function(f) if f.generics.is_empty() => declare_function(
+                ctx,
+                module,
+                f,
+                shape_table,
+                &shape_types,
+                effective_ownership,
+            )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
             | Item::OptionsDecl(_)
@@ -1280,7 +1320,10 @@ fn build_module<'ctx, 'g>(
                     .unwrap_or_else(|| ctx.i64_type().into())
             })
             .collect();
-        let fn_ty = match llvm_type_for_ctx(ctx, &mono_sig.ret_type) {
+        // Return ABI from the ONE authoritative mapping (`abi_return_type`) — shared
+        // with `declare_function` and the imported-fn declarations (v0.3-M7 R9
+        // by-value return ABI). Params keep `llvm_type_for_ctx` (unchanged ABI).
+        let fn_ty = match abi_return_type(ctx, &shape_types, &mono_sig.ret_type)? {
             Some(ret) => ret.fn_type(&param_llvms, false),
             None => ctx.void_type().fn_type(&param_llvms, false),
         };
@@ -1491,7 +1534,7 @@ fn lower_generic_function<'ctx>(
         typed,
         current_fn: fn_val,
         is_main: false,
-        _current_fn_ret_ty: ret_ty,
+        current_fn_ret_ty: ret_ty,
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -1508,6 +1551,8 @@ fn lower_generic_function<'ctx>(
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
+        arc_transients: HashMap::new(),
+        arc_pending_release: Vec::new(),
         // Generic functions cannot contain `wait` in M2. Use empty caches.
         wait_cache: empty_wait_cache(),
         suspend_set: empty_suspend_set(),
@@ -1541,6 +1586,8 @@ fn lower_generic_function<'ctx>(
         sm_number_errors_staging_offset: None,
         // Generic functions cannot contain `wait` — auto-parallel is never applicable.
         no_auto_parallel: false,
+        // Generic functions never SM-lower; no back-edge yield.
+        back_edge_yield: false,
         // Generic functions never reach lower_sm_block; the empty table satisfies
         // the struct field without the caller needing a real SignatureTable.
         sig_table: empty_sig_table(),
@@ -1613,16 +1660,31 @@ fn llvm_param_types<'ctx>(
 
 /// Forward-declare a function in the LLVM module (signature only, no body).
 ///
-/// Also attaches LLVM `readonly` and `noalias` attributes to pointer parameters
-/// based on the declared ownership modifier:
-/// - `share` / inferred (None) → `readonly` + `noalias`
-/// - `lend` → `noalias` only
-/// - `give` → no attributes (callee owns the data, may mutate)
+/// Also attaches LLVM `readonly` and `noalias` attributes to pointer parameters,
+/// consulting typeck's EFFECTIVE-ownership analysis — never the raw AST modifier
+/// (v0.3-M7 Phase 2, FRAGO 002; authoritative-derivation: consume the computed
+/// answer). The raw-AST version defaulted bare params to `share` and emitted a
+/// FALSE `readonly` on a bare param the body mutates — the optimizer deletes the
+/// "impossible" store (RED fixture `v0_3_m7_p1_bare_param_mutation.ynz`).
+///
+/// - effective `Reads` (declared `share`, or a bare param proven read-only) →
+///   `readonly` + `noalias`. Read-read overlap between arguments is explicitly
+///   permitted by LLVM's `noalias` semantics, so the pair is honest even when the
+///   same value is passed to two read-only positions.
+/// - effective `Writes` (declared `lend`, or a bare param the body mutates) →
+///   `noalias` only. The exclusivity `noalias` asserts is enforced at every call
+///   site by typeck's aliasing-call rejection (same FRAGO): a call passing
+///   overlapping values where any position is write-capable is a compile error.
+/// - effective `Unknown` → NO attributes. The analysis cannot prove read-only, so
+///   any claim would be hope, not knowledge — degrade to conservative.
+/// - declared `give` → no attributes (callee owns the data, may mutate or free).
 fn declare_function<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
     f: &FunctionDecl,
     shape_table: &ShapeTable,
+    shape_types: &ShapeLlvmTypes<'ctx>,
+    effective_ownership: &ynz_typeck::EffectiveOwnershipReport,
 ) -> Result<(), String> {
     let params = llvm_param_types(ctx, f, shape_table);
     let fn_ty = if f.name == "entrypoint" {
@@ -1634,14 +1696,13 @@ fn declare_function<'ctx>(
         let result_ty = errors_result_type(ctx);
         result_ty.fn_type(&params, false)
     } else {
-        match &f.return_type {
-            ynz_ast::nodes::Type::Nothing => ctx.void_type().fn_type(&params, false),
-            ynz_ast::nodes::Type::Int => ctx.i64_type().fn_type(&params, false),
-            ynz_ast::nodes::Type::Float => ctx.f64_type().fn_type(&params, false),
-            ynz_ast::nodes::Type::Bool => ctx.bool_type().fn_type(&params, false),
-            _ => ctx
-                .ptr_type(AddressSpace::default())
-                .fn_type(&params, false),
+        // The return ABI comes from the ONE authoritative mapping (`abi_return_type`,
+        // shared with the imported-fn and mono declaration sites) — v0.3-M7 R9:
+        // number/maybe/shape return BY VALUE, never a pointer to a callee alloca.
+        let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+        match abi_return_type(ctx, shape_types, &ret_ty)? {
+            None => ctx.void_type().fn_type(&params, false),
+            Some(t) => t.fn_type(&params, false),
         }
     };
     // `entrypoint` is the Yinz name; the C ABI entry point must be `main` for the linker.
@@ -1660,12 +1721,16 @@ fn declare_function<'ctx>(
         if !is_ptr_param(&param.ty, shape_table) {
             continue;
         }
-        let ownership = param
-            .ownership
-            .as_ref()
-            .unwrap_or(&OwnershipModifier::Share);
-        match ownership {
-            OwnershipModifier::Share => {
+        // `give` transfers ownership — the callee may mutate or free; no claims.
+        if param.ownership == Some(OwnershipModifier::Give) {
+            continue;
+        }
+        // Consult the authoritative effective-ownership answer (see doc comment).
+        // A declared `share` that reaches `Writes` is already a typeck compile error
+        // (transitive share violation), so declared modifiers never contradict the
+        // effective answer in a program that reaches codegen.
+        match effective_ownership.ownership_of(&f.name, i) {
+            ynz_typeck::EffectiveOwnership::Reads => {
                 fn_val.add_attribute(
                     AttributeLoc::Param(i as u32),
                     ctx.create_enum_attribute(readonly_kind, 0),
@@ -1675,13 +1740,14 @@ fn declare_function<'ctx>(
                     ctx.create_enum_attribute(noalias_kind, 0),
                 );
             }
-            OwnershipModifier::Lend => {
+            ynz_typeck::EffectiveOwnership::Writes => {
                 fn_val.add_attribute(
                     AttributeLoc::Param(i as u32),
                     ctx.create_enum_attribute(noalias_kind, 0),
                 );
             }
-            OwnershipModifier::Give => {}
+            // Cannot prove read-only or exclusive — claim nothing (conservative).
+            ynz_typeck::EffectiveOwnership::Unknown => {}
         }
     }
 
@@ -1703,6 +1769,67 @@ fn declare_function<'ctx>(
 ///     type before dereferencing.
 fn errors_result_type(ctx: &Context) -> inkwell::types::StructType<'_> {
     ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
+}
+
+/// The ONE C-ABI return-type mapping for user functions (v0.3-M7 Phase 3, R9/FRAGO 005).
+///
+/// Consumed by ALL THREE declaration sites — local `declare_function`, the imported-fn
+/// forward declarations (Pass 0.25), and the monomorphized-generic declarations
+/// (Pass 1.5) — so the return ABI can never drift between them
+/// (authoritative-derivation: one producer; the pre-fix imported path already declared
+/// `number` returns as by-value `i128` while the local path declared `ptr` — exactly
+/// the twin-drift class this unification closes).
+///
+/// # The dangling-stack-return fix (R9)
+///
+/// Value classes whose payload used to be returned as `ret ptr <callee-own-alloca>`
+/// (the "stack-backed, copy-and-forget ABI" — UB the optimizer legally exploits by
+/// deleting stores to the dying alloca) now return BY VALUE, so callee-owned stack
+/// memory is never the returned storage:
+///
+/// - `number` (N ≤ 34) → `i128` by value (rax:rdx — no memory at all).
+/// - `maybe<T>`        → `{i64, i64}` envelope by value (same registers).
+/// - `Shape`           → the shape's LLVM struct by value (the backend lowers large
+///   aggregates to an implicit sret slot the CALLER owns). Interior shape/maybe
+///   fields are already counted heap cells (`store_field`), so the shallow copy is
+///   complete.
+///
+/// Everything heap-backed (string, array, map, sensitive, bignum) keeps the `ptr`
+/// return. `fixed<T>` and union returns also keep `ptr`: fixed returns are broken at
+/// BOTH tiers today (pre-existing size-loss bug, not an O0-reliant class) and union
+/// read-back after a call is loudly blocked (the documented union KNOWN-HOLE posture)
+/// — neither is silently-wrong-under-optimization, and both are surfaced findings,
+/// not ride-along fixes.
+///
+/// Returns `Ok(None)` for `Nothing` (void).
+fn abi_return_type<'ctx>(
+    ctx: &'ctx Context,
+    shape_types: &ShapeLlvmTypes<'ctx>,
+    ret: &Type,
+) -> Result<Option<BasicTypeEnum<'ctx>>, String> {
+    Ok(match ret {
+        Type::Nothing => None,
+        Type::Int => Some(ctx.i64_type().into()),
+        Type::Float => Some(ctx.f64_type().into()),
+        Type::Bool => Some(ctx.bool_type().into()),
+        Type::Number { precision } if *precision <= 34 => Some(ctx.i128_type().into()),
+        Type::ErrorsCapable { .. } => Some(errors_result_type(ctx).into()),
+        Type::Maybe { .. } => Some(
+            ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
+                .into(),
+        ),
+        Type::Shape { name } => {
+            let struct_ty = shape_types.named.get(name).ok_or_else(|| {
+                format!(
+                    "abi_return_type: no LLVM struct type for shape `{name}` — a \
+                     shape-returning function's return type must resolve to a declared \
+                     shape (is this an unresolved `Self` return?)"
+                )
+            })?;
+            Some((*struct_ty).into())
+        }
+        _ => Some(ctx.ptr_type(AddressSpace::default()).into()),
+    })
 }
 
 /// True when the AST type will be passed as a pointer in LLVM (not a scalar value).
@@ -1762,7 +1889,7 @@ struct Cg<'ctx, 'g> {
     /// True when this function is `main` (affects return type and implicit ret).
     is_main: bool,
     /// Return type of the current function.
-    _current_fn_ret_ty: Type,
+    current_fn_ret_ty: Type,
     locals: HashMap<String, PointerValue<'ctx>>,
     // M4 additions:
     shape_table: &'g ShapeTable,
@@ -1803,6 +1930,18 @@ struct Cg<'ctx, 'g> {
     // Per-Cg (not global static) so identical source always produces identical IR even
     // when multiple compilations run in the same process (LSP, test harness).
     bg_uid: u64,
+    // v0.3-M8 Phase 5 Auto-Arc (topology (B)): the caller-side TRANSIENT reference of each
+    // admitted spawn group lowered in this function — keyed by typeck's group id, holding
+    // the `ynz_arc_new` data pointer and the block's byte size. Minted at the group's
+    // `first` member, cloned from at every member, and moved to `arc_pending_release` at
+    // the `last` member so the spawn-site lowering frees it right after the spawn call.
+    // An ordinary SSA local: typeck admits a group only when no suspension point lies
+    // between its first and last spawn, so it never has to survive a frame boundary.
+    arc_transients: HashMap<u32, (PointerValue<'ctx>, u64)>,
+    // Transients whose group's last member was just prepared; drained (ynz_arc_free) by the
+    // spawn-site lowering immediately after the spawn call — never by the drop ladder,
+    // which frees only the TASKS' references.
+    arc_pending_release: Vec<(PointerValue<'ctx>, u64)>,
     // v0.3-M2 P6: local contains-wait cache (kept for generic lowering backward-compat).
     // Dead in P7 for non-generic code; remove in M3 when generic functions can suspend.
     #[allow(dead_code)]
@@ -1913,6 +2052,12 @@ struct Cg<'ctx, 'g> {
     // When false (the default), `lower_sm_block` runs `partition_independent_groups`
     // and routes independent groups through `emit_independent_group_poll`.
     no_auto_parallel: bool,
+    // v0.3-M7 Phase 6: true iff the CURRENT function is admitted to the back-edge
+    // poll-yield transform (typeck's `TypedModule::back_edge_yield_admitted` — the ONE
+    // producer). Widens `stmt_needs_sm_walker` so every qualifying loop routes through
+    // the SM loop arms, and gates the poll-yield emission at their back edges. False in
+    // every non-resume-fn Cg (plain functions and generic bodies have no frame to yield).
+    back_edge_yield: bool,
     // v0.3-M3b Phase 4: signature table for write-effect classification in the
     // independence analysis. Used ONLY by `lower_sm_block` → `partition_independent_groups`.
     // When `no_auto_parallel` is true, this is never accessed.
@@ -2184,6 +2329,77 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             self.builder.position_at_end(bb);
         }
         Ok(slot)
+    }
+
+    /// Capture the stack pointer at a loop's preheader via `llvm.stacksave.p0`.
+    ///
+    /// Fix for the general hot-loop O0 stack-exhaustion SIGSEGV (roadmap ledger row 439,
+    /// v0.3-M7 Phase 4 / risk R2): statement- and expression-level allocas emitted inside
+    /// a loop body execute once per ITERATION, and at `-O0` (the `--no-optimize` escape
+    /// hatch) nothing releases them — the frame grows ~16 bytes per dynamic alloca per
+    /// iteration until the 8 MB stack guard faults (measured: ~18.75 B/visit on the
+    /// calibration workload; SIGSEGV between 262,144 and 524,288 visits). The optimized
+    /// default only survives because mem2reg incidentally promotes the slots — the
+    /// emitted IR itself is the defect.
+    ///
+    /// The pairing contract (`loop_stack_restore` at every back-edge AND at loop exit)
+    /// releases each iteration's allocas, so the loop reuses one iteration-frame instead
+    /// of accumulating one per trip. SAFE because (a) the plain loop emitters only ever
+    /// see fully-non-suspending bodies — `stmt_needs_sm_walker` (the authoritative
+    /// suspend-set consumer) routes any suspending loop to the SM `sm_while_header` arm,
+    /// which never uses this; (b) Yinz block scoping ends body-local lifetimes at the
+    /// iteration; (c) for the HEAP-UPGRADED spawn-arg set — plain-ident args with
+    /// inferred give/copy ownership and explicit `.copy()` args, the `is_heap_arg` gate
+    /// in `prepare_bg_arg_for_ctx` — the only in-loop alloca whose pointer legitimately
+    /// outlives the call consuming it is `bg_ctx` itself, and `ynz_rt_spawn*` copies
+    /// those bytes synchronously before returning (documented at its emission site).
+    ///
+    /// (c) also covers the fr23 shapes (FRAGO 011 → FRAGO 016-021's allowlist →
+    /// default-deny redesign, FRAGO 022): any non-ident spawn receiver/arg that
+    /// typeck's `bg_arg_is_provably_safe` does NOT prove safe (which now includes
+    /// every confirmed-live shape across all 6 rounds, PLUS any future shape by
+    /// construction — see that function's doc comment) is recorded as `Give` and
+    /// heap-upgraded by the same `is_heap_arg` span lookup as plain idents, so no
+    /// in-loop payload alloca rides raw into a task ctx. Locked green by
+    /// `crates/ynz-driver/tests/fr23_uaf_planned_red.rs` (fixtures
+    /// `v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz` /
+    /// `v0_3_m7_fr23_call_materialized_spawn_receiver.ynz`).
+    ///
+    /// The save must be emitted AFTER the loop's own machinery allocas and iterator
+    /// evaluation (e.g. a `fixed_arr` literal buffer the loop reads every iteration) —
+    /// restore only releases allocas created after the save point.
+    fn loop_stack_save(&self) -> Result<PointerValue<'ctx>, String> {
+        let f = match self.module.get_function("llvm.stacksave.p0") {
+            Some(f) => f,
+            None => {
+                let ty = self.ptr().fn_type(&[], false);
+                self.module.add_function("llvm.stacksave.p0", ty, None)
+            }
+        };
+        self.builder
+            .build_call(f, &[], "loop_sp")
+            .map_err(|e| format!("loop stacksave: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "llvm.stacksave returned void".to_string())
+            .map(|v| v.into_pointer_value())
+    }
+
+    /// Release the current iteration's allocas by restoring the stack pointer captured
+    /// by `loop_stack_save` — emitted at every loop back-edge and at loop exit. See
+    /// `loop_stack_save` for the full rationale and safety argument.
+    fn loop_stack_restore(&self, sp: PointerValue<'ctx>) -> Result<(), String> {
+        let f = match self.module.get_function("llvm.stackrestore.p0") {
+            Some(f) => f,
+            None => {
+                let ty = self.ctx.void_type().fn_type(&[self.ptr().into()], false);
+                self.module.add_function("llvm.stackrestore.p0", ty, None)
+            }
+        };
+        self.builder
+            .build_call(f, &[sp.into()], "")
+            .map_err(|e| format!("loop stackrestore: {e}"))?;
+        Ok(())
     }
 
     /// Build an alloca holding a `maybe<T>` with `has_value = 0`.
@@ -3141,62 +3357,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| format!("{e}"))?
             .into_int_value();
 
-        let final_bits = if let Type::Shape { ref name } = self.resolve_type(inner_ty) {
-            let size = self.shape_abi_size_const(name, "maybe_to_owned_dest")?;
-            let has = self
-                .builder
-                .build_int_compare(
-                    IntPredicate::NE,
-                    flag,
-                    self.i64().const_zero(),
-                    &format!("{site}_has_pay"),
-                )
-                .map_err(|e| format!("{e}"))?;
-            let pre_bb = self
-                .builder
-                .get_insert_block()
-                .ok_or_else(|| format!("{site}: builder has no insert block"))?;
-            let copy_bb = self.append_block(&format!("{site}_pay_copy"));
-            let cont_bb = self.append_block(&format!("{site}_pay_cont"));
-            self.builder
-                .build_conditional_branch(has, copy_bb, cont_bb)
-                .map_err(|e| format!("{e}"))?;
-            self.builder.position_at_end(copy_bb);
-            // Payload destination: heap cells allocate INSIDE the guarded block
-            // (no cell burned for a `none`); entry-block allocas are free and
-            // position-independent, so the same acquisition point serves both.
-            let owned_pay = if heap {
-                self.heap_cell(size, &format!("{site}_pay"))?
-            } else {
-                let struct_ty = self.shape_types.get(name).ok_or_else(|| {
-                    format!("maybe_to_owned_dest: LLVM type for `{name}` missing")
-                })?;
-                self.alloca_in_entry_llvm(struct_ty, &format!("{site}_pay_own"))?
-            };
-            let src_pay = self
-                .builder
-                .build_int_to_ptr(bits, self.ptr(), &format!("{site}_src_pay"))
-                .map_err(|e| format!("{e}"))?;
-            self.builder
-                .build_memcpy(owned_pay, 1, src_pay, 1, size)
-                .map_err(|e| format!("maybe_to_owned_dest payload memcpy: {e}"))?;
-            let own_bits = self
-                .builder
-                .build_ptr_to_int(owned_pay, self.i64(), &format!("{site}_own_bits"))
-                .map_err(|e| format!("{e}"))?;
-            self.builder
-                .build_unconditional_branch(cont_bb)
-                .map_err(|e| format!("{e}"))?;
-            self.builder.position_at_end(cont_bb);
-            let phi = self
-                .builder
-                .build_phi(self.i64(), &format!("{site}_final_bits"))
-                .map_err(|e| format!("{e}"))?;
-            phi.add_incoming(&[(&own_bits, copy_bb), (&bits, pre_bb)]);
-            phi.as_basic_value().into_int_value()
-        } else {
-            bits
-        };
+        let final_bits = self.maybe_payload_stable_bits(flag, bits, inner_ty, site, heap)?;
 
         let dst_flag_gep = self
             .builder
@@ -3213,6 +3374,216 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_store(dst_val_gep, final_bits)
             .map_err(|e| format!("{e}"))?;
         Ok(owned_env)
+    }
+
+    /// The ONE flag-guarded maybe-PAYLOAD ownership copy (extracted from
+    /// `maybe_to_owned_dest`, v0.3-M7 Phase 3 / R9): given a maybe envelope's
+    /// loaded `flag` and `bits`, return payload bits that are STABLE past the
+    /// producing site. Two inners carry NON-self-contained bits and promote,
+    /// guarded on `flag != 0` so a `none` burns nothing:
+    /// - Shape: the payload pointer is cloned into a counted heap cell
+    ///   (`heap = true`) or an entry-block alloca (`heap = false`).
+    /// - `number` (decimal128, N ≤ 34): the bits are ptr_to_int of a 16-byte
+    ///   i128 STACK slot on the producing frame (FRAGO 009 — the 8th R9
+    ///   member; NOT a self-contained value). A copy that must survive that
+    ///   frame (`heap = true`: by-value returns, persist cells, background
+    ///   crossings) clones the slot via the ONE authoritative
+    ///   `number_to_heap_cell` — never a second promotion path. An in-frame
+    ///   copy (`heap = false`) keeps the pointer: the slot is frame-local
+    ///   (stable against per-site reuse) and outlives the binding.
+    ///
+    /// The remaining inners' bits are self-contained i64 values or
+    /// already-heap-backed pointers (string / array / map) and pass through.
+    ///
+    /// Consumers: `maybe_to_owned_dest` (binding/persist copies) AND the by-value
+    /// return paths (non-SM `-> maybe<T>` return + the SM resume-side maybe return),
+    /// which must promote a wide payload to the heap because the callee's stack —
+    /// where the payload alloca lives — dies at `ret`. One promotion discipline,
+    /// never a return-side twin (authoritative-derivation).
+    fn maybe_payload_stable_bits(
+        &self,
+        flag: inkwell::values::IntValue<'ctx>,
+        bits: inkwell::values::IntValue<'ctx>,
+        inner_ty: &Type,
+        site: &str,
+        heap: bool,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        enum WidePayload {
+            Shape(String),
+            Number,
+        }
+        let wide = match self.resolve_type(inner_ty) {
+            Type::Shape { name } => WidePayload::Shape(name),
+            Type::Number { precision } if precision <= 34 && heap => WidePayload::Number,
+            _ => return Ok(bits),
+        };
+        let has = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                flag,
+                self.i64().const_zero(),
+                &format!("{site}_has_pay"),
+            )
+            .map_err(|e| format!("{e}"))?;
+        let pre_bb = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| format!("{site}: builder has no insert block"))?;
+        let copy_bb = self.append_block(&format!("{site}_pay_copy"));
+        let cont_bb = self.append_block(&format!("{site}_pay_cont"));
+        self.builder
+            .build_conditional_branch(has, copy_bb, cont_bb)
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(copy_bb);
+        let src_pay = self
+            .builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_src_pay"))
+            .map_err(|e| format!("{e}"))?;
+        let owned_pay = match &wide {
+            WidePayload::Shape(name) => {
+                let size = self.shape_abi_size_const(name, "maybe_payload_stable_bits")?;
+                // Payload destination: heap cells allocate INSIDE the guarded block
+                // (no cell burned for a `none`); entry-block allocas are free and
+                // position-independent, so the same acquisition point serves both.
+                let owned_pay = if heap {
+                    self.heap_cell(size, &format!("{site}_pay"))?
+                } else {
+                    let struct_ty = self.shape_types.get(name).ok_or_else(|| {
+                        format!("maybe_payload_stable_bits: LLVM type for `{name}` missing")
+                    })?;
+                    self.alloca_in_entry_llvm(struct_ty, &format!("{site}_pay_own"))?
+                };
+                self.builder
+                    .build_memcpy(owned_pay, 1, src_pay, 1, size)
+                    .map_err(|e| format!("maybe_payload_stable_bits payload memcpy: {e}"))?;
+                owned_pay
+            }
+            // Number reaches here only with `heap = true` (the match above passes
+            // in-frame copies through) — the one authoritative i128 promotion.
+            WidePayload::Number => self.number_to_heap_cell(src_pay, &format!("{site}_num_pay"))?,
+        };
+        let own_bits = self
+            .builder
+            .build_ptr_to_int(owned_pay, self.i64(), &format!("{site}_own_bits"))
+            .map_err(|e| format!("{e}"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(|e| format!("{e}"))?;
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(self.i64(), &format!("{site}_final_bits"))
+            .map_err(|e| format!("{e}"))?;
+        phi.add_incoming(&[(&own_bits, copy_bb), (&bits, pre_bb)]);
+        Ok(phi.as_basic_value().into_int_value())
+    }
+
+    /// Load a maybe envelope's `(flag, bits)` pair from its `{i64, i64}` storage.
+    fn load_maybe_env_pair(
+        &self,
+        env_ptr: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let flag_gep = self
+            .builder
+            .build_struct_gep(self.maybe_type(), env_ptr, 0, &format!("{site}_flag_gep"))
+            .map_err(|e| format!("{e}"))?;
+        let flag = self
+            .builder
+            .build_load(self.i64(), flag_gep, &format!("{site}_flag"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let bits_gep = self
+            .builder
+            .build_struct_gep(self.maybe_type(), env_ptr, 1, &format!("{site}_bits_gep"))
+            .map_err(|e| format!("{e}"))?;
+        let bits = self
+            .builder
+            .build_load(self.i64(), bits_gep, &format!("{site}_bits"))
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        Ok((flag, bits))
+    }
+
+    /// Re-materialize a BY-VALUE user-call result into the internal pointer
+    /// representation the rest of codegen expects (v0.3-M7 Phase 3 / R9).
+    ///
+    /// The R9 return-ABI fix makes user functions return `number` as `i128`,
+    /// `maybe<T>` as `{i64, i64}`, and shapes as their LLVM struct BY VALUE (see
+    /// `abi_return_type`). Internally, codegen still represents those values as
+    /// pointers to storage — so every C-ABI call reception site routes through
+    /// THIS one wrapper: it allocas a CALLER-OWNED slot, stores the returned
+    /// aggregate, and yields the slot pointer. The slot is the caller's own stack —
+    /// exactly the ownership the old callee-alloca ABI faked.
+    ///
+    /// Every other return class passes through untouched.
+    fn wrap_abi_call_result(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        ret_ty: &Type,
+        site: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match self.resolve_type(ret_ty) {
+            Type::Number { precision } if precision <= 34 => {
+                let iv = val.into_int_value();
+                let slot = self
+                    .builder
+                    .build_alloca(self.i128(), &format!("{site}_num_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                // The fresh alloca is ABI-aligned (16) by construction; make the
+                // guarantee explicit so `claim_i128_align_by_provenance` keeps it.
+                if let Some(inst) = slot.as_instruction() {
+                    inst.set_alignment(16)
+                        .map_err(|e| format!("{site}_num_ret align: {e}"))?;
+                }
+                self.builder
+                    .build_store(slot, iv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            Type::Maybe { .. } => {
+                let sv = val.into_struct_value();
+                let slot = self
+                    .builder
+                    .build_alloca(self.maybe_type(), &format!("{site}_maybe_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                self.builder
+                    .build_store(slot, sv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            Type::Shape { ref name } if !name.is_empty() => {
+                let sv = val.into_struct_value();
+                let struct_ty = self.shape_types.get(name).ok_or_else(|| {
+                    format!("wrap_abi_call_result: LLVM type for shape `{name}` missing")
+                })?;
+                let slot = self
+                    .builder
+                    .build_alloca(struct_ty, &format!("{site}_shape_ret"))
+                    .map_err(|e| format!("{e}"))?;
+                // Mirror lower_struct_lit's padded-shape discipline: a false-sharing-
+                // padded shape's stack slot is 64-byte aligned so each field's 64-byte
+                // slot coincides with one cache line.
+                if self.layout.padded_shapes.contains(name) {
+                    if let Some(inst) = slot.as_instruction() {
+                        inst.set_alignment(crate::shape_types::CACHE_LINE_BYTES)
+                            .map_err(|e| format!("align padded ret slot {name}: {e}"))?;
+                    }
+                }
+                self.builder
+                    .build_store(slot, sv)
+                    .map_err(|e| format!("{e}"))?;
+                Ok(slot.into())
+            }
+            _ => Ok(val),
+        }
     }
 
     /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
@@ -3474,6 +3845,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .builder
             .build_load(self.i128(), num_ptr, &format!("{site}_num_ld"))
             .map_err(|e| format!("number_to_heap_cell load {site}: {e}"))?;
+        // A number value pointer's provenance is either a 16-aligned alloca/heap cell
+        // OR an 8-aligned frame-interior address (an SM staged-param pointer or an EC
+        // staging slot) — claim the guaranteed floor, never ABI 16.
+        state_machine::claim_frame_i128_align(
+            bits.as_instruction_value()
+                .ok_or_else(|| format!("number_to_heap_cell load {site}: no instruction value"))?,
+        )?;
         self.builder
             .build_store(cell, bits)
             .map_err(|e| format!("number_to_heap_cell store {site}: {e}"))?;
@@ -4090,7 +4468,7 @@ fn lower_function<'ctx, 'g>(
         typed,
         current_fn: fn_val,
         is_main,
-        _current_fn_ret_ty: ret_ty,
+        current_fn_ret_ty: ret_ty,
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -4104,6 +4482,8 @@ fn lower_function<'ctx, 'g>(
         is_errors_capable,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
+        arc_transients: HashMap::new(),
+        arc_pending_release: Vec::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -4130,6 +4510,8 @@ fn lower_function<'ctx, 'g>(
         sm_number_errors_staging_offset: None,
         // Non-SM functions cannot contain independent suspending groups.
         no_auto_parallel: false,
+        // Non-SM functions have no frame and cannot yield — the documented residual.
+        back_edge_yield: false,
         // sig_table unused for non-SM functions — independence analysis runs only in
         // lower_sm_block which is never reached from the non-SM path.
         sig_table,
@@ -4341,12 +4723,18 @@ fn lower_function_with_waits<'ctx, 'g>(
     } else {
         HashSet::new()
     };
+    // v0.3-M7 Phase 6: the admission verdict for THIS function — typeck's ONE producer
+    // (`back_edge_yield_admission`), threaded into the crossing collection, the
+    // suspension-point count, and the SM-walker routing below so all three walks consume
+    // the identical qualifying predicate (authoritative-derivation.md; R8).
+    let back_edge_yield = typed.back_edge_yield_admitted.contains(&f.name);
     let crossing_names: Vec<String> = crossing_local_names_with_cpu_spike(
         &f.body.stmts,
         &param_name_refs,
         &suspending_refs,
         &cpu_supported_refs,
         &typed.expr_types,
+        back_edge_yield,
     );
 
     // Slot index layout: params occupy slots [0..n_params), crossing locals occupy
@@ -4526,7 +4914,8 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Pre-create state blocks.
     // Count ALL suspension points: explicit `wait` nodes + calls to suspending callees.
     // Each suspension point needs a poll-loop continuation state.
-    let n_waits_base = count_suspension_points(&f.body, suspend_set, &typed.expr_types);
+    let n_waits_base =
+        count_suspension_points(&f.body, suspend_set, &typed.expr_types, back_edge_yield);
     // Spike: a CPU-parallel group occupies two states — the spawn state (state 0, which is
     // the initial dispatch state, always present) and the poll state (state 1, the extra one).
     // After emit_cpu_group_spawn_join, *current_state is advanced by 2. Any subsequent
@@ -4586,7 +4975,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         typed,
         current_fn: resume_fn,
         is_main: false,
-        _current_fn_ret_ty: Type::Nothing, // resume fn returns i32, not the Yinz type
+        current_fn_ret_ty: Type::Nothing, // resume fn returns i32, not the Yinz type
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -4604,6 +4993,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
+        arc_transients: HashMap::new(),
+        arc_pending_release: Vec::new(),
         wait_cache,
         suspend_set,
         base_suspends,
@@ -4631,6 +5022,9 @@ fn lower_function_with_waits<'ctx, 'g>(
         // When set, lower_sm_block skips independence analysis and lowers all stmts
         // sequentially — the TRUE dumb-sequential baseline (not a shared-analysis no-op).
         no_auto_parallel,
+        // v0.3-M7 Phase 6: thread typeck's admission verdict (the ONE producer) into
+        // this resume fn's routing + back-edge emission.
+        back_edge_yield,
         // sig_table forwarded so independence analysis can read param_ownerships
         // without re-deriving write effects from scratch (corpse b compliance).
         sig_table,
@@ -4920,20 +5314,20 @@ fn lower_function_with_waits<'ctx, 'g>(
             let shape_name = shape_names
                 .get(cname.as_str())
                 .ok_or_else(|| format!("sm shape wire: shape name for `{cname}` not found"))?;
-            // Compute the GEP into the frame's slot region for this shape.
+            // Compute the region pointer into the frame's slot region for this shape —
+            // through the ONE producer (`shape_frame_region_ptr`), which rounds the
+            // address up to `FRAME_SHAPE_REGION_ALIGN` inside the slack
+            // `shape_frame_slots` reserved. Every consumer below reads this pointer
+            // from the ptr alloca; nothing recomputes it from `slot_idx`.
             let frame_slot_byte_offset = state_machine::FRAME_OFFSET_LOCALS_START
                 + (slot_idx as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
-            let shape_region_ptr = unsafe {
-                cg_resume
-                    .builder
-                    .build_gep(
-                        ctx.i8_type(),
-                        frame_param,
-                        &[ctx.i64_type().const_int(frame_slot_byte_offset, false)],
-                        &format!("{cname}_frame_region"),
-                    )
-                    .map_err(|e| format!("sm shape frame GEP {cname}: {e}"))?
-            };
+            let shape_region_ptr = state_machine::shape_frame_region_ptr(
+                ctx,
+                &cg_resume.builder,
+                frame_param,
+                frame_slot_byte_offset,
+                cname,
+            )?;
             // Verify the struct type is known (for documentation; GEP is byte-level).
             let _ = cg_resume
                 .shape_types
@@ -5158,6 +5552,12 @@ fn lower_function_with_waits<'ctx, 'g>(
                 .build_load(ctx.i128_type(), staging_ptr, "wrap_ec_i128")
                 .map_err(|e| format!("ec wrapper load i128: {e}"))?
                 .into_int_value();
+            // Staging slot is frame-interior: only 8-aligned — claim that, not ABI 16.
+            state_machine::claim_frame_i128_align(
+                i128_val
+                    .as_instruction_value()
+                    .ok_or("ec wrapper load i128: no instruction value")?,
+            )?;
             let heap_ptr = builder
                 .build_call(
                     rt.ynz_alloc,
@@ -5254,38 +5654,49 @@ fn lower_function_with_waits<'ctx, 'g>(
             }
             Type::Number { precision } if *precision <= 34 => {
                 // Decimal128 (i128): the resume fn stored the full 16-byte i128 value
-                // directly in the 16-byte return slot. The wrapper is declared as ptr-returning;
-                // the non-SM `number` lowering returns a pointer to a caller-local i128 the
-                // caller copies out immediately and never frees (a stack-backed, copy-and-forget
-                // ABI — see the non-SM `addUp`/`combine` lowering: `ret ptr %resultN` where
-                // `%resultN = alloca i128`). The SM wrapper MUST return the same shape so the
-                // single shared caller contract holds for both lowerings. A heap allocation here
-                // would have no owner: no `number` call site frees its returned pointer (the
-                // non-SM ABI taught every caller it is unowned), so a heap block leaks once per
-                // promoted `number` returned out of its function. Mirror the non-SM ABI: copy the
-                // i128 into a wrapper-local stack slot, free the frame, return that slot's
-                // pointer. The pointee lives until this wrapper returns; the caller's copy
-                // happens at the call site before the slot is reused — identical to the non-SM
-                // path. (Freeing inside the wrapper is impossible: the caller's copy is at its
-                // own call site, after this return — a free here would dangle the pointee.)
+                // directly in the 16-byte return slot. v0.3-M7 R9: the wrapper is
+                // declared i128-returning (`abi_return_type`) — load the value and
+                // return it BY VALUE. The old shape (copy into a wrapper-local alloca,
+                // `ret ptr` to it — the "stack-backed, copy-and-forget ABI") was UB the
+                // optimizer legally exploited: stores to the dying alloca were deleted
+                // and callers read garbage out of the dead wrapper frame.
                 let i128_val =
                     state_machine::load_return_value_i128(ctx, &builder, frame_ptr, "ret_i128")?;
-                let ret_slot = builder
-                    .build_alloca(ctx.i128_type(), "ret_dec_slot")
-                    .map_err(|e| format!("ret_dec_slot: {e}"))?;
-                builder
-                    .build_store(ret_slot, i128_val)
-                    .map_err(|e| format!("ret_dec_store: {e}"))?;
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
                 builder
-                    .build_return(Some(&ret_slot))
+                    .build_return(Some(&i128_val))
                     .map_err(|e| format!("wrapper number ret: {e}"))?;
             }
+            Type::Maybe { .. } => {
+                // v0.3-M7 R9: the resume fn stored the maybe envelope's (flag, bits)
+                // pair in the 16-byte return slot (same +0/+8 pair layout as the
+                // errors ABI); rebuild the {i64, i64} envelope and return it BY VALUE —
+                // the wrapper is declared {i64,i64}-returning per `abi_return_type`.
+                let (flag, bits) =
+                    state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                let env_ty =
+                    ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false);
+                let mut env = env_ty.const_zero();
+                env = builder
+                    .build_insert_value(env, flag, 0, "wrap_maybe_flag")
+                    .map_err(|e| format!("wrapper maybe flag insert: {e}"))?
+                    .into_struct_value();
+                env = builder
+                    .build_insert_value(env, bits, 1, "wrap_maybe_bits")
+                    .map_err(|e| format!("wrapper maybe bits insert: {e}"))?
+                    .into_struct_value();
+                builder
+                    .build_return(Some(&env))
+                    .map_err(|e| format!("wrapper maybe ret: {e}"))?;
+            }
+            // Shape stays in the pointer group below only nominally: typeck's
+            // WideValueSuspendingReturn rejects every `-> Shape` suspending function,
+            // so this arm is unreachable for shapes today.
             Type::String
             | Type::Shape { .. }
             | Type::BuiltinArray { .. }
             | Type::BuiltinFixed { .. }
-            | Type::Maybe { .. }
             | Type::BuiltinMap { .. }
             | Type::Union { .. }
             | Type::Sensitive { .. } => {
@@ -5326,11 +5737,12 @@ fn count_suspension_points(
     block: &ynz_ast::nodes::Block,
     suspend_set: &SuspendSet,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> usize {
     block
         .stmts
         .iter()
-        .map(|s| count_suspension_stmt(s, suspend_set, expr_types))
+        .map(|s| count_suspension_stmt(s, suspend_set, expr_types, back_edge_yield))
         .sum()
 }
 
@@ -5338,6 +5750,7 @@ fn count_suspension_stmt(
     stmt: &Stmt,
     suspend_set: &SuspendSet,
     expr_types: &HashMap<(usize, usize), Type>,
+    back_edge_yield: bool,
 ) -> usize {
     match stmt {
         Stmt::Expr(e) => count_suspension_expr(e, suspend_set, expr_types),
@@ -5363,15 +5776,22 @@ fn count_suspension_stmt(
         }
         Stmt::If { cond, body, .. } => {
             count_suspension_expr(cond, suspend_set, expr_types)
-                + count_suspension_points(body, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types, back_edge_yield)
         }
+        // v0.3-M7 Phase 6: in an ADMITTED function, every QUALIFYING loop's back edge is
+        // one extra poll-yield continuation state — counted via THE one predicate
+        // (`ynz_typeck::loop_stmt_back_edge_yields`), exactly matching the state the SM
+        // loop arm claims at emission (authoritative-derivation.md; the M3d/M3e
+        // envelope-narrowing family is exactly a count-vs-claim drift).
         Stmt::While { cond, body, .. } => {
-            count_suspension_expr(cond, suspend_set, expr_types)
-                + count_suspension_points(body, suspend_set, expr_types)
+            usize::from(back_edge_yield && ynz_typeck::loop_stmt_back_edge_yields(stmt, expr_types))
+                + count_suspension_expr(cond, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types, back_edge_yield)
         }
         Stmt::For { iter, body, .. } => {
-            count_suspension_expr(iter, suspend_set, expr_types)
-                + count_suspension_points(body, suspend_set, expr_types)
+            usize::from(back_edge_yield && ynz_typeck::loop_stmt_back_edge_yields(stmt, expr_types))
+                + count_suspension_expr(iter, suspend_set, expr_types)
+                + count_suspension_points(body, suspend_set, expr_types, back_edge_yield)
         }
         Stmt::Match {
             scrutinee,
@@ -5382,11 +5802,13 @@ fn count_suspension_stmt(
             count_suspension_expr(scrutinee, suspend_set, expr_types)
                 + arms
                     .iter()
-                    .map(|a| count_suspension_points(&a.body, suspend_set, expr_types))
+                    .map(|a| {
+                        count_suspension_points(&a.body, suspend_set, expr_types, back_edge_yield)
+                    })
                     .sum::<usize>()
-                + else_arm
-                    .as_ref()
-                    .map_or(0, |b| count_suspension_points(b, suspend_set, expr_types))
+                + else_arm.as_ref().map_or(0, |b| {
+                    count_suspension_points(b, suspend_set, expr_types, back_edge_yield)
+                })
         }
     }
 }
@@ -5461,6 +5883,12 @@ fn stmt_needs_sm_walker(cg: &Cg<'_, '_>, stmt: &Stmt) -> bool {
     stmt_contains_wait(stmt)
         || stmt_contains_suspending_call(stmt, cg.suspend_set, &cg.typed.expr_types)
         || ynz_typeck::stmt_contains_conduit_suspend(stmt, &cg.typed.expr_types)
+        // v0.3-M7 Phase 6: in an ADMITTED function, a statement that IS or CONTAINS a
+        // qualifying loop routes through the SM walker so the loop reaches its SM arm's
+        // back-edge poll-yield (a wait-free `if` wrapping a hot loop must not strand the
+        // loop in plain lowering). THE one containment predicate — never re-derived.
+        || (cg.back_edge_yield
+            && ynz_typeck::stmt_contains_back_edge_yield(stmt, &cg.typed.expr_types))
 }
 
 /// True if the statement contains a direct call to a suspending user-defined function.
@@ -6363,6 +6791,11 @@ fn flush_var_slot_to_frame<'ctx>(
                 .build_load(ctx.i128_type(), dec_ptr, &format!("{name}_flush_i128"))
                 .map_err(|e| format!("crossing flush ec_num load i128 {name}: {e}"))?
                 .into_int_value();
+            // The ok-word points at the callee's frame-interior staging slot: only
+            // 8-aligned — claim that, not ABI 16.
+            state_machine::claim_frame_i128_align(i128_val.as_instruction_value().ok_or_else(
+                || format!("crossing flush ec_num load i128 {name}: no instruction value"),
+            )?)?;
             let lo = cg
                 .builder
                 .build_int_truncate(i128_val, ctx.i64_type(), &format!("{name}_flush_lo"))
@@ -6936,6 +7369,8 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
 
             // Body: lower via SM block walker so nested waits consume continuation states.
             cg.builder.position_at_end(while_body_bb);
+            // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+            let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
             lower_sm_block(
                 cg,
                 body,
@@ -6949,11 +7384,26 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 current_state,
             )?;
             if !is_block_terminated(cg) {
-                // Body didn't contain a return; flush preempt hook then loop back to header.
-                emit_loop_preempt(cg)?;
-                cg.builder
-                    .build_unconditional_branch(while_header_bb)
-                    .map_err(|e| format!("sm while body->header branch: {e}"))?;
+                // Body didn't contain a return: release this iteration's allocas (leaf
+                // wait-free bodies only), then the back edge — a poll-yield suspension
+                // point when this function is admitted (Phase 6), else the legacy
+                // budget-tick + branch.
+                if let Some(sp) = loop_sp {
+                    cg.loop_stack_restore(sp)?;
+                }
+                emit_sm_loop_back_edge(
+                    cg,
+                    while_header_bb,
+                    "sm while body->header branch",
+                    state_blocks,
+                    pending_block,
+                    frame_ptr,
+                    waker_ctx,
+                    param_names,
+                    f,
+                    shape_table,
+                    current_state,
+                )?;
             }
 
             cg.sm_scope_depth -= 1;
@@ -7212,6 +7662,8 @@ fn lower_sm_for<'ctx, 'g>(
         // flush_crossing_local_if_needed does not see it — flush manually here.
         flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
 
+        // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+        let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
             cg,
             body,
@@ -7226,6 +7678,10 @@ fn lower_sm_for<'ctx, 'g>(
         )?;
 
         if !is_block_terminated(cg) {
+            // Release this iteration's allocas before the back edge (leaf bodies only).
+            if let Some(sp) = loop_sp {
+                cg.loop_stack_restore(sp)?;
+            }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7240,10 +7696,21 @@ fn lower_sm_for<'ctx, 'g>(
                 .map_err(|e| format!("{e}"))?;
             state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
                 .map_err(|e| format!("sm range flush next: {e}"))?;
-            emit_loop_preempt(cg)?;
-            cg.builder
-                .build_unconditional_branch(header_bb)
-                .map_err(|e| format!("sm for range back-edge: {e}"))?;
+            // Back edge: poll-yield when admitted (idx is already frame-flushed above,
+            // so the resume header reloads the post-increment value).
+            emit_sm_loop_back_edge(
+                cg,
+                header_bb,
+                "sm for range back-edge",
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
         }
 
         cg.builder.position_at_end(exit_bb);
@@ -7353,6 +7820,8 @@ fn lower_sm_for<'ctx, 'g>(
         // the only shadow case an admitted binding can hit is its own loop var.
         let soa_masked = cg.soa_bindings.remove(var);
 
+        // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+        let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
             cg,
             body,
@@ -7371,6 +7840,10 @@ fn lower_sm_for<'ctx, 'g>(
         }
 
         if !is_block_terminated(cg) {
+            // Release this iteration's allocas before the back edge (leaf bodies only).
+            if let Some(sp) = loop_sp {
+                cg.loop_stack_restore(sp)?;
+            }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7385,10 +7858,19 @@ fn lower_sm_for<'ctx, 'g>(
                 .map_err(|e| format!("{e}"))?;
             state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
                 .map_err(|e| format!("sm array flush next: {e}"))?;
-            emit_loop_preempt(cg)?;
-            cg.builder
-                .build_unconditional_branch(header_bb)
-                .map_err(|e| format!("sm for array back: {e}"))?;
+            emit_sm_loop_back_edge(
+                cg,
+                header_bb,
+                "sm for array back",
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
         }
 
         cg.builder.position_at_end(exit_bb);
@@ -7594,6 +8076,8 @@ fn lower_sm_for<'ctx, 'g>(
         // after a `wait` inside the body — crossing-local analysis handles this correctly
         // because map entry destructure bindings are not yet tracked as scalar crossing locals.
 
+        // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
+        let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
             cg,
             body,
@@ -7608,6 +8092,10 @@ fn lower_sm_for<'ctx, 'g>(
         )?;
 
         if !is_block_terminated(cg) {
+            // Release this iteration's allocas before the back edge (leaf bodies only).
+            if let Some(sp) = loop_sp {
+                cg.loop_stack_restore(sp)?;
+            }
             let idx_after = state_machine::load_local_slot(
                 cg.ctx,
                 &cg.builder,
@@ -7622,10 +8110,19 @@ fn lower_sm_for<'ctx, 'g>(
                 .map_err(|e| format!("{e}"))?;
             state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
                 .map_err(|e| format!("sm map flush next: {e}"))?;
-            emit_loop_preempt(cg)?;
-            cg.builder
-                .build_unconditional_branch(header_bb)
-                .map_err(|e| format!("{e}"))?;
+            emit_sm_loop_back_edge(
+                cg,
+                header_bb,
+                "sm for map back-edge",
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
         }
 
         cg.builder.position_at_end(exit_bb);
@@ -7946,6 +8443,34 @@ fn load_sm_return_value_typed<'ctx>(
             let i128_val = state_machine::load_return_value_i128(ctx, &cg.builder, frame_ptr, tag)?;
             Ok(i128_val.into())
         }
+        Some(Type::Maybe { .. }) => {
+            // v0.3-M7 R9: a maybe-returning callee's resume fn stores the envelope's
+            // (flag, bits) VALUE pair in the return slot (+0/+8, the errors pair
+            // layout) — never a pointer into its own dead stack. Rebuild a
+            // CALLER-owned {i64, i64} envelope and hand back its pointer, matching
+            // the representation `lower_expr` produces for a non-SM maybe call.
+            let (flag, bits) =
+                state_machine::load_return_value_errors(ctx, &cg.builder, frame_ptr)?;
+            let env_slot = cg
+                .builder
+                .build_alloca(cg.maybe_type(), &format!("{tag}_maybe_env"))
+                .map_err(|e| format!("{tag} maybe env alloca: {e}"))?;
+            let flag_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env_slot, 0, &format!("{tag}_mflag"))
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(flag_gep, flag)
+                .map_err(|e| format!("{e}"))?;
+            let bits_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env_slot, 1, &format!("{tag}_mbits"))
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(bits_gep, bits)
+                .map_err(|e| format!("{e}"))?;
+            Ok(env_slot.into())
+        }
         _ => {
             // All other types (int, bool, string, shape, array, etc.): load the i64
             // from the return slot (ptr-as-i64 for pointer-family; raw i64 for scalars).
@@ -8189,6 +8714,12 @@ fn bind_sm_result_and_flush<'ctx>(
                         .build_load(cg.ctx.i128_type(), staging_ptr, &format!("{name}_cob_i128"))
                         .map_err(|e| format!("bind_sm_result ec_num load i128 {name}: {e}"))?
                         .into_int_value();
+                    // Staging slot is frame-interior: only 8-aligned — claim that.
+                    state_machine::claim_frame_i128_align(
+                        i128_val.as_instruction_value().ok_or_else(|| {
+                            format!("bind_sm_result ec_num load i128 {name}: no instruction value")
+                        })?,
+                    )?;
                     cg.builder
                         .build_store(i128_alloca, i128_val)
                         .map_err(|e| format!("bind_sm_result ec_num store i128 {name}: {e}"))?;
@@ -8469,6 +9000,12 @@ fn bind_sm_result_and_flush<'ctx>(
                     .build_load(cg.ctx.i128_type(), staging_ptr, &format!("{name}_cob_i128"))
                     .map_err(|e| format!("copy-on-bind load i128 {name}: {e}"))?
                     .into_int_value();
+                // Staging slot is frame-interior: only 8-aligned — claim that.
+                state_machine::claim_frame_i128_align(
+                    i128_val.as_instruction_value().ok_or_else(|| {
+                        format!("copy-on-bind load i128 {name}: no instruction value")
+                    })?,
+                )?;
                 cg.builder
                     .build_store(binding_alloca, i128_val)
                     .map_err(|e| format!("copy-on-bind store {name}: {e}"))?;
@@ -8512,13 +9049,19 @@ fn bind_sm_result_and_flush<'ctx>(
 /// once in `emit_program`) — the ONE shape-size source. The SM shape-embed memcpys
 /// (the Let-embed arm and the `bind_sm_result_and_flush` flush) and the bg heap copy
 /// read the SAME map via `shape_abi_size_const` (FRAGO 010 twin unified, P3 step 5(c)).
-/// `ceil(byte_size / 8)` rounds up to the next 8-byte slot boundary.
+/// `ceil(byte_size / 8)` rounds up to the next 8-byte slot boundary, plus
+/// `FRAME_SHAPE_REGION_SLACK_SLOTS` so the region pointer `shape_frame_region_ptr`
+/// rounds up to `FRAME_SHAPE_REGION_ALIGN` at runtime still has `byte_size` bytes in
+/// front of it (hotfix `bgarg-number`: a shape with an i128 field is read through its
+/// region pointer at ABI `align 16`, which an 8-multiple frame offset cannot honor).
+/// The slack is unconditional — one rule for every embedded shape, no per-shape
+/// alignment branch for a future field type to drift past.
 fn shape_frame_slots(shape_name: &str, shape_abi_sizes: &HashMap<String, u64>) -> usize {
     // Fallback to 1 slot (8 bytes) if the shape is not in the precomputed map. This
     // can only happen for shapes not seen during emit_shape_types (compiler bug).
     let byte_size = shape_abi_sizes.get(shape_name).copied().unwrap_or(8);
     // At minimum 1 slot even for a zero-byte struct (degenerate; avoids zero-size alloca).
-    (byte_size.max(8) as usize).div_ceil(8)
+    (byte_size.max(8) as usize).div_ceil(8) + state_machine::FRAME_SHAPE_REGION_SLACK_SLOTS
 }
 
 /// Most types fit in 1 slot (8 bytes). Decimal128 (number with precision ≤ 34) is
@@ -9667,42 +10210,31 @@ fn build_cpu_trampoline<'ctx, 'g>(
             (bits, i64_ty.const_int(0, false))
         }
         inkwell::values::BasicValueEnum::PointerValue(pv) => {
-            if callee_returns_bare_number(cg.typed, cg.imported_fns, callee) {
-                // number (decimal128): the non-SM ABI returns a POINTER to a
-                // heap-stable 16-byte i128. Dereference it and pack lo/hi so the
-                // result slot holds the raw i128 the join-side i128 load expects.
-                let i128_val = tramp_builder
-                    .build_load(i128_ty, pv, "spike_num_load")
-                    .map_err(|e| format!("trampoline num load {trampoline_name}: {e}"))?
-                    .into_int_value();
-                let lo = tramp_builder
-                    .build_int_truncate(i128_val, i64_ty, "spike_num_lo")
-                    .map_err(|e| format!("trampoline num lo {trampoline_name}: {e}"))?;
-                let hi_shift = tramp_builder
-                    .build_right_shift(
-                        i128_val,
-                        i128_ty.const_int(64, false),
-                        false,
-                        "spike_num_sh",
-                    )
-                    .map_err(|e| format!("trampoline num shift {trampoline_name}: {e}"))?;
-                let hi = tramp_builder
-                    .build_int_truncate(hi_shift, i64_ty, "spike_num_hi")
-                    .map_err(|e| format!("trampoline num hi {trampoline_name}: {e}"))?;
-                (lo, hi)
-            } else {
-                // string/array/map: the returned heap pointer IS the value. Store it
-                // as i64 (ptr_to_int); the heap block outlives the blocking-pool task,
-                // so the parent reads it post-join.
-                let bits = tramp_builder
-                    .build_ptr_to_int(pv, i64_ty, "spike_ptr_to_i")
-                    .map_err(|e| format!("trampoline ptr_to_int {trampoline_name}: {e}"))?;
-                (bits, i64_ty.const_int(0, false))
-            }
+            // string/array/map: the returned heap pointer IS the value. Store it
+            // as i64 (ptr_to_int); the heap block outlives the blocking-pool task,
+            // so the parent reads it post-join. (v0.3-M7 R9: `number` callees no
+            // longer return pointers — they return by-value i128, handled by the
+            // i128 arm above; the old deref-the-copy-and-forget-pointer branch is
+            // gone with the ABI that required it.)
+            let bits = tramp_builder
+                .build_ptr_to_int(pv, i64_ty, "spike_ptr_to_i")
+                .map_err(|e| format!("trampoline ptr_to_int {trampoline_name}: {e}"))?;
+            (bits, i64_ty.const_int(0, false))
         }
         inkwell::values::BasicValueEnum::StructValue(sv) => {
-            // `T errors`: {i64 error word, i64 success word}. Both words must reach
-            // the result slot — dropping field0 would turn an error into a success.
+            // `T errors` {i64 error, i64 success} — or, post-R9, a by-value
+            // `maybe<T>` envelope {i64 flag, i64 bits}: both are the same two-word
+            // pair the 16-byte result slot carries at +0/+8, and the join-side
+            // typed load rebuilds each correctly. Any OTHER aggregate (e.g. a
+            // by-value shape return) has no packing contract here — fail loud
+            // rather than silently truncating it to two words.
+            if sv.get_type() != cpu_result_ty {
+                return Err(format!(
+                    "spike trampoline: callee `{callee}` returns aggregate {:?}, which \
+                     does not fit the two-word CPU result protocol",
+                    sv.get_type()
+                ));
+            }
             let err = tramp_builder
                 .build_extract_value(sv, 0, "spike_ec_err")
                 .map_err(|e| format!("trampoline ec err {trampoline_name}: {e}"))?
@@ -10383,9 +10915,9 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
     // The alloca sits in poll_state (a non-entry block), which is valid because each call
     // to the resume_fn gets a fresh stack frame — poll_state is only ever entered from the
     // SM dispatch switch in sm_entry, so the alloca always dominates its uses in this
-    // invocation. OptimizationLevel::None means mem2reg does not run; the alloca stays
-    // as a stack slot, not an SSA value, so LLVM does not require entry-block placement
-    // for correctness here.
+    // invocation. Dominance is the only placement requirement LLVM imposes on an alloca,
+    // at every pipeline tier: a dominating non-entry alloca is safely promotable (or
+    // simply stays a stack slot) whether or not mem2reg/SROA run.
     let any_pending = cg
         .builder
         .build_alloca(ctx.i32_type(), "spike_any_pending")
@@ -11139,10 +11671,11 @@ fn emit_fused_group_spawn_poll<'ctx, 'g>(
 
     // The alloca sits in poll_state (a non-entry block), which is valid because each call to the
     // resume_fn gets a fresh stack frame — poll_state is only ever entered from the SM dispatch
-    // switch in sm_entry, so the alloca always dominates its uses in this invocation.
-    // OptimizationLevel::None means mem2reg does not run; the alloca stays as a stack slot, not
-    // an SSA value, so LLVM does not require entry-block placement for correctness here (mirrors
-    // `emit_cpu_group_spawn_join`'s identical `spike_any_pending` rationale).
+    // switch in sm_entry, so the alloca always dominates its uses in this invocation. Dominance
+    // is the only placement requirement LLVM imposes on an alloca, at every pipeline tier: a
+    // dominating non-entry alloca is safely promotable (or simply stays a stack slot) whether or
+    // not mem2reg/SROA run (mirrors `emit_cpu_group_spawn_join`'s identical `spike_any_pending`
+    // rationale).
     let any_pending = cg
         .builder
         .build_alloca(ctx.i32_type(), "fused_any_pending")
@@ -11979,13 +12512,51 @@ fn lower_let_background_handle<'ctx>(
         .map(|s| s.ret.clone())
         .or_else(|| cg.imported_fns.get(&callee_name).map(|s| s.ret.clone()))
         .ok_or_else(|| format!("handle spawn: signature for `{callee_name}` not found"))?;
+    // Heap-pointer words (`array<T>` / `map<K, V>`) get their own kinds so the runtime can
+    // release a returned pointer from the child's spawn-arg drop ladder — a child that
+    // returns one of its own heap-cloned arguments hands ownership to the parent, and the
+    // ladder must not free it behind `h.receive()`.
+    let is_heap_ptr = |t: &Type| {
+        matches!(
+            cg.resolve_type(t),
+            Type::BuiltinArray { .. } | Type::BuiltinMap { .. }
+        )
+    };
+    // The ONE `ret_kind` classification. Every 16-byte aggregate the resume fn stores INLINE
+    // in the return slot needs its copy-before-frame-free kind: `number` (the i128) and — since
+    // v0.3-M8 Phase 4 — a plain `maybe<T>` (the `{flag, bits}` pair `lower_stmt_return` stores;
+    // the `_ => VALUE_WORD` fallthrough used to hand the parent the flag word as a pointer, the
+    // SIGSEGV `v0_3_m8_p4_handle_maybe_return.ynz` pins). A `-> maybe<T> errors` ok-word is a
+    // heap cell already (`maybe_to_heap_cell` at the return) and stays `EC_WORD`. The word
+    // types are listed by name so a future aggregate return cannot fall through silently.
     let ret_kind = match &sig_ret {
         Type::ErrorsCapable { inner } => match inner.as_ref() {
             Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_EC_NUMBER,
+            t if is_heap_ptr(t) => ynz_abi::HANDLE_RET_KIND_EC_HEAP_PTR,
             _ => ynz_abi::HANDLE_RET_KIND_EC_WORD,
         },
         Type::Number { precision } if *precision <= 34 => ynz_abi::HANDLE_RET_KIND_VALUE_NUMBER,
-        _ => ynz_abi::HANDLE_RET_KIND_VALUE_WORD,
+        Type::Maybe { .. } => ynz_abi::HANDLE_RET_KIND_VALUE_MAYBE,
+        t if is_heap_ptr(t) => ynz_abi::HANDLE_RET_KIND_VALUE_HEAP_PTR,
+        Type::Nothing
+        | Type::Int
+        | Type::Bool
+        | Type::Float
+        | Type::String
+        | Type::Number { .. }
+        | Type::Options { .. }
+        | Type::Union { .. }
+        | Type::Sensitive { .. }
+        | Type::BuiltinChannel { .. }
+        | Type::BackgroundHandle { .. }
+        | Type::Range { .. }
+        | Type::BuiltinFixed { .. } => ynz_abi::HANDLE_RET_KIND_VALUE_WORD,
+        other => {
+            return Err(format!(
+                "handle spawn: `{callee_name}` returns {other:?}, an aggregate with no \
+                 completion-extraction kind — refusing to classify it as an i64 word"
+            ))
+        }
     } as u64;
 
     let handle_val = lower_sm_background_spawn(cg, call, &callee_name, Some(ret_kind))?;
@@ -12122,8 +12693,9 @@ fn emit_conduit_stmt<'ctx, 'g>(
 ///
 /// Result value at `post`:
 /// - send ops → `{i64 err, i64 0}` EC struct (`nothing errors`, Lock 8);
-/// - `ch.receive()` → the elem-typed value (Closed is structurally unreachable in v0.3-M4 —
-///   the channel object holds a sender — and aborts loudly via `ynz_unhandled_error`);
+/// - `ch.receive()` → a `maybe<elem>` envelope pointer (v0.3-M8 Phase 4): the ready paths
+///   deliver `{1, payload}`; the closed paths — reachable once `close()` has been called and
+///   the buffer is drained — deliver `none` (`{0, 0}`), never an error and never a hang;
 /// - `h.receive()` → `{i64 err, i64 ok}` EC struct (`T errors`; Closed = the typed
 ///   task-already-finished error, never a hang).
 ///
@@ -12155,10 +12727,76 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         let arg = &args[0];
         let arg_ty = cg.expr_type(arg);
         let v = lower_expr(cg, arg)?;
-        cg.to_i64_bits(v, &arg_ty)
-            .map_err(|e| format!("conduit send value bits: {e}"))?
+        // fr12 (v0.3-M8 Phase 4 step 3d): a decimal128 payload lives on the sender's frame
+        // (a pointer to per-site i128 storage) and would dangle in the buffer. Mint a fresh
+        // counted 16-byte cell through the ONE `number_to_heap_cell` helper the `background`
+        // decimal128 bg-arg path already uses; the cell's pointer bits ride the slot and the
+        // receive side (below) copies out and frees it. Both send producers (`ch.send`,
+        // `h.send`) pass through here, so the handle form gets the marshalling for free. The
+        // sender's own binding is untouched — `number` is copy-through (never given away).
+        // "Does this element get a minted cell?" is answered by the ONE element-kind
+        // classification (`channel_elem_drop == NumberCell`), never by a re-derived
+        // precision test beside it (authoritative-derivation; fix round 2 replaced the twin).
+        if channel_elem_drop(&cg.resolve_type(&arg_ty)) == Some(ChannelElemDrop::NumberCell) {
+            let cell = cg.number_to_heap_cell(v.into_pointer_value(), "conduit_send_num")?;
+            cg.builder
+                .build_ptr_to_int(cell, i64t, "conduit_send_num_bits")
+                .map_err(|e| format!("conduit send number cell bits: {e}"))?
+        } else {
+            cg.to_i64_bits(v, &arg_ty)
+                .map_err(|e| format!("conduit send value bits: {e}"))?
+        }
     } else {
         i64t.const_int(0, false)
+    };
+    // fr12 receive side: a `channel<number>` delivers cell-pointer bits; the receiver copies
+    // the 16 bytes into its OWN per-site storage (one entry-block i128 slot per receive site)
+    // and frees the cell immediately, BEFORE the `maybe<number>` envelope is built — the cell
+    // never outlives the receive statement. Shared by both ready paths.
+    let recv_number_own: Option<PointerValue<'ctx>> = match op {
+        ConduitOp::ChanRecv { elem }
+            if channel_elem_drop(&cg.resolve_type(elem)) == Some(ChannelElemDrop::NumberCell) =>
+        {
+            Some(cg.alloca_in_entry_llvm(cg.i128(), "conduit_recv_num_own")?)
+        }
+        _ => None,
+    };
+    // Copy a delivered number cell into the receiver-owned slot and free the cell; returns
+    // the slot's pointer bits (what the `maybe<number>` envelope carries).
+    let unpack_number_cell = |cg: &mut Cg<'ctx, '_>,
+                              cell_bits: inkwell::values::IntValue<'ctx>,
+                              own: PointerValue<'ctx>,
+                              label: &str|
+     -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let cell = cg
+            .builder
+            .build_int_to_ptr(cell_bits, cg.ptr(), &format!("conduit_recv_cell_{label}"))
+            .map_err(|e| format!("conduit recv cell ptr {label}: {e}"))?;
+        let bits = cg
+            .builder
+            .build_load(cg.i128(), cell, &format!("conduit_recv_num_{label}"))
+            .map_err(|e| format!("conduit recv number load {label}: {e}"))?
+            .into_int_value();
+        // The cell is a counted heap allocation with the allocator's alignment (16 here),
+        // but claim only the frame floor — the same discipline every i128 load of
+        // non-alloca provenance follows.
+        state_machine::claim_frame_i128_align(
+            bits.as_instruction_value()
+                .ok_or_else(|| format!("conduit recv number load {label}: no instruction"))?,
+        )?;
+        cg.builder
+            .build_store(own, bits)
+            .map_err(|e| format!("conduit recv number store {label}: {e}"))?;
+        cg.builder
+            .build_call(
+                cg.rt.ynz_number_cell_free,
+                &[cell.into()],
+                &format!("conduit_recv_cell_free_{label}"),
+            )
+            .map_err(|e| format!("conduit recv cell free {label}: {e}"))?;
+        cg.builder
+            .build_ptr_to_int(own, cg.i64(), &format!("conduit_recv_num_bits_{label}"))
+            .map_err(|e| format!("conduit recv number bits {label}: {e}"))
     };
 
     // One poll emission (used for both the first poll and the resumed poll). Returns the
@@ -12261,18 +12899,29 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
 
     // Closed-path error text per op (WHAT/WHAT-INSTEAD/WHY lives in the typeck teaching
     // diagnostics; this is the RUNTIME error message the typed `errors` value carries).
-    let closed_msg: &str = match op {
-        ConduitOp::ChanSend | ConduitOp::HandleSend => {
-            "The channel is closed - the receiving side is gone, so this value cannot be delivered. \
-             Handle the error with .failed() or .or(), or keep the receiver alive."
-        }
-        ConduitOp::HandleRecv => {
+    // `ch.receive()` has NO message: after `close()` and a drained buffer it returns `none`
+    // — the end of a stream is a normal value, not a failure (v0.3-M8 Phase 4).
+    let closed_msg: Option<&str> = match op {
+        ConduitOp::ChanSend | ConduitOp::HandleSend => Some(
+            "The channel is closed — close() was called, so this value cannot be delivered. \
+             Check .failed() on the send, or send everything before close().",
+        ),
+        ConduitOp::HandleRecv => Some(
             "This task already finished and its value was already received. Store the first \
-             receive() result in a binding if you need it in more than one place."
-        }
+             receive() result in a binding if you need it in more than one place.",
+        ),
+        ConduitOp::ChanRecv { .. } => None,
+    };
+    // The `maybe<T>` envelope a bare-channel `receive()` returns: ONE slot per receive site,
+    // hoisted to the function's ENTRY block (`alloca_in_entry_llvm`) — `conduit_post` sits
+    // inside the consumer's `while` body, so an insertion-point alloca would grow the resume
+    // function's stack by 16 bytes per iteration (v0.3-M8 Phase 4 step 4b). Every
+    // `.exists()`/`.value`/`.or()` site reads this same `{i64 has, i64 bits}` layout.
+    let recv_envelope: Option<PointerValue<'ctx>> = match op {
         ConduitOp::ChanRecv { .. } => {
-            "receive() on a closed channel - every sender is gone and the buffer is empty."
+            Some(cg.alloca_in_entry_llvm(cg.maybe_type(), "conduit_recv_env")?)
         }
+        _ => None,
     };
 
     // ── first poll ──────────────────────────────────────────────────────────
@@ -12308,10 +12957,12 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         .build_unconditional_branch(pending_block)
         .map_err(|e| format!("conduit suspend branch: {e}"))?;
 
-    // A closed-path error value builder (shared by both closed blocks).
+    // A closed-path error value builder (shared by both closed blocks of the send/handle ops;
+    // never called for `ch.receive()`, which builds `none` instead).
     let build_closed_err =
         |cg: &mut Cg<'ctx, '_>, label: &str| -> Result<inkwell::values::IntValue<'ctx>, String> {
-            let msg_global = build_string_global(cg.ctx, cg.module, closed_msg, ".conduit.closed");
+            let msg = closed_msg.ok_or("conduit: closed error built for a message-less op")?;
+            let msg_global = build_string_global(cg.ctx, cg.module, msg, ".conduit.closed");
             let err_ptr = cg
                 .builder
                 .build_call(
@@ -12336,11 +12987,14 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         Option<inkwell::values::IntValue<'ctx>>,
     )> = match &outs1 {
         Some((a, b)) => {
-            let va = cg
+            let mut va = cg
                 .builder
                 .build_load(i64t, *a, "conduit_pl1_a")
                 .map_err(|e| format!("conduit payload1 a: {e}"))?
                 .into_int_value();
+            if let Some(own) = recv_number_own {
+                va = unpack_number_cell(cg, va, own, "first")?;
+            }
             let vb = match b {
                 Some(bp) => Some(
                     cg.builder
@@ -12358,27 +13012,15 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         .build_unconditional_branch(post_bb)
         .map_err(|e| format!("conduit ready1 branch: {e}"))?;
 
-    // closed1.
+    // closed1. For `ch.receive()` the closed path is the LIVE end-of-stream path (v0.3-M8
+    // Phase 4: `close()` exists): it carries no value and builds no error — `post` stores a
+    // `none` envelope. The send/handle ops build their typed error value and merge it.
     cg.builder.position_at_end(closed1_bb);
-    let closed1_terminates = matches!(op, ConduitOp::ChanRecv { .. });
-    let err1 = if closed1_terminates {
-        // Structurally unreachable in v0.3-M4 (the channel object holds a sender), kept as
-        // a LOUD abort — never a silent wrong value (verification discipline).
-        let e = build_closed_err(cg, "closed1")?;
-        let e_ptr = cg
-            .builder
-            .build_int_to_ptr(e, ctx.ptr_type(AddressSpace::default()), "conduit_c1_ptr")
-            .map_err(|e| format!("conduit closed1 int_to_ptr: {e}"))?;
+    let recv_returns_none = matches!(op, ConduitOp::ChanRecv { .. });
+    let err1 = if recv_returns_none {
         cg.builder
-            .build_call(
-                cg.rt.ynz_unhandled_error,
-                &[e_ptr.into()],
-                "conduit_c1_abort",
-            )
-            .map_err(|e| format!("conduit closed1 abort: {e}"))?;
-        cg.builder
-            .build_unreachable()
-            .map_err(|e| format!("conduit closed1 unreachable: {e}"))?;
+            .build_unconditional_branch(post_bb)
+            .map_err(|e| format!("conduit closed1 branch: {e}"))?;
         None
     } else {
         let e = build_closed_err(cg, "closed1")?;
@@ -12411,11 +13053,14 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         Option<inkwell::values::IntValue<'ctx>>,
     )> = match &outs2 {
         Some((a, b)) => {
-            let va = cg
+            let mut va = cg
                 .builder
                 .build_load(i64t, *a, "conduit_pl2_a")
                 .map_err(|e| format!("conduit payload2 a: {e}"))?
                 .into_int_value();
+            if let Some(own) = recv_number_own {
+                va = unpack_number_cell(cg, va, own, "resume")?;
+            }
             let vb = match b {
                 Some(bp) => Some(
                     cg.builder
@@ -12434,22 +13079,10 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
         .map_err(|e| format!("conduit ready2 branch: {e}"))?;
 
     cg.builder.position_at_end(closed2_bb);
-    let err2 = if closed1_terminates {
-        let e = build_closed_err(cg, "closed2")?;
-        let e_ptr = cg
-            .builder
-            .build_int_to_ptr(e, ctx.ptr_type(AddressSpace::default()), "conduit_c2_ptr")
-            .map_err(|e| format!("conduit closed2 int_to_ptr: {e}"))?;
+    let err2 = if recv_returns_none {
         cg.builder
-            .build_call(
-                cg.rt.ynz_unhandled_error,
-                &[e_ptr.into()],
-                "conduit_c2_abort",
-            )
-            .map_err(|e| format!("conduit closed2 abort: {e}"))?;
-        cg.builder
-            .build_unreachable()
-            .map_err(|e| format!("conduit closed2 unreachable: {e}"))?;
+            .build_unconditional_branch(post_bb)
+            .map_err(|e| format!("conduit closed2 branch: {e}"))?;
         None
     } else {
         let e = build_closed_err(cg, "closed2")?;
@@ -12489,16 +13122,51 @@ fn emit_conduit_suspend_point<'ctx, 'g>(
                 .into_struct_value();
             Ok(r.into())
         }
-        ConduitOp::ChanRecv { elem } => {
-            // The delivered i64 payload from whichever ready path ran (closed paths abort).
+        ConduitOp::ChanRecv { .. } => {
+            // `maybe<T>`: the ready paths deliver `{1, payload}`, the closed paths (after
+            // `close()` and a drained buffer) deliver `{0, 0}` = `none`. Stored into the ONE
+            // entry-block envelope slot every `.exists()`/`.value`/`.or()` site reads; the
+            // result value is the envelope pointer, exactly what a non-SM maybe call yields.
+            let env = recv_envelope.expect("recv envelope slot");
+            let has_phi = cg
+                .builder
+                .build_phi(i64t, "conduit_recv_has")
+                .map_err(|e| format!("conduit recv has phi: {e}"))?;
             let val_phi = cg
                 .builder
                 .build_phi(i64t, "conduit_recv_val")
                 .map_err(|e| format!("conduit recv val phi: {e}"))?;
             let (p1, _) = payload1.expect("recv first-poll payload");
             let (p2, _) = payload2.expect("recv resume payload");
-            val_phi.add_incoming(&[(&p1, ready1_bb), (&p2, ready2_bb)]);
-            cg.i64_bits_to(val_phi.as_basic_value().into_int_value(), elem)
+            let one = i64t.const_int(1, false);
+            let zero = i64t.const_int(0, false);
+            has_phi.add_incoming(&[
+                (&one, ready1_bb),
+                (&zero, closed1_bb),
+                (&one, ready2_bb),
+                (&zero, closed2_bb),
+            ]);
+            val_phi.add_incoming(&[
+                (&p1, ready1_bb),
+                (&zero, closed1_bb),
+                (&p2, ready2_bb),
+                (&zero, closed2_bb),
+            ]);
+            let has_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env, 0, "conduit_recv_env_has")
+                .map_err(|e| format!("conduit recv env has gep: {e}"))?;
+            cg.builder
+                .build_store(has_gep, has_phi.as_basic_value().into_int_value())
+                .map_err(|e| format!("conduit recv env has store: {e}"))?;
+            let val_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), env, 1, "conduit_recv_env_val")
+                .map_err(|e| format!("conduit recv env val gep: {e}"))?;
+            cg.builder
+                .build_store(val_gep, val_phi.as_basic_value().into_int_value())
+                .map_err(|e| format!("conduit recv env val store: {e}"))?;
+            Ok(env.into())
         }
         ConduitOp::HandleRecv => {
             // {err, ok} EC struct — ready paths deliver the task's (err, ok); closed paths
@@ -12881,16 +13549,166 @@ fn is_block_terminated(cg: &Cg) -> bool {
         .unwrap_or(true)
 }
 
-/// Emit a cooperative preemption checkpoint at a loop back-edge.
+/// Emit the budget-ticking preemption call at a NON-yielding loop back-edge — plain
+/// (non-state-machine) loops, and the SM fixed-array arm (excluded from the yield by THE
+/// qualifying predicate; see `ynz_typeck::loop_stmt_back_edge_yields`).
 ///
-/// The v0.3-M1 stub is a no-op (single `ret`); it correctly positions call sites
-/// for v0.3-M2 state-machine suspension. Call-site preempt (at every `build_call`
-/// for user functions) deferred to M2 per P1 GATE measurement (1190% overhead).
+/// v0.3-M7 Phase 6: `ynz_rt_check_preempt` now takes the waker context and returns a
+/// bool. Non-yielding sites pass NULL and DISCARD the result: they cannot suspend (no
+/// frame, no Pending), but the call still ticks the per-worker budget — one function,
+/// one signature, no SM-only twin entry point. Yielding SM back edges go through
+/// `emit_sm_loop_back_edge` instead.
+/// v0.3-M7 Phase 6 Step 5: compile-time toggle for CALL-SITE preempt-check emission —
+/// the R6 re-measurement experiment. When `YNZ_PREEMPT_CALLSITE_CHECKS=1` is set at
+/// COMPILE time, every direct user-function call site emits the same budget-ticking
+/// `ynz_rt_check_preempt(null)` call the plain loop back edges use. This exists ONLY to
+/// take the fresh default-pipeline overhead measurement the plan's R6 mitigation
+/// requires (the prior 1190% figure was O0, wrong-tier evidence); it is NOT a user
+/// surface, and the ship/defer decision is measurement-gated against the
+/// pre-registered threshold recorded in the Phase 6 audit entry.
+fn callsite_preempt_checks_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("YNZ_PREEMPT_CALLSITE_CHECKS").is_ok_and(|v| v == "1"))
+}
+
 #[inline]
 fn emit_loop_preempt<'ctx>(cg: &mut Cg<'ctx, '_>) -> Result<(), String> {
+    let null_waker = cg.ctx.ptr_type(AddressSpace::default()).const_null();
     cg.builder
-        .build_call(cg.rt.ynz_rt_check_preempt, &[], "preempt")
+        .build_call(cg.rt.ynz_rt_check_preempt, &[null_waker.into()], "preempt")
         .map_err(|e| format!("preempt: {e}"))?;
+    Ok(())
+}
+
+/// v0.3-M7 Phase 6: emit a state-machine loop's back edge — a conditional POLL-YIELD
+/// suspension point when the enclosing function is admitted (`cg.back_edge_yield`),
+/// or the legacy budget-tick + unconditional branch when not.
+///
+/// The yield reuses ONLY the existing authoritative suspension machinery
+/// (R8 / authoritative-derivation.md — no new frame-touching path):
+///
+/// ```llvm
+/// back_edge:
+///   %p = call i8 @ynz_rt_check_preempt(ptr %waker_ctx)   ; budget check; wakes on true
+///   %should = icmp ne i8 %p, 0
+///   br i1 %should, label %yield_K, label %header
+/// yield_K:
+///   ; crossing locals are already frame-resident BY CONSTRUCTION (the per-statement
+///   ; flush discipline: flush_crossing_local_if_needed / flush_for_loop_var / the
+///   ; sm-range idx flush — all delegating to flush_var_slot_to_frame). No bulk flush.
+///   call store_resume_point(frame, K)                    ; state_machine.rs helper
+///   br label %sm_pending                                 ; existing Pending return
+/// sm_sK:                                                 ; continuation (resume path)
+///   call reload_params_from_frame(..., reload_crossing=true, reload_spike=true)
+///   br label %header                                     ; re-evaluate loop condition
+/// ```
+///
+/// The continuation index is claimed via the SAME `*current_state + 1` advance protocol
+/// every wait site uses, matching `count_suspension_stmt`'s per-qualifying-loop pre-count
+/// (count-vs-claim drift is the M3d/M3e envelope-narrowing family).
+///
+/// Callers: the SM while / for-range / for-array / for-map arms — the four forms THE
+/// qualifying predicate admits. The fixed arm and the fallback keep `emit_loop_preempt`.
+/// v0.3-M7 Phase 6 — R2/row-439 parity for MIGRATED wait-free loops: when an admitted
+/// function routes a LEAF wait-free loop (no suspension of any kind inside the body —
+/// no wait, no suspending call, no conduit, no nested qualifying loop) through an SM
+/// arm, the body's per-iteration allocas (e.g. a non-crossing union `let`'s tagged
+/// struct) would otherwise accumulate unboundedly — the exact stack-exhaustion class the
+/// plain arms' `loop_stack_save` fixed (ledger row 439), newly hot-loop-relevant because
+/// migration moves wait-free loops off the plain arms.
+///
+/// Returns `Some(sp)` — a stacksave taken at the START of each body iteration — ONLY for
+/// leaf wait-free bodies. The matching restore is emitted at the back edge, BEFORE the
+/// poll-yield branch: with no internal suspension, save and restore provably live in the
+/// SAME resume-fn activation (the yield, if taken, fires after the restore; the resume
+/// re-enters at the header and the next body pass re-takes a fresh save). A body WITH
+/// internal suspensions must NOT stacksave here — a mid-body resume would re-enter past
+/// the save site, leaving the slot from a dead C stack (fresh-stack-per-resume law) —
+/// so those bodies keep today's no-save SM behavior.
+fn sm_leaf_loop_stack_save<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    body: &ynz_ast::nodes::Block,
+) -> Result<Option<PointerValue<'ctx>>, String> {
+    let body_suspends = body.stmts.iter().any(|s| stmt_needs_sm_walker(cg, s));
+    if cg.back_edge_yield && !body_suspends {
+        Ok(Some(cg.loop_stack_save()?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_sm_loop_back_edge<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    header_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    err_label: &str,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    if !cg.back_edge_yield {
+        // Not admitted: byte-identical legacy back edge (budget tick + branch).
+        emit_loop_preempt(cg)?;
+        cg.builder
+            .build_unconditional_branch(header_bb)
+            .map_err(|e| format!("{err_label}: {e}"))?;
+        return Ok(());
+    }
+
+    let continuation_state = *current_state + 1;
+    let cont_state_bb = state_blocks
+        .get(continuation_state)
+        .copied()
+        .ok_or_else(|| {
+            format!(
+                "back-edge yield continuation state {continuation_state} out of range —                  count_suspension_points and the SM loop arms disagree on the qualifying                  predicate (authoritative-derivation violation; compiler bug)"
+            )
+        })?;
+    let yield_bb = cg.append_block("sm_backedge_yield");
+
+    let preempt_i8 = cg
+        .builder
+        .build_call(cg.rt.ynz_rt_check_preempt, &[waker_ctx.into()], "preempt")
+        .map_err(|e| format!("{err_label} preempt call: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_rt_check_preempt returned void")?
+        .into_int_value();
+    let should_yield = cg
+        .builder
+        .build_int_compare(
+            inkwell::IntPredicate::NE,
+            preempt_i8,
+            cg.ctx.i8_type().const_zero(),
+            "preempt_should",
+        )
+        .map_err(|e| format!("{err_label} preempt cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(should_yield, yield_bb, header_bb)
+        .map_err(|e| format!("{err_label} preempt branch: {e}"))?;
+
+    // yield_bb: record the continuation and return Pending. ynz_rt_check_preempt has
+    // already woken the task (wake-before-Pending), so this is a yield-and-requeue.
+    cg.builder.position_at_end(yield_bb);
+    state_machine::store_resume_point(cg.ctx, &cg.builder, frame_ptr, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("{err_label} yield->pending: {e}"))?;
+
+    // Continuation state: fresh resume-fn invocation — reload params + crossing locals
+    // (the same reload every wait continuation performs), then re-enter at the header.
+    *current_state = continuation_state;
+    cg.builder.position_at_end(cont_state_bb);
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
+    cg.builder
+        .build_unconditional_branch(header_bb)
+        .map_err(|e| format!("{err_label} cont->header: {e}"))?;
+
     Ok(())
 }
 
@@ -13599,6 +14417,8 @@ fn lower_stmt_while<'ctx>(
     let body_bb = cg.append_block("while_body");
     let exit_bb = cg.append_block("while_exit");
 
+    // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+    let loop_sp = cg.loop_stack_save()?;
     cg.builder
         .build_unconditional_branch(header_bb)
         .map_err(|e| format!("{e}"))?;
@@ -13618,12 +14438,14 @@ fn lower_stmt_while<'ctx>(
     }
     if !is_block_terminated(cg) {
         emit_loop_preempt(cg)?;
+        cg.loop_stack_restore(loop_sp)?;
         cg.builder
             .build_unconditional_branch(header_bb)
             .map_err(|e| format!("{e}"))?;
     }
 
     cg.builder.position_at_end(exit_bb);
+    cg.loop_stack_restore(loop_sp)?;
     Ok(())
 }
 
@@ -13660,6 +14482,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("si_body");
         let after_bb = cg.append_block("si_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -13711,6 +14535,7 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -13718,6 +14543,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -13735,29 +14561,31 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("uf_body");
         let after_bb = cg.append_block("uf_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
         cg.builder.position_at_end(cond_bb);
 
-        // Call next(&obj) → maybe<T> (stored in a fresh alloca returned as ptr).
-        let maybe_slot_ptr = cg
+        // Call next(&obj) → maybe<T>. v0.3-M7 R9: `next` returns the {i64, i64}
+        // envelope BY VALUE (never a pointer into its own dead frame — the exact
+        // miscompile the Class-3 RED fixture locks: the optimizer deleted the
+        // stores to the callee's dying alloca and this loop never saw `none`).
+        // Extract (has_value, bits) straight from the returned aggregate.
+        let maybe_env = cg
             .builder
             .build_call(next_fn, &[obj_ptr.into()], "uf_next")
             .map_err(|e| format!("{e}"))?
             .try_as_basic_value()
             .basic()
             .ok_or("next() returned void")?
-            .into_pointer_value();
+            .into_struct_value();
 
-        // Check has_value (slot 0).
-        let tag_gep = cg
-            .builder
-            .build_struct_gep(cg.maybe_type(), maybe_slot_ptr, 0, "uf_tag")
-            .map_err(|e| format!("{e}"))?;
+        // Check has_value (field 0).
         let tag = cg
             .builder
-            .build_load(cg.i64(), tag_gep, "uf_tag_v")
+            .build_extract_value(maybe_env, 0, "uf_tag_v")
             .map_err(|e| format!("{e}"))?
             .into_int_value();
         let has = cg
@@ -13769,14 +14597,10 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(body_bb);
-        // Extract the value (slot 1) and determine its type by looking at the typeck.
-        let val_gep = cg
-            .builder
-            .build_struct_gep(cg.maybe_type(), maybe_slot_ptr, 1, "uf_val")
-            .map_err(|e| format!("{e}"))?;
+        // Extract the value (field 1) and determine its type by looking at the typeck.
         let bits = cg
             .builder
-            .build_load(cg.i64(), val_gep, "uf_bits")
+            .build_extract_value(maybe_env, 1, "uf_bits")
             .map_err(|e| format!("{e}"))?
             .into_int_value();
         // The element type is Int (as the most common case in our fixtures).
@@ -13797,12 +14621,14 @@ fn lower_stmt_for<'ctx>(
         cg.locals.remove(var);
         if !is_block_terminated(cg) {
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
         }
 
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -13835,6 +14661,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("for_body");
         let after_bb = cg.append_block("for_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -13898,6 +14726,7 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -13905,6 +14734,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -13931,6 +14761,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("ff_body");
         let after_bb = cg.append_block("ff_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -13981,6 +14813,7 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -13988,6 +14821,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -14039,6 +14873,8 @@ fn lower_stmt_for<'ctx>(
         let body_bb = cg.append_block("mfor_body");
         let after_bb = cg.append_block("mfor_after");
 
+        // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+        let loop_sp = cg.loop_stack_save()?;
         cg.builder
             .build_unconditional_branch(cond_bb)
             .map_err(|e| format!("{e}"))?;
@@ -14108,12 +14944,14 @@ fn lower_stmt_for<'ctx>(
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
             emit_loop_preempt(cg)?;
+            cg.loop_stack_restore(loop_sp)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
         }
 
         cg.builder.position_at_end(after_bb);
+        cg.loop_stack_restore(loop_sp)?;
         return Ok(());
     }
 
@@ -14176,6 +15014,8 @@ fn lower_stmt_for<'ctx>(
     let body_bb = cg.append_block("for_body");
     let exit_bb = cg.append_block("for_exit");
 
+    // R2 / ledger row 439: release each iteration's allocas (see loop_stack_save).
+    let loop_sp = cg.loop_stack_save()?;
     cg.builder
         .build_unconditional_branch(header_bb)
         .map_err(|e| format!("{e}"))?;
@@ -14231,12 +15071,14 @@ fn lower_stmt_for<'ctx>(
             .build_store(counter_slot, ctr_next)
             .map_err(|e| format!("{e}"))?;
         emit_loop_preempt(cg)?;
+        cg.loop_stack_restore(loop_sp)?;
         cg.builder
             .build_unconditional_branch(header_bb)
             .map_err(|e| format!("{e}"))?;
     }
 
     cg.builder.position_at_end(exit_bb);
+    cg.loop_stack_restore(loop_sp)?;
     cg.locals.remove(var);
     Ok(())
 }
@@ -14381,11 +15223,24 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                     )
                                                     .map_err(|e| format!("num err i128 load: {e}"))?
                                                     .into_int_value();
-                                                cg.builder
+                                                // The value pointer may be an SM
+                                                // staged-param pointer into the
+                                                // caller's frame (8-aligned) —
+                                                // claim the floor, never ABI 16.
+                                                state_machine::claim_frame_i128_align(
+                                                    i128_val.as_instruction_value().ok_or(
+                                                        "num err i128 load: no instruction value",
+                                                    )?,
+                                                )?;
+                                                let st = cg
+                                                    .builder
                                                     .build_store(staging_ptr, i128_val)
                                                     .map_err(|e| {
                                                         format!("num err staging store: {e}")
                                                     })?;
+                                                // Staging slot is frame-interior:
+                                                // only 8-aligned — claim that.
+                                                state_machine::claim_frame_i128_align(st)?;
                                                 // The EC ok-word is the staging slot address as i64.
                                                 cg.builder
                                                     .build_ptr_to_int(
@@ -14410,9 +15265,31 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                         .to_string(),
                                                 );
                                             }
-                                            // String, Array, Map, Maybe, Union: all heap-allocated
-                                            // (global literals or ynz_alloc). The pointer survives
-                                            // resume fn return — ptr_to_int is safe.
+                                            // Maybe: the envelope is a per-site STACK alloca
+                                            // (`build_maybe_none` etc.) — it dies with this
+                                            // resume invocation, so its raw pointer must never
+                                            // ride the ok word (v0.3-M7 R9 sibling). Promote
+                                            // envelope + any Shape payload to counted heap
+                                            // cells; the wrapper/caller reads a stable cell.
+                                            Type::Maybe { inner: m_inner } => {
+                                                let cell = cg.maybe_to_heap_cell(
+                                                    ptr,
+                                                    m_inner,
+                                                    "sm_ec_ret",
+                                                )?;
+                                                cg.builder
+                                                    .build_ptr_to_int(
+                                                        cell,
+                                                        cg.ctx.i64_type(),
+                                                        "sm_ec_maybe_ok",
+                                                    )
+                                                    .map_err(|e| {
+                                                        format!("sm_ec_maybe_ok p2i: {e}")
+                                                    })?
+                                            }
+                                            // String, Array, Map, Union: heap-allocated
+                                            // (global literals or ynz_alloc). The pointer
+                                            // survives resume fn return — ptr_to_int is safe.
                                             _ => cg
                                                 .builder
                                                 .build_ptr_to_int(
@@ -14502,6 +15379,14 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 .build_load(cg.ctx.i128_type(), ptr_v, "sm_ret_dec_load")
                                 .map_err(|e| format!("sm ret number i128 load: {e}"))?
                                 .into_int_value();
+                            // For an SM number PARAM the value pointer is staged bits
+                            // pointing into the caller's frame (8-aligned) — claim the
+                            // guaranteed floor, never ABI 16.
+                            state_machine::claim_frame_i128_align(
+                                i128_val
+                                    .as_instruction_value()
+                                    .ok_or("sm ret number i128 load: no instruction value")?,
+                            )?;
                             state_machine::store_return_value_i128(
                                 cg.ctx,
                                 &cg.builder,
@@ -14509,10 +15394,36 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 i128_val,
                             )?;
                         }
+                        // Maybe: the envelope is a per-site STACK alloca that dies with
+                        // this resume invocation — storing its raw pointer in the return
+                        // slot dangles by the time the wrapper loads it (v0.3-M7 R9).
+                        // Store the envelope's VALUE instead: the (flag, bits) pair rides
+                        // the 16-byte return slot exactly like the errors {i64,i64} pair
+                        // (same slot+0/+8 layout — `store_return_value_errors` IS the one
+                        // pair-store producer). A wide payload (shape / number) heap-promotes
+                        // first (the shared flag-guarded discipline; heap is mandatory
+                        // because the resume stack dies).
+                        Type::Maybe { ref inner } => {
+                            let env_ptr = val.into_pointer_value();
+                            let (flag, bits) = cg.load_maybe_env_pair(env_ptr, "sm_ret_maybe")?;
+                            let stable_bits = cg.maybe_payload_stable_bits(
+                                flag,
+                                bits,
+                                inner,
+                                "sm_ret_maybe",
+                                true,
+                            )?;
+                            state_machine::store_return_value_errors(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                flag,
+                                stable_bits,
+                            )?;
+                        }
                         Type::String
                         | Type::BuiltinArray { .. }
                         | Type::BuiltinFixed { .. }
-                        | Type::Maybe { .. }
                         | Type::BuiltinMap { .. }
                         | Type::Union { .. }
                         | Type::Sensitive { .. } => {
@@ -14577,9 +15488,40 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             Some(expr) => {
                 let val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
-                let success_bits = cg
-                    .to_i64_bits(val, &val_ty)
-                    .unwrap_or_else(|_| cg.i64().const_int(0, false));
+                // v0.3-M7 Phase 3 / R9 sibling: the EC ok-WORD must never carry a
+                // pointer into the callee's own stack. maybe / shape / number
+                // success values are per-site stack storage (envelope alloca,
+                // struct-lit alloca, i128 alloca) — promote each to a counted heap
+                // cell before packing its address into the ok word (verified live:
+                // `-> maybe<int> errors` / `-> Coin errors` / `-> number errors`
+                // all returned garbage under default<O2> pre-fix). Same
+                // never-drop-cells posture as store_field (FRAGO 009); everything
+                // else is self-contained bits or already heap-backed.
+                let success_bits = match cg.resolve_type(&val_ty) {
+                    Type::Maybe { ref inner } => {
+                        let cell =
+                            cg.maybe_to_heap_cell(val.into_pointer_value(), inner, "ec_ret")?;
+                        cg.builder
+                            .build_ptr_to_int(cell, cg.i64(), "ec_ret_maybe_bits")
+                            .map_err(|e| format!("ec ret maybe bits: {e}"))?
+                    }
+                    Type::Shape { ref name } if !name.is_empty() => {
+                        let cell =
+                            cg.shape_bytes_to_heap_cell(val.into_pointer_value(), name, "ec_ret")?;
+                        cg.builder
+                            .build_ptr_to_int(cell, cg.i64(), "ec_ret_shape_bits")
+                            .map_err(|e| format!("ec ret shape bits: {e}"))?
+                    }
+                    Type::Number { precision } if precision <= 34 => {
+                        let cell = cg.number_to_heap_cell(val.into_pointer_value(), "ec_ret")?;
+                        cg.builder
+                            .build_ptr_to_int(cell, cg.i64(), "ec_ret_num_bits")
+                            .map_err(|e| format!("ec ret num bits: {e}"))?
+                    }
+                    _ => cg
+                        .to_i64_bits(val, &val_ty)
+                        .unwrap_or_else(|_| cg.i64().const_int(0, false)),
+                };
                 let result_ty = errors_result_type(cg.ctx);
                 let mut result = result_ty.const_zero();
                 result = cg
@@ -14607,9 +15549,79 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
         }
         Some(expr) => {
             let val = lower_expr(cg, expr)?;
-            cg.builder
-                .build_return(Some(&val))
-                .map_err(|e| format!("ret: {e}"))?;
+            // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
+            // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
+            // legally miscompiled: stores to the dying alloca get deleted and the
+            // caller reads garbage out of the dead frame). The declared return type
+            // (`abi_return_type`) is i128 / {i64,i64} / the shape struct; load the
+            // VALUE out of the internal pointer representation and return it.
+            match cg.resolve_type(&cg.current_fn_ret_ty.clone()) {
+                Type::Number { precision } if precision <= 34 => {
+                    let ptr_v = val.into_pointer_value();
+                    let i128_val = cg
+                        .builder
+                        .build_load(cg.i128(), ptr_v, "ret_num_val")
+                        .map_err(|e| format!("ret number load: {e}"))?
+                        .into_int_value();
+                    // Provenance may be an 8-aligned frame-interior pointer — claim
+                    // ABI 16 only when the source is provably a >=16-aligned alloca.
+                    state_machine::claim_i128_align_by_provenance(
+                        i128_val
+                            .as_instruction_value()
+                            .ok_or("ret number load: no instruction value")?,
+                        ptr_v,
+                    )?;
+                    cg.builder
+                        .build_return(Some(&i128_val))
+                        .map_err(|e| format!("ret number: {e}"))?;
+                }
+                Type::Maybe { ref inner } => {
+                    let env_ptr = val.into_pointer_value();
+                    let (flag, bits) = cg.load_maybe_env_pair(env_ptr, "ret_maybe")?;
+                    // A wide payload's pointer (shape struct alloca / number i128
+                    // slot) targets the callee's own stack — promote it to a counted
+                    // heap cell (flag-guarded; the shared promotion discipline, never
+                    // a return-side twin). Same never-drop-cells posture as
+                    // store_field (FRAGO 009).
+                    let stable_bits =
+                        cg.maybe_payload_stable_bits(flag, bits, inner, "ret_maybe", true)?;
+                    let mut env = cg.maybe_type().const_zero();
+                    env = cg
+                        .builder
+                        .build_insert_value(env, flag, 0, "ret_maybe_flag")
+                        .map_err(|e| format!("ret maybe flag insert: {e}"))?
+                        .into_struct_value();
+                    env = cg
+                        .builder
+                        .build_insert_value(env, stable_bits, 1, "ret_maybe_bits")
+                        .map_err(|e| format!("ret maybe bits insert: {e}"))?
+                        .into_struct_value();
+                    cg.builder
+                        .build_return(Some(&env))
+                        .map_err(|e| format!("ret maybe: {e}"))?;
+                }
+                Type::Shape { ref name } if !name.is_empty() => {
+                    let ptr_v = val.into_pointer_value();
+                    let struct_ty = cg
+                        .shape_types
+                        .get(name)
+                        .ok_or_else(|| format!("shape return: LLVM type for `{name}` missing"))?;
+                    // Shallow by-value copy is complete: interior shape/maybe fields
+                    // are counted heap cells (store_field), never stack pointers.
+                    let sv = cg
+                        .builder
+                        .build_load(struct_ty, ptr_v, "ret_shape_val")
+                        .map_err(|e| format!("ret shape load: {e}"))?;
+                    cg.builder
+                        .build_return(Some(&sv))
+                        .map_err(|e| format!("ret shape: {e}"))?;
+                }
+                _ => {
+                    cg.builder
+                        .build_return(Some(&val))
+                        .map_err(|e| format!("ret: {e}"))?;
+                }
+            }
         }
     }
     Ok(())
@@ -14654,15 +15666,19 @@ fn extract_range_bounds<'ctx>(
 ///
 /// The glue is registered ONCE at construction — the single authoritative element-drop choke
 /// point (authoritative-derivation.md); the runtime's `YnzChannel::drop` invokes it on each
-/// residual buffered element / suspended-send payload at last-ref teardown. Typeck
-/// (`check_channel_construction`) admits only int/float/bool/string/array/map element types,
-/// so exactly TWO non-null arms exist:
-///   - `array<T>` → `void glue(i64 bits) { ynz_array_drop(bits as ptr) }`
-///   - `map<K,V>` → `void glue(i64 bits) { ynz_map_drop(bits as ptr) }`
+/// residual buffered element / suspended-send payload at last-ref teardown, and
+/// `refuse_closed` on a refused send. The element-kind classification is THE one in
+/// `ynz_typeck::types::channel_elem_drop` (v0.3-M8 Phase 4): `None` → null glue (int/float/
+/// bool value bits; `string`'s DELIBERATELY glue-less immortal bytes — raw-malloc'd, invisible
+/// to the alloc counter, freeing would be unsound); `Some(kind)` → an EXHAUSTIVE match whose
+/// arms are function values, so a new kind cannot register a null:
+///   - `Array`      → `void glue(i64 bits) { ynz_array_drop(bits as ptr) }`
+///   - `Map`        → `void glue(i64 bits) { ynz_map_drop(bits as ptr) }`
+///   - `NumberCell` → `void glue(i64 bits) { ynz_number_cell_free(bits as ptr) }` (fr12: the
+///     16-byte cell a `number` send mints)
 ///
-/// int/float/bool are value bits (nothing to drop) and `string` is DELIBERATELY glue-less
-/// (raw-malloc'd immortal bytes, invisible to the alloc counter — freeing would be unsound):
-/// all pass null. A shape arm would be dead code (typeck rejects shape elements) — none exists.
+/// Typeck's construction gate is DERIVED from the same function (`channel_elem_supported`),
+/// so a shape arm would be dead code — none exists.
 fn channel_drop_glue<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     expr: &Expr,
@@ -14677,10 +15693,13 @@ fn channel_drop_glue<'ctx>(
             ))
         }
     };
-    let drop_fn = match &elem {
-        Type::BuiltinArray { .. } => cg.rt.ynz_array_drop,
-        Type::BuiltinMap { .. } => cg.rt.ynz_map_drop,
-        _ => return Ok(cg.ptr().const_null()),
+    let drop_fn = match channel_elem_drop(&elem) {
+        None => return Ok(cg.ptr().const_null()),
+        Some(kind) => match kind {
+            ChannelElemDrop::Array => cg.rt.ynz_array_drop,
+            ChannelElemDrop::Map => cg.rt.ynz_map_drop,
+            ChannelElemDrop::NumberCell => cg.rt.ynz_number_cell_free,
+        },
     };
     let name = format!("ynz_chan_drop_glue_{}", mangle_type(&elem));
     let glue_fn = match cg.module.get_function(&name) {
@@ -15229,6 +16248,12 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         let val = lower_expr(cg, arg)?;
                         call_args.push(val.into());
                     }
+                    // Phase 6 Step 5 (R6 re-measurement): budget tick before every direct
+                    // user call when the experiment toggle is on — see
+                    // `callsite_preempt_checks_enabled`.
+                    if callsite_preempt_checks_enabled() {
+                        emit_loop_preempt(cg)?;
+                    }
                     let call_site = cg
                         .builder
                         .build_call(fn_val, &call_args, "call")
@@ -15253,7 +16278,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     }
 
                     match call_site.try_as_basic_value().basic() {
-                        Some(val) => Ok(val),
+                        // v0.3-M7 R9: number/maybe/shape come back BY VALUE — wrap
+                        // them into a CALLER-owned slot so the internal
+                        // pointer-representation convention holds downstream. The
+                        // call expression's typeck type is the authoritative answer.
+                        Some(val) => {
+                            let ret_ty = cg.expr_type(expr);
+                            cg.wrap_abi_call_result(val, &ret_ty, "call")
+                        }
                         None => Ok(cg.i32().const_int(0, false).into()),
                     }
                 }
@@ -15271,11 +16303,35 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             match &recv_ty {
                 Type::Shape { name } => {
                     let name = name.clone();
-                    lower_ufcs_call(cg, recv_val, &name, method, args)
+                    let raw = lower_ufcs_call(cg, recv_val, &name, method, args)?;
+                    // v0.3-M7 R9: a UFCS call is the same C-ABI invocation as the
+                    // direct-call arm — by-value number/maybe/shape results wrap into
+                    // a caller-owned slot here too (one reception discipline).
+                    let ret_ty = cg.expr_type(expr);
+                    cg.wrap_abi_call_result(raw, &ret_ty, "ufcs")
                 }
                 Type::Dynamic { .. } => {
                     // Dynamic dispatch via vtable — deferred post-P5.
                     Err("codegen: dynamic dispatch call sites not yet lowered in M4 P4".to_string())
+                }
+                // v0.3-M8 Phase 4: `ch.close()` — the first NON-suspending conduit method
+                // (typeck keeps it out of `CHANNEL_SUSPENDING_METHODS`, so it never routes
+                // through `emit_conduit_stmt`): a thin call to `ynz_channel_close`, typed
+                // `nothing`. The suspending `send`/`receive` are conduit statements and are
+                // lowered by `emit_conduit_stmt`; reaching them here is a routing bug.
+                Type::BuiltinChannel { .. } => {
+                    if method == "close" {
+                        cg.builder
+                            .build_call(cg.rt.ynz_channel_close, &[recv_val.into()], "")
+                            .map_err(|e| format!("channel close: {e}"))?;
+                        Ok(cg.i32().const_int(0, false).into())
+                    } else {
+                        Err(format!(
+                            "codegen: conduit method `{method}` on a channel reached the \
+                             expression lowerer — suspending conduit methods are statements \
+                             lowered by emit_conduit_stmt"
+                        ))
+                    }
                 }
                 Type::BuiltinArray { elem } => {
                     let elem = elem.as_ref().clone();
@@ -15825,6 +16881,10 @@ enum BgArgFreeKind {
     /// FRAGO 011): freeing it would need a flag-guarded interior walk this
     /// ladder has no machinery for, and the class's drop story is P3-owned.
     HeapMaybeEnv { byte_size: u64 },
+    /// v0.3-M8 Phase 5 Auto-Arc: the task's counted reference to a shared shape block
+    /// (`ynz_arc_clone` at the spawn site): release with `ynz_arc_free(ptr, byte_size)`
+    /// after the call (CPU arm) or at retire via `BG_ARG_KIND_ARC_SHAPE` (SM ladder).
+    ArcShape { byte_size: u64 },
 }
 
 /// Prepare one `background` argument for storage in the task ctx.
@@ -15834,26 +16894,27 @@ enum BgArgFreeKind {
 /// the returned value is the heap pointer (safe to pass to the task via the ctx).
 /// The returned `BgArgFreeKind` tells the closure body what to free after the call.
 ///
-/// Two kinds of bg args reach this function:
+/// Three kinds of bg args reach this function's heap-upgrade path:
 /// - Plain-ident args where typeck chose Copy (inferred from use-after-spawn).
 /// - Explicit `.copy()` args whose inner `lower_expr` produced a Shape alloca pointer.
 ///   Those also point into spawner stack memory and need the same heap-upgrade.
+/// - fr23 materialized-shape-temp receivers/args (v0.3-M7 Phase 9, FRAGO 016):
+///   maybe-payload access (`m.value`, B′) and call-materialized (`makeCargo()`, C2)
+///   expressions, whose `lower_expr` pointer is a payload/return-temp alloca on the
+///   spawner's frame. Typeck records them as `Give` in
+///   `background_arg_inferred_ownership`; the same span lookup admits them here.
 ///
 /// In both cases the heap allocation outlives the spawner's frame (ynz_rt_spawn_blocking
 /// copies the ctx bytes — the i64 pointer value — before returning; the pointed-to
 /// heap data is what must survive).
 ///
-/// Per-type decisions:
-/// - `Shape`: `ynz_alloc(struct_bytes)` + memcpy. BgArgFreeKind::HeapShape.
-/// - `String`: immutable heap bytes, already outlive the spawner frame. BgArgFreeKind::None.
-/// - `array<Int|Float|Bool>`: `ynz_array_clone_primitive`. BgArgFreeKind::HeapArrayPrimitive.
-/// - `maybe<T>` (v0.3-M5 P2 fix round 3): `maybe_to_heap_cell` — heap-cloned envelope
-///   (+ payload for shape inners). BgArgFreeKind::HeapMaybeEnv.
-/// - Primitives (Int/Bool/Float): by-value i64, no pointer. BgArgFreeKind::None.
-/// - Other heap types (array<heap_elem>, map, union): not yet supported here;
-///   these fall through unchanged (same pointer-alias behavior as today — the caller
-///   is responsible for not mutating these after the spawn, which the typeck enforces
-///   by consuming give bindings and producing a copy warning for inferred-copy cases).
+/// Per-type decisions are NOT made here. They come from `emit_owned_copy`, which reads
+/// `ynz_typeck::owned_copy::owned_copy_plan` — the same single table `.copy()`'s lowering
+/// consumes, so the spawn path and `.copy()` can never again disagree about what an owned copy
+/// is (v0.3 concurrency hardening Phase 3, FRAGO 002 cluster C2). The two `background`-only
+/// decisions this function still makes for itself are deliberately NOT copy questions: a
+/// `channel` argument is SHARED with the task by design (`ynz_channel_share`), and an
+/// Auto-Arc group member shares ONE counted block by design.
 fn prepare_bg_arg_for_ctx<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     arg: &ynz_ast::nodes::Expr,
@@ -15880,220 +16941,301 @@ fn prepare_bg_arg_for_ctx<'ctx>(
     // ynz_channel_share (both sides must operate on the SAME bounded buffer; neither give
     // nor copy is correct for a conduit). The task's drop ladder releases the reference
     // (BgArgDropEntry kind 2 / the closure-body free arm).
-    if matches!(cg.resolve_type(ty), Type::BuiltinChannel { .. }) {
-        let shared = cg
-            .builder
-            .build_call(cg.rt.ynz_channel_share, &[val.into()], "bg_chan_share")
-            .map_err(|e| format!("bg channel share: {e}"))?
-            .try_as_basic_value()
-            .basic()
-            .ok_or_else(|| "bg channel share: returned void".to_string())?;
-        return Ok((shared, BgArgFreeKind::SharedChannel));
+    // ── The `background` path's OWN unconditional pre-gates ─────────────────────────────
+    //
+    // For these three types "give the task its own value" is not a copy question, so they are
+    // answered before the shared owned-copy routine is ever consulted, and independently of
+    // give/copy inference. WHICH types those are is read from the ONE list
+    // (`ynz_typeck::owned_copy::spawn_rehoming`) rather than matched a second time here —
+    // typeck's spawn-side refusal reads the same list, which is why a shipped-and-working
+    // `MapEntry` spawn argument cannot be refused by a rule that only knows about copying.
+    match ynz_typeck::owned_copy::spawn_rehoming(&cg.resolve_type(ty)) {
+        // v0.3-M4: a channel argument is SHARED with the task — a refcounted alias via
+        // `ynz_channel_share`. Both sides must operate on the SAME bounded buffer (that is the
+        // whole point of a channel), so neither give nor copy is correct for a conduit. The
+        // task's drop ladder releases the reference (`BgArgDropEntry` kind 2 / the closure-body
+        // free arm).
+        Some(ynz_typeck::owned_copy::SpawnRehoming::ShareChannel) => {
+            let shared = cg
+                .builder
+                .build_call(cg.rt.ynz_channel_share, &[val.into()], "bg_chan_share")
+                .map_err(|e| format!("bg channel share: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "bg channel share: returned void".to_string())?;
+            return Ok((shared, BgArgFreeKind::SharedChannel));
+        }
+        // v0.3-M5 P3 step 5(b): a MapEntry arg ALWAYS needs stabilization — the value is a
+        // pointer to the loop arm's per-site entry struct, rewritten every iteration and dead
+        // with the spawner's frame (sweep probe: the task read the ADVANCED slot — 2/20 vs
+        // expected 1/10). Route through the ONE stable-bits choke point
+        // (`value_to_stable_bits` — no bg-side marshalling twin); the free ladder reuses
+        // `HeapShape` for the 16-byte entry cell (`ynz_free` ignores its size arg today). The
+        // deep-copied VALUE sub-cell is deliberately NOT freed — the FRAGO 011 accounted
+        // persist-cell class, deferred to the drop story.
+        Some(ynz_typeck::owned_copy::SpawnRehoming::StabilizeLoopView) => {
+            let bits = cg.value_to_stable_bits(val, ty, "bg_mapentry")?;
+            let cell_ptr = cg
+                .builder
+                .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_ptr")
+                .map_err(|e| format!("bg mapentry inttoptr: {e}"))?;
+            return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+        }
+        // v0.3-M6 Phase 1d (FRAGO 009 defect A): a decimal128 (`number`, N ≤ 34) arg ALWAYS
+        // needs stabilization, because the value is a POINTER to per-site i128 storage on the
+        // spawner's frame — a hardware-decimal128 stack alloca or the staged pointer bits of an
+        // SM number param — regardless of what the ownership record says. That storage dies
+        // with the spawner's frame; the task (CPU-spawn arm via `ynz_rt_spawn_blocking`, or
+        // SM-spawn arm via `ynz_rt_spawn`) reads dangling bits after the spawner returns or
+        // suspends (probe: deterministic `0.000...` vs `2.5`). Copy the i128 into a counted heap
+        // cell via the ONE `number_to_heap_cell` mechanism the cpu-member path also consumes
+        // (authoritative-derivation). The 16-byte cell rides the free ladder's `HeapShape`
+        // protocol — closure-body `emit_bg_arg_frees` (CPU arm) and `BgArgDropEntry` kind-0 (SM
+        // arm) both free it exactly once. The SM child-side read is unchanged: `load()`'s
+        // `sm_number_param_set` indirection derefs the heap cell instead of the dead stack temp.
+        // N > 34 (bignum) is not on this list — the owned-copy table refuses it outright.
+        Some(ynz_typeck::owned_copy::SpawnRehoming::DecimalCell) => {
+            let cell = cg.number_to_heap_cell(val.into_pointer_value(), "bg_number")?;
+            return Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+        }
+        None => {}
     }
 
-    // v0.3-M5 P3 step 5(b): a MapEntry arg ALWAYS needs stabilization — an
-    // UNCONDITIONAL pre-gate, independent of give/copy inference (the map
-    // loop var may not be in `background_arg_inferred_ownership` at all).
-    // The value is a pointer to the loop arm's per-site entry struct,
-    // rewritten every iteration and dead with the spawner's frame (sweep
-    // probe: the task read the ADVANCED slot — 2/20 vs expected 1/10).
-    // Route through the ONE stable-bits choke point (`value_to_stable_bits`
-    // — no bg-side marshalling twin); the free ladder reuses `HeapShape` for
-    // the 16-byte entry cell (`ynz_free` ignores its size arg today). The
-    // deep-copied VALUE sub-cell is deliberately NOT freed — the FRAGO 011
-    // accounted persist-cell class, deferred to the drop story.
-    if matches!(cg.resolve_type(ty), Type::MapEntry { .. }) {
-        let bits = cg.value_to_stable_bits(val, ty, "bg_mapentry")?;
-        let cell_ptr = cg
-            .builder
-            .build_int_to_ptr(bits, cg.ptr(), "bg_mapentry_ptr")
-            .map_err(|e| format!("bg mapentry inttoptr: {e}"))?;
-        return Ok((cell_ptr.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
-    }
-
-    // v0.3-M6 Phase 1d (FRAGO 009 defect A): a decimal128 (`number`, N ≤ 34) arg
-    // ALWAYS needs stabilization — an UNCONDITIONAL pre-gate, independent of
-    // give/copy inference (mirroring the MapEntry pre-gate above), because the
-    // value is a POINTER to per-site i128 storage on the spawner's frame — a
-    // hardware-decimal128 stack alloca or the staged pointer bits of an SM number
-    // param — regardless of whether the ident lands in
-    // `background_arg_inferred_ownership`. That storage dies with the spawner's
-    // frame; the task (CPU-spawn arm via `ynz_rt_spawn_blocking`, or SM-spawn arm
-    // via `ynz_rt_spawn`) reads dangling bits after the spawner returns/suspends
-    // (probe: deterministic `0.000...` vs `2.5`). Copy the i128 into a counted
-    // heap cell via the ONE `number_to_heap_cell` mechanism the cpu-member path
-    // also consumes (authoritative-derivation). The 16-byte cell rides the free
-    // ladder's `HeapShape` protocol — closure-body `emit_bg_arg_frees` (CPU arm)
-    // and `BgArgDropEntry` kind-0 (SM arm) both free it exactly once. The SM
-    // child-side read is unchanged: `load()`'s `sm_number_param_set` indirection
-    // now derefs the heap cell instead of the dead stack temp. N > 34 (bignum, a
-    // heap/global string pointer that already survives the frame) is deliberately
-    // out of scope — it falls through to the by-pointer default arm below.
-    if matches!(cg.resolve_type(ty), Type::Number { precision } if precision <= 34) {
-        let cell = cg.number_to_heap_cell(val.into_pointer_value(), "bg_number")?;
-        return Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }));
+    // v0.3-M8 Phase 5 Auto-Arc, topology (B) (`IMP-ownership.md` "Auto-Arc — Sharing
+    // Topology Across `background` Boundaries"): a member of an admitted spawn group shares
+    // ONE block instead of taking its own heap copy. Codegen reads typeck's recorded
+    // `BgOwnership::Arc { group, first, last }` and consults no ownership fact of its own
+    // (authoritative-derivation): `first` mints the block (`ynz_arc_new` + a copy of the
+    // struct bytes) into the caller-side transient; EVERY member (the first included — the
+    // transient's own reference is separate) takes the task's reference with
+    // `ynz_arc_clone`; `last` queues the transient for release right after this spawn call.
+    // The task's reference rides the drop ladder as `BG_ARG_KIND_ARC_SHAPE`. The transient is
+    // what keeps the block alive between the spawns: without it, task 1 could retire and free
+    // the block before spawn 2 clones it. When the record is anything but `Arc`, this arm is
+    // not entered and the pre-existing paths below run byte-for-byte unchanged.
+    {
+        let s = arg.span();
+        if let Some(ynz_typeck::check::BgOwnership::Arc { group, first, last }) = cg
+            .typed
+            .background_arg_inferred_ownership
+            .get(&(s.start, s.end))
+        {
+            let (group, first, last) = (*group, *first, *last);
+            let arc = arc_decls(cg.ctx, cg.module);
+            let Type::Shape { name } = cg.resolve_type(ty) else {
+                return Err(format!(
+                    "auto-arc: typeck admitted a non-shape argument ({}) to an Arc group",
+                    ynz_typeck::types::type_name(ty)
+                ));
+            };
+            let struct_ty = cg
+                .shape_types
+                .get(&name)
+                .ok_or_else(|| format!("auto-arc: LLVM type for `{name}` not found"))?;
+            let abi_size =
+                cg.shape_abi_sizes.get(&name).copied().ok_or_else(|| {
+                    format!("auto-arc: shape `{name}` missing from shape_abi_sizes")
+                })?;
+            if first {
+                let size_val = cg.i64().const_int(abi_size, false);
+                let block = cg
+                    .builder
+                    .build_call(arc.new, &[size_val.into()], "arc_new")
+                    .map_err(|e| format!("auto-arc: ynz_arc_new call: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| "auto-arc: ynz_arc_new returned void".to_string())?
+                    .into_pointer_value();
+                let struct_val = cg
+                    .builder
+                    .build_load(struct_ty, val.into_pointer_value(), "arc_src")
+                    .map_err(|e| format!("auto-arc: load src: {e}"))?;
+                cg.builder
+                    .build_store(block, struct_val)
+                    .map_err(|e| format!("auto-arc: store to block: {e}"))?;
+                cg.arc_transients.insert(group, (block, abi_size));
+            }
+            let (transient, size) = cg.arc_transients.get(&group).copied().ok_or_else(|| {
+                format!("auto-arc: group {group} member lowered before its first member")
+            })?;
+            let task_ref = cg
+                .builder
+                .build_call(arc.clone, &[transient.into()], "arc_clone")
+                .map_err(|e| format!("auto-arc: ynz_arc_clone call: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "auto-arc: ynz_arc_clone returned void".to_string())?;
+            if last {
+                cg.arc_transients.remove(&group);
+                cg.arc_pending_release.push((transient, size));
+            }
+            return Ok((task_ref, BgArgFreeKind::ArcShape { byte_size: size }));
+        }
     }
 
     let is_heap_arg = match arg {
-        ynz_ast::nodes::Expr::Ident(_, s) => {
-            // Plain ident: any inferred Give or Copy ownership gets the heap fix.
-            let key = (s.start, s.end);
-            cg.typed
-                .background_arg_inferred_ownership
-                .contains_key(&key)
-        }
         // Explicit .copy() postfix — always heap-upgrade for heap types.
         ynz_ast::nodes::Expr::PostfixOp {
             op: ynz_ast::nodes::PostfixOpKind::Copy,
             ..
         } => true,
-        _ => false,
+        // Everything else: consult the ONE authoritative ownership record typeck
+        // produced at the spawn site (`background_arg_inferred_ownership` — plain
+        // idents with inferred give/copy/channel ownership, plus every non-ident
+        // spawn arg/receiver typeck's `bg_arg_is_provably_safe` did NOT prove safe,
+        // v0.3-M7 Phase 9 FRAGO 016, redesigned default-deny FRAGO 022). Byte-
+        // identical for the Ident arm this lookup replaces; extends admission
+        // exactly to what typeck recorded — never a codegen-side re-derivation
+        // (authoritative-derivation). Since FRAGO 022, that admission is
+        // default-deny: a field-access receiver (e.g. the still-latent A/C1 class,
+        // whose storage is already a separate `field_own` heap cell) rides the SAME
+        // `Give` default as everything else typeck cannot prove safe — a harmless
+        // redundant heap copy on top of an already-safe pointer, not a correctness
+        // concern (see `bg_arg_is_provably_safe`'s doc comment).
+        _ => {
+            let s = arg.span();
+            cg.typed
+                .background_arg_inferred_ownership
+                .contains_key(&(s.start, s.end))
+        }
     };
 
     if !is_heap_arg {
         return Ok((val, BgArgFreeKind::None));
     }
 
+    // ── The ONE owned-copy question, asked once ─────────────────────────────────────────
+    //
+    // Everything below this point used to be a SECOND per-type dispatch answering "give me an
+    // independent copy of this heap value", parallel to `.copy()`'s own — and both defaulted
+    // to handing back the receiver's own pointer (this function's `array<pointer-elem>` branch
+    // and its `_` arm; `.copy()`'s `AliasNoOp`). Their arms' comments cited each other as
+    // justification, with nothing forcing them to agree. One live use-after-free (a task's
+    // ladder-owned clone stored into an ALIASED outer container, then freed at retire while
+    // the spawner still pointed at it) and one live silent wrong answer came out of the pair.
+    //
+    // Now both consume `emit_owned_copy`, which consumes `ynz_typeck::owned_copy`'s single
+    // per-type table (`.claude/rules/authoritative-derivation.md`). The two `background`-only
+    // decisions ABOVE this point stay where they are because they are not copy questions at
+    // all: a channel is deliberately SHARED with the task, and an Auto-Arc group member
+    // deliberately shares one counted block.
+    //
     let resolved = cg.resolve_type(ty);
-    match &resolved {
-        Type::Shape { name } => {
-            // Shape: the val is a pointer to struct data on the spawner's stack (whether the
-            // copy came from an alloca+memcpy in inferred-copy or explicit .copy() codegen,
-            // or from the original shape allocation in a give path). Heap-allocate the struct
-            // bytes so the task's pointer survives the spawner's frame return.
-            let name = name.clone();
-            let struct_ty = cg
-                .shape_types
-                .get(&name)
-                .ok_or_else(|| format!("bg heap copy: LLVM type for `{}` not found", name))?;
-            // Byte size from the ONE authoritative shape-size source
-            // (`shape_abi_sizes` via `shape_abi_size_const`) — the FRAGO 010
-            // twin (`struct_ty.size_of()` + zext, plus this site's documented
-            // free-side fallback-to-0) unified away (P3 step 5(c)).
-            let abi_size = cg.shape_abi_sizes.get(&name).copied().ok_or_else(|| {
-                format!("bg heap copy: shape `{name}` missing from shape_abi_sizes")
-            })?;
-            let byte_size_i64 = cg.i64().const_int(abi_size, false);
-            let heap_ptr = cg
-                .builder
-                .build_call(cg.rt.ynz_alloc, &[byte_size_i64.into()], "bg_shape_heap")
-                .map_err(|e| format!("bg heap copy: ynz_alloc call: {e}"))?
-                .try_as_basic_value()
-                .basic()
-                .ok_or_else(|| "bg heap copy: ynz_alloc returned void".to_string())?
-                .into_pointer_value();
-            let struct_val = cg
-                .builder
-                .build_load(struct_ty, val.into_pointer_value(), "bg_shape_src")
-                .map_err(|e| format!("bg heap copy: load src: {e}"))?;
-            cg.builder
-                .build_store(heap_ptr, struct_val)
-                .map_err(|e| format!("bg heap copy: store to heap: {e}"))?;
-            // Byte size for the BgArgFreeKind free call: the REAL size from
-            // `shape_abi_sizes` (this closed the @follow-up that documented a
-            // fallback-to-0 here — `ynz_free` still ignores its size argument
-            // today, so the change is behavior-neutral now and correct when
-            // kernel-mode sized-dealloc lands; P3 step 5(c), FRAGO 010).
-            Ok((
-                heap_ptr.into(),
-                BgArgFreeKind::HeapShape {
-                    byte_size: abi_size,
-                },
-            ))
-        }
-        Type::BuiltinArray { elem } => {
-            // FRAGO 014 follow-through (P5 step 4b — the bg-arg double-copy
-            // hazard): an explicit spawn-site `.copy()` has ALREADY produced an
-            // independent heap array (both layout modes, every element class —
-            // the alias-no-op is closed). Re-cloning it here would (a) double-
-            // copy and (b) LEAK the intermediate: nothing ever frees the value
-            // `.copy()` allocated (an E8 clone→drop imbalance — the FRAGO 009
-            // zero-tolerance class; measured gap 4→6 on
-            // m5_p3_sweep_bg_array_shape_give_wait pre-fix). Transfer ownership
-            // of the copy to the task instead: its drop ladder frees it
-            // (HeapArrayPrimitive → ynz_array_drop), exactly as it freed the
-            // clone this branch used to mint.
-            if matches!(
-                arg,
-                ynz_ast::nodes::Expr::PostfixOp {
-                    op: ynz_ast::nodes::PostfixOpKind::Copy,
-                    ..
-                }
-            ) {
-                return Ok((val, BgArgFreeKind::HeapArrayPrimitive));
+
+    // fr23 tracking guard (v0.3-M7, FRAGO 025): `dynamic Contract` receivers are CURRENTLY
+    // unreachable here — dynamic-dispatch call sites abort earlier with "codegen: dynamic
+    // dispatch call sites not yet lowered in M4 P4" (this file, `Expr::MethodCall`'s
+    // dynamic-dispatch arm). The shared table refuses `dynamic` outright, so this arm no
+    // longer decides anything the table does not; it survives only to keep the fr23 wording,
+    // which names what must be built (a real heap-upgrade path sized for the fat pointer and
+    // its function table) BEFORE dynamic-dispatch codegen ships.
+    if let Type::Dynamic { contract } = &resolved {
+        return Err(format!(
+            "codegen: `background`-spawn heap-upgrade for `dynamic {contract}` receivers is \
+             not yet implemented (fr23 tracking guard, FRAGO 025) — dynamic-dispatch codegen \
+             must not ship until prepare_bg_arg_for_ctx gets a real heap-upgrade arm here"
+        ));
+    }
+
+    // ── Does the task need a value of its OWN? ──────────────────────────────────────────
+    //
+    // Two facts decide it, and each is READ from its one producer rather than answered here:
+    //
+    // 1. Is the task the SOLE holder — does nothing the spawner can still name reach this
+    //    value? Typeck's `background_arg_sole_holder`, derived from
+    //    `effective_ownership::provenance` plus the one spawn route that actually consumes a
+    //    binding. This replaces two syntactic guesses at the same question: an
+    //    `Expr::PostfixOp{Copy}`-plus-`Type::BuiltinArray` match (which stayed array-shaped
+    //    while `map`, `maybe` and `fixed` started allocating, so each of those double-copied
+    //    and leaked the first copy), and a bare `BgOwnership::Give` test (which is true on a
+    //    route that consumes nothing — `background eat(b.items)` left the task and `b` sharing
+    //    one map while the comment claimed sole ownership).
+    // 2. Does the value's storage already outlive the spawner's frame? Answered per PLAN by
+    //    `sole_holder_transfer_free_kind`, a non-wildcard match over the same `OwnedCopy` the
+    //    emitter destructures. Freshness alone is NOT enough here: `makeCargo()` is fresh and
+    //    sits in a return temp on the dying frame, and handing that to a task is the fr23
+    //    use-after-free.
+    //
+    // Both true: hand the value over as it is, with the free kind that plan's own SpawnArg
+    // copy would have carried, so the task's drop ladder releases it exactly once.
+    let sole_holder = {
+        let s = arg.span();
+        cg.typed
+            .background_arg_sole_holder
+            .get(&(s.start, s.end))
+            .copied()
+    };
+
+    // ── A. A temporary nobody names: hand it over, do not copy it again ──────────────────
+    //
+    // An SoA-laid-out binding is the one value whose bits are not what an ordinary reader of
+    // this type expects (`emit_owned_copy`'s ArrayClone arm gathers it into a fresh AoS
+    // buffer). Never transfer one — the task reads AoS. (An SoA binding is an `Ident`, which
+    // is never `FreshTemporary`; the guard is belt for a future fresh SoA expression form.)
+    if matches!(
+        sole_holder,
+        Some(ynz_typeck::check::SoleHolder::FreshTemporary)
+    ) && cg.soa_expr_info(arg).is_none()
+    {
+        let minted_here = matches!(
+            arg,
+            ynz_ast::nodes::Expr::PostfixOp {
+                op: ynz_ast::nodes::PostfixOpKind::Copy,
+                ..
             }
-            // Clone the array so the task gets an independent copy. Primitive
-            // elements (i64 cells) and — since the v0.3-M5 P3 by-value cut —
-            // SHAPE elements (inline bytes in the heap buffer) both clone
-            // correctly via `ynz_array_clone_primitive`, which is elem_size-
-            // aware (byte-copies len × elem_size; the `_primitive` name records
-            // its original call-site class). The M5 cut IS the "m3c ABI work"
-            // trigger the old fall-through comment deferred to: pre-fix, an
-            // array<Shape> bg arg ALIASED the caller's buffer (P3 step 5 sweep
-            // probe: task read the caller's post-spawn mutation, 119 vs 30).
-            // Remaining fall-through (alias, unchanged): string/maybe/map/union
-            // element arrays — element cells hold pointers whose deep-copy
-            // semantics are not defined by the by-value cut.
-            let is_inline_elem = matches!(
-                cg.resolve_type(elem.as_ref()),
-                Type::Int | Type::Bool | Type::Float | Type::Shape { .. }
-            );
-            if is_inline_elem {
-                let clone_ptr = cg
-                    .builder
-                    .build_call(
-                        cg.rt.ynz_array_clone_primitive,
-                        &[val.into_pointer_value().into()],
-                        "bg_arr_clone",
-                    )
-                    .map_err(|e| format!("bg arr clone: {e}"))?
-                    .try_as_basic_value()
-                    .basic()
-                    .ok_or_else(|| "bg arr clone: returned void".to_string())?;
-                Ok((clone_ptr, BgArgFreeKind::HeapArrayPrimitive))
-            } else {
-                // array<pointer_elem> (string/maybe/map/union cells): pass as-is —
-                // same pointer-alias behavior as explicit `.copy()` on these types.
-                // Deep-copy semantics for pointer-cell elements are a separate
-                // design question (FR #6-adjacent), not part of the by-value cut.
-                Ok((val, BgArgFreeKind::None))
-            }
-        }
-        Type::String => {
-            // String bytes are heap-allocated and immutable — the pointer itself survives the
-            // spawner's frame independently of the stack. No heap copy needed.
-            Ok((val, BgArgFreeKind::None))
-        }
-        Type::Maybe { inner } => {
-            // v0.3-M5 P2 fix round 3: a maybe value is a pointer to the
-            // BINDING's envelope storage — entry-block storage the producing
-            // site rewrites on every execution and that dies with the
-            // spawner's frame. Passing it through stored stale/dangling
-            // envelope-pointer bits in the spawn ctx/frame (tripwire
-            // `m5_p2_byval_bg_maybe_arg_escape`: expected 1, observed 3).
-            // Clone the envelope — and, for a shape payload, the payload
-            // bytes — into counted heap cells via the ONE maybe heap-cell
-            // core the map/array/field persist surfaces share
-            // (authoritative-derivation: no per-surface twin).
-            let cell = cg.maybe_to_heap_cell(val.into_pointer_value(), inner, "bg_maybe")?;
-            // Envelope byte size for the free ladder: same documented
-            // fallback-to-0 pattern as HeapShape above (`ynz_free` ignores
-            // its size argument today; the honest constant folds in practice
-            // for the fixed `{i64, i64}` envelope).
-            let byte_size = cg
-                .maybe_type()
-                .size_of()
-                .and_then(|s| s.get_zero_extended_constant())
-                .unwrap_or(0);
-            Ok((cell.into(), BgArgFreeKind::HeapMaybeEnv { byte_size }))
-        }
-        _ => {
-            // Primitives (Int/Bool/Float) are i64 by-value — no pointer involved.
-            // Other heap types (map, union) alias today on explicit .copy() too;
-            // that is the m3c scope, not changed here.
-            Ok((val, BgArgFreeKind::None))
+        );
+        if let Some(free) = sole_holder_transfer_free_kind(cg, &resolved, minted_here) {
+            return Ok((val, free));
         }
     }
+
+    // ── B. A binding this spawn CONSUMES, for the two shapes that already shipped this way ─
+    //
+    // A `map` the task solely holds needs no copy: copying it would leave the spawner's
+    // original held by nobody — a leak minted against a hazard that cannot occur. A type the
+    // table REFUSES has no copy to make at all, so the value itself is the only thing there is
+    // to hand over (a union today).
+    //
+    // What CHANGED here is the gate, not the type list. It used to read `BgOwnership::Give`,
+    // and justify itself with "Give means the spawner's binding was consumed at the spawn."
+    // That is false for one of the three routes to that label: FRAGO 022's default-deny arm
+    // records `Give` for any non-ident argument it cannot prove safe, consuming nothing — so
+    // `background eat(b.items)` handed the task a map `b` still holds, and both sides wrote to
+    // it. The gate now reads the record that states the fact the arm actually needs.
+    //
+    // The type list stays exactly what shipped, deliberately: extending it to `array` would
+    // change WHICH allocation the task's drop ladder releases (today it owns and frees the
+    // clone, and the several exact-gap E8 pins over the hand-off path encode that), which is
+    // release-pass work and not a copy fix. That boundary is the one commit `6be6773` drew and
+    // this round keeps; the residual sharing left in the REFUSED arm — a default-deny `Give` of
+    // a union, where no copy exists to make — is named in parked entry 71 rather than left
+    // resting on the false claim above.
+    let consumed_shape_needs_no_copy = matches!(resolved, Type::BuiltinMap { .. })
+        || matches!(
+            ynz_typeck::owned_copy::owned_copy_plan(&resolved),
+            ynz_typeck::owned_copy::OwnedCopy::Refused(_)
+        );
+    if consumed_shape_needs_no_copy {
+        let refused = matches!(
+            ynz_typeck::owned_copy::owned_copy_plan(&resolved),
+            ynz_typeck::owned_copy::OwnedCopy::Refused(_)
+        );
+        let s = arg.span();
+        let recorded_give = matches!(
+            cg.typed
+                .background_arg_inferred_ownership
+                .get(&(s.start, s.end)),
+            Some(ynz_typeck::check::BgOwnership::Give)
+        );
+        // For a REFUSED type the old `Give` test stands unchanged: there is no copy to fall
+        // back to, so narrowing the gate here would only turn a shipped pass-through into a
+        // backend error. For a `map` the fallback is a real clone, so the honest gate applies.
+        if (refused && recorded_give) || (!refused && sole_holder.is_some()) {
+            return Ok((val, BgArgFreeKind::None));
+        }
+    }
+
+    emit_owned_copy(cg, Some(arg), val, &resolved, CopyMode::SpawnArg, "bg_arg")
 }
 
 /// Emit the free calls for heap-copied `background` args inside the closure body.
@@ -16104,9 +17246,12 @@ fn prepare_bg_arg_for_ctx<'ctx>(
 ///
 /// The `ctx_arg` pointer and `arg_types` give the slot layout; `free_kinds` is parallel to
 /// `arg_types` and was recorded at the spawn site.
+/// `arc` is `Some` only when a slot is an Auto-Arc reference (declared lazily by the caller so a
+/// program with no admitted group carries no `ynz_arc_*` declaration).
 fn emit_bg_arg_frees<'ctx>(
     cg_builder: &inkwell::builder::Builder<'ctx>,
     rt: &RuntimeDecls<'ctx>,
+    arc: Option<&ArcDecls<'ctx>>,
     i64_ty: inkwell::types::IntType<'ctx>,
     ptr_ty: inkwell::types::PointerType<'ctx>,
     ctx_arg: inkwell::values::PointerValue<'ctx>,
@@ -16217,7 +17362,95 @@ fn emit_bg_arg_frees<'ctx>(
                     .build_call(rt.ynz_channel_free, &[chan_ptr.into()], "bg_chan_free")
                     .map_err(|e| format!("bg chan free call: {e}"))?;
             }
+            // v0.3-M8 Phase 5 Auto-Arc: release the task's counted reference to the shared
+            // block (the CPU-arm twin of the SM ladder's `BG_ARG_KIND_ARC_SHAPE` arm).
+            BgArgFreeKind::ArcShape { byte_size } => {
+                let slot = unsafe {
+                    cg_builder
+                        .build_gep(
+                            i64_ty,
+                            ctx_arg,
+                            &[i64_ty.const_int(i as u64, false)],
+                            "free_arc_slot",
+                        )
+                        .map_err(|e| format!("bg arc free gep: {e}"))?
+                };
+                let bits = cg_builder
+                    .build_load(i64_ty, slot, "free_arc_bits")
+                    .map_err(|e| format!("bg arc free load: {e}"))?
+                    .into_int_value();
+                let arc_ptr = cg_builder
+                    .build_int_to_ptr(bits, ptr_ty, "free_arc_ptr")
+                    .map_err(|e| format!("bg arc free inttoptr: {e}"))?;
+                let size_val = i64_ty.const_int(*byte_size, false);
+                let arc = arc.ok_or_else(|| {
+                    "bg arc free: ArcShape slot with no arc declarations".to_string()
+                })?;
+                cg_builder
+                    .build_call(arc.free, &[arc_ptr.into(), size_val.into()], "bg_arc_free")
+                    .map_err(|e| format!("bg arc free call: {e}"))?;
+            }
         }
+    }
+    Ok(())
+}
+
+/// v0.3-M8 Phase 5 — the Auto-Arc runtime entry points, declared ON FIRST USE (idempotent,
+/// the same `declare_fn` `RuntimeDecls` uses) rather than eagerly in `RuntimeDecls`: a module
+/// with no admitted spawn group then carries no `ynz_arc_*` declaration at all, so its IR is
+/// byte-identical to the pre-emission compiler's — the single-reader no-op proof. The DATA
+/// pointer is what codegen holds and passes; the refcount header (data − 8) is runtime-private.
+struct ArcDecls<'ctx> {
+    /// `ynz_arc_new(size: i64) -> ptr` — a block for `size` data bytes, count = 1.
+    new: FunctionValue<'ctx>,
+    /// `ynz_arc_clone(data: ptr) -> ptr` — one more reference (same pointer back).
+    clone: FunctionValue<'ctx>,
+    /// `ynz_arc_free(data: ptr, size: i64) -> void` — release one; the last frees.
+    free: FunctionValue<'ctx>,
+}
+
+fn arc_decls<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) -> ArcDecls<'ctx> {
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let i64 = ctx.i64_type();
+    ArcDecls {
+        new: crate::runtime_decls::declare_fn(
+            module,
+            "ynz_arc_new",
+            ptr.fn_type(&[i64.into()], false),
+        ),
+        clone: crate::runtime_decls::declare_fn(
+            module,
+            "ynz_arc_clone",
+            ptr.fn_type(&[ptr.into()], false),
+        ),
+        free: crate::runtime_decls::declare_fn(
+            module,
+            "ynz_arc_free",
+            ctx.void_type().fn_type(&[ptr.into(), i64.into()], false),
+        ),
+    }
+}
+
+/// v0.3-M8 Phase 5 Auto-Arc: release the caller-side transient of every group whose LAST
+/// member was prepared for the spawn just emitted (`ynz_arc_free(transient, size)`). Called
+/// by both spawn-site lowerings right after their spawn call — the statically placed release
+/// topology (B) specifies ("immediately after the last member's spawn statement"); the drop
+/// ladder frees only the tasks' references. Empty for every non-group spawn.
+fn release_pending_arc_transients(cg: &mut Cg<'_, '_>) -> Result<(), String> {
+    let pending = std::mem::take(&mut cg.arc_pending_release);
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let arc = arc_decls(cg.ctx, cg.module);
+    for (transient, size) in pending {
+        let size_val = cg.i64().const_int(size, false);
+        cg.builder
+            .build_call(
+                arc.free,
+                &[transient.into(), size_val.into()],
+                "arc_transient_free",
+            )
+            .map_err(|e| format!("auto-arc: transient release: {e}"))?;
     }
     Ok(())
 }
@@ -16456,8 +17689,20 @@ fn lower_expr_background<'ctx>(
     // Each BgArgFreeKind::HeapShape/HeapArrayPrimitive slot holds a heap pointer that was
     // ynz_alloc'd at spawn time and must be freed exactly once here.
     let ptr_ty = cg.ctx.ptr_type(inkwell::AddressSpace::default());
-    emit_bg_arg_frees(&cg.builder, cg.rt, cg.i64(), ptr_ty, ctx_arg, &free_kinds)
-        .map_err(|e| format!("bg arg free: {e}"))?;
+    let arc = free_kinds
+        .iter()
+        .any(|k| matches!(k, BgArgFreeKind::ArcShape { .. }))
+        .then(|| arc_decls(cg.ctx, cg.module));
+    emit_bg_arg_frees(
+        &cg.builder,
+        cg.rt,
+        arc.as_ref(),
+        cg.i64(),
+        ptr_ty,
+        ctx_arg,
+        &free_kinds,
+    )
+    .map_err(|e| format!("bg arg free: {e}"))?;
 
     cg.builder
         .build_return(None)
@@ -16493,6 +17738,7 @@ fn lower_expr_background<'ctx>(
         )
         .map_err(|e| format!("spawn_blocking: {e}"))?;
 
+    release_pending_arc_transients(cg)?;
     Ok(cg.i32().const_int(0, false).into())
 }
 
@@ -16617,8 +17863,9 @@ fn lower_sm_background_spawn<'ctx>(
     //
     // Each BgArgDropEntry has three i64 fields (24 bytes total):
     //   byte_offset: u64 — byte offset in the frame to the i64 slot holding the heap pointer
-    //   kind: u64        — 0=HeapShape (ynz_free), 1=HeapArrayPrimitive (ynz_array_drop)
-    //   size: u64        — byte count for ynz_free (HeapShape); 0 for HeapArrayPrimitive
+    //   kind: u64        — ynz_abi::BG_ARG_KIND_* (HEAP_SHAPE → ynz_free, HEAP_ARRAY →
+    //                      ynz_array_drop, SHARED_CHANNEL → ynz_channel_free)
+    //   size: u64        — byte count for ynz_free (HEAP_SHAPE); 0 for the other kinds
     //
     // Build the descriptor list only for args that were actually heap-copied; skip None.
     // If no args need freeing, pass null pointer + count=0 (no allocation needed).
@@ -16648,6 +17895,12 @@ fn lower_sm_background_spawn<'ctx>(
             // v0.3-M5 P2 fix round 3: maybe envelope cell — rides the wire's
             // kind-0 protocol (ynz_free(ptr, size); runtime unchanged).
             BgArgFreeKind::HeapMaybeEnv { byte_size } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, *byte_size))
+            }
+            // v0.3-M8 Phase 5 Auto-Arc: the task's reference — `ynz_arc_free(ptr, size)` at
+            // retire (kind 4); size = the block's data byte count (the `ynz_arc_new` size).
+            BgArgFreeKind::ArcShape { byte_size } => {
                 let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
                 Some((slot_idx, byte_offset, *byte_size))
             }
@@ -16697,13 +17950,18 @@ fn lower_sm_background_spawn<'ctx>(
                 .build_store(off0, i64_ty.const_int(*byte_offset, false))
                 .map_err(|e| format!("desc store 0: {e}"))?;
 
-            // field 1: kind (0=HeapShape, 1=HeapArrayPrimitive)
+            // field 1: kind (the ynz-abi `BG_ARG_KIND_*` wire contract; the runtime may
+            // later rewrite it to `BG_ARG_KIND_RELEASED` when the payload's ownership
+            // leaves the task via a channel send or handle return).
             let kind_val = match &free_kinds[*slot_idx] {
-                // HeapMaybeEnv deliberately shares wire kind 0: the free
+                // HeapMaybeEnv deliberately shares the HEAP_SHAPE wire kind: the free
                 // protocol IS ynz_free(ptr, size) — no runtime change.
-                BgArgFreeKind::HeapShape { .. } | BgArgFreeKind::HeapMaybeEnv { .. } => 0_u64,
-                BgArgFreeKind::HeapArrayPrimitive => 1_u64,
-                BgArgFreeKind::SharedChannel => 2_u64,
+                BgArgFreeKind::HeapShape { .. } | BgArgFreeKind::HeapMaybeEnv { .. } => {
+                    ynz_abi::BG_ARG_KIND_HEAP_SHAPE
+                }
+                BgArgFreeKind::HeapArrayPrimitive => ynz_abi::BG_ARG_KIND_HEAP_ARRAY,
+                BgArgFreeKind::SharedChannel => ynz_abi::BG_ARG_KIND_SHARED_CHANNEL,
+                BgArgFreeKind::ArcShape { .. } => ynz_abi::BG_ARG_KIND_ARC_SHAPE,
                 BgArgFreeKind::None => unreachable!("filtered above"),
             };
             let off1 = unsafe {
@@ -16775,6 +18033,7 @@ fn lower_sm_background_spawn<'ctx>(
             .try_as_basic_value()
             .basic()
             .ok_or_else(|| "ynz_rt_spawn_handle returned void".to_string())?;
+        release_pending_arc_transients(cg)?;
         return Ok(handle);
     }
 
@@ -16793,6 +18052,7 @@ fn lower_sm_background_spawn<'ctx>(
         )
         .map_err(|e| format!("ynz_rt_spawn: {e}"))?;
 
+    release_pending_arc_transients(cg)?;
     Ok(cg.i32().const_int(0, false).into())
 }
 
@@ -18149,6 +19409,121 @@ fn lower_field_access<'ctx>(
         return cg.i64_bits_to(bits, &field_ty);
     }
 
+    // `errors`-value `.message` — the error's text (`REF-errors.md`: "error description, only
+    // valid after a `.failed()` check"). The receiver is a pointer to the {i64 error_ptr,
+    // i64 success_val} result struct, exactly as `.failed()`/`.or()` read it
+    // (`lower_errors_capable_method`); the message is the null-terminated bytes
+    // `ynz_error_new` stored (a Yinz `string` at the ABI). Typeck now refuses every source
+    // program that reaches this arm on a not-yet-failed value (the flow-sensitive
+    // `.failed()`-guard in `check.rs`), so the not-failed path is unreachable FROM SOURCE —
+    // but codegen still defends it: `ynz_error_message` is called ONLY inside a real
+    // conditional block gated on `err_ptr != 0`, never unconditionally. `select` was tried
+    // first and was wrong: LLVM `select` evaluates BOTH operands eagerly, so the call ran
+    // on a null pointer even on the success path and SIGABRT'd (v0.3-M8 Phase 4 fix round 3).
+    // Before this arm existed at all the field fell through to `field_gep` and ICEd
+    // (v0.3-M8 Phase 4 fix round 2, Producer B).
+    if let Type::ErrorsCapable { .. } = &recv_ty {
+        // v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): `EC_FIELDS_REQUIRE_
+        // FAILED_CHECK` (typeck's admission list) and this arm's field-name check used to be
+        // two hand-written lists nothing bound together — a field admitted by the first and
+        // unhandled by the second reached a real user as "This is a compiler bug"
+        // (`ynz_typeck::errors_fields`'s module doc has the full producer). Both typeck's
+        // admission gate and this arm now consume the SAME table
+        // (`ynz_typeck::errors_fields::ec_field_lowering`), and typeck refuses every
+        // `Refused` field before codegen runs (`check_errors_field_is_lowered`) — the driver
+        // never invokes codegen while diagnostics are non-empty
+        // (`crates/ynz-driver/src/build.rs`). The `Refused` arm below is defensive, mirroring
+        // `emit_owned_copy`'s `OwnedCopy::Refused` arm: reaching it means typeck's gate was
+        // bypassed, which is a compiler bug, not a user's mistake.
+        let ec_field =
+            ynz_typeck::errors_fields::EcField::from_field_name(field_name).ok_or_else(|| {
+                format!("codegen: `.{field_name}` is not a recognized `errors`-capable field")
+            })?;
+        match ynz_typeck::errors_fields::ec_field_lowering(ec_field) {
+            ynz_typeck::errors_fields::EcFieldLowering::Refused => {
+                return Err(format!(
+                    "codegen: `.{field_name}` on an `errors` value reached codegen despite \
+                     having no lowering — typeck must refuse this before codegen ever sees \
+                     it; this is a compiler bug"
+                ));
+            }
+            ynz_typeck::errors_fields::EcFieldLowering::Lowered => {}
+        }
+        if ec_field == ynz_typeck::errors_fields::EcField::Message {
+            let result_ty = errors_result_type(cg.ctx);
+            let recv_ptr = lower_expr(cg, receiver)?.into_pointer_value();
+            let err_gep = cg
+                .builder
+                .build_struct_gep(result_ty, recv_ptr, 0, "ec_msg_err_gep")
+                .map_err(|e| format!("{e}"))?;
+            let err_bits = cg
+                .builder
+                .build_load(cg.i64(), err_gep, "ec_msg_err_bits")
+                .map_err(|e| format!("{e}"))?
+                .into_int_value();
+            let is_failed = cg
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    err_bits,
+                    cg.i64().const_zero(),
+                    "ec_msg_failed",
+                )
+                .map_err(|e| format!("{e}"))?;
+            let pre_bb = cg
+                .builder
+                .get_insert_block()
+                .ok_or_else(|| "ec_msg: builder has no insert block".to_string())?;
+            let call_bb = cg.append_block("ec_msg_call_bb");
+            let merge_bb = cg.append_block("ec_msg_merge");
+            cg.builder
+                .build_conditional_branch(is_failed, call_bb, merge_bb)
+                .map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(call_bb);
+            let err_ptr = cg
+                .builder
+                .build_int_to_ptr(err_bits, cg.ptr(), "ec_msg_err_ptr")
+                .map_err(|e| format!("{e}"))?;
+            let msg = cg
+                .builder
+                .build_call(cg.rt.ynz_error_message, &[err_ptr.into()], "ec_msg_call")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "ynz_error_message returned void".to_string())?;
+            cg.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(|e| format!("{e}"))?;
+            let call_end_bb = cg
+                .builder
+                .get_insert_block()
+                .ok_or_else(|| "ec_msg: builder has no insert block after call".to_string())?;
+
+            cg.builder.position_at_end(merge_bb);
+            let empty = cg
+                .builder
+                .build_global_string_ptr("", "ec_msg_empty")
+                .map_err(|e| format!("{e}"))?
+                .as_pointer_value();
+            let phi = cg
+                .builder
+                .build_phi(cg.ptr(), "ec_msg")
+                .map_err(|e| format!("{e}"))?;
+            phi.add_incoming(&[(&msg.into_pointer_value(), call_end_bb), (&empty, pre_bb)]);
+            return Ok(phi.as_basic_value());
+        }
+        // `ec_field_lowering` classified this field `Lowered` but the match above only has a
+        // real arm for `EcField::Message` — a future field marked `Lowered` needs its codegen
+        // written HERE before the classification changes. `every_ec_field_lowered_has_a_
+        // codegen_arm` in `errors_field_parity_tests` catches this at build time; this is the
+        // defensive runtime twin (same pattern as `emit_owned_copy`'s `OwnedCopy::Refused` arm).
+        return Err(format!(
+            "codegen: `.{field_name}` is classified Lowered but has no codegen arm — add one \
+             before marking it Lowered in ec_field_lowering"
+        ));
+    }
+
     // maybe<T>.value — extract value bits from the {i64,i64} alloca.
     if let Type::Maybe { inner } = &recv_ty {
         let inner = inner.as_ref().clone();
@@ -18401,65 +19776,729 @@ fn lower_postfix_op<'ctx>(
         PostfixOpKind::Copy => {
             let recv_ty = cg.expr_type(receiver);
             let recv_val = lower_expr(cg, receiver)?;
-            match &recv_ty {
-                Type::Shape { name } => {
-                    // Trivially-copyable shape: memcpy into a fresh alloca.
-                    let name = name.clone();
-                    let struct_ty = cg
-                        .shape_types
-                        .get(&name)
-                        .ok_or_else(|| format!(".copy(): LLVM type for `{}` not found", name))?;
-                    let new_slot = cg
-                        .builder
-                        .build_alloca(struct_ty, &format!("{}_copy", name))
-                        .map_err(|e| format!(".copy alloca: {e}"))?;
-                    // Load the struct value and store into the new slot.
-                    let val = cg
-                        .builder
-                        .build_load(struct_ty, recv_val.into_pointer_value(), "copy_src")
-                        .map_err(|e| format!(".copy load: {e}"))?;
+            // ONE owned-copy emitter, shared with the `background`-argument path
+            // (`prepare_bg_arg_for_ctx`). Before v0.3 concurrency hardening Phase 3 these were
+            // two per-type dispatches that both defaulted to handing back the receiver's own
+            // pointer; the pair produced one use-after-free and one silent wrong answer. See
+            // `emit_owned_copy` and `ynz_typeck::owned_copy`.
+            let (val, _free) = emit_owned_copy(
+                cg,
+                Some(receiver),
+                recv_val,
+                &recv_ty,
+                CopyMode::Body,
+                "copy",
+            )?;
+            Ok(val)
+        }
+    }
+}
+
+/// Which consumer is asking [`emit_owned_copy`] for a copy. The per-type PLAN is the same for
+/// both (`owned_copy_plan` — one table, no twin); what differs is where the copy has to live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CopyMode {
+    /// `.copy()` in a function body. The copy lives as long as the frame does, so a type whose
+    /// contents can never change may hand back the receiver.
+    Body,
+    /// A `background` argument. The spawner's frame dies while the task still holds the value,
+    /// so anything that points into that frame must be re-homed onto the heap first.
+    SpawnArg,
+}
+
+/// THE owned-copy emitter: given a value and its type, produce a genuinely independent copy.
+///
+/// This is the single place that turns `ynz_typeck::owned_copy::owned_copy_plan`'s answer into
+/// machine code, and it is what makes "one routine, two call sites" true rather than
+/// aspirational — `lower_postfix_op`'s `.copy()` arm and `prepare_bg_arg_for_ctx`'s
+/// heap-upgrade path both call it. Neither classifies a type itself.
+///
+/// The returned [`BgArgFreeKind`] tells the spawn path what the task must release at retire;
+/// `CopyMode::Body` callers ignore it (nothing releases a body-local heap value yet — the
+/// scope-exit release pass is separate, later work).
+///
+/// The `match` below is exhaustive over `OwnedCopy` with NO `_` arm on purpose: a plan added to
+/// the shared table fails to compile here until someone says how to emit it, which is the same
+/// forcing function `owned_copy_plan` itself uses over `Type`.
+fn emit_owned_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    receiver: Option<&Expr>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    mode: CopyMode,
+    site: &str,
+) -> Result<(BasicValueEnum<'ctx>, BgArgFreeKind), String> {
+    use ynz_typeck::owned_copy::{owned_copy_plan, ElemCopy, HeapCell, OwnedCopy};
+    let resolved = cg.resolve_type(ty);
+    match owned_copy_plan(&resolved) {
+        // Contents nothing can change: a second name for the same bits cannot disagree with
+        // the first, so the receiver IS the copy — in a body and across a spawn alike.
+        OwnedCopy::ReceiverIsCopy => Ok((val, BgArgFreeKind::None)),
+
+        // Immutable, but living in storage the producing frame owns.
+        OwnedCopy::FrameLocalImmutable { heap_cell } => match (mode, heap_cell) {
+            (CopyMode::Body, _) => Ok((val, BgArgFreeKind::None)),
+            (CopyMode::SpawnArg, HeapCell::Number) => {
+                // Reached only if the unconditional decimal pre-gate in
+                // `prepare_bg_arg_for_ctx` is ever bypassed; kept honest rather than left to
+                // pass a pointer into the dying frame.
+                let cell = cg.number_to_heap_cell(val.into_pointer_value(), site)?;
+                Ok((cell.into(), BgArgFreeKind::HeapShape { byte_size: 16 }))
+            }
+            (CopyMode::SpawnArg, HeapCell::None) => Err(format!(
+                "codegen: a `{}` argument cannot be handed to a `background` task — its \
+                 storage belongs to the spawning function's frame and no re-homing path \
+                 exists for it ({site})",
+                ynz_typeck::types::type_name(&resolved)
+            )),
+        },
+
+        // A shape's own bytes. Its pointer-valued fields (a nested shape, an `array`, a `map`,
+        // a `maybe`) are copied as pointers — the named residual in `ynz_typeck::owned_copy`'s
+        // header, pre-existing behaviour, unchanged here.
+        OwnedCopy::ShapeMemcpy => {
+            let Type::Shape { name } = &resolved else {
+                return Err(format!(
+                    "{site}: owned_copy_plan classified a non-shape as ShapeMemcpy"
+                ));
+            };
+            let struct_ty = cg
+                .shape_types
+                .get(name)
+                .ok_or_else(|| format!("{site}: LLVM type for `{name}` not found"))?;
+            let abi_size =
+                cg.shape_abi_sizes.get(name).copied().ok_or_else(|| {
+                    format!("{site}: shape `{name}` missing from shape_abi_sizes")
+                })?;
+            let dst = match mode {
+                CopyMode::Body => cg
+                    .builder
+                    .build_alloca(struct_ty, &format!("{name}_copy"))
+                    .map_err(|e| format!("{site} alloca: {e}"))?,
+                CopyMode::SpawnArg => {
+                    let size_val = cg.i64().const_int(abi_size, false);
                     cg.builder
-                        .build_store(new_slot, val)
-                        .map_err(|e| format!(".copy store: {e}"))?;
-                    Ok(new_slot.into())
+                        .build_call(cg.rt.ynz_alloc, &[size_val.into()], "bg_shape_heap")
+                        .map_err(|e| format!("{site}: ynz_alloc call: {e}"))?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| format!("{site}: ynz_alloc returned void"))?
+                        .into_pointer_value()
                 }
-                // FRAGO 014: array `.copy()` is a genuine ONE-LEVEL deep copy in
-                // BOTH layout modes — closing the M4-era alias-no-op stub (the
-                // old catch-all returned the receiver's own pointer, so
-                // `arr2 = arr1.copy(); arr2.set(...)` also mutated `arr1`).
-                // One-level = the same semantics as the `Type::Shape` arm above:
-                // a fresh buffer, element cells byte-copied; pointer cells
-                // (string/maybe elements) copy as pointers, so nested data still
-                // aliases (consistent with D12/D13's recorded stance).
-                Type::BuiltinArray { .. } => {
-                    let arr = recv_val.into_pointer_value();
-                    if let Some(info) = cg.soa_expr_info(receiver) {
-                        // SoA receiver: gather into a fresh AoS buffer — the
-                        // copy's binding is authority-declined, so its reads
-                        // lower AoS (see soa_copy_to_aos's header).
-                        let copied = cg.soa_copy_to_aos(&info, arr, "arr_copy")?;
-                        Ok(copied.into())
-                    } else {
-                        // AoS receiver: elem_size-aware byte deep copy
-                        // (len × elem_size; clone/drop are E7-exempt like count).
-                        let cloned = cg
-                            .builder
-                            .build_call(
-                                cg.rt.ynz_array_clone_primitive,
-                                &[arr.into()],
-                                "arr_copy_clone",
-                            )
-                            .map_err(|e| format!(".copy array clone: {e}"))?
-                            .try_as_basic_value()
-                            .basic()
-                            .ok_or_else(|| ".copy array clone: returned void".to_string())?;
-                        Ok(cloned)
-                    }
+            };
+            // IR value names are mode-stable on purpose: `copy_src` / `bg_shape_src` are the
+            // names the two call sites emitted before they shared this emitter, and IR-shape
+            // tests grep for them (`hotfix_bg_arg_number_field`).
+            let load_name = match mode {
+                CopyMode::Body => "copy_src",
+                CopyMode::SpawnArg => "bg_shape_src",
+            };
+            let struct_val = cg
+                .builder
+                .build_load(struct_ty, val.into_pointer_value(), load_name)
+                .map_err(|e| format!("{site} load: {e}"))?;
+            cg.builder
+                .build_store(dst, struct_val)
+                .map_err(|e| format!("{site} store: {e}"))?;
+            let free = match mode {
+                CopyMode::Body => BgArgFreeKind::None,
+                CopyMode::SpawnArg => BgArgFreeKind::HeapShape {
+                    byte_size: abi_size,
+                },
+            };
+            Ok((dst.into(), free))
+        }
+
+        // `fixed<T>`: N inline i64 cells. Before this, `.copy()` handed back the receiver's own
+        // cells, so `b = a.copy(); b.set(0, 99)` changed `a` too — the silent wrong answer this
+        // emitter's whole existence is about.
+        OwnedCopy::FixedMemcpy => {
+            let Type::BuiltinFixed { size, .. } = &resolved else {
+                return Err(format!(
+                    "{site}: owned_copy_plan classified a non-fixed as FixedMemcpy"
+                ));
+            };
+            let n = size.ok_or_else(|| {
+                format!(
+                    "{site}: the length of this `fixed` list is not known here, so its copy \
+                     cannot be sized — this is a compiler bug"
+                )
+            })? as u64;
+            let bytes = n * 8;
+            let cells_ty = cg.i64().array_type(n as u32);
+            let dst = match mode {
+                CopyMode::Body => cg
+                    .builder
+                    .build_alloca(cells_ty, &format!("{site}_fixed"))
+                    .map_err(|e| format!("{site} fixed alloca: {e}"))?,
+                CopyMode::SpawnArg => {
+                    let size_val = cg.i64().const_int(bytes, false);
+                    cg.builder
+                        .build_call(cg.rt.ynz_alloc, &[size_val.into()], "bg_fixed_heap")
+                        .map_err(|e| format!("{site}: ynz_alloc call: {e}"))?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| format!("{site}: ynz_alloc returned void"))?
+                        .into_pointer_value()
                 }
-                // For primitives, the value is already by-value — just return it.
-                _ => Ok(recv_val),
+            };
+            cg.builder
+                .build_memcpy(
+                    dst,
+                    8,
+                    val.into_pointer_value(),
+                    8,
+                    cg.i64().const_int(bytes, false),
+                )
+                .map_err(|e| format!("{site} fixed memcpy: {e}"))?;
+            let free = match mode {
+                CopyMode::Body => BgArgFreeKind::None,
+                CopyMode::SpawnArg => BgArgFreeKind::HeapShape { byte_size: bytes },
+            };
+            Ok((dst.into(), free))
+        }
+
+        // `array<T>`: a fresh header and buffer, and — when the cells hold pointers to
+        // separately-allocated items — every item copied through this same emitter. That
+        // second half is what makes an `array<array<int>>` genuinely independent instead of
+        // two containers sharing their inner arrays.
+        OwnedCopy::ArrayClone { elem } => {
+            let Type::BuiltinArray { elem: elem_ty } = &resolved else {
+                return Err(format!(
+                    "{site}: owned_copy_plan classified a non-array as ArrayClone"
+                ));
+            };
+            let elem_ty = elem_ty.as_ref().clone();
+            let src = val.into_pointer_value();
+            // SoA receivers gather into a fresh AoS buffer; the copy's binding is
+            // authority-declined, so its reads lower AoS (see `soa_copy_to_aos`'s header).
+            let cloned = match receiver.and_then(|r| cg.soa_expr_info(r)) {
+                Some(info) => cg.soa_copy_to_aos(&info, src, "arr_copy")?,
+                None => cg
+                    .builder
+                    .build_call(
+                        cg.rt.ynz_array_clone_primitive,
+                        &[src.into()],
+                        match mode {
+                            CopyMode::Body => "arr_copy_clone",
+                            CopyMode::SpawnArg => "bg_arr_clone",
+                        },
+                    )
+                    .map_err(|e| format!("{site} array clone: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| format!("{site} array clone: returned void"))?
+                    .into_pointer_value(),
+            };
+            if elem == ElemCopy::Nested {
+                emit_array_elem_deep_copy(cg, cloned, &elem_ty, mode, site)?;
+            }
+            let free = match mode {
+                CopyMode::Body => BgArgFreeKind::None,
+                CopyMode::SpawnArg => BgArgFreeKind::HeapArrayPrimitive,
+            };
+            Ok((cloned.into(), free))
+        }
+
+        // `map<K, V>`: a fresh header plus its four buffers.
+        OwnedCopy::MapClone => {
+            let cloned = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_map_clone,
+                    &[val.into_pointer_value().into()],
+                    "map_copy_clone",
+                )
+                .map_err(|e| format!("{site} map clone: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| format!("{site} map clone: returned void"))?;
+            // DEFERRED, four fields, for the SpawnArg case only.
+            // WHAT: the task's own copy of a `map` argument is not released when the task
+            //   retires, so a spawn that passes a map leaks that copy.
+            // WHY: releasing it needs a new `BG_ARG_KIND_*` wire value, which the runtime's
+            //   retire ladder, the channel-side release rewrite, and both of their
+            //   kind-enumerating parity tests all read. That is a wire-format change, and
+            //   this change is a correctness fix that must land BEFORE the scope-exit release
+            //   pass (a release pass landing first would emit frees on the pointers this fix
+            //   exists to stop aliasing). Shipping the wire change here would invert that
+            //   order for a leak, to fix an alias.
+            // COST to fix later: one `BG_ARG_KIND_HEAP_MAP` constant, one arm in the runtime
+            //   retire ladder calling `ynz_map_drop`, one arm here, and the `ALL_BG_ARG_KINDS`
+            //   / releasable-payload parity tests that enumerate the kinds.
+            // TRIGGER: the scope-exit release pass, which owns the release ladder — or the
+            //   first program that spawns with a `map` argument from inside a loop.
+            // Until then this is strictly better than what it replaces: the task used to
+            //   share the spawner's map outright.
+            Ok((cloned, BgArgFreeKind::None))
+        }
+
+        // `maybe<T>`: a fresh envelope cell through the ONE maybe-ownership core the map,
+        // array and field persist surfaces already share.
+        OwnedCopy::MaybeCellClone => {
+            let Type::Maybe { inner } = &resolved else {
+                return Err(format!(
+                    "{site}: owned_copy_plan classified a non-maybe as MaybeCellClone"
+                ));
+            };
+            let inner = inner.as_ref().clone();
+            let cell = cg.maybe_to_heap_cell(val.into_pointer_value(), &inner, site)?;
+            let byte_size = cg
+                .maybe_type()
+                .size_of()
+                .and_then(|s| s.get_zero_extended_constant())
+                .unwrap_or(0);
+            let free = match mode {
+                CopyMode::Body => BgArgFreeKind::None,
+                CopyMode::SpawnArg => BgArgFreeKind::HeapMaybeEnv { byte_size },
+            };
+            Ok((cell.into(), free))
+        }
+
+        // Typeck refuses `.copy()` on these before codegen runs, and the spawn path's own
+        // admission never records one. Reaching here means a compiler bug, so say so.
+        OwnedCopy::Refused(_) => Err(format!(
+            "codegen: no independent copy exists for `{}` ({site}) — this should have been \
+             refused with a teaching diagnostic before codegen; this is a compiler bug",
+            ynz_typeck::types::type_name(&resolved)
+        )),
+    }
+}
+
+/// A `background` argument whose task is the SOLE holder needs no second copy — IF the value
+/// it already is will outlive the spawner's frame. This says whether it will, per plan, and
+/// with what the task's drop ladder must then release.
+///
+/// Derived from the same [`OwnedCopy`] the emitter destructures, with no `_` arm: a new plan
+/// fails the build here until someone says where its values live. The free kind each arm
+/// returns is the one that plan's own `CopyMode::SpawnArg` emission returns, so a transferred
+/// value and a freshly-copied one ride the ladder identically.
+///
+/// `minted_here` says the argument expression is an explicit `.copy()`, which is the one form
+/// whose value THIS emitter produced in `CopyMode::Body` — the only way to know a `maybe`
+/// envelope is a heap cell rather than the entry-block alloca every other `maybe` lives in.
+/// It is not a re-derivation of who holds the value (that is fact 1, read from typeck); it is
+/// the emitter recognising its own output.
+fn sole_holder_transfer_free_kind<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    resolved: &Type,
+    minted_here: bool,
+) -> Option<BgArgFreeKind> {
+    match ynz_typeck::owned_copy::owned_copy_plan(resolved) {
+        // An `array` and a `map` are runtime-minted headers with their own buffers, whatever
+        // expression produced them — no value of either type is frame storage. A sole-held one
+        // is the task's to own.
+        ynz_typeck::owned_copy::OwnedCopy::ArrayClone { .. } => {
+            Some(BgArgFreeKind::HeapArrayPrimitive)
+        }
+        // `BgArgFreeKind::None` is what the `MapClone` SpawnArg emission returns too: the drop
+        // ladder still has no map kind (that arm's own four-field deferral). Transferring is
+        // strictly better than copying anyway — one allocation instead of two, and the one
+        // that leaks is the one the program already made.
+        ynz_typeck::owned_copy::OwnedCopy::MapClone => Some(BgArgFreeKind::None),
+        // A `maybe` envelope is an entry-block alloca unless `emit_owned_copy` heap-celled it.
+        ynz_typeck::owned_copy::OwnedCopy::MaybeCellClone if minted_here => {
+            let byte_size = cg
+                .maybe_type()
+                .size_of()
+                .and_then(|s| s.get_zero_extended_constant())
+                .unwrap_or(0);
+            Some(BgArgFreeKind::HeapMaybeEnv { byte_size })
+        }
+        ynz_typeck::owned_copy::OwnedCopy::MaybeCellClone => None,
+        // A shape's and a `fixed`'s body-mode copies are allocas on the spawner's frame, and a
+        // fresh one of either (`makeCargo()`) is a return temp on that same frame. Both must be
+        // re-homed; this is the fr23 class.
+        ynz_typeck::owned_copy::OwnedCopy::ShapeMemcpy
+        | ynz_typeck::owned_copy::OwnedCopy::FixedMemcpy => None,
+        // Nothing was allocated to transfer: the receiver either IS the bits, or is a pointer
+        // into frame storage the SpawnArg path must re-home (or refuse) for itself.
+        ynz_typeck::owned_copy::OwnedCopy::ReceiverIsCopy
+        | ynz_typeck::owned_copy::OwnedCopy::FrameLocalImmutable { .. } => None,
+        // No copy exists; the caller's own refusal arm handles it.
+        ynz_typeck::owned_copy::OwnedCopy::Refused(_) => None,
+    }
+}
+
+/// Copy every element of an already-cloned array whose cells hold pointers to separately
+/// allocated items, through [`emit_owned_copy`] — so the clone and the original do not share
+/// their items. Emitted as a counted loop over the clone's own length.
+///
+/// Called only for [`ElemCopy::Nested`] element kinds, which is exactly the set whose plan
+/// produces a fresh allocation (`array`, `map`, `maybe`); an element that cannot be copied
+/// makes the whole container a refusal in the shared table, so it never reaches here.
+///
+/// DEFERRED, four fields:
+/// - WHAT: the items this loop allocates are not released when the copy is dropped —
+///   `ynz_array_drop` is element-blind by design (recorded decision D6), so it frees the
+///   buffer and the header and nothing else.
+/// - WHY: an element-aware drop needs the element TYPE at the drop site. The runtime does not
+///   have it, and a task's retire ladder carries only a wire kind — so giving it one is the
+///   same `BG_ARG_KIND_*` wire-format change the `MapClone` arm's deferral names, and this
+///   change must land BEFORE the scope-exit release pass, not carry a piece of it. The
+///   alternative in the meantime is leaving the items SHARED, which is the alias this loop
+///   exists to remove and the thing that produced a use-after-free; a leak is the strictly
+///   less harmful of the two.
+/// - COST to fix later: per-element-kind drop glue, which codegen already mints for channel
+///   payloads (`channel_elem_drop` is the pattern), plus a way for the drop site to reach it.
+/// - TRIGGER: the scope-exit release pass, which is where a body-local array's own release
+///   lands and where this element walk has to exist anyway.
+fn emit_array_elem_deep_copy<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arr: PointerValue<'ctx>,
+    elem_ty: &Type,
+    mode: CopyMode,
+    site: &str,
+) -> Result<(), String> {
+    let i64_ty = cg.i64();
+    let len = cg
+        .builder
+        .build_call(cg.rt.ynz_array_count, &[arr.into()], &format!("{site}_len"))
+        .map_err(|e| format!("{site} deep count: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| format!("{site} deep count: returned void"))?
+        .into_int_value();
+    let idx_slot = cg
+        .builder
+        .build_alloca(i64_ty, &format!("{site}_deep_i"))
+        .map_err(|e| format!("{site} deep idx alloca: {e}"))?;
+    cg.builder
+        .build_store(idx_slot, i64_ty.const_zero())
+        .map_err(|e| format!("{site} deep idx init: {e}"))?;
+    let cell_slot = cg
+        .builder
+        .build_alloca(i64_ty, &format!("{site}_deep_cell"))
+        .map_err(|e| format!("{site} deep cell alloca: {e}"))?;
+
+    let head = cg.append_block(&format!("{site}_deep_head"));
+    let body = cg.append_block(&format!("{site}_deep_body"));
+    let done = cg.append_block(&format!("{site}_deep_done"));
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| format!("{site} deep br: {e}"))?;
+
+    cg.builder.position_at_end(head);
+    let i = cg
+        .builder
+        .build_load(i64_ty, idx_slot, &format!("{site}_deep_i_v"))
+        .map_err(|e| format!("{site} deep idx load: {e}"))?
+        .into_int_value();
+    let more = cg
+        .builder
+        .build_int_compare(IntPredicate::SLT, i, len, &format!("{site}_deep_more"))
+        .map_err(|e| format!("{site} deep cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(more, body, done)
+        .map_err(|e| format!("{site} deep cond: {e}"))?;
+
+    cg.builder.position_at_end(body);
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_get,
+            &[arr.into(), i.into(), cell_slot.into()],
+            &format!("{site}_deep_get"),
+        )
+        .map_err(|e| format!("{site} deep get: {e}"))?;
+    let bits = cg
+        .builder
+        .build_load(i64_ty, cell_slot, &format!("{site}_deep_bits"))
+        .map_err(|e| format!("{site} deep bits load: {e}"))?
+        .into_int_value();
+    let item_ptr = cg
+        .builder
+        .build_int_to_ptr(bits, cg.ptr(), &format!("{site}_deep_item"))
+        .map_err(|e| format!("{site} deep inttoptr: {e}"))?;
+    // The recursion: the item is copied by the SAME emitter, so a three-deep nesting is
+    // handled by the same rule as a one-deep one and neither can drift from the other.
+    let (copied, _free) = emit_owned_copy(
+        cg,
+        None,
+        item_ptr.into(),
+        elem_ty,
+        mode,
+        &format!("{site}_item"),
+    )?;
+    let copied_bits = cg
+        .builder
+        .build_ptr_to_int(
+            copied.into_pointer_value(),
+            i64_ty,
+            &format!("{site}_deep_new_bits"),
+        )
+        .map_err(|e| format!("{site} deep ptrtoint: {e}"))?;
+    cg.builder
+        .build_store(cell_slot, copied_bits)
+        .map_err(|e| format!("{site} deep cell store: {e}"))?;
+    cg.builder
+        .build_call(
+            cg.rt.ynz_array_set,
+            &[arr.into(), i.into(), cell_slot.into()],
+            &format!("{site}_deep_set"),
+        )
+        .map_err(|e| format!("{site} deep set: {e}"))?;
+    let next = cg
+        .builder
+        .build_int_add(i, i64_ty.const_int(1, false), &format!("{site}_deep_next"))
+        .map_err(|e| format!("{site} deep add: {e}"))?;
+    cg.builder
+        .build_store(idx_slot, next)
+        .map_err(|e| format!("{site} deep idx store: {e}"))?;
+    cg.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| format!("{site} deep loop br: {e}"))?;
+
+    cg.builder.position_at_end(done);
+    Ok(())
+}
+
+#[cfg(test)]
+mod copy_parity_tests {
+    use super::CopyMode;
+    use ynz_typeck::owned_copy::{owned_copy_plan, ElemCopy, HeapCell, OwnedCopy};
+    use ynz_typeck::type_variant_sampler::{all_type_variants, TYPE_VARIANT_COUNT};
+    use ynz_typeck::types::Type;
+
+    /// v0.3-M8 Phase 4 fix round 3, should-fix 3: this used to be a second, independently
+    /// typed copy of `ynz-typeck`'s per-variant sample list (plus its own hand-counted
+    /// `TYPE_VARIANT_COUNT`) — exactly the twin-derivation class `authoritative-derivation.md`
+    /// bans. Both now thread the ONE sampler in `ynz_typeck::type_variant_sampler`.
+    #[test]
+    fn every_variant_is_sampled() {
+        assert_eq!(
+            all_type_variants().len(),
+            TYPE_VARIANT_COUNT,
+            "ynz_typeck::type_variant_sampler::all_type_variants must have one sample per \
+             Type variant"
+        );
+    }
+
+    #[test]
+    fn copy_is_independent_matches_the_owned_copy_plan_for_every_type_variant() {
+        // WHY: `copy_is_independent` (typeck provenance: "is `x.copy()` Fresh?") and the arm
+        // that lowers `.copy()` used to be linked only by a comment claiming a parity test
+        // that did not exist (v0.3-M8 Phase 4 round-1 finding). Since v0.3 concurrency
+        // hardening Phase 3 the two are the SAME table — `copy_is_independent` is derived from
+        // `owned_copy_plan` — so this test is now a lock on that derivation rather than a
+        // bridge between two lists: if anyone gives `copy_is_independent` a body of its own
+        // again, this fails.
+        for ty in all_type_variants() {
+            let plan = owned_copy_plan(&ty);
+            // Two plans are not an independent value. `Refused` never produces one at all;
+            // `FrameLocalImmutable` hands back the RECEIVER's own pointer in body mode, so the
+            // receiver still reaches it (v0.3 hardening 3.2 fix round: `r.copy()` on a `range`
+            // was `Fresh` while aliasing).
+            let independent = !matches!(
+                plan,
+                OwnedCopy::Refused(_) | OwnedCopy::FrameLocalImmutable { .. }
+            );
+            assert_eq!(
+                ynz_typeck::types::copy_is_independent(&ty),
+                independent,
+                "{ty:?}: the owned-copy table plans {plan:?} but copy_is_independent says {} — \
+                 a `.copy()` provenance would admit or refuse a transfer the machine code does \
+                 not honor",
+                ynz_typeck::types::copy_is_independent(&ty)
+            );
+        }
+    }
+
+    #[test]
+    fn every_plan_matches_the_type_shape_its_emitter_destructures() {
+        // WHY: this is the binding the shared emitter needs and the compiler cannot give it.
+        // `emit_owned_copy`'s exhaustiveness over `OwnedCopy` is a BUILD failure for a new
+        // plan variant, and `owned_copy_plan`'s exhaustiveness over `Type` is a build failure
+        // for a new type. Neither catches the third mistake: a plan handed out for a type
+        // whose payload the emitter's `let … else` cannot destructure. That one compiles fine
+        // and reaches a user as an internal-error string at the moment they call `.copy()`.
+        // Asserted here for every sampled variant so it fails the build instead.
+        for ty in all_type_variants() {
+            match owned_copy_plan(&ty) {
+                OwnedCopy::ShapeMemcpy => assert!(
+                    matches!(ty, Type::Shape { .. }),
+                    "{ty:?}: planned ShapeMemcpy, which the emitter destructures as Type::Shape"
+                ),
+                OwnedCopy::FixedMemcpy => assert!(
+                    matches!(ty, Type::BuiltinFixed { .. }),
+                    "{ty:?}: planned FixedMemcpy, which the emitter destructures as \
+                     Type::BuiltinFixed"
+                ),
+                OwnedCopy::ArrayClone { .. } => assert!(
+                    matches!(ty, Type::BuiltinArray { .. }),
+                    "{ty:?}: planned ArrayClone, which the emitter destructures as \
+                     Type::BuiltinArray"
+                ),
+                OwnedCopy::MapClone => assert!(
+                    matches!(ty, Type::BuiltinMap { .. }),
+                    "{ty:?}: planned MapClone, which the emitter calls ynz_map_clone for"
+                ),
+                OwnedCopy::MaybeCellClone => assert!(
+                    matches!(ty, Type::Maybe { .. }),
+                    "{ty:?}: planned MaybeCellClone, which the emitter destructures as \
+                     Type::Maybe"
+                ),
+                OwnedCopy::ReceiverIsCopy
+                | OwnedCopy::FrameLocalImmutable { .. }
+                | OwnedCopy::Refused(_) => {}
             }
         }
+    }
+
+    #[test]
+    fn a_spawn_argument_never_carries_frame_storage_into_a_task() {
+        // WHY: the spawn path and `.copy()` share one table but not one lifetime. A type whose
+        // contents cannot change may hand back the receiver INSIDE a frame; handing the same
+        // pointer to a task that outlives the frame is the defect class that produced the
+        // decimal-number spawn bug. Every `FrameLocalImmutable` type therefore names its
+        // re-homing mechanism, and `HeapCell::None` means the spawn path must refuse rather
+        // than pass the pointer. This asserts the two consumers read the same field and that
+        // `CopyMode` still has both sides.
+        assert_ne!(CopyMode::Body, CopyMode::SpawnArg);
+        for ty in all_type_variants() {
+            if let OwnedCopy::FrameLocalImmutable { heap_cell } = owned_copy_plan(&ty) {
+                match heap_cell {
+                    HeapCell::Number => assert!(
+                        matches!(ty, Type::Number { .. }),
+                        "{ty:?}: claims the decimal heap-cell path, which is number-only"
+                    ),
+                    HeapCell::None => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn spawn_refusal_matches_the_emitters_own_refusals() {
+        // WHY: typeck decides whether a `background` argument CAN be made the task's own, and
+        // the emitter decides how. Those were two predicates with no link: typeck admitted
+        // anything the copy table did not refuse, while the emitter carried a refusal of its
+        // own — `(CopyMode::SpawnArg, HeapCell::None)`, a bare error string with no teaching
+        // slots — that `range` reaches. `spawn_arg_refusal` is now the one producer of both,
+        // and this holds them to it: everything typeck admits must have a plan the SpawnArg
+        // path can actually emit.
+        for ty in all_type_variants() {
+            if !ynz_typeck::owned_copy::spawn_arg_can_be_independent(&ty) {
+                continue;
+            }
+            if ynz_typeck::owned_copy::spawn_rehoming(&ty).is_some() {
+                continue;
+            }
+            match owned_copy_plan(&ty) {
+                OwnedCopy::Refused(_) => panic!(
+                    "{ty:?}: admitted as a spawn argument, but the emitter has no copy for it"
+                ),
+                OwnedCopy::FrameLocalImmutable {
+                    heap_cell: HeapCell::None,
+                } => panic!(
+                    "{ty:?}: admitted as a spawn argument, but emit_owned_copy's \
+                     (SpawnArg, HeapCell::None) arm refuses it with a backend error string"
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn a_container_of_containers_copies_its_items() {
+        // WHY: FR #9's own type. A one-level clone leaves the two containers sharing their
+        // inner arrays, which is the alias the ruling removes one level down — and, when the
+        // task's drop ladder frees an item the spawner still points at, the use-after-free
+        // this whole cluster came from.
+        assert_eq!(
+            owned_copy_plan(&Type::BuiltinArray {
+                elem: Box::new(Type::BuiltinArray {
+                    elem: Box::new(Type::Int)
+                })
+            }),
+            OwnedCopy::ArrayClone {
+                elem: ElemCopy::Nested
+            }
+        );
+    }
+
+    #[test]
+    fn bignum_number_is_refused_not_aliased() {
+        // WHY: v0.3-M8 Phase 4 fix round 3, should-fix 5 — bignum (precision > 34) lowers as a
+        // POINTER to a heap decimal string (`llvm_type_for`), not an i128 value; the
+        // whole-variant sweep above only samples `Number { precision: 34 }` (a value), so it
+        // cannot see this within-variant edge case. It used to sit in the alias arm; under the
+        // 2026-09-06 ruling an alias is not an answer, so it is a refusal until the design for
+        // wider numbers lands.
+        let bignum = Type::Number { precision: 40 };
+        assert!(
+            matches!(owned_copy_plan(&bignum), OwnedCopy::Refused(_)),
+            "bignum `number` (a pointer) must not be copied by handing back the pointer"
+        );
+        assert!(
+            !ynz_typeck::types::is_trivially_copyable(&bignum),
+            "bignum `number` must not be trivially copyable — it is a pointer, not a value"
+        );
+    }
+}
+
+/// v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): mirrors `copy_parity_tests` —
+/// the binding the shared `EcField`/`EcFieldLowering` table needs and the compiler cannot give
+/// it. `ec_field_lowering`'s exhaustiveness over `EcField` is a BUILD failure for a new field
+/// name; this test is the binding the compiler cannot enforce on its own: a field marked
+/// `Lowered` must be one this arm's inner match actually has codegen for (today, only
+/// `EcField::Message`). A fifth field admitted-but-unlowered fails THIS test rather than
+/// reaching a user as "This is a compiler bug".
+#[cfg(test)]
+mod errors_field_parity_tests {
+    use ynz_typeck::errors_fields::{ec_field_lowering, EcField, EcFieldLowering};
+
+    const ALL_EC_FIELDS: &[EcField] = &[
+        EcField::Message,
+        EcField::Suggestions,
+        EcField::Trace,
+        EcField::Source,
+    ];
+
+    #[test]
+    fn every_ec_field_lowered_has_a_codegen_arm() {
+        // WHY: `lower_field_access`'s `Type::ErrorsCapable` branch has a real codegen arm for
+        // exactly `EcField::Message` today. If a future field is reclassified `Lowered` in
+        // `ec_field_lowering` without writing its codegen, this catches it at build/test time
+        // instead of a user reaching the defensive "classified Lowered but has no codegen arm"
+        // runtime error string.
+        for field in ALL_EC_FIELDS {
+            if ec_field_lowering(*field) == EcFieldLowering::Lowered {
+                assert_eq!(
+                    *field,
+                    EcField::Message,
+                    "{field:?}: classified Lowered, but `lower_field_access`'s ErrorsCapable \
+                     arm only has real codegen for EcField::Message — write the codegen before \
+                     reclassifying"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn message_is_the_only_field_lowered_today() {
+        // WHY: names the current state plainly so a reviewer sees at a glance which three
+        // fields are refused and why (see `ynz_typeck::errors_fields`'s module doc) rather
+        // than inferring it from the absence of a codegen arm.
+        assert_eq!(
+            ec_field_lowering(EcField::Message),
+            EcFieldLowering::Lowered
+        );
+        assert_eq!(
+            ec_field_lowering(EcField::Suggestions),
+            EcFieldLowering::Refused
+        );
+        assert_eq!(ec_field_lowering(EcField::Trace), EcFieldLowering::Refused);
+        assert_eq!(ec_field_lowering(EcField::Source), EcFieldLowering::Refused);
+    }
+
+    #[test]
+    fn from_field_name_round_trips_every_variant() {
+        for field in ALL_EC_FIELDS {
+            assert_eq!(EcField::from_field_name(field.name()), Some(*field));
+        }
+        assert_eq!(EcField::from_field_name("failed"), None);
+        assert_eq!(EcField::from_field_name("or"), None);
+        assert_eq!(EcField::from_field_name("notAField"), None);
     }
 }
 
@@ -19015,37 +21054,6 @@ fn lower_maybe_method<'ctx>(
 
 // ── M7 P4a: errors-capable helpers ───────────────────────────────────────────
 
-/// True when the named function returns a bare `number` (decimal128, precision ≤ 34) —
-/// NOT `number errors`. The non-SM `number` ABI returns a POINTER to a heap-stable 16-byte
-/// i128 (see the wrapper at the `Type::Number` arm of the SM wrapper), so a CPU trampoline
-/// must DEREFERENCE that pointer to recover the i128 value before packing it into the result
-/// slot — unlike string/array/map, where the returned pointer IS the value (`ptr_to_int`).
-///
-/// Time: O(n) where n = items in the typed module  Space: O(1)
-fn callee_returns_bare_number(
-    typed: &TypedModule,
-    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
-    fn_name: &str,
-) -> bool {
-    let local = typed.module.items.iter().any(|item| {
-        if let ynz_ast::nodes::Item::Function(f) = item {
-            f.name == fn_name
-                && matches!(
-                    f.return_type,
-                    ynz_ast::nodes::Type::Number { precision } if precision <= 34
-                )
-        } else {
-            false
-        }
-    });
-    if local {
-        return true;
-    }
-    imported_fns.get(fn_name).is_some_and(
-        |sig| matches!(sig.ret, ynz_typeck::types::Type::Number { precision } if precision <= 34),
-    )
-}
-
 /// True when the named function's FIRST parameter is a bare decimal128 (`number`,
 /// N ≤ 34) — the first-param twin of `callee_returns_bare_number` (v0.3-M6 Phase
 /// 1d, FRAGO 009 defect C). A cpu-member spawn stages an 8-byte ctx word and the
@@ -19288,6 +21296,11 @@ fn lower_errors_capable_call_result<'ctx>(
             .build_load(cg.ctx.i128_type(), dec_ptr, "ec_cob_i128")
             .map_err(|e| format!("ec_result cob load i128 {callee_name}: {e}"))?
             .into_int_value();
+        // The ok-word points at the callee's frame-interior staging slot: only
+        // 8-aligned — claim that, not ABI 16.
+        state_machine::claim_frame_i128_align(i128_val.as_instruction_value().ok_or_else(
+            || format!("ec_result cob load i128 {callee_name}: no instruction value"),
+        )?)?;
         cg.builder
             .build_store(binding_alloca, i128_val)
             .map_err(|e| format!("ec_result cob store {callee_name}: {e}"))?;
@@ -20308,6 +22321,14 @@ fn store<'ctx>(
                 .builder
                 .build_load(cg.i128(), val.into_pointer_value(), "dec_bits")
                 .map_err(|e| format!("{e}"))?;
+            // The value pointer may be an 8-aligned frame-interior address (SM staged
+            // param / EC staging slot) — claim the guaranteed floor unless the source
+            // is provably a >=16-aligned alloca (the one airtight ABI-16 provenance).
+            state_machine::claim_i128_align_by_provenance(
+                bits.as_instruction_value()
+                    .ok_or("store dec_bits load: no instruction value")?,
+                val.into_pointer_value(),
+            )?;
             cg.builder
                 .build_store(slot, bits)
                 .map_err(|e| format!("{e}"))?;
@@ -20476,6 +22497,12 @@ fn store_field<'ctx>(
                 .builder
                 .build_load(cg.i128(), val.into_pointer_value(), "dec_field_bits")
                 .map_err(|e| format!("{e}"))?;
+            // Same provenance-narrowed claim rationale as `store`'s dec_bits load above.
+            state_machine::claim_i128_align_by_provenance(
+                bits.as_instruction_value()
+                    .ok_or("dec_field_bits load: no instruction value")?,
+                val.into_pointer_value(),
+            )?;
             cg.builder
                 .build_store(field_ptr, bits)
                 .map_err(|e| format!("{e}"))?;

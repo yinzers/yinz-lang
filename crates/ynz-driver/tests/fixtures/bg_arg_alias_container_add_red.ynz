@@ -1,0 +1,36 @@
+// GREEN-WORLD LOCK since the v0.3 concurrency-hardening owned-copy fix (FRAGO 002 cluster C2 /
+// M8 Future Requirements #9). This file was a KNOWN-DEFECT pin asserting the wrong behaviour on
+// purpose; the producer it documented is closed, so it now asserts the right one. Its name is
+// kept because several records cite it by name.
+//
+// What it used to catch: `bucket: array<array<int>>` is an `array<pointer-elem>` argument,
+// which the `background` path passed through UN-CLONED, so the task wrote into the PARENT's
+// container. `rows` WAS cloned and owned by the task's drop ladder. `bucket.add(rows)` handed
+// the ladder-owned clone to the parent's container, the ladder freed it at task retire, and the
+// parent's `bucket[0]` was left dangling — reading it printed garbage or crashed.
+//
+// What it locks now, in three separate readings:
+//   1. the task's container is its OWN — the parent still sees 1 row after the task adds one;
+//   2. the task's ITEMS are its own too — the task overwrites its row 0 with 999 and the
+//      parent's row 0 still starts at 1 (a one-level clone would fail exactly here);
+//   3. nothing dangles — the parent dereferences `bucket[0]`, which the defect made unsafe.
+//
+// The parent's `wait sleep(80)` is what makes the reads happen after the task has finished
+// mutating, so the assertions are about ownership rather than timing.
+function stash(bucket: array<array<int>>, rows: array<int>) -> nothing {
+  bucket.add(rows)
+  let mine: array<int> = bucket[0].or(rows)
+  mine.set(0, 999)
+  print(`task sees ${bucket.count().toString()} rows`)
+}
+
+function entrypoint() -> nothing {
+  let seed: array<int> = [1, 2, 3]
+  let bucket: array<array<int>> = [seed]
+  let rows: array<int> = [10, 20, 30]
+  background stash(bucket, rows)
+  wait sleep(80)
+  print(`parent sees ${bucket.count().toString()} rows`)
+  let first: array<int> = bucket[0].or(rows)
+  print(`parent row 0 starts at ${first[0].or(-1).toString()}`)
+}
