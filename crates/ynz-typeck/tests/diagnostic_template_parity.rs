@@ -42,6 +42,7 @@ const TEMPLATES_WITHOUT_A_VARIANT: &[&str] = &[
     "WaitOnNonCallExpression",
     "UnawaitedSleepAsync",
     "WaitRequiredOnStateMachineCall",
+    "StatementNestingTooDeep",
 ];
 
 /// PRE-EXISTING variant-backed templates whose emit sites still hand-write their text
