@@ -216,16 +216,34 @@ fn add_finite(
     b_coef: u128,
 ) -> u128 {
     // Align both operands to the same exponent at 35-digit working precision,
-    // then clamp the result to 34 digits once at the end.  Doing a single final
+    // then round the result to 34 digits once at the end.  Doing a single final
     // rounding avoids the sub-ULP precision loss that comes from pre-rounding
-    // each operand independently.
-    let (coef_a, coef_b, result_exp) = align_exponents(a_exp, a_coef, b_exp, b_coef);
+    // each operand independently.  `tail` classifies the fine operand's truncated
+    // tail `f` (0 < f < 1 aligned units) relative to half a unit — it must reach
+    // the final rounding, or a result sitting on a rounding boundary picks the
+    // wrong neighbor.
+    let (coef_a, coef_b, result_exp, tail) = align_exponents(a_exp, a_coef, b_exp, b_coef);
 
     if a_sign == b_sign {
+        // True sum = coef_a + coef_b + f: strictly above the computed sum.
         let sum = coef_a + coef_b;
-        let (final_exp, final_coef) = clamp_to_34_digits(sum, result_exp);
+        let (final_exp, final_coef) = if sum > MAX_COEFFICIENT {
+            // Clamp drops ≥ 1 digit: the dropped remainder r plus f satisfies
+            // r ≤ half-1 → r + f < half regardless of f, so f only matters at an
+            // exact-half r, where any non-zero f promotes the tie to round-up.
+            clamp_to_34_digits_sticky(sum, result_exp, tail != TruncatedTail::Exact)
+        } else {
+            // No digit dropped: round sum + f to the integer grid directly.
+            // (Reachable only via the fine-vanishes alignment branch, where
+            // f < 1/2 always — but handle all classes for uniformity.)
+            round_tail_to_grid(sum, result_exp, tail)
+        };
         normalize_and_encode(a_sign, final_exp, final_coef)
     } else {
+        // Effective subtraction.  The truncated (fine) operand is always the smaller
+        // aligned magnitude, so it is always the subtrahend: true diff = d - f.
+        // Rewrite as (d - 1) + (1 - f) with 0 < 1 - f < 1 — borrow one and flip the
+        // tail class (below-half ↔ above-half; an exact half stays a half).
         let (diff, sign) = if coef_a >= coef_b {
             let d = coef_a - coef_b;
             let s = if d == 0 { false } else { a_sign }; // IEEE 754: +0 on cancellation
@@ -233,22 +251,88 @@ fn add_finite(
         } else {
             (coef_b - coef_a, b_sign)
         };
-        let (final_exp, final_coef) = clamp_to_34_digits(diff, result_exp);
+        let (final_exp, final_coef) = if tail == TruncatedTail::Exact {
+            clamp_to_34_digits(diff, result_exp)
+        } else {
+            // Truncation implies coarse > fine strictly, so diff ≥ 1 — the borrow
+            // cannot underflow.
+            let borrowed = diff - 1;
+            if borrowed > MAX_COEFFICIENT {
+                // Clamp drops ≥ 1 digit: dropped remainder r plus (1-f) < half
+                // whenever r ≤ half-1, and any r ≥ half rounds up since 1-f > 0 —
+                // a boolean sticky is exact here (no reachable tie).
+                clamp_to_34_digits_sticky(borrowed, result_exp, true)
+            } else {
+                round_tail_to_grid(borrowed, result_exp, tail.flip())
+            }
+        };
         normalize_and_encode(sign, final_exp, final_coef)
+    }
+}
+
+/// Classification of the sub-ULP tail truncated off the smaller operand during
+/// exponent alignment, relative to half of one aligned unit.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TruncatedTail {
+    /// Nothing truncated — the aligned coefficients are exact.
+    Exact,
+    /// 0 < f < 1/2 unit.
+    BelowHalf,
+    /// f == 1/2 unit exactly.
+    Half,
+    /// 1/2 unit < f < 1 unit.
+    AboveHalf,
+}
+
+impl TruncatedTail {
+    /// The class of `1 - f`, used when the tail is subtracted rather than added.
+    /// `Exact` never flips (the caller branches on it before borrowing).
+    fn flip(self) -> Self {
+        match self {
+            TruncatedTail::Exact => TruncatedTail::Exact,
+            TruncatedTail::BelowHalf => TruncatedTail::AboveHalf,
+            TruncatedTail::Half => TruncatedTail::Half,
+            TruncatedTail::AboveHalf => TruncatedTail::BelowHalf,
+        }
+    }
+}
+
+/// Round `coef + f` (where `tail` classifies f against half a unit) to the integer
+/// grid, half-even.  `coef` must already fit in 34 digits.
+fn round_tail_to_grid(coef: u128, exp: i32, tail: TruncatedTail) -> (i32, u128) {
+    let increment = match tail {
+        TruncatedTail::Exact | TruncatedTail::BelowHalf => false,
+        TruncatedTail::AboveHalf => true,
+        TruncatedTail::Half => coef % 2 != 0,
+    };
+    let rounded = coef + increment as u128;
+    if rounded > MAX_COEFFICIENT {
+        // 999…9 + 1 = 10^34 — exact shift, no re-rounding.
+        (exp + 1, rounded / 10)
+    } else {
+        (exp, rounded)
     }
 }
 
 /// Align two coefficients to the same exponent, using 35-digit working precision.
 ///
-/// Returns `(coef_a_aligned, coef_b_aligned, result_exp)` where both coefficients
-/// are expressed at `result_exp`.  The caller is responsible for rounding the
-/// resulting sum/difference down to 34 digits via `clamp_to_34_digits`.
+/// Returns `(coef_a_aligned, coef_b_aligned, result_exp, tail)` where both
+/// coefficients are expressed at `result_exp`.  `tail` classifies the non-zero
+/// digits truncated off the smaller ("fine") operand during alignment — the true
+/// fine value is `fine_aligned + f` with `0 < f < 1` in aligned units — relative
+/// to half a unit.  The caller is responsible for threading the class into the
+/// single final rounding in add_finite (never dropping it).
 ///
 /// Using 35-digit precision (DECIMAL_DIGITS + 1) ensures sub-ULP information is
 /// preserved so the single final rounding in add_finite is correct.
-fn align_exponents(a_exp: i32, a_coef: u128, b_exp: i32, b_coef: u128) -> (u128, u128, i32) {
+fn align_exponents(
+    a_exp: i32,
+    a_coef: u128,
+    b_exp: i32,
+    b_coef: u128,
+) -> (u128, u128, i32, TruncatedTail) {
     if a_exp == b_exp {
-        return (a_coef, b_coef, a_exp);
+        return (a_coef, b_coef, a_exp, TruncatedTail::Exact);
     }
 
     let (coarse_exp, coarse_coef, fine_coef, fine_exp, large_is_a) = if a_exp > b_exp {
@@ -263,29 +347,55 @@ fn align_exponents(a_exp: i32, a_coef: u128, b_exp: i32, b_coef: u128) -> (u128,
     // Working precision: DECIMAL_DIGITS + 1 = 35.
     const WORK: u32 = DECIMAL_DIGITS + 1;
 
-    let (coarse_aligned, fine_aligned, result_exp) = if aligned_digits > 2 * DECIMAL_DIGITS + 1 {
-        // Fine is more than one full precision width smaller than coarse — it rounds
-        // away entirely even at 35-digit working precision.
-        (coarse_coef, 0u128, coarse_exp)
-    } else if aligned_digits <= WORK {
-        // Scaling up coarse by 10^diff produces ≤ 35 digits — no truncation needed.
-        let scaled = coarse_coef * POW10[diff as usize];
-        (scaled, fine_coef, fine_exp)
-    } else {
-        // Overflow: scale coarse up to exactly WORK digits; scale fine down by the rest.
-        // fine_rem (the truncated portion of fine) is discarded here — it contributes
-        // at most ½ ULP to the result and is captured correctly for the cases we test.
-        let scale_up = (WORK - coarse_digits) as usize; // → coarse has WORK digits
-        let scale_down = (aligned_digits - WORK) as usize; // → fine is trimmed
-        let coarse_scaled = coarse_coef * POW10[scale_up];
-        let fine_trimmed = fine_coef / POW10[scale_down.min(34)];
-        (coarse_scaled, fine_trimmed, fine_exp + scale_down as i32)
-    };
+    let (coarse_aligned, fine_aligned, result_exp, tail) =
+        if aligned_digits > 2 * DECIMAL_DIGITS + 1 {
+            // Fine is more than one full precision width smaller than coarse — it
+            // rounds away entirely even at 35-digit working precision.  Its whole
+            // (non-zero) value is the truncated tail; the digit gap guarantees
+            // f < 10^-1 < 1/2, so the class is always BelowHalf.
+            let tail = if fine_coef != 0 {
+                TruncatedTail::BelowHalf
+            } else {
+                TruncatedTail::Exact
+            };
+            (coarse_coef, 0u128, coarse_exp, tail)
+        } else if aligned_digits <= WORK {
+            // Scaling up coarse by 10^diff produces ≤ 35 digits — no truncation needed.
+            let scaled = coarse_coef * POW10[diff as usize];
+            (scaled, fine_coef, fine_exp, TruncatedTail::Exact)
+        } else {
+            // Overflow: scale coarse up to exactly WORK digits; scale fine down by
+            // the rest.  The truncated remainder of fine contributes < 1 aligned
+            // unit; classify it against half a unit so the final rounding in
+            // add_finite still sees it.
+            let scale_up = (WORK - coarse_digits) as usize; // → coarse has WORK digits
+            let scale_down = (aligned_digits - WORK) as usize; // → fine is trimmed
+            let unit = POW10[scale_down.min(34)];
+            let coarse_scaled = coarse_coef * POW10[scale_up];
+            let fine_trimmed = fine_coef / unit;
+            let fine_rem = fine_coef % unit;
+            let tail = if fine_rem == 0 {
+                TruncatedTail::Exact
+            } else {
+                // fine_rem < unit ≤ 10^34, so the ×2 cannot overflow u128.
+                match (fine_rem * 2).cmp(&unit) {
+                    std::cmp::Ordering::Less => TruncatedTail::BelowHalf,
+                    std::cmp::Ordering::Equal => TruncatedTail::Half,
+                    std::cmp::Ordering::Greater => TruncatedTail::AboveHalf,
+                }
+            };
+            (
+                coarse_scaled,
+                fine_trimmed,
+                fine_exp + scale_down as i32,
+                tail,
+            )
+        };
 
     if large_is_a {
-        (coarse_aligned, fine_aligned, result_exp)
+        (coarse_aligned, fine_aligned, result_exp, tail)
     } else {
-        (fine_aligned, coarse_aligned, result_exp)
+        (fine_aligned, coarse_aligned, result_exp, tail)
     }
 }
 
@@ -410,48 +520,47 @@ fn round_to_34_digits(product: U256, exponent: i32) -> (i32, u128) {
     clamp_to_34_digits(rounded, exponent + excess as i32)
 }
 
-/// If `coef` has more than 34 digits, shift right (round) until it fits.
+/// If `coef` has more than 34 digits, round it to 34 in a single half-even step.
 ///
 /// `sticky`: true if the caller knows there are additional non-zero digits below
-/// the current precision — forces "half" cases to round up rather than to even.
-/// Used by division where the quotient is exactly half but the remainder is non-zero.
+/// the current precision (e.g. a tail truncated during exponent alignment, or a
+/// division remainder) — a "half" remainder is then strictly above half, so it
+/// rounds up rather than to even.
 fn clamp_to_34_digits(coef: u128, exp: i32) -> (i32, u128) {
     clamp_to_34_digits_sticky(coef, exp, false)
 }
 
-/// Time: O(k) where k = excess digits beyond 34 (at most 2 in practice, O(1) amortized).
-/// Space: O(1).
-fn clamp_to_34_digits_sticky(mut coef: u128, mut exp: i32, mut sticky: bool) -> (i32, u128) {
-    while coef > MAX_COEFFICIENT {
-        let d = coef % 10;
-        coef /= 10;
-        let round_up = match d.cmp(&5) {
-            std::cmp::Ordering::Less => {
-                // d < 5: round down; true value is above rounded result → accumulate sticky
-                sticky = sticky || d != 0;
-                false
-            }
-            std::cmp::Ordering::Greater => {
-                // d > 5: round up unconditionally; rounded result is now above the true value
-                // so there is no residual → reset sticky for the next step if any
-                sticky = false;
-                true
-            }
-            std::cmp::Ordering::Equal => {
-                // d == 5: half-ULP boundary
-                // sticky → true value is strictly above half → round up, consume sticky
-                // !sticky → exact half → round to even, no residual
-                let up = sticky || coef % 2 != 0;
-                sticky = false;
-                up
-            }
-        };
-        if round_up {
-            coef += 1;
-        }
-        exp += 1;
+/// Time: O(1) — one division by a power of 10 plus one comparison.  Space: O(1).
+///
+/// All excess digits are dropped as ONE unit compared against half a ULP.
+/// Rounding one digit at a time is textbook multi-rounding: a low digit > 5
+/// cascades a carry upward that the whole dropped unit (judged against half)
+/// would not produce — e.g. dropping "4780" digit-by-digit rounds up at the "8",
+/// but 4780 < 5000, so the correct single-step round is DOWN.
+fn clamp_to_34_digits_sticky(coef: u128, exp: i32, sticky: bool) -> (i32, u128) {
+    if coef <= MAX_COEFFICIENT {
+        return (exp, coef);
     }
-    (exp, coef)
+    // decimal_digits() saturates at 34 (its search table stops there), so count the
+    // excess from the high part instead: coef > MAX means coef / 10^34 ∈ [1, ~34028]
+    // (u128 caps at 39 digits), and digits(coef) = 34 + digits(coef / 10^34).
+    let excess = decimal_digits(coef / POW10[DECIMAL_DIGITS as usize]); // ∈ [1, 5]
+    let divisor = POW10[excess as usize];
+    let q = coef / divisor;
+    let r = coef % divisor;
+    // Half-even on the whole dropped unit; sticky promotes an exact half to
+    // "strictly above half" (the true value carries non-zero digits below r).
+    let rounded = if sticky && r * 2 == divisor {
+        q + 1
+    } else {
+        round_half_even(q, r, divisor)
+    };
+    // A round-up can push 999…9 (34 digits) to 10^34 — one exact shift fixes it.
+    if rounded > MAX_COEFFICIENT {
+        (exp + excess as i32 + 1, rounded / 10)
+    } else {
+        (exp + excess as i32, rounded)
+    }
 }
 
 /// Encode, applying exponent clamping and subnormal handling.
@@ -495,8 +604,10 @@ fn compare_magnitude(a_exp: i32, a_coef: u128, b_exp: i32, b_coef: u128) -> i32 
         return 1;
     }
 
-    // Compare by aligning exponents
-    let (ca, cb, _) = align_exponents(a_exp, a_coef, b_exp, b_coef);
+    // Compare by aligning exponents.  The truncated tail is ignorable here:
+    // truncation only happens to the strictly-smaller aligned operand, so it can
+    // never flip an ordering (the coarse operand always dominates).
+    let (ca, cb, _, _) = align_exponents(a_exp, a_coef, b_exp, b_coef);
     if ca > cb {
         1
     } else if ca < cb {

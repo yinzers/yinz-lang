@@ -34,8 +34,16 @@ pub fn format_bignum(bn: &BigNum) -> String {
         if zeros <= 6 {
             return format!("{sign}{coeff}{}", "0".repeat(zeros));
         }
-        // Too many trailing zeros — use scientific notation
-        format!("{sign}{coeff}e+{adjusted}")
+        // Too many trailing zeros — use scientific notation.  The decimal point
+        // goes after the FIRST digit (mirroring the small-value branch below):
+        // emitting the whole coefficient before the exponent reads as a value
+        // 10^(len-1)× too large.
+        let (first, rest) = coeff.split_at(1);
+        if rest.is_empty() {
+            format!("{sign}{first}E+{adjusted}")
+        } else {
+            format!("{sign}{first}.{rest}E+{adjusted}")
+        }
     } else if adjusted >= 0 {
         // Has a decimal point within the digits: e.g., "12345" exp=-2 → "123.45"
         let int_len = (num_digits + exp) as usize; // digits before decimal

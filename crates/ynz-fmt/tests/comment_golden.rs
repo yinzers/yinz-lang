@@ -59,6 +59,17 @@ fn mixed_comments() {
     golden("mixed_comments");
 }
 
+// WHY: F9 (2026-07-11 non-concurrency audit) — a `//` comment block following a union-alias
+// declaration (`shape U = A | B`) was silently DELETED by the formatter. Root cause: the
+// parser's union-alias arm in `parse_shape_decl` computed `ShapeDecl.span.end` from the START
+// of the next unconsumed token instead of the END of the last consumed one, over-extending the
+// declaration's span to swallow a trailing comment before the formatter's comment-merge pass
+// ever saw it as available. Locks the fix and round-trip idempotency together.
+#[test]
+fn union_alias_trailing_comment() {
+    golden("union_alias_trailing_comment");
+}
+
 // ── 16 locked comment-merge-spec edge cases ───────────────────────────────────
 
 #[test]

@@ -4,7 +4,7 @@ description: "Every version of Yinz between v0.1 and v1.0 ships ONE focused thin
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-04"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -78,7 +78,7 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Types (struct-like with fields and methods)
 - Options (named value sets, replaces enums)
 - Unions (`shape Foo = A | B | C`)
-- Maybe types (`maybe T`, `none`, `.exists()`, `.value`, `.or(default)`)
+- Maybe types (`maybe<T>`, `none`, `.exists()`, `.value`, `.or(default)`)
 - Generics — both **type generics** (`array<T>`, `map<K,V>`) AND **function generics** (`function foo<T>(...)`)
 - Collections (`fixed<T>`, `array<T>`, `map<K,V>`) with bracket sugar for `.get()` / `.set()`
 - Control flow (`if`, multi-case `if`, `for`, `while`, early returns)

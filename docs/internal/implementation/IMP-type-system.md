@@ -4,7 +4,7 @@ description: "Design decisions for Yinz's type system: the single 'shape' declar
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -31,9 +31,9 @@ User spec: [`docs/reference/REF-types.md`](../../reference/REF-types.md), [`docs
 
 Single inheritance only. `extends` reuses parent's DATA FIELDS — behavior comes from standalone functions, not from inherited methods (because there are no methods on shapes to inherit). No multiple inheritance.
 
-**Why**: Multiple inheritance creates the diamond problem (ambiguous resolution with surprising behavior). Single inheritance is simpler to reason about and almost always sufficient. `extends` is for code reuse at the DATA level; for behavior polymorphism, write a standalone function for each shape and let the compiler pick by argument-type overloading. For shared behavior contracts, `follows` handles any number of contracts. Locked r10 (2026-05-16).
+**Why**: Multiple inheritance creates the diamond problem (ambiguous resolution with surprising behavior). Single inheritance is simpler to reason about and almost always sufficient. `extends` is for code reuse at the DATA level; behavior polymorphism per-shape is planned to eventually work via argument-type overloading, but **that dispatch mechanism is not implemented in v0.1** — see the correction below ("No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)"). For shared behavior contracts, `follows` handles any number of contracts. Locked r10 (2026-05-16).
 
-**Example**:
+**Example** (v0.1-valid — distinct function names, since same-named functions in one file are a compile error; see the correction below):
 ```ynz
 shape Entity { name: string, health: int }
 shape Warrior extends Entity { weapon: string, armor: int }
@@ -42,12 +42,12 @@ function greet(share self: Entity) -> string {
   return "Hello, I am " + self.name
 }
 
-function greet(share self: Warrior) -> string {
+function greetWarrior(share self: Warrior) -> string {
   return "Hello, I am " + self.name + " the warrior, wielding " + self.weapon
 }
 
 const w: Warrior = { name: "Aragorn", health: 100, weapon: "sword", armor: 50 }
-w.greet()    // calls greet(Warrior) — more specific overload wins
+w.greetWarrior()    // UFCS sugar for greetWarrior(w) — distinct name, not an overload
 ```
 
 ---
@@ -74,28 +74,22 @@ w.greet()    // calls greet(Warrior) — more specific overload wins
 
 ---
 
-## Function Overloading by Argument Type (no `override` keyword)
+## No `override` Keyword; Function Overloading by Argument Type Is NOT Implemented (v0.1)
 
-There is no `override` keyword in Yinz. Method polymorphism is provided by **function overloading by argument type** — write multiple standalone functions with the same name but different first-parameter types; the compiler picks the most specific match at every call site.
+There is no `override` keyword in Yinz — methods don't live inside shapes ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), so there's nothing to "override." **Correction (2026-07-16, audit finding TS2):** earlier revisions of this doc additionally described **function overloading by argument type** ("write multiple standalone functions with the same name but different first-parameter types; the compiler picks the most specific match") as the shipped replacement mechanism. That was aspirational, not actual — the v0.1 typeck function-declaration collision check (`crates/ynz-typeck/src/signatures.rs`) keys the signature table by function **name alone** and unconditionally rejects a second same-named function in the same file, regardless of its parameter types:
 
-**Why no `override`**: methods don't live inside shapes ([`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md)), so there's nothing to "override" — there's no parent-method-in-shape to redeclare. The OOP `override` keyword exists to disambiguate "I'm intentionally replacing the parent's method" from "I accidentally shadowed it" — Yinz doesn't have that ambiguity because methods are always standalone functions, and the compiler's overload-resolution rules are deterministic (most-specific-first-parameter-type wins).
-
-**Example**:
 ```ynz
 shape Entity { name: string }
 shape Warrior extends Entity { weapon: string }
 
 function attack(share self: Entity) -> string { return self.name + " attacks!" }
 function attack(share self: Warrior) -> string { return self.name + " swings " + self.weapon + "!" }
-
-const e: Entity = { name: "Orc" }
-const w: Warrior = { name: "Aragorn", weapon: "Andúril" }
-
-e.attack()    // calls attack(Entity) — "Orc attacks!"
-w.attack()    // calls attack(Warrior) — "Aragorn swings Andúril!" (more specific match)
+// COMPILE ERROR: A function named `attack` is already defined in this file.
 ```
 
-**Diagnostic for shadow-without-overload**: if you write a function with the same name as one in a parent's overload set but with a less-specific signature, the compiler accepts it (it's still callable for the parent type's values); shadowing-detection is not needed because OOP's "did I mean to override?" problem doesn't apply when there's no method-on-instance binding.
+**Actual v0.1 behavior**: two functions sharing a name in the same file is a compile error no matter how their parameter types differ. `extends` gives a child shape its parent's *fields* only ([data-only inheritance](#single-inheritance-with-extends-data-only)) — it does not give call sites polymorphic dispatch over a shared function name. The only working polymorphism mechanism in v0.1 is **generics** (monomorphization, verified correct).
+
+**Status**: overload-by-argument-type dispatch is now tracked as a deferred language feature, not a shipped one — see the `function-overload-by-argument-type` `[[deferred_language_feature]]` registry entry in [`registry/features.toml`](../../../registry/features.toml) for the WHY/SUBSTITUTE/SHIPS_IN/DESIGN_DOC deferral fields. Until it ships, give overload-shaped functions distinct names (e.g. `attackEntity`/`attackWarrior`) or reach for generics.
 
 Locked r10 (2026-05-16). Replaces the previously-locked `override` keyword which is now removed entirely.
 
@@ -147,7 +141,7 @@ function compare(share self: Item, share other: Item) -> int {
 }
 
 // A generic function — works on anything that follows Comparable
-function findMax<T follows Comparable>(share items: array<T>) -> maybe T {
+function findMax<T follows Comparable>(share items: array<T>) -> maybe<T> {
   // ... walk the array, keep the largest per compare()
 }
 
@@ -295,11 +289,11 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 ## No Null — `maybe` Types
 
-No `null`. No `undefined`. Absence is expressed as `none` and tracked by the type system with `maybe T`.
+No `null`. No `undefined`. Absence is expressed as `none` and tracked by the type system with `maybe<T>`.
 
 **Why**: Null references are the "billion dollar mistake" — entire categories of runtime errors exist only because null can masquerade as any type. Making absence explicit in the type system moves null errors to compile time (Golden Rule 5).
 
-**`maybe T` = `T | none`**: Interchangeable syntax. `maybe string` is sugar for `string | none`. Both valid everywhere.
+**`maybe<T>` = `T | none`**: Interchangeable syntax. `maybe<string>` is sugar for `string | none`. Both valid everywhere.
 
 ---
 

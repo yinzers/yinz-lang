@@ -20,4 +20,5 @@ _No member plans yet._
 
 ## Standalone plans
 
-_None._
+- [audit-remediation-followups](active/2026-07-16-audit-remediation-followups/plan.md) `stub`
+- [audit-remediation-two-lane](active/2026-07-16-audit-remediation-two-lane/plan.md) `active`

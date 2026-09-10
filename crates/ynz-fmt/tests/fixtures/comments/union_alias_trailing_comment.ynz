@@ -1,0 +1,14 @@
+shape A {
+  x: int
+}
+
+shape B {
+  y: int
+}
+
+shape U = A | B
+
+// comment after union alias — must survive
+function entrypoint() -> nothing {
+  print(`hi`)
+}

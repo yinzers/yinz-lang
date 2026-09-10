@@ -4,7 +4,7 @@ description: "Configuration in Yinz lives in three places, each with a specific 
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -65,9 +65,9 @@ STRIPE_KEY=
 Reading env vars in code:
 
 ```
-let dbUrl = env.get("DATABASE_URL")              // -> maybe string — might not be set
+let dbUrl = env.get("DATABASE_URL")              // -> maybe<string> — might not be set
 let port = env.get("PORT").or("3000")            // use "3000" if PORT isn't set
-let secret = env.get("SECRET_KEY")              // -> maybe string
+let secret = env.get("SECRET_KEY")              // -> maybe<string>
 
 if (dbUrl.exists()) {
   let db = database.connect(dbUrl.value)

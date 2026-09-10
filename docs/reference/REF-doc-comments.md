@@ -4,7 +4,7 @@ description: "A // comment block immediately above a declaration — with no bla
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -25,7 +25,7 @@ Regular `//` comments anywhere else (inside function bodies, with a blank line a
 // Fetches a user by their unique ID.
 // Returns none if the user doesn't exist.
 // Errors on database connection failure.
-export function fetchUser(id: UserId) -> maybe User errors {
+export function fetchUser(id: UserId) -> maybe<User> errors {
   // This note is inside the body — never shows in hover or docs
 }
 ```

@@ -126,8 +126,12 @@ fn handshake(
 fn main_loop(connection: &Connection, state: &mut ServerState) {
     for msg in &connection.receiver {
         match msg {
-            Message::Request(req) => handle_request(connection, state, req),
-            Message::Notification(notif) => handle_notification(connection, state, notif),
+            Message::Request(req) => {
+                dispatch_request(connection, state, req);
+            }
+            Message::Notification(notif) => {
+                dispatch_notification(connection, state, notif);
+            }
             Message::Response(_) => {}
         }
         if state.shutdown_requested {
@@ -136,7 +140,98 @@ fn main_loop(connection: &Connection, state: &mut ServerState) {
     }
 }
 
+/// Whether a dispatched request/notification completed normally or was caught mid-panic.
+/// Returned so tests can assert on the isolation outcome directly, instead of re-deriving
+/// it from side effects (the response sent, or lack of one).
+#[derive(Debug, PartialEq, Eq)]
+enum DispatchOutcome {
+    Handled,
+    Caught,
+}
+
+/// The LSP embeds the entire compiler front-end and runs it on every keystroke over
+/// untrusted buffers, which are peppered with invariant panic!/unreachable!/unwrap()
+/// guards ("compiler bug -> abort is acceptable"). Without isolation, ONE such panic
+/// unwinds through the dispatch loop and kills the whole server process — every open
+/// document's state gone. Catch it per-request instead: log it, answer that one request
+/// with an error, and keep serving every other open document.
+///
+/// Extracted out of `main_loop` (rather than inlined in the loop body) so the ISOLATION
+/// MECHANISM ITSELF — not just a hand-rolled `catch_unwind` in a test — is what a test
+/// drives a real request through. See `panic_isolation_tests::dispatch_request_isolates_a_panic_and_keeps_serving`.
+fn dispatch_request(
+    connection: &Connection,
+    state: &mut ServerState,
+    req: Request,
+) -> DispatchOutcome {
+    let req_id = req.id.clone();
+    let method = req.method.clone();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_request(connection, state, req)
+    }));
+    match outcome {
+        Ok(()) => DispatchOutcome::Handled,
+        Err(payload) => {
+            let msg = panic_payload_message(&payload);
+            eprintln!("ynz-lsp: caught panic handling request `{method}`: {msg}");
+            let response = Response::new_err(
+                req_id,
+                lsp_server::ErrorCode::InternalError as i32,
+                format!("ynz-lsp hit an internal error handling `{method}`: {msg}"),
+            );
+            connection.sender.send(Message::Response(response)).ok();
+            DispatchOutcome::Caught
+        }
+    }
+}
+
+/// Same isolation as `dispatch_request`, for notifications — these have no request id /
+/// response to answer, so a caught panic is logged only. Losing one notification's side
+/// effect (e.g. one diagnostics republish) is far better than losing the whole server.
+fn dispatch_notification(
+    connection: &Connection,
+    state: &mut ServerState,
+    notif: Notification,
+) -> DispatchOutcome {
+    let method = notif.method.clone();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_notification(connection, state, notif)
+    }));
+    match outcome {
+        Ok(()) => DispatchOutcome::Handled,
+        Err(payload) => {
+            let msg = panic_payload_message(&payload);
+            eprintln!("ynz-lsp: caught panic handling notification `{method}`: {msg}");
+            DispatchOutcome::Caught
+        }
+    }
+}
+
+/// Best-effort extraction of a human-readable message from a caught panic payload
+/// (`std::panic::catch_unwind`'s `Err` variant). Most panics carry a `&str` or
+/// `String` message; anything else (a custom payload type) falls back to a generic
+/// label rather than failing to log at all.
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
 fn handle_request(connection: &Connection, state: &mut ServerState, req: Request) {
+    // Test-only injected panic hook — compiled ONLY under `#[cfg(test)]`, never present
+    // in a production binary. Lets `dispatch_request`'s panic-isolation test drive a
+    // REAL panic through the ACTUAL dispatch path (this function), instead of
+    // re-deriving the isolation behavior with a standalone `catch_unwind` that never
+    // touches `handle_request` at all — mirrors the `__testFallibleAsync` internal-only
+    // intrinsic precedent in `ynz-typeck`.
+    #[cfg(test)]
+    if req.method == "$/ynzTestPanicHook" {
+        panic!("synthetic ICE — proves dispatch_request's catch_unwind isolates this");
+    }
     if req.method == Shutdown::METHOD {
         state.shutdown_requested = true;
         let response = Response::new_ok(req.id, serde_json::Value::Null);
@@ -775,4 +870,121 @@ pub fn publish_diagnostics(
     };
     let notif = Notification::new("textDocument/publishDiagnostics".to_string(), params);
     connection.sender.send(Message::Notification(notif)).ok();
+}
+
+#[cfg(test)]
+mod panic_isolation_tests {
+    use super::*;
+
+    #[test]
+    fn panic_payload_message_extracts_str_and_string() {
+        let payload_str: Box<dyn std::any::Any + Send> = Box::new("boom");
+        assert_eq!(panic_payload_message(&payload_str), "boom");
+
+        let payload_string: Box<dyn std::any::Any + Send> = Box::new(String::from("kaboom"));
+        assert_eq!(panic_payload_message(&payload_string), "kaboom");
+
+        let payload_other: Box<dyn std::any::Any + Send> = Box::new(42i32);
+        assert_eq!(
+            panic_payload_message(&payload_other),
+            "<non-string panic payload>"
+        );
+    }
+
+    // F3: proves the ISOLATION MECHANISM itself by driving TWO real requests through
+    // the ACTUAL `dispatch_request` -> `handle_request` path (not a hand-rolled
+    // standalone `catch_unwind` that never touches production dispatch code at all —
+    // the F3 tautology this replaces).
+    //
+    // (1) a request that panics inside `handle_request` (the `#[cfg(test)]`-only
+    //     `$/ynzTestPanicHook` hook — standing in for any of the audit's cited reachable
+    //     `unreachable!()`/panic! guards: typeck/check.rs:3545/3624/3626,
+    //     intrinsics.rs:61/105/114/132, shapes.rs:674) must produce an INTERNAL ERROR
+    //     response, not crash the dispatcher;
+    // (2) a SECOND, ordinary request driven through the SAME dispatch function
+    //     afterward must still succeed — proving the server keeps serving.
+    //
+    // Deleting `dispatch_request`'s `catch_unwind` wrapping makes this test FAIL: the
+    // panic from step (1) would propagate out of `dispatch_request` uncaught instead of
+    // producing an error response, and the test would abort on that panic before ever
+    // reaching step (2)'s assertions.
+    #[test]
+    fn dispatch_request_isolates_a_panic_and_keeps_serving() {
+        use lsp_server::RequestId;
+
+        let (server_conn, client_conn) = Connection::memory();
+        let mut state = ServerState::new(crate::capabilities::PositionEncoding::Utf16);
+
+        // Silence the default panic-hook backtrace noise in test output — the panic is
+        // expected and caught by `dispatch_request`, not a real test failure.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        // (1) A request that panics mid-`handle_request`, driven through the REAL
+        // dispatch function.
+        let panic_req = Request::new(
+            RequestId::from(1),
+            "$/ynzTestPanicHook".to_string(),
+            serde_json::Value::Null,
+        );
+        let outcome1 = dispatch_request(&server_conn, &mut state, panic_req);
+
+        std::panic::set_hook(previous_hook);
+
+        assert_eq!(
+            outcome1,
+            DispatchOutcome::Caught,
+            "the panic must be CAUGHT by dispatch_request, not propagate"
+        );
+
+        let msg1 = client_conn
+            .receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("expected an error response for the panicking request");
+        match msg1 {
+            Message::Response(resp) => {
+                assert_eq!(resp.id, RequestId::from(1));
+                assert!(
+                    resp.error.is_some(),
+                    "expected an InternalError response for the caught panic, got: {resp:?}"
+                );
+                assert!(resp.result.is_none());
+            }
+            other => {
+                panic!("expected a Response message for the panicking request, got: {other:?}")
+            }
+        }
+
+        // (2) A SECOND, ordinary request through the SAME dispatch function — proving
+        // the server keeps serving other requests after the caught panic. `Shutdown` is
+        // a cheap, always-succeeds request that needs no document state.
+        let shutdown_req = Request::new(
+            RequestId::from(2),
+            lsp_types::request::Shutdown::METHOD.to_string(),
+            serde_json::Value::Null,
+        );
+        let outcome2 = dispatch_request(&server_conn, &mut state, shutdown_req);
+
+        assert_eq!(
+            outcome2,
+            DispatchOutcome::Handled,
+            "the ordinary request after a caught panic must be handled normally, not caught"
+        );
+
+        let msg2 = client_conn
+            .receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("expected a success response for the ordinary request");
+        match msg2 {
+            Message::Response(resp) => {
+                assert_eq!(resp.id, RequestId::from(2));
+                assert!(
+                    resp.error.is_none(),
+                    "expected the ordinary request to succeed after the caught panic, got: {resp:?}"
+                );
+            }
+            other => panic!("expected a Response message for the shutdown request, got: {other:?}"),
+        }
+        assert!(state.shutdown_requested);
+    }
 }

@@ -489,8 +489,8 @@ reason = "Rust-specific type name — Yinz uses the `errors` keyword instead"
 
 [[banned_jargon]]
 name = "Option"
-replacement = "`maybe T` — a value that might not be present"
-reason = "Rust-specific type name — Yinz uses `maybe T`"
+replacement = "`maybe<T>` — a value that might not be present"
+reason = "Rust-specific type name — Yinz uses `maybe<T>`"
 
 [[banned_jargon]]
 name = "Either"
@@ -1357,6 +1357,18 @@ ships_in = "TBD — pending a real workload demonstrating the automatic routing 
 design_doc = "docs/internal/implementation/IMP-no-function-coloring.md"
 triggers = "A real workload where CPU-bound auto-inference misroutes a task to the I/O scheduler, causing measurable starvation."
 
+# --- Function overloading by argument type (2026-07-16 audit-remediation-two-lane, TS2 finding —
+# docs/internal/implementation/IMP-type-system.md previously described this as the shipped `override`
+# replacement; typeck rejects two same-named functions in a file unconditionally, regardless of
+# parameter types) ---
+[[deferred_language_feature]]
+name = "function-overload-by-argument-type"
+substitute = "Give same-purpose functions distinct names (e.g. `attackEntity`/`attackWarrior` instead of two `attack` functions), or use generics (`function process<T>(share item: T)`) to write one function that works across types. `extends` still reuses a parent shape's fields."
+why = "IMP-type-system.md and REF-golden-rules.md described function overloading by argument type as the shipped dispatch mechanism replacing `override` (\"the compiler picks the most specific overload at the call site\") — but the v0.1 typeck function-declaration collision check (crates/ynz-typeck/src/signatures.rs) keys its signature table by function name alone and rejects a second same-named function in the same file unconditionally, regardless of parameter types. This entry is a documentation-honesty fix, not a code fix — the docs previously read as if the mechanism already existed."
+ships_in = "TBD — a dedicated design + build pass is required; not scoped to any milestone today"
+design_doc = "docs/internal/implementation/IMP-type-system.md"
+triggers = "Writing two standalone functions with the same name and different first-parameter types in the same file, expecting the compiler to dispatch by argument type."
+
 # --- `--kernel` flag — no-runtime mode (docs/internal/implementation/IMP-no-runtime-mode.md) ---
 [[deferred_tooling_feature]]
 name = "--kernel"
@@ -1823,6 +1835,24 @@ kind_name = "WaitOnNonCallExpression"
 what_template = "`wait` must be followed by a function call."
 what_instead_template = "Write `wait someFn()` to wait for `someFn` to complete."
 why_template = "`wait` schedules a suspension point. It only applies to function calls whose result must be waited for."
+
+# audit-remediation-two-lane Phase A3 (F2): deeply nested statements/blocks
+# (if/while/for bodies) had no depth guard, so
+# `parse_block`/`parse_stmt` recursion overflowed the stack and aborted the process
+# with a raw core dump — no diagnostic, bypassing the driver's ICE hook entirely.
+# The parser's expression-depth guard (`expr_depth >= 256`) has no matching registry
+# entry either (it predates this registry's diagnostic_template convention and is not
+# wired through DiagnosticKind). This entry is the SINGLE SOURCE for the guard's teaching
+# text, rendered at the firing site via `ynz_registry::diagnostic_template_parts` (Phase A3
+# fix-round, BLOCKER 3 — no more hand-syncing a hardcoded copy in
+# `crates/ynz-parser/src/parser.rs`'s `parse_block_depth_overflow`). Its gallery trigger is
+# gated to Lane B (decision D3) — see Future Requirements in the audit-remediation-two-lane
+# plan.
+[[diagnostic_template]]
+kind_name = "StatementNestingTooDeep"
+what_template = "Nesting too deep (max 256 levels of nested blocks)."
+what_instead_template = "Break this code into smaller functions — Yinz prefers small, focused functions over deeply nested `if`/`while`/`for` bodies anyway."
+why_template = "The compiler tracks one level of nesting at a time, and 256 levels is far more than real code needs — further nesting would crash the compiler. The limit catches both typos (like a code generator repeating an unclosed brace) and adversarial inputs."
 
 # UnawaitedSleepAsync — RETIRED by v0.3-M2 Phase 6 (transitive inference model).
 # Under the inference model, `sleep` without explicit `wait` is correct: the transitive

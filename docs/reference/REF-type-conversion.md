@@ -4,7 +4,7 @@ description: "Convert between types using dot methods. No cast keyword. Type .to
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -52,9 +52,9 @@ Parsing a string into a number might fail if the string isn't valid. These retur
 
 ```
 let input = "42"
-let count = input.toInt()           // maybe int
-let price = input.toNumber()        // maybe number
-let velocity = input.toFloat()      // maybe float
+let count = input.toInt()           // maybe<int>
+let price = input.toNumber()        // maybe<number>
+let velocity = input.toFloat()      // maybe<float>
 
 // Handle it:
 if (count.exists()) {
@@ -71,13 +71,13 @@ let bad = "hello".toInt().or(0)     // 0 — fallback
 
 ## Parsing non-decimal strings
 
-For hex, binary, and octal strings, use explicit methods. All return `maybe int` — the string might not be valid for that base.
+For hex, binary, and octal strings, use explicit methods. All return `maybe<int>` — the string might not be valid for that base.
 
 ```
-"FF".fromHex()        // maybe int — 255
-"ff".fromHex()        // maybe int — 255 (case-insensitive)
-"1010".fromBinary()   // maybe int — 10
-"17".fromOctal()      // maybe int — 15
+"FF".fromHex()        // maybe<int> — 255
+"ff".fromHex()        // maybe<int> — 255 (case-insensitive)
+"1010".fromBinary()   // maybe<int> — 10
+"17".fromOctal()      // maybe<int> — 15
 
 // With fallback:
 "FF".fromHex().or(0)  // 255

@@ -4,7 +4,7 @@ description: "User-facing reference for Yinz string literals: backtick quoting, 
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -93,12 +93,12 @@ No imports needed. `string` is available everywhere.
 
 ## Safe indexing — brackets are sugar for .get()
 
-Reading a code point at a position uses brackets, same as collections. The result is `maybe string` — never crashes on out-of-bounds:
+Reading a code point at a position uses brackets, same as collections. The result is `maybe<string>` — never crashes on out-of-bounds:
 
 ```ynz
 let name = `Alice`
-let first = name[0]             // sugar for name.get(0) → maybe string ("A")
-let huh = name[100]             // maybe string → none (out of bounds, safe)
+let first = name[0]             // sugar for name.get(0) → maybe<string> ("A")
+let huh = name[100]             // maybe<string> → none (out of bounds, safe)
 
 if (first.exists()) {
   print(first.value)            // "A"
@@ -144,9 +144,9 @@ By default, `.get()` / `[n]` indexes by **Unicode code point**. Two additional m
 
 | Method | Indexes by | Returns | Use when |
 |--------|------------|---------|----------|
-| `.get(n)` or `s[n]` | Code point | `maybe string` (1 code point) | Most text manipulation |
-| `.byteAt(n)` | UTF-8 byte | `maybe int` (0–255) | Parsers, protocols, raw data |
-| `.graphemeAt(n)` | Grapheme cluster | `maybe string` (1 grapheme) | Text rendering, cursor positioning, emoji |
+| `.get(n)` or `s[n]` | Code point | `maybe<string>` (1 code point) | Most text manipulation |
+| `.byteAt(n)` | UTF-8 byte | `maybe<int>` (0–255) | Parsers, protocols, raw data |
+| `.graphemeAt(n)` | Grapheme cluster | `maybe<string>` (1 grapheme) | Text rendering, cursor positioning, emoji |
 
 Companion length methods:
 
@@ -191,7 +191,7 @@ family.graphemeAt(0).value   // "👨‍👩‍👧"     (the whole family — o
 
 ```ynz
 `Patrick`.contains(`rick`)       // true
-`Patrick`.indexOf(`rick`)        // maybe int → some 3
+`Patrick`.indexOf(`rick`)        // maybe<int> → some 3
 `Patrick`.startsWith(`Pat`)      // true
 `Patrick`.endsWith(`ick`)        // true
 ```

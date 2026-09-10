@@ -4,7 +4,7 @@ description: "Some functions can fail. Yinz makes that explicit in the type, and
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -207,7 +207,7 @@ Each `Frame` value has:
 
 ```ynz
 frame.file        // string — source file path
-frame.line        // maybe int — line number (one-based), none for the truncation sentinel
+frame.line        // maybe<int> — line number (one-based), none for the truncation sentinel
 frame.function    // string — function name
 ```
 
@@ -215,7 +215,7 @@ frame.function    // string — function name
 
 ```ynz
 content.source.file    // string
-content.source.line    // maybe int
+content.source.line    // maybe<int>
 ```
 
 The trace captures the full call chain from the function where the error was created up to the current handler.
@@ -227,14 +227,14 @@ The trace captures the full call chain from the function where the error was cre
 ## `maybe` vs `errors` — two different things
 
 ```
-maybe User         // this user might not exist — absence, not failure
+maybe<User>        // this user might not exist — absence, not failure
 -> User errors     // this function might fail — failure with a message and call trace
 ```
 
 A function can have both:
 
 ```
-function findUser(id: string) -> maybe User errors {
+function findUser(id: string) -> maybe<User> errors {
   let data = readDatabase(id)                              // might fail (connection error)
   let user = data.filter(u => u.id == id).first()          // might be none (user not found)
   return user

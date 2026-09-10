@@ -4,7 +4,7 @@ description: "The compiler catches problems at three levels. Errors block compil
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -61,9 +61,9 @@ function load() -> Config {
 
 **Unhandled maybe:**
 ```
-let user: maybe User = findUser(id)
+let user: maybe<User> = findUser(id)
 print(user.name)
-// ERROR: user is maybe User — value might be none.
+// ERROR: user is maybe<User> — value might be none.
 // Use user.or(default).name or check user.exists() first.
 ```
 
@@ -92,10 +92,10 @@ nums.add(4)
 ```
 let item = items[5]
 // ERROR: Direct index access is not allowed.
-// Use items.get(5) for safe access — it returns maybe T and handles out-of-bounds.
+// Use items.get(5) for safe access — it returns maybe<T> and handles out-of-bounds.
 ```
 
-All collection access uses `.get(index)` which returns `maybe T`. The compiler enforces that you handle the case where the index doesn't exist. No out-of-bounds crashes.
+All collection access uses `.get(index)` which returns `maybe<T>`. The compiler enforces that you handle the case where the index doesn't exist. No out-of-bounds crashes.
 
 **Naming convention violations:**
 ```

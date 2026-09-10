@@ -4,7 +4,7 @@ description: "Design rationale for Yinz's 'errors' keyword-based error handling 
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -27,7 +27,7 @@ No try/catch. No Result types. No `?` operator. Functions that can fail declare 
 
 **Why `errors` works**: Keeps the contract at the function boundary with zero boilerplate inside `errors` functions. Auto-propagation handles the common case (let failures cascade to the caller). Explicit handling is required when the function doesn't auto-propagate, enforced at compile time.
 
-**`maybe` vs `errors`**: Distinct concepts. `maybe T` = value might not exist (absence, not failure). `-> T errors` = function might fail (failure with a message and call trace). A function can have both: `-> maybe User errors` means "might fail AND might not find a user."
+**`maybe` vs `errors`**: Distinct concepts. `maybe<T>` = value might not exist (absence, not failure). `-> T errors` = function might fail (failure with a message and call trace). A function can have both: `-> maybe<User> errors` means "might fail AND might not find a user."
 
 ---
 
@@ -82,7 +82,7 @@ function loadConfig() -> Config errors {
 - **Pure Option B (lazy, variables retain error-capable type until manually unwrapped):** Forces users to think about "what's the type" at every fallible call. Heavier mental load. Goes against "happy path reads like the happy path."
 - **This hybrid (lazy under the hood, eager in feel):** Pure Option B mechanics, taught to users as "auto-propagation happens by default, you can opt out by checking first." 99% of code reads as Option A; 1% gets Option B's flexibility.
 
-**Implementation note:** This is flow-sensitive narrowing — the same machinery the type checker already uses for `maybe T` (after `if (item.exists())`, `item` narrows to `T`). Salsa handles flow-typing well. No new infrastructure needed.
+**Implementation note:** This is flow-sensitive narrowing — the same machinery the type checker already uses for `maybe<T>` (after `if (item.exists())`, `item` narrows to `T`). Salsa handles flow-typing well. No new infrastructure needed.
 
 **Same method set everywhere:** `.failed()`, `.message`, `.or(default)` work both inside and outside `errors` functions. One mental model, two contexts. The compiler picks behavior based on what the user wrote, not based on where they wrote it.
 
@@ -95,7 +95,7 @@ When an error reaches a custom handler (`setErrorHandler`) or propagates to the 
 - `.message` — human-readable description (string)
 - `.suggestions` — array of human-readable next steps (array<string>, may be empty)
 - `.trace` — call path as structured data (`array<Frame>`)
-- `.source` — a `SourceLoc` value (`{ file: string, line: maybe int }`) of the originating failure
+- `.source` — a `SourceLoc` value (`{ file: string, line: maybe<int> }`) of the originating failure
 
 `suggestions` is part of the base shape because the teaching-compiler philosophy applies at runtime too — not just compile time. An error that can tell you what to do next is better than one that just tells you what went wrong. Stdlib modules are expected to populate suggestions where the cause is known. User-defined errors may leave it empty.
 
@@ -106,12 +106,12 @@ When an error reaches a custom handler (`setErrorHandler`) or propagates to the 
 ```ynz
 shape Frame {
   file: string
-  line: maybe int
+  line: maybe<int>
   function: string
 }
 ```
 
-**`line` is `maybe int`** — real frames carry a one-based positive int; the truncation-sentinel frame uses `none` to avoid a magic-number sentinel. ONE-BASED: matches compiler diagnostic line numbering exactly. Tools integrating with `.trace` must treat this as one-based; convert to zero-based at the tool boundary (e.g., LSP) rather than in the Frame value.
+**`line` is `maybe<int>`** — real frames carry a one-based positive int; the truncation-sentinel frame uses `none` to avoid a magic-number sentinel. ONE-BASED: matches compiler diagnostic line numbering exactly. Tools integrating with `.trace` must treat this as one-based; convert to zero-based at the tool boundary (e.g., LSP) rather than in the Frame value.
 
 **Truncation sentinel**: when the frame stack overflows 1024 entries, an additional sentinel Frame is appended: `Frame { file: "<trace truncated at depth 1024>", line: none, function: "<...>" }`. The real frames before it are still present and useful.
 
@@ -122,7 +122,7 @@ shape Frame {
 ```ynz
 shape SourceLoc {
   file: string
-  line: maybe int
+  line: maybe<int>
 }
 ```
 

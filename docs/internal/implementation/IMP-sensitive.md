@@ -4,7 +4,7 @@ description: "Design decisions for the sensitive type modifier used to mark secr
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -21,7 +21,7 @@ User spec: [`docs/reference/REF-sensitive.md`](../../reference/REF-sensitive.md)
 
 `sensitive string` is a modifier on an existing type, like `maybe`. Not a wrapper type like `Secret<String>`.
 
-**Why**: `maybe string` is the established pattern in the language for type modifiers. `sensitive string` follows the same convention — readable, composable, consistent. A `Secret<string>` wrapper would require special unwrapping syntax instead of the intuitive `.reveal()`.
+**Why**: `maybe<T>` established the idea of a built-in type modifier in the language — a keyword that changes an existing type's meaning without a wrapper shape. `sensitive string` follows that same idea, with its own bare-prefix syntax (`sensitive T`, no angle brackets — unlike `maybe<T>`'s generic-style brackets) — readable, composable, consistent. A `Secret<string>` wrapper would require special unwrapping syntax instead of the intuitive `.reveal()`.
 
 ---
 

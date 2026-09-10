@@ -32,6 +32,16 @@ pub struct Parser<'a> {
     pos: usize,
     pub diags: DiagnosticBucket,
     expr_depth: u32,
+    /// Mirrors `expr_depth` for statement/block recursion (`parse_block` <-> `parse_stmt`
+    /// via `if`/`while`/`for` bodies). Unguarded, this recursion overflows the stack on
+    /// deeply nested source with a raw abort (no diagnostic, bypasses the driver's ICE
+    /// hook entirely).
+    block_depth: u32,
+    /// Whether the `StatementNestingTooDeep` diagnostic has already been emitted this
+    /// parse — a typed flag instead of a brittle
+    /// `d.what.starts_with("Nesting too deep")` string match (which silently stops
+    /// deduping the moment the registry template's WHAT text changes a single word).
+    nesting_too_deep_reported: bool,
     /// When `true`, the current token is logically `>` — the first half of a `>>` token
     /// that was split while closing a nested generic type. `peek()` returns `&Token::Gt`
     /// and `advance()` consumes it by clearing this flag (without incrementing `pos`).
@@ -47,6 +57,8 @@ impl<'a> Parser<'a> {
             pos: 0,
             diags: DiagnosticBucket::new(),
             expr_depth: 0,
+            block_depth: 0,
+            nesting_too_deep_reported: false,
             pending_gt: false,
         }
     }
@@ -876,8 +888,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&mut self) -> Type {
+        self.parse_type_at_depth(0)
+    }
+
+    /// Same as `parse_type` (union-type `|` collection included), but starting from an
+    /// explicit nesting depth instead of hardcoding a fresh root (0). Any type-parsing
+    /// entry point that is itself NESTED inside another type being parsed (e.g. an
+    /// anonymous inline shape type's field types) MUST route through this — calling the
+    /// depth-0 `parse_type()` from inside a type would silently bypass the 16-level
+    /// generic-nesting cap.
+    fn parse_type_at_depth(&mut self, depth: u8) -> Type {
         let start = self.current_span().start;
-        let first = self.parse_type_with_depth(0);
+        let first = self.parse_type_with_depth(depth);
 
         // `|` in type position = union type (not bitwise-OR which is expr-position only).
         // Collect remaining variants until no more `|`.
@@ -887,7 +909,7 @@ impl<'a> Parser<'a> {
         let mut variants = vec![first];
         while matches!(self.peek(), Token::Pipe) {
             self.advance(); // consume `|`
-            let next = self.parse_type_with_depth(0);
+            let next = self.parse_type_with_depth(depth);
             variants.push(next);
         }
         let end = self.current_span().start;
@@ -1003,7 +1025,15 @@ impl<'a> Parser<'a> {
                         }
                         _ => {
                             let field_start = self.current_span().start;
-                            if let Some(field) = self.parse_field_decl(false, field_start) {
+                            // This field's type is nested ONE level deeper than the
+                            // anonymous shape type itself — thread depth + 1 so a
+                            // `{ a: { a: { ... } } }` chain hits the 16-level cap instead
+                            // of resetting to depth 0 on every nested field (the bypass
+                            // that let `{ a: { a: ... } }` nesting overflow the stack past
+                            // the cap).
+                            if let Some(field) =
+                                self.parse_field_decl(false, field_start, depth + 1)
+                            {
                                 fields.push(field);
                             } else {
                                 // parse_field_decl failed but didn't advance — skip the token
@@ -1217,13 +1247,22 @@ impl<'a> Parser<'a> {
 
     fn parse_block(&mut self) -> Block {
         let start = self.current_span();
+
+        // F2: cap statement/block nesting at 256 (mirrors the expression-depth guard
+        // below). Checked BEFORE incrementing block_depth / recursing, so a pathological
+        // input never grows the call stack past this point.
+        if self.block_depth >= 256 {
+            return self.parse_block_depth_overflow(start);
+        }
+
+        self.block_depth += 1;
         let mut stmts = Vec::new();
         // Defense-in-depth: 10 000-iteration cap catches any future forward-progress
         // regression before it silently hangs CI. The real forward-progress guarantee
         // is the `pos_before` check below; this cap is a tripwire, not the fix.
         let mut iter_budget = 10_000usize;
 
-        loop {
+        let result = loop {
             debug_assert!(
                 {
                     iter_budget = iter_budget.saturating_sub(1);
@@ -1236,7 +1275,7 @@ impl<'a> Parser<'a> {
                 Token::RBrace => {
                     let end = self.current_span();
                     self.advance(); // consume `}`
-                    return Block {
+                    break Block {
                         stmts,
                         span: SourceSpan::new(self.file, start.start, end.end),
                     };
@@ -1248,7 +1287,7 @@ impl<'a> Parser<'a> {
                         "Add `}` at the end of the function body.",
                         "Every `{` must be matched with a `}`. The compiler reached the end of the file before finding it.",
                     ));
-                    return Block {
+                    break Block {
                         stmts,
                         span: SourceSpan::new(self.file, start.start, self.eof_span().end),
                     };
@@ -1266,6 +1305,62 @@ impl<'a> Parser<'a> {
                     if self.pos == pos_before {
                         self.advance();
                     }
+                }
+            }
+        };
+        self.block_depth -= 1;
+        result
+    }
+
+    /// F2 overflow path: emit the teaching diagnostic once, then resync PAST this
+    /// block's body with a flat (non-recursive) brace-counting scan instead of
+    /// continuing to recurse through `parse_stmt`/`parse_if`/etc. A recursive skip
+    /// would just move the stack overflow from "one frame per nested block" to "one
+    /// frame per skipped nested brace" — the whole point is a flat loop here.
+    fn parse_block_depth_overflow(&mut self, start: SourceSpan) -> Block {
+        let span = self.current_span();
+        if !self.nesting_too_deep_reported {
+            self.nesting_too_deep_reported = true;
+            // The WHAT/WHAT-INSTEAD/WHY text has exactly one home — the
+            // `StatementNestingTooDeep` `[[diagnostic_template]]` entry in
+            // registry/features.toml — rendered here instead of a hand-duplicated copy
+            // that drifted from the registry.
+            let (what, what_instead, why) = ynz_registry::diagnostic_template_parts(
+                "StatementNestingTooDeep",
+                &Default::default(),
+            )
+            .expect("registry missing diagnostic_template 'StatementNestingTooDeep'");
+            self.diags
+                .push(Diagnostic::error(span, what, what_instead, why));
+        }
+        self.skip_balanced_braces();
+        let end = self.current_span();
+        Block {
+            stmts: vec![],
+            span: SourceSpan::new(self.file, start.start, end.end),
+        }
+    }
+
+    /// Flat (non-recursive) brace-counting scan that consumes tokens until the CURRENT
+    /// open `{` (already assumed depth 1 — the caller has consumed it, or is standing
+    /// just past it) is balanced by its matching `}`, or EOF. Shared by
+    /// `parse_block_depth_overflow` (F2 recovery) and `parse_stmt`'s `Token::Shape |
+    /// Token::Base` in-function-body recovery arm — both previously duplicated this exact
+    /// loop (SHOULD-FIX #4, Phase A3 fix-round).
+    fn skip_balanced_braces(&mut self) {
+        let mut depth = 1usize;
+        while depth > 0 && !matches!(self.peek(), Token::Eof) {
+            match self.peek() {
+                Token::LBrace => {
+                    depth += 1;
+                    self.advance();
+                }
+                Token::RBrace => {
+                    depth -= 1;
+                    self.advance();
+                }
+                _ => {
+                    self.advance();
                 }
             }
         }
@@ -1293,22 +1388,7 @@ impl<'a> Parser<'a> {
                 }
                 if matches!(self.peek(), Token::LBrace) {
                     self.advance(); // consume `{`
-                    let mut depth = 1usize;
-                    while depth > 0 && !matches!(self.peek(), Token::Eof) {
-                        match self.peek() {
-                            Token::LBrace => {
-                                depth += 1;
-                                self.advance();
-                            }
-                            Token::RBrace => {
-                                depth -= 1;
-                                self.advance();
-                            }
-                            _ => {
-                                self.advance();
-                            }
-                        }
-                    }
+                    self.skip_balanced_braces();
                 }
                 None
             }
@@ -3665,7 +3745,21 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::Eq) {
             self.advance(); // consume `=`
             let alias_ty = self.parse_type();
-            let end = self.current_span().start;
+            // Use the END of the LAST CONSUMED token (mirroring the struct-form's `end`
+            // computation below), not `current_span().start` (the START of the NEXT
+            // unconsumed token). Comments are lexed separately as trivia and never appear
+            // in `self.tokens`, so `current_span().start` silently jumps past any comment
+            // sitting between the alias type and the next real token — over-extending this
+            // declaration's span to swallow it. The formatter's union-alias arm reads
+            // `ShapeDecl.span.end` to decide where the declaration's own text ends, and a
+            // swallowed comment falls BEFORE that endpoint, so
+            // `comment_merge::CommentContext::between` never sees it as available for the
+            // next item — the comment is silently dropped, not merely misplaced.
+            let end = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map(|s| s.span.end)
+                .unwrap_or(start);
             return Some(ShapeDecl {
                 name,
                 name_span,
@@ -3801,7 +3895,10 @@ impl<'a> Parser<'a> {
                     let doc = Self::take_doc(&mut field_doc_buffer);
                     let field_start = self.current_span().start;
                     self.advance(); // consume `hidden`
-                    if let Some(mut field) = self.parse_field_decl(true, field_start) {
+                                    // Top-level `shape`/`base shape` field — a fresh root type context,
+                                    // same as a function param type (depth 0), never nested inside another
+                                    // type being parsed.
+                    if let Some(mut field) = self.parse_field_decl(true, field_start, 0) {
                         field.doc = doc;
                         fields.push(field);
                     }
@@ -3813,7 +3910,8 @@ impl<'a> Parser<'a> {
                     let field_start = self.current_span().start;
                     match self.peek_ahead(1) {
                         Token::Colon => {
-                            if let Some(mut field) = self.parse_field_decl(false, field_start) {
+                            // Same rationale as the `hidden` arm above — fresh root, depth 0.
+                            if let Some(mut field) = self.parse_field_decl(false, field_start, 0) {
                                 field.doc = doc;
                                 fields.push(field);
                             }
@@ -3871,7 +3969,18 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a field declaration `[hidden] name: Type [= default]`.
-    fn parse_field_decl(&mut self, is_hidden: bool, field_start: usize) -> Option<FieldDecl> {
+    /// `depth` is the type-nesting depth this field's TYPE starts parsing at — 0 for a
+    /// field on a top-level `shape`/`base shape` declaration (a fresh root context, same
+    /// as a function param type), or the enclosing anonymous-inline-shape-type's depth + 1
+    /// when called from `parse_type_with_depth`'s `Token::LBrace` arm — threading this
+    /// is what makes the 16-level generic-nesting cap bound `{ a: { a: ... } }`
+    /// field-type recursion too.
+    fn parse_field_decl(
+        &mut self,
+        is_hidden: bool,
+        field_start: usize,
+        depth: u8,
+    ) -> Option<FieldDecl> {
         let (name, name_span) = match self.peek().clone() {
             Token::Identifier(n) => {
                 let span = self.current_span();
@@ -3911,7 +4020,7 @@ impl<'a> Parser<'a> {
         }
 
         let ty_start = self.current_span().start;
-        let ty = self.parse_type();
+        let ty = self.parse_type_at_depth(depth);
         let ty_end = self
             .tokens
             .get(self.pos.saturating_sub(1))

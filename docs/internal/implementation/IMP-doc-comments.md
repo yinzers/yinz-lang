@@ -4,7 +4,7 @@ description: "Design rationale for Yinz's Go-model leading '//' doc comment conv
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-07-16"
 status: "active"
 author: "patrick"
 metadata:
@@ -24,7 +24,7 @@ User spec: [`docs/reference/REF-doc-comments.md`](../../reference/REF-doc-commen
 ```ynz
 // Fetches a user by their unique ID.
 // Returns none if the user doesn't exist.
-export function fetchUser(id: UserId) -> maybe User errors {
+export function fetchUser(id: UserId) -> maybe<User> errors {
   // implementation note — never appears in hover or generated docs
 }
 ```
