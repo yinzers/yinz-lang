@@ -177,7 +177,7 @@ fn regression_lsp_vs_cli_divergence() {
             Ok(output) => {
                 // Parse the summary line (last line of NDJSON output).
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let summary_line = stdout.lines().filter(|l| !l.is_empty()).last();
+                let summary_line = stdout.lines().rfind(|l| !l.is_empty());
                 match summary_line.and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok()) {
                     Some(v) if v["type"] == "summary" => v["errors"].as_u64().unwrap_or(0) as usize,
                     _ => {

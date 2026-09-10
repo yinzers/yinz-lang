@@ -407,7 +407,7 @@ function entrypoint() -> nothing {
 "#,
     );
     assert!(
-        out.diagnostics.len() >= 1,
+        !out.diagnostics.is_empty(),
         "Expected at least one error for accessing nonexistent field on Pair"
     );
 }

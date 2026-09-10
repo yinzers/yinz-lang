@@ -1,0 +1,29 @@
+// WHY: v0.3-M8 Phase 4 — the `map` instance of the runtime-side P2-3 fix: a refused
+// send-after-close on a `channel<map<K, V>>` frees the (consumed, holder-less) map through the
+// channel's registered glue (`ChannelElemDrop::Map` → `ynz_map_drop`) from the ONE
+// `refuse_closed` fallthrough. Parity: the map's 5 counted allocs are matched by 5 counted
+// frees — alloc == free + 0. RED today: `.close()` is unknown.
+//
+// Expected output:
+//   refused
+//   end
+function producer(lend wire: channel<map<string, int>>) -> nothing {
+  let table: map<string, int> = {}
+  table.set(`a`, 1)
+  wire.close()
+  let sent = wire.send(table)
+  if (sent.failed()) {
+    print(`refused`)
+  }
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<map<string, int>> = channel<map<string, int>>(2)
+  background producer(wire)
+  wait sleep(40)
+  let got = wire.receive()
+  if (got.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`end`)
+}

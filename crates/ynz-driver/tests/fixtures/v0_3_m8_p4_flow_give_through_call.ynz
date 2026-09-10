@@ -1,0 +1,26 @@
+// WHY: v0.3-M8 Phase 4 — the ownership-flow class, correct program: the reviewer's
+// `wait producer(wire, rows)` shape (FRAGO 007 / IMP-ownership.md "The parameter rule and how
+// far it travels") WITH `give rows` declared. The `give` consumes entrypoint's `rows` at the
+// call through the one transfer decision (any later read there is the use-after-give error —
+// see the m8 gallery), `producer` sends its now-owned parameter, and the receiver is the sole
+// holder. Without `give` this program is `ParamNeedsGive` (gallery). RED today: `.close()` is
+// unknown; `.exists()` on an `array<int>`.
+//
+// Expected output:
+//   3
+//   end
+function producer(lend wire: channel<array<int>>, give rows: array<int>) -> nothing {
+  wire.send(rows)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  let rows: array<int> = [1, 2, 3]
+  wait producer(wire, rows)
+  let got = wire.receive()
+  if (got.exists()) {
+    print(got.value.count().toString())
+  }
+  print(`end`)
+}

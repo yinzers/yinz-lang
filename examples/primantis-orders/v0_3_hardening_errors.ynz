@@ -1,0 +1,105 @@
+// Error gallery — v0.3 concurrency hardening, Phase 3.
+//
+// Two sections, two rules. The first eight refusals (step 3.2): `.copy()` gives you a
+// genuinely separate value, or it refuses out loud. It never hands back the thing you asked it
+// to copy while saying it copied it. Before this, six of the types below quietly did exactly
+// that — you got a second name for the same value, and changing one changed the other with no
+// warning at all. The last two triggers (steps 3.3 and 3.4) are a different rule with the same
+// manners, both about an `errors` value's dot-property surface: reading `.message` and its
+// siblings only means something once you've proven the call actually failed, and only
+// `.message` itself has a real value to hand back today.
+
+shape Delivery { miles: int }
+shape Pickup { slot: int }
+
+function bake(give ticket: Delivery) -> nothing {
+  wait sleep(10)
+  print(`baking ${ticket.miles.toString()}`)
+}
+
+function sort(job: Delivery | Pickup) -> nothing {
+  sleepBlocking(10)
+}
+
+function walk(steps: range) -> nothing {
+  print(`walking`)
+}
+
+function nothingAtAll() -> nothing {
+  print(`no value came back from here`)
+}
+
+function ticketsSold(share neighborhood: string) -> int errors {
+  return 12
+}
+
+function entrypoint() -> nothing {
+  // WHY: CopyNotIndependent on `channel<T>` — a channel is shared on purpose. A copy would be
+  // a line nobody is listening on, and the messages you sent into it would vanish silently.
+  let orders: channel<int> = channel<int>(4)
+  let sameLine = orders.copy()
+
+  // WHY: CopyNotIndependent on a task handle — a handle names one running task, so a second
+  // handle would name the same task rather than a second one.
+  let handle = background bake({ miles: 3 })
+  let sameTask = handle.copy()
+
+  // WHY: CopyNotIndependent on a union — which choice is live is only settled while the
+  // program runs, and the two choices are different sizes.
+  const run: Delivery = { miles: 9 }
+  let either: Delivery | Pickup = run
+  let bothWays = either.copy()
+
+  // WHY: CopyNotIndependent on a map entry — the loop rewrites that view on its next turn, so
+  // the copy would stop being about the slot you were looking at.
+  let counts: map<string, int> = { }
+  for (entry in counts) {
+    let savedView = entry.copy()
+  }
+
+  // WHY: CopyNotIndependent on an `errors` value read before its `.failed()` check — until the
+  // check runs it is either the answer or a failure, and those are not the same thing to copy.
+  let attempt = ticketsSold(`strip district`)
+  let savedAttempt = attempt.copy()
+
+  // WHY: CopyNotIndependent on `nothing` — there is no value here at all to make a second of.
+  let void = nothingAtAll().copy()
+
+  // WHY: SpawnArgNotIndependent — the `background` face of the same rule. This line still
+  // reads `parcel` after the task starts, so the task would need its own separate one, and a
+  // union has no separate one to give. Hand it over instead, or read it before the spawn.
+  let parcel: Delivery | Pickup = run
+  background sort(parcel)
+  if (parcel is Delivery) {
+    print(`still a delivery`)
+  }
+
+  // WHY: SpawnArgStorageDiesWithTheFrame — a different rule from the seven above, and it needs
+  // its own words. A `range` is kept with the function that made it, so the problem is not that
+  // two places would hold one value: it is that by the time the task looked, the function would
+  // be gone. Handing it over instead does not help, which is why this refusal never says to.
+  let stroll: range = range(0, 3)
+  background walk(stroll)
+
+  // WHY: MessageBeforeFailedCheck fires here even though `.failed()` WAS checked — on a
+  // DIFFERENT `count`. The inner `let count = ...` shadows the outer checked one, so the
+  // compiler has no proof THIS `count` ever failed. (v0.3 concurrency hardening Phase 3 step
+  // 3.3 — closes parked item 33: before this fix, the checked-status tracking was keyed by
+  // NAME, so the shadowed inner binding silently inherited the outer one's checked status and
+  // this compiled clean, printing an empty string at runtime instead of refusing here.)
+  let count = ticketsSold(`bloomfield`)
+  if (count.failed()) {
+    let count = ticketsSold(`lawrenceville`)
+    print(count.message)
+  }
+
+  // WHY: EcFieldNotYetAvailable fires here even INSIDE a correct `.failed()` guard — `.trace`
+  // type-checks fine (it really is `array<Frame>`) but has no working codegen yet. (v0.3
+  // concurrency hardening Phase 3 step 3.4 — closes parked item 34: before this fix the
+  // program below compiled clean and reached codegen as "This is a compiler bug," a lie about
+  // a program that did everything REF-errors.md asks.)
+  let lastOrder = ticketsSold(`squirrel hill`)
+  if (lastOrder.failed()) {
+    let history = lastOrder.trace
+  }
+}

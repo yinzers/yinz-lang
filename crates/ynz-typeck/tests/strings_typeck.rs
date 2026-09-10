@@ -8,7 +8,7 @@
 // test-ratchet: M7 P3b adds string method dispatch and interpolation typechecking.
 
 use ynz_parser::{CompilerDb, SourceFile};
-use ynz_typeck::{check_query, CheckOutput, Type};
+use ynz_typeck::{check_query, CheckOutput};
 
 const FILE: &str = "test.ynz";
 
@@ -59,7 +59,7 @@ fn check_has_diag(source: &str, fragment: &str) {
 // ── 1. Zero-arg string methods return correct types ──────────────────────────
 
 #[test]
-fn m7_string_toUpperCase_returns_string() {
+fn m7_string_to_upper_case_returns_string() {
     // WHY: .toUpperCase() must return string; if the return type were wrong, any
     // downstream assignment or use would produce a spurious type mismatch.
     check_no_diags(
@@ -71,7 +71,7 @@ fn m7_string_toUpperCase_returns_string() {
 }
 
 #[test]
-fn m7_string_toLowerCase_returns_string() {
+fn m7_string_to_lower_case_returns_string() {
     // WHY: same as toUpperCase — lowercase transform returns string.
     check_no_diags(
         r#"function entrypoint() -> nothing {
@@ -105,7 +105,7 @@ fn m7_string_count_returns_int() {
 }
 
 #[test]
-fn m7_string_byteCount_returns_int() {
+fn m7_string_byte_count_returns_int() {
     // WHY: .byteCount() returns int. Distinct from .count() (code-point count)
     // and .graphemeCount() (grapheme cluster count). Must not be confused.
     check_no_diags(
@@ -117,7 +117,7 @@ fn m7_string_byteCount_returns_int() {
 }
 
 #[test]
-fn m7_string_graphemeCount_returns_int() {
+fn m7_string_grapheme_count_returns_int() {
     // WHY: .graphemeCount() returns int for grapheme-cluster-aware length.
     check_no_diags(
         r#"function entrypoint() -> nothing {
@@ -142,7 +142,7 @@ fn m7_string_contains_returns_bool() {
 }
 
 #[test]
-fn m7_string_startsWith_returns_bool() {
+fn m7_string_starts_with_returns_bool() {
     // WHY: .startsWith(prefix) returns bool.
     check_no_diags(
         r#"function entrypoint() -> nothing {
@@ -153,7 +153,7 @@ fn m7_string_startsWith_returns_bool() {
 }
 
 #[test]
-fn m7_string_endsWith_returns_bool() {
+fn m7_string_ends_with_returns_bool() {
     // WHY: .endsWith(suffix) returns bool.
     check_no_diags(
         r#"function entrypoint() -> nothing {
@@ -166,7 +166,7 @@ fn m7_string_endsWith_returns_bool() {
 // ── 3. Indexed access methods return maybe types ─────────────────────────────
 
 #[test]
-fn m7_string_indexOf_returns_maybe_int() {
+fn m7_string_index_of_returns_maybe_int() {
     // WHY: .indexOf() returns maybe<int> because the substring may not be found.
     // If it returned plain int, callers would skip the none-check and crash.
     check_no_diags(
@@ -178,7 +178,7 @@ fn m7_string_indexOf_returns_maybe_int() {
 }
 
 #[test]
-fn m7_string_byteAt_returns_maybe_int() {
+fn m7_string_byte_at_returns_maybe_int() {
     // WHY: .byteAt(n) returns maybe<int> — out-of-bounds returns none.
     check_no_diags(
         r#"function entrypoint() -> nothing {
@@ -189,7 +189,7 @@ fn m7_string_byteAt_returns_maybe_int() {
 }
 
 #[test]
-fn m7_string_graphemeAt_returns_maybe_string() {
+fn m7_string_grapheme_at_returns_maybe_string() {
     // WHY: .graphemeAt(n) returns maybe<string> — grapheme-cluster-aware access.
     check_no_diags(
         r#"function entrypoint() -> nothing {
@@ -295,7 +295,7 @@ fn m7_interpolated_string_with_string_is_clean() {
 }
 
 #[test]
-fn m7_interpolated_string_with_shape_with_toString_is_clean() {
+fn m7_interpolated_string_with_shape_with_to_string_is_clean() {
     // WHY: a shape with a standalone toString function must be accepted in
     // interpolation. If it's rejected, user shapes would be un-usable in templates.
     check_no_diags(
@@ -315,7 +315,7 @@ function entrypoint() -> nothing {
 }
 
 #[test]
-fn m7_interpolated_string_with_shape_without_toString_produces_error() {
+fn m7_interpolated_string_with_shape_without_to_string_produces_error() {
     // WHY: a shape without toString must be rejected in interpolation with a
     // clear "add a toString function" message. Without this check, codegen
     // would try to call a non-existent function at runtime.
@@ -333,7 +333,7 @@ function entrypoint() -> nothing {
 }
 
 #[test]
-fn m7_interpolated_string_error_message_mentions_toString() {
+fn m7_interpolated_string_error_message_mentions_to_string() {
     // WHY: the diagnostic message must guide the user to add the toString
     // function — without this, they have no hint on how to fix the error.
     check_has_diag(
@@ -394,7 +394,7 @@ fn m7_string_bracket_access_returns_maybe_string() {
 // ── 8. Existing M6 string conversions still work ─────────────────────────────
 
 #[test]
-fn m7_string_toInt_still_works() {
+fn m7_string_to_int_still_works() {
     // WHY: .toInt() was added in M6 and must still typecheck correctly alongside
     // the new M7 string methods. Non-regression guard.
     check_no_diags(
@@ -406,7 +406,7 @@ fn m7_string_toInt_still_works() {
 }
 
 #[test]
-fn m7_string_toFloat_still_works() {
+fn m7_string_to_float_still_works() {
     // WHY: .toFloat() was added in M6 — same non-regression guard.
     check_no_diags(
         r#"function entrypoint() -> nothing {

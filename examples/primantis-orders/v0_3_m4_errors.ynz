@@ -92,10 +92,12 @@ function entrypoint() -> nothing {
   let line = window.line
   let pickup = line.receive()
 
-  // WHY: channel-element-type-not-supported — a `number` (or `shape`) value lives in the
-  // SENDING task's stack frame, which can be freed while the value still sits in the channel;
-  // the receiver would read freed memory. Rejected until per-type heap-copying ships.
-  let widePipe: channel<number> = channel<number>(2)
+  // WHY: channel-element-type-not-supported — a `shape` value lives in the SENDING task's
+  // stack frame, which can be freed while the value still sits in the channel; the receiver
+  // would read freed memory. Rejected until per-type heap-copying ships. (`channel<number>`
+  // was this trigger until v0.3-M8 shipped decimal128 marshalling — fr12 — so the class keeps
+  // a shape instance here.)
+  let widePipe: channel<BatchNote> = channel<BatchNote>(2)
 
   // ── v0.3-M4 Phase 2: the background handle-form ──
 

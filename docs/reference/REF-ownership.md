@@ -80,11 +80,58 @@ rename(player)
 
 ```ynz
 const original: Player = { name: `Patrick`, health: 100 }
-const backup = original.copy()    // produces a new owned value (cheap, trivially-copyable types only)
+const backup = original.copy()    // a new value of your own
 saveForever(backup)                // backup is given to saveForever; original is unchanged
 ```
 
-`.copy()` is only allowed when every field of the value's type is trivially copyable (primitives all the way down). For shapes containing arrays, maps, or other heap-owned data, you write a standalone `copy()` function that does the deep copy explicitly and call it as a normal function. This prevents silent expensive copies.
+`.copy()` gives you a value nobody else can reach. Change the copy and the original does not move; change the original and the copy does not move.
+
+For a list, that includes the items. Copying an `array<array<int>>` gives you a new outer list holding new inner lists, so writing into the copy's first row leaves the original's first row alone:
+
+```ynz
+let inner: array<int> = [1, 2, 3]
+let outer: array<array<int>> = [inner]
+let clone: array<array<int>> = outer.copy()
+let cloneRow: array<int> = clone[0].or(inner)
+cloneRow.set(0, 99)
+// outer's first row still starts at 1
+```
+
+`.copy()` works on every simple value (numbers, strings, booleans, an `options` value, a `sensitive` value — a copied `sensitive` value stays hidden when it is printed, same as the original), on a shape, on an `array<T>`, and on a `map<K, V>`.
+
+For the three that hold other values inside them, it depends on what is inside:
+
+- **`array<T>`** copies its items too, however deep they go — unless an item is something that cannot be copied at all (a `channel`, say), and then the whole copy is refused.
+- **`fixed<T>`** holds its items in one block with no separate piece to follow, so it copies lists of simple values and shapes, and refuses a `fixed` of lists or maps.
+- **`maybe<T>`** copies when what is inside is a simple value, a number, or a shape. `maybe<array<int>>`, `maybe<map<string, int>>`, `maybe<fixed<int>>` and a `maybe` of a `maybe` are refused today — those are the natural things to wrap, so you will meet this. Copy the piece instead:
+
+```ynz
+let rows: maybe<array<int>> = loadRows()
+// let backup = rows.copy()          // COMPILE ERROR — see below
+let theRows: array<int> = rows.or([])
+let backup: array<int> = theRows.copy()   // copy the list itself
+```
+
+For a shape that holds arrays or maps inside it, `.copy()` copies the shape's own fields and the inner list stays shared. Write a standalone `copy()` function that copies those pieces and call it as a normal function — that keeps an expensive copy visible in your code.
+
+### When `.copy()` refuses
+
+Some things cannot be copied, and Yinz says so while you build rather than handing you back the same thing and letting you find out later:
+
+```ynz
+let orders: channel<int> = channel<int>(4)
+let secondLine = orders.copy()
+// COMPILE ERROR: `.copy()` cannot make a separate `channel<int>` value — a channel is the
+// line two tasks talk over, not a value you hold.
+//   Pass the channel itself to the task and every task holding it reads and writes the same
+//   line. If you want a second, separate line, make one:
+//     let replies: channel<int> = channel<int>()
+//   Why: a second channel holding the same messages would not help you — the task on the
+//   other end is listening on the first one. Anything you sent into the copy would go
+//   nowhere, and nothing would tell you.
+```
+
+The same happens for a task handle (it names one running task), for a value written with `|` (which of the two it is, is only settled while the program runs), for a `dynamic` value, for a loop's map entry, and for an `errors` value you have not checked with `.failed()` yet. Every one of those errors tells you what to do instead.
 
 ---
 
@@ -109,7 +156,7 @@ After `.freeze()`, the binding behaves like `const` for the rest of its scope. T
 | What | Where it lives | When you type it |
 |---|---|---|
 | `share` / `lend` / `give` | Function signatures only | Always at signatures; never at call sites (compiler infers there) |
-| `.copy()` | Body expression | When you want a cheap independent copy of a trivially-copyable value |
+| `.copy()` | Body expression | When you need a value of your own that nobody else can reach |
 | `.freeze()` | Body expression | When you want to lock a binding from further mutation mid-function |
 
 The compiler does the heavy lifting at call sites. The IDE shows what was inferred. You learn ownership by reading your own code with hints turned on.

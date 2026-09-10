@@ -1,0 +1,22 @@
+// `background eat(b.items)` — a map reached through a FIELD. Typeck cannot prove a non-ident
+// argument safe, so it records `Give` by default-deny (FRAGO 022), which consumes nothing:
+// `b` still holds the map. The spawn glue read that `Give` label as "the spawner's binding was
+// consumed, so the task is the sole holder" and handed the map over untouched, leaving both
+// sides writing one map — the task's write showed up in the parent (99 / 99).
+//
+// The task must get its own map: 99 in the task, 1 in the parent.
+shape Box {
+  items: map<string, int>
+}
+
+function eat(counts: map<string, int>) -> nothing {
+  counts.set(`k`, 99)
+  print(counts.get(`k`).or(0))
+}
+
+function entrypoint() -> nothing {
+  let b: Box = { items: { `k`: 1 } }
+  background eat(b.items)
+  wait sleep(120)
+  print(b.items.get(`k`).or(0))
+}

@@ -52,8 +52,8 @@ fn check_semantic_roundtrip(path: &Path) {
     let db_orig = ynz_parser::CompilerDb::default();
     let sf_orig = ynz_parser::SourceFile::new(
         &db_orig,
-        path.to_string_lossy().into_owned().into(),
-        source.clone().into(),
+        path.to_string_lossy().into_owned(),
+        source.clone(),
     );
     let original_parse = ynz_parser::parse_query(&db_orig, sf_orig);
 
@@ -79,8 +79,7 @@ fn check_semantic_roundtrip(path: &Path) {
     };
 
     let db_fmt = ynz_parser::CompilerDb::default();
-    let sf_fmt =
-        ynz_parser::SourceFile::new(&db_fmt, "<formatted>".into(), formatted.clone().into());
+    let sf_fmt = ynz_parser::SourceFile::new(&db_fmt, "<formatted>".into(), formatted.clone());
     let reformatted_parse = ynz_parser::parse_query(&db_fmt, sf_fmt);
 
     assert!(

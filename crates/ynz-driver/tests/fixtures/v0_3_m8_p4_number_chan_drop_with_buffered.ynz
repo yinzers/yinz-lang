@@ -1,0 +1,20 @@
+// WHY: v0.3-M8 Phase 4 step 3d — fr12's buffered cell: one `number` sent and never received is
+// held to exit by the never-torn-down channel as one 16-byte cell — alloc == free + 1 (the
+// teardown-glue free of a residual cell is the runtime crate's unit gate, unreachable from
+// source until locals are dropped at scope exit). RED today: `channel<number>` is rejected at
+// construction.
+//
+// Expected output:
+//   buffered
+function producer(lend wire: channel<number>) -> nothing {
+  let price: number = 2.5
+  wire.send(price)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<number> = channel<number>(4)
+  background producer(wire)
+  wait sleep(40)
+  print(`buffered`)
+}

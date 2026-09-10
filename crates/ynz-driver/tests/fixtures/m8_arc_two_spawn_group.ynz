@@ -1,0 +1,45 @@
+// v0.3-M8 Phase 5 — the Auto-Arc spike fixture, promoted to the first real fixture.
+//
+// Two `background` spawns in one block pass the SAME whole shape binding, nothing changes
+// `scene` between them, both callees only read it, and `Scene` is Arc-shareable (string +
+// int fields). Under topology (B) (`IMP-ownership.md` "Auto-Arc — Sharing Topology Across
+// `background` Boundaries") the compiler mints ONE shared block (`ynz_arc_new` + copy), hands
+// each task a counted reference (`ynz_arc_clone`), releases the caller's transient after the
+// last spawn, and each task's drop ladder releases its reference at retire.
+//
+// RED observed before the emission landed: the program printed the correct lines but the
+// emitted IR carried ZERO `ynz_arc_new` calls (two independent `ynz_alloc` shape copies), so
+// the IR assertion in `v03_m8_auto_arc.rs` failed — the emission did not exist.
+//
+// Expected output (order-independent — both tasks print the same line shape; the driver test
+// sorts): the caller's own read after the spawns must see the ORIGINAL (the caller never reads
+// through the Arc block).
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(10)
+  let area = scene.width * scene.height
+  results.send(area)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let scene: Scene = { name: `Three Rivers`, width: 6, height: 7 }
+  background render(scene, results)
+  background render(scene, results)
+  let total = 0
+  let a = results.receive()
+  if (a.exists()) {
+    total = total + a.value
+  }
+  let b = results.receive()
+  if (b.exists()) {
+    total = total + b.value
+  }
+  print(`tasks saw ${total}`)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}

@@ -15,8 +15,10 @@ function entrypoint() -> nothing {
   let h = background worker(ch)
   wait sleep(30)
   let a = ch.receive()
+  let aValue = a.or(0)
   let b = ch.receive()
-  let drained = a + b
+  let bValue = b.or(0)
+  let drained = aValue + bValue
   print(drained.toString())
   let r = h.receive()
   let v = r.or(0.0)

@@ -26,9 +26,7 @@ fn row01_point1_plus_point2() {
 /// Row 2: half-even rounding at tie — 0.5 rounds to 0 (even)
 #[test]
 fn row02_half_even_0_5() {
-    let a = parse("0.5", 34);
-    let b = parse("0", 33); // narrowing to 33 causes rounding of 0.5 → 0 (even)
-                            // Direct: parse "0.5" at precision 33 and check rounding
+    // narrowing to precision 33 causes rounding of 0.5 → 0 (even)
     let rounded = parse("0.5", 33);
     let expected = fmt(&rounded);
     // 0.5 at precision 33: half-even rounds to 0 (even)

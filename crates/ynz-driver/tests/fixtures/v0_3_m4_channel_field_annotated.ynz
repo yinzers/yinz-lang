@@ -15,5 +15,6 @@ function entrypoint() -> nothing {
   let b: Box = { wire: ch }
   let c: channel<int> = b.wire
   let first = c.receive()
-  print(first)
+  let value = first.or(0)
+  print(value)
 }

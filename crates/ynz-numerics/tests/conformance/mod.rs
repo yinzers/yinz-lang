@@ -10,7 +10,7 @@
 ///
 /// Only the M2 subset is exercised:
 ///   dqAdd, dqSubtract, dqMultiply, dqDivide, dqCompare, dqAbs, dqMinus, dqPlus
-use ynz_numerics::{abs, add, compare, decode, div, format, mul, neg, parse, sub};
+use ynz_numerics::{abs, add, compare, div, format, mul, neg, parse, sub};
 
 // WHY: conformance must not silently pass when the IBM corpus is absent.
 // These vectors cover the load-bearing invariants: associativity-breaking edge
@@ -364,7 +364,6 @@ fn run_corpus_line(line: &str, op_name: &str) -> Option<Result<(), String>> {
         return None;
     }
 
-    let op = parts[1].to_lowercase();
     let operands = &parts[2..arrow_pos];
 
     if operands.is_empty() {

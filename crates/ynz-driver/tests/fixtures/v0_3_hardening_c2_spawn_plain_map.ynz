@@ -1,0 +1,12 @@
+// The control twin of `v0_3_hardening_c2_spawn_copied_map.ynz`: the same program with no
+// `.copy()`. The spawn glue clones the map here, which is correct — the spawner reads `m`
+// after the spawn. Its cost is the yardstick the `.copy()` twin is held to.
+function eat(counts: map<string, int>) -> nothing {
+  print(counts.count())
+}
+
+function entrypoint() -> nothing {
+  let m: map<string, int> = { `a`: 1, `b`: 2 }
+  background eat(m)
+  print(m.count())
+}

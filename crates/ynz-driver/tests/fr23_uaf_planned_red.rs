@@ -33,8 +33,25 @@
 // permanent green regression locks by the Phase 9 fix (`#[ignore]` removed per the
 // Phase-1/Phase-3 RED-set precedent). They assert the CORRECT contract (both tiers
 // print real values). Do NOT weaken an assertion, widen the watchdog, or delete
-// these tests: a red here is a live use-after-free in the flagship concurrency
-// surface — the test-weakening corpse applies.
+// these tests on a hunch — but a red here is NOT automatically a live
+// use-after-free, and telling the two apart in seconds is the whole point of this
+// paragraph (FRAGO 003, 2026-09-06 — four verification gates waved three failures
+// through as "expected planned REDs" because the sentence this replaces drew no
+// distinction, when the actual producer was v0.3-M8 Phase 4's transfer rule
+// deliberately rejecting a fixture, three weeks after this file's own last UAF
+// fix):
+//
+//   - A test here fails because the built binary printed WRONG VALUES, hung, or
+//     crashed at runtime → this IS a live use-after-free in the flagship
+//     concurrency surface. Stop everything. The test-weakening corpse applies
+//     with full force — do not touch the assertion, do not touch the fixture's
+//     shape, fix the compiler.
+//   - A test here fails because `ynz build` REJECTED the fixture at compile time
+//     (no binary produced, no bytes ever read) → this is NOT a memory-safety
+//     event. Some language rule changed under the fixture since it was written.
+//     Diagnose the FIXTURE against the CURRENT rules and update it to the legal
+//     form the compiler's diagnostic asks for; never weaken or delete the
+//     assertion over a compile-time rejection.
 //
 // v0.3-M7 FRAGO 024 (round 8, 2026-07-18): the FRAGO 022/023 default-deny
 // redesign's OWN security re-check found two NEW, qualitatively different bugs
@@ -155,6 +172,24 @@ fn fr23_red_maybe_payload_spawn_receiver_reads_live_values() {
     // must outlive the spawner's frame. Today the payload alloca rides raw into the
     // task and the task reads dead-frame garbage at BOTH tiers (optimized 0/0,
     // O0 stomp sentinels) — confirmed-live 2026-07-17, FRAGO 011.
+    //
+    // Migrated reasoning (FRAGO 003, 2026-09-06): this file used to carry a sibling
+    // `fr23_generic_maybe_payload_spawn_receiver_reads_live_values`, a
+    // GENERIC-container B' variant proving the B' admission arm reads
+    // `binding_ty_narrowed` (the concrete instantiated scope type) rather than a
+    // function table, so it stayed generic-safe by construction (Phase 9 security
+    // fix-round, 2026-07-18). FRAGO 022's default-deny redesign made that specific
+    // proof moot — `Expr::FieldAccess` now falls through `bg_arg_is_provably_safe`'s
+    // trailing wildcard regardless of how its type was derived, so there is no table
+    // lookup left to regress. The sibling test was deleted; its fixture
+    // (`let first = identity(m)` producing an owned `maybe<Cargo>` through a
+    // generic `give`) is inexpressible under v0.3-M8 Phase 4's transfer rule and
+    // stays that way until the `maybe-move-out` deferred feature lands (see
+    // `.claude/plans/parked.md`) — three independent attempts to construct an owned
+    // `maybe<Cargo>` argument all failed for documented reasons (direct return: type
+    // error; a `give` accessor: `returns_fresh` correctly propagates `Reaches`;
+    // `channel<Cargo>.receive()`: element type unsupported). This B' lock and the
+    // state-machine-arm B' lock below are what keep the shape reachable and green.
     assert_both_tiers_print_correct_haul("v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz");
 }
 
@@ -227,17 +262,30 @@ fn fr23_generic_call_triple_nested_spawn_receiver_reads_live_values() {
 #[test]
 fn fr23_generic_call_ufcs_nested_arg_spawn_receiver_reads_live_values() {
     // WHY: locks the GENERIC-callee C2 variant whose argument is a UFCS METHOD-CALL
-    // CHAIN (`background identity(makeCargo().reroute()).haul()` — `reroute` is a
-    // concrete `Cargo -> Cargo` UFCS function). Rounds 2/3 (FRAGO 018/019) made the
-    // nested-argument resolver RECURSIVE for `Expr::Call`, but its match had exactly
-    // two arms (`Ident`, `Call`) — a `MethodCall` (UFCS chain) nested inside a generic
-    // callee's argument was never classified, so `identity`'s `T` stayed unresolved
-    // and the receiver fell through un-admitted — live-reproduced independently by two
-    // reviewers, 2026-07-18 (M7 completion-gate round 4, FRAGO 020). Closed by
-    // collapsing the top-level admission check and the nested-argument resolver into
-    // ONE exhaustively-matched classifier (`bg_expr_resolved_type`, no `_ =>`
-    // catch-all) so a `MethodCall` is classified exactly once, consulted everywhere. A
-    // red here means the unified classifier's `MethodCall` arm regressed.
+    // CHAIN (`background identity(makeCargo().reroute().copy()).haul()` — `reroute`
+    // is a concrete `Cargo -> Cargo` UFCS function). Rounds 2/3 (FRAGO 018/019) made
+    // the nested-argument resolver RECURSIVE for `Expr::Call`, but its match had
+    // exactly two arms (`Ident`, `Call`) — a `MethodCall` (UFCS chain) nested inside
+    // a generic callee's argument was never classified, so `identity`'s `T` stayed
+    // unresolved and the receiver fell through un-admitted — live-reproduced
+    // independently by two reviewers, 2026-07-18 (M7 completion-gate round 4, FRAGO
+    // 020). Closed by collapsing the top-level admission check and the
+    // nested-argument resolver into ONE exhaustively-matched classifier
+    // (`bg_expr_resolved_type`, no `_ =>` catch-all) so a `MethodCall` is classified
+    // exactly once, consulted everywhere. A red here means the unified classifier's
+    // `MethodCall` arm regressed.
+    //
+    // The trailing `.copy()` is REQUIRED, not incidental (FRAGO 003, 2026-09-06):
+    // v0.3-M8 Phase 4's transfer rule (`check_transfer`, `TransferNeedsCopy`,
+    // signed off 2026-09-03) classifies `makeCargo().reroute()` as
+    // `Provenance::Reaches` at the generic `give` sink and refuses the bare form at
+    // compile time — this is a language-rule change, not a UAF regression, and it
+    // does not touch the fr23 gate this test locks: `identity`'s argument is
+    // `Expr::PostfixOp` after the `.copy()`, which `bg_expr_resolved_type` still
+    // classifies as unresolved (`None`), so `T` stays unresolved and the receiver
+    // still routes through the default-deny wildcard exactly as before. Do not
+    // remove the `.copy()` to "simplify" this fixture — it is the fixture's only
+    // legal form under the current transfer rule.
     assert_both_tiers_print_correct_haul(
         "v0_3_m7_fr23_generic_call_ufcs_nested_arg_spawn_receiver.ynz",
     );
@@ -246,7 +294,7 @@ fn fr23_generic_call_ufcs_nested_arg_spawn_receiver_reads_live_values() {
 #[test]
 fn fr23_generic_call_fieldaccess_nested_arg_spawn_receiver_reads_live_values() {
     // WHY: locks the GENERIC-callee C2 variant whose argument is a MAYBE-PAYLOAD
-    // FIELD ACCESS (`background identity(first.value).haul()` where
+    // FIELD ACCESS (`background identity(first.value.copy()).haul()` where
     // `first: maybe<Cargo>`). Same class of gap as the UFCS sibling test above: the
     // nested-argument resolver never classified `Expr::FieldAccess`, even though the
     // top-level admission predicate already recognized `.value` (the B' class, FRAGO
@@ -254,20 +302,21 @@ fn fr23_generic_call_fieldaccess_nested_arg_spawn_receiver_reads_live_values() {
     // live-reproduced independently by two reviewers, 2026-07-18 (M7 completion-gate
     // round 4, FRAGO 020). Closed by the SAME unified classifier as the UFCS sibling.
     // A red here means the unified classifier's `FieldAccess` arm regressed.
+    //
+    // The trailing `.copy()` is REQUIRED, not incidental (FRAGO 003, 2026-09-06):
+    // v0.3-M8 Phase 4's transfer rule (`check_transfer`, `TransferNeedsCopy`,
+    // signed off 2026-09-03) classifies `first.value` as `Provenance::Reaches`
+    // (a field of `first`) at the generic `give` sink and refuses the bare form at
+    // compile time — this is a language-rule change, not a UAF regression, and it
+    // does not touch the fr23 gate this test locks: `identity`'s argument is
+    // `Expr::PostfixOp` after the `.copy()`, which `bg_expr_resolved_type` still
+    // classifies as unresolved (`None`), so `T` stays unresolved and the receiver
+    // still routes through the default-deny wildcard exactly as before. Do not
+    // remove the `.copy()` to "simplify" this fixture — it is the fixture's only
+    // legal form under the current transfer rule.
     assert_both_tiers_print_correct_haul(
         "v0_3_m7_fr23_generic_call_fieldaccess_nested_arg_spawn_receiver.ynz",
     );
-}
-
-#[test]
-fn fr23_generic_maybe_payload_spawn_receiver_reads_live_values() {
-    // WHY: locks the GENERIC-container B' variant — a `maybe<Cargo>` binding whose
-    // type arrives through a generic instantiation (`let first = identity(m)`,
-    // un-annotated). The B' admission arm reads `binding_ty_narrowed` (the concrete
-    // instantiated scope type) and never touches the fn tables, so it is generic-safe
-    // by construction — this test locks that construction against a future rewrite
-    // that re-keys the arm on a table lookup (Phase 9 security fix-round, 2026-07-18).
-    assert_both_tiers_print_correct_haul("v0_3_m7_fr23_generic_maybe_payload_spawn_receiver.ynz");
 }
 
 #[test]
@@ -285,6 +334,12 @@ fn fr23_sm_arm_maybe_payload_spawn_receiver_reads_live_values() {
     // WHY: locks the B' shape through the STATE-MACHINE spawn arm — same
     // shared-`prepare_bg_arg_for_ctx` contract as the SM C2 lock above, for the
     // maybe-payload receiver (Phase 9 code-reviewer fix-round, 2026-07-18).
+    //
+    // Migrated reasoning (FRAGO 003, 2026-09-06): see the CPU-arm B' lock above
+    // (`fr23_red_maybe_payload_spawn_receiver_reads_live_values`) for the full
+    // account of the deleted GENERIC-container B' sibling test and why its
+    // fixture is now inexpressible — this lock and that one are the two surviving
+    // B' locks its reasoning was migrated into.
     assert_both_tiers_print_correct_haul("v0_3_m7_fr23_sm_maybe_payload_spawn_receiver.ynz");
 }
 

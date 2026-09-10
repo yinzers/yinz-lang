@@ -216,6 +216,24 @@ pub fn map_method_is_mutating(method: &str) -> bool {
     matches!(method, "set" | "remove" | "clear")
 }
 
+/// THE table of built-in methods whose RESULT is a fresh value nobody else reaches —
+/// consumed by `effective_ownership::provenance` for a heap-typed builtin method result
+/// (v0.3-M8 Phase 4, `IMP-ownership.md` "Classification"). The default for a heap-typed
+/// builtin result is `Reaches([receiver root])` (`.get`/`.first`/`.last` hand out a cell of
+/// the receiver); a method joins this set one at a time WITH EVIDENCE that its codegen
+/// returns a fresh allocation, never by default (parked item 18 records the conservative
+/// omission of `.sort`/`.filter`/`.map`/`.concat` until each is checked). Value-typed
+/// results (`count`, `toString`, `exists`) never consult this table — a value is fresh bits.
+///
+/// - `receive` — a channel/handle delivery: the receiver's `maybe<T>` is the sole reference
+///   (`IMP-concurrency.md` "What this makes sound").
+///
+/// (`keys`/`values`/`entries` are typed as fresh arrays but have no codegen lowering yet —
+/// "not yet lowered in P4b" — so they carry no evidence and stay out until they do.)
+pub fn builtin_method_returns_fresh(method: &str) -> bool {
+    matches!(method, "receive")
+}
+
 /// The receiver-typed argument positions of the built-in collection methods:
 /// which arg positions of `method` carry the collection's elem / inner / key /
 /// value type (rather than an `int` index or a closure).

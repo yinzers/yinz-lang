@@ -11,10 +11,11 @@ env:
   RUST_BACKTRACE: 1
 
 # Least-privilege GITHUB_TOKEN for every job in this workflow (fix-loop round, M6 Phase
-# 6b): neither `build-and-test` nor the new `sanitizers` job needs anything beyond
-# read-only repo access (checkout + actions/cache read/write on the cache API, which
-# does not require the `contents` write scope) — no PR comments, no releases, no pushes.
-# Workflow-level so it covers both jobs without duplicating the block per-job.
+# 6b): none of `build-and-test`, `fuzz` (v0.3-M8 Phase 8) or `sanitizers` needs anything
+# beyond read-only repo access (checkout + actions/cache read/write on the cache API, which
+# does not require the `contents` write scope; actions/upload-artifact authenticates with the
+# runtime token, not GITHUB_TOKEN) — no PR comments, no releases, no pushes.
+# Workflow-level so it covers every job without duplicating the block per-job.
 permissions:
   contents: read
 
@@ -75,7 +76,7 @@ jobs:
         run: cargo build -p ynz-runtime
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build (release)
         # Pre-build the release-profile runtime staticlib first, for the same reason as the
@@ -89,8 +90,129 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # Loom model-checking harness (v0.3-M8 Phase 3). `--cfg loom` swaps ynz-runtime's
+      # `crate::sync` primitives to loom's and compiles `src/loom_tests.rs`; nothing else in the
+      # workspace observes the cfg (tokio gates its own loom paths on `all(test, loom)`, never
+      # true for a dependency). Own target dir so the cfg'd rebuild never invalidates the main
+      # cache. Unbounded (exhaustive) on purpose — the whole lane is ~2s; `LOOM_MAX_PREEMPTIONS`
+      # is a local bisecting knob, not a CI setting: every model completes exhaustively
+      # unbounded, and a preemption bound only PRUNES schedules from that same exploration, so
+      # a bounded run explores a strict subset of what this step already covers — a second,
+      # bounded run would add wall time and no coverage. The trailing grep is a vacuity guard:
+      # a drifted `loom_` filter would otherwise "pass" by matching zero tests.
+      #
+      # `pipefail` is load-bearing: without it the `tee` pipe discarded cargo's exit status and
+      # the grep was the accidental sole failure gate (a crashed lane with a stale "ok" line
+      # would have passed). Patrick ruled 2026-09-03 that this lane stays BLOCKING on the main
+      # job — no `continue-on-error`.
+      - name: Loom (ynz-runtime model-checking harness, --cfg loom)
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUSTFLAGS='--cfg loom' CARGO_TARGET_DIR=target/loom \
+            cargo test -p ynz-runtime --release --lib -- loom_ --nocapture 2>&1 | tee loom.log
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed' loom.log
+
       - name: Verify --version
         run: ./target/release/ynz --version
+
+  fuzz:
+    name: Structured fuzzing lane (generated .ynz corpus × mode matrix)
+    runs-on: ubuntu-latest
+    # NON-BLOCKING on first landing, by v0.3-M8 Phase 8 step 4's design. A genuine finding here
+    # routes through the plan-amendment/FRAGO seam (risk R5), not an immediate red build, until
+    # the lane has proven it does not flake.
+    #
+    # PROMOTE-TO-BLOCKING TRIGGER (delete this flag and the two lines above when it fires):
+    # thirty consecutive CI runs of this job with zero findings AND zero TIMED OUT reports. At
+    # that point a finding is evidence about the compiler rather than about the harness, and a
+    # non-blocking lane nobody reads is worse than no lane.
+    continue-on-error: true
+    # Hard wall-clock ceiling on the whole job — the "never open-ended, never AFL-style
+    # continuous fuzzing" requirement, enforced by the runner rather than trusted to the corpus
+    # size. Measured: 64 programs × 4 modes = 14.5s on a 16-core dev container; the corpus size
+    # below is fixed at 96 and the rest of this budget is build time.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev libclang-18-dev clang-18
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-fuzz-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # Same reason as the main job's equivalent step: ynz-driver embeds the runtime staticlib
+      # via include_bytes!, which a check-only invocation never produces.
+      - name: Build runtime archive (required by include_bytes! in driver)
+        run: cargo build -p ynz-runtime
+
+      # BOUNDED BY CONSTRUCTION: a fixed corpus of 96 generated programs, each run across the
+      # 2×2 compilation-mode matrix, with a per-invocation liveness kill in the harness
+      # (FUZZ_RUN_BUDGET, 90s) and the job-level timeout-minutes above. Nothing here is
+      # open-ended.
+      #
+      # The seed base is the run id, so every CI run explores a DIFFERENT, fully reproducible
+      # slice: the harness prints the seed base, and each generated file carries its own seed in
+      # its name and its header comment. Replay locally with
+      #   YNZ_FUZZ_SEED=<seed> cargo test -p ynz-driver --test cross_impl_consistency \
+      #     print_generated_program -- --ignored --nocapture
+      #
+      # `pipefail` is load-bearing for the same reason it is in the Loom step: without it the
+      # `tee` pipe would swallow cargo's exit status and the greps would become the sole gate.
+      #
+      # The three greps are the VACUITY GUARD. A lane that generated zero programs, compiled
+      # zero of them, or matched zero tests must FAIL, not pass quietly — that is the exact
+      # green-rot shape the Loom step's own grep exists to catch. (`continue-on-error` above
+      # means a failure is reported, not fatal — that is the non-blocking policy, not an excuse
+      # to skip the guard.)
+      - name: Structured fuzzing (96 generated programs × 4 compilation modes)
+        shell: bash
+        env:
+          YNZ_FUZZ_PROGRAMS: "96"
+          YNZ_FUZZ_SEED: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          cargo test -p ynz-driver --test cross_impl_consistency \
+            generated_corpus_byte_identical_across_mode_matrix -- --nocapture 2>&1 | tee fuzz.log
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed' fuzz.log
+          grep -Eq 'fuzz corpus: .* [1-9][0-9]* generated \([1-9][0-9]* distinct' fuzz.log
+          grep -Eq '[1-9][0-9]* compiled and ran to exit 0' fuzz.log
+
+      - name: Upload fuzz.log on failure (the summary + embedded finding sources)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-log
+          path: fuzz.log
+          if-no-files-found: warn
+
+      # The README presents the KEPT scratch directory as the durable replay artifact (full,
+      # untruncated per-mode stdout/stderr capture files — fuzz.log above only carries the
+      # panic message's truncated 600/1600-byte excerpts). `generated_corpus_byte_identical_
+      # across_mode_matrix` calls `tempfile::Builder::new().prefix("ynz-fuzz-").tempdir()` with
+      # no `tempdir_in`, so it lands in the OS temp dir — `/tmp` on this runner — and `dir.keep()`
+      # on failure leaves it there rather than deleting it. Upload it too, so the README's own
+      # claim and what CI actually keeps agree.
+      - name: Upload kept fuzz corpus on failure (full per-mode capture files, replay input)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus
+          path: /tmp/ynz-fuzz-*
+          if-no-files-found: warn
 
   sanitizers:
     name: Sanitizer lane (Miri / TSan / ASan) — ynz-runtime

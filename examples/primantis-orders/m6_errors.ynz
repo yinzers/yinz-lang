@@ -104,6 +104,10 @@ function valueWithoutCheck() -> nothing {
 // NarrowedUnionBackgroundReceiver class). Inside the `is Circle` arm the binding still
 // holds the union's storage, not a standalone Circle; running it in the background
 // would read past that storage, so the compiler rejects it deterministically.
+// The same line ALSO fires ParamNeedsGive (v0.3-M8 Phase 4): `fig` is a bare parameter
+// passed as the receiver of `haulCircle(give self: Circle)` — the relay-through-bare-
+// parameter shape the transfer rule refuses (only a `give` parameter can be given away);
+// before M8 this was a silent consume (parked item 17).
 function haulCircle(give self: Circle) -> nothing {
   wait sleep(20)
   print(`hauling`)

@@ -1,0 +1,37 @@
+// WHY: v0.3-M8 Phase 4 fix round 2 (should-fix 5) — a builder whose returned array is built
+// from a COMPUTED SCALAR local (`let n = b.rows.count()`) is `Fresh`: `[n]` copies `n`'s
+// value bits, nothing in it reaches `b`. The fixpoint's type oracle answered `None` for every
+// `let`-bound local, so `[n]` was classified as reaching a heap value, `build` became
+// `MayAlias`, and `wire.send(build(bucket))` was refused with a WHY that was false about the
+// program ("returns a piece of its `b` argument"). The oracle now resolves `let` locals whose
+// type is knowable before body checking — an annotation, a literal, or a scalar-returning
+// builtin — and keeps the sound `None` for everything else.
+// RED today: refused at compile time (TransferNeedsCopy). GREEN: sends and prints the count.
+//
+// Expected output:
+//   1
+//   3
+//   end
+shape Bucket {
+  rows: array<int>
+}
+
+function build(share b: Bucket) -> array<int> {
+  let n = b.rows.count()
+  let out: array<int> = [n]
+  return out
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  let bucket: Bucket = { rows: [1, 2, 3] }
+  wire.send(build(bucket))
+  wire.close()
+  let got = wire.receive()
+  if (got.exists()) {
+    print(got.value.count().toString())
+    let first = got.value[0]
+    print(first.or(0).toString())
+  }
+  print(`end`)
+}

@@ -34,5 +34,5 @@ function entrypoint() -> nothing {
   let scene: Scene = { name: `Point`, width: 800, height: 600, scale: 1.5 }
   background render(scene, results)
   let ratio = results.receive()
-  print(`${ratio} ${scene.scale}`)
+  print(`${ratio.or(-1)} ${scene.scale}`)
 }

@@ -1,0 +1,39 @@
+// WHY: v0.3-M8 Phase 4 — the FIRST `channel<array<T>>` end-to-end fixture in the tree (the
+// design's "Fixture gap Phase 4 must close": no owned-heap element channel had ever been run
+// by a `.ynz` program). A task builds an array, `send()`s it — a transfer sink: the task's
+// `rows` binding is consumed (`ConsumedBySend` on any later read, see the m8 gallery) — then
+// closes. The spawner receives the INTACT array as the sole holder, then observes `none`.
+// Alloc/free parity (the integration test): the one array (2 counted allocs: header + data)
+// is held by the receiver's `got` at exit and never freed (no scope-exit drop pass exists —
+// the never-drop-locals class), so alloc == free + 2 exactly; a smaller gap is a double free,
+// a larger one a leak. RED today: `.close()` is unknown; `.exists()` on an `array<int>`.
+//
+// Expected output:
+//   3
+//   10
+//   30
+//   end
+function producer(lend wire: channel<array<int>>) -> nothing {
+  let rows: array<int> = [10, 20, 30]
+  wire.send(rows)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(2)
+  background producer(wire)
+  let got = wire.receive()
+  if (got.exists()) {
+    let rows = got.value
+    print(rows.count().toString())
+    let first = rows[0].or(-1)
+    let last = rows[2].or(-1)
+    print(first.toString())
+    print(last.toString())
+  }
+  let after = wire.receive()
+  if (after.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`end`)
+}

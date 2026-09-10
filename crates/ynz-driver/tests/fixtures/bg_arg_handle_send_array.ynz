@@ -3,12 +3,20 @@
 // which funnels into the same channel core). The grandchild must read the intact array after
 // the middle task has retired.
 function sink(inbox: channel<array<int>>, report: channel<int>) -> nothing {
-  let got = inbox.receive()
-  let first = got[0].or(-1)
-  report.send(got.count() * 100 + first)
+  // v0.3-M8: `receive()` is `maybe<array<int>>`; the values are pulled out BEFORE the
+  // `report.send` suspension (a `maybe` cannot cross a suspension point yet).
+  let delivered = inbox.receive()
+  let count = 0
+  let first = -1
+  if (delivered.exists()) {
+    let got = delivered.value
+    count = got.count()
+    first = got[0].or(-1)
+  }
+  report.send(count * 100 + first)
 }
 
-function relay(report: channel<int>, rows: array<int>) -> nothing {
+function relay(report: channel<int>, give rows: array<int>) -> nothing {
   let inbox: channel<array<int>> = channel<array<int>>(4)
   let h = background sink(inbox, report)
   h.send(rows)
@@ -18,6 +26,7 @@ function entrypoint() -> nothing {
   let report: channel<int> = channel<int>(4)
   let rows: array<int> = [7, 8, 9]
   background relay(report, rows)
-  let summary = report.receive()
+  let reply = report.receive()
+  let summary = reply.or(0)
   print(summary.toString())
 }

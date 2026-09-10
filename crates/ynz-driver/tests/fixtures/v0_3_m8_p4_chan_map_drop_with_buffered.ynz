@@ -1,0 +1,19 @@
+// WHY: v0.3-M8 Phase 4 — the `map` twin of `chan_array_drop_with_buffered`: a map sent and
+// never received is held to exit by the never-torn-down channel (alloc == free + 5), neither
+// freed under the buffer nor freed twice. RED today: `.close()` is unknown.
+//
+// Expected output:
+//   buffered
+function producer(lend wire: channel<map<string, int>>) -> nothing {
+  let table: map<string, int> = {}
+  table.set(`a`, 1)
+  wire.send(table)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<map<string, int>> = channel<map<string, int>>(2)
+  background producer(wire)
+  wait sleep(40)
+  print(`buffered`)
+}

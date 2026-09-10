@@ -1,0 +1,24 @@
+// WHY: locks FRAGO 002 cluster C2 — `.copy()`'s per-type lowering used to have an
+// `AliasNoOp` arm for `fixed<T>` that returned the RECEIVER'S OWN pointer instead of
+// an independent copy. `b = a.copy()` therefore aliased `a`, and mutating `b` mutated
+// `a`. No transfer, no diagnostic — a silent wrong answer in the default mode.
+//
+// Observed before the fix (2026-09-06, default optimized mode): printed "99"
+// where "1" is correct (`a[0]` reads the mutation made through `b`). Confirmed-live
+// by dispatch hardening-p2b-20260905-a1 as probe N
+// (target/p2b-probe/n_copy_fixed.ynz, gitignored). Shares a design ancestor (not a
+// code line) with M8 FR #9's bg-arg escape door — Patrick's 2026-09-06 ruling
+// required EVERY type in that arm to become either a real deep copy or a compile-time
+// refusal; `AliasNoOp` survives as neither. Closes M8 FR #10.
+//
+// FIXED by Phase 3 step 3.2: exit 0, stdout exactly "1" — `a` is untouched by
+// mutating the copy. `fixed<T>` landed on the COPY side of the ruling rather than the
+// refusal side, because its cells hold the items outright, so copying the cells into
+// fresh storage genuinely separates the two lists. Silent aliasing is the wrong answer
+// this fixture exists to catch, and a "99" here means it came back.
+function entrypoint() -> nothing {
+  let a: fixed<int> = [1, 2, 3]
+  let b = a.copy()
+  b.set(0, 99)
+  print(a[0].or(-1).toString())
+}

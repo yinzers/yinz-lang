@@ -169,11 +169,11 @@ fn test_code_action_multiple_banned_keywords_returns_all() {
         })
         .collect();
     assert!(
-        titles.iter().any(|t| *t == "Replace `class` with `shape`"),
+        titles.contains(&"Replace `class` with `shape`"),
         "missing class action; got: {titles:?}"
     );
     assert!(
-        titles.iter().any(|t| *t == "Replace `enum` with `options`"),
+        titles.contains(&"Replace `enum` with `options`"),
         "missing enum action; got: {titles:?}"
     );
 }
@@ -199,11 +199,11 @@ fn test_code_action_range_filter_excludes_out_of_range() {
         })
         .collect();
     assert!(
-        titles.iter().any(|t| *t == "Replace `class` with `shape`"),
+        titles.contains(&"Replace `class` with `shape`"),
         "class action should be in range"
     );
     assert!(
-        !titles.iter().any(|t| *t == "Replace `enum` with `options`"),
+        !titles.contains(&"Replace `enum` with `options`"),
         "enum action should NOT be in range (on line 1); got: {titles:?}"
     );
 }

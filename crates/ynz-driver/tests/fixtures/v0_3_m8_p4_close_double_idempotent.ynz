@@ -1,0 +1,24 @@
+// WHY: v0.3-M8 Phase 4 — contract item 5: a second `close()` is a safe no-op (`Option::take()`
+// on `None`): no error, no panic, no log line, and a value buffered BEFORE the first close is
+// still delivered. This is a plan invariant, locked here rather than left as an implementation
+// accident. RED today: `.close()` is an unknown method.
+//
+// Expected output:
+//   1
+//   closed twice ok
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  wire.send(1)
+  wire.close()
+  wire.close()
+  let first = wire.receive()
+  if (first.exists()) {
+    print(first.value.toString())
+  }
+  let second = wire.receive()
+  if (second.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  wire.close()
+  print(`closed twice ok`)
+}

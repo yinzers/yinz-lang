@@ -46,6 +46,8 @@
 - [v0-3-m5-auto-soa](done/2026-07-03-v0-3-m5-auto-soa/plan.md) `done`
 - [v0-3-m6-concurrency-hotfix](done/2026-07-04-v0-3-m6-concurrency-hotfix/plan.md) `done`
 - [v0-3-m7-optimizer-pipeline](done/2026-07-04-v0-3-m7-optimizer-pipeline/plan.md) `done`
+- [v0-3-m8-concurrency-completion](done/2026-07-04-v0-3-m8-concurrency-completion/plan.md) `done`
+- [v0-3-concurrency-hardening](done/2026-09-04-v0-3-concurrency-hardening/plan.md) `done`
 
 ## Standalone plans
 

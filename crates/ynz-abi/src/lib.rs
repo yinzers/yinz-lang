@@ -93,6 +93,15 @@ pub const HANDLE_RET_KIND_VALUE_HEAP_PTR: i64 = 4;
 /// `-> array<T> errors` / `-> map<K, V> errors`: the `EC_WORD` twin of `VALUE_HEAP_PTR` —
 /// the ok-word is a heap-stable pointer released from the drop ladder on the ok path.
 pub const HANDLE_RET_KIND_EC_HEAP_PTR: i64 = 5;
+/// Plain `-> maybe<T>` (v0.3-M8 Phase 4): the return slot holds the envelope's `{flag, bits}`
+/// PAIR inline (the resume fn stores the pair, never a pointer into its own dead stack) — a
+/// 16-byte aggregate exactly like `VALUE_NUMBER`, so extraction copies the 16 bytes to the
+/// handle-owned buffer before the frame is freed; completion is `{0, buf}`, and the parent
+/// reads `buf` as its `maybe<T>` envelope. Before this kind existed the fallthrough classified
+/// it `VALUE_WORD` and handed the parent the FLAG word as a pointer (SIGSEGV on `.value`).
+/// (`-> maybe<T> errors` needs no twin: its ok-word is already a heap cell the resume fn
+/// promotes at the return, `EC_WORD` reads it as-is.)
+pub const HANDLE_RET_KIND_VALUE_MAYBE: i64 = 6;
 
 // ── `background` spawn-argument drop-ladder descriptor kinds ─────────────────
 //
@@ -115,3 +124,115 @@ pub const BG_ARG_KIND_SHARED_CHANNEL: u64 = 2;
 /// runtime at that hand-off, never by codegen; the drop ladder skips the slot. Without this the
 /// same pointer is owned twice (ladder + channel) and freed under the receiver's feet.
 pub const BG_ARG_KIND_RELEASED: u64 = 3;
+/// The task's counted reference to an Auto-Arc shared shape block (`ynz_arc_clone` at the
+/// spawn site, v0.3-M8 Phase 5 — `IMP-ownership.md` "Auto-Arc — Sharing Topology Across
+/// `background` Boundaries", topology (B)): released with `ynz_arc_free(ptr, size)`; the LAST
+/// release frees the block. `size` is the shape's ABI byte size (the `ynz_arc_new` size).
+pub const BG_ARG_KIND_ARC_SHAPE: u64 = 4;
+
+/// Every `BG_ARG_KIND_*` value, for the runtime's per-kind alloc/free parity test that links
+/// [`bg_arg_kind_is_releasable_payload`] to the drop ladder's free match: a kind added here
+/// without a ladder arm (or the reverse) fails that test rather than leaking or double-freeing.
+pub const ALL_BG_ARG_KINDS: &[u64] = &[
+    BG_ARG_KIND_HEAP_SHAPE,
+    BG_ARG_KIND_HEAP_ARRAY,
+    BG_ARG_KIND_SHARED_CHANNEL,
+    BG_ARG_KIND_RELEASED,
+    BG_ARG_KIND_ARC_SHAPE,
+];
+
+/// Is a ladder slot of this kind a heap PAYLOAD the task can hand off (send into a channel,
+/// return through its handle) — i.e. one `release_ladder_payload` may rewrite to
+/// [`BG_ARG_KIND_RELEASED`]? Defined by INVERSION so a new heap kind is releasable by default
+/// rather than silently skipped (v0.3-M8 Phase 4; the previous hand-listed
+/// `HEAP_SHAPE`/`HEAP_ARRAY` filter would have missed a future `HEAP_MAP` and reopened the
+/// spawn-arg use-after-free door). A shared-channel slot is the task's own refcount, never a
+/// channel element (typeck rejects `channel<channel<T>>`); a released slot is terminal.
+///
+/// An Auto-Arc slot ([`BG_ARG_KIND_ARC_SHAPE`]) is NOT releasable — decided v0.3-M8 Phase 5
+/// (the plan's packet item (h)), with this reasoning: the slot holds one COUNT on a block
+/// other tasks also count, not a payload the task owns outright. Today no hand-off can ever
+/// match it (shapes are not channel elements, and a shape is returned by value, so the data
+/// pointer never leaves the task). If a future hand-off DID match, the two possible mistakes
+/// are asymmetric: skipping the ladder's release leaks ONE count (the block is never freed —
+/// a bounded leak the alloc/free parity gate reports); releasing it while a receiver still
+/// reads the block is a use-after-free. `false` picks the leak side by construction, and the
+/// runtime's per-kind parity test pins the answer.
+pub const fn bg_arg_kind_is_releasable_payload(kind: u64) -> bool {
+    kind != BG_ARG_KIND_SHARED_CHANNEL
+        && kind != BG_ARG_KIND_RELEASED
+        && kind != BG_ARG_KIND_ARC_SHAPE
+}
+
+#[cfg(test)]
+mod bg_arg_kind_tests {
+    use super::*;
+
+    /// `ALL_BG_ARG_KINDS` is a hand list; this holds it to the crate's own `BG_ARG_KIND_*`
+    /// constants by reading this source file, so a kind added above without being listed (or
+    /// the reverse) fails here instead of slipping past the runtime's per-kind parity test.
+    #[test]
+    fn every_bg_arg_kind_const_is_in_all_bg_arg_kinds() {
+        let src = include_str!("lib.rs");
+        let mut declared: Vec<(String, u64)> = Vec::new();
+        for line in src.lines() {
+            let Some(rest) = line.trim_start().strip_prefix("pub const BG_ARG_KIND_") else {
+                continue;
+            };
+            let Some((name, value)) = rest.split_once(": u64 = ") else {
+                continue;
+            };
+            let value: u64 = value
+                .trim_end_matches(';')
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("BG_ARG_KIND_{name}: not an integer literal"));
+            declared.push((name.to_string(), value));
+        }
+        assert!(
+            !declared.is_empty(),
+            "found no `pub const BG_ARG_KIND_*: u64 = N;` lines — the parser drifted from the source"
+        );
+        // v0.3-M8 Phase 4 fix round 3, should-fix 6: the parse above requires the ENTIRE
+        // `pub const BG_ARG_KIND_NAME: u64 = N;` on one line — a multi-line declaration (the
+        // value wrapped to its own line) would silently disappear from `declared` instead of
+        // failing loudly. Count lines whose trimmed text STARTS WITH the declaration marker —
+        // that survives a wrapped value (the marker itself is still line-initial) while never
+        // matching this test's own doc comments or string literals (which start with `//` or
+        // `"`, never `pub const`) — and hold it to the same count.
+        let marker_count = src
+            .lines()
+            .filter(|l| l.trim_start().starts_with("pub const BG_ARG_KIND_"))
+            .count();
+        assert_eq!(
+            marker_count,
+            declared.len(),
+            "found {marker_count} `pub const BG_ARG_KIND_` declaration markers but the \
+             line-based parser only extracted {} — a declaration spans multiple lines (or some \
+             other shape this parser does not handle) and silently dropped out of the parity \
+             check",
+            declared.len()
+        );
+        for (name, value) in &declared {
+            assert!(
+                ALL_BG_ARG_KINDS.contains(value),
+                "BG_ARG_KIND_{name} = {value} is declared but missing from ALL_BG_ARG_KINDS"
+            );
+        }
+        assert_eq!(
+            ALL_BG_ARG_KINDS.len(),
+            declared.len(),
+            "ALL_BG_ARG_KINDS lists {} kinds but {} BG_ARG_KIND_* constants are declared",
+            ALL_BG_ARG_KINDS.len(),
+            declared.len()
+        );
+        let mut sorted = ALL_BG_ARG_KINDS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            ALL_BG_ARG_KINDS.len(),
+            "duplicate kind value in ALL_BG_ARG_KINDS"
+        );
+    }
+}

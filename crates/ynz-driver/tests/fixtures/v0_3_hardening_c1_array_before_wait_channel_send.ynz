@@ -1,0 +1,31 @@
+// WHY: locks FRAGO 002 cluster C1 — `collect_crossings_in_stmts`
+// (crates/ynz-typeck/src/check.rs) never scans a suspending statement's OWN operands
+// once `past_wait` is true. Here `rows` is a pre-suspension `array<int>` local read
+// only by `wire.send(rows)`, a statement that is itself a suspension point — its
+// operands fall through the `_ => {}` arm instead of being visited by
+// `collect_ident_refs_in_stmt` (which fires only from the If/While/For/Match arms).
+// `rows` never enters the crossing set, gets no frame slot, and the spawned
+// consumer's resume reads an uninitialised alloca.
+//
+// Observed today (2026-09-06, default optimized mode, ynz-lang HEAD): SIGABRT, 3/3
+// runs. Confirmed-live by dispatch hardening-p2b-20260905-a1 as probe A
+// (target/p2b-probe/a_bug.ynz, gitignored). Closes M8 FR #11(a).
+//
+// When C1's fix lands: exit 0, stdout exactly "3\nend\n".
+function consumer(wire: channel<array<int>>) -> nothing {
+  let got = wire.receive()
+  if (got.exists()) {
+    let rows = got.value
+    print(rows.count().toString())
+  }
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<array<int>> = channel<array<int>>(4)
+  let rows: array<int> = [10, 20, 30]
+  background consumer(wire)
+  wait sleep(20)
+  wire.send(rows)
+  wait sleep(60)
+  print(`end`)
+}

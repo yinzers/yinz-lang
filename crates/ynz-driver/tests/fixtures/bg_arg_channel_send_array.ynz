@@ -3,7 +3,7 @@
 // SAME pointer into a channel. The receiver must read the intact array AFTER the task
 // has retired — never the freed clone. Pre-fix the ladder freed it and `got.count()`
 // printed garbage (use-after-free).
-function producer(wire: channel<array<int>>, rows: array<int>) -> nothing {
+function producer(wire: channel<array<int>>, give rows: array<int>) -> nothing {
   wire.send(rows)
 }
 
@@ -13,10 +13,13 @@ function entrypoint() -> nothing {
   background producer(wire, rows)
   // Let the task retire (and its drop ladder run) BEFORE the receive.
   wait sleep(50)
-  let got = wire.receive()
-  print(got.count().toString())
-  let first = got[0].or(-1)
-  let last = got[2].or(-1)
-  print(first.toString())
-  print(last.toString())
+  let delivered = wire.receive()
+  if (delivered.exists()) {
+    let got = delivered.value
+    print(got.count().toString())
+    let first = got[0].or(-1)
+    let last = got[2].or(-1)
+    print(first.toString())
+    print(last.toString())
+  }
 }

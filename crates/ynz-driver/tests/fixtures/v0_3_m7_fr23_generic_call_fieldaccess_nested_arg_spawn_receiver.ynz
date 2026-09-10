@@ -1,6 +1,6 @@
 // fr23 regression fixture — shape C2, GENERIC-callee variant whose argument is a
 // MAYBE-PAYLOAD FIELD ACCESS (M7 completion-gate FRAGO 020):
-// `background identity(first.value).haul()` where `first: maybe<Cargo>`.
+// `background identity(first.value.copy()).haul()` where `first: maybe<Cargo>`.
 //
 // Same class of gap as the UFCS sibling fixture: the nested-argument resolver's
 // match had exactly two arms, `Expr::Ident` and `Expr::Call`. A maybe-payload
@@ -39,7 +39,7 @@ function spawner() -> nothing {
   let ships: array<Cargo> = [{ weight: 111, tag: 222 }, { weight: 333, tag: 444 }]
   let first: maybe<Cargo> = ships[0]
   if (first.exists()) {
-    background identity(first.value).haul()
+    background identity(first.value.copy()).haul()
   }
 }
 

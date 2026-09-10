@@ -4,13 +4,17 @@ use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPatternKind, Module,
     OwnershipModifier, PostfixOpKind, Stmt, StructLitField, Type as AstType, UnaryOpKind,
 };
-use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
+use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind, SourceSpan};
 
 use crate::{
     builtins::{
         array_method_is_mutating, array_method_return, collection_method_arg_slots,
         fixed_method_is_mutating, fixed_method_return, map_method_is_mutating, map_method_return,
         maybe_method_return, sensitive_method_return, string_method_return,
+    },
+    effective_ownership::{
+        classify_binding_in_stmts, provenance, stmt_rebinds, EffectiveOwnership, Freshness,
+        Provenance, ProvenanceCtx,
     },
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
@@ -19,12 +23,227 @@ use crate::{
     intrinsics::PrimitiveIntrinsicTable,
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
-    scope::{Scope, ScopeEntry},
+    scope::{ConsumedBy, Origin, Scope, ScopeEntry},
     shapes::ShapeTable,
     signatures::SignatureTable,
-    suspension_source::is_base_suspension_intrinsic,
-    types::{type_name, Type},
+    suspension_source::{is_base_suspension_intrinsic, CHANNEL_SUSPENDING_METHODS},
+    types::{arc_shareable, channel_elem_drop, type_name, Type},
 };
+
+/// A transfer sink — where a value is about to leave this frame for a holder that will free
+/// it (`IMP-ownership.md` "The transfer decision"). The list of sinks is closed and small;
+/// the list of argument SHAPES is not, which is why sinks never inspect syntax.
+enum TransferSink<'s> {
+    /// `channel.send(v)` / `h.send(v)` of an owned-heap payload; `channel` is the binding.
+    Send { channel: &'s str },
+    /// A `give` position of `callee`. `chain_param` is `Some(p)` when the position is not
+    /// declared `give` but the fixpoint found `callee`'s parameter `p` gives it away — the
+    /// chain form of `{act}` that reports every frame in one compile.
+    Give {
+        callee: &'s str,
+        chain_param: Option<&'s str>,
+    },
+}
+
+impl TransferSink<'_> {
+    /// The cause recorded on the consumed alias class; `sent` is the binding named at the
+    /// sink (the `{sent}` slot when a class-mate is read later).
+    fn cause(&self, sent: &str) -> ConsumedBy {
+        match self {
+            TransferSink::Send { channel } => ConsumedBy::Sent {
+                channel: channel.to_string(),
+                sent: sent.to_string(),
+            },
+            TransferSink::Give { callee, .. } => ConsumedBy::Given {
+                callee: callee.to_string(),
+                given: sent.to_string(),
+            },
+        }
+    }
+
+    /// The `{act}` and `{copy_form}` slots for a value named `name` at this sink.
+    fn render(&self, name: &str) -> (String, String) {
+        match self {
+            TransferSink::Send { channel } => (
+                format!("sent into `{channel}`"),
+                format!("{channel}.send({name}.copy())"),
+            ),
+            TransferSink::Give {
+                callee,
+                chain_param: None,
+            } => (
+                format!("given to `{callee}`"),
+                format!("{callee}({name}.copy(), …)"),
+            ),
+            TransferSink::Give {
+                callee,
+                chain_param: Some(p),
+            } => (
+                format!("given to `{callee}`, whose `{p}` parameter gives it away"),
+                format!("{callee}({name}.copy(), …)"),
+            ),
+        }
+    }
+}
+
+/// Render a registry `[[diagnostic_template]]` for `kind` with its `{slot}`s filled — the
+/// registry is the ONE source of the text (parked items 7/8: the `Consumed` template used to
+/// be dead data beside a hand-written twin). A missing template is a build-time invariant
+/// (`diagnostic_templates_render_from_the_registry` in the tests) — panicking here names it.
+fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)]) -> Diagnostic {
+    let kind_name = kind.kind_name();
+    let template = ynz_registry::diagnostic_template_lookup(kind_name).unwrap_or_else(|| {
+        panic!(
+            "registry/features.toml has no [[diagnostic_template]] with kind_name = {kind_name:?}"
+        )
+    });
+    let fill = |text: &str| -> String {
+        let mut out = text.to_string();
+        for (slot, value) in slots {
+            out = out.replace(&format!("{{{slot}}}"), value);
+        }
+        out
+    };
+    Diagnostic::error(
+        span,
+        fill(template.what_template),
+        fill(template.what_instead_template),
+        fill(template.why_template),
+    )
+    .with_kind(kind)
+}
+
+/// THE rendering of a read of a consumed binding — the use-after-give (`Consumed`) or
+/// use-after-send (`ConsumedBySend`) template, selected by the cause `Scope::consume` stamped
+/// on the alias class, with the `{via}` slot naming the class-mate that was actually given or
+/// sent when it is not the name being read (v0.3-M8 Phase 4; parked items 7/8 reconciled the
+/// `Consumed` template with this rendering, fix round 2 gave it the `{via}` slot). Two callers,
+/// one text: `resolve_ident` (a read inferred after the consume) and `check_transfer` (a read
+/// at a later position of the call that consumed it).
+fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagnostic {
+    match cause {
+        ConsumedBy::Given { given, .. } => {
+            let via = if given == name {
+                String::new()
+            } else {
+                format!(" — it shares its value with `{given}`, which is what was given away")
+            };
+            registry_diag(
+                span,
+                DiagnosticKind::Consumed,
+                &[("name", name), ("given", given), ("via", &via)],
+            )
+        }
+        ConsumedBy::Sent { channel, sent } => {
+            let via = if sent == name {
+                String::new()
+            } else {
+                format!(" — it shares its value with `{sent}`, which is what was sent")
+            };
+            registry_diag(
+                span,
+                DiagnosticKind::ConsumedBySend,
+                &[
+                    ("name", name),
+                    ("channel", channel),
+                    ("sent", sent),
+                    ("via", &via),
+                ],
+            )
+        }
+    }
+}
+
+/// Source-shaped text for an expression in a diagnostic slot (`bucket.rows`, `matrix[0]`,
+/// `pick(bucket)`, `[a]`, …). Typeck has no source buffer, so this renders from the AST;
+/// it only needs to be recognizable, never byte-exact.
+fn expr_source_text(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(n, _) => n.clone(),
+        Expr::SelfValue { .. } => "self".to_string(),
+        Expr::FieldAccess {
+            receiver, field, ..
+        } => format!("{}.{field}", expr_source_text(receiver)),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => format!(
+            "{}[{}]",
+            expr_source_text(receiver),
+            expr_source_text(index)
+        ),
+        Expr::Call(call) => format!(
+            "{}({})",
+            expr_source_text(&call.callee),
+            call.args
+                .iter()
+                .map(expr_source_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => format!(
+            "{}.{method}({})",
+            expr_source_text(receiver),
+            args.iter()
+                .map(expr_source_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expr::ArrayLit { elements, .. } => format!(
+            "[{}]",
+            elements
+                .iter()
+                .map(expr_source_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expr::MapLit { .. } => "{ … }".to_string(),
+        Expr::StructLit { .. } => "{ … }".to_string(),
+        Expr::PostfixOp { receiver, op, .. } => match op {
+            PostfixOpKind::Copy => format!("{}.copy()", expr_source_text(receiver)),
+            PostfixOpKind::Freeze => format!("{}.freeze()", expr_source_text(receiver)),
+        },
+        Expr::IntLit(n, _) => n.to_string(),
+        Expr::NumberLit(s, _) => s.clone(),
+        Expr::BoolLit(b, _) => b.to_string(),
+        Expr::StringLit(bytes, _) => format!("`{}`", String::from_utf8_lossy(bytes)),
+        Expr::NoneLit { .. } => "none".to_string(),
+        Expr::Wait(inner, _) => format!("wait {}", expr_source_text(inner)),
+        Expr::Background(inner, _) => format!("background {}", expr_source_text(inner)),
+        Expr::BinOp { .. }
+        | Expr::UnaryOp { .. }
+        | Expr::Is { .. }
+        | Expr::InterpolatedString(..)
+        | Expr::Error(..) => "this value".to_string(),
+    }
+}
+
+/// A contract receiver's declared kind as the ownership word an implementing function's
+/// `self` parameter carries.
+fn receiver_kind_modifier(kind: &ynz_ast::nodes::ReceiverKind) -> OwnershipModifier {
+    match kind {
+        ynz_ast::nodes::ReceiverKind::Share => OwnershipModifier::Share,
+        ynz_ast::nodes::ReceiverKind::Lend => OwnershipModifier::Lend,
+        ynz_ast::nodes::ReceiverKind::Give => OwnershipModifier::Give,
+    }
+}
+
+/// The names of the functions `module` defines — the local half of the call-graph boundary
+/// `provenance` reads (an imported name is the other half).
+fn local_fn_names(module: &Module) -> HashSet<String> {
+    module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(f) => Some(f.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
 
 /// P0-locked default channel capacity — the ONE authoritative source every consumer
 /// threads from (authoritative-derivation.md): typeck's teaching diagnostics here,
@@ -36,6 +255,26 @@ use crate::{
 /// (real workload evidence) — see the v0.3-M4 plan's Future Requirements.
 pub const DEFAULT_CHANNEL_CAPACITY: i64 = 64;
 
+/// The `errors`-capable member names whose *dispatch* requires the receiver's un-stripped
+/// `Type::ErrorsCapable` — `resolve_ident`'s auto-propagation may already have narrowed a
+/// bare-ident receiver to its success type on THIS exact read (first use of an
+/// `ErrorsCapable` binding inside an `errors` function narrows immediately, before either
+/// dispatch path below sees it). ONE list feeds both `Expr::MethodCall` (`.failed()`,
+/// `.or(...)` — parens) and `Expr::FieldAccess` (`.message`, `.suggestions`, `.trace`,
+/// `.source` — no parens, per dot-postfix.md) dispatch, via `restore_ec_receiver_ty`, so the
+/// two call forms cannot drift on which names need the restore (authoritative-derivation.md —
+/// a second, hand-copied list here would be exactly the twin-derivation class it bans).
+const EC_MEMBER_NAMES: &[&str] = &["or", "failed", "message", "suggestions", "trace", "source"];
+
+// The four fields REF-errors.md gates behind an explicit `.failed()` check
+// ("`.message` and other error fields require a `.failed()` check first",
+// `REF-errors.md:171-175`) are no longer a separate hand-written list here — v0.3
+// concurrency hardening Phase 3 (FRAGO 002 singleton S1) folded the admission list into
+// `ynz_typeck::errors_fields::EcField::from_field_name`, the SAME table
+// `check_errors_field_is_lowered` consults for whether codegen can build the field at all.
+// `.failed()` itself and `.or(default)` are NOT gated — `.failed()` IS the check, and
+// `.or(default)` supplies its own fallback, so neither is an `EcField` variant.
+
 /// Inferred ownership for a plain-ident argument at a `background` call site.
 ///
 /// `OwnershipModifier` (from ynz-ast) covers `Share / Lend / Give` — the three
@@ -43,6 +282,16 @@ pub const DEFAULT_CHANNEL_CAPACITY: i64 = 64;
 /// needs `Copy` (the argument is cloned because the caller reads the binding again
 /// after the spawn).  Rather than extend the AST enum (which is shared across all
 /// compiler passes), we keep this typeck-local enum.
+/// How a `background` argument came to be one the task solely holds
+/// (`TypedModule::background_arg_sole_holder`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoleHolder {
+    /// A temporary nobody names: `provenance` says `Fresh`.
+    FreshTemporary,
+    /// A plain binding this spawn consumes, so no name reaches the value afterwards.
+    ConsumedBinding,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BgOwnership {
     /// Transfer ownership to the background task — the caller does not read the
@@ -56,6 +305,16 @@ pub enum BgOwnership {
     /// operate on the SAME bounded buffer (that is the whole point of a channel), so neither
     /// `give` (caller loses its end) nor `copy` (two disconnected buffers) is correct.
     Channel,
+    /// v0.3-M8 Phase 5 Auto-Arc (`IMP-ownership.md` "Auto-Arc — Sharing Topology Across
+    /// `background` Boundaries", topology (B)): this argument is a member of an admitted
+    /// spawn GROUP — ≥2 spawn statements in one block passing the same whole shape binding,
+    /// no suspension/rebinding/early exit between them, every callee proven `Reads`
+    /// (`effective_ownership`), the caller proven `Reads` between the spawns, and the type
+    /// `arc_shareable`. Codegen mints ONE shared block at the `first` member (held in a
+    /// caller-side transient), `ynz_arc_clone`s a reference for EVERY member's task, and
+    /// releases the transient right after the `last` member's spawn. Recorded by the ONE
+    /// group admission (`admit_arc_group_for`); codegen consults no ownership fact of its own.
+    Arc { group: u32, first: bool, last: bool },
 }
 
 /// The type-annotated view of a module.
@@ -90,6 +349,37 @@ pub struct TypedModule {
     /// all thread its `padded_shapes`); a direct read outside that authority is
     /// the E3 twin-derivation corpse (authoritative-derivation.md).
     pub cross_thread_padded_shapes: std::collections::HashSet<String>,
+    /// v0.3 concurrency hardening Phase 3 step 3.2 fix round: for each `background` argument
+    /// where, after the spawn, the TASK IS THE SOLE HOLDER of the value — nothing the spawner
+    /// can still name reaches it — WHICH of the two ways that came about.
+    ///
+    /// Codegen's spawn path asks exactly one question of this record: does the task need a
+    /// value of its OWN, or can it take the one that already exists? Before this, that
+    /// question was answered by matching an `Expr::` variant against a `Type::` variant at the
+    /// call site (an explicit `.copy()` of an `array`, and a `Give` label on a `map`) — the
+    /// corpse `.claude/corpses.md` "Enumerating syntactic sites instead of threading the
+    /// whole-program ownership analysis", which behaved exactly as that corpse predicts: when
+    /// `map`, `maybe` and `fixed` started allocating, the array-shaped enumeration did not
+    /// widen with them, so every one of those spawns copied a value that had already been
+    /// copied and leaked the first one.
+    ///
+    /// The two ways are recorded APART because codegen does different things with them, and
+    /// the difference is a deliberate scope line rather than a property of the values: a
+    /// [`SoleHolder::FreshTemporary`] is handed straight to the task, while a
+    /// [`SoleHolder::ConsumedBinding`] only skips its copy for the types that already shipped
+    /// that way (see `prepare_bg_arg_for_ctx`, which carries the reason).
+    ///
+    /// Membership is derived, never re-derived here:
+    /// - `effective_ownership::provenance(arg) == Fresh` — a temporary nobody names (an
+    ///   explicit `.copy()`, a call whose every return is fresh, a literal built from fresh
+    ///   parts). The SAME classification every transfer sink consumes.
+    /// - or the argument is a plain binding this spawn CONSUMES: a `Give` recorded by the
+    ///   statement-form route, which pushes the name onto `gives` and consumes its alias class
+    ///   immediately after. The handle form (`let h = background f(x)`) has no
+    ///   remaining-statement view and consumes nothing, so it is deliberately NOT a member —
+    ///   and neither is the default-deny `Give` a non-ident argument gets, which consumes
+    ///   nothing either (`background eat(b.items)` leaves `b` holding the map).
+    pub background_arg_sole_holder: std::collections::HashMap<(usize, usize), SoleHolder>,
     /// v0.3-M7 Phase 6: function names ADMITTED to the back-edge poll-yield transform —
     /// state-machine functions whose loops become poll-yield suspension points.
     ///
@@ -120,6 +410,8 @@ pub fn check(
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
     imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
+    ownership: &crate::effective_ownership::EffectiveOwnershipReport,
+    imported_fn_names: &HashSet<String>,
 ) -> (
     TypedModule,
     MonomorphizationTable,
@@ -143,9 +435,13 @@ pub fn check(
         generic_fn_table,
         generic_shape_table,
         options_table: &options_table,
+        ownership,
+        imported_fn_names,
+        local_fn_names: local_fn_names(module),
         expr_types: HashMap::new(),
         diags,
         scope: Scope::new(),
+        current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
         current_shape: None,
         type_param_scope: HashMap::new(),
@@ -155,6 +451,7 @@ pub fn check(
         union_aliases: collect_union_aliases(module, shape_table),
         errors_success_narrowed: HashSet::new(),
         errors_consumed: HashSet::new(),
+        errors_failed_true_branch: Vec::new(),
         current_fn_errors_capable: false,
         referenced_names: HashSet::new(),
         kernel_mode: false,
@@ -162,6 +459,8 @@ pub fn check(
         inside_background: false,
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
+        bg_sole_holder: HashMap::new(),
+        next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
@@ -175,6 +474,7 @@ pub fn check(
         module: module.clone(),
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
+        background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
     };
@@ -209,6 +509,10 @@ pub fn check_with_kernel_mode(
             .entry(name.clone())
             .or_insert_with(|| entry.clone());
     }
+    // Test-only entry: no fixpoint ran, so the transfer decision reads the conservative
+    // empty report (an unseen callee consumes nothing and returns `MayAlias`).
+    let empty_report = crate::effective_ownership::EffectiveOwnershipReport::empty();
+    let no_imports: HashSet<String> = HashSet::new();
     let mut checker = Checker {
         intrinsics,
         sig_table,
@@ -216,9 +520,13 @@ pub fn check_with_kernel_mode(
         generic_fn_table,
         generic_shape_table,
         options_table: &options_table,
+        ownership: &empty_report,
+        imported_fn_names: &no_imports,
+        local_fn_names: local_fn_names(module),
         expr_types: HashMap::new(),
         diags,
         scope: Scope::new(),
+        current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
         current_shape: None,
         type_param_scope: HashMap::new(),
@@ -228,6 +536,7 @@ pub fn check_with_kernel_mode(
         union_aliases: collect_union_aliases(module, shape_table),
         errors_success_narrowed: HashSet::new(),
         errors_consumed: HashSet::new(),
+        errors_failed_true_branch: Vec::new(),
         current_fn_errors_capable: false,
         referenced_names: HashSet::new(),
         kernel_mode: true,
@@ -235,6 +544,8 @@ pub fn check_with_kernel_mode(
         inside_background: false,
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
+        bg_sole_holder: HashMap::new(),
+        next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
         channel_returning_fns: crate::may_block::collect_channel_returning_fns(module),
@@ -248,6 +559,7 @@ pub fn check_with_kernel_mode(
         module: module.clone(),
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
+        background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
     };
@@ -298,6 +610,17 @@ struct Checker<'b> {
     generic_fn_table: &'b GenericFnTable,
     generic_shape_table: &'b GenericShapeTable,
     options_table: &'b OptionsTable,
+    /// The whole-program effective-ownership fixpoint (hoisted above the body check in
+    /// v0.3-M8 Phase 4): `consumed[fn][i]` and `returns_fresh[fn]` feed the ONE transfer
+    /// decision (`check_transfer`); never re-derived here.
+    ownership: &'b crate::effective_ownership::EffectiveOwnershipReport,
+    /// Names defined in OTHER modules — the cross-module boundary `provenance` reads.
+    imported_fn_names: &'b HashSet<String>,
+    /// Names of the functions this module defines (a UFCS `value.method()` whose method is
+    /// one of these is a user call, receiver first).
+    local_fn_names: HashSet<String>,
+    /// The function whose body is being checked — the `{fn}` slot of `ParamNeedsGive`.
+    current_fn_name: String,
 
     // ── Mutable module-level output ───────────────────────────────────────────
     //
@@ -348,14 +671,32 @@ struct Checker<'b> {
     /// M6: binding names narrowed to a specific union variant inside an `is`-arm body.
     /// Maps binding name → narrowed type (the specific variant type).
     union_narrowed: HashMap<String, Type>,
-    /// Flow-sensitive: binding names known to be in the success state after a
-    /// `.failed() == false` check or after auto-propagation fired. These bindings
-    /// have narrowed from `ErrorsCapable<T>` to `T`.
-    errors_success_narrowed: HashSet<String>,
-    /// Bindings that have been consumed by auto-propagation at first use or by
+    /// Flow-sensitive: binding IDENTITIES (`ScopeEntry::alias_class`, not names) known to be
+    /// in the success state after a `.failed() == false` check or after auto-propagation
+    /// fired. These bindings have narrowed from `ErrorsCapable<T>` to `T`.
+    ///
+    /// Keyed by alias class, not name (v0.3 concurrency hardening Phase 3, FRAGO 002 cluster
+    /// C3): a bare-`String` key let a shadowing inner `let x = ...` inside the guarded block
+    /// inherit the outer `x`'s checked status, since both bindings share the name "x" but are
+    /// different values with different alias classes. `alias_class` is the SAME
+    /// binding-identity signal `Scope`'s use-after-give tracking already uses — threading it
+    /// here instead of inventing a second identity scheme is the
+    /// `.claude/rules/authoritative-derivation.md` discipline.
+    errors_success_narrowed: HashSet<u64>,
+    /// Binding identities that have been consumed by auto-propagation at first use or by
     /// a `.failed()` check. After consumption, calling `.failed()` is a compile
-    /// error ("check-after-use").
-    errors_consumed: HashSet<String>,
+    /// error ("check-after-use"). Keyed by alias class — see `errors_success_narrowed`.
+    errors_consumed: HashSet<u64>,
+    /// Binding identities currently inside the TRUE branch of `if (name.failed())` — the one
+    /// shape `REF-errors.md:171-183` documents as legal for reading `.message`/`.suggestions`/
+    /// `.trace`/`.source`. Pushed by `check_stmt_if` right before checking the if-body,
+    /// popped right after: lexical and block-scoped, unlike `errors_success_narrowed`/
+    /// `errors_consumed` above (function-scoped auto-propagation bookkeeping that answers
+    /// a different question — "has this binding EVER been checked" — not "am I textually
+    /// inside its guarded block right now"). A `Vec`, not a `HashSet`, so a nested
+    /// `if (x.failed()) { if (x.failed()) { … } }` pops correctly (v0.3-M8 Phase 4 fix
+    /// round 3). Keyed by alias class, not name — see `errors_success_narrowed`.
+    errors_failed_true_branch: Vec<u64>,
     /// Names that were actually resolved via the signature table or shape table
     /// during this check pass. Used by `check_query` to detect unused imports —
     /// any imported name absent from this set after the pass was never referenced.
@@ -397,6 +738,14 @@ struct Checker<'b> {
     /// Only plain `Expr::Ident` args are recorded — explicit `.give`/`.copy()` postfix
     /// args are handled by the postfix-op path; explicit always wins over inferred.
     bg_inferred: HashMap<(usize, usize), BgOwnership>,
+
+    /// Spans whose spawned task is the value's SOLE holder — the record
+    /// `TypedModule::background_arg_sole_holder` is moved from. Written by the ONE spawn-arg
+    /// recording function (`record_spawn_arg_ownership`).
+    bg_sole_holder: HashMap<(usize, usize), SoleHolder>,
+
+    /// v0.3-M8 Phase 5: the next Auto-Arc group id (minted per admitted group, module-wide).
+    next_arc_group: u32,
 
     /// v0.3-M4 Phase 2: spans at which a suspending conduit-method call (`ch.send(v)`,
     /// `ch.receive()`, `h.send(v)`, `h.receive()`) is allowed to appear — the ROOT of a
@@ -592,11 +941,13 @@ impl<'b> Checker<'b> {
         // ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner } already.
         let ret_ty = self.ast_type_to_type(&f.return_type);
         self.current_fn_ret = ret_ty.clone();
+        self.current_fn_name = f.name.clone();
 
         // M7 P3a: track whether the current function is errors-capable.
         self.current_fn_errors_capable = f.errors_capable;
         self.errors_success_narrowed.clear();
         self.errors_consumed.clear();
+        self.errors_failed_true_branch.clear();
         // Track whether the caller transitively suspends (analysis result). The can't-infer
         // diagnostic gates on this: a function that independently reaches a suspension point
         // (intra-unit `sleep`) AND makes an unanalyzable boundary call gets the error.
@@ -631,6 +982,7 @@ impl<'b> Checker<'b> {
                     self.current_shape = Some(name.clone());
                 }
             }
+            let alias_class = self.scope.new_class();
             self.scope.insert(
                 param.name.clone(),
                 ScopeEntry {
@@ -639,7 +991,9 @@ impl<'b> Checker<'b> {
                     is_param: true,
                     param_ownership: param.ownership.clone(),
                     is_loop_var: false,
-                    is_consumed: false,
+                    consumed: None,
+                    origin: Origin::Param(param.ownership.clone()),
+                    alias_class,
                     defined_at: param.name_span.clone(),
                 },
             );
@@ -926,11 +1280,18 @@ impl<'b> Checker<'b> {
                 // `union_to_heap_cell`) — nothing is frame-embedded, so the nested-shape
                 // limitation this check guards cannot apply. Its RHS resolves to the
                 // CONCRETE variant shape (`let fig: Figure = s` types as `Square`),
-                // which is exactly why this check would otherwise fire on it. Lexical
-                // (read-after-wait) union crossings never enter `arg_escape_only` and
-                // stay subject to this check. Mirrored in
-                // `suspension_guards_fire_for_fn` (the M3d decline probe — both touch
-                // points or the verdicts drift).
+                // which is exactly why this check would otherwise fire on it.
+                // Membership is the SPAN rule (`crossing_local_names_with_provenance`):
+                // a name is `arg_escape_only` when EVERY crossing span the one lexical
+                // scan recorded for it is an argument position the arg-escape collector
+                // qualified. So a lexical crossing DOES land in `arg_escape_only` when
+                // its span is such an argument position — that is the two collectors
+                // describing one event, and it is the case bind-time promotion covers.
+                // What still disqualifies a name is a crossing read anywhere ELSE: one
+                // post-wait read at a non-argument span puts it back under this check,
+                // because promotion does not make the parent's own reload safe.
+                // Mirrored in `suspension_guards_fire_for_fn` (the M3d decline probe —
+                // both touch points or the verdicts drift).
                 // A nested-shape variant payload is safe under this flat one-level ABI-size
                 // memcpy: since v0.3-M5 P2, `store_field` (emit.rs ~20154) heap-cells EVERY
                 // shape-typed field store, so a nested-shape field is already a pointer to a
@@ -1068,10 +1429,14 @@ impl<'b> Checker<'b> {
                 // promotes the binding to a counted heap cell at bind time
                 // (`maybe_to_heap_cell` / `union_to_heap_cell`), so the pointer the
                 // callee holds across its own suspension targets surviving heap, not the
-                // dead resume-fn stack. Lexical (read-after-wait) crossings are collected
-                // BEFORE the arg-escape pass and therefore never appear in
-                // `arg_escape_only` — they stay rejected here, because the promotion does
-                // not make the parent's own post-wait reload safe. The union skip keys on
+                // dead resume-fn stack. Membership is the SPAN rule, not collector
+                // order (`crossing_local_names_with_provenance`): every crossing span the
+                // lexical scan recorded for the name must be an argument position the
+                // arg-escape collector qualified. A lexical crossing sitting exactly on
+                // such an argument position therefore DOES qualify — the two collectors
+                // are describing one event — while a crossing read at any other span
+                // disqualifies the name and it stays rejected here, because the promotion
+                // does not make the parent's own post-wait reload safe. The union skip keys on
                 // the ANNOTATION resolving to Union (step 3c): the union-ctor arm that
                 // performs the promotion keys on that same annotation, and the RHS types
                 // as the concrete variant shape.
@@ -1383,6 +1748,7 @@ impl<'b> Checker<'b> {
 
         let ret_ty = self.ast_type_to_type(&f.return_type);
         self.current_fn_ret = ret_ty;
+        self.current_fn_name = f.name.clone();
         self.current_shape = None;
 
         self.scope.push();
@@ -1395,6 +1761,7 @@ impl<'b> Checker<'b> {
         }
         for param in &f.params {
             let param_ty = self.ast_type_to_type(&param.ty);
+            let alias_class = self.scope.new_class();
             self.scope.insert(
                 param.name.clone(),
                 ScopeEntry {
@@ -1403,7 +1770,9 @@ impl<'b> Checker<'b> {
                     is_param: true,
                     param_ownership: param.ownership.clone(),
                     is_loop_var: false,
-                    is_consumed: false,
+                    consumed: None,
+                    origin: Origin::Param(param.ownership.clone()),
+                    alias_class,
                     defined_at: param.name_span.clone(),
                 },
             );
@@ -1417,6 +1786,314 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// THE one spawn-argument ownership recording function (`IMP-ownership.md` "What typeck
+    /// records and what codegen reads") — the statement-form liveness pass, the handle-form
+    /// pre-record, and the `Expr::Background` backstop all derive their label HERE, so the
+    /// three sites cannot drift on what a spawn argument is. Returns the label recorded at
+    /// the argument's span (`None` when nothing is recorded: a non-ident argument typeck
+    /// proved safe).
+    ///
+    /// Precedence: an `Arc` entry the group admission placed wins outright (and a fill-only
+    /// caller never overwrites any existing entry); then a `channel` binding is `Channel`;
+    /// then a position the callee's signature declares `give` is `Give` (the binding IS
+    /// given — recording `Copy` there was parked item 16); then, when the remaining
+    /// statements are in hand, the class-aware liveness rule (v0.3-M8 Phase 4, `IMP-
+    /// ownership.md` sink 3: `Give` iff origin `Owned`/`Param(give)` and no alias-class
+    /// member is read afterwards, else `Copy`); with no liveness view, `Copy` (the safe
+    /// direction — the caller keeps its original). A non-ident argument that is not provably
+    /// safe (`bg_arg_is_provably_safe`, default-deny FRAGO 022) records `Give` so codegen's
+    /// presence-gated heap-upgrade fires. A `Copy` is always RECORDED, never omitted —
+    /// codegen's `is_heap_arg` gate reads PRESENCE (parked item 19, the fr23 class).
+    fn record_spawn_arg_ownership(
+        &mut self,
+        arg: &Expr,
+        ident: Option<&str>,
+        callee: Option<&str>,
+        position: usize,
+        remaining: Option<&[Stmt]>,
+        fill_only: bool,
+    ) -> Option<BgOwnership> {
+        let span = arg.span();
+        let key = (span.start, span.end);
+        // The sole-holder record (`TypedModule::background_arg_sole_holder`), written BEFORE
+        // either early return below so it covers every spawn argument this function sees —
+        // including the ones it records no ownership label for (a `.copy()` argument is
+        // "provably safe" and returns early, and it is exactly the argument codegen was
+        // double-copying).
+        //
+        // Half one: a temporary nobody names. `provenance` is the whole-program
+        // classification every transfer sink already consumes; asking it here is what stops
+        // the spawn path from having a syntactic opinion of its own about who holds a value.
+        // Called on EVERY visit rather than once: the three recording sites run at different
+        // points in the check, and only the `Expr::Background` backstop runs after
+        // `infer_expr` has typed the argument's own sub-expressions. A visit with less type
+        // knowledge can only answer LESS freshly (`provenance`'s type oracle is consulted to
+        // SKIP value-typed parts and to type a `.copy()` receiver; an absent answer degrades
+        // to `Reaches`/`Unknown`), so a union across visits cannot manufacture a false
+        // `Fresh`.
+        if matches!(self.provenance_of(arg), Provenance::Fresh) {
+            self.bg_sole_holder.insert(key, SoleHolder::FreshTemporary);
+        }
+        if let Some(existing) = self.bg_inferred.get(&key) {
+            if fill_only || matches!(existing, BgOwnership::Arc { .. }) {
+                return Some(existing.clone());
+            }
+        }
+        let label = match ident {
+            Some(name) => {
+                let is_channel = self
+                    .scope
+                    .lookup(name)
+                    .is_some_and(|e| matches!(e.ty, Type::BuiltinChannel { .. }));
+                let declared_give = callee
+                    .and_then(|c| self.sig_table.fns.get(c))
+                    .and_then(|sig| sig.param_ownerships.get(position))
+                    .is_some_and(|o| matches!(o, Some(OwnershipModifier::Give)));
+                if is_channel {
+                    BgOwnership::Channel
+                } else if declared_give {
+                    BgOwnership::Give
+                } else if let Some(remaining) = remaining {
+                    let (origin_ok, members) = match self.scope.lookup(name) {
+                        Some(e) => (
+                            matches!(
+                                e.origin,
+                                Origin::Owned | Origin::Param(Some(OwnershipModifier::Give))
+                            ),
+                            self.scope.visible_members_of(e.alias_class),
+                        ),
+                        None => (false, vec![name.to_string()]),
+                    };
+                    let used_after = remaining
+                        .iter()
+                        .any(|s| members.iter().any(|m| ident_read_in_stmt(s, m.as_str())));
+                    if origin_ok && !used_after {
+                        BgOwnership::Give
+                    } else {
+                        BgOwnership::Copy
+                    }
+                } else {
+                    BgOwnership::Copy
+                }
+            }
+            None => {
+                if self.bg_arg_is_provably_safe(arg) {
+                    return None;
+                }
+                BgOwnership::Give
+            }
+        };
+        // A `Copy` spawn argument means the spawner keeps reading the binding, so the task
+        // must get a value of its OWN. When neither the spawn path's own re-homing nor the
+        // shared owned-copy table can produce one, refuse the spawn here instead of letting
+        // codegen hand both sides the same pointer — the `background` face of the same ruling `.copy()` obeys,
+        // reading the SAME table rather than a second opinion about it
+        // (`.claude/rules/authoritative-derivation.md`). A `Give` argument is untouched: the
+        // spawner's binding is consumed at the spawn, so nothing needs to be independent.
+        if let Some(name) = ident {
+            let arg_ty = self.scope.lookup(name).map(|e| e.ty.clone());
+            if let Some(ty) = arg_ty {
+                if let Some((cause, refusal)) = crate::owned_copy::spawn_arg_refusal(&ty) {
+                    // `NoIndependentCopy` is a `Copy`-only refusal: under `Give` there is
+                    // nothing to be independent FROM. `StorageDiesWithTheFrame` fires under
+                    // either label, because a consumed binding's storage dies with the frame
+                    // exactly as an unconsumed one's does — and the alternative for it is the
+                    // emitter's own bare error string with no teaching slots at all.
+                    let fires = matches!(label, BgOwnership::Copy)
+                        || matches!(
+                            cause,
+                            crate::owned_copy::SpawnRefusalCause::StorageDiesWithTheFrame
+                        );
+                    if fires {
+                        let fills = [
+                            ("name", name),
+                            ("type", &type_name(&ty)),
+                            ("detail", &refusal.detail),
+                            ("fix", &refusal.fix),
+                            ("why", &refusal.why),
+                        ];
+                        // Two calls rather than one over a computed kind: each template's own
+                        // name has to appear literally inside a `registry_diag(...)` argument
+                        // list, which is what `diagnostic_template_parity` scans for to prove
+                        // no shipped template is dead.
+                        let diag = match cause {
+                            crate::owned_copy::SpawnRefusalCause::NoIndependentCopy => {
+                                registry_diag(
+                                    span.clone(),
+                                    DiagnosticKind::SpawnArgNotIndependent,
+                                    &fills,
+                                )
+                            }
+                            crate::owned_copy::SpawnRefusalCause::StorageDiesWithTheFrame => {
+                                registry_diag(
+                                    span.clone(),
+                                    DiagnosticKind::SpawnArgStorageDiesWithTheFrame,
+                                    &fills,
+                                )
+                            }
+                        };
+                        self.diags.push(diag);
+                    }
+                }
+            }
+        }
+        // Half two of the sole-holder record: a plain binding this spawn CONSUMES. `Give`
+        // alone is NOT that fact — `record_spawn_arg_ownership` reaches `Give` by three routes
+        // and only the statement-form ident routes consume anything. The `ident.is_none()`
+        // default-deny route (FRAGO 022) records `Give` for any non-ident argument it cannot
+        // prove safe while consuming NOTHING, so `background eat(b.items)` would otherwise
+        // claim the task is the sole holder of a map `b` still owns. `remaining.is_some()`
+        // identifies the one caller with the following statements in hand — the
+        // `check_stmts` statement form, which pushes every ident `Give` onto `gives` and
+        // consumes its alias class immediately after this returns. The handle form passes
+        // `None` and consumes nothing, so it is not a sole-holder route either.
+        if ident.is_some() && remaining.is_some() && matches!(label, BgOwnership::Give) {
+            self.bg_sole_holder
+                .entry(key)
+                .or_insert(SoleHolder::ConsumedBinding);
+        }
+        self.bg_inferred.insert(key, label.clone());
+        Some(label)
+    }
+
+    /// The spawn statement forms the Auto-Arc group admission scans: a bare
+    /// `background f(...)` statement or the handle form `let h = background f(...)`, both
+    /// normalized through the ONE call-form normalization (`background_spawn_call_form`).
+    fn stmt_spawn_form<'e>(&mut self, stmt: &'e Stmt) -> Option<(Option<&'e str>, Vec<&'e Expr>)> {
+        match stmt {
+            Stmt::Expr(Expr::Background(inner, _))
+            | Stmt::Let {
+                value: Expr::Background(inner, _),
+                ..
+            } => self.background_spawn_call_form(inner.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// v0.3-M8 Phase 5: run the Auto-Arc group admission for every whole-binding ident
+    /// argument of the spawn statement at `stmts[start]` that no earlier admission covered.
+    fn admit_arc_groups_from(&mut self, stmts: &[Stmt], start: usize) {
+        let Some((_, args)) = self.stmt_spawn_form(&stmts[start]) else {
+            return;
+        };
+        let mut names: Vec<String> = Vec::new();
+        for arg in args {
+            if let Expr::Ident(name, span) = arg {
+                if !self.bg_inferred.contains_key(&(span.start, span.end))
+                    && !names.iter().any(|n| n == name)
+                {
+                    names.push(name.clone());
+                }
+            }
+        }
+        for name in names {
+            self.admit_arc_group_for(stmts, start, &name);
+        }
+    }
+
+    /// THE Auto-Arc beneficial-emission condition (`IMP-ownership.md` "The beneficial-
+    /// emission condition"), judged for binding `name` on the spawn group that begins at
+    /// `stmts[start]`. Records `BgOwnership::Arc { group, first, last }` for every member
+    /// when ALL hold, and records nothing (the shipped `Give`/`Copy` inference then runs
+    /// unchanged) when any fails:
+    ///
+    /// 1. ≥ 2 spawn STATEMENTS in this block pass `name` as a whole binding, with no group
+    ///    boundary between the first and the last. A boundary is: a top-level rebinding of
+    ///    `name` (`stmt_rebinds` — the group closes; the next spawn opens a new one, judged on
+    ///    its own), a statement that may suspend (the caller-side transient is a straight-line
+    ///    temporary that must never cross a frame boundary — judged CONSERVATIVELY and
+    ///    syntactically by `stmt_may_suspend_conservative`, because expression types of the
+    ///    statements ahead are not yet inferred when this runs), or a statement containing a
+    ///    `return` at any depth (an early exit would skip the transient's release — the one
+    ///    boundary this implementation adds beyond the signed text, recorded in the design).
+    ///    "Caller + 1 task" is out by construction (one statement is not a group).
+    /// 2. Task-side: `report.ownership_of(callee, position) == Reads` for every member —
+    ///    `effective_ownership`'s whole-program fixpoint, never a second classifier.
+    /// 3. Caller-side: `classify_binding_in_stmts(name, stmts[first..=last]) == Reads` — the
+    ///    same walker over the member spawn statements themselves AND everything between
+    ///    them (a rebinding INSIDE a nested block is `Writes` there, per the walker's
+    ///    `stmt_rebinds` arm). The members are INCLUDED because a write can hide inside a
+    ///    member's own argument list — `background render(scene, bump(scene))` with `bump`
+    ///    declared `lend` — and arguments are prepared in order, so the block would be
+    ///    minted from `scene` BEFORE `bump` ran and a later member's clone would read stale
+    ///    bytes (fix round 2, `red:code-reviewer`; the walker's `Call` arm already returns
+    ///    `Writes` for a declared `lend`/`give` position, and the whole-binding positions
+    ///    classify `Reads` from the same report the task-side proof read).
+    /// 4. `arc_shareable(type)` — the compile-time floor in `types.rs`.
+    fn admit_arc_group_for(&mut self, stmts: &[Stmt], start: usize, name: &str) {
+        let shareable = self
+            .scope
+            .lookup(name)
+            .is_some_and(|e| arc_shareable(&e.ty, self.shape_table));
+        if !shareable {
+            return;
+        }
+        // `let v = background f(v)` — the spawn reads the OLD `v`, the statement binds a
+        // new one; a later spawn would pass a different value. Not a group opener.
+        if stmt_rebinds(&stmts[start], name) {
+            return;
+        }
+        // (stmt index, arg span key, callee, argument position) per member, in order.
+        let mut members: Vec<(usize, (usize, usize), String, usize)> = Vec::new();
+        for (k, stmt) in stmts.iter().enumerate().skip(start) {
+            if k > start && self.stmt_breaks_arc_group(stmt, name) {
+                break;
+            }
+            let Some((callee, args)) = self.stmt_spawn_form(stmt) else {
+                continue;
+            };
+            for (position, arg) in args.iter().enumerate() {
+                if let Expr::Ident(n, span) = arg {
+                    if n == name {
+                        // A spawn whose callee has no name cannot be proven `Reads`.
+                        let Some(callee) = callee else {
+                            return;
+                        };
+                        members.push((k, (span.start, span.end), callee.to_string(), position));
+                    }
+                }
+            }
+        }
+        let distinct_stmts: HashSet<usize> = members.iter().map(|m| m.0).collect();
+        if distinct_stmts.len() < 2 {
+            return;
+        }
+        let report = self.ownership;
+        for (_, _, callee, position) in &members {
+            if report.ownership_of(callee, *position) != EffectiveOwnership::Reads {
+                return;
+            }
+        }
+        let first = members[0].0;
+        let last = members[members.len() - 1].0;
+        let members_and_between = &stmts[first..=last];
+        if classify_binding_in_stmts(name, members_and_between, report, self.imported_fn_names)
+            != EffectiveOwnership::Reads
+        {
+            return;
+        }
+        let group = self.next_arc_group;
+        self.next_arc_group += 1;
+        let n = members.len();
+        for (i, (_, key, _, _)) in members.into_iter().enumerate() {
+            self.bg_inferred.insert(
+                key,
+                BgOwnership::Arc {
+                    group,
+                    first: i == 0,
+                    last: i + 1 == n,
+                },
+            );
+        }
+    }
+
+    /// Does `stmt` end an Auto-Arc spawn group for `name`? See `admit_arc_group_for` item 1.
+    fn stmt_breaks_arc_group(&self, stmt: &Stmt, name: &str) -> bool {
+        stmt_rebinds(stmt, name)
+            || stmt_contains_return(stmt)
+            || stmt_may_suspend_conservative(stmt, self.sig_table)
+    }
+
     fn check_stmts(&mut self, stmts: &[Stmt]) {
         // Collect early-return narrowing facts: when an `if (!m.exists()) { return }` or
         // `if (!m.exists()) { panic(...) }` is detected, mark `m` as non-none for all
@@ -1428,6 +2105,20 @@ impl<'b> Checker<'b> {
             // Apply any early-return narrowing facts from previous `if (!x.exists()) { return }`.
             for name in &early_return_narrowed {
                 self.maybe_non_none.insert(name.clone());
+            }
+
+            // v0.3-M8 Phase 5: Auto-Arc group admission runs at the FIRST spawn of a
+            // candidate group, before either spawn form records its per-argument label, so
+            // the shared recording function finds the group's `Arc` entries already placed.
+            if matches!(
+                stmt,
+                Stmt::Expr(Expr::Background(..))
+                    | Stmt::Let {
+                        value: Expr::Background(..),
+                        ..
+                    }
+            ) {
+                self.admit_arc_groups_from(stmts, i);
             }
 
             match stmt {
@@ -1451,45 +2142,42 @@ impl<'b> Checker<'b> {
                             .map(|(_, args)| args);
                         if let Some(bg_args) = bg_args {
                             let remaining = &stmts[i + 1..];
+                            let spawn_callee: String = self
+                                .background_spawn_call_form(inner.as_ref())
+                                .and_then(|(c, _)| c.map(str::to_string))
+                                .unwrap_or_else(|| "the task".to_string());
                             // Only infer for plain Expr::Ident args — explicit .give/.copy()
                             // postfix args are handled by the postfix-op path; explicit wins.
+                            //
+                            // v0.3-M8 Phase 5: every label comes from the ONE recording
+                            // function all three spawn-arg sites share
+                            // (`record_spawn_arg_ownership`): Channel / Arc (group
+                            // admission ran first, above the match) / declared-`give` /
+                            // liveness-inferred Give-or-Copy / default-deny Give for a
+                            // non-ident arg. This site is the only one with the remaining
+                            // statements in hand, so it is the only one that can prove
+                            // liveness-Give; it consumes the bindings it proved.
+                            let callee_for_sig: Option<String> = self
+                                .background_spawn_call_form(inner.as_ref())
+                                .and_then(|(c, _)| c.map(str::to_string));
                             let mut gives: Vec<String> = Vec::new();
-                            for arg in bg_args {
-                                if let Expr::Ident(name, span) = arg {
-                                    // v0.3-M4: a channel argument is SHARED with the task
-                                    // (refcounted alias) — both sides must operate on the
-                                    // same bounded buffer; neither give nor copy is correct.
-                                    let is_channel = self.scope.lookup(name).is_some_and(|e| {
-                                        matches!(e.ty, Type::BuiltinChannel { .. })
-                                    });
-                                    if is_channel {
-                                        self.bg_inferred
-                                            .insert((span.start, span.end), BgOwnership::Channel);
-                                        continue;
-                                    }
-                                    let used_after = remaining
-                                        .iter()
-                                        .any(|s| ident_read_in_stmt(s, name.as_str()));
-                                    let inferred = if used_after {
-                                        BgOwnership::Copy
-                                    } else {
-                                        BgOwnership::Give
-                                    };
-                                    self.bg_inferred
-                                        .insert((span.start, span.end), inferred.clone());
-                                    if inferred == BgOwnership::Give {
-                                        gives.push(name.clone());
-                                    }
-                                } else if !self.bg_arg_is_provably_safe(arg) {
-                                    // fr23 (M7 Phase 9, FRAGO 016; default-deny
-                                    // FRAGO 022): not a plain ident, and not
-                                    // PROVABLY safe — default-deny heap-upgrades
-                                    // it (`Give`). No binding to consume in scope
-                                    // either way (a non-ident arg is never a
-                                    // reachable binding the caller could reuse).
-                                    let span = arg.span();
-                                    self.bg_inferred
-                                        .insert((span.start, span.end), BgOwnership::Give);
+                            for (position, arg) in bg_args.iter().enumerate() {
+                                let ident = match arg {
+                                    Expr::Ident(name, _) => Some(name.as_str()),
+                                    _ => None,
+                                };
+                                let recorded = self.record_spawn_arg_ownership(
+                                    arg,
+                                    ident,
+                                    callee_for_sig.as_deref(),
+                                    position,
+                                    Some(remaining),
+                                    false,
+                                );
+                                if let (Some(name), Some(BgOwnership::Give)) =
+                                    (ident, recorded.as_ref())
+                                {
+                                    gives.push(name.to_string());
                                 }
                             }
                             // Infer_expr runs first (for diagnostics / type registration),
@@ -1507,8 +2195,14 @@ impl<'b> Checker<'b> {
                                 // changes that might re-derive give candidates without the
                                 // const distinction.
                                 if let Some(entry) = self.scope.lookup(name.as_str()) {
-                                    if !entry.is_const && !entry.is_consumed {
-                                        self.scope.consume(name.as_str());
+                                    if !entry.is_const && entry.consumed.is_none() {
+                                        self.scope.consume(
+                                            name.as_str(),
+                                            ConsumedBy::Given {
+                                                callee: spawn_callee.clone(),
+                                                given: name.clone(),
+                                            },
+                                        );
                                     }
                                 }
                             }
@@ -1526,6 +2220,45 @@ impl<'b> Checker<'b> {
                     span: _,
                 } => {
                     self.check_let(*is_const, name, name_span, ty.as_ref(), value);
+                    // v0.3-M8 Phase 7 no-duct-tape guard: the `background-handle-not-waited`
+                    // Tier 3 lint. Patrick re-deferred the real fix (codegen calling
+                    // `ynz_handle_free` when a handle binding's scope ends — registry entry
+                    // `background-handle-cancel-injection`) on condition that the live
+                    // exposure ships with a LOUD guard, not a muted one: today NOTHING
+                    // releases a local of any type at scope exit (`emit.rs` only frees along
+                    // three narrow glue paths — see that registry entry's `why`), so a task
+                    // whose handle goes out of scope keeps running unseen. This fires a
+                    // dismissable SUGGESTION — never a build gate — when a bound handle is
+                    // never received anywhere in the rest of its own scope. It retires the
+                    // moment the real fix ships.
+                    if matches!(value, Expr::Background(..))
+                        && matches!(
+                            self.scope.lookup(name).map(|e| &e.ty),
+                            Some(Type::BackgroundHandle { .. })
+                        )
+                    {
+                        let remaining = &stmts[i + 1..];
+                        let waited = remaining
+                            .iter()
+                            .any(|s| stmt_receives_from_handle(s, name.as_str()));
+                        if !waited {
+                            let vars: std::collections::HashMap<&str, &str> =
+                                std::collections::HashMap::from([("handle", name.as_str())]);
+                            let diag = crate::lints::lint_diagnostic(
+                                "background-handle-not-waited",
+                                value.span().clone(),
+                                &vars,
+                            )
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "[[lint_rule]] `background-handle-not-waited` missing from \
+                                     registry/features.toml — the firing site and the registry \
+                                     drifted"
+                                )
+                            });
+                            self.diags.push(diag);
+                        }
+                    }
                 }
                 Stmt::Assign {
                     target,
@@ -1612,6 +2345,8 @@ impl<'b> Checker<'b> {
             // v0.3-M4 conduit-origin discipline: a spawn binding is a derivable conduit —
             // mirrors the resolver's `Expr::Background` arm in `let_binds_derivable_conduit`.
             self.derivable_conduits.insert(name.to_string());
+            // A task handle is the spawn's sole reference: `Fresh` → `Owned`, its own class.
+            let alias_class = self.scope.new_class();
             self.scope.insert(
                 name.to_string(),
                 ScopeEntry {
@@ -1620,7 +2355,9 @@ impl<'b> Checker<'b> {
                     is_param: false,
                     param_ownership: None,
                     is_loop_var: false,
-                    is_consumed: false,
+                    consumed: None,
+                    origin: Origin::Owned,
+                    alias_class,
                     defined_at: name_span.clone(),
                 },
             );
@@ -1649,6 +2386,7 @@ impl<'b> Checker<'b> {
             ) {
                 // Bind the name at the annotated `number` type so later uses don't
                 // cascade into spurious unknown-variable diagnostics.
+                let alias_class = self.scope.new_class();
                 self.scope.insert(
                     name.to_string(),
                     ScopeEntry {
@@ -1657,7 +2395,9 @@ impl<'b> Checker<'b> {
                         is_param: false,
                         param_ownership: None,
                         is_loop_var: false,
-                        is_consumed: false,
+                        consumed: None,
+                        origin: Origin::Owned,
+                        alias_class,
                         defined_at: name_span.clone(),
                     },
                 );
@@ -1712,6 +2452,11 @@ impl<'b> Checker<'b> {
             self.derivable_conduits.insert(name.to_string());
         }
 
+        // The binding EVENT (v0.3-M8 Phase 4, `IMP-ownership.md` "Binding events"): origin
+        // and alias class come from the initializer's provenance — a NEW entry; a shadowed
+        // outer entry keeps its own origin, class and consumed state (it still names its
+        // old value). The same rule `check_assign` applies on a reassignment.
+        let (origin, alias_class) = self.binding_event_origin(value);
         self.scope.insert(
             name.to_string(),
             ScopeEntry {
@@ -1720,7 +2465,9 @@ impl<'b> Checker<'b> {
                 is_param: false,
                 param_ownership: None,
                 is_loop_var: false,
-                is_consumed: false,
+                consumed: None,
+                origin,
+                alias_class,
                 defined_at: name_span.clone(),
             },
         );
@@ -2317,31 +3064,30 @@ impl<'b> Checker<'b> {
         // gates codegen's Shape heap-upgrade. Without it the receiver rides into the
         // task as a raw pointer to the spawner's dead resume-fn frame — the FRAGO 025
         // handle-form twin of the FRAGO 024 statement-form use-after-free.
+        //
+        // v0.3-M8 Phase 5: labels come from the ONE shared recording function. With no
+        // remaining-statement view here the liveness-Give rule cannot run (Copy is the safe
+        // default), but a binding the callee's signature declares `give` is recorded `Give`
+        // — parked item 16: the handle form used to record `Copy` unconditionally, so a hint
+        // over this map would have said "copied" for a value that was given. An Arc entry
+        // the group admission already placed (the `check_stmts` loop runs it before this
+        // `let` is checked) is never overwritten.
         let call_form = self.background_spawn_call_form(inner);
-        if let Some((_, args)) = &call_form {
-            for &arg in args {
-                if let Expr::Ident(n, span) = arg {
-                    let is_channel = self
-                        .scope
-                        .lookup(n)
-                        .is_some_and(|e| matches!(e.ty, Type::BuiltinChannel { .. }));
-                    let o = if is_channel {
-                        BgOwnership::Channel
-                    } else {
-                        BgOwnership::Copy
-                    };
-                    self.bg_inferred.insert((span.start, span.end), o);
-                } else if !self.bg_arg_is_provably_safe(arg) {
-                    // fr23 (M7 Phase 9, FRAGO 016; default-deny FRAGO 022): same
-                    // admission predicate as the statement form above — the
-                    // handle form shares codegen's ONE heap-upgrade gate, so a
-                    // non-ident arg that isn't PROVABLY safe must be recorded
-                    // here too (`Give`: default-deny, no binding to read after
-                    // the spawn either way).
-                    let span = arg.span();
-                    self.bg_inferred
-                        .insert((span.start, span.end), BgOwnership::Give);
-                }
+        if let Some((callee, args)) = &call_form {
+            let callee_for_sig: Option<String> = callee.map(str::to_string);
+            for (position, &arg) in args.iter().enumerate() {
+                let ident = match arg {
+                    Expr::Ident(n, _) => Some(n.as_str()),
+                    _ => None,
+                };
+                let _ = self.record_spawn_arg_ownership(
+                    arg,
+                    ident,
+                    callee_for_sig.as_deref(),
+                    position,
+                    None,
+                    false,
+                );
             }
         }
 
@@ -2352,7 +3098,9 @@ impl<'b> Checker<'b> {
         // Resolve the spawned callee's signature for the handle type — from the SAME
         // Call-form normalization (a UFCS spawn's callee is the method name: `haul` in
         // `let h = background barge.haul()`).
-        let callee_name = call_form.and_then(|(callee, _)| callee.map(str::to_string));
+        let callee_name = call_form
+            .as_ref()
+            .and_then(|(callee, _)| callee.map(str::to_string));
         let Some(callee_name) = callee_name else {
             // No user-defined callee to derive a handle type from: a non-call target
             // (the Background arm's must-wrap-a-call error already fired), a non-ident
@@ -2402,13 +3150,31 @@ impl<'b> Checker<'b> {
             Type::ErrorsCapable { inner } => inner.clone(),
             other => Box::new(other.clone()),
         };
-        let msg_elem = params.iter().find_map(|(_, t)| {
-            if let Type::BuiltinChannel { elem } = t {
-                Some(elem.clone())
-            } else {
-                None
-            }
+        let msg_param_index = params
+            .iter()
+            .position(|(_, t)| matches!(t, Type::BuiltinChannel { .. }));
+        let msg_elem = msg_param_index.and_then(|i| match &params[i].1 {
+            Type::BuiltinChannel { elem } => Some(elem.clone()),
+            _ => None,
         });
+        // v0.3-M8 Phase 4 (`HandleChannelArgNeedsBinding`, a hard compile ERROR — FRAGO 009
+        // ruling 2): the argument that binds the callee's FIRST `channel<T>` parameter — the
+        // channel `h.send` feeds — must be a named binding, or nothing outside the task can
+        // ever `close()` it (a handle has no `close()`; `commands.close()` is the act). Only
+        // the handle form: the statement form with a call-materialized channel is a
+        // single-holder degenerate shape the child alone produces and consumes.
+        if let (Some(i), Some((_, args))) = (msg_param_index, &call_form) {
+            if let Some(arg) = args.get(i) {
+                if !matches!(arg, Expr::Ident(..)) {
+                    let text = expr_source_text(arg);
+                    self.diags.push(registry_diag(
+                        arg.span().clone(),
+                        DiagnosticKind::HandleChannelArgNeedsBinding,
+                        &[("callee", &callee_name), ("expr", &text)],
+                    ));
+                }
+            }
+        }
         let handle_ty = Type::BackgroundHandle { result, msg_elem };
         // Overwrite the Background expression's recorded type (the generic arm stored
         // `nothing`) so codegen and later reads see the handle type.
@@ -2463,6 +3229,20 @@ impl<'b> Checker<'b> {
             }
             Some(entry) => {
                 let bound_ty = entry.ty.clone();
+                // The binding EVENT for a reassignment (`IMP-ownership.md` "Binding
+                // events", `Stmt::Assign` row — the SECOND caller of the one rule
+                // `check_let` applies): the entry LEAVES its old alias class (the class
+                // keeps its other members and their consumed state — they still hold the
+                // old value), its consumed state is CLEARED (a consumed name that is
+                // reassigned names a NEW value — revive-on-reassign: `eat(rows); rows =
+                // [4, 5]; rows.count()` is a correct program), and it joins the new value's
+                // class per the initializer table.
+                let (origin, alias_class) = self.binding_event_origin(value);
+                if let Some(e) = self.scope.lookup_mut(target) {
+                    e.origin = origin;
+                    e.alias_class = alias_class;
+                    e.consumed = None;
+                }
                 if value_ty != Type::Error && value_ty != bound_ty {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -2504,14 +3284,43 @@ impl<'b> Checker<'b> {
 
         // M7 P3a: if condition is `x.failed()`, mark `x` as "consumed by failed check"
         // inside the if body. After the block, `x` is narrowed to success.
+        //
+        // v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C3): resolved to the CURRENT
+        // binding's alias class here, before `self.scope.push()` opens the guarded block. A
+        // shadowing inner `let x = ...` inside that block mints its own fresh alias class
+        // (`binding_event_origin`, same mechanism `Scope`'s use-after-give tracking uses), so
+        // it is never a member of `failed_binding_classes` and cannot inherit the outer `x`'s
+        // checked status — the compile-time hole `check_errors_field_needs_failed_check` used
+        // to have when this was keyed by the bare name "x".
         let failed_binding = self.extract_failed_binding(cond);
-        for name in &failed_binding {
-            self.errors_consumed.insert(name.clone());
+        let failed_binding_classes: Vec<u64> = failed_binding
+            .iter()
+            .filter_map(|name| self.scope.lookup(name).map(|e| e.alias_class))
+            .collect();
+        for class in &failed_binding_classes {
+            self.errors_consumed.insert(*class);
+        }
+        // v0.3-M8 Phase 4 fix round 3: the binding is inside the TRUE branch of its own
+        // `.failed()` check for the extent of this body — the one shape REF-errors.md
+        // admits for reading `.message`/`.suggestions`/`.trace`/`.source` (see
+        // `errors_failed_true_branch`'s doc comment). Pushed here, popped below —
+        // strictly nested with the `check_stmts(body)` call between them.
+        for class in &failed_binding_classes {
+            self.errors_failed_true_branch.push(*class);
         }
 
         self.scope.push();
         self.check_stmts(&body.stmts);
         self.scope.pop();
+
+        for class in &failed_binding_classes {
+            debug_assert_eq!(
+                self.errors_failed_true_branch.last(),
+                Some(class),
+                "errors_failed_true_branch push/pop must nest strictly around check_stmts(body)"
+            );
+            self.errors_failed_true_branch.pop();
+        }
 
         // Remove narrowing flags after the block exits.
         for name in &narrowed {
@@ -2519,8 +3328,8 @@ impl<'b> Checker<'b> {
         }
 
         // M7 P3a: after `if (x.failed()) { ... }`, narrow `x` to success for subsequent code.
-        for name in &failed_binding {
-            self.errors_success_narrowed.insert(name.clone());
+        for class in &failed_binding_classes {
+            self.errors_success_narrowed.insert(*class);
         }
     }
 
@@ -2792,6 +3601,20 @@ impl<'b> Checker<'b> {
         };
 
         self.scope.push();
+        // A loop variable is one CELL of the iterated value — never transferable — and joins
+        // the iterated root's alias class (if a root is given away, the cells go with it).
+        let iterated_root = root_binding_name(iter).map(str::to_string);
+        let alias_class = match iterated_root
+            .as_deref()
+            .and_then(|r| self.scope.class_of(r))
+        {
+            Some(c) => c,
+            None => self.scope.new_class(),
+        };
+        let cell_reason = match &iterated_root {
+            Some(r) => format!("one cell of `{r}`, which this loop is walking"),
+            None => "one cell of the value this loop is walking".to_string(),
+        };
         self.scope.insert(
             var.to_string(),
             ScopeEntry {
@@ -2800,7 +3623,9 @@ impl<'b> Checker<'b> {
                 is_param: false,
                 param_ownership: None,
                 is_loop_var: true,
-                is_consumed: false,
+                consumed: None,
+                origin: Origin::Cell(cell_reason),
+                alias_class,
                 defined_at: var_span.clone(),
             },
         );
@@ -2986,44 +3811,11 @@ impl<'b> Checker<'b> {
                 // errors-capable function: resolve_ident auto-propagates the binding from
                 // ErrorsCapable<T> → T (so the compiler can insert early-return IR). That
                 // means receiver_ty here is the bare inner type, and check_method_call
-                // cannot find .or/.failed/.message etc. on it.
-                //
-                // Restore the full ErrorsCapable<T> for dispatch when ALL of:
-                //   (a) the method is one of the EC-specific set,
-                //   (b) the inferred receiver_ty is NOT already ErrorsCapable (was auto-stripped),
-                //   (c) the receiver is a bare Ident whose SCOPE ENTRY still carries ErrorsCapable.
-                //
-                // This is a narrow, targeted fix — it does not affect normal value-context
-                // auto-propagation (check_user_fn_call etc.) or non-EC method dispatch.
-                const EC_METHODS: &[&str] =
-                    &["or", "failed", "message", "suggestions", "trace", "source"];
-                let effective_receiver_ty = if !matches!(receiver_ty, Type::ErrorsCapable { .. })
-                    && EC_METHODS.contains(&method.as_str())
-                {
-                    if let Expr::Ident(ident_name, ident_span) = receiver.as_ref() {
-                        if let Some(entry) = self.scope.lookup(ident_name) {
-                            if matches!(entry.ty, Type::ErrorsCapable { .. }) {
-                                // Restore the ErrorsCapable type for EC-method dispatch.
-                                // Auto-propagation in resolve_ident already stripped the type
-                                // and wrote the bare inner type into expr_types. Overwrite that
-                                // entry with the full ErrorsCapable type so codegen reads the
-                                // right ABI ({i64,i64} pair) when lowering the EC method call.
-                                let ec_ty = entry.ty.clone();
-                                self.expr_types
-                                    .insert((ident_span.start, ident_span.end), ec_ty.clone());
-                                ec_ty
-                            } else {
-                                receiver_ty
-                            }
-                        } else {
-                            receiver_ty
-                        }
-                    } else {
-                        receiver_ty
-                    }
-                } else {
-                    receiver_ty
-                };
+                // cannot find .or/.failed/.message etc. on it. `restore_ec_receiver_ty`
+                // undoes the strip for dispatch (shared with `infer_field_access` — see its
+                // doc comment and `EC_MEMBER_NAMES`).
+                let effective_receiver_ty =
+                    self.restore_ec_receiver_ty(receiver, receiver_ty, method);
                 // v0.3-M4 Phase 2: suspending conduit-method surface — `.send()`/`.receive()`
                 // on a `channel<T>` value or a background task handle. Dispatched BEFORE the
                 // generic method paths so the element-typed argument check and the
@@ -3350,30 +4142,22 @@ impl<'b> Checker<'b> {
                 // pre-recording loops. It is idempotent across repeat calls for the
                 // same spawn (`bg_union_narrowed_diag_spans` dedups its one
                 // diagnostic side effect, above).
-                if let Some((_, bg_args)) = self.background_spawn_call_form(inner.as_ref()) {
-                    for arg in bg_args {
-                        let key = (arg.span().start, arg.span().end);
-                        if self.bg_inferred.contains_key(&key) {
-                            continue;
-                        }
-                        if let Some(name) = simple_ident_name(arg) {
-                            // `Ident` or `SelfValue` (FRAGO 024 Bug 2: `self` no
-                            // longer defaults to provably-safe — see
-                            // `bg_arg_is_provably_safe` — so it reaches this
-                            // branch exactly like a plain-named parameter would).
-                            let is_channel = self
-                                .scope
-                                .lookup(name)
-                                .is_some_and(|e| matches!(e.ty, Type::BuiltinChannel { .. }));
-                            let o = if is_channel {
-                                BgOwnership::Channel
-                            } else {
-                                BgOwnership::Copy
-                            };
-                            self.bg_inferred.insert(key, o);
-                        } else if !self.bg_arg_is_provably_safe(arg) {
-                            self.bg_inferred.insert(key, BgOwnership::Give);
-                        }
+                if let Some((callee, bg_args)) = self.background_spawn_call_form(inner.as_ref()) {
+                    let callee_for_sig: Option<String> = callee.map(str::to_string);
+                    for (position, arg) in bg_args.iter().enumerate() {
+                        // `Ident` or `SelfValue` (FRAGO 024 Bug 2: `self` no longer
+                        // defaults to provably-safe — see `bg_arg_is_provably_safe` — so
+                        // it reaches the ident path exactly like a plain-named parameter
+                        // would). v0.3-M8 Phase 5: through the ONE shared recording
+                        // function, fill-only (never clobbers a prior, more precise entry).
+                        let _ = self.record_spawn_arg_ownership(
+                            arg,
+                            simple_ident_name(arg),
+                            callee_for_sig.as_deref(),
+                            position,
+                            None,
+                            true,
+                        );
                     }
                 }
 
@@ -3620,13 +4404,14 @@ impl<'b> Checker<'b> {
             }
         }
         if let Some(entry) = self.scope.lookup(name) {
-            if entry.is_consumed {
-                self.diags.push(Diagnostic::error(
-                    span.clone(),
-                    format!("`{name}` was already given away and cannot be used here."),
-                    "Create a new value or use `.copy()` before passing if you need it in both places.",
-                    "When a function takes ownership of a value, the caller no longer holds it. Using it afterward would be a memory safety violation.",
-                ));
+            // The consumed-read site for every read the type checker infers: a use-after-give
+            // / use-after-send is rendered by `consumed_read_diag` (the ONE rendering of the
+            // `Consumed` / `ConsumedBySend` templates). Its other caller is `check_transfer`,
+            // for the one read this site cannot see — an argument consumed by an earlier
+            // position of the SAME call, which was inferred before the call consumed anything.
+            if let Some(cause) = entry.consumed.clone() {
+                let diag = consumed_read_diag(span.clone(), name, &cause);
+                self.diags.push(diag);
                 return Type::Error;
             }
 
@@ -3638,8 +4423,9 @@ impl<'b> Checker<'b> {
                 let inner = inner.as_ref().clone();
 
                 // Already narrowed to success type (after .failed() check or prior use) —
-                // return the success type directly.
-                if self.errors_success_narrowed.contains(name) {
+                // return the success type directly. Keyed by alias class, not name
+                // (FRAGO 002 cluster C3) — see `errors_success_narrowed`'s doc comment.
+                if self.errors_success_narrowed.contains(&entry.alias_class) {
                     return inner;
                 }
 
@@ -3647,8 +4433,8 @@ impl<'b> Checker<'b> {
                     // Inside an errors function: auto-propagation fires — narrow the
                     // binding to its success type. The compiler will insert early-return-
                     // on-failure IR at P4a; for typeck, just return the inner type.
-                    self.errors_success_narrowed.insert(name.to_string());
-                    self.errors_consumed.insert(name.to_string());
+                    self.errors_success_narrowed.insert(entry.alias_class);
+                    self.errors_consumed.insert(entry.alias_class);
                     return inner;
                 }
                 // Outside an errors function: return the full ErrorsCapable type.
@@ -3986,26 +4772,69 @@ impl<'b> Checker<'b> {
         }
 
         // Method-name check first (unknown methods shouldn't trip the position rules).
-        // The known-method set IS the authoritative suspending-method set (every conduit
-        // method suspends in v0.3) — threaded from `suspension_source`, never a re-derived
-        // local list (authoritative-derivation.md). If a future non-suspending conduit
-        // method ships (e.g. `.tryReceive()`), extend THIS site to union it in explicitly.
+        // The suspending-method set is threaded from `suspension_source` — never a
+        // re-derived local list (authoritative-derivation.md). `close` (v0.3-M8 Phase 4) is
+        // the first NON-suspending conduit method: it is unioned in explicitly HERE, for
+        // channel receivers only (a task handle has no `close()` — a handle is a message
+        // line to the child, not the channel's lifecycle; `commands.close()` is the act),
+        // and stays OUT of `CHANNEL_SUSPENDING_METHODS` so the may-block fixpoint never
+        // over-approximates a function that only closes a channel into a state machine.
+        let is_channel = matches!(receiver_ty, Type::BuiltinChannel { .. });
+        let suspending = crate::suspension_source::channel_method_suspends(true, method);
+        let is_close = is_channel && method == "close";
         let known = match receiver_ty {
-            Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. } => {
-                crate::suspension_source::channel_method_suspends(true, method)
-            }
+            Type::BuiltinChannel { .. } | Type::BackgroundHandle { .. } => suspending || is_close,
             _ => false,
         };
         if !known {
+            // The available-methods list is split per receiver: a channel's names close(),
+            // a handle's does not.
+            let (what_instead, why): (&str, &str) = if is_channel {
+                (
+                    "Available methods: send(value), receive(), close().",
+                    "A channel carries values between tasks: `send(value)` puts a value in \
+                     (suspending when the buffer is full — backpressure), `receive()` takes \
+                     the next value out (suspending until one arrives, or `none` once the \
+                     channel is closed and empty), and `close()` marks the channel finished \
+                     so a receiver knows when to stop.",
+                )
+            } else {
+                (
+                    "Available methods: send(value), receive().",
+                    "A task handle carries values to and from one task: `send(value)` puts a \
+                     value into the task's channel (suspending when the buffer is full — \
+                     backpressure), `receive()` takes the next thing the task delivers \
+                     (suspending until one arrives). A handle cannot close the task's \
+                     channel — call `close()` on the channel binding you passed at the spawn.",
+                )
+            };
             self.diags.push(Diagnostic::error(
                 method_span.clone(),
                 format!("`{receiver_display}` does not have a method called `{method}`."),
-                "Available methods: send(value), receive().",
-                "Channels and task handles carry values between tasks: `send(value)` puts a \
-                 value in (suspending when the buffer is full — backpressure), `receive()` \
-                 takes the next value out (suspending until one arrives).",
+                what_instead,
+                why,
             ));
             return Type::Error;
+        }
+
+        // `close()` never suspends: the receiver/statement-position disciplines below exist
+        // because a SUSPENDING operation needs its receiver held across the suspension and
+        // must sit at a statement boundary — neither applies. Any `channel<T>`-typed
+        // receiver expression is fine; it takes no arguments and returns `nothing`.
+        if is_close {
+            if !args.is_empty() {
+                self.diags.push(Diagnostic::error(
+                    call_span.clone(),
+                    format!("`.close()` takes no arguments, but got {}.", args.len()),
+                    "Call it bare: wire.close()",
+                    "close() only marks the channel finished — there is nothing to pass in.",
+                ));
+                for a in args {
+                    self.infer_expr(a, None);
+                }
+                return Type::Error;
+            }
+            return Type::Nothing;
         }
 
         // Receiver discipline: plain identifier only.
@@ -4140,6 +4969,17 @@ impl<'b> Checker<'b> {
                              is full, `send` suspends this task until the receiver drains a \
                              slot — that is backpressure working, not a deadlock.",
                         ));
+                    } else if channel_elem_drop(elem).is_some_and(|k| k.transfers_source()) {
+                        // v0.3-M8 Phase 4: `send()` GIVES its payload for an owned-heap
+                        // element kind (`array`/`map`) — the ONE transfer decision; the arm
+                        // inspects no syntax of its own. `number` is copy-through (a fresh
+                        // cell is minted at the send), `int`/`float`/`bool`/`string` are
+                        // value bits or immortal bytes — none reach here.
+                        let sink = TransferSink::Send {
+                            channel: receiver_name.as_str(),
+                        };
+                        let consumed_before = self.scope.consumed_classes();
+                        self.check_transfer(&args[0], &sink, &consumed_before);
                     }
                     // Lock 8: `.send()` is `-> nothing errors` — a dropped/closed receiver
                     // yields a typed channel-closed error, never a silent drop.
@@ -4160,7 +5000,15 @@ impl<'b> Checker<'b> {
                             self.infer_expr(a, None);
                         }
                     }
-                    (**elem).clone()
+                    // v0.3-M8 Phase 4: a bare channel's `receive()` is `maybe<T>` — `none`
+                    // once the channel is closed and drained. The end of a stream is a
+                    // normal value the consumer checks with `.exists()`/`.value`/`.or()`,
+                    // never an error (running out is not failing) and never a hang. The
+                    // handle's `receive()` stays `T errors` (its error arm carries the
+                    // task's OWN failure) — the two are deliberately distinct.
+                    Type::Maybe {
+                        inner: elem.clone(),
+                    }
                 }
                 _ => unreachable!("known-method check above"),
             },
@@ -4236,6 +5084,14 @@ impl<'b> Checker<'b> {
                              parameter, so the value's type must match that channel's \
                              element type.",
                         ));
+                    } else if channel_elem_drop(elem).is_some_and(|k| k.transfers_source()) {
+                        // `h.send` funnels into the SAME send core as `ch.send` (the child's
+                        // channel takes the payload and will free it) — same transfer sink.
+                        let sink = TransferSink::Send {
+                            channel: receiver_name.as_str(),
+                        };
+                        let consumed_before = self.scope.consumed_classes();
+                        self.check_transfer(&args[0], &sink, &consumed_before);
                     }
                     Type::ErrorsCapable {
                         inner: Box::new(Type::Nothing),
@@ -4279,21 +5135,15 @@ impl<'b> Checker<'b> {
 
         // v0.3-M4 Phase 2: the element type must survive crossing a task boundary. Values
         // travel through the channel as one 64-bit slot: scalars by value (int, float,
-        // boolean) and heap-stable pointers (string, array, map). A `shape` value or a
-        // `number` is backed by SENDER-STACK storage that is gone by the time the receiver
-        // reads it — rejected until per-type heap-upgrade ships (mirrors the
-        // UnsupportedCrossingLocalType discipline: a clean teaching error, never a silent
-        // dangling read).
-        let elem_supported = matches!(
-            elem,
-            Type::Error // already diagnosed upstream — don't cascade
-                | Type::Int
-                | Type::Float
-                | Type::Bool
-                | Type::String
-                | Type::BuiltinArray { .. }
-                | Type::BuiltinMap { .. }
-        );
+        // boolean), heap-stable pointers (string, array, map), and — since v0.3-M8 (fr12) —
+        // a `number` as a 16-byte cell the send mints. A `shape` value is backed by
+        // SENDER-STACK storage that is gone by the time the receiver reads it — rejected
+        // until per-type heap-upgrade ships (mirrors the UnsupportedCrossingLocalType
+        // discipline: a clean teaching error, never a silent dangling read). The admitted
+        // set is DERIVED from the ONE element-kind classification (`channel_elem_supported`
+        // over `channel_elem_drop`) — never a third hand-maintained list.
+        let elem_supported = elem == Type::Error /* already diagnosed upstream — don't cascade */
+                || crate::types::channel_elem_supported(&elem);
         if !elem_supported {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
@@ -4301,14 +5151,16 @@ impl<'b> Checker<'b> {
                     "`channel<{}>` is not supported yet — this element type cannot cross a task boundary.",
                     type_name(&elem)
                 ),
-                "Use one of: int, float, boolean, string, array<T>, map<K, V>. For a shape, \
-                 send its fields as separate values or as an array, and rebuild the shape on \
-                 the receiving side.",
+                format!(
+                    "Use one of: {}. For a shape, send its fields as separate values or as \
+                     an array, and rebuild the shape on the receiving side.",
+                    crate::types::CHANNEL_ELEM_SUPPORTED_NAMES.join(", ")
+                ),
                 "Channel values travel between tasks as a single 64-bit slot: numbers-by-value \
-                 or a pointer to heap memory that both tasks can safely read. A `shape` or \
-                 `number` value lives in the SENDING task's stack frame, which can be freed \
-                 while the value still sits in the channel — the receiver would read freed \
-                 memory. Per-type heap-copying for these ships in a later milestone.",
+                 or a pointer to heap memory that both tasks can safely read. A `shape` value \
+                 lives in the SENDING task's stack frame, which can be freed while the value \
+                 still sits in the channel — the receiver would read freed memory. Per-type \
+                 heap-copying for shapes ships in a later version.",
             ));
             return Type::Error;
         }
@@ -4580,70 +5432,411 @@ impl<'b> Checker<'b> {
         Type::Nothing
     }
 
-    /// Check ownership constraints when a binding is passed to a function parameter.
+    // ── v0.3-M8 Phase 4: the transfer rule ──────────────────────────────────
+    //
+    // `IMP-ownership.md` "Transfer — Who Else Holds This Value". ONE emit site
+    // (`check_transfer`) for the three transfer diagnostics, fed by ONE provenance
+    // classification (`effective_ownership::provenance`, exhaustive over `Expr`) and the
+    // binding-event rule (`binding_event_origin`, exhaustive over the statement forms that
+    // bind a name). No sink inspects syntax; the closed sink list is: a channel/handle
+    // `send` of an owned-heap payload, every declared-`give` (or fixpoint-`consumed`)
+    // position of every call form, and — as an INFERENCE, not a call — the `background`
+    // spawn liveness pass.
+
+    /// THE provenance of an expression under typeck's full type knowledge (`expr_types`
+    /// answers the oracle; the fixpoint's report answers `returns_fresh`).
+    fn provenance_of(&self, expr: &Expr) -> Provenance {
+        let type_of = |e: &Expr| -> Option<Type> {
+            let s = e.span();
+            self.expr_types.get(&(s.start, s.end)).cloned()
+        };
+        let ctx = ProvenanceCtx::from_report(
+            self.ownership,
+            &self.local_fn_names,
+            self.imported_fn_names,
+            &type_of,
+        );
+        provenance(expr, &ctx)
+    }
+
+    /// The initializer table (`IMP-ownership.md` "Binding events"): the origin and alias
+    /// class a `let`/`const`/reassignment gives its name, from the bound value's provenance.
+    /// `Fresh` → `Owned`, own class; `Whole(b)` → b's origin, JOINS b's class (two names, one
+    /// value); `Reaches(roots)` → `Reaches`, joins every root's class (giving a root away
+    /// consumes this name with it); `Unknown` → `Unknown`, own class.
+    fn binding_event_origin(&mut self, value: &Expr) -> (Origin, u64) {
+        match self.provenance_of(value) {
+            Provenance::Fresh => (Origin::Owned, self.scope.new_class()),
+            Provenance::Whole(b) => match self.scope.lookup(&b) {
+                Some(entry) => (entry.origin.clone(), entry.alias_class),
+                // An undefined name — already diagnosed by `resolve_ident`.
+                None => (Origin::Unknown, self.scope.new_class()),
+            },
+            Provenance::Reaches(roots) => {
+                let reason = self.reaches_reason(value, &roots);
+                // Join the first root's class (the roots of one initializer denote one
+                // value's holders; `[a, b]` joins `a`'s — consuming either root consumes
+                // this name because both roots are consumed through the same sink rule).
+                let class = roots
+                    .iter()
+                    .find_map(|r| self.scope.class_of(r))
+                    .unwrap_or_else(|| self.scope.new_class());
+                (Origin::Reaches(reason), class)
+            }
+            Provenance::Unknown => (Origin::Unknown, self.scope.new_class()),
+        }
+    }
+
+    /// The `{reason}` slot of `TransferNeedsCopy` for a `Reaches` expression: who still
+    /// holds the value, said from the expression's own shape.
+    fn reaches_reason(&self, expr: &Expr, roots: &[String]) -> String {
+        match expr {
+            Expr::FieldAccess { receiver, .. } => match root_binding_name(receiver) {
+                Some(r) => format!("a field of `{r}`"),
+                None => "a field of a value that is not held in a named binding".to_string(),
+            },
+            Expr::IndexAccess { receiver, .. } => match root_binding_name(receiver) {
+                Some(r) => format!("an item inside `{r}`"),
+                None => "an item inside a value that is not held in a named binding".to_string(),
+            },
+            Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
+                let names = roots
+                    .iter()
+                    .map(|r| format!("`{r}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("built from {names}, which are still named here")
+            }
+            Expr::Call(call) => match &call.callee {
+                Expr::Ident(callee, _) => self.returns_piece_reason(callee),
+                _ => "a value the compiler cannot trace to one owner".to_string(),
+            },
+            Expr::MethodCall { method, .. }
+                if self.local_fn_names.contains(method)
+                    || self.imported_fn_names.contains(method) =>
+            {
+                self.returns_piece_reason(method)
+            }
+            Expr::MethodCall { receiver, .. } => match root_binding_name(receiver) {
+                Some(r) => format!("an item inside `{r}`"),
+                None => "a value the compiler cannot trace to one owner".to_string(),
+            },
+            Expr::Wait(inner, _) => self.reaches_reason(inner, roots),
+            _ => "a value the compiler cannot trace to one owner".to_string(),
+        }
+    }
+
+    fn returns_piece_reason(&self, callee: &str) -> String {
+        match self.ownership.returns_fresh_of(callee) {
+            Freshness::MayAlias { param: Some(p) } => format!(
+                "what `{callee}` returns, and `{callee}` returns a piece of its `{p}` argument"
+            ),
+            _ => format!("what `{callee}` returns, and `{callee}` may return a piece of something someone else holds"),
+        }
+    }
+
+    /// The ONE transfer decision (`IMP-ownership.md` "The transfer decision — ONE emit
+    /// site"). Returns true when the transfer is admitted (the caller may proceed as if the
+    /// value moved). Emits `ParamNeedsGive` / `TransferNeedsCopy` / the const refusal;
+    /// consumes an admitted `Whole` binding's whole alias class with the sink's cause.
     ///
-    /// Called from BOTH the UFCS dot-call path AND the regular function-call path to ensure
-    /// the same ownership rules apply and the same diagnostic text is produced in both cases.
-    /// Per `design/ide-hints.md` shared-wording rule, the error text must be byte-identical
-    /// between the two call forms (e.g., `p.heal(20)` and `heal(p, 20)` produce the same error).
-    ///
-    /// Time: O(1) scope lookup.  Space: O(1).
-    fn check_arg_ownership(
+    /// `consumed_before` is the caller's snapshot of `Scope::consumed_classes()` taken BEFORE
+    /// the call form ran any transfer decision. Every call form infers all of its arguments
+    /// first and only then walks the positions, so a name whose class was consumed before the
+    /// call had its read reported by `resolve_ident` at inference — nothing to re-report. A
+    /// name whose class is consumed but NOT in the snapshot was consumed by an earlier
+    /// position of THIS call (`eat2(rows, other)` with `let other = rows`) — no other site
+    /// ever sees that read, so it is reported here, naming both bindings (v0.3-M8 Phase 4 fix
+    /// round 2; the earlier unconditional early return let the alias pair compile and print
+    /// `3 3`).
+    fn check_transfer(
         &mut self,
-        binding_name: &str,
-        ownership: Option<&ynz_ast::nodes::OwnershipModifier>,
-        fn_name: &str,
-        arg_span: &SourceSpan,
+        expr: &Expr,
+        sink: &TransferSink<'_>,
+        consumed_before: &HashSet<u64>,
+    ) -> bool {
+        let span = expr.span().clone();
+        match self.provenance_of(expr) {
+            Provenance::Fresh => true,
+            Provenance::Whole(name) => {
+                let Some(entry) = self.scope.lookup(&name) else {
+                    return false; // undefined — already diagnosed
+                };
+                if let Some(cause) = entry.consumed.clone() {
+                    if !consumed_before.contains(&entry.alias_class) {
+                        let diag = consumed_read_diag(span, &name, &cause);
+                        self.diags.push(diag);
+                    }
+                    return false;
+                }
+                if entry.is_const {
+                    let what_instead = match sink {
+                        TransferSink::Send { channel } => format!(
+                            "Send a copy instead: `{channel}.send({name}.copy())`. A `const` \
+                             binding keeps its value for its whole life, so the copy is what \
+                             the channel gets."
+                        ),
+                        TransferSink::Give { callee, .. } => format!(
+                            "Declare `{name}` with `let` if you need to hand it over for good, \
+                             or give `{callee}` a copy: `{name}.copy()`."
+                        ),
+                    };
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        format!("`{name}` is `const` and cannot be given away."),
+                        what_instead,
+                        "`const` bindings are fully read-only — the compiler cannot transfer \
+                         ownership of a value that may not change.",
+                    ));
+                    return false;
+                }
+                let ty = type_name(&entry.ty);
+                let origin = entry.origin.clone();
+                let class = entry.alias_class;
+                // A parameter anywhere in the class (the name itself, or an alias of a
+                // parameter) that is not declared `give` refuses the transfer: the caller
+                // keeps the value.
+                let non_give_param = {
+                    let mut found: Option<(String, Option<OwnershipModifier>, String)> = None;
+                    for member in self.scope.visible_members_of(class) {
+                        if let Some(e) = self.scope.lookup(&member) {
+                            if let Origin::Param(m) = &e.origin {
+                                if *m != Some(OwnershipModifier::Give) {
+                                    found = Some((member.clone(), m.clone(), type_name(&e.ty)));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    found
+                };
+                if let Some((pname, modifier, ptype)) = non_give_param {
+                    self.emit_param_needs_give(span, &pname, modifier.as_ref(), &ptype, sink);
+                    return false;
+                }
+                match origin {
+                    Origin::Owned | Origin::Param(Some(OwnershipModifier::Give)) => {
+                        let cause = sink.cause(&name);
+                        self.scope.consume(&name, cause);
+                        true
+                    }
+                    Origin::Param(_) => unreachable!("non-give parameter handled above"),
+                    Origin::Cell(reason) | Origin::Reaches(reason) => {
+                        self.emit_transfer_needs_copy(
+                            span,
+                            &name,
+                            &ty,
+                            &reason,
+                            &format!("{name}.copy()"),
+                            sink,
+                        );
+                        false
+                    }
+                    Origin::Unknown => {
+                        self.emit_transfer_needs_copy(
+                            span,
+                            &name,
+                            &ty,
+                            "a value the compiler cannot trace to one owner",
+                            &format!("{name}.copy()"),
+                            sink,
+                        );
+                        false
+                    }
+                }
+            }
+            Provenance::Reaches(roots) => {
+                let text = expr_source_text(expr);
+                let ty = self.expr_type_name(expr);
+                let reason = self.reaches_reason(expr, &roots);
+                let fix = match expr {
+                    Expr::ArrayLit { .. } | Expr::MapLit { .. } | Expr::StructLit { .. } => {
+                        let parts = roots
+                            .iter()
+                            .map(|r| format!("{r}.copy()"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("[{parts}, …]")
+                    }
+                    _ => format!("{text}.copy()"),
+                };
+                self.emit_transfer_needs_copy(span, &text, &ty, &reason, &fix, sink);
+                false
+            }
+            Provenance::Unknown => {
+                let text = expr_source_text(expr);
+                let ty = self.expr_type_name(expr);
+                self.emit_transfer_needs_copy(
+                    span,
+                    &text,
+                    &ty,
+                    "a value the compiler cannot trace to one owner",
+                    &format!("{text}.copy()"),
+                    sink,
+                );
+                false
+            }
+        }
+    }
+
+    fn expr_type_name(&self, expr: &Expr) -> String {
+        let s = expr.span();
+        self.expr_types
+            .get(&(s.start, s.end))
+            .map(type_name)
+            .unwrap_or_else(|| "value".to_string())
+    }
+
+    fn emit_param_needs_give(
+        &mut self,
+        span: SourceSpan,
+        name: &str,
+        modifier: Option<&OwnershipModifier>,
+        ty: &str,
+        sink: &TransferSink<'_>,
     ) {
-        match ownership {
-            Some(ynz_ast::nodes::OwnershipModifier::Give) => {
-                if let Some(entry) = self.scope.lookup(binding_name) {
-                    if entry.is_const {
-                        self.diags.push(Diagnostic::error(
-                            arg_span.clone(),
-                            format!("`{binding_name}` is `const` and cannot be given away."),
-                            format!("Declare `{binding_name}` with `let` if you need to transfer ownership."),
-                            "`const` bindings are fully read-only — the compiler cannot transfer ownership of a value that may not change.",
-                        ));
-                    } else if entry.param_ownership
-                        == Some(ynz_ast::nodes::OwnershipModifier::Share)
-                    {
-                        self.diags.push(Diagnostic::error(
-                            arg_span.clone(),
-                            format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to take ownership of it (`give`)."),
-                            format!("Declare `{binding_name}` as `give` to pass it here."),
-                            "A `share` parameter is a read-only borrow — the caller still owns the value and trusts it is unchanged after the call. A function that takes ownership of a value would consume it, which a read-only borrow does not permit.",
-                        ));
-                    } else if !entry.is_consumed {
-                        self.scope.consume(binding_name);
-                    }
+        let modifier_text = match modifier {
+            None => "has no ownership word".to_string(),
+            Some(OwnershipModifier::Share) => "is declared `share`".to_string(),
+            Some(OwnershipModifier::Lend) => "is declared `lend`".to_string(),
+            Some(OwnershipModifier::Give) => "is declared `give`".to_string(),
+        };
+        let fn_name = self.current_fn_name.clone();
+        let (act, copy_form) = sink.render(name);
+        self.diags.push(registry_diag(
+            span,
+            DiagnosticKind::ParamNeedsGive,
+            &[
+                ("name", name),
+                ("fn", &fn_name),
+                ("type", ty),
+                ("modifier", &modifier_text),
+                ("act", &act),
+                ("copy_form", &copy_form),
+            ],
+        ));
+    }
+
+    fn emit_transfer_needs_copy(
+        &mut self,
+        span: SourceSpan,
+        expr_text: &str,
+        ty: &str,
+        reason: &str,
+        fix: &str,
+        sink: &TransferSink<'_>,
+    ) {
+        let (act, _) = sink.render(expr_text);
+        self.diags.push(registry_diag(
+            span,
+            DiagnosticKind::TransferNeedsCopy,
+            &[
+                ("expr", expr_text),
+                ("act", &act),
+                ("type", ty),
+                ("reason", reason),
+                ("fix", fix),
+            ],
+        ));
+    }
+
+    /// Every declared-`give` (or fixpoint-`consumed`) position of one call form, over the
+    /// ONE normalized argument list `[receiver?, args…]` — the plain call, the generic call,
+    /// the UFCS dot-call (receiver AND non-receiver arguments), the `dynamic Contract`
+    /// dispatch and the `background` spawn's inner call all reach the transfer decision here.
+    /// `ownerships[i]` is the callee's declared modifier at position `i` of the normalized
+    /// list; `param_names[i]` its parameter name (for the chain form of `{act}`).
+    fn check_call_transfers(
+        &mut self,
+        callee: &str,
+        normalized_args: &[&Expr],
+        ownerships: &[Option<OwnershipModifier>],
+        param_names: &[String],
+    ) {
+        // The pre-call snapshot: which alias classes were consumed before THIS call touched
+        // anything. A later position whose class is consumed but absent here was consumed by
+        // an earlier position of this same call — `check_transfer` reports that read.
+        let consumed_before = self.scope.consumed_classes();
+        for (i, arg) in normalized_args.iter().enumerate() {
+            let declared = ownerships.get(i).and_then(|o| o.as_ref());
+            match declared {
+                Some(OwnershipModifier::Give) => {
+                    let sink = TransferSink::Give {
+                        callee,
+                        chain_param: None,
+                    };
+                    self.check_transfer(arg, &sink, &consumed_before);
                 }
-            }
-            Some(ynz_ast::nodes::OwnershipModifier::Lend) => {
-                if let Some(entry) = self.scope.lookup(binding_name) {
-                    if entry.is_const {
-                        self.diags.push(Diagnostic::error(
-                            arg_span.clone(),
-                            format!("`{binding_name}` is `const` — `{fn_name}` needs to mutate it but `const` blocks mutation."),
-                            format!("Declare `{binding_name}` with `let` if you need `{fn_name}` to modify it."),
-                            "`const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.",
-                        ));
-                    } else if entry.param_ownership
-                        == Some(ynz_ast::nodes::OwnershipModifier::Share)
-                    {
-                        // share→lend escalation (`design/concurrency.md` line 651): a function
-                        // that receives a value as `share` (read-only) cannot lend it mutably
-                        // to a callee. This is the load-bearing auto-parallel soundness rule.
-                        self.diags.push(Diagnostic::error(
-                            arg_span.clone(),
-                            format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to modify it (`lend`)."),
-                            format!("Declare `{binding_name}` as `lend` to pass it here."),
-                            "A `share` parameter is a read-only borrow — the caller keeps ownership and trusts the value is unchanged after the call. Passing it where the value will be modified would break that promise; declare `lend` so the change is visible at every call site.",
-                        ));
-                    }
+                _ if self.ownership.consumed_of(callee, i) => {
+                    // Not declared `give`, but the callee's body gives this position away:
+                    // report the caller's frame in the SAME compile, naming the callee's
+                    // parameter (the chain form). The program is already rejected by the
+                    // callee's own error; this only changes what is reported.
+                    let chain = param_names.get(i).cloned();
+                    let sink = TransferSink::Give {
+                        callee,
+                        chain_param: chain.as_deref(),
+                    };
+                    self.check_transfer(arg, &sink, &consumed_before);
                 }
+                Some(OwnershipModifier::Lend) => {
+                    if let Some(binding_name) = simple_ident_name(arg) {
+                        self.check_lend_arg(binding_name, callee, arg.span());
+                    }
+                    self.check_read_of_same_call_consumed(arg, &consumed_before);
+                }
+                // share or bare: no transfer, but the value is READ by the callee — a read of
+                // a class-mate an earlier `give` position of this same call consumed
+                // (`mix(rows, other)` with `mix(give a, share b)`) is a read after free.
+                _ => self.check_read_of_same_call_consumed(arg, &consumed_before),
             }
-            _ => {} // share or unspecified: no restrictions
+        }
+    }
+
+    /// A non-`give` position of a call whose argument names a binding consumed by an
+    /// earlier position of the SAME call: `resolve_ident` inferred it before the consume, so
+    /// this is the only place that read can be reported. Anything consumed before the call
+    /// was already reported at inference (`consumed_before`).
+    fn check_read_of_same_call_consumed(&mut self, arg: &Expr, consumed_before: &HashSet<u64>) {
+        let Provenance::Whole(name) = self.provenance_of(arg) else {
+            return;
+        };
+        let Some(entry) = self.scope.lookup(&name) else {
+            return;
+        };
+        if let Some(cause) = entry.consumed.clone() {
+            if !consumed_before.contains(&entry.alias_class) {
+                let diag = consumed_read_diag(arg.span().clone(), &name, &cause);
+                self.diags.push(diag);
+            }
+        }
+    }
+
+    /// The `lend` half of the old `check_arg_ownership` (unchanged): a `const` binding
+    /// cannot be lent for mutation, and a `share` parameter cannot be escalated to `lend`.
+    /// Called from every call form with the same wording (`p.heal(20)` and `heal(p, 20)`
+    /// render byte-identical text — `design/ide-hints.md`'s shared-wording rule).
+    fn check_lend_arg(&mut self, binding_name: &str, fn_name: &str, arg_span: &SourceSpan) {
+        let Some(entry) = self.scope.lookup(binding_name) else {
+            return;
+        };
+        if entry.is_const {
+            self.diags.push(Diagnostic::error(
+                arg_span.clone(),
+                format!("`{binding_name}` is `const` — `{fn_name}` needs to mutate it but `const` blocks mutation."),
+                format!("Declare `{binding_name}` with `let` if you need `{fn_name}` to modify it."),
+                "`const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.",
+            ));
+        } else if entry.param_ownership == Some(OwnershipModifier::Share) {
+            // share→lend escalation (`design/concurrency.md` line 651): a function
+            // that receives a value as `share` (read-only) cannot lend it mutably
+            // to a callee. This is the load-bearing auto-parallel soundness rule.
+            self.diags.push(Diagnostic::error(
+                arg_span.clone(),
+                format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to modify it (`lend`)."),
+                format!("Declare `{binding_name}` as `lend` to pass it here."),
+                "A `share` parameter is a read-only borrow — the caller keeps ownership and trusts the value is unchanged after the call. Passing it where the value will be modified would break that promise; declare `lend` so the change is visible at every call site.",
+            ));
         }
     }
 
@@ -4786,17 +5979,24 @@ impl<'b> Checker<'b> {
             }
             return Type::Error;
         }
+        // Ownership at every position, over the normalized argument list (a plain call's
+        // list IS its argument list) — the transfer decision for `give`/consumed positions,
+        // the lend checks for `lend` positions. Runs after every argument is inferred so
+        // the provenance oracle sees each argument's type.
+        let arg_refs: Vec<&Expr> = call.args.iter().collect();
+        let param_names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+        let actual_tys: Vec<Type> = call
+            .args
+            .iter()
+            .zip(params.iter())
+            .map(|(arg, (_, expected_ty))| self.infer_expr(arg, Some(expected_ty)))
+            .collect();
+        self.check_call_transfers(name, &arg_refs, ownerships, &param_names);
         for (i, (arg, (_, expected_ty))) in call.args.iter().zip(params.iter()).enumerate() {
-            let ownership = ownerships.get(i).and_then(|o| o.as_ref());
-            let actual_ty = self.infer_expr(arg, Some(expected_ty));
+            let actual_ty = actual_tys[i].clone();
 
             if self.reject_int_literal_number_arg(name, expected_ty, arg) {
                 continue;
-            }
-
-            // Ownership enforcement on direct identifier arguments.
-            if let Some(binding_name) = simple_ident_name(arg) {
-                self.check_arg_ownership(binding_name, ownership, name, arg.span());
             }
 
             // Can't-infer: UFCS free-fn form of dynamic dispatch. When the EXPECTED param
@@ -5102,19 +6302,21 @@ impl<'b> Checker<'b> {
         let non_self_ownerships: Vec<Option<ynz_ast::nodes::OwnershipModifier>> =
             sig.param_ownerships.iter().skip(skip).cloned().collect();
         let mut arg_types = Vec::new();
-        for (i, (arg, (_, param_ty))) in call.args.iter().zip(non_self_params.iter()).enumerate() {
+        for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params.iter()) {
             let actual = self.infer_expr(arg, None);
             arg_types.push(actual.clone());
 
             if actual != Type::Error {
                 let _ = unify_param(param_ty, &actual, &mut subst);
             }
-            // Ownership enforcement via shared helper (same as check_user_fn_call and UFCS path).
-            let ownership = non_self_ownerships.get(i).and_then(|o| o.as_ref());
-            if let Some(binding_name) = simple_ident_name(arg) {
-                self.check_arg_ownership(binding_name, ownership, name, arg.span());
-            }
         }
+        // Ownership over the normalized argument list — the same transfer decision as
+        // `check_user_fn_call` and the UFCS path (the generic call's list is its
+        // non-`self` arguments; `consumed[callee]` is indexed the same way, since a generic
+        // function's fixpoint row follows its declared parameter order minus `self`).
+        let arg_refs: Vec<&Expr> = call.args.iter().collect();
+        let non_self_names: Vec<String> = non_self_params.iter().map(|(n, _)| n.clone()).collect();
+        self.check_call_transfers(name, &arg_refs, &non_self_ownerships, &non_self_names);
 
         // Int literal into a `number` param of a generic fn — CONCRETE
         // (`tag(`x`, 5)` with a declared `number` param), EXPLICIT
@@ -5417,6 +6619,23 @@ impl<'b> Checker<'b> {
                              ships in a future version.",
                         ));
                     }
+                    // v0.3-M8 Phase 4: ownership over the same normalized `[receiver,
+                    // args…]` list, using the CONTRACT's declared modifiers — the only static
+                    // truth for a runtime-resolved callee (`IMP-ownership.md` "`dynamic
+                    // Contract` dispatch — covered by construction"). `follows` conformance
+                    // checks the implementer's modifiers equal the contract's.
+                    if let Some(recv_expr) = receiver_expr {
+                        let sig = sig.clone();
+                        let normalized: Vec<&Expr> =
+                            std::iter::once(recv_expr).chain(args.iter()).collect();
+                        let mut ownerships: Vec<Option<OwnershipModifier>> =
+                            vec![sig.receiver.as_ref().map(receiver_kind_modifier)];
+                        ownerships.extend(sig.param_ownerships.iter().cloned());
+                        let mut names: Vec<String> = vec!["self".to_string()];
+                        names.extend(sig.param_names.iter().cloned());
+                        self.check_call_transfers(method, &normalized, &ownerships, &names);
+                        return sig.ret_ty.clone();
+                    }
                     return sig.ret_ty.clone();
                 }
             }
@@ -5434,21 +6653,24 @@ impl<'b> Checker<'b> {
                 if let Some((_, first_ty)) = sig.params.first() {
                     if first_ty == receiver_ty || *first_ty == Type::Error {
                         self.referenced_names.insert(method.to_string());
-                        // Receiver ownership check via the shared helper — called from BOTH
-                        // this UFCS dot-call path AND the regular function-call arg loop so
-                        // the diagnostic text is byte-identical between `p.heal(20)` and
-                        // `heal(p, 20)` per design/ide-hints.md shared-wording rule.
-                        let receiver_ownership =
-                            sig.param_ownerships.first().and_then(|o| o.as_ref());
+                        // Ownership over the ONE normalized argument list `[receiver,
+                        // args…]` — the same transfer decision the plain call form runs,
+                        // so `p.heal(20)` and `heal(p, 20)` render byte-identical text
+                        // (design/ide-hints.md shared-wording rule), and a `give` position
+                        // that is NOT the receiver (`bucket.stash(rows)`) is reached too —
+                        // the round-3 probe hole that used to bypass ownership entirely.
                         if let Some(recv_expr) = receiver_expr {
-                            if let Some(binding_name) = simple_ident_name(recv_expr) {
-                                self.check_arg_ownership(
-                                    binding_name,
-                                    receiver_ownership,
-                                    method,
-                                    recv_expr.span(),
-                                );
-                            }
+                            let normalized: Vec<&Expr> =
+                                std::iter::once(recv_expr).chain(args.iter()).collect();
+                            let ownerships = sig.param_ownerships.clone();
+                            let param_names: Vec<String> =
+                                sig.params.iter().map(|(n, _)| n.clone()).collect();
+                            self.check_call_transfers(
+                                method,
+                                &normalized,
+                                &ownerships,
+                                &param_names,
+                            );
                         }
                         // Int literal into a `number` param through the UFCS
                         // dot-call form (`p.f(5)` — sugar for `f(p, 5)`): the
@@ -5500,7 +6722,7 @@ impl<'b> Checker<'b> {
         // M7 P3a: errors-capable value method dispatch.
         if let Type::ErrorsCapable { inner } = receiver_ty {
             let inner = inner.as_ref().clone();
-            return self.check_errors_capable_method(method, method_span, &inner);
+            return self.check_errors_capable_method(receiver_expr, method, method_span, &inner);
         }
 
         // M6: options type method dispatch.
@@ -5562,12 +6784,116 @@ impl<'b> Checker<'b> {
         Type::Error
     }
 
+    /// Restore the un-stripped `Type::ErrorsCapable` for EC member dispatch
+    /// (`EC_MEMBER_NAMES`) when `resolve_ident`'s auto-propagation already narrowed a
+    /// bare-ident receiver to its success type on THIS exact read (see `EC_MEMBER_NAMES`'s
+    /// doc comment for why that happens). The scope entry's stored type is never mutated by
+    /// that narrowing — only the read's return value and the `expr_types` cache are — so it
+    /// stays the one authoritative source to restore from. Shared by `Expr::MethodCall` and
+    /// `Expr::FieldAccess` dispatch so the two call forms answer "is this receiver still
+    /// ErrorsCapable" the same way (authoritative-derivation.md).
+    fn restore_ec_receiver_ty(&mut self, receiver: &Expr, receiver_ty: Type, member: &str) -> Type {
+        if matches!(receiver_ty, Type::ErrorsCapable { .. }) || !EC_MEMBER_NAMES.contains(&member) {
+            return receiver_ty;
+        }
+        let Expr::Ident(ident_name, ident_span) = receiver else {
+            return receiver_ty;
+        };
+        let Some(entry) = self.scope.lookup(ident_name) else {
+            return receiver_ty;
+        };
+        if !matches!(entry.ty, Type::ErrorsCapable { .. }) {
+            return receiver_ty;
+        }
+        let ec_ty = entry.ty.clone();
+        self.expr_types
+            .insert((ident_span.start, ident_span.end), ec_ty.clone());
+        ec_ty
+    }
+
+    /// v0.3-M8 Phase 4 fix round 3: compile-error gate for `REF-errors.md:171-175` —
+    /// `.message`/`.suggestions`/`.trace`/`.source` require the receiver to have been
+    /// checked with `.failed()` first. Shared by `check_errors_capable_method`
+    /// (`Expr::MethodCall` dispatch — the parenthesized form) and `infer_field_access`
+    /// (`Expr::FieldAccess` — the real dot-postfix form). Returns `true` (and pushes the
+    /// diagnostic) when the read is refused; `false` when admitted — currently inside the
+    /// receiver's own `if (name.failed()) { … }` true branch, per `errors_failed_true_branch`.
+    /// A non-`Ident` receiver (e.g. a call result read without ever being bound) is never
+    /// admitted: `extract_failed_binding` only recognizes bare-ident receivers too, so there
+    /// is no way such a read could have been legally checked.
+    ///
+    /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C3): "checked" is now read by
+    /// resolving `receiver` to its CURRENT binding identity (`ScopeEntry::alias_class`) and
+    /// testing membership in `errors_failed_true_branch` by that identity, not by name. A
+    /// shadowing inner `let x = ...` inside the guarded block mints its own alias class
+    /// (`binding_event_origin`), so it is never a member here and is correctly refused — see
+    /// `errors_success_narrowed`'s doc comment for why alias class is the binding-identity
+    /// signal to thread rather than re-derive.
+    fn check_errors_field_needs_failed_check(
+        &mut self,
+        receiver: Option<&Expr>,
+        field: &str,
+        field_span: &SourceSpan,
+    ) -> bool {
+        if crate::errors_fields::EcField::from_field_name(field).is_none() {
+            return false;
+        }
+        let checked = match receiver {
+            Some(Expr::Ident(name, _)) => self
+                .scope
+                .lookup(name)
+                .map(|e| e.alias_class)
+                .is_some_and(|class| self.errors_failed_true_branch.contains(&class)),
+            _ => false,
+        };
+        if checked {
+            return false;
+        }
+        let name = receiver
+            .map(expr_source_text)
+            .unwrap_or_else(|| "this value".to_string());
+        self.diags.push(registry_diag(
+            field_span.clone(),
+            DiagnosticKind::MessageBeforeFailedCheck,
+            &[("name", &name), ("field", field)],
+        ));
+        true
+    }
+
+    /// v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): compile-error gate for a
+    /// field `check_errors_field_needs_failed_check` just admitted, but that codegen cannot
+    /// build a value for yet (`ynz_typeck::errors_fields::ec_field_lowering`). Before this gate
+    /// existed, `.trace`/`.suggestions`/`.source` compiled cleanly inside a correct guard and
+    /// then reached codegen's `Type::ErrorsCapable` field arm, which has a real lowering only
+    /// for `.message` and returned `"This is a compiler bug"` for the other three — a lie about
+    /// a correct user program. Refusing here means codegen NEVER sees an unlowered field: the
+    /// driver does not run codegen when typeck's diagnostics are non-empty
+    /// (`crates/ynz-driver/src/build.rs`). Returns `true` (and pushes the diagnostic) when the
+    /// field is refused; `false` when it has a real lowering.
+    fn check_errors_field_is_lowered(&mut self, field: &str, field_span: &SourceSpan) -> bool {
+        let Some(ec_field) = crate::errors_fields::EcField::from_field_name(field) else {
+            return false;
+        };
+        if crate::errors_fields::ec_field_lowering(ec_field)
+            != crate::errors_fields::EcFieldLowering::Refused
+        {
+            return false;
+        }
+        self.diags.push(registry_diag(
+            field_span.clone(),
+            DiagnosticKind::EcFieldNotYetAvailable,
+            &[("field", field)],
+        ));
+        true
+    }
+
     /// M7 P3a: type-check a method call on an `errors`-capable value.
     ///
     /// Available methods: `.failed()`, `.or(default)`, `.message`, `.suggestions`,
     /// `.trace`, `.source`. All other method names are a compile error.
     fn check_errors_capable_method(
         &mut self,
+        receiver: Option<&Expr>,
         method: &str,
         method_span: &SourceSpan,
         inner: &Type,
@@ -5581,6 +6907,20 @@ impl<'b> Checker<'b> {
                 // .or(default) — returns the success type. Arg checking happens
                 // at the call site where args are inferred; here return inner.
                 inner.clone()
+            }
+            "message" | "suggestions" | "trace" | "source"
+                if self.check_errors_field_needs_failed_check(receiver, method, method_span) =>
+            {
+                Type::Error
+            }
+            // v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): a field admitted by
+            // the check above but with no real codegen lowering is refused HERE, at compile
+            // time — never typed as if it were shippable. See
+            // `check_errors_field_is_lowered`'s doc comment.
+            "message" | "suggestions" | "trace" | "source"
+                if self.check_errors_field_is_lowered(method, method_span) =>
+            {
+                Type::Error
             }
             "message" => Type::String,
             "suggestions" => Type::BuiltinArray {
@@ -6183,6 +7523,39 @@ impl<'b> Checker<'b> {
                             // Check first param matches the implementing shape.
                             match fn_sig.params.first() {
                                 Some((_, first_ty)) if *first_ty == shape_ty => {
+                                    // v0.3-M8 Phase 4: ownership PARITY between the contract
+                                    // and its implementer — the dispatch site trusts the
+                                    // contract's declared modifiers, so an implementer that
+                                    // takes `give` where the contract is bare (or the
+                                    // reverse) would make the vtable promise one thing and
+                                    // the body do another. Non-receiver positions match
+                                    // exactly; the receiver: an explicit contract modifier
+                                    // must match exactly, and a bare contract receiver is
+                                    // never a give position (the parser folds a bare `self`
+                                    // into `receiver: None`, the same value as "no self", so
+                                    // the safety-relevant half is what can be checked there).
+                                    let impl_recv =
+                                        fn_sig.param_ownerships.first().cloned().flatten();
+                                    let recv_mismatch = match &sig.receiver {
+                                        Some(k) => {
+                                            impl_recv.as_ref() != Some(&receiver_kind_modifier(k))
+                                        }
+                                        None => impl_recv == Some(OwnershipModifier::Give),
+                                    };
+                                    let params_mismatch = fn_sig
+                                        .param_ownerships
+                                        .iter()
+                                        .skip(1)
+                                        .zip(sig.param_ownerships.iter())
+                                        .any(|(i, c)| i != c);
+                                    if recv_mismatch || params_mismatch {
+                                        self.diags.push(Diagnostic::error(
+                                            shape_def_span.clone(),
+                                            format!("Function `{}` for `{shape_name}` does not use the same ownership words as `{contract_name}` declares for `{}`.", sig.name, sig.name),
+                                            format!("Write `{}`'s parameters with exactly the `share`/`lend`/`give` words the contract uses — a bare position in the contract stays bare in the function.", sig.name),
+                                            "A value called through the contract is handed over the way the contract says: only a `give` position in the contract makes the caller give the value up. If the function took ownership where the contract does not say so, the caller would keep using a value the function had already freed.",
+                                        ));
+                                    }
                                     // Return type must match.
                                     if fn_sig.ret != sig.ret_ty
                                         && fn_sig.ret != Type::Error
@@ -6230,11 +7603,28 @@ impl<'b> Checker<'b> {
         field_span: &SourceSpan,
     ) -> Type {
         let receiver_ty = self.infer_expr(receiver, None);
+        // `resolve_ident`'s auto-propagation may already have stripped ErrorsCapable → inner
+        // on this exact read (inside an `errors` function, on the binding's first use — see
+        // `EC_MEMBER_NAMES`'s doc comment). Restore it before dispatch, exactly as the
+        // `Expr::MethodCall` arm does for `.failed()`/`.or()`.
+        let receiver_ty = self.restore_ec_receiver_ty(receiver, receiver_ty, field);
 
         // M7 P3a: errors-capable value property access (message, suggestions, trace, source).
         // These are dot-property accesses (no parens) per the Yinz dot-postfix rule.
         if let Type::ErrorsCapable { inner } = &receiver_ty {
             let inner = inner.as_ref().clone();
+            // v0.3-M8 Phase 4 fix round 3: REF-errors.md:171-175 — these four fields require
+            // a `.failed()` check first. Gate before returning a type so a not-yet-checked
+            // read is a compile error, not a silently-typed `string`/`array`/etc.
+            if self.check_errors_field_needs_failed_check(Some(receiver), field, field_span) {
+                return Type::Error;
+            }
+            // v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1): refuse a checked
+            // read of a field with no real codegen lowering, at compile time — see
+            // `check_errors_field_is_lowered`'s doc comment.
+            if self.check_errors_field_is_lowered(field, field_span) {
+                return Type::Error;
+            }
             return match field {
                 "message" => Type::String,
                 "suggestions" => Type::BuiltinArray {
@@ -6937,10 +8327,36 @@ impl<'b> Checker<'b> {
         let receiver_ty = self.infer_expr(receiver, None);
         match op {
             PostfixOpKind::Copy => {
-                // P3c will enforce trivially-copyable requirement.
-                // P3a: just return the receiver type.
                 if receiver_ty == Type::Error {
                     return Type::Error;
+                }
+                // THE refusal gate (v0.3 concurrency hardening Phase 3, FRAGO 002 cluster C2).
+                // `.copy()` either produces a genuinely independent value or says out loud
+                // that it cannot — there is no third answer where it hands the receiver back
+                // while claiming to have copied it. The decision is read from the ONE
+                // owned-copy table (`owned_copy_plan`), the same table codegen's `.copy()`
+                // lowering and its `background`-argument path consume; nothing here re-derives
+                // it (`.claude/rules/authoritative-derivation.md`).
+                //
+                // A type parameter is exempt: it is not a real type until the call site fills
+                // it in, and the body is checked before that happens. The refusal that matters
+                // fires where the concrete type is known.
+                if !matches!(receiver_ty, Type::TypeParam { .. }) {
+                    if let crate::owned_copy::OwnedCopy::Refused(refusal) =
+                        crate::owned_copy::owned_copy_plan(&receiver_ty)
+                    {
+                        self.diags.push(registry_diag(
+                            span.clone(),
+                            DiagnosticKind::CopyNotIndependent,
+                            &[
+                                ("type", &type_name(&receiver_ty)),
+                                ("detail", &refusal.detail),
+                                ("fix", &refusal.fix),
+                                ("why", &refusal.why),
+                            ],
+                        ));
+                        return Type::Error;
+                    }
                 }
                 receiver_ty
             }
@@ -8487,15 +9903,125 @@ pub(crate) fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool 
     false
 }
 
-/// Returns `true` if `stmt` contains ANY read of the identifier `name` — conservative
-/// (may report true for shadowed names in nested scopes).
-///
-/// Used for `background` give/copy inference: safe direction is `.copy` (do not
-/// consume the binding) whenever we cannot PROVE the name is dead after the spawn.
-/// A false positive here only costs a copy (the safe choice); a false negative
-/// (`.give` on a still-live binding) would be a use-after-move bug.
-///
-/// Time: O(stmt nodes).  Space: O(1).
+/// Does `stmt` contain a `return` at any nesting depth? An Auto-Arc group boundary: the
+/// caller-side transient is released by straight-line code after the last spawn, and an
+/// early exit between two spawns would skip that release (a leaked count, never a free-early).
+fn stmt_contains_return(stmt: &Stmt) -> bool {
+    let block = |b: &Block| b.stmts.iter().any(stmt_contains_return);
+    match stmt {
+        Stmt::Return { .. } => true,
+        Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => block(body),
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter().any(|a| block(&a.body)) || else_arm.as_ref().is_some_and(block)
+        }
+        Stmt::Expr(_)
+        | Stmt::Let { .. }
+        | Stmt::Assign { .. }
+        | Stmt::FieldAssign { .. }
+        | Stmt::IndexAssign { .. } => false,
+    }
+}
+
+/// May `stmt` suspend the enclosing function? CONSERVATIVE and purely syntactic — an
+/// Auto-Arc group boundary (`admit_arc_group_for` item 1), judged over statements whose
+/// expression types are not yet inferred, so it cannot use `stmt_is_conduit_suspend`'s
+/// `expr_types` view. Anything that COULD be a suspension point counts: an explicit `wait`,
+/// a call to a function the may-block fixpoint marked `suspends` or to a base suspension
+/// intrinsic, a call through a non-identifier callee, or a `send`/`receive` method call on
+/// ANY receiver (a conduit's suspending methods, by name). A `background` spawn is never a
+/// suspension of the parent. Over-approximating only declines a group to the shipped copy
+/// path; under-approximating would hand a straight-line transient across a frame boundary.
+fn stmt_may_suspend_conservative(stmt: &Stmt, sigs: &SignatureTable) -> bool {
+    let expr = |e: &Expr| expr_may_suspend_conservative(e, sigs);
+    let block = |b: &Block| {
+        b.stmts
+            .iter()
+            .any(|s| stmt_may_suspend_conservative(s, sigs))
+    };
+    match stmt {
+        Stmt::Expr(e) => expr(e),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr(value),
+        Stmt::If { cond, body, .. } => expr(cond) || block(body),
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            expr(scrutinee)
+                || arms.iter().any(|a| block(&a.body))
+                || else_arm.as_ref().is_some_and(block)
+        }
+        Stmt::While { cond, body, .. } => expr(cond) || block(body),
+        Stmt::For { iter, body, .. } => expr(iter) || block(body),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(expr),
+        Stmt::FieldAssign { target, value, .. } => expr(target) || expr(value),
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => expr(receiver) || expr(index) || expr(value),
+    }
+}
+
+fn expr_may_suspend_conservative(expr: &Expr, sigs: &SignatureTable) -> bool {
+    let r = |e: &Expr| expr_may_suspend_conservative(e, sigs);
+    let fn_suspends = |name: &str| {
+        sigs.fns.get(name).is_some_and(|s| s.suspends) || is_base_suspension_intrinsic(name)
+    };
+    match expr {
+        Expr::Wait(..) => true,
+        // A spawn is not a suspension of the parent: the spawned CALLEE's suspension belongs
+        // to the task. Its ARGUMENTS are evaluated by the parent — typeck rejects a suspending
+        // call there, but walking them anyway keeps this predicate a true over-approximation of
+        // the may-block fixpoint on EVERY input (`suspends_parity_tests`), not only on accepted
+        // programs; on an accepted program the walk returns `false` exactly as before.
+        Expr::Background(inner, _) => match inner.as_ref() {
+            Expr::Call(c) => c.args.iter().any(r),
+            Expr::MethodCall { receiver, args, .. } => r(receiver) || args.iter().any(r),
+            other => r(other),
+        },
+        Expr::Call(c) => match &c.callee {
+            Expr::Ident(name, _) => fn_suspends(name) || c.args.iter().any(r),
+            _ => true,
+        },
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            CHANNEL_SUSPENDING_METHODS.contains(&method.as_str())
+                || fn_suspends(method)
+                || r(receiver)
+                || args.iter().any(r)
+        }
+        Expr::BinOp { lhs, rhs, .. } => r(lhs) || r(rhs),
+        Expr::UnaryOp { operand, .. } => r(operand),
+        Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => r(receiver),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => r(receiver) || r(index),
+        Expr::StructLit { fields, .. } => fields.iter().any(|f| r(&f.value)),
+        Expr::ArrayLit { elements, .. } => elements.iter().any(r),
+        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| r(k) || r(v)),
+        Expr::Is { expr: inner, .. } => r(inner),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| match p {
+            ynz_ast::nodes::StringPart::Expr(e, _) => r(e),
+            ynz_ast::nodes::StringPart::Lit(_, _) => false,
+        }),
+        Expr::Ident(_, _)
+        | Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => false,
+    }
+}
+
 fn ident_read_in_stmt(stmt: &Stmt, name: &str) -> bool {
     match stmt {
         Stmt::Expr(e) => expr_refs_ident(e, name),
@@ -8536,6 +10062,138 @@ fn ident_read_in_stmt(stmt: &Stmt, name: &str) -> bool {
         }
         Stmt::For { iter, body, .. } => {
             expr_refs_ident(iter, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+        }
+    }
+}
+
+/// Returns `true` if `expr` contains a `.receive()` method call on the plain identifier
+/// `name` — the only wait-equivalent a `background` task handle exposes in v0.3 (there is
+/// no explicit `wait h` call-site syntax for a handle; `h.receive()` IS the wait). Used by
+/// the `background-handle-not-waited` Tier 3 lint (v0.3-M8 Phase 7 guard) to decide whether
+/// a handle binding was ever waited on anywhere in the rest of its scope.
+///
+/// Mirrors `expr_refs_ident`'s traversal shape but narrows the predicate from "any
+/// reference" to "a `.receive()` call rooted at this exact identifier" — a plain `h` read
+/// (e.g. `h.send(v)`, or passing `h` itself somewhere) does not count; only a receive does.
+/// Like `ident_read_in_stmt`/`expr_refs_ident`, this does not special-case shadowing inside
+/// a nested block — the same simplification those helpers already make, acceptable here
+/// because this is a dismissable teaching nag, not a soundness-load-bearing analysis.
+fn expr_receives_from_handle(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            (method == "receive" && matches!(receiver.as_ref(), Expr::Ident(n, _) if n == name))
+                || expr_receives_from_handle(receiver, name)
+                || args.iter().any(|a| expr_receives_from_handle(a, name))
+        }
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => expr_receives_from_handle(inner, name),
+        Expr::Call(c) => {
+            expr_receives_from_handle(&c.callee, name)
+                || c.args.iter().any(|a| expr_receives_from_handle(a, name))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_receives_from_handle(lhs, name) || expr_receives_from_handle(rhs, name)
+        }
+        Expr::UnaryOp { operand, .. } => expr_receives_from_handle(operand, name),
+        Expr::FieldAccess { receiver, .. } => expr_receives_from_handle(receiver, name),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => expr_receives_from_handle(receiver, name) || expr_receives_from_handle(index, name),
+        Expr::StructLit { fields, .. } => fields
+            .iter()
+            .any(|f| expr_receives_from_handle(&f.value, name)),
+        Expr::ArrayLit { elements, .. } => {
+            elements.iter().any(|e| expr_receives_from_handle(e, name))
+        }
+        Expr::MapLit { entries, .. } => entries
+            .iter()
+            .any(|(k, v)| expr_receives_from_handle(k, name) || expr_receives_from_handle(v, name)),
+        Expr::PostfixOp { receiver, .. } => expr_receives_from_handle(receiver, name),
+        Expr::Is { expr: inner, .. } => expr_receives_from_handle(inner, name),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| {
+            if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                expr_receives_from_handle(e, name)
+            } else {
+                false
+            }
+        }),
+        Expr::Ident(_, _)
+        | Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => false,
+    }
+}
+
+/// Statement-level counterpart to [`expr_receives_from_handle`] — recurses into nested
+/// block bodies (`if`/`while`/`for`/`match`) the same way [`ident_read_in_stmt`] does, so a
+/// `.receive()` inside a following nested block still counts as "waited on."
+fn stmt_receives_from_handle(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_receives_from_handle(e, name),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+            expr_receives_from_handle(value, name)
+        }
+        Stmt::Return { value, .. } => value
+            .as_ref()
+            .is_some_and(|e| expr_receives_from_handle(e, name)),
+        Stmt::FieldAssign { target, value, .. } => {
+            expr_receives_from_handle(target, name) || expr_receives_from_handle(value, name)
+        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            expr_receives_from_handle(receiver, name)
+                || expr_receives_from_handle(index, name)
+                || expr_receives_from_handle(value, name)
+        }
+        Stmt::If { cond, body, .. } => {
+            expr_receives_from_handle(cond, name)
+                || body
+                    .stmts
+                    .iter()
+                    .any(|s| stmt_receives_from_handle(s, name))
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            expr_receives_from_handle(scrutinee, name)
+                || arms.iter().any(|arm| {
+                    arm.body
+                        .stmts
+                        .iter()
+                        .any(|s| stmt_receives_from_handle(s, name))
+                })
+                || else_arm
+                    .as_ref()
+                    .is_some_and(|b| b.stmts.iter().any(|s| stmt_receives_from_handle(s, name)))
+        }
+        Stmt::While { cond, body, .. } => {
+            expr_receives_from_handle(cond, name)
+                || body
+                    .stmts
+                    .iter()
+                    .any(|s| stmt_receives_from_handle(s, name))
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_receives_from_handle(iter, name)
+                || body
+                    .stmts
+                    .iter()
+                    .any(|s| stmt_receives_from_handle(s, name))
         }
     }
 }
@@ -9044,10 +10702,13 @@ pub fn crossing_local_names_with_cpu_spike(
 /// (`maybe`, and `union` from Phase 1c step 3c) while still rejecting the same types when
 /// they lexically cross a `wait` — a read-after-wait reload the promotion does not cover.
 ///
-/// The split is by construction, not by a second scan: a lexically-crossing name enters
-/// the dedupe set BEFORE the arg-escape collector runs (so it can never land in the
-/// arg-escape slice), and for-loop synthetics are appended after the snapshot window
-/// closes. One producer, provenance threaded to every consumer — never a re-derived twin
+/// The split is by SPAN, not by a second scan and not by collector order: the arg-escape
+/// collector records the exact `Ident` span of every argument position it qualifies
+/// ([`ArgEscapeSink`]), and a name is `arg_escape_only` when every crossing read the ONE
+/// lexical scan recorded for it lands on one of those spans (names with no lexical
+/// crossing at all qualify vacuously, which is the original case). For-loop synthetics are
+/// appended afterwards and have no spans, so they are never arg-escape-only. One producer,
+/// provenance threaded to every consumer — never a re-derived twin
 /// (authoritative-derivation.md).
 pub struct CrossingNames {
     /// Sorted, deduplicated crossing-local names — byte-identical to what
@@ -9080,10 +10741,10 @@ pub fn crossing_local_names_with_provenance(
     );
     let mut seen = std::collections::HashSet::new();
     let mut names: Vec<String> = crossings
-        .into_iter()
+        .iter()
         .filter_map(|c| {
             if seen.insert(c.name.clone()) {
-                Some(c.name)
+                Some(c.name.clone())
             } else {
                 None
             }
@@ -9107,20 +10768,52 @@ pub fn crossing_local_names_with_provenance(
     // bind-time promotion to a counted heap cell (its alloca then holds a stable heap
     // pointer, so the default pointer flush stays correct across suspension).
     //
-    // Everything this collector appends is, by construction, crossing ONLY via
-    // arg-escape: lexical crossings are already in `seen` (collected above), so the
-    // snapshot window below IS the provenance split — no second scan.
+    // Provenance split, by SPAN rather than by collector order (see `ArgEscapeSink`).
+    // A name is arg-escape-only when the collector qualified at least one of its
+    // argument positions AND every crossing read the lexical scan recorded for it sits
+    // at one of those qualified positions — i.e. the value escapes through a suspending
+    // callee's frame and is never additionally read after a suspension in this function,
+    // which is precisely the case bind-time heap-cell promotion covers.
+    //
+    // Ordering alone used to stand in for this ("appended after the lexical names, so it
+    // must be arg-escape-only"), which held only while the lexical scan could not see an
+    // arg-position read. Once that scan was corrected to visit a suspending statement's
+    // own operands (FRAGO 002 cluster C1), the two collectors began describing ONE event
+    // for the same span, and the order-based split silently withdrew the `maybe`/`union`
+    // skip from programs it had always covered — `v0_3_m6_maybe_arg_pure_call.ynz` and
+    // `v0_3_m6_union_arg_pure_call.ynz` turned from correct programs into
+    // `UnsupportedCrossingLocalType` errors. The span comparison asks the question the
+    // ordering was proxying for, so the two facts cannot drift apart again.
     let before_arg_escape = names.len();
+    let mut sink = ArgEscapeSink {
+        seen: &mut seen,
+        names: &mut names,
+        arg_spans: std::collections::HashSet::new(),
+    };
     collect_aggregate_args_to_suspending_calls(
         stmts,
         param_names,
         suspending,
         expr_types,
-        &mut seen,
-        &mut names,
+        &mut sink,
     );
-    let arg_escape_only: std::collections::HashSet<String> =
-        names[before_arg_escape..].iter().cloned().collect();
+    let arg_spans = sink.arg_spans;
+    let arg_escape_qualified: std::collections::HashSet<&str> = crossings
+        .iter()
+        .filter(|c| arg_spans.contains(&(c.use_span.start, c.use_span.end)))
+        .map(|c| c.name.as_str())
+        .chain(names[before_arg_escape..].iter().map(String::as_str))
+        .collect();
+    let arg_escape_only: std::collections::HashSet<String> = arg_escape_qualified
+        .into_iter()
+        .filter(|name| {
+            crossings
+                .iter()
+                .filter(|c| c.name == *name)
+                .all(|c| arg_spans.contains(&(c.use_span.start, c.use_span.end)))
+        })
+        .map(str::to_string)
+        .collect();
     // Collect synthetic frame slots for for-loops whose bodies contain a suspension.
     // For-loop iteration requires an internal index counter that must survive suspension;
     // giving it a named frame slot (prefixed `__ynz_for_idx_`) integrates it with the
@@ -9213,8 +10906,7 @@ fn collect_aggregate_args_to_suspending_calls(
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
-    seen: &mut std::collections::HashSet<String>,
-    names: &mut Vec<String>,
+    sink: &mut ArgEscapeSink<'_>,
 ) {
     collect_aggregate_args_in_stmts(
         stmts_topmost,
@@ -9222,9 +10914,31 @@ fn collect_aggregate_args_to_suspending_calls(
         param_names,
         suspending,
         expr_types,
-        seen,
-        names,
+        sink,
     );
+}
+
+/// Output sink for the arg-escape collector: the shared crossing-name accumulator it
+/// appends to, PLUS the exact `Ident` spans it qualified.
+///
+/// The spans are what make the provenance split in
+/// [`crossing_local_names_with_provenance`] independent of collector ORDER. A local
+/// passed by pointer to a suspending callee is read at that argument position, and the
+/// lexical scan in [`collect_crossings_in_stmts`] sees that same read once a prior
+/// suspension has happened in the enclosing sequence — the two collectors then describe
+/// ONE event, not two. Splitting provenance by "who saw the name first" misfiles that
+/// single event as a lexical crossing and withdraws the arg-escape skip that
+/// bind-time heap-cell promotion earns (`maybe`, `union`). Comparing SPANS asks the
+/// real question instead: is every crossing read of this name an arg-escape read?
+struct ArgEscapeSink<'a> {
+    /// Shared name-dedupe set (already holds every lexically-crossing name).
+    seen: &'a mut std::collections::HashSet<String>,
+    /// Shared crossing-name accumulator.
+    names: &'a mut Vec<String>,
+    /// Every `Ident` span this collector qualified as an arg escape — recorded even when
+    /// the name was already in `seen`, because that is exactly the overlap case the
+    /// provenance split has to recognize.
+    arg_spans: std::collections::HashSet<(usize, usize)>,
 }
 
 /// Statement-level walker for [`collect_aggregate_args_to_suspending_calls`].
@@ -9237,44 +10951,32 @@ fn collect_aggregate_args_in_stmts(
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
-    seen: &mut std::collections::HashSet<String>,
-    names: &mut Vec<String>,
+    sink: &mut ArgEscapeSink<'_>,
 ) {
-    let walk_block =
-        |block: &Block, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
-            collect_aggregate_args_in_stmts(
-                &block.stmts,
-                stmts_topmost,
-                param_names,
-                suspending,
-                expr_types,
-                seen,
-                names,
-            );
-        };
-    let walk_expr =
-        |e: &Expr, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
-            collect_aggregate_args_in_expr(
-                e,
-                stmts_topmost,
-                param_names,
-                suspending,
-                expr_types,
-                seen,
-                names,
-            );
-        };
+    let walk_block = |block: &Block, sink: &mut ArgEscapeSink<'_>| {
+        collect_aggregate_args_in_stmts(
+            &block.stmts,
+            stmts_topmost,
+            param_names,
+            suspending,
+            expr_types,
+            sink,
+        );
+    };
+    let walk_expr = |e: &Expr, sink: &mut ArgEscapeSink<'_>| {
+        collect_aggregate_args_in_expr(e, stmts_topmost, param_names, suspending, expr_types, sink);
+    };
     for stmt in stmts {
         match stmt {
-            Stmt::Expr(e) => walk_expr(e, seen, names),
-            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => walk_expr(value, seen, names),
+            Stmt::Expr(e) => walk_expr(e, sink),
+            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => walk_expr(value, sink),
             Stmt::If { cond, body, .. } | Stmt::While { cond, body, .. } => {
-                walk_expr(cond, seen, names);
-                walk_block(body, seen, names);
+                walk_expr(cond, sink);
+                walk_block(body, sink);
             }
             Stmt::For { iter, body, .. } => {
-                walk_expr(iter, seen, names);
-                walk_block(body, seen, names);
+                walk_expr(iter, sink);
+                walk_block(body, sink);
             }
             Stmt::Match {
                 scrutinee,
@@ -9282,22 +10984,22 @@ fn collect_aggregate_args_in_stmts(
                 else_arm,
                 ..
             } => {
-                walk_expr(scrutinee, seen, names);
+                walk_expr(scrutinee, sink);
                 for arm in arms {
-                    walk_block(&arm.body, seen, names);
+                    walk_block(&arm.body, sink);
                 }
                 if let Some(eb) = else_arm {
-                    walk_block(eb, seen, names);
+                    walk_block(eb, sink);
                 }
             }
             Stmt::Return { value, .. } => {
                 if let Some(v) = value {
-                    walk_expr(v, seen, names);
+                    walk_expr(v, sink);
                 }
             }
             Stmt::FieldAssign { target, value, .. } => {
-                walk_expr(target, seen, names);
-                walk_expr(value, seen, names);
+                walk_expr(target, sink);
+                walk_expr(value, sink);
             }
             Stmt::IndexAssign {
                 receiver,
@@ -9305,9 +11007,9 @@ fn collect_aggregate_args_in_stmts(
                 value,
                 ..
             } => {
-                walk_expr(receiver, seen, names);
-                walk_expr(index, seen, names);
-                walk_expr(value, seen, names);
+                walk_expr(receiver, sink);
+                walk_expr(index, sink);
+                walk_expr(value, sink);
             }
         }
     }
@@ -9326,91 +11028,75 @@ fn collect_aggregate_args_in_expr(
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
-    seen: &mut std::collections::HashSet<String>,
-    names: &mut Vec<String>,
+    sink: &mut ArgEscapeSink<'_>,
 ) {
-    let walk = |e: &Expr, seen: &mut std::collections::HashSet<String>, names: &mut Vec<String>| {
-        collect_aggregate_args_in_expr(
-            e,
-            stmts_topmost,
-            param_names,
-            suspending,
-            expr_types,
-            seen,
-            names,
-        );
+    let walk = |e: &Expr, sink: &mut ArgEscapeSink<'_>| {
+        collect_aggregate_args_in_expr(e, stmts_topmost, param_names, suspending, expr_types, sink);
     };
     match expr {
-        Expr::Wait(inner, _) => walk(inner, seen, names),
+        Expr::Wait(inner, _) => walk(inner, sink),
         // Background args are independently staged by the spawn path — safe, and
         // deliberately NOT a crossing source (matching the pre-fix passing fixture).
         Expr::Background(_, _) => {}
         Expr::Call(c) => {
             if is_suspending_call(c, suspending) {
                 for arg in &c.args {
-                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, seen, names);
+                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, sink);
                 }
             }
-            walk(&c.callee, seen, names);
+            walk(&c.callee, sink);
             for arg in &c.args {
-                walk(arg, seen, names);
+                walk(arg, sink);
             }
         }
         Expr::MethodCall { receiver, args, .. } => {
             if expr_is_ufcs_suspending_call(expr, expr_types, &|n| suspending.contains(n)) {
                 // UFCS: the receiver is arg 0 of the desugared call.
-                mark_aggregate_arg(
-                    receiver,
-                    stmts_topmost,
-                    param_names,
-                    expr_types,
-                    seen,
-                    names,
-                );
+                mark_aggregate_arg(receiver, stmts_topmost, param_names, expr_types, sink);
                 for arg in args {
-                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, seen, names);
+                    mark_aggregate_arg(arg, stmts_topmost, param_names, expr_types, sink);
                 }
             }
-            walk(receiver, seen, names);
+            walk(receiver, sink);
             for arg in args {
-                walk(arg, seen, names);
+                walk(arg, sink);
             }
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            walk(lhs, seen, names);
-            walk(rhs, seen, names);
+            walk(lhs, sink);
+            walk(rhs, sink);
         }
-        Expr::UnaryOp { operand, .. } => walk(operand, seen, names),
+        Expr::UnaryOp { operand, .. } => walk(operand, sink),
         Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
-            walk(receiver, seen, names);
+            walk(receiver, sink);
         }
         Expr::StructLit { fields, .. } => {
             for field in fields {
-                walk(&field.value, seen, names);
+                walk(&field.value, sink);
             }
         }
         Expr::IndexAccess {
             receiver, index, ..
         } => {
-            walk(receiver, seen, names);
-            walk(index, seen, names);
+            walk(receiver, sink);
+            walk(index, sink);
         }
         Expr::ArrayLit { elements, .. } => {
             for el in elements {
-                walk(el, seen, names);
+                walk(el, sink);
             }
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                walk(k, seen, names);
-                walk(v, seen, names);
+                walk(k, sink);
+                walk(v, sink);
             }
         }
-        Expr::Is { expr: inner, .. } => walk(inner, seen, names),
+        Expr::Is { expr: inner, .. } => walk(inner, sink),
         Expr::InterpolatedString(parts, _) => {
             for part in parts {
                 if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
-                    walk(e, seen, names);
+                    walk(e, sink);
                 }
             }
         }
@@ -9445,8 +11131,7 @@ fn mark_aggregate_arg(
     stmts_topmost: &[Stmt],
     param_names: &[&str],
     expr_types: &HashMap<(usize, usize), Type>,
-    seen: &mut std::collections::HashSet<String>,
-    names: &mut Vec<String>,
+    sink: &mut ArgEscapeSink<'_>,
 ) {
     let Expr::Ident(name, span) = arg else {
         return;
@@ -9469,9 +11154,14 @@ fn mark_aggregate_arg(
     );
     if is_stack_backed_aggregate
         && find_crossing_local_typeck_type_in_map(stmts_topmost, name, expr_types).is_some()
-        && seen.insert(name.clone())
     {
-        names.push(name.clone());
+        // Record the span FIRST and unconditionally: a name the lexical scan already
+        // collected still escapes through THIS argument position, and that overlap is
+        // exactly what the provenance split needs to see (see `ArgEscapeSink`).
+        sink.arg_spans.insert((span.start, span.end));
+        if sink.seen.insert(name.clone()) {
+            sink.names.push(name.clone());
+        }
     }
 }
 
@@ -10107,12 +11797,38 @@ fn block_suspends_m3d(
         || (back_edge_yield && block_contains_back_edge_yield(block, expr_types))
 }
 
+/// Whether a statement is a suspension point for its enclosing statement sequence, and
+/// WHERE inside the statement that suspension sits.
+///
+/// The distinction decides one thing and one thing only: whether the statement's own
+/// operands are evaluated strictly before the suspension it carries (`AtRoot`) or can
+/// also be evaluated after it (`InControlFlow` — a loop back edge re-runs the condition
+/// after the body suspends; a branch body's later statements run after its inner
+/// suspension). It is derived ONCE, by the single `match` in
+/// [`collect_crossings_in_stmts`], and read from there — never re-derived
+/// (`.claude/rules/authoritative-derivation.md`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SuspensionSite {
+    /// The suspending call / `wait` / conduit method IS the statement's root form
+    /// (`f()`, `let x = f()`, `wait f()`, `ch.send(v)`, `let x = ch.receive()`).
+    /// Every operand of such a statement is evaluated before it suspends, and typeck
+    /// Check 3 (`suspending_calls_in_subexpr_position`, in [`Checker::check_function`])
+    /// rejects any program that nests a second suspending call inside those operands —
+    /// so "before the root suspension" means "before EVERY suspension in this statement."
+    AtRoot,
+    /// The suspension is inside a control-flow statement's body (`if` / `while` / `for`
+    /// / `match`). Operand evaluation is NOT confined to before it.
+    InControlFlow,
+}
+
 /// Recursive crossing-analysis kernel.
 ///
-/// `declared` accumulates all local names declared before any suspension point seen
-/// so far in this statement sequence. When a suspension point (explicit `wait` node
-/// OR an inferred-suspension call) is encountered, subsequent statements are scanned
-/// for references to those accumulated names.
+/// `declared` holds exactly the local names whose declaration is separated from the
+/// current scan position by AT LEAST ONE suspension point — that separation IS the
+/// crossing precondition, so a read of a `declared` name is a crossing and a read of
+/// anything else is not. Names bound since the most recent suspension live in the
+/// local `declared_since_suspension` staging list instead, and move into `declared`
+/// at the one flush point (see that binding's comment and [`SuspensionSite`]).
 ///
 /// Time: O(N) where N = AST nodes scanned  Space: O(D) recursion depth + O(L) declared locals
 #[allow(clippy::too_many_arguments)]
@@ -10133,19 +11849,32 @@ fn collect_crossings_in_stmts(
     let spike_first_idx = cpu_spike_pair_first_index(stmts, suspending, cpu_supported);
     // Whether a reachable suspension point has been seen in this statement list.
     let mut past_wait = false;
-    // Result-binding names from the most-recent suspension step, not yet flushed
-    // into `declared`. A result-binding is safe across its OWN producing suspension
-    // (the state machine stores it in the frame and resumes with it), but becomes
-    // a crossing candidate for any LATER suspension. We defer adding it to
-    // `declared` until the next suspension so that reads between the producing
-    // suspension and the next one are not falsely flagged.
-    let mut pending_result_bindings: Vec<String> = Vec::new();
+    // Every local bound since the most-recent suspension point, not yet flushed into
+    // `declared`. NOTHING in this list can be a crossing yet: no suspension separates
+    // its declaration from the current position, which is the crossing precondition.
+    // It flushes into `declared` at exactly one place — the next suspension point —
+    // after which its names ARE separated by a suspension and become crossings on any
+    // later read.
+    //
+    // ROOT-CAUSE FIX (v0.3 concurrency hardening, FRAGO 002 review round 1): this list
+    // used to hold ONLY suspension result-bindings (`let x = wait f()`), while a plain
+    // `let` appearing after a suspension was pushed straight into `declared`. Nothing
+    // then asked whether a suspension actually fell between that declaration and a
+    // later read, so every read of such a local was reported as a crossing — rejecting
+    // correct programs. `wait sleep(1)  let m: maybe<int> = ...  print(m.or(0))` failed
+    // with "a `maybe<int>` value cannot yet cross a `wait`" although `m` crosses
+    // nothing; deleting the leading `wait` compiled the identical read. Result-bindings
+    // were always handled correctly BECAUSE they were staged here — the fix is to stage
+    // every post-suspension binding the same way, so one list answers one question
+    // ("has a suspension happened since this name was bound?") for both.
+    // Pinned by `crates/ynz-driver/tests/fixtures/v0_3_hardening_c1_*.ynz`.
+    let mut declared_since_suspension: Vec<String> = Vec::new();
 
     for (idx, stmt) in stmts.iter().enumerate() {
         // CPU spike-group join: the first member of the adjacent pair marks the suspension.
         // Before the pair, mark `past_wait` so every prior `declared` local is checked against
         // post-join reads (the accumulator bug). The two member binds are deferred into
-        // `pending_result_bindings` (safe across their own join, crossing candidates only for a
+        // `declared_since_suspension` (safe across their own join, crossing candidates only for a
         // LATER suspension), and the second member is consumed here so it is not re-processed as
         // a plain `let` that would push it into `declared` prematurely.
         if !past_wait && spike_first_idx == Some(idx) {
@@ -10153,9 +11882,9 @@ fn collect_crossings_in_stmts(
             for member_idx in [idx, idx + 1] {
                 if let Stmt::Let { name, .. } = &stmts[member_idx] {
                     if !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name)
+                        && !declared_since_suspension.contains(name)
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
                 }
             }
@@ -10166,15 +11895,11 @@ fn collect_crossings_in_stmts(
             continue;
         }
         if past_wait {
-            // Before checking references, flush any result-binding names from the
-            // PREVIOUS suspension that were deferred. At this point we are inside a
-            // body that already has `past_wait = true`, which means there could be
-            // another suspension ahead — so these names are now real crossing
-            // candidates if read after that next suspension.
-            //
-            // We check for a NEW suspension first; if this statement IS a suspension,
-            // flush before scanning so the binding isn't falsely flagged for being
-            // read by its own producing step.
+            // Classify this statement first. Names staged in
+            // `declared_since_suspension` become crossing candidates only once a
+            // suspension separates them from the read being scanned, so WHERE this
+            // statement's suspension sits decides whether the flush happens before or
+            // after the scan (see [`SuspensionSite`] and the `if let Some(site)` arm).
             //
             // ROOT-CAUSE FIX (v0.3-M3g): a control-flow statement (`if`/`while`/`for`/`match`)
             // whose BODY suspends is ITSELF a reachable suspension point for THIS statement
@@ -10191,19 +11916,26 @@ fn collect_crossings_in_stmts(
             // used to carry a narrow residual decline for this shape
             // (`stmt_control_flow_body_suspends`); that decline is removed now that the real
             // crossing-analysis gap is fixed here directly.
-            let this_stmt_suspends = match stmt {
-                Stmt::Expr(Expr::Wait(_, _)) => true,
-                Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => true,
+            //
+            // The match yields WHERE the suspension sits, not merely whether one exists
+            // ([`SuspensionSite`]) — the two cases order the operand scan and the
+            // `declared_since_suspension` flush differently, and this is the ONE place
+            // that classification is derived.
+            let stmt_suspension: Option<SuspensionSite> = match stmt {
+                Stmt::Expr(Expr::Wait(_, _)) => Some(SuspensionSite::AtRoot),
+                Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => {
+                    Some(SuspensionSite::AtRoot)
+                }
                 // v0.3-M4: conduit-method suspension statements.
-                s if stmt_is_conduit_suspend(s, expr_types) => true,
+                s if stmt_is_conduit_suspend(s, expr_types) => Some(SuspensionSite::AtRoot),
                 Stmt::Let {
                     value: Expr::Wait(_, _),
                     ..
-                } => true,
+                } => Some(SuspensionSite::AtRoot),
                 Stmt::Let {
                     value: Expr::Call(c),
                     ..
-                } if is_suspending_call(c, suspending) => true,
+                } if is_suspending_call(c, suspending) => Some(SuspensionSite::AtRoot),
                 Stmt::If { body, .. }
                     if block_suspends_m3d(
                         body,
@@ -10213,7 +11945,7 @@ fn collect_crossings_in_stmts(
                         back_edge_yield,
                     ) =>
                 {
-                    true
+                    Some(SuspensionSite::InControlFlow)
                 }
                 // v0.3-M7 Phase 6: under the admitted widening, a QUALIFYING loop is a
                 // suspension point in its own right (its back edge yields) even when its
@@ -10228,7 +11960,7 @@ fn collect_crossings_in_stmts(
                             back_edge_yield,
                         ) =>
                 {
-                    true
+                    Some(SuspensionSite::InControlFlow)
                 }
                 Stmt::Match { arms, else_arm, .. }
                     if arms.iter().any(|a| {
@@ -10249,23 +11981,83 @@ fn collect_crossings_in_stmts(
                         )
                     }) =>
                 {
-                    true
+                    Some(SuspensionSite::InControlFlow)
                 }
-                _ => false,
+                _ => None,
             };
-            if this_stmt_suspends {
-                // Flush pending result-bindings from the prior suspension into
-                // `declared` so they are live for any suspension AFTER this one.
-                for name in pending_result_bindings.drain(..) {
-                    if !declared.contains(&name) {
-                        declared.push(name);
+            if let Some(site) = stmt_suspension {
+                // Scan and flush, in the order this statement's evaluation demands.
+                //
+                // `AtRoot` — the suspending call IS the statement (`useRows(rows)`,
+                // `let v = wait consume(x)`, `ch.send(v)`). Its operands all run before
+                // it suspends, and typeck Check 3 forbids a second suspending call
+                // nested inside them, so a read here is separated from a declaration
+                // made since the last suspension by NOTHING: scan against `declared`
+                // BEFORE the flush, then flush.
+                //
+                // `InControlFlow` — the suspension is inside the body. A `while`/`for`
+                // back edge re-evaluates the condition after that body suspends, and
+                // `collect_ident_refs_in_stmt` walks the body as well as the condition,
+                // so reads here can genuinely follow the inner suspension: flush FIRST
+                // and scan against the widened set. Conservative by construction (it
+                // can over-report a body read that textually precedes the inner
+                // suspension), which is the safe direction — see this arm's ROOT-CAUSE
+                // note below and the `Stmt::If` sub-case (b) recursion, which is what
+                // actually catches the after-inner-suspension reads precisely.
+                let flush = |declared_since_suspension: &mut Vec<String>,
+                             declared: &mut Vec<String>| {
+                    for name in declared_since_suspension.drain(..) {
+                        if !declared.contains(&name) {
+                            declared.push(name);
+                        }
                     }
+                };
+                if site == SuspensionSite::InControlFlow {
+                    flush(&mut declared_since_suspension, declared);
+                }
+                // ROOT-CAUSE FIX (v0.3 concurrency hardening, FRAGO 002 cluster C1):
+                // scan THIS statement's own operands against `declared` — for EVERY
+                // suspending statement shape, not just the control-flow ones.
+                //
+                // A suspending statement's operands are evaluated strictly AFTER the
+                // prior suspension in this sequence (that is the only way execution
+                // reaches this arm), so a read of a pre-suspension local in them is a
+                // real crossing, identical in kind to a read in a non-suspending
+                // statement (the `else` branch below, which has always scanned). Until
+                // this fix only the `If`/`While`/`For`/`Match` arms below called
+                // `collect_ident_refs_in_stmt`; the DIRECT suspending forms —
+                // `Stmt::Expr(conduit send)`, `Stmt::Expr(suspending call)`,
+                // `Stmt::Let { value: Call | Wait | MethodCall }` — recorded their
+                // result-binding and then fell through `_ => {}` with their own
+                // operands never visited. A local read ONLY by such a statement never
+                // entered the crossing set, got no frame slot, and the resumed
+                // continuation read an uninitialised alloca: silent wrong output at
+                // exit 0 in the default optimized mode (`useRows(rows)` after a
+                // `wait`, no channel involved), a misaligned-pointer SIGABRT for an
+                // `array` payload, and raw heap addresses out of a capacity-blocked
+                // `ch.send(local)`. Pinned by
+                // `crates/ynz-driver/tests/frago002_c1_c2_planned_red.rs` (probes A, D,
+                // G, J); diagnosis in this plan's `audit.md` FRAGO 002 cluster C1.
+                //
+                // Hoisted here rather than added arm-by-arm on purpose: one scan for
+                // the one question ("does this statement read a local that a suspension
+                // separates from its declaration?") per
+                // `.claude/rules/authoritative-derivation.md`. The three per-arm calls
+                // that used to live below are gone — a fourth shape added to
+                // `stmt_suspension` can no longer arrive without its scan.
+                collect_ident_refs_in_stmt(stmt, declared, out);
+                if site == SuspensionSite::AtRoot {
+                    // Post-scan flush: the names bound since the last suspension were
+                    // NOT crossings for the operands just scanned (those run first), but
+                    // this statement's own suspension does separate them from everything
+                    // after it.
+                    flush(&mut declared_since_suspension, declared);
                 }
                 match stmt {
                     // Collect the new result-binding (if any) into pending.
                     // The MethodCall arm covers v0.3-M4 conduit-suspend bindings
                     // (`let x = ch.receive()`) — reachable here only when
-                    // `this_stmt_suspends` already classified the statement.
+                    // `stmt_suspension` already classified the statement.
                     Stmt::Let {
                         name,
                         value: Expr::Wait(_, _),
@@ -10281,31 +12073,31 @@ fn collect_crossings_in_stmts(
                         value: Expr::MethodCall { .. },
                         ..
                     } if !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name) =>
+                        && !declared_since_suspension.contains(name) =>
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
-                    // A control-flow statement whose body suspends: scan the condition for
-                    // references to already-`declared` (pre-suspension) locals FIRST — unlike
-                    // the not-yet-suspended top-level `Stmt::If` handling below (which
-                    // deliberately skips this scan because NOTHING has suspended yet at that
-                    // point, so no read there could possibly be crossing), we are HERE only
-                    // because an EARLIER suspension already happened in this sequence, so the
-                    // condition genuinely runs strictly after that prior suspension and a read
-                    // of a pre-suspension local in it IS a real crossing (caught by a real
-                    // regression this session: `v0_3_m3a_p1_disjoint_sibling_scope_shadow.ynz`'s
-                    // second `if (flag2)`, where `flag2` is declared before the FIRST if's wait
-                    // and read only in the SECOND if's condition — the codegen-emitted alloca
-                    // for `flag2` correctly disappeared from the frame and the second if-arm's
-                    // print silently never ran until this scan was added back). Mirrors the
+                    // A control-flow statement whose body suspends. Its condition was
+                    // already scanned by the hoisted `collect_ident_refs_in_stmt` above —
+                    // unlike the not-yet-suspended top-level `Stmt::If` handling below
+                    // (which deliberately skips that scan because NOTHING has suspended yet
+                    // at that point, so no read there could possibly be crossing), we are
+                    // HERE only because an EARLIER suspension already happened in this
+                    // sequence, so the condition genuinely runs strictly after that prior
+                    // suspension and a read of a pre-suspension local in it IS a real
+                    // crossing (caught by a real regression in v0.3-M3g:
+                    // `v0_3_m3a_p1_disjoint_sibling_scope_shadow.ynz`'s second `if (flag2)`,
+                    // where `flag2` is declared before the FIRST if's wait and read only in
+                    // the SECOND if's condition — the codegen-emitted alloca for `flag2`
+                    // correctly disappeared from the frame and the second if-arm's print
+                    // silently never ran until this scan was added back). Mirrors the
                     // pre-existing "else" (not-yet-suspended) branch, which unconditionally
-                    // called `collect_ident_refs_in_stmt` on every statement type BEFORE the
-                    // now-removed dead-code nested-suspension recursion. Then recurse into the
-                    // suspending sub-block with the now-FLUSHED `declared` (sub-case (b) — a
-                    // local declared INSIDE the branch, before the branch's OWN inner
-                    // suspension, still needs its own crossing detection).
+                    // calls `collect_ident_refs_in_stmt` on every statement type. What
+                    // remains arm-specific is only the recursion into the suspending
+                    // sub-block with the now-FLUSHED `declared` (sub-case (b) — a local
+                    // declared INSIDE the branch, before the branch's OWN inner suspension,
+                    // still needs its own crossing detection).
                     Stmt::If { body, .. } => {
-                        collect_ident_refs_in_stmt(stmt, declared, out);
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
@@ -10319,7 +12111,6 @@ fn collect_crossings_in_stmts(
                         );
                     }
                     Stmt::While { body, .. } | Stmt::For { body, .. } => {
-                        collect_ident_refs_in_stmt(stmt, declared, out);
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
@@ -10333,7 +12124,6 @@ fn collect_crossings_in_stmts(
                         );
                     }
                     Stmt::Match { arms, else_arm, .. } => {
-                        collect_ident_refs_in_stmt(stmt, declared, out);
                         for arm in arms {
                             if block_suspends_m3d(
                                 &arm.body,
@@ -10384,12 +12174,22 @@ fn collect_crossings_in_stmts(
                 // already-declared (pre-suspension) locals. Pending result-bindings are NOT
                 // yet in `declared`, so reads of the just-produced binding are not flagged.
                 collect_ident_refs_in_stmt(stmt, declared, out);
-                // A new `let` binding introduced BETWEEN two suspension points is itself
-                // a crossing candidate for any suspension that follows it. Add it to
-                // `declared` so the next suspension will catch any reads after it.
+                // A new `let` binding introduced BETWEEN two suspension points is a
+                // crossing candidate for any suspension that FOLLOWS it, and for no
+                // earlier one — no suspension separates it from a read before the next
+                // suspension. Stage it in `declared_since_suspension`, which the next
+                // suspension point flushes into `declared`; pushing it straight into
+                // `declared` here is the false-positive producer this fix removed (see
+                // that binding's ROOT-CAUSE note). A name already in `declared` (a
+                // shadowing re-`let` of a pre-suspension binding) stays there: codegen
+                // frame slots are keyed by name, so the conservative reading is the
+                // correct one for a re-used name.
                 if let Stmt::Let { name, .. } = stmt {
-                    if !declared.contains(name) && !param_names.contains(&name.as_str()) {
-                        declared.push(name.clone());
+                    if !declared.contains(name)
+                        && !declared_since_suspension.contains(name)
+                        && !param_names.contains(&name.as_str())
+                    {
+                        declared_since_suspension.push(name.clone());
                     }
                 }
                 // NOTE: a control-flow statement (`if`/`while`/`for`/`match`) only reaches
@@ -10420,15 +12220,15 @@ fn collect_crossings_in_stmts(
                     past_wait = true;
                     if !declared.contains(name)
                         && !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name)
+                        && !declared_since_suspension.contains(name)
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
                 }
                 // `let name = wait expr` — name is safe across its OWN producing suspension
                 // (the state machine writes it to the frame, resumes with it available), but
                 // is a crossing candidate for every LATER suspension. Defer tracking to
-                // `pending_result_bindings`; it flushes into `declared` when the next
+                // `declared_since_suspension`; it flushes into `declared` when the next
                 // suspension is encountered, making it catchable only then.
                 Stmt::Let {
                     name,
@@ -10438,14 +12238,14 @@ fn collect_crossings_in_stmts(
                     past_wait = true;
                     if !declared.contains(name)
                         && !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name)
+                        && !declared_since_suspension.contains(name)
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
                 }
                 // `let name = suspending_call()` — same semantics as the explicit-wait form.
                 // Safe across its OWN producing suspension; a crossing candidate only for
-                // subsequent suspensions. Defer into `pending_result_bindings` for the same
+                // subsequent suspensions. Defer into `declared_since_suspension` for the same
                 // reason as the `wait` arm above.
                 Stmt::Let {
                     name,
@@ -10455,9 +12255,9 @@ fn collect_crossings_in_stmts(
                     past_wait = true;
                     if !declared.contains(name)
                         && !param_names.contains(&name.as_str())
-                        && !pending_result_bindings.contains(name)
+                        && !declared_since_suspension.contains(name)
                     {
-                        pending_result_bindings.push(name.clone());
+                        declared_since_suspension.push(name.clone());
                     }
                 }
                 Stmt::Let { name, value, .. } => {
@@ -11856,19 +13656,9 @@ fn simple_ident_name(expr: &Expr) -> Option<&str> {
     }
 }
 
-/// Walk a field-access chain to find the root binding name.
-///
-/// `player.inner.health` → `Some("player")`
-/// `self.field` → `Some("self")`
-/// Anything not rooted in a simple identifier → `None`.
-fn root_binding_name(expr: &Expr) -> Option<&str> {
-    match expr {
-        Expr::Ident(name, _) => Some(name.as_str()),
-        Expr::SelfValue { .. } => Some("self"),
-        Expr::FieldAccess { receiver, .. } => root_binding_name(receiver),
-        _ => None,
-    }
-}
+// `root_binding_name` is THE one in `effective_ownership` (v0.3-M8 Phase 4 collapsed the
+// twin that lived here — it lacked the `IndexAccess` arm; parked item 27).
+use crate::effective_ownership::root_binding_name;
 
 #[cfg(test)]
 mod tests {
@@ -11942,6 +13732,8 @@ mod tests {
             &generic_shape_table,
             &intrinsics,
             &std::collections::HashMap::new(),
+            &crate::effective_ownership::EffectiveOwnershipReport::empty(),
+            &HashSet::new(),
         );
         let diags: Vec<_> = diags.into_iter().collect();
         assert_eq!(
@@ -11954,5 +13746,111 @@ mod tests {
         assert!(!d.what.is_empty(), "what must be non-empty");
         assert!(!d.what_instead.is_empty(), "what_instead must be non-empty");
         assert!(!d.why.is_empty(), "why must be non-empty");
+    }
+}
+
+/// v0.3-M8 Phase 5 (fix round 2) — the compile-time link between the may-block fixpoint and
+/// the Auto-Arc admission's conservative suspension boundary (`authoritative-derivation.md`
+/// "If two predicates genuinely must live apart, give them a compile-time link").
+///
+/// `may_block::analyze` is THE producer of "which functions suspend"; `stmt_may_suspend_
+/// conservative` is a syntactic OVER-approximation of "does this statement contain a
+/// suspension" that the admission consults before expression types exist. The one direction
+/// that matters for soundness: every function the fixpoint marks suspending must contain at
+/// least one statement the conservative predicate flags — otherwise a group could be admitted
+/// across a real suspension the boundary test did not see (R2's hazard: the caller-side
+/// transient crossing a frame). The other direction (the predicate flags a statement the
+/// fixpoint does not) is the intended over-approximation and is not asserted.
+#[cfg(test)]
+mod suspends_parity_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Every single-file fixture the driver suite ships, parsed standalone. Files that do not
+    /// parse alone or import another module are skipped (their suspends set depends on a unit
+    /// this test does not assemble); the non-vacuity floor below keeps the skip honest.
+    #[test]
+    fn every_suspending_fn_has_a_stmt_the_conservative_predicate_flags() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ynz-driver/tests/fixtures");
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("fixture dir {}: {e}", dir.display()))
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "ynz"))
+            .collect();
+        paths.sort();
+        let mut checked_fns = 0usize;
+        let mut checked_files = 0usize;
+        let mut failures: Vec<String> = Vec::new();
+        for path in &paths {
+            let src = std::fs::read_to_string(path).expect("fixture readable");
+            let db = ynz_parser::CompilerDb::default();
+            let sf = ynz_parser::SourceFile::new(
+                &db,
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                src,
+            );
+            let parsed = ynz_parser::parse_query(&db, sf);
+            if parsed.diagnostics.iter().next().is_some() {
+                continue;
+            }
+            let module = parsed.module.clone();
+            if module
+                .items
+                .iter()
+                .any(|i| matches!(i, Item::ImportDecl(_)))
+            {
+                continue;
+            }
+            let no_imports: HashSet<String> = HashSet::new();
+            let suspends = crate::may_block::analyze(&module, &no_imports, &no_imports).suspends;
+            let shape_table = crate::shapes::collect_shapes(
+                &module,
+                &Default::default(),
+                &Default::default(),
+                &mut DiagnosticBucket::new(),
+            );
+            let mut sigs = crate::signatures::collect_signatures(
+                &module,
+                &mut DiagnosticBucket::new(),
+                &shape_table,
+            );
+            // Mirror `check_query`: the fixpoint's answer is what `FunctionSig.suspends` carries.
+            for (name, sig) in sigs.fns.iter_mut() {
+                sig.suspends = sig.suspends || suspends.contains(name.as_str());
+            }
+            checked_files += 1;
+            for item in &module.items {
+                let Item::Function(f) = item else {
+                    continue;
+                };
+                if !suspends.contains(&f.name) {
+                    continue;
+                }
+                checked_fns += 1;
+                let flagged = f
+                    .body
+                    .stmts
+                    .iter()
+                    .any(|s| stmt_may_suspend_conservative(s, &sigs));
+                if !flagged {
+                    failures.push(format!(
+                        "{}::{} is in the may-block suspends set but no statement of its body \
+                         is flagged by stmt_may_suspend_conservative",
+                        path.file_name().unwrap().to_string_lossy(),
+                        f.name
+                    ));
+                }
+            }
+        }
+        assert!(
+            checked_files >= 100 && checked_fns >= 50,
+            "vacuous parity sweep: {checked_files} files / {checked_fns} suspending fns checked"
+        );
+        assert!(
+            failures.is_empty(),
+            "suspends-set / conservative-predicate parity broken:\n{}",
+            failures.join("\n")
+        );
     }
 }

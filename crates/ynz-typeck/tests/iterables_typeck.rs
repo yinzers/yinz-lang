@@ -10,7 +10,7 @@
 // string iteration, and Frame/SourceLoc built-in shape fields.
 
 use ynz_parser::{CompilerDb, SourceFile};
-use ynz_typeck::{check_query, CheckOutput, Type};
+use ynz_typeck::{check_query, CheckOutput};
 
 const FILE: &str = "test.ynz";
 

@@ -23,7 +23,8 @@ function entrypoint() -> nothing {
   let t: Tally = { hits: 3, outs: 2 }
   let wire: channel<int> = channel<int>(4)
   background report(t, wire)
-  let total = wire.receive()
+  let reply = wire.receive()
+  let total = reply.or(0)
   print(`tally total: ${total.toString()}`)
   let season: array<Tally> = [
     { hits: 1, outs: 2 },

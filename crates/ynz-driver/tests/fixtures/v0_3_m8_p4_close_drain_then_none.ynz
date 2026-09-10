@@ -1,0 +1,42 @@
+// WHY: v0.3-M8 Phase 4 — the end-of-stream contract (IMP-concurrency.md "Channel Close",
+// contract items 1 and 3): a producer sends, then calls `wire.close()`; the consumer's
+// `receive()` drains every buffered value IN ORDER and then returns `none`, which is how the
+// consumer loop ends — never a hang, never an error. Bare-channel `receive()` is typed
+// `maybe<int>` (the one breaking change of the design); the loop below is the form the spec and
+// demo teach (no standalone `else` exists in Yinz — the design's own loop sketch used one).
+// RED today: `.close()` is an unknown method and `.exists()` on an `int` does not type-check.
+//
+// Expected output:
+//   total: 10
+//   end
+function relayScores(lend wire: channel<int>) -> nothing {
+  wire.send(2)
+  wire.send(5)
+  wire.send(3)
+  wire.close()
+}
+
+function tallyScores(lend wire: channel<int>) -> int {
+  let total = 0
+  let stillOpen = true
+  while (stillOpen) {
+    let next = wire.receive()
+    if (next.exists()) {
+      total = total + next.value
+    }
+    stillOpen = next.exists()
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(4)
+  background relayScores(wire)
+  let total = tallyScores(wire)
+  print(`total: ${total.toString()}`)
+  let after = wire.receive()
+  if (after.exists()) {
+    print(`unexpected value after end of stream`)
+  }
+  print(`end`)
+}

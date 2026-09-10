@@ -175,7 +175,7 @@ fn test_rename_local_let_produces_workspace_edit_with_one_file() {
         .expect("WorkspaceEdit must have changes");
     assert_eq!(changes.len(), 1, "only one file affected");
     let edits = changes.values().next().unwrap();
-    assert!(edits.len() >= 1, "at least one edit");
+    assert!(!edits.is_empty(), "at least one edit");
     for te in edits {
         assert_eq!(te.new_text, "points", "replacement text must be `points`");
     }

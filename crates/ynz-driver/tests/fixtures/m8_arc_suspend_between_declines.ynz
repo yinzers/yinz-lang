@@ -1,0 +1,35 @@
+// v0.3-M8 Phase 5 — a SUSPENSION between two spawns declines the group (the caller-side
+// transient is a straight-line temporary that must never cross a frame boundary — the
+// registry's residual). Both spawns take the shipped copy path; no `ynz_arc_*` call may be
+// emitted for this program.
+//
+// Expected output:
+//   tasks total 84
+//   caller keeps Mazeroski 6x7
+shape Scene {
+  name: string
+  width: int
+  height: int
+}
+
+function render(scene: Scene, results: channel<int>) -> nothing {
+  wait sleep(5)
+  results.send(scene.width * scene.height)
+}
+
+function entrypoint() -> nothing {
+  let results: channel<int> = channel<int>()
+  let scene: Scene = { name: `Mazeroski`, width: 6, height: 7 }
+  background render(scene, results)
+  wait sleep(1)
+  background render(scene, results)
+  let total = 0
+  for (k in range(0, 2)) {
+    let got = results.receive()
+    if (got.exists()) {
+      total = total + got.value
+    }
+  }
+  print(`tasks total ${total}`)
+  print(`caller keeps ${scene.name} ${scene.width}x${scene.height}`)
+}
