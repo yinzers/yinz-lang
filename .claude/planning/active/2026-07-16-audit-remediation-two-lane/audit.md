@@ -328,3 +328,31 @@ Step-3a / Step-0 reconcile; never by executors (they read the current-truth plan
 
 ## Context-segment log
 (none yet)
+
+- `session_01Ff4hQP3RThP8VR3HvC2KxT` — 2026-09-10 — Phase A5 dispatch (Opus 5, worktree
+  `ynz-lang-lane-a`, branch `fix/audit-remediation-lane-a`). Per dispatch instructions, merged
+  `main` (88 commits, v0.3-M7 + v0.3-M8 landed) into the branch as a merge commit (`a0b224b`),
+  then ran A5's two blocking gates. Six merge conflicts, all resolved by understanding both sides
+  (full accounting in the merge commit message and the Phase A5 STATUS block above); none touched
+  `emit.rs`/`state_machine.rs`. Gate (a) PASSED: golden.rs 34/34 green, byte-identical to `main`.
+  Gate (b) PASSED: `entrypoint.ynz` byte-identical to `main`, `examples_basics_runs_end_to_end`
+  green. Merge surfaced one real attributable failure — v0.3-M8's
+  `diagnostic_template_parity.rs::every_template_kind_name_is_classified` test post-dated this
+  branch's fork and never saw F2's `StatementNestingTooDeep` registry entry; fixed by pinning it
+  on `TEMPLATES_WITHOUT_A_VARIANT` (it is parser-rendered-by-name, never meant to carry a
+  `DiagnosticKind` variant) — commit `c8c8375`, Lane A file (`ynz-typeck`), not Lane B. Full
+  verification green: `cargo test --workspace --no-fail-fast` exit 0 (150 result blocks, 0
+  failed, two independent post-fix runs); clippy clean; fmt clean. **Step 3 (retire
+  SCRATCH-audit-2026-07-11-{numerics-correctness,non-concurrency}.md) BLOCKED**: neither file (nor
+  any of the other three sibling audit docs) exists anywhere in this worktree's git history under
+  any name — `git log --all --diff-filter=A -- 'docs/internal/scratchpad/*audit-2026-07-11*'`
+  returns only the unrelated `SCRATCH-{rules,teaching}-audit-2026-07-11.md` main added. This
+  session's own prior preflight note (session `session_01CZ3fYLUXaJqfQnaPgUzwBQ`, above) already
+  flagged these five docs as "known-not-mine, ride in at A5/B5" — the orchestrating process was
+  expected to land them by this phase; it never did. The only surviving copies are in a stale,
+  broken git-worktree directory under the OTHER checkout's `.git/worktrees/` internals (worktree
+  registration pruned, working files orphaned) — out of this dispatch's explicit scope to read
+  from or touch. Not fabricated, not silently skipped. `handoff-phase-A5.md` written with the
+  resume pointer. STATUS: PARTIAL — both blocking gates pass and full verification is green, but
+  the branch is not yet ready to land per this phase's own exit criteria until step 3 is resolved
+  by a session with access to the real source docs, or explicitly waived by Patrick.

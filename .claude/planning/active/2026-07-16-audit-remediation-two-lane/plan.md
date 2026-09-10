@@ -3,9 +3,9 @@ name: "audit-remediation-two-lane"
 plan-id: "2026-07-16-audit-remediation-two-lane"
 status: "active"
 roadmap-id: null
-session-id: ["36402316-b77e-4db0-93c0-8f433b3626ed", "session_01CZ3fYLUXaJqfQnaPgUzwBQ", "2cbdf552-51aa-4528-8621-495bedc3e7b6"]
+session-id: ["36402316-b77e-4db0-93c0-8f433b3626ed", "session_01CZ3fYLUXaJqfQnaPgUzwBQ", "2cbdf552-51aa-4528-8621-495bedc3e7b6", "session_01Ff4hQP3RThP8VR3HvC2KxT"]
 created_at: "2026-07-16"
-updated_at: "2026-07-16"
+updated_at: "2026-09-10"
 metadata:
   type: "plan"
 ---
@@ -464,6 +464,46 @@ docs files. See `audit.md` for the fix-round session entry.
 ---
 
 #### Phase A5 — Lane A cross-session-safety gate + close numerics & non-concurrency docs
+
+**STATUS: PARTIAL (2026-09-10)** — first merged `main` into this branch (88 commits, v0.3-M7 +
+v0.3-M8 landed since fork) as a merge commit per `.claude/rules/branching.md`, then ran both A5
+gates. **Gate (a) PASSED**: `cargo test -p ynz-codegen --test golden` 34/34 green, `golden.rs`
+byte-identical to `main` (confirmed via `git diff main HEAD -- crates/ynz-codegen/tests/golden.rs`
+— empty). **Gate (b) PASSED**: `examples/pirates-roster/entrypoint.ynz` byte-identical to `main`
+(md5 match) and `examples_basics_runs_end_to_end` green. Six merge conflicts, none in a Lane B
+file (`emit.rs`/`state_machine.rs` untouched by the merge's manual resolutions): N3's
+`decimal_n/format.rs` fix taken in full over main's cosmetic-only refactor of the same buggy line;
+a clippy unused-var silencing conflict in `conformance/mod.rs` resolved by taking main's cleaner
+deletion; a comment-wording-only conflict in `deterministic_vectors.rs` resolved to main's
+phrasing; `IMP-ownership.md`'s `maybe<V>` doc-fix kept ahead of main's ~290-line M8 Transfer/
+Auto-Arc addition; the generated `ynz.tmLanguage.json` regenerated via `cargo run -p
+ynz-tmgrammar` from the cleanly-merged `registry/features.toml` rather than hand-merged; the
+auto-generated `_index.md` resolved to keep this branch's plan entries (the `plan-lifecycle.py`
+regen hook is not present in this environment — noted, not silently worked around). The merge
+also surfaced one real, attributable, Lane-A-scoped test failure — v0.3-M8 added
+`diagnostic_template_parity.rs`'s `every_template_kind_name_is_classified` test after this branch
+forked; F2's `StatementNestingTooDeep` registry entry (Phase A3) predates that test and was never
+classified. Root-caused (it is a parser-rendered-by-name diagnostic, never meant to carry a typeck
+`DiagnosticKind` variant) and fixed by pinning it on `TEMPLATES_WITHOUT_A_VARIANT` — the exact
+remedy the test's own panic names — in `crates/ynz-typeck/tests/diagnostic_template_parity.rs`
+(commit `c8c8375`), not a Lane B file. **Full verification green**: `cargo test --workspace
+--no-fail-fast` exit 0 (150 test-result blocks, 0 failed, confirmed by two independent full runs
+post-fix); `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all -- --check` clean.
+**Step 3 (retire the two scratch docs) is BLOCKED, not done**: `SCRATCH-audit-2026-07-11-
+numerics-correctness.md` and `SCRATCH-audit-2026-07-11-non-concurrency.md` (and the other three
+sibling audit docs) do not exist anywhere in this worktree's git history, under any name, at any
+commit — confirmed via `git log --all --diff-filter=A -- 'docs/internal/scratchpad/*audit-2026-07-
+11*'` (only unrelated `SCRATCH-{rules,teaching}-audit-2026-07-11.md` files exist, added by `main`,
+topically unrelated). `audit.md`'s own prior session note flags these as "known-not-mine, ride in
+at A5/B5" — i.e. the orchestrating process was expected to deliver them into the repo by this
+phase, and that never happened. The only on-disk copies found are orphaned files left behind in a
+stale, broken git-worktree directory under the OTHER checkout's `.git/worktrees/` internals
+(`git worktree list` there fails with "not a git repository" — the registration was pruned, the
+files were not) — explicitly out of this dispatch's scope to touch or read from. Not fabricated,
+not skipped silently: see `handoff-phase-A5.md` for the resume pointer. **Branch NOT yet ready to
+land on `main`** per this phase's own exit criteria until step 3 is resolved (or explicitly
+waived) by a session with access to the real source docs.
+
 - **Task + purpose:** the blocking cross-session gates (R3, R6) and retirement of the two scratch docs
   whose findings fully close in Lane A.
 - **Steps:**
