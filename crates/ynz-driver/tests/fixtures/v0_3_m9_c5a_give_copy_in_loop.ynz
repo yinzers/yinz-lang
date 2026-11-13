@@ -1,0 +1,17 @@
+// v0.3-M9 C5a (spike S3 probe t3, the accepted spelling): the loop gives a fresh COPY on every pass,
+// so the outer `x` is never given away. The un-copied `eat(x)` is rejected by typeck
+// (`ynz-typeck/tests/transfer_record.rs`); a release pass must not free `x` early or free a copy
+// twice. GREEN today; guards C7. Expected output: `3` three times, then `3`.
+function eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+
+function entrypoint() -> nothing {
+  let x: array<int> = [1, 2, 3]
+  let i: int = 0
+  while (i < 3) {
+    eat(x.copy())
+    i = i + 1
+  }
+  print(x.count().toString())
+}

@@ -1,0 +1,14 @@
+// v0.3-M9 C5a: a store joins, it does not consume — `a` and the container `o` both stay readable
+// after `o.add(a)`. A release pass that treated the store as a move (freeing `a`'s slot) or freed
+// `a` while `o` holds it breaks the reads below. GREEN today; guards C7.
+// Expected output: `3` `1` `3`.
+function entrypoint() -> nothing {
+  let a: array<int> = [1, 2, 3]
+  let o: array<array<int>> = []
+  o.add(a)
+  print(a.count().toString())
+  print(o.count().toString())
+  for (inner in o) {
+    print(inner.count().toString())
+  }
+}
