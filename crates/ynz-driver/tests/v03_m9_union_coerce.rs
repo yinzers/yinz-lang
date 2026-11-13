@@ -8,6 +8,14 @@
 //! parameter and return slots of a SHAPE variant pass there (#410) and stay as the
 //! `v03_m9_union_wrap` fixtures through the new point.
 //!
+//! Count: 25 tests = 6 fixtures x 4 runs + 1 build refusal, past the ~8 a High-tier unit gets
+//! without a written reason. The fixtures are one per slot kind (field, let, non-shape variant,
+//! `.or`, generic parameter, narrowed binding into another union) because the card requires a
+//! red fixture per kind and each kind failed on the base through a different path. The 4 runs
+//! per fixture are not copies: plain vs ASan, because the pre-fix miscompiles often print
+//! plausible output and only the sanitizer sees the out-of-bounds envelope read; -O0 vs -O2,
+//! because the optimizer can mask a misread, so a defect that shows at one level only is named.
+//!
 //! One named test per case: each fixture runs at two optimization levels, plainly (the VALUE)
 //! and under AddressSanitizer (the MEMORY ACCESS), kept apart so a failure says which is wrong.
 //! Non-shape variants are matched with `else =>`; an `is int =>` arm does not lower (#418).
