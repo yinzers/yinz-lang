@@ -3844,6 +3844,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         else {
             return false;
         };
+        // A `let` inside the arm that reuses the narrowed name is a different binding: the name
+        // no longer resolves to the arm's payload slot, so it gets no outer envelope.
+        if self.locals.get(name) != Some(&entry.narrowed_slot) {
+            return false;
+        }
         self.expr_type(&entry.scrutinee) == self.resolve_type(&coercion.slot)
     }
 

@@ -890,8 +890,10 @@ struct Checker<'b> {
     /// Flow-sensitive tracking: binding names known to be non-none inside an `.exists()` guard.
     maybe_non_none: HashSet<String>,
     /// M6: binding names narrowed to a specific union variant inside an `is`-arm body.
-    /// Maps binding name → narrowed type (the specific variant type).
-    union_narrowed: HashMap<String, Type>,
+    /// Maps binding name → (narrowed variant type, the narrowed binding's `defined_at`). The
+    /// overlay applies only while the name still resolves to that binding: a `let` in the arm
+    /// that reuses the name is a different binding (`active_union_narrowing`).
+    union_narrowed: HashMap<String, (Type, SourceSpan)>,
     /// Flow-sensitive: binding IDENTITIES (`ScopeEntry::alias_class`, not names) known to be
     /// in the success state after a `.failed() == false` check or after auto-propagation
     /// fired. These bindings have narrowed from `ErrorsCapable<T>` to `T`.
@@ -3247,7 +3249,7 @@ impl<'b> Checker<'b> {
                 // probed live, `let inner: Circle = fig` copies the union storage
                 // into a shape-sized binding — an OOB read that SIGSEGVs on a
                 // pointer-field read, one binding over (Future Requirements #24).
-                if self.union_narrowed.contains_key(rname) {
+                if self.active_union_narrowing(rname).is_some() {
                     // FRAGO 024 (round 8): this function is now called MULTIPLE
                     // times for the same spawn (the pre-recording loops in
                     // `check_stmts`/`check_background_handle_spawn` AND the
@@ -3721,12 +3723,18 @@ impl<'b> Checker<'b> {
                     // (Full binding-name extraction is P3b — basic case: scrutinee is a direct Ident)
                     let narrowed_name = simple_ident_name(scrutinee).map(|s| s.to_string());
                     if let Some(ref name) = narrowed_name {
-                        self.union_narrowed.insert(
-                            name.clone(),
-                            Type::Shape {
-                                name: type_path.name.clone(),
-                            },
-                        );
+                        if let Some(narrowed_binding) = self.scope.lookup(name) {
+                            let defined_at = narrowed_binding.defined_at.clone();
+                            self.union_narrowed.insert(
+                                name.clone(),
+                                (
+                                    Type::Shape {
+                                        name: type_path.name.clone(),
+                                    },
+                                    defined_at,
+                                ),
+                            );
+                        }
                     }
                     self.scope.push();
                     self.check_stmts(&arm.body.stmts);
@@ -4905,10 +4913,20 @@ impl<'b> Checker<'b> {
     /// un-narrowed union for a receiver narrowed to a shape variant, skipping the
     /// spawn heap-upgrade — the same UAF one subcase over.
     fn binding_ty_narrowed(&self, name: &str) -> Option<Type> {
-        self.union_narrowed
-            .get(name)
-            .cloned()
+        self.active_union_narrowing(name)
             .or_else(|| self.scope.lookup(name).map(|e| e.ty.clone()))
+    }
+
+    /// The `is`-arm variant `name` is narrowed to, when `name` still resolves to the binding the
+    /// arm narrowed. A `let` inside the arm that reuses the name declares a different binding
+    /// (another `defined_at`), which keeps its own type: reading it as the arm's variant would
+    /// tag its value with the wrong variant wherever it enters a union slot.
+    ///
+    /// Time: O(s) for s scopes searched by `scope.lookup`  Space: O(1)
+    fn active_union_narrowing(&self, name: &str) -> Option<Type> {
+        let (narrowed_ty, narrowed_binding) = self.union_narrowed.get(name)?;
+        let current = self.scope.lookup(name)?;
+        (current.defined_at == *narrowed_binding).then(|| narrowed_ty.clone())
     }
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
@@ -4918,7 +4936,7 @@ impl<'b> Checker<'b> {
         // source); only the narrowed case returns here — the un-narrowed path continues
         // below to the side-effecting scope checks (use-after-give, ErrorsCapable
         // narrowing) the overlay window bypasses.
-        if self.union_narrowed.contains_key(name) {
+        if self.active_union_narrowing(name).is_some() {
             if let Some(narrowed_ty) = self.binding_ty_narrowed(name) {
                 return narrowed_ty;
             }

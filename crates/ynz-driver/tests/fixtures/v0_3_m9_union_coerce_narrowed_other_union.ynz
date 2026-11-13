@@ -1,10 +1,13 @@
 // v0.3-M9 C1e (#421): an `is` arm's narrowed binding flowing into a union slot whose union lists
 // the variant at a DIFFERENT position than the union the arm narrowed (`Thing = Tiny | Big`
 // narrowed to `Big`, into `Big | Small`) must carry the SLOT's tag, not the outer envelope's.
-// Correct behavior: prints `big hello`, `big hello`, `end`; clean under AddressSanitizer at both
-// optimization levels.
+// A `let` that shadows the narrowed name inside the arm is a different binding: it is wrapped
+// with its own tag, never handed the arm's outer envelope.
+// Correct behavior: prints `big hello`, `big hello`, `big shadow`, `end`; clean under
+// AddressSanitizer at both optimization levels.
 // Pre-fix failure: the arm handed over the outer `Thing` envelope (tag 1); the callee read tag 1
-// of `Big | Small` as `Small` and printed `small`.
+// of `Big | Small` as `Small` and printed `small`. The shadowing `let` was matched by name alone,
+// so the callee got the outer `Tiny` envelope and printed `tiny`.
 shape Tiny {
   flag: boolean
 }
@@ -59,10 +62,26 @@ function viaField(share t: Thing) -> string {
   return `none`
 }
 
+function shadowed(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      let t: Big = { label: `shadow`, count: 9 }
+      return route(t)
+    }
+    is Big => {
+      return `big`
+    }
+  }
+  return `none`
+}
+
 function entrypoint() -> nothing {
   let big: Big = { label: `hello`, count: 3 }
   let t: Thing = big
+  let tiny: Tiny = { flag: true }
+  let small: Thing = tiny
   print(route(t))
   print(viaField(t))
+  print(shadowed(small))
   print(`end`)
 }

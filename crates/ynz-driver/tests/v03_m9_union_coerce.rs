@@ -142,10 +142,11 @@ coercion_tests!(
 );
 
 // Bug: a narrowed binding passed into a union slot that lists its variant at another position
-// reused the outer envelope and its tag (read as `Small`, printed `small`). Tier: High.
+// reused the outer envelope and its tag (read as `Small`, printed `small`); a `let` shadowing the
+// narrowed name got the outer envelope too (printed `tiny`). Tier: High.
 coercion_tests!(
     "v0_3_m9_union_coerce_narrowed_other_union.ynz",
-    "big hello\nbig hello\nend\n",
+    "big hello\nbig hello\nbig shadow\nend\n",
     v03_m9_union_coerce_narrowed_other_union_optimized,
     v03_m9_union_coerce_narrowed_other_union_no_optimize,
     v03_m9_union_coerce_narrowed_other_union_asan_optimized,
