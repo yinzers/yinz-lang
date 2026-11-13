@@ -18,10 +18,11 @@
 //! edge cases at this contract's boundary, not 17 copies of one check. Each row is a distinct
 //! binding shape (param / local / `for` var / destructure alias / `errors` value / background
 //! argument; crossing vs non-crossing; int / number / shape / string widths) that reached the
-//! mis-compile through a different keyed-by-name site (one S2 probe each). The second level
-//! exists because at the default level the optimizer's
-//! alloca promotion can split a shared alloca by access type and hide a width or aliasing
-//! defect (rows `p26`..`p29`, `m03`); `--no-optimize` keeps the shared alloca visible.
+//! mis-compile through a different keyed-by-name site (one S2 probe each). Measured: with the
+//! fix reverted, all 15 bug rows are red at BOTH levels and only the `p01` / `p11` guards stay
+//! green, so the second level adds no detection today; it is kept (the suite takes ~2 s) as the
+//! guard against a fix that holds at one level only, the pairing `d5_frame_slot_collision`
+//! already uses.
 
 mod support;
 
