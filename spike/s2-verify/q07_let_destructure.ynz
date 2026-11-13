@@ -1,0 +1,19 @@
+// S2-verify: `let { a, b } = shape` destructuring, nested shadow.
+shape Pt {
+  a: string
+  b: string
+}
+function entrypoint() -> nothing {
+  let a = true
+  let p: Pt = { a: `pa`, b: `pb` }
+  if (a) {
+    let { a as x } = p
+    wait sleep(5)
+    if (a) {
+      let { b as x } = p
+      wait sleep(5)
+      print(x)
+    }
+    print(x)
+  }
+}

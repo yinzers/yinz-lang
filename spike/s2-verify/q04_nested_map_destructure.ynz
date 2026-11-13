@@ -1,0 +1,13 @@
+// S2-verify: nested map-entry destructure loops -> synthetic `__entry` twice.
+// Expected: k2 k2 k1 k2 k2 k1 -ish (order of map iteration); check that outer key is intact after inner loop.
+function entrypoint() -> nothing {
+  let outer: map<string, string> = { `o1`: `ov1` }
+  let inner: map<string, string> = { `i1`: `iv1` }
+  for ((ok, ov) in outer) {
+    for ((ik, iv) in inner) {
+      wait sleep(5)
+      print(iv)
+    }
+    print(ov)
+  }
+}

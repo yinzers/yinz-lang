@@ -1,0 +1,17 @@
+// S2-verify: nested shape-destructure loops. Parser desugars both to a loop var literally named `__shape`.
+// Expected: d1 d2 a1 d1 d2 a2
+shape Pt {
+  a: string
+  b: string
+}
+function entrypoint() -> nothing {
+  let xs: array<Pt> = [{ a: `a1`, b: `x` }, { a: `a2`, b: `x` }]
+  let ys: array<Pt> = [{ a: `x`, b: `d1` }, { a: `x`, b: `d2` }]
+  for ({ a } in xs) {
+    for ({ b } in ys) {
+      wait sleep(5)
+      print(b)
+    }
+    print(a)
+  }
+}

@@ -1,0 +1,21 @@
+// S2-verify: background spawns capture args by value; inner shadow `tag` also crosses; handle names differ.
+// Expected: inner-task prints "in", outer-task prints "out", then main prints "in" then "out".
+function work(tag: string) -> nothing {
+  wait sleep(5)
+  print(tag)
+}
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let tag = `out`
+    let h1 = background work(tag)
+    wait sleep(20)
+    if (a) {
+      let tag = `in`
+      let h2 = background work(tag)
+      wait sleep(20)
+      print(tag)
+    }
+    print(tag)
+  }
+}

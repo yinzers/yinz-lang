@@ -1,0 +1,17 @@
+// S2-verify: both loops alias their field to `v` (body-level desugared `let v`, no top-level outer let).
+// Expected: d1 d2 a1 d1 d2 a2
+shape Pt {
+  a: string
+  b: string
+}
+function entrypoint() -> nothing {
+  let xs: array<Pt> = [{ a: `a1`, b: `x` }, { a: `a2`, b: `x` }]
+  let ys: array<Pt> = [{ a: `x`, b: `d1` }, { a: `x`, b: `d2` }]
+  for ({ a as v } in xs) {
+    for ({ b as v } in ys) {
+      wait sleep(5)
+      print(v)
+    }
+    print(v)
+  }
+}

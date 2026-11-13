@@ -1,0 +1,6 @@
+function entrypoint() -> nothing {
+  let inner: map<string, string> = { `i1`: `iv1` }
+  for ((ik, iv) in inner) {
+    print(iv)
+  }
+}

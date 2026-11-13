@@ -1,0 +1,10 @@
+function entrypoint() -> nothing {
+  let outer: map<string, string> = { `o1`: `ov1` }
+  let inner: map<string, string> = { `i1`: `iv1` }
+  for ((ok, ov) in outer) {
+    for ((ik, iv) in inner) {
+      print(iv)
+    }
+    print(ov)
+  }
+}

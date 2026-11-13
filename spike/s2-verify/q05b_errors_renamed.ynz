@@ -1,0 +1,25 @@
+// hand-renamed q05 (r -> r2 for inner). Expected: 99.9 / 0.0 / true
+function fetchPrice(fail: boolean) -> number errors {
+  wait sleep(1)
+  if (fail) {
+    let v = wait __testFallibleAsync(true)
+    const n = v.toNumber()
+    return n
+  }
+  return 99.9
+}
+
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let r = fetchPrice(true)
+    wait sleep(5)
+    if (a) {
+      let r2 = fetchPrice(false)
+      wait sleep(5)
+      print(r2.or(0.0).toString())
+    }
+    print(r.or(0.0).toString())
+    print(r.failed().toString())
+  }
+}

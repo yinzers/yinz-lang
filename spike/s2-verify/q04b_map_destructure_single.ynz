@@ -1,0 +1,8 @@
+// S2-verify: single map-entry destructure, no nesting, with wait (baseline: is q04's failure about nesting at all?)
+function entrypoint() -> nothing {
+  let inner: map<string, string> = { `i1`: `iv1` }
+  for ((ik, iv) in inner) {
+    wait sleep(5)
+    print(iv)
+  }
+}
