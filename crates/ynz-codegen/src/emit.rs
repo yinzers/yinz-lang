@@ -3638,7 +3638,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 
     /// Read the `data` word (field 1) of a non-null union envelope `{i64 tag, i64 data}`.
     /// For a shape variant these are the `ptr_to_int` bits of the payload's storage
-    /// (union-ctor Let arm); for any other variant they are the value's own i64 bits.
+    /// (`wrap_into_union_envelope`); for any other variant they are the value's own i64 bits.
     ///
     /// The ONE place the envelope's `data` field is read: `union_payload_ptr` (variant
     /// narrowing) and `union_to_heap_cell` (binding promotion) both go through it, so
@@ -3831,6 +3831,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// a slot `Big | Small`) needs a fresh envelope from the payload, which the ordinary
     /// coercion builds with the slot's own tag.
     ///
+    /// Matching `narrowed_unions` by `name` is by binding: `BindingNames::apply` gives a `let`
+    /// that shadows the narrowed name its own codegen name, so a shadow never finds an entry.
+    ///
     /// Time: O(d) for d nested narrowings  Space: O(1)
     fn narrowed_use_reuses_envelope(&self, name: &str, use_key: (usize, usize)) -> bool {
         let Some(coercion) = self.typed.union_coercions.get(&use_key) else {
@@ -3844,11 +3847,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         else {
             return false;
         };
-        // A `let` inside the arm that reuses the narrowed name is a different binding: the name
-        // no longer resolves to the arm's payload slot, so it gets no outer envelope.
-        if self.locals.get(name) != Some(&entry.narrowed_slot) {
-            return false;
-        }
         self.expr_type(&entry.scrutinee) == self.resolve_type(&coercion.slot)
     }
 
@@ -3893,7 +3891,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// argument (plain, dot-call, generic, `wait`-staged), `return`, shape field, `.or`
     /// fallback — wraps here, once, with the same tag derivation.
     ///
-    /// The envelope lives in this function's frame (`Frame` home): a callee only borrows it,
+    /// The envelope lives in this function's frame (a per-site entry-block slot): a callee only borrows it,
     /// and a binding or field holds the pointer. A value that must outlive the frame is
     /// promoted afterwards (`home_union_on_heap`). A union with no shape variant never reaches
     /// here: typeck records only envelope unions (`T | nothing` with a non-shape `T` stays the
@@ -3933,15 +3931,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Shape { .. }
             | Type::String
             | Type::BuiltinArray { .. }
+            | Type::Number { precision: 35.. }
             | Type::BuiltinMap { .. } => self
-                .builder
-                .build_ptr_to_int(
-                    val.into_pointer_value(),
-                    self.i64(),
-                    &format!("{site}_bits"),
-                )
-                .map_err(|err| format!("{site}: ptr2int: {err}"))?,
-            Type::Number { precision } if *precision > 34 => self
                 .builder
                 .build_ptr_to_int(
                     val.into_pointer_value(),
@@ -4101,7 +4092,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///   - NULL for the `T | nothing` none case (the `is`-none path
     ///     `build_is_null`s the value directly), or
     ///   - a pointer to a `{i64 tag, i64 data}` tagged struct whose `data` holds
-    ///     `ptr_to_int` of the payload shape's storage (union-ctor Let arm).
+    ///     `ptr_to_int` of the payload shape's storage (`wrap_into_union_envelope`).
     ///
     /// The clone preserves BOTH reprs:
     ///   - **null → null**: a heap cell pointer is never null, so cloning a none
@@ -4117,8 +4108,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// BINDING surface only: `value_to_stable_bits` deliberately keeps NO Union
     /// arm (its KNOWN-HOLE doc — the persist surfaces stay loud-fail-pinned
     /// until the union ABI gets one authoritative layout), so this helper is
-    /// reachable only from the two binding funnels (`store_binding`'s Union arm
-    /// and the union-ctor Let arm's crossing branch).
+    /// reachable only from the binding funnel (`store_binding`'s Union arm) and the
+    /// frame-outliving homes (`home_union_on_heap`).
     ///
     /// Time: O(1) + one memcpy of the selected variant's ABI size  Space: O(1)
     /// (two heap cells per present value; zero for a none)
@@ -5619,9 +5610,9 @@ fn lower_function_with_waits<'ctx, 'g>(
             // union-ANNOTATED crossing local's RHS types as the CONCRETE variant shape
             // (`let fig: Figure = s` types as `Square`), which would misclassify the
             // binding into `shape_embed_set` — but its storage is the union {tag,data}
-            // heap cell (bind-time promotion in the union-ctor Let arm), never
+            // heap cell (bind-time promotion in `store_binding`), never
             // embeddable shape bytes. Resolve the Let's annotation through the SAME
-            // finder the typeck guards use and the SAME resolver the union-ctor arm
+            // finder the typeck guards use and the SAME resolver the annotated `let`
             // uses (`ast_type_to_typeck_type` — one source, no twin); a Union
             // annotation routes the binding to the pointer-alloca strategy (the
             // default arm below), same as maybe.
@@ -14297,11 +14288,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
         }
 
         Stmt::Let {
-            name,
-            ty: ann_ty,
-            value,
-            span,
-            ..
+            name, value, span, ..
         } => {
             // v0.3-M4 Phase 2: `let h = background fn(...)` — the handle-form spawn.
             // Compile-time spawn-form keying (R8): only THIS let-bound form routes to
@@ -14332,174 +14319,89 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 lower_expr(cg, value)?
             };
 
-            // M6: when annotation is a union type and value is a concrete shape variant,
-            // construct a tagged-struct { i64 tag, i64 data } on the stack.
-            let union_constructed = 'union_ctor: {
-                if let Some(ast_ann) = ann_ty.as_ref() {
-                    let resolved_ann = ast_type_to_typeck_type(ast_ann, cg.shape_table);
-                    if let Type::Union { ref variants } = resolved_ann {
-                        if let Type::Shape {
-                            name: ref shape_name,
-                        } = val_ty
-                        {
-                            let tag = variants.iter().position(|v| {
-                                if let Type::Shape { name } = v {
-                                    name == shape_name
-                                } else {
-                                    false
-                                }
-                            });
-                            if let Some(tag_idx) = tag {
-                                let union_st = cg
-                                    .ctx
-                                    .struct_type(&[cg.i64().into(), cg.i64().into()], false);
-                                let union_slot = cg
-                                    .builder
-                                    .build_alloca(union_st, &format!("{name}_union"))
-                                    .map_err(|e| format!("{e}"))?;
-                                let tag_gep = cg
-                                    .builder
-                                    .build_struct_gep(union_st, union_slot, 0, "u_tag")
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.builder
-                                    .build_store(tag_gep, cg.i64().const_int(tag_idx as u64, false))
-                                    .map_err(|e| format!("{e}"))?;
-                                let data_gep = cg
-                                    .builder
-                                    .build_struct_gep(union_st, union_slot, 1, "u_data")
-                                    .map_err(|e| format!("{e}"))?;
-                                let ptr_as_i64 = cg
-                                    .builder
-                                    .build_ptr_to_int(val.into_pointer_value(), cg.i64(), "ptr2i")
-                                    .map_err(|e| format!("{e}"))?;
-                                cg.builder
-                                    .build_store(data_gep, ptr_as_i64)
-                                    .map_err(|e| format!("{e}"))?;
-                                // v0.3-M6 Phase 1c step 3c (FRAGOs 006/007/013): a
-                                // CROSSING union binding must not keep the STACK tagged
-                                // struct — the resume fn's stack dies on every Pending
-                                // return, so a suspending callee's tag read dangles
-                                // (fixture `v0_3_m6_union_arg_pure_call.ynz`: `circle`
-                                // vs `square`). Promote envelope + payload to counted
-                                // heap cells and store the cell into the PRE-CREATED
-                                // sm_entry crossing alloca — never a fresh `outer_slot`,
-                                // which would orphan the alloca the flush/reload
-                                // machinery reads (and, being created in a state block,
-                                // would violate LLVM SSA dominance across states).
-                                let is_sm_crossing = cg
-                                    .sm_crossing_names
-                                    .as_ref()
-                                    .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
-                                if is_sm_crossing {
-                                    let cell = cg.union_to_heap_cell(union_slot, variants, name)?;
-                                    let slot = *cg.locals.get(name.as_str()).ok_or_else(|| {
-                                        format!("sm crossing alloca for `{name}` missing in entry")
-                                    })?;
-                                    cg.builder
-                                        .build_store(slot, cell)
-                                        .map_err(|e| format!("{e}"))?;
-                                } else {
-                                    let outer_slot = cg
-                                        .builder
-                                        .build_alloca(cg.ptr(), name)
-                                        .map_err(|e| format!("{e}"))?;
-                                    cg.builder
-                                        .build_store(outer_slot, union_slot)
-                                        .map_err(|e| format!("{e}"))?;
-                                    cg.locals.insert(name.clone(), outer_slot);
-                                }
-                                break 'union_ctor true;
-                            }
-                        }
-                    }
-                }
-                false
+            // When inside a SM resume function and this name is a crossing local,
+            // the alloca was pre-created in the sm_entry block (LLVM SSA dominance
+            // requires allocas to be in the entry block). Reuse that alloca instead
+            // of creating a new one in the current state block.
+            //
+            // A nested `let` that reuses a crossing local's user name is a different
+            // binding with a different codegen name (`TypedModule::binding_names`), so
+            // `name` below is crossing only when THIS declaration is the crossing one.
+            let is_sm_crossing = cg
+                .sm_crossing_names
+                .as_ref()
+                .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
+            let slot = if is_sm_crossing {
+                // Crossing local: reuse the pre-created sm_entry alloca regardless of
+                // nesting depth. LLVM SSA dominance requires allocas to be in the entry
+                // block; the sm_entry alloca dominates all state blocks. Codegen names are
+                // unique per binding (`TypedModule::binding_names`), so any `let name`
+                // here is the first and only definition of that crossing local.
+                *cg.locals
+                    .get(name.as_str())
+                    .ok_or_else(|| format!("sm crossing alloca for `{name}` missing in entry"))?
+            } else {
+                // Not a crossing local: alloca in the ENTRY block so it dominates all
+                // successor blocks. Yinz allows variable shadowing (design/linting.md
+                // `shadowed-variables` lint); a shadow `let x` inside an if/while body
+                // is a separate LLVM basic block — its alloca must be in the entry block
+                // or LLVM rejects the IR with "Instruction does not dominate all uses!".
+                // The outer binding is restored to cg.locals on scope exit (restore-all
+                // protocol), so the shadow has no lasting effect outside its own scope.
+                let s = cg.alloca_in_entry(&val_ty, name)?;
+                cg.locals.insert(name.clone(), s);
+                s
             };
-            if !union_constructed {
-                // When inside a SM resume function and this name is a crossing local,
-                // the alloca was pre-created in the sm_entry block (LLVM SSA dominance
-                // requires allocas to be in the entry block). Reuse that alloca instead
-                // of creating a new one in the current state block.
-                //
-                // A nested `let` that reuses a crossing local's user name is a different
-                // binding with a different codegen name (`TypedModule::binding_names`), so
-                // `name` below is crossing only when THIS declaration is the crossing one.
-                let is_sm_crossing = cg
-                    .sm_crossing_names
-                    .as_ref()
-                    .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
-                let slot = if is_sm_crossing {
-                    // Crossing local: reuse the pre-created sm_entry alloca regardless of
-                    // nesting depth. LLVM SSA dominance requires allocas to be in the entry
-                    // block; the sm_entry alloca dominates all state blocks. Codegen names are
-                    // unique per binding (`TypedModule::binding_names`), so any `let name`
-                    // here is the first and only definition of that crossing local.
-                    *cg.locals.get(name.as_str()).ok_or_else(|| {
-                        format!("sm crossing alloca for `{name}` missing in entry")
-                    })?
-                } else {
-                    // Not a crossing local: alloca in the ENTRY block so it dominates all
-                    // successor blocks. Yinz allows variable shadowing (design/linting.md
-                    // `shadowed-variables` lint); a shadow `let x` inside an if/while body
-                    // is a separate LLVM basic block — its alloca must be in the entry block
-                    // or LLVM rejects the IR with "Instruction does not dominate all uses!".
-                    // The outer binding is restored to cg.locals on scope exit (restore-all
-                    // protocol), so the shadow has no lasting effect outside its own scope.
-                    let s = cg.alloca_in_entry(&val_ty, name)?;
-                    cg.locals.insert(name.clone(), s);
-                    s
+            // Shape crossing local: val is a PointerValue to a temp stack struct (from
+            // lower_struct_lit). The slot is a ptr alloca pre-wired to the frame's slot
+            // region (Step 1b). Memcpy from the temp into the frame region by loading the
+            // frame region ptr from the ptr alloca and memcpy-ing into it. Works at any
+            // nesting depth — the ptr alloca is always the sm_entry one.
+            let stored = if is_sm_crossing
+                && matches!(val_ty, Type::Shape { .. })
+                && cg.sm_crossing_shape_embed_set.contains(name.as_str())
+            {
+                let shape_name = match &val_ty {
+                    Type::Shape { name: sn } => sn.clone(),
+                    _ => unreachable!(),
                 };
-                // Shape crossing local: val is a PointerValue to a temp stack struct (from
-                // lower_struct_lit). The slot is a ptr alloca pre-wired to the frame's slot
-                // region (Step 1b). Memcpy from the temp into the frame region by loading the
-                // frame region ptr from the ptr alloca and memcpy-ing into it. Works at any
-                // nesting depth — the ptr alloca is always the sm_entry one.
-                let stored = if is_sm_crossing
-                    && matches!(val_ty, Type::Shape { .. })
-                    && cg.sm_crossing_shape_embed_set.contains(name.as_str())
-                {
-                    let shape_name = match &val_ty {
-                        Type::Shape { name: sn } => sn.clone(),
-                        _ => unreachable!(),
-                    };
-                    if cg.shape_types.get(&shape_name).is_some() {
-                        let src_ptr = val.into_pointer_value();
-                        // Copy size from the ONE authoritative shape-size source
-                        // (`shape_abi_sizes` via `shape_abi_size_const`) — the
-                        // FRAGO 010 twin (`struct_ty.size_of()` + zext) unified
-                        // away (P3 step 5(c), authoritative-derivation §1).
-                        let size_i64 = cg.shape_abi_size_const(&shape_name, "sm shape let")?;
-                        // Load the frame region ptr from the ptr alloca (pre-wired to frame
-                        // in Step 1b). Memcpy from the temp stack alloca into the frame region.
-                        let dest_ptr = cg
-                            .builder
-                            .build_load(
-                                cg.ctx.ptr_type(AddressSpace::default()),
-                                slot,
-                                &format!("{name}_frame_ptr"),
-                            )
-                            .map_err(|e| format!("sm shape let load frame ptr {name}: {e}"))?
-                            .into_pointer_value();
-                        cg.builder
-                            .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
-                            .map_err(|e| format!("sm shape let memcpy {name}: {e}"))?;
-                        true
-                    } else {
-                        false
-                    }
+                if cg.shape_types.get(&shape_name).is_some() {
+                    let src_ptr = val.into_pointer_value();
+                    // Copy size from the ONE authoritative shape-size source
+                    // (`shape_abi_sizes` via `shape_abi_size_const`) — the
+                    // FRAGO 010 twin (`struct_ty.size_of()` + zext) unified
+                    // away (P3 step 5(c), authoritative-derivation §1).
+                    let size_i64 = cg.shape_abi_size_const(&shape_name, "sm shape let")?;
+                    // Load the frame region ptr from the ptr alloca (pre-wired to frame
+                    // in Step 1b). Memcpy from the temp stack alloca into the frame region.
+                    let dest_ptr = cg
+                        .builder
+                        .build_load(
+                            cg.ctx.ptr_type(AddressSpace::default()),
+                            slot,
+                            &format!("{name}_frame_ptr"),
+                        )
+                        .map_err(|e| format!("sm shape let load frame ptr {name}: {e}"))?
+                        .into_pointer_value();
+                    cg.builder
+                        .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
+                        .map_err(|e| format!("sm shape let memcpy {name}: {e}"))?;
+                    true
                 } else {
                     false
-                };
-                if !stored {
-                    // Binding funnel: shape/maybe values copy their bytes into
-                    // variable-owned storage here (get-side ownership contract —
-                    // see store_binding); everything else stores as before.
-                    store_binding(cg, val, &val_ty, slot, name)?;
                 }
-                // M7 P4a: track bindings that hold errors-capable results.
-                if matches!(val_ty, Type::ErrorsCapable { .. }) {
-                    cg.errors_capable_locals.insert(name.clone());
-                }
+            } else {
+                false
+            };
+            if !stored {
+                // Binding funnel: shape/maybe values copy their bytes into
+                // variable-owned storage here (get-side ownership contract —
+                // see store_binding); everything else stores as before.
+                store_binding(cg, val, &val_ty, slot, name)?;
+            }
+            // M7 P4a: track bindings that hold errors-capable results.
+            if matches!(val_ty, Type::ErrorsCapable { .. }) {
+                cg.errors_capable_locals.insert(name.clone());
             }
         }
 

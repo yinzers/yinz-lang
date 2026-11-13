@@ -1684,9 +1684,9 @@ impl<'b> Checker<'b> {
                 // are describing one event — while a crossing read at any other span
                 // disqualifies the name and it stays rejected here, because the promotion
                 // does not make the parent's own post-wait reload safe. The union skip keys on
-                // the ANNOTATION resolving to Union (step 3c): the union-ctor arm that
-                // performs the promotion keys on that same annotation, and the RHS types
-                // as the concrete variant shape.
+                // the ANNOTATION resolving to Union (step 3c): codegen wraps the value in the union
+                // envelope and `store_binding` promotes it, while typeck types the RHS as the
+                // concrete variant shape.
                 if arg_escape_only.contains(crossing_name.as_str())
                     && (matches!(effective_ty, Some(Type::Maybe { .. }))
                         || matches!(ann_ty, Some(Type::Union { .. })))
