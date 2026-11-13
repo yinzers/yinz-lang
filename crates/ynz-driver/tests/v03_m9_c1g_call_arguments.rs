@@ -7,7 +7,7 @@
 //! call discarded `unify_param`'s mismatch; the dot-call form checked non-receiver arguments
 //! for the union case only); built under ASan at -O0 the first four overflow the stack.
 //!
-//! Test count: 8 — one per refused case and per call form (generic with a sibling argument,
+//! Test count: 9 — one per refused case and per call form (generic with a sibling argument,
 //! with an explicit type argument, with a concrete parameter, with two scalar types; dot-call
 //! with a shape and with an int), the plain-form guard (already clean when probed), and the
 //! legal calls that must keep running.
@@ -147,5 +147,19 @@ fn v03_m9_c1g_calls_whose_arguments_match_their_parameters_still_run() {
         false,
         "ten\n7\ntwo\n3\n9\n6\n",
         "legal calls must still compile and run",
+    );
+}
+
+#[test]
+fn v03_m9_c1g_generic_parameters_holding_the_type_parameter_in_a_container_are_accepted() {
+    // BUG (found in review): the signature resolved `maybe<T>` with `T` as an unknown type and
+    // `array<T>` as a user generic shape, so the argument comparison refused the correct calls
+    // and the instance table recorded types no argument ever had. TIER: High (the check must
+    // not reject a correct program).
+    support::assert_fixture_prints(
+        "v0_3_m9_c1g_generic_container_parameters.ynz",
+        false,
+        "3\n3\n3\n3\n",
+        "container parameters of a generic function must still compile and run",
     );
 }

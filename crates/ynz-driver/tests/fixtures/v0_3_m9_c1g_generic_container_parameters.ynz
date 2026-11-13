@@ -1,0 +1,25 @@
+// v0.3-M9 C1g regression guard: a generic parameter that holds the type parameter inside a
+// built-in container (`maybe<T>`, `array<T>`) must compare equal to the argument once the
+// call has bound `T`. The signature used to resolve `maybe<T>` as `maybe<unknown>` and
+// `array<T>` as a user generic shape named `array`, so the new argument comparison refused a
+// correct call ("expects `maybe<unknown>`").
+// Correct behavior: compiles; prints 3 / 3 / 3 / 3.
+// Pre-fix: `pickMaybe` compiled on the parent of C1g and was wrongly refused by the first
+// version of the comparison; `pickArray` failed in codegen ("cannot alloca for type Generic").
+
+function pickMaybe<T>(share first: maybe<T>, share second: T) -> T {
+  return second
+}
+
+function pickArray<T>(share items: array<T>, share second: T) -> T {
+  return second
+}
+
+function entrypoint() -> nothing {
+  let numbers: array<int> = [5]
+  let found = numbers.first()
+  print(pickMaybe(found, 3).toString())
+  print(pickMaybe<int>(found, 3).toString())
+  print(pickArray(numbers, 3).toString())
+  print(pickArray<int>(numbers, 3).toString())
+}

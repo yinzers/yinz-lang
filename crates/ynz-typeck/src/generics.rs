@@ -63,11 +63,35 @@ pub fn unify_param(param_ty: &Type, arg_ty: &Type, subst: &mut Substitution) -> 
 
 /// Recursively apply `subst` to `ty`, replacing `TypeParam` leaves with concrete types.
 pub fn apply_substitution(ty: &Type, subst: &Substitution) -> Type {
+    let apply = |inner: &Type| Box::new(apply_substitution(inner, subst));
     match ty {
         Type::TypeParam { name } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
         Type::Generic { name, args } => Type::Generic {
             name: name.clone(),
             args: args.iter().map(|a| apply_substitution(a, subst)).collect(),
+        },
+        Type::BuiltinArray { elem } => Type::BuiltinArray { elem: apply(elem) },
+        Type::BuiltinFixed { elem, size } => Type::BuiltinFixed {
+            elem: apply(elem),
+            size: *size,
+        },
+        Type::BuiltinChannel { elem } => Type::BuiltinChannel { elem: apply(elem) },
+        Type::Maybe { inner } => Type::Maybe { inner: apply(inner) },
+        Type::ErrorsCapable { inner } => Type::ErrorsCapable { inner: apply(inner) },
+        Type::Sensitive { inner } => Type::Sensitive { inner: apply(inner) },
+        Type::BuiltinMap { key, val } => Type::BuiltinMap {
+            key: apply(key),
+            val: apply(val),
+        },
+        Type::MapEntry { key, val } => Type::MapEntry {
+            key: apply(key),
+            val: apply(val),
+        },
+        Type::Union { variants } => Type::Union {
+            variants: variants
+                .iter()
+                .map(|variant| apply_substitution(variant, subst))
+                .collect(),
         },
         other => other.clone(),
     }
