@@ -1637,7 +1637,9 @@ why_template = "Yinz import paths are root-relative, not relative to the current
 # Rendered from this entry by typeck's consumed-read rendering (`consumed_read_diag`). `{via}`
 # is empty when the name read is the name that was given; otherwise it names the alias-class
 # mate that was given away instead (e.g. " — it shares its value with `rows`, which is what
-# was given away"), mirroring ConsumedBySend. Decided v0.3-M8 Phase 4: `git log --grep=m8-p4`.
+# was given away"), mirroring ConsumedBySend; for a give carried into the next pass of a loop it
+# names the loop (", because the previous pass through this loop already ..."). Decided v0.3-M8 Phase 4:
+# `git log --grep=m8-p4`.
 [[diagnostic_template]]
 kind_name = "Consumed"
 what_template = "`{name}` was already given away and cannot be used here{via}."

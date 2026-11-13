@@ -598,7 +598,8 @@ pub fn check(
 /// in two or more positions, solve the stores from the first walk and walk again: the second walk
 /// merges those arguments in the live scope too, so a program that reads `a` after giving `o` away
 /// is rejected like the direct `o.add(a)` form (the record already says they are one class).
-/// A module with no such call is walked once.
+/// A module with no such call is walked once; one with such a call is walked twice, so checking
+/// costs up to 2x O(module size) time and one extra checker state in memory.
 fn walk_module<'b>(
     module: &Module,
     make_checker: impl Fn(crate::transfer_record::CallStoreTable) -> Checker<'b>,
@@ -6267,7 +6268,10 @@ impl<'b> Checker<'b> {
     /// A call that stores one argument into another (`put(o, a)` with `o.add(a)` in `put`) makes
     /// the two arguments' holders one value, exactly as the direct `o.add(a)` does: giving or
     /// returning either covers both, so a read of the other afterwards is a use-after-give. The
-    /// record joins the same pairs in `TransferRecorder::finish`.
+    /// The record joins the same pairs for a LOCAL callee (`TransferRecorder::finish`). For an
+    /// unseen callee the two deliberately differ: the record joins EVERY pair (a release pass must
+    /// never free early, and a leak is acceptable), while this live merge takes only pairs with a
+    /// `lend` position (merging more would reject programs that compile today).
     ///
     /// Which pairs: a LOCAL callee stores what its own record says (`call_stores`, solved by the
     /// first walk of the module); any other callee (imported, dynamic) is unseen, so every pair

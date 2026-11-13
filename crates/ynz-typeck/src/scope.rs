@@ -239,6 +239,7 @@ impl Scope {
     /// Join two alias classes into one: every live entry of `absorbed` moves to `kept`. Used
     /// where one value comes to hold another (a literal built from several named values, a
     /// store into a container), so consuming or returning any member covers all of them.
+    /// O(entries) time: scans every live entry of every frame.
     pub fn merge_classes(&mut self, kept: u64, absorbed: u64) {
         if kept == absorbed {
             return;
