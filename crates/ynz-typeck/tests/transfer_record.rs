@@ -314,6 +314,18 @@ cases! { assert_loop_give_rejected;
   }}
 }}"
     ), "(High) t3 through an alias: the binding given (`y`) is declared outside the loop and its class-mate `x` is what the next pass would read";
+    give_in_an_inner_loop_reaches_the_outer_pass: format!(
+        "{EAT}function l() -> nothing {{
+  let x: array<int> = [1, 2, 3]
+  for (j in range(0, 2)) {{
+    let y: array<int> = x
+    for (i in range(0, 1)) {{
+      eat(y)
+      y = [0]
+    }}
+  }}
+}}"
+    ), "(High) t3 across nested loops: the inner loop revives `y` so it carries nothing, but the outer pass reads `x` again; the inner loop dropped the give, so `x`'s value was given once per outer pass (double free)";
 }
 
 cases! { assert_loop_send_rejected;
@@ -324,6 +336,17 @@ cases! { assert_loop_send_rejected;
   }
   wire.close()
 }", "(High) t3 for `send`: the loop-carried check also covers a send, whose wording is its own arm; an accepted program sends one array twice and two receivers free it";
+    send_in_an_inner_loop_reaches_the_outer_pass: "function producer(lend wire: channel<array<int>>) -> nothing {
+  let sent: array<int> = [10, 20, 30]
+  for (j in range(0, 2)) {
+    let y: array<int> = sent
+    for (i in range(0, 1)) {
+      wire.send(y)
+      y = [0]
+    }
+  }
+  wire.close()
+}", "(High) t3 for `send` across nested loops: the enclosing loop must check a send the inner loop does not carry";
 }
 
 cases! { assert_accepted;
@@ -374,6 +397,17 @@ cases! { assert_accepted;
   eat(x)
 }}"
     ), "(High) over-rejection: a give after the loop is the ordinary single give";
+    give_of_an_outer_loop_local_in_an_inner_loop_is_accepted: format!(
+        "{EAT}function l() -> nothing {{
+  for (j in range(0, 2)) {{
+    let x: array<int> = [1, 2, 3]
+    for (i in range(0, 1)) {{
+      eat(x)
+      x = [0]
+    }}
+  }}
+}}"
+    ), "(High) over-rejection: a give the inner loop hands up is of a binding the outer loop declares afresh each pass, so the outer loop carries nothing";
 }
 
 // ── the record's boundaries (no over-joining, anchors, escapes) ─────────────

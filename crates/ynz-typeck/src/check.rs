@@ -4742,7 +4742,9 @@ impl<'b> Checker<'b> {
     ///
     /// Only an entry the next pass READS (by name, in `condition` or `body`) is carried: a
     /// class-mate the loop never mentions stays consumed but nothing reads it, and a read after the
-    /// loop is the ordinary use-after-give. O(entries . loop size) per give.
+    /// loop is the ordinary use-after-give. A give this loop does not carry passes to the
+    /// enclosing loop, if any, which checks it the same way. O(entries . loop size) per give
+    /// per enclosing loop.
     fn end_loop_body(&mut self, mark: usize, condition: Option<&Expr>, body: &Block) {
         let Some(body_frame) = self.loop_body_frames.pop() else {
             return;
@@ -4766,6 +4768,12 @@ impl<'b> Checker<'b> {
             if carried {
                 let diag = loop_carried_give_diag(give.span, &give.cause);
                 self.diags.push(diag);
+            } else if !self.loop_body_frames.is_empty() {
+                // Not carried into THIS loop's next pass, but every enclosing loop runs this
+                // whole loop again: hand the give up so the enclosing loop checks it against
+                // its own next pass (`for j { let y = x; for i { eat(y); y = [0] } }` gives
+                // `x`'s value once per outer pass).
+                self.loop_gives.push(give);
             }
         }
     }
