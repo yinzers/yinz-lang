@@ -38,6 +38,35 @@ const RUN_WATCHDOG: Duration = Duration::from_secs(120);
 ///   rather than going unnoticed.
 const ASAN_OPTIONS: &str = "detect_leaks=0:max_free_fill_size=65536:free_fill_byte=0";
 
+/// What `ynz build` said about one fixture: whether it compiled, and every diagnostic it printed.
+pub struct Compiled {
+    pub success: bool,
+    pub diagnostics: String,
+}
+
+/// Build `fixture_name` with `ynz build` in its own temp directory and keep the compiler's
+/// verdict and text. For the suites that assert a program is REFUSED with a teaching diagnostic
+/// (no program is run). `CLICOLOR=0` keeps the text free of escape codes.
+pub fn compile(fixture_name: &str) -> Compiled {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let source = directory.path().join("program.ynz");
+    std::fs::copy(fixture_path(fixture_name), &source).expect("copy fixture");
+    let output = Command::new(env!("CARGO_BIN_EXE_ynz"))
+        .arg("build")
+        .arg(&source)
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("spawn `ynz build`");
+    Compiled {
+        success: output.status.success(),
+        diagnostics: format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    }
+}
+
 pub fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")

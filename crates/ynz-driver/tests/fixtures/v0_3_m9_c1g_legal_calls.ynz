@@ -1,0 +1,36 @@
+// v0.3-M9 C1g regression guard: calls whose arguments match their parameter types must keep
+// compiling and running once every call form compares arguments with parameters: a generic call
+// whose arguments agree on `T` (inferred, and with an explicit type argument), a generic call
+// with a concrete extra parameter, and the dot-call form with a matching extra argument.
+// Correct behavior (kept): compiles; prints
+//   ten / 7 / two / 3 / 9 / 6
+
+shape Big {
+  label: string
+  count: int
+}
+
+function same<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function labelled<T>(share first: T, share extra: Big) -> int {
+  return extra.count
+}
+
+function sumCounts(share first: Big, share second: Big) -> int {
+  return first.count + second.count
+}
+
+function entrypoint() -> nothing {
+  let first: Big = { label: `one`, count: 3 }
+  let second: Big = { label: `two`, count: 6 }
+  let number: int = 7
+  let other: int = 9
+  print(same(`ten`, `ten`))
+  print(same(number, number).toString())
+  print(same<Big>(first, second).label)
+  print(labelled(number, first).toString())
+  print(same(other, other).toString())
+  print(first.sumCounts(first).toString())
+}

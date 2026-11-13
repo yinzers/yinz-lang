@@ -21399,6 +21399,45 @@ fn find_mono_name_by_args(
         .map(|k| mangle_mono_name(&k.fn_name, &k.type_args))
 }
 
+#[cfg(test)]
+mod mono_lookup_tests {
+    use super::find_mono_name_by_args;
+    use ynz_typeck::generics::MonoSignature;
+    use ynz_typeck::{MonomorphizationTable, Type};
+
+    fn table_with_one_instance_for_big() -> MonomorphizationTable {
+        let big = Type::Shape { name: "Big".into() };
+        let mut table = MonomorphizationTable::default();
+        table.record(
+            "same".into(),
+            vec![big.clone()],
+            MonoSignature {
+                param_types: vec![big.clone(), big.clone()],
+                ret_type: big,
+            },
+        );
+        table
+    }
+
+    #[test]
+    fn v03_m9_c1g_mono_lookup_finds_the_instance_whose_parameters_match() {
+        // GUARD (High: call dispatch): the exact match still resolves.
+        let table = table_with_one_instance_for_big();
+        let big = Type::Shape { name: "Big".into() };
+        assert!(find_mono_name_by_args(&table, "same", &[big.clone(), big]).is_some());
+    }
+
+    #[test]
+    fn v03_m9_c1g_mono_lookup_never_falls_back_to_the_first_instance() {
+        // BUG (High: call dispatch, memory safety): arguments that match no instance used to
+        // resolve to the FIRST instance of the name, calling a function built for other types.
+        let table = table_with_one_instance_for_big();
+        let tiny = Type::Shape { name: "Tiny".into() };
+        let big = Type::Shape { name: "Big".into() };
+        assert!(find_mono_name_by_args(&table, "same", &[big, tiny]).is_none());
+    }
+}
+
 // ── BuiltinArray method dispatch ─────────────────────────────────────────────
 
 fn lower_array_method<'ctx>(

@@ -1,0 +1,19 @@
+// v0.3-M9 C1g (security): an int passed as a non-receiver argument of a dot-call where a `Big`
+// is expected (`big.useBig(5)`).
+// Correct behavior: does not compile — the same diagnostic as the plain form `useBig(big, 5)`.
+// Pre-fix failure: reached LLVM and failed module verification ("Call parameter type does not
+// match function signature"), reported as a compiler bug instead of a diagnostic.
+
+shape Big {
+  label: string
+  count: int
+}
+
+function useBig(share first: Big, share second: Big) -> int {
+  return second.count
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  print(big.useBig(5).toString())
+}

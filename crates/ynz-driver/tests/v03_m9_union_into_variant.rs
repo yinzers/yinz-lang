@@ -12,35 +12,9 @@
 //! type parameter; return; `let` + field together) plus the legal flows it must keep (run at two
 //! optimization levels).
 
-use std::path::Path;
-use std::process::Command;
-
 mod support;
 
-struct Compiled {
-    success: bool,
-    diagnostics: String,
-}
-
-fn compile(fixture_name: &str) -> Compiled {
-    let directory = tempfile::tempdir().expect("create temp directory");
-    let source = directory.path().join("program.ynz");
-    std::fs::copy(support::fixture_path(fixture_name), &source).expect("copy fixture");
-    let output = Command::new(env!("CARGO_BIN_EXE_ynz"))
-        .arg("build")
-        .arg(Path::new(&source))
-        .env("CLICOLOR", "0")
-        .output()
-        .expect("spawn `ynz build`");
-    Compiled {
-        success: output.status.success(),
-        diagnostics: format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ),
-    }
-}
+use support::compile;
 
 /// The compile must fail and say all three parts of the lesson: WHAT (the value, its union
 /// type, the slot), WHAT-INSTEAD (an `is` arm), WHY (the tagged box).
