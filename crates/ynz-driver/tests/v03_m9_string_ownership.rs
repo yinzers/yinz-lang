@@ -197,3 +197,18 @@ plain_case!(
     "an `if` arm on a `number>34` value must match numerically equal text (`2.5` and `2.50`)",
     "the arm test reads the bignum text as decimal128, so `2.5` does not match the arm `2.50` (High: wrong branch)"
 );
+
+plain_case!(
+    shape_debug_print_reads_a_bignum_field_as_text,
+    "v0_3_m9_c3a_bignum_in_shape_debug_text.ynz",
+    "Ledger { total: 4, entries: [1.5, 2.5], byName: { rent: 2.5 } }\n",
+    "a `number>34` field of a printed shape must show its decimal text",
+    "the shape debug print loads a bignum field (an 8-byte pointer) as a 16-byte decimal128: garbage text and a read past the field (High: memory safety)"
+);
+
+asan_case!(
+    shape_debug_print_of_a_bignum_field_is_asan_clean,
+    "v0_3_m9_c3a_bignum_in_shape_debug_text.ynz",
+    "Ledger { total: 4, entries: [1.5, 2.5], byName: { rent: 2.5 } }\n",
+    "the debug print of a bignum field reads past the field, or releases the borrowed bignum text (High)"
+);
