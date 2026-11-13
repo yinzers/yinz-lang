@@ -3757,9 +3757,15 @@ impl<'b> Checker<'b> {
         self.scope.push();
         self.scope.begin_arm();
         self.check_stmts(&body.stmts);
-        self.scope
-            .end_arm(crate::return_paths::analyze_stmts(&body.stmts).all_paths_return);
+        self.end_branch_arm(body);
         self.scope.pop();
+    }
+
+    /// Close the arm `body` of the open branch point: an arm that always returns never reaches the
+    /// join. O(size of `body`) for the return-path analysis.
+    fn end_branch_arm(&mut self, body: &Block) {
+        let returns = crate::return_paths::analyze_stmts(&body.stmts).all_paths_return;
+        self.scope.end_arm(returns);
     }
 
     fn check_stmt_while(&mut self, cond: &Expr, body: &Block) {
@@ -3782,8 +3788,7 @@ impl<'b> Checker<'b> {
         }
         self.check_stmts(&body.stmts);
         self.end_loop_body(loop_mark, Some(cond), body);
-        self.scope
-            .end_arm(crate::return_paths::analyze_stmts(&body.stmts).all_paths_return);
+        self.end_branch_arm(body);
         self.scope.pop();
         self.scope.end_branches(true);
     }
@@ -3866,8 +3871,7 @@ impl<'b> Checker<'b> {
         let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
         self.end_loop_body(loop_mark, None, body);
-        self.scope
-            .end_arm(crate::return_paths::analyze_stmts(&body.stmts).all_paths_return);
+        self.end_branch_arm(body);
         self.scope.pop();
         self.scope.end_branches(true);
     }

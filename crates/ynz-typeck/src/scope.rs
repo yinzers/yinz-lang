@@ -102,6 +102,16 @@ pub struct Scope {
 /// An entry named by where it lives: frame index, name, declaration span.
 type EntryKey = (usize, String, usize, usize);
 
+/// The key of the entry `name` declared at `defined_at` in frame `frame_index`.
+fn entry_key(frame_index: usize, name: &str, defined_at: &SourceSpan) -> EntryKey {
+    (
+        frame_index,
+        name.to_string(),
+        defined_at.start,
+        defined_at.end,
+    )
+}
+
 /// What the join after a branch point needs (see [`Scope::begin_branches`]).
 struct Branches {
     /// Entries consumed when the branch point opened, with their cause.
@@ -241,6 +251,8 @@ impl Scope {
     /// Returns the entries newly marked (frame index, name, declaration), in no particular
     /// order: the loop-carried-give check and the transfer record both need to know exactly
     /// which entries this transfer reached.
+    ///
+    /// O(entries + reached . open branch points) time.
     pub fn consume(&mut self, name: &str, cause: ConsumedBy) -> Vec<ConsumedEntry> {
         let Some(class) = self.class_of(name) else {
             return Vec::new();
@@ -259,12 +271,7 @@ impl Scope {
             }
         }
         for entry in &reached {
-            let key = (
-                entry.frame_index,
-                entry.name.clone(),
-                entry.defined_at.start,
-                entry.defined_at.end,
-            );
+            let key = entry_key(entry.frame_index, &entry.name, &entry.defined_at);
             for branch in self.branches.iter_mut() {
                 branch.arm_consumed.insert(key.clone());
             }
@@ -275,6 +282,7 @@ impl Scope {
     /// Revive `name`: a reassignment gives it a NEW value, so it is no longer given away on the
     /// path that reaches here. Inside an open branch point the revive covers only that arm; the
     /// join (`end_branches`) decides what is true after it.
+    /// O(frames + revived entries in the open arm) time.
     pub fn revive(&mut self, name: &str) {
         let Some(frame_index) = self.frame_of(name) else {
             return;
@@ -285,12 +293,7 @@ impl Scope {
         let Some(prior) = entry.consumed.take() else {
             return;
         };
-        let key = (
-            frame_index,
-            name.to_string(),
-            entry.defined_at.start,
-            entry.defined_at.end,
-        );
+        let key = entry_key(frame_index, name, &entry.defined_at);
         if let Some(branch) = self.branches.last_mut() {
             if frame_index < branch.arm_frame && !branch.arm_revived.contains(&key) {
                 branch.arm_prior.insert(key.clone(), prior);
@@ -312,12 +315,7 @@ impl Scope {
             for (name, entry) in frame {
                 if let Some(cause) = &entry.consumed {
                     consumed_before.insert(
-                        (
-                            frame_index,
-                            name.clone(),
-                            entry.defined_at.start,
-                            entry.defined_at.end,
-                        ),
+                        entry_key(frame_index, name, &entry.defined_at),
                         cause.clone(),
                     );
                 }
@@ -348,6 +346,7 @@ impl Scope {
     /// An arm ends (before its frame pops). `returns`: it always returns, so it never reaches the
     /// join. What the arm revived is recorded for the join and then put back to the state before
     /// the branch point, so the NEXT arm does not inherit this arm's revive.
+    /// O(revived entries in the arm) time.
     pub fn end_arm(&mut self, returns: bool) {
         let Some(mut branch) = self.branches.pop() else {
             return;
