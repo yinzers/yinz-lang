@@ -6278,7 +6278,7 @@ impl<'b> Checker<'b> {
 
     /// A call that stores one argument into another (`put(o, a)` with `o.add(a)` in `put`) makes
     /// the two arguments' holders one value, exactly as the direct `o.add(a)` does: giving or
-    /// returning either covers both, so a read of the other afterwards is a use-after-give. The
+    /// returning either covers both, so a read of the other afterwards is a use-after-give.
     /// The record joins the same pairs for a LOCAL callee (`TransferRecorder::finish`). For an
     /// unseen callee the two deliberately differ: the record joins EVERY pair (a release pass must
     /// never free early, and a leak is acceptable), while this live merge takes only pairs with a

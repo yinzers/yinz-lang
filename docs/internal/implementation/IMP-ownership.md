@@ -263,8 +263,8 @@ The initializer table, applied at every `Let` and `Assign` event:
 |---|---|---|
 | `Fresh` | `Owned` | its own (a new class) |
 | `Whole(b)` | b's origin | **joins b's class** — two names, one value |
+| `Reaches(roots)` | `Reaches` (never transferable) | joins every root's class — if a root is given away, this name is consumed with it |
 | `Unknown` | `Unknown` (never transferable) | its own in the live scope; the persisted record (below) joins it to every binding the expression mentions, since an untraceable result may hold any of them |
-| `Unknown` | `Unknown` (never transferable) | its own |
 
 Why "leave, then join" on a reassignment is the whole of the fix: `let rows = [1]; let other = [2]; rows = other; wire.send(rows); other.count()` — on today's tree the send consumes nothing and the program prints `2 2` (probe — `git log --grep=m8-p2`; the shadowing form `let rows = other` prints the same). Under this rule the `Assign` moves `rows` out of its own class and into `other`'s; the send consumes `{rows, other}`; `other.count()` is `ConsumedBySend` with the `{via}` slot naming `rows`. The `[1]` allocation `rows` used to name has no holder — an existing leak class (no scope-exit drop pass), not a use-after-free. The consumed-read mechanism itself is a straight-line walk; a give carried into the next pass of a loop is a separate check (see "A give inside a loop" below).
 
@@ -288,7 +288,7 @@ Why "leave, then join" on a reassignment is the whole of the fix: `let rows = [1
 
 **Call-site stores (the second walk).** A callee may store one argument into another (`put(o, a)` with `o.add(a)` inside `put`); the callee's own record answers that, and a caller can be walked first. So when a call passes heap values in two or more positions, `walk_module` solves the stores from the first walk and walks the module again (checking costs up to 2x for such modules; the first walk's diagnostics are dropped). A local callee merges its own parameter pairs in the live scope; an unseen callee (imported, dynamic) merges every pair with a `lend` position, while the record joins every pair — the record must never free early, the live scope must not reject programs that compile today.
 
-**A give inside a loop must not reach the next pass.** A give of a binding declared outside the loop that is still consumed when the loop body ends is rejected with the `Consumed` template (the loop named in `{via}`); a reassignment before the back-edge revives the binding, a block that always returns never reaches the back-edge. The `background` liveness inference reads an outer binding in a loop as live, so it infers `Copy`, not a second `Give`.
+**A give inside a loop must not reach the next pass.** A give of a binding declared outside the loop that is still consumed when the loop body ends is rejected with the `Consumed` template (the loop named in `{via}`); a reassignment before the back-edge revives the binding, a block that always returns never reaches the back-edge. Only a binding the next pass reads (by name, in the loop condition or body) counts; a give the loop does not carry passes to the enclosing loop, which checks it the same way; a `while` condition is part of the loop, so a give made in it counts. The `background` liveness inference reads an outer binding in a loop as live, so it infers `Copy`, not a second `Give`.
 
 ### The persisted transfer record
 
