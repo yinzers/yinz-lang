@@ -2,25 +2,39 @@
 //! `{i64 tag, i64 data}` envelope. Tier: High (data integrity — a wrong read is silent
 //! garbage or an out-of-bounds read).
 //!
-//! RED-first: all three fixtures fail on the pre-fix tree (`sm_host` is described below).
+//! RED-first: all three fixtures fail on the pre-fix tree. Measured: with
+//! `narrow_union_local_to_variant` disabled, all ten tests below are red; with only the
+//! post-resume re-derivation (`renarrow_union_locals`) reverted, the four `sm_host` tests are
+//! red and the other six stay green.
 //!   - `field_read`: the arm typed `fig` as the variant but codegen left the binding on the
 //!     16-byte envelope, so `fig.radius` returned the tag word (a zero value, not `5.0`).
 //!   - `payload_copy`: `let inner: Circle = fig` memcpy'd `sizeof(Circle)` bytes out of the
 //!     16-byte envelope (AddressSanitizer: stack-buffer-overflow READ in memcpy) and the
 //!     string field then dereferenced garbage (SIGSEGV in the optimized build).
+//!   - `sm_host`: in a suspending function (`lower_sm_match`, a second `is`-arm lowering site)
+//!     the resume reloaded the envelope into the narrowed payload slot, so a read after a
+//!     `wait` inside the arm saw the envelope again.
 //!
-//! The `payload_copy_asan` tests run that fixture under AddressSanitizer through the shared
-//! harness (`support::run_under_asan`, which needs `clang` with the ASan runtime, as the C2
-//! safety fixtures do): the card's criterion is "clean under ASan, failed before the fix", and
-//! the output assertions alone would not name an out-of-bounds read that happens to return
-//! plausible bytes. Each fixture runs at the default optimization level and
-//! under `--no-optimize` — one named test per case, built with `ynz build` into its own temp
-//! directory and run as its own process under a liveness watchdog, so the runner parallelizes
-//! them and names the failing case.
+//! The `*_asan_*` tests run the `payload_copy` and `sm_host` fixtures under AddressSanitizer
+//! through the shared harness (`support::assert_asan_clean_and_prints`, which needs `clang`
+//! with the ASan runtime, as the C2 safety fixtures do): the card's criterion is "clean under
+//! ASan, failed before the fix", and the output assertions alone would not name an
+//! out-of-bounds read that happens to return plausible bytes. Each fixture runs at the default
+//! optimization level and under `--no-optimize` — one named test per case, built with
+//! `ynz build` into its own temp directory and run as its own process under a liveness
+//! watchdog, so the runner parallelizes them and names the failing case.
+//!
+//! Why 10 tests where the SOP says "about 8" per High-tier unit: three distinct lowering
+//! paths (plain match arm, copy out of the arm, suspending-function arm), each at two
+//! optimization levels; the plain and ASan variants of one fixture differ only in the
+//! sanitizer verdict, kept apart so a failure names whether the VALUE or the MEMORY ACCESS is
+//! wrong.
 
 mod support;
 
-use support::{assert_fixture_prints as assert_prints, run_under_asan};
+use support::{
+    assert_asan_clean_and_prints as assert_asan_clean, assert_fixture_prints as assert_prints,
+};
 
 /// The check every case here shares: the narrowed arm reads the variant payload.
 fn assert_fixture_prints(name: &str, no_optimize: bool, expected_stdout: &str) {
@@ -58,28 +72,6 @@ fn v03_m9_union_narrow_payload_copy_optimized() {
 fn v03_m9_union_narrow_payload_copy_no_optimize() {
     // WHY: same OOB read at -O0 (the ASan red).
     assert_fixture_prints(PAYLOAD_COPY, true, "round\n5.0\n78.5\nt\n");
-}
-
-/// `fixture_name` runs clean under AddressSanitizer and prints `expected_stdout`: a narrowed
-/// read that lands in the envelope can return plausible bytes, so the output alone does not
-/// prove the read stayed inside the payload. Tier: High (data integrity / memory safety).
-fn assert_asan_clean(fixture_name: &str, no_optimize: bool, expected_stdout: &str) {
-    let run = run_under_asan(fixture_name, no_optimize);
-    assert!(
-        !run.stderr.contains("AddressSanitizer"),
-        "{fixture_name} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
-        run.stderr
-    );
-    assert_eq!(
-        run.exit_code, 0,
-        "{fixture_name} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
-        run.stderr
-    );
-    assert_eq!(
-        run.stdout, expected_stdout,
-        "{fixture_name} (no_optimize={no_optimize}): wrong values; stderr:\n{}",
-        run.stderr
-    );
 }
 
 #[test]

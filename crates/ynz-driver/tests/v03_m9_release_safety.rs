@@ -39,26 +39,7 @@
 
 mod support;
 
-use support::{build, run_counted, run_under_asan};
-
-fn assert_asan_clean_and_prints(fixture: &str, no_optimize: bool, expected_stdout: &str) {
-    let run = run_under_asan(fixture, no_optimize);
-    assert!(
-        !run.stderr.contains("AddressSanitizer"),
-        "{fixture} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
-        run.stderr
-    );
-    assert_eq!(
-        run.exit_code, 0,
-        "{fixture} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
-        run.stderr
-    );
-    assert_eq!(
-        run.stdout, expected_stdout,
-        "{fixture} (no_optimize={no_optimize}): wrong values; stderr:\n{}",
-        run.stderr
-    );
-}
+use support::{assert_asan_clean_and_prints, build, run_counted};
 
 /// `asan_case!(case, fixture, expected_stdout, "bug it catches (Tier: High)")`; the bug line
 /// becomes the module doc.
@@ -66,7 +47,7 @@ macro_rules! asan_case {
     ($case:ident, $fixture:literal, $expected:literal, $bug:literal) => {
         #[doc = $bug]
         mod $case {
-            use super::assert_asan_clean_and_prints;
+            use crate::assert_asan_clean_and_prints;
 
             #[test]
             fn optimized() {

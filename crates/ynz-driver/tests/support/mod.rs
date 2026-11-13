@@ -308,3 +308,25 @@ pub fn assert_fixture_prints(
         run.stderr
     );
 }
+
+/// The shared check of the AddressSanitizer suites: `fixture_name` runs clean under ASan (no
+/// report, exit 0) and prints exactly `expected_stdout`. A bad read that returns plausible bytes
+/// leaves the output right, so the sanitizer verdict is asserted on its own.
+pub fn assert_asan_clean_and_prints(fixture_name: &str, no_optimize: bool, expected_stdout: &str) {
+    let run = run_under_asan(fixture_name, no_optimize);
+    assert!(
+        !run.stderr.contains("AddressSanitizer"),
+        "{fixture_name} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
+        run.stderr
+    );
+    assert_eq!(
+        run.exit_code, 0,
+        "{fixture_name} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
+        run.stderr
+    );
+    assert_eq!(
+        run.stdout, expected_stdout,
+        "{fixture_name} (no_optimize={no_optimize}): wrong values; stderr:\n{}",
+        run.stderr
+    );
+}
