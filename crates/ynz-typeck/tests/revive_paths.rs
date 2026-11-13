@@ -213,16 +213,13 @@ accepted!(
 );
 
 rejected!(
-    one_arm_gives_while_another_gives_and_revives,
-    "arm 1 gives `x`, arm 2 gives then revives it: the join must still see arm 1's give (High)",
+    read_after_a_match_where_one_arm_gives_and_the_other_revives,
+    "arm 1 gives `x`, the else arm revives it, then read: the join must keep arm 1's give, so one arm's revive cannot launder another arm's give (High)",
     "function l(n: int) -> int {
   let x: array<int> = [1, 2, 3]
   if (n) {
     1 => { eat(x) }
-    else => {
-      eat(x)
-      x = [0]
-    }
+    else => { x = [0] }
   }
   return x.count()
 }"
