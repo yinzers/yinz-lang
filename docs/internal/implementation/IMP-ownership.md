@@ -300,6 +300,15 @@ Why "leave, then join" on a reassignment is the whole of the fix: `let rows = [1
 - **anchor**: `Founder` = the owner whose scope exits last, earliest declared on a tie; `CallerOwns` (a borrowed parameter is in the class); `NoOwner` (all pieces: the allocation belongs to code this function cannot see); `NoStaticFounder(OutlivedByNonOwner)` (a non-owner outlives every owner, so which value it holds at the owner's exit is known only at run time — reported, never guessed);
 - **escapes** on at least one path: returned, given, sent, stored into a temporary.
 
+**The two anchors with no static release point are C7's, decided** (Software Architect ruling, plan #17 C5a). The record reports them; it does not release them. Each is pinned by a typeck-fact test now and gets its ASan fixture when C7 lands:
+
+| anchor | what C7 does | typeck-fact fixture (`ynz-typeck/tests/transfer_record.rs`) |
+|---|---|---|
+| `NoStaticFounder(OutlivedByNonOwner)` | a run-time drop flag decides, where the holder's value is known only at run time, which value is released | `a_non_owner_that_outlives_the_owner_leaves_no_static_founder` |
+| `NoOwner` | the temporary is released at the end of the statement that made it (a piece of a temporary, a loop cell of a temporary, an imported function's result); no binding has a release duty | `a_piece_of_a_temporary_is_recorded_as_no_owner`, `a_loop_cell_of_a_temporary_is_recorded_as_no_owner`, `an_imported_functions_result_is_recorded_as_no_owner` |
+
+Until C7, neither anchor is released (a leak, never an early or double free).
+
 A hole in the recorder's own bookkeeping (an event with no function being walked or naming an undeclared binding, a binding with no codegen name, a class with no anchor candidate) is never skipped: it is kept as a string in `TransferRecord::internal_errors`, and `TypedModule::with_codegen_names` fails on it with the other record holes, so `codegen_query` reports the compiler-bug diagnostic and builds nothing.
 
 A call's stores are derived from the callee's OWN record (parameters sharing a class), to a fixpoint; a callee with no record joins all its heap arguments. Releasing a class must free every distinct object in it exactly once, container and stored elements alike (C6/C7); leaks are acceptable meanwhile, an early or double free never.
