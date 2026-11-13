@@ -1,0 +1,41 @@
+// v0.3-M9 C1b: the directional check must keep every legal flow.
+//   - a plain value widens into a union slot: `map<string,string>` into
+//     `map<string,string> | nothing`, and `let thing: Thing = big` widens a `Big` into a union;
+//   - inside an `is Big` arm the narrowed `thing` is a `Big`, so `showBig(thing)` is accepted.
+// Correct behavior: compiles and prints `hello`, `hello`, `ok`, `end`.
+// Pre-fix failure of the narrowed call: none (it compiled) — this pins that the fix does not
+// reject it.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function showBig(share b: Big) -> string {
+  return b.label
+}
+
+function describe(share table: map<string, string> | nothing) -> string {
+  return `ok`
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let thing: Thing = big
+  if (thing) {
+    is Big => {
+      print(showBig(thing))
+    }
+    is Tiny => {
+      print(`no`)
+    }
+  }
+  print(showBig(big))
+  let table: map<string, string> = { `a`: `b` }
+  print(describe(table))
+  print(`end`)
+}

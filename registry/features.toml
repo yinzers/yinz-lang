@@ -1672,6 +1672,19 @@ what_template = "`{callee}` gets its command channel from `{expr}`, which is not
 what_instead_template = "Bind the channel first, then spawn: `let commands = {expr}` and `let h = background {callee}(commands, …)`. Call `commands.close()` when you are done sending."
 why_template = "A task handle can send into its channel (`h.send(value)`) but cannot close it — only the channel binding can. Without a binding, a task waiting on `receive()` can never be told the stream has ended, so it waits forever."
 
+# v0.3-M9 C1b (security): a union value reaching a slot that expects one of its variants. The
+# union is a 16-byte tagged envelope; the slot reads it as the bare variant, so the callee reads
+# the envelope's tag/data words as the variant's fields (a segfault whose read address the
+# value controls). `{value}` is the value as source text, `{union}` its type (`Tiny | Big`),
+# `{variant}` the variant the slot expects, `{needs}` the slot ("`showBig` expects a `Big` here",
+# "this function must return a `Big`", "`b` is declared as `Big`").
+# Decided v0.3-M9 C1b: `git log --grep=UnionWhereVariantExpected`.
+[[diagnostic_template]]
+kind_name = "UnionWhereVariantExpected"
+what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
+what_instead_template = "Check which variant it holds first, then use it inside that arm: `if ({value}) { is {variant} => { … } }` — inside the arm, `{value}` is a `{variant}`. Handle the other variants in their own `is` arms, or in an `else =>` arm."
+why_template = "A `{union}` is a box with a tag saying which variant is inside. Code that expects a plain `{variant}` reads the box's bytes as `{variant}` fields, which is only right when the tag says `{variant}` — for any other variant it reads the wrong bytes, or memory past the box, and can crash. Inside an `is {variant}` arm the compiler knows the tag matched, so `{value}` is a `{variant}` there and can be passed on."
+
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
 # `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
 # source text (`expr_source_text` — an identifier for the common bound-value case, the full

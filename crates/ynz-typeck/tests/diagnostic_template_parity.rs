@@ -672,3 +672,27 @@ fn message_before_failed_check_refuses_a_non_ident_receiver() {
         &[("name", "freshResult()"), ("field", "message")],
     );
 }
+
+#[test]
+fn union_where_variant_expected_is_rendered_from_the_registry() {
+    // WHY: v0.3-M9 C1b — a union reaching a variant slot used to compile and crash; its refusal
+    // text must come from the registry template, not a hand-written twin.
+    assert_rendered(
+        DiagnosticKind::UnionWhereVariantExpected,
+        "shape Tiny { flag: boolean }\n\
+         shape Big { label: string }\n\
+         shape Thing = Tiny | Big\n\
+         function showBig(share b: Big) -> string { return b.label }\n\
+         function entrypoint() -> nothing {\n\
+           let big: Big = { label: `hello` }\n\
+           let thing: Thing = big\n\
+           print(showBig(thing))\n\
+         }",
+        &[
+            ("value", "thing"),
+            ("union", "Tiny | Big"),
+            ("variant", "Big"),
+            ("needs", "`showBig` expects a `Big` here"),
+        ],
+    );
+}

@@ -126,6 +126,27 @@ fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)])
     .with_kind(kind)
 }
 
+/// The teaching diagnostic for a union value reaching a slot that expects one of its variants
+/// (`UnionWhereVariantExpected`). `needs` finishes the sentence "…, but {needs}" and names the
+/// slot: `showBig` expects a `Big` here, the function must return a `Big`, ….
+fn union_where_variant_expected_diag(
+    value: &Expr,
+    source_union: &Type,
+    expected_variant: &Type,
+    needs: &str,
+) -> Diagnostic {
+    registry_diag(
+        value.span().clone(),
+        DiagnosticKind::UnionWhereVariantExpected,
+        &[
+            ("value", &expr_source_text(value)),
+            ("union", &type_name(source_union)),
+            ("variant", &type_name(expected_variant)),
+            ("needs", needs),
+        ],
+    )
+}
+
 /// What a binding event (`let`, reassignment) makes the name denote: the origin and live alias
 /// class it takes, and every declaration whose value it now holds (the transfer record's join
 /// edges — the live scope only needs the class).
@@ -2528,7 +2549,7 @@ impl<'b> Checker<'b> {
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
 
         // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): `let x: number = 5`
-        // hints the int literal to `number`, so `types_compatible(number, number)`
+        // hints the int literal to `number`, so `can_assign(number, number)`
         // admits it — then codegen ICEs storing a raw i64 into the decimal128 pointer
         // slot (the store-site #9 class). Route it through the SAME shared teaching
         // gate as every other int-literal→`number` slot (authoritative-derivation: one
@@ -2567,21 +2588,30 @@ impl<'b> Checker<'b> {
         let binding_ty = if let Some(ann_ty) = &annotated_ty {
             if value_ty == Type::Error || *ann_ty == Type::Error {
                 Type::Error
-            } else if !types_compatible(ann_ty, &value_ty) {
-                self.diags.push(Diagnostic::error(
-                    value.span().clone(),
-                    format!(
-                        "This value is `{}`, but `{}` is declared as `{}`.",
-                        type_name(&value_ty),
-                        name,
-                        type_name(ann_ty)
-                    ),
-                    format!(
-                        "Change the annotation to `{}`, or use a different value.",
-                        type_name(&value_ty)
-                    ),
-                    "The value on the right side must match the type annotation on the left.",
-                ));
+            } else if !can_assign(ann_ty, &value_ty) {
+                if is_union_into_its_variant(ann_ty, &value_ty) {
+                    self.diags.push(union_where_variant_expected_diag(
+                        value,
+                        &value_ty,
+                        ann_ty,
+                        &format!("`{name}` is declared as `{}`", type_name(ann_ty)),
+                    ));
+                } else {
+                    self.diags.push(Diagnostic::error(
+                        value.span().clone(),
+                        format!(
+                            "This value is `{}`, but `{}` is declared as `{}`.",
+                            type_name(&value_ty),
+                            name,
+                            type_name(ann_ty)
+                        ),
+                        format!(
+                            "Change the annotation to `{}`, or use a different value.",
+                            type_name(&value_ty)
+                        ),
+                        "The value on the right side must match the type annotation on the left.",
+                    ));
+                }
                 Type::Error
             } else if matches!(ann_ty, Type::Union { .. }) {
                 // M6: for union type annotations, use the declared union type as the binding type,
@@ -3875,18 +3905,30 @@ impl<'b> Checker<'b> {
                 if self.reject_int_literal_number_slot(NumberSlotRole::Return, ret, expr) {
                     return;
                 }
-                if val_ty != Type::Error && *ret != Type::Error && !types_compatible(ret, &val_ty) {
+                if val_ty != Type::Error && *ret != Type::Error && !can_assign(ret, &val_ty) {
                     // M7 P3a: in an errors-capable function, returning the inner success
                     // type is valid (the auto-propagation machinery wraps it at codegen).
                     let compatible = if let Type::ErrorsCapable { inner } = ret {
-                        types_compatible(&val_ty, inner)
+                        can_assign(inner, &val_ty)
                     } else if let Type::ErrorsCapable { inner } = &val_ty {
                         // Returning an ErrorsCapable value from an errors function is also valid.
-                        self.current_fn_errors_capable && types_compatible(inner, ret)
+                        self.current_fn_errors_capable && can_assign(ret, inner)
                     } else {
                         false
                     };
-                    if !compatible {
+                    // The variant the return type declares, with an `errors` wrapper peeled.
+                    let declared_variant = match ret {
+                        Type::ErrorsCapable { inner } => inner.as_ref(),
+                        _ => ret,
+                    };
+                    if !compatible && is_union_into_its_variant(declared_variant, &val_ty) {
+                        self.diags.push(union_where_variant_expected_diag(
+                            expr,
+                            &val_ty,
+                            declared_variant,
+                            &format!("this function must return a `{}`", type_name(ret)),
+                        ));
+                    } else if !compatible {
                         self.diags.push(Diagnostic::error(
                             expr.span().clone(),
                             format!(
@@ -6474,7 +6516,7 @@ impl<'b> Checker<'b> {
                         "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
                     ));
                 }
-            } else if actual_ty != Type::Error && !types_compatible(expected_ty, &actual_ty) {
+            } else if actual_ty != Type::Error && !can_assign(expected_ty, &actual_ty) {
                 // Accept a concrete shape as a `dynamic Contract` argument when the
                 // shape's declaration includes `follows Contract`.
                 //
@@ -6491,7 +6533,14 @@ impl<'b> Checker<'b> {
                     _ => false,
                 };
 
-                if !is_valid_dyn_coerce {
+                if !is_valid_dyn_coerce && is_union_into_its_variant(expected_ty, &actual_ty) {
+                    self.diags.push(union_where_variant_expected_diag(
+                        arg,
+                        &actual_ty,
+                        expected_ty,
+                        &format!("`{name}` expects a `{}` here", type_name(expected_ty)),
+                    ));
+                } else if !is_valid_dyn_coerce {
                     self.diags.push(Diagnostic::error(
                         arg.span().clone(),
                         format!(
@@ -8573,7 +8622,22 @@ impl<'b> Checker<'b> {
                     }
                     if actual != Type::Error
                         && expected != Type::Error
-                        && !types_compatible(&actual, &expected)
+                        && !can_assign(&expected, &actual)
+                        && is_union_into_its_variant(&expected, &actual)
+                    {
+                        self.diags.push(union_where_variant_expected_diag(
+                            &lit_field.value,
+                            &actual,
+                            &expected,
+                            &format!(
+                                "`{shape_name}.{}` is declared as a `{}`",
+                                lit_field.name,
+                                type_name(&expected)
+                            ),
+                        ));
+                    } else if actual != Type::Error
+                        && expected != Type::Error
+                        && !can_assign(&expected, &actual)
                     {
                         self.diags.push(Diagnostic::error(
                             lit_field.name_span.clone(),
@@ -9427,49 +9491,88 @@ pub(crate) fn collect_union_aliases(
     aliases
 }
 
-/// Check whether two types are compatible for assignment.
+/// Can a value of type `source` be assigned to a slot of type `target`?
 ///
-/// This is mostly structural equality, with one exception: `BuiltinFixed` ignores the
-/// `size` field so that `let f: fixed<int> = [1, 2, 3]` does not fail (annotation has
-/// `size: None`; the literal infers `size: Some(3)`).
-fn types_compatible(a: &Type, b: &Type) -> bool {
-    match (a, b) {
-        (Type::BuiltinFixed { elem: ea, .. }, Type::BuiltinFixed { elem: eb, .. }) => {
-            types_compatible(ea, eb)
+/// The check is **directional**: `target` is what the slot (annotation, parameter, return
+/// type, field) declares, `source` is what the value is. Argument order is the assignment
+/// order, `target` first, and swapping them changes the answer.
+///
+/// This is mostly structural equality, with these exceptions:
+/// - `BuiltinFixed` ignores the `size` field so that `let f: fixed<int> = [1, 2, 3]` does not
+///   fail (annotation has `size: None`; the literal infers `size: Some(3)`).
+/// - A concrete variant widens into a union that lists it (`Big` into `Tiny | Big`,
+///   `map<string,string>` into `map<string,string> | nothing`). The reverse never holds: a
+///   union is a tagged envelope, and a slot that expects one variant reads the envelope's
+///   bytes as that variant — wrong data, or memory past the 16-byte envelope. Narrow it with
+///   an `is Variant` arm first.
+/// - Any `number<A>` is assignable to any `number<B>` (the narrowing warning is emitted in
+///   `check_let_stmt`).
+/// - Element and payload types of containers (`array`, `fixed`, `maybe`, `errors`, union
+///   variants) must agree in BOTH directions: a container of variants and a container of
+///   unions have different memory layouts, so neither converts to the other.
+///
+/// O(size of the types) time and space.
+fn can_assign(target: &Type, source: &Type) -> bool {
+    match (target, source) {
+        (
+            Type::BuiltinFixed {
+                elem: target_elem, ..
+            },
+            Type::BuiltinFixed {
+                elem: source_elem, ..
+            },
+        )
+        | (Type::BuiltinArray { elem: target_elem }, Type::BuiltinArray { elem: source_elem })
+        | (Type::Maybe { inner: target_elem }, Type::Maybe { inner: source_elem })
+        | (
+            Type::ErrorsCapable { inner: target_elem },
+            Type::ErrorsCapable { inner: source_elem },
+        ) => same_layout(target_elem, source_elem),
+        // M6: a union is assignable to a union with the same variants in the same order.
+        (
+            Type::Union {
+                variants: target_variants,
+            },
+            Type::Union {
+                variants: source_variants,
+            },
+        ) => {
+            target_variants.len() == source_variants.len()
+                && target_variants.iter().zip(source_variants.iter()).all(
+                    |(target_variant, source_variant)| same_layout(target_variant, source_variant),
+                )
         }
-        (Type::BuiltinArray { elem: ea }, Type::BuiltinArray { elem: eb }) => {
-            types_compatible(ea, eb)
-        }
-        (Type::Maybe { inner: ia }, Type::Maybe { inner: ib }) => types_compatible(ia, ib),
-        // M6: union type compatibility — same set of variants (order-insensitive for now).
-        (Type::Union { variants: va }, Type::Union { variants: vb }) => {
-            va.len() == vb.len()
-                && va
-                    .iter()
-                    .zip(vb.iter())
-                    .all(|(a, b)| types_compatible(a, b))
-        }
-        // M6: assigning a concrete variant type to a union is valid.
-        // e.g., `let s: Circle | Square = { radius: 5.0 }` — Circle is a valid union value.
-        (Type::Union { variants }, concrete) => {
-            variants.iter().any(|v| types_compatible(v, concrete))
-        }
-        // Symmetric: a concrete type is compatible with a union if it matches any variant.
-        // e.g., map<string,string> is valid for map<string,string> | nothing.
-        (concrete, Type::Union { variants }) => {
-            variants.iter().any(|v| types_compatible(concrete, v))
-        }
-        // M7 P3a: ErrorsCapable is compatible with itself when inner types match.
-        (Type::ErrorsCapable { inner: ia }, Type::ErrorsCapable { inner: ib }) => {
-            types_compatible(ia, ib)
-        }
+        // A concrete variant widens into a union that lists it, e.g. `let s: Circle | Square =
+        // { radius: 5.0 }` or `map<string,string>` for `map<string,string> | nothing`.
+        (Type::Union { variants }, concrete_source) => variants
+            .iter()
+            .any(|variant| can_assign(variant, concrete_source)),
         // M8 P6: mixed-precision number compatibility.
         // Any number<A> is compatible with any number<B> — widening always succeeds;
         // narrowing (A > B) will emit a warning at the call site. Here we just
         // allow the assignment so the program can type-check. The narrowing warning
         // is emitted in check_let_stmt when we detect precision shrinkage.
         (Type::Number { .. }, Type::Number { .. }) => true,
-        _ => a == b,
+        // A union source into a non-union target (a variant slot) falls through to here and
+        // is refused: `Type::Union != <anything that is not a union>`.
+        _ => target == source,
+    }
+}
+
+/// Do two element or payload types have the same memory layout, so a container of one is a
+/// container of the other? True when each is assignable to the other.
+fn same_layout(first: &Type, second: &Type) -> bool {
+    can_assign(first, second) && can_assign(second, first)
+}
+
+/// `source` is a union that lists `target` as one of its variants, and `target` is not itself a
+/// union: the shape of the bug where a tagged envelope reaches a slot that expects the bare
+/// variant. Used to pick the teaching diagnostic over the generic type mismatch.
+fn is_union_into_its_variant(target: &Type, source: &Type) -> bool {
+    match (target, source) {
+        (Type::Union { .. }, _) => false,
+        (_, Type::Union { variants }) => variants.iter().any(|variant| can_assign(target, variant)),
+        _ => false,
     }
 }
 

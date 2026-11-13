@@ -3677,7 +3677,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// narrowable binding (typeck applies no overlay then either).
     ///
     /// Typeck still accepts the narrowed binding where the UNION is expected (a union
-    /// parameter, a union return: `types_compatible` admits a variant there), and no such
+    /// parameter, a union return: `can_assign` admits a variant there), and no such
     /// site wraps a shape into an envelope. Those uses (`union_slot_uses_in_block` over
     /// `arm_body`) keep the envelope (`narrowed_envelope_use`); handing them the payload
     /// pointer would make the callee read a 16-byte envelope out of a smaller variant.
