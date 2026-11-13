@@ -323,6 +323,13 @@ fn roots_of(p: Provenance) -> Option<Vec<String>> {
     }
 }
 
+/// The bindings a receiver expression reaches (`None` = untraceable). A piece of the receiver
+/// is a piece of each of them, so field/index/method results inherit the whole set — not just
+/// the root of a name chain, which loses every receiver that is a call or method result.
+fn receiver_roots(receiver: &Expr, ctx: &ProvenanceCtx<'_>) -> Option<Vec<String>> {
+    roots_of(provenance(receiver, ctx))
+}
+
 /// Fold the provenance of an aggregate's parts (a literal's elements, a call's arguments):
 /// `Fresh` iff every heap-typed part is `Fresh`; else `Reaches(∪ roots)`; `Unknown` if any
 /// part is. `skip_value_typed` drops parts the oracle proves value-like (a literal of ints
@@ -397,14 +404,14 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
         // Exactly the value a binding names — the binding's ORIGIN decides transferability.
         Expr::Ident(name, _) => Provenance::Whole(name.clone()),
         Expr::SelfValue { .. } => Provenance::Whole("self".to_string()),
-        // A piece of whatever the receiver chain roots in; a piece of a fresh temp is
-        // `Reaches([])` — still not transferable.
+        // A piece of whatever the receiver reaches: a binding chain roots in its binding, a call
+        // or method result in the bindings that result may hold (`firstBag(bags).items` is a
+        // piece of `bags`). A piece of a fresh temp is `Reaches([])` — still not transferable.
         Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. } => {
-            Provenance::Reaches(
-                root_binding_name(receiver)
-                    .map(|r| vec![r.to_string()])
-                    .unwrap_or_default(),
-            )
+            match receiver_roots(receiver, ctx) {
+                Some(roots) => Provenance::Reaches(roots),
+                None => Provenance::Unknown,
+            }
         }
         Expr::ArrayLit { elements, .. } => fold_parts(elements.iter(), ctx, true),
         Expr::MapLit { entries, .. } => {
@@ -471,9 +478,9 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             // The result may be (a piece of) the receiver OR of a heap argument the method hands
             // back or builds from: `maybe.or(default)`, `a.concat(b)`, `a.append(b)`. Every
             // heap argument's roots are roots of the result (value-typed arguments drop out).
-            let mut roots: Vec<String> = root_binding_name(receiver)
-                .map(|r| vec![r.to_string()])
-                .unwrap_or_default();
+            let Some(mut roots) = receiver_roots(receiver, ctx) else {
+                return Provenance::Unknown;
+            };
             match fold_parts(args.iter(), ctx, true) {
                 Provenance::Fresh => {}
                 Provenance::Reaches(argument_roots) => {

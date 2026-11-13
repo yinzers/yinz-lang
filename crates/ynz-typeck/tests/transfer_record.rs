@@ -578,3 +578,72 @@ fn a_builtin_methods_result_reaches_its_heap_arguments() {
     assert!(transfers.same_class("a", "b"), "{transfers:#?}");
     assert_eq!(escapes_of(&transfers, "b"), vec![Escape::Returned]);
 }
+
+// ── receivers that are not a name chain (fixer round 1) ─────────────────────
+
+const FIRST_BAG: &str = "shape Bag {
+  items: array<int>
+}
+function firstBag(share bags: array<Bag>) -> Bag {
+  let fallback: Bag = { items: [] }
+  return bags[0].or(fallback)
+}
+";
+
+/// (High) Bug caught: `firstBag(bags).items` is a piece of `bags` (the callee returns one of its
+/// elements), but the field access rooted only in NAME chains and recorded no root. Stored into
+/// the returned `o`, `n` then freed `bags[0].items` at `bags`'s scope exit while `o` still held it.
+#[test]
+fn a_field_of_a_call_result_is_a_piece_of_the_calls_arguments() {
+    let source = format!(
+        "{FIRST_BAG}function f() -> array<array<int>> {{
+  let bags: array<Bag> = [{{ items: [1] }}]
+  let o: array<array<int>> = []
+  let n: array<int> = firstBag(bags).items
+  o.add(n)
+  return o
+}}"
+    );
+    let transfers = transfers_of(&source, "f");
+    assert!(transfers.same_class("bags", "o"), "{transfers:#?}");
+    assert!(transfers.same_class("bags", "n"), "{transfers:#?}");
+}
+
+/// (High) Bug caught: a store whose PLACE is a call result (`firstBag(bags).items = a`) was
+/// recorded as a store into a temporary, so `a` and the `bags` that now hold it stayed apart.
+#[test]
+fn a_store_into_a_piece_of_a_call_result_joins_the_arguments() {
+    let source = format!(
+        "{FIRST_BAG}function f() -> array<int> {{
+  let bags: array<Bag> = [{{ items: [1] }}]
+  let a: array<int> = [5]
+  firstBag(bags).items = a
+  return a
+}}"
+    );
+    let transfers = transfers_of(&source, "f");
+    assert!(transfers.same_class("bags", "a"), "{transfers:#?}");
+}
+
+/// (High) Bug caught: `for (row in rows.concat(extra))` joined the loop cell to nothing (the
+/// iterated expression is a method call, not a name), so `out.add(row)` left `rows` and `extra`
+/// free to release the rows `out` holds.
+#[test]
+fn a_loop_cell_joins_everything_the_iterated_value_reaches() {
+    let source = "function f() -> array<array<int>> {
+  let rows: array<array<int>> = [[1]]
+  let extra: array<array<int>> = [[2]]
+  let out: array<array<int>> = []
+  for (row in rows.concat(extra)) {
+    out.add(row)
+  }
+  return out
+}";
+    let transfers = transfers_of(source, "f");
+    for member in ["rows", "extra", "out", "row"] {
+        assert!(
+            transfers.same_class("rows", member),
+            "{member}: {transfers:#?}"
+        );
+    }
+}

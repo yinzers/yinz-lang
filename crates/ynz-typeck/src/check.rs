@@ -3765,17 +3765,25 @@ impl<'b> Checker<'b> {
 
         self.scope.push();
         // A loop variable is one CELL of the iterated value — never transferable — and joins
-        // the iterated root's alias class (if a root is given away, the cells go with it).
-        let iterated_root = root_binding_name(iter).map(str::to_string);
-        let alias_class = match iterated_root
-            .as_deref()
-            .and_then(|r| self.scope.class_of(r))
+        // the alias class of every binding the iterated value reaches (if a root is given away,
+        // the cells go with it). Computed before the variable is declared: `for (a in a.items)`.
+        let iterated_holders = self.heap_holders_of(iter);
+        let alias_class = match iterated_holders
+            .iter()
+            .find_map(|(name, _)| self.scope.class_of(name))
         {
-            Some(c) => c,
+            Some(kept) => {
+                for (name, _) in &iterated_holders {
+                    if let Some(other) = self.scope.class_of(name) {
+                        self.scope.merge_classes(kept, other);
+                    }
+                }
+                kept
+            }
             None => self.scope.new_class(),
         };
-        let cell_reason = match &iterated_root {
-            Some(r) => format!("one cell of `{r}`, which this loop is walking"),
+        let cell_reason = match iterated_holders.first() {
+            Some((root, _)) => format!("one cell of `{root}`, which this loop is walking"),
             None => "one cell of the value this loop is walking".to_string(),
         };
         self.declare_binding(
@@ -3792,9 +3800,9 @@ impl<'b> Checker<'b> {
                 defined_at: var_span.clone(),
             },
         );
-        if let (Some(declaration), Some(root)) = (self.declaration_of(var), &iterated_root) {
-            if let Some(root_declaration) = self.declaration_of(root) {
-                self.transfers.join(&declaration, &root_declaration);
+        if let Some(declaration) = self.declaration_of(var) {
+            for (_, holder) in &iterated_holders {
+                self.transfers.join(&declaration, holder);
             }
         }
         let loop_mark = self.begin_loop_body();
@@ -4628,23 +4636,24 @@ impl<'b> Checker<'b> {
         if holders.is_empty() {
             return;
         }
-        let root = root_binding_name(place).map(str::to_string);
-        let Some(root) = root.filter(|name| self.scope.lookup(name).is_some()) else {
+        // The place's holders come from its provenance, not the root of its name chain: a place
+        // that is a call or method result (`firstBag(bags).items`) still reaches `bags`.
+        let places = self.heap_holders_of(place);
+        if places.is_empty() {
             for (_, holder) in holders {
                 self.transfers.escape(&holder, Escape::StoredIntoTemporary);
             }
             return;
-        };
-        let (Some(place_declaration), Some(place_class)) =
-            (self.declaration_of(&root), self.scope.class_of(&root))
-        else {
-            return;
-        };
-        for (name, holder) in holders {
-            if let Some(holder_class) = self.scope.class_of(&name) {
-                self.scope.merge_classes(place_class, holder_class);
+        }
+        for (place_name, place_declaration) in &places {
+            for (name, holder) in &holders {
+                if let (Some(place_class), Some(holder_class)) =
+                    (self.scope.class_of(place_name), self.scope.class_of(name))
+                {
+                    self.scope.merge_classes(place_class, holder_class);
+                }
+                self.transfers.join(place_declaration, holder);
             }
-            self.transfers.join(&place_declaration, &holder);
         }
     }
 
