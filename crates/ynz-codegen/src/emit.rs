@@ -19233,7 +19233,8 @@ fn to_c_string<'ctx>(
             .map(|v| v.into_pointer_value())
             .map_err(|e| format!("{e}")),
 
-        // Runtime format shims return a ptr into a thread-local static buffer.
+        // Runtime format shims return a fresh heap string the caller owns (`value_text` says
+        // who releases it).
         Type::Int => {
             let c = cg
                 .builder
