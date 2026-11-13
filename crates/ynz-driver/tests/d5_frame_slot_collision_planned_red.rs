@@ -17,19 +17,12 @@
 //     widened routing): heap corruption, SIGABRT "corrupted size vs. prev_size".
 //
 // These tests are the no-duct-tape planned-RED inverse: they assert the CORRECT
-// contract (each loop's variable reloads ITS OWN element values at both tiers), so
-// they FAIL today and go green only when the real fix — per-loop (or per-name+type)
-// frame-slot keying/classification — lands. Do NOT weaken an assertion or assert the
-// currently-observed garbage to force green: a red here is silent frame corruption in
-// the suspension machinery (the R8 / M3a-family class).
-//
-// test-ratchet: planned-RED lock authored per the Phase 6 review round (2026-07-17) —
-// `#[ignore]`d pending the Future Requirements fix, mirroring the FRAGO 011 / fr23
-// precedent (fr23_uaf_planned_red.rs). The fixing milestone removes the `#[ignore]`
-// marks; deleting or weakening these tests instead is the test-weakening corpse.
-//
-// Run explicitly (dev container): docker compose run --rm dev \
-//   cargo test -p ynz-driver --test d5_frame_slot_collision_planned_red -- --ignored
+// contract (each loop's variable reloads ITS OWN element values at both tiers). They were
+// `#[ignore]`d planned-RED locks until v0.3-M9 C4 (per-binding slot identity: typeck gives
+// every binding a unique codegen name, so two same-named loop variables no longer share a
+// frame slot) fixed the hazard; the `#[ignore]` marks are gone and they run in the normal
+// suite. Do NOT weaken an assertion or assert garbage to force green: a red here is silent
+// frame corruption in the suspension machinery (the R8 / M3a-family class).
 
 use std::{
     path::PathBuf,
@@ -130,7 +123,6 @@ fn assert_tier_reloads_own_loop_values(tier_args: &[&str], tier_label: &str) {
 }
 
 #[test]
-#[ignore = "planned-RED: name-keyed loop-var frame-slot collision on suspending-body loops — pre-existing hazard D5 declines around; fix is per-loop slot keying (plan Future Requirements, ELEVATED)"]
 fn d5_red_suspending_loops_sharing_var_name_reload_their_own_values_default() {
     // WHY: locks the correct contract on the shipped default tier — the second loop's
     // string variable must reload `anchor`/`harbor`, not raw bytes through the first
@@ -139,7 +131,6 @@ fn d5_red_suspending_loops_sharing_var_name_reload_their_own_values_default() {
 }
 
 #[test]
-#[ignore = "planned-RED: name-keyed loop-var frame-slot collision on suspending-body loops — pre-existing hazard D5 declines around; fix is per-loop slot keying (plan Future Requirements, ELEVATED)"]
 fn d5_red_suspending_loops_sharing_var_name_reload_their_own_values_o0() {
     // WHY: the --no-optimize escape hatch shares the identical name-keyed slot
     // machinery and must hold the same contract independently.

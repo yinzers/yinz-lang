@@ -7900,10 +7900,6 @@ fn lower_sm_for<'ctx, 'g>(
             flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
         }
 
-        // v0.3-M5 P5: loop-var mask (same contract as the non-SM array loop) —
-        // the only shadow case an admitted binding can hit is its own loop var.
-        let soa_masked = cg.soa_bindings.remove(var);
-
         // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
         let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
@@ -7918,10 +7914,6 @@ fn lower_sm_for<'ctx, 'g>(
             shape_table,
             current_state,
         )?;
-
-        if let Some(m) = soa_masked {
-            cg.soa_bindings.insert(var.to_string(), m);
-        }
 
         if !is_block_terminated(cg) {
             // Release this iteration's allocas before the back edge (leaf bodies only).
@@ -13872,7 +13864,8 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             }
             let val_ty = cg.expr_type(value);
             // v0.3-M5 P5: SoA construction interception. The authority keys a
-            // decision by (array_name, decl_span) — only THIS binding's literal
+            // decision by decl_span ALONE (the name is renamed per binding for codegen, the
+            // declaration span is not) — only THIS binding's literal
             // constructs segmented; every other path stays AoS byte-for-byte.
             // The returned arr pointer flows through the arm's existing binding
             // store unchanged (BuiltinArray = plain pointer store).
@@ -13881,8 +13874,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 .arrays
                 .iter()
                 .find(|d| {
-                    d.array_name == *name
-                        && d.decl_span == *span
+                    d.decl_span == *span
                         && matches!(d.kind, ynz_typeck::soa::LayoutKind::Soa { .. })
                 })
                 .cloned();
@@ -14805,21 +14797,11 @@ fn lower_stmt_for<'ctx>(
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
 
-        // v0.3-M5 P5: loop-var mask — `for (pts in pts)` shadows an admitted
-        // binding WITHOUT a `Stmt::Let` (admission's shadow-decline already
-        // covers every same-name `let`, so this is the ONLY shadow case).
-        // Inside the body the name means the by-value element, never the array.
-        let soa_masked = cg.soa_bindings.remove(var);
-
         for stmt in &body.stmts {
             if is_block_terminated(cg) {
                 break;
             }
             lower_stmt(cg, stmt)?;
-        }
-
-        if let Some(m) = soa_masked {
-            cg.soa_bindings.insert(var.to_string(), m);
         }
 
         if !is_block_terminated(cg) {

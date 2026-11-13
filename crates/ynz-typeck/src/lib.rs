@@ -39,6 +39,7 @@
 //! - `types` — the [`Type`] enum: all types the type checker knows.
 
 pub mod ast_offset;
+pub mod binding_names;
 pub mod builtins;
 pub mod check;
 pub mod cpu_admission;

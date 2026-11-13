@@ -156,3 +156,24 @@ slot_case!(
     "out\nin\nin\nout\n",
     "`background work(tag)` with a shadowed crossing `tag`: the outer task/`print(tag)` saw `in` (High)"
 );
+
+// ── Shadow matrix rows (non-crossing / mixed-type shadows of a crossing param or local) ──
+
+slot_case!(
+    m01_param_vs_noncrossing_for_var,
+    "v0_3_m9_slot_m01_param_vs_noncrossing_for_var.ynz",
+    "amy\nbob\nparam\n",
+    "NON-crossing `for (n ..)` shadowing a crossing param `n`: shared the param's alloca/slot (High)"
+);
+slot_case!(
+    m02_local_vs_noncrossing_for_var,
+    "v0_3_m9_slot_m02_local_vs_noncrossing_for_var.ynz",
+    "amy\nbob\nouter\n",
+    "NON-crossing `for (n ..)` shadowing a crossing local `n`: shared the local's alloca/slot (High)"
+);
+slot_case!(
+    m03_param_int_vs_for_var_string,
+    "v0_3_m9_slot_m03_param_int_vs_for_var_string.ynz",
+    "amy\nbob\n41\n",
+    "crossing param `n: int` vs crossing `for (n in strings)`: slot width/type came from one binding (High)"
+);

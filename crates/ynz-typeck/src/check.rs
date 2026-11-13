@@ -390,6 +390,34 @@ pub struct TypedModule {
     /// flag — so all consumers key off ONE producer (authoritative-derivation.md), never
     /// a per-consumer re-derivation.
     pub back_edge_yield_admitted: std::collections::HashSet<String>,
+    /// v0.3-M9 C4: the unique codegen name of every binding declaration and the declaration
+    /// each identifier use resolves to (typeck's resolver is the single source). Codegen applies
+    /// it to its own AST clone via `BindingNames::apply`; diagnostics, lints and the LSP keep
+    /// `module` and its user names.
+    pub binding_names: crate::binding_names::BindingNames,
+}
+
+impl TypedModule {
+    /// This module as codegen reads it: every binding declaration and use carries its unique
+    /// codegen name (`binding_names`), so name-keyed backend structures hold one binding each.
+    /// `self` — the AST diagnostics, lints and the LSP read — keeps the user's names.
+    ///
+    /// Hard error when the record has a hole (see `BindingNames::apply`); never falls back to
+    /// the raw names.
+    ///
+    /// O(size of the module and its type map) time and memory: one clone.
+    pub fn with_codegen_names(&self) -> Result<TypedModule, String> {
+        let module = self.binding_names.apply(&self.module)?;
+        Ok(TypedModule {
+            module,
+            expr_types: self.expr_types.clone(),
+            background_arg_inferred_ownership: self.background_arg_inferred_ownership.clone(),
+            background_arg_sole_holder: self.background_arg_sole_holder.clone(),
+            cross_thread_padded_shapes: self.cross_thread_padded_shapes.clone(),
+            back_edge_yield_admitted: self.back_edge_yield_admitted.clone(),
+            binding_names: self.binding_names.clone(),
+        })
+    }
 }
 
 /// Run the M5 type checker over all function bodies.
@@ -468,8 +496,10 @@ pub fn check(
         padded_shapes: HashSet::new(),
         back_edge_yield_admitted: std::collections::HashSet::new(),
         bg_union_narrowed_diag_spans: HashSet::new(),
+        binding_names: crate::binding_names::BindingNameRecorder::default(),
     };
     checker.check_module(module);
+    let binding_names = checker.binding_names.finish();
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -477,6 +507,7 @@ pub fn check(
         background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
+        binding_names,
     };
     (
         typed,
@@ -553,8 +584,10 @@ pub fn check_with_kernel_mode(
         padded_shapes: HashSet::new(),
         back_edge_yield_admitted: std::collections::HashSet::new(),
         bg_union_narrowed_diag_spans: HashSet::new(),
+        binding_names: crate::binding_names::BindingNameRecorder::default(),
     };
     checker.check_module(module);
+    let binding_names = checker.binding_names.finish();
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -562,6 +595,7 @@ pub fn check_with_kernel_mode(
         background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
+        binding_names,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -801,6 +835,10 @@ struct Checker<'b> {
     /// pushed twice for one spawn. Keyed by the receiver's span; the function's
     /// other return paths are pure (no side effect) and need no dedup.
     bg_union_narrowed_diag_spans: HashSet<(usize, usize)>,
+    /// v0.3-M9 C4: every binding declaration and identifier use, with the unique codegen name of
+    /// each declaration (`crate::binding_names`). Recorded by `declare_binding` /
+    /// `note_binding_use`; carried on `TypedModule::binding_names`.
+    binding_names: crate::binding_names::BindingNameRecorder,
 }
 
 impl<'b> Checker<'b> {
@@ -938,6 +976,8 @@ impl<'b> Checker<'b> {
             return;
         }
 
+        self.binding_names.begin_function(&f.span);
+
         // ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner } already.
         let ret_ty = self.ast_type_to_type(&f.return_type);
         self.current_fn_ret = ret_ty.clone();
@@ -983,7 +1023,7 @@ impl<'b> Checker<'b> {
                 }
             }
             let alias_class = self.scope.new_class();
-            self.scope.insert(
+            self.declare_binding(
                 param.name.clone(),
                 ScopeEntry {
                     ty: param_ty,
@@ -1741,6 +1781,7 @@ impl<'b> Checker<'b> {
     /// Generic bodies are checked with TypeParam types in scope. No return-path
     /// analysis at P3a — the generic signature is trusted; codegen verifies per-instantiation.
     fn check_generic_function_body(&mut self, f: &FunctionDecl) {
+        self.binding_names.begin_function(&f.span);
         // Push type param names into the type_param_scope.
         for gp in &f.generics {
             self.type_param_scope.insert(gp.name.clone(), ());
@@ -1762,7 +1803,7 @@ impl<'b> Checker<'b> {
         for param in &f.params {
             let param_ty = self.ast_type_to_type(&param.ty);
             let alias_class = self.scope.new_class();
-            self.scope.insert(
+            self.declare_binding(
                 param.name.clone(),
                 ScopeEntry {
                     ty: param_ty,
@@ -2347,7 +2388,7 @@ impl<'b> Checker<'b> {
             self.derivable_conduits.insert(name.to_string());
             // A task handle is the spawn's sole reference: `Fresh` → `Owned`, its own class.
             let alias_class = self.scope.new_class();
-            self.scope.insert(
+            self.declare_binding(
                 name.to_string(),
                 ScopeEntry {
                     ty: handle_ty,
@@ -2387,7 +2428,7 @@ impl<'b> Checker<'b> {
                 // Bind the name at the annotated `number` type so later uses don't
                 // cascade into spurious unknown-variable diagnostics.
                 let alias_class = self.scope.new_class();
-                self.scope.insert(
+                self.declare_binding(
                     name.to_string(),
                     ScopeEntry {
                         ty: ann_ty.clone(),
@@ -2457,7 +2498,7 @@ impl<'b> Checker<'b> {
         // outer entry keeps its own origin, class and consumed state (it still names its
         // old value). The same rule `check_assign` applies on a reassignment.
         let (origin, alias_class) = self.binding_event_origin(value);
-        self.scope.insert(
+        self.declare_binding(
             name.to_string(),
             ScopeEntry {
                 ty: binding_ty,
@@ -3185,6 +3226,7 @@ impl<'b> Checker<'b> {
     }
 
     fn check_assign(&mut self, target: &str, target_span: &SourceSpan, value: &Expr) {
+        self.note_binding_use(target, target_span);
         let value_ty = self.infer_expr(value, None);
 
         match self.scope.lookup(target) {
@@ -3615,7 +3657,7 @@ impl<'b> Checker<'b> {
             Some(r) => format!("one cell of `{r}`, which this loop is walking"),
             None => "one cell of the value this loop is walking".to_string(),
         };
-        self.scope.insert(
+        self.declare_binding(
             var.to_string(),
             ScopeEntry {
                 ty: elem_ty,
@@ -4376,6 +4418,27 @@ impl<'b> Checker<'b> {
         ty
     }
 
+    /// THE one place a binding enters the scope. Besides `Scope::insert` it records the
+    /// declaration for the per-binding codegen names (`crate::binding_names`), keyed by where
+    /// the binding was declared and the name it was declared with.
+    fn declare_binding(&mut self, name: String, entry: ScopeEntry) {
+        self.binding_names
+            .declare(crate::binding_names::decl_key(&entry.defined_at, &name));
+        self.scope.insert(name, entry);
+    }
+
+    /// Record which declaration the identifier `name` written at `use_span` resolves to — the
+    /// SAME scope lookup that types it, so the codegen names can never disagree with typeck's
+    /// own resolution. A name with no binding in scope records nothing (a function, a type, or
+    /// an error already diagnosed).
+    fn note_binding_use(&mut self, name: &str, use_span: &SourceSpan) {
+        if let Some(entry) = self.scope.lookup(name) {
+            let declaration = crate::binding_names::decl_key(&entry.defined_at, name);
+            self.binding_names
+                .note_use(crate::binding_names::use_key(use_span, name), declaration);
+        }
+    }
+
     /// Narrowing-aware plain-ident binding type: the union `is`-arm overlay
     /// (`union_narrowed`) wins over the raw scope entry. This is the ONE
     /// narrowing-aware, side-effect-free read for "what type does this binding have
@@ -4393,6 +4456,7 @@ impl<'b> Checker<'b> {
     }
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
+        self.note_binding_use(name, span);
         // M6: if inside a union `is` arm, the binding is narrowed to a specific variant.
         // The overlay branch reads through `binding_ty_narrowed` (the one narrowing-aware
         // source); only the narrowed case returns here — the un-narrowed path continues

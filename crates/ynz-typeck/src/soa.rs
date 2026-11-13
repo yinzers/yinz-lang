@@ -221,7 +221,7 @@ pub const ARRAY_USING_SOA_LAYOUT: &str = "array-using-soa-layout";
 /// ARE SoA, post-D11 padding precedence) and the candidate list (which carries the
 /// per-site teaching vars `provable_len` + `hot_fields` on `SoaVerdict::Admitted`;
 /// `resolve_layout` drops them, so the pairing here recovers them by
-/// `(array_name, decl_span)`). No re-derivation: a second "is this array SoA?"
+/// `decl_span` alone — the array name is the user's, for the lint text). No re-derivation: a second "is this array SoA?"
 /// computation here would be the E3 twin-derivation corpse
 /// (authoritative-derivation.md) — this function only READS the one authority.
 ///
@@ -242,7 +242,7 @@ pub fn layout_lints(decisions: &LayoutDecisions, candidates: &[SoaCandidate]) ->
         // the defensive skip keeps this total if that invariant ever shifts.
         let Some((provable_len, hot_fields)) = candidates
             .iter()
-            .find(|c| c.array_name == decision.array_name && c.decl_span == decision.decl_span)
+            .find(|c| c.decl_span == decision.decl_span)
             .and_then(|c| match &c.verdict {
                 SoaVerdict::Admitted {
                     provable_len,
