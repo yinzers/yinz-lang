@@ -76,7 +76,29 @@ for (turn in [1, 2]) {
 }
 ```
 
-Give a copy each pass (`consume(rows.copy())`), or make a new value inside the loop. Reassigning `rows` before the end of the body also works.
+Give a copy each pass (`consume(rows.copy())`), or make a new value inside the loop. Reassigning `rows` before the end of the body also works, as long as every path through the body does it.
+
+---
+
+## Giving away, then reassigning
+
+A reassignment gives the name a new value, so the name is usable again after it, but only for the code the reassignment is sure to have run before:
+
+```ynz
+consume(rows)
+rows = [4, 5]
+print(rows.count())      // fine: every path got here through the reassignment
+
+consume(rows)
+if (ready) {
+  rows = [4, 5]
+}
+print(rows.count())
+// COMPILE ERROR: `rows` was already given away and cannot be used here.
+// When `ready` is false the new value was never assigned.
+```
+
+After an `if`, a `match` or a loop, `rows` is usable again only if every arm assigned it (a match needs an `else` arm, or to cover every variant). A loop body may run zero times, so a reassignment inside it does not count after the loop.
 
 Putting a value into a container (`bucket.add(rows)`, `bucket[0] = rows`, `player.items = rows`) does not give it away: you can still read `rows`. But the two now share one value, so once you give `bucket` away, `rows` is gone too and reading it is an error.
 

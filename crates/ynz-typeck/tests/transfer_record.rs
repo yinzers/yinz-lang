@@ -918,3 +918,28 @@ fn a_loop_cell_joins_everything_the_iterated_value_reaches() {
         );
     }
 }
+
+/// (High) Bug caught: a binding given away on one path and revived by a reassignment must keep
+/// its `Given` escape (the record is flow-insensitive on purpose). Dropping the escape at the
+/// revive would let a release pass free the class on the path where it WAS given away, a double
+/// free; keeping it costs only a leak of the revived value.
+#[test]
+fn a_given_then_revived_binding_keeps_its_given_escape() {
+    let source = format!(
+        "{EAT}function f(c: boolean) -> int {{
+  let x: array<int> = [1, 2, 3]
+  if (c) {{
+    eat(x)
+    x = [0]
+  }}
+  return x.count()
+}}"
+    );
+    let transfers = transfers_of(&source, "f");
+    assert_eq!(
+        escapes_of(&transfers, "x"),
+        vec![Escape::Given {
+            callee: "eat".to_string()
+        }]
+    );
+}

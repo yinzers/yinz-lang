@@ -94,6 +94,30 @@ pub struct Scope {
     next_frame_id: u32,
     /// Mint for alias-class ids — each fresh value gets its own class.
     next_class: u64,
+    /// The open branch points (an `if`, a match, a loop), innermost last: where a revive is made
+    /// on ONE path and the join must not believe it covers the others.
+    branches: Vec<Branches>,
+}
+
+/// An entry named by where it lives: frame index, name, declaration span.
+type EntryKey = (usize, String, usize, usize);
+
+/// What the join after a branch point needs (see [`Scope::begin_branches`]).
+struct Branches {
+    /// Entries consumed when the branch point opened, with their cause.
+    consumed_before: HashMap<EntryKey, ConsumedBy>,
+    /// Frame index of the arm being checked: only entries BELOW it outlive the arm.
+    arm_frame: usize,
+    /// Entries revived in the current arm, with the state each had just before its first revive.
+    arm_revived: Vec<EntryKey>,
+    arm_prior: HashMap<EntryKey, ConsumedBy>,
+    /// Entries the current arm itself gave away (so they were live when the arm began).
+    arm_consumed: HashSet<EntryKey>,
+    /// Per entry revived in some arm: how many arms that reach the join recorded it, and the
+    /// cause it was left consumed with by the first arm that left it consumed.
+    recorded: HashMap<EntryKey, (usize, Option<ConsumedBy>)>,
+    /// Arms that reach the join (an arm that always returns does not).
+    arms_reaching_join: usize,
 }
 
 impl Default for Scope {
@@ -109,6 +133,7 @@ impl Scope {
             frame_ids: vec![0],
             next_frame_id: 1,
             next_class: 1,
+            branches: Vec::new(),
         }
     }
 
@@ -233,7 +258,161 @@ impl Scope {
                 }
             }
         }
+        for entry in &reached {
+            let key = (
+                entry.frame_index,
+                entry.name.clone(),
+                entry.defined_at.start,
+                entry.defined_at.end,
+            );
+            for branch in self.branches.iter_mut() {
+                branch.arm_consumed.insert(key.clone());
+            }
+        }
         reached
+    }
+
+    /// Revive `name`: a reassignment gives it a NEW value, so it is no longer given away on the
+    /// path that reaches here. Inside an open branch point the revive covers only that arm; the
+    /// join (`end_branches`) decides what is true after it.
+    pub fn revive(&mut self, name: &str) {
+        let Some(frame_index) = self.frame_of(name) else {
+            return;
+        };
+        let Some(entry) = self.frames[frame_index].get_mut(name) else {
+            return;
+        };
+        let Some(prior) = entry.consumed.take() else {
+            return;
+        };
+        let key = (
+            frame_index,
+            name.to_string(),
+            entry.defined_at.start,
+            entry.defined_at.end,
+        );
+        if let Some(branch) = self.branches.last_mut() {
+            if frame_index < branch.arm_frame && !branch.arm_revived.contains(&key) {
+                branch.arm_prior.insert(key.clone(), prior);
+                branch.arm_revived.push(key);
+            }
+        }
+    }
+
+    fn entry_mut(&mut self, key: &EntryKey) -> Option<&mut ScopeEntry> {
+        let entry = self.frames.get_mut(key.0)?.get_mut(&key.1)?;
+        (entry.defined_at.start == key.2 && entry.defined_at.end == key.3).then_some(entry)
+    }
+
+    /// Open a branch point: an `if` body, the arms of a match, a loop body. Records which entries
+    /// are given away now. O(entries).
+    pub fn begin_branches(&mut self) {
+        let mut consumed_before = HashMap::new();
+        for (frame_index, frame) in self.frames.iter().enumerate() {
+            for (name, entry) in frame {
+                if let Some(cause) = &entry.consumed {
+                    consumed_before.insert(
+                        (
+                            frame_index,
+                            name.clone(),
+                            entry.defined_at.start,
+                            entry.defined_at.end,
+                        ),
+                        cause.clone(),
+                    );
+                }
+            }
+        }
+        self.branches.push(Branches {
+            consumed_before,
+            arm_frame: 0,
+            arm_revived: Vec::new(),
+            arm_prior: HashMap::new(),
+            arm_consumed: HashSet::new(),
+            recorded: HashMap::new(),
+            arms_reaching_join: 0,
+        });
+    }
+
+    /// An arm starts (its frame is already pushed).
+    pub fn begin_arm(&mut self) {
+        let innermost = self.innermost_frame();
+        if let Some(branch) = self.branches.last_mut() {
+            branch.arm_frame = innermost;
+            branch.arm_revived.clear();
+            branch.arm_prior.clear();
+            branch.arm_consumed.clear();
+        }
+    }
+
+    /// An arm ends (before its frame pops). `returns`: it always returns, so it never reaches the
+    /// join. What the arm revived is recorded for the join and then put back to the state before
+    /// the branch point, so the NEXT arm does not inherit this arm's revive.
+    pub fn end_arm(&mut self, returns: bool) {
+        let Some(mut branch) = self.branches.pop() else {
+            return;
+        };
+        let revived = std::mem::take(&mut branch.arm_revived);
+        for key in revived {
+            let end_state = self
+                .entry_mut(&key)
+                .and_then(|entry| entry.consumed.clone());
+            if !returns {
+                let slot = branch.recorded.entry(key.clone()).or_insert((0, None));
+                slot.0 += 1;
+                if slot.1.is_none() {
+                    slot.1 = end_state;
+                }
+            }
+            // Put it back to what the NEXT arm should see: live if this arm gave it away itself
+            // (it was live when the arm began), else what it was when the arm revived it.
+            let restored = if branch.arm_consumed.contains(&key) {
+                None
+            } else {
+                branch.arm_prior.get(&key).cloned()
+            };
+            if let Some(entry) = self.entry_mut(&key) {
+                entry.consumed = restored;
+            }
+        }
+        if !returns {
+            branch.arms_reaching_join += 1;
+        }
+        self.branches.push(branch);
+    }
+
+    /// Close the branch point. An entry revived in an arm is live after it only if EVERY path
+    /// that reaches the join revived it: each arm that reaches the join, and the path that
+    /// enters no arm when `skip_path` (an `if` without an else, a loop that may run zero times, a
+    /// match with no else that is not exhaustive). Otherwise it stays given away (maybe given),
+    /// and reading it is the use-after-give error. A revive that holds at the join is a revive for
+    /// the enclosing branch point too. O(revived entries).
+    pub fn end_branches(&mut self, skip_path: bool) {
+        let Some(branch) = self.branches.pop() else {
+            return;
+        };
+        let consumed_before = branch.consumed_before;
+        for (key, (recorded_arms, left_consumed)) in branch.recorded {
+            let covered = !skip_path && recorded_arms == branch.arms_reaching_join;
+            let now = self.entry_mut(&key).map(|entry| entry.consumed.clone());
+            let Some(now) = now else {
+                continue;
+            };
+            let exit = left_consumed.or(if covered { None } else { now });
+            if let Some(entry) = self.entry_mut(&key) {
+                entry.consumed = exit.clone();
+            }
+            if exit.is_none() {
+                if let Some(parent) = self.branches.last_mut() {
+                    if key.0 < parent.arm_frame && !parent.arm_revived.contains(&key) {
+                        if let Some(before) = consumed_before.get(&key) {
+                            parent.arm_prior.insert(key.clone(), before.clone());
+                        }
+                        parent.arm_revived.push(key);
+                    }
+                }
+            }
+        }
     }
 
     /// Join two alias classes into one: every live entry of `absorbed` moves to `kept`. Used

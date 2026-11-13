@@ -211,3 +211,51 @@ accepted!(
   return x.count()
 }"
 );
+
+rejected!(
+    one_arm_gives_while_another_gives_and_revives,
+    "arm 1 gives `x`, arm 2 gives then revives it: the join must still see arm 1's give (High)",
+    "function l(n: int) -> int {
+  let x: array<int> = [1, 2, 3]
+  if (n) {
+    1 => { eat(x) }
+    else => {
+      eat(x)
+      x = [0]
+    }
+  }
+  return x.count()
+}"
+);
+
+rejected!(
+    revive_under_a_nested_if_only,
+    "give, revive only under two nested `if`s, then read: neither join covers the outer skip path (High)",
+    "function l(c: boolean, d: boolean) -> int {
+  let x: array<int> = [1, 2, 3]
+  eat(x)
+  if (c) {
+    if (d) { x = [0] }
+  }
+  return x.count()
+}"
+);
+
+accepted!(
+    revive_in_every_leaf_of_nested_matches,
+    "give, revive in every leaf of a match nested in a match, then read: every path revived (High)",
+    "function l(n: int, m: int) -> int {
+  let x: array<int> = [1, 2, 3]
+  eat(x)
+  if (n) {
+    1 => {
+      if (m) {
+        1 => { x = [0] }
+        else => { x = [1] }
+      }
+    }
+    else => { x = [2] }
+  }
+  return x.count()
+}"
+);

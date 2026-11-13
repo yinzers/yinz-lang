@@ -3431,10 +3431,13 @@ impl<'b> Checker<'b> {
                 let event = self.binding_event_origin(value);
                 let declaration = self.declaration_of(target);
                 self.transfers_note_reassign(declaration.as_ref(), &event);
+                // A reassignment names a NEW value, so the binding is no longer given away on
+                // the path that reaches here; a branch join decides what holds after it
+                // (`Scope::revive`, `Scope::end_branches`).
+                self.scope.revive(target);
                 if let Some(e) = self.scope.lookup_mut(target) {
                     e.origin = event.origin;
                     e.alias_class = event.alias_class;
-                    e.consumed = None;
                 }
                 if value_ty != Type::Error && value_ty != bound_ty {
                     self.diags.push(Diagnostic::error(
@@ -3502,9 +3505,10 @@ impl<'b> Checker<'b> {
             self.errors_failed_true_branch.push(*class);
         }
 
-        self.scope.push();
-        self.check_stmts(&body.stmts);
-        self.scope.pop();
+        // The body runs on one path; the other path (condition false) enters no arm.
+        self.scope.begin_branches();
+        self.check_branch_body(body);
+        self.scope.end_branches(true);
 
         for class in &failed_binding_classes {
             debug_assert_eq!(
@@ -3591,6 +3595,7 @@ impl<'b> Checker<'b> {
 
     fn check_stmt_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], else_arm: Option<&Block>) {
         let scrutinee_ty = self.infer_expr(scrutinee, None);
+        self.scope.begin_branches();
 
         for arm in arms {
             match &arm.pattern.kind {
@@ -3641,9 +3646,7 @@ impl<'b> Checker<'b> {
                             },
                         );
                     }
-                    self.scope.push();
-                    self.check_stmts(&arm.body.stmts);
-                    self.scope.pop();
+                    self.check_branch_body(&arm.body);
                     if let Some(ref name) = narrowed_name {
                         self.union_narrowed.remove(name);
                     }
@@ -3654,9 +3657,7 @@ impl<'b> Checker<'b> {
                     self.check_option_name_arm(&scrutinee_ty, variant_name, &arm.pattern.span);
                 }
             }
-            self.scope.push();
-            self.check_stmts(&arm.body.stmts);
-            self.scope.pop();
+            self.check_branch_body(&arm.body);
         }
 
         // Exhaustiveness check for options multi-case.
@@ -3741,17 +3742,34 @@ impl<'b> Checker<'b> {
         }
 
         if let Some(else_body) = else_arm {
-            self.scope.push();
-            self.check_stmts(&else_body.stmts);
-            self.scope.pop();
+            self.check_branch_body(else_body);
         }
+        // A path enters no arm unless the match is exhaustive: an `else` arm, or an options /
+        // union scrutinee (typeck rejects a missing variant above).
+        let exhaustive =
+            else_arm.is_some() || matches!(scrutinee_ty, Type::Options { .. } | Type::Union { .. });
+        self.scope.end_branches(!exhaustive);
+    }
+
+    /// One arm of an open branch point (an `if` body, a match arm): its own frame, and what it
+    /// revived is handed to the join. Not for loops, which interleave the loop-carried check.
+    fn check_branch_body(&mut self, body: &Block) {
+        self.scope.push();
+        self.scope.begin_arm();
+        self.check_stmts(&body.stmts);
+        self.scope
+            .end_arm(crate::return_paths::analyze_stmts(&body.stmts).all_paths_return);
+        self.scope.pop();
     }
 
     fn check_stmt_while(&mut self, cond: &Expr, body: &Block) {
         // The loop is open before the condition is checked: the condition runs at the top of
         // EVERY pass, so a give made in it (`while (ok(x))` with `ok(give rows)`) reaches the next
         // pass exactly as a give in the body does.
+        // A loop body may run zero times: a revive in it covers only its own pass.
+        self.scope.begin_branches();
         self.scope.push();
+        self.scope.begin_arm();
         let loop_mark = self.begin_loop_body();
         let cond_ty = self.infer_expr(cond, None);
         if cond_ty != Type::Error && cond_ty != Type::Bool {
@@ -3764,7 +3782,10 @@ impl<'b> Checker<'b> {
         }
         self.check_stmts(&body.stmts);
         self.end_loop_body(loop_mark, Some(cond), body);
+        self.scope
+            .end_arm(crate::return_paths::analyze_stmts(&body.stmts).all_paths_return);
         self.scope.pop();
+        self.scope.end_branches(true);
     }
 
     fn check_stmt_for(&mut self, var: &str, var_span: &SourceSpan, iter: &Expr, body: &Block) {
@@ -3798,7 +3819,9 @@ impl<'b> Checker<'b> {
             }
         };
 
+        self.scope.begin_branches();
         self.scope.push();
+        self.scope.begin_arm();
         // A loop variable is one CELL of the iterated value — never transferable — and joins
         // the alias class of every binding the iterated value reaches (if a root is given away,
         // the cells go with it). Computed before the variable is declared: `for (a in a.items)`.
@@ -3843,7 +3866,10 @@ impl<'b> Checker<'b> {
         let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
         self.end_loop_body(loop_mark, None, body);
+        self.scope
+            .end_arm(crate::return_paths::analyze_stmts(&body.stmts).all_paths_return);
         self.scope.pop();
+        self.scope.end_branches(true);
     }
 
     /// M7 P3c: look up the element type T for iterating over a user-defined shape.
