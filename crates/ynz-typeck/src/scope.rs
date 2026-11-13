@@ -248,3 +248,17 @@ impl Scope {
         v
     }
 }
+
+impl Scope {
+    /// SPIKE S3: name of the visible founder entry of `class` (the only member with a release duty).
+    pub fn founder_of(&self, class: u64) -> Option<String> {
+        for frame in self.frames.iter().rev() {
+            for (name, e) in frame {
+                if e.alias_class == class && e.founder {
+                    return Some(name.clone());
+                }
+            }
+        }
+        None
+    }
+}

@@ -15101,6 +15101,38 @@ fn lower_stmt_for<'ctx>(
     Ok(())
 }
 
+// SPIKE S3: null-slot-on-move. A move site recorded by typeck (`ReleasePlan::moved_at`) nulls the
+// FOUNDER binding's slot right after the argument was read, so the release helper (which skips a
+// null in `Fate::ReleaseIfLive`) cannot free a moved value. In a state-machine resume function the
+// null must also reach the frame slot NOW: the statement-end flush (`collect_crossing_writes`) only
+// sees `let`/assign writes, not moves, and a later resume would reload the stale pointer.
+fn emit_null_founder_slot_on_move<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    site: &ynz_diagnostics::SourceSpan,
+) -> Result<(), String> {
+    let typed = cg.typed;
+    let Some(founder) = typed.release_plan.moved_at.get(&(site.start, site.end)) else {
+        return Ok(());
+    };
+    let slot = *cg
+        .locals
+        .get(founder.as_str())
+        .ok_or_else(|| format!("move site: no slot for founder `{founder}`"))?;
+    cg.builder
+        .build_store(slot, cg.ptr().const_null())
+        .map_err(|e| format!("null-on-move store: {e}"))?;
+    if std::env::var("YNZ_SPIKE_NO_NULL_FLUSH").is_ok() {
+        return Ok(()); // negative control: leave the stale frame slot
+    }
+    if let (Some(frame_ptr), Some(names)) = (cg.sm_frame_ptr, cg.sm_crossing_names.clone()) {
+        if let Some(pos) = names.iter().position(|n| n == founder) {
+            let slot_idx = cg.sm_crossing_slot_indices[pos];
+            flush_var_slot_to_frame(cg, founder, slot, frame_ptr, slot_idx)?;
+        }
+    }
+    Ok(())
+}
+
 // ── SPIKE S3: THE release helper ────────────────────────────────────────────────────────────
 //
 // One function serves BOTH codegen paths. It reads a typeck-persisted exit record
@@ -15133,7 +15165,7 @@ fn emit_release_list<'ctx>(
         seen.push(entry.name.as_str());
     }
     for entry in entries {
-        if entry.fate != Fate::Release {
+        if !matches!(entry.fate, Fate::Release | Fate::ReleaseIfLive) {
             continue;
         }
         let kind = entry
@@ -15147,12 +15179,34 @@ fn emit_release_list<'ctx>(
             .builder
             .build_load(cg.ptr(), slot, &format!("rel_{}", entry.name))
             .map_err(|e| format!("release load: {e}"))?;
+        // ReleaseIfLive: every move site nulled the slot, so a null means "moved on this path".
+        let guard = if entry.fate == Fate::ReleaseIfLive {
+            let is_live = cg
+                .builder
+                .build_is_not_null(value.into_pointer_value(), "rel_live")
+                .map_err(|e| format!("release null test: {e}"))?;
+            let drop_bb = cg.append_block("rel_drop");
+            let join_bb = cg.append_block("rel_join");
+            cg.builder
+                .build_conditional_branch(is_live, drop_bb, join_bb)
+                .map_err(|e| format!("release branch: {e}"))?;
+            cg.builder.position_at_end(drop_bb);
+            Some(join_bb)
+        } else {
+            None
+        };
         match kind {
             ReleaseKind::ArrayPrimitive => {
                 cg.builder
                     .build_call(cg.rt.ynz_array_drop, &[value.into()], "rel_array_drop")
                     .map_err(|e| format!("release call: {e}"))?;
             }
+        }
+        if let Some(join_bb) = guard {
+            cg.builder
+                .build_unconditional_branch(join_bb)
+                .map_err(|e| format!("release join: {e}"))?;
+            cg.builder.position_at_end(join_bb);
         }
     }
     Ok(())
@@ -16039,7 +16093,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 // which returns the ptr for .or()/.failed() method dispatch.
             }
 
-            load(cg, slot, &ty, name)
+            let loaded = load(cg, slot, &ty, name)?;
+            emit_null_founder_slot_on_move(cg, ident_span)?;
+            Ok(loaded)
         }
 
         Expr::BinOp { op, lhs, rhs, .. } => {

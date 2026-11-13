@@ -1,0 +1,20 @@
+function eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+function cond(c: boolean, d: boolean) -> int {
+  let x: array<int> = [1, 2, 3]
+  let y: array<int> = x
+  if (c) {
+    eat(y)
+  }
+  if (d) {
+    return 7
+  }
+  return 8
+}
+function entrypoint() -> nothing {
+  print(cond(true, true).toString())
+  print(cond(false, true).toString())
+  print(cond(true, false).toString())
+  print(cond(false, false).toString())
+}

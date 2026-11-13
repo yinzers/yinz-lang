@@ -30,6 +30,9 @@ pub enum Fate {
     /// Transferred inside a nested (conditional / loop) scope before this exit: moved on some
     /// paths only. Prototype leaks (sound); the full design needs a drop flag (null-the-slot).
     OmittedMaybeMoved,
+    /// Moved on some paths only: the helper loads the slot and frees it only if non-null
+    /// (every move site nulled the slot). Replaces OmittedMaybeMoved when null-slot-on-move is on.
+    ReleaseIfLive,
     /// Returned (or reachable from the returned value) at this exit.
     OmittedReturned,
     /// Not the sole owner (alias-class member that is not the founder, loop cell, `Reaches`, `Unknown`,
@@ -57,6 +60,9 @@ pub struct ReleaseEntry {
 pub struct ReleasePlan {
     pub block_end: HashMap<(usize, usize), Vec<ReleaseEntry>>,
     pub return_edge: HashMap<(usize, usize), Vec<ReleaseEntry>>,
+    /// Move sites: span of the argument read that transfers ownership -> founder binding name whose
+    /// slot codegen nulls right after the read (null-slot-on-move).
+    pub moved_at: HashMap<(usize, usize), String>,
 }
 
 /// The release kind of a type, if the prototype supports it.
@@ -81,7 +87,7 @@ impl ReleasePlan {
             .chain(self.return_edge.iter())
             .filter(|(key, _)| key.0 >= start && key.1 <= end)
             .flat_map(|(_, list)| list.iter())
-            .filter(|e| e.fate == Fate::Release)
+            .filter(|e| matches!(e.fate, Fate::Release | Fate::ReleaseIfLive))
             .map(|e| e.name.clone())
             .collect();
         names.sort();

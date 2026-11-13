@@ -3727,7 +3727,7 @@ impl<'b> Checker<'b> {
             Fate::OmittedReturned
         } else if entry.consumed.is_some() {
             match self.scope.consumed_at_depth(entry.alias_class) {
-                Some(depth) if depth > frame_index + 1 => Fate::OmittedMaybeMoved,
+                Some(depth) if depth > frame_index + 1 => Fate::ReleaseIfLive,
                 _ => Fate::OmittedMoved,
             }
         } else {
@@ -3810,7 +3810,7 @@ impl<'b> Checker<'b> {
             .chain(self.release_plan.return_edge.values_mut())
         {
             for entry in list.iter_mut() {
-                if entry.fate == Fate::Release && reassigned.contains(&entry.binding) {
+                if matches!(entry.fate, Fate::Release | Fate::ReleaseIfLive) && reassigned.contains(&entry.binding) {
                     entry.fate = Fate::OmittedReassigned;
                 }
             }
@@ -5769,6 +5769,15 @@ impl<'b> Checker<'b> {
                 match origin {
                     Origin::Owned | Origin::Param(Some(OwnershipModifier::Give)) => {
                         let cause = sink.cause(&name);
+                        // SPIKE S3: record the move SITE (the argument read) with the founder whose slot
+                        // codegen must null — the founder is the only member with a release duty.
+                        if let Expr::Ident(..) = expr {
+                            if let Some(class) = self.scope.class_of(&name) {
+                                if let Some(founder) = self.scope.founder_of(class) {
+                                    self.release_plan.moved_at.insert((span.start, span.end), founder);
+                                }
+                            }
+                        }
                         self.scope.consume(&name, cause);
                         true
                     }

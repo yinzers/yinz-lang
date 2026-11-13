@@ -1,0 +1,16 @@
+function eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+function cond(c: boolean) -> nothing {
+  let x: array<int> = [1, 2, 3]
+  wait sleep(1)
+  if (c) {
+    eat(x)
+    wait sleep(1)
+  }
+  wait sleep(1)
+}
+function entrypoint() -> nothing {
+  cond(true)
+  cond(false)
+}
