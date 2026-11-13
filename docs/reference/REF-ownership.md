@@ -63,6 +63,25 @@ print(data)
 
 ---
 
+## Giving away inside a loop
+
+A loop runs its body again and again, so a value given away on one pass is gone on the next. The compiler refuses it:
+
+```ynz
+let rows: array<int> = [1, 2, 3]
+for (turn in [1, 2]) {
+  consume(rows)
+  // COMPILE ERROR: `rows` was already given away and cannot be used here, because the previous
+  // pass through this loop already gave it to `consume`.
+}
+```
+
+Give a copy each pass (`consume(rows.copy())`), or make a new value inside the loop. Reassigning `rows` before the end of the body also works.
+
+Putting a value into a container (`bucket.add(rows)`, `bucket[0] = rows`, `player.items = rows`) does not give it away: you can still read `rows`. But the two now share one value, so once you give `bucket` away, `rows` is gone too and reading it is an error.
+
+---
+
 ## `const` bindings get extra protection
 
 A `const` binding can only be shared (read). The compiler refuses to infer `lend` or `give` for a `const` value:
