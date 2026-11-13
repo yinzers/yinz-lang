@@ -127,3 +127,73 @@ fn printing_and_interpolating_numbers_releases_their_temporaries() {
          {ITERATIONS} interpolation results may (counters: {counters:?})"
     );
 }
+
+// ---- bignum text must never be read as decimal128: comparisons, unary minus, `if` on a value ----
+
+plain_case!(
+    bignum_compared_with_bignum_is_an_exact_decimal_compare,
+    "v0_3_m9_c3a_bignum_compare_big_big.ynz",
+    "true\ntrue\nfalse\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\n",
+    "`number>34 <op> number>34` must compare the decimal text exactly",
+    "a comparison between two bignums reads their text as 16 decimal128 bytes: `2.5 < 12.5` prints false and the read runs past a short heap string (High: wrong comparison, memory safety)"
+);
+
+plain_case!(
+    small_number_compared_with_bignum_is_an_exact_decimal_compare,
+    "v0_3_m9_c3a_bignum_compare_small_big.ynz",
+    "true\ntrue\nfalse\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\ntrue\n",
+    "`number<=34 <op> number>34` must compare as bignum text",
+    "`small < big` coerces the small side to bignum text then reads it as decimal128 (High: wrong comparison, memory safety)"
+);
+
+plain_case!(
+    bignum_compared_with_small_number_is_an_exact_decimal_compare,
+    "v0_3_m9_c3a_bignum_compare_big_small.ynz",
+    "false\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\n",
+    "`number>34 <op> number<=34` must compare as bignum text",
+    "`big < small` reads the bignum text as decimal128 (High: wrong comparison, memory safety)"
+);
+
+asan_case!(
+    bignum_compare_of_short_text_stays_inside_the_string,
+    "v0_3_m9_c3a_bignum_compare_short_text.ynz",
+    "true\ntrue\nfalse\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\ntrue\ntrue\n",
+    "a bignum of 4 bytes of text (`9.0`) compared as 16 decimal128 bytes reads past its exact-size heap string (High: heap over-read)"
+);
+
+asan_case!(
+    mixed_precision_compare_releases_coerced_operands_once,
+    "v0_3_m9_c3a_bignum_compare_small_big.ynz",
+    "true\ntrue\nfalse\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\ntrue\n",
+    "the bignum text a `small <op> big` compare coerced is freed twice, freed while held, or not freed (High)"
+);
+
+asan_case!(
+    big_vs_small_compare_releases_coerced_operands_once,
+    "v0_3_m9_c3a_bignum_compare_big_small.ynz",
+    "false\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\n",
+    "the bignum text a `big <op> small` compare coerced is freed twice, freed while held, or not freed (High)"
+);
+
+plain_case!(
+    negating_a_bignum_negates_its_decimal_text,
+    "v0_3_m9_c3a_bignum_negate.ynz",
+    "-2.5\n2.5\n-12.5\n0\n",
+    "`-value` on a `number>34` must return the negated bignum text",
+    "unary minus on a bignum runs decimal128 `0 - value` on its text and returns a 16-byte stack cell as bignum text: `-2.5` is not printed (High: wrong arithmetic, memory safety)"
+);
+
+asan_case!(
+    negating_a_bignum_returns_an_owned_string,
+    "v0_3_m9_c3a_bignum_negate.ynz",
+    "-2.5\n2.5\n-12.5\n0\n",
+    "a negated bignum that is a stack cell, not a heap string, is read or released as one (High)"
+);
+
+plain_case!(
+    multi_case_if_on_a_bignum_compares_decimal_text,
+    "v0_3_m9_c3a_bignum_branch_on_value.ynz",
+    "two-five\nten\nother\n",
+    "an `if` arm on a `number>34` value must match numerically equal text (`2.5` and `2.50`)",
+    "the arm test reads the bignum text as decimal128, so `2.5` does not match the arm `2.50` (High: wrong branch)"
+);
