@@ -7,98 +7,66 @@
 // after a branch is "maybe given" unless EVERY path that reaches it revived the binding; reading
 // a maybe-given binding is the ordinary use-after-give error (the canonical `Consumed` text).
 //
-// Each rejected case failed on the base commit (typeck accepted the program); each accepted case
-// is a guard that the fix does not reject a program every path of which revives the binding.
+// Each rejected case failed on the base commit (typeck accepted the program; red commit
+// `e2d4344` for the first six, the other two fail on that commit's source too); each accepted
+// case is a guard that the fix does not reject a program every path of which revives the binding.
+//
+// WHY this many tests for one High-tier unit (the SOP says stop at about 8 and justify): the unit
+// is the join of the consumed state, and its contract is a table over path shapes, one named test
+// per shape. A rejected case is a shape the join must keep "maybe given" (an `if` with no else,
+// a match arm that does not revive, a match with no else, a `while` body, a zero-trip inner
+// loop, a loop-carried back-edge, an arm that gives while another revives, a revive nested under
+// two `if`s). An accepted case is a shape the join must still treat as revived (every arm
+// including `else`, an arm that always returns, a revive after a loop, a revive both in and after
+// a loop, a give and revive inside one branch, the straight-line rule, nested matches). Two
+// shapes that take the same checker path are not both here.
 
-use ynz_diagnostics::Severity;
-use ynz_parser::{CompilerDb, SourceFile};
-use ynz_typeck::{check_query, CheckOutput};
+#[macro_use]
+mod support;
 
-const EAT: &str = "function eat(give rows: array<int>) -> nothing {
-  print(rows.count().toString())
-}\n";
+use support::{assert_accepted, assert_use_after_give, EAT};
 
-fn run(source: &str) -> CheckOutput {
-    let db = CompilerDb::default();
-    // Every program needs an `entrypoint`; the cases under test are the other functions.
-    let program = format!("{EAT}{source}\nfunction entrypoint() -> nothing {{\n}}\n");
-    let source_file = SourceFile::new(&db, "test.ynz".to_string(), program);
-    (*check_query(&db, source_file)).clone()
+/// Programs here are checked with `eat` in scope, so the sources below only hold the function
+/// under test.
+fn assert_revive_rejected(source: &str) {
+    assert_use_after_give(&format!("{EAT}{source}"));
 }
 
-fn errors(source: &str) -> Vec<String> {
-    run(source)
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| matches!(diagnostic.severity, Severity::Error))
-        .map(|diagnostic| format!("{diagnostic:?}"))
-        .collect()
+fn assert_revive_accepted(source: &str) {
+    assert_accepted(&format!("{EAT}{source}"));
 }
 
-macro_rules! rejected {
-    ($case:ident, $bug:literal, $source:expr) => {
-        #[doc = $bug]
-        #[test]
-        fn $case() {
-            let found = errors($source);
-            assert!(
-                found.iter().any(|e| e.contains("was already given away")),
-                "expected a use-after-give rejection, got {found:#?}"
-            );
-        }
-    };
-}
-
-macro_rules! accepted {
-    ($case:ident, $bug:literal, $source:expr) => {
-        #[doc = $bug]
-        #[test]
-        fn $case() {
-            let found = errors($source);
-            assert!(found.is_empty(), "expected accepted, got {found:#?}");
-        }
-    };
-}
-
-rejected!(
-    loop_revive_under_an_if_is_carried,
-    "give, then revive only under `if`, inside a loop: the next pass gives `x` again (High)",
-    "function l(c: boolean) -> nothing {
+cases! { assert_revive_rejected;
+    loop_revive_under_an_if_is_carried: "function l(c: boolean) -> nothing {
   let x: array<int> = [1, 2, 3]
   for (j in range(0, 2)) {
     eat(x)
     if (c) { x = [0] }
   }
-}"
-);
+}", "give, then revive only under `if`, inside a loop: the next pass gives `x` again (High)";
+}
 
-rejected!(
-    loop_revive_in_a_zero_trip_inner_loop_is_carried,
-    "give, then revive inside an inner loop that may run zero times: the next pass gives `x` again (High)",
-    "function l() -> nothing {
+cases! { assert_revive_rejected;
+    loop_revive_in_a_zero_trip_inner_loop_is_carried: "function l() -> nothing {
   let x: array<int> = [1, 2, 3]
   for (j in range(0, 2)) {
     eat(x)
     for (k in range(0, 0)) { x = [0] }
   }
-}"
-);
+}", "give, then revive inside an inner loop that may run zero times: the next pass gives `x` again (High)";
+}
 
-rejected!(
-    read_after_an_if_that_revives_on_one_path,
-    "give, revive only under `if`, then read: on the path where the condition was false `x` is gone (High)",
-    "function l(c: boolean) -> int {
+cases! { assert_revive_rejected;
+    read_after_an_if_that_revives_on_one_path: "function l(c: boolean) -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   if (c) { x = [0] }
   return x.count()
-}"
-);
+}", "give, revive only under `if`, then read: on the path where the condition was false `x` is gone (High)";
+}
 
-rejected!(
-    read_after_a_match_whose_else_arm_does_not_revive,
-    "give, revive in one match arm only, then read: the other arm leaves `x` given away (High)",
-    "function l(n: int) -> int {
+cases! { assert_revive_rejected;
+    read_after_a_match_whose_else_arm_does_not_revive: "function l(n: int) -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   if (n) {
@@ -106,13 +74,11 @@ rejected!(
     else => { print(`other`) }
   }
   return x.count()
-}"
-);
+}", "give, revive in one match arm only, then read: the other arm leaves `x` given away (High)";
+}
 
-rejected!(
-    read_after_a_match_with_no_else_arm,
-    "give, revive in every listed arm of a non-exhaustive match, then read: no arm matching is a path that never revived (High)",
-    "function l(n: int) -> int {
+cases! { assert_revive_rejected;
+    read_after_a_match_with_no_else_arm: "function l(n: int) -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   if (n) {
@@ -120,24 +86,20 @@ rejected!(
     2 => { x = [1] }
   }
   return x.count()
-}"
-);
+}", "give, revive in every listed arm of a non-exhaustive match, then read: no arm matching is a path that never revived (High)";
+}
 
-rejected!(
-    read_after_a_while_that_revives_in_its_body,
-    "give, revive inside a `while` body, then read: the body may run zero times (High)",
-    "function l(c: boolean) -> int {
+cases! { assert_revive_rejected;
+    read_after_a_while_that_revives_in_its_body: "function l(c: boolean) -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   while (c) { x = [0] }
   return x.count()
-}"
-);
+}", "give, revive inside a `while` body, then read: the body may run zero times (High)";
+}
 
-accepted!(
-    revive_in_every_arm_of_a_match_with_else,
-    "give, revive in every arm including `else`, then read: every path revived (High)",
-    "function l(n: int) -> int {
+cases! { assert_revive_accepted;
+    revive_in_every_arm_of_a_match_with_else: "function l(n: int) -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   if (n) {
@@ -145,13 +107,11 @@ accepted!(
     else => { x = [1] }
   }
   return x.count()
-}"
-);
+}", "give, revive in every arm including `else`, then read: every path revived (High)";
+}
 
-accepted!(
-    revive_beside_an_arm_that_always_returns,
-    "give, one arm returns, the other revives, then read: the returning arm never reaches the join (High)",
-    "function l(n: int) -> int {
+cases! { assert_revive_accepted;
+    revive_beside_an_arm_that_always_returns: "function l(n: int) -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   if (n) {
@@ -159,25 +119,21 @@ accepted!(
     else => { x = [0] }
   }
   return x.count()
-}"
-);
+}", "give, one arm returns, the other revives, then read: the returning arm never reaches the join (High)";
+}
 
-accepted!(
-    unconditional_revive_after_a_loop,
-    "give, run a loop that does not mention `x`, revive after it, then read (High)",
-    "function l() -> int {
+cases! { assert_revive_accepted;
+    unconditional_revive_after_a_loop: "function l() -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   for (j in range(0, 2)) { print(`tick`) }
   x = [0]
   return x.count()
-}"
-);
+}", "give, run a loop that does not mention `x`, revive after it, then read (High)";
+}
 
-accepted!(
-    revive_in_a_loop_body_then_revive_again_after_it,
-    "give and revive on every pass, then revive after the loop and read (High)",
-    "function l() -> int {
+cases! { assert_revive_accepted;
+    revive_in_a_loop_body_then_revive_again_after_it: "function l() -> int {
   let x: array<int> = [1, 2, 3]
   for (j in range(0, 2)) {
     eat(x)
@@ -185,63 +141,53 @@ accepted!(
   }
   x = [1]
   return x.count()
-}"
-);
+}", "give and revive on every pass, then revive after the loop and read (High)";
+}
 
-accepted!(
-    give_and_revive_both_inside_the_branch,
-    "give then revive inside one `if` body: both paths leave `x` live (High)",
-    "function l(c: boolean) -> int {
+cases! { assert_revive_accepted;
+    give_and_revive_both_inside_the_branch: "function l(c: boolean) -> int {
   let x: array<int> = [1, 2, 3]
   if (c) {
     eat(x)
     x = [0]
   }
   return x.count()
-}"
-);
+}", "give then revive inside one `if` body: both paths leave `x` live (High)";
+}
 
-accepted!(
-    unconditional_revive_straight_line,
-    "give then revive on the same path, then read: the existing revive-on-reassign rule (High)",
-    "function l() -> int {
+cases! { assert_revive_accepted;
+    unconditional_revive_straight_line: "function l() -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   x = [4, 5]
   return x.count()
-}"
-);
+}", "give then revive on the same path, then read: the existing revive-on-reassign rule (High)";
+}
 
-rejected!(
-    read_after_a_match_where_one_arm_gives_and_the_other_revives,
-    "arm 1 gives `x`, the else arm revives it, then read: the join must keep arm 1's give, so one arm's revive cannot launder another arm's give (High)",
-    "function l(n: int) -> int {
+cases! { assert_revive_rejected;
+    read_after_a_match_where_one_arm_gives_and_the_other_revives: "function l(n: int) -> int {
   let x: array<int> = [1, 2, 3]
   if (n) {
     1 => { eat(x) }
     else => { x = [0] }
   }
   return x.count()
-}"
-);
+}", "arm 1 gives `x`, the else arm revives it, then read: the join must keep arm 1's give, so one arm's revive cannot launder another arm's give (High)";
+}
 
-rejected!(
-    revive_under_a_nested_if_only,
-    "give, revive only under two nested `if`s, then read: neither join covers the outer skip path (High)",
-    "function l(c: boolean, d: boolean) -> int {
+cases! { assert_revive_rejected;
+    revive_under_a_nested_if_only: "function l(c: boolean, d: boolean) -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   if (c) {
     if (d) { x = [0] }
   }
   return x.count()
-}"
-);
+}", "give, revive only under two nested `if`s, then read: neither join covers the outer skip path (High)";
+}
 
-accepted!(
-    revive_in_every_leaf_of_nested_matches,
-    "give, revive in every leaf of a match nested in a match, then read: every path revived (High)",
-    "function l(n: int, m: int) -> int {
+cases! { assert_revive_accepted;
+    revive_in_every_leaf_of_nested_matches: "function l(n: int, m: int) -> int {
   let x: array<int> = [1, 2, 3]
   eat(x)
   if (n) {
@@ -254,5 +200,5 @@ accepted!(
     else => { x = [2] }
   }
   return x.count()
-}"
-);
+}", "give, revive in every leaf of a match nested in a match, then read: every path revived (High)";
+}

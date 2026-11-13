@@ -21,23 +21,24 @@
 // unit is the whole ownership record, and each test is one way the checker can lose a transfer
 // at its own code site (a field store, a container store, an index store, a reassignment, a
 // literal, a call-site store, a call-result receiver, a loop cell, a builtin result, a loop
-// give). Reverting each producer in turn (the C5a fix commits, and a one-line mutation of each
-// remaining site) failed only that site's tests. The case tables below are one NAMED test per
-// case, so the runner parallelizes them and names the failing program; a case is in a table only
-// when it takes a different checker path.
+// give, a give handed up from an inner loop, a give made in a `while` condition). Reverting each
+// producer in turn (the C5a fix commits, and a one-line mutation of each remaining site) failed
+// only that site's tests. The case tables below are one NAMED test per case, so the runner
+// parallelizes them and names the failing program; a case is in a table only when it takes a
+// different checker path. The accepted-program guards and
+// `a_given_then_revived_binding_keeps_its_given_escape` were green on arrival on purpose: they pin
+// over-rejection and the record's flow-insensitivity against the path-aware revive
+// (`revive_paths.rs`), which must not leak into the record (a record that forgot the give would
+// let a release pass free the class early).
 
-use ynz_diagnostics::{Diagnostic, DiagnosticKind, Severity};
+#[macro_use]
+mod support;
+
+use support::{assert_accepted, assert_use_after_give, error_diagnostics, errors, run, EAT};
+use ynz_diagnostics::DiagnosticKind;
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::transfer_record::{Escape, FunctionTransfers, NoFounderReason, ReleaseAnchor};
 use ynz_typeck::{check_query, CheckOutput};
-
-fn run(source: &str) -> CheckOutput {
-    let db = CompilerDb::default();
-    // Every program needs an `entrypoint`; the cases under test are the other functions.
-    let program = format!("{source}\nfunction entrypoint() -> nothing {{\n}}\n");
-    let source_file = SourceFile::new(&db, "test.ynz".to_string(), program);
-    (*check_query(&db, source_file)).clone()
-}
 
 /// Check `main_source` (as `main.ynz`) in a project that also holds `library_source` (as
 /// `lib.ynz`, imported with ``import { .. } from `lib` ``). The files must exist on disk for the
@@ -69,21 +70,6 @@ fn run_with_library(library_source: &str, main_source: &str) -> CheckOutput {
     db.register_source(library_file);
     db.register_source(main_file);
     (*check_query(&db, main_file)).clone()
-}
-
-fn error_diagnostics(output: &CheckOutput) -> Vec<&Diagnostic> {
-    output
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| matches!(diagnostic.severity, Severity::Error))
-        .collect()
-}
-
-fn errors(output: &CheckOutput) -> Vec<String> {
-    error_diagnostics(output)
-        .into_iter()
-        .map(|diagnostic| format!("{diagnostic:?}"))
-        .collect()
 }
 
 /// The record of `function_name` in `output`, which must be free of errors.
@@ -119,36 +105,6 @@ fn escapes_of(transfers: &FunctionTransfers, member: &str) -> Vec<Escape> {
         .unwrap_or_else(|| panic!("`{member}` is in no class"))
         .escapes
         .clone()
-}
-
-fn assert_accepted(source: &str) {
-    let found = errors(&run(source));
-    assert!(found.is_empty(), "expected accepted, got {found:#?}");
-}
-
-/// The program must be rejected with the use-after-give text.
-fn assert_use_after_give(source: &str) {
-    let found = errors(&run(source));
-    assert!(
-        found
-            .iter()
-            .any(|message| message.contains("was already given away")),
-        "expected a use-after-give for:\n{source}\ngot {found:#?}"
-    );
-}
-
-/// One named test per program: `cases!(check; name: source, "bug it catches (High)";)` expands to
-/// `#[test] fn name() { check(&source) }` with the bug line as its doc.
-macro_rules! cases {
-    ($check:ident; $($case:ident: $source:expr, $bug:literal;)+) => {
-        $(
-            #[doc = $bug]
-            #[test]
-            fn $case() {
-                $check(&$source);
-            }
-        )+
-    };
 }
 
 const BAG: &str = "shape Bag {\n  items: array<int>\n}\n";
@@ -239,10 +195,6 @@ fn multi_root_literal_joins_every_root() {
 }
 
 // ── t3: a move inside a loop, rejected ──────────────────────────────────────
-
-const EAT: &str = "function eat(give rows: array<int>) -> nothing {
-  print(rows.count().toString())
-}\n";
 
 /// The program must be rejected with the canonical use-after-give text and the loop wording.
 fn assert_loop_give_rejected(source: &str) {
