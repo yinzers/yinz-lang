@@ -1,0 +1,20 @@
+// hand-renamed q06 (inner tag -> tag2). Expected main lines: in, out
+function work(tag: string) -> nothing {
+  wait sleep(5)
+  print(tag)
+}
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let tag = `out`
+    let h1 = background work(tag)
+    wait sleep(20)
+    if (a) {
+      let tag2 = `in`
+      let h2 = background work(tag2)
+      wait sleep(20)
+      print(tag2)
+    }
+    print(tag)
+  }
+}

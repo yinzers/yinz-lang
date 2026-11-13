@@ -38,10 +38,10 @@ Refinements:
 ## Claim 5: cases the per-function `uniquify_bindings` pass does not (or may not) cover
 Probes in spike/s2-verify/.
 - q02 nested shape-destructure with the same alias (`for ({a as v}..) { for ({b as v}..)`): accepted, WRONG (d1 d2 d2 d1 d2 d2,
-  want d1 d2 a1 d1 d2 a2). Same class as p12; pass fixes it iff it walks the parser-desugared `let v = __shape.f` (an ordinary Let).
+  want d1 d2 a1 d1 d2 a2); q02b hand-renamed (v2): correct. Same class as p12; pass fixes it iff it walks the parser-desugared `let v = __shape.f` (an ordinary Let).
 - q05 errors-capable values (outer failed, inner ok, same name `r`): accepted, WRONG (99.9 / 99.9 / false, want 99.9 / 0.0 / true).
   q05b hand-renamed: correct. So errors bindings are a collision victim the spike table lacks; renaming fixes it.
-- q06 `background work(tag)` with shadowed `tag` crossing: accepted, WRONG main prints `in in` (want `in out`). Not hand-renamed.
+- q06 `background work(tag)` with shadowed `tag` crossing: accepted, WRONG main prints `in in` (want `in out`). q06b hand-renamed: correct (out, in, in, out; background tasks print first).
 - q01 nested shape-destructure (distinct aliases) and q03 sibling destructure over different shapes: correct. Parser names the
   loop var literally `__shape` (map form `__entry`) in every such loop, so the pass will see colliding `__shape` names; harmless today
   because the var is read only before the first wait. Pass must treat it consistently (rename or leave), not trip on it.
@@ -52,7 +52,7 @@ Risks to the Q3 conclusion (read, not run):
 - Where the pass runs matters. Typeck results are span- or function-keyed (TypedModule), so a renamed clone keeps `expr_types`
   valid. But SoA decisions are keyed `(array_name, decl_span)` (soa.rs:245, emit.rs:13782-13791) from the ORIGINAL AST; a codegen-only
   rename of an `array<Shape>` binding makes the lookup miss and silently falls back to AoS (perf loss, not wrong output). Run the pass
-  before typeck, or key SoA by span. Not run (python missing in sandbox; probe generator not executed).
+  before typeck, or key SoA by span. Probe q08 (two sibling-scope `pts: array<P>` of 70 elements, one escaping) prints the correct 2415/4830/70 both same-name and renamed, so no observed SoA name bug today; the silent-AoS-fallback is read from code, not observed.
 - Generated names `name__N` can collide with a user identifier of that exact name; the pass must pick a name absent from the function.
 - Diagnostics/LSP: spiker's clone-only advice is right, but anything typeck emits after the rename (lints naming bindings, e.g.
   background-handle-not-waited) would print renamed names if the pass runs before the lint.
