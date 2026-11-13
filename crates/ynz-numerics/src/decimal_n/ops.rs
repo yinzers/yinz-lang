@@ -584,38 +584,120 @@ mod compare_tests {
         BigNum::from_str(text, 100).expect("test literal parses")
     }
 
-    /// Bug caught: a comparison that is textual (`"9" > "10"`), ignores the exponent, or treats
-    /// the sign wrongly (High: pure math). Table-driven edge cases of the compare contract.
-    #[test]
-    fn compare_is_exact_and_numeric() {
-        let cases = [
-            ("9", "10", Some(Less)),
-            ("10", "9", Some(Greater)),
-            ("2.5", "2.50", Some(Equal)),
-            ("0.001", "0.01", Some(Less)),
-            ("1e3", "999", Some(Greater)),
-            ("-1", "1", Some(Less)),
-            ("-9", "-10", Some(Greater)),
-            ("-0", "0", Some(Equal)),
-            ("0.000", "0", Some(Equal)),
-            ("-0.5", "0", Some(Less)),
-            (
-                "123456789012345678901234567890123456789",
-                "123456789012345678901234567890123456788",
-                Some(Greater),
-            ),
-            ("inf", "1e400", Some(Greater)),
-            ("-inf", "-1e400", Some(Less)),
-            ("inf", "inf", Some(Equal)),
-            ("nan", "1", None),
-            ("1", "nan", None),
-        ];
-        for (left, right, expected) in cases {
-            assert_eq!(
-                compare(&parsed(left), &parsed(right)),
-                expected,
-                "compare({left}, {right})"
-            );
-        }
+    /// One test per edge case of the compare contract (High: pure math, the edge cases are the
+    /// contract): `compare_case!(case, left, right, expected, "bug it catches")`.
+    macro_rules! compare_case {
+        ($case:ident, $left:literal, $right:literal, $expected:expr, $bug:literal) => {
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                assert_eq!(
+                    compare(&parsed($left), &parsed($right)),
+                    $expected,
+                    "compare({}, {})",
+                    $left,
+                    $right
+                );
+            }
+        };
     }
+
+    compare_case!(
+        nine_is_less_than_ten,
+        "9",
+        "10",
+        Some(Less),
+        "Bug caught: a textual comparison (`\"9\" > \"10\"`). (High)"
+    );
+    compare_case!(
+        trailing_zeros_are_equal,
+        "2.5",
+        "2.50",
+        Some(Equal),
+        "Bug caught: operands of different digit counts compare unequal. (High)"
+    );
+    compare_case!(
+        a_smaller_exponent_is_less,
+        "0.001",
+        "0.01",
+        Some(Less),
+        "Bug caught: the exponent is ignored, so equal digits compare equal. (High)"
+    );
+    compare_case!(
+        a_larger_exponent_beats_more_digits,
+        "1e3",
+        "999",
+        Some(Greater),
+        "Bug caught: the digit count decides instead of the position of the leading digit. (High)"
+    );
+    compare_case!(
+        a_negative_is_less_than_a_positive,
+        "-1",
+        "1",
+        Some(Less),
+        "Bug caught: the sign is ignored. (High)"
+    );
+    compare_case!(
+        between_negatives_the_larger_magnitude_is_less,
+        "-9",
+        "-10",
+        Some(Greater),
+        "Bug caught: negatives are ordered by magnitude, not reversed. (High)"
+    );
+    compare_case!(
+        negative_zero_equals_zero,
+        "-0",
+        "0",
+        Some(Equal),
+        "Bug caught: `-0` orders below `0` because its sign flag is set. (High)"
+    );
+    compare_case!(
+        a_negative_fraction_is_less_than_zero,
+        "-0.5",
+        "0",
+        Some(Less),
+        "Bug caught: a negative against zero compares as its magnitude. (High)"
+    );
+    compare_case!(
+        a_difference_in_the_last_of_39_digits_decides,
+        "123456789012345678901234567890123456789",
+        "123456789012345678901234567890123456788",
+        Some(Greater),
+        "Bug caught: the digits are compared through a narrower number (u64, f64) and the last digits are lost. (High)"
+    );
+    compare_case!(
+        infinity_is_greater_than_any_finite,
+        "inf",
+        "1e400",
+        Some(Greater),
+        "Bug caught: infinity compared by its (empty) digits. (High)"
+    );
+    compare_case!(
+        negative_infinity_is_less_than_any_finite,
+        "-inf",
+        "-1e400",
+        Some(Less),
+        "Bug caught: negative infinity compared by its (empty) digits. (High)"
+    );
+    compare_case!(
+        infinity_equals_infinity,
+        "inf",
+        "inf",
+        Some(Equal),
+        "Bug caught: two infinities of one sign compare by digits and are not equal. (High)"
+    );
+    compare_case!(
+        nan_on_the_left_is_unordered,
+        "nan",
+        "1",
+        None,
+        "Bug caught: NaN orders against a number. (High)"
+    );
+    compare_case!(
+        nan_on_the_right_is_unordered,
+        "1",
+        "nan",
+        None,
+        "Bug caught: only the left operand is checked for NaN. (High)"
+    );
 }

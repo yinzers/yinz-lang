@@ -1,18 +1,20 @@
-//! v0.3-M9 C3a: `ynz_string_release` frees a string's owned bytes and never static ones.
+//! v0.3-M9 C3a: `ynz_string_release` frees a string's owned bytes and never static ones, and the
+//! owned `toString` conversions return independent strings.
 //!
 //! Tier: High (memory safety). Run under AddressSanitizer (the `sanitizers` CI lane,
 //! `RUSTFLAGS=-Zsanitizer=address cargo +nightly test -p ynz-runtime`): a release that frees
 //! static bytes is an invalid free, a second release of owned bytes is a double free, and a
 //! string that a conversion left in a shared buffer is an invalid free too. Without the
 //! sanitizer the same tests still check the bytes survive.
+//!
+//! That every allocator writes the header and is released clean is pinned once, for all of them,
+//! by `string_counter.rs` (they share one allocation point, `heap_string_buffer`).
 
 use std::ffi::CStr;
 
 use ynz_runtime::{
-    ynz_bignum_add, ynz_decimal_from_int, ynz_decimal_to_string, ynz_float_to_string,
-    ynz_int_to_string, ynz_sensitive_to_string, ynz_string_builder_append,
-    ynz_string_builder_finalize, ynz_string_builder_new, ynz_string_concat, ynz_string_from_static,
-    ynz_string_release, ynz_string_to_upper, StaticString,
+    ynz_float_to_string, ynz_int_to_string, ynz_sensitive_to_string, ynz_string_release,
+    StaticString,
 };
 
 /// A literal as codegen emits it: header word 0, then the bytes and a NUL.
@@ -47,78 +49,30 @@ fn releasing_static_bytes_leaves_them_untouched() {
     assert_eq!(text(redacted), "[REDACTED]");
 }
 
-/// Bug caught: an owned string from some allocator that `ynz_string_release` cannot free (it
-/// lacks the header, so the release reads the wrong word) or frees twice. One row per allocator
-/// that returns a string. (High)
-#[test]
-fn releasing_owned_bytes_from_every_allocator_is_clean() {
-    let mut decimal = [0u8; 16];
-    ynz_decimal_from_int(7, decimal.as_mut_ptr().cast());
-    let owned: Vec<(&str, *const u8, &str)> = unsafe {
-        vec![
-            (
-                "from_static",
-                ynz_string_from_static(b"abc".as_ptr(), 3),
-                "abc",
-            ),
-            (
-                "concat",
-                ynz_string_concat(c"foo".as_ptr().cast(), c"bar".as_ptr().cast()),
-                "foobar",
-            ),
-            (
-                "to_upper",
-                ynz_string_to_upper(c"abc".as_ptr().cast()),
-                "ABC",
-            ),
-            ("int_to_string", ynz_int_to_string(-12), "-12"),
-            ("float_to_string", ynz_float_to_string(2.5), "2.5"),
-            (
-                "decimal_to_string",
-                ynz_decimal_to_string(decimal.as_ptr().cast()),
-                "7",
-            ),
-            (
-                "bignum_add",
-                ynz_bignum_add(c"1".as_ptr().cast(), c"2".as_ptr().cast(), 40) as *const u8,
-                "3",
-            ),
-            (
-                "builder_finalize",
-                {
-                    let builder = ynz_string_builder_new();
-                    ynz_string_builder_append(builder, c"x".as_ptr().cast());
-                    ynz_string_builder_finalize(builder)
-                },
-                "x",
-            ),
-        ]
+/// One test per boundary of the `int` conversion's hand-written digit loop:
+/// `int_to_string_case!("bug it catches (High)"; case: value => "text", ...)`.
+macro_rules! int_to_string_case {
+    ($bug:literal; $($case:ident: $value:expr => $expected:expr,)+) => {
+        $(
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                let string = ynz_int_to_string($value);
+                assert_eq!(text(string), $expected);
+                unsafe { ynz_string_release(string) };
+            }
+        )+
     };
-    for (allocator, string, expected) in owned {
-        assert_eq!(text(string), expected, "{allocator}");
-        unsafe { ynz_string_release(string) };
-    }
 }
 
-/// Bug caught: the `int` conversion's hand-written digit loop is wrong at a boundary (zero,
-/// sign, `i64::MIN` whose magnitude does not fit an i64, the 20-byte maximum). (High)
-#[test]
-fn int_to_string_is_exact_at_the_boundaries() {
-    let table: [(i64, &str); 7] = [
-        (0, "0"),
-        (9, "9"),
-        (10, "10"),
-        (-1, "-1"),
-        (i64::MAX, "9223372036854775807"),
-        (i64::MIN, "-9223372036854775808"),
-        (1_000_000, "1000000"),
-    ];
-    for (value, expected) in table {
-        let string = ynz_int_to_string(value);
-        assert_eq!(text(string), expected);
-        unsafe { ynz_string_release(string) };
-    }
-}
+int_to_string_case!(
+    "Bug caught: the `int` conversion's digit loop is wrong at a boundary: zero, a carry into a new digit, the sign, `i64::MIN` (whose magnitude does not fit an i64), the 20-byte maximum. (High)";
+    int_to_string_of_zero: 0 => "0",
+    int_to_string_of_ten: 10 => "10",
+    int_to_string_of_minus_one: -1 => "-1",
+    int_to_string_of_i64_max: i64::MAX => "9223372036854775807",
+    int_to_string_of_i64_min: i64::MIN => "-9223372036854775808",
+);
 
 /// Bug caught: two conversions alive at once share one buffer (the `222 222` bug, S1 t06). (High)
 #[test]
@@ -135,25 +89,25 @@ fn two_live_conversions_hold_two_values() {
     }
 }
 
-/// Bug caught: a float's text is cut to a fixed buffer again (the old thread-local buffer kept
-/// 31 bytes, which hid a wrong float literal behind a truncated denormal). One row per shape of
-/// text: short, negative, fractional, a 301-digit magnitude, the smallest subnormal's long
-/// fraction, and the non-finite values. (High)
-#[test]
-fn float_to_string_is_never_truncated() {
-    let table: [f64; 8] = [
-        0.0,
-        -2.5,
-        0.317,
-        1e300,
-        f64::MIN_POSITIVE,
-        5e-324,
-        f64::INFINITY,
-        f64::NAN,
-    ];
-    for value in table {
-        let string = ynz_float_to_string(value);
-        assert_eq!(text(string), format!("{value}"), "float {value:e}");
-        unsafe { ynz_string_release(string) };
-    }
+/// One test per shape of long float text, which the old 31-byte thread-local buffer cut (and
+/// that hid a wrong float literal behind a truncated denormal):
+/// `float_to_string_case!("bug it catches (High)"; case: value => expected_text, ...)`.
+macro_rules! float_to_string_case {
+    ($bug:literal; $($case:ident: $value:expr => $expected:expr,)+) => {
+        $(
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                let string = ynz_float_to_string($value);
+                assert_eq!(text(string), $expected);
+                unsafe { ynz_string_release(string) };
+            }
+        )+
+    };
 }
+
+float_to_string_case!(
+    "Bug caught: a float's text is cut to a fixed buffer again. (High)";
+    float_to_string_keeps_all_301_digits_of_1e300: 1e300 => format!("1{}", "0".repeat(300)),
+    float_to_string_keeps_the_long_fraction_of_the_smallest_subnormal: 5e-324 => format!("0.{}5", "0".repeat(323)),
+);

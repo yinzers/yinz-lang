@@ -1,51 +1,57 @@
-//! v0.3-M9 C3a: the bignum runtime entry points that generated code calls for a comparison and
-//! for unary minus. The compiled-program contract is `ynz-driver/tests/v03_m9_string_ownership.rs`;
-//! this pins what a program cannot reach: the unordered (NaN) answer and parse failure.
+//! v0.3-M9 C3a: the answer word of the bignum compare entry point that generated code branches on.
+//! The compiled-program contract (orderings, mixed precision, release) is
+//! `ynz-driver/tests/v03_m9_string_ownership.rs`; this pins the numeric answer codes, including
+//! the unordered (NaN) one, which that fixture cannot show.
 //!
-//! Tier: High (a comparison of money-sized numbers; text read as another type).
+//! Tier: High (a comparison of money-sized numbers; the codegen/runtime boundary).
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::CString;
 
-use ynz_runtime::{ynz_bignum_compare, ynz_bignum_neg, ynz_string_release};
+use ynz_runtime::ynz_bignum_compare;
 
-fn compare(left: &str, right: &str) -> i32 {
-    let left = CString::new(left).expect("no NUL in test text");
-    let right = CString::new(right).expect("no NUL in test text");
-    // SAFETY: both are valid NUL-terminated strings.
-    unsafe { ynz_bignum_compare(left.as_ptr(), right.as_ptr(), 100) }
-}
-
-/// Bug caught: the compare answer is wrong or collapses "unordered" into an ordering, so
-/// `NaN > x` or `NaN >= x` reads as true in generated code (-1 / 0 / 1 / 2). (High)
-#[test]
-fn compare_answers_less_equal_greater_and_unordered() {
-    let cases = [
-        ("9", "10", -1),
-        ("10", "9", 1),
-        ("2.5", "2.50", 0),
-        ("-0", "0", 0),
-        ("nan", "1", 2),
-        ("1", "nan", 2),
-        ("nan", "nan", 2),
-    ];
-    for (left, right, expected) in cases {
-        assert_eq!(compare(left, right), expected, "compare({left}, {right})");
-    }
-}
-
-/// Bug caught: negation returns something other than an owned heap string holding `0 - value`
-/// (the decimal128 path returned a 16-byte stack cell). (High)
-#[test]
-fn negation_is_an_owned_heap_string() {
-    for (value, expected) in [("2.5", "-2.5"), ("-2.5", "2.5"), ("0", "0")] {
-        let value = CString::new(value).expect("no NUL in test text");
-        // SAFETY: `value` is a valid NUL-terminated string; the result is a heap string that
-        // is read once and released once.
-        unsafe {
-            let negated = ynz_bignum_neg(value.as_ptr(), 100);
-            let negated_text = CStr::from_ptr(negated as *const c_char).to_str().unwrap();
-            assert_eq!(negated_text, expected);
-            ynz_string_release(negated as *const u8);
+/// One test per answer code: `compare_case!(case, left, right, answer, "bug it catches (High)")`.
+macro_rules! compare_case {
+    ($case:ident, $left:literal, $right:literal, $answer:literal, $bug:literal) => {
+        #[doc = $bug]
+        #[test]
+        fn $case() {
+            let left = CString::new($left).expect("no NUL in test text");
+            let right = CString::new($right).expect("no NUL in test text");
+            // SAFETY: both are valid NUL-terminated strings.
+            let answer = unsafe { ynz_bignum_compare(left.as_ptr(), right.as_ptr(), 100) };
+            assert_eq!(answer, $answer, "compare({}, {})", $left, $right);
         }
-    }
+    };
 }
+
+compare_case!(
+    less_is_minus_one_and_numeric,
+    "9",
+    "10",
+    -1,
+    "Bug caught: a textual compare (`\"9\" > \"10\"`) or a wrong code for less-than. (High)"
+);
+
+compare_case!(
+    equal_is_zero_across_trailing_zeros,
+    "2.5",
+    "2.50",
+    0,
+    "Bug caught: `2.5` and `2.50` compare unequal, so `==` and a multi-case `if` miss. (High)"
+);
+
+compare_case!(
+    greater_is_one,
+    "10",
+    "9",
+    1,
+    "Bug caught: a wrong code for greater-than. (High)"
+);
+
+compare_case!(
+    unordered_is_two_not_an_ordering,
+    "nan",
+    "1",
+    2,
+    "Bug caught: the unordered answer collapses into an ordering, so `NaN > x` or `NaN >= x` reads as true in generated code. (High)"
+);

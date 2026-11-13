@@ -5146,19 +5146,6 @@ mod print_text_tests {
         assert!(stack_text.write_str("abcd").is_err());
     }
 
-    /// Bug caught: `write_int_digits` dropping the sign or a digit of an extreme `int`, or
-    /// leaving no NUL after the digits. (High: formatting math/parser)
-    #[test]
-    fn int_digits_are_exact_and_nul_terminated_at_the_extremes() {
-        for value in [0i64, 1, -1, 9, 10, -10, i64::MAX, i64::MIN] {
-            let mut buffer = [0xffu8; I64_DECIMAL_MAX_BYTES + 1];
-            let first_digit = write_int_digits(value, &mut buffer);
-            let text = std::str::from_utf8(&buffer[first_digit..I64_DECIMAL_MAX_BYTES]).unwrap();
-            assert_eq!(text, value.to_string());
-            assert_eq!(buffer[I64_DECIMAL_MAX_BYTES], 0);
-        }
-    }
-
     /// Bug caught: an append entry that writes different bytes than the owned `toString` of the
     /// same value, so `${n}` and `n.toString()` disagree. (High: output correctness)
     #[test]

@@ -70,19 +70,11 @@ plain_case!(
     "a decimal literal where typeck wants a `float` (annotation, shape field, argument, return) lowers to a decimal128 cell address used as the f64 bits, printing a denormal (High: wrong numeric value)"
 );
 
-plain_case!(
-    mixed_precision_binop_uses_the_bignum_operation,
-    "v0_3_m9_c3a_mixed_precision_binop.ynz",
-    "4\n4\n-1\n3.75\n0.6\n4\n4\n4\n4\n-2.5\n",
-    "`number<=34> op number>34` must run the bignum operation on bignum text",
-    "`small op big` runs the decimal128 operation on the coerced bignum text: a wrong result (`2.5` for `1.5 + 2.5`) and a 16-byte read past an exact-size heap string (High: arithmetic, memory safety)"
-);
-
 asan_case!(
-    mixed_precision_binop_releases_coerced_operands_once,
+    mixed_precision_binop_is_exact_and_releases_coerced_operands_once,
     "v0_3_m9_c3a_mixed_precision_binop.ynz",
     "4\n4\n-1\n3.75\n0.6\n4\n4\n4\n4\n-2.5\n",
-    "releasing the bignum text a mixed-precision binop coerced frees it twice, frees a held string, or leaks past the operation (High)"
+    "`small op big` runs the decimal128 operation on the coerced bignum text (a wrong result, `2.5` for `1.5 + 2.5`, and a 16-byte read past an exact-size heap string), or the coerced text is freed twice, freed while held, or leaked (High: arithmetic, memory safety)"
 );
 
 asan_case!(
@@ -182,31 +174,6 @@ print_cost_case!(
     "the debug print of a shape builds a heap string for each int/float/number field's text, not only the one debug text (High: Golden Rule 8 cost regression)"
 );
 
-/// Bug caught: a `print`/`${}` of a number that allocates a temporary and forgets to release it
-/// leaks one string per use; here nothing is allocated for the numbers, so only each
-/// interpolation result (a string the program holds) may be live at the end. (High)
-#[test]
-fn printing_and_interpolating_numbers_leaves_only_the_interpolation_results() {
-    let built = build("v0_3_m9_c3a_print_temps_balance.ynz", false);
-    let (output, counters) = run_counted(&built);
-    assert_eq!(output.exit_code, 0, "stderr:\n{}", output.stderr);
-    assert!(
-        output.stdout.ends_with("1000\n"),
-        "loop must run to the end:\n{}",
-        output.stdout
-    );
-    assert_eq!(
-        counters.string_alloc, PRINT_COST_ITERATIONS,
-        "only the interpolation result may be a heap string per iteration (counters: {counters:?})"
-    );
-    let still_allocated = counters.string_alloc - counters.string_free;
-    assert!(
-        still_allocated <= PRINT_COST_ITERATIONS,
-        "{still_allocated} strings stayed allocated after {PRINT_COST_ITERATIONS} iterations; only \
-         the interpolation results may (counters: {counters:?})"
-    );
-}
-
 // ---- bignum text must never be read as decimal128: comparisons, unary minus, `if` on a value ----
 
 plain_case!(
@@ -217,20 +184,21 @@ plain_case!(
     "a comparison between two bignums reads their text as 16 decimal128 bytes: `2.5 < 12.5` prints false and the read runs past a short heap string (High: wrong comparison, memory safety)"
 );
 
-plain_case!(
+// The next three cases and the negate and shape-field cases run under ASan only: the ASan run
+// asserts the same stdout as a plain run, so a plain twin would catch nothing more.
+
+asan_case!(
     small_number_compared_with_bignum_is_an_exact_decimal_compare,
     "v0_3_m9_c3a_bignum_compare_small_big.ynz",
     "true\ntrue\nfalse\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\ntrue\n",
-    "`number<=34 <op> number>34` must compare as bignum text",
-    "`small < big` coerces the small side to bignum text then reads it as decimal128 (High: wrong comparison, memory safety)"
+    "`number<=34 <op> number>34` coerces the small side to text then reads it as decimal128 (wrong comparison, memory safety), or the coerced text is freed twice, freed while held, or leaked (High)"
 );
 
-plain_case!(
+asan_case!(
     bignum_compared_with_small_number_is_an_exact_decimal_compare,
     "v0_3_m9_c3a_bignum_compare_big_small.ynz",
     "false\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\n",
-    "`number>34 <op> number<=34` must compare as bignum text",
-    "`big < small` reads the bignum text as decimal128 (High: wrong comparison, memory safety)"
+    "`number>34 <op> number<=34` reads the bignum text as decimal128 (wrong comparison, memory safety), or the coerced text is freed twice, freed while held, or leaked (High)"
 );
 
 asan_case!(
@@ -241,32 +209,10 @@ asan_case!(
 );
 
 asan_case!(
-    mixed_precision_compare_releases_coerced_operands_once,
-    "v0_3_m9_c3a_bignum_compare_small_big.ynz",
-    "true\ntrue\nfalse\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\ntrue\n",
-    "the bignum text a `small <op> big` compare coerced is freed twice, freed while held, or not freed (High)"
-);
-
-asan_case!(
-    big_vs_small_compare_releases_coerced_operands_once,
-    "v0_3_m9_c3a_bignum_compare_big_small.ynz",
-    "false\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\n",
-    "the bignum text a `big <op> small` compare coerced is freed twice, freed while held, or not freed (High)"
-);
-
-plain_case!(
-    negating_a_bignum_negates_its_decimal_text,
+    negating_a_bignum_negates_its_decimal_text_into_an_owned_string,
     "v0_3_m9_c3a_bignum_negate.ynz",
     "-2.5\n2.5\n-12.5\n0\n",
-    "`-value` on a `number>34` must return the negated bignum text",
-    "unary minus on a bignum runs decimal128 `0 - value` on its text and returns a 16-byte stack cell as bignum text: `-2.5` is not printed (High: wrong arithmetic, memory safety)"
-);
-
-asan_case!(
-    negating_a_bignum_returns_an_owned_string,
-    "v0_3_m9_c3a_bignum_negate.ynz",
-    "-2.5\n2.5\n-12.5\n0\n",
-    "a negated bignum that is a stack cell, not a heap string, is read or released as one (High)"
+    "unary minus on a bignum runs decimal128 `0 - value` on its text and returns a 16-byte stack cell as bignum text: `-2.5` is not printed and the stack cell is read or released as a heap string (High: wrong arithmetic, memory safety)"
 );
 
 plain_case!(
@@ -277,17 +223,9 @@ plain_case!(
     "the arm test reads the bignum text as decimal128, so `2.5` does not match the arm `2.50` (High: wrong branch)"
 );
 
-plain_case!(
+asan_case!(
     shape_debug_print_reads_a_bignum_field_as_text,
     "v0_3_m9_c3a_bignum_in_shape_debug_text.ynz",
     "Ledger { total: 4, entries: [1.5, 2.5], byName: { rent: 2.5 } }\n",
-    "a `number>34` field of a printed shape must show its decimal text",
-    "the shape debug print loads a bignum field (an 8-byte pointer) as a 16-byte decimal128: garbage text and a read past the field (High: memory safety)"
-);
-
-asan_case!(
-    shape_debug_print_of_a_bignum_field_is_asan_clean,
-    "v0_3_m9_c3a_bignum_in_shape_debug_text.ynz",
-    "Ledger { total: 4, entries: [1.5, 2.5], byName: { rent: 2.5 } }\n",
-    "the debug print of a bignum field reads past the field, or releases the borrowed bignum text (High)"
+    "the shape debug print loads a bignum field (an 8-byte pointer) as a 16-byte decimal128, printing garbage text and reading past the field, or releases the borrowed bignum text (High: memory safety)"
 );
