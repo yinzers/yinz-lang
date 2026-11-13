@@ -1,0 +1,29 @@
+// v0.3-M9 C3a fixture: arithmetic between a `number<=34>` (hardware decimal128) and a
+// `number>34` (bignum). The decimal128 side is turned into bignum text first, so the operation
+// must be the bignum one whichever side the small number is on. Dispatching a `small op big`
+// on the small side's type read that text as 16 raw decimal128 bytes: a wrong result and a read
+// past the end of the text's heap buffer (an exact-size string since C3a).
+//
+// Expected output (one per line): 4 4 -1 3.75 0.6 4 4 4 4 -2.5
+
+function entrypoint() -> nothing {
+  let small: number<10> = 1.5
+  let big: number<50> = 2.5
+  print(small + big)
+  print(big + small)
+  print(small - big)
+  print(small * big)
+  print(small / big)
+  print(`${small + big}`)
+
+  // The edge of the two representations: 34 digits is decimal128, 35 is bignum.
+  let largestSmall: number<34> = 1.5
+  let smallestBig: number<35> = 2.5
+  print(largestSmall + smallestBig)
+  print(smallestBig + largestSmall)
+
+  // The sum keeps its bignum precision and feeds another operation.
+  let sum: number<50> = small + big
+  print(sum)
+  print(small - sum)
+}

@@ -1,0 +1,37 @@
+// v0.3-M9 C3a fixture: the debug text of a shape, and of the arrays, maps and nested shapes in
+// it, run under AddressSanitizer. Printing a shape builds its text field by field; each
+// `int`/`float`/`number` field's temporary text is owned heap that the compiled code releases
+// after appending it, and the "... and N more" count of a long array is released too. Static
+// text (an options display name, a string field) must never be released.
+//
+// Expected output: see the `print` below (23 ints: 20 shown and "... and 3 more").
+
+options Level { low, high }
+
+shape Reading {
+  count: int
+  ratio: float
+  price: number
+  level: Level
+  note: string
+}
+
+shape Bag {
+  ints: array<int>
+  floats: array<float>
+  scores: map<string, int>
+  inner: Reading
+}
+
+function entrypoint() -> nothing {
+  let many: array<int> = []
+  let next: int = 0
+  while (next < 23) {
+    many.add(next)
+    next = next + 1
+  }
+  let floats: array<float> = [1.5, 2.25]
+  let inner: Reading = { count: 3, ratio: 0.5, price: 1.25, level: Level.low, note: `hi` }
+  let bag: Bag = { ints: many, floats: floats, scores: { `alice`: 90 }, inner: inner }
+  print(bag)
+}
