@@ -144,6 +144,10 @@ impl FunctionTransfers {
     }
 }
 
+/// Per local function, the pairs of parameter positions a call may store into one another
+/// (`TransferRecorder::solve_call_stores`). A function absent from the table stores nothing.
+pub type CallStoreTable = HashMap<String, Vec<(usize, usize)>>;
+
 /// The finished record of a module, carried on `TypedModule::transfers`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TransferRecord {
@@ -170,6 +174,7 @@ pub enum RoleEvidence {
     Piece,
 }
 
+#[derive(Clone)]
 struct BindingState {
     decl: DeclKey,
     /// The frame path (`Scope::path`) of the scope the binding was declared in.
@@ -180,6 +185,7 @@ struct BindingState {
     ever_piece: bool,
 }
 
+#[derive(Clone)]
 struct FunctionState {
     name: String,
     bindings: Vec<BindingState>,
@@ -195,6 +201,7 @@ struct FunctionState {
 
 /// One call site: the callee and, per argument position, the declarations holding the
 /// argument's heap value (empty for a fresh or value-typed argument).
+#[derive(Clone)]
 struct CallEdge {
     callee: String,
     positions: Vec<Vec<DeclKey>>,
@@ -238,7 +245,7 @@ impl FunctionState {
 /// Fills a [`TransferRecord`] while the checker walks the module, one function at a time.
 /// Mirrors `BindingNameRecorder`: the checker calls it at the same events that update its live
 /// scope, so the record can never disagree with what the checker decided.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TransferRecorder {
     current: Option<FunctionState>,
     finished: Vec<FunctionState>,
@@ -346,6 +353,41 @@ impl TransferRecorder {
         }
     }
 
+    /// True when some call passes heap values in two or more argument positions: only then can
+    /// a call store one argument into another, so only then is `solve_call_stores` worth running.
+    pub fn has_multi_holder_calls(&self) -> bool {
+        self.finished
+            .iter()
+            .chain(self.current.iter())
+            .flat_map(|function| function.calls.iter())
+            .any(|edge| {
+                edge.positions
+                    .iter()
+                    .filter(|holders| !holders.is_empty())
+                    .count()
+                    >= 2
+            })
+    }
+
+    /// Solve the call-site stores (on a copy; the recorder is left as it is): for every local function, the
+    /// pairs of its parameter positions that end up in one class. A second walk of the module
+    /// hands this to the checker so the LIVE scope merges the same arguments a call joins in the
+    /// record (`put(o, a)` storing `a` into `o`; giving `o` then covers `a`).
+    ///
+    /// O(rounds . calls . p^2) time, see `propagate_call_stores`.
+    pub fn solve_call_stores(&self) -> CallStoreTable {
+        let mut functions: Vec<FunctionState> = self.finished.clone();
+        functions.extend(self.current.clone());
+        propagate_call_stores(&mut functions);
+        functions
+            .iter()
+            .filter_map(|function| {
+                let pairs = parameter_pairs(function);
+                (!pairs.is_empty()).then(|| (function.name.clone(), pairs))
+            })
+            .collect()
+    }
+
     /// Close the last function and build the record. Codegen names come from `names`, which
     /// must have named every declaration this recorder saw (the checker declares both at the
     /// same event).
@@ -365,6 +407,31 @@ impl TransferRecorder {
         }
         record
     }
+}
+
+/// The pairs of parameter positions of `function` that share a class (so a call may have stored
+/// the argument at one position into the argument at the other).
+fn parameter_pairs(function: &FunctionState) -> Vec<(usize, usize)> {
+    let parameter_roots: Vec<Option<usize>> = function
+        .parameters
+        .iter()
+        .map(|parameter| {
+            function
+                .index
+                .get(parameter)
+                .map(|&position| function.find_readonly(position))
+        })
+        .collect();
+    let mut shared = Vec::new();
+    for first in 0..parameter_roots.len() {
+        for second in (first + 1)..parameter_roots.len() {
+            if parameter_roots[first].is_some() && parameter_roots[first] == parameter_roots[second]
+            {
+                shared.push((first, second));
+            }
+        }
+    }
+    shared
 }
 
 /// A call may store one argument into another (`put(o, a)` with `o.add(a)` in the body). The
@@ -388,28 +455,8 @@ fn propagate_call_stores(functions: &mut [FunctionState]) {
                 // Which pairs of argument positions share a class in the callee.
                 let pairs: Vec<(usize, usize)> = match by_name.get(&edge.callee) {
                     Some(&callee) => {
-                        let callee_state = &functions[callee];
-                        let parameter_roots: Vec<Option<usize>> = callee_state
-                            .parameters
-                            .iter()
-                            .map(|parameter| {
-                                callee_state
-                                    .index
-                                    .get(parameter)
-                                    .map(|&position| callee_state.find_readonly(position))
-                            })
-                            .collect();
-                        let limit = edge.positions.len().min(parameter_roots.len());
-                        let mut shared = Vec::new();
-                        for first in 0..limit {
-                            for second in (first + 1)..limit {
-                                if parameter_roots[first].is_some()
-                                    && parameter_roots[first] == parameter_roots[second]
-                                {
-                                    shared.push((first, second));
-                                }
-                            }
-                        }
+                        let mut shared = parameter_pairs(&functions[callee]);
+                        shared.retain(|&(_, second)| second < edge.positions.len());
                         shared
                     }
                     None => {

@@ -647,3 +647,65 @@ fn a_loop_cell_joins_everything_the_iterated_value_reaches() {
         );
     }
 }
+
+/// (High) Bug caught: the record joined `a` and `o` after `put(o, a)` (the callee stores `a`
+/// into `o`) but the live scope did not, so `eat(o); a.count()` was accepted: `eat` would free
+/// the row `a` still names. The direct `o.add(a)` form was already rejected. Also pins the
+/// converse: a callee that only READS `src` into `dst` does not tie them (no false rejection),
+/// and a store that travels through a relay and a recursive callee still ties them.
+#[test]
+fn a_call_that_stores_one_argument_into_another_is_a_give_of_both() {
+    let eat = "function eat(give o: array<array<int>>) -> nothing {
+  print(o.count().toString())
+}
+function put(lend o: array<array<int>>, a: array<int>) -> nothing {
+  o.add(a)
+}
+function relay(lend o: array<array<int>>, a: array<int>) -> nothing {
+  put(o, a)
+}
+function descend(lend o: array<array<int>>, a: array<int>, depth: int) -> nothing {
+  if (depth > 0) {
+    descend(o, a, depth - 1)
+  }
+  o.add(a)
+}
+function tally(lend into: array<int>, from: array<int>) -> nothing {
+  into.add(from.count())
+}
+function eatInts(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+";
+    let reject = |body: &str| {
+        let output = run(&format!("{eat}{body}"));
+        let found = errors(&output);
+        assert!(
+            found
+                .iter()
+                .any(|message| message.contains("already given away")),
+            "expected a use-after-give for:\n{body}\ngot {found:#?}"
+        );
+    };
+    for call in ["put(o, a)", "relay(o, a)", "descend(o, a, 2)"] {
+        reject(&format!(
+            "function f() -> nothing {{
+  let a: array<int> = [1, 2, 3]
+  let o: array<array<int>> = []
+  {call}
+  eat(o)
+  print(a.count().toString())
+}}"
+        ));
+    }
+    let clean = run(&format!(
+        "{eat}function g() -> nothing {{
+  let from: array<int> = [1, 2, 3]
+  let into: array<int> = []
+  tally(into, from)
+  eatInts(into)
+  print(from.count().toString())
+}}"
+    ));
+    assert!(errors(&clean).is_empty(), "{:#?}", errors(&clean));
+}

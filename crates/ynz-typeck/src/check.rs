@@ -526,7 +526,7 @@ pub fn check(
             .or_insert_with(|| entry.clone());
     }
 
-    let mut checker = Checker {
+    let make_checker = |call_stores: crate::transfer_record::CallStoreTable| Checker {
         intrinsics,
         sig_table,
         shape_table,
@@ -537,7 +537,7 @@ pub fn check(
         imported_fn_names,
         local_fn_names: local_fn_names(module),
         expr_types: HashMap::new(),
-        diags,
+        diags: diags.clone(),
         scope: Scope::new(),
         current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
@@ -570,8 +570,9 @@ pub fn check(
         transfers: crate::transfer_record::TransferRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
+        call_stores,
     };
-    checker.check_module(module);
+    let checker = walk_module(module, make_checker);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
     let typed = TypedModule {
@@ -590,6 +591,31 @@ pub fn check(
         checker.diags,
         checker.referenced_names,
     )
+}
+
+/// Walk every function body. A call may store one of its arguments into another (`put(o, a)` with
+/// `o.add(a)` in the body); whether it does is the CALLEE's own record, which exists only once
+/// the callee has been walked, and a caller can come first. So when some call passes heap values
+/// in two or more positions, solve the stores from the first walk and walk again: the second walk
+/// merges those arguments in the live scope too, so a program that reads `a` after giving `o` away
+/// is rejected like the direct `o.add(a)` form (the record already says they are one class).
+/// A module with no such call is walked once.
+fn walk_module<'b>(
+    module: &Module,
+    make_checker: impl Fn(crate::transfer_record::CallStoreTable) -> Checker<'b>,
+) -> Checker<'b> {
+    let mut checker = make_checker(crate::transfer_record::CallStoreTable::new());
+    checker.check_module(module);
+    if !checker.transfers.has_multi_holder_calls() {
+        return checker;
+    }
+    let call_stores = checker.transfers.solve_call_stores();
+    if call_stores.is_empty() {
+        return checker;
+    }
+    let mut second = make_checker(call_stores);
+    second.check_module(module);
+    second
 }
 
 /// Like `check` but with kernel-mode enabled.
@@ -619,7 +645,7 @@ pub fn check_with_kernel_mode(
     // empty report (an unseen callee consumes nothing and returns `MayAlias`).
     let empty_report = crate::effective_ownership::EffectiveOwnershipReport::empty();
     let no_imports: HashSet<String> = HashSet::new();
-    let mut checker = Checker {
+    let make_checker = |call_stores: crate::transfer_record::CallStoreTable| Checker {
         intrinsics,
         sig_table,
         shape_table,
@@ -630,7 +656,7 @@ pub fn check_with_kernel_mode(
         imported_fn_names: &no_imports,
         local_fn_names: local_fn_names(module),
         expr_types: HashMap::new(),
-        diags,
+        diags: diags.clone(),
         scope: Scope::new(),
         current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
@@ -663,8 +689,9 @@ pub fn check_with_kernel_mode(
         transfers: crate::transfer_record::TransferRecorder::default(),
         loop_gives: Vec::new(),
         loop_body_frames: Vec::new(),
+        call_stores,
     };
-    checker.check_module(module);
+    let checker = walk_module(module, make_checker);
     let binding_names = checker.binding_names.finish();
     let transfers = checker.transfers.finish(&binding_names);
     let typed = TypedModule {
@@ -928,6 +955,9 @@ struct Checker<'b> {
     loop_gives: Vec<LoopGive>,
     /// Frame index of the body of each enclosing loop, outermost first.
     loop_body_frames: Vec<usize>,
+    /// The parameter pairs each local function stores into one another, solved by a first walk
+    /// of the module (`walk_module`). Empty during that first walk.
+    call_stores: crate::transfer_record::CallStoreTable,
 }
 
 impl<'b> Checker<'b> {
@@ -6175,21 +6205,27 @@ impl<'b> Checker<'b> {
         ownerships: &[Option<OwnershipModifier>],
         param_names: &[String],
     ) {
+        // A callee may store one argument into another; whether it does is decided from its own
+        // record once every function is walked (`TransferRecorder::finish`).
+        let holders_per_position: Vec<Vec<(String, DeclKey)>> = normalized_args
+            .iter()
+            .map(|arg| self.heap_holders_of(arg))
+            .collect();
+        self.transfers.note_call(
+            callee,
+            holders_per_position
+                .iter()
+                .map(|holders| {
+                    holders
+                        .iter()
+                        .map(|(_, declaration)| declaration.clone())
+                        .collect()
+                })
+                .collect(),
+        );
         // The pre-call snapshot: which alias classes were consumed before THIS call touched
         // anything. A later position whose class is consumed but absent here was consumed by
         // an earlier position of this same call — `check_transfer` reports that read.
-        // A callee may store one argument into another; whether it does is decided from its own
-        // record once every function is walked (`TransferRecorder::finish`).
-        let holders_per_position: Vec<Vec<DeclKey>> = normalized_args
-            .iter()
-            .map(|arg| {
-                self.heap_holders_of(arg)
-                    .into_iter()
-                    .map(|(_, declaration)| declaration)
-                    .collect()
-            })
-            .collect();
-        self.transfers.note_call(callee, holders_per_position);
         let consumed_before = self.scope.consumed_classes();
         for (i, arg) in normalized_args.iter().enumerate() {
             let declared = ownerships.get(i).and_then(|o| o.as_ref());
@@ -6223,6 +6259,63 @@ impl<'b> Checker<'b> {
                 // a class-mate an earlier `give` position of this same call consumed
                 // (`mix(rows, other)` with `mix(give a, share b)`) is a read after free.
                 _ => self.check_read_of_same_call_consumed(arg, &consumed_before),
+            }
+        }
+        self.merge_call_stored_arguments(callee, ownerships, &holders_per_position);
+    }
+
+    /// A call that stores one argument into another (`put(o, a)` with `o.add(a)` in `put`) makes
+    /// the two arguments' holders one value, exactly as the direct `o.add(a)` does: giving or
+    /// returning either covers both, so a read of the other afterwards is a use-after-give. The
+    /// record joins the same pairs in `TransferRecorder::finish`.
+    ///
+    /// Which pairs: a LOCAL callee stores what its own record says (`call_stores`, solved by the
+    /// first walk of the module); any other callee (imported, dynamic) is unseen, so every pair
+    /// with a `lend` position, the only way a callee can write into an argument it does not own.
+    /// A `give` position is skipped: it hands the value to the callee, which owns it from there,
+    /// and the transfer sink has already consumed it.
+    fn merge_call_stored_arguments(
+        &mut self,
+        callee: &str,
+        ownerships: &[Option<OwnershipModifier>],
+        holders_per_position: &[Vec<(String, DeclKey)>],
+    ) {
+        let positions = holders_per_position.len();
+        let pairs: Vec<(usize, usize)> = if self.local_fn_names.contains(callee) {
+            self.call_stores.get(callee).cloned().unwrap_or_default()
+        } else {
+            let lends = |position: usize| {
+                matches!(
+                    ownerships.get(position),
+                    Some(Some(OwnershipModifier::Lend))
+                )
+            };
+            (0..positions)
+                .flat_map(|first| ((first + 1)..positions).map(move |second| (first, second)))
+                .filter(|&(first, second)| lends(first) || lends(second))
+                .collect()
+        };
+        for (first, second) in pairs {
+            if first >= positions || second >= positions {
+                continue;
+            }
+            let hands_over = |position: usize| {
+                matches!(
+                    ownerships.get(position),
+                    Some(Some(OwnershipModifier::Give))
+                ) || self.ownership.consumed_of(callee, position)
+            };
+            if hands_over(first) || hands_over(second) {
+                continue;
+            }
+            for (name_a, _) in &holders_per_position[first] {
+                for (name_b, _) in &holders_per_position[second] {
+                    if let (Some(class_a), Some(class_b)) =
+                        (self.scope.class_of(name_a), self.scope.class_of(name_b))
+                    {
+                        self.scope.merge_classes(class_a, class_b);
+                    }
+                }
             }
         }
     }
