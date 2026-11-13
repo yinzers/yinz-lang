@@ -14,6 +14,8 @@ declare ptr @ynz_int_to_string(i64) local_unnamed_addr
 
 declare void @ynz_siphash_init() local_unnamed_addr
 
+declare void @ynz_string_release(ptr) local_unnamed_addr
+
 declare void @ynz_rt_init() local_unnamed_addr
 
 declare i8 @ynz_rt_check_preempt(ptr) local_unnamed_addr
@@ -33,6 +35,7 @@ entry:
   tail call void @llvm.stackrestore.p0(ptr %loop_sp)
   %int_str = tail call ptr @ynz_int_to_string(i64 0)
   %puts = tail call i32 @puts(ptr nonnull dereferenceable(1) %int_str)
+  tail call void @ynz_string_release(ptr %int_str)
   tail call void @ynz_rt_shutdown()
   ret i32 0
 }
