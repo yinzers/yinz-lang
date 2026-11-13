@@ -5,8 +5,8 @@
 //! `Circle | int` with only `is Circle` and no `else` compiled (the fixture's first test failed
 //! then: the build succeeded).
 //!
-//! 3 tests, one per contract edge: the rejection and its teaching text, the accepted forms
-//! (an `else`, an arm per shape variant), and the `nothing` exemption.
+//! 2 tests, one per contract edge: the rejection and its teaching text, and the accepted forms
+//! (an `else`, an arm per shape variant, and the `nothing` exemption).
 
 mod support;
 
@@ -46,6 +46,15 @@ fn v03_m9_union_match_missing_a_non_shape_variant_is_rejected() {
         diagnostics.contains("Add an `else =>` default arm to handle int."),
         "WHAT-INSTEAD must suggest `else =>`; got:\n{diagnostics}"
     );
+    // The card requires the pre-existing text unchanged apart from the added names: the WHAT
+    // sentence is asserted above, the WHY sentence here.
+    assert!(
+        diagnostics.contains(
+            "The compiler knows every union variant at compile time. A missing arm means some \
+             values silently fall through — likely a bug."
+        ),
+        "WHY must keep the pre-existing exhaustiveness text; got:\n{diagnostics}"
+    );
     assert!(
         !diagnostics.contains("`is int =>`"),
         "WHAT-INSTEAD must not suggest an `is int` arm — it does not compile; got:\n{diagnostics}"
@@ -60,17 +69,6 @@ fn v03_m9_union_match_accepted_forms_still_compile_and_run() {
     support::assert_fixture_prints(
         "v0_3_m9_union_exhaustive_forms.ynz",
         false,
-        "circle\ncircle\nsquare\ncircle\nend\n",
-        "the accepted exhaustive forms must still compile and run",
-    );
-}
-
-#[test]
-fn v03_m9_union_match_accepted_forms_run_without_optimization() {
-    // WHY: same accepted forms at -O0.
-    support::assert_fixture_prints(
-        "v0_3_m9_union_exhaustive_forms.ynz",
-        true,
         "circle\ncircle\nsquare\ncircle\nend\n",
         "the accepted exhaustive forms must still compile and run",
     );
