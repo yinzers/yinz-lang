@@ -17250,15 +17250,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             let val = lower_expr(cg, sub_expr)?;
                             let sub_ty = cg.expr_type(sub_expr);
                             // Produce a null-terminated string from the expression value.
-                            let text = expr_to_cstring(cg, val, &sub_ty)?;
-                            cg.builder
-                                .build_call(
-                                    cg.rt.ynz_string_builder_append,
-                                    &[builder.into(), text.ptr.into()],
-                                    "",
-                                )
-                                .map_err(|e| format!("{e}"))?;
-                            release_value_text(cg, &text)?;
+                            if let Type::Options { name } = &sub_ty {
+                                // An options value arrives as its i8 tag, not the i64 a field load gives.
+                                let text =
+                                    lower_options_to_string(cg, val, name)?.into_pointer_value();
+                                write_text_ptr(cg, TextSink::Builder(builder), text)?;
+                            } else {
+                                write_value_text(cg, val, &sub_ty, TextSink::Builder(builder))?;
+                            }
                         }
                     }
                 }
@@ -19284,11 +19283,7 @@ fn lower_print<'ctx>(
     val: BasicValueEnum<'ctx>,
     ty: &Type,
 ) -> Result<(), String> {
-    let text = value_text(cg, val, ty)?;
-    cg.builder
-        .build_call(cg.rt.puts, &[text.ptr.into()], "puts")
-        .map_err(|e| format!("{e}"))?;
-    release_value_text(cg, &text)
+    write_value_text(cg, val, ty, TextSink::Stdout)
 }
 
 /// Terminate a byte vector as a C string, aborting with an ICE message if any
@@ -19344,8 +19339,8 @@ fn to_c_string<'ctx>(
             .map(|v| v.into_pointer_value())
             .map_err(|e| format!("{e}")),
 
-        // Runtime format shims return a fresh heap string the caller owns (`value_text` says
-        // who releases it).
+        // Runtime format shims return a fresh heap string the caller owns: `toString()` hands it to
+        // the program; `print`/`${}` never call these (`write_value_text`).
         Type::Int => {
             let c = cg
                 .builder
@@ -19483,16 +19478,7 @@ fn to_c_string<'ctx>(
                         .into_int_value();
                     cg.i64_bits_to(bits, field_ty)?
                 };
-                let field_text = value_text(cg, field_val, field_ty)?;
-
-                cg.builder
-                    .build_call(
-                        cg.rt.ynz_string_builder_append,
-                        &[builder_val.into(), field_text.ptr.into()],
-                        "",
-                    )
-                    .map_err(|e| format!("{e}"))?;
-                release_value_text(cg, &field_text)?;
+                write_value_text(cg, field_val, field_ty, TextSink::Builder(builder_val))?;
             }
 
             append_static(cg, builder_val, " }")?;
@@ -19622,16 +19608,7 @@ fn to_c_string<'ctx>(
             let out = cg.array_elem_out_buffer(&elem, "arr_dbg")?;
             let _flag = cg.array_elem_get_into(arr_ptr, i, out, "arr_dbg_get", None)?;
             let elem_val = cg.array_elem_from_out(out, &elem, "arr_dbg")?;
-            let elem_text = value_text(cg, elem_val, &elem)?;
-
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), elem_text.ptr.into()],
-                    "",
-                )
-                .map_err(|e| format!("{e}"))?;
-            release_value_text(cg, &elem_text)?;
+            write_value_text(cg, elem_val, &elem, TextSink::Builder(builder_val))?;
 
             // i += 1
             let next_i = cg
@@ -19811,15 +19788,7 @@ fn to_c_string<'ctx>(
             append_static(cg, builder_val, ": ")?;
 
             let val_val = cg.array_elem_from_out(val_out, &val_ty, "mdbg_vv")?;
-            let val_text = value_text(cg, val_val, &val_ty)?;
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), val_text.ptr.into()],
-                    "",
-                )
-                .map_err(|e| format!("{e}"))?;
-            release_value_text(cg, &val_text)?;
+            write_value_text(cg, val_val, &val_ty, TextSink::Builder(builder_val))?;
 
             let next_i = cg
                 .builder
@@ -19854,57 +19823,12 @@ fn to_c_string<'ctx>(
             Ok(g.as_pointer_value())
         }
 
-        // Union printing: for `T | nothing`, check null → "none", else print as T.
-        // For other union shapes, show a placeholder — full union introspection is future work.
-        Type::Union { variants } => {
-            let non_nothing: Vec<&Type> = variants
-                .iter()
-                .filter(|v| !matches!(v, Type::Nothing))
-                .collect();
-
-            if non_nothing.len() == 1 {
-                let inner = non_nothing[0].clone();
-                let ptr = val.into_pointer_value();
-                let is_null = cg
-                    .builder
-                    .build_is_null(ptr, "union_null")
-                    .map_err(|e| format!("{e}"))?;
-
-                let none_bb = cg.append_block("union_none");
-                let some_bb = cg.append_block("union_some");
-                let merge_bb = cg.append_block("union_merge");
-
-                cg.builder
-                    .build_conditional_branch(is_null, none_bb, some_bb)
-                    .map_err(|e| format!("{e}"))?;
-
-                cg.builder.position_at_end(none_bb);
-                let none_str = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
-                cg.builder
-                    .build_unconditional_branch(merge_bb)
-                    .map_err(|e| format!("{e}"))?;
-
-                cg.builder.position_at_end(some_bb);
-                let some_str = to_c_string(cg, val, &inner)?;
-                cg.builder
-                    .build_unconditional_branch(merge_bb)
-                    .map_err(|e| format!("{e}"))?;
-                let some_bb_end = cg.builder.get_insert_block().unwrap();
-
-                cg.builder.position_at_end(merge_bb);
-                let phi = cg
-                    .builder
-                    .build_phi(cg.ptr(), "union_str")
-                    .map_err(|e| format!("{e}"))?;
-                phi.add_incoming(&[
-                    (&none_str.as_pointer_value(), none_bb),
-                    (&some_str, some_bb_end),
-                ]);
-                Ok(phi.as_basic_value().into_pointer_value())
-            } else {
-                let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
-                Ok(g.as_pointer_value())
-            }
+        // A `T | nothing` union is written by `write_value_text` (branch on null, no string is
+        // built). Here, as a value to hold, any union shows a placeholder — full union
+        // introspection is future work.
+        Type::Union { .. } => {
+            let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
+            Ok(g.as_pointer_value())
         }
 
         // Options type — val is the i64-extended i8 tag; delegate to options toString.
@@ -19922,76 +19846,120 @@ fn to_c_string<'ctx>(
     }
 }
 
-/// The text of a value for a consumer that reads it once and drops it (a `print`, a `${}`
-/// part, a debug-print part), and whether that consumer must release it afterwards.
-struct ValueText<'ctx> {
-    ptr: PointerValue<'ctx>,
-    release_after_use: bool,
+/// Where a consumer that reads a value's text once puts it: `print` writes it to stdout, a
+/// `${}` part, a debug-print part or an array/map element appends it to a string builder.
+#[derive(Clone, Copy)]
+enum TextSink<'ctx> {
+    Stdout,
+    Builder(PointerValue<'ctx>),
 }
 
-/// Whether `to_c_string(_, _, ty)` returns text the converter just allocated and nothing else
-/// holds: `int`/`float`/`number` conversions allocate a fresh heap string per call, and a
-/// `T | nothing` union is either that or the static text `none`, which a release leaves alone.
+/// Put NUL-terminated text at `text` into `sink`. The sink never frees the text.
+fn write_text_ptr<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    sink: TextSink<'ctx>,
+    text: PointerValue<'ctx>,
+) -> Result<(), String> {
+    match sink {
+        TextSink::Stdout => cg
+            .builder
+            .build_call(cg.rt.puts, &[text.into()], "puts")
+            .map(|_| ())
+            .map_err(|e| format!("{e}")),
+        TextSink::Builder(builder) => cg
+            .builder
+            .build_call(
+                cg.rt.ynz_string_builder_append,
+                &[builder.into(), text.into()],
+                "",
+            )
+            .map(|_| ())
+            .map_err(|e| format!("{e}")),
+    }
+}
+
+/// Write the text of `val` (type `ty`) to `sink`: the one path every consumer that reads the
+/// text at once and drops it goes through (`print`, `${}`, shape/array/map debug text).
 ///
-/// Never true for a type whose text aliases a string someone else holds (`string`, a revealed
-/// `sensitive`, a bignum `number`): releasing that would free the holder's bytes. Debug text of
-/// a shape/array/map/options value is also fresh but is not released here (pre-existing leak,
-/// left to the scope-exit release pass).
-fn converts_to_fresh_text(ty: &Type) -> bool {
-    match ty {
-        Type::Int | Type::Float => true,
-        Type::Number { precision } => *precision <= 34,
+/// `int`, `float` and `number` (decimal128) call a runtime print/append entry that formats and
+/// writes straight to the sink: no heap string is built and nothing is released, which is what
+/// keeps `print(n)` at or below its cost before strings carried an owned header (Golden Rule 8).
+/// Only `n.toString()` builds an owned string (`to_c_string`). A `T | nothing` union branches on
+/// null and writes `none` or the inner text the same way. Every other type's text is a pointer
+/// that something else owns (a held string, a static, a debug string), so it is written and not
+/// released.
+fn write_value_text<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    sink: TextSink<'ctx>,
+) -> Result<(), String> {
+    let (print_entry, append_entry) = match ty {
+        Type::Int => (cg.rt.int_print, cg.rt.int_append),
+        Type::Float => (cg.rt.float_print, cg.rt.float_append),
+        Type::Number { precision } if *precision <= 34 => {
+            (cg.rt.decimal_print, cg.rt.decimal_append)
+        }
         Type::Union { variants } => {
             let mut non_nothing = variants
                 .iter()
                 .filter(|variant| !matches!(variant, Type::Nothing));
-            match (non_nothing.next(), non_nothing.next()) {
-                (Some(inner), None) => converts_to_fresh_text(inner),
-                _ => false,
-            }
+            return match (non_nothing.next(), non_nothing.next()) {
+                (Some(inner), None) => write_optional_text(cg, val, inner, sink),
+                _ => {
+                    let text = to_c_string(cg, val, ty)?;
+                    write_text_ptr(cg, sink, text)
+                }
+            };
         }
-        _ => false,
-    }
+        _ => {
+            let text = to_c_string(cg, val, ty)?;
+            return write_text_ptr(cg, sink, text);
+        }
+    };
+    let call = match sink {
+        TextSink::Stdout => cg.builder.build_call(print_entry, &[val.into()], ""),
+        TextSink::Builder(builder) => {
+            cg.builder
+                .build_call(append_entry, &[builder.into(), val.into()], "")
+        }
+    };
+    call.map(|_| ()).map_err(|e| format!("{e}"))
 }
 
-/// `to_c_string` plus the release duty the consumer inherits (see `converts_to_fresh_text`).
-fn value_text<'ctx>(
+/// The text of a `T | nothing` value: `none` when `val` is null, else the text of `T`.
+fn write_optional_text<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
-    ty: &Type,
-) -> Result<ValueText<'ctx>, String> {
-    Ok(ValueText {
-        ptr: to_c_string(cg, val, ty)?,
-        release_after_use: converts_to_fresh_text(ty),
-    })
-}
+    inner: &Type,
+    sink: TextSink<'ctx>,
+) -> Result<(), String> {
+    let is_null = cg
+        .builder
+        .build_is_null(val.into_pointer_value(), "union_null")
+        .map_err(|e| format!("{e}"))?;
+    let none_bb = cg.append_block("union_none");
+    let some_bb = cg.append_block("union_some");
+    let merge_bb = cg.append_block("union_merge");
+    cg.builder
+        .build_conditional_branch(is_null, none_bb, some_bb)
+        .map_err(|e| format!("{e}"))?;
 
-/// Release `text` through `ynz_string_release` when its consumer owes that.
-fn release_value_text<'ctx>(cg: &mut Cg<'ctx, '_>, text: &ValueText<'ctx>) -> Result<(), String> {
-    if text.release_after_use {
-        cg.builder
-            .build_call(cg.rt.ynz_string_release, &[text.ptr.into()], "")
-            .map_err(|e| format!("{e}"))?;
-    }
+    cg.builder.position_at_end(none_bb);
+    let none_text = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
+    write_text_ptr(cg, sink, none_text.as_pointer_value())?;
+    cg.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|e| format!("{e}"))?;
+
+    cg.builder.position_at_end(some_bb);
+    write_value_text(cg, val, inner, sink)?;
+    cg.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|e| format!("{e}"))?;
+
+    cg.builder.position_at_end(merge_bb);
     Ok(())
-}
-
-/// Convert any Yinz value to a null-terminated C string pointer for interpolation.
-///
-/// Delegates to `to_c_string` for the types it knows. For Options types, emits a call
-/// to the options toString runtime helper. For all other types, defers to `to_c_string`.
-fn expr_to_cstring<'ctx>(
-    cg: &mut Cg<'ctx, '_>,
-    val: BasicValueEnum<'ctx>,
-    ty: &Type,
-) -> Result<ValueText<'ctx>, String> {
-    match ty {
-        Type::Options { name } => Ok(ValueText {
-            ptr: lower_options_to_string(cg, val, name)?.into_pointer_value(),
-            release_after_use: false,
-        }),
-        _ => value_text(cg, val, ty),
-    }
 }
 
 /// UFCS dispatch: `receiver.method(args)` → call standalone function `method(receiver, args)`.

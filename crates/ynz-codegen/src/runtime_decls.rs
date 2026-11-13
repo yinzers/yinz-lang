@@ -27,6 +27,16 @@ pub struct RuntimeDecls<'ctx> {
     pub int_to_string: FunctionValue<'ctx>,
     pub float_to_string: FunctionValue<'ctx>,
 
+    // Print / interpolation text of a number, consumed at once: no heap string, nothing to release.
+    // print: (value) → void, writes the text and a newline to stdout.
+    // append: (builder: *mut u8, value) → void, appends the text to a string builder.
+    pub int_print: FunctionValue<'ctx>,
+    pub int_append: FunctionValue<'ctx>,
+    pub float_print: FunctionValue<'ctx>,
+    pub float_append: FunctionValue<'ctx>,
+    pub decimal_print: FunctionValue<'ctx>,
+    pub decimal_append: FunctionValue<'ctx>,
+
     // Panic stubs — noreturn, write to stderr then abort
     pub panic_overflow: FunctionValue<'ctx>,
     pub panic_div_by_zero: FunctionValue<'ctx>,
@@ -369,6 +379,32 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_float_to_string",
                 ptr.fn_type(&[f64.into()], false),
+            ),
+            int_print: declare_fn(module, "ynz_int_print", void.fn_type(&[i64.into()], false)),
+            int_append: declare_fn(
+                module,
+                "ynz_int_append",
+                void.fn_type(&[ptr.into(), i64.into()], false),
+            ),
+            float_print: declare_fn(
+                module,
+                "ynz_float_print",
+                void.fn_type(&[f64.into()], false),
+            ),
+            float_append: declare_fn(
+                module,
+                "ynz_float_append",
+                void.fn_type(&[ptr.into(), f64.into()], false),
+            ),
+            decimal_print: declare_fn(
+                module,
+                "ynz_decimal_print",
+                void.fn_type(&[ptr.into()], false),
+            ),
+            decimal_append: declare_fn(
+                module,
+                "ynz_decimal_append",
+                void.fn_type(&[ptr.into(), ptr.into()], false),
             ),
             panic_overflow: declare_fn(
                 module,

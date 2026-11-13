@@ -164,18 +164,15 @@ pub unsafe extern "C" fn ynz_panic_div_by_zero(
     std::process::abort();
 }
 
-/// Convert an i64 to its decimal string representation.
-///
-/// Returns a fresh heap string the caller owns (`ynz_string_release` frees it). O(1) time and
-/// one allocation: the digits are written to a stack buffer, then copied once.
-#[no_mangle]
-pub extern "C" fn ynz_int_to_string(x: i64) -> *const u8 {
-    let mut digits = [0u8; I64_DECIMAL_MAX_BYTES];
+/// Write `x`'s decimal digits at the end of `buffer`, with a NUL after them, and return the
+/// index of the first digit (a `-` counts as one). O(1) time, no allocation.
+fn write_int_digits(x: i64, buffer: &mut [u8; I64_DECIMAL_MAX_BYTES + 1]) -> usize {
+    buffer[I64_DECIMAL_MAX_BYTES] = 0;
     let mut first_digit = I64_DECIMAL_MAX_BYTES;
     let mut remaining = x.unsigned_abs();
     loop {
         first_digit -= 1;
-        digits[first_digit] = b'0' + (remaining % 10) as u8;
+        buffer[first_digit] = b'0' + (remaining % 10) as u8;
         remaining /= 10;
         if remaining == 0 {
             break;
@@ -183,9 +180,20 @@ pub extern "C" fn ynz_int_to_string(x: i64) -> *const u8 {
     }
     if x < 0 {
         first_digit -= 1;
-        digits[first_digit] = b'-';
+        buffer[first_digit] = b'-';
     }
-    heap_string_from_bytes(&digits[first_digit..])
+    first_digit
+}
+
+/// Convert an i64 to its decimal string representation.
+///
+/// Returns a fresh heap string the caller owns (`ynz_string_release` frees it). O(1) time and
+/// one allocation: the digits are written to a stack buffer, then copied once.
+#[no_mangle]
+pub extern "C" fn ynz_int_to_string(x: i64) -> *const u8 {
+    let mut digits = [0u8; I64_DECIMAL_MAX_BYTES + 1];
+    let first_digit = write_int_digits(x, &mut digits);
+    heap_string_from_bytes(&digits[first_digit..I64_DECIMAL_MAX_BYTES])
 }
 
 /// Convert an f64 to its decimal string representation.
@@ -194,6 +202,148 @@ pub extern "C" fn ynz_int_to_string(x: i64) -> *const u8 {
 #[no_mangle]
 pub extern "C" fn ynz_float_to_string(x: f64) -> *const u8 {
     heap_string_from_str(&format!("{x}"))
+}
+
+// ── Print and interpolation of a number ───────────────────────────────────────
+//
+// `print(n)` and `${n}` read the text of an `int`, `float` or `number` once and drop it, so the
+// text is never a Yinz `string`: these entries format and write (`puts`) or append it directly,
+// with no headered heap string and no release. Owned results are `ynz_*_to_string` above.
+
+extern "C" {
+    fn puts(text: *const core::ffi::c_char) -> i32;
+}
+
+/// Longest text `{f64}` prints: `-0.` then 307 zeros then 17 digits (`-2.2250738585072014e-308`
+/// written out), 328 bytes; 330 leaves a margin. The max-length test pins it.
+const F64_DISPLAY_MAX_BYTES: usize = 330;
+
+/// A fixed-capacity text buffer on the stack that `write!` can fill and `puts` can read.
+/// Holds `CAPACITY` bytes of text plus the NUL.
+struct StackText<const CAPACITY: usize> {
+    bytes: [u8; CAPACITY],
+    len: usize,
+}
+
+impl<const CAPACITY: usize> StackText<CAPACITY> {
+    fn new() -> Self {
+        StackText {
+            bytes: [0u8; CAPACITY],
+            len: 0,
+        }
+    }
+
+    /// Write the NUL after the text and `puts` it. The caller guarantees the text holds no NUL.
+    fn puts(&mut self) {
+        self.bytes[self.len] = 0;
+        // SAFETY: `bytes[..=len]` is NUL-terminated text that lives through the call.
+        unsafe { puts(self.bytes.as_ptr() as *const core::ffi::c_char) };
+    }
+}
+
+impl<const CAPACITY: usize> core::fmt::Write for StackText<CAPACITY> {
+    fn write_str(&mut self, piece: &str) -> core::fmt::Result {
+        let end = self.len + piece.len();
+        if end > CAPACITY - 1 {
+            return Err(core::fmt::Error);
+        }
+        self.bytes[self.len..end].copy_from_slice(piece.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+/// Text up to this many bytes (plus its NUL) is printed from the stack; longer decimal text
+/// (a number with a large positive exponent writes its zeros out) reuses its `String`'s buffer.
+const PRINT_STACK_TEXT_BYTES: usize = 128;
+
+/// `puts` text that came back from the numerics crate as an owned `String`. O(n) time; no
+/// allocation beyond the `String` the caller already paid for, except that text of
+/// `PRINT_STACK_TEXT_BYTES` or more may grow that `String` by its NUL.
+fn puts_formatted(text: String) {
+    if text.len() < PRINT_STACK_TEXT_BYTES {
+        let mut stack_text = StackText::<PRINT_STACK_TEXT_BYTES>::new();
+        let written = core::fmt::Write::write_str(&mut stack_text, &text);
+        debug_assert!(written.is_ok(), "text shorter than the buffer always fits");
+        stack_text.puts();
+    } else {
+        let mut bytes = text.into_bytes();
+        bytes.push(0);
+        // SAFETY: `bytes` is NUL-terminated text that lives through the call.
+        unsafe { puts(bytes.as_ptr() as *const core::ffi::c_char) };
+    }
+}
+
+/// The byte vector a string builder handle owns.
+///
+/// # Safety
+/// `builder` must be a live handle from `ynz_string_builder_new`, used by one caller at a time.
+unsafe fn builder_bytes<'builder>(builder: *mut u8) -> &'builder mut Vec<u8> {
+    &mut *(builder as *mut Vec<u8>)
+}
+
+/// `print(int)`: write the decimal text and a newline to stdout. O(1) time, no allocation: the
+/// digits live on this call's stack, so two prints never share a buffer.
+#[no_mangle]
+pub extern "C" fn ynz_int_print(x: i64) {
+    let mut digits = [0u8; I64_DECIMAL_MAX_BYTES + 1];
+    let first_digit = write_int_digits(x, &mut digits);
+    // SAFETY: `write_int_digits` NUL-terminated `digits`, and it outlives the call.
+    unsafe { puts(digits[first_digit..].as_ptr() as *const core::ffi::c_char) };
+}
+
+/// `${int}`: append the decimal text to a string builder. O(1) time, no allocation.
+///
+/// # Safety
+/// `builder` must be a valid handle returned by `ynz_string_builder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_int_append(builder: *mut u8, x: i64) {
+    let mut digits = [0u8; I64_DECIMAL_MAX_BYTES + 1];
+    let first_digit = write_int_digits(x, &mut digits);
+    builder_bytes(builder).extend_from_slice(&digits[first_digit..I64_DECIMAL_MAX_BYTES]);
+}
+
+/// `print(float)`: write the text and a newline to stdout. O(1) time (bounded text), no
+/// allocation: the text is formatted into a stack buffer.
+#[no_mangle]
+pub extern "C" fn ynz_float_print(x: f64) {
+    let mut stack_text = StackText::<{ F64_DISPLAY_MAX_BYTES + 1 }>::new();
+    if core::fmt::Write::write_fmt(&mut stack_text, format_args!("{x}")).is_err() {
+        // Unreachable while F64_DISPLAY_MAX_BYTES holds (a test pins it); never print cut text.
+        std::process::abort();
+    }
+    stack_text.puts();
+}
+
+/// `${float}`: append the text to a string builder. O(1) time (bounded text); formats straight
+/// into the builder's buffer, so it allocates only when that buffer grows.
+///
+/// # Safety
+/// `builder` must be a valid handle returned by `ynz_string_builder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_float_append(builder: *mut u8, x: f64) {
+    use std::io::Write;
+    if write!(builder_bytes(builder), "{x}").is_err() {
+        // Writing into a `Vec` cannot fail.
+        std::process::abort();
+    }
+}
+
+/// `print(number)` for a decimal128 value: write the text and a newline to stdout. One
+/// allocation (the numerics crate's `String`), as before C3a.
+#[no_mangle]
+pub extern "C" fn ynz_decimal_print(a: *const D128) {
+    puts_formatted(format(load(a)));
+}
+
+/// `${number}` for a decimal128 value: append the text to a string builder. One allocation
+/// (the numerics crate's `String`), as before C3a.
+///
+/// # Safety
+/// `builder` must be a valid handle returned by `ynz_string_builder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_decimal_append(builder: *mut u8, a: *const D128) {
+    builder_bytes(builder).extend_from_slice(format(load(a)).as_bytes());
 }
 
 /// Compare two null-terminated UTF-8 strings for NFC canonical equivalence.
@@ -2220,7 +2370,7 @@ pub extern "C" fn ynz_string_builder_new() -> *mut u8 {
 /// `s` must be a valid pointer to a null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_builder_append(builder: *mut u8, s: *const u8) {
-    let vec = unsafe { &mut *(builder as *mut Vec<u8>) };
+    let vec = unsafe { builder_bytes(builder) };
     let bytes = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
     vec.extend_from_slice(bytes);
 }
@@ -4950,6 +5100,92 @@ mod m6_pending_send_aba {
             }
             tokio::task::yield_now().await;
             ynz_channel_free(chan);
+        }
+    }
+}
+
+#[cfg(test)]
+mod print_text_tests {
+    use super::*;
+    use core::fmt::Write;
+
+    /// Bug caught: a stack buffer smaller than the longest `{f64}` text would make `print(float)`
+    /// abort on a legal value. (High: a fixed bound on untrusted-range numeric text)
+    #[test]
+    fn f64_display_text_never_exceeds_the_print_buffer() {
+        let extremes = [
+            f64::MAX,
+            f64::MIN,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            5e-324,
+            -5e-324,
+            -2.2250738585072014e-308,
+            -1.2345678901234567e-308,
+        ];
+        let mut longest = extremes.iter().map(|x| format!("{x}").len()).max().unwrap();
+        // Sweep the exponent range with a full-width mantissa: 17-digit shortest text.
+        for exponent_bits in 0u64..0x7ff {
+            let bits = (exponent_bits << 52) | 0x000f_edcb_a987_6543 | (1 << 63);
+            longest = longest.max(format!("{}", f64::from_bits(bits)).len());
+        }
+        assert!(
+            longest <= F64_DISPLAY_MAX_BYTES,
+            "longest f64 text is {longest} bytes, buffer holds {F64_DISPLAY_MAX_BYTES}"
+        );
+    }
+
+    /// Bug caught: `StackText` accepting text that leaves no room for the NUL, so `puts` reads
+    /// past the buffer. (High: memory safety)
+    #[test]
+    fn stack_text_rejects_text_that_leaves_no_room_for_the_nul() {
+        let mut stack_text = StackText::<4>::new();
+        assert!(stack_text.write_str("abc").is_ok());
+        assert!(stack_text.write_str("d").is_err());
+        let mut stack_text = StackText::<4>::new();
+        assert!(stack_text.write_str("abcd").is_err());
+    }
+
+    /// Bug caught: `write_int_digits` dropping the sign or a digit of an extreme `int`, or
+    /// leaving no NUL after the digits. (High: formatting math/parser)
+    #[test]
+    fn int_digits_are_exact_and_nul_terminated_at_the_extremes() {
+        for value in [0i64, 1, -1, 9, 10, -10, i64::MAX, i64::MIN] {
+            let mut buffer = [0xffu8; I64_DECIMAL_MAX_BYTES + 1];
+            let first_digit = write_int_digits(value, &mut buffer);
+            let text = std::str::from_utf8(&buffer[first_digit..I64_DECIMAL_MAX_BYTES]).unwrap();
+            assert_eq!(text, value.to_string());
+            assert_eq!(buffer[I64_DECIMAL_MAX_BYTES], 0);
+        }
+    }
+
+    /// Bug caught: an append entry that writes different bytes than the owned `toString` of the
+    /// same value, so `${n}` and `n.toString()` disagree. (High: output correctness)
+    #[test]
+    fn appended_text_equals_the_owned_to_string_text() {
+        let builder = ynz_string_builder_new();
+        unsafe {
+            ynz_int_append(builder, i64::MIN);
+            ynz_float_append(builder, -1.5);
+            ynz_float_append(builder, f64::NAN);
+            ynz_float_append(builder, 1e21);
+            let mut decimal = [0u8; 16];
+            ynz_decimal_from_int(-42, &mut decimal);
+            ynz_decimal_append(builder, &decimal);
+            let joined = ynz_string_builder_finalize(builder);
+            let text = std::ffi::CStr::from_ptr(joined as *const i8)
+                .to_str()
+                .unwrap();
+            let expected = format!(
+                "{}{}{}{}{}",
+                i64::MIN,
+                -1.5f64,
+                f64::NAN,
+                1e21f64,
+                format(u128::from_ne_bytes(decimal))
+            );
+            assert_eq!(text, expected);
+            ynz_string_release(joined);
         }
     }
 }
