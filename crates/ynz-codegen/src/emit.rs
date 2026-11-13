@@ -16925,8 +16925,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         // Infer concrete arg types from the call site to pick the right mono.
                         let arg_types: Vec<Type> =
                             call.args.iter().map(|a| cg.expr_type(a)).collect();
-                        find_mono_name_by_args(cg.mono_table, name, &arg_types)
-                            .unwrap_or_else(|| name.to_string())
+                        find_mono_name_by_args(cg.mono_table, name, &arg_types)?
                     };
 
                     // The direct wrapper-fn invocation below serves ONLY callees that do not
@@ -18389,8 +18388,7 @@ fn lower_expr_background<'ctx>(
     } else if cg.module.get_function(&callee_name).is_some() {
         callee_name.clone()
     } else {
-        find_mono_name_by_args(cg.mono_table, &callee_name, &arg_types)
-            .unwrap_or_else(|| callee_name.clone())
+        find_mono_name_by_args(cg.mono_table, &callee_name, &arg_types)?
     };
     let target_fn = cg
         .module
@@ -21370,33 +21368,61 @@ fn declare_sat_intrinsic<'ctx>(
         .unwrap_or_else(|| module.add_function(name, fn_ty, None))
 }
 
-/// Find the mangled name for a generic function call by matching the base name in the mono table.
+/// Find the mangled name of the generic instance a call site resolved to.
 ///
-/// When there are multiple instantiations of the same generic (e.g. `identity<int>` and
-/// `identity<string>`), this picks the first match. For P4a the typical case is a single
-/// instantiation per call site — a precise match by argument types is a P4b refinement.
+/// Type checking compares every argument with its substituted parameter (C1g, #424), so the
+/// call's instance is the one whose parameter types the arguments can be assigned to. An exact
+/// match wins; otherwise exactly one instance must accept every argument (a plain `map` passed
+/// for a `T` the call made `map | nothing` is assignable, not equal).
+///
+/// There is no "first instance of that name" fallback: an instance the arguments do not fit
+/// would run a function built for other types (a `Tiny` read as a `Big`). No match, or several
+/// with no exact one, is an internal error naming the call and the instances there were — the
+/// type checker and the monomorphization table disagree, a compiler bug and never a user
+/// mistake.
+///
+/// O(entries x parameters x size of the types) time, O(entries) space.
 fn find_mono_name_by_args(
     mono_table: &MonomorphizationTable,
     fn_name: &str,
     arg_types: &[Type],
-) -> Option<String> {
-    // Try exact match on param types first.
+) -> Result<String, String> {
+    let mut instances_of_name = Vec::new();
+    let mut assignable_instances = Vec::new();
     for (key, sig) in &mono_table.entries {
         if key.fn_name != fn_name {
             continue;
         }
-        if sig.param_types.len() == arg_types.len()
-            && sig.param_types.iter().zip(arg_types).all(|(a, b)| a == b)
-        {
-            return Some(mangle_mono_name(&key.fn_name, &key.type_args));
+        let same_arity = sig.param_types.len() == arg_types.len();
+        if same_arity && sig.param_types.iter().zip(arg_types).all(|(a, b)| a == b) {
+            return Ok(mangle_mono_name(&key.fn_name, &key.type_args));
         }
+        if same_arity
+            && sig
+                .param_types
+                .iter()
+                .zip(arg_types)
+                .all(|(param, arg)| ynz_typeck::can_assign(param, arg))
+        {
+            assignable_instances.push(mangle_mono_name(&key.fn_name, &key.type_args));
+        }
+        instances_of_name.push(format!("{:?}", sig.param_types));
     }
-    // Fall back: first entry with matching name (single-instantiation case).
-    mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == fn_name)
-        .map(|k| mangle_mono_name(&k.fn_name, &k.type_args))
+    match assignable_instances.as_slice() {
+        [only] => Ok(only.clone()),
+        fitting => Err(format!(
+            "internal compiler error: the call to generic `{fn_name}` has argument types \
+             {arg_types:?}, which {} of its {} compiled instance(s) {}. The type checker should \
+             have refused or recorded this call; this is a compiler bug.",
+            if fitting.is_empty() {
+                "fit none".to_string()
+            } else {
+                format!("fit {} of them equally, with no exact match", fitting.len())
+            },
+            instances_of_name.len(),
+            instances_of_name.join(", "),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -21424,7 +21450,7 @@ mod mono_lookup_tests {
         // GUARD (High: call dispatch): the exact match still resolves.
         let table = table_with_one_instance_for_big();
         let big = Type::Shape { name: "Big".into() };
-        assert!(find_mono_name_by_args(&table, "same", &[big.clone(), big]).is_some());
+        assert!(find_mono_name_by_args(&table, "same", &[big.clone(), big]).is_ok());
     }
 
     #[test]
@@ -21432,9 +21458,40 @@ mod mono_lookup_tests {
         // BUG (High: call dispatch, memory safety): arguments that match no instance used to
         // resolve to the FIRST instance of the name, calling a function built for other types.
         let table = table_with_one_instance_for_big();
-        let tiny = Type::Shape { name: "Tiny".into() };
+        let tiny = Type::Shape {
+            name: "Tiny".into(),
+        };
         let big = Type::Shape { name: "Big".into() };
-        assert!(find_mono_name_by_args(&table, "same", &[big, tiny]).is_none());
+        let error = find_mono_name_by_args(&table, "same", &[big, tiny]).unwrap_err();
+        assert!(
+            error.contains("internal compiler error") && error.contains("`same`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_mono_lookup_accepts_an_argument_assignable_to_the_instance() {
+        // GUARD (High: call dispatch): a plain `map` passed for a `T` the call made
+        // `map | nothing` fits that one instance without being equal to it — the legal flow
+        // the old first-instance fallback served by accident.
+        let map = Type::BuiltinMap {
+            key: Box::new(Type::String),
+            val: Box::new(Type::String),
+        };
+        let maybe_map = Type::Union {
+            variants: vec![map.clone(), Type::Nothing],
+        };
+        let mut table = MonomorphizationTable::default();
+        table.record(
+            "fallback".into(),
+            vec![maybe_map.clone()],
+            MonoSignature {
+                param_types: vec![maybe_map.clone(), maybe_map.clone()],
+                ret_type: maybe_map.clone(),
+            },
+        );
+        let found = find_mono_name_by_args(&table, "fallback", &[maybe_map, map]);
+        assert!(found.is_ok(), "{found:?}");
     }
 }
 

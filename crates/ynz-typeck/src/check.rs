@@ -18,8 +18,8 @@ use crate::{
         Provenance, ProvenanceCtx,
     },
     generics::{
-        apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
-        MonoSignature, MonomorphizationTable, Substitution,
+        apply_substitution, mentions_type_param, unify_param, GenericFnSig, GenericFnTable,
+        GenericShapeTable, MonoSignature, MonomorphizationTable, Substitution,
     },
     intrinsics::PrimitiveIntrinsicTable,
     options_table::{collect_options, OptionsTable},
@@ -208,6 +208,103 @@ fn union_where_variant_expected_diag(
             &slots,
         ),
     }
+}
+
+/// What made a type parameter stand for the type a later argument disagrees with.
+enum TypeParamBinding<'call> {
+    /// An earlier argument: the parameter it is passed for and its value.
+    Argument {
+        parameter: &'call str,
+        value: &'call Expr,
+    },
+    /// The explicit type arguments of the call (`same<Big>(…)`), as written.
+    ExplicitTypeArgs(&'call [String]),
+}
+
+/// The argument that conflicts with its type parameter, in the call's own names.
+struct ConflictingArgument<'call> {
+    callee: &'call str,
+    parameter: &'call str,
+    value: &'call Expr,
+    actual: &'call Type,
+}
+
+/// `ArgumentConflictsWithTypeParameter`: an argument of another type than the one its type
+/// parameter was made to stand for (`same(big, tiny)`, `same<Big>(big, tiny)`). The registry
+/// template holds the text; `cause` and `alternative` are the two sentences that depend on
+/// what bound the type parameter, and name only code that compiles.
+fn argument_conflicts_with_type_parameter_diag(
+    conflict: ConflictingArgument<'_>,
+    type_param: &str,
+    sig: &GenericFnSig,
+    bound: &Type,
+    binding: TypeParamBinding<'_>,
+) -> Diagnostic {
+    let actual = type_name(conflict.actual);
+    let (cause, alternative) = match binding {
+        TypeParamBinding::Argument {
+            parameter: first_parameter,
+            value: first_value,
+        } => (
+            format!(
+                "`{}` and `{first_parameter}` share the type parameter `{type_param}`, and the \
+                 argument `{}` for `{first_parameter}` already made it `{}`",
+                conflict.parameter,
+                expr_source_text(first_value),
+                type_name(bound),
+            ),
+            format!(
+                "Or give `{first_parameter}` a `{actual}` too, so `{first_parameter}` and `{}` \
+                 have the same type",
+                conflict.parameter,
+            ),
+        ),
+        TypeParamBinding::ExplicitTypeArgs(written) => {
+            let as_written = written.join(", ");
+            let with_actual = sig
+                .type_params
+                .iter()
+                .zip(written.iter())
+                .map(|(declared, written_arg)| {
+                    if declared == type_param {
+                        actual.clone()
+                    } else {
+                        written_arg.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            (
+                format!(
+                    "`{}<{as_written}>` sets the type parameter `{type_param}` to `{}`",
+                    conflict.callee,
+                    type_name(bound),
+                ),
+                format!(
+                    "Or write `{}<{with_actual}>` instead, if every argument that takes \
+                     `{type_param}` is a `{actual}`",
+                    conflict.callee,
+                ),
+            )
+        }
+    };
+    let value = expr_source_text(conflict.value);
+    let bound = type_name(bound);
+    let slots = [
+        ("value", value.as_str()),
+        ("actual", actual.as_str()),
+        ("callee", conflict.callee),
+        ("param", conflict.parameter),
+        ("typeParam", type_param),
+        ("bound", bound.as_str()),
+        ("cause", cause.as_str()),
+        ("alternative", alternative.as_str()),
+    ];
+    registry_diag(
+        conflict.value.span().clone(),
+        DiagnosticKind::ArgumentConflictsWithTypeParameter,
+        &slots,
+    )
 }
 
 /// What a binding event (`let`, reassignment) makes the name denote: the origin and live alias
@@ -6502,6 +6599,90 @@ impl<'b> Checker<'b> {
         true
     }
 
+    /// Compare one call argument with the type its parameter declares, and refuse a mismatch
+    /// with the teaching diagnostic. THE comparison of the plain call form (`f(a, b)`) and the
+    /// dot-call form (`a.f(b)`), so both render byte-identical text (non-oop.md's dual-style
+    /// convention): an `errors` value for a plain parameter, a union where one of its variants
+    /// is expected (`UnionWhereVariantExpected`), a concrete shape for a `dynamic Contract`
+    /// parameter (accepted when it follows the contract), anything else not assignable.
+    ///
+    /// `name` is the callee as the call names it. An `Error` argument was already reported.
+    /// O(size of the two types) time and space.
+    fn check_argument_type(
+        &mut self,
+        name: &str,
+        arg: &Expr,
+        expected_ty: &Type,
+        actual_ty: &Type,
+    ) {
+        let actual_ty = actual_ty.clone();
+        // M7 P3c: range values are first-class — can be passed as function arguments.
+        if let Type::ErrorsCapable { .. } = &actual_ty {
+            // M7 P3a: give a more helpful diagnostic for ErrorsCapable values passed
+            // to a function expecting the success type.
+            if !matches!(expected_ty, Type::ErrorsCapable { .. }) {
+                self.diags.push(Diagnostic::error(
+                        arg.span().clone(),
+                        "This function can fail, but the failure is not handled here.",
+                        "Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.",
+                        "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
+                    ));
+            }
+        } else if actual_ty != Type::Error && !can_assign(expected_ty, &actual_ty) {
+            // Accept a concrete shape as a `dynamic Contract` argument when the
+            // shape's declaration includes `follows Contract`.
+            //
+            // Both shapes and `dynamic` values are plain pointers in the LLVM ABI —
+            // the coerce is a type-level widening only; no runtime fat-pointer packing
+            // is needed at this call site.  Method dispatch through `d` inside the
+            // callee uses the vtable at the call site where the concrete type is known.
+            let is_valid_dyn_coerce = match (expected_ty, &actual_ty) {
+                (Type::Dynamic { contract }, Type::Shape { name: shape_name }) => self
+                    .shape_table
+                    .get(shape_name)
+                    .map(|def| def.follows.contains(contract))
+                    .unwrap_or(false),
+                _ => false,
+            };
+
+            if !is_valid_dyn_coerce && is_union_into_its_variant(expected_ty, &actual_ty) {
+                self.diags.push(union_where_variant_expected_diag(
+                    arg,
+                    &actual_ty,
+                    expected_ty,
+                    &format!("`{name}` expects a `{}` here", type_name(expected_ty)),
+                ));
+            } else if !is_valid_dyn_coerce {
+                self.diags.push(Diagnostic::error(
+                        arg.span().clone(),
+                        format!(
+                            "This argument is `{}`, but `{name}` expects `{}` here.",
+                            type_name(&actual_ty),
+                            type_name(expected_ty)
+                        ),
+                        if let Type::Dynamic { contract } = expected_ty {
+                            format!(
+                                "Pass a shape that follows `{contract}` (add `follows {contract}` to the shape declaration)."
+                            )
+                        } else {
+                            format!("Pass a `{}` value.", type_name(expected_ty))
+                        },
+                        if let Type::Dynamic { contract } = expected_ty {
+                            format!(
+                                "`{name}` declared this parameter as `dynamic {contract}`. Only shapes that declare `follows {contract}` can be passed here."
+                            )
+                        } else {
+                            format!(
+                                "`{name}` declared this parameter as `{}`. Passing a `{}` would be a type mismatch.",
+                                type_name(expected_ty),
+                                type_name(&actual_ty)
+                            )
+                        },
+                    ));
+            }
+        }
+    }
+
     fn check_user_fn_call(
         &mut self,
         call: &CallExpr,
@@ -6584,71 +6765,7 @@ impl<'b> Checker<'b> {
                 }
             }
 
-            // M7 P3c: range values are first-class — can be passed as function arguments.
-            if let Type::ErrorsCapable { .. } = &actual_ty {
-                // M7 P3a: give a more helpful diagnostic for ErrorsCapable values passed
-                // to a function expecting the success type.
-                if !matches!(expected_ty, Type::ErrorsCapable { .. }) {
-                    self.diags.push(Diagnostic::error(
-                        arg.span().clone(),
-                        "This function can fail, but the failure is not handled here.",
-                        "Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.",
-                        "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
-                    ));
-                }
-            } else if actual_ty != Type::Error && !can_assign(expected_ty, &actual_ty) {
-                // Accept a concrete shape as a `dynamic Contract` argument when the
-                // shape's declaration includes `follows Contract`.
-                //
-                // Both shapes and `dynamic` values are plain pointers in the LLVM ABI —
-                // the coerce is a type-level widening only; no runtime fat-pointer packing
-                // is needed at this call site.  Method dispatch through `d` inside the
-                // callee uses the vtable at the call site where the concrete type is known.
-                let is_valid_dyn_coerce = match (expected_ty, &actual_ty) {
-                    (Type::Dynamic { contract }, Type::Shape { name: shape_name }) => self
-                        .shape_table
-                        .get(shape_name)
-                        .map(|def| def.follows.contains(contract))
-                        .unwrap_or(false),
-                    _ => false,
-                };
-
-                if !is_valid_dyn_coerce && is_union_into_its_variant(expected_ty, &actual_ty) {
-                    self.diags.push(union_where_variant_expected_diag(
-                        arg,
-                        &actual_ty,
-                        expected_ty,
-                        &format!("`{name}` expects a `{}` here", type_name(expected_ty)),
-                    ));
-                } else if !is_valid_dyn_coerce {
-                    self.diags.push(Diagnostic::error(
-                        arg.span().clone(),
-                        format!(
-                            "This argument is `{}`, but `{name}` expects `{}` here.",
-                            type_name(&actual_ty),
-                            type_name(expected_ty)
-                        ),
-                        if let Type::Dynamic { contract } = expected_ty {
-                            format!(
-                                "Pass a shape that follows `{contract}` (add `follows {contract}` to the shape declaration)."
-                            )
-                        } else {
-                            format!("Pass a `{}` value.", type_name(expected_ty))
-                        },
-                        if let Type::Dynamic { contract } = expected_ty {
-                            format!(
-                                "`{name}` declared this parameter as `dynamic {contract}`. Only shapes that declare `follows {contract}` can be passed here."
-                            )
-                        } else {
-                            format!(
-                                "`{name}` declared this parameter as `{}`. Passing a `{}` would be a type mismatch.",
-                                type_name(expected_ty),
-                                type_name(&actual_ty)
-                            )
-                        },
-                    ));
-                }
-            }
+            self.check_argument_type(name, arg, expected_ty, &actual_ty);
         }
         // Reject Range return values (shouldn't be in sig_table, but guard anyway)
         if matches!(ret, Type::Range { .. }) {
@@ -6842,10 +6959,13 @@ impl<'b> Checker<'b> {
 
         let mut subst: Substitution = HashMap::new();
 
-        // Explicit type args (e.g. `foo<int>(x)`) seed the substitution directly.
+        // Explicit type args (e.g. `foo<int>(x)`) seed the substitution directly. The ones
+        // given are kept as written for the conflict diagnostic (`same<Big>`).
+        let mut explicit_type_args: Vec<String> = Vec::new();
         if let Some(type_args) = &call.type_args {
             for (tp_name, ast_ty) in sig.type_params.iter().zip(type_args.iter()) {
                 let concrete = self.ast_type_to_type(ast_ty);
+                explicit_type_args.push(type_name(&concrete));
                 subst.insert(tp_name.clone(), concrete);
             }
         }
@@ -6856,12 +6976,32 @@ impl<'b> Checker<'b> {
         let non_self_ownerships: Vec<Option<ynz_ast::nodes::OwnershipModifier>> =
             sig.param_ownerships.iter().skip(skip).cloned().collect();
         let mut arg_types = Vec::new();
-        for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params.iter()) {
+        // The argument that first made each type parameter stand for a type, so a later
+        // argument that disagrees can name it (`ArgumentConflictsWithTypeParameter`).
+        let mut binding_argument: HashMap<String, usize> = HashMap::new();
+        let mut unify_results: Vec<Result<(), String>> = vec![Ok(()); call.args.len()];
+        for (index, (arg, (_, param_ty))) in
+            call.args.iter().zip(non_self_params.iter()).enumerate()
+        {
             let actual = self.infer_expr(arg, None);
             arg_types.push(actual.clone());
 
             if actual != Type::Error {
-                let _ = unify_param(param_ty, &actual, &mut subst);
+                let bound_before: Vec<&String> = sig
+                    .type_params
+                    .iter()
+                    .filter(|type_param| subst.contains_key(*type_param))
+                    .collect();
+                // Kept: unify_param reports a structural disagreement (`T` already bound to
+                // another type, a concrete parameter of another type). The comparison below
+                // refuses it unless the types are legally assignable (C1g, #424 — the result
+                // used to be discarded, so nothing compared arguments with parameters).
+                unify_results[index] = unify_param(param_ty, &actual, &mut subst);
+                for type_param in &sig.type_params {
+                    if subst.contains_key(type_param) && !bound_before.contains(&type_param) {
+                        binding_argument.insert(type_param.clone(), index);
+                    }
+                }
             }
         }
         // Ownership over the normalized argument list — the same transfer decision as
@@ -6878,14 +7018,17 @@ impl<'b> Checker<'b> {
         // number from arg 0). One post-loop pass over the SUBSTITUTED param
         // types catches all three via the same shared gate (Future-Req #14):
         // an unresolved TypeParam stays a TypeParam and never matches
-        // `Number`, so partial substitutions cannot false-fire. (The
-        // `unify_param` mismatch above is deliberately discarded — generic
-        // inference tolerates partial unification — so without this gate the
-        // program passes typeck silently and ICEs at codegen.)
-        for (arg, (_, param_ty)) in call.args.iter().zip(non_self_params.iter()) {
-            let resolved = apply_substitution(param_ty, &subst);
-            self.reject_int_literal_number_arg(name, &resolved, arg);
-        }
+        // `Number`, so partial substitutions cannot false-fire. An argument this gate
+        // refuses is not compared again below (one diagnostic per argument).
+        let int_literal_refused: Vec<bool> = call
+            .args
+            .iter()
+            .zip(non_self_params.iter())
+            .map(|(arg, (_, param_ty))| {
+                let resolved = apply_substitution(param_ty, &subst);
+                self.reject_int_literal_number_arg(name, &resolved, arg)
+            })
+            .collect();
         // A union where the resolved parameter expects one of its variants (`pick(5, thing)`
         // with `b: Big`, `same(big, thing)` with `T = Big`, `useBig<int>(thing, 3)`): the
         // `unify_param` mismatch above is discarded, so without this the callee reads the
@@ -6940,6 +7083,51 @@ impl<'b> Checker<'b> {
                         type_name(&actual_ty),
                     ),
                 ));
+            } else if !int_literal_refused[index]
+                && !mentions_type_param(&resolved)
+                && unify_results[index].is_err()
+                && !can_assign(&resolved, &actual_ty)
+            {
+                // Any other argument that is not the type its (substituted) parameter has: the
+                // callee is built for `resolved` and would read the argument as it — a 1-byte
+                // `Tiny` as a 16-byte `Big`, or an `int` where a `string` pointer belongs
+                // (C1g, #424). When the parameter IS a type parameter, the text names what made
+                // it that type; otherwise it is the plain call form's text.
+                let binder = match param_ty {
+                    Type::TypeParam { name: type_param } => {
+                        let binding = binding_argument
+                            .get(type_param)
+                            .filter(|binding| **binding != index)
+                            .map(|binding| TypeParamBinding::Argument {
+                                parameter: &non_self_params[*binding].0,
+                                value: &call.args[*binding],
+                            })
+                            .or_else(|| {
+                                (!explicit_type_args.is_empty()).then_some(
+                                    TypeParamBinding::ExplicitTypeArgs(&explicit_type_args),
+                                )
+                            });
+                        binding.map(|binding| (type_param, binding))
+                    }
+                    _ => None,
+                };
+                match binder {
+                    Some((type_param, binding)) => {
+                        self.diags.push(argument_conflicts_with_type_parameter_diag(
+                            ConflictingArgument {
+                                callee: name,
+                                parameter: &non_self_params[index].0,
+                                value: arg,
+                                actual: &actual_ty,
+                            },
+                            type_param,
+                            sig,
+                            &resolved,
+                            binding,
+                        ));
+                    }
+                    None => self.check_argument_type(name, arg, &resolved, &actual_ty),
+                }
             }
         }
 
@@ -7292,24 +7480,22 @@ impl<'b> Checker<'b> {
                                 &param_names,
                             );
                         }
-                        // Int literal into a `number` param through the UFCS
-                        // dot-call form (`p.f(5)` — sugar for `f(p, 5)`): the
-                        // non-receiver args were inferred with no hint upstream,
-                        // so without this gate the program passes typeck and
-                        // ICEs at codegen. Same shared gate as the plain call
-                        // form so both render byte-identical diagnostics per
-                        // non-oop.md's dual-style convention (Future-Req #14).
-                        // Receiver is the first param; args map to params[1..].
+                        // Every non-receiver argument against its parameter (`p.f(a)` is
+                        // sugar for `f(p, a)`; the receiver is the first parameter, so the
+                        // arguments map to params[1..]). Two checks, in the plain call
+                        // form's order and with its text (non-oop.md's dual-style
+                        // convention): an int literal into a `number` parameter (the
+                        // arguments were inferred with no hint upstream, so without this
+                        // gate the program ICEs at codegen — Future-Req #14), then the
+                        // argument's type against the parameter's (`check_argument_type`).
+                        // Without the second, `a.useBig(tiny)` read a 1-byte `Tiny` as a
+                        // 16-byte `Big` and `a.useBig(5)` failed LLVM verification (C1g,
+                        // #424); only the union case was compared before (C1b, #409).
+                        // The arguments' types are in `expr_types`.
                         for (arg, (_, expected_ty)) in args.iter().zip(sig.params.iter().skip(1)) {
-                            self.reject_int_literal_number_arg(method, expected_ty, arg);
-                        }
-                        // A union value into a non-receiver parameter that expects one of
-                        // its variants (`a.useBig(thing)`): the UFCS arm checks no other
-                        // argument types, so without this the callee reads the 16-byte
-                        // tagged envelope as a `Big` (the C1b hole through the dot-call
-                        // form). Same teaching diagnostic as the plain call form. The
-                        // arguments were inferred upstream; their types are in `expr_types`.
-                        for (arg, (_, expected_ty)) in args.iter().zip(sig.params.iter().skip(1)) {
+                            if self.reject_int_literal_number_arg(method, expected_ty, arg) {
+                                continue;
+                            }
                             let argument_span = arg.span();
                             let Some(actual_ty) = self
                                 .expr_types
@@ -7318,17 +7504,7 @@ impl<'b> Checker<'b> {
                             else {
                                 continue;
                             };
-                            if is_union_into_its_variant(expected_ty, &actual_ty) {
-                                self.diags.push(union_where_variant_expected_diag(
-                                    arg,
-                                    &actual_ty,
-                                    expected_ty,
-                                    &format!(
-                                        "`{method}` expects a `{}` here",
-                                        type_name(expected_ty)
-                                    ),
-                                ));
-                            }
+                            self.check_argument_type(method, arg, expected_ty, &actual_ty);
                         }
                         // Kernel-mode rejection for UFCS suspending method calls. The
                         // bare call-dispatch arm guards `Expr::Call name =>` at the call site;
@@ -9675,7 +9851,7 @@ pub(crate) fn collect_union_aliases(
 ///   unions have different memory layouts, so neither converts to the other.
 ///
 /// O(size of the types) time and space.
-fn can_assign(target: &Type, source: &Type) -> bool {
+pub fn can_assign(target: &Type, source: &Type) -> bool {
     match (target, source) {
         (
             Type::BuiltinFixed {

@@ -50,6 +50,11 @@ pub enum DiagnosticKind {
     /// expects one of its variants. The union is a tagged envelope; the slot would read it as
     /// the bare variant — wrong data or memory past the envelope. v0.3-M9 C1b.
     UnionWhereVariantExpected,
+    /// An argument whose type differs from the type a type parameter of a generic function was
+    /// already made to stand for, by an earlier argument or an explicit type argument
+    /// (`same(big, tiny)` makes `T` a `Big`, then a `Tiny` arrives). The function is built for
+    /// the first type and would read the second as it. v0.3-M9 C1g.
+    ArgumentConflictsWithTypeParameter,
     /// `.copy()` was called on a type that has no independent copy — a channel, a task
     /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
     /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
@@ -115,6 +120,7 @@ impl DiagnosticKind {
             DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
             DiagnosticKind::UnionWhereVariantExpected => "UnionWhereVariantExpected",
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => "ArgumentConflictsWithTypeParameter",
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -146,6 +152,7 @@ impl DiagnosticKind {
         "TransferNeedsCopy",
         "HandleChannelArgNeedsBinding",
         "UnionWhereVariantExpected",
+        "ArgumentConflictsWithTypeParameter",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
@@ -176,6 +183,7 @@ impl DiagnosticKind {
             // label comes from the kind alone, so it must not name an `is` check that two of them
             // (a non-shape variant, an expression value) cannot offer as written.
             DiagnosticKind::UnionWhereVariantExpected => "might be a different type".to_string(),
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => "not the type this call needs".to_string(),
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {

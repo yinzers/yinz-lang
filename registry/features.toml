@@ -1708,6 +1708,21 @@ what_template = "`{value}` is a `{union}` — it might hold any one of those —
 what_instead_template = "No `is` arm can hand `{value}` over as a `{variant}`: `is` arms name shape variants only. Change what receives it to accept a `{union}` instead, or keep the value a `{variant}` from where it is created instead of storing it in a `{union}`."
 why_template = "A `{union}` might hold any one of its variants, not only a `{variant}`: also {others}. Code that expects a plain `{variant}` is written for that variant alone, so given another variant it would read the wrong kind of data, and can crash. No check the compiler can run today proves `{value}` is a `{variant}`, so it refuses the hand-over."
 
+# v0.3-M9 C1g (#424): an argument whose type differs from the type a type parameter of a generic
+# function already stands for. Rendered by `check_generic_fn_call` when the parameter's type IS the
+# type parameter (`same<T>(first: T, second: T)`); every other argument/parameter mismatch uses the
+# plain call form's text. `{value}`/`{actual}` the argument as source text and its type; `{callee}`
+# the function; `{param}` the parameter it is passed for; `{typeParam}` the type parameter and
+# `{bound}` the type the call made it; `{cause}` says what made it (the argument for a sibling
+# parameter, or the explicit type argument); `{alternative}` the other way out, in prose that
+# names only code that compiles.
+# Decided v0.3-M9 C1g: `git log --grep=ArgumentConflictsWithTypeParameter`.
+[[diagnostic_template]]
+kind_name = "ArgumentConflictsWithTypeParameter"
+what_template = "`{value}` has type `{actual}`, but `{callee}` needs `{bound}` for `{param}`: {cause}."
+what_instead_template = "Pass a value of type `{bound}` for `{param}`. {alternative}."
+why_template = "`{callee}` is compiled once for each type `{typeParam}` stands for, and this call makes it `{bound}`, so `{callee}` handles `{param}` as `{bound}`. A `{actual}` is laid out differently, so reading it as `{bound}` gives wrong values, or goes past the end of the `{actual}` and can crash."
+
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
 # `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
 # source text (`expr_source_text` — an identifier for the common bound-value case, the full

@@ -73,6 +73,25 @@ pub fn apply_substitution(ty: &Type, subst: &Substitution) -> Type {
     }
 }
 
+/// Does `ty` still mention a type parameter after substitution? True for a parameter the call
+/// never bound (reported by the "cannot work out the type parameter" error), anywhere inside
+/// the type. O(size of the type) time, O(depth) stack.
+pub fn mentions_type_param(ty: &Type) -> bool {
+    match ty {
+        Type::TypeParam { .. } => true,
+        Type::Generic { args, .. } => args.iter().any(mentions_type_param),
+        Type::BuiltinArray { elem }
+        | Type::BuiltinFixed { elem, .. }
+        | Type::BuiltinChannel { elem } => mentions_type_param(elem),
+        Type::Maybe { inner } | Type::ErrorsCapable { inner } => mentions_type_param(inner),
+        Type::BuiltinMap { key, val } | Type::MapEntry { key, val } => {
+            mentions_type_param(key) || mentions_type_param(val)
+        }
+        Type::Union { variants } => variants.iter().any(mentions_type_param),
+        _ => false,
+    }
+}
+
 // ── MonomorphizationTable ─────────────────────────────────────────────────────
 
 /// Key into the MonomorphizationTable: the function name + the concrete type args.
