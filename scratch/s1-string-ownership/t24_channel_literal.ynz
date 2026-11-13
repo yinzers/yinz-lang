@@ -1,0 +1,7 @@
+function entrypoint() -> nothing {
+  let ch: channel<string> = channel<string>(4)
+  ch.send(`lit`)
+  let got = ch.receive()
+  let r: string = got.or(`none`)
+  print(r)
+}

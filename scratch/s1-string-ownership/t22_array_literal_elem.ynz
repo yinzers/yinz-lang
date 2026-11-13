@@ -1,0 +1,5 @@
+function entrypoint() -> nothing {
+  let names: array<string> = [`a`, `b`]
+  let r: string = names[0].or(`none`)
+  print(r)
+}

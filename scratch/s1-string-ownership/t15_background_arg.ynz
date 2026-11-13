@@ -1,10 +1,13 @@
+// string passed to a suspending background task, which binds it to a local
 function worker(msg: string) -> nothing {
-  print(msg)
+  wait sleep(10)
+  let mine: string = msg
+  print(mine)
 }
 function entrypoint() -> nothing {
   let n: int = 5
   let s: string = `bob${n}`
   let h = background worker(s)
-  wait sleep(50)
+  wait sleep(100)
   print(s)
 }

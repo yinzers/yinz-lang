@@ -1,0 +1,7 @@
+// substring(0, count) on heap string: whole-range returns receiver? 
+function entrypoint() -> nothing {
+  let n: int = 5
+  let s: string = `Hello${n}`
+  let whole = s.substring(0, 6)
+  print(whole)
+}

@@ -1,0 +1,9 @@
+// shape field initialised from a literal, read back into a local
+shape Person {
+  name: string
+}
+function entrypoint() -> nothing {
+  let p: Person = { name: `bob` }
+  let r: string = p.name
+  print(r)
+}

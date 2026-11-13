@@ -1,0 +1,7 @@
+// .or(default) returns either the element or the default literal
+function entrypoint() -> nothing {
+  let n: int = 5
+  let names: array<string> = [`a${n}`]
+  let r: string = names[9].or(`none`)
+  print(r)
+}

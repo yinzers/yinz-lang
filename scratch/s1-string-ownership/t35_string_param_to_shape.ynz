@@ -1,0 +1,15 @@
+// string param stored into a returned shape: callee's local vs param vs shape field
+shape Person {
+  name: string
+}
+function build(label: string) -> Person {
+  let p: Person = { name: label }
+  return p
+}
+function entrypoint() -> nothing {
+  let n: int = 5
+  let s: string = `bob${n}`
+  let p: Person = build(s)
+  let r: string = p.name
+  print(r)
+}

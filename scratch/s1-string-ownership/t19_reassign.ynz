@@ -1,0 +1,8 @@
+// reassign: old value must be released, new one aliasing a literal/heap
+function entrypoint() -> nothing {
+  let n: int = 5
+  let h: string = `x${n}`
+  let a: string = `lit`
+  a = h
+  print(a)
+}

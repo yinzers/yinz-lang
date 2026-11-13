@@ -1,0 +1,10 @@
+// .message on a runtime error value: whose bytes are they?
+function entrypoint() -> nothing {
+  let wire: channel<int> = channel<int>(2)
+  wire.close()
+  let late = wire.send(9)
+  if (late.failed()) {
+    let m: string = late.message
+    print(m)
+  }
+}

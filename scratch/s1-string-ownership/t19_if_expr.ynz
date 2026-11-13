@@ -1,7 +1,0 @@
-// branch picks between a literal and a heap string
-function entrypoint() -> nothing {
-  let n: int = 5
-  let h: string = `x${n}`
-  let a: string = if (n > 3) { h } else { `lit` }
-  print(a)
-}

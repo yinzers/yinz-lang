@@ -1,0 +1,14 @@
+// parent function returns (and would free its string local) while a suspended task still holds the pointer
+function worker(msg: string) -> nothing {
+  wait sleep(100)
+  print(msg)
+}
+function launch() -> nothing {
+  let n: int = 5
+  let s: string = `bob${n}`
+  background worker(s)
+}
+function entrypoint() -> nothing {
+  launch()
+  wait sleep(300)
+}

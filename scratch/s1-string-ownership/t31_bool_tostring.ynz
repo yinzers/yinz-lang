@@ -1,0 +1,6 @@
+// bool.toString() selects between two static globals (str_true / str_false)
+function entrypoint() -> nothing {
+  let b: boolean = true
+  let s: string = b.toString()
+  print(s)
+}

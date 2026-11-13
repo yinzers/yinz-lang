@@ -1,5 +1,0 @@
-function entrypoint() -> nothing {
-  let s: string = `Hello`
-  let sub = s.substring(0, 5)
-  print(sub)
-}

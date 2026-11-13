@@ -1,0 +1,97 @@
+== t00_baseline_interp: exit=0 CLEAN
+     out: x5
+== t01_literal: exit=0 CLEAN
+     out: hello
+== t02_pure_interp_literal: exit=0 CLEAN
+     out: hello world
+== t03_copy_alias: exit=0 CLEAN
+     out: x5
+== t04_dot_copy: exit=0 CLEAN
+     out: x5
+== t05_int_tostring: exit=0 CLEAN
+     out: 12345
+== t05b_float_tostring: exit=0 CLEAN
+     out: 0.00000000000000000000000000000
+== t05c_number_tostring: exit=0 CLEAN
+     out: 1.5
+== t06_tostring_clobber: exit=0 CLEAN
+     out: 222
+     out: 222
+== t07_upper_lower_trim: exit=0 CLEAN
+     out:  HELLO5 
+     out:  hello5 
+     out: Hello5
+== t08_substring: exit=0 CLEAN
+     out: el
+== t08b_substring_of_literal: exit=0 CLEAN
+     out: Hello
+== t08c_trim_noop: exit=0 CLEAN
+     out: Hello5
+== t08d_replace_noop: exit=0 CLEAN
+     out: Hello5
+== t09_split: exit=0 CLEAN
+     out: a
+== t10_options_tostring: exit=0 CLEAN
+     out: red
+== t11_codepoint_at: exit=0 CLEAN
+     out: a
+     out: b
+     out: c
+     out: 5
+== t12_shape_field: exit=0 CLEAN
+     out: bob5
+== t13_array: exit=0 CLEAN
+     out: bob5
+== t14_channel: exit=0 CLEAN
+     out: bob5
+== t15_background_arg: exit=0 CLEAN
+     out: bob5
+     out: bob5
+== t16_param_alias: exit=0 CLEAN
+     out: bob5
+     out: bob5
+== t17_return_string: exit=0 CLEAN
+     out: bob7
+== t18_map: exit=0 CLEAN
+     out: 2
+== t19_reassign: exit=0 CLEAN
+     out: x5
+== t20_sensitive: exit=0 CLEAN
+     out: [REDACTED]
+== t21_shape_literal_field: exit=0 CLEAN
+     out: bob
+== t22_array_literal_elem: exit=0 CLEAN
+     out: a
+== t23_array_or_default: exit=0 CLEAN
+     out: none
+== t24_channel_literal: exit=0 CLEAN
+     out: lit
+== t25_channel_ptr_identity: exit=0 CLEAN
+     out: bob5
+     out: bob5
+== t26_map_get_alias: exit=0 CLEAN
+     out: v5
+== t27_maybe_string: BUILD FAIL
+Error: This value is `string`, but `m` is declared as `maybe<string>`.
+   ╭─[ /tmp/s1bin/t27_maybe_string.ynz:4:26 ]
+   │
+ 4 │   let m: maybe<string> = s
+   │                          ┬  
+   │                          ╰── Change the annotation to `string`, or use a different value.
+== t28_bg_fire_and_forget_cpu: exit=0 CLEAN
+     out: bob5
+== t29_grapheme_at: exit=0 CLEAN
+     out: b
+== t30_substring_variants: exit=0 CLEAN
+     out: Hello5
+== t31_bool_tostring: exit=0 CLEAN
+     out: true
+== t32_error_message: exit=0 CLEAN
+     out: The channel is closed — close() was called, so this value cannot be delivered. Check .failed() on the send, or send everything before close().
+== t33_interp_of_string_part: exit=0 CLEAN
+     out: x5
+     out: x5
+== t34_bg_parent_frees_early: exit=0 CLEAN
+     out: bob5
+== t35_string_param_to_shape: exit=0 CLEAN
+     out: bob5

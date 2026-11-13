@@ -6290,6 +6290,7 @@ fn lower_sm_body<'ctx, 'g>(
     // and stored to the frame at their definition site (no prior stored value to load).
     reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, false, true)?;
 
+    SPIKE_STRING_LOCALS.with(|v| v.borrow_mut().clear());
     // Track which state block index we are currently emitting into.
     let mut current_state: usize = 0;
 
@@ -6311,6 +6312,9 @@ fn lower_sm_body<'ctx, 'g>(
 
     // Emit the terminal transition: write typed return value to return_slot@16, return Ready.
     if !is_block_terminated(cg) {
+        if matches!(cg.resolve_type(&cg.current_fn_ret_ty.clone()), Type::Nothing) {
+            spike_free_string_locals(cg)?;
+        }
         // For nothing-returning fns: store 0 as the return value (harmless to read).
         state_machine::store_return_value_i64(
             cg.ctx,

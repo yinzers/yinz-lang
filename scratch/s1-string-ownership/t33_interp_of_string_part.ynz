@@ -1,0 +1,8 @@
+// interpolation whose only part is another string: result is a fresh copy (not the part)?
+function entrypoint() -> nothing {
+  let n: int = 5
+  let a: string = `x${n}`
+  let b: string = `${a}`
+  print(a)
+  print(b)
+}
