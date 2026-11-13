@@ -1,0 +1,9 @@
+// callee returns a string built inside it; caller binds it
+function make(n: int) -> string {
+  let s: string = `bob${n}`
+  return s
+}
+function entrypoint() -> nothing {
+  let a: string = make(7)
+  print(a)
+}

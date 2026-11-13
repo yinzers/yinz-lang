@@ -1,0 +1,11 @@
+// a callee that binds a param to a local; passing a string to a function
+function f(s: string) -> nothing {
+  let t: string = s
+  print(t)
+}
+function entrypoint() -> nothing {
+  let n: int = 5
+  let a: string = `bob${n}`
+  f(a)
+  print(a)
+}

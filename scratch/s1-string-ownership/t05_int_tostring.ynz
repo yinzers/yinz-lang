@@ -1,0 +1,6 @@
+// int.toString() returns a thread-local static buffer
+function entrypoint() -> nothing {
+  let n: int = 12345
+  let a: string = n.toString()
+  print(a)
+}

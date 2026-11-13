@@ -1,0 +1,6 @@
+// control: one interpolated (heap) string, freed at scope exit -> expected CLEAN
+function entrypoint() -> nothing {
+  let n: int = 5
+  let a: string = `x${n}`
+  print(a)
+}

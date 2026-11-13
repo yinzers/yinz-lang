@@ -1,0 +1,8 @@
+function entrypoint() -> nothing {
+  let n: int = 5
+  let s: string = `abc${n}`
+  for c in s {
+    let t: string = c
+    print(t)
+  }
+}

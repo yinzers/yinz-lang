@@ -1,0 +1,11 @@
+// methods that return fresh heap strings
+function entrypoint() -> nothing {
+  let n: int = 5
+  let s: string = ` Hello${n} `
+  let up: string = s.toUpperCase()
+  let lo: string = s.toLowerCase()
+  let tr: string = s.trim()
+  print(up)
+  print(lo)
+  print(tr)
+}

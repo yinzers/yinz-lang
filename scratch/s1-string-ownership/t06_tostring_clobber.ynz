@@ -1,0 +1,9 @@
+// two int.toString() results share ONE thread-local buffer: a is overwritten by b
+function entrypoint() -> nothing {
+  let n: int = 111
+  let m: int = 222
+  let a: string = n.toString()
+  let b: string = m.toString()
+  print(a)
+  print(b)
+}

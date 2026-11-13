@@ -1,0 +1,8 @@
+// split returns array<string>; element strings?
+function entrypoint() -> nothing {
+  let n: int = 5
+  let s: string = `a,b,${n}`
+  let parts = s.split(`,`)
+  let first = parts[0].or(`none`)
+  print(first)
+}

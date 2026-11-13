@@ -1,0 +1,5 @@
+// literal -> private constant global (.rodata). Free = invalid free expected
+function entrypoint() -> nothing {
+  let a: string = `hello`
+  print(a)
+}

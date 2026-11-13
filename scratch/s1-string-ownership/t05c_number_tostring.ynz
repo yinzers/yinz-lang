@@ -1,0 +1,5 @@
+function entrypoint() -> nothing {
+  let n: number = 1.5
+  let a: string = n.toString()
+  print(a)
+}

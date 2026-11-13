@@ -1,0 +1,9 @@
+function entrypoint() -> nothing {
+  let n: int = 5
+  let s: string = `bob${n}`
+  let ch: channel<string> = channel<string>(4)
+  ch.send(s)
+  let got = ch.receive()
+  let r: string = got.or(`none`)
+  print(r)
+}

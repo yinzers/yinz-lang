@@ -1,0 +1,7 @@
+function entrypoint() -> nothing {
+  let n: int = 5
+  let s: string = `bob${n}`
+  let names: array<string> = [s]
+  let r: string = names[0].or(`none`)
+  print(r)
+}

@@ -4392,6 +4392,51 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
 }
 
 #[allow(clippy::too_many_arguments)]
+// ── SPIKE S1 (scratch, never merged): crude scope-exit string free ───────────
+// Env-gated by YNZ_SPIKE_FREE_STRINGS=1. Records the name of every `let` whose type is
+// `string`, and frees each recorded local's pointer when a function falls off its end
+// (or returns `nothing`). Purpose: expose which string sources are unsound to free.
+thread_local! {
+    static SPIKE_STRING_LOCALS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn spike_free_enabled() -> bool {
+    std::env::var("YNZ_SPIKE_FREE_STRINGS").as_deref() == Ok("1")
+}
+
+fn spike_record_string_local(name: &str) {
+    if !spike_free_enabled() {
+        return;
+    }
+    SPIKE_STRING_LOCALS.with(|v| {
+        let mut v = v.borrow_mut();
+        if !v.iter().any(|n| n == name) {
+            v.push(name.to_string());
+        }
+    });
+}
+
+fn spike_free_string_locals<'ctx>(cg: &mut Cg<'ctx, '_>) -> Result<(), String> {
+    if !spike_free_enabled() {
+        return Ok(());
+    }
+    let names: Vec<String> = SPIKE_STRING_LOCALS.with(|v| v.borrow().clone());
+    for name in names.iter().rev() {
+        if let Some(slot) = cg.locals.get(name.as_str()).copied() {
+            let ptr_ty = cg.ptr();
+            let loaded = cg
+                .builder
+                .build_load(ptr_ty, slot, "spike_str")
+                .map_err(|e| format!("spike load: {e}"))?;
+            let size = cg.i64().const_int(0, false);
+            cg.builder
+                .build_call(cg.rt.ynz_free, &[loaded.into(), size.into()], "")
+                .map_err(|e| format!("spike free: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn lower_function<'ctx, 'g>(
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
@@ -4566,11 +4611,15 @@ fn lower_function<'ctx, 'g>(
         materialize_param(&mut cg, &param.name, llvm_param, &param_ty)?;
     }
 
+    SPIKE_STRING_LOCALS.with(|v| v.borrow_mut().clear());
     for stmt in &f.body.stmts {
         if is_block_terminated(&cg) {
             break;
         }
         lower_stmt(&mut cg, stmt)?;
+    }
+    if !is_block_terminated(&cg) && (is_main || ret_is_nothing) {
+        spike_free_string_locals(&mut cg)?;
     }
 
     // Implicit terminator if the current block has no terminator yet.
@@ -13778,6 +13827,9 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 return lower_let_background_handle(cg, name, bg_inner);
             }
             let val_ty = cg.expr_type(value);
+            if matches!(cg.resolve_type(&val_ty), Type::String) {
+                spike_record_string_local(name);
+            }
             // v0.3-M5 P5: SoA construction interception. The authority keys a
             // decision by (array_name, decl_span) — only THIS binding's literal
             // constructs segmented; every other path stays AoS byte-for-byte.

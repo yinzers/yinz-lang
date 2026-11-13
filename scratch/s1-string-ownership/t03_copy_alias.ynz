@@ -1,0 +1,7 @@
+// let b = a : shallow pointer copy -> double free expected
+function entrypoint() -> nothing {
+  let n: int = 5
+  let a: string = `x${n}`
+  let b: string = a
+  print(b)
+}

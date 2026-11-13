@@ -1,0 +1,5 @@
+function entrypoint() -> nothing {
+  let n: int = 5
+  let s: sensitive string = `pw${n}`
+  print(s)
+}

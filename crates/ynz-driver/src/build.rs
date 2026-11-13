@@ -441,6 +441,10 @@ fn link_objects(
         .arg("-ldl")
         .arg("-lm")
         .arg("-lrt");
+    // SPIKE S1 (scratch): extra linker args, e.g. -fsanitize=address.
+    if let Ok(extra) = std::env::var("YNZ_SPIKE_LINK_EXTRA") {
+        cmd.args(extra.split_whitespace());
+    }
     let cc_result = cmd.output();
     // rt_lib_tmp dropped here — linker has already finished reading it.
 
@@ -598,7 +602,11 @@ fn build_single_file(source_path: &Path, output_dir: Option<&Path>) -> BuildResu
         return build_failed(diags, source_path, FailureKind::InfraError);
     };
 
-    let cc_result = Command::new(linker)
+    let mut spike_cmd = Command::new(linker);
+    if let Ok(extra) = std::env::var("YNZ_SPIKE_LINK_EXTRA") {
+        spike_cmd.args(extra.split_whitespace());
+    }
+    let cc_result = spike_cmd
         .arg(&obj_path)
         .arg(rt_lib_tmp.path())
         // Modern Linux distros default `cc` to producing PIE executables, but

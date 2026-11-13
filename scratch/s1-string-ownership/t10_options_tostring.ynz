@@ -1,0 +1,6 @@
+options Color { red, green }
+function entrypoint() -> nothing {
+  let c: Color = Color.red
+  let s: string = c.toString()
+  print(s)
+}

@@ -1,0 +1,7 @@
+// substring: fresh heap copy or slice?
+function entrypoint() -> nothing {
+  let n: int = 5
+  let s: string = `Hello${n}`
+  let sub = s.substring(1, 3)
+  print(sub)
+}

@@ -1,0 +1,5 @@
+// interpolation with only literal parts folds to a constant global (is_pure_lit path)
+function entrypoint() -> nothing {
+  let a: string = `hello ${`world`}`
+  print(a)
+}

@@ -1,0 +1,8 @@
+function entrypoint() -> nothing {
+  let n: int = 5
+  let k: string = `k${n}`
+  let m: map<string, int> = { `a`: 1 }
+  m.set(k, 2)
+  let v = m.get(k)
+  print(v.or(0).toString())
+}
