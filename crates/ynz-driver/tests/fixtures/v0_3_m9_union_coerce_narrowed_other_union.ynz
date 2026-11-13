@@ -1,0 +1,68 @@
+// v0.3-M9 C1e (#421): an `is` arm's narrowed binding flowing into a union slot whose union lists
+// the variant at a DIFFERENT position than the union the arm narrowed (`Thing = Tiny | Big`
+// narrowed to `Big`, into `Big | Small`) must carry the SLOT's tag, not the outer envelope's.
+// Correct behavior: prints `big hello`, `big hello`, `end`; clean under AddressSanitizer at both
+// optimization levels.
+// Pre-fix failure: the arm handed over the outer `Thing` envelope (tag 1); the callee read tag 1
+// of `Big | Small` as `Small` and printed `small`.
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Small {
+  n: int
+}
+shape Thing = Tiny | Big
+shape Other = Big | Small
+
+shape Holder {
+  inner: Big | Small
+}
+
+function describeOther(share t: Other) -> string {
+  if (t) {
+    is Small => {
+      return `small`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function route(share t: Thing) -> string {
+  if (t) {
+    is Big => {
+      return describeOther(t)
+    }
+    is Tiny => {
+      return `tiny`
+    }
+  }
+  return `none`
+}
+
+function viaField(share t: Thing) -> string {
+  if (t) {
+    is Big => {
+      let h: Holder = { inner: t }
+      return describeOther(h.inner)
+    }
+    is Tiny => {
+      return `tiny`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let t: Thing = big
+  print(route(t))
+  print(viaField(t))
+  print(`end`)
+}

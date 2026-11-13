@@ -3821,10 +3821,30 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let Expr::Ident(name, span) = expr else {
             return false;
         };
-        self.typed
-            .union_coercions
-            .contains_key(&(span.start, span.end))
-            && self.narrowed_unions.iter().any(|entry| &entry.name == name)
+        self.narrowed_use_reuses_envelope(name, (span.start, span.end))
+    }
+
+    /// Whether the use of the narrowed binding `name` at `use_key` can hand the slot the arm's
+    /// OUTER envelope: typeck recorded the use as flowing into a union slot AND that slot is the
+    /// union the arm narrowed. The envelope's tag is a position in ITS union, so a slot union
+    /// that lists the variant at another position (`Thing = Tiny | Big` narrowed to `Big`, into
+    /// a slot `Big | Small`) needs a fresh envelope from the payload, which the ordinary
+    /// coercion builds with the slot's own tag.
+    ///
+    /// Time: O(d) for d nested narrowings  Space: O(1)
+    fn narrowed_use_reuses_envelope(&self, name: &str, use_key: (usize, usize)) -> bool {
+        let Some(coercion) = self.typed.union_coercions.get(&use_key) else {
+            return false;
+        };
+        let Some(entry) = self
+            .narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| entry.name == name)
+        else {
+            return false;
+        };
+        self.expr_type(&entry.scrutinee) == self.resolve_type(&coercion.slot)
     }
 
     /// Build the tagged envelope `{i64 tag, i64 data}`: `data_bits` is the variant's payload
@@ -4016,6 +4036,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         name: &str,
         span: &ynz_diagnostics::SourceSpan,
     ) -> Result<Option<PointerValue<'ctx>>, String> {
+        if !self.narrowed_use_reuses_envelope(name, (span.start, span.end)) {
+            return Ok(None);
+        }
         let Some(entry) = self
             .narrowed_unions
             .iter()
@@ -4024,13 +4047,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         else {
             return Ok(None);
         };
-        if !self
-            .typed
-            .union_coercions
-            .contains_key(&(span.start, span.end))
-        {
-            return Ok(None);
-        }
         let (scrutinee, outer_slot, narrowed_slot) = (
             entry.scrutinee.clone(),
             entry.outer_slot,

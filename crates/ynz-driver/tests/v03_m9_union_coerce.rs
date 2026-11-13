@@ -140,3 +140,14 @@ coercion_tests!(
     v03_m9_union_coerce_generic_param_asan_optimized,
     v03_m9_union_coerce_generic_param_asan_no_optimize
 );
+
+// Bug: a narrowed binding passed into a union slot that lists its variant at another position
+// reused the outer envelope and its tag (read as `Small`, printed `small`). Tier: High.
+coercion_tests!(
+    "v0_3_m9_union_coerce_narrowed_other_union.ynz",
+    "big hello\nbig hello\nend\n",
+    v03_m9_union_coerce_narrowed_other_union_optimized,
+    v03_m9_union_coerce_narrowed_other_union_no_optimize,
+    v03_m9_union_coerce_narrowed_other_union_asan_optimized,
+    v03_m9_union_coerce_narrowed_other_union_asan_no_optimize
+);
