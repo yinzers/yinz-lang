@@ -23,7 +23,7 @@
 //! optimization level is the same fixture at `--no-optimize`, where no optimizer can delete a
 //! dead read of freed memory and hide the defect.
 //!
-//! ## C5a store fixtures (AddressSanitizer) — 7 programs × 2 optimization levels
+//! ## C5a store fixtures (AddressSanitizer) — 8 programs × 2 optimization levels
 //!
 //! The heap-value-stored-without-a-sink class (spike S3 holes t6b, g1, g8, g7, t7, and the
 //! accepted spelling of t3): typeck's transfer record now joins each stored value to its holder
@@ -161,6 +161,12 @@ asan_case!(
     "v0_3_m9_c5a_multi_root_literal.ynz",
     "3\n2\n",
     "`{ first: a, second: c }` returned: the pass joins only the first root and frees `c` under the returned pair (High)"
+);
+asan_case!(
+    store_by_callee,
+    "v0_3_m9_c5a_call_stores_argument.ynz",
+    "3\n",
+    "`put(o, a)` stores `a` into `o` inside the callee, then `o` is returned: the pass frees `a` under the returned container (High)"
 );
 asan_case!(
     loop_give_of_a_copy,

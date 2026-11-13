@@ -86,8 +86,6 @@ pub enum NoFounderReason {
     /// none): the owner's scope ends while `holder` still holds the value. Which one of the
     /// values `holder` holds at that moment is only known at run time.
     OutlivedByNonOwner { holder: String },
-    /// The members live in sibling scopes and none encloses the others.
-    SiblingScopes,
 }
 
 /// Where the class's release is anchored.
@@ -189,9 +187,45 @@ struct FunctionState {
     /// Union-find parent links over `bindings`.
     parent: Vec<usize>,
     escapes: Vec<(usize, Escape)>,
+    /// The parameters in position order (a method's receiver first).
+    parameters: Vec<DeclKey>,
+    /// Every call this function makes to a function that may store one argument into another.
+    calls: Vec<CallEdge>,
+}
+
+/// One call site: the callee and, per argument position, the declarations holding the
+/// argument's heap value (empty for a fresh or value-typed argument).
+struct CallEdge {
+    callee: String,
+    positions: Vec<Vec<DeclKey>>,
 }
 
 impl FunctionState {
+    /// Root of `node` without compressing paths (usable through a shared reference).
+    fn find_readonly(&self, mut node: usize) -> usize {
+        while self.parent[node] != node {
+            node = self.parent[node];
+        }
+        node
+    }
+
+    /// Join two bindings; true when they were in different classes.
+    fn union(&mut self, first: usize, second: usize) -> bool {
+        let first_root = self.find(first);
+        let second_root = self.find(second);
+        if first_root == second_root {
+            return false;
+        }
+        // The smaller index stays the root so class order follows declaration order.
+        let (kept, absorbed) = if first_root < second_root {
+            (first_root, second_root)
+        } else {
+            (second_root, first_root)
+        };
+        self.parent[absorbed] = kept;
+        true
+    }
+
     fn find(&mut self, mut node: usize) -> usize {
         while self.parent[node] != node {
             self.parent[node] = self.parent[self.parent[node]];
@@ -222,6 +256,8 @@ impl TransferRecorder {
             index: HashMap::new(),
             parent: Vec::new(),
             escapes: Vec::new(),
+            parameters: Vec::new(),
+            calls: Vec::new(),
         });
     }
 
@@ -276,17 +312,7 @@ impl TransferRecorder {
         else {
             return;
         };
-        let first_root = function.find(first_position);
-        let second_root = function.find(second_position);
-        if first_root != second_root {
-            // The smaller index stays the root so class order follows declaration order.
-            let (kept, absorbed) = if first_root < second_root {
-                (first_root, second_root)
-            } else {
-                (second_root, first_root)
-            };
-            function.parent[absorbed] = kept;
-        }
+        function.union(first_position, second_position);
     }
 
     /// The value `decl` holds leaves this function's hands.
@@ -299,6 +325,27 @@ impl TransferRecorder {
         }
     }
 
+    /// The parameters of the current function, in position order (a method's receiver first).
+    pub fn set_parameters(&mut self, parameters: Vec<DeclKey>) {
+        if let Some(function) = self.current.as_mut() {
+            function.parameters = parameters;
+        }
+    }
+
+    /// The current function calls `callee`; `positions[i]` holds the declarations that hold
+    /// argument `i`'s heap value. Whether the call stores one argument into another is decided
+    /// in `finish`, from the callee's own record, once every function has been walked.
+    pub fn note_call(&mut self, callee: &str, positions: Vec<Vec<DeclKey>>) {
+        if let Some(function) = self.current.as_mut() {
+            if positions.iter().any(|holders| !holders.is_empty()) {
+                function.calls.push(CallEdge {
+                    callee: callee.to_string(),
+                    positions,
+                });
+            }
+        }
+    }
+
     /// Close the last function and build the record. Codegen names come from `names`, which
     /// must have named every declaration this recorder saw (the checker declares both at the
     /// same event).
@@ -308,6 +355,7 @@ impl TransferRecorder {
         if let Some(last) = self.current.take() {
             self.finished.push(last);
         }
+        propagate_call_stores(&mut self.finished);
         let mut record = TransferRecord::default();
         for function in self.finished {
             let name = function.name.clone();
@@ -316,6 +364,82 @@ impl TransferRecorder {
                 .insert(name, build_function(function, names));
         }
         record
+    }
+}
+
+/// A call may store one argument into another (`put(o, a)` with `o.add(a)` in the body). The
+/// callee's own record says which of its parameters ended up in one class; the caller's holders
+/// of those arguments then hold one value too. A callee with no record (imported, or a body
+/// typeck did not walk) could store anything anywhere, so all its heap arguments join.
+/// Repeats until no class changes: a callee's classes can grow from its own calls.
+///
+/// O(rounds · calls · p²) time for p argument positions; rounds is bounded by the bindings.
+fn propagate_call_stores(functions: &mut [FunctionState]) {
+    let by_name: HashMap<String, usize> = functions
+        .iter()
+        .enumerate()
+        .map(|(position, function)| (function.name.clone(), position))
+        .collect();
+    loop {
+        let mut changed = false;
+        for caller in 0..functions.len() {
+            let edges = std::mem::take(&mut functions[caller].calls);
+            for edge in &edges {
+                // Which pairs of argument positions share a class in the callee.
+                let pairs: Vec<(usize, usize)> = match by_name.get(&edge.callee) {
+                    Some(&callee) => {
+                        let callee_state = &functions[callee];
+                        let parameter_roots: Vec<Option<usize>> = callee_state
+                            .parameters
+                            .iter()
+                            .map(|parameter| {
+                                callee_state
+                                    .index
+                                    .get(parameter)
+                                    .map(|&position| callee_state.find_readonly(position))
+                            })
+                            .collect();
+                        let limit = edge.positions.len().min(parameter_roots.len());
+                        let mut shared = Vec::new();
+                        for first in 0..limit {
+                            for second in (first + 1)..limit {
+                                if parameter_roots[first].is_some()
+                                    && parameter_roots[first] == parameter_roots[second]
+                                {
+                                    shared.push((first, second));
+                                }
+                            }
+                        }
+                        shared
+                    }
+                    None => {
+                        let count = edge.positions.len();
+                        (0..count)
+                            .flat_map(|first| {
+                                ((first + 1)..count).map(move |second| (first, second))
+                            })
+                            .collect()
+                    }
+                };
+                let caller_state = &mut functions[caller];
+                for (first, second) in pairs {
+                    for holder_a in &edge.positions[first] {
+                        for holder_b in &edge.positions[second] {
+                            if let (Some(&a), Some(&b)) = (
+                                caller_state.index.get(holder_a),
+                                caller_state.index.get(holder_b),
+                            ) {
+                                changed |= caller_state.union(a, b);
+                            }
+                        }
+                    }
+                }
+            }
+            functions[caller].calls = edges;
+        }
+        if !changed {
+            break;
+        }
     }
 }
 
@@ -408,9 +532,15 @@ fn anchor_of(
     let outermost: Vec<usize> = (0..members.len())
         .filter(|&i| bindings[positions[i]].path.len() == shared.len())
         .collect();
-    if outermost.is_empty() {
-        return ReleaseAnchor::NoStaticFounder(NoFounderReason::SiblingScopes);
-    }
+    // Never empty. A join needs both bindings visible at once, so two joined bindings are
+    // always in an enclosing relation (one scope inside the other). In a class connected by
+    // such links, take a member of minimal depth: any link leaving its subtree would reach a
+    // shallower scope, contradicting minimality. So the minimal-depth member's scope encloses
+    // every member, and the longest shared path is exactly its path.
+    assert!(
+        !outermost.is_empty(),
+        "a class has a member whose scope encloses all the others"
+    );
     match outermost
         .iter()
         .find(|&&i| members[i].role == MemberRole::Owner)

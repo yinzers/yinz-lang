@@ -1128,6 +1128,12 @@ impl<'b> Checker<'b> {
                 },
             );
         }
+        let parameter_declarations: Vec<DeclKey> = f
+            .params
+            .iter()
+            .map(|param| decl_key(&param.name_span, &param.name))
+            .collect();
+        self.transfers.set_parameters(parameter_declarations);
 
         // Option-B deferral checks: emit clean teaching errors for wait patterns
         // that require the M3 coroutine-locals transform rather than silently
@@ -1909,6 +1915,12 @@ impl<'b> Checker<'b> {
                 },
             );
         }
+        let parameter_declarations: Vec<DeclKey> = f
+            .params
+            .iter()
+            .map(|param| decl_key(&param.name_span, &param.name))
+            .collect();
+        self.transfers.set_parameters(parameter_declarations);
         self.check_stmts(&f.body.stmts);
         self.scope.pop();
 
@@ -6157,6 +6169,18 @@ impl<'b> Checker<'b> {
         // The pre-call snapshot: which alias classes were consumed before THIS call touched
         // anything. A later position whose class is consumed but absent here was consumed by
         // an earlier position of this same call — `check_transfer` reports that read.
+        // A callee may store one argument into another; whether it does is decided from its own
+        // record once every function is walked (`TransferRecorder::finish`).
+        let holders_per_position: Vec<Vec<DeclKey>> = normalized_args
+            .iter()
+            .map(|arg| {
+                self.heap_holders_of(arg)
+                    .into_iter()
+                    .map(|(_, declaration)| declaration)
+                    .collect()
+            })
+            .collect();
+        self.transfers.note_call(callee, holders_per_position);
         let consumed_before = self.scope.consumed_classes();
         for (i, arg) in normalized_args.iter().enumerate() {
             let declared = ownerships.get(i).and_then(|o| o.as_ref());
