@@ -7,7 +7,7 @@
 //! and the field are accepted by the checker there too (the binding is typed as the union), and
 //! the build only stops later on an unrelated `values do not have fields` error.
 //!
-//! Test count: 5, against the "about 8" High-tier budget — one per slot class the one
+//! Test count: 6, against the "about 8" High-tier budget — one per slot class the one
 //! directional check serves (argument, return, `let` + field together) plus the two legal flows
 //! it must keep (widening, narrowed arm).
 
@@ -87,6 +87,40 @@ fn v03_m9_union_into_variant_argument_is_rejected() {
         "v0_3_m9_union_into_variant_ufcs_arg.ynz",
         &["`thing` is a `Tiny | Big`", "`useBig` expects a `Big` here"],
     );
+    // The generic call form discarded the argument/parameter mismatch: a concrete `Big`
+    // parameter, `T` bound to `Big` by a sibling argument, and an explicit `<int>` all compiled
+    // and segfaulted.
+    assert_rejected_with_teaching(
+        "v0_3_m9_union_into_variant_generic_arg.ynz",
+        &[
+            "`pick` expects a `Big` here",
+            "`same` expects a `Big` here",
+            "`useBig` expects a `Big` here",
+        ],
+    );
+}
+
+#[test]
+fn v03_m9_plain_shape_into_type_parameter_bound_to_union_is_rejected() {
+    // WHY: `same(thing, big)` binds `T` to the union; codegen wraps only declared union
+    // parameters, so `big` reached the callee unwrapped and read as the wrong variant (`none`).
+    let compiled = compile("v0_3_m9_union_generic_param_plain_shape.ynz");
+    assert!(
+        !compiled.success,
+        "a plain shape reached a union-bound type parameter and compiled:\n{}",
+        compiled.diagnostics
+    );
+    for fragment in [
+        "`big` is a `Big`",
+        "which this call makes a `Tiny | Big`",
+        "let asUnion: Tiny | Big = big",
+    ] {
+        assert!(
+            compiled.diagnostics.contains(fragment),
+            "diagnostic must contain {fragment:?}; got:\n{}",
+            compiled.diagnostics
+        );
+    }
 }
 
 #[test]

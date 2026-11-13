@@ -1,0 +1,40 @@
+// v0.3-M9 C1c (security): a plain shape passed where a TYPE PARAMETER is bound to a union
+// (`same(thing, big)` makes `T = Tiny | Big`). Codegen builds the tagged envelope only for a
+// declared union parameter, never through a substituted `T`.
+// Correct behavior: does not compile — the call is refused with a teaching error until the one
+// coercion point (#421) wraps substituted parameters.
+// Pre-fix failure: compiled, and `describe` read the bare `Big` as the envelope — printed
+// `none` instead of `big hello`.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function same<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let thing: Thing = tiny
+  let out = same(thing, big)
+  print(describe(out))
+}

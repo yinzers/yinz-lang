@@ -6823,6 +6823,62 @@ impl<'b> Checker<'b> {
             let resolved = apply_substitution(param_ty, &subst);
             self.reject_int_literal_number_arg(name, &resolved, arg);
         }
+        // A union where the resolved parameter expects one of its variants (`pick(5, thing)`
+        // with `b: Big`, `same(big, thing)` with `T = Big`, `useBig<int>(thing, 3)`): the
+        // `unify_param` mismatch above is discarded, so without this the callee reads the
+        // 16-byte tagged envelope as the variant (C1b, #409). Same teaching diagnostic as the
+        // plain and UFCS call forms.
+        //
+        // And a plain variant into a parameter whose type is a type parameter bound to a union
+        // (`same(thing, big)`, `T = Tiny | Big`): codegen wraps a plain shape into an envelope
+        // only where the DECLARED parameter type is a union, never through a substituted `T`,
+        // so the callee would read the bare shape as `{tag, data}` (C1c, #410). Refused until
+        // the one coercion point (#421) covers substituted parameters.
+        for (index, (arg, (_, param_ty))) in
+            call.args.iter().zip(non_self_params.iter()).enumerate()
+        {
+            let actual_ty = arg_types[index].clone();
+            if actual_ty == Type::Error {
+                continue;
+            }
+            let resolved = apply_substitution(param_ty, &subst);
+            if is_union_into_its_variant(&resolved, &actual_ty) {
+                self.diags.push(union_where_variant_expected_diag(
+                    arg,
+                    &actual_ty,
+                    &resolved,
+                    &format!("`{name}` expects a `{}` here", type_name(&resolved)),
+                ));
+            } else if matches!(param_ty, Type::TypeParam { .. })
+                && matches!(resolved, Type::Union { .. })
+                && !matches!(actual_ty, Type::Union { .. })
+                && can_assign(&resolved, &actual_ty)
+            {
+                let type_param = type_name(param_ty);
+                let union_name = type_name(&resolved);
+                self.diags.push(Diagnostic::error(
+                    arg.span().clone(),
+                    format!(
+                        "`{}` is a `{}`, but `{name}` takes it as `{type_param}`, which this call \
+                         makes a `{union_name}`.",
+                        expr_source_text(arg),
+                        type_name(&actual_ty),
+                    ),
+                    format!(
+                        "Put it in a `{union_name}` first, then pass that: \
+                         `let asUnion: {union_name} = {}`.",
+                        expr_source_text(arg),
+                    ),
+                    format!(
+                        "A `{union_name}` is a box with a tag saying which variant is inside. \
+                         A generic parameter does not build that box for a plain `{}` yet, so \
+                         `{name}` would read the plain value's bytes as the box and get the \
+                         wrong variant.",
+                        type_name(&actual_ty),
+                    ),
+                ));
+            }
+        }
 
         // Verify all type params were resolved — emit one consolidated error if multiple are missing.
         let unresolved: Vec<&String> = sig
