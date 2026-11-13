@@ -65,7 +65,7 @@ pub struct Counters {
 
 /// A fixture built into a private temp directory. The directory is removed on drop.
 pub struct Built {
-    _dir: tempfile::TempDir,
+    _directory: tempfile::TempDir,
     pub binary: PathBuf,
     pub ir: PathBuf,
 }
@@ -74,16 +74,16 @@ pub struct Built {
 /// Panics with the compiler's output when the fixture does not compile (a fixture that fails
 /// to compile is a test bug, never a skip).
 pub fn build(fixture_name: &str, no_optimize: bool) -> Built {
-    let dir = tempfile::tempdir().expect("create temp dir");
-    let source = dir.path().join("program.ynz");
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let source = directory.path().join("program.ynz");
     std::fs::copy(fixture_path(fixture_name), &source)
         .unwrap_or_else(|err| panic!("copy fixture {fixture_name}: {err}"));
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ynz"));
-    cmd.arg("build").arg(&source).arg("--emit-ir");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ynz"));
+    command.arg("build").arg(&source).arg("--emit-ir");
     if no_optimize {
-        cmd.arg("--no-optimize");
+        command.arg("--no-optimize");
     }
-    let output = cmd
+    let output = command
         .env("CLICOLOR", "0")
         .output()
         .expect("spawn `ynz build`");
@@ -94,9 +94,9 @@ pub fn build(fixture_name: &str, no_optimize: bool) -> Built {
         String::from_utf8_lossy(&output.stderr)
     );
     Built {
-        binary: dir.path().join("program"),
-        ir: dir.path().join("program.ll"),
-        _dir: dir,
+        binary: directory.path().join("program"),
+        ir: directory.path().join("program.ll"),
+        _directory: directory,
     }
 }
 
@@ -116,11 +116,11 @@ fn drain<R: Read + Send + 'static>(stream: R) -> std::thread::JoinHandle<Vec<u8>
     })
 }
 
-/// Run `cmd` to completion under the liveness watchdog. The child is killed through its own
+/// Run `command` to completion under the liveness watchdog. The child is killed through its own
 /// handle (`Child::kill`), never an external `kill` binary that a minimal image may lack: a
 /// hung fixture must not survive the failed test as an orphan.
-fn run_with_watchdog(mut cmd: Command) -> RunOutput {
-    let mut child = cmd
+fn run_with_watchdog(mut command: Command) -> RunOutput {
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -156,10 +156,11 @@ fn run_with_watchdog(mut cmd: Command) -> RunOutput {
 /// "the counter did not report" into "the program balanced".
 pub fn run_counted(built: &Built) -> (RunOutput, Counters) {
     let counter_file = built.binary.with_extension("counters");
-    let mut cmd = Command::new(&built.binary);
-    cmd.env("YNZ_ALLOC_COUNTER", "1")
+    let mut command = Command::new(&built.binary);
+    command
+        .env("YNZ_ALLOC_COUNTER", "1")
         .env("YNZ_ALLOC_COUNTER_OUTPUT", &counter_file);
-    let output = run_with_watchdog(cmd);
+    let output = run_with_watchdog(command);
     let text = std::fs::read_to_string(&counter_file).unwrap_or_else(|err| {
         panic!(
             "counter file {} not written ({err}); exit {}, stderr:\n{}",
@@ -232,12 +233,12 @@ fn find_clang() -> &'static str {
 }
 
 /// Instrument `ir` (LLVM IR text) for ASan, compile it with `clang -fsanitize=address` and link
-/// it against the bundled runtime archive. The files are written into `dir`; returns the path
+/// it against the bundled runtime archive. The files are written into `directory`; returns the path
 /// of the sanitized binary.
-pub fn build_asan_from_ir(dir: &Path, ir: &str) -> PathBuf {
-    let sanitized_ir = dir.join("program.asan.ll");
+pub fn build_asan_from_ir(directory: &Path, ir: &str) -> PathBuf {
+    let sanitized_ir = directory.join("program.asan.ll");
     std::fs::write(&sanitized_ir, instrument_for_asan(ir)).expect("write instrumented IR");
-    let sanitized_binary = dir.join("program.asan");
+    let sanitized_binary = directory.join("program.asan");
     let output = Command::new(find_clang())
         .args(["-O0", "-g", "-fsanitize=address", "-no-pie"])
         .arg(&sanitized_ir)
@@ -260,18 +261,18 @@ pub fn build_asan_from_ir(dir: &Path, ir: &str) -> PathBuf {
 /// bundled runtime archive. Returns the path of the sanitized binary.
 pub fn build_asan(built: &Built) -> PathBuf {
     let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
-    let dir = built
+    let directory = built
         .ir
         .parent()
         .expect("emitted IR has a parent directory");
-    build_asan_from_ir(dir, &ir)
+    build_asan_from_ir(directory, &ir)
 }
 
 /// Run an ASan-built binary under the fixtures' `ASAN_OPTIONS`, with the liveness watchdog.
 pub fn run_asan_binary(sanitized_binary: &Path) -> RunOutput {
-    let mut cmd = Command::new(sanitized_binary);
-    cmd.env("ASAN_OPTIONS", ASAN_OPTIONS);
-    run_with_watchdog(cmd)
+    let mut command = Command::new(sanitized_binary);
+    command.env("ASAN_OPTIONS", ASAN_OPTIONS);
+    run_with_watchdog(command)
 }
 
 /// Build `fixture_name`, instrument it, run it under AddressSanitizer.

@@ -22,8 +22,8 @@ const DECLARATIONS: &str = "declare ptr @ynz_alloc(i64)\ndeclare void @ynz_free(
 
 fn run_module(main_body: &str) -> RunOutput {
     let ir = format!("{DECLARATIONS}define i32 @main() {{\n{main_body}\n}}\n");
-    let dir = tempfile::tempdir().expect("create temp dir");
-    let binary = build_asan_from_ir(dir.path(), &ir);
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let binary = build_asan_from_ir(directory.path(), &ir);
     run_asan_binary(&binary)
 }
 
