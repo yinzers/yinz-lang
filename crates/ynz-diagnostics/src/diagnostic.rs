@@ -172,7 +172,7 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
             DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),
             DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),
-            DiagnosticKind::UnionWhereVariantExpected => "narrow it with `is`".to_string(),
+            DiagnosticKind::UnionWhereVariantExpected => "check it with `is` first".to_string(),
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {
