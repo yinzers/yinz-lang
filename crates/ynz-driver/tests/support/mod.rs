@@ -1,0 +1,333 @@
+//! Shared harness for tests that build ONE fixture and then observe the compiled program:
+//! its heap alloc/free counters, or its behavior under AddressSanitizer.
+//!
+//! Each call builds into its own temp directory and runs its own process, so concurrent tests
+//! never share a counter, a binary or a file (`.claude/rules/test-parallelism.md`).
+//!
+//! ## AddressSanitizer on Yinz programs
+//!
+//! `ynz build --emit-ir` writes the LLVM IR the object was lowered from. [`build_asan`] adds the
+//! `sanitize_address` attribute to every function the compiler defined, then lets
+//! `clang -fsanitize=address` compile that IR and link it with the bundled runtime archive.
+//! Result: the generated code's loads/stores are instrumented (a use-after-free of a Yinz heap
+//! value is caught at the access), and every `malloc`/`free` the runtime makes goes through
+//! ASan (double free, invalid free). The runtime's own Rust code is not instrumented.
+//!
+//! Requires `clang` (`clang-18` first, as the driver's linker search does) WITH the ASan runtime
+//! (`libclang-rt-18-dev` on Ubuntu/Debian). A missing runtime fails the test with the linker's
+//! message; it never skips.
+
+#![allow(dead_code)] // each test binary uses a different subset of this shared module
+
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Liveness ceiling for one compiled fixture run. A trip is a hang, never a slow test:
+/// generous by an order of magnitude over the observed run so a loaded parallel lane cannot
+/// false-trip it.
+const RUN_WATCHDOG: Duration = Duration::from_secs(120);
+
+/// `ASAN_OPTIONS` for the Yinz fixtures:
+/// - `detect_leaks=0`: the safety fixtures guard against freeing early or twice. They pass
+///   today BECAUSE nothing is freed, so leak detection would be red until the release pass
+///   lands; leaks are asserted by the counter tests instead.
+/// - `free_fill_byte=0` / `max_free_fill_size`: freed memory reads back as zero, so a read of
+///   a freed header by the (uninstrumented) runtime shows up as a wrong count in the output
+///   rather than going unnoticed.
+const ASAN_OPTIONS: &str = "detect_leaks=0:max_free_fill_size=65536:free_fill_byte=0";
+
+pub fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+/// What a compiled fixture printed and how it exited.
+pub struct RunOutput {
+    pub stdout: String,
+    pub stderr: String,
+    /// Exit code; `-1` when the process was killed by a signal.
+    pub exit_code: i32,
+}
+
+/// The `YNZ_ALLOC_COUNTER_OUTPUT` file of a finished run.
+#[derive(Debug)]
+pub struct Counters {
+    pub alloc: u64,
+    pub free: u64,
+    pub string_alloc: u64,
+    pub string_free: u64,
+    pub string_alloc_bytes: u64,
+    pub string_free_bytes: u64,
+}
+
+/// A fixture built into a private temp directory. The directory is removed on drop.
+pub struct Built {
+    _directory: tempfile::TempDir,
+    pub binary: PathBuf,
+    pub ir: PathBuf,
+}
+
+/// `ynz build --emit-ir [--no-optimize] <copy of fixture>` into a fresh temp directory.
+/// Panics with the compiler's output when the fixture does not compile (a fixture that fails
+/// to compile is a test bug, never a skip).
+pub fn build(fixture_name: &str, no_optimize: bool) -> Built {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let source = directory.path().join("program.ynz");
+    std::fs::copy(fixture_path(fixture_name), &source)
+        .unwrap_or_else(|err| panic!("copy fixture {fixture_name}: {err}"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ynz"));
+    command.arg("build").arg(&source).arg("--emit-ir");
+    if no_optimize {
+        command.arg("--no-optimize");
+    }
+    let output = command
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("spawn `ynz build`");
+    assert!(
+        output.status.success(),
+        "{fixture_name}: `ynz build` failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Built {
+        binary: directory.path().join("program"),
+        ir: directory.path().join("program.ll"),
+        _directory: directory,
+    }
+}
+
+/// How often the watchdog polls the child. Only bounds how late a finished run is noticed; it
+/// is not a performance budget.
+const WATCHDOG_POLL: Duration = Duration::from_millis(5);
+
+/// Read `stream` to its end on a thread of its own, so a chatty child cannot fill a pipe and
+/// block while the watchdog polls for its exit.
+fn drain<R: Read + Send + 'static>(stream: R) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut stream = stream;
+        // A read error (child killed mid-write) still returns what arrived before it.
+        let _ = stream.read_to_end(&mut bytes);
+        bytes
+    })
+}
+
+/// Run `command` to completion under the liveness watchdog. The child is killed through its own
+/// handle (`Child::kill`), never an external `kill` binary that a minimal image may lack: a
+/// hung fixture must not survive the failed test as an orphan.
+fn run_with_watchdog(mut command: Command) -> RunOutput {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn compiled fixture");
+    let stdout_reader = drain(child.stdout.take().expect("piped stdout"));
+    let stderr_reader = drain(child.stderr.take().expect("piped stderr"));
+    let deadline = Instant::now() + RUN_WATCHDOG;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll compiled fixture") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "WATCHDOG TRIP: compiled fixture did not exit within {RUN_WATCHDOG:?} — a hang, \
+                 never a slow test; fix the program, never widen this timeout."
+            );
+        }
+        std::thread::sleep(WATCHDOG_POLL);
+    };
+    RunOutput {
+        stdout: String::from_utf8_lossy(&stdout_reader.join().expect("join stdout reader"))
+            .into_owned(),
+        stderr: String::from_utf8_lossy(&stderr_reader.join().expect("join stderr reader"))
+            .into_owned(),
+        exit_code: status.code().unwrap_or(-1),
+    }
+}
+
+/// Run a built fixture with the runtime's alloc counters on and return what it printed plus the
+/// counters. Panics when the counter file is missing or a key is absent: a silent `0` would turn
+/// "the counter did not report" into "the program balanced".
+pub fn run_counted(built: &Built) -> (RunOutput, Counters) {
+    let counter_file = built.binary.with_extension("counters");
+    let mut command = Command::new(&built.binary);
+    command
+        .env("YNZ_ALLOC_COUNTER", "1")
+        .env("YNZ_ALLOC_COUNTER_OUTPUT", &counter_file);
+    let output = run_with_watchdog(command);
+    let text = std::fs::read_to_string(&counter_file).unwrap_or_else(|err| {
+        panic!(
+            "counter file {} not written ({err}); exit {}, stderr:\n{}",
+            counter_file.display(),
+            output.exit_code,
+            output.stderr
+        )
+    });
+    let counters = Counters {
+        alloc: counter_value(&text, "alloc"),
+        free: counter_value(&text, "free"),
+        string_alloc: counter_value(&text, "string_alloc"),
+        string_free: counter_value(&text, "string_free"),
+        string_alloc_bytes: counter_value(&text, "string_alloc_bytes"),
+        string_free_bytes: counter_value(&text, "string_free_bytes"),
+    };
+    (output, counters)
+}
+
+fn counter_value(file_text: &str, key: &str) -> u64 {
+    let prefix = format!("{key}=");
+    file_text
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix.as_str()))
+        .unwrap_or_else(|| panic!("counter key `{key}` missing from:\n{file_text}"))
+        .trim()
+        .parse()
+        .unwrap_or_else(|err| {
+            panic!("counter key `{key}` is not a number ({err}) in:\n{file_text}")
+        })
+}
+
+/// Add `sanitize_address` to every function definition in `ir`. O(n) time, O(n) memory.
+/// Panics when no definition is found: an uninstrumented binary would pass every check.
+fn instrument_for_asan(ir: &str) -> String {
+    let mut instrumented_definitions = 0;
+    let mut out = String::with_capacity(ir.len() + 4096);
+    for line in ir.lines() {
+        match line.strip_suffix(" {") {
+            Some(header) if line.starts_with("define ") => {
+                out.push_str(header);
+                out.push_str(" sanitize_address {");
+                instrumented_definitions += 1;
+            }
+            _ => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    assert!(
+        instrumented_definitions > 0,
+        "no `define ... {{` line found in the emitted IR; cannot instrument for ASan"
+    );
+    out
+}
+
+/// First of the driver's linker candidates that runs.
+fn find_clang() -> &'static str {
+    ["clang-18", "clang"]
+        .into_iter()
+        .find(|candidate| {
+            Command::new(candidate)
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        })
+        .expect("ASan fixtures need `clang-18` or `clang` on PATH (with libclang-rt-18-dev)")
+}
+
+/// Instrument `ir` (LLVM IR text) for ASan, compile it with `clang -fsanitize=address` and link
+/// it against the bundled runtime archive. The files are written into `directory`; returns the path
+/// of the sanitized binary.
+pub fn build_asan_from_ir(directory: &Path, ir: &str) -> PathBuf {
+    let sanitized_ir = directory.join("program.asan.ll");
+    std::fs::write(&sanitized_ir, instrument_for_asan(ir)).expect("write instrumented IR");
+    let sanitized_binary = directory.join("program.asan");
+    let output = Command::new(find_clang())
+        .args(["-O0", "-g", "-fsanitize=address", "-no-pie"])
+        .arg(&sanitized_ir)
+        .arg(env!("YNZ_RT_LIB_PATH"))
+        // The same system libraries the driver's own link line adds for the Tokio runtime.
+        .args(["-lpthread", "-ldl", "-lm", "-lrt"])
+        .arg("-o")
+        .arg(&sanitized_binary)
+        .output()
+        .expect("spawn clang");
+    assert!(
+        output.status.success(),
+        "clang -fsanitize=address failed (is libclang-rt-18-dev installed?):\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    sanitized_binary
+}
+
+/// Compile `built`'s emitted IR with the ASan instrumentation pass and link it against the
+/// bundled runtime archive. Returns the path of the sanitized binary.
+pub fn build_asan(built: &Built) -> PathBuf {
+    let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
+    let directory = built
+        .ir
+        .parent()
+        .expect("emitted IR has a parent directory");
+    build_asan_from_ir(directory, &ir)
+}
+
+/// Run an ASan-built binary under the fixtures' `ASAN_OPTIONS`, with the liveness watchdog.
+pub fn run_asan_binary(sanitized_binary: &Path) -> RunOutput {
+    let mut command = Command::new(sanitized_binary);
+    command.env("ASAN_OPTIONS", ASAN_OPTIONS);
+    run_with_watchdog(command)
+}
+
+/// Build `fixture_name`, instrument it, run it under AddressSanitizer.
+pub fn run_under_asan(fixture_name: &str, no_optimize: bool) -> RunOutput {
+    let built = build(fixture_name, no_optimize);
+    run_asan_binary(&build_asan(&built))
+}
+
+/// Build `fixture_name` with `ynz build` and run the binary (no sanitizer, no counters) under
+/// the liveness watchdog. The binary is the watchdog's direct child, so a hang is killed with
+/// the program itself rather than leaving it orphaned behind a `ynz run` parent.
+pub fn run_plain(fixture_name: &str, no_optimize: bool) -> RunOutput {
+    let built = build(fixture_name, no_optimize);
+    run_with_watchdog(Command::new(&built.binary))
+}
+
+/// The shared check of the output-assertion suites: `fixture_name` exits 0 and prints exactly
+/// `expected_stdout`. `what_it_guards` completes the failure message.
+pub fn assert_fixture_prints(
+    fixture_name: &str,
+    no_optimize: bool,
+    expected_stdout: &str,
+    what_it_guards: &str,
+) {
+    let run = run_plain(fixture_name, no_optimize);
+    assert_eq!(
+        run.exit_code, 0,
+        "{fixture_name} (no_optimize={no_optimize}) must run clean; stderr:\n{}",
+        run.stderr
+    );
+    assert_eq!(
+        run.stdout, expected_stdout,
+        "{fixture_name} (no_optimize={no_optimize}): {what_it_guards}; stderr:\n{}",
+        run.stderr
+    );
+}
+
+/// The shared check of the AddressSanitizer suites: `fixture_name` runs clean under ASan (no
+/// report, exit 0) and prints exactly `expected_stdout`. A bad read that returns plausible bytes
+/// leaves the output right, so the sanitizer verdict is asserted on its own.
+pub fn assert_asan_clean_and_prints(fixture_name: &str, no_optimize: bool, expected_stdout: &str) {
+    let run = run_under_asan(fixture_name, no_optimize);
+    assert!(
+        !run.stderr.contains("AddressSanitizer"),
+        "{fixture_name} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
+        run.stderr
+    );
+    assert_eq!(
+        run.exit_code, 0,
+        "{fixture_name} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
+        run.stderr
+    );
+    assert_eq!(
+        run.stdout, expected_stdout,
+        "{fixture_name} (no_optimize={no_optimize}): wrong values; stderr:\n{}",
+        run.stderr
+    );
+}

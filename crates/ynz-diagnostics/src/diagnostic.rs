@@ -46,6 +46,10 @@ pub enum DiagnosticKind {
     /// A handle-form spawn's command channel is not a named binding, so nothing outside the
     /// task could ever close it — v0.3-M8 Phase 4.
     HandleChannelArgNeedsBinding,
+    /// A union value reaches a slot (argument, return, annotated `let`, shape field) that
+    /// expects one of its variants. The union is a tagged envelope; the slot would read it as
+    /// the bare variant — wrong data or memory past the envelope. v0.3-M9 C1b.
+    UnionWhereVariantExpected,
     /// `.copy()` was called on a type that has no independent copy — a channel, a task
     /// handle, a `dynamic` value, a union, a collection whose items cannot be copied.
     /// v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C2): the ruling is that
@@ -110,6 +114,7 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "ParamNeedsGive",
             DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
+            DiagnosticKind::UnionWhereVariantExpected => "UnionWhereVariantExpected",
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -140,6 +145,7 @@ impl DiagnosticKind {
         "ParamNeedsGive",
         "TransferNeedsCopy",
         "HandleChannelArgNeedsBinding",
+        "UnionWhereVariantExpected",
         "CopyNotIndependent",
         "SpawnArgNotIndependent",
         "SpawnArgStorageDiesWithTheFrame",
@@ -166,6 +172,10 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
             DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),
             DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),
+            // True for all three recoveries `union_where_variant_expected_diag` picks from: the caret
+            // label comes from the kind alone, so it must not name an `is` check that two of them
+            // (a non-shape variant, an expression value) cannot offer as written.
+            DiagnosticKind::UnionWhereVariantExpected => "might be a different type".to_string(),
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {

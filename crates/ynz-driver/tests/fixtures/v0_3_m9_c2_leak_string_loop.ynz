@@ -1,0 +1,22 @@
+// v0.3-M9 C2 leak fixture: heap strings built in a 2,000-iteration loop body.
+// Each iteration allocates strings through two different allocators (interpolation and
+// `toUpperCase`). Correct behavior: every iteration's strings are released at the end of that
+// iteration, so the runtime's string alloc count (and bytes) equals its string free count (and
+// bytes) when the program exits.
+// Today (no scope-exit release; strings are never freed): all of them leak.
+// The test reads the counters; this program prints a checksum so the loop cannot be elided.
+//
+// Expected output: 24000
+
+function entrypoint() -> nothing {
+  let i: int = 0
+  let total: int = 0
+  let stem: string = `item`
+  while (i < 2000) {
+    let joined: string = `${stem}-suffix`
+    let loud: string = joined.toUpperCase()
+    total = total + joined.count() - 5 + loud.count() - 5
+    i = i + 1
+  }
+  print(total.toString())
+}

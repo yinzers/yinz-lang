@@ -1,0 +1,15 @@
+// Q1: outer `let x` is NOT top-level (inside an if), inner `let x` nested deeper, both cross a wait.
+// Guard requires a TOP-LEVEL outer let to fire.
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let x = `outer`
+    wait sleep(5)
+    if (a) {
+      let x = `inner`
+      wait sleep(5)
+      print(x)
+    }
+    print(x)
+  }
+}

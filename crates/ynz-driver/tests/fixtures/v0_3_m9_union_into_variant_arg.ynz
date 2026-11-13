@@ -1,0 +1,24 @@
+// v0.3-M9 C1b (security): a union value passed where ONE VARIANT is expected.
+// Correct behavior: does not compile — `UnionWhereVariantExpected` names `thing`, its type
+// `Tiny | Big`, the expected `Big`, and suggests narrowing with an `is Big` arm.
+// Pre-fix failure: compiled, and the callee read the 16-byte union envelope as a `Big` —
+// SIGSEGV with the read address controlled by the tag/data words.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function showBig(share b: Big) -> string {
+  return b.label
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let thing: Thing = big
+  print(showBig(thing))
+}

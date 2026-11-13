@@ -511,3 +511,193 @@ fn ge_digits_padded(a: &[u8], b: &[u8]) -> bool {
     }
     true
 }
+
+/// Exact numeric comparison of two BigNums; precision plays no part.
+///
+/// `None` when unordered (either side is NaN). `-0` equals `+0`; `2.5` equals `2.50`.
+///
+/// Time O(digits), space O(1): compares the position of the most significant digit first, then
+/// the digits one by one (a missing digit counts as 0), so no operand is aligned or copied.
+pub fn compare(left: &BigNum, right: &BigNum) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    if left.is_nan || right.is_nan {
+        return None;
+    }
+    let left_class = sign_class(left);
+    let right_class = sign_class(right);
+    if left_class != right_class {
+        return Some(left_class.cmp(&right_class));
+    }
+    match left_class {
+        // both -inf, both zero, or both +inf
+        -2 | 0 | 2 => Some(Ordering::Equal),
+        1 => Some(compare_magnitudes(left, right)),
+        // both negative: the larger magnitude is the smaller number
+        _ => Some(compare_magnitudes(right, left)),
+    }
+}
+
+/// -2 = -infinity, -1 = negative, 0 = zero (of either sign), 1 = positive, 2 = +infinity.
+fn sign_class(value: &BigNum) -> i8 {
+    if value.is_infinity {
+        return if value.sign { -2 } else { 2 };
+    }
+    if value.digits.iter().all(|&digit| digit == 0) {
+        return 0;
+    }
+    if value.sign {
+        -1
+    } else {
+        1
+    }
+}
+
+/// Compare |left| and |right|, both finite and non-zero.
+fn compare_magnitudes(left: &BigNum, right: &BigNum) -> std::cmp::Ordering {
+    let left_leading_zeros = left.digits.iter().take_while(|&&digit| digit == 0).count();
+    let right_leading_zeros = right.digits.iter().take_while(|&&digit| digit == 0).count();
+    let left_digits = &left.digits[left_leading_zeros..];
+    let right_digits = &right.digits[right_leading_zeros..];
+    // Position of the most significant digit: value = 0.d1d2.. × 10^(exponent + len).
+    let left_magnitude = left.exponent + left_digits.len() as i64;
+    let right_magnitude = right.exponent + right_digits.len() as i64;
+    if left_magnitude != right_magnitude {
+        return left_magnitude.cmp(&right_magnitude);
+    }
+    let longest = left_digits.len().max(right_digits.len());
+    for position in 0..longest {
+        let left_digit = left_digits.get(position).copied().unwrap_or(0);
+        let right_digit = right_digits.get(position).copied().unwrap_or(0);
+        if left_digit != right_digit {
+            return left_digit.cmp(&right_digit);
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+#[cfg(test)]
+mod compare_tests {
+    use super::*;
+    use std::cmp::Ordering::{Equal, Greater, Less};
+
+    fn parsed(text: &str) -> BigNum {
+        BigNum::from_str(text, 100).expect("test literal parses")
+    }
+
+    /// One test per edge case of the compare contract (High: pure math, the edge cases are the
+    /// contract): `compare_case!(case, left, right, expected, "bug it catches")`.
+    macro_rules! compare_case {
+        ($case:ident, $left:literal, $right:literal, $expected:expr, $bug:literal) => {
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                assert_eq!(
+                    compare(&parsed($left), &parsed($right)),
+                    $expected,
+                    "compare({}, {})",
+                    $left,
+                    $right
+                );
+            }
+        };
+    }
+
+    compare_case!(
+        nine_is_less_than_ten,
+        "9",
+        "10",
+        Some(Less),
+        "Bug caught: a textual comparison (`\"9\" > \"10\"`). (High)"
+    );
+    compare_case!(
+        trailing_zeros_are_equal,
+        "2.5",
+        "2.50",
+        Some(Equal),
+        "Bug caught: operands of different digit counts compare unequal. (High)"
+    );
+    compare_case!(
+        a_smaller_exponent_is_less,
+        "0.001",
+        "0.01",
+        Some(Less),
+        "Bug caught: the exponent is ignored, so equal digits compare equal. (High)"
+    );
+    compare_case!(
+        a_larger_exponent_beats_more_digits,
+        "1e3",
+        "999",
+        Some(Greater),
+        "Bug caught: the digit count decides instead of the position of the leading digit. (High)"
+    );
+    compare_case!(
+        a_negative_is_less_than_a_positive,
+        "-1",
+        "1",
+        Some(Less),
+        "Bug caught: the sign is ignored. (High)"
+    );
+    compare_case!(
+        between_negatives_the_larger_magnitude_is_less,
+        "-9",
+        "-10",
+        Some(Greater),
+        "Bug caught: negatives are ordered by magnitude, not reversed. (High)"
+    );
+    compare_case!(
+        negative_zero_equals_zero,
+        "-0",
+        "0",
+        Some(Equal),
+        "Bug caught: `-0` orders below `0` because its sign flag is set. (High)"
+    );
+    compare_case!(
+        a_negative_fraction_is_less_than_zero,
+        "-0.5",
+        "0",
+        Some(Less),
+        "Bug caught: a negative against zero compares as its magnitude. (High)"
+    );
+    compare_case!(
+        a_difference_in_the_last_of_39_digits_decides,
+        "123456789012345678901234567890123456789",
+        "123456789012345678901234567890123456788",
+        Some(Greater),
+        "Bug caught: the digits are compared through a narrower number (u64, f64) and the last digits are lost. (High)"
+    );
+    compare_case!(
+        infinity_is_greater_than_any_finite,
+        "inf",
+        "1e400",
+        Some(Greater),
+        "Bug caught: infinity compared by its (empty) digits. (High)"
+    );
+    compare_case!(
+        negative_infinity_is_less_than_any_finite,
+        "-inf",
+        "-1e400",
+        Some(Less),
+        "Bug caught: negative infinity compared by its (empty) digits. (High)"
+    );
+    compare_case!(
+        infinity_equals_infinity,
+        "inf",
+        "inf",
+        Some(Equal),
+        "Bug caught: two infinities of one sign compare by digits and are not equal. (High)"
+    );
+    compare_case!(
+        nan_on_the_left_is_unordered,
+        "nan",
+        "1",
+        None,
+        "Bug caught: NaN orders against a number. (High)"
+    );
+    compare_case!(
+        nan_on_the_right_is_unordered,
+        "1",
+        "nan",
+        None,
+        "Bug caught: only the left operand is checked for NaN. (High)"
+    );
+}

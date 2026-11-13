@@ -1,0 +1,44 @@
+// v0.3-M9 C2 safety fixture — exit class: BLOCK EXIT.
+// A heap local declared inside an `if` block is released when that block ends; the enclosing
+// scope's locals (declared before the block, read after it) must stay alive. `scoped` runs the
+// plain-function lowering, `scopedSuspending` the state-machine lowering (a different emitter
+// for the same exit class).
+// Correct behavior: exact output below, exit 0, AddressSanitizer-clean.
+// Guards against: releasing an OUTER binding at the inner block's end (use-after-free on the
+// later read), or releasing the inner binding twice (nested block + enclosing block).
+//
+// Expected output (one per line): 2, 1, 5, 3, 3, 2, 3, 3
+
+function scoped(enter: boolean) -> int {
+  let outer: array<int> = [1, 2, 3]
+  if (enter) {
+    let inner: array<int> = [4, 5]
+    print(inner.count().toString())
+    if (enter) {
+      let deeper: array<int> = [6]
+      print(deeper.count().toString())
+    }
+    print(inner[1].or(-1).toString())
+  }
+  return outer.count()
+}
+
+function scopedSuspending(enter: boolean) -> int {
+  let outer: array<int> = [1, 2, 3]
+  wait sleep(1)
+  if (enter) {
+    let inner: array<int> = [4, 5]
+    wait sleep(1)
+    print(inner.count().toString())
+  }
+  return outer.count()
+}
+
+function entrypoint() -> nothing {
+  print(scoped(true).toString())
+  print(scoped(false).toString())
+  let later: int = scopedSuspending(true)
+  print(later.toString())
+  let skipped: int = scopedSuspending(false)
+  print(skipped.toString())
+}

@@ -4,7 +4,7 @@ description: "Locks Yinz's internal string encoding (UTF-8 always) and SIMD impl
 tags:
   - "yinz-compiler"
 created_at: "2026-05-15"
-updated_at: "2026-07-01"
+updated_at: "2026-11-13"
 status: "active"
 author: "patrick"
 metadata:
@@ -163,6 +163,28 @@ A `YnzString` is exactly 24 bytes with 8-byte alignment. The tag byte lives at o
 - 30-char ASCII literal: heap. Bytes 0..7 = ptr; bytes 8..15 = `len = 30 | (1 << 1) = 32` (NFC-known); bytes 16..23 = `cap = 30`.
 
 **Compile-time verification:** `crates/ynz-runtime/tests/string_layout.rs` asserts `mem::size_of::<YnzString>() == 24` AND `mem::align_of::<YnzString>() == 8`. Bit-pattern test constructs known inline + heap strings and asserts byte-by-byte expected patterns.
+
+---
+
+## String Ownership and Release
+
+Current state (v0.3, before the 24-byte layout lands): a `string` value is one `ptr` to NUL-terminated UTF-8 bytes. A `u64` header sits in front of the first byte (`STRING_HEADER_BYTES = 8`, `ynz_abi`):
+
+| Header | Bytes are | Source |
+|---|---|---|
+| `STATIC_STRING_HEADER` (0) | static, never freed | literals, `true`/`false`, options display names, the `none`/placeholder debug text, error-message literals, `[REDACTED]` |
+| any other value | heap, owned; the value is the byte capacity (length + NUL, never 0) | every string the runtime allocates: interpolation, string methods, `int`/`float`/`number` `.toString()`, bignum results |
+
+Rules:
+
+- Every string source that can reach Yinz code carries the header: codegen emits static strings as `{ i64 0, [N x i8] }`, and `heap_string_buffer` (the one string allocator, counted by `YNZ_ALLOC_COUNTER`) writes the capacity. Compiler-internal C strings (panic text, file names, debug-print fragments) are not `string` values and have no header.
+- `ynz_string_release(ptr)` is the one release entry point: null and static bytes are no-ops; heap bytes are freed and counted. It accepts any string, so a caller never needs to know where one came from.
+- A heap string has exactly one owner when it is released. Copy-on-store and last-use moves (the way an owner is guaranteed) are specified with the ownership pass, not here.
+- A conversion result is never shared: two `.toString()` results alive together are two strings.
+- `print(n)` and `${n}` of an `int`, `float` or `number` build no string: the text is read once and dropped, so codegen calls a runtime entry that formats and writes (`ynz_{int,float,decimal}_print`) or appends to the string builder (`ynz_{int,float,decimal}_append`), with nothing to release. `int` formats into a stack buffer owned by that call (never shared across calls or threads); `float` prints from one and appends by formatting straight into the builder; `number` keeps the one `String` the numerics crate returns (the only allocation left). Only `.toString()` returns an owned heap string. Test: `v03_m9_string_ownership` counts heap strings for each case.
+- Cost: 8 header bytes per string (Rust `String` is a 24-byte handle, `&'static str` a 16-byte fat pointer; Yinz pointer plus header is 16 bytes at most), one 8-byte store per allocation, one load and compare per release, no atomics.
+
+Under the 24-byte layout above, the rules carry over unchanged. What changes is where the "static" marker lives: inline strings (23 bytes or fewer) own nothing, so releasing one is a no-op; for the heap form the marker moves from the pre-header into the value (`len` bit 0, which this layout reserves, is the proposed "static, not owned" bit), the header word and the 8-byte allocation prefix go away, and `ynz_string_release` takes the 24-byte value.
 
 ---
 

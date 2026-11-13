@@ -9,8 +9,9 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind, SourceSpan};
 use crate::{
     builtins::{
         array_method_is_mutating, array_method_return, collection_method_arg_slots,
-        fixed_method_is_mutating, fixed_method_return, map_method_is_mutating, map_method_return,
-        maybe_method_return, sensitive_method_return, string_method_return,
+        collection_store_positions, fixed_method_is_mutating, fixed_method_return,
+        map_method_is_mutating, map_method_return, maybe_method_return, sensitive_method_return,
+        string_method_return,
     },
     effective_ownership::{
         classify_binding_in_stmts, provenance, stmt_rebinds, EffectiveOwnership, Freshness,
@@ -23,12 +24,24 @@ use crate::{
     intrinsics::PrimitiveIntrinsicTable,
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
-    scope::{ConsumedBy, Origin, Scope, ScopeEntry},
+    scope::{ConsumedBy, ConsumedEntry, Origin, Scope, ScopeEntry},
     shapes::ShapeTable,
     signatures::SignatureTable,
     suspension_source::{is_base_suspension_intrinsic, CHANNEL_SUSPENDING_METHODS},
+    transfer_record::{Escape, RoleEvidence},
     types::{arc_shareable, channel_elem_drop, type_name, Type},
 };
+
+use crate::binding_names::{decl_key, DeclKey};
+
+/// One give made while a loop body was being checked: where it happened, why the entries it
+/// reached are gone, and which entries those are. At the loop's end each is checked against the
+/// NEXT pass (`Checker::check_loop_carried_gives`).
+struct LoopGive {
+    span: SourceSpan,
+    cause: ConsumedBy,
+    reached: Vec<ConsumedEntry>,
+}
 
 /// A transfer sink — where a value is about to leave this frame for a holder that will free
 /// it (`IMP-ownership.md` "The transfer decision"). The list of sinks is closed and small;
@@ -91,10 +104,22 @@ impl TransferSink<'_> {
 /// be dead data beside a hand-written twin). A missing template is a build-time invariant
 /// (`diagnostic_templates_render_from_the_registry` in the tests) — panicking here names it.
 fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)]) -> Diagnostic {
-    let kind_name = kind.kind_name();
-    let template = ynz_registry::diagnostic_template_lookup(kind_name).unwrap_or_else(|| {
+    let template_name = kind.kind_name();
+    registry_diag_template(span, kind, template_name, slots)
+}
+
+/// `registry_diag` for a kind whose text has more than one recovery: `template_name` names the
+/// `[[diagnostic_template]]` to render (a variant-less sibling of the kind's own template), and
+/// the diagnostic still carries `kind`.
+fn registry_diag_template(
+    span: SourceSpan,
+    kind: DiagnosticKind,
+    template_name: &str,
+    slots: &[(&str, &str)],
+) -> Diagnostic {
+    let template = ynz_registry::diagnostic_template_lookup(template_name).unwrap_or_else(|| {
         panic!(
-            "registry/features.toml has no [[diagnostic_template]] with kind_name = {kind_name:?}"
+            "registry/features.toml has no [[diagnostic_template]] with kind_name = {template_name:?}"
         )
     });
     let fill = |text: &str| -> String {
@@ -111,6 +136,96 @@ fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)])
         fill(template.why_template),
     )
     .with_kind(kind)
+}
+
+/// Which recovery the WHAT-INSTEAD may name for a union reaching a variant slot. Only code that
+/// compiles today is ever suggested: an `is` arm parses a bare shape-variant name and checks a
+/// named binding (`check_is_arm_pattern`; non-shape variants are #418).
+enum UnionRecovery {
+    /// `if (value) { is Variant => … }` — the value is a name and the variant a listed shape of
+    /// a union that has a shape variant.
+    IsArmOnTheValue,
+    /// The same, after `let checked = value` — the value is an expression, not a name.
+    IsArmOnANamedCopy,
+    /// No `is` arm can hand the value over: the variant is not a shape, or the union has no
+    /// shape variant (it is the variant's own pointer, with no tag box).
+    NoIsArm,
+}
+
+fn union_recovery(value: &Expr, source_union: &Type, expected_variant: &Type) -> UnionRecovery {
+    let is_arm_can_name_variant = is_envelope_union(source_union)
+        && matches!(expected_variant, Type::Shape { .. })
+        && matches!(source_union, Type::Union { variants } if variants.contains(expected_variant));
+    match (is_arm_can_name_variant, value) {
+        (false, _) => UnionRecovery::NoIsArm,
+        (true, Expr::Ident(..)) => UnionRecovery::IsArmOnTheValue,
+        (true, _) => UnionRecovery::IsArmOnANamedCopy,
+    }
+}
+
+/// The teaching diagnostic for a union value reaching a slot that expects one of its variants
+/// (`UnionWhereVariantExpected`). `needs` finishes the sentence "…, but {needs}" and names the
+/// slot: `showBig` expects a `Big` here, the function must return a `Big`, …. The WHAT-INSTEAD
+/// and WHY come from the registry template for the recovery that compiles (`union_recovery`).
+fn union_where_variant_expected_diag(
+    value: &Expr,
+    source_union: &Type,
+    expected_variant: &Type,
+    needs: &str,
+) -> Diagnostic {
+    let other_variants = match source_union {
+        Type::Union { variants } => variants
+            .iter()
+            .filter(|variant| *variant != expected_variant)
+            .map(|variant| format!("`{}`", type_name(variant)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => String::new(),
+    };
+    let slots = [
+        ("value", expr_source_text(value)),
+        ("union", type_name(source_union)),
+        ("variant", type_name(expected_variant)),
+        ("needs", needs.to_string()),
+        ("others", other_variants),
+    ];
+    let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let span = value.span().clone();
+    match union_recovery(value, source_union, expected_variant) {
+        UnionRecovery::IsArmOnTheValue => {
+            registry_diag(span, DiagnosticKind::UnionWhereVariantExpected, &slots)
+        }
+        UnionRecovery::IsArmOnANamedCopy => registry_diag_template(
+            span,
+            DiagnosticKind::UnionWhereVariantExpected,
+            "UnionWhereVariantExpectedNameIt",
+            &slots,
+        ),
+        UnionRecovery::NoIsArm => registry_diag_template(
+            span,
+            DiagnosticKind::UnionWhereVariantExpected,
+            "UnionWhereVariantExpectedNoIsArm",
+            &slots,
+        ),
+    }
+}
+
+/// What a binding event (`let`, reassignment) makes the name denote: the origin and live alias
+/// class it takes, and every declaration whose value it now holds (the transfer record's join
+/// edges — the live scope only needs the class).
+struct BindingEvent {
+    origin: Origin,
+    alias_class: u64,
+    joined: Vec<DeclKey>,
+}
+
+/// What a binding event says about the binding's part in releasing its value.
+fn role_evidence_of(origin: &Origin) -> RoleEvidence {
+    match origin {
+        Origin::Owned | Origin::Param(Some(OwnershipModifier::Give)) => RoleEvidence::Owner,
+        Origin::Param(_) => RoleEvidence::BorrowedParam,
+        Origin::Cell(_) | Origin::Reaches(_) | Origin::Unknown => RoleEvidence::Piece,
+    }
 }
 
 /// THE rendering of a read of a consumed binding — the use-after-give (`Consumed`) or
@@ -151,6 +266,41 @@ fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagn
                 ],
             )
         }
+    }
+}
+
+/// The use-after-give of a LOOP-CARRIED give: the loop gave a binding declared outside it away on
+/// one pass and the next pass reads it again. Same templates and slots as `consumed_read_diag`
+/// (one canonical explanation per concept); the loop is named in the `{via}` slot.
+fn loop_carried_give_diag(span: SourceSpan, cause: &ConsumedBy) -> Diagnostic {
+    match cause {
+        ConsumedBy::Given { callee, given } => registry_diag(
+            span,
+            DiagnosticKind::Consumed,
+            &[
+                ("name", given),
+                ("given", given),
+                (
+                    "via",
+                    &format!(
+                        ", because the previous pass through this loop already gave it to `{callee}`"
+                    ),
+                ),
+            ],
+        ),
+        ConsumedBy::Sent { channel, sent } => registry_diag(
+            span,
+            DiagnosticKind::ConsumedBySend,
+            &[
+                ("name", sent),
+                ("channel", channel),
+                ("sent", sent),
+                (
+                    "via",
+                    " — the previous pass through this loop already sent it",
+                ),
+            ],
+        ),
     }
 }
 
@@ -390,6 +540,38 @@ pub struct TypedModule {
     /// flag — so all consumers key off ONE producer (authoritative-derivation.md), never
     /// a per-consumer re-derivation.
     pub back_edge_yield_admitted: std::collections::HashSet<String>,
+    /// v0.3-M9 C4: the unique codegen name of every binding declaration and the declaration
+    /// each identifier use resolves to (typeck's resolver is the single source). Codegen applies
+    /// it to its own AST clone via `BindingNames::apply`; diagnostics, lints and the LSP keep
+    /// `module` and its user names.
+    pub binding_names: crate::binding_names::BindingNames,
+    /// v0.3-M9 C5a: the persisted transfer record — the final alias-class partition of every
+    /// function with its release anchor and escapes (see `crate::transfer_record`).
+    pub transfers: crate::transfer_record::TransferRecord,
+}
+
+impl TypedModule {
+    /// This module as codegen reads it: every binding declaration and use carries its unique
+    /// codegen name (`binding_names`), so name-keyed backend structures hold one binding each.
+    /// `self` — the AST diagnostics, lints and the LSP read — keeps the user's names.
+    ///
+    /// Hard error when the record has a hole (see `BindingNames::apply`); never falls back to
+    /// the raw names.
+    ///
+    /// O(size of the module and its type map) time and memory: one clone.
+    pub fn with_codegen_names(&self) -> Result<TypedModule, String> {
+        let module = self.binding_names.apply(&self.module)?;
+        Ok(TypedModule {
+            module,
+            expr_types: self.expr_types.clone(),
+            background_arg_inferred_ownership: self.background_arg_inferred_ownership.clone(),
+            background_arg_sole_holder: self.background_arg_sole_holder.clone(),
+            cross_thread_padded_shapes: self.cross_thread_padded_shapes.clone(),
+            back_edge_yield_admitted: self.back_edge_yield_admitted.clone(),
+            binding_names: self.binding_names.clone(),
+            transfers: self.transfers.clone(),
+        })
+    }
 }
 
 /// Run the M5 type checker over all function bodies.
@@ -468,8 +650,14 @@ pub fn check(
         padded_shapes: HashSet::new(),
         back_edge_yield_admitted: std::collections::HashSet::new(),
         bg_union_narrowed_diag_spans: HashSet::new(),
+        binding_names: crate::binding_names::BindingNameRecorder::default(),
+        transfers: crate::transfer_record::TransferRecorder::default(),
+        loop_gives: Vec::new(),
+        loop_body_frames: Vec::new(),
     };
     checker.check_module(module);
+    let binding_names = checker.binding_names.finish();
+    let transfers = checker.transfers.finish(&binding_names);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -477,6 +665,8 @@ pub fn check(
         background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
+        binding_names,
+        transfers,
     };
     (
         typed,
@@ -553,8 +743,14 @@ pub fn check_with_kernel_mode(
         padded_shapes: HashSet::new(),
         back_edge_yield_admitted: std::collections::HashSet::new(),
         bg_union_narrowed_diag_spans: HashSet::new(),
+        binding_names: crate::binding_names::BindingNameRecorder::default(),
+        transfers: crate::transfer_record::TransferRecorder::default(),
+        loop_gives: Vec::new(),
+        loop_body_frames: Vec::new(),
     };
     checker.check_module(module);
+    let binding_names = checker.binding_names.finish();
+    let transfers = checker.transfers.finish(&binding_names);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -562,6 +758,8 @@ pub fn check_with_kernel_mode(
         background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
+        binding_names,
+        transfers,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -801,6 +999,19 @@ struct Checker<'b> {
     /// pushed twice for one spawn. Keyed by the receiver's span; the function's
     /// other return paths are pure (no side effect) and need no dedup.
     bg_union_narrowed_diag_spans: HashSet<(usize, usize)>,
+    /// v0.3-M9 C4: every binding declaration and identifier use, with the unique codegen name of
+    /// each declaration (`crate::binding_names`). Recorded by `declare_binding` /
+    /// `note_binding_use`; carried on `TypedModule::binding_names`.
+    binding_names: crate::binding_names::BindingNameRecorder,
+    /// v0.3-M9 C5a: the persisted transfer record, filled at the same events that update the
+    /// live scope (`declare_binding`, `binding_event_origin`, the store and return sites,
+    /// `consume_binding`). Carried on `TypedModule::transfers`.
+    transfers: crate::transfer_record::TransferRecorder,
+    /// Gives made while inside a loop body, in order, so the loop can check at its end that no
+    /// give reached a binding the NEXT pass reads again (`check_loop_carried_gives`).
+    loop_gives: Vec<LoopGive>,
+    /// Frame index of the body of each enclosing loop, outermost first.
+    loop_body_frames: Vec<usize>,
 }
 
 impl<'b> Checker<'b> {
@@ -938,6 +1149,9 @@ impl<'b> Checker<'b> {
             return;
         }
 
+        self.binding_names.begin_function(&f.span);
+        self.transfers.begin_function(&f.name);
+
         // ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner } already.
         let ret_ty = self.ast_type_to_type(&f.return_type);
         self.current_fn_ret = ret_ty.clone();
@@ -983,7 +1197,7 @@ impl<'b> Checker<'b> {
                 }
             }
             let alias_class = self.scope.new_class();
-            self.scope.insert(
+            self.declare_binding(
                 param.name.clone(),
                 ScopeEntry {
                     ty: param_ty,
@@ -998,6 +1212,12 @@ impl<'b> Checker<'b> {
                 },
             );
         }
+        let parameter_declarations: Vec<DeclKey> = f
+            .params
+            .iter()
+            .map(|param| decl_key(&param.name_span, &param.name))
+            .collect();
+        self.transfers.set_parameters(parameter_declarations);
 
         // Option-B deferral checks: emit clean teaching errors for wait patterns
         // that require the M3 coroutine-locals transform rather than silently
@@ -1741,6 +1961,8 @@ impl<'b> Checker<'b> {
     /// Generic bodies are checked with TypeParam types in scope. No return-path
     /// analysis at P3a — the generic signature is trusted; codegen verifies per-instantiation.
     fn check_generic_function_body(&mut self, f: &FunctionDecl) {
+        self.binding_names.begin_function(&f.span);
+        self.transfers.begin_function(&f.name);
         // Push type param names into the type_param_scope.
         for gp in &f.generics {
             self.type_param_scope.insert(gp.name.clone(), ());
@@ -1762,7 +1984,7 @@ impl<'b> Checker<'b> {
         for param in &f.params {
             let param_ty = self.ast_type_to_type(&param.ty);
             let alias_class = self.scope.new_class();
-            self.scope.insert(
+            self.declare_binding(
                 param.name.clone(),
                 ScopeEntry {
                     ty: param_ty,
@@ -1777,6 +1999,12 @@ impl<'b> Checker<'b> {
                 },
             );
         }
+        let parameter_declarations: Vec<DeclKey> = f
+            .params
+            .iter()
+            .map(|param| decl_key(&param.name_span, &param.name))
+            .collect();
+        self.transfers.set_parameters(parameter_declarations);
         self.check_stmts(&f.body.stmts);
         self.scope.pop();
 
@@ -1864,9 +2092,12 @@ impl<'b> Checker<'b> {
                         ),
                         None => (false, vec![name.to_string()]),
                     };
-                    let used_after = remaining
-                        .iter()
-                        .any(|s| members.iter().any(|m| ident_read_in_stmt(s, m.as_str())));
+                    // The NEXT pass of an enclosing loop reads a binding declared outside it as
+                    // surely as a later statement does, and `remaining` ends at this block's end.
+                    let used_after = self.bound_outside_current_loop(name)
+                        || remaining
+                            .iter()
+                            .any(|s| members.iter().any(|m| ident_read_in_stmt(s, m.as_str())));
                     if origin_ok && !used_after {
                         BgOwnership::Give
                     } else {
@@ -2095,6 +2326,7 @@ impl<'b> Checker<'b> {
     }
 
     fn check_stmts(&mut self, stmts: &[Stmt]) {
+        let gives_at_start = self.loop_gives.len();
         // Collect early-return narrowing facts: when an `if (!m.exists()) { return }` or
         // `if (!m.exists()) { panic(...) }` is detected, mark `m` as non-none for all
         // subsequent statements in this block.
@@ -2196,12 +2428,13 @@ impl<'b> Checker<'b> {
                                 // const distinction.
                                 if let Some(entry) = self.scope.lookup(name.as_str()) {
                                     if !entry.is_const && entry.consumed.is_none() {
-                                        self.scope.consume(
+                                        self.consume_binding(
                                             name.as_str(),
                                             ConsumedBy::Given {
                                                 callee: spawn_callee.clone(),
                                                 given: name.clone(),
                                             },
+                                            expr.span(),
                                         );
                                     }
                                 }
@@ -2326,6 +2559,13 @@ impl<'b> Checker<'b> {
         for name in &early_return_narrowed {
             self.maybe_non_none.remove(name.as_str());
         }
+        // A block that always returns never reaches a loop's back-edge, so a give made in it is
+        // not carried into the next pass. O(n) per block that made a give, only then.
+        if self.loop_gives.len() > gives_at_start
+            && crate::return_paths::analyze_stmts(stmts).all_paths_return
+        {
+            self.loop_gives.truncate(gives_at_start);
+        }
     }
 
     fn check_let(
@@ -2347,7 +2587,7 @@ impl<'b> Checker<'b> {
             self.derivable_conduits.insert(name.to_string());
             // A task handle is the spawn's sole reference: `Fresh` → `Owned`, its own class.
             let alias_class = self.scope.new_class();
-            self.scope.insert(
+            self.declare_binding(
                 name.to_string(),
                 ScopeEntry {
                     ty: handle_ty,
@@ -2372,7 +2612,7 @@ impl<'b> Checker<'b> {
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
 
         // v0.3-M6 store-site stopgap (no-duct-tape live-exposure): `let x: number = 5`
-        // hints the int literal to `number`, so `types_compatible(number, number)`
+        // hints the int literal to `number`, so `can_assign(number, number)`
         // admits it — then codegen ICEs storing a raw i64 into the decimal128 pointer
         // slot (the store-site #9 class). Route it through the SAME shared teaching
         // gate as every other int-literal→`number` slot (authoritative-derivation: one
@@ -2387,7 +2627,7 @@ impl<'b> Checker<'b> {
                 // Bind the name at the annotated `number` type so later uses don't
                 // cascade into spurious unknown-variable diagnostics.
                 let alias_class = self.scope.new_class();
-                self.scope.insert(
+                self.declare_binding(
                     name.to_string(),
                     ScopeEntry {
                         ty: ann_ty.clone(),
@@ -2411,21 +2651,30 @@ impl<'b> Checker<'b> {
         let binding_ty = if let Some(ann_ty) = &annotated_ty {
             if value_ty == Type::Error || *ann_ty == Type::Error {
                 Type::Error
-            } else if !types_compatible(ann_ty, &value_ty) {
-                self.diags.push(Diagnostic::error(
-                    value.span().clone(),
-                    format!(
-                        "This value is `{}`, but `{}` is declared as `{}`.",
-                        type_name(&value_ty),
-                        name,
-                        type_name(ann_ty)
-                    ),
-                    format!(
-                        "Change the annotation to `{}`, or use a different value.",
-                        type_name(&value_ty)
-                    ),
-                    "The value on the right side must match the type annotation on the left.",
-                ));
+            } else if !can_assign(ann_ty, &value_ty) {
+                if is_union_into_its_variant(ann_ty, &value_ty) {
+                    self.diags.push(union_where_variant_expected_diag(
+                        value,
+                        &value_ty,
+                        ann_ty,
+                        &format!("`{name}` is declared as `{}`", type_name(ann_ty)),
+                    ));
+                } else {
+                    self.diags.push(Diagnostic::error(
+                        value.span().clone(),
+                        format!(
+                            "This value is `{}`, but `{}` is declared as `{}`.",
+                            type_name(&value_ty),
+                            name,
+                            type_name(ann_ty)
+                        ),
+                        format!(
+                            "Change the annotation to `{}`, or use a different value.",
+                            type_name(&value_ty)
+                        ),
+                        "The value on the right side must match the type annotation on the left.",
+                    ));
+                }
                 Type::Error
             } else if matches!(ann_ty, Type::Union { .. }) {
                 // M6: for union type annotations, use the declared union type as the binding type,
@@ -2456,8 +2705,9 @@ impl<'b> Checker<'b> {
         // and alias class come from the initializer's provenance — a NEW entry; a shadowed
         // outer entry keeps its own origin, class and consumed state (it still names its
         // old value). The same rule `check_assign` applies on a reassignment.
-        let (origin, alias_class) = self.binding_event_origin(value);
-        self.scope.insert(
+        let event = self.binding_event_origin(value);
+        let declaration = decl_key(name_span, name);
+        self.declare_binding(
             name.to_string(),
             ScopeEntry {
                 ty: binding_ty,
@@ -2466,11 +2716,12 @@ impl<'b> Checker<'b> {
                 param_ownership: None,
                 is_loop_var: false,
                 consumed: None,
-                origin,
-                alias_class,
+                origin: event.origin,
+                alias_class: event.alias_class,
                 defined_at: name_span.clone(),
             },
         );
+        self.record_joins(&declaration, &event.joined);
     }
 
     /// fr23 (v0.3-M7 Phase 9, FRAGO 016; unified FRAGO 020; consumption redesigned
@@ -3185,6 +3436,7 @@ impl<'b> Checker<'b> {
     }
 
     fn check_assign(&mut self, target: &str, target_span: &SourceSpan, value: &Expr) {
+        self.note_binding_use(target, target_span);
         let value_ty = self.infer_expr(value, None);
 
         match self.scope.lookup(target) {
@@ -3237,10 +3489,12 @@ impl<'b> Checker<'b> {
                 // reassigned names a NEW value — revive-on-reassign: `eat(rows); rows =
                 // [4, 5]; rows.count()` is a correct program), and it joins the new value's
                 // class per the initializer table.
-                let (origin, alias_class) = self.binding_event_origin(value);
+                let event = self.binding_event_origin(value);
+                let declaration = self.declaration_of(target);
+                self.transfers_note_reassign(declaration.as_ref(), &event);
                 if let Some(e) = self.scope.lookup_mut(target) {
-                    e.origin = origin;
-                    e.alias_class = alias_class;
+                    e.origin = event.origin;
+                    e.alias_class = event.alias_class;
                     e.consumed = None;
                 }
                 if value_ty != Type::Error && value_ty != bound_ty {
@@ -3517,30 +3771,47 @@ impl<'b> Checker<'b> {
                 })
                 .collect();
             if else_arm.is_none() {
-                let missing: Vec<String> = variants
+                // Every variant an `is` arm does not name is unhandled, shape or not. Two
+                // exemptions, each because no arm CAN name the variant:
+                //   - `nothing` is the absent case of `T | nothing`; there is no `is nothing`
+                //     arm, and skipping the absent case is the defined "only if present"
+                //     idiom (no data is dropped), so it never needs an `else`.
+                //   - a non-shape variant (`int`, `string`, …) is also unnameable today — the
+                //     `is` arm accepts shape variants only (`check_is_arm_pattern`) — so it can
+                //     only be handled by `else =>`, which is why it is reported rather than
+                //     exempted: skipping it would silently drop a real value.
+                let missing: Vec<(String, bool)> = variants
                     .iter()
-                    .filter_map(|v| {
-                        if let Type::Shape { name } = v {
-                            if !covered.contains(name) {
-                                Some(name.clone())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
+                    .filter_map(|v| match v {
+                        Type::Nothing => None,
+                        Type::Shape { name } if covered.contains(name) => None,
+                        Type::Shape { name } => Some((name.clone(), true)),
+                        other => Some((type_name(other), false)),
                     })
                     .collect();
                 if !missing.is_empty() {
+                    let missing_names: Vec<String> =
+                        missing.iter().map(|(name, _)| name.clone()).collect();
+                    // Only suggest what compiles today: an `is` arm names a shape variant
+                    // only, so a non-shape variant is handled by `else =>`.
+                    let what_instead = match missing.iter().find(|(_, is_shape)| *is_shape) {
+                        Some((shape_name, _)) => format!(
+                            "Add the missing arms (e.g. `is {shape_name} =>`) or add an `else =>` default arm."
+                        ),
+                        None => format!(
+                            "Add an `else =>` default arm to handle {}.",
+                            missing_names.join(", ")
+                        ),
+                    };
                     self.diags.push(Diagnostic::error(
                         scrutinee.span().clone(),
                         format!(
                             "Non-exhaustive union multi-case — {} variant{} not handled: {}.",
                             missing.len(),
                             if missing.len() == 1 { " is" } else { "s are" },
-                            missing.join(", ")
+                            missing_names.join(", ")
                         ),
-                        format!("Add the missing arms (e.g. `is {} =>`) or add an `else =>` default arm.", missing[0]),
+                        what_instead,
                         "The compiler knows every union variant at compile time. A missing arm means some values silently fall through — likely a bug.",
                     ));
                 }
@@ -3565,7 +3836,9 @@ impl<'b> Checker<'b> {
             ));
         }
         self.scope.push();
+        let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
+        self.end_loop_body(loop_mark);
         self.scope.pop();
     }
 
@@ -3615,7 +3888,7 @@ impl<'b> Checker<'b> {
             Some(r) => format!("one cell of `{r}`, which this loop is walking"),
             None => "one cell of the value this loop is walking".to_string(),
         };
-        self.scope.insert(
+        self.declare_binding(
             var.to_string(),
             ScopeEntry {
                 ty: elem_ty,
@@ -3629,7 +3902,14 @@ impl<'b> Checker<'b> {
                 defined_at: var_span.clone(),
             },
         );
+        if let (Some(declaration), Some(root)) = (self.declaration_of(var), &iterated_root) {
+            if let Some(root_declaration) = self.declaration_of(root) {
+                self.transfers.join(&declaration, &root_declaration);
+            }
+        }
+        let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
+        self.end_loop_body(loop_mark);
         self.scope.pop();
     }
 
@@ -3698,24 +3978,37 @@ impl<'b> Checker<'b> {
             }
             (Some(expr), ret) => {
                 let val_ty = self.infer_expr(expr, Some(ret));
+                self.record_return(expr);
                 // Int literal returned from a `-> number` function — the hinted
                 // infer silently types it `number` and the LLVM verifier rejects
                 // the raw-i64 ret at codegen (Future-Req #14, shared gate).
                 if self.reject_int_literal_number_slot(NumberSlotRole::Return, ret, expr) {
                     return;
                 }
-                if val_ty != Type::Error && *ret != Type::Error && !types_compatible(ret, &val_ty) {
+                if val_ty != Type::Error && *ret != Type::Error && !can_assign(ret, &val_ty) {
                     // M7 P3a: in an errors-capable function, returning the inner success
                     // type is valid (the auto-propagation machinery wraps it at codegen).
                     let compatible = if let Type::ErrorsCapable { inner } = ret {
-                        types_compatible(&val_ty, inner)
+                        can_assign(inner, &val_ty)
                     } else if let Type::ErrorsCapable { inner } = &val_ty {
                         // Returning an ErrorsCapable value from an errors function is also valid.
-                        self.current_fn_errors_capable && types_compatible(inner, ret)
+                        self.current_fn_errors_capable && can_assign(ret, inner)
                     } else {
                         false
                     };
-                    if !compatible {
+                    // The variant the return type declares, with an `errors` wrapper peeled.
+                    let declared_variant = match ret {
+                        Type::ErrorsCapable { inner } => inner.as_ref(),
+                        _ => ret,
+                    };
+                    if !compatible && is_union_into_its_variant(declared_variant, &val_ty) {
+                        self.diags.push(union_where_variant_expected_diag(
+                            expr,
+                            &val_ty,
+                            declared_variant,
+                            &format!("this function must return a `{}`", type_name(ret)),
+                        ));
+                    } else if !compatible {
                         self.diags.push(Diagnostic::error(
                             expr.span().clone(),
                             format!(
@@ -4376,6 +4669,197 @@ impl<'b> Checker<'b> {
         ty
     }
 
+    /// THE one place a binding enters the scope. Besides `Scope::insert` it records the
+    /// declaration for the per-binding codegen names (`crate::binding_names`), keyed by where
+    /// the binding was declared and the name it was declared with.
+    fn declare_binding(&mut self, name: String, entry: ScopeEntry) {
+        let declaration = decl_key(&entry.defined_at, &name);
+        self.binding_names.declare(declaration.clone());
+        self.transfers.declare(
+            declaration,
+            self.scope.path(),
+            role_evidence_of(&entry.origin),
+        );
+        self.scope.insert(name, entry);
+    }
+
+    /// The declaration key of the binding `name` currently resolves to.
+    fn declaration_of(&self, name: &str) -> Option<DeclKey> {
+        self.scope
+            .lookup(name)
+            .map(|entry| decl_key(&entry.defined_at, name))
+    }
+
+    /// Record that the binding just declared (or reassigned) as `target` now denotes or reaches
+    /// the same value as every binding in `joined`.
+    fn record_joins(&mut self, target: &DeclKey, joined: &[DeclKey]) {
+        for other in joined {
+            self.transfers.join(target, other);
+        }
+    }
+
+    /// A reassignment is a binding event: it adds role evidence for the binding and joins it to
+    /// the declarations its new value holds.
+    fn transfers_note_reassign(&mut self, declaration: Option<&DeclKey>, event: &BindingEvent) {
+        let Some(declaration) = declaration else {
+            return;
+        };
+        self.transfers
+            .note_event(declaration, role_evidence_of(&event.origin));
+        self.record_joins(declaration, &event.joined);
+    }
+
+    /// The named bindings that hold (some of) the heap value `value` denotes, as (name,
+    /// declaration). Empty when the value is fresh, not a heap value, or held by nobody named.
+    /// An untraceable value (an imported call's result) may hold anything its expression
+    /// mentions, so it yields every mentioned binding.
+    fn heap_holders_of(&self, value: &Expr) -> Vec<(String, DeclKey)> {
+        let span = value.span();
+        if self
+            .expr_types
+            .get(&(span.start, span.end))
+            .is_some_and(crate::effective_ownership::value_like)
+        {
+            return Vec::new();
+        }
+        let names: Vec<String> = match self.provenance_of(value) {
+            Provenance::Fresh => Vec::new(),
+            Provenance::Whole(name) => vec![name],
+            Provenance::Reaches(roots) => roots,
+            Provenance::Unknown => {
+                let mut mentioned: HashSet<String> = HashSet::new();
+                crate::independence::collect_ident_names(value, &mut mentioned);
+                let mut sorted: Vec<String> = mentioned.into_iter().collect();
+                sorted.sort();
+                sorted
+            }
+        };
+        names
+            .into_iter()
+            .filter_map(|name| self.declaration_of(&name).map(|key| (name, key)))
+            .collect()
+    }
+
+    /// A heap value stored into a place (`o.add(a)`, `o.set(i, a)`, `o[i] = a`, `b.f = a`):
+    /// the place's root binding and the value's holders now reach one value, so they join —
+    /// in the live scope (giving or returning either covers both) and in the record. A store
+    /// does NOT consume the source: that would reject programs that compile today, and would
+    /// need new user-facing syntax (B4).
+    fn record_store(&mut self, place: &Expr, value: &Expr) {
+        let holders = self.heap_holders_of(value);
+        if holders.is_empty() {
+            return;
+        }
+        let root = root_binding_name(place).map(str::to_string);
+        let Some(root) = root.filter(|name| self.scope.lookup(name).is_some()) else {
+            for (_, holder) in holders {
+                self.transfers.escape(&holder, Escape::StoredIntoTemporary);
+            }
+            return;
+        };
+        let (Some(place_declaration), Some(place_class)) =
+            (self.declaration_of(&root), self.scope.class_of(&root))
+        else {
+            return;
+        };
+        for (name, holder) in holders {
+            if let Some(holder_class) = self.scope.class_of(&name) {
+                self.scope.merge_classes(place_class, holder_class);
+            }
+            self.transfers.join(&place_declaration, &holder);
+        }
+    }
+
+    /// A `return`: every binding holding (a piece of) the returned value escapes.
+    fn record_return(&mut self, value: &Expr) {
+        for (_, holder) in self.heap_holders_of(value) {
+            self.transfers.escape(&holder, Escape::Returned);
+        }
+    }
+
+    /// THE consume: mark `name`'s whole alias class consumed with `cause`, record the escape, and
+    /// remember the give when a loop body is open so the loop can check it against the next
+    /// pass. Every transfer sink (`check_transfer`, the `background` liveness give) comes here.
+    fn consume_binding(&mut self, name: &str, cause: ConsumedBy, span: &SourceSpan) {
+        let declaration = self.declaration_of(name);
+        let reached = self.scope.consume(name, cause.clone());
+        if let Some(declaration) = &declaration {
+            self.transfers.escape(
+                declaration,
+                match &cause {
+                    ConsumedBy::Given { callee, .. } => Escape::Given {
+                        callee: callee.clone(),
+                    },
+                    ConsumedBy::Sent { channel, .. } => Escape::Sent {
+                        channel: channel.clone(),
+                    },
+                },
+            );
+        }
+        if !self.loop_body_frames.is_empty() && !reached.is_empty() {
+            self.loop_gives.push(LoopGive {
+                span: span.clone(),
+                cause,
+                reached,
+            });
+        }
+    }
+
+    /// True when a loop body is open and `name` resolves to a binding declared outside the
+    /// innermost one — a binding the next pass reads again.
+    fn bound_outside_current_loop(&self, name: &str) -> bool {
+        match (self.loop_body_frames.last(), self.scope.frame_of(name)) {
+            (Some(body_frame), Some(frame)) => frame < *body_frame,
+            _ => false,
+        }
+    }
+
+    /// Open a loop body (its frame is already pushed). Returns the mark `end_loop_body` needs.
+    fn begin_loop_body(&mut self) -> usize {
+        self.loop_body_frames.push(self.scope.innermost_frame());
+        self.loop_gives.len()
+    }
+
+    /// Close a loop body. A give made in it reaches the NEXT pass whenever it consumed a binding
+    /// declared outside the loop and the binding is still consumed here (a reassignment on the
+    /// way to the back-edge revives it; a path that returns never gets here —
+    /// `check_stmts` drops the gives of a block that always returns). Rust rejects the same
+    /// program: use of a moved value in a later iteration. The text is the one canonical
+    /// use-after-give wording with the loop named in the `{via}` slot.
+    fn end_loop_body(&mut self, mark: usize) {
+        let Some(body_frame) = self.loop_body_frames.pop() else {
+            return;
+        };
+        let gives = self.loop_gives.split_off(mark);
+        for give in gives {
+            let carried = give.reached.iter().any(|entry| {
+                entry.frame_index < body_frame
+                    && self
+                        .scope
+                        .entry_in_frame(entry.frame_index, &entry.name)
+                        .is_some_and(|live| {
+                            live.defined_at == entry.defined_at && live.consumed.is_some()
+                        })
+            });
+            if carried {
+                let diag = loop_carried_give_diag(give.span, &give.cause);
+                self.diags.push(diag);
+            }
+        }
+    }
+
+    /// Record which declaration the identifier `name` written at `use_span` resolves to — the
+    /// SAME scope lookup that types it, so the codegen names can never disagree with typeck's
+    /// own resolution. A name with no binding in scope records nothing (a function, a type, or
+    /// an error already diagnosed).
+    fn note_binding_use(&mut self, name: &str, use_span: &SourceSpan) {
+        if let Some(entry) = self.scope.lookup(name) {
+            let declaration = crate::binding_names::decl_key(&entry.defined_at, name);
+            self.binding_names
+                .note_use(crate::binding_names::use_key(use_span, name), declaration);
+        }
+    }
+
     /// Narrowing-aware plain-ident binding type: the union `is`-arm overlay
     /// (`union_narrowed`) wins over the raw scope entry. This is the ONE
     /// narrowing-aware, side-effect-free read for "what type does this binding have
@@ -4393,6 +4877,7 @@ impl<'b> Checker<'b> {
     }
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
+        self.note_binding_use(name, span);
         // M6: if inside a union `is` arm, the binding is narrowed to a specific variant.
         // The overlay branch reads through `binding_ty_narrowed` (the one narrowing-aware
         // source); only the narrowed case returns here — the un-narrowed path continues
@@ -5464,27 +5949,77 @@ impl<'b> Checker<'b> {
     /// `Fresh` → `Owned`, own class; `Whole(b)` → b's origin, JOINS b's class (two names, one
     /// value); `Reaches(roots)` → `Reaches`, joins every root's class (giving a root away
     /// consumes this name with it); `Unknown` → `Unknown`, own class.
-    fn binding_event_origin(&mut self, value: &Expr) -> (Origin, u64) {
+    fn binding_event_origin(&mut self, value: &Expr) -> BindingEvent {
         match self.provenance_of(value) {
-            Provenance::Fresh => (Origin::Owned, self.scope.new_class()),
+            Provenance::Fresh => BindingEvent {
+                origin: Origin::Owned,
+                alias_class: self.scope.new_class(),
+                joined: Vec::new(),
+            },
             Provenance::Whole(b) => match self.scope.lookup(&b) {
-                Some(entry) => (entry.origin.clone(), entry.alias_class),
+                Some(entry) => BindingEvent {
+                    origin: entry.origin.clone(),
+                    alias_class: entry.alias_class,
+                    joined: vec![decl_key(&entry.defined_at, &b)],
+                },
                 // An undefined name — already diagnosed by `resolve_ident`.
-                None => (Origin::Unknown, self.scope.new_class()),
+                None => BindingEvent {
+                    origin: Origin::Unknown,
+                    alias_class: self.scope.new_class(),
+                    joined: Vec::new(),
+                },
             },
             Provenance::Reaches(roots) => {
                 let reason = self.reaches_reason(value, &roots);
-                // Join the first root's class (the roots of one initializer denote one
-                // value's holders; `[a, b]` joins `a`'s — consuming either root consumes
-                // this name because both roots are consumed through the same sink rule).
-                let class = roots
+                // Join EVERY root's class: the roots of one initializer are all held by the
+                // value it builds (`{ first: a, second: c }` holds both), so giving or
+                // returning any one of them must reach this name, and this name must reach
+                // them. Joining only the first root left `c` free to be released while the
+                // returned literal still held it (spike S3 probe t7).
+                let root_entries: Vec<(u64, DeclKey)> = roots
                     .iter()
-                    .find_map(|r| self.scope.class_of(r))
-                    .unwrap_or_else(|| self.scope.new_class());
-                (Origin::Reaches(reason), class)
+                    .filter_map(|r| {
+                        self.scope
+                            .lookup(r)
+                            .map(|e| (e.alias_class, decl_key(&e.defined_at, r)))
+                    })
+                    .collect();
+                let alias_class = match root_entries.first() {
+                    Some((kept, _)) => {
+                        for (class, _) in &root_entries[1..] {
+                            self.scope.merge_classes(*kept, *class);
+                        }
+                        *kept
+                    }
+                    None => self.scope.new_class(),
+                };
+                BindingEvent {
+                    origin: Origin::Reaches(reason),
+                    alias_class,
+                    joined: root_entries.into_iter().map(|(_, key)| key).collect(),
+                }
             }
-            Provenance::Unknown => (Origin::Unknown, self.scope.new_class()),
+            // Untraceable: the live scope gives it a class of its own (never transferable),
+            // but the record must still assume the result may hold any named value the
+            // expression mentions (an imported call can hand back a piece of its argument).
+            Provenance::Unknown => BindingEvent {
+                origin: Origin::Unknown,
+                alias_class: self.scope.new_class(),
+                joined: self.mentioned_declarations(value),
+            },
         }
+    }
+
+    /// Every binding the expression names, as declarations. For the transfer record only.
+    fn mentioned_declarations(&self, expr: &Expr) -> Vec<DeclKey> {
+        let mut names: HashSet<String> = HashSet::new();
+        crate::independence::collect_ident_names(expr, &mut names);
+        let mut keys: Vec<DeclKey> = names
+            .iter()
+            .filter_map(|name| self.declaration_of(name))
+            .collect();
+        keys.sort();
+        keys
     }
 
     /// The `{reason}` slot of `TransferNeedsCopy` for a `Reaches` expression: who still
@@ -5617,7 +6152,7 @@ impl<'b> Checker<'b> {
                 match origin {
                     Origin::Owned | Origin::Param(Some(OwnershipModifier::Give)) => {
                         let cause = sink.cause(&name);
-                        self.scope.consume(&name, cause);
+                        self.consume_binding(&name, cause, &span);
                         true
                     }
                     Origin::Param(_) => unreachable!("non-give parameter handled above"),
@@ -5756,6 +6291,18 @@ impl<'b> Checker<'b> {
         // The pre-call snapshot: which alias classes were consumed before THIS call touched
         // anything. A later position whose class is consumed but absent here was consumed by
         // an earlier position of this same call — `check_transfer` reports that read.
+        // A callee may store one argument into another; whether it does is decided from its own
+        // record once every function is walked (`TransferRecorder::finish`).
+        let holders_per_position: Vec<Vec<DeclKey>> = normalized_args
+            .iter()
+            .map(|arg| {
+                self.heap_holders_of(arg)
+                    .into_iter()
+                    .map(|(_, declaration)| declaration)
+                    .collect()
+            })
+            .collect();
+        self.transfers.note_call(callee, holders_per_position);
         let consumed_before = self.scope.consumed_classes();
         for (i, arg) in normalized_args.iter().enumerate() {
             let declared = ownerships.get(i).and_then(|o| o.as_ref());
@@ -6049,7 +6596,7 @@ impl<'b> Checker<'b> {
                         "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
                     ));
                 }
-            } else if actual_ty != Type::Error && !types_compatible(expected_ty, &actual_ty) {
+            } else if actual_ty != Type::Error && !can_assign(expected_ty, &actual_ty) {
                 // Accept a concrete shape as a `dynamic Contract` argument when the
                 // shape's declaration includes `follows Contract`.
                 //
@@ -6066,7 +6613,14 @@ impl<'b> Checker<'b> {
                     _ => false,
                 };
 
-                if !is_valid_dyn_coerce {
+                if !is_valid_dyn_coerce && is_union_into_its_variant(expected_ty, &actual_ty) {
+                    self.diags.push(union_where_variant_expected_diag(
+                        arg,
+                        &actual_ty,
+                        expected_ty,
+                        &format!("`{name}` expects a `{}` here", type_name(expected_ty)),
+                    ));
+                } else if !is_valid_dyn_coerce {
                     self.diags.push(Diagnostic::error(
                         arg.span().clone(),
                         format!(
@@ -6332,6 +6886,62 @@ impl<'b> Checker<'b> {
             let resolved = apply_substitution(param_ty, &subst);
             self.reject_int_literal_number_arg(name, &resolved, arg);
         }
+        // A union where the resolved parameter expects one of its variants (`pick(5, thing)`
+        // with `b: Big`, `same(big, thing)` with `T = Big`, `useBig<int>(thing, 3)`): the
+        // `unify_param` mismatch above is discarded, so without this the callee reads the
+        // 16-byte tagged envelope as the variant (C1b, #409). Same teaching diagnostic as the
+        // plain and UFCS call forms.
+        //
+        // And a plain variant into a parameter whose type is a type parameter bound to a union
+        // (`same(thing, big)`, `T = Tiny | Big`): codegen wraps a plain shape into an envelope
+        // only where the DECLARED parameter type is a union, never through a substituted `T`,
+        // so the callee would read the bare shape as `{tag, data}` (C1c, #410). Refused until
+        // the one coercion point (#421) covers substituted parameters.
+        for (index, (arg, (_, param_ty))) in
+            call.args.iter().zip(non_self_params.iter()).enumerate()
+        {
+            let actual_ty = arg_types[index].clone();
+            if actual_ty == Type::Error {
+                continue;
+            }
+            let resolved = apply_substitution(param_ty, &subst);
+            if is_union_into_its_variant(&resolved, &actual_ty) {
+                self.diags.push(union_where_variant_expected_diag(
+                    arg,
+                    &actual_ty,
+                    &resolved,
+                    &format!("`{name}` expects a `{}` here", type_name(&resolved)),
+                ));
+            } else if matches!(param_ty, Type::TypeParam { .. })
+                && is_envelope_union(&resolved)
+                && !matches!(actual_ty, Type::Union { .. })
+                && can_assign(&resolved, &actual_ty)
+            {
+                let type_param = type_name(param_ty);
+                let union_name = type_name(&resolved);
+                self.diags.push(Diagnostic::error(
+                    arg.span().clone(),
+                    format!(
+                        "`{}` is a `{}`, but `{name}` takes it as `{type_param}`, which this call \
+                         makes a `{union_name}`.",
+                        expr_source_text(arg),
+                        type_name(&actual_ty),
+                    ),
+                    format!(
+                        "Put it in a `{union_name}` first, then pass that: \
+                         `let asUnion: {union_name} = {}`.",
+                        expr_source_text(arg),
+                    ),
+                    format!(
+                        "A `{union_name}` is a box with a tag saying which variant is inside. \
+                         A generic parameter does not build that box for a plain `{}` yet, so \
+                         `{name}` would read the plain value's bytes as the box and get the \
+                         wrong variant.",
+                        type_name(&actual_ty),
+                    ),
+                ));
+            }
+        }
 
         // Verify all type params were resolved — emit one consolidated error if multiple are missing.
         let unresolved: Vec<&String> = sig
@@ -6483,6 +7093,16 @@ impl<'b> Checker<'b> {
         for (pos, slot_ty) in collection_method_arg_slots(receiver_ty, method) {
             if let Some(arg) = args.get(pos) {
                 self.reject_int_literal_number_arg(method, &slot_ty, arg);
+            }
+        }
+
+        // A heap value stored by an in-place collection method (`add`, `set`) joins the
+        // receiver's alias class — the same edge as a field or index store.
+        if let Some(receiver) = receiver_expr {
+            for position in collection_store_positions(receiver_ty, method) {
+                if let Some(stored) = args.get(*position) {
+                    self.record_store(receiver, stored);
+                }
             }
         }
 
@@ -6682,6 +7302,33 @@ impl<'b> Checker<'b> {
                         // Receiver is the first param; args map to params[1..].
                         for (arg, (_, expected_ty)) in args.iter().zip(sig.params.iter().skip(1)) {
                             self.reject_int_literal_number_arg(method, expected_ty, arg);
+                        }
+                        // A union value into a non-receiver parameter that expects one of
+                        // its variants (`a.useBig(thing)`): the UFCS arm checks no other
+                        // argument types, so without this the callee reads the 16-byte
+                        // tagged envelope as a `Big` (the C1b hole through the dot-call
+                        // form). Same teaching diagnostic as the plain call form. The
+                        // arguments were inferred upstream; their types are in `expr_types`.
+                        for (arg, (_, expected_ty)) in args.iter().zip(sig.params.iter().skip(1)) {
+                            let argument_span = arg.span();
+                            let Some(actual_ty) = self
+                                .expr_types
+                                .get(&(argument_span.start, argument_span.end))
+                                .cloned()
+                            else {
+                                continue;
+                            };
+                            if is_union_into_its_variant(expected_ty, &actual_ty) {
+                                self.diags.push(union_where_variant_expected_diag(
+                                    arg,
+                                    &actual_ty,
+                                    expected_ty,
+                                    &format!(
+                                        "`{method}` expects a `{}` here",
+                                        type_name(expected_ty)
+                                    ),
+                                ));
+                            }
                         }
                         // Kernel-mode rejection for UFCS suspending method calls. The
                         // bare call-dispatch arm guards `Expr::Call name =>` at the call site;
@@ -8138,7 +8785,22 @@ impl<'b> Checker<'b> {
                     }
                     if actual != Type::Error
                         && expected != Type::Error
-                        && !types_compatible(&actual, &expected)
+                        && !can_assign(&expected, &actual)
+                        && is_union_into_its_variant(&expected, &actual)
+                    {
+                        self.diags.push(union_where_variant_expected_diag(
+                            &lit_field.value,
+                            &actual,
+                            &expected,
+                            &format!(
+                                "`{shape_name}.{}` is declared as a `{}`",
+                                lit_field.name,
+                                type_name(&expected)
+                            ),
+                        ));
+                    } else if actual != Type::Error
+                        && expected != Type::Error
+                        && !can_assign(&expected, &actual)
                     {
                         self.diags.push(Diagnostic::error(
                             lit_field.name_span.clone(),
@@ -8294,6 +8956,7 @@ impl<'b> Checker<'b> {
         // Resolve the field and check the value type.
         let field_ty = self.infer_field_access(receiver, field, field_span);
         let value_ty = self.infer_expr(value, Some(&field_ty));
+        self.record_store(receiver, value);
 
         // Int literal assigned to a `number`-typed field — the hinted infer
         // silently types it `number` and ICEs at codegen (Future-Req #14).
@@ -8468,6 +9131,18 @@ impl<'b> Checker<'b> {
 
     /// Type-check an index assignment `receiver[index] = value`.
     fn check_index_assign(
+        &mut self,
+        receiver: &Expr,
+        index: &Expr,
+        value: &Expr,
+        span: &SourceSpan,
+    ) {
+        self.check_index_assign_types(receiver, index, value, span);
+        // The value is inferred by now on every path, so its provenance is answerable.
+        self.record_store(receiver, value);
+    }
+
+    fn check_index_assign_types(
         &mut self,
         receiver: &Expr,
         index: &Expr,
@@ -8979,49 +9654,100 @@ pub(crate) fn collect_union_aliases(
     aliases
 }
 
-/// Check whether two types are compatible for assignment.
+/// Can a value of type `source` be assigned to a slot of type `target`?
 ///
-/// This is mostly structural equality, with one exception: `BuiltinFixed` ignores the
-/// `size` field so that `let f: fixed<int> = [1, 2, 3]` does not fail (annotation has
-/// `size: None`; the literal infers `size: Some(3)`).
-fn types_compatible(a: &Type, b: &Type) -> bool {
-    match (a, b) {
-        (Type::BuiltinFixed { elem: ea, .. }, Type::BuiltinFixed { elem: eb, .. }) => {
-            types_compatible(ea, eb)
+/// The check is **directional**: `target` is what the slot (annotation, parameter, return
+/// type, field) declares, `source` is what the value is. Argument order is the assignment
+/// order, `target` first, and swapping them changes the answer.
+///
+/// This is mostly structural equality, with these exceptions:
+/// - `BuiltinFixed` ignores the `size` field so that `let f: fixed<int> = [1, 2, 3]` does not
+///   fail (annotation has `size: None`; the literal infers `size: Some(3)`).
+/// - A concrete variant widens into a union that lists it (`Big` into `Tiny | Big`,
+///   `map<string,string>` into `map<string,string> | nothing`). The reverse never holds: a
+///   union is a tagged envelope, and a slot that expects one variant reads the envelope's
+///   bytes as that variant — wrong data, or memory past the 16-byte envelope. Narrow it with
+///   an `is Variant` arm first.
+/// - Any `number<A>` is assignable to any `number<B>` (the narrowing warning is emitted in
+///   `check_let_stmt`).
+/// - Element and payload types of containers (`array`, `fixed`, `maybe`, `errors`, union
+///   variants) must agree in BOTH directions: a container of variants and a container of
+///   unions have different memory layouts, so neither converts to the other.
+///
+/// O(size of the types) time and space.
+fn can_assign(target: &Type, source: &Type) -> bool {
+    match (target, source) {
+        (
+            Type::BuiltinFixed {
+                elem: target_elem, ..
+            },
+            Type::BuiltinFixed {
+                elem: source_elem, ..
+            },
+        )
+        | (Type::BuiltinArray { elem: target_elem }, Type::BuiltinArray { elem: source_elem })
+        | (Type::Maybe { inner: target_elem }, Type::Maybe { inner: source_elem })
+        | (
+            Type::ErrorsCapable { inner: target_elem },
+            Type::ErrorsCapable { inner: source_elem },
+        ) => same_layout(target_elem, source_elem),
+        // M6: a union is assignable to a union with the same variants in the same order.
+        (
+            Type::Union {
+                variants: target_variants,
+            },
+            Type::Union {
+                variants: source_variants,
+            },
+        ) => {
+            target_variants.len() == source_variants.len()
+                && target_variants.iter().zip(source_variants.iter()).all(
+                    |(target_variant, source_variant)| same_layout(target_variant, source_variant),
+                )
         }
-        (Type::BuiltinArray { elem: ea }, Type::BuiltinArray { elem: eb }) => {
-            types_compatible(ea, eb)
-        }
-        (Type::Maybe { inner: ia }, Type::Maybe { inner: ib }) => types_compatible(ia, ib),
-        // M6: union type compatibility — same set of variants (order-insensitive for now).
-        (Type::Union { variants: va }, Type::Union { variants: vb }) => {
-            va.len() == vb.len()
-                && va
-                    .iter()
-                    .zip(vb.iter())
-                    .all(|(a, b)| types_compatible(a, b))
-        }
-        // M6: assigning a concrete variant type to a union is valid.
-        // e.g., `let s: Circle | Square = { radius: 5.0 }` — Circle is a valid union value.
-        (Type::Union { variants }, concrete) => {
-            variants.iter().any(|v| types_compatible(v, concrete))
-        }
-        // Symmetric: a concrete type is compatible with a union if it matches any variant.
-        // e.g., map<string,string> is valid for map<string,string> | nothing.
-        (concrete, Type::Union { variants }) => {
-            variants.iter().any(|v| types_compatible(concrete, v))
-        }
-        // M7 P3a: ErrorsCapable is compatible with itself when inner types match.
-        (Type::ErrorsCapable { inner: ia }, Type::ErrorsCapable { inner: ib }) => {
-            types_compatible(ia, ib)
-        }
+        // A concrete variant widens into a union that lists it, e.g. `let s: Circle | Square =
+        // { radius: 5.0 }` or `map<string,string>` for `map<string,string> | nothing`.
+        (Type::Union { variants }, concrete_source) => variants
+            .iter()
+            .any(|variant| can_assign(variant, concrete_source)),
         // M8 P6: mixed-precision number compatibility.
         // Any number<A> is compatible with any number<B> — widening always succeeds;
         // narrowing (A > B) will emit a warning at the call site. Here we just
         // allow the assignment so the program can type-check. The narrowing warning
         // is emitted in check_let_stmt when we detect precision shrinkage.
         (Type::Number { .. }, Type::Number { .. }) => true,
-        _ => a == b,
+        // A union source into a non-union target (a variant slot) falls through to here and
+        // is refused: `Type::Union != <anything that is not a union>`.
+        _ => target == source,
+    }
+}
+
+/// Do two element or payload types have the same memory layout, so a container of one is a
+/// container of the other? True when each is assignable to the other.
+fn same_layout(first: &Type, second: &Type) -> bool {
+    can_assign(first, second) && can_assign(second, first)
+}
+
+/// A union with a shape variant (`Tiny | Big`, `Circle | nothing`) is a pointer to a tagged
+/// `{tag, data}` envelope. Any other union (`map<..> | nothing`) is the variant's raw pointer,
+/// null for `nothing`, and has no envelope to build.
+fn is_envelope_union(candidate: &Type) -> bool {
+    match candidate {
+        Type::Union { variants } => variants
+            .iter()
+            .any(|variant| matches!(variant, Type::Shape { .. })),
+        _ => false,
+    }
+}
+
+/// `source` is a union that lists `target` as one of its variants, and `target` is not itself a
+/// union: the shape of the bug where a tagged envelope reaches a slot that expects the bare
+/// variant. Used to pick the teaching diagnostic over the generic type mismatch.
+fn is_union_into_its_variant(target: &Type, source: &Type) -> bool {
+    match (target, source) {
+        (Type::Union { .. }, _) => false,
+        (_, Type::Union { variants }) => variants.iter().any(|variant| can_assign(target, variant)),
+        _ => false,
     }
 }
 
@@ -13648,7 +14374,7 @@ enum NumberSlotRole<'a> {
     StoreBinding { name: &'a str },
 }
 
-fn simple_ident_name(expr: &Expr) -> Option<&str> {
+pub fn simple_ident_name(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Ident(name, _) => Some(name.as_str()),
         Expr::SelfValue { .. } => Some("self"),

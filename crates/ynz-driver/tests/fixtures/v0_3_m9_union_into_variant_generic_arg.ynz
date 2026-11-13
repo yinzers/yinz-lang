@@ -1,0 +1,37 @@
+// v0.3-M9 C1b (security): a union value passed to a GENERIC function where ONE VARIANT is
+// expected: a concrete `Big` parameter (`pick`), a type parameter bound to `Big` by a sibling
+// argument (`same(big, thing)`), and an explicit type argument (`useBig<int>`).
+// Correct behavior: does not compile — `UnionWhereVariantExpected` at every call.
+// Pre-fix failure: compiled (the generic call discarded the argument/parameter mismatch), and
+// the callee read the 16-byte union envelope as a `Big` — SIGSEGV.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function pick<T>(share first: T, share b: Big) -> int {
+  return b.count
+}
+
+function same<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function useBig<T>(share b: Big, share extra: T) -> string {
+  return b.label
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let thing: Thing = tiny
+  print(pick(5, thing).toString())
+  let out = same(big, thing)
+  print(out.label)
+  print(useBig<int>(thing, 3))
+}

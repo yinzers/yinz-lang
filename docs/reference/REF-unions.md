@@ -104,6 +104,32 @@ function getAccess(share user: AnyUser) -> string {
 
 ---
 
+## A union is not one of its variants
+
+A `Circle` can go where a `Shape` is expected. A `Shape` cannot go where a `Circle` is expected: it might hold a `Square`, so the compiler refuses it until an `is` arm has checked.
+
+```
+function describeCircle(share circle: Circle) -> string {
+  return `a circle`
+}
+
+function describe(share figure: Shape) -> string {
+  return describeCircle(figure)
+}
+
+// COMPILE ERROR: `figure` is a `Circle | Square | Triangle` — it might hold any one of those — but `describeCircle` expects a `Circle` here.
+// Check which variant it holds first, then use it inside that arm: if (figure) { is Circle => { … } }
+```
+
+Inside `is Circle =>`, `figure` is a `Circle`, so `describeCircle(figure)` compiles there. This applies everywhere a value must have one exact type: arguments, `return`, annotated `let`, and shape fields.
+
+The suggestion changes with what can be checked. An `is` arm checks a name and names a shape variant, so:
+
+- A value that is not a name (`holder.inner`, `pick()`): the error asks you to bind it first, `let checked = holder.inner`, then check `checked`.
+- A variant that is not a shape (`int`, `string`), or a union with no shape variant (`map<string, string> | nothing`): no `is` arm can name the variant, so the error suggests making the receiving function accept the union, or keeping the value as the variant from where it is created.
+
+---
+
 ## Exhaustiveness — all variants must be handled
 
 When using multi-case `if` on a union, you must cover every variant — or include `else =>`:
@@ -125,6 +151,8 @@ Missing a variant is a compile error. The compiler names which ones are missing:
 // Missing variant: Triangle
 // Add: is Triangle => ...  or add: else => ...
 ```
+
+A variant that is not a shape (`int`, `string`, …) counts too: `is` arms name shape variants only, so for `Circle | int` the missing `int` is handled with `else =>`. `nothing` is the one exemption: in `T | nothing` a match with only the arms for `T` is complete, because no arm can name `nothing` and skipping the absent case drops no data.
 
 ---
 

@@ -242,6 +242,8 @@ fn check_query_cycle_initial(
             background_arg_inferred_ownership: std::collections::HashMap::new(),
             background_arg_sole_holder: std::collections::HashMap::new(),
             cross_thread_padded_shapes: std::collections::HashSet::new(),
+            binding_names: crate::binding_names::BindingNames::default(),
+            transfers: Default::default(),
         },
         mono_table: crate::generics::MonomorphizationTable {
             entries: std::collections::BTreeMap::new(),

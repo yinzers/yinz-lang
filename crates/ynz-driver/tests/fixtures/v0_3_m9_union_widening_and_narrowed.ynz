@@ -1,0 +1,83 @@
+// v0.3-M9 C1b: the directional check must keep every legal flow.
+//   - a plain value widens into a union slot: `map<string,string>` into
+//     `map<string,string> | nothing`, and `let thing: Thing = big` widens a `Big` into a union;
+//   - a plain `map<string,string>` for a type parameter that a sibling argument binds to
+//     `map<string,string> | nothing`: that union is the raw map pointer, no envelope to build;
+//   - inside an `is Big` arm the narrowed `thing` is a `Big`, so `showBig(thing)` is accepted,
+//     and so is the same `thing` as a `Big` argument of a dot call, of a generic call with a
+//     concrete `Big` parameter, and of a generic call whose `T` the sibling `big` binds to `Big`;
+//   - a union for a type parameter that a sibling union argument binds to the same union
+//     (`same(thing, other)`, T = `Tiny | Big`) is accepted.
+// Correct behavior: compiles and prints `hello` x5, `tiny`, `ok` x2, `end`.
+// Pre-fix failure of the narrowed calls: none (they compiled) — this pins that the fix does not
+// reject them.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function showBig(share b: Big) -> string {
+  return b.label
+}
+
+function useBig(share first: Big, share second: Big) -> string {
+  return second.label
+}
+
+function pick<T>(share first: T, share b: Big) -> string {
+  return b.label
+}
+
+function same<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function fallback<T>(share first: T, share second: T) -> T {
+  return second
+}
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big`
+    }
+  }
+  return `none`
+}
+
+function describeTable(share table: map<string, string> | nothing) -> string {
+  return `ok`
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let thing: Thing = big
+  let other: Thing = tiny
+  if (thing) {
+    is Big => {
+      print(showBig(thing))
+      print(big.useBig(thing))
+      print(pick(5, thing))
+      print(same(big, thing).label)
+    }
+    is Tiny => {
+      print(`no`)
+    }
+  }
+  print(showBig(big))
+  print(describe(same(thing, other)))
+  let table: map<string, string> = { `a`: `b` }
+  print(describeTable(table))
+  let maybeTable: map<string, string> | nothing = table
+  print(describeTable(fallback(maybeTable, table)))
+  print(`end`)
+}

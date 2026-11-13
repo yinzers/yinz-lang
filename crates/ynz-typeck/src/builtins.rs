@@ -267,3 +267,17 @@ pub fn collection_method_arg_slots(receiver: &Type, method: &str) -> Vec<(usize,
         _ => Vec::new(),
     }
 }
+
+/// THE table of built-in collection methods that STORE an argument into the receiver, and which
+/// argument positions they store: `add(v)`, `set(i, v)`, `map.set(k, v)`. A heap value stored
+/// this way is held by the receiver from then on, so the transfer record joins the two
+/// (`transfer_record` module docs). Read-only methods (`contains`, `get`, `remove`) are absent.
+/// A method that stores gains an entry here, never a per-site check.
+pub fn collection_store_positions(receiver: &Type, method: &str) -> &'static [usize] {
+    match (receiver, method) {
+        (Type::BuiltinArray { .. }, "add") => &[0],
+        (Type::BuiltinArray { .. }, "set") | (Type::BuiltinFixed { .. }, "set") => &[1],
+        (Type::BuiltinMap { .. }, "set") => &[0, 1],
+        _ => &[],
+    }
+}

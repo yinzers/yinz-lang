@@ -1,0 +1,37 @@
+// v0.3-M9 C1: `let inner: Circle = fig` inside `is Circle =>` copies the variant PAYLOAD.
+// Fields are `number` (a plain `float` prints `0.000...` — separate pre-existing bug).
+// Correct behavior: prints `round`, `5.0`, `78.5`, `t`, exit 0, and runs clean under
+// AddressSanitizer.
+// Pre-fix failure (ASan: dynamic-stack-buffer-overflow, READ of size 32 in memcpy): the
+// binding copy memcpy'd sizeof(Circle) (> 16) bytes out of the 16-byte union envelope, and the
+// string field read then dereferenced garbage bits (printed unprintable bytes).
+
+shape Circle {
+  radius: number
+  label: string
+  area: number
+  tag: string
+}
+
+shape Square {
+  side: number
+}
+
+shape Figure = Circle | Square
+
+function entrypoint() -> nothing {
+  let c: Circle = { radius: 5.0, label: `round`, area: 78.5, tag: `t` }
+  let fig: Figure = c
+  if (fig) {
+    is Circle => {
+      let inner: Circle = fig
+      print(inner.label)
+      print(inner.radius)
+      print(inner.area)
+      print(inner.tag)
+    }
+    is Square => {
+      print(fig.side)
+    }
+  }
+}

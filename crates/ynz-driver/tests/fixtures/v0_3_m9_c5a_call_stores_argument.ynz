@@ -1,0 +1,21 @@
+// v0.3-M9 C5a: `put(o, a)` stores `a` into `o` INSIDE the callee (`o.add(a)`), so nothing at the
+// call site looks like a transfer. `make` then returns `o`; a release pass that frees `a` at
+// `make`'s scope exit leaves the caller reading a freed row. GREEN today; guards C7.
+// Expected output: `3`.
+function put(lend o: array<array<int>>, a: array<int>) -> nothing {
+  o.add(a)
+}
+
+function make() -> array<array<int>> {
+  let a: array<int> = [1, 2, 3]
+  let o: array<array<int>> = []
+  put(o, a)
+  return o
+}
+
+function entrypoint() -> nothing {
+  let o: array<array<int>> = make()
+  for (inner in o) {
+    print(inner.count().toString())
+  }
+}

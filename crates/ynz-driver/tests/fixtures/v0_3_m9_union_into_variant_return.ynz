@@ -1,0 +1,24 @@
+// v0.3-M9 C1b (security): a union value RETURNED where a variant return type is declared.
+// Correct behavior: does not compile — `UnionWhereVariantExpected` names `t`, its type
+// `Tiny | Big`, the declared return `Big`, and suggests an `is Big` arm.
+// Pre-fix failure: compiled; the caller read the returned union envelope as a `Big`.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function asBig(share t: Thing) -> Big {
+  return t
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let thing: Thing = big
+  let back = asBig(thing)
+  print(back.label)
+}

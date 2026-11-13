@@ -1,0 +1,48 @@
+// v0.3-M9 C2 safety fixture — exit class: EARLY RETURN.
+// A `return` in the middle of a function releases EVERY binding still open at that point (the
+// function's, the loop's, the block's) exactly once, after the return value is computed, and
+// the fall-through path does the same later. `early` returns from a nested loop+if,
+// `earlySuspending` is the state-machine lowering.
+// Correct behavior: exact output below, exit 0, AddressSanitizer-clean.
+// Guards against: a return edge that releases only the innermost frame (leak), releases the
+// outer frames twice (return edge + the scope ends it skips), or reads a released local while
+// evaluating the return expression (`per.count() + anchor.count()` is computed first).
+//
+// Expected output (one per line): 5, 3, 5, 3
+
+function early(stopAt: int) -> int {
+  let anchor: array<int> = [1, 2, 3]
+  let i: int = 0
+  while (i < 3) {
+    let per: array<int> = [i, i]
+    if (i == stopAt) {
+      let marker: array<int> = [7]
+      return per.count() + anchor.count() + marker.count() - 1
+    }
+    i = i + 1
+  }
+  return anchor.count()
+}
+
+function earlySuspending(stopAt: int) -> int {
+  let anchor: array<int> = [1, 2, 3]
+  let i: int = 0
+  while (i < 3) {
+    let per: array<int> = [i, i]
+    wait sleep(1)
+    if (i == stopAt) {
+      return per.count() + anchor.count()
+    }
+    i = i + 1
+  }
+  return anchor.count()
+}
+
+function entrypoint() -> nothing {
+  print(early(1).toString())
+  print(early(9).toString())
+  let hit: int = earlySuspending(2)
+  print(hit.toString())
+  let miss: int = earlySuspending(9)
+  print(miss.toString())
+}

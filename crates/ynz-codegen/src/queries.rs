@@ -88,6 +88,16 @@ pub fn frame_layouts_query(
         // Codegen is skipped on type errors — no meaningful layouts to compute.
         return Arc::new(HashMap::new());
     }
+    // Codegen reads the module with per-binding unique names (`TypedModule::binding_names`). A
+    // hole in that record is a compiler bug that `codegen_query` of THIS file reports as an
+    // error diagnostic (it applies the same map) and answers with no artifact; this query has no
+    // error channel, so it gives the same "codegen is skipped" empty answer as the type-error
+    // branch above. An importer sizing a frame against this file therefore sees no layout for
+    // it, so its own artifact is wrong, but the build still fails: it runs `codegen_query` on
+    // every source file and fails on any error diagnostic (`ynz-driver` build.rs).
+    let Ok(codegen_typed) = check.typed_module.with_codegen_names() else {
+        return Arc::new(HashMap::new());
+    };
     let sig_output = module_signatures_query(db, source);
     let source_path = source.path(db);
 
@@ -118,7 +128,7 @@ pub fn frame_layouts_query(
         build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
     let promotion = cpu_promotion_query(db, source);
     let spike_hosts = spike_host_subset(
-        &check.typed_module,
+        &codegen_typed,
         &base_suspend_set,
         &base_suspend_set,
         &promotion.promoted,
@@ -262,7 +272,7 @@ pub fn frame_layouts_query(
     };
 
     let mut layouts = build_frame_layouts_with_resolver(
-        &check.typed_module,
+        &codegen_typed,
         &effective_suspend_set,
         &base_suspend_set,
         &shape_abi_sizes,
@@ -334,6 +344,25 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         diagnostics.push(lint);
     }
 
+    let codegen_typed = match check.typed_module.with_codegen_names() {
+        Ok(typed) => typed,
+        Err(msg) => {
+            diagnostics.push(Diagnostic::file_error(
+                source.path(db).as_str(),
+                format!("The compiler failed to produce machine code: {msg}"),
+                "This is a compiler bug. Please report it with the source file attached.",
+                "Your program passed every check, but the compiler could not tell which variable one of its names refers to. It stopped instead of guessing, because a wrong guess would build a program that gives wrong answers.",
+            ));
+            return Arc::new(CodegenOutput {
+                artifact: CompiledArtifact {
+                    object_bytes: Vec::new(),
+                    ir_text: String::new(),
+                    sha256: [0u8; 32],
+                },
+                diagnostics,
+            });
+        }
+    };
     let sig_output = module_signatures_query(db, source);
     let source_path = source.path(db);
     // Pre-compute LLVM-accurate frame layouts via the salsa query so both the emitter
@@ -373,7 +402,7 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
     let promotion = cpu_promotion_query(db, source);
     let spike_hosts = spike_host_subset(
-        &check.typed_module,
+        &codegen_typed,
         &base_suspend_set,
         &base_suspend_set,
         &promotion.promoted,
@@ -410,7 +439,7 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
 
     match emit_artifact(
         source_path.as_str(),
-        &check.typed_module,
+        &codegen_typed,
         &sig_output.shape_table,
         &sig_output.sig_table,
         &sig_output.generic_fn_table,

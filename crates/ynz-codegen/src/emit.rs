@@ -27,7 +27,8 @@ use inkwell::{
     AddressSpace, IntPredicate,
 };
 use ynz_ast::nodes::{
-    BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt, UnaryOpKind,
+    BinOpKind, Block, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt,
+    StringPart, UnaryOpKind,
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
@@ -994,8 +995,8 @@ pub fn emit_artifact(
 }
 
 struct ModuleGlobals<'ctx> {
-    str_true: GlobalValue<'ctx>,
-    str_false: GlobalValue<'ctx>,
+    str_true: StaticString<'ctx>,
+    str_false: StaticString<'ctx>,
     dec_zero: GlobalValue<'ctx>,
     panic_int_add: GlobalValue<'ctx>,
     panic_int_sub: GlobalValue<'ctx>,
@@ -1093,19 +1094,24 @@ fn build_module<'ctx, 'g>(
         str_true: build_string_global(ctx, module, "true", ".str.true"),
         str_false: build_string_global(ctx, module, "false", ".str.false"),
         dec_zero: build_decimal_global(ctx, module, zero_bits, ".dec.zero"),
-        panic_int_add: build_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
-        panic_int_sub: build_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
-        panic_int_mul: build_string_global(ctx, module, "int overflow in '*'", ".panic.imul"),
-        panic_int_div: build_string_global(ctx, module, "division by zero (int)", ".panic.idiv"),
-        panic_int_rem: build_string_global(ctx, module, "remainder by zero (int)", ".panic.irem"),
-        panic_dec_div: build_string_global(ctx, module, "division by zero (number)", ".panic.ddiv"),
-        panic_dec_rem: build_string_global(
+        panic_int_add: build_c_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
+        panic_int_sub: build_c_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
+        panic_int_mul: build_c_string_global(ctx, module, "int overflow in '*'", ".panic.imul"),
+        panic_int_div: build_c_string_global(ctx, module, "division by zero (int)", ".panic.idiv"),
+        panic_int_rem: build_c_string_global(ctx, module, "remainder by zero (int)", ".panic.irem"),
+        panic_dec_div: build_c_string_global(
+            ctx,
+            module,
+            "division by zero (number)",
+            ".panic.ddiv",
+        ),
+        panic_dec_rem: build_c_string_global(
             ctx,
             module,
             "remainder by zero (number)",
             ".panic.drem",
         ),
-        source_file: build_string_global(ctx, module, source_path, ".source.file"),
+        source_file: build_c_string_global(ctx, module, source_path, ".source.file"),
     };
 
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
@@ -1582,6 +1588,7 @@ fn lower_generic_function<'ctx>(
         sm_crossing_shape_names: HashMap::new(),
         sm_crossing_shape_allocas: HashMap::new(),
         sm_scope_depth: 0,
+        narrowed_unions: Vec::new(),
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
         // Generic functions cannot contain `wait` — auto-parallel is never applicable.
@@ -1878,6 +1885,36 @@ struct SoaArrayInfo<'ctx> {
     segments: Vec<SoaSegment<'ctx>>,
 }
 
+/// Where the envelope built for a plain shape lives (`Cg::coerce_into_union_slot`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EnvelopeHome {
+    /// The caller's frame: a callee that only borrows the argument.
+    Frame,
+    /// Counted heap cells for a plain shape that must outlive this frame: an argument staged
+    /// into a suspending callee's frame. Union-typed values pass through (their binding already
+    /// homed them).
+    Heap,
+    /// A `return`: like `Heap`, and a union-typed value the callee built itself is promoted to
+    /// heap cells too (its envelope is a slot in the frame that is about to die).
+    Return,
+}
+
+/// One union `is`-arm narrowing in force (see `Cg::narrowed_unions`).
+struct NarrowedUnion<'ctx> {
+    /// The scrutinee binding's codegen name.
+    name: String,
+    /// The scrutinee expression, re-lowered against `outer_slot` to re-derive the envelope.
+    scrutinee: Expr,
+    /// The binding's slot outside the arm: holds the union envelope.
+    outer_slot: PointerValue<'ctx>,
+    /// The arm's slot: holds the variant payload pointer; `cg.locals[name]` inside the arm.
+    narrowed_slot: PointerValue<'ctx>,
+    /// Spans of the arm's uses of `name` that flow into a UNION-typed slot (a union
+    /// parameter, a union return): those take the envelope, never the payload pointer
+    /// (`union_slot_uses_in_block`).
+    envelope_uses: HashSet<(usize, usize)>,
+}
+
 struct Cg<'ctx, 'g> {
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
@@ -1906,8 +1943,9 @@ struct Cg<'ctx, 'g> {
     // v0.3-M5 P5: the admitted-SoA bindings live in THIS function (fresh empty per
     // Cg; keyed by binding name). Registered at the `Stmt::Let` construction
     // interception; consulted by `soa_expr_info` at every choke-point call site.
-    // For-in loop vars mask an entry for the body's duration (the only shadow case:
-    // admission's shadow-decline covers every same-name `let`).
+    // The key is the binding's unique codegen name (`TypedModule::binding_names`), so a
+    // for-in loop var or a same-name `let` that reuses the user's name is a different key and
+    // never reads or hides this entry.
     soa_bindings: HashMap<String, SoaArrayInfo<'ctx>>,
     // v0.3-M5 P4: THE one authoritative layout source (typeck's
     // `layout_decisions_query` — E3 B1). Every layout read in lowering goes
@@ -2030,10 +2068,17 @@ struct Cg<'ctx, 'g> {
     sm_crossing_shape_allocas: HashMap<String, PointerValue<'ctx>>,
     // Nesting depth inside if/while/for/match bodies in a SM resume function.
     // Used for the snapshot/restore protocol that prevents non-crossing locals introduced
-    // inside a nested scope from leaking into cg.locals after the scope exits. Shadow
-    // bindings (a `let x` where outer `x` crosses a wait) are rejected at typeck
-    // (ShadowsCrossingLocal), so at codegen time depth > 0 never signals a shadow.
+    // inside a nested scope from leaking into cg.locals after the scope exits. Every binding
+    // has its own codegen name (`TypedModule::binding_names`), so a nested `let x` never
+    // shares a name, or a frame slot, with an outer `x` that crosses a wait: depth > 0 never
+    // signals a shadow. (Typeck's ShadowsCrossingLocal still rejects that source shape.)
     sm_scope_depth: usize,
+    // Union `is`-arm narrowings in force at the current lowering point, innermost last
+    // (`narrow_union_local_to_variant` pushes, `restore_narrowed_local` pops). A state-machine
+    // resume reloads bindings from the frame AFTER the arm entry that narrowed them, so
+    // `reload_params_from_frame` reads this to write the reloaded envelope to the OUTER slot
+    // and re-derive the payload pointer (`renarrow_union_locals`).
+    narrowed_unions: Vec<NarrowedUnion<'ctx>>,
     // Counter tracking how many suspending for-loops have been emitted in this SM function.
     // Generates the matching synthetic crossing-local name `__ynz_for_idx_N` that
     // typeck pre-allocates a frame slot for. Must increment in the same order as
@@ -3586,6 +3631,392 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// Read the `data` word (field 1) of a non-null union envelope `{i64 tag, i64 data}`.
+    /// For a shape variant these are the `ptr_to_int` bits of the payload's storage
+    /// (union-ctor Let arm); for any other variant they are the value's own i64 bits.
+    ///
+    /// The ONE place the envelope's `data` field is read: `union_payload_ptr` (variant
+    /// narrowing) and `union_to_heap_cell` (binding promotion) both go through it, so
+    /// the layout lives in one derivation (authoritative-derivation).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn union_data_bits(
+        &self,
+        envelope: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let union_st = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let data_gep = self
+            .builder
+            .build_struct_gep(union_st, envelope, 1, &format!("{site}_src_data"))
+            .map_err(|err| format!("union data gep {site}: {err}"))?;
+        Ok(self
+            .builder
+            .build_load(self.i64(), data_gep, &format!("{site}_data"))
+            .map_err(|err| format!("union data load {site}: {err}"))?
+            .into_int_value())
+    }
+
+    /// Envelope → payload pointer: the pointer to a SHAPE variant's own storage, read
+    /// out of a non-null union envelope. The ONE routine both consumers call:
+    /// `union_to_heap_cell` (deep-copies the payload into a counted cell) and the
+    /// `is`-arm narrowing (`narrow_union_local_to_variant`, re-points the narrowed
+    /// binding at the payload so shape field reads and `let inner: Variant = fig`
+    /// copies see the variant, not the 16-byte envelope).
+    ///
+    /// Valid only after a tag check selected a shape variant — the caller owns that
+    /// check (the `is` arm's tag compare / the heap-cell tag switch).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn union_payload_ptr(
+        &self,
+        envelope: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let bits = self.union_data_bits(envelope, site)?;
+        self.builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_payload_ptr"))
+            .map_err(|err| format!("union payload int_to_ptr {site}: {err}"))
+    }
+
+    /// Inside an `is Variant =>` arm, typeck types the scrutinee binding as the variant
+    /// shape (`union_narrowed` overlay, `simple_ident_name` predicate). Codegen mirrors
+    /// that: re-point the binding's local slot at a fresh slot holding the variant's
+    /// PAYLOAD pointer (`union_payload_ptr`), so every shape-typed read of the name in
+    /// the arm resolves through the ordinary shape-local path. Without it the arm reads
+    /// the `{tag, data}` envelope as if it were the shape (field reads return the tag;
+    /// `let inner: Variant = fig` memcpys `sizeof(Variant)` bytes out of 16 — an
+    /// out-of-bounds read).
+    ///
+    /// Must run inside the arm body block (after the tag compare branched there), so
+    /// the payload load only happens when the tag matched. Returns the handle for
+    /// `restore_narrowed_local` at arm end; `None` when the scrutinee is not a
+    /// narrowable binding (typeck applies no overlay then either).
+    ///
+    /// Typeck still accepts the narrowed binding where the UNION is expected (a union
+    /// parameter, a union return: `can_assign` admits a variant there), and no such
+    /// site wraps a shape into an envelope. Those uses (`union_slot_uses_in_block` over
+    /// `arm_body`) keep the envelope (`narrowed_envelope_use`); handing them the payload
+    /// pointer would make the callee read a 16-byte envelope out of a smaller variant.
+    ///
+    /// Time: O(n) for n nodes of `arm_body`  Space: O(u) for u envelope uses, plus one
+    /// pointer-sized entry-block slot per arm site
+    fn narrow_union_local_to_variant(
+        &mut self,
+        scrutinee: &Expr,
+        envelope: PointerValue<'ctx>,
+        arm_body: &Block,
+        site: &str,
+    ) -> Result<Option<(String, PointerValue<'ctx>)>, String> {
+        let Some(name) = ynz_typeck::check::simple_ident_name(scrutinee) else {
+            return Ok(None);
+        };
+        let outer_slot = *self
+            .locals
+            .get(name)
+            .ok_or_else(|| format!("{site}: narrowed binding `{name}` has no local slot"))?;
+        let payload = self.union_payload_ptr(envelope, site)?;
+        let narrowed_slot = self.alloca_in_entry_llvm(self.ptr(), &format!("{name}_variant"))?;
+        self.builder
+            .build_store(narrowed_slot, payload)
+            .map_err(|err| format!("{site}: store narrowed payload: {err}"))?;
+        self.locals.insert(name.to_string(), narrowed_slot);
+        let ret_ty = self
+            .sm_yinz_ret_ty
+            .clone()
+            .unwrap_or_else(|| self.current_fn_ret_ty.clone());
+        let mut envelope_uses = HashSet::new();
+        union_slot_uses_in_block(
+            arm_body,
+            name,
+            self.sig_table,
+            &self.typed.module,
+            self.shape_table,
+            &self.resolve_type(&ret_ty),
+            &mut envelope_uses,
+        );
+        self.narrowed_unions.push(NarrowedUnion {
+            name: name.to_string(),
+            scrutinee: scrutinee.clone(),
+            outer_slot,
+            narrowed_slot,
+            envelope_uses,
+        });
+        Ok(Some((name.to_string(), outer_slot)))
+    }
+
+    /// Undo `narrow_union_local_to_variant` at the end of the arm (typeck removes its
+    /// overlay at the same point).
+    fn restore_narrowed_local(&mut self, narrowed: Option<(String, PointerValue<'ctx>)>) {
+        if let Some((name, outer_slot)) = narrowed {
+            let closed = self.narrowed_unions.pop();
+            debug_assert!(
+                closed.as_ref().is_some_and(|entry| entry.name == name),
+                "narrowed_unions is out of step with the `is` arm being closed"
+            );
+            self.locals.insert(name, outer_slot);
+        }
+    }
+
+    /// The slot a frame reload writes `name`'s value to: the binding's OUTER slot while an
+    /// `is` arm narrows it (the arm's slot holds the payload pointer, never the envelope),
+    /// otherwise `cg.locals[name]`.
+    ///
+    /// Time: O(d) for d nested narrowings (the `is`-arm nesting depth)  Space: O(1)
+    fn reload_slot(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        self.narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| entry.name == name)
+            .map(|entry| entry.outer_slot)
+            .or_else(|| self.locals.get(name).copied())
+    }
+
+    /// The union envelope of a narrowed binding: the scrutinee re-lowered against the
+    /// binding's OUTER slot (the slot that holds the envelope), the same derivation the
+    /// arm entry used. `cg.locals[name]` is back on `narrowed_slot` afterwards.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn lower_narrowed_envelope(
+        &mut self,
+        name: &str,
+        scrutinee: &Expr,
+        outer_slot: PointerValue<'ctx>,
+        narrowed_slot: PointerValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        self.locals.insert(name.to_string(), outer_slot);
+        let envelope = lower_expr(self, scrutinee);
+        self.locals.insert(name.to_string(), narrowed_slot);
+        Ok(envelope?.into_pointer_value())
+    }
+
+    /// The declared type of parameter `index` of `callee`, resolved. A generic function is not
+    /// in the signature table, so its declaration in this module answers (same lookup as
+    /// `UnionSlotUses::param_is_union`).
+    ///
+    /// Time: O(f) for f items in the module  Space: O(1)
+    fn callee_param_type(&self, callee: &str, index: usize) -> Option<Type> {
+        let declared = match self.sig_table.fns.get(callee) {
+            Some(sig) => sig.params.get(index).map(|(_, param_ty)| param_ty.clone()),
+            None => self.typed.module.items.iter().find_map(|item| match item {
+                Item::Function(function) if function.name == callee => function
+                    .params
+                    .get(index)
+                    .map(|param| ast_type_to_typeck_type(&param.ty, self.shape_table)),
+                _ => None,
+            }),
+        };
+        declared.map(|param_ty| self.resolve_type(&param_ty))
+    }
+
+    /// The union a `return` must produce: the current function's declared return type (the
+    /// state machine's Yinz type inside a resume function) with an `errors` wrapper peeled,
+    /// when that is a union.
+    fn union_return_slot_ty(&self) -> Option<Type> {
+        let declared = self
+            .sm_yinz_ret_ty
+            .clone()
+            .unwrap_or_else(|| self.current_fn_ret_ty.clone());
+        let peeled = match self.resolve_type(&declared) {
+            Type::ErrorsCapable { inner } => self.resolve_type(&inner),
+            other => other,
+        };
+        matches!(peeled, Type::Union { .. }).then_some(peeled)
+    }
+
+    /// Whether `expr` is an identifier use that `narrowed_envelope_use` answers with the
+    /// union envelope (an `is` arm's narrowed binding flowing into a union-typed slot).
+    fn is_narrowed_envelope_ident(&self, expr: &Expr) -> bool {
+        let Expr::Ident(name, span) = expr else {
+            return false;
+        };
+        self.narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| &entry.name == name)
+            .is_some_and(|entry| entry.envelope_uses.contains(&(span.start, span.end)))
+    }
+
+    /// Build the tagged envelope `{i64 tag, i64 data}` for a plain shape variant: `data` is the
+    /// `ptr_to_int` of the payload's storage, exactly what the union-annotated `let` builds. The
+    /// slot is a per-site entry-block alloca (the caller's frame): the callee borrows it for the
+    /// call. Anything that must outlive the frame goes through `union_to_heap_cell` after.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn build_union_envelope(
+        &self,
+        payload: PointerValue<'ctx>,
+        tag: u64,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let union_st = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let slot = self.alloca_in_entry_llvm(union_st, &format!("{site}_envelope"))?;
+        let tag_gep = self
+            .builder
+            .build_struct_gep(union_st, slot, 0, &format!("{site}_env_tag"))
+            .map_err(|err| format!("union envelope tag gep {site}: {err}"))?;
+        self.builder
+            .build_store(tag_gep, self.i64().const_int(tag, false))
+            .map_err(|err| format!("union envelope tag store {site}: {err}"))?;
+        let data_gep = self
+            .builder
+            .build_struct_gep(union_st, slot, 1, &format!("{site}_env_data"))
+            .map_err(|err| format!("union envelope data gep {site}: {err}"))?;
+        let payload_bits = self
+            .builder
+            .build_ptr_to_int(payload, self.i64(), &format!("{site}_env_bits"))
+            .map_err(|err| format!("union envelope ptr2int {site}: {err}"))?;
+        self.builder
+            .build_store(data_gep, payload_bits)
+            .map_err(|err| format!("union envelope data store {site}: {err}"))?;
+        Ok(slot)
+    }
+
+    /// THE coercion of a lowered value into a union-typed slot (a union parameter or a union
+    /// return) — one decision for every call path and every return path.
+    ///
+    /// A union with a SHAPE variant is an envelope pointer (`{tag, data}`, null = `nothing`);
+    /// any other union (`map<..> | nothing`) is the raw pointer or null and is never touched
+    /// here. For an envelope union:
+    /// - a plain shape variant is wrapped in a freshly tagged envelope — `Frame` home (the
+    ///   caller's entry-block slot) for an argument the callee only borrows, `Heap`/`Return`
+    ///   home (`union_to_heap_cell`: envelope AND payload in counted heap cells) for anything
+    ///   that outlives this frame: an argument staged into a suspending callee's frame, and a
+    ///   returned value;
+    /// - under `Return` home, a union-typed value is copied to a heap cell too, unless it is a
+    ///   call result (the callee returned a heap cell: every union return promotes, a returned
+    ///   PARAMETER included — its envelope is the caller's Frame slot, which dies with the
+    ///   caller's own frame when the call result is returned onward). Otherwise a callee-built or
+    ///   pass-through envelope would come back as a pointer into a dead frame;
+    /// - an `is` arm's narrowed binding already lowers to its envelope (`narrowed_envelope_use`)
+    ///   and is never re-wrapped.
+    ///
+    /// Time: O(1) + the heap-cell copy under `Heap`/`Return`  Space: O(1) envelope slot
+    /// (`Frame`), two counted heap cells per present value (`Heap`/`Return`)
+    fn coerce_into_union_slot(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+        slot_ty: &Type,
+        home: EnvelopeHome,
+        site: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Type::Union { variants } = self.resolve_type(slot_ty) else {
+            return Ok(val);
+        };
+        let variants: Vec<Type> = variants
+            .iter()
+            .map(|variant| self.resolve_type(variant))
+            .collect();
+        if !variants
+            .iter()
+            .any(|variant| matches!(variant, Type::Shape { .. }))
+        {
+            return Ok(val);
+        }
+        let narrowed = self.is_narrowed_envelope_ident(expr);
+        let source_ty = self.resolve_type(&self.expr_type(expr));
+        match source_ty {
+            Type::Shape { ref name } if !narrowed => {
+                let Some(tag) = variants.iter().position(
+                    |variant| matches!(variant, Type::Shape { name: shape_name } if shape_name == name),
+                ) else {
+                    return Err(format!(
+                        "codegen: `{name}` reaches the union slot `{site}` but is not one of its \
+                         variants; the type checker should have refused this"
+                    ));
+                };
+                let envelope =
+                    self.build_union_envelope(val.into_pointer_value(), tag as u64, site)?;
+                match home {
+                    EnvelopeHome::Frame => Ok(envelope.into()),
+                    EnvelopeHome::Heap | EnvelopeHome::Return => {
+                        Ok(self.union_to_heap_cell(envelope, &variants, site)?.into())
+                    }
+                }
+            }
+            _ => {
+                let is_union_value = narrowed || matches!(source_ty, Type::Union { .. });
+                let already_homed = matches!(
+                    expr,
+                    Expr::Call(_) | Expr::MethodCall { .. } | Expr::Wait(..)
+                );
+                if home == EnvelopeHome::Return && is_union_value && !already_homed {
+                    Ok(self
+                        .union_to_heap_cell(val.into_pointer_value(), &variants, site)?
+                        .into())
+                } else {
+                    Ok(val)
+                }
+            }
+        }
+    }
+
+    /// The envelope for the identifier `name` at `span` when that use belongs to an active
+    /// `is`-arm narrowing and flows into a union-typed slot (`NarrowedUnion::envelope_uses`);
+    /// `None` for every other use, which reads the payload through `cg.locals`.
+    ///
+    /// Time: O(d) for d nested narrowings  Space: O(1)
+    fn narrowed_envelope_use(
+        &mut self,
+        name: &str,
+        span: &ynz_diagnostics::SourceSpan,
+    ) -> Result<Option<PointerValue<'ctx>>, String> {
+        let Some(entry) = self
+            .narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| entry.name == name)
+        else {
+            return Ok(None);
+        };
+        if !entry.envelope_uses.contains(&(span.start, span.end)) {
+            return Ok(None);
+        }
+        let (scrutinee, outer_slot, narrowed_slot) = (
+            entry.scrutinee.clone(),
+            entry.outer_slot,
+            entry.narrowed_slot,
+        );
+        self.lower_narrowed_envelope(name, &scrutinee, outer_slot, narrowed_slot)
+            .map(Some)
+    }
+
+    /// Re-derive every narrowed binding's payload pointer from its just-reloaded envelope.
+    /// A state-machine resume enters the arm at a post-`wait` state block, skipping the arm
+    /// entry where `narrow_union_local_to_variant` stored the payload pointer, so in this
+    /// invocation the arm's entry-block slot is uninitialized until this runs. It re-lowers
+    /// the scrutinee against the outer slot: the same derivation the arm entry used.
+    ///
+    /// Time: O(d) for d nested narrowings  Space: O(d)
+    fn renarrow_union_locals(&mut self) -> Result<(), String> {
+        let narrowings: Vec<(String, Expr, PointerValue<'ctx>, PointerValue<'ctx>)> = self
+            .narrowed_unions
+            .iter()
+            .map(|entry| {
+                (
+                    entry.name.clone(),
+                    entry.scrutinee.clone(),
+                    entry.outer_slot,
+                    entry.narrowed_slot,
+                )
+            })
+            .collect();
+        for (name, scrutinee, outer_slot, narrowed_slot) in narrowings {
+            let envelope =
+                self.lower_narrowed_envelope(&name, &scrutinee, outer_slot, narrowed_slot)?;
+            let payload = self.union_payload_ptr(envelope, "is_arm_resume")?;
+            self.builder
+                .build_store(narrowed_slot, payload)
+                .map_err(|err| format!("re-narrow `{name}` after resume: {err}"))?;
+        }
+        Ok(())
+    }
+
     /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
     /// FRAGOs 006/007/013) — the union sibling of `maybe_to_heap_cell`: clone a
     /// union value into counted heap cells so a CROSSING binding's pointer
@@ -3665,15 +4096,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_store(dst_tag_gep, tag)
             .map_err(|e| format!("{e}"))?;
-        let src_data_gep = self
-            .builder
-            .build_struct_gep(union_st, src, 1, &format!("{site}_src_data"))
-            .map_err(|e| format!("{e}"))?;
-        let data = self
-            .builder
-            .build_load(self.i64(), src_data_gep, &format!("{site}_data"))
-            .map_err(|e| format!("{e}"))?
-            .into_int_value();
+        let data = self.union_data_bits(src, site)?;
         let dst_data_gep = self
             .builder
             .build_struct_gep(union_st, cell, 1, &format!("{site}_dst_data"))
@@ -3706,10 +4129,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| format!("union cell tag switch {site}: {e}"))?;
         for ((i, shape_name), case_bb) in shape_cases.iter().zip(case_blocks.iter()) {
             self.builder.position_at_end(*case_bb);
-            let src_pay = self
-                .builder
-                .build_int_to_ptr(data, self.ptr(), &format!("{site}_src_pay{i}"))
-                .map_err(|e| format!("{e}"))?;
+            let src_pay = self.union_payload_ptr(src, &format!("{site}_src_pay{i}"))?;
             let size = self.shape_abi_size_const(shape_name, "union_to_heap_cell")?;
             let pay_cell = self.heap_cell(size, &format!("{site}_pay{i}"))?;
             self.builder
@@ -4506,6 +4926,7 @@ fn lower_function<'ctx, 'g>(
         sm_crossing_shape_names: HashMap::new(),
         sm_crossing_shape_allocas: HashMap::new(),
         sm_scope_depth: 0,
+        narrowed_unions: Vec::new(),
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
         // Non-SM functions cannot contain independent suspending groups.
@@ -4542,8 +4963,8 @@ fn lower_function<'ctx, 'g>(
 
     // M7 P4a: errors-capable functions push a frame on entry for the call trace.
     if is_errors_capable {
-        let file_g = build_string_global(ctx, module, f.name.as_str(), ".ec.file");
-        let fn_g = build_string_global(ctx, module, f.name.as_str(), ".ec.fn");
+        let file_g = build_c_string_global(ctx, module, f.name.as_str(), ".ec.file");
+        let fn_g = build_c_string_global(ctx, module, f.name.as_str(), ".ec.fn");
         cg.builder
             .build_call(
                 cg.rt.ynz_frame_push,
@@ -5017,6 +5438,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_ec_number_set: HashSet::new(),  // populated during alloca creation below
         sm_crossing_ec_number_i128_allocas: HashMap::new(), // populated during alloca creation below
         sm_scope_depth: 0,
+        narrowed_unions: Vec::new(),
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: number_errors_staging_offset,
         // When set, lower_sm_block skips independence analysis and lowers all stmts
@@ -5945,9 +6367,8 @@ fn reload_params_from_frame<'ctx>(
         let bits = state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, pname)?;
         let param_decl = &f.params[slot_idx];
         let param_ty = ast_type_to_typeck_type(&param_decl.ty, shape_table);
-        let alloca = *cg
-            .locals
-            .get(pname)
+        let alloca = cg
+            .reload_slot(pname)
             .ok_or_else(|| format!("sm reload: alloca for {pname} missing"))?;
         let bits_to_store = cg.to_i64_bits(cg.i64_bits_to(bits, &param_ty)?, &param_ty)?;
         cg.builder
@@ -5982,7 +6403,7 @@ fn reload_params_from_frame<'ctx>(
                 let slot_idx = slot_indices[i];
                 let bits =
                     state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, cname)?;
-                if let Some(&alloca) = cg.locals.get(cname) {
+                if let Some(alloca) = cg.reload_slot(cname) {
                     let is_int = scalar_set.contains(cname.as_str());
                     let is_bool = bool_set.contains(cname.as_str());
                     let is_float = float_set.contains(cname.as_str());
@@ -6203,7 +6624,7 @@ fn reload_params_from_frame<'ctx>(
             }
         }
     } // end reload_crossing guard
-    Ok(())
+    cg.renarrow_union_locals()
 }
 
 /// Lower the body of a state-machine function.
@@ -7816,10 +8237,6 @@ fn lower_sm_for<'ctx, 'g>(
             flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
         }
 
-        // v0.3-M5 P5: loop-var mask (same contract as the non-SM array loop) —
-        // the only shadow case an admitted binding can hit is its own loop var.
-        let soa_masked = cg.soa_bindings.remove(var);
-
         // Row-439 parity for migrated leaf wait-free loops (see sm_leaf_loop_stack_save).
         let loop_sp = sm_leaf_loop_stack_save(cg, body)?;
         lower_sm_block(
@@ -7834,10 +8251,6 @@ fn lower_sm_for<'ctx, 'g>(
             shape_table,
             current_state,
         )?;
-
-        if let Some(m) = soa_masked {
-            cg.soa_bindings.insert(var.to_string(), m);
-        }
 
         if !is_block_terminated(cg) {
             // Release this iteration's allocas before the back edge (leaf bodies only).
@@ -8276,6 +8689,19 @@ fn lower_sm_match<'ctx, 'g>(
                 || (cg.m3d_spike
                     && stmt_block_has_direct_cpu_group(&arm.body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
+        // `is Variant =>`: re-point the scrutinee binding at the variant payload for the arm
+        // body, the same window typeck's overlay uses. A `wait` inside the arm re-derives the
+        // payload on resume (`reload_params_from_frame` → `renarrow_union_locals`).
+        let narrowed = if matches!(arm.pattern.kind, MatchPatternKind::Is(_)) {
+            cg.narrow_union_local_to_variant(
+                scrutinee,
+                scrutinee_val.into_pointer_value(),
+                &arm.body,
+                "sm_is_arm",
+            )?
+        } else {
+            None
+        };
         cg.sm_scope_depth += 1;
         if arm_routes_to_sm {
             lower_sm_block(
@@ -8299,6 +8725,7 @@ fn lower_sm_match<'ctx, 'g>(
             }
         }
         cg.sm_scope_depth -= 1;
+        cg.restore_narrowed_local(narrowed);
         for (name, &outer_alloca) in &locals_snapshot {
             cg.locals.insert(name.clone(), outer_alloca);
         }
@@ -10613,8 +11040,13 @@ fn emit_io_member_init<'ctx, 'g>(
         // crossing local stages a GEP into the PARENT frame's 2-slot region, never a
         // ptr_to_int of a dying resume-fn stack temp (the FRAGO 006/007 arg UAF —
         // this was the third staging loop, missed by the initial two-loop conversion).
-        let bits = stage_suspending_call_arg_bits(cg, arg, frame_ptr)
-            .map_err(|e| format!("{arg_bits_label}: {e}"))?;
+        let bits = stage_suspending_call_arg_bits(
+            cg,
+            arg,
+            frame_ptr,
+            cg.callee_param_type(callee_name, idx),
+        )
+        .map_err(|e| format!("{arg_bits_label}: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
 
@@ -11979,8 +12411,13 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         .map(|l| l.n_locals)
         .unwrap_or(arg_exprs.len());
     for (idx, arg) in arg_exprs.iter().copied().enumerate().take(child_n_locals) {
-        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
-            .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
+        let bits = stage_suspending_call_arg_bits(
+            cg,
+            arg,
+            parent_frame,
+            cg.callee_param_type(&callee_name, idx),
+        )
+        .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
 
@@ -12141,11 +12578,14 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 ///    Scope-minimal: `StructLit` only; other non-Ident temp forms stay recorded
 ///    residuals (Phase 1c plan text).
 ///
+/// `param_ty` is the callee's declared type for this position (`Cg::callee_param_type`).
+///
 /// Time: O(1) per arg beyond `lower_expr`  Space: O(1)
 fn stage_suspending_call_arg_bits<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     arg: &Expr,
     parent_frame: PointerValue<'ctx>,
+    param_ty: Option<Type>,
 ) -> Result<inkwell::values::IntValue<'ctx>, String> {
     let ctx = cg.ctx;
     if let Expr::Ident(name, _) = arg {
@@ -12192,8 +12632,24 @@ fn stage_suspending_call_arg_bits<'ctx>(
         let arg_ty = cg.expr_type(arg);
         return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
     }
-    let arg_val = lower_expr(cg, arg)?;
-    let arg_ty = cg.expr_type(arg);
+    let mut arg_val = lower_expr(cg, arg)?;
+    let mut arg_ty = cg.expr_type(arg);
+    // 3. A plain shape for a UNION parameter: the staged bits must name a tagged envelope that
+    //    survives the parent's suspension, so the envelope and payload live in counted heap
+    //    cells (`coerce_into_union_slot`, `Heap` home) — a frame slot would die with the resume
+    //    invocation.
+    if let Some(param_ty) = param_ty {
+        if matches!(param_ty, Type::Union { .. }) {
+            arg_val = cg.coerce_into_union_slot(
+                arg,
+                arg_val,
+                &param_ty,
+                EnvelopeHome::Heap,
+                "sm_union_arg",
+            )?;
+            arg_ty = param_ty;
+        }
+    }
     cg.to_i64_bits(arg_val, &arg_ty)
 }
 
@@ -12294,8 +12750,13 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
 
     // Write call arguments.
     for (idx, arg) in args.iter().copied().enumerate().take(child_n_locals) {
-        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
-            .map_err(|e| format!("rec arg bits: {e}"))?;
+        let bits = stage_suspending_call_arg_bits(
+            cg,
+            arg,
+            parent_frame,
+            cg.callee_param_type(callee_name, idx),
+        )
+        .map_err(|e| format!("rec arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
 
@@ -13779,7 +14240,8 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             }
             let val_ty = cg.expr_type(value);
             // v0.3-M5 P5: SoA construction interception. The authority keys a
-            // decision by (array_name, decl_span) — only THIS binding's literal
+            // decision by decl_span ALONE (the name is renamed per binding for codegen, the
+            // declaration span is not) — only THIS binding's literal
             // constructs segmented; every other path stays AoS byte-for-byte.
             // The returned arr pointer flows through the arm's existing binding
             // store unchanged (BuiltinArray = plain pointer store).
@@ -13788,8 +14250,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 .arrays
                 .iter()
                 .find(|d| {
-                    d.array_name == *name
-                        && d.decl_span == *span
+                    d.decl_span == *span
                         && matches!(d.kind, ynz_typeck::soa::LayoutKind::Soa { .. })
                 })
                 .cloned();
@@ -13888,10 +14349,9 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 // requires allocas to be in the entry block). Reuse that alloca instead
                 // of creating a new one in the current state block.
                 //
-                // Exception: if we are inside a nested scope (sm_scope_depth > 0), this
-                // `let name = ...` is a SHADOW binding that creates a new inner local —
-                // not a write to the outer crossing local. Create a fresh alloca so the
-                // outer crossing alloca is not clobbered by the shadow's value.
+                // A nested `let` that reuses a crossing local's user name is a different
+                // binding with a different codegen name (`TypedModule::binding_names`), so
+                // `name` below is crossing only when THIS declaration is the crossing one.
                 let is_sm_crossing = cg
                     .sm_crossing_names
                     .as_ref()
@@ -13899,10 +14359,9 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 let slot = if is_sm_crossing {
                     // Crossing local: reuse the pre-created sm_entry alloca regardless of
                     // nesting depth. LLVM SSA dominance requires allocas to be in the entry
-                    // block; the sm_entry alloca dominates all state blocks. Shadow bindings
-                    // (a nested `let x` where outer `x` crosses a wait) are rejected at
-                    // typeck (ShadowsCrossingLocal), so any `let name` here is the first
-                    // and only definition of that crossing local.
+                    // block; the sm_entry alloca dominates all state blocks. Codegen names are
+                    // unique per binding (`TypedModule::binding_names`), so any `let name`
+                    // here is the first and only definition of that crossing local.
                     *cg.locals.get(name.as_str()).ok_or_else(|| {
                         format!("sm crossing alloca for `{name}` missing in entry")
                     })?
@@ -14302,12 +14761,25 @@ fn lower_stmt_match<'ctx>(
             .map_err(|e| format!("match branch: {e}"))?;
 
         cg.builder.position_at_end(arm_body_bb);
+        // `is Variant =>`: re-point the scrutinee binding at the variant payload for the
+        // arm body (typeck's `union_narrowed` overlay covers the same window).
+        let narrowed = if matches!(arm.pattern.kind, MatchPatternKind::Is(_)) {
+            cg.narrow_union_local_to_variant(
+                scrutinee,
+                scrutinee_val.into_pointer_value(),
+                &arm.body,
+                "is_arm",
+            )?
+        } else {
+            None
+        };
         for stmt in &arm.body.stmts {
             if is_block_terminated(cg) {
                 break;
             }
             lower_stmt(cg, stmt)?;
         }
+        cg.restore_narrowed_local(narrowed);
         if !is_block_terminated(cg) {
             cg.builder
                 .build_unconditional_branch(merge_bb)
@@ -14386,6 +14858,15 @@ fn match_cmp<'ctx>(
                 )
                 .map_err(|e| format!("{e}"))
         }
+        // A bignum is decimal text: compare it as text-of-a-number, never as decimal128 bytes.
+        Type::Number { precision } if *precision > 34 => bignum_compare(
+            cg,
+            scrutinee_val.into_pointer_value(),
+            pattern_val.into_pointer_value(),
+            *precision,
+            &BinOpKind::EqEq,
+        )
+        .map(|matched| matched.into_int_value()),
         Type::Number { .. } => {
             let c = cg
                 .builder
@@ -14700,21 +15181,11 @@ fn lower_stmt_for<'ctx>(
         store(cg, elem_val, &elem, var_slot)?;
         cg.locals.insert(var.to_string(), var_slot);
 
-        // v0.3-M5 P5: loop-var mask — `for (pts in pts)` shadows an admitted
-        // binding WITHOUT a `Stmt::Let` (admission's shadow-decline already
-        // covers every same-name `let`, so this is the ONLY shadow case).
-        // Inside the body the name means the by-value element, never the array.
-        let soa_masked = cg.soa_bindings.remove(var);
-
         for stmt in &body.stmts {
             if is_block_terminated(cg) {
                 break;
             }
             lower_stmt(cg, stmt)?;
-        }
-
-        if let Some(m) = soa_masked {
-            cg.soa_bindings.insert(var.to_string(), m);
         }
 
         if !is_block_terminated(cg) {
@@ -15099,8 +15570,19 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 )?;
             }
             Some(expr) => {
-                let val = lower_expr(cg, expr)?;
+                let mut val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
+                // A union return carries a tagged envelope that outlives this resume
+                // invocation (`coerce_into_union_slot`, `Return` home).
+                if let Some(union_ty) = cg.union_return_slot_ty() {
+                    val = cg.coerce_into_union_slot(
+                        expr,
+                        val,
+                        &union_ty,
+                        EnvelopeHome::Return,
+                        "sm_union_ret",
+                    )?;
+                }
                 // Detect errors-capable return: the Yinz return type is ErrorsCapable, OR
                 // the actual value is a struct (from __testFallibleAsync or a nested SM errors call).
                 let is_ec_return = matches!(val, inkwell::values::BasicValueEnum::StructValue(_));
@@ -15287,9 +15769,12 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                         format!("sm_ec_maybe_ok p2i: {e}")
                                                     })?
                                             }
-                                            // String, Array, Map, Union: heap-allocated
-                                            // (global literals or ynz_alloc). The pointer
-                                            // survives resume fn return — ptr_to_int is safe.
+                                            // String, Array, Map: heap-allocated (global
+                                            // literals or ynz_alloc). Union: `coerce_into_union_slot`
+                                            // above already put an envelope union's envelope and
+                                            // payload in counted heap cells (a raw-pointer union is
+                                            // heap-backed like Map). The pointer survives resume fn
+                                            // return — ptr_to_int is safe.
                                             _ => cg
                                                 .builder
                                                 .build_ptr_to_int(
@@ -15486,8 +15971,22 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     .map_err(|e| format!("ec void ret: {e}"))?;
             }
             Some(expr) => {
-                let val = lower_expr(cg, expr)?;
-                let val_ty = cg.expr_type(expr);
+                let mut val = lower_expr(cg, expr)?;
+                let mut val_ty = cg.expr_type(expr);
+                // A union success value's envelope must not live in this frame
+                // (`coerce_into_union_slot`, `Return` home); the coerced value IS a union.
+                if let Some(union_ty) = cg.union_return_slot_ty() {
+                    val = cg.coerce_into_union_slot(
+                        expr,
+                        val,
+                        &union_ty,
+                        EnvelopeHome::Return,
+                        "ec_union_ret",
+                    )?;
+                    if !matches!(val_ty, Type::ErrorsCapable { .. }) {
+                        val_ty = union_ty;
+                    }
+                }
                 // v0.3-M7 Phase 3 / R9 sibling: the EC ok-WORD must never carry a
                 // pointer into the callee's own stack. maybe / shape / number
                 // success values are per-site stack storage (envelope alloca,
@@ -15548,7 +16047,19 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 .map_err(|e| format!("void ret: {e}"))?;
         }
         Some(expr) => {
-            let val = lower_expr(cg, expr)?;
+            let mut val = lower_expr(cg, expr)?;
+            // A union return is a pointer to a tagged envelope that must outlive this frame
+            // (`coerce_into_union_slot`, `Return` home): never a bare shape, never a slot in
+            // the frame that is about to die.
+            if let Some(union_ty) = cg.union_return_slot_ty() {
+                val = cg.coerce_into_union_slot(
+                    expr,
+                    val,
+                    &union_ty,
+                    EnvelopeHome::Return,
+                    "union_ret",
+                )?;
+            }
             // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
             // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
             // legally miscompiled: stores to the dying alloca get deleted and the
@@ -15728,6 +16239,210 @@ fn channel_drop_glue<'ctx>(
     Ok(glue_fn.as_global_value().as_pointer_value())
 }
 
+/// Collect the spans of every use of the narrowed binding `name` in `block` that typeck
+/// accepts into a UNION-typed slot: an argument whose callee parameter is a union (a plain,
+/// `wait`ed or `background` call, or a UFCS call's extra argument) and a `return` value
+/// when the function returns a union. Inside an `is` arm those uses must get the envelope,
+/// not the payload pointer (`Cg::narrow_union_local_to_variant`).
+///
+/// O(n * f) time for n AST nodes in `block` and f items in the module (a generic callee's
+/// declaration is looked up by scanning the module); O(u) memory for u matching uses.
+fn union_slot_uses_in_block(
+    block: &Block,
+    name: &str,
+    sig_table: &SignatureTable,
+    module: &ynz_ast::nodes::Module,
+    shape_table: &ShapeTable,
+    fn_ret_ty: &Type,
+    uses: &mut HashSet<(usize, usize)>,
+) {
+    let mut walker = UnionSlotUses {
+        name,
+        sig_table,
+        module,
+        shape_table,
+        returns_union: matches!(fn_ret_ty, Type::Union { .. }),
+        uses,
+    };
+    walker.block(block);
+}
+
+/// The walk behind `union_slot_uses_in_block`.
+struct UnionSlotUses<'walk> {
+    name: &'walk str,
+    sig_table: &'walk SignatureTable,
+    module: &'walk ynz_ast::nodes::Module,
+    shape_table: &'walk ShapeTable,
+    returns_union: bool,
+    uses: &'walk mut HashSet<(usize, usize)>,
+}
+
+impl UnionSlotUses<'_> {
+    fn note_if_union_slot(&mut self, value: &Expr, slot_is_union: bool) {
+        if let Expr::Ident(used, span) = value {
+            if slot_is_union && used == self.name {
+                self.uses.insert((span.start, span.end));
+            }
+        }
+    }
+
+    /// Whether parameter `index` of `callee` is declared with a union type. A generic
+    /// function is not in the signature table, so its declaration in this module answers.
+    fn param_is_union(&self, callee: &str, index: usize) -> bool {
+        let declared = match self.sig_table.fns.get(callee) {
+            Some(sig) => sig.params.get(index).map(|(_, param_ty)| param_ty.clone()),
+            None => self.module.items.iter().find_map(|item| match item {
+                Item::Function(function) if function.name == callee => function
+                    .params
+                    .get(index)
+                    .map(|param| ast_type_to_typeck_type(&param.ty, self.shape_table)),
+                _ => None,
+            }),
+        };
+        matches!(declared, Some(Type::Union { .. }))
+    }
+
+    fn block(&mut self, block: &Block) {
+        for stmt in &block.stmts {
+            self.stmt(stmt);
+        }
+    }
+
+    fn stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Expr(value) | Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+                self.expr(value)
+            }
+            Stmt::If { cond, body, .. } | Stmt::While { cond, body, .. } => {
+                self.expr(cond);
+                self.block(body);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
+                self.expr(scrutinee);
+                for arm in arms {
+                    if let MatchPatternKind::Value(pattern) = &arm.pattern.kind {
+                        self.expr(pattern);
+                    }
+                    self.block(&arm.body);
+                }
+                if let Some(else_block) = else_arm {
+                    self.block(else_block);
+                }
+            }
+            Stmt::For { iter, body, .. } => {
+                self.expr(iter);
+                self.block(body);
+            }
+            Stmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    self.note_if_union_slot(value, self.returns_union);
+                    self.expr(value);
+                }
+            }
+            Stmt::FieldAssign { target, value, .. } => {
+                self.expr(target);
+                self.expr(value);
+            }
+            Stmt::IndexAssign {
+                receiver,
+                index,
+                value,
+                ..
+            } => {
+                self.expr(receiver);
+                self.expr(index);
+                self.expr(value);
+            }
+        }
+    }
+
+    fn expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Call(call) => {
+                if let Expr::Ident(callee, _) = &call.callee {
+                    for (index, arg) in call.args.iter().enumerate() {
+                        let slot_is_union = self.param_is_union(callee, index);
+                        self.note_if_union_slot(arg, slot_is_union);
+                    }
+                } else {
+                    self.expr(&call.callee);
+                }
+                for arg in &call.args {
+                    self.expr(arg);
+                }
+            }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                // UFCS: `receiver.method(args)` is `method(receiver, args)`.
+                let receiver_is_union = self.param_is_union(method, 0);
+                self.note_if_union_slot(receiver, receiver_is_union);
+                self.expr(receiver);
+                for (index, arg) in args.iter().enumerate() {
+                    let slot_is_union = self.param_is_union(method, index + 1);
+                    self.note_if_union_slot(arg, slot_is_union);
+                    self.expr(arg);
+                }
+            }
+            Expr::Ident(..)
+            | Expr::StringLit(..)
+            | Expr::Error(..)
+            | Expr::IntLit(..)
+            | Expr::NumberLit(..)
+            | Expr::BoolLit(..)
+            | Expr::SelfValue { .. }
+            | Expr::NoneLit { .. } => {}
+            Expr::BinOp { lhs, rhs, .. } => {
+                self.expr(lhs);
+                self.expr(rhs);
+            }
+            Expr::UnaryOp { operand, .. } => self.expr(operand),
+            Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
+                self.expr(receiver)
+            }
+            Expr::StructLit { fields, .. } => {
+                for field in fields {
+                    self.expr(&field.value);
+                }
+            }
+            Expr::IndexAccess {
+                receiver, index, ..
+            } => {
+                self.expr(receiver);
+                self.expr(index);
+            }
+            Expr::ArrayLit { elements, .. } => {
+                for element in elements {
+                    self.expr(element);
+                }
+            }
+            Expr::MapLit { entries, .. } => {
+                for (key, value) in entries {
+                    self.expr(key);
+                    self.expr(value);
+                }
+            }
+            Expr::Is { expr, .. } => self.expr(expr),
+            Expr::InterpolatedString(parts, _) => {
+                for part in parts {
+                    if let StringPart::Expr(inner, _) = part {
+                        self.expr(inner);
+                    }
+                }
+            }
+            Expr::Wait(inner, _) | Expr::Background(inner, _) => self.expr(inner),
+        }
+    }
+}
+
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
     match expr {
         Expr::IntLit(n, _) => Ok(cg.i64().const_int(*n as u64, true).into()),
@@ -15749,6 +16464,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     );
                     return Ok(global.as_pointer_value().into());
                 }
+            }
+            // A decimal literal under a `float` annotation (`let x: float = 0.317`) is an f64
+            // constant: typeck types it `float`, so its value must be f64 bits like every other
+            // `float`, not the address of a decimal cell.
+            if ty == Type::Float {
+                let value: f64 = s
+                    .parse()
+                    .map_err(|err| format!("bad float literal `{s}`: {err}"))?;
+                return Ok(cg.f64().const_float(value).into());
             }
             // Hardware decimal128 path (N ≤ 34): stack alloca holds i128 bits.
             let bits: u128 =
@@ -15772,25 +16496,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::StringLit(bytes, _) => {
             let mut null = bytes.clone();
             push_c_string_terminator(&mut null);
-            let i8t = cg.i8();
-            let arr_ty = i8t.array_type(null.len() as u32);
-            let arr = i8t.const_array(
-                &null
-                    .iter()
-                    .map(|&b| i8t.const_int(b as u64, false))
-                    .collect::<Vec<_>>(),
-            );
-            let g = cg
-                .module
-                .add_global(arr_ty, Some(AddressSpace::default()), "str");
-            g.set_initializer(&arr);
-            g.set_constant(true);
-            g.set_linkage(inkwell::module::Linkage::Private);
-            g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-            Ok(g.as_pointer_value().into())
+            Ok(build_static_string(cg.ctx, cg.module, &null, "str")
+                .as_pointer_value()
+                .into())
         }
 
-        Expr::Ident(name, _) => {
+        Expr::Ident(name, ident_span) => {
+            if let Some(envelope) = cg.narrowed_envelope_use(name, ident_span)? {
+                return Ok(envelope.into());
+            }
             let slot = *cg
                 .locals
                 .get(name.as_str())
@@ -16244,8 +16958,19 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         format!("codegen: function `{effective_name}` not found in module")
                     })?;
                     let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
-                    for arg in &call.args {
-                        let val = lower_expr(cg, arg)?;
+                    for (index, arg) in call.args.iter().enumerate() {
+                        let mut val = lower_expr(cg, arg)?;
+                        // A plain shape for a union parameter travels as a tagged envelope
+                        // in this frame (`coerce_into_union_slot`).
+                        if let Some(param_ty) = cg.callee_param_type(name, index) {
+                            val = cg.coerce_into_union_slot(
+                                arg,
+                                val,
+                                &param_ty,
+                                EnvelopeHome::Frame,
+                                &format!("{name}_arg{index}"),
+                            )?;
+                        }
                         call_args.push(val.into());
                     }
                     // Phase 6 Step 5 (R6 re-measurement): budget tick before every direct
@@ -16739,22 +17464,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     })
                     .collect();
                 push_c_string_terminator(&mut bytes);
-                let i8t = cg.i8();
-                let arr_ty = i8t.array_type(bytes.len() as u32);
-                let arr = i8t.const_array(
-                    &bytes
-                        .iter()
-                        .map(|&b| i8t.const_int(b as u64, false))
-                        .collect::<Vec<_>>(),
-                );
-                let g = cg
-                    .module
-                    .add_global(arr_ty, Some(AddressSpace::default()), "bts");
-                g.set_initializer(&arr);
-                g.set_constant(true);
-                g.set_linkage(inkwell::module::Linkage::Private);
-                g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-                Ok(g.as_pointer_value().into())
+                Ok(build_static_string(cg.ctx, cg.module, &bytes, "bts")
+                    .as_pointer_value()
+                    .into())
             } else {
                 // Interpolated string: build via ynz_string_builder_*.
                 let builder = cg
@@ -16801,14 +17513,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             let val = lower_expr(cg, sub_expr)?;
                             let sub_ty = cg.expr_type(sub_expr);
                             // Produce a null-terminated string from the expression value.
-                            let s_ptr = expr_to_cstring(cg, val, &sub_ty)?;
-                            cg.builder
-                                .build_call(
-                                    cg.rt.ynz_string_builder_append,
-                                    &[builder.into(), s_ptr.into()],
-                                    "",
-                                )
-                                .map_err(|e| format!("{e}"))?;
+                            if let Type::Options { name } = &sub_ty {
+                                // An options value arrives as its i8 tag, not the i64 a field load gives.
+                                let text =
+                                    lower_options_to_string(cg, val, name)?.into_pointer_value();
+                                write_text_ptr(cg, TextSink::Builder(builder), text)?;
+                            } else {
+                                write_value_text(cg, val, &sub_ty, TextSink::Builder(builder))?;
+                            }
                         }
                     }
                 }
@@ -18057,27 +18769,39 @@ fn lower_sm_background_spawn<'ctx>(
 }
 
 /// Coerce a decimal128 (N≤34) operand to a bignum C-string when the other side is
-/// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed.
+/// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed, and the
+/// strings the coercion allocated: the caller releases them once the operation has read them.
 fn coerce_to_bignum_pair<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
     lhs_ty: &Type,
     rhs_ty: &Type,
-) -> Result<(BasicValueEnum<'ctx>, BasicValueEnum<'ctx>), String> {
+) -> Result<
+    (
+        BasicValueEnum<'ctx>,
+        BasicValueEnum<'ctx>,
+        Vec<PointerValue<'ctx>>,
+    ),
+    String,
+> {
     let lhs_big = matches!(lhs_ty, Type::Number { precision } if *precision > 34);
     let rhs_big = matches!(rhs_ty, Type::Number { precision } if *precision > 34);
     if !lhs_big && !rhs_big {
-        return Ok((lhs, rhs));
+        return Ok((lhs, rhs, Vec::new()));
     }
+    let mut converted = Vec::new();
     let lhs2 = if matches!(lhs_ty, Type::Number { precision } if *precision <= 34) {
         let s = cg
             .builder
             .build_call(cg.rt.decimal_to_string, &[lhs.into()], "lhs_dec2str")
             .map_err(|e| format!("{e}"))?;
-        s.try_as_basic_value()
+        let text = s
+            .try_as_basic_value()
             .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+            .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+        converted.push(text.into_pointer_value());
+        text
     } else {
         lhs
     };
@@ -18086,13 +18810,16 @@ fn coerce_to_bignum_pair<'ctx>(
             .builder
             .build_call(cg.rt.decimal_to_string, &[rhs.into()], "rhs_dec2str")
             .map_err(|e| format!("{e}"))?;
-        s.try_as_basic_value()
+        let text = s
+            .try_as_basic_value()
             .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+            .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+        converted.push(text.into_pointer_value());
+        text
     } else {
         rhs
     };
-    Ok((lhs2, rhs2))
+    Ok((lhs2, rhs2, converted))
 }
 
 fn lower_binop<'ctx>(
@@ -18112,43 +18839,83 @@ fn lower_binop<'ctx>(
 
     // M8 P6: when one operand is bignum (N>34) and the other is decimal128 (N≤34),
     // coerce the N≤34 side to a C string so both operands are bignum-compatible.
-    let (lhs, rhs) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
+    let (lhs, rhs, converted_operands) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
+    // The operation follows the operands as they are now: a `number<=34>` left side coerced to
+    // bignum text takes the right side's bignum type (typeck's max(lhs, rhs) precision).
+    // Dispatching on the left side's own type would read that text as 16 decimal128 bytes:
+    // a wrong result and a read past the end of its exact-size heap buffer.
+    let lhs_was_coerced = matches!(lhs_ty, Type::Number { precision } if *precision <= 34)
+        && matches!(rhs_ty, Type::Number { precision } if *precision > 34);
+    let operand_ty = if lhs_was_coerced { rhs_ty } else { lhs_ty };
+    // A bignum comparison parses both texts at one precision: the wider of the two bignum
+    // operands (the left type alone would round a wider right operand down).
+    let is_comparison = matches!(op, EqEq | NotEq | Lt | LtEq | Gt | GtEq);
+    let widest_bignum_ty;
+    let operand_ty = match (is_comparison, lhs_ty, rhs_ty) {
+        (true, Type::Number { precision: left }, Type::Number { precision: right })
+            if *left > 34 && *right > 34 =>
+        {
+            widest_bignum_ty = Type::Number {
+                precision: *left.max(right),
+            };
+            &widest_bignum_ty
+        }
+        _ => operand_ty,
+    };
+    let result = lower_binop_operands(cg, op, lhs, rhs, lhs_e.span().start as u32, operand_ty)?;
+    for converted in converted_operands {
+        cg.builder
+            .build_call(cg.rt.ynz_string_release, &[converted.into()], "")
+            .map_err(|err| format!("{err}"))?;
+    }
+    Ok(result)
+}
 
+/// The operation itself, on operands already lowered (and coerced to bignum text where needed).
+fn lower_binop_operands<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    op: &BinOpKind,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    lhs_start: u32,
+    lhs_ty: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    use BinOpKind::*;
     match (op, lhs_ty) {
         (Add, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Sub, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Mul, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Div, Type::Int) => int_divrem(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             false,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Rem, Type::Int) => int_divrem(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             true,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
 
         (Add, Type::Float) => cg
@@ -18271,6 +19038,15 @@ fn lower_binop<'ctx>(
         (EqEq, Type::Float) => fcmp(cg, inkwell::FloatPredicate::OEQ, lhs, rhs, "feq"),
         (NotEq, Type::Float) => fcmp(cg, inkwell::FloatPredicate::ONE, lhs, rhs, "fne"),
 
+        (EqEq | NotEq | Lt | LtEq | Gt | GtEq, Type::Number { precision }) if *precision > 34 => {
+            bignum_compare(
+                cg,
+                lhs.into_pointer_value(),
+                rhs.into_pointer_value(),
+                *precision,
+                op,
+            )
+        }
         (EqEq | NotEq | Lt | LtEq | Gt | GtEq, Type::Number { .. }) => {
             decimal_compare(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), op)
         }
@@ -18578,6 +19354,60 @@ fn decimal_div<'ctx>(
     decimal_binop(cg, lhs, rhs, cg.rt.decimal_div, "ddiv")
 }
 
+/// Bignum comparison: `ynz_bignum_compare` gives -1 / 0 / 1, or 2 when unordered (NaN), and each
+/// operator is tested against that so an unordered pair is false for everything but `!=`
+/// (`2 > 0` and `2 >= 0` would otherwise read as true).
+///
+/// The operands are decimal text: reading them as decimal128 compares garbage and runs past a
+/// short exact-size string.
+fn bignum_compare<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+    precision: u32,
+    op: &BinOpKind,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let order = bignum_compare_order(cg, lhs, rhs, precision)?;
+    let int32 = cg.i32();
+    let (predicate, bound) = match op {
+        BinOpKind::Lt => (IntPredicate::EQ, int32.const_int(-1i64 as u64, true)),
+        BinOpKind::LtEq => (IntPredicate::SLE, int32.const_int(0, false)),
+        BinOpKind::EqEq => (IntPredicate::EQ, int32.const_int(0, false)),
+        BinOpKind::NotEq => (IntPredicate::NE, int32.const_int(0, false)),
+        BinOpKind::Gt => (IntPredicate::EQ, int32.const_int(1, false)),
+        // unsigned: -1 wraps high and 2 is above 1, so only 0 and 1 pass
+        BinOpKind::GtEq => (IntPredicate::ULE, int32.const_int(1, false)),
+        other => return Err(format!("codegen: {other:?} is not a bignum comparison")),
+    };
+    cg.builder
+        .build_int_compare(predicate, order, bound, "bncmp_b")
+        .map(|value| value.into())
+        .map_err(|err| format!("{err}"))
+}
+
+/// The raw -1 / 0 / 1 / 2 order of two bignum texts (see `bignum_compare`).
+fn bignum_compare_order<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+    precision: u32,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let precision_val = cg.i32().const_int(precision as u64, false);
+    let call = cg
+        .builder
+        .build_call(
+            cg.rt.ynz_bignum_compare,
+            &[lhs.into(), rhs.into(), precision_val.into()],
+            "bncmp",
+        )
+        .map_err(|err| format!("{err}"))?;
+    Ok(call
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_bignum_compare void")?
+        .into_int_value())
+}
+
 fn decimal_compare<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     lhs: PointerValue<'ctx>,
@@ -18670,6 +19500,23 @@ fn lower_unary<'ctx>(
             .build_float_neg(val.into_float_value(), "fneg")
             .map(|v| v.into())
             .map_err(|e| format!("{e}")),
+        // A bignum is decimal text: the decimal128 `0 - value` below would read it as 16 raw bytes
+        // and return a stack cell where a heap string is expected.
+        (UnaryOpKind::Neg, Type::Number { precision }) if *precision > 34 => {
+            let precision_val = cg.i32().const_int(*precision as u64, false);
+            let negated = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_bignum_neg,
+                    &[val.into(), precision_val.into()],
+                    "bn_neg",
+                )
+                .map_err(|err| format!("{err}"))?;
+            Ok(negated
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_bignum_neg void")?)
+        }
         (UnaryOpKind::Neg, Type::Number { .. }) => {
             let zero = cg.globals.dec_zero.as_pointer_value();
             decimal_binop(
@@ -18699,11 +19546,7 @@ fn lower_print<'ctx>(
     val: BasicValueEnum<'ctx>,
     ty: &Type,
 ) -> Result<(), String> {
-    let p = to_c_string(cg, val, ty)?;
-    cg.builder
-        .build_call(cg.rt.puts, &[p.into()], "puts")
-        .map_err(|e| format!("{e}"))?;
-    Ok(())
+    write_value_text(cg, val, ty, TextSink::Stdout)
 }
 
 /// Terminate a byte vector as a C string, aborting with an ICE message if any
@@ -18759,7 +19602,8 @@ fn to_c_string<'ctx>(
             .map(|v| v.into_pointer_value())
             .map_err(|e| format!("{e}")),
 
-        // Runtime format shims return a ptr into a thread-local static buffer.
+        // Runtime format shims return a fresh heap string the caller owns: `toString()` hands it to
+        // the program; `print`/`${}` never call these (`write_value_text`).
         Type::Int => {
             let c = cg
                 .builder
@@ -18828,7 +19672,7 @@ fn to_c_string<'ctx>(
 
             // Helper closure: append a static string literal to the builder.
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "dbg_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "dbg_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -18858,10 +19702,12 @@ fn to_c_string<'ctx>(
                     .build_struct_gep(struct_ty, shape_ptr, *field_idx as u32, field_name)
                     .map_err(|e| format!("GEP {field_name}: {e}"))?;
                 // Fields use different LLVM types depending on the Yinz type:
-                //   Number (decimal128) → i128 → pass as pointer
+                //   Number (decimal128, N <= 34) → i128 → pass as pointer
+                //   Number (bignum, N > 34)      → 8-byte pointer to decimal text → i64_bits_to
                 //   Options            → i8   → zero-extend to i64, use as tag
                 //   everything else    → i64  → i64_bits_to
-                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { .. }) {
+                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { precision } if *precision <= 34)
+                {
                     let i128t = cg.ctx.i128_type();
                     let raw = cg
                         .builder
@@ -18895,15 +19741,7 @@ fn to_c_string<'ctx>(
                         .into_int_value();
                     cg.i64_bits_to(bits, field_ty)?
                 };
-                let field_str = to_c_string(cg, field_val, field_ty)?;
-
-                cg.builder
-                    .build_call(
-                        cg.rt.ynz_string_builder_append,
-                        &[builder_val.into(), field_str.into()],
-                        "",
-                    )
-                    .map_err(|e| format!("{e}"))?;
+                write_value_text(cg, field_val, field_ty, TextSink::Builder(builder_val))?;
             }
 
             append_static(cg, builder_val, " }")?;
@@ -18941,7 +19779,7 @@ fn to_c_string<'ctx>(
                 .into_pointer_value();
 
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "arr_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "arr_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19033,15 +19871,7 @@ fn to_c_string<'ctx>(
             let out = cg.array_elem_out_buffer(&elem, "arr_dbg")?;
             let _flag = cg.array_elem_get_into(arr_ptr, i, out, "arr_dbg_get", None)?;
             let elem_val = cg.array_elem_from_out(out, &elem, "arr_dbg")?;
-            let elem_str = to_c_string(cg, elem_val, &elem)?;
-
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), elem_str.into()],
-                    "",
-                )
-                .map_err(|e| format!("{e}"))?;
+            write_value_text(cg, elem_val, &elem, TextSink::Builder(builder_val))?;
 
             // i += 1
             let next_i = cg
@@ -19090,6 +19920,9 @@ fn to_c_string<'ctx>(
                     "",
                 )
                 .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_call(cg.rt.ynz_string_release, &[rem_str.into()], "")
+                .map_err(|err| format!("{err}"))?;
             append_static(cg, builder_val, " more")?;
             cg.builder
                 .build_unconditional_branch(finish_bb)
@@ -19132,7 +19965,7 @@ fn to_c_string<'ctx>(
                 .into_pointer_value();
 
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "mdbg_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "mdbg_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19218,14 +20051,7 @@ fn to_c_string<'ctx>(
             append_static(cg, builder_val, ": ")?;
 
             let val_val = cg.array_elem_from_out(val_out, &val_ty, "mdbg_vv")?;
-            let val_str = to_c_string(cg, val_val, &val_ty)?;
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), val_str.into()],
-                    "",
-                )
-                .map_err(|e| format!("{e}"))?;
+            write_value_text(cg, val_val, &val_ty, TextSink::Builder(builder_val))?;
 
             let next_i = cg
                 .builder
@@ -19260,57 +20086,12 @@ fn to_c_string<'ctx>(
             Ok(g.as_pointer_value())
         }
 
-        // Union printing: for `T | nothing`, check null → "none", else print as T.
-        // For other union shapes, show a placeholder — full union introspection is future work.
-        Type::Union { variants } => {
-            let non_nothing: Vec<&Type> = variants
-                .iter()
-                .filter(|v| !matches!(v, Type::Nothing))
-                .collect();
-
-            if non_nothing.len() == 1 {
-                let inner = non_nothing[0].clone();
-                let ptr = val.into_pointer_value();
-                let is_null = cg
-                    .builder
-                    .build_is_null(ptr, "union_null")
-                    .map_err(|e| format!("{e}"))?;
-
-                let none_bb = cg.append_block("union_none");
-                let some_bb = cg.append_block("union_some");
-                let merge_bb = cg.append_block("union_merge");
-
-                cg.builder
-                    .build_conditional_branch(is_null, none_bb, some_bb)
-                    .map_err(|e| format!("{e}"))?;
-
-                cg.builder.position_at_end(none_bb);
-                let none_str = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
-                cg.builder
-                    .build_unconditional_branch(merge_bb)
-                    .map_err(|e| format!("{e}"))?;
-
-                cg.builder.position_at_end(some_bb);
-                let some_str = to_c_string(cg, val, &inner)?;
-                cg.builder
-                    .build_unconditional_branch(merge_bb)
-                    .map_err(|e| format!("{e}"))?;
-                let some_bb_end = cg.builder.get_insert_block().unwrap();
-
-                cg.builder.position_at_end(merge_bb);
-                let phi = cg
-                    .builder
-                    .build_phi(cg.ptr(), "union_str")
-                    .map_err(|e| format!("{e}"))?;
-                phi.add_incoming(&[
-                    (&none_str.as_pointer_value(), none_bb),
-                    (&some_str, some_bb_end),
-                ]);
-                Ok(phi.as_basic_value().into_pointer_value())
-            } else {
-                let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
-                Ok(g.as_pointer_value())
-            }
+        // A `T | nothing` union is written by `write_value_text` (branch on null, no string is
+        // built). Here, as a value to hold, any union shows a placeholder — full union
+        // introspection is future work.
+        Type::Union { .. } => {
+            let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
+            Ok(g.as_pointer_value())
         }
 
         // Options type — val is the i64-extended i8 tag; delegate to options toString.
@@ -19328,21 +20109,120 @@ fn to_c_string<'ctx>(
     }
 }
 
-/// Convert any Yinz value to a null-terminated C string pointer for interpolation.
+/// Where a consumer that reads a value's text once puts it: `print` writes it to stdout, a
+/// `${}` part, a debug-print part or an array/map element appends it to a string builder.
+#[derive(Clone, Copy)]
+enum TextSink<'ctx> {
+    Stdout,
+    Builder(PointerValue<'ctx>),
+}
+
+/// Put NUL-terminated text at `text` into `sink`. The sink never frees the text.
+fn write_text_ptr<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    sink: TextSink<'ctx>,
+    text: PointerValue<'ctx>,
+) -> Result<(), String> {
+    match sink {
+        TextSink::Stdout => cg
+            .builder
+            .build_call(cg.rt.puts, &[text.into()], "puts")
+            .map(|_| ())
+            .map_err(|err| format!("{err}")),
+        TextSink::Builder(builder) => cg
+            .builder
+            .build_call(
+                cg.rt.ynz_string_builder_append,
+                &[builder.into(), text.into()],
+                "",
+            )
+            .map(|_| ())
+            .map_err(|err| format!("{err}")),
+    }
+}
+
+/// Write the text of `val` (type `ty`) to `sink`: the one path every consumer that reads the
+/// text at once and drops it goes through (`print`, `${}`, shape/array/map debug text).
 ///
-/// Delegates to `to_c_string` for the types it knows. For Options types, emits a call
-/// to the options toString runtime helper. For all other types, defers to `to_c_string`.
-fn expr_to_cstring<'ctx>(
+/// `int`, `float` and `number` (decimal128) call a runtime print/append entry that formats and
+/// writes straight to the sink: no heap string is built and nothing is released, which is what
+/// keeps `print(n)` at or below its cost before strings carried an owned header (Golden Rule 8).
+/// Only `n.toString()` builds an owned string (`to_c_string`). A `T | nothing` union branches on
+/// null and writes `none` or the inner text the same way. Every other type's text is a pointer
+/// that something else owns (a held string, a static, a debug string), so it is written and not
+/// released.
+fn write_value_text<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
-) -> Result<inkwell::values::PointerValue<'ctx>, String> {
-    match ty {
-        Type::Options { name } => {
-            lower_options_to_string(cg, val, name).map(|v| v.into_pointer_value())
+    sink: TextSink<'ctx>,
+) -> Result<(), String> {
+    let (print_entry, append_entry) = match ty {
+        Type::Int => (cg.rt.int_print, cg.rt.int_append),
+        Type::Float => (cg.rt.float_print, cg.rt.float_append),
+        Type::Number { precision } if *precision <= 34 => {
+            (cg.rt.decimal_print, cg.rt.decimal_append)
         }
-        _ => to_c_string(cg, val, ty),
-    }
+        Type::Union { variants } => {
+            let mut non_nothing = variants
+                .iter()
+                .filter(|variant| !matches!(variant, Type::Nothing));
+            return match (non_nothing.next(), non_nothing.next()) {
+                (Some(inner), None) => write_optional_text(cg, val, inner, sink),
+                _ => {
+                    let text = to_c_string(cg, val, ty)?;
+                    write_text_ptr(cg, sink, text)
+                }
+            };
+        }
+        _ => {
+            let text = to_c_string(cg, val, ty)?;
+            return write_text_ptr(cg, sink, text);
+        }
+    };
+    let call = match sink {
+        TextSink::Stdout => cg.builder.build_call(print_entry, &[val.into()], ""),
+        TextSink::Builder(builder) => {
+            cg.builder
+                .build_call(append_entry, &[builder.into(), val.into()], "")
+        }
+    };
+    call.map(|_| ()).map_err(|err| format!("{err}"))
+}
+
+/// The text of a `T | nothing` value: `none` when `val` is null, else the text of `T`.
+fn write_optional_text<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    inner: &Type,
+    sink: TextSink<'ctx>,
+) -> Result<(), String> {
+    let is_null = cg
+        .builder
+        .build_is_null(val.into_pointer_value(), "union_null")
+        .map_err(|err| format!("{err}"))?;
+    let none_bb = cg.append_block("union_none");
+    let some_bb = cg.append_block("union_some");
+    let merge_bb = cg.append_block("union_merge");
+    cg.builder
+        .build_conditional_branch(is_null, none_bb, some_bb)
+        .map_err(|err| format!("{err}"))?;
+
+    cg.builder.position_at_end(none_bb);
+    let none_text = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
+    write_text_ptr(cg, sink, none_text.as_pointer_value())?;
+    cg.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|err| format!("{err}"))?;
+
+    cg.builder.position_at_end(some_bb);
+    write_value_text(cg, val, inner, sink)?;
+    cg.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|err| format!("{err}"))?;
+
+    cg.builder.position_at_end(merge_bb);
+    Ok(())
 }
 
 /// UFCS dispatch: `receiver.method(args)` → call standalone function `method(receiver, args)`.
@@ -19359,9 +20239,19 @@ fn lower_ufcs_call<'ctx>(
         .ok_or_else(|| format!("codegen UFCS: function `{}` not found in module", method))?;
 
     let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![recv_val.into()];
-    for arg in extra_args {
-        let arg_val = lower_expr(cg, arg)?;
-        // If the function param expects dynamic but arg is a concrete shape, coerce.
+    for (index, arg) in extra_args.iter().enumerate() {
+        let mut arg_val = lower_expr(cg, arg)?;
+        // A plain shape for a union parameter travels as a tagged envelope in this frame
+        // (`coerce_into_union_slot`); parameter 0 is the receiver.
+        if let Some(param_ty) = cg.callee_param_type(method, index + 1) {
+            arg_val = cg.coerce_into_union_slot(
+                arg,
+                arg_val,
+                &param_ty,
+                EnvelopeHome::Frame,
+                &format!("{method}_ufcs_arg{}", index + 1),
+            )?;
+        }
         args.push(arg_val.into());
     }
 
@@ -19501,11 +20391,8 @@ fn lower_field_access<'ctx>(
                 .ok_or_else(|| "ec_msg: builder has no insert block after call".to_string())?;
 
             cg.builder.position_at_end(merge_bb);
-            let empty = cg
-                .builder
-                .build_global_string_ptr("", "ec_msg_empty")
-                .map_err(|e| format!("{e}"))?
-                .as_pointer_value();
+            let empty =
+                build_string_global(cg.ctx, cg.module, "", "ec_msg_empty").as_pointer_value();
             let phi = cg
                 .builder
                 .build_phi(cg.ptr(), "ec_msg")
@@ -21548,7 +22435,7 @@ fn lower_options_to_string<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(arm_bb);
-        let g = build_string_global(
+        let g = build_c_string_global(
             cg.ctx,
             cg.module,
             display,
@@ -22601,28 +23488,95 @@ fn load<'ctx>(
     }
 }
 
+/// A static Yinz `string`: `{ i64 STATIC_STRING_HEADER, [N x i8] }`, the header telling
+/// `ynz_string_release` these bytes are never freed.
+#[derive(Clone, Copy)]
+struct StaticString<'ctx> {
+    bytes: PointerValue<'ctx>,
+}
+
+impl<'ctx> StaticString<'ctx> {
+    /// The string pointer Yinz code holds: the first byte, with the header in front of it.
+    fn as_pointer_value(&self) -> PointerValue<'ctx> {
+        self.bytes
+    }
+}
+
+/// Emit `bytes_with_nul` as a static Yinz `string` (header + bytes, private constant) and
+/// return its string pointer. O(n) time and memory in the string length.
+fn build_static_string<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    bytes_with_nul: &[u8],
+    name: &str,
+) -> StaticString<'ctx> {
+    let i8_type = ctx.i8_type();
+    let i32_type = ctx.i32_type();
+    let header = ctx
+        .i64_type()
+        .const_int(ynz_abi::STATIC_STRING_HEADER, false);
+    let bytes = i8_type.const_array(
+        &bytes_with_nul
+            .iter()
+            .map(|&byte| i8_type.const_int(byte as u64, false))
+            .collect::<Vec<_>>(),
+    );
+    let initializer = ctx.const_struct(&[header.into(), bytes.into()], false);
+    let global = module.add_global(initializer.get_type(), Some(AddressSpace::default()), name);
+    global.set_initializer(&initializer);
+    global.set_constant(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+    global.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+    // The header is read as a u64 in front of the first byte.
+    global.set_alignment(ynz_abi::STRING_HEADER_BYTES as u32);
+    // SAFETY: field 1 of the struct just built; index 0 steps over the global itself.
+    let bytes = unsafe {
+        global.as_pointer_value().const_in_bounds_gep(
+            initializer.get_type(),
+            &[i32_type.const_zero(), i32_type.const_int(1, false)],
+        )
+    };
+    StaticString { bytes }
+}
+
+/// A static Yinz `string` from Rust text (no embedded NUL; the NUL terminator is added).
 fn build_string_global<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
-    s: &str,
+    text: &str,
+    name: &str,
+) -> StaticString<'ctx> {
+    let mut bytes: Vec<u8> = text.bytes().collect();
+    bytes.push(0);
+    build_static_string(ctx, module, &bytes, name)
+}
+
+/// A static C string the compiler uses internally (a panic message, a source file name, a
+/// debug-print fragment, the source of a copy): never a Yinz `string` value, so it has no
+/// ownership header. Anything that can reach Yinz code as a `string` goes through
+/// `build_string_global` instead.
+fn build_c_string_global<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    text: &str,
     name: &str,
 ) -> GlobalValue<'ctx> {
-    let i8t = ctx.i8_type();
-    let mut bytes: Vec<u8> = s.bytes().collect();
+    let i8_type = ctx.i8_type();
+    let mut bytes: Vec<u8> = text.bytes().collect();
     bytes.push(0);
-    let arr_ty = i8t.array_type(bytes.len() as u32);
-    let arr = i8t.const_array(
+    let arr_ty = i8_type.array_type(bytes.len() as u32);
+    let arr = i8_type.const_array(
         &bytes
             .iter()
-            .map(|&b| i8t.const_int(b as u64, false))
+            .map(|&byte| i8_type.const_int(byte as u64, false))
             .collect::<Vec<_>>(),
     );
-    let g = module.add_global(arr_ty, Some(AddressSpace::default()), name);
-    g.set_initializer(&arr);
-    g.set_constant(true);
-    g.set_linkage(inkwell::module::Linkage::Private);
-    g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-    g
+    let global = module.add_global(arr_ty, Some(AddressSpace::default()), name);
+    global.set_initializer(&arr);
+    global.set_constant(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+    global.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+    global
 }
 
 fn build_decimal_global<'ctx>(

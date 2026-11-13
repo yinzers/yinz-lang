@@ -1,0 +1,12 @@
+// Q1: nested for-loops with the same loop var name.
+function entrypoint() -> nothing {
+  let a: array<string> = [`a1`, `a2`]
+  let b: array<string> = [`b1`, `b2`]
+  for (v in a) {
+    for (v in b) {
+      wait sleep(5)
+      print(v)
+    }
+    print(v)
+  }
+}

@@ -323,7 +323,7 @@ function fixed() -> nothing {
 }
 ```
 
-**Shape B — top-level redeclaration**: an outer `let x` before a `wait` AND a second `let x` at the TOP LEVEL of the function body after the suspension. Even when all post-wait reads resolve to the redeclared binding (not the outer one), both top-level `let x` bindings share the same name-keyed frame slot — the second write clobbers the first, producing a silent wrong answer at runtime.
+**Shape B — top-level redeclaration**: an outer `let x` before a `wait` AND a second `let x` at the TOP LEVEL of the function body after the suspension. The type checker rejects it as a language rule, even when all post-wait reads resolve to the redeclared binding. (Codegen now gives each binding its own slot, see "Per-binding slot identity" below, so the rule no longer protects against a shared slot.)
 
 ```
 // ❌ — x=10 and x=99 both at top level, separated by a wait
@@ -345,16 +345,18 @@ function fixed() -> nothing {
 
 The same two shapes apply to **parameters**: a parameter `p` occupies a frame slot at function entry.
 
-- **Shape A (nested shadow)**: a `let p` inside any nested block (if/while/for/match body) is rejected in a suspending function. The frame-slot system keys every crossing local and parameter by NAME — a nested `let p` shares the parameter's name-keyed slot. Every continuation state's `reload_params_from_frame` overwrites `cg.locals[p]` with the slot pointer, which means even a non-crossing inner shadow would install the wrong alloca across the next suspension. All nested param shadows in suspending functions are therefore conservatively rejected until per-binding-ID slot allocation ships (M3c).
+- **Shape A (nested shadow)**: a `let p` inside any nested block (if/while/for/match body) is rejected in a suspending function. All nested param shadows in suspending functions stay rejected: the guard is unchanged language behaviour, and codegen no longer shares the parameter's slot with the inner binding (see below).
 - **Shape B (top-level redeclaration)**: a `let p` at the TOP LEVEL of the function body shares the parameter's frame slot and is rejected regardless of whether the inner binding is read post-wait.
+
+**Per-binding slot identity (the guards above stay as the language rule)**: slots, crossing allocas and `cg.locals` are still keyed by name, but codegen reads the module with a unique name per binding. Typeck's resolver records every declaration (`let`, `for` variable, desugared destructure alias, parameter) and which declaration each identifier use resolves to (`TypedModule::binding_names`, `crates/ynz-typeck/src/binding_names.rs`); the first declaration of a name in a function keeps it, later ones become `name__N` (N unused anywhere in the function). `TypedModule::with_codegen_names` applies the map to a clone — diagnostics, lints and the LSP keep the user's names — and fails hard when an identifier naming a local binding has no resolution entry. Any pass that looks a binding up by name after this point (e.g. a scope-exit release list) must use the unique name or the declaration key from that map. So the nested-shadow programs the guards do not examine (nested outer bindings, `for` variables, destructure aliases, non-crossing shadows) now get one slot per binding.
 
 **Non-async functions**: a `let p` shadowing a parameter in a function that does NOT contain any `wait` is allowed — Yinz permits shadowing per [`docs/internal/implementation/IMP-linting.md`](IMP-linting.md) (`shadowed-variables` Tier-3 lint). The conservative guard only applies to suspending (async) functions where parameters are frame-slotted.
 
-**Why the guard is conservative (not precise)**: the frame-slot system maps each crossing local to a slot by NAME — one slot per unique name across the entire function body. A precise implementation would assign each `let` declaration a unique binding ID (keyed by source span or a monotonic counter), then allocate one slot per binding ID. The conservative guard rejects all same-name cases because it cannot distinguish two bindings that would slot correctly from two bindings that would collide. The workaround is always: use distinct names.
+**Why the guard is still there**: slots, crossing allocas and `cg.locals` are keyed by name, and typeck now makes every binding's name unique for codegen, so the collisions the guard was written for cannot happen in generated code. The guard (`ShadowsCrossingLocal`) is kept unchanged because removing it is a language change, not a codegen fix. The user-level workaround is still: use distinct names.
 
-**What it costs to lift** (1–2 sessions): assign each `let` declaration a unique binding ID; key crossing-local frame slots by binding ID rather than name; propagate ID-keyed resolution through the flush/reload and typeck layers so the compiler can distinguish "same name, different slot" at every read and write site.
+**What it costs to lift** (small): delete the `ShadowsCrossingLocal` check and its parameter mirror in typeck and update the spec. Slot identity needs no further codegen change (per-binding names, v0.3-M9 C4).
 
-**Trigger**: user demand for re-using a name around a suspension in a program that cannot be restructured, OR when per-binding slot identity is added to the crossing analysis and codegen.
+**Trigger**: user demand for re-using a name around a suspension in a program that cannot be restructured.
 
 **Workaround** (always applies): rename any binding that re-uses a name already in use across a suspension boundary — two values with different semantics should have different names anyway (Golden Rule 2).
 

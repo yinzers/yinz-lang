@@ -1,0 +1,45 @@
+// v0.3-M9 C2 safety fixture — exit class: THE CALLER'S `free_frame` AFTER READY.
+// A suspending callee runs in a heap frame the CALLER allocates, polls to Ready and then frees
+// (`free_frame`). The callee's heap locals live in that frame across its waits. The callee's
+// own scope-exit release runs at its Ready exit, BEFORE the caller frees the frame, so the
+// frame free must neither release those locals a second time nor leave the caller reading a
+// freed return slot. `callee` is one level; `depth` recurses so the CHILD-frame free site (a
+// different `free_frame` emitter) runs too.
+// Correct behavior: exact output below, exit 0, AddressSanitizer-clean.
+// Guards against: a double free of a frame-held local (callee release + frame teardown), and a
+// read of the callee's return value from a frame that was already freed.
+//
+// Expected output (one per line): 8, 3, 2, 12
+
+function callee(enter: boolean) -> int {
+  let kept: array<int> = [1, 2, 3]
+  let extra: array<int> = [4, 5]
+  wait sleep(1)
+  if (enter) {
+    let inner: array<int> = [6]
+    wait sleep(1)
+    return kept.count() + extra.count() + inner.count() + 2
+  }
+  return kept.count()
+}
+
+function depth(level: int) -> int {
+  let mine: array<int> = [level, level]
+  wait sleep(1)
+  if (level == 0) {
+    return mine.count()
+  }
+  let below: int = depth(level - 1)
+  return below + mine.count()
+}
+
+function entrypoint() -> nothing {
+  let entered: int = callee(true)
+  print(entered.toString())
+  let skipped: int = callee(false)
+  print(skipped.toString())
+  let shallow: int = depth(0)
+  print(shallow.toString())
+  let deep: int = depth(5)
+  print(deep.toString())
+}

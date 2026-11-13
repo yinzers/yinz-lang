@@ -295,18 +295,22 @@ impl<'a> ProvenanceCtx<'a> {
 /// heap allocation, so an element of that type contributes nothing to a literal's roots.
 /// `Error` counts as value-like so an earlier type error does not cascade into a transfer
 /// refusal. `None` (type unknown to the oracle) is treated as heap-typed by the callers.
-fn value_like(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Int
-            | Type::Float
-            | Type::Bool
-            | Type::Number { .. }
-            | Type::String
-            | Type::Options { .. }
-            | Type::Nothing
-            | Type::Error
-    )
+pub(crate) fn value_like(ty: &Type) -> bool {
+    match ty {
+        // A `maybe` of bits is an inline envelope of bits: it holds no heap pointer either.
+        Type::Maybe { inner } => value_like(inner),
+        _ => matches!(
+            ty,
+            Type::Int
+                | Type::Float
+                | Type::Bool
+                | Type::Number { .. }
+                | Type::String
+                | Type::Options { .. }
+                | Type::Nothing
+                | Type::Error
+        ),
+    }
 }
 
 /// The roots a provenance reaches through, for folding into an aggregate. `None` = Unknown.
@@ -464,11 +468,24 @@ pub fn provenance(expr: &Expr, ctx: &ProvenanceCtx<'_>) -> Provenance {
             if builtin_method_returns_fresh(method) {
                 return Provenance::Fresh;
             }
-            Provenance::Reaches(
-                root_binding_name(receiver)
-                    .map(|r| vec![r.to_string()])
-                    .unwrap_or_default(),
-            )
+            // The result may be (a piece of) the receiver OR of a heap argument the method hands
+            // back or builds from: `maybe.or(default)`, `a.concat(b)`, `a.append(b)`. Every
+            // heap argument's roots are roots of the result (value-typed arguments drop out).
+            let mut roots: Vec<String> = root_binding_name(receiver)
+                .map(|r| vec![r.to_string()])
+                .unwrap_or_default();
+            match fold_parts(args.iter(), ctx, true) {
+                Provenance::Fresh => {}
+                Provenance::Reaches(argument_roots) => {
+                    for root in argument_roots {
+                        if !roots.contains(&root) {
+                            roots.push(root);
+                        }
+                    }
+                }
+                Provenance::Whole(_) | Provenance::Unknown => return Provenance::Unknown,
+            }
+            Provenance::Reaches(roots)
         }
         Expr::Wait(inner, _) => provenance(inner, ctx),
         // A task handle — the spawn's sole reference.

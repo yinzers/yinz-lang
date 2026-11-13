@@ -1,0 +1,25 @@
+// v0.3-M9 C1b (security): a union value passed as a NON-RECEIVER argument of a UFCS dot-call
+// where ONE VARIANT is expected (`big.useBig(thing)` is sugar for `useBig(big, thing)`).
+// Correct behavior: does not compile — `UnionWhereVariantExpected`, the same lesson as the
+// plain call form.
+// Pre-fix failure: compiled (the dot-call form checked no argument types), and the callee read
+// the 16-byte union envelope as a `Big` — it printed a stack address.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function useBig(share first: Big, share second: Big) -> int {
+  return second.count
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let thing: Thing = big
+  print(big.useBig(thing).toString())
+}
