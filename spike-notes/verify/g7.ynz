@@ -1,0 +1,13 @@
+function f() -> int {
+  let acc: array<int> = [0]
+  let i: int = 0
+  while (i < 2) {
+    let per: array<int> = [i, i, i]
+    acc = per
+    i = i + 1
+  }
+  return acc.count()
+}
+function entrypoint() -> nothing {
+  print(f().toString())
+}

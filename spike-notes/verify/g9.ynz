@@ -1,0 +1,12 @@
+function pump() -> int {
+  let ch: channel<array<int>> = channel<array<int>>(4)
+  let a: array<int> = [1, 2, 3]
+  ch.send(a)
+  let got = ch.receive()
+  let rows = got.or([0])
+  return rows.count()
+}
+function entrypoint() -> nothing {
+  let n: int = pump()
+  print(n.toString())
+}

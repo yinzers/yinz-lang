@@ -1,0 +1,15 @@
+function eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+function shade(c: boolean) -> nothing {
+  let x: array<int> = [1, 2, 3]
+  let y: array<int> = x
+  if (c) {
+    let x: array<int> = [9]
+    print(x.count().toString())
+    eat(y)
+  }
+}
+function entrypoint() -> nothing {
+  shade(true)
+}

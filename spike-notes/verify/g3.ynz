@@ -1,0 +1,9 @@
+function fresh() -> array<int> {
+  return [1, 2, 3]
+}
+function entrypoint() -> nothing {
+  fresh()
+  print(fresh().count().toString())
+  let n: int = fresh().count()
+  print(n.toString())
+}

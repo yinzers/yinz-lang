@@ -1,0 +1,12 @@
+function make() -> array<array<int>> {
+  let a: array<int> = [1, 2, 3]
+  let o: array<array<int>> = []
+  o.add(a)
+  return o
+}
+function entrypoint() -> nothing {
+  let o: array<array<int>> = make()
+  for (inner in o) {
+    print(inner.count().toString())
+  }
+}

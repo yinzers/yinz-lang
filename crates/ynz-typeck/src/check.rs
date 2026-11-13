@@ -10854,7 +10854,7 @@ pub fn crossing_local_names_with_cpu_spike(
     .names;
     // SPIKE S3: a scope-exit release is a use after every suspension that separates the
     // owner from its exit. Release owners join the SAME set (second input, same producer).
-    for owner in release_owners {
+    for owner in release_owners.iter().filter(|_| std::env::var("YNZ_VERIFY_NO_COUPLING").is_err()) {
         if !param_names.contains(&owner.as_str()) && !names.contains(owner) {
             names.push(owner.clone());
         }

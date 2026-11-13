@@ -1,0 +1,11 @@
+function pass(rows: array<int>) -> array<int> {
+  return rows
+}
+function make() -> array<int> {
+  let a: array<int> = [1, 2, 3]
+  return pass(a)
+}
+function entrypoint() -> nothing {
+  let r: array<int> = make()
+  print(r.count().toString())
+}

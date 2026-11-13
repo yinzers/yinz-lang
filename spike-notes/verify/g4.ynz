@@ -1,0 +1,14 @@
+function entrypoint() -> nothing {
+  for (i in range(3)) {
+    let per: array<int> = [i, i]
+    print(per.count().toString())
+  }
+  let a: array<int> = [1]
+  if (a.count()) {
+    1 => {
+      let m: array<int> = [9]
+      print(m.count().toString())
+    }
+    else => { print(`other`) }
+  }
+}
