@@ -16912,7 +16912,8 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     // Prefer the direct name. If not found, check for an aliased import
                     // (`import { getValue as fetchVal }`) — the LLVM module declares the
                     // function under the original exported name, not the local alias.
-                    // Fall back to monomorphization lookup, then the name itself.
+                    // Then the monomorphization lookup: the one generic instance the call's
+                    // argument types resolve to, or an internal error (no guess).
                     let effective_name = if cg.module.get_function(name).is_some() {
                         name.to_string()
                     } else if let Some(orig) = cg
