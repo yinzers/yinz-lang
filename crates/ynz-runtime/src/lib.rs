@@ -3120,8 +3120,10 @@ mod array_runtime {
 // ── M8 P6: bignum runtime — `number<N>` for N > 34 ──────────────────────────
 //
 // Bignum values at the ABI boundary are null-terminated decimal strings
-// (pointer to i8). The runtime allocates result strings with `malloc`;
-// callers are responsible for eventual cleanup (deferred to v0.2 arena).
+// (pointer to i8). Every result string comes from the counted heap-string
+// allocator (`heap_string_from_str`), so it is a heap string like any other:
+// the caller owns it and `ynz_string_free` releases it. Generated code frees
+// no heap string yet; the scope-exit release pass will.
 
 use ynz_numerics::decimal_n::{
     add as bignum_add_op, div as bignum_div_op, format_bignum, mul as bignum_mul_op, parse_bignum,
