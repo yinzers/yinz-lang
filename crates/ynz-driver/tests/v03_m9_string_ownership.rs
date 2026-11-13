@@ -99,11 +99,94 @@ asan_case!(
     "the debug print of a shape releases a field's, element's or `... and N more` text twice, or releases a static display name / string field (High)"
 );
 
-/// Bug caught: `int`/`float`/`number` text that used to live in a thread-local buffer is now heap,
-/// so a `print`/`${}` that does not release its temporary leaks one string per use. (High)
+/// Iterations every counted print-cost fixture runs.
+const PRINT_COST_ITERATIONS: u64 = 1000;
+
+/// Build and run a print-cost fixture with the string counter on, and assert that the program
+/// allocated exactly `expected_strings` heap strings in total.
+fn assert_heap_strings_allocated(fixture: &str, expected_strings: u64) {
+    let built = build(fixture, false);
+    let (output, counters) = run_counted(&built);
+    assert_eq!(output.exit_code, 0, "stderr:\n{}", output.stderr);
+    assert!(
+        output.stdout.ends_with("1000\n"),
+        "loop must run to the end:\n{}",
+        output.stdout
+    );
+    assert_eq!(
+        counters.string_alloc, expected_strings,
+        "{fixture}: expected {expected_strings} heap strings, saw {} (counters: {counters:?})",
+        counters.string_alloc
+    );
+}
+
+/// `print_cost_case!(case, fixture, strings_per_iteration, "bug it catches (High)")`: the fixture
+/// allocates exactly `strings_per_iteration` heap strings per iteration (the string the program
+/// builds itself, never one for the text of a number it prints or interpolates).
+macro_rules! print_cost_case {
+    ($case:ident, $fixture:literal, $strings_per_iteration:expr, $bug:literal) => {
+        #[doc = $bug]
+        #[test]
+        fn $case() {
+            assert_heap_strings_allocated($fixture, $strings_per_iteration * PRINT_COST_ITERATIONS);
+        }
+    };
+}
+
+print_cost_case!(
+    printing_an_int_allocates_no_string,
+    "v0_3_m9_c3a_no_alloc_print_int.ynz",
+    0,
+    "`print(int)` mallocs and frees a heap string per call, which costs more than the thread-local buffer it replaced and more than Rust's `println!` (High: Golden Rule 8 cost regression)"
+);
+
+print_cost_case!(
+    printing_a_float_allocates_no_string,
+    "v0_3_m9_c3a_no_alloc_print_float.ynz",
+    0,
+    "`print(float)` copies the formatted text into a headered heap string on top of the formatting `String`: two allocations where the base had one (High: Golden Rule 8 cost regression)"
+);
+
+print_cost_case!(
+    printing_a_number_allocates_no_string,
+    "v0_3_m9_c3a_no_alloc_print_number.ynz",
+    0,
+    "`print(number)` copies the formatted text into a headered heap string on top of the formatting `String`: two allocations where the base had one (High: Golden Rule 8 cost regression)"
+);
+
+print_cost_case!(
+    interpolating_an_int_allocates_only_the_result,
+    "v0_3_m9_c3a_no_alloc_interp_int.ynz",
+    1,
+    "`${int}` mallocs and frees a heap string for the part before appending it to the result (High: Golden Rule 8 cost regression)"
+);
+
+print_cost_case!(
+    interpolating_a_float_allocates_only_the_result,
+    "v0_3_m9_c3a_no_alloc_interp_float.ynz",
+    1,
+    "`${float}` builds a headered heap string for the part before appending it to the result (High: Golden Rule 8 cost regression)"
+);
+
+print_cost_case!(
+    interpolating_a_number_allocates_only_the_result,
+    "v0_3_m9_c3a_no_alloc_interp_number.ynz",
+    1,
+    "`${number}` builds a headered heap string for the part before appending it to the result (High: Golden Rule 8 cost regression)"
+);
+
+print_cost_case!(
+    printing_a_shape_allocates_only_its_debug_text,
+    "v0_3_m9_c3a_no_alloc_shape_fields.ynz",
+    1,
+    "the debug print of a shape builds a heap string for each int/float/number field's text, not only the one debug text (High: Golden Rule 8 cost regression)"
+);
+
+/// Bug caught: a `print`/`${}` of a number that allocates a temporary and forgets to release it
+/// leaks one string per use; here nothing is allocated for the numbers, so only each
+/// interpolation result (a string the program holds) may be live at the end. (High)
 #[test]
-fn printing_and_interpolating_numbers_releases_their_temporaries() {
-    const ITERATIONS: u64 = 1000;
+fn printing_and_interpolating_numbers_leaves_only_the_interpolation_results() {
     let built = build("v0_3_m9_c3a_print_temps_balance.ynz", false);
     let (output, counters) = run_counted(&built);
     assert_eq!(output.exit_code, 0, "stderr:\n{}", output.stderr);
@@ -112,19 +195,15 @@ fn printing_and_interpolating_numbers_releases_their_temporaries() {
         "loop must run to the end:\n{}",
         output.stdout
     );
-    // Three temporaries + one interpolation result per iteration are allocated, so this is not
-    // vacuous; only the interpolation result may still be allocated (the C7 pass frees it).
-    assert!(
-        counters.string_alloc >= 4 * ITERATIONS,
-        "expected at least {} string allocations, saw {}",
-        4 * ITERATIONS,
-        counters.string_alloc
+    assert_eq!(
+        counters.string_alloc, PRINT_COST_ITERATIONS,
+        "only the interpolation result may be a heap string per iteration (counters: {counters:?})"
     );
     let still_allocated = counters.string_alloc - counters.string_free;
     assert!(
-        still_allocated <= ITERATIONS,
-        "{still_allocated} strings stayed allocated after {ITERATIONS} iterations; only the \
-         {ITERATIONS} interpolation results may (counters: {counters:?})"
+        still_allocated <= PRINT_COST_ITERATIONS,
+        "{still_allocated} strings stayed allocated after {PRINT_COST_ITERATIONS} iterations; only \
+         the interpolation results may (counters: {counters:?})"
     );
 }
 
