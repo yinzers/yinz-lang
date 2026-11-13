@@ -3928,10 +3928,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             }
             _ => {
                 let is_union_value = narrowed || matches!(source_ty, Type::Union { .. });
-                let already_homed = match expr {
-                    Expr::Call(_) | Expr::MethodCall { .. } | Expr::Wait(..) => true,
-                    _ => false,
-                };
+                let already_homed = matches!(
+                    expr,
+                    Expr::Call(_) | Expr::MethodCall { .. } | Expr::Wait(..)
+                );
                 if home == EnvelopeHome::Return && is_union_value && !already_homed {
                     Ok(self
                         .union_to_heap_cell(val.into_pointer_value(), &variants, site)?
