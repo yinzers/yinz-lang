@@ -387,7 +387,10 @@ fn anchor_of(
             parameter: parameter.codegen_name.clone(),
         };
     }
-    if !members.iter().any(|member| member.role == MemberRole::Owner) {
+    if !members
+        .iter()
+        .any(|member| member.role == MemberRole::Owner)
+    {
         return ReleaseAnchor::NoOwner;
     }
     // The scope that exits last is the one every member's scope is inside: the longest path

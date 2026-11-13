@@ -8,9 +8,10 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind, SourceSpan};
 
 use crate::{
     builtins::{
-        array_method_is_mutating, array_method_return, collection_method_arg_slots, collection_store_positions,
-        fixed_method_is_mutating, fixed_method_return, map_method_is_mutating, map_method_return,
-        maybe_method_return, sensitive_method_return, string_method_return,
+        array_method_is_mutating, array_method_return, collection_method_arg_slots,
+        collection_store_positions, fixed_method_is_mutating, fixed_method_return,
+        map_method_is_mutating, map_method_return, maybe_method_return, sensitive_method_return,
+        string_method_return,
     },
     effective_ownership::{
         classify_binding_in_stmts, provenance, stmt_rebinds, EffectiveOwnership, Freshness,
@@ -1998,11 +1999,9 @@ impl<'b> Checker<'b> {
                     // The NEXT pass of an enclosing loop reads a binding declared outside it as
                     // surely as a later statement does, and `remaining` ends at this block's end.
                     let used_after = self.bound_outside_current_loop(name)
-                        || remaining.iter().any(|s| {
-                            members
-                                .iter()
-                                .any(|m| ident_read_in_stmt(s, m.as_str()))
-                        });
+                        || remaining
+                            .iter()
+                            .any(|s| members.iter().any(|m| ident_read_in_stmt(s, m.as_str())));
                     if origin_ok && !used_after {
                         BgOwnership::Give
                     } else {

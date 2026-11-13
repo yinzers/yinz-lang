@@ -23,6 +23,14 @@
 //! optimization level is the same fixture at `--no-optimize`, where no optimizer can delete a
 //! dead read of freed memory and hide the defect.
 //!
+//! ## C5a store fixtures (AddressSanitizer) — 7 programs × 2 optimization levels
+//!
+//! The heap-value-stored-without-a-sink class (spike S3 holes t6b, g1, g8, g7, t7, and the
+//! accepted spelling of t3): typeck's transfer record now joins each stored value to its holder
+//! (`ynz-typeck/tests/transfer_record.rs` asserts the facts); these programs are the end-to-end
+//! guard that the release pass frees none of them early. Green today for the same reason as the
+//! exit classes above.
+//!
 //! ## Leak fixtures (alloc/free counters) — RED until the release pass lands
 //!
 //! A 2,000-iteration loop must free what it allocates, for heap locals (`ynz_alloc`/`ynz_free`
@@ -116,6 +124,55 @@ asan_case!(
     "v0_3_m9_c2_transfer_return.ynz",
     "3\n3\n2\n1\n3\n4\n",
     "the return edge releases the binding it returns (caller reads freed memory), skips the sibling it should release, or the caller's frame teardown frees the returned array (High)"
+);
+
+// ── C5a: a heap value stored without a sink (spike S3 holes t3, t6b, g1, g7, g8, t7) ──
+//
+// Typeck's transfer record used to miss these transfers; its facts are asserted in
+// `ynz-typeck/tests/transfer_record.rs`. Here each program is the end-to-end guard for the
+// release pass: green today (nothing frees), red the moment C7 frees a value something still
+// holds. One program per process, at both optimization levels, like the exit classes above.
+asan_case!(
+    store_field_set,
+    "v0_3_m9_c5a_field_set_store.ynz",
+    "3\n",
+    "`b.items = a; return b`: the pass releases `a` at scope exit while the returned `b` holds it (High)"
+);
+asan_case!(
+    store_container_add,
+    "v0_3_m9_c5a_container_add_store.ynz",
+    "3\n",
+    "`o.add(a); return o`: the pass releases `a` while the returned container holds it (High)"
+);
+asan_case!(
+    store_index_set,
+    "v0_3_m9_c5a_index_set_store.ynz",
+    "3\n",
+    "`o[0] = a; return o`: the pass releases `a` while the returned container holds it (High)"
+);
+asan_case!(
+    store_assign_from_loop_local,
+    "v0_3_m9_c5a_assign_from_loop_local.ynz",
+    "3\n",
+    "`acc = per` in a loop: the back-edge release frees `per` while the outer `acc` aliases it (High)"
+);
+asan_case!(
+    store_multi_root_literal,
+    "v0_3_m9_c5a_multi_root_literal.ynz",
+    "3\n2\n",
+    "`{ first: a, second: c }` returned: the pass joins only the first root and frees `c` under the returned pair (High)"
+);
+asan_case!(
+    loop_give_of_a_copy,
+    "v0_3_m9_c5a_give_copy_in_loop.ynz",
+    "3\n3\n3\n3\n",
+    "a loop giving `x.copy()` each pass: the pass frees the outer `x` with the callee's clone, or frees a clone twice (High)"
+);
+asan_case!(
+    store_then_read_both,
+    "v0_3_m9_c5a_store_then_read_both.ynz",
+    "3\n1\n3\n",
+    "`o.add(a)` then reading `a` and `o`: the pass treats the store as a move and frees `a`'s array under the container (High)"
 );
 
 /// Run a leak fixture and return (stdout, counters).

@@ -275,7 +275,10 @@ fn gives_that_do_not_carry_into_the_next_pass_are_accepted() {
     ];
     for (label, source) in cases {
         let found = errors(&run(&source));
-        assert!(found.is_empty(), "{label}: expected accepted, got {found:#?}");
+        assert!(
+            found.is_empty(),
+            "{label}: expected accepted, got {found:#?}"
+        );
     }
 }
 

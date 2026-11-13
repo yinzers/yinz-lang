@@ -144,7 +144,9 @@ impl Scope {
 
     /// The entry named `name` in the frame at `frame_index`, if that frame still holds it.
     pub fn entry_in_frame(&self, frame_index: usize, name: &str) -> Option<&ScopeEntry> {
-        self.frames.get(frame_index).and_then(|frame| frame.get(name))
+        self.frames
+            .get(frame_index)
+            .and_then(|frame| frame.get(name))
     }
 
     /// A brand-new alias class (a value with exactly one holder so far).
