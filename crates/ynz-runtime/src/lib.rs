@@ -3145,8 +3145,8 @@ mod array_runtime {
 // the temporaries `print`/`${}` make of numbers; the scope-exit release pass frees the rest.
 
 use ynz_numerics::decimal_n::{
-    add as bignum_add_op, div as bignum_div_op, format_bignum, mul as bignum_mul_op, parse_bignum,
-    sub as bignum_sub_op,
+    add as bignum_add_op, compare as bignum_compare_op, div as bignum_div_op, format_bignum,
+    mul as bignum_mul_op, parse_bignum, sub as bignum_sub_op,
 };
 use ynz_numerics::BigNum;
 
@@ -3185,6 +3185,60 @@ pub unsafe extern "C" fn ynz_bignum_mul(a: *const i8, b: *const i8, precision: u
 #[no_mangle]
 pub unsafe extern "C" fn ynz_bignum_div(a: *const i8, b: *const i8, precision: u16) -> *mut i8 {
     bignum_binop(a, b, precision, bignum_div_op)
+}
+
+/// Compare `a` and `b` as exact decimal numbers: -1 (a < b), 0 (equal), 1 (a > b), or 2
+/// (unordered: either side is NaN, so every ordering test is false and only `!=` holds).
+///
+/// Both texts are parsed at `precision` digits like the arithmetic above, so a compare sees
+/// the same rounded operands a `+` would. `2.5` equals `2.50`, and `9` is less than `10`.
+/// O(digits) time and memory; allocates nothing the caller must release.
+///
+/// # Safety
+/// `a` and `b` must be valid null-terminated strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_compare(a: *const i8, b: *const i8, precision: u16) -> i32 {
+    let left = parse_bignum_operand(a, precision);
+    let right = parse_bignum_operand(b, precision);
+    match bignum_compare_op(&left, &right) {
+        Some(std::cmp::Ordering::Less) => -1,
+        Some(std::cmp::Ordering::Equal) => 0,
+        Some(std::cmp::Ordering::Greater) => 1,
+        None => 2,
+    }
+}
+
+/// Negate: `0 - a` at `precision` digits (the same result a decimal128 `0 - a` gives).
+///
+/// # Safety
+/// Same as `ynz_bignum_add`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_neg(a: *const i8, precision: u16) -> *mut i8 {
+    bignum_binop(c"0".as_ptr().cast(), a, precision, bignum_sub_op)
+}
+
+/// Parse one bignum operand of a comparison. A compare has no value to fall back to, so text
+/// that is not a number is a compiler bug (every bignum text comes from a bignum operation or a
+/// decimal128 conversion): abort loudly rather than compare against a made-up zero.
+///
+/// # Safety
+/// `text` must be a valid null-terminated string.
+unsafe fn parse_bignum_operand(text: *const i8, precision: u16) -> BigNum {
+    let parsed = std::ffi::CStr::from_ptr(text)
+        .to_str()
+        .ok()
+        .and_then(|decimal_text| parse_bignum(decimal_text, precision));
+    match parsed {
+        Some(number) => number,
+        None => {
+            eprintln!(
+                "INTERNAL ERROR: a bignum comparison was given text that is not a number. \
+                 This is a compiler bug — please file an issue at \
+                 https://github.com/yinz-lang/yinz/issues with the source file attached."
+            );
+            std::process::abort();
+        }
+    }
 }
 
 /// Helper: parse, apply op, format, return as heap-allocated C string.

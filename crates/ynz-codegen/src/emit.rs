@@ -14646,6 +14646,15 @@ fn match_cmp<'ctx>(
                 )
                 .map_err(|e| format!("{e}"))
         }
+        // A bignum is decimal text: compare it as text-of-a-number, never as decimal128 bytes.
+        Type::Number { precision } if *precision > 34 => bignum_compare(
+            cg,
+            scrutinee_val.into_pointer_value(),
+            pattern_val.into_pointer_value(),
+            *precision,
+            &BinOpKind::EqEq,
+        )
+        .map(|matched| matched.into_int_value()),
         Type::Number { .. } => {
             let c = cg
                 .builder
@@ -18576,6 +18585,21 @@ fn lower_binop<'ctx>(
     let lhs_was_coerced = matches!(lhs_ty, Type::Number { precision } if *precision <= 34)
         && matches!(rhs_ty, Type::Number { precision } if *precision > 34);
     let operand_ty = if lhs_was_coerced { rhs_ty } else { lhs_ty };
+    // A bignum comparison parses both texts at one precision: the wider of the two bignum
+    // operands (the left type alone would round a wider right operand down).
+    let is_comparison = matches!(op, EqEq | NotEq | Lt | LtEq | Gt | GtEq);
+    let widest_bignum_ty;
+    let operand_ty = match (is_comparison, lhs_ty, rhs_ty) {
+        (true, Type::Number { precision: left }, Type::Number { precision: right })
+            if *left > 34 && *right > 34 =>
+        {
+            widest_bignum_ty = Type::Number {
+                precision: *left.max(right),
+            };
+            &widest_bignum_ty
+        }
+        _ => operand_ty,
+    };
     let result = lower_binop_operands(cg, op, lhs, rhs, lhs_e.span().start as u32, operand_ty)?;
     for converted in converted_operands {
         cg.builder
@@ -18752,6 +18776,15 @@ fn lower_binop_operands<'ctx>(
         (EqEq, Type::Float) => fcmp(cg, inkwell::FloatPredicate::OEQ, lhs, rhs, "feq"),
         (NotEq, Type::Float) => fcmp(cg, inkwell::FloatPredicate::ONE, lhs, rhs, "fne"),
 
+        (EqEq | NotEq | Lt | LtEq | Gt | GtEq, Type::Number { precision }) if *precision > 34 => {
+            bignum_compare(
+                cg,
+                lhs.into_pointer_value(),
+                rhs.into_pointer_value(),
+                *precision,
+                op,
+            )
+        }
         (EqEq | NotEq | Lt | LtEq | Gt | GtEq, Type::Number { .. }) => {
             decimal_compare(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), op)
         }
@@ -19059,6 +19092,60 @@ fn decimal_div<'ctx>(
     decimal_binop(cg, lhs, rhs, cg.rt.decimal_div, "ddiv")
 }
 
+/// Bignum comparison: `ynz_bignum_compare` gives -1 / 0 / 1, or 2 when unordered (NaN), and each
+/// operator is tested against that so an unordered pair is false for everything but `!=`
+/// (`2 > 0` and `2 >= 0` would otherwise read as true).
+///
+/// The operands are decimal text: reading them as decimal128 compares garbage and runs past a
+/// short exact-size string.
+fn bignum_compare<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+    precision: u32,
+    op: &BinOpKind,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let order = bignum_compare_order(cg, lhs, rhs, precision)?;
+    let int32 = cg.i32();
+    let (predicate, bound) = match op {
+        BinOpKind::Lt => (IntPredicate::EQ, int32.const_int(-1i64 as u64, true)),
+        BinOpKind::LtEq => (IntPredicate::SLE, int32.const_int(0, false)),
+        BinOpKind::EqEq => (IntPredicate::EQ, int32.const_int(0, false)),
+        BinOpKind::NotEq => (IntPredicate::NE, int32.const_int(0, false)),
+        BinOpKind::Gt => (IntPredicate::EQ, int32.const_int(1, false)),
+        // unsigned: -1 wraps high and 2 is above 1, so only 0 and 1 pass
+        BinOpKind::GtEq => (IntPredicate::ULE, int32.const_int(1, false)),
+        other => return Err(format!("codegen: {other:?} is not a bignum comparison")),
+    };
+    cg.builder
+        .build_int_compare(predicate, order, bound, "bncmp_b")
+        .map(|v| v.into())
+        .map_err(|e| format!("{e}"))
+}
+
+/// The raw -1 / 0 / 1 / 2 order of two bignum texts (see `bignum_compare`).
+fn bignum_compare_order<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+    precision: u32,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let precision_val = cg.i32().const_int(precision as u64, false);
+    let call = cg
+        .builder
+        .build_call(
+            cg.rt.ynz_bignum_compare,
+            &[lhs.into(), rhs.into(), precision_val.into()],
+            "bncmp",
+        )
+        .map_err(|e| format!("{e}"))?;
+    Ok(call
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_bignum_compare void")?
+        .into_int_value())
+}
+
 fn decimal_compare<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     lhs: PointerValue<'ctx>,
@@ -19151,6 +19238,23 @@ fn lower_unary<'ctx>(
             .build_float_neg(val.into_float_value(), "fneg")
             .map(|v| v.into())
             .map_err(|e| format!("{e}")),
+        // A bignum is decimal text: the decimal128 `0 - value` below would read it as 16 raw bytes
+        // and return a stack cell where a heap string is expected.
+        (UnaryOpKind::Neg, Type::Number { precision }) if *precision > 34 => {
+            let precision_val = cg.i32().const_int(*precision as u64, false);
+            let negated = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_bignum_neg,
+                    &[val.into(), precision_val.into()],
+                    "bn_neg",
+                )
+                .map_err(|e| format!("{e}"))?;
+            Ok(negated
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_bignum_neg void")?)
+        }
         (UnaryOpKind::Neg, Type::Number { .. }) => {
             let zero = cg.globals.dec_zero.as_pointer_value();
             decimal_binop(

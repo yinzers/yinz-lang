@@ -511,3 +511,111 @@ fn ge_digits_padded(a: &[u8], b: &[u8]) -> bool {
     }
     true
 }
+
+/// Exact numeric comparison of two BigNums; precision plays no part.
+///
+/// `None` when unordered (either side is NaN). `-0` equals `+0`; `2.5` equals `2.50`.
+///
+/// Time O(digits), space O(1): compares the position of the most significant digit first, then
+/// the digits one by one (a missing digit counts as 0), so no operand is aligned or copied.
+pub fn compare(a: &BigNum, b: &BigNum) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    if a.is_nan || b.is_nan {
+        return None;
+    }
+    let a_class = sign_class(a);
+    let b_class = sign_class(b);
+    if a_class != b_class {
+        return Some(a_class.cmp(&b_class));
+    }
+    match a_class {
+        // both -inf, both zero, or both +inf
+        -2 | 0 | 2 => Some(Ordering::Equal),
+        1 => Some(compare_magnitudes(a, b)),
+        // both negative: the larger magnitude is the smaller number
+        _ => Some(compare_magnitudes(b, a)),
+    }
+}
+
+/// -2 = -infinity, -1 = negative, 0 = zero (of either sign), 1 = positive, 2 = +infinity.
+fn sign_class(value: &BigNum) -> i8 {
+    if value.is_infinity {
+        return if value.sign { -2 } else { 2 };
+    }
+    if value.digits.iter().all(|&digit| digit == 0) {
+        return 0;
+    }
+    if value.sign {
+        -1
+    } else {
+        1
+    }
+}
+
+/// Compare |a| and |b|, both finite and non-zero.
+fn compare_magnitudes(a: &BigNum, b: &BigNum) -> std::cmp::Ordering {
+    let a_leading_zeros = a.digits.iter().take_while(|&&digit| digit == 0).count();
+    let b_leading_zeros = b.digits.iter().take_while(|&&digit| digit == 0).count();
+    let a_digits = &a.digits[a_leading_zeros..];
+    let b_digits = &b.digits[b_leading_zeros..];
+    // Position of the most significant digit: value = 0.d1d2.. × 10^(exponent + len).
+    let a_magnitude = a.exponent + a_digits.len() as i64;
+    let b_magnitude = b.exponent + b_digits.len() as i64;
+    if a_magnitude != b_magnitude {
+        return a_magnitude.cmp(&b_magnitude);
+    }
+    let longest = a_digits.len().max(b_digits.len());
+    for position in 0..longest {
+        let a_digit = a_digits.get(position).copied().unwrap_or(0);
+        let b_digit = b_digits.get(position).copied().unwrap_or(0);
+        if a_digit != b_digit {
+            return a_digit.cmp(&b_digit);
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+#[cfg(test)]
+mod compare_tests {
+    use super::*;
+    use std::cmp::Ordering::{Equal, Greater, Less};
+
+    fn parsed(text: &str) -> BigNum {
+        BigNum::from_str(text, 100).expect("test literal parses")
+    }
+
+    /// Bug caught: a comparison that is textual (`"9" > "10"`), ignores the exponent, or treats
+    /// the sign wrongly (High: pure math). Table-driven edge cases of the compare contract.
+    #[test]
+    fn compare_is_exact_and_numeric() {
+        let cases = [
+            ("9", "10", Some(Less)),
+            ("10", "9", Some(Greater)),
+            ("2.5", "2.50", Some(Equal)),
+            ("0.001", "0.01", Some(Less)),
+            ("1e3", "999", Some(Greater)),
+            ("-1", "1", Some(Less)),
+            ("-9", "-10", Some(Greater)),
+            ("-0", "0", Some(Equal)),
+            ("0.000", "0", Some(Equal)),
+            ("-0.5", "0", Some(Less)),
+            (
+                "123456789012345678901234567890123456789",
+                "123456789012345678901234567890123456788",
+                Some(Greater),
+            ),
+            ("inf", "1e400", Some(Greater)),
+            ("-inf", "-1e400", Some(Less)),
+            ("inf", "inf", Some(Equal)),
+            ("nan", "1", None),
+            ("1", "nan", None),
+        ];
+        for (left, right, expected) in cases {
+            assert_eq!(
+                compare(&parsed(left), &parsed(right)),
+                expected,
+                "compare({left}, {right})"
+            );
+        }
+    }
+}

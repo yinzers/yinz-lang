@@ -34,6 +34,11 @@ pub fn mul(a: &BigNum, b: &BigNum) -> BigNum {
     ops::mul(a, b)
 }
 
+/// Exact numeric comparison; `None` when unordered (NaN). See `ops::compare`.
+pub fn compare(a: &BigNum, b: &BigNum) -> Option<std::cmp::Ordering> {
+    ops::compare(a, b)
+}
+
 /// Divide a / b.
 pub fn div(a: &BigNum, b: &BigNum) -> BigNum {
     ops::div(a, b)

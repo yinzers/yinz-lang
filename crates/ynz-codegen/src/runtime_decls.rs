@@ -229,6 +229,8 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_bignum_sub: FunctionValue<'ctx>,
     pub ynz_bignum_mul: FunctionValue<'ctx>,
     pub ynz_bignum_div: FunctionValue<'ctx>,
+    pub ynz_bignum_compare: FunctionValue<'ctx>,
+    pub ynz_bignum_neg: FunctionValue<'ctx>,
 
     // ── v0.3-M1: Tokio scheduler runtime ─────────────────────────────────
     // Called by generated `main` and `background` lowering.
@@ -752,6 +754,18 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_bignum_div",
                 ptr.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            // (ptr a, ptr b, i32 precision) -> i32: -1 less, 0 equal, 1 greater, 2 unordered (NaN)
+            ynz_bignum_compare: declare_fn(
+                module,
+                "ynz_bignum_compare",
+                i32.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            // (ptr a, i32 precision) -> ptr: `0 - a` as a heap string
+            ynz_bignum_neg: declare_fn(
+                module,
+                "ynz_bignum_neg",
+                ptr.fn_type(&[ptr.into(), i32.into()], false),
             ),
 
             // v0.3-M1: Tokio scheduler runtime
