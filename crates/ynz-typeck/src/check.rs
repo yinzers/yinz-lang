@@ -10799,6 +10799,7 @@ pub fn crossing_local_names(
         &std::collections::HashSet::new(),
         expr_types,
         false,
+        &[],
     )
 }
 
@@ -10831,8 +10832,9 @@ pub fn crossing_local_names_with_cpu_spike(
     cpu_supported: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
     back_edge_yield: bool,
+    release_owners: &[String],
 ) -> Vec<String> {
-    crossing_local_names_with_provenance(
+    let mut names = crossing_local_names_with_provenance(
         stmts,
         param_names,
         suspending,
@@ -10840,7 +10842,16 @@ pub fn crossing_local_names_with_cpu_spike(
         expr_types,
         back_edge_yield,
     )
-    .names
+    .names;
+    // SPIKE S3: a scope-exit release is a use after every suspension that separates the
+    // owner from its exit. Release owners join the SAME set (second input, same producer).
+    for owner in release_owners {
+        if !param_names.contains(&owner.as_str()) && !names.contains(owner) {
+            names.push(owner.clone());
+        }
+    }
+    names.sort();
+    names
 }
 
 /// Crossing-local names plus provenance (v0.3-M6 Phase 1c, FRAGOs 013/014).

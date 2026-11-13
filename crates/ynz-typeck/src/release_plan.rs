@@ -68,3 +68,24 @@ pub fn release_kind_of(ty: &Type) -> Option<ReleaseKind> {
         _ => None,
     }
 }
+
+impl ReleasePlan {
+    /// SPIKE S3 (crossing coupling): names of every binding that has `Fate::Release` in ANY exit list
+    /// whose key span lies inside `[start, end)`. These are "used" at scope exit, so they must be
+    /// in the crossing set when a suspension separates their declaration from that exit.
+    /// Over-approximation: no suspension-position test. O(L) over the lists.
+    pub fn release_owner_names_within(&self, start: usize, end: usize) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .block_end
+            .iter()
+            .chain(self.return_edge.iter())
+            .filter(|(key, _)| key.0 >= start && key.1 <= end)
+            .flat_map(|(_, list)| list.iter())
+            .filter(|e| e.fate == Fate::Release)
+            .map(|e| e.name.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+}

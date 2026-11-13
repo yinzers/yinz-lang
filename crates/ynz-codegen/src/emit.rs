@@ -338,6 +338,7 @@ pub fn build_frame_layouts_with_resolver(
                 // Phase 6: frame layout must reserve slots for the SAME widened
                 // crossing set the resume fn flushes/reloads — one producer verdict.
                 typed.back_edge_yield_admitted.contains(&f.name),
+                &typed.release_plan.release_owner_names_within(f.body.span.start, f.body.span.end),
             );
             let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
 
@@ -785,6 +786,7 @@ fn compute_frame_size(
                         // Phase 6: the child-frame-size memo must match the layout's
                         // widened crossing reservation exactly — same producer verdict.
                         typed.back_edge_yield_admitted.contains(&f.name),
+                        &typed.release_plan.release_owner_names_within(f.body.span.start, f.body.span.end),
                     );
                     let crossing_slots =
                         crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
@@ -4738,6 +4740,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         &cpu_supported_refs,
         &typed.expr_types,
         back_edge_yield,
+        &typed.release_plan.release_owner_names_within(f.body.span.start, f.body.span.end),
     );
 
     // Slot index layout: params occupy slots [0..n_params), crossing locals occupy
