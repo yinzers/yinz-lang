@@ -243,7 +243,7 @@ pub fn layout_lints(decisions: &LayoutDecisions, candidates: &[SoaCandidate]) ->
         let Some((provable_len, hot_fields)) = candidates
             .iter()
             .find(|candidate| candidate.decl_span == decision.decl_span)
-            .and_then(|c| match &c.verdict {
+            .and_then(|candidate| match &candidate.verdict {
                 SoaVerdict::Admitted {
                     provable_len,
                     hot_fields,

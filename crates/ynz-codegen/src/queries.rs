@@ -89,8 +89,12 @@ pub fn frame_layouts_query(
         return Arc::new(HashMap::new());
     }
     // Codegen reads the module with per-binding unique names (`TypedModule::binding_names`). A
-    // hole in that record is reported by `codegen_query` (it applies the same map), so an empty
-    // layout set here is never observed as a live wrong value.
+    // hole in that record is a compiler bug that `codegen_query` of THIS file reports as an
+    // error diagnostic (it applies the same map) and answers with no artifact; this query has no
+    // error channel, so it gives the same "codegen is skipped" empty answer as the type-error
+    // branch above. An importer sizing a frame against this file therefore sees no layout for
+    // it, so its own artifact is wrong, but the build still fails: it runs `codegen_query` on
+    // every source file and fails on any error diagnostic (`ynz-driver` build.rs).
     let Ok(codegen_typed) = check.typed_module.with_codegen_names() else {
         return Arc::new(HashMap::new());
     };

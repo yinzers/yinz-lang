@@ -1919,8 +1919,9 @@ struct Cg<'ctx, 'g> {
     // v0.3-M5 P5: the admitted-SoA bindings live in THIS function (fresh empty per
     // Cg; keyed by binding name). Registered at the `Stmt::Let` construction
     // interception; consulted by `soa_expr_info` at every choke-point call site.
-    // For-in loop vars mask an entry for the body's duration (the only shadow case:
-    // admission's shadow-decline covers every same-name `let`).
+    // The key is the binding's unique codegen name (`TypedModule::binding_names`), so a
+    // for-in loop var or a same-name `let` that reuses the user's name is a different key and
+    // never reads or hides this entry.
     soa_bindings: HashMap<String, SoaArrayInfo<'ctx>>,
     // v0.3-M5 P4: THE one authoritative layout source (typeck's
     // `layout_decisions_query` — E3 B1). Every layout read in lowering goes
@@ -2043,9 +2044,10 @@ struct Cg<'ctx, 'g> {
     sm_crossing_shape_allocas: HashMap<String, PointerValue<'ctx>>,
     // Nesting depth inside if/while/for/match bodies in a SM resume function.
     // Used for the snapshot/restore protocol that prevents non-crossing locals introduced
-    // inside a nested scope from leaking into cg.locals after the scope exits. Shadow
-    // bindings (a `let x` where outer `x` crosses a wait) are rejected at typeck
-    // (ShadowsCrossingLocal), so at codegen time depth > 0 never signals a shadow.
+    // inside a nested scope from leaking into cg.locals after the scope exits. Every binding
+    // has its own codegen name (`TypedModule::binding_names`), so a nested `let x` never
+    // shares a name, or a frame slot, with an outer `x` that crosses a wait: depth > 0 never
+    // signals a shadow. (Typeck's ShadowsCrossingLocal still rejects that source shape.)
     sm_scope_depth: usize,
     // Union `is`-arm narrowings in force at the current lowering point, innermost last
     // (`narrow_union_local_to_variant` pushes, `restore_narrowed_local` pops). A state-machine
@@ -14055,10 +14057,9 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 // requires allocas to be in the entry block). Reuse that alloca instead
                 // of creating a new one in the current state block.
                 //
-                // Exception: if we are inside a nested scope (sm_scope_depth > 0), this
-                // `let name = ...` is a SHADOW binding that creates a new inner local —
-                // not a write to the outer crossing local. Create a fresh alloca so the
-                // outer crossing alloca is not clobbered by the shadow's value.
+                // A nested `let` that reuses a crossing local's user name is a different
+                // binding with a different codegen name (`TypedModule::binding_names`), so
+                // `name` below is crossing only when THIS declaration is the crossing one.
                 let is_sm_crossing = cg
                     .sm_crossing_names
                     .as_ref()
@@ -14066,10 +14067,9 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 let slot = if is_sm_crossing {
                     // Crossing local: reuse the pre-created sm_entry alloca regardless of
                     // nesting depth. LLVM SSA dominance requires allocas to be in the entry
-                    // block; the sm_entry alloca dominates all state blocks. Shadow bindings
-                    // (a nested `let x` where outer `x` crosses a wait) are rejected at
-                    // typeck (ShadowsCrossingLocal), so any `let name` here is the first
-                    // and only definition of that crossing local.
+                    // block; the sm_entry alloca dominates all state blocks. Codegen names are
+                    // unique per binding (`TypedModule::binding_names`), so any `let name`
+                    // here is the first and only definition of that crossing local.
                     *cg.locals.get(name.as_str()).ok_or_else(|| {
                         format!("sm crossing alloca for `{name}` missing in entry")
                     })?
