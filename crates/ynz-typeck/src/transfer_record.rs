@@ -472,11 +472,11 @@ fn propagate_call_stores(functions: &mut [FunctionState]) {
                 for (first, second) in pairs {
                     for holder_a in &edge.positions[first] {
                         for holder_b in &edge.positions[second] {
-                            if let (Some(&a), Some(&b)) = (
+                            if let (Some(&first_binding), Some(&second_binding)) = (
                                 caller_state.index.get(holder_a),
                                 caller_state.index.get(holder_b),
                             ) {
-                                changed |= caller_state.union(a, b);
+                                changed |= caller_state.union(first_binding, second_binding);
                             }
                         }
                     }
@@ -505,11 +505,13 @@ fn build_function(mut function: FunctionState, names: &BindingNames) -> Function
     }
     let mut classes = Vec::with_capacity(class_order.len());
     for root in class_order {
-        let positions: Vec<usize> = (0..count).filter(|&p| roots[p] == root).collect();
+        let positions: Vec<usize> = (0..count)
+            .filter(|&position| roots[position] == root)
+            .collect();
         let members: Vec<ClassMember> = positions
             .iter()
-            .map(|&p| {
-                let binding = &function.bindings[p];
+            .map(|&position| {
+                let binding = &function.bindings[position];
                 let role = if binding.borrowed_param {
                     MemberRole::BorrowedParam
                 } else if binding.ever_piece {
@@ -577,7 +579,7 @@ fn anchor_of(
         shared = &shared[..common];
     }
     let outermost: Vec<usize> = (0..members.len())
-        .filter(|&i| bindings[positions[i]].path.len() == shared.len())
+        .filter(|&member_index| bindings[positions[member_index]].path.len() == shared.len())
         .collect();
     // Never empty. A join needs both bindings visible at once, so two joined bindings are
     // always in an enclosing relation (one scope inside the other). In a class connected by
@@ -590,11 +592,11 @@ fn anchor_of(
     );
     match outermost
         .iter()
-        .find(|&&i| members[i].role == MemberRole::Owner)
+        .find(|&&member_index| members[member_index].role == MemberRole::Owner)
     {
-        Some(&i) => ReleaseAnchor::Founder {
-            decl: members[i].decl.clone(),
-            codegen_name: members[i].codegen_name.clone(),
+        Some(&member_index) => ReleaseAnchor::Founder {
+            decl: members[member_index].decl.clone(),
+            codegen_name: members[member_index].codegen_name.clone(),
         },
         None => ReleaseAnchor::NoStaticFounder(NoFounderReason::OutlivedByNonOwner {
             holder: members[outermost[0]].codegen_name.clone(),

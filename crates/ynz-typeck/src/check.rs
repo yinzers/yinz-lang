@@ -126,6 +126,17 @@ fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)])
     .with_kind(kind)
 }
 
+/// Every name `expr` mentions, sorted so the order does not depend on hashing. The one place the
+/// transfer record's "an untraceable value may hold anything it mentions" rule reads the
+/// mentions from (`heap_holders_of`, `mentioned_declarations`). O(n log n) for n mentions.
+fn mentioned_names(expr: &Expr) -> Vec<String> {
+    let mut mentioned: HashSet<String> = HashSet::new();
+    crate::independence::collect_ident_names(expr, &mut mentioned);
+    let mut sorted: Vec<String> = mentioned.into_iter().collect();
+    sorted.sort();
+    sorted
+}
+
 /// What a binding event (`let`, reassignment) makes the name denote: the origin and live alias
 /// class it takes, and every declaration whose value it now holds (the transfer record's join
 /// edges — the live scope only needs the class).
@@ -2029,9 +2040,11 @@ impl<'b> Checker<'b> {
                     // The NEXT pass of an enclosing loop reads a binding declared outside it as
                     // surely as a later statement does, and `remaining` ends at this block's end.
                     let used_after = self.bound_outside_current_loop(name)
-                        || remaining
-                            .iter()
-                            .any(|s| members.iter().any(|m| ident_read_in_stmt(s, m.as_str())));
+                        || remaining.iter().any(|stmt| {
+                            members
+                                .iter()
+                                .any(|member| ident_read_in_stmt(stmt, member.as_str()))
+                        });
                     if origin_ok && !used_after {
                         BgOwnership::Give
                     } else {
@@ -4630,13 +4643,7 @@ impl<'b> Checker<'b> {
             Provenance::Fresh => Vec::new(),
             Provenance::Whole(name) => vec![name],
             Provenance::Reaches(roots) => roots,
-            Provenance::Unknown => {
-                let mut mentioned: HashSet<String> = HashSet::new();
-                crate::independence::collect_ident_names(value, &mut mentioned);
-                let mut sorted: Vec<String> = mentioned.into_iter().collect();
-                sorted.sort();
-                sorted
-            }
+            Provenance::Unknown => mentioned_names(value),
         };
         names
             .into_iter()
@@ -5892,10 +5899,10 @@ impl<'b> Checker<'b> {
                 // returned literal still held it (spike S3 probe t7).
                 let root_entries: Vec<(u64, DeclKey)> = roots
                     .iter()
-                    .filter_map(|r| {
+                    .filter_map(|root| {
                         self.scope
-                            .lookup(r)
-                            .map(|e| (e.alias_class, decl_key(&e.defined_at, r)))
+                            .lookup(root)
+                            .map(|entry| (entry.alias_class, decl_key(&entry.defined_at, root)))
                     })
                     .collect();
                 let alias_class = match root_entries.first() {
@@ -5926,14 +5933,10 @@ impl<'b> Checker<'b> {
 
     /// Every binding the expression names, as declarations. For the transfer record only.
     fn mentioned_declarations(&self, expr: &Expr) -> Vec<DeclKey> {
-        let mut names: HashSet<String> = HashSet::new();
-        crate::independence::collect_ident_names(expr, &mut names);
-        let mut keys: Vec<DeclKey> = names
+        mentioned_names(expr)
             .iter()
             .filter_map(|name| self.declaration_of(name))
-            .collect();
-        keys.sort();
-        keys
+            .collect()
     }
 
     /// The `{reason}` slot of `TransferNeedsCopy` for a `Reaches` expression: who still

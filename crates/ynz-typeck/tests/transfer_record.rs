@@ -139,7 +139,9 @@ fn assert_accepted(source: &str) {
 fn assert_use_after_give(source: &str) {
     let found = errors(&run(source));
     assert!(
-        found.iter().any(|e| e.contains("was already given away")),
+        found
+            .iter()
+            .any(|message| message.contains("was already given away")),
         "expected a use-after-give for:\n{source}\ngot {found:#?}"
     );
 }
