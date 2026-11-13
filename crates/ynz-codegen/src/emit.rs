@@ -23237,15 +23237,15 @@ fn build_static_string<'ctx>(
     bytes_with_nul: &[u8],
     name: &str,
 ) -> StaticString<'ctx> {
-    let i8t = ctx.i8_type();
-    let i32t = ctx.i32_type();
+    let i8_type = ctx.i8_type();
+    let i32_type = ctx.i32_type();
     let header = ctx
         .i64_type()
         .const_int(ynz_abi::STATIC_STRING_HEADER, false);
-    let bytes = i8t.const_array(
+    let bytes = i8_type.const_array(
         &bytes_with_nul
             .iter()
-            .map(|&byte| i8t.const_int(byte as u64, false))
+            .map(|&byte| i8_type.const_int(byte as u64, false))
             .collect::<Vec<_>>(),
     );
     let initializer = ctx.const_struct(&[header.into(), bytes.into()], false);
@@ -23260,7 +23260,7 @@ fn build_static_string<'ctx>(
     let bytes = unsafe {
         global.as_pointer_value().const_in_bounds_gep(
             initializer.get_type(),
-            &[i32t.const_zero(), i32t.const_int(1, false)],
+            &[i32_type.const_zero(), i32_type.const_int(1, false)],
         )
     };
     StaticString { bytes }
@@ -23270,10 +23270,10 @@ fn build_static_string<'ctx>(
 fn build_string_global<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
-    s: &str,
+    text: &str,
     name: &str,
 ) -> StaticString<'ctx> {
-    let mut bytes: Vec<u8> = s.bytes().collect();
+    let mut bytes: Vec<u8> = text.bytes().collect();
     bytes.push(0);
     build_static_string(ctx, module, &bytes, name)
 }
@@ -23285,25 +23285,25 @@ fn build_string_global<'ctx>(
 fn build_c_string_global<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
-    s: &str,
+    text: &str,
     name: &str,
 ) -> GlobalValue<'ctx> {
-    let i8t = ctx.i8_type();
-    let mut bytes: Vec<u8> = s.bytes().collect();
+    let i8_type = ctx.i8_type();
+    let mut bytes: Vec<u8> = text.bytes().collect();
     bytes.push(0);
-    let arr_ty = i8t.array_type(bytes.len() as u32);
-    let arr = i8t.const_array(
+    let arr_ty = i8_type.array_type(bytes.len() as u32);
+    let arr = i8_type.const_array(
         &bytes
             .iter()
-            .map(|&b| i8t.const_int(b as u64, false))
+            .map(|&byte| i8_type.const_int(byte as u64, false))
             .collect::<Vec<_>>(),
     );
-    let g = module.add_global(arr_ty, Some(AddressSpace::default()), name);
-    g.set_initializer(&arr);
-    g.set_constant(true);
-    g.set_linkage(inkwell::module::Linkage::Private);
-    g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-    g
+    let global = module.add_global(arr_ty, Some(AddressSpace::default()), name);
+    global.set_initializer(&arr);
+    global.set_constant(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+    global.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+    global
 }
 
 fn build_decimal_global<'ctx>(

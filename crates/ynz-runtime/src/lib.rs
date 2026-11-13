@@ -3409,16 +3409,16 @@ unsafe fn parse_bignum_operand(text: *const i8, precision: u16) -> BigNum {
 /// Helper: parse, apply op, format, return as heap-allocated C string.
 ///
 /// # Safety
-/// `a` and `b` must be valid null-terminated UTF-8 strings.
+/// `left_text` and `right_text` must be valid null-terminated UTF-8 strings.
 unsafe fn bignum_binop(
-    a: *const i8,
-    b: *const i8,
+    left_text: *const i8,
+    right_text: *const i8,
     precision: u16,
     op: fn(&BigNum, &BigNum) -> BigNum,
 ) -> *mut i8 {
-    let an = parse_bignum_operand(a, precision);
-    let bn_val = parse_bignum_operand(b, precision);
-    let result = op(&an, &bn_val);
+    let left = parse_bignum_operand(left_text, precision);
+    let right = parse_bignum_operand(right_text, precision);
+    let result = op(&left, &right);
     let formatted = format_bignum(&result);
     if formatted.as_bytes().contains(&0) {
         eprintln!(
