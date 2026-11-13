@@ -7,9 +7,12 @@
 // after a branch is "maybe given" unless EVERY path that reaches it revived the binding; reading
 // a maybe-given binding is the ordinary use-after-give error (the canonical `Consumed` text).
 //
-// Each rejected case failed on the base commit (typeck accepted the program; red commit
-// `e2d4344` for the first six, the other two fail on that commit's source too); each accepted
-// case is a guard that the fix does not reject a program every path of which revives the binding.
+// Each rejected case failed on the commit it was written against (red commit `e2d4344` for the
+// first six, the other two fail on that commit's source too; the security-round cases failed on
+// `855b79e`, and all of them but the `{via}` clause cases still failed on `ff122f3`). The
+// accepted cases and `read_after_sibling_arms_that_each_give` were green on arrival on purpose:
+// they guard that the fix does not reject a program every path of which revives the binding, nor
+// accept one every path of which gave it.
 //
 // WHY this many tests for one High-tier unit (the SOP says stop at about 8 and justify): the unit
 // is the join of the consumed state, and its contract is a table over path shapes, one named test
@@ -20,9 +23,11 @@
 // including `else`, an arm that always returns, a revive after a loop, a revive both in and after
 // a loop, a give and revive inside one branch, the straight-line rule, nested matches). The
 // security-round cases add the shapes the join still got wrong: a re-give after a reassignment
-// in one arm, a `while` condition, a union with a non-shape variant, and the alias class and
-// origin a one-path reassignment changes. Two shapes that take the same checker path are not both
-// here.
+// in one arm, a `while` condition, a union with a non-shape variant, the alias class and origin a
+// one-path reassignment changes, and sibling arms that each give (one accepted, one read after
+// them rejected). Three more tests pin the `{via}` clause of the maybe-given text, one per path
+// shape that names a different clause (`if`, `match`, loop): the text contract of the same join,
+// not another join shape. Two shapes that take the same checker path are not both here.
 
 #[macro_use]
 mod support;

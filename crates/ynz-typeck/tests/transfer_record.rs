@@ -21,7 +21,7 @@
 // unit is the whole ownership record, and each test is one way the checker can lose a transfer
 // at its own code site (a field store, a container store, an index store, a reassignment, a
 // literal, a call-site store, a call-result receiver, a loop cell, a builtin result, a loop
-// give, a give handed up from an inner loop, a give made in a `while` condition, an event the
+// give, a give handed up from an inner loop, a give made in a `while` condition, five kinds of event the
 // recorder cannot place). Reverting each
 // producer in turn (the C5a fix commits, and a one-line mutation of each remaining site) failed
 // only that site's tests. The case tables below are one NAMED test per case, so the runner
@@ -900,40 +900,93 @@ fn a_given_then_revived_binding_keeps_its_given_escape() {
     );
 }
 
-/// (High) Bug caught: an event the recorder cannot place (no function being walked, or a binding
-/// the function never declared) used to return silently, so the record claimed a partition it
-/// never built and a release pass would have trusted it. Each must come back as an internal-error
-/// value instead, which `TypedModule::with_codegen_names` turns into a hard error. The checker
-/// cannot produce these today, so the recorder is driven directly through its public boundary.
-#[test]
-fn an_event_the_recorder_cannot_place_is_an_internal_error() {
-    let declared = (0, 1, "declared".to_string());
-    let undeclared = (2, 3, "undeclared".to_string());
+/// Every event the recorder cannot place must come back as one internal-error value (which
+/// `TypedModule::with_codegen_names` turns into a hard error), never as a silent return. The
+/// checker cannot produce these events today, so the recorder is driven through its public API:
+/// `drive` makes the calls, and the record must hold exactly one message containing `needle`.
+/// (`BindingNames::default()` names nothing, so a binding `drive` declares adds a missing-name
+/// message of its own; only `needle` is counted.)
+fn assert_one_internal_error(drive: impl FnOnce(&mut TransferRecorder), needle: &str) {
     let mut recorder = TransferRecorder::default();
-
-    recorder.join(&declared, &undeclared);
-    recorder.begin_function("f");
-    recorder.declare(declared.clone(), vec![0], RoleEvidence::Owner);
-    recorder.join(&declared, &undeclared);
-    recorder.escape(&undeclared, Escape::Returned);
-    recorder.note_event(&undeclared, RoleEvidence::Piece);
-    // `BindingNames::default()` names nothing, so `declared` has no codegen name either.
+    drive(&mut recorder);
     let record = recorder.finish(&BindingNames::default());
-
     let messages = record.internal_errors();
-    let mentioning = |needle: &str| {
-        messages
-            .iter()
-            .filter(|message| message.contains(needle))
-            .count()
-    };
+    let mentioning = messages
+        .iter()
+        .filter(|message| message.contains(needle))
+        .count();
     assert_eq!(
-        messages.len(),
-        5,
-        "unexpected internal errors: {messages:#?}"
+        mentioning, 1,
+        "expected one internal error containing `{needle}`, got {messages:#?}"
     );
-    assert_eq!(mentioning("while no function was being walked"), 1);
-    assert_eq!(mentioning("in `f`, which it never saw declared"), 3);
-    assert_eq!(mentioning("has no codegen name from type checking"), 1);
+}
+
+fn key(start: usize, name: &str) -> (usize, usize, String) {
+    (start, start + 1, name.to_string())
+}
+
+/// (High) Bug caught: an event with no function being walked used to return silently, so the
+/// record claimed a partition it never built and a release pass would have trusted it.
+#[test]
+fn an_event_before_any_function_is_an_internal_error() {
+    assert_one_internal_error(
+        |recorder| recorder.join(&key(0, "a"), &key(2, "b")),
+        "while no function was being walked",
+    );
+}
+
+/// (High) Bug caught: a join naming a binding the function never declared used to be dropped,
+/// leaving two values in separate classes that one value reaches.
+#[test]
+fn a_join_naming_an_undeclared_binding_is_an_internal_error() {
+    assert_one_internal_error(
+        |recorder| {
+            recorder.begin_function("f");
+            recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner);
+            recorder.join(&key(0, "declared"), &key(2, "undeclared"));
+        },
+        "in `f`, which it never saw declared",
+    );
+}
+
+/// (High) Bug caught: an escape of an undeclared binding used to be dropped, so a value that
+/// leaves the function looked as if it stayed and a release pass would free it.
+#[test]
+fn an_escape_of_an_undeclared_binding_is_an_internal_error() {
+    assert_one_internal_error(
+        |recorder| {
+            recorder.begin_function("f");
+            recorder.escape(&key(2, "undeclared"), Escape::Returned);
+        },
+        "in `f`, which it never saw declared",
+    );
+}
+
+/// (High) Bug caught: a reassignment's role evidence for an undeclared binding used to be
+/// dropped, so a piece could be recorded as an owner.
+#[test]
+fn a_binding_event_for_an_undeclared_binding_is_an_internal_error() {
+    assert_one_internal_error(
+        |recorder| {
+            recorder.begin_function("f");
+            recorder.note_event(&key(2, "undeclared"), RoleEvidence::Piece);
+        },
+        "in `f`, which it never saw declared",
+    );
+}
+
+/// (High) Bug caught: a declared binding the name table lacks used to be skipped when the record
+/// was built, so its function vanished from the record without an error.
+#[test]
+fn a_declared_binding_with_no_codegen_name_is_an_internal_error() {
+    let mut recorder = TransferRecorder::default();
+    recorder.begin_function("f");
+    recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner);
+    let record = recorder.finish(&BindingNames::default());
+    let messages = record.internal_errors();
+    assert!(
+        messages.len() == 1 && messages[0].contains("has no codegen name from type checking"),
+        "expected one missing-name internal error, got {messages:#?}"
+    );
     assert!(record.function("f").is_none());
 }
