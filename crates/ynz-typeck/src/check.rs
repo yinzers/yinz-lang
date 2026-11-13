@@ -7039,7 +7039,11 @@ impl<'b> Checker<'b> {
         // (`same(thing, big)`, `T = Tiny | Big`): codegen wraps a plain shape into an envelope
         // only where the DECLARED parameter type is a union, never through a substituted `T`,
         // so the callee would read the bare shape as `{tag, data}` (C1c, #410). Refused until
-        // the one coercion point (#421) covers substituted parameters.
+        // the one coercion point (#421) covers substituted parameters. The same holds where the
+        // type parameter sits INSIDE the declared union (`first: T | nothing`, `T | Tiny`): a
+        // `Big` that fits only through `T` has no tag in the declared union, so codegen passes
+        // it bare (wrong variant read) or fails; a declared variant (`Tiny`) keeps its tag and
+        // is still accepted (C1g, #424).
         for (index, (arg, (_, param_ty))) in
             call.args.iter().zip(non_self_params.iter()).enumerate()
         {
@@ -7055,10 +7059,11 @@ impl<'b> Checker<'b> {
                     &resolved,
                     &format!("`{name}` expects a `{}` here", type_name(&resolved)),
                 ));
-            } else if matches!(param_ty, Type::TypeParam { .. })
+            } else if mentions_type_param(param_ty)
                 && is_envelope_union(&resolved)
                 && !matches!(actual_ty, Type::Union { .. })
                 && can_assign(&resolved, &actual_ty)
+                && !can_assign(param_ty, &actual_ty)
             {
                 let type_param = type_name(param_ty);
                 let union_name = type_name(&resolved);

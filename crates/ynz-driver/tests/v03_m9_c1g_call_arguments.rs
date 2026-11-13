@@ -7,10 +7,11 @@
 //! call discarded `unify_param`'s mismatch; the dot-call form checked non-receiver arguments
 //! for the union case only); built under ASan at -O0 the first four overflow the stack.
 //!
-//! Test count: 9 — one per refused case and per call form (generic with a sibling argument,
-//! with an explicit type argument, with a concrete parameter, with two scalar types; dot-call
+//! Test count: 10 — one per refused case and per call form (generic with a sibling argument,
+//! with an explicit type argument, with a concrete parameter, with two scalar types, with a
+//! shape that fits a union parameter only through its type parameter; dot-call
 //! with a shape and with an int), the plain-form guard (already clean when probed), and the
-//! legal calls that must keep running.
+//! legal calls and container parameters that must keep running.
 
 mod support;
 
@@ -159,7 +160,22 @@ fn v03_m9_c1g_generic_parameters_holding_the_type_parameter_in_a_container_are_a
     support::assert_fixture_prints(
         "v0_3_m9_c1g_generic_container_parameters.ynz",
         false,
-        "3\n3\n3\n3\n",
+        "3\n3\n3\n3\ntiny\n",
         "container parameters of a generic function must still compile and run",
+    );
+}
+
+#[test]
+fn v03_m9_c1g_shape_fitting_only_through_a_type_parameter_inside_a_union_is_rejected() {
+    // BUG (found in security review): `first: T | nothing` with `T = Big` took a plain `Big`;
+    // no tag exists for it in the declared union, so the callee read the bare shape as the
+    // tagged box (wrong variant, `absent` for `hello`) or codegen failed. TIER: High.
+    assert_rejected_with(
+        "v0_3_m9_c1g_generic_type_parameter_inside_union.ynz",
+        &[
+                "`big` is a `Big`, but `pick` takes it as `T | nothing`, which this call makes a `Big | nothing`.",
+                "`big` is a `Big`, but `pickOrTiny` takes it as `T | Tiny`, which this call makes a `Big | Tiny`.",
+        "Put it in a `Big | nothing` first",
+        ],
     );
 }

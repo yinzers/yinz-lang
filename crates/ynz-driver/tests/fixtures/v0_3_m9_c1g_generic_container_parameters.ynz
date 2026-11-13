@@ -3,9 +3,23 @@
 // call has bound `T`. The signature used to resolve `maybe<T>` as `maybe<unknown>` and
 // `array<T>` as a user generic shape named `array`, so the new argument comparison refused a
 // correct call ("expects `maybe<unknown>`").
-// Correct behavior: compiles; prints 3 / 3 / 3 / 3.
+// A declared variant of a union that also holds `T` (`Tiny` for `T | Tiny`) keeps its tag and
+// stays accepted; only a shape that fits through `T` alone is refused.
+// Correct behavior: compiles; prints 3 / 3 / 3 / 3 / tiny.
 // Pre-fix: `pickMaybe` compiled on the parent of C1g and was wrongly refused by the first
 // version of the comparison; `pickArray` failed in codegen ("cannot alloca for type Generic").
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function pickOrTiny<T>(share first: T | Tiny, share second: T) -> T | Tiny {
+  return first
+}
 
 function pickMaybe<T>(share first: maybe<T>, share second: T) -> T {
   return second
@@ -22,4 +36,15 @@ function entrypoint() -> nothing {
   print(pickMaybe<int>(found, 3).toString())
   print(pickArray(numbers, 3).toString())
   print(pickArray<int>(numbers, 3).toString())
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let out = pickOrTiny(tiny, big)
+  if (out) {
+    is Big => {
+      print(out.label)
+    }
+    is Tiny => {
+      print(`tiny`)
+    }
+  }
 }

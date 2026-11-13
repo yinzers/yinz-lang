@@ -1,0 +1,38 @@
+// v0.3-M9 C1g (security): a plain shape that fits a union parameter only THROUGH the type
+// parameter inside it (`first: T | nothing` or `first: T | Tiny`, `T = Big` from `second`).
+// Correct behavior: does not compile — refused with the C1c teaching text (put it in the union
+// first), for both calls.
+// Pre-fix failure: `pick(big, big)` with `T | nothing` compiled and printed `absent` instead
+// of `hello` (the bare `Big` was read as the tagged union box); with `T | Tiny` codegen failed
+// ("`Big` reaches the union slot `pick_arg0` but is not one of its variants").
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+
+function describe(share thing: Big | nothing) -> string {
+  if (thing) {
+    is Big => {
+      return thing.label
+    }
+  }
+  return `absent`
+}
+
+function pick<T>(share first: T | nothing, share second: T) -> T | nothing {
+  return first
+}
+
+function pickOrTiny<T>(share first: T | Tiny, share second: T) -> T | Tiny {
+  return first
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  print(describe(pick(big, big)))
+  let out = pickOrTiny(big, big)
+}
