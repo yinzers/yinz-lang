@@ -16204,6 +16204,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     return Ok(global.as_pointer_value().into());
                 }
             }
+            // A decimal literal under a `float` annotation (`let x: float = 0.317`) is an f64
+            // constant: typeck types it `float`, so its value must be f64 bits like every other
+            // `float`, not the address of a decimal cell.
+            if ty == Type::Float {
+                let value: f64 = s
+                    .parse()
+                    .map_err(|e| format!("bad float literal `{s}`: {e}"))?;
+                return Ok(cg.f64().const_float(value).into());
+            }
             // Hardware decimal128 path (N ≤ 34): stack alloca holds i128 bits.
             let bits: u128 =
                 ynz_numerics::parse(s).ok_or_else(|| format!("bad decimal literal `{s}`"))?;

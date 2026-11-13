@@ -4,7 +4,7 @@ Pittsburgh Pirates Roster — Yinz v0.1 Showcase
 M2 — variables, arithmetic, primitives:
 Clemente
 2000
-0.00000000000000000000000000000
+0.317
 1234567.89
 true
 3

@@ -11,14 +11,16 @@ mod support;
 use support::{assert_asan_clean_and_prints, assert_fixture_prints, build, run_counted};
 
 /// Bug caught: `int`/`float`/`number` `.toString()` returns a pointer into one shared
-/// thread-local buffer, so two live results both show the last value (`222 222`). (High)
+/// thread-local buffer, so two live results both show the last value (`222 222`); and a decimal
+/// literal under a `float` annotation lowered to a decimal-cell address (printed as a denormal
+/// once the 31-byte buffer truncation was gone). (High)
 #[test]
 fn to_string_results_are_distinct_strings() {
     for no_optimize in [false, true] {
         assert_fixture_prints(
             "v0_3_m9_c3a_to_string_distinct_results.ynz",
             no_optimize,
-            "111\n222\n7\n9\n3.25\n4.75\n",
+            "111\n222\n7.5\n9\n3.25\n4.75\n",
             "two live toString results must hold two values",
         );
     }

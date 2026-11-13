@@ -2,7 +2,7 @@
 // Before C3a, `int`/`float`/`number` `.toString()` returned a pointer into one thread-local
 // buffer, so the second call overwrote the first and both lines printed the second value.
 //
-// Expected output: 111 222 7 9 3.25 4.75 (one per line)
+// Expected output: 111 222 7.5 9 3.25 4.75 (one per line)
 
 function entrypoint() -> nothing {
   let firstInt: int = 111
@@ -10,7 +10,7 @@ function entrypoint() -> nothing {
   let firstIntText: string = firstInt.toString()
   let secondIntText: string = secondInt.toString()
 
-  let firstFloat: float = (7).toFloat()
+  let firstFloat: float = 7.5
   let secondFloat: float = (9).toFloat()
   let firstFloatText: string = firstFloat.toString()
   let secondFloatText: string = secondFloat.toString()
