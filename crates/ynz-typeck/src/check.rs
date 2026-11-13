@@ -3758,7 +3758,7 @@ impl<'b> Checker<'b> {
         self.scope.push();
         let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
-        self.end_loop_body(loop_mark);
+        self.end_loop_body(loop_mark, Some(cond), body);
         self.scope.pop();
     }
 
@@ -3837,7 +3837,7 @@ impl<'b> Checker<'b> {
         }
         let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
-        self.end_loop_body(loop_mark);
+        self.end_loop_body(loop_mark, None, body);
         self.scope.pop();
     }
 
@@ -4743,7 +4743,11 @@ impl<'b> Checker<'b> {
     /// `check_stmts` drops the gives of a block that always returns). Rust rejects the same
     /// program: use of a moved value in a later iteration. The text is the one canonical
     /// use-after-give wording with the loop named in the `{via}` slot.
-    fn end_loop_body(&mut self, mark: usize) {
+    ///
+    /// Only an entry the next pass READS (by name, in `condition` or `body`) is carried: a
+    /// class-mate the loop never mentions stays consumed but nothing reads it, and a read after the
+    /// loop is the ordinary use-after-give. O(entries . loop size) per give.
+    fn end_loop_body(&mut self, mark: usize, condition: Option<&Expr>, body: &Block) {
         let Some(body_frame) = self.loop_body_frames.pop() else {
             return;
         };
@@ -4751,6 +4755,11 @@ impl<'b> Checker<'b> {
         for give in gives {
             let carried = give.reached.iter().any(|entry| {
                 entry.frame_index < body_frame
+                    && (condition.is_some_and(|cond| expr_refs_ident(cond, &entry.name))
+                        || body
+                            .stmts
+                            .iter()
+                            .any(|stmt| ident_read_in_stmt(stmt, &entry.name)))
                     && self
                         .scope
                         .entry_in_frame(entry.frame_index, &entry.name)

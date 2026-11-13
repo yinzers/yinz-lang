@@ -222,7 +222,7 @@ fn a_give_inside_a_loop_of_an_outer_binding_is_rejected() {
 /// loop, and a give after the loop.
 #[test]
 fn gives_that_do_not_carry_into_the_next_pass_are_accepted() {
-    let cases: [(&str, String); 4] = [
+    let cases: [(&str, String); 5] = [
         (
             "declared inside the loop",
             format!(
@@ -256,6 +256,19 @@ fn gives_that_do_not_carry_into_the_next_pass_are_accepted() {
       eat(x)
       return
     }}
+  }}
+}}"
+            ),
+        ),
+        (
+            "a class-mate the loop never reads stays consumed after the given binding is revived",
+            format!(
+                "{EAT}function l() -> nothing {{
+  let x: array<int> = [1, 2, 3]
+  let snapshot: array<int> = x
+  for (i in range(0, 3)) {{
+    eat(x)
+    x = [4, 5]
   }}
 }}"
             ),
