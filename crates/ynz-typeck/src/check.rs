@@ -144,78 +144,66 @@ fn role_evidence_of(origin: &Origin) -> RoleEvidence {
     }
 }
 
-/// THE rendering of a read of a consumed binding — the use-after-give (`Consumed`) or
+/// THE rendering of a consumed-binding diagnostic — the use-after-give (`Consumed`) or
 /// use-after-send (`ConsumedBySend`) template, selected by the cause `Scope::consume` stamped
-/// on the alias class, with the `{via}` slot naming the class-mate that was actually given or
-/// sent when it is not the name being read (v0.3-M8 Phase 4; parked items 7/8 reconciled the
-/// `Consumed` template with this rendering, fix round 2 gave it the `{via}` slot). Two callers,
-/// one text: `resolve_ident` (a read inferred after the consume) and `check_transfer` (a read
-/// at a later position of the call that consumed it).
-fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagnostic {
+/// on the alias class. `name` is the binding the message talks about and `via` fills the `{via}`
+/// slot. The two callers below pass different `name`/`via` and share every other slot, so the
+/// canonical explanation stays one text.
+fn consumed_diag(span: SourceSpan, name: &str, cause: &ConsumedBy, via: &str) -> Diagnostic {
     match cause {
-        ConsumedBy::Given { given, .. } => {
-            let via = if given == name {
-                String::new()
-            } else {
-                format!(" — it shares its value with `{given}`, which is what was given away")
-            };
-            registry_diag(
-                span,
-                DiagnosticKind::Consumed,
-                &[("name", name), ("given", given), ("via", &via)],
-            )
-        }
-        ConsumedBy::Sent { channel, sent } => {
-            let via = if sent == name {
-                String::new()
-            } else {
-                format!(" — it shares its value with `{sent}`, which is what was sent")
-            };
-            registry_diag(
-                span,
-                DiagnosticKind::ConsumedBySend,
-                &[
-                    ("name", name),
-                    ("channel", channel),
-                    ("sent", sent),
-                    ("via", &via),
-                ],
-            )
-        }
-    }
-}
-
-/// The use-after-give of a LOOP-CARRIED give: the loop gave a binding declared outside it away on
-/// one pass and the next pass reads it again. Same templates and slots as `consumed_read_diag`
-/// (one canonical explanation per concept); the loop is named in the `{via}` slot.
-fn loop_carried_give_diag(span: SourceSpan, cause: &ConsumedBy) -> Diagnostic {
-    match cause {
-        ConsumedBy::Given { callee, given } => registry_diag(
+        ConsumedBy::Given { given, .. } => registry_diag(
             span,
             DiagnosticKind::Consumed,
-            &[
-                ("name", given),
-                ("given", given),
-                (
-                    "via",
-                    &format!(
-                        ", because the previous pass through this loop already gave it to `{callee}`"
-                    ),
-                ),
-            ],
+            &[("name", name), ("given", given), ("via", via)],
         ),
         ConsumedBy::Sent { channel, sent } => registry_diag(
             span,
             DiagnosticKind::ConsumedBySend,
             &[
-                ("name", sent),
+                ("name", name),
                 ("channel", channel),
                 ("sent", sent),
-                (
-                    "via",
-                    " — the previous pass through this loop already sent it",
-                ),
+                ("via", via),
             ],
+        ),
+    }
+}
+
+/// The rendering of a READ of a consumed binding, with the `{via}` slot naming the class-mate
+/// that was actually given or sent when it is not the name being read (v0.3-M8 Phase 4; parked
+/// items 7/8 reconciled the `Consumed` template with this rendering, fix round 2 gave it the
+/// `{via}` slot). Two callers, one text: `resolve_ident` (a read inferred after the consume)
+/// and `check_transfer` (a read at a later position of the call that consumed it).
+fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagnostic {
+    let via = match cause {
+        ConsumedBy::Given { given, .. } if given != name => {
+            format!(" — it shares its value with `{given}`, which is what was given away")
+        }
+        ConsumedBy::Sent { sent, .. } if sent != name => {
+            format!(" — it shares its value with `{sent}`, which is what was sent")
+        }
+        ConsumedBy::Given { .. } | ConsumedBy::Sent { .. } => String::new(),
+    };
+    consumed_diag(span, name, cause, &via)
+}
+
+/// The use-after-give of a LOOP-CARRIED give: the loop gave a binding declared outside it away on
+/// one pass and the next pass reads it again. The same templates as `consumed_read_diag` (one
+/// canonical explanation per concept) about the binding that was given, with the loop named in
+/// the `{via}` slot.
+fn loop_carried_give_diag(span: SourceSpan, cause: &ConsumedBy) -> Diagnostic {
+    match cause {
+        ConsumedBy::Given { callee, given } => {
+            let via = format!(
+                ", because the previous pass through this loop already gave it to `{callee}`"
+            );
+            consumed_diag(span, given, cause, &via)
+        }
+        ConsumedBy::Sent { sent, .. } => consumed_diag(
+            span,
+            sent,
+            cause,
+            ", because the previous pass through this loop already sent it",
         ),
     }
 }
