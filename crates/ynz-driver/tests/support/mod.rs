@@ -19,10 +19,10 @@
 
 #![allow(dead_code)] // each test binary uses a different subset of this shared module
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Liveness ceiling for one compiled fixture run. A trip is a hang, never a slow test:
 /// generous by an order of magnitude over the observed run so a loaded parallel lane cannot
@@ -100,35 +100,54 @@ pub fn build(fixture_name: &str, no_optimize: bool) -> Built {
     }
 }
 
-/// Run `binary` to completion under the liveness watchdog.
+/// How often the watchdog polls the child. Only bounds how late a finished run is noticed; it
+/// is not a performance budget.
+const WATCHDOG_POLL: Duration = Duration::from_millis(5);
+
+/// Read `stream` to its end on a thread of its own, so a chatty child cannot fill a pipe and
+/// block while the watchdog polls for its exit.
+fn drain<R: Read + Send + 'static>(stream: R) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut stream = stream;
+        // A read error (child killed mid-write) still returns what arrived before it.
+        let _ = stream.read_to_end(&mut bytes);
+        bytes
+    })
+}
+
+/// Run `cmd` to completion under the liveness watchdog. The child is killed through its own
+/// handle (`Child::kill`), never an external `kill` binary that a minimal image may lack: a
+/// hung fixture must not survive the failed test as an orphan.
 fn run_with_watchdog(mut cmd: Command) -> RunOutput {
-    let child = cmd
+    let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn compiled fixture");
-    let pid = child.id();
-    let (sender, receiver) = mpsc::channel::<std::io::Result<Output>>();
-    // `wait_with_output` drains both pipes while waiting, so a chatty child cannot deadlock.
-    std::thread::spawn(move || {
-        let _ = sender.send(child.wait_with_output());
-    });
-    match receiver.recv_timeout(RUN_WATCHDOG) {
-        Ok(result) => {
-            let output = result.expect("collect compiled fixture output");
-            RunOutput {
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                exit_code: output.status.code().unwrap_or(-1),
-            }
+    let stdout_reader = drain(child.stdout.take().expect("piped stdout"));
+    let stderr_reader = drain(child.stderr.take().expect("piped stderr"));
+    let deadline = Instant::now() + RUN_WATCHDOG;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll compiled fixture") {
+            break status;
         }
-        Err(_) => {
-            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
             panic!(
                 "WATCHDOG TRIP: compiled fixture did not exit within {RUN_WATCHDOG:?} — a hang, \
                  never a slow test; fix the program, never widen this timeout."
             );
         }
+        std::thread::sleep(WATCHDOG_POLL);
+    };
+    RunOutput {
+        stdout: String::from_utf8_lossy(&stdout_reader.join().expect("join stdout reader"))
+            .into_owned(),
+        stderr: String::from_utf8_lossy(&stderr_reader.join().expect("join stderr reader"))
+            .into_owned(),
+        exit_code: status.code().unwrap_or(-1),
     }
 }
 
