@@ -6850,7 +6850,7 @@ impl<'b> Checker<'b> {
                     &format!("`{name}` expects a `{}` here", type_name(&resolved)),
                 ));
             } else if matches!(param_ty, Type::TypeParam { .. })
-                && matches!(resolved, Type::Union { .. })
+                && is_envelope_union(&resolved)
                 && !matches!(actual_ty, Type::Union { .. })
                 && can_assign(&resolved, &actual_ty)
             {
@@ -9663,6 +9663,18 @@ fn can_assign(target: &Type, source: &Type) -> bool {
 /// container of the other? True when each is assignable to the other.
 fn same_layout(first: &Type, second: &Type) -> bool {
     can_assign(first, second) && can_assign(second, first)
+}
+
+/// A union with a shape variant (`Tiny | Big`, `Circle | nothing`) is a pointer to a tagged
+/// `{tag, data}` envelope. Any other union (`map<..> | nothing`) is the variant's raw pointer,
+/// null for `nothing`, and has no envelope to build.
+fn is_envelope_union(candidate: &Type) -> bool {
+    match candidate {
+        Type::Union { variants } => variants
+            .iter()
+            .any(|variant| matches!(variant, Type::Shape { .. })),
+        _ => false,
+    }
 }
 
 /// `source` is a union that lists `target` as one of its variants, and `target` is not itself a

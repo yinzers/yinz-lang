@@ -164,7 +164,7 @@ fn v03_m9_union_widening_and_narrowed_arm_still_compile_and_run() {
     support::assert_fixture_prints(
         "v0_3_m9_union_widening_and_narrowed.ynz",
         false,
-        "hello\nhello\nhello\nhello\nhello\ntiny\nok\nend\n",
+        "hello\nhello\nhello\nhello\nhello\ntiny\nok\nok\nend\n",
         "legal union flows must still compile and run",
     );
 }
@@ -175,7 +175,7 @@ fn v03_m9_union_widening_and_narrowed_arm_run_without_optimization() {
     support::assert_fixture_prints(
         "v0_3_m9_union_widening_and_narrowed.ynz",
         true,
-        "hello\nhello\nhello\nhello\nhello\ntiny\nok\nend\n",
+        "hello\nhello\nhello\nhello\nhello\ntiny\nok\nok\nend\n",
         "legal union flows must still compile and run",
     );
 }
