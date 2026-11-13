@@ -1,0 +1,36 @@
+// v0.3-M9 C2 safety fixture — exit class: NORMAL RETURN.
+// Function-body locals are released when the body ends, either by a `return value` tail or by
+// falling off the end. The returned value is computed BEFORE the release.
+// Correct behavior: exact output below, exit 0, AddressSanitizer-clean.
+// Guards against: releasing a local before the `return` expression reads it (use-after-free of
+// `first`/`second` in `a.count() + b.count()`), and releasing twice (return edge + fallthrough).
+// `tail` is the plain lowering of a value return, `fallthrough` a plain function with no return
+// statement, `tailSuspending` the state-machine lowering.
+//
+// Expected output (one per line): 5, 2, 9
+
+function tail() -> int {
+  let first: array<int> = [1, 2, 3]
+  let second: array<int> = [4, 5]
+  return first.count() + second.count()
+}
+
+function fallthrough() -> nothing {
+  let only: array<int> = [8, 9]
+  print(only.count().toString())
+}
+
+function tailSuspending() -> int {
+  let first: array<int> = [1, 2, 3]
+  wait sleep(1)
+  let second: array<int> = [4, 5]
+  wait sleep(1)
+  return first.count() + second.count() + second[0].or(0)
+}
+
+function entrypoint() -> nothing {
+  print(tail().toString())
+  fallthrough()
+  let value: int = tailSuspending()
+  print(value.toString())
+}

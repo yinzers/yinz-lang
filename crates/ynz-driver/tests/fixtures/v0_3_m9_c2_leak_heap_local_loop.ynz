@@ -1,0 +1,18 @@
+// v0.3-M9 C2 leak fixture: a heap local declared in a 2,000-iteration loop body.
+// Correct behavior: every iteration's array is released at the end of that iteration, so the
+// runtime's heap alloc count equals its free count when the program exits.
+// Today (no scope-exit release): all 4,000 allocations (header + data per array) leak.
+// The test reads the counters; this program prints the checksum so the loop cannot be elided.
+//
+// Expected output: 2000
+
+function entrypoint() -> nothing {
+  let i: int = 0
+  let total: int = 0
+  while (i < 2000) {
+    let per: array<int> = [i, i + 1]
+    total = total + per.count() - 1
+    i = i + 1
+  }
+  print(total.toString())
+}

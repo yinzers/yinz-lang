@@ -1,0 +1,42 @@
+// v0.3-M9 C2 safety fixture — exit class: LOOP ITERATION END.
+// A heap local declared in a `while` body is released at the end of EACH iteration (the
+// back-edge), and a binding declared OUTSIDE the loop must survive every iteration. `looped`
+// is the plain lowering, `loopedSuspending` the state-machine one (the back-edge there may
+// also yield to the scheduler).
+// Correct behavior: exact output below, exit 0, AddressSanitizer-clean.
+// Guards against: releasing `kept` (declared outside) at an iteration end — a use-after-free on
+// iteration 2 — and releasing `per` once per iteration AND again at function exit — a double free.
+//
+// Expected output (one per line): 15, 18, 0, 1, 2, 3
+
+function looped() -> int {
+  let kept: array<int> = [9, 9, 9]
+  let i: int = 0
+  let total: int = 0
+  while (i < 3) {
+    let per: array<int> = [i, i + 1]
+    total = total + per.count() + kept.count()
+    i = i + 1
+  }
+  print(total.toString())
+  return total + kept.count()
+}
+
+function loopedSuspending() -> int {
+  let kept: array<int> = [9, 9, 9]
+  let i: int = 0
+  while (i < 3) {
+    let per: array<int> = [i, i + 1]
+    wait sleep(1)
+    print(per[0].or(-1).toString())
+    i = i + 1
+  }
+  return kept.count()
+}
+
+function entrypoint() -> nothing {
+  let plain: int = looped()
+  print(plain.toString())
+  let suspended: int = loopedSuspending()
+  print(suspended.toString())
+}
