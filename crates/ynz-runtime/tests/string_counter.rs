@@ -14,7 +14,7 @@
 
 use std::ffi::CStr;
 
-use ynz_runtime::runtime::ynz_rt_init;
+use ynz_runtime::runtime::{ynz_rt_init, ynz_rt_shutdown};
 use ynz_runtime::{
     ynz_bignum_add, ynz_string_alloc_bytes, ynz_string_alloc_count, ynz_string_builder_append,
     ynz_string_builder_finalize, ynz_string_builder_new, ynz_string_codepoint_at,
@@ -107,4 +107,9 @@ fn every_string_allocator_is_counted_and_balanced_by_ynz_string_free() {
     let free_count_before = ynz_string_free_count();
     unsafe { ynz_string_free(std::ptr::null()) };
     assert_eq!(ynz_string_free_count(), free_count_before);
+
+    // `ynz_rt_init` starts Tokio worker threads; Miri fails a process that exits with live
+    // threads ("main thread terminated without waiting for all remaining threads"), so join
+    // them the way a compiled program does at exit.
+    ynz_rt_shutdown();
 }
