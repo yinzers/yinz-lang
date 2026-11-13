@@ -2644,6 +2644,7 @@ version = "0.3.3"
 dependencies = [
  "insta",
  "salsa",
+ "tempfile",
  "ynz-ast",
  "ynz-diagnostics",
  "ynz-parser",

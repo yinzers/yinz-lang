@@ -16,3 +16,4 @@ ynz-registry      = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+tempfile = { workspace = true }

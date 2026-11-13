@@ -26,8 +26,6 @@
 // case, so the runner parallelizes them and names the failing program; a case is in a table only
 // when it takes a different checker path.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use ynz_diagnostics::{Diagnostic, DiagnosticKind, Severity};
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::transfer_record::{Escape, FunctionTransfers, NoFounderReason, ReleaseAnchor};
@@ -43,22 +41,17 @@ fn run(source: &str) -> CheckOutput {
 
 /// Check `main_source` (as `main.ynz`) in a project that also holds `library_source` (as
 /// `lib.ynz`, imported with ``import { .. } from `lib` ``). The files must exist on disk for the
-/// import to resolve; each call gets its own directory so parallel tests never share one.
+/// import to resolve; each call gets its own `TempDir`, so parallel tests never share one and the
+/// directory is removed even when the check panics.
 fn run_with_library(library_source: &str, main_source: &str) -> CheckOutput {
-    static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);
-    let project_directory = std::env::temp_dir().join(format!(
-        "ynz_transfer_record_{}_{}",
-        std::process::id(),
-        NEXT_PROJECT.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&project_directory).expect("create the project directory");
+    let project_directory = tempfile::tempdir().expect("create the project directory");
     std::fs::write(
-        project_directory.join("yinz.toml"),
+        project_directory.path().join("yinz.toml"),
         "[project]\nname = \"test\"\n",
     )
     .expect("write yinz.toml");
-    let library_path = project_directory.join("lib.ynz");
-    let main_path = project_directory.join("main.ynz");
+    let library_path = project_directory.path().join("lib.ynz");
+    let main_path = project_directory.path().join("main.ynz");
     std::fs::write(&library_path, library_source).expect("write lib.ynz");
     std::fs::write(&main_path, main_source).expect("write main.ynz");
 
@@ -75,9 +68,7 @@ fn run_with_library(library_source: &str, main_source: &str) -> CheckOutput {
     );
     db.register_source(library_file);
     db.register_source(main_file);
-    let output = (*check_query(&db, main_file)).clone();
-    let _ = std::fs::remove_dir_all(&project_directory);
-    output
+    (*check_query(&db, main_file)).clone()
 }
 
 fn error_diagnostics(output: &CheckOutput) -> Vec<&Diagnostic> {
