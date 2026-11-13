@@ -134,3 +134,26 @@ fn two_live_conversions_hold_two_values() {
         unsafe { ynz_string_release(string) };
     }
 }
+
+/// Bug caught: a float's text is cut to a fixed buffer again (the old thread-local buffer kept
+/// 31 bytes, which hid a wrong float literal behind a truncated denormal). One row per shape of
+/// text: short, negative, fractional, a 301-digit magnitude, the smallest subnormal's long
+/// fraction, and the non-finite values. (High)
+#[test]
+fn float_to_string_is_never_truncated() {
+    let table: [f64; 8] = [
+        0.0,
+        -2.5,
+        0.317,
+        1e300,
+        f64::MIN_POSITIVE,
+        5e-324,
+        f64::INFINITY,
+        f64::NAN,
+    ];
+    for value in table {
+        let string = ynz_float_to_string(value);
+        assert_eq!(text(string), format!("{value}"), "float {value:e}");
+        unsafe { ynz_string_release(string) };
+    }
+}
