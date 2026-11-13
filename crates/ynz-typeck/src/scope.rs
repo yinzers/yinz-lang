@@ -14,11 +14,71 @@ pub enum ConsumedBy {
     /// Given to a `give` position of `callee` (a call, a UFCS dot-call, a `background` spawn);
     /// `given` is the binding that was named at the give — it differs from the consumed name
     /// when the consumption reached this entry through its alias class (the `{via}` slot).
-    Given { callee: String, given: String },
+    /// `missed_revive`: see [`ConsumedBy::missed_revive`].
+    Given {
+        callee: String,
+        given: String,
+        missed_revive: Option<BranchKind>,
+    },
     /// Sent into `channel` (a `channel<T>.send` / `h.send` of an owned-heap payload); `sent`
     /// is the binding that was named at the send — it differs from the consumed name when
     /// the consumption reached this entry through its alias class.
-    Sent { channel: String, sent: String },
+    /// `missed_revive`: see [`ConsumedBy::missed_revive`].
+    Sent {
+        channel: String,
+        sent: String,
+        missed_revive: Option<BranchKind>,
+    },
+}
+
+/// The kind of statement that opened a branch point (see [`Scope::begin_branches`]); names the
+/// path a revive did not cover in the maybe-given read diagnostic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BranchKind {
+    /// An `if` (it has no `else`: the condition-false path enters no arm).
+    If,
+    /// A `match`.
+    Match,
+    /// A `while` or `for` loop (its body may run zero times).
+    Loop,
+}
+
+impl ConsumedBy {
+    /// The branch point at whose join the binding stayed given away on a path that did not
+    /// reassign it, though another path did (`None`: given away with no revive involved). It
+    /// fills the `{via}` slot of the maybe-given read, so the explanation of the give stays the
+    /// one canonical `Consumed` text.
+    pub fn missed_revive(&self) -> Option<BranchKind> {
+        match self {
+            ConsumedBy::Given { missed_revive, .. } | ConsumedBy::Sent { missed_revive, .. } => {
+                *missed_revive
+            }
+        }
+    }
+
+    /// This cause marked as left maybe-given by a join of `kind`; an earlier (inner) mark wins.
+    fn marked_missed_revive(self, kind: BranchKind) -> ConsumedBy {
+        match self {
+            ConsumedBy::Given {
+                callee,
+                given,
+                missed_revive,
+            } => ConsumedBy::Given {
+                callee,
+                given,
+                missed_revive: missed_revive.or(Some(kind)),
+            },
+            ConsumedBy::Sent {
+                channel,
+                sent,
+                missed_revive,
+            } => ConsumedBy::Sent {
+                channel,
+                sent,
+                missed_revive: missed_revive.or(Some(kind)),
+            },
+        }
+    }
 }
 
 /// Where a binding's value came from — a property of the BINDING EVENT (the `let`, the
@@ -114,6 +174,8 @@ fn entry_key(frame_index: usize, name: &str, defined_at: &SourceSpan) -> EntryKe
 
 /// What the join after a branch point needs (see [`Scope::begin_branches`]).
 struct Branches {
+    /// The statement that opened it.
+    kind: BranchKind,
     /// Entries consumed when the branch point opened, with their cause.
     consumed_before: HashMap<EntryKey, ConsumedBy>,
     /// Frame index of the arm being checked: only entries BELOW it outlive the arm.
@@ -307,9 +369,9 @@ impl Scope {
         (entry.defined_at.start == key.2 && entry.defined_at.end == key.3).then_some(entry)
     }
 
-    /// Open a branch point: an `if` body, the arms of a match, a loop body. Records which entries
-    /// are given away now. O(entries).
-    pub fn begin_branches(&mut self) {
+    /// Open a branch point of `kind`: an `if` body, the arms of a match, a loop body. Records
+    /// which entries are given away now. O(entries).
+    pub fn begin_branches(&mut self, kind: BranchKind) {
         let mut consumed_before = HashMap::new();
         for (frame_index, frame) in self.frames.iter().enumerate() {
             for (name, entry) in frame {
@@ -322,6 +384,7 @@ impl Scope {
             }
         }
         self.branches.push(Branches {
+            kind,
             consumed_before,
             arm_frame: 0,
             arm_revived: Vec::new(),
@@ -384,20 +447,24 @@ impl Scope {
     /// that reaches the join revived it: each arm that reaches the join, and the path that
     /// enters no arm when `skip_path` (an `if` without an else, a loop that may run zero times, a
     /// match with no else that is not exhaustive). Otherwise it stays given away (maybe given),
-    /// and reading it is the use-after-give error. A revive that holds at the join is a revive for
-    /// the enclosing branch point too. O(revived entries).
+    /// and reading it is the use-after-give error; its cause is marked with this branch point's
+    /// kind, so the read names the path that did not reassign it. A revive that holds at the join
+    /// is a revive for the enclosing branch point too. O(revived entries).
     pub fn end_branches(&mut self, skip_path: bool) {
         let Some(branch) = self.branches.pop() else {
             return;
         };
         let consumed_before = branch.consumed_before;
+        let kind = branch.kind;
         for (key, (recorded_arms, left_consumed)) in branch.recorded {
             let covered = !skip_path && recorded_arms == branch.arms_reaching_join;
             let now = self.entry_mut(&key).map(|entry| entry.consumed.clone());
             let Some(now) = now else {
                 continue;
             };
-            let exit = left_consumed.or(if covered { None } else { now });
+            let exit = left_consumed
+                .or(if covered { None } else { now })
+                .map(|cause| cause.marked_missed_revive(kind));
             if let Some(entry) = self.entry_mut(&key) {
                 entry.consumed = exit.clone();
             }

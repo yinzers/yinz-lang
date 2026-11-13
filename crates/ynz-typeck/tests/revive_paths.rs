@@ -202,3 +202,47 @@ cases! { assert_revive_accepted;
   return x.count()
 }", "give, revive in every leaf of a match nested in a match, then read: every path revived (High)";
 }
+
+/// The maybe-given read keeps the canonical `Consumed` text and adds the `{via}` clause naming
+/// the path that did not reassign the binding. `case` is `(the clause, a program)`.
+fn assert_maybe_given_names_the_path(case: &(&str, &str)) {
+    let (clause, source) = case;
+    let program = format!("{EAT}{source}");
+    let found = support::errors(&support::run(&program));
+    assert!(
+        found.iter().any(|message| message.contains(&format!(
+            "was already given away and cannot be used here, because {clause} never reassigned it."
+        ))),
+        "expected the clause `{clause}` for:\n{program}\ngot {found:#?}"
+    );
+}
+
+cases! { assert_maybe_given_names_the_path;
+    maybe_given_after_an_if_names_the_if_path: ("the path where the `if` above did not run", "function l(c: boolean) -> int {
+  let x: array<int> = [1, 2, 3]
+  eat(x)
+  if (c) { x = [0] }
+  return x.count()
+}"), "a read after an `if` that reassigned on one path said only `already given away`, which over-claims on the reassigned path (High: the wrong text sends the user to the wrong fix)";
+}
+
+cases! { assert_maybe_given_names_the_path;
+    maybe_given_after_a_match_names_the_match_path: ("a path through the `match` above", "function l(n: int) -> int {
+  let x: array<int> = [1, 2, 3]
+  eat(x)
+  if (n) {
+    1 => { x = [0] }
+    else => { print(`other`) }
+  }
+  return x.count()
+}"), "the same over-claim after a `match` where one arm does not reassign (High)";
+}
+
+cases! { assert_maybe_given_names_the_path;
+    maybe_given_after_a_loop_names_the_loop_path: ("the path where the loop above ran zero times", "function l(c: boolean) -> int {
+  let x: array<int> = [1, 2, 3]
+  eat(x)
+  while (c) { x = [0] }
+  return x.count()
+}"), "the same over-claim after a loop whose body reassigns but may run zero times (High)";
+}

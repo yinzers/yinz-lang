@@ -94,8 +94,8 @@ if (ready) {
   rows = [4, 5]
 }
 print(rows.count())
-// COMPILE ERROR: `rows` was already given away and cannot be used here.
-// When `ready` is false the new value was never assigned.
+// COMPILE ERROR: `rows` was already given away and cannot be used here, because the path where
+// the `if` above did not run never reassigned it.
 ```
 
 After an `if`, a `match` or a loop, `rows` is usable again only if every arm assigned it (a match needs an `else` arm, or to cover every variant). A loop body may run zero times, so a reassignment inside it does not count after the loop.

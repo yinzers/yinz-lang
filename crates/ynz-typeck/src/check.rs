@@ -24,7 +24,7 @@ use crate::{
     intrinsics::PrimitiveIntrinsicTable,
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
-    scope::{ConsumedBy, ConsumedEntry, Origin, Scope, ScopeEntry},
+    scope::{BranchKind, ConsumedBy, ConsumedEntry, Origin, Scope, ScopeEntry},
     shapes::ShapeTable,
     signatures::SignatureTable,
     suspension_source::{is_base_suspension_intrinsic, CHANNEL_SUSPENDING_METHODS},
@@ -66,10 +66,12 @@ impl TransferSink<'_> {
             TransferSink::Send { channel } => ConsumedBy::Sent {
                 channel: channel.to_string(),
                 sent: sent.to_string(),
+                missed_revive: None,
             },
             TransferSink::Give { callee, .. } => ConsumedBy::Given {
                 callee: callee.to_string(),
                 given: sent.to_string(),
+                missed_revive: None,
             },
         }
     }
@@ -167,7 +169,7 @@ fn consumed_diag(span: SourceSpan, name: &str, cause: &ConsumedBy, via: &str) ->
             DiagnosticKind::Consumed,
             &[("name", name), ("given", given), ("via", via)],
         ),
-        ConsumedBy::Sent { channel, sent } => registry_diag(
+        ConsumedBy::Sent { channel, sent, .. } => registry_diag(
             span,
             DiagnosticKind::ConsumedBySend,
             &[
@@ -195,7 +197,25 @@ fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagn
         }
         ConsumedBy::Given { .. } | ConsumedBy::Sent { .. } => String::new(),
     };
+    let via = match cause.missed_revive() {
+        Some(kind) => format!("{via}{}", missed_revive_clause(kind)),
+        None => via,
+    };
     consumed_diag(span, name, cause, &via)
+}
+
+/// The `{via}` clause of a READ of a binding that one path reassigned and another did not: the
+/// path that was left without a new value, named by the statement that split the paths (typeck has
+/// no source buffer, so it names the statement, not its line). The give itself is still explained
+/// by the canonical `Consumed` text.
+fn missed_revive_clause(kind: BranchKind) -> &'static str {
+    match kind {
+        BranchKind::If => ", because the path where the `if` above did not run never reassigned it",
+        BranchKind::Match => ", because a path through the `match` above never reassigned it",
+        BranchKind::Loop => {
+            ", because the path where the loop above ran zero times never reassigned it"
+        }
+    }
 }
 
 /// The use-after-give of a LOOP-CARRIED give: the loop gave a binding declared outside it away on
@@ -204,7 +224,7 @@ fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagn
 /// the `{via}` slot.
 fn loop_carried_give_diag(span: SourceSpan, cause: &ConsumedBy) -> Diagnostic {
     match cause {
-        ConsumedBy::Given { callee, given } => {
+        ConsumedBy::Given { callee, given, .. } => {
             let via = format!(
                 ", because the previous pass through this loop already gave it to `{callee}`"
             );
@@ -2384,6 +2404,7 @@ impl<'b> Checker<'b> {
                                             ConsumedBy::Given {
                                                 callee: spawn_callee.clone(),
                                                 given: name.clone(),
+                                                missed_revive: None,
                                             },
                                             expr.span(),
                                         );
@@ -3509,7 +3530,7 @@ impl<'b> Checker<'b> {
         }
 
         // The body runs on one path; the other path (condition false) enters no arm.
-        self.scope.begin_branches();
+        self.scope.begin_branches(BranchKind::If);
         self.check_branch_body(body);
         self.scope.end_branches(true);
 
@@ -3598,7 +3619,7 @@ impl<'b> Checker<'b> {
 
     fn check_stmt_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], else_arm: Option<&Block>) {
         let scrutinee_ty = self.infer_expr(scrutinee, None);
-        self.scope.begin_branches();
+        self.scope.begin_branches(BranchKind::Match);
 
         for arm in arms {
             match &arm.pattern.kind {
@@ -3776,7 +3797,7 @@ impl<'b> Checker<'b> {
         // EVERY pass, so a give made in it (`while (ok(x))` with `ok(give rows)`) reaches the next
         // pass exactly as a give in the body does.
         // A loop body may run zero times: a revive in it covers only its own pass.
-        self.scope.begin_branches();
+        self.scope.begin_branches(BranchKind::Loop);
         self.scope.push();
         self.scope.begin_arm();
         let loop_mark = self.begin_loop_body();
@@ -3827,7 +3848,7 @@ impl<'b> Checker<'b> {
             }
         };
 
-        self.scope.begin_branches();
+        self.scope.begin_branches(BranchKind::Loop);
         self.scope.push();
         self.scope.begin_arm();
         // A loop variable is one CELL of the iterated value — never transferable — and joins
