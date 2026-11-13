@@ -18569,7 +18569,14 @@ fn lower_binop<'ctx>(
     // M8 P6: when one operand is bignum (N>34) and the other is decimal128 (N≤34),
     // coerce the N≤34 side to a C string so both operands are bignum-compatible.
     let (lhs, rhs, converted_operands) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
-    let result = lower_binop_operands(cg, op, lhs, rhs, lhs_e.span().start as u32, lhs_ty)?;
+    // The operation follows the operands as they are now: a `number<=34>` left side coerced to
+    // bignum text takes the right side's bignum type (typeck's max(lhs, rhs) precision).
+    // Dispatching on the left side's own type would read that text as 16 decimal128 bytes:
+    // a wrong result and a read past the end of its exact-size heap buffer.
+    let lhs_was_coerced = matches!(lhs_ty, Type::Number { precision } if *precision <= 34)
+        && matches!(rhs_ty, Type::Number { precision } if *precision > 34);
+    let operand_ty = if lhs_was_coerced { rhs_ty } else { lhs_ty };
+    let result = lower_binop_operands(cg, op, lhs, rhs, lhs_e.span().start as u32, operand_ty)?;
     for converted in converted_operands {
         cg.builder
             .build_call(cg.rt.ynz_string_release, &[converted.into()], "")
