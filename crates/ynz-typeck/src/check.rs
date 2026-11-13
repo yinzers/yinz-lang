@@ -470,11 +470,14 @@ impl TypedModule {
     /// codegen name (`binding_names`), so name-keyed backend structures hold one binding each.
     /// `self` — the AST diagnostics, lints and the LSP read — keeps the user's names.
     ///
-    /// Hard error when the record has a hole (see `BindingNames::apply`); never falls back to
-    /// the raw names.
+    /// Hard error when the record has a hole (see `BindingNames::apply`,
+    /// `TransferRecord::internal_errors`); never falls back to the raw names.
     ///
     /// O(size of the module and its type map) time and memory: one clone.
     pub fn with_codegen_names(&self) -> Result<TypedModule, String> {
+        if !self.transfers.internal_errors().is_empty() {
+            return Err(self.transfers.internal_errors().join("; "));
+        }
         let module = self.binding_names.apply(&self.module)?;
         Ok(TypedModule {
             module,

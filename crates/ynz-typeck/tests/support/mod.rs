@@ -15,8 +15,15 @@ pub fn run(source: &str) -> CheckOutput {
     let db = CompilerDb::default();
     // Every program needs an `entrypoint`; the cases under test are the other functions.
     let program = format!("{source}\nfunction entrypoint() -> nothing {{\n}}\n");
-    let source_file = SourceFile::new(&db, "test.ynz".to_string(), program);
-    (*check_query(&db, source_file)).clone()
+    let source_file = SourceFile::new(&db, "test.ynz".to_string(), program.clone());
+    let output = (*check_query(&db, source_file)).clone();
+    // Every program checked here must leave a whole transfer record (a hole is a checker bug).
+    assert_eq!(
+        output.typed_module.transfers.internal_errors(),
+        Vec::<String>::new(),
+        "the transfer record has holes for:\n{program}"
+    );
+    output
 }
 
 pub fn error_diagnostics(output: &CheckOutput) -> Vec<&Diagnostic> {

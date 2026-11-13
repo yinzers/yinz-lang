@@ -300,6 +300,8 @@ Why "leave, then join" on a reassignment is the whole of the fix: `let rows = [1
 - **anchor**: `Founder` = the owner whose scope exits last, earliest declared on a tie; `CallerOwns` (a borrowed parameter is in the class); `NoOwner` (all pieces: the allocation belongs to code this function cannot see); `NoStaticFounder(OutlivedByNonOwner)` (a non-owner outlives every owner, so which value it holds at the owner's exit is known only at run time — reported, never guessed);
 - **escapes** on at least one path: returned, given, sent, stored into a temporary.
 
+A hole in the recorder's own bookkeeping (an event with no function being walked or naming an undeclared binding, a binding with no codegen name, a class with no anchor candidate) is never skipped: it is kept as a string in `TransferRecord::internal_errors`, and `TypedModule::with_codegen_names` fails on it with the other record holes, so `codegen_query` reports the compiler-bug diagnostic and builds nothing.
+
 A call's stores are derived from the callee's OWN record (parameters sharing a class), to a fixpoint; a callee with no record joins all its heap arguments. Releasing a class must free every distinct object in it exactly once, container and stored elements alike (C6/C7); leaks are acceptable meanwhile, an early or double free never.
 
 ### The parameter rule and how far it travels (FRAGO 007, re-derived)

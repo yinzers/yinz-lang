@@ -21,7 +21,8 @@
 // unit is the whole ownership record, and each test is one way the checker can lose a transfer
 // at its own code site (a field store, a container store, an index store, a reassignment, a
 // literal, a call-site store, a call-result receiver, a loop cell, a builtin result, a loop
-// give, a give handed up from an inner loop, a give made in a `while` condition). Reverting each
+// give, a give handed up from an inner loop, a give made in a `while` condition, an event the
+// recorder cannot place). Reverting each
 // producer in turn (the C5a fix commits, and a one-line mutation of each remaining site) failed
 // only that site's tests. The case tables below are one NAMED test per case, so the runner
 // parallelizes them and names the failing program; a case is in a table only when it takes a
@@ -37,7 +38,10 @@ mod support;
 use support::{assert_accepted, assert_use_after_give, error_diagnostics, errors, run, EAT};
 use ynz_diagnostics::DiagnosticKind;
 use ynz_parser::{CompilerDb, SourceFile};
-use ynz_typeck::transfer_record::{Escape, FunctionTransfers, NoFounderReason, ReleaseAnchor};
+use ynz_typeck::binding_names::BindingNames;
+use ynz_typeck::transfer_record::{
+    Escape, FunctionTransfers, NoFounderReason, ReleaseAnchor, RoleEvidence, TransferRecorder,
+};
 use ynz_typeck::{check_query, CheckOutput};
 
 /// Check `main_source` (as `main.ynz`) in a project that also holds `library_source` (as
@@ -894,4 +898,42 @@ fn a_given_then_revived_binding_keeps_its_given_escape() {
             callee: "eat".to_string()
         }]
     );
+}
+
+/// (High) Bug caught: an event the recorder cannot place (no function being walked, or a binding
+/// the function never declared) used to return silently, so the record claimed a partition it
+/// never built and a release pass would have trusted it. Each must come back as an internal-error
+/// value instead, which `TypedModule::with_codegen_names` turns into a hard error. The checker
+/// cannot produce these today, so the recorder is driven directly through its public boundary.
+#[test]
+fn an_event_the_recorder_cannot_place_is_an_internal_error() {
+    let declared = (0, 1, "declared".to_string());
+    let undeclared = (2, 3, "undeclared".to_string());
+    let mut recorder = TransferRecorder::default();
+
+    recorder.join(&declared, &undeclared);
+    recorder.begin_function("f");
+    recorder.declare(declared.clone(), vec![0], RoleEvidence::Owner);
+    recorder.join(&declared, &undeclared);
+    recorder.escape(&undeclared, Escape::Returned);
+    recorder.note_event(&undeclared, RoleEvidence::Piece);
+    // `BindingNames::default()` names nothing, so `declared` has no codegen name either.
+    let record = recorder.finish(&BindingNames::default());
+
+    let messages = record.internal_errors();
+    let mentioning = |needle: &str| {
+        messages
+            .iter()
+            .filter(|message| message.contains(needle))
+            .count()
+    };
+    assert_eq!(
+        messages.len(),
+        5,
+        "unexpected internal errors: {messages:#?}"
+    );
+    assert_eq!(mentioning("while no function was being walked"), 1);
+    assert_eq!(mentioning("in `f`, which it never saw declared"), 3);
+    assert_eq!(mentioning("has no codegen name from type checking"), 1);
+    assert!(record.function("f").is_none());
 }

@@ -152,12 +152,22 @@ pub type CallStoreTable = HashMap<String, Vec<(usize, usize)>>;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TransferRecord {
     functions: HashMap<String, FunctionTransfers>,
+    /// Events the recorder could not place and anchors it could not build: each is a hole in the
+    /// checker's own bookkeeping, never a user mistake. `TypedModule::with_codegen_names` fails
+    /// on them, exactly as it does on a hole in `BindingNames`. Empty for every record the
+    /// checker builds today.
+    internal_errors: Vec<String>,
 }
 
 impl TransferRecord {
     /// The classes of the function named `function_name` (functions are unique by name).
     pub fn function(&self, function_name: &str) -> Option<&FunctionTransfers> {
         self.functions.get(function_name)
+    }
+
+    /// The holes found while recording (see the field). Empty when the record is whole.
+    pub fn internal_errors(&self) -> &[String] {
+        &self.internal_errors
     }
 }
 
@@ -249,6 +259,28 @@ impl FunctionState {
 pub struct TransferRecorder {
     current: Option<FunctionState>,
     finished: Vec<FunctionState>,
+    /// An event that named no current function or an undeclared binding. Recorded, never
+    /// dropped: `finish` hands them on in the record.
+    internal_errors: Vec<String>,
+}
+
+/// The internal error for an event that arrived while no function was being walked.
+fn outside_function_message(event: &str, decl: Option<&DeclKey>) -> String {
+    let subject = decl.map_or_else(String::new, |decl| {
+        format!(" for `{}` at bytes {}..{}", decl.2, decl.0, decl.1)
+    });
+    format!(
+        "internal: the transfer record was told {event}{subject} while no function was being walked"
+    )
+}
+
+/// The internal error for an event that names a binding the function never declared.
+fn undeclared_message(event: &str, function_name: &str, decl: &DeclKey) -> String {
+    format!(
+        "internal: the transfer record was told {event} for `{}` at bytes {}..{} in `{function_name}`, \
+         which it never saw declared",
+        decl.2, decl.0, decl.1
+    )
 }
 
 impl TransferRecorder {
@@ -272,6 +304,8 @@ impl TransferRecorder {
     /// later events only add evidence.
     pub fn declare(&mut self, decl: DeclKey, path: Vec<u32>, event: RoleEvidence) {
         let Some(function) = self.current.as_mut() else {
+            self.internal_errors
+                .push(outside_function_message("a declaration", Some(&decl)));
             return;
         };
         if let Some(&existing) = function.index.get(&decl) {
@@ -302,21 +336,35 @@ impl TransferRecorder {
     /// A later binding event (a reassignment) bound `decl` to a value of this role.
     pub fn note_event(&mut self, decl: &DeclKey, event: RoleEvidence) {
         let Some(function) = self.current.as_mut() else {
+            self.internal_errors
+                .push(outside_function_message("a binding event", Some(decl)));
             return;
         };
-        if let Some(&position) = function.index.get(decl) {
-            Self::apply_event(&mut function.bindings[position], event);
-        }
+        let Some(&position) = function.index.get(decl) else {
+            self.internal_errors
+                .push(undeclared_message("a binding event", &function.name, decl));
+            return;
+        };
+        Self::apply_event(&mut function.bindings[position], event);
     }
 
     /// The two bindings denote or reach one value from now on.
     pub fn join(&mut self, first: &DeclKey, second: &DeclKey) {
         let Some(function) = self.current.as_mut() else {
+            self.internal_errors
+                .push(outside_function_message("a join", Some(first)));
             return;
         };
         let (Some(&first_position), Some(&second_position)) =
             (function.index.get(first), function.index.get(second))
         else {
+            let undeclared = if function.index.contains_key(first) {
+                second
+            } else {
+                first
+            };
+            self.internal_errors
+                .push(undeclared_message("a join", &function.name, undeclared));
             return;
         };
         function.union(first_position, second_position);
@@ -325,31 +373,42 @@ impl TransferRecorder {
     /// The value `decl` holds leaves this function's hands.
     pub fn escape(&mut self, decl: &DeclKey, escape: Escape) {
         let Some(function) = self.current.as_mut() else {
+            self.internal_errors
+                .push(outside_function_message("an escape", Some(decl)));
             return;
         };
-        if let Some(&position) = function.index.get(decl) {
-            function.escapes.push((position, escape));
-        }
+        let Some(&position) = function.index.get(decl) else {
+            self.internal_errors
+                .push(undeclared_message("an escape", &function.name, decl));
+            return;
+        };
+        function.escapes.push((position, escape));
     }
 
     /// The parameters of the current function, in position order (a method's receiver first).
     pub fn set_parameters(&mut self, parameters: Vec<DeclKey>) {
-        if let Some(function) = self.current.as_mut() {
-            function.parameters = parameters;
-        }
+        let Some(function) = self.current.as_mut() else {
+            self.internal_errors
+                .push(outside_function_message("the parameters", None));
+            return;
+        };
+        function.parameters = parameters;
     }
 
     /// The current function calls `callee`; `positions[i]` holds the declarations that hold
     /// argument `i`'s heap value. Whether the call stores one argument into another is decided
     /// in `finish`, from the callee's own record, once every function has been walked.
     pub fn note_call(&mut self, callee: &str, positions: Vec<Vec<DeclKey>>) {
-        if let Some(function) = self.current.as_mut() {
-            if positions.iter().any(|holders| !holders.is_empty()) {
-                function.calls.push(CallEdge {
-                    callee: callee.to_string(),
-                    positions,
-                });
-            }
+        let Some(function) = self.current.as_mut() else {
+            self.internal_errors
+                .push(outside_function_message("a call", None));
+            return;
+        };
+        if positions.iter().any(|holders| !holders.is_empty()) {
+            function.calls.push(CallEdge {
+                callee: callee.to_string(),
+                positions,
+            });
         }
     }
 
@@ -390,7 +449,8 @@ impl TransferRecorder {
 
     /// Close the last function and build the record. Codegen names come from `names`, which
     /// must have named every declaration this recorder saw (the checker declares both at the
-    /// same event).
+    /// same event). An event the recorder could not place, or a declaration `names` lacks, ends
+    /// up in `TransferRecord::internal_errors`; it is never skipped.
     ///
     /// O(b · d) time and O(b) memory for b bindings at frame depth d.
     pub fn finish(mut self, names: &BindingNames) -> TransferRecord {
@@ -398,12 +458,18 @@ impl TransferRecorder {
             self.finished.push(last);
         }
         propagate_call_stores(&mut self.finished);
-        let mut record = TransferRecord::default();
+        let mut record = TransferRecord {
+            internal_errors: self.internal_errors,
+            ..TransferRecord::default()
+        };
         for function in self.finished {
             let name = function.name.clone();
-            record
-                .functions
-                .insert(name, build_function(function, names));
+            match build_function(function, names) {
+                Ok(transfers) => {
+                    record.functions.insert(name, transfers);
+                }
+                Err(message) => record.internal_errors.push(message),
+            }
         }
         record
     }
@@ -490,7 +556,12 @@ fn propagate_call_stores(functions: &mut [FunctionState]) {
     }
 }
 
-fn build_function(mut function: FunctionState, names: &BindingNames) -> FunctionTransfers {
+/// One function's classes; an error when a recorded binding has no codegen name or a class has no
+/// anchor candidate (a hole in the record, see `TransferRecord::internal_errors`).
+fn build_function(
+    mut function: FunctionState,
+    names: &BindingNames,
+) -> Result<FunctionTransfers, String> {
     let count = function.bindings.len();
     let mut roots: Vec<usize> = Vec::with_capacity(count);
     for position in 0..count {
@@ -508,7 +579,7 @@ fn build_function(mut function: FunctionState, names: &BindingNames) -> Function
         let positions: Vec<usize> = (0..count)
             .filter(|&position| roots[position] == root)
             .collect();
-        let members: Vec<ClassMember> = positions
+        let members = positions
             .iter()
             .map(|&position| {
                 let binding = &function.bindings[position];
@@ -519,17 +590,17 @@ fn build_function(mut function: FunctionState, names: &BindingNames) -> Function
                 } else {
                     MemberRole::Owner
                 };
-                ClassMember {
+                let codegen_name = names
+                    .codegen_name(&binding.decl)
+                    .ok_or_else(|| undeclared_in_names_message(&function.name, &binding.decl))?;
+                Ok(ClassMember {
                     decl: binding.decl.clone(),
-                    codegen_name: names
-                        .codegen_name(&binding.decl)
-                        .expect("every recorded binding is declared with BindingNames")
-                        .to_string(),
+                    codegen_name: codegen_name.to_string(),
                     role,
-                }
+                })
             })
-            .collect();
-        let anchor = anchor_of(&members, &positions, &function.bindings);
+            .collect::<Result<Vec<ClassMember>, String>>()?;
+        let anchor = anchor_of(&function.name, &members, &positions, &function.bindings)?;
         let mut escapes: Vec<Escape> = Vec::new();
         for (position, escape) in &function.escapes {
             if roots[*position] == root && !escapes.contains(escape) {
@@ -542,29 +613,39 @@ fn build_function(mut function: FunctionState, names: &BindingNames) -> Function
             escapes,
         });
     }
-    FunctionTransfers { classes }
+    Ok(FunctionTransfers { classes })
+}
+
+/// The internal error for a binding the recorder holds that `BindingNames` never named.
+fn undeclared_in_names_message(function_name: &str, decl: &DeclKey) -> String {
+    format!(
+        "internal: the binding `{}` at bytes {}..{} in `{function_name}` was recorded for \
+         releasing but has no codegen name from type checking",
+        decl.2, decl.0, decl.1
+    )
 }
 
 /// The founder rule: the owner whose scope exits last. `positions[i]` is the binding behind
-/// `members[i]`.
+/// `members[i]`. An error when no member's scope encloses the others (a hole in the record).
 fn anchor_of(
+    function_name: &str,
     members: &[ClassMember],
     positions: &[usize],
     bindings: &[BindingState],
-) -> ReleaseAnchor {
+) -> Result<ReleaseAnchor, String> {
     if let Some(parameter) = members
         .iter()
         .find(|member| member.role == MemberRole::BorrowedParam)
     {
-        return ReleaseAnchor::CallerOwns {
+        return Ok(ReleaseAnchor::CallerOwns {
             parameter: parameter.codegen_name.clone(),
-        };
+        });
     }
     if !members
         .iter()
         .any(|member| member.role == MemberRole::Owner)
     {
-        return ReleaseAnchor::NoOwner;
+        return Ok(ReleaseAnchor::NoOwner);
     }
     // The scope that exits last is the one every member's scope is inside: the longest path
     // all members share. A member declared exactly there is "outermost".
@@ -581,25 +662,30 @@ fn anchor_of(
     let outermost: Vec<usize> = (0..members.len())
         .filter(|&member_index| bindings[positions[member_index]].path.len() == shared.len())
         .collect();
-    // Never empty. A join needs both bindings visible at once, so two joined bindings are
-    // always in an enclosing relation (one scope inside the other). In a class connected by
-    // such links, take a member of minimal depth: any link leaving its subtree would reach a
-    // shallower scope, contradicting minimality. So the minimal-depth member's scope encloses
-    // every member, and the longest shared path is exactly its path.
-    assert!(
-        !outermost.is_empty(),
-        "a class has a member whose scope encloses all the others"
-    );
-    match outermost
-        .iter()
-        .find(|&&member_index| members[member_index].role == MemberRole::Owner)
-    {
-        Some(&member_index) => ReleaseAnchor::Founder {
-            decl: members[member_index].decl.clone(),
-            codegen_name: members[member_index].codegen_name.clone(),
-        },
-        None => ReleaseAnchor::NoStaticFounder(NoFounderReason::OutlivedByNonOwner {
-            holder: members[outermost[0]].codegen_name.clone(),
-        }),
+    // Empty only for a hole in the record. A join needs both bindings visible at once, so two
+    // joined bindings are always in an enclosing relation (one scope inside the other). In a class
+    // connected by such links, take a member of minimal depth: any link leaving its subtree would
+    // reach a shallower scope, contradicting minimality. So the minimal-depth member's scope
+    // encloses every member, and the longest shared path is exactly its path.
+    if outermost.is_empty() {
+        return Err(format!(
+            "internal: no member of the class of `{}` in `{function_name}` has a scope that \
+             encloses all the others",
+            members[0].codegen_name
+        ));
     }
+    Ok(
+        match outermost
+            .iter()
+            .find(|&&member_index| members[member_index].role == MemberRole::Owner)
+        {
+            Some(&member_index) => ReleaseAnchor::Founder {
+                decl: members[member_index].decl.clone(),
+                codegen_name: members[member_index].codegen_name.clone(),
+            },
+            None => ReleaseAnchor::NoStaticFounder(NoFounderReason::OutlivedByNonOwner {
+                holder: members[outermost[0]].codegen_name.clone(),
+            }),
+        },
+    )
 }
