@@ -77,7 +77,7 @@ pub fn build(fixture_name: &str, no_optimize: bool) -> Built {
     let dir = tempfile::tempdir().expect("create temp dir");
     let source = dir.path().join("program.ynz");
     std::fs::copy(fixture_path(fixture_name), &source)
-        .unwrap_or_else(|e| panic!("copy fixture {fixture_name}: {e}"));
+        .unwrap_or_else(|err| panic!("copy fixture {fixture_name}: {err}"));
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ynz"));
     cmd.arg("build").arg(&source).arg("--emit-ir");
     if no_optimize {
@@ -141,9 +141,9 @@ pub fn run_counted(built: &Built) -> (RunOutput, Counters) {
     cmd.env("YNZ_ALLOC_COUNTER", "1")
         .env("YNZ_ALLOC_COUNTER_OUTPUT", &counter_file);
     let output = run_with_watchdog(cmd);
-    let text = std::fs::read_to_string(&counter_file).unwrap_or_else(|e| {
+    let text = std::fs::read_to_string(&counter_file).unwrap_or_else(|err| {
         panic!(
-            "counter file {} not written ({e}); exit {}, stderr:\n{}",
+            "counter file {} not written ({err}); exit {}, stderr:\n{}",
             counter_file.display(),
             output.exit_code,
             output.stderr
@@ -168,7 +168,9 @@ fn counter_value(file_text: &str, key: &str) -> u64 {
         .unwrap_or_else(|| panic!("counter key `{key}` missing from:\n{file_text}"))
         .trim()
         .parse()
-        .unwrap_or_else(|e| panic!("counter key `{key}` is not a number ({e}) in:\n{file_text}"))
+        .unwrap_or_else(|err| {
+            panic!("counter key `{key}` is not a number ({err}) in:\n{file_text}")
+        })
 }
 
 /// Add `sanitize_address` to every function definition in `ir`. O(n) time, O(n) memory.

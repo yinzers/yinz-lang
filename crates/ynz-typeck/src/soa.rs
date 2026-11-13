@@ -242,7 +242,7 @@ pub fn layout_lints(decisions: &LayoutDecisions, candidates: &[SoaCandidate]) ->
         // the defensive skip keeps this total if that invariant ever shifts.
         let Some((provable_len, hot_fields)) = candidates
             .iter()
-            .find(|c| c.decl_span == decision.decl_span)
+            .find(|candidate| candidate.decl_span == decision.decl_span)
             .and_then(|c| match &c.verdict {
                 SoaVerdict::Admitted {
                     provable_len,

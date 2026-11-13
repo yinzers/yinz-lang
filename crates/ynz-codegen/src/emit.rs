@@ -3606,11 +3606,11 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let data_gep = self
             .builder
             .build_struct_gep(union_st, envelope, 1, &format!("{site}_src_data"))
-            .map_err(|e| format!("union data gep {site}: {e}"))?;
+            .map_err(|err| format!("union data gep {site}: {err}"))?;
         Ok(self
             .builder
             .build_load(self.i64(), data_gep, &format!("{site}_data"))
-            .map_err(|e| format!("union data load {site}: {e}"))?
+            .map_err(|err| format!("union data load {site}: {err}"))?
             .into_int_value())
     }
 
@@ -3633,7 +3633,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let bits = self.union_data_bits(envelope, site)?;
         self.builder
             .build_int_to_ptr(bits, self.ptr(), &format!("{site}_payload_ptr"))
-            .map_err(|e| format!("union payload int_to_ptr {site}: {e}"))
+            .map_err(|err| format!("union payload int_to_ptr {site}: {err}"))
     }
 
     /// Inside an `is Variant =>` arm, typeck types the scrutinee binding as the variant
@@ -3668,7 +3668,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let narrowed_slot = self.alloca_in_entry_llvm(self.ptr(), &format!("{name}_variant"))?;
         self.builder
             .build_store(narrowed_slot, payload)
-            .map_err(|e| format!("{site}: store narrowed payload: {e}"))?;
+            .map_err(|err| format!("{site}: store narrowed payload: {err}"))?;
         self.locals.insert(name.to_string(), narrowed_slot);
         Ok(Some((name.to_string(), outer_slot)))
     }

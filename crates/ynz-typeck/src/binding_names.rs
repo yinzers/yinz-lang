@@ -163,7 +163,10 @@ impl BindingNameRecorder {
             return;
         };
         let declarations = std::mem::take(&mut self.current_declarations);
-        let declared_names: HashSet<&str> = declarations.iter().map(|k| k.2.as_str()).collect();
+        let declared_names: HashSet<&str> = declarations
+            .iter()
+            .map(|declaration| declaration.2.as_str())
+            .collect();
         let mut taken: HashSet<String> = HashSet::new();
         let mut next_suffix: HashMap<&str, u32> = HashMap::new();
         let mut named: Vec<(DeclKey, String)> = Vec::with_capacity(declarations.len());
@@ -190,7 +193,7 @@ impl BindingNameRecorder {
             .function_binding_names
             .entry(function)
             .or_default()
-            .extend(declarations.into_iter().map(|key| key.2));
+            .extend(declarations.into_iter().map(|declaration| declaration.2));
     }
 
     /// Close the last function and hand over the finished record.
