@@ -19444,10 +19444,12 @@ fn to_c_string<'ctx>(
                     .build_struct_gep(struct_ty, shape_ptr, *field_idx as u32, field_name)
                     .map_err(|e| format!("GEP {field_name}: {e}"))?;
                 // Fields use different LLVM types depending on the Yinz type:
-                //   Number (decimal128) → i128 → pass as pointer
+                //   Number (decimal128, N <= 34) → i128 → pass as pointer
+                //   Number (bignum, N > 34)      → 8-byte pointer to decimal text → i64_bits_to
                 //   Options            → i8   → zero-extend to i64, use as tag
                 //   everything else    → i64  → i64_bits_to
-                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { .. }) {
+                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { precision } if *precision <= 34)
+                {
                     let i128t = cg.ctx.i128_type();
                     let raw = cg
                         .builder
