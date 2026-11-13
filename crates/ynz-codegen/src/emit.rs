@@ -1536,6 +1536,7 @@ fn lower_generic_function<'ctx>(
         current_fn: fn_val,
         is_main: false,
         current_fn_ret_ty: ret_ty,
+        current_fn_param_names: f.params.iter().map(|p| p.name.clone()).collect(),
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -1880,6 +1881,20 @@ struct SoaArrayInfo<'ctx> {
     segments: Vec<SoaSegment<'ctx>>,
 }
 
+/// Where the envelope built for a plain shape lives (`Cg::coerce_into_union_slot`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EnvelopeHome {
+    /// The caller's frame: a callee that only borrows the argument.
+    Frame,
+    /// Counted heap cells for a plain shape that must outlive this frame: an argument staged
+    /// into a suspending callee's frame. Union-typed values pass through (their binding already
+    /// homed them).
+    Heap,
+    /// A `return`: like `Heap`, and a union-typed value the callee built itself is promoted to
+    /// heap cells too (its envelope is a slot in the frame that is about to die).
+    Return,
+}
+
 /// One union `is`-arm narrowing in force (see `Cg::narrowed_unions`).
 struct NarrowedUnion<'ctx> {
     /// The scrutinee binding's codegen name.
@@ -1908,6 +1923,10 @@ struct Cg<'ctx, 'g> {
     is_main: bool,
     /// Return type of the current function.
     current_fn_ret_ty: Type,
+    /// The current function's parameter names. A union PARAMETER returned as-is is the caller's
+    /// envelope (it outlives this frame), so `return t` needs no copy; any other union value
+    /// returned is promoted to a heap cell (`coerce_into_union_slot`).
+    current_fn_param_names: Vec<String>,
     locals: HashMap<String, PointerValue<'ctx>>,
     // M4 additions:
     shape_table: &'g ShapeTable,
@@ -3773,6 +3792,162 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(envelope?.into_pointer_value())
     }
 
+    /// The declared type of parameter `index` of `callee`, resolved. A generic function is not
+    /// in the signature table, so its declaration in this module answers (same lookup as
+    /// `UnionSlotUses::param_is_union`).
+    ///
+    /// Time: O(f) for f items in the module  Space: O(1)
+    fn callee_param_type(&self, callee: &str, index: usize) -> Option<Type> {
+        let declared = match self.sig_table.fns.get(callee) {
+            Some(sig) => sig.params.get(index).map(|(_, param_ty)| param_ty.clone()),
+            None => self.typed.module.items.iter().find_map(|item| match item {
+                Item::Function(function) if function.name == callee => function
+                    .params
+                    .get(index)
+                    .map(|param| ast_type_to_typeck_type(&param.ty, self.shape_table)),
+                _ => None,
+            }),
+        };
+        declared.map(|param_ty| self.resolve_type(&param_ty))
+    }
+
+    /// The union a `return` must produce: the current function's declared return type (the
+    /// state machine's Yinz type inside a resume function) with an `errors` wrapper peeled,
+    /// when that is a union.
+    fn union_return_slot_ty(&self) -> Option<Type> {
+        let declared = self
+            .sm_yinz_ret_ty
+            .clone()
+            .unwrap_or_else(|| self.current_fn_ret_ty.clone());
+        let peeled = match self.resolve_type(&declared) {
+            Type::ErrorsCapable { inner } => self.resolve_type(&inner),
+            other => other,
+        };
+        matches!(peeled, Type::Union { .. }).then_some(peeled)
+    }
+
+    /// Whether `expr` is an identifier use that `narrowed_envelope_use` answers with the
+    /// union envelope (an `is` arm's narrowed binding flowing into a union-typed slot).
+    fn is_narrowed_envelope_ident(&self, expr: &Expr) -> bool {
+        let Expr::Ident(name, span) = expr else {
+            return false;
+        };
+        self.narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| &entry.name == name)
+            .is_some_and(|entry| entry.envelope_uses.contains(&(span.start, span.end)))
+    }
+
+    /// Build the tagged envelope `{i64 tag, i64 data}` for a plain shape variant: `data` is the
+    /// `ptr_to_int` of the payload's storage, exactly what the union-annotated `let` builds. The
+    /// slot is a per-site entry-block alloca (the caller's frame): the callee borrows it for the
+    /// call. Anything that must outlive the frame goes through `union_to_heap_cell` after.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn build_union_envelope(
+        &self,
+        payload: PointerValue<'ctx>,
+        tag: u64,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let union_st = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let slot = self.alloca_in_entry_llvm(union_st, &format!("{site}_envelope"))?;
+        let tag_gep = self
+            .builder
+            .build_struct_gep(union_st, slot, 0, &format!("{site}_env_tag"))
+            .map_err(|err| format!("union envelope tag gep {site}: {err}"))?;
+        self.builder
+            .build_store(tag_gep, self.i64().const_int(tag, false))
+            .map_err(|err| format!("union envelope tag store {site}: {err}"))?;
+        let data_gep = self
+            .builder
+            .build_struct_gep(union_st, slot, 1, &format!("{site}_env_data"))
+            .map_err(|err| format!("union envelope data gep {site}: {err}"))?;
+        let payload_bits = self
+            .builder
+            .build_ptr_to_int(payload, self.i64(), &format!("{site}_env_bits"))
+            .map_err(|err| format!("union envelope ptr2int {site}: {err}"))?;
+        self.builder
+            .build_store(data_gep, payload_bits)
+            .map_err(|err| format!("union envelope data store {site}: {err}"))?;
+        Ok(slot)
+    }
+
+    /// THE coercion of a lowered value into a union-typed slot (a union parameter or a union
+    /// return) — one decision for every call path and every return path.
+    ///
+    /// A union with a SHAPE variant is an envelope pointer (`{tag, data}`, null = `nothing`);
+    /// any other union (`map<..> | nothing`) is the raw pointer or null and is never touched
+    /// here. For an envelope union:
+    /// - a plain shape variant is wrapped in a freshly tagged envelope — `Frame` home (the
+    ///   caller's entry-block slot) for an argument the callee only borrows, `Heap`/`Return`
+    ///   home (`union_to_heap_cell`: envelope AND payload in counted heap cells) for anything
+    ///   that outlives this frame: an argument staged into a suspending callee's frame, and a
+    ///   returned value;
+    /// - under `Return` home, a union-typed value is copied to a heap cell too, unless it is a
+    ///   call result (the callee already homed it), or this function's own parameter (the
+    ///   caller's envelope outlives this call) — otherwise a callee-built envelope would come
+    ///   back as a pointer into its dead frame;
+    /// - an `is` arm's narrowed binding already lowers to its envelope (`narrowed_envelope_use`)
+    ///   and is never re-wrapped.
+    ///
+    /// Time: O(1) + the heap-cell copy under `Heap`/`Return`  Space: O(1) envelope slot
+    /// (`Frame`), two counted heap cells per present value (`Heap`/`Return`)
+    fn coerce_into_union_slot(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+        slot_ty: &Type,
+        home: EnvelopeHome,
+        site: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Type::Union { variants } = self.resolve_type(slot_ty) else {
+            return Ok(val);
+        };
+        let variants: Vec<Type> = variants.iter().map(|v| self.resolve_type(v)).collect();
+        if !variants.iter().any(|v| matches!(v, Type::Shape { .. })) {
+            return Ok(val);
+        }
+        let narrowed = self.is_narrowed_envelope_ident(expr);
+        let source_ty = self.resolve_type(&self.expr_type(expr));
+        match source_ty {
+            Type::Shape { ref name } if !narrowed => {
+                let Some(tag) = variants
+                    .iter()
+                    .position(|v| matches!(v, Type::Shape { name: variant } if variant == name))
+                else {
+                    return Ok(val);
+                };
+                let envelope =
+                    self.build_union_envelope(val.into_pointer_value(), tag as u64, site)?;
+                match home {
+                    EnvelopeHome::Frame => Ok(envelope.into()),
+                    EnvelopeHome::Heap | EnvelopeHome::Return => {
+                        Ok(self.union_to_heap_cell(envelope, &variants, site)?.into())
+                    }
+                }
+            }
+            _ => {
+                let is_union_value = narrowed || matches!(source_ty, Type::Union { .. });
+                let already_homed = match expr {
+                    Expr::Call(_) | Expr::MethodCall { .. } | Expr::Wait(..) => true,
+                    Expr::Ident(name, _) => self.current_fn_param_names.contains(name),
+                    _ => false,
+                };
+                if home == EnvelopeHome::Return && is_union_value && !already_homed {
+                    Ok(self
+                        .union_to_heap_cell(val.into_pointer_value(), &variants, site)?
+                        .into())
+                } else {
+                    Ok(val)
+                }
+            }
+        }
+    }
+
     /// The envelope for the identifier `name` at `span` when that use belongs to an active
     /// `is`-arm narrowing and flows into a union-typed slot (`NarrowedUnion::envelope_uses`);
     /// `None` for every other use, which reads the payload through `cg.locals`.
@@ -4706,6 +4881,7 @@ fn lower_function<'ctx, 'g>(
         current_fn: fn_val,
         is_main,
         current_fn_ret_ty: ret_ty,
+        current_fn_param_names: f.params.iter().map(|p| p.name.clone()).collect(),
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -5214,6 +5390,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         current_fn: resume_fn,
         is_main: false,
         current_fn_ret_ty: Type::Nothing, // resume fn returns i32, not the Yinz type
+        current_fn_param_names: f.params.iter().map(|p| p.name.clone()).collect(),
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -10857,8 +11034,13 @@ fn emit_io_member_init<'ctx, 'g>(
         // crossing local stages a GEP into the PARENT frame's 2-slot region, never a
         // ptr_to_int of a dying resume-fn stack temp (the FRAGO 006/007 arg UAF —
         // this was the third staging loop, missed by the initial two-loop conversion).
-        let bits = stage_suspending_call_arg_bits(cg, arg, frame_ptr)
-            .map_err(|e| format!("{arg_bits_label}: {e}"))?;
+        let bits = stage_suspending_call_arg_bits(
+            cg,
+            arg,
+            frame_ptr,
+            cg.callee_param_type(callee_name, idx),
+        )
+        .map_err(|e| format!("{arg_bits_label}: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
 
@@ -12223,8 +12405,13 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         .map(|l| l.n_locals)
         .unwrap_or(arg_exprs.len());
     for (idx, arg) in arg_exprs.iter().copied().enumerate().take(child_n_locals) {
-        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
-            .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
+        let bits = stage_suspending_call_arg_bits(
+            cg,
+            arg,
+            parent_frame,
+            cg.callee_param_type(&callee_name, idx),
+        )
+        .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
 
@@ -12385,11 +12572,15 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 ///    Scope-minimal: `StructLit` only; other non-Ident temp forms stay recorded
 ///    residuals (Phase 1c plan text).
 ///
+///
+/// `param_ty` is the callee's declared type for this position (`Cg::callee_param_type`).
+///
 /// Time: O(1) per arg beyond `lower_expr`  Space: O(1)
 fn stage_suspending_call_arg_bits<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     arg: &Expr,
     parent_frame: PointerValue<'ctx>,
+    param_ty: Option<Type>,
 ) -> Result<inkwell::values::IntValue<'ctx>, String> {
     let ctx = cg.ctx;
     if let Expr::Ident(name, _) = arg {
@@ -12436,8 +12627,24 @@ fn stage_suspending_call_arg_bits<'ctx>(
         let arg_ty = cg.expr_type(arg);
         return cg.value_to_stable_bits(arg_val, &arg_ty, "sm_arg_anon");
     }
-    let arg_val = lower_expr(cg, arg)?;
-    let arg_ty = cg.expr_type(arg);
+    let mut arg_val = lower_expr(cg, arg)?;
+    let mut arg_ty = cg.expr_type(arg);
+    // 3. A plain shape for a UNION parameter: the staged bits must name a tagged envelope that
+    //    survives the parent's suspension, so the envelope and payload live in counted heap
+    //    cells (`coerce_into_union_slot`, `Heap` home) — a frame slot would die with the resume
+    //    invocation.
+    if let Some(param_ty) = param_ty {
+        if matches!(param_ty, Type::Union { .. }) {
+            arg_val = cg.coerce_into_union_slot(
+                arg,
+                arg_val,
+                &param_ty,
+                EnvelopeHome::Heap,
+                "sm_union_arg",
+            )?;
+            arg_ty = param_ty;
+        }
+    }
     cg.to_i64_bits(arg_val, &arg_ty)
 }
 
@@ -12538,8 +12745,13 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
 
     // Write call arguments.
     for (idx, arg) in args.iter().copied().enumerate().take(child_n_locals) {
-        let bits = stage_suspending_call_arg_bits(cg, arg, parent_frame)
-            .map_err(|e| format!("rec arg bits: {e}"))?;
+        let bits = stage_suspending_call_arg_bits(
+            cg,
+            arg,
+            parent_frame,
+            cg.callee_param_type(callee_name, idx),
+        )
+        .map_err(|e| format!("rec arg bits: {e}"))?;
         state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
     }
 
@@ -15344,8 +15556,19 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 )?;
             }
             Some(expr) => {
-                let val = lower_expr(cg, expr)?;
+                let mut val = lower_expr(cg, expr)?;
                 let val_ty = cg.expr_type(expr);
+                // A union return carries a tagged envelope that outlives this resume
+                // invocation (`coerce_into_union_slot`, `Return` home).
+                if let Some(union_ty) = cg.union_return_slot_ty() {
+                    val = cg.coerce_into_union_slot(
+                        expr,
+                        val,
+                        &union_ty,
+                        EnvelopeHome::Return,
+                        "sm_union_ret",
+                    )?;
+                }
                 // Detect errors-capable return: the Yinz return type is ErrorsCapable, OR
                 // the actual value is a struct (from __testFallibleAsync or a nested SM errors call).
                 let is_ec_return = matches!(val, inkwell::values::BasicValueEnum::StructValue(_));
@@ -15532,9 +15755,12 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                                         format!("sm_ec_maybe_ok p2i: {e}")
                                                     })?
                                             }
-                                            // String, Array, Map, Union: heap-allocated
-                                            // (global literals or ynz_alloc). The pointer
-                                            // survives resume fn return — ptr_to_int is safe.
+                                            // String, Array, Map: heap-allocated (global
+                                            // literals or ynz_alloc). Union: `coerce_into_union_slot`
+                                            // above already put an envelope union's envelope and
+                                            // payload in counted heap cells (a raw-pointer union is
+                                            // heap-backed like Map). The pointer survives resume fn
+                                            // return — ptr_to_int is safe.
                                             _ => cg
                                                 .builder
                                                 .build_ptr_to_int(
@@ -15731,8 +15957,22 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     .map_err(|e| format!("ec void ret: {e}"))?;
             }
             Some(expr) => {
-                let val = lower_expr(cg, expr)?;
-                let val_ty = cg.expr_type(expr);
+                let mut val = lower_expr(cg, expr)?;
+                let mut val_ty = cg.expr_type(expr);
+                // A union success value's envelope must not live in this frame
+                // (`coerce_into_union_slot`, `Return` home); the coerced value IS a union.
+                if let Some(union_ty) = cg.union_return_slot_ty() {
+                    val = cg.coerce_into_union_slot(
+                        expr,
+                        val,
+                        &union_ty,
+                        EnvelopeHome::Return,
+                        "ec_union_ret",
+                    )?;
+                    if !matches!(val_ty, Type::ErrorsCapable { .. }) {
+                        val_ty = union_ty;
+                    }
+                }
                 // v0.3-M7 Phase 3 / R9 sibling: the EC ok-WORD must never carry a
                 // pointer into the callee's own stack. maybe / shape / number
                 // success values are per-site stack storage (envelope alloca,
@@ -15793,7 +16033,19 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 .map_err(|e| format!("void ret: {e}"))?;
         }
         Some(expr) => {
-            let val = lower_expr(cg, expr)?;
+            let mut val = lower_expr(cg, expr)?;
+            // A union return is a pointer to a tagged envelope that must outlive this frame
+            // (`coerce_into_union_slot`, `Return` home): never a bare shape, never a slot in
+            // the frame that is about to die.
+            if let Some(union_ty) = cg.union_return_slot_ty() {
+                val = cg.coerce_into_union_slot(
+                    expr,
+                    val,
+                    &union_ty,
+                    EnvelopeHome::Return,
+                    "union_ret",
+                )?;
+            }
             // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
             // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
             // legally miscompiled: stores to the dying alloca get deleted and the
@@ -16696,8 +16948,19 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         format!("codegen: function `{effective_name}` not found in module")
                     })?;
                     let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
-                    for arg in &call.args {
-                        let val = lower_expr(cg, arg)?;
+                    for (index, arg) in call.args.iter().enumerate() {
+                        let mut val = lower_expr(cg, arg)?;
+                        // A plain shape for a union parameter travels as a tagged envelope
+                        // in this frame (`coerce_into_union_slot`).
+                        if let Some(param_ty) = cg.callee_param_type(name, index) {
+                            val = cg.coerce_into_union_slot(
+                                arg,
+                                val,
+                                &param_ty,
+                                EnvelopeHome::Frame,
+                                &format!("{name}_arg{index}"),
+                            )?;
+                        }
                         call_args.push(val.into());
                     }
                     // Phase 6 Step 5 (R6 re-measurement): budget tick before every direct
@@ -19811,9 +20074,19 @@ fn lower_ufcs_call<'ctx>(
         .ok_or_else(|| format!("codegen UFCS: function `{}` not found in module", method))?;
 
     let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![recv_val.into()];
-    for arg in extra_args {
-        let arg_val = lower_expr(cg, arg)?;
-        // If the function param expects dynamic but arg is a concrete shape, coerce.
+    for (index, arg) in extra_args.iter().enumerate() {
+        let mut arg_val = lower_expr(cg, arg)?;
+        // A plain shape for a union parameter travels as a tagged envelope in this frame
+        // (`coerce_into_union_slot`); parameter 0 is the receiver.
+        if let Some(param_ty) = cg.callee_param_type(method, index + 1) {
+            arg_val = cg.coerce_into_union_slot(
+                arg,
+                arg_val,
+                &param_ty,
+                EnvelopeHome::Frame,
+                &format!("{method}_ufcs_arg{}", index + 1),
+            )?;
+        }
         args.push(arg_val.into());
     }
 
