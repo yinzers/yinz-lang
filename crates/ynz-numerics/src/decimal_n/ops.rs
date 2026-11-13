@@ -518,22 +518,22 @@ fn ge_digits_padded(a: &[u8], b: &[u8]) -> bool {
 ///
 /// Time O(digits), space O(1): compares the position of the most significant digit first, then
 /// the digits one by one (a missing digit counts as 0), so no operand is aligned or copied.
-pub fn compare(a: &BigNum, b: &BigNum) -> Option<std::cmp::Ordering> {
+pub fn compare(left: &BigNum, right: &BigNum) -> Option<std::cmp::Ordering> {
     use std::cmp::Ordering;
-    if a.is_nan || b.is_nan {
+    if left.is_nan || right.is_nan {
         return None;
     }
-    let a_class = sign_class(a);
-    let b_class = sign_class(b);
-    if a_class != b_class {
-        return Some(a_class.cmp(&b_class));
+    let left_class = sign_class(left);
+    let right_class = sign_class(right);
+    if left_class != right_class {
+        return Some(left_class.cmp(&right_class));
     }
-    match a_class {
+    match left_class {
         // both -inf, both zero, or both +inf
         -2 | 0 | 2 => Some(Ordering::Equal),
-        1 => Some(compare_magnitudes(a, b)),
+        1 => Some(compare_magnitudes(left, right)),
         // both negative: the larger magnitude is the smaller number
-        _ => Some(compare_magnitudes(b, a)),
+        _ => Some(compare_magnitudes(right, left)),
     }
 }
 
@@ -552,24 +552,24 @@ fn sign_class(value: &BigNum) -> i8 {
     }
 }
 
-/// Compare |a| and |b|, both finite and non-zero.
-fn compare_magnitudes(a: &BigNum, b: &BigNum) -> std::cmp::Ordering {
-    let a_leading_zeros = a.digits.iter().take_while(|&&digit| digit == 0).count();
-    let b_leading_zeros = b.digits.iter().take_while(|&&digit| digit == 0).count();
-    let a_digits = &a.digits[a_leading_zeros..];
-    let b_digits = &b.digits[b_leading_zeros..];
+/// Compare |left| and |right|, both finite and non-zero.
+fn compare_magnitudes(left: &BigNum, right: &BigNum) -> std::cmp::Ordering {
+    let left_leading_zeros = left.digits.iter().take_while(|&&digit| digit == 0).count();
+    let right_leading_zeros = right.digits.iter().take_while(|&&digit| digit == 0).count();
+    let left_digits = &left.digits[left_leading_zeros..];
+    let right_digits = &right.digits[right_leading_zeros..];
     // Position of the most significant digit: value = 0.d1d2.. × 10^(exponent + len).
-    let a_magnitude = a.exponent + a_digits.len() as i64;
-    let b_magnitude = b.exponent + b_digits.len() as i64;
-    if a_magnitude != b_magnitude {
-        return a_magnitude.cmp(&b_magnitude);
+    let left_magnitude = left.exponent + left_digits.len() as i64;
+    let right_magnitude = right.exponent + right_digits.len() as i64;
+    if left_magnitude != right_magnitude {
+        return left_magnitude.cmp(&right_magnitude);
     }
-    let longest = a_digits.len().max(b_digits.len());
+    let longest = left_digits.len().max(right_digits.len());
     for position in 0..longest {
-        let a_digit = a_digits.get(position).copied().unwrap_or(0);
-        let b_digit = b_digits.get(position).copied().unwrap_or(0);
-        if a_digit != b_digit {
-            return a_digit.cmp(&b_digit);
+        let left_digit = left_digits.get(position).copied().unwrap_or(0);
+        let right_digit = right_digits.get(position).copied().unwrap_or(0);
+        if left_digit != right_digit {
+            return left_digit.cmp(&right_digit);
         }
     }
     std::cmp::Ordering::Equal

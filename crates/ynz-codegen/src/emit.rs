@@ -16219,7 +16219,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             if ty == Type::Float {
                 let value: f64 = s
                     .parse()
-                    .map_err(|e| format!("bad float literal `{s}`: {e}"))?;
+                    .map_err(|err| format!("bad float literal `{s}`: {err}"))?;
                 return Ok(cg.f64().const_float(value).into());
             }
             // Hardware decimal128 path (N ≤ 34): stack alloca holds i128 bits.
@@ -18603,7 +18603,7 @@ fn lower_binop<'ctx>(
     for converted in converted_operands {
         cg.builder
             .build_call(cg.rt.ynz_string_release, &[converted.into()], "")
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|err| format!("{err}"))?;
     }
     Ok(result)
 }
@@ -19118,8 +19118,8 @@ fn bignum_compare<'ctx>(
     };
     cg.builder
         .build_int_compare(predicate, order, bound, "bncmp_b")
-        .map(|v| v.into())
-        .map_err(|e| format!("{e}"))
+        .map(|value| value.into())
+        .map_err(|err| format!("{err}"))
 }
 
 /// The raw -1 / 0 / 1 / 2 order of two bignum texts (see `bignum_compare`).
@@ -19137,7 +19137,7 @@ fn bignum_compare_order<'ctx>(
             &[lhs.into(), rhs.into(), precision_val.into()],
             "bncmp",
         )
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|err| format!("{err}"))?;
     Ok(call
         .try_as_basic_value()
         .basic()
@@ -19248,7 +19248,7 @@ fn lower_unary<'ctx>(
                     &[val.into(), precision_val.into()],
                     "bn_neg",
                 )
-                .map_err(|e| format!("{e}"))?;
+                .map_err(|err| format!("{err}"))?;
             Ok(negated
                 .try_as_basic_value()
                 .basic()
@@ -19659,7 +19659,7 @@ fn to_c_string<'ctx>(
                 .map_err(|e| format!("{e}"))?;
             cg.builder
                 .build_call(cg.rt.ynz_string_release, &[rem_str.into()], "")
-                .map_err(|e| format!("{e}"))?;
+                .map_err(|err| format!("{err}"))?;
             append_static(cg, builder_val, " more")?;
             cg.builder
                 .build_unconditional_branch(finish_bb)
@@ -19865,7 +19865,7 @@ fn write_text_ptr<'ctx>(
             .builder
             .build_call(cg.rt.puts, &[text.into()], "puts")
             .map(|_| ())
-            .map_err(|e| format!("{e}")),
+            .map_err(|err| format!("{err}")),
         TextSink::Builder(builder) => cg
             .builder
             .build_call(
@@ -19874,7 +19874,7 @@ fn write_text_ptr<'ctx>(
                 "",
             )
             .map(|_| ())
-            .map_err(|e| format!("{e}")),
+            .map_err(|err| format!("{err}")),
     }
 }
 
@@ -19924,7 +19924,7 @@ fn write_value_text<'ctx>(
                 .build_call(append_entry, &[builder.into(), val.into()], "")
         }
     };
-    call.map(|_| ()).map_err(|e| format!("{e}"))
+    call.map(|_| ()).map_err(|err| format!("{err}"))
 }
 
 /// The text of a `T | nothing` value: `none` when `val` is null, else the text of `T`.
@@ -19937,26 +19937,26 @@ fn write_optional_text<'ctx>(
     let is_null = cg
         .builder
         .build_is_null(val.into_pointer_value(), "union_null")
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|err| format!("{err}"))?;
     let none_bb = cg.append_block("union_none");
     let some_bb = cg.append_block("union_some");
     let merge_bb = cg.append_block("union_merge");
     cg.builder
         .build_conditional_branch(is_null, none_bb, some_bb)
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|err| format!("{err}"))?;
 
     cg.builder.position_at_end(none_bb);
     let none_text = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
     write_text_ptr(cg, sink, none_text.as_pointer_value())?;
     cg.builder
         .build_unconditional_branch(merge_bb)
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|err| format!("{err}"))?;
 
     cg.builder.position_at_end(some_bb);
     write_value_text(cg, val, inner, sink)?;
     cg.builder
         .build_unconditional_branch(merge_bb)
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|err| format!("{err}"))?;
 
     cg.builder.position_at_end(merge_bb);
     Ok(())

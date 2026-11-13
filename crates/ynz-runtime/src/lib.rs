@@ -310,6 +310,11 @@ pub extern "C" fn ynz_float_print(x: f64) {
     let mut stack_text = StackText::<{ F64_DISPLAY_MAX_BYTES + 1 }>::new();
     if core::fmt::Write::write_fmt(&mut stack_text, format_args!("{x}")).is_err() {
         // Unreachable while F64_DISPLAY_MAX_BYTES holds (a test pins it); never print cut text.
+        eprintln!(
+            "INTERNAL ERROR: the text of a float is longer than {F64_DISPLAY_MAX_BYTES} bytes. \
+             This is a compiler bug — please file an issue at \
+             https://github.com/yinz-lang/yinz/issues with the source file attached."
+        );
         std::process::abort();
     }
     stack_text.puts();
@@ -325,6 +330,11 @@ pub unsafe extern "C" fn ynz_float_append(builder: *mut u8, x: f64) {
     use std::io::Write;
     if write!(builder_bytes(builder), "{x}").is_err() {
         // Writing into a `Vec` cannot fail.
+        eprintln!(
+            "INTERNAL ERROR: appending the text of a float to a string builder failed. \
+             This is a compiler bug — please file an issue at \
+             https://github.com/yinz-lang/yinz/issues with the source file attached."
+        );
         std::process::abort();
     }
 }
@@ -332,8 +342,8 @@ pub unsafe extern "C" fn ynz_float_append(builder: *mut u8, x: f64) {
 /// `print(number)` for a decimal128 value: write the text and a newline to stdout. One
 /// allocation (the numerics crate's `String`), as before C3a.
 #[no_mangle]
-pub extern "C" fn ynz_decimal_print(a: *const D128) {
-    puts_formatted(format(load(a)));
+pub extern "C" fn ynz_decimal_print(decimal: *const D128) {
+    puts_formatted(format(load(decimal)));
 }
 
 /// `${number}` for a decimal128 value: append the text to a string builder. One allocation
@@ -342,8 +352,8 @@ pub extern "C" fn ynz_decimal_print(a: *const D128) {
 /// # Safety
 /// `builder` must be a valid handle returned by `ynz_string_builder_new`.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_decimal_append(builder: *mut u8, a: *const D128) {
-    builder_bytes(builder).extend_from_slice(format(load(a)).as_bytes());
+pub unsafe extern "C" fn ynz_decimal_append(builder: *mut u8, decimal: *const D128) {
+    builder_bytes(builder).extend_from_slice(format(load(decimal)).as_bytes());
 }
 
 /// Compare two null-terminated UTF-8 strings for NFC canonical equivalence.
@@ -3337,19 +3347,24 @@ pub unsafe extern "C" fn ynz_bignum_div(a: *const i8, b: *const i8, precision: u
     bignum_binop(a, b, precision, bignum_div_op)
 }
 
-/// Compare `a` and `b` as exact decimal numbers: -1 (a < b), 0 (equal), 1 (a > b), or 2
-/// (unordered: either side is NaN, so every ordering test is false and only `!=` holds).
+/// Compare `left_text` and `right_text` as exact decimal numbers: -1 (left < right), 0 (equal),
+/// 1 (left > right), or 2 (unordered: either side is NaN, so every ordering test is false and
+/// only `!=` holds).
 ///
 /// Both texts are parsed at `precision` digits like the arithmetic above, so a compare sees
 /// the same rounded operands a `+` would. `2.5` equals `2.50`, and `9` is less than `10`.
 /// O(digits) time and memory; allocates nothing the caller must release.
 ///
 /// # Safety
-/// `a` and `b` must be valid null-terminated strings.
+/// `left_text` and `right_text` must be valid null-terminated strings.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_bignum_compare(a: *const i8, b: *const i8, precision: u16) -> i32 {
-    let left = parse_bignum_operand(a, precision);
-    let right = parse_bignum_operand(b, precision);
+pub unsafe extern "C" fn ynz_bignum_compare(
+    left_text: *const i8,
+    right_text: *const i8,
+    precision: u16,
+) -> i32 {
+    let left = parse_bignum_operand(left_text, precision);
+    let right = parse_bignum_operand(right_text, precision);
     match bignum_compare_op(&left, &right) {
         Some(std::cmp::Ordering::Less) => -1,
         Some(std::cmp::Ordering::Equal) => 0,
@@ -3358,13 +3373,13 @@ pub unsafe extern "C" fn ynz_bignum_compare(a: *const i8, b: *const i8, precisio
     }
 }
 
-/// Negate: `0 - a` at `precision` digits (the same result a decimal128 `0 - a` gives).
+/// Negate: `0 - text` at `precision` digits (the same result a decimal128 `0 - text` gives).
 ///
 /// # Safety
 /// Same as `ynz_bignum_add`.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_bignum_neg(a: *const i8, precision: u16) -> *mut i8 {
-    bignum_binop(c"0".as_ptr().cast(), a, precision, bignum_sub_op)
+pub unsafe extern "C" fn ynz_bignum_neg(text: *const i8, precision: u16) -> *mut i8 {
+    bignum_binop(c"0".as_ptr().cast(), text, precision, bignum_sub_op)
 }
 
 /// Parse one bignum operand of an arithmetic or comparison entry point. Text that is not a
