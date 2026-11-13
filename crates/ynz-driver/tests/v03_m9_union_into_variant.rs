@@ -7,9 +7,10 @@
 //! and the field are accepted by the checker there too (the binding is typed as the union), and
 //! the build only stops later on an unrelated `values do not have fields` error.
 //!
-//! Test count: 6, against the "about 8" High-tier budget — one per slot class the one
-//! directional check serves (argument, return, `let` + field together) plus the two legal flows
-//! it must keep (widening, narrowed arm).
+//! Test count: 8, the "about 8" High-tier budget — one per slot class and call form the one
+//! directional check serves (plain, dot-call and generic argument; a plain shape into a union-bound
+//! type parameter; return; `let` + field together) plus the legal flows it must keep (run at two
+//! optimization levels).
 
 use std::path::Path;
 use std::process::Command;
@@ -80,16 +81,25 @@ fn v03_m9_union_into_variant_argument_is_rejected() {
             "`showBig` expects a `Big` here",
         ],
     );
-    // The dot-call form `big.useBig(thing)` is the same argument slot: its non-receiver
+}
+
+#[test]
+fn v03_m9_union_into_variant_dot_call_argument_is_rejected() {
+    // WHY: the dot-call form `big.useBig(thing)` is the same argument slot, but its non-receiver
     // arguments had no type check at all, so the union compiled and the callee printed a stack
     // address.
     assert_rejected_with_teaching(
         "v0_3_m9_union_into_variant_ufcs_arg.ynz",
         &["`thing` is a `Tiny | Big`", "`useBig` expects a `Big` here"],
     );
-    // The generic call form discarded the argument/parameter mismatch: a concrete `Big`
+}
+
+#[test]
+fn v03_m9_union_into_variant_generic_call_argument_is_rejected() {
+    // WHY: the generic call form discarded the argument/parameter mismatch: a concrete `Big`
     // parameter, `T` bound to `Big` by a sibling argument, and an explicit `<int>` all compiled
-    // and segfaulted.
+    // and segfaulted. One fixture holds the three call shapes of this one check; the diagnostic
+    // must name each callee.
     assert_rejected_with_teaching(
         "v0_3_m9_union_into_variant_generic_arg.ynz",
         &[
@@ -154,7 +164,7 @@ fn v03_m9_union_widening_and_narrowed_arm_still_compile_and_run() {
     support::assert_fixture_prints(
         "v0_3_m9_union_widening_and_narrowed.ynz",
         false,
-        "hello\nhello\nok\nend\n",
+        "hello\nhello\nhello\nhello\nhello\ntiny\nok\nend\n",
         "legal union flows must still compile and run",
     );
 }
@@ -165,7 +175,7 @@ fn v03_m9_union_widening_and_narrowed_arm_run_without_optimization() {
     support::assert_fixture_prints(
         "v0_3_m9_union_widening_and_narrowed.ynz",
         true,
-        "hello\nhello\nok\nend\n",
+        "hello\nhello\nhello\nhello\nhello\ntiny\nok\nend\n",
         "legal union flows must still compile and run",
     );
 }
