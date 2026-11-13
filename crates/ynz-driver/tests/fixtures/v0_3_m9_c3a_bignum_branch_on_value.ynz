@@ -1,0 +1,24 @@
+// v0.3-M9 C3a fixture: multi-case `if` on a `number>34` value. The arm test compared the
+// bignum text and the pattern as decimal128 cells.
+//
+// The `2.50` arm must match the value `2.5`: equal numbers, different text.
+//
+// Expected: two-five / ten / other
+
+function describe(value: number<50>) -> nothing {
+  if (value) {
+    1.5 => print(`one-five`)
+    2.50 => print(`two-five`)
+    10.0 => print(`ten`)
+    else => print(`other`)
+  }
+}
+
+function entrypoint() -> nothing {
+  let two: number<50> = 2.5
+  let ten: number<50> = 10.0
+  let eleven: number<50> = 11.0
+  describe(two)
+  describe(ten)
+  describe(eleven)
+}

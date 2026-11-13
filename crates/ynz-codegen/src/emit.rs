@@ -995,8 +995,8 @@ pub fn emit_artifact(
 }
 
 struct ModuleGlobals<'ctx> {
-    str_true: GlobalValue<'ctx>,
-    str_false: GlobalValue<'ctx>,
+    str_true: StaticString<'ctx>,
+    str_false: StaticString<'ctx>,
     dec_zero: GlobalValue<'ctx>,
     panic_int_add: GlobalValue<'ctx>,
     panic_int_sub: GlobalValue<'ctx>,
@@ -1094,19 +1094,24 @@ fn build_module<'ctx, 'g>(
         str_true: build_string_global(ctx, module, "true", ".str.true"),
         str_false: build_string_global(ctx, module, "false", ".str.false"),
         dec_zero: build_decimal_global(ctx, module, zero_bits, ".dec.zero"),
-        panic_int_add: build_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
-        panic_int_sub: build_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
-        panic_int_mul: build_string_global(ctx, module, "int overflow in '*'", ".panic.imul"),
-        panic_int_div: build_string_global(ctx, module, "division by zero (int)", ".panic.idiv"),
-        panic_int_rem: build_string_global(ctx, module, "remainder by zero (int)", ".panic.irem"),
-        panic_dec_div: build_string_global(ctx, module, "division by zero (number)", ".panic.ddiv"),
-        panic_dec_rem: build_string_global(
+        panic_int_add: build_c_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
+        panic_int_sub: build_c_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
+        panic_int_mul: build_c_string_global(ctx, module, "int overflow in '*'", ".panic.imul"),
+        panic_int_div: build_c_string_global(ctx, module, "division by zero (int)", ".panic.idiv"),
+        panic_int_rem: build_c_string_global(ctx, module, "remainder by zero (int)", ".panic.irem"),
+        panic_dec_div: build_c_string_global(
+            ctx,
+            module,
+            "division by zero (number)",
+            ".panic.ddiv",
+        ),
+        panic_dec_rem: build_c_string_global(
             ctx,
             module,
             "remainder by zero (number)",
             ".panic.drem",
         ),
-        source_file: build_string_global(ctx, module, source_path, ".source.file"),
+        source_file: build_c_string_global(ctx, module, source_path, ".source.file"),
     };
 
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
@@ -4958,8 +4963,8 @@ fn lower_function<'ctx, 'g>(
 
     // M7 P4a: errors-capable functions push a frame on entry for the call trace.
     if is_errors_capable {
-        let file_g = build_string_global(ctx, module, f.name.as_str(), ".ec.file");
-        let fn_g = build_string_global(ctx, module, f.name.as_str(), ".ec.fn");
+        let file_g = build_c_string_global(ctx, module, f.name.as_str(), ".ec.file");
+        let fn_g = build_c_string_global(ctx, module, f.name.as_str(), ".ec.fn");
         cg.builder
             .build_call(
                 cg.rt.ynz_frame_push,
@@ -14853,6 +14858,15 @@ fn match_cmp<'ctx>(
                 )
                 .map_err(|e| format!("{e}"))
         }
+        // A bignum is decimal text: compare it as text-of-a-number, never as decimal128 bytes.
+        Type::Number { precision } if *precision > 34 => bignum_compare(
+            cg,
+            scrutinee_val.into_pointer_value(),
+            pattern_val.into_pointer_value(),
+            *precision,
+            &BinOpKind::EqEq,
+        )
+        .map(|matched| matched.into_int_value()),
         Type::Number { .. } => {
             let c = cg
                 .builder
@@ -16451,6 +16465,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     return Ok(global.as_pointer_value().into());
                 }
             }
+            // A decimal literal under a `float` annotation (`let x: float = 0.317`) is an f64
+            // constant: typeck types it `float`, so its value must be f64 bits like every other
+            // `float`, not the address of a decimal cell.
+            if ty == Type::Float {
+                let value: f64 = s
+                    .parse()
+                    .map_err(|err| format!("bad float literal `{s}`: {err}"))?;
+                return Ok(cg.f64().const_float(value).into());
+            }
             // Hardware decimal128 path (N ≤ 34): stack alloca holds i128 bits.
             let bits: u128 =
                 ynz_numerics::parse(s).ok_or_else(|| format!("bad decimal literal `{s}`"))?;
@@ -16473,22 +16496,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::StringLit(bytes, _) => {
             let mut null = bytes.clone();
             push_c_string_terminator(&mut null);
-            let i8t = cg.i8();
-            let arr_ty = i8t.array_type(null.len() as u32);
-            let arr = i8t.const_array(
-                &null
-                    .iter()
-                    .map(|&b| i8t.const_int(b as u64, false))
-                    .collect::<Vec<_>>(),
-            );
-            let g = cg
-                .module
-                .add_global(arr_ty, Some(AddressSpace::default()), "str");
-            g.set_initializer(&arr);
-            g.set_constant(true);
-            g.set_linkage(inkwell::module::Linkage::Private);
-            g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-            Ok(g.as_pointer_value().into())
+            Ok(build_static_string(cg.ctx, cg.module, &null, "str")
+                .as_pointer_value()
+                .into())
         }
 
         Expr::Ident(name, ident_span) => {
@@ -17454,22 +17464,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     })
                     .collect();
                 push_c_string_terminator(&mut bytes);
-                let i8t = cg.i8();
-                let arr_ty = i8t.array_type(bytes.len() as u32);
-                let arr = i8t.const_array(
-                    &bytes
-                        .iter()
-                        .map(|&b| i8t.const_int(b as u64, false))
-                        .collect::<Vec<_>>(),
-                );
-                let g = cg
-                    .module
-                    .add_global(arr_ty, Some(AddressSpace::default()), "bts");
-                g.set_initializer(&arr);
-                g.set_constant(true);
-                g.set_linkage(inkwell::module::Linkage::Private);
-                g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-                Ok(g.as_pointer_value().into())
+                Ok(build_static_string(cg.ctx, cg.module, &bytes, "bts")
+                    .as_pointer_value()
+                    .into())
             } else {
                 // Interpolated string: build via ynz_string_builder_*.
                 let builder = cg
@@ -17516,14 +17513,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             let val = lower_expr(cg, sub_expr)?;
                             let sub_ty = cg.expr_type(sub_expr);
                             // Produce a null-terminated string from the expression value.
-                            let s_ptr = expr_to_cstring(cg, val, &sub_ty)?;
-                            cg.builder
-                                .build_call(
-                                    cg.rt.ynz_string_builder_append,
-                                    &[builder.into(), s_ptr.into()],
-                                    "",
-                                )
-                                .map_err(|e| format!("{e}"))?;
+                            if let Type::Options { name } = &sub_ty {
+                                // An options value arrives as its i8 tag, not the i64 a field load gives.
+                                let text =
+                                    lower_options_to_string(cg, val, name)?.into_pointer_value();
+                                write_text_ptr(cg, TextSink::Builder(builder), text)?;
+                            } else {
+                                write_value_text(cg, val, &sub_ty, TextSink::Builder(builder))?;
+                            }
                         }
                     }
                 }
@@ -18772,27 +18769,39 @@ fn lower_sm_background_spawn<'ctx>(
 }
 
 /// Coerce a decimal128 (N≤34) operand to a bignum C-string when the other side is
-/// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed.
+/// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed, and the
+/// strings the coercion allocated: the caller releases them once the operation has read them.
 fn coerce_to_bignum_pair<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
     lhs_ty: &Type,
     rhs_ty: &Type,
-) -> Result<(BasicValueEnum<'ctx>, BasicValueEnum<'ctx>), String> {
+) -> Result<
+    (
+        BasicValueEnum<'ctx>,
+        BasicValueEnum<'ctx>,
+        Vec<PointerValue<'ctx>>,
+    ),
+    String,
+> {
     let lhs_big = matches!(lhs_ty, Type::Number { precision } if *precision > 34);
     let rhs_big = matches!(rhs_ty, Type::Number { precision } if *precision > 34);
     if !lhs_big && !rhs_big {
-        return Ok((lhs, rhs));
+        return Ok((lhs, rhs, Vec::new()));
     }
+    let mut converted = Vec::new();
     let lhs2 = if matches!(lhs_ty, Type::Number { precision } if *precision <= 34) {
         let s = cg
             .builder
             .build_call(cg.rt.decimal_to_string, &[lhs.into()], "lhs_dec2str")
             .map_err(|e| format!("{e}"))?;
-        s.try_as_basic_value()
+        let text = s
+            .try_as_basic_value()
             .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+            .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+        converted.push(text.into_pointer_value());
+        text
     } else {
         lhs
     };
@@ -18801,13 +18810,16 @@ fn coerce_to_bignum_pair<'ctx>(
             .builder
             .build_call(cg.rt.decimal_to_string, &[rhs.into()], "rhs_dec2str")
             .map_err(|e| format!("{e}"))?;
-        s.try_as_basic_value()
+        let text = s
+            .try_as_basic_value()
             .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+            .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+        converted.push(text.into_pointer_value());
+        text
     } else {
         rhs
     };
-    Ok((lhs2, rhs2))
+    Ok((lhs2, rhs2, converted))
 }
 
 fn lower_binop<'ctx>(
@@ -18827,43 +18839,83 @@ fn lower_binop<'ctx>(
 
     // M8 P6: when one operand is bignum (N>34) and the other is decimal128 (N≤34),
     // coerce the N≤34 side to a C string so both operands are bignum-compatible.
-    let (lhs, rhs) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
+    let (lhs, rhs, converted_operands) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
+    // The operation follows the operands as they are now: a `number<=34>` left side coerced to
+    // bignum text takes the right side's bignum type (typeck's max(lhs, rhs) precision).
+    // Dispatching on the left side's own type would read that text as 16 decimal128 bytes:
+    // a wrong result and a read past the end of its exact-size heap buffer.
+    let lhs_was_coerced = matches!(lhs_ty, Type::Number { precision } if *precision <= 34)
+        && matches!(rhs_ty, Type::Number { precision } if *precision > 34);
+    let operand_ty = if lhs_was_coerced { rhs_ty } else { lhs_ty };
+    // A bignum comparison parses both texts at one precision: the wider of the two bignum
+    // operands (the left type alone would round a wider right operand down).
+    let is_comparison = matches!(op, EqEq | NotEq | Lt | LtEq | Gt | GtEq);
+    let widest_bignum_ty;
+    let operand_ty = match (is_comparison, lhs_ty, rhs_ty) {
+        (true, Type::Number { precision: left }, Type::Number { precision: right })
+            if *left > 34 && *right > 34 =>
+        {
+            widest_bignum_ty = Type::Number {
+                precision: *left.max(right),
+            };
+            &widest_bignum_ty
+        }
+        _ => operand_ty,
+    };
+    let result = lower_binop_operands(cg, op, lhs, rhs, lhs_e.span().start as u32, operand_ty)?;
+    for converted in converted_operands {
+        cg.builder
+            .build_call(cg.rt.ynz_string_release, &[converted.into()], "")
+            .map_err(|err| format!("{err}"))?;
+    }
+    Ok(result)
+}
 
+/// The operation itself, on operands already lowered (and coerced to bignum text where needed).
+fn lower_binop_operands<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    op: &BinOpKind,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    lhs_start: u32,
+    lhs_ty: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    use BinOpKind::*;
     match (op, lhs_ty) {
         (Add, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Sub, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Mul, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Div, Type::Int) => int_divrem(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             false,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Rem, Type::Int) => int_divrem(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             true,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
 
         (Add, Type::Float) => cg
@@ -18986,6 +19038,15 @@ fn lower_binop<'ctx>(
         (EqEq, Type::Float) => fcmp(cg, inkwell::FloatPredicate::OEQ, lhs, rhs, "feq"),
         (NotEq, Type::Float) => fcmp(cg, inkwell::FloatPredicate::ONE, lhs, rhs, "fne"),
 
+        (EqEq | NotEq | Lt | LtEq | Gt | GtEq, Type::Number { precision }) if *precision > 34 => {
+            bignum_compare(
+                cg,
+                lhs.into_pointer_value(),
+                rhs.into_pointer_value(),
+                *precision,
+                op,
+            )
+        }
         (EqEq | NotEq | Lt | LtEq | Gt | GtEq, Type::Number { .. }) => {
             decimal_compare(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), op)
         }
@@ -19293,6 +19354,60 @@ fn decimal_div<'ctx>(
     decimal_binop(cg, lhs, rhs, cg.rt.decimal_div, "ddiv")
 }
 
+/// Bignum comparison: `ynz_bignum_compare` gives -1 / 0 / 1, or 2 when unordered (NaN), and each
+/// operator is tested against that so an unordered pair is false for everything but `!=`
+/// (`2 > 0` and `2 >= 0` would otherwise read as true).
+///
+/// The operands are decimal text: reading them as decimal128 compares garbage and runs past a
+/// short exact-size string.
+fn bignum_compare<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+    precision: u32,
+    op: &BinOpKind,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let order = bignum_compare_order(cg, lhs, rhs, precision)?;
+    let int32 = cg.i32();
+    let (predicate, bound) = match op {
+        BinOpKind::Lt => (IntPredicate::EQ, int32.const_int(-1i64 as u64, true)),
+        BinOpKind::LtEq => (IntPredicate::SLE, int32.const_int(0, false)),
+        BinOpKind::EqEq => (IntPredicate::EQ, int32.const_int(0, false)),
+        BinOpKind::NotEq => (IntPredicate::NE, int32.const_int(0, false)),
+        BinOpKind::Gt => (IntPredicate::EQ, int32.const_int(1, false)),
+        // unsigned: -1 wraps high and 2 is above 1, so only 0 and 1 pass
+        BinOpKind::GtEq => (IntPredicate::ULE, int32.const_int(1, false)),
+        other => return Err(format!("codegen: {other:?} is not a bignum comparison")),
+    };
+    cg.builder
+        .build_int_compare(predicate, order, bound, "bncmp_b")
+        .map(|value| value.into())
+        .map_err(|err| format!("{err}"))
+}
+
+/// The raw -1 / 0 / 1 / 2 order of two bignum texts (see `bignum_compare`).
+fn bignum_compare_order<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+    precision: u32,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let precision_val = cg.i32().const_int(precision as u64, false);
+    let call = cg
+        .builder
+        .build_call(
+            cg.rt.ynz_bignum_compare,
+            &[lhs.into(), rhs.into(), precision_val.into()],
+            "bncmp",
+        )
+        .map_err(|err| format!("{err}"))?;
+    Ok(call
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_bignum_compare void")?
+        .into_int_value())
+}
+
 fn decimal_compare<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     lhs: PointerValue<'ctx>,
@@ -19385,6 +19500,23 @@ fn lower_unary<'ctx>(
             .build_float_neg(val.into_float_value(), "fneg")
             .map(|v| v.into())
             .map_err(|e| format!("{e}")),
+        // A bignum is decimal text: the decimal128 `0 - value` below would read it as 16 raw bytes
+        // and return a stack cell where a heap string is expected.
+        (UnaryOpKind::Neg, Type::Number { precision }) if *precision > 34 => {
+            let precision_val = cg.i32().const_int(*precision as u64, false);
+            let negated = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_bignum_neg,
+                    &[val.into(), precision_val.into()],
+                    "bn_neg",
+                )
+                .map_err(|err| format!("{err}"))?;
+            Ok(negated
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_bignum_neg void")?)
+        }
         (UnaryOpKind::Neg, Type::Number { .. }) => {
             let zero = cg.globals.dec_zero.as_pointer_value();
             decimal_binop(
@@ -19414,11 +19546,7 @@ fn lower_print<'ctx>(
     val: BasicValueEnum<'ctx>,
     ty: &Type,
 ) -> Result<(), String> {
-    let p = to_c_string(cg, val, ty)?;
-    cg.builder
-        .build_call(cg.rt.puts, &[p.into()], "puts")
-        .map_err(|e| format!("{e}"))?;
-    Ok(())
+    write_value_text(cg, val, ty, TextSink::Stdout)
 }
 
 /// Terminate a byte vector as a C string, aborting with an ICE message if any
@@ -19474,7 +19602,8 @@ fn to_c_string<'ctx>(
             .map(|v| v.into_pointer_value())
             .map_err(|e| format!("{e}")),
 
-        // Runtime format shims return a ptr into a thread-local static buffer.
+        // Runtime format shims return a fresh heap string the caller owns: `toString()` hands it to
+        // the program; `print`/`${}` never call these (`write_value_text`).
         Type::Int => {
             let c = cg
                 .builder
@@ -19543,7 +19672,7 @@ fn to_c_string<'ctx>(
 
             // Helper closure: append a static string literal to the builder.
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "dbg_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "dbg_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19573,10 +19702,12 @@ fn to_c_string<'ctx>(
                     .build_struct_gep(struct_ty, shape_ptr, *field_idx as u32, field_name)
                     .map_err(|e| format!("GEP {field_name}: {e}"))?;
                 // Fields use different LLVM types depending on the Yinz type:
-                //   Number (decimal128) → i128 → pass as pointer
+                //   Number (decimal128, N <= 34) → i128 → pass as pointer
+                //   Number (bignum, N > 34)      → 8-byte pointer to decimal text → i64_bits_to
                 //   Options            → i8   → zero-extend to i64, use as tag
                 //   everything else    → i64  → i64_bits_to
-                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { .. }) {
+                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { precision } if *precision <= 34)
+                {
                     let i128t = cg.ctx.i128_type();
                     let raw = cg
                         .builder
@@ -19610,15 +19741,7 @@ fn to_c_string<'ctx>(
                         .into_int_value();
                     cg.i64_bits_to(bits, field_ty)?
                 };
-                let field_str = to_c_string(cg, field_val, field_ty)?;
-
-                cg.builder
-                    .build_call(
-                        cg.rt.ynz_string_builder_append,
-                        &[builder_val.into(), field_str.into()],
-                        "",
-                    )
-                    .map_err(|e| format!("{e}"))?;
+                write_value_text(cg, field_val, field_ty, TextSink::Builder(builder_val))?;
             }
 
             append_static(cg, builder_val, " }")?;
@@ -19656,7 +19779,7 @@ fn to_c_string<'ctx>(
                 .into_pointer_value();
 
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "arr_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "arr_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19748,15 +19871,7 @@ fn to_c_string<'ctx>(
             let out = cg.array_elem_out_buffer(&elem, "arr_dbg")?;
             let _flag = cg.array_elem_get_into(arr_ptr, i, out, "arr_dbg_get", None)?;
             let elem_val = cg.array_elem_from_out(out, &elem, "arr_dbg")?;
-            let elem_str = to_c_string(cg, elem_val, &elem)?;
-
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), elem_str.into()],
-                    "",
-                )
-                .map_err(|e| format!("{e}"))?;
+            write_value_text(cg, elem_val, &elem, TextSink::Builder(builder_val))?;
 
             // i += 1
             let next_i = cg
@@ -19805,6 +19920,9 @@ fn to_c_string<'ctx>(
                     "",
                 )
                 .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_call(cg.rt.ynz_string_release, &[rem_str.into()], "")
+                .map_err(|err| format!("{err}"))?;
             append_static(cg, builder_val, " more")?;
             cg.builder
                 .build_unconditional_branch(finish_bb)
@@ -19847,7 +19965,7 @@ fn to_c_string<'ctx>(
                 .into_pointer_value();
 
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "mdbg_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "mdbg_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19933,14 +20051,7 @@ fn to_c_string<'ctx>(
             append_static(cg, builder_val, ": ")?;
 
             let val_val = cg.array_elem_from_out(val_out, &val_ty, "mdbg_vv")?;
-            let val_str = to_c_string(cg, val_val, &val_ty)?;
-            cg.builder
-                .build_call(
-                    cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), val_str.into()],
-                    "",
-                )
-                .map_err(|e| format!("{e}"))?;
+            write_value_text(cg, val_val, &val_ty, TextSink::Builder(builder_val))?;
 
             let next_i = cg
                 .builder
@@ -19975,57 +20086,12 @@ fn to_c_string<'ctx>(
             Ok(g.as_pointer_value())
         }
 
-        // Union printing: for `T | nothing`, check null → "none", else print as T.
-        // For other union shapes, show a placeholder — full union introspection is future work.
-        Type::Union { variants } => {
-            let non_nothing: Vec<&Type> = variants
-                .iter()
-                .filter(|v| !matches!(v, Type::Nothing))
-                .collect();
-
-            if non_nothing.len() == 1 {
-                let inner = non_nothing[0].clone();
-                let ptr = val.into_pointer_value();
-                let is_null = cg
-                    .builder
-                    .build_is_null(ptr, "union_null")
-                    .map_err(|e| format!("{e}"))?;
-
-                let none_bb = cg.append_block("union_none");
-                let some_bb = cg.append_block("union_some");
-                let merge_bb = cg.append_block("union_merge");
-
-                cg.builder
-                    .build_conditional_branch(is_null, none_bb, some_bb)
-                    .map_err(|e| format!("{e}"))?;
-
-                cg.builder.position_at_end(none_bb);
-                let none_str = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
-                cg.builder
-                    .build_unconditional_branch(merge_bb)
-                    .map_err(|e| format!("{e}"))?;
-
-                cg.builder.position_at_end(some_bb);
-                let some_str = to_c_string(cg, val, &inner)?;
-                cg.builder
-                    .build_unconditional_branch(merge_bb)
-                    .map_err(|e| format!("{e}"))?;
-                let some_bb_end = cg.builder.get_insert_block().unwrap();
-
-                cg.builder.position_at_end(merge_bb);
-                let phi = cg
-                    .builder
-                    .build_phi(cg.ptr(), "union_str")
-                    .map_err(|e| format!("{e}"))?;
-                phi.add_incoming(&[
-                    (&none_str.as_pointer_value(), none_bb),
-                    (&some_str, some_bb_end),
-                ]);
-                Ok(phi.as_basic_value().into_pointer_value())
-            } else {
-                let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
-                Ok(g.as_pointer_value())
-            }
+        // A `T | nothing` union is written by `write_value_text` (branch on null, no string is
+        // built). Here, as a value to hold, any union shows a placeholder — full union
+        // introspection is future work.
+        Type::Union { .. } => {
+            let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
+            Ok(g.as_pointer_value())
         }
 
         // Options type — val is the i64-extended i8 tag; delegate to options toString.
@@ -20043,21 +20109,120 @@ fn to_c_string<'ctx>(
     }
 }
 
-/// Convert any Yinz value to a null-terminated C string pointer for interpolation.
+/// Where a consumer that reads a value's text once puts it: `print` writes it to stdout, a
+/// `${}` part, a debug-print part or an array/map element appends it to a string builder.
+#[derive(Clone, Copy)]
+enum TextSink<'ctx> {
+    Stdout,
+    Builder(PointerValue<'ctx>),
+}
+
+/// Put NUL-terminated text at `text` into `sink`. The sink never frees the text.
+fn write_text_ptr<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    sink: TextSink<'ctx>,
+    text: PointerValue<'ctx>,
+) -> Result<(), String> {
+    match sink {
+        TextSink::Stdout => cg
+            .builder
+            .build_call(cg.rt.puts, &[text.into()], "puts")
+            .map(|_| ())
+            .map_err(|err| format!("{err}")),
+        TextSink::Builder(builder) => cg
+            .builder
+            .build_call(
+                cg.rt.ynz_string_builder_append,
+                &[builder.into(), text.into()],
+                "",
+            )
+            .map(|_| ())
+            .map_err(|err| format!("{err}")),
+    }
+}
+
+/// Write the text of `val` (type `ty`) to `sink`: the one path every consumer that reads the
+/// text at once and drops it goes through (`print`, `${}`, shape/array/map debug text).
 ///
-/// Delegates to `to_c_string` for the types it knows. For Options types, emits a call
-/// to the options toString runtime helper. For all other types, defers to `to_c_string`.
-fn expr_to_cstring<'ctx>(
+/// `int`, `float` and `number` (decimal128) call a runtime print/append entry that formats and
+/// writes straight to the sink: no heap string is built and nothing is released, which is what
+/// keeps `print(n)` at or below its cost before strings carried an owned header (Golden Rule 8).
+/// Only `n.toString()` builds an owned string (`to_c_string`). A `T | nothing` union branches on
+/// null and writes `none` or the inner text the same way. Every other type's text is a pointer
+/// that something else owns (a held string, a static, a debug string), so it is written and not
+/// released.
+fn write_value_text<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
-) -> Result<inkwell::values::PointerValue<'ctx>, String> {
-    match ty {
-        Type::Options { name } => {
-            lower_options_to_string(cg, val, name).map(|v| v.into_pointer_value())
+    sink: TextSink<'ctx>,
+) -> Result<(), String> {
+    let (print_entry, append_entry) = match ty {
+        Type::Int => (cg.rt.int_print, cg.rt.int_append),
+        Type::Float => (cg.rt.float_print, cg.rt.float_append),
+        Type::Number { precision } if *precision <= 34 => {
+            (cg.rt.decimal_print, cg.rt.decimal_append)
         }
-        _ => to_c_string(cg, val, ty),
-    }
+        Type::Union { variants } => {
+            let mut non_nothing = variants
+                .iter()
+                .filter(|variant| !matches!(variant, Type::Nothing));
+            return match (non_nothing.next(), non_nothing.next()) {
+                (Some(inner), None) => write_optional_text(cg, val, inner, sink),
+                _ => {
+                    let text = to_c_string(cg, val, ty)?;
+                    write_text_ptr(cg, sink, text)
+                }
+            };
+        }
+        _ => {
+            let text = to_c_string(cg, val, ty)?;
+            return write_text_ptr(cg, sink, text);
+        }
+    };
+    let call = match sink {
+        TextSink::Stdout => cg.builder.build_call(print_entry, &[val.into()], ""),
+        TextSink::Builder(builder) => {
+            cg.builder
+                .build_call(append_entry, &[builder.into(), val.into()], "")
+        }
+    };
+    call.map(|_| ()).map_err(|err| format!("{err}"))
+}
+
+/// The text of a `T | nothing` value: `none` when `val` is null, else the text of `T`.
+fn write_optional_text<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    inner: &Type,
+    sink: TextSink<'ctx>,
+) -> Result<(), String> {
+    let is_null = cg
+        .builder
+        .build_is_null(val.into_pointer_value(), "union_null")
+        .map_err(|err| format!("{err}"))?;
+    let none_bb = cg.append_block("union_none");
+    let some_bb = cg.append_block("union_some");
+    let merge_bb = cg.append_block("union_merge");
+    cg.builder
+        .build_conditional_branch(is_null, none_bb, some_bb)
+        .map_err(|err| format!("{err}"))?;
+
+    cg.builder.position_at_end(none_bb);
+    let none_text = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
+    write_text_ptr(cg, sink, none_text.as_pointer_value())?;
+    cg.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|err| format!("{err}"))?;
+
+    cg.builder.position_at_end(some_bb);
+    write_value_text(cg, val, inner, sink)?;
+    cg.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|err| format!("{err}"))?;
+
+    cg.builder.position_at_end(merge_bb);
+    Ok(())
 }
 
 /// UFCS dispatch: `receiver.method(args)` → call standalone function `method(receiver, args)`.
@@ -20226,11 +20391,8 @@ fn lower_field_access<'ctx>(
                 .ok_or_else(|| "ec_msg: builder has no insert block after call".to_string())?;
 
             cg.builder.position_at_end(merge_bb);
-            let empty = cg
-                .builder
-                .build_global_string_ptr("", "ec_msg_empty")
-                .map_err(|e| format!("{e}"))?
-                .as_pointer_value();
+            let empty =
+                build_string_global(cg.ctx, cg.module, "", "ec_msg_empty").as_pointer_value();
             let phi = cg
                 .builder
                 .build_phi(cg.ptr(), "ec_msg")
@@ -22273,7 +22435,7 @@ fn lower_options_to_string<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(arm_bb);
-        let g = build_string_global(
+        let g = build_c_string_global(
             cg.ctx,
             cg.module,
             display,
@@ -23326,28 +23488,95 @@ fn load<'ctx>(
     }
 }
 
+/// A static Yinz `string`: `{ i64 STATIC_STRING_HEADER, [N x i8] }`, the header telling
+/// `ynz_string_release` these bytes are never freed.
+#[derive(Clone, Copy)]
+struct StaticString<'ctx> {
+    bytes: PointerValue<'ctx>,
+}
+
+impl<'ctx> StaticString<'ctx> {
+    /// The string pointer Yinz code holds: the first byte, with the header in front of it.
+    fn as_pointer_value(&self) -> PointerValue<'ctx> {
+        self.bytes
+    }
+}
+
+/// Emit `bytes_with_nul` as a static Yinz `string` (header + bytes, private constant) and
+/// return its string pointer. O(n) time and memory in the string length.
+fn build_static_string<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    bytes_with_nul: &[u8],
+    name: &str,
+) -> StaticString<'ctx> {
+    let i8_type = ctx.i8_type();
+    let i32_type = ctx.i32_type();
+    let header = ctx
+        .i64_type()
+        .const_int(ynz_abi::STATIC_STRING_HEADER, false);
+    let bytes = i8_type.const_array(
+        &bytes_with_nul
+            .iter()
+            .map(|&byte| i8_type.const_int(byte as u64, false))
+            .collect::<Vec<_>>(),
+    );
+    let initializer = ctx.const_struct(&[header.into(), bytes.into()], false);
+    let global = module.add_global(initializer.get_type(), Some(AddressSpace::default()), name);
+    global.set_initializer(&initializer);
+    global.set_constant(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+    global.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+    // The header is read as a u64 in front of the first byte.
+    global.set_alignment(ynz_abi::STRING_HEADER_BYTES as u32);
+    // SAFETY: field 1 of the struct just built; index 0 steps over the global itself.
+    let bytes = unsafe {
+        global.as_pointer_value().const_in_bounds_gep(
+            initializer.get_type(),
+            &[i32_type.const_zero(), i32_type.const_int(1, false)],
+        )
+    };
+    StaticString { bytes }
+}
+
+/// A static Yinz `string` from Rust text (no embedded NUL; the NUL terminator is added).
 fn build_string_global<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
-    s: &str,
+    text: &str,
+    name: &str,
+) -> StaticString<'ctx> {
+    let mut bytes: Vec<u8> = text.bytes().collect();
+    bytes.push(0);
+    build_static_string(ctx, module, &bytes, name)
+}
+
+/// A static C string the compiler uses internally (a panic message, a source file name, a
+/// debug-print fragment, the source of a copy): never a Yinz `string` value, so it has no
+/// ownership header. Anything that can reach Yinz code as a `string` goes through
+/// `build_string_global` instead.
+fn build_c_string_global<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    text: &str,
     name: &str,
 ) -> GlobalValue<'ctx> {
-    let i8t = ctx.i8_type();
-    let mut bytes: Vec<u8> = s.bytes().collect();
+    let i8_type = ctx.i8_type();
+    let mut bytes: Vec<u8> = text.bytes().collect();
     bytes.push(0);
-    let arr_ty = i8t.array_type(bytes.len() as u32);
-    let arr = i8t.const_array(
+    let arr_ty = i8_type.array_type(bytes.len() as u32);
+    let arr = i8_type.const_array(
         &bytes
             .iter()
-            .map(|&b| i8t.const_int(b as u64, false))
+            .map(|&byte| i8_type.const_int(byte as u64, false))
             .collect::<Vec<_>>(),
     );
-    let g = module.add_global(arr_ty, Some(AddressSpace::default()), name);
-    g.set_initializer(&arr);
-    g.set_constant(true);
-    g.set_linkage(inkwell::module::Linkage::Private);
-    g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-    g
+    let global = module.add_global(arr_ty, Some(AddressSpace::default()), name);
+    global.set_initializer(&arr);
+    global.set_constant(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+    global.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+    global
 }
 
 fn build_decimal_global<'ctx>(

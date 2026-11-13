@@ -1,0 +1,20 @@
+// v0.3-M9 C3a fixture: the debug text of a shape holding `number>34` values: a field, array
+// elements and map values. A bignum field is an 8-byte pointer to decimal text; the debug print
+// loaded it as a 16-byte decimal128 field (garbage text and a read past the field).
+//
+// Expected: Ledger { total: 4, entries: [1.5, 2.5], byName: { rent: 2.5 } }
+
+shape Ledger {
+  total: number<50>
+  entries: array<number<50> >
+  byName: map<string, number<50> >
+}
+
+function entrypoint() -> nothing {
+  let first: number<50> = 1.5
+  let second: number<50> = 2.5
+  let total: number<50> = first + second
+  let entries: array<number<50> > = [first, second]
+  let ledger: Ledger = { total: total, entries: entries, byName: { `rent`: second } }
+  print(ledger)
+}

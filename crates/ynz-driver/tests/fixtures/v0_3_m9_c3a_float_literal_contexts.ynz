@@ -1,0 +1,29 @@
+// v0.3-M9 C3a fixture: a decimal literal where typeck wants a `float` is an f64 constant in
+// every position a value can be written. Codegen used to lower it as a decimal128 cell and use
+// the cell's address as the float's bits, which printed an address-derived denormal (hidden
+// while `float.toString()` cut its text at 31 bytes).
+//
+// Expected output (one per line): 0.317 0.75 0.5 0.125 2
+
+shape Sample {
+  ratio: float
+}
+
+function double(value: float) -> float {
+  return value + value
+}
+
+function eighth() -> float {
+  return 0.125
+}
+
+function entrypoint() -> nothing {
+  let annotated: float = 0.317
+  let sample: Sample = { ratio: 0.75 }
+  print(annotated)
+  print(sample.ratio)
+  print(double(0.25))
+  print(eighth())
+  let whole: float = 2.0
+  print(whole)
+}

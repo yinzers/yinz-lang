@@ -22,10 +22,20 @@ pub struct RuntimeDecls<'ctx> {
     // Decimal conversion from float: (double x, ptr out) → void
     pub decimal_from_float: FunctionValue<'ctx>,
 
-    // Formatting: (value, ptr buf, i64 buf_len) → i64 bytes_written
+    // Formatting: (value) → ptr to a fresh heap string the caller owns (`ynz_string_release`)
     pub decimal_to_string: FunctionValue<'ctx>,
     pub int_to_string: FunctionValue<'ctx>,
     pub float_to_string: FunctionValue<'ctx>,
+
+    // Print / interpolation text of a number, consumed at once: no heap string, nothing to release.
+    // print: (value) → void, writes the text and a newline to stdout.
+    // append: (builder: *mut u8, value) → void, appends the text to a string builder.
+    pub int_print: FunctionValue<'ctx>,
+    pub int_append: FunctionValue<'ctx>,
+    pub float_print: FunctionValue<'ctx>,
+    pub float_append: FunctionValue<'ctx>,
+    pub decimal_print: FunctionValue<'ctx>,
+    pub decimal_append: FunctionValue<'ctx>,
 
     // Panic stubs — noreturn, write to stderr then abort
     pub panic_overflow: FunctionValue<'ctx>,
@@ -152,6 +162,10 @@ pub struct RuntimeDecls<'ctx> {
     // ABI: (ptr: *const u8, len: i64) → *const u8 (null-terminated)
     pub ynz_string_from_static: FunctionValue<'ctx>,
 
+    // C3a: the one release entry point for string bytes — frees an owned (heap) string, leaves
+    // static bytes alone, ignores null. ABI: (ptr) → void
+    pub ynz_string_release: FunctionValue<'ctx>,
+
     // M7 P4a: errors runtime — frame stack + error allocation.
     // ynz_frame_push(file: ptr, line: i64, function: ptr) → void
     pub ynz_frame_push: FunctionValue<'ctx>,
@@ -225,6 +239,8 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_bignum_sub: FunctionValue<'ctx>,
     pub ynz_bignum_mul: FunctionValue<'ctx>,
     pub ynz_bignum_div: FunctionValue<'ctx>,
+    pub ynz_bignum_compare: FunctionValue<'ctx>,
+    pub ynz_bignum_neg: FunctionValue<'ctx>,
 
     // ── v0.3-M1: Tokio scheduler runtime ─────────────────────────────────
     // Called by generated `main` and `background` lowering.
@@ -347,8 +363,8 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_decimal_from_float",
                 void.fn_type(&[f64.into(), ptr.into()], false),
             ),
-            // Format shims: value → ptr to null-terminated string in thread-local buffer.
-            // Runtime uses thread-local static buffers, not caller-allocated buffers.
+            // Format shims: value → ptr to a fresh heap string the caller owns (release it with
+            // `ynz_string_release`).
             decimal_to_string: declare_fn(
                 module,
                 "ynz_decimal_to_string",
@@ -363,6 +379,32 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_float_to_string",
                 ptr.fn_type(&[f64.into()], false),
+            ),
+            int_print: declare_fn(module, "ynz_int_print", void.fn_type(&[i64.into()], false)),
+            int_append: declare_fn(
+                module,
+                "ynz_int_append",
+                void.fn_type(&[ptr.into(), i64.into()], false),
+            ),
+            float_print: declare_fn(
+                module,
+                "ynz_float_print",
+                void.fn_type(&[f64.into()], false),
+            ),
+            float_append: declare_fn(
+                module,
+                "ynz_float_append",
+                void.fn_type(&[ptr.into(), f64.into()], false),
+            ),
+            decimal_print: declare_fn(
+                module,
+                "ynz_decimal_print",
+                void.fn_type(&[ptr.into()], false),
+            ),
+            decimal_append: declare_fn(
+                module,
+                "ynz_decimal_append",
+                void.fn_type(&[ptr.into(), ptr.into()], false),
             ),
             panic_overflow: declare_fn(
                 module,
@@ -582,6 +624,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 ptr.fn_type(&[ptr.into(), i64.into()], false),
             ),
 
+            ynz_string_release: declare_fn(
+                module,
+                "ynz_string_release",
+                void.fn_type(&[ptr.into()], false),
+            ),
             // M7 P4a: errors runtime.
             ynz_frame_push: declare_fn(
                 module,
@@ -743,6 +790,18 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_bignum_div",
                 ptr.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            // (ptr a, ptr b, i32 precision) -> i32: -1 less, 0 equal, 1 greater, 2 unordered (NaN)
+            ynz_bignum_compare: declare_fn(
+                module,
+                "ynz_bignum_compare",
+                i32.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            // (ptr a, i32 precision) -> ptr: `0 - a` as a heap string
+            ynz_bignum_neg: declare_fn(
+                module,
+                "ynz_bignum_neg",
+                ptr.fn_type(&[ptr.into(), i32.into()], false),
             ),
 
             // v0.3-M1: Tokio scheduler runtime

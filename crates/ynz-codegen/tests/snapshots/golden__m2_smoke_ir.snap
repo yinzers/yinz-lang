@@ -7,16 +7,16 @@ source_filename = "ynz-m2_smoke.ynz"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-linux-gnu"
 
-@.str.true = private unnamed_addr constant [5 x i8] c"true\00"
+@.str.true = private unnamed_addr constant { i64, [5 x i8] } { i64 0, [5 x i8] c"true\00" }, align 8
 
 ; Function Attrs: nofree nounwind
 declare noundef i32 @puts(ptr nocapture noundef readonly) local_unnamed_addr #0
 
 declare void @ynz_decimal_add(ptr, ptr, ptr) local_unnamed_addr
 
-declare ptr @ynz_decimal_to_string(ptr) local_unnamed_addr
+declare void @ynz_int_print(i64) local_unnamed_addr
 
-declare ptr @ynz_int_to_string(i64) local_unnamed_addr
+declare void @ynz_decimal_print(ptr) local_unnamed_addr
 
 declare void @ynz_siphash_init() local_unnamed_addr
 
@@ -37,11 +37,9 @@ entry:
   %dec_bits = load i128, ptr %dadd, align 16
   %price2 = alloca i128, align 16
   store i128 %dec_bits, ptr %price2, align 16
-  %dec_str = call ptr @ynz_decimal_to_string(ptr nonnull %price2)
-  %puts = call i32 @puts(ptr nonnull dereferenceable(1) %dec_str)
-  %int_str = call ptr @ynz_int_to_string(i64 1763)
-  %puts10 = call i32 @puts(ptr nonnull dereferenceable(1) %int_str)
-  %puts13 = call i32 @puts(ptr nonnull dereferenceable(1) @.str.true)
+  call void @ynz_decimal_print(ptr nonnull %price2)
+  call void @ynz_int_print(i64 1763)
+  %puts = call i32 @puts(ptr nonnull dereferenceable(1) getelementptr inbounds ({ i64, [5 x i8] }, ptr @.str.true, i64 0, i32 1))
   call void @ynz_rt_shutdown()
   ret i32 0
 }
