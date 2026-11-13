@@ -104,6 +104,27 @@ function getAccess(share user: AnyUser) -> string {
 
 ---
 
+## A union is not one of its variants
+
+A `Circle` can go where a `Shape` is expected. A `Shape` cannot go where a `Circle` is expected: it might hold a `Square`, so the compiler refuses it until an `is` arm has checked.
+
+```
+function describeCircle(share circle: Circle) -> string {
+  return `a circle`
+}
+
+function describe(share figure: Shape) -> string {
+  return describeCircle(figure)
+}
+
+// COMPILE ERROR: `figure` is a `Circle | Square | Triangle` — it might hold any one of those — but `describeCircle` expects a `Circle` here.
+// Check which variant it holds first, then use it inside that arm: if (figure) { is Circle => { … } }
+```
+
+Inside `is Circle =>`, `figure` is a `Circle`, so `describeCircle(figure)` compiles there. This applies everywhere a value must have one exact type: arguments, `return`, annotated `let`, and shape fields.
+
+---
+
 ## Exhaustiveness — all variants must be handled
 
 When using multi-case `if` on a union, you must cover every variant — or include `else =>`:
