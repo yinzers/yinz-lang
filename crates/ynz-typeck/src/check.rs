@@ -395,6 +395,9 @@ pub struct TypedModule {
     /// it to its own AST clone via `BindingNames::apply`; diagnostics, lints and the LSP keep
     /// `module` and its user names.
     pub binding_names: crate::binding_names::BindingNames,
+    /// v0.3-M9 C5a: the persisted transfer record — the final alias-class partition of every
+    /// function with its release anchor and escapes (see `crate::transfer_record`).
+    pub transfers: crate::transfer_record::TransferRecord,
 }
 
 impl TypedModule {
@@ -416,6 +419,7 @@ impl TypedModule {
             cross_thread_padded_shapes: self.cross_thread_padded_shapes.clone(),
             back_edge_yield_admitted: self.back_edge_yield_admitted.clone(),
             binding_names: self.binding_names.clone(),
+            transfers: self.transfers.clone(),
         })
     }
 }
@@ -508,6 +512,7 @@ pub fn check(
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
+        transfers: Default::default(),
     };
     (
         typed,
@@ -596,6 +601,7 @@ pub fn check_with_kernel_mode(
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
+        transfers: Default::default(),
     };
     (typed, checker.mono_table, checker.diags)
 }
