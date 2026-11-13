@@ -16,7 +16,7 @@ use std::ffi::CStr;
 
 use ynz_runtime::runtime::ynz_rt_init;
 use ynz_runtime::{
-    ynz_string_alloc_bytes, ynz_string_alloc_count, ynz_string_builder_append,
+    ynz_bignum_add, ynz_string_alloc_bytes, ynz_string_alloc_count, ynz_string_builder_append,
     ynz_string_builder_finalize, ynz_string_builder_new, ynz_string_codepoint_at,
     ynz_string_concat, ynz_string_free, ynz_string_free_bytes, ynz_string_free_count,
     ynz_string_from_static, ynz_string_to_upper,
@@ -96,6 +96,12 @@ fn every_string_allocator_is_counted_and_balanced_by_ynz_string_free() {
         "ABC",
         || unsafe { ynz_string_to_upper(c"abc".as_ptr().cast()) },
     );
+
+    // High-precision `number` arithmetic returns its result as a heap string too; it used to
+    // come from `CString::into_raw` (invisible to the counter, wrong allocator for the free).
+    check_allocator("ynz_bignum_add", "3", || unsafe {
+        ynz_bignum_add(c"1".as_ptr().cast(), c"2".as_ptr().cast(), 40) as *const u8
+    });
 
     // Freeing null must be a no-op that moves nothing (a null `string` slot is a legal state).
     let free_count_before = ynz_string_free_count();

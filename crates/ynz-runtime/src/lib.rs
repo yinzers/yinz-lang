@@ -3178,15 +3178,19 @@ unsafe fn bignum_binop(
     let bn_val = parse_bignum(b_str, precision).unwrap_or_else(|| BigNum::zero(precision));
     let result = op(&an, &bn_val);
     let s = format_bignum(&result);
-    let cstr = std::ffi::CString::new(s).unwrap_or_else(|_| {
+    if s.as_bytes().contains(&0) {
         eprintln!(
             "INTERNAL ERROR: bignum formatting produced an unexpected NUL byte. \
                   This is a compiler bug — please file an issue at \
                   https://github.com/yinz-lang/yinz/issues with the source file attached."
         );
         std::process::abort();
-    });
-    cstr.into_raw()
+    }
+    // A high-precision `number` is a heap string like any other: it must come from the ONE
+    // counted, libc-`malloc` string allocator (`heap_string_from_str`), never `CString::into_raw`
+    // (the Rust allocator, invisible to the string alloc/free counter and not freeable by
+    // `ynz_string_free`).
+    heap_string_from_str(&s) as *mut i8
 }
 
 // The CPU-parallel join shim tests exercise the three production C-ABI shims in isolation —
