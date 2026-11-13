@@ -1,0 +1,33 @@
+// v0.3-M9 C3a fixture: the six comparisons with a `number<=34>` (decimal128) on the left and a
+// `number>34` (bignum) on the right. The small side is turned into bignum text, so the compare
+// must be the bignum one; the decimal128 compare read that text as raw bytes.
+//
+// Expected: (1.5, 12.5) true true false true false false
+//           (1.5, 1.5)  false true true false false true
+//           (20, 12.5)  false false false true true true
+
+function sixOps(lhs: number<10>, rhs: number<50>) -> nothing {
+  print(lhs < rhs)
+  print(lhs <= rhs)
+  print(lhs == rhs)
+  print(lhs != rhs)
+  print(lhs > rhs)
+  print(lhs >= rhs)
+}
+
+function entrypoint() -> nothing {
+  let small: number<10> = 1.5
+  let twenty: number<10> = 20.0
+  let large: number<50> = oneAnd(11.5)
+  let sameAsSmall: number<50> = oneAnd(0.5)
+  sixOps(small, large)
+  sixOps(small, sameAsSmall)
+  sixOps(twenty, large)
+}
+
+// A computed bignum is an exact-size heap string. A literal is a static string, which sits in
+// read-only data with more bytes after it, so a 16-byte over-read of it can happen to look right.
+function oneAnd(addend: number<50>) -> number<50> {
+  let one: number<50> = 1.0
+  return one + addend
+}
