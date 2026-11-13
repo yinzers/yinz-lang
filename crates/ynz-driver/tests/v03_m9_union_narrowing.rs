@@ -9,16 +9,18 @@
 //!     16-byte envelope (AddressSanitizer: stack-buffer-overflow READ in memcpy) and the
 //!     string field then dereferenced garbage (SIGSEGV in the optimized build).
 //!
-//! The AddressSanitizer run itself is not in this suite (it needs the sanitizer runtime);
-//! the output assertions here catch the same defect deterministically: the pre-fix reads
-//! are never the fixture's values. Each fixture runs at the default optimization level and
+//! The `payload_copy_asan` tests run that fixture under AddressSanitizer through the shared
+//! harness (`support::run_under_asan`, which needs `clang` with the ASan runtime, as the C2
+//! safety fixtures do): the card's criterion is "clean under ASan, failed before the fix", and
+//! the output assertions alone would not name an out-of-bounds read that happens to return
+//! plausible bytes. Each fixture runs at the default optimization level and
 //! under `--no-optimize` — one named test per case, built with `ynz build` into its own temp
 //! directory and run as its own process under a liveness watchdog, so the runner parallelizes
 //! them and names the failing case.
 
 mod support;
 
-use support::assert_fixture_prints as assert_prints;
+use support::{assert_fixture_prints as assert_prints, run_under_asan};
 
 /// The check every case here shares: the narrowed arm reads the variant payload.
 fn assert_fixture_prints(name: &str, no_optimize: bool, expected_stdout: &str) {
@@ -58,7 +60,41 @@ fn v03_m9_union_narrow_payload_copy_no_optimize() {
     assert_fixture_prints(PAYLOAD_COPY, true, "round\n5.0\n78.5\nt\n");
 }
 
-const SM_HOST: &str = "v0_3_m9_union_narrow_sm_host.ynz";
+/// `let inner: Circle = fig` inside `is Circle =>` must read exactly the payload's bytes: the
+/// pre-fix copy ran `sizeof(Circle)` bytes past the 16-byte envelope (ASan: READ in memcpy).
+/// Tier: High (data integrity / memory safety).
+fn assert_payload_copy_asan_clean(no_optimize: bool) {
+    let run = run_under_asan(PAYLOAD_COPY, no_optimize);
+    assert!(
+        !run.stderr.contains("AddressSanitizer"),
+        "{PAYLOAD_COPY} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
+        run.stderr
+    );
+    assert_eq!(
+        run.exit_code, 0,
+        "{PAYLOAD_COPY} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
+        run.stderr
+    );
+    assert_eq!(
+        run.stdout, "round\n5.0\n78.5\nt\n",
+        "{PAYLOAD_COPY} (no_optimize={no_optimize}): wrong values; stderr:\n{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn v03_m9_union_narrow_payload_copy_asan_optimized() {
+    // WHY: C1 criterion 2 — the payload copy is memory-safe, not merely plausible-looking.
+    assert_payload_copy_asan_clean(false);
+}
+
+#[test]
+fn v03_m9_union_narrow_payload_copy_asan_no_optimize() {
+    // WHY: same out-of-bounds copy at -O0, where nothing optimizes the read away.
+    assert_payload_copy_asan_clean(true);
+}
+
+const SM_HOST: &str ="v0_3_m9_union_narrow_sm_host.ynz";
 
 #[test]
 fn v03_m9_union_narrow_sm_host_optimized() {
