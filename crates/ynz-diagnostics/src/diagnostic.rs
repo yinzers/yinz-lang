@@ -120,7 +120,9 @@ impl DiagnosticKind {
             DiagnosticKind::TransferNeedsCopy => "TransferNeedsCopy",
             DiagnosticKind::HandleChannelArgNeedsBinding => "HandleChannelArgNeedsBinding",
             DiagnosticKind::UnionWhereVariantExpected => "UnionWhereVariantExpected",
-            DiagnosticKind::ArgumentConflictsWithTypeParameter => "ArgumentConflictsWithTypeParameter",
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => {
+                "ArgumentConflictsWithTypeParameter"
+            }
             DiagnosticKind::CopyNotIndependent => "CopyNotIndependent",
             DiagnosticKind::SpawnArgNotIndependent => "SpawnArgNotIndependent",
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => "SpawnArgStorageDiesWithTheFrame",
@@ -183,7 +185,9 @@ impl DiagnosticKind {
             // label comes from the kind alone, so it must not name an `is` check that two of them
             // (a non-shape variant, an expression value) cannot offer as written.
             DiagnosticKind::UnionWhereVariantExpected => "might be a different type".to_string(),
-            DiagnosticKind::ArgumentConflictsWithTypeParameter => "not the type this call needs".to_string(),
+            DiagnosticKind::ArgumentConflictsWithTypeParameter => {
+                "not the type this call needs".to_string()
+            }
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {

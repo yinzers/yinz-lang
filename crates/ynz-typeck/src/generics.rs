@@ -76,9 +76,15 @@ pub fn apply_substitution(ty: &Type, subst: &Substitution) -> Type {
             size: *size,
         },
         Type::BuiltinChannel { elem } => Type::BuiltinChannel { elem: apply(elem) },
-        Type::Maybe { inner } => Type::Maybe { inner: apply(inner) },
-        Type::ErrorsCapable { inner } => Type::ErrorsCapable { inner: apply(inner) },
-        Type::Sensitive { inner } => Type::Sensitive { inner: apply(inner) },
+        Type::Maybe { inner } => Type::Maybe {
+            inner: apply(inner),
+        },
+        Type::ErrorsCapable { inner } => Type::ErrorsCapable {
+            inner: apply(inner),
+        },
+        Type::Sensitive { inner } => Type::Sensitive {
+            inner: apply(inner),
+        },
         Type::BuiltinMap { key, val } => Type::BuiltinMap {
             key: apply(key),
             val: apply(val),
