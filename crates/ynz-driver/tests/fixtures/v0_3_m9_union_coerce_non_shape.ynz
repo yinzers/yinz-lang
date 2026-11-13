@@ -1,0 +1,48 @@
+// v0.3-M9 C1e (#421): a NON-shape variant (`int`) of a union that also has a shape variant is
+// wrapped in the tagged envelope at every slot: a parameter, a return, and a shape field.
+// Variants that are not shapes are matched with `else =>`: an `is int =>` arm does not lower
+// (#418, deferred).
+// Correct behavior: prints `other`, `other`, `other`, `circle`, `end`; clean under
+// AddressSanitizer at both optimization levels.
+// Pre-fix failure: the raw int was passed/returned/stored as the envelope pointer; the callee
+// read its tag through address 0x5 (SIGSEGV).
+
+shape Circle {
+  radius: float
+}
+shape Mixed = Circle | int
+
+shape Box {
+  held: Circle | int
+}
+
+function show(share fig: Mixed) -> string {
+  if (fig) {
+    is Circle => {
+      return `circle`
+    }
+    else => {
+      return `other`
+    }
+  }
+}
+
+function makeInt() -> Mixed {
+  return 7
+}
+
+function makeCircle() -> Mixed {
+  let made: Circle = { radius: 1.0 }
+  return made
+}
+
+function entrypoint() -> nothing {
+  print(show(5))
+  let returned = makeInt()
+  print(show(returned))
+  let box: Box = { held: 9 }
+  print(show(box.held))
+  let circle = makeCircle()
+  print(show(circle))
+  print(`end`)
+}

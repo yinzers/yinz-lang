@@ -1,0 +1,26 @@
+// v0.3-M9 C1e (#421): a channel never carries a union, so no plain value reaches a union-typed
+// channel slot. This fixture pins that: `channel<Tiny | Big>` is refused at compile time, and so
+// is sending a plain shape into it. If channels ever accept union elements, the send must wrap
+// through the one coercion point and this fixture turns into a run fixture.
+// Correct behavior: does not compile.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function producer(lend wire: channel<Thing>) -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  wire.send(big)
+  wire.close()
+}
+
+function entrypoint() -> nothing {
+  let wire: channel<Thing> = channel<Thing>(2)
+  background producer(wire)
+  print(`end`)
+}

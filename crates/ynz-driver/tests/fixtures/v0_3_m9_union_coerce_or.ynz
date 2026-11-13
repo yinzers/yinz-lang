@@ -1,0 +1,36 @@
+// v0.3-M9 C1e (#421): the fallback of `.or(...)` on a `maybe<union>` is a value flowing into
+// the union-typed result slot, so a plain shape there must be wrapped in a tagged envelope.
+// Correct behavior: prints `big hello`, `tiny` (each the fallback of an empty maybe), `end`; clean
+// under AddressSanitizer at both optimization levels.
+// Pre-fix failure: the fallback was returned as the bare shape pointer, so `describe` read it as
+// `{tag, data}` and printed `none`.
+
+shape Tiny {
+  flag: boolean
+}
+shape Big {
+  label: string
+  count: int
+}
+shape Thing = Tiny | Big
+
+function describe(share t: Thing) -> string {
+  if (t) {
+    is Tiny => {
+      return `tiny`
+    }
+    is Big => {
+      return `big ${t.label}`
+    }
+  }
+  return `none`
+}
+
+function entrypoint() -> nothing {
+  let big: Big = { label: `hello`, count: 3 }
+  let tiny: Tiny = { flag: true }
+  let empty: maybe<Thing> = none
+  print(describe(empty.or(big)))
+  print(describe(empty.or(tiny)))
+  print(`end`)
+}
