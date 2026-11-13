@@ -335,6 +335,19 @@ static YNZ_HANDLE_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
 /// `Drop` is the one choke point that observes them all.
 static YNZ_HANDLE_FREE_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Running count of heap strings allocated since last reset, across EVERY string allocator
+/// (`heap_string_buffer` is the single allocation point). Strings are raw `malloc` buffers, not
+/// `ynz_alloc` ones, so `YNZ_ALLOC_COUNT`/`YNZ_FREE_COUNT` never see them and they need their own
+/// pair.
+static YNZ_STRING_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Total bytes of those string allocations (length + 1 NUL), so a leak of one long string cannot
+/// hide behind a balanced count of short ones.
+static YNZ_STRING_ALLOC_BYTES: AtomicU64 = AtomicU64::new(0);
+/// Running count of heap strings released through `ynz_string_free` since last reset.
+static YNZ_STRING_FREE_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Total bytes of those releases (length + 1 NUL, measured at free time).
+static YNZ_STRING_FREE_BYTES: AtomicU64 = AtomicU64::new(0);
+
 /// Return true when alloc-counter instrumentation is enabled.
 ///
 /// Reads a `static AtomicBool` set once at `ynz_rt_init`; cost is a single
@@ -393,13 +406,18 @@ pub extern "C" fn ynz_free_count() -> u64 {
     YNZ_FREE_COUNT.load(Ordering::Relaxed)
 }
 
-/// Reset all counters to zero (frame alloc/free AND CpuJoinHandle alloc/free).
+/// Reset all counters to zero (frame alloc/free, CpuJoinHandle alloc/free AND heap-string
+/// alloc/free).
 #[no_mangle]
 pub extern "C" fn ynz_alloc_count_reset() {
     YNZ_ALLOC_COUNT.store(0, Ordering::Relaxed);
     YNZ_FREE_COUNT.store(0, Ordering::Relaxed);
     YNZ_HANDLE_ALLOC_COUNT.store(0, Ordering::Relaxed);
     YNZ_HANDLE_FREE_COUNT.store(0, Ordering::Relaxed);
+    YNZ_STRING_ALLOC_COUNT.store(0, Ordering::Relaxed);
+    YNZ_STRING_ALLOC_BYTES.store(0, Ordering::Relaxed);
+    YNZ_STRING_FREE_COUNT.store(0, Ordering::Relaxed);
+    YNZ_STRING_FREE_BYTES.store(0, Ordering::Relaxed);
 }
 
 /// Record one `CpuJoinHandle` creation. No-op unless the alloc counter is enabled
@@ -427,6 +445,81 @@ pub(crate) fn ynz_handle_alloc_count() -> u64 {
 /// Read the current `CpuJoinHandle` free count. Zero when counter not enabled.
 pub(crate) fn ynz_handle_free_count() -> u64 {
     YNZ_HANDLE_FREE_COUNT.load(Ordering::Relaxed)
+}
+
+/// Allocate a heap string buffer of `size` bytes (the caller includes the NUL terminator).
+/// Aborts on OOM — Yinz programs cannot recover from OOM.
+///
+/// THE single allocation point for every heap string (`ynz_string_from_static`,
+/// `ynz_string_concat`, `ynz_string_codepoint_at`, `ynz_string_builder_finalize`,
+/// `heap_string_from_str` and so everything built on it). Counting here, in one place, is what
+/// makes a string alloc/free balance check trustworthy: a sixth allocator that bypassed this
+/// helper would be invisible to the counter and make a leak assertion pass vacuously.
+///
+/// Why abort instead of returning null or a static empty string: codegen assumes every string
+/// pointer this family returns is heap-owned and freeable, so a static fallback would be freed
+/// by a later release — undefined behavior. `ynz_string_codepoint_at` also uses null as its
+/// out-of-bounds sentinel, so a null on OOM would be indistinguishable from a normal miss.
+///
+/// Cost: one relaxed atomic load when the counter is off (same `YNZ_ALLOC_COUNTER` gate as
+/// `ynz_alloc`); O(1) time, `size` bytes of memory.
+unsafe fn heap_string_buffer(size: usize) -> *mut u8 {
+    if alloc_counter_enabled() {
+        YNZ_STRING_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+        YNZ_STRING_ALLOC_BYTES.fetch_add(size as u64, Ordering::Relaxed);
+    }
+    let buf = malloc(size) as *mut u8;
+    if buf.is_null() {
+        std::process::abort();
+    }
+    buf
+}
+
+/// Release a heap string returned by any string allocator in this module.
+///
+/// The one sanctioned free for a heap string: counts the release (count and bytes) when the
+/// `YNZ_ALLOC_COUNTER` gate is on, then frees. The byte count is measured here with `strlen`
+/// (O(n), only while the counter is on) because a string carries no length header.
+/// A null pointer is a no-op. Never pass a static literal or a thread-local conversion buffer
+/// (`ynz_int_to_string` & co.) — only pointers a string allocator returned.
+///
+/// # Safety
+/// `s` must be null, or a pointer returned by a heap string allocator and not yet freed.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_free(s: *const u8) {
+    if s.is_null() {
+        return;
+    }
+    if alloc_counter_enabled() {
+        let bytes = std::ffi::CStr::from_ptr(s as *const i8).to_bytes().len() + 1;
+        YNZ_STRING_FREE_COUNT.fetch_add(1, Ordering::Relaxed);
+        YNZ_STRING_FREE_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+    free(s as *mut core::ffi::c_void);
+}
+
+/// Read the current heap-string alloc count. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_string_alloc_count() -> u64 {
+    YNZ_STRING_ALLOC_COUNT.load(Ordering::Relaxed)
+}
+
+/// Read the total bytes of heap-string allocations. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_string_alloc_bytes() -> u64 {
+    YNZ_STRING_ALLOC_BYTES.load(Ordering::Relaxed)
+}
+
+/// Read the current heap-string free count. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_string_free_count() -> u64 {
+    YNZ_STRING_FREE_COUNT.load(Ordering::Relaxed)
+}
+
+/// Read the total bytes of heap-string frees. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_string_free_bytes() -> u64 {
+    YNZ_STRING_FREE_BYTES.load(Ordering::Relaxed)
 }
 
 /// Allocate `size` bytes. Aborts on OOM — Yinz programs cannot recover from OOM.
@@ -1621,17 +1714,7 @@ pub unsafe extern "C" fn ynz_string_to_number(ptr: *const u8, len: i64, out: *mu
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_from_static(ptr: *const u8, len: i64) -> *const u8 {
     let size = len as usize + 1; // +1 for null terminator
-    let buf = malloc(size) as *mut u8;
-    if buf.is_null() {
-        // Abort on OOM like every other allocation site in this runtime (`ynz_alloc`,
-        // `ynz_error_new`, map/array allocs) — Yinz programs cannot recover from OOM.
-        // Returning a pointer to a STATIC empty string here was inconsistent with that
-        // policy AND a footgun:
-        // codegen assumes every string pointer this family returns is heap-owned and
-        // freeable, so a caller that later `ynz_free`s (or drops) this "string" would
-        // free a static buffer — undefined behavior.
-        std::process::abort();
-    }
+    let buf = heap_string_buffer(size);
     std::ptr::copy_nonoverlapping(ptr, buf, len as usize);
     *buf.add(len as usize) = 0;
     buf as *const u8
@@ -1795,12 +1878,7 @@ pub unsafe extern "C" fn ynz_string_concat(a: *const u8, b: *const u8) -> *const
     let a_str = unsafe { std::ffi::CStr::from_ptr(a as *const i8) }.to_bytes();
     let b_str = unsafe { std::ffi::CStr::from_ptr(b as *const i8) }.to_bytes();
     let total = a_str.len() + b_str.len() + 1;
-    let buf = malloc(total) as *mut u8;
-    if buf.is_null() {
-        // Abort on OOM — see ynz_string_from_static for the full rationale
-        // (consistent OOM policy across the runtime; no free-of-static hazard).
-        std::process::abort();
-    }
+    let buf = heap_string_buffer(total);
     std::ptr::copy_nonoverlapping(a_str.as_ptr(), buf, a_str.len());
     std::ptr::copy_nonoverlapping(b_str.as_ptr(), buf.add(a_str.len()), b_str.len());
     *buf.add(a_str.len() + b_str.len()) = 0;
@@ -1849,19 +1927,7 @@ pub unsafe extern "C" fn ynz_string_codepoint_at(s: *const u8, n: i64) -> *const
             let mut buf = [0u8; 5];
             let encoded = ch.encode_utf8(&mut buf[..4]);
             let len = encoded.len();
-            let heap = malloc(len + 1) as *mut u8;
-            if heap.is_null() {
-                // Abort on OOM — see ynz_string_from_static for the full rationale
-                // (consistent OOM policy across the runtime; no free-of-static hazard).
-                // This site was a sibling allocation the runtime's original OOM-policy
-                // sweep missed: it silently returned null on malloc failure, which is a
-                // documented sentinel for a DIFFERENT case (the `None` arm above, `n`
-                // out of bounds) — conflating the two would make an out-of-memory
-                // failure indistinguishable from a normal out-of-bounds index to every
-                // caller. Aborting removes the conflation without touching the real OOB
-                // sentinel.
-                std::process::abort();
-            }
+            let heap = heap_string_buffer(len + 1);
             std::ptr::copy_nonoverlapping(encoded.as_ptr(), heap, len);
             *heap.add(len) = 0;
             heap as *const u8
@@ -2148,12 +2214,7 @@ pub unsafe extern "C" fn ynz_string_builder_finalize(builder: *mut u8) -> *const
     let mut vec = unsafe { *Box::from_raw(builder as *mut Vec<u8>) };
     vec.push(0); // null-terminate
     let len = vec.len();
-    let buf = malloc(len) as *mut u8;
-    if buf.is_null() {
-        // Abort on OOM — see ynz_string_from_static for the full rationale
-        // (consistent OOM policy across the runtime; no free-of-static hazard).
-        std::process::abort();
-    }
+    let buf = heap_string_buffer(len);
     std::ptr::copy_nonoverlapping(vec.as_ptr(), buf, len);
     buf as *const u8
 }
@@ -2171,12 +2232,7 @@ pub unsafe extern "C" fn ynz_string_builder_drop(builder: *mut u8) {
 fn heap_string_from_str(s: &str) -> *const u8 {
     let bytes = s.as_bytes();
     let len = bytes.len();
-    let buf = unsafe { malloc(len + 1) as *mut u8 };
-    if buf.is_null() {
-        // Abort on OOM — see ynz_string_from_static for the full rationale
-        // (consistent OOM policy across the runtime; no free-of-static hazard).
-        std::process::abort();
-    }
+    let buf = unsafe { heap_string_buffer(len + 1) };
     if len > 0 {
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);

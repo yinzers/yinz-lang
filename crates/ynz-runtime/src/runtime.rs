@@ -597,8 +597,9 @@ pub unsafe extern "C" fn ynz_rt_check_preempt(waker_ctx: *mut u8) -> bool {
 /// `shutdown_timeout` phases combined, never `timeout_ms` for each phase separately.
 ///
 /// When `YNZ_ALLOC_COUNTER_OUTPUT` env var is set to a file path, writes final alloc/free
-/// counts to that file (one "alloc=N\nfree=M\n" pair). Used by the composed-single-alloc
-/// proof in integration tests: the test sets the env var, runs the fixture, reads the file.
+/// counts to that file (one "alloc=N\nfree=M\n" pair, then the handle_* and string_* pairs).
+/// Used by the composed-single-alloc proof in integration tests: the test sets the env var,
+/// runs the fixture, reads the file.
 #[no_mangle]
 pub extern "C" fn ynz_rt_shutdown() {
     // Close admission FIRST, before anything else in this function — see
@@ -705,12 +706,19 @@ pub extern "C" fn ynz_rt_shutdown() {
             let free_count = crate::ynz_free_count();
             let handle_alloc_count = crate::ynz_handle_alloc_count();
             let handle_free_count = crate::ynz_handle_free_count();
-            // The handle_* lines come AFTER the alloc=/free= lines: existing prefix-parsers
-            // take the FIRST line matching starts_with("alloc")/starts_with("free"), and
-            // neither "handle_alloc" nor "handle_free" matches those prefixes.
+            let string_alloc_count = crate::ynz_string_alloc_count();
+            let string_alloc_bytes = crate::ynz_string_alloc_bytes();
+            let string_free_count = crate::ynz_string_free_count();
+            let string_free_bytes = crate::ynz_string_free_bytes();
+            // The handle_* and string_* lines come AFTER the alloc=/free= lines: existing
+            // prefix-parsers take the FIRST line matching starts_with("alloc")/
+            // starts_with("free"), and neither "handle_alloc"/"handle_free" nor
+            // "string_alloc"/"string_free" matches those prefixes.
             let content = format!(
                 "alloc={alloc_count}\nfree={free_count}\n\
-                 handle_alloc={handle_alloc_count}\nhandle_free={handle_free_count}\n"
+                 handle_alloc={handle_alloc_count}\nhandle_free={handle_free_count}\n\
+                 string_alloc={string_alloc_count}\nstring_free={string_free_count}\n\
+                 string_alloc_bytes={string_alloc_bytes}\nstring_free_bytes={string_free_bytes}\n"
             );
             // Best-effort write: ignore errors (the alloc counter is test-only).
             let _ = std::fs::write(&output_path, content);
