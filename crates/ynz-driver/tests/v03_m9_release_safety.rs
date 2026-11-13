@@ -13,7 +13,8 @@
 //!
 //! These are GREEN today, and say so: nothing frees a scope's heap locals yet, so there is
 //! nothing to free early or twice. They are the guard that the release pass does not. They
-//! cannot be red before that pass exists; the leak group below is the red half. Leak detection
+//! cannot be red before that pass exists, so `v03_m9_asan_harness_controls` proves the harness
+//! reports an early and a double free; the leak group below is the red half. Leak detection
 //! is off for them (it IS red today) — balance is asserted by the counters instead.
 //!
 //! Why 18 tests where the SOP says "about 8" per High-tier unit: the card requires one fixture
