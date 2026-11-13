@@ -118,3 +118,24 @@ fn v03_m9_union_narrow_sm_host_asan_no_optimize() {
     // WHY: same post-resume envelope read at -O0.
     assert_asan_clean(SM_HOST, true, SM_HOST_STDOUT);
 }
+
+// The narrowed binding passed or returned where the UNION is expected (union parameter of a
+// plain, `wait`ed, UFCS or generic call; union return). Two more tests past the ten above
+// because this is a separate lowering decision (envelope vs payload per use), and the ASan
+// verdict is the criterion: the pre-fix output was wrong only some of the time, the read past
+// the 1-byte variant every time.
+const UNION_SLOT: &str = "v0_3_m9_union_narrow_union_slot.ynz";
+const UNION_SLOT_STDOUT: &str = "tiny\ntrue\ntiny\ntiny\ntiny\ntiny\ntrue\nend\n";
+
+#[test]
+fn v03_m9_union_narrow_union_slot_asan_optimized() {
+    // WHY: the callee read a 16-byte envelope out of the 1-byte `Tiny` payload (heap/stack
+    // buffer overflow READ, wrong variant `big`). Tier: High (memory safety).
+    assert_asan_clean(UNION_SLOT, false, UNION_SLOT_STDOUT);
+}
+
+#[test]
+fn v03_m9_union_narrow_union_slot_asan_no_optimize() {
+    // WHY: same out-of-bounds envelope read at -O0. Tier: High (memory safety).
+    assert_asan_clean(UNION_SLOT, true, UNION_SLOT_STDOUT);
+}

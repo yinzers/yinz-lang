@@ -27,7 +27,8 @@ use inkwell::{
     AddressSpace, IntPredicate,
 };
 use ynz_ast::nodes::{
-    BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt, UnaryOpKind,
+    BinOpKind, Block, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt,
+    StringPart, UnaryOpKind,
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
@@ -1889,6 +1890,10 @@ struct NarrowedUnion<'ctx> {
     outer_slot: PointerValue<'ctx>,
     /// The arm's slot: holds the variant payload pointer; `cg.locals[name]` inside the arm.
     narrowed_slot: PointerValue<'ctx>,
+    /// Spans of the arm's uses of `name` that flow into a UNION-typed slot (a union
+    /// parameter, a union return): those take the envelope, never the payload pointer
+    /// (`union_slot_uses_in_block`).
+    envelope_uses: HashSet<(usize, usize)>,
 }
 
 struct Cg<'ctx, 'g> {
@@ -3671,11 +3676,19 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// `restore_narrowed_local` at arm end; `None` when the scrutinee is not a
     /// narrowable binding (typeck applies no overlay then either).
     ///
-    /// Time: O(1)  Space: O(1) (one pointer-sized entry-block slot per arm site)
+    /// Typeck still accepts the narrowed binding where the UNION is expected (a union
+    /// parameter, a union return: `types_compatible` admits a variant there), and no such
+    /// site wraps a shape into an envelope. Those uses (`union_slot_uses_in_block` over
+    /// `arm_body`) keep the envelope (`narrowed_envelope_use`); handing them the payload
+    /// pointer would make the callee read a 16-byte envelope out of a smaller variant.
+    ///
+    /// Time: O(n) for n nodes of `arm_body`  Space: O(u) for u envelope uses, plus one
+    /// pointer-sized entry-block slot per arm site
     fn narrow_union_local_to_variant(
         &mut self,
         scrutinee: &Expr,
         envelope: PointerValue<'ctx>,
+        arm_body: &Block,
         site: &str,
     ) -> Result<Option<(String, PointerValue<'ctx>)>, String> {
         let Some(name) = ynz_typeck::check::simple_ident_name(scrutinee) else {
@@ -3691,11 +3704,26 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_store(narrowed_slot, payload)
             .map_err(|err| format!("{site}: store narrowed payload: {err}"))?;
         self.locals.insert(name.to_string(), narrowed_slot);
+        let ret_ty = self
+            .sm_yinz_ret_ty
+            .clone()
+            .unwrap_or_else(|| self.current_fn_ret_ty.clone());
+        let mut envelope_uses = HashSet::new();
+        union_slot_uses_in_block(
+            arm_body,
+            name,
+            self.sig_table,
+            &self.typed.module,
+            self.shape_table,
+            &self.resolve_type(&ret_ty),
+            &mut envelope_uses,
+        );
         self.narrowed_unions.push(NarrowedUnion {
             name: name.to_string(),
             scrutinee: scrutinee.clone(),
             outer_slot,
             narrowed_slot,
+            envelope_uses,
         });
         Ok(Some((name.to_string(), outer_slot)))
     }
@@ -3727,6 +3755,54 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .or_else(|| self.locals.get(name).copied())
     }
 
+    /// The union envelope of a narrowed binding: the scrutinee re-lowered against the
+    /// binding's OUTER slot (the slot that holds the envelope), the same derivation the
+    /// arm entry used. `cg.locals[name]` is back on `narrowed_slot` afterwards.
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn lower_narrowed_envelope(
+        &mut self,
+        name: &str,
+        scrutinee: &Expr,
+        outer_slot: PointerValue<'ctx>,
+        narrowed_slot: PointerValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        self.locals.insert(name.to_string(), outer_slot);
+        let envelope = lower_expr(self, scrutinee);
+        self.locals.insert(name.to_string(), narrowed_slot);
+        Ok(envelope?.into_pointer_value())
+    }
+
+    /// The envelope for the identifier `name` at `span` when that use belongs to an active
+    /// `is`-arm narrowing and flows into a union-typed slot (`NarrowedUnion::envelope_uses`);
+    /// `None` for every other use, which reads the payload through `cg.locals`.
+    ///
+    /// Time: O(d) for d nested narrowings  Space: O(1)
+    fn narrowed_envelope_use(
+        &mut self,
+        name: &str,
+        span: &ynz_diagnostics::SourceSpan,
+    ) -> Result<Option<PointerValue<'ctx>>, String> {
+        let Some(entry) = self
+            .narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| entry.name == name)
+        else {
+            return Ok(None);
+        };
+        if !entry.envelope_uses.contains(&(span.start, span.end)) {
+            return Ok(None);
+        }
+        let (scrutinee, outer_slot, narrowed_slot) = (
+            entry.scrutinee.clone(),
+            entry.outer_slot,
+            entry.narrowed_slot,
+        );
+        self.lower_narrowed_envelope(name, &scrutinee, outer_slot, narrowed_slot)
+            .map(Some)
+    }
+
     /// Re-derive every narrowed binding's payload pointer from its just-reloaded envelope.
     /// A state-machine resume enters the arm at a post-`wait` state block, skipping the arm
     /// entry where `narrow_union_local_to_variant` stored the payload pointer, so in this
@@ -3748,11 +3824,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             })
             .collect();
         for (name, scrutinee, outer_slot, narrowed_slot) in narrowings {
-            self.locals.insert(name.clone(), outer_slot);
-            let envelope = lower_expr(self, &scrutinee);
-            self.locals.insert(name.clone(), narrowed_slot);
-            let payload =
-                self.union_payload_ptr(envelope?.into_pointer_value(), "is_arm_resume")?;
+            let envelope =
+                self.lower_narrowed_envelope(&name, &scrutinee, outer_slot, narrowed_slot)?;
+            let payload = self.union_payload_ptr(envelope, "is_arm_resume")?;
             self.builder
                 .build_store(narrowed_slot, payload)
                 .map_err(|err| format!("re-narrow `{name}` after resume: {err}"))?;
@@ -8439,6 +8513,7 @@ fn lower_sm_match<'ctx, 'g>(
             cg.narrow_union_local_to_variant(
                 scrutinee,
                 scrutinee_val.into_pointer_value(),
+                &arm.body,
                 "sm_is_arm",
             )?
         } else {
@@ -14475,6 +14550,7 @@ fn lower_stmt_match<'ctx>(
             cg.narrow_union_local_to_variant(
                 scrutinee,
                 scrutinee_val.into_pointer_value(),
+                &arm.body,
                 "is_arm",
             )?
         } else {
@@ -15897,6 +15973,210 @@ fn channel_drop_glue<'ctx>(
     Ok(glue_fn.as_global_value().as_pointer_value())
 }
 
+/// Collect the spans of every use of the narrowed binding `name` in `block` that typeck
+/// accepts into a UNION-typed slot: an argument whose callee parameter is a union (a plain,
+/// `wait`ed or `background` call, or a UFCS call's extra argument) and a `return` value
+/// when the function returns a union. Inside an `is` arm those uses must get the envelope,
+/// not the payload pointer (`Cg::narrow_union_local_to_variant`).
+///
+/// O(n * f) time for n AST nodes in `block` and f items in the module (a generic callee's
+/// declaration is looked up by scanning the module); O(u) memory for u matching uses.
+fn union_slot_uses_in_block(
+    block: &Block,
+    name: &str,
+    sig_table: &SignatureTable,
+    module: &ynz_ast::nodes::Module,
+    shape_table: &ShapeTable,
+    fn_ret_ty: &Type,
+    uses: &mut HashSet<(usize, usize)>,
+) {
+    let mut walker = UnionSlotUses {
+        name,
+        sig_table,
+        module,
+        shape_table,
+        returns_union: matches!(fn_ret_ty, Type::Union { .. }),
+        uses,
+    };
+    walker.block(block);
+}
+
+/// The walk behind `union_slot_uses_in_block`.
+struct UnionSlotUses<'walk> {
+    name: &'walk str,
+    sig_table: &'walk SignatureTable,
+    module: &'walk ynz_ast::nodes::Module,
+    shape_table: &'walk ShapeTable,
+    returns_union: bool,
+    uses: &'walk mut HashSet<(usize, usize)>,
+}
+
+impl UnionSlotUses<'_> {
+    fn note_if_union_slot(&mut self, value: &Expr, slot_is_union: bool) {
+        if let Expr::Ident(used, span) = value {
+            if slot_is_union && used == self.name {
+                self.uses.insert((span.start, span.end));
+            }
+        }
+    }
+
+    /// Whether parameter `index` of `callee` is declared with a union type. A generic
+    /// function is not in the signature table, so its declaration in this module answers.
+    fn param_is_union(&self, callee: &str, index: usize) -> bool {
+        let declared = match self.sig_table.fns.get(callee) {
+            Some(sig) => sig.params.get(index).map(|(_, param_ty)| param_ty.clone()),
+            None => self.module.items.iter().find_map(|item| match item {
+                Item::Function(function) if function.name == callee => function
+                    .params
+                    .get(index)
+                    .map(|param| ast_type_to_typeck_type(&param.ty, self.shape_table)),
+                _ => None,
+            }),
+        };
+        matches!(declared, Some(Type::Union { .. }))
+    }
+
+    fn block(&mut self, block: &Block) {
+        for stmt in &block.stmts {
+            self.stmt(stmt);
+        }
+    }
+
+    fn stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Expr(value) | Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+                self.expr(value)
+            }
+            Stmt::If { cond, body, .. } | Stmt::While { cond, body, .. } => {
+                self.expr(cond);
+                self.block(body);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
+                self.expr(scrutinee);
+                for arm in arms {
+                    if let MatchPatternKind::Value(pattern) = &arm.pattern.kind {
+                        self.expr(pattern);
+                    }
+                    self.block(&arm.body);
+                }
+                if let Some(else_block) = else_arm {
+                    self.block(else_block);
+                }
+            }
+            Stmt::For { iter, body, .. } => {
+                self.expr(iter);
+                self.block(body);
+            }
+            Stmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    self.note_if_union_slot(value, self.returns_union);
+                    self.expr(value);
+                }
+            }
+            Stmt::FieldAssign { target, value, .. } => {
+                self.expr(target);
+                self.expr(value);
+            }
+            Stmt::IndexAssign {
+                receiver,
+                index,
+                value,
+                ..
+            } => {
+                self.expr(receiver);
+                self.expr(index);
+                self.expr(value);
+            }
+        }
+    }
+
+    fn expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Call(call) => {
+                if let Expr::Ident(callee, _) = &call.callee {
+                    for (index, arg) in call.args.iter().enumerate() {
+                        let slot_is_union = self.param_is_union(callee, index);
+                        self.note_if_union_slot(arg, slot_is_union);
+                    }
+                } else {
+                    self.expr(&call.callee);
+                }
+                for arg in &call.args {
+                    self.expr(arg);
+                }
+            }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                // UFCS: `receiver.method(args)` is `method(receiver, args)`.
+                let receiver_is_union = self.param_is_union(method, 0);
+                self.note_if_union_slot(receiver, receiver_is_union);
+                self.expr(receiver);
+                for (index, arg) in args.iter().enumerate() {
+                    let slot_is_union = self.param_is_union(method, index + 1);
+                    self.note_if_union_slot(arg, slot_is_union);
+                    self.expr(arg);
+                }
+            }
+            Expr::Ident(..)
+            | Expr::StringLit(..)
+            | Expr::Error(..)
+            | Expr::IntLit(..)
+            | Expr::NumberLit(..)
+            | Expr::BoolLit(..)
+            | Expr::SelfValue { .. }
+            | Expr::NoneLit { .. } => {}
+            Expr::BinOp { lhs, rhs, .. } => {
+                self.expr(lhs);
+                self.expr(rhs);
+            }
+            Expr::UnaryOp { operand, .. } => self.expr(operand),
+            Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
+                self.expr(receiver)
+            }
+            Expr::StructLit { fields, .. } => {
+                for field in fields {
+                    self.expr(&field.value);
+                }
+            }
+            Expr::IndexAccess {
+                receiver, index, ..
+            } => {
+                self.expr(receiver);
+                self.expr(index);
+            }
+            Expr::ArrayLit { elements, .. } => {
+                for element in elements {
+                    self.expr(element);
+                }
+            }
+            Expr::MapLit { entries, .. } => {
+                for (key, value) in entries {
+                    self.expr(key);
+                    self.expr(value);
+                }
+            }
+            Expr::Is { expr, .. } => self.expr(expr),
+            Expr::InterpolatedString(parts, _) => {
+                for part in parts {
+                    if let StringPart::Expr(inner, _) = part {
+                        self.expr(inner);
+                    }
+                }
+            }
+            Expr::Wait(inner, _) | Expr::Background(inner, _) => self.expr(inner),
+        }
+    }
+}
+
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
     match expr {
         Expr::IntLit(n, _) => Ok(cg.i64().const_int(*n as u64, true).into()),
@@ -15959,7 +16239,10 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             Ok(g.as_pointer_value().into())
         }
 
-        Expr::Ident(name, _) => {
+        Expr::Ident(name, ident_span) => {
+            if let Some(envelope) = cg.narrowed_envelope_use(name, ident_span)? {
+                return Ok(envelope.into());
+            }
             let slot = *cg
                 .locals
                 .get(name.as_str())
