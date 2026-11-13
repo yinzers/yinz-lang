@@ -21427,7 +21427,7 @@ fn find_mono_name_by_args(
 
 #[cfg(test)]
 mod mono_lookup_tests {
-    use super::find_mono_name_by_args;
+    use super::{find_mono_name_by_args, mangle_mono_name};
     use ynz_typeck::generics::MonoSignature;
     use ynz_typeck::{MonomorphizationTable, Type};
 
@@ -21450,7 +21450,10 @@ mod mono_lookup_tests {
         // GUARD (High: call dispatch): the exact match still resolves.
         let table = table_with_one_instance_for_big();
         let big = Type::Shape { name: "Big".into() };
-        assert!(find_mono_name_by_args(&table, "same", &[big.clone(), big]).is_ok());
+        assert_eq!(
+            find_mono_name_by_args(&table, "same", &[big.clone(), big.clone()]),
+            Ok(mangle_mono_name("same", &[big]))
+        );
     }
 
     #[test]
@@ -21490,8 +21493,68 @@ mod mono_lookup_tests {
                 ret_type: maybe_map.clone(),
             },
         );
-        let found = find_mono_name_by_args(&table, "fallback", &[maybe_map, map]);
-        assert!(found.is_ok(), "{found:?}");
+        let found = find_mono_name_by_args(&table, "fallback", &[maybe_map.clone(), map]);
+        assert_eq!(found, Ok(mangle_mono_name("fallback", &[maybe_map])));
+    }
+
+    #[test]
+    fn v03_m9_c1g_mono_lookup_picks_the_exact_instance_among_several() {
+        // GUARD (High: call dispatch, memory safety): with two instances of one name the
+        // exact match must win whichever order the table holds them in; a wrong pick calls a
+        // function built for the other type.
+        let big = Type::Shape { name: "Big".into() };
+        let tiny = Type::Shape {
+            name: "Tiny".into(),
+        };
+        let mut table = MonomorphizationTable::default();
+        for instance in [&big, &tiny] {
+            table.record(
+                "same".into(),
+                vec![instance.clone()],
+                MonoSignature {
+                    param_types: vec![instance.clone(), instance.clone()],
+                    ret_type: instance.clone(),
+                },
+            );
+        }
+        assert_eq!(
+            find_mono_name_by_args(&table, "same", &[tiny.clone(), tiny.clone()]),
+            Ok(mangle_mono_name("same", &[tiny]))
+        );
+        assert_eq!(
+            find_mono_name_by_args(&table, "same", &[big.clone(), big.clone()]),
+            Ok(mangle_mono_name("same", &[big]))
+        );
+    }
+
+    #[test]
+    fn v03_m9_c1g_mono_lookup_refuses_to_choose_between_instances_that_both_fit() {
+        // BUG (High: call dispatch): two instances accept a plain `map` and neither is an
+        // exact match; picking one would be a guess, so the lookup is an internal error that
+        // says how many fit.
+        let map = Type::BuiltinMap {
+            key: Box::new(Type::String),
+            val: Box::new(Type::String),
+        };
+        let mut table = MonomorphizationTable::default();
+        for other_variant in [Type::Nothing, Type::Int] {
+            let union = Type::Union {
+                variants: vec![map.clone(), other_variant],
+            };
+            table.record(
+                "fallback".into(),
+                vec![union.clone()],
+                MonoSignature {
+                    param_types: vec![union.clone(), union.clone()],
+                    ret_type: union,
+                },
+            );
+        }
+        let error = find_mono_name_by_args(&table, "fallback", &[map.clone(), map]).unwrap_err();
+        assert!(
+            error.contains("internal compiler error") && error.contains("fit 2 of them equally"),
+            "{error}"
+        );
     }
 }
 
