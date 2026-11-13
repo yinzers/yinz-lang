@@ -1,0 +1,13 @@
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let x: int = 7
+    wait sleep(5)
+    print(x.toString())
+  }
+  if (a) {
+    let x2: number = 1.5
+    wait sleep(5)
+    print(x2.toString())
+  }
+}

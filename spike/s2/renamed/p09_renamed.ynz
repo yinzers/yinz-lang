@@ -1,0 +1,10 @@
+function entrypoint() -> nothing {
+  let n = `outer`
+  let names: array<string> = [`amy`, `bob`]
+  for (n2 in names) {
+    wait sleep(5)
+    print(n2)
+  }
+  wait sleep(5)
+  print(n)
+}

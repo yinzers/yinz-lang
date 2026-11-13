@@ -1,0 +1,15 @@
+// Q3: sibling crossing `x`: first string (heap), then int. A release keyed by the first-let type would free an int.
+function entrypoint() -> nothing {
+  let a = true
+  let n: int = 12345
+  if (a) {
+    let x = n.toString()
+    wait sleep(5)
+    print(x)
+  }
+  if (a) {
+    let x: int = 99
+    wait sleep(5)
+    print(x.toString())
+  }
+}

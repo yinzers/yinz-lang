@@ -1,0 +1,11 @@
+function entrypoint() -> nothing {
+  let a: array<string> = [`a1`, `a2`]
+  let b: array<string> = [`b1`, `b2`]
+  for (v in a) {
+    for (v2 in b) {
+      wait sleep(5)
+      print(v2)
+    }
+    print(v)
+  }
+}

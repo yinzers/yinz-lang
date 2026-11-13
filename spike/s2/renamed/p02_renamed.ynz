@@ -1,0 +1,14 @@
+// p02 hand alpha-renamed (inner x -> x__2). Same program, unique names.
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let x = `outer`
+    wait sleep(5)
+    if (a) {
+      let x2 = `inner`
+      wait sleep(5)
+      print(x2)
+    }
+    print(x)
+  }
+}

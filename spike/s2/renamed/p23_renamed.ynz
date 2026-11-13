@@ -1,0 +1,15 @@
+function entrypoint() -> nothing {
+  let i = 0
+  while (i < 1) {
+    let s = `outer`
+    wait sleep(5)
+    let j = 0
+    while (j < 1) {
+      let s2 = `inner`
+      print(s2)
+      j = j + 1
+    }
+    print(s)
+    i = i + 1
+  }
+}
