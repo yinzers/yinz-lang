@@ -3903,19 +3903,27 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         let Type::Union { variants } = self.resolve_type(slot_ty) else {
             return Ok(val);
         };
-        let variants: Vec<Type> = variants.iter().map(|v| self.resolve_type(v)).collect();
-        if !variants.iter().any(|v| matches!(v, Type::Shape { .. })) {
+        let variants: Vec<Type> = variants
+            .iter()
+            .map(|variant| self.resolve_type(variant))
+            .collect();
+        if !variants
+            .iter()
+            .any(|variant| matches!(variant, Type::Shape { .. }))
+        {
             return Ok(val);
         }
         let narrowed = self.is_narrowed_envelope_ident(expr);
         let source_ty = self.resolve_type(&self.expr_type(expr));
         match source_ty {
             Type::Shape { ref name } if !narrowed => {
-                let Some(tag) = variants
-                    .iter()
-                    .position(|v| matches!(v, Type::Shape { name: variant } if variant == name))
-                else {
-                    return Ok(val);
+                let Some(tag) = variants.iter().position(
+                    |variant| matches!(variant, Type::Shape { name: shape_name } if shape_name == name),
+                ) else {
+                    return Err(format!(
+                        "codegen: `{name}` reaches the union slot `{site}` but is not one of its \
+                         variants; the type checker should have refused this"
+                    ));
                 };
                 let envelope =
                     self.build_union_envelope(val.into_pointer_value(), tag as u64, site)?;
@@ -12564,7 +12572,6 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
 ///    bits point at a counted heap cell that survives the parent's suspension.
 ///    Scope-minimal: `StructLit` only; other non-Ident temp forms stay recorded
 ///    residuals (Phase 1c plan text).
-///
 ///
 /// `param_ty` is the callee's declared type for this position (`Cg::callee_param_type`).
 ///
