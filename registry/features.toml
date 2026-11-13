@@ -1705,7 +1705,7 @@ why_template = "A `{union}` is a box with a tag saying which variant is inside. 
 [[diagnostic_template]]
 kind_name = "UnionWhereVariantExpectedNoIsArm"
 what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
-what_instead_template = "No `is` arm can hand `{value}` over as a `{variant}`: `is` arms name shape variants only. Change what receives it to accept a `{union}` and handle each variant there, or keep the value a `{variant}` from where it is created instead of storing it in a `{union}`."
+what_instead_template = "No `is` arm can hand `{value}` over as a `{variant}`: `is` arms name shape variants only. Change what receives it to accept a `{union}` instead, or keep the value a `{variant}` from where it is created instead of storing it in a `{union}`."
 why_template = "A `{union}` might hold any one of its variants, not only a `{variant}`: also {others}. Code that expects a plain `{variant}` is written for that variant alone, so given another variant it would read the wrong kind of data, and can crash. No check the compiler can run today proves `{value}` is a `{variant}`, so it refuses the hand-over."
 
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a

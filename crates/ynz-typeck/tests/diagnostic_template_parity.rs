@@ -870,8 +870,21 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
     );
     let diagnostic = errors_for(source).remove(0);
     assert!(
-        !diagnostic.what_instead.contains("is int"),
-        "no `is int` arm exists to suggest: {diagnostic:?}"
+        !diagnostic.what_instead.contains("is int")
+            && !diagnostic.what_instead.contains("handle each variant"),
+        "no `is int` arm exists to suggest, and a receiving slot cannot handle an `int` variant: {diagnostic:?}"
+    );
+    // The caret label comes from the kind alone and is shown for every recovery, so it must not
+    // tell the reader to `is`-check a value that no `is` arm can hand over (it printed
+    // "check it with `is` first" under this very diagnostic).
+    let caret_label = diagnostic
+        .kind
+        .as_ref()
+        .expect("the diagnostic carries its kind")
+        .tag();
+    assert!(
+        !caret_label.contains("`is`"),
+        "the caret label names an `is` check no arm can offer here: {caret_label:?}"
     );
     assert_compiles(
         "function takesEither(share either: int | string) -> string { return `ok` }\n\

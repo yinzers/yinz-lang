@@ -172,7 +172,10 @@ impl DiagnosticKind {
             DiagnosticKind::ParamNeedsGive => "needs `give`".to_string(),
             DiagnosticKind::TransferNeedsCopy => "needs `.copy()`".to_string(),
             DiagnosticKind::HandleChannelArgNeedsBinding => "bind the channel first".to_string(),
-            DiagnosticKind::UnionWhereVariantExpected => "check it with `is` first".to_string(),
+            // True for all three recoveries `union_where_variant_expected_diag` picks from: the caret
+            // label comes from the kind alone, so it must not name an `is` check that two of them
+            // (a non-shape variant, an expression value) cannot offer as written.
+            DiagnosticKind::UnionWhereVariantExpected => "might be a different type".to_string(),
             DiagnosticKind::CopyNotIndependent => "cannot be copied".to_string(),
             DiagnosticKind::SpawnArgNotIndependent => "cannot be copied for a task".to_string(),
             DiagnosticKind::SpawnArgStorageDiesWithTheFrame => {
