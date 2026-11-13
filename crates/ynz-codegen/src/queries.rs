@@ -347,7 +347,7 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
                 source.path(db).as_str(),
                 format!("The compiler failed to produce machine code: {msg}"),
                 "This is a compiler bug. Please report it with the source file attached.",
-                "Codegen needs a unique name for every local binding, and type checking left a hole in its record.",
+                "Your program passed every check, but the compiler could not tell which variable one of its names refers to. It stopped instead of guessing, because a wrong guess would build a program that gives wrong answers.",
             ));
             return Arc::new(CodegenOutput {
                 artifact: CompiledArtifact {
