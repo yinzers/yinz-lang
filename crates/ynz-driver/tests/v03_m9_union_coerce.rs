@@ -128,3 +128,15 @@ fn v03_m9_union_coerce_channel_union_element_is_refused() {
         "refusal must name the union channel; got:\n{diagnostics}"
     );
 }
+
+// Bug: a plain shape for a type parameter the call binds to a union (`same(thing, big)`) reached
+// the callee unwrapped (`none`); the stopgap refusal is replaced by wrapping through the
+// substituted parameter type. Tier: High.
+coercion_tests!(
+    "v0_3_m9_union_generic_param_plain_shape.ynz",
+    "big hello\ntiny\nbig hello\nend\n",
+    v03_m9_union_coerce_generic_param_optimized,
+    v03_m9_union_coerce_generic_param_no_optimize,
+    v03_m9_union_coerce_generic_param_asan_optimized,
+    v03_m9_union_coerce_generic_param_asan_no_optimize
+);

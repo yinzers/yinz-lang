@@ -425,6 +425,17 @@ const EC_MEMBER_NAMES: &[&str] = &["or", "failed", "message", "suggestions", "tr
 // `.failed()` itself and `.or(default)` are NOT gated — `.failed()` IS the check, and
 // `.or(default)` supplies its own fallback, so neither is an `EcField` variant.
 
+/// A plain value that flows into a slot of an ENVELOPE union type (`Tiny | Big`, `Circle | int`)
+/// and so must be wrapped in the tagged `{tag, data}` envelope before it is stored or passed
+/// (`TypedModule::union_coercions`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnionCoercion {
+    /// The union type of the slot the value flows into (a type parameter already substituted).
+    pub slot: Type,
+    /// Index in `slot`'s variants of the variant the value is: the envelope's tag.
+    pub tag: usize,
+}
+
 /// Inferred ownership for a plain-ident argument at a `background` call site.
 ///
 /// `OwnershipModifier` (from ynz-ast) covers `Share / Lend / Give` — the three
@@ -530,6 +541,13 @@ pub struct TypedModule {
     ///   and neither is the default-deny `Give` a non-ident argument gets, which consumes
     ///   nothing either (`background eat(b.items)` leaves `b` holding the map).
     pub background_arg_sole_holder: std::collections::HashMap<(usize, usize), SoleHolder>,
+    /// v0.3-M9 C1e (#421): every expression whose plain value flows into a slot of an envelope
+    /// union type, keyed by the expression's `(span.start, span.end)`: the slot's union and the
+    /// variant's tag. Written by the ONE recording function (`Checker::record_union_coercion`)
+    /// at every point where a value meets a slot of declared type (annotated `let`, argument,
+    /// `return`, shape field, built-in method argument); codegen wraps exactly these
+    /// expressions, at the one place it lowers an expression, and nowhere else.
+    pub union_coercions: std::collections::HashMap<(usize, usize), UnionCoercion>,
     /// v0.3-M7 Phase 6: function names ADMITTED to the back-edge poll-yield transform —
     /// state-machine functions whose loops become poll-yield suspension points.
     ///
@@ -566,6 +584,7 @@ impl TypedModule {
             expr_types: self.expr_types.clone(),
             background_arg_inferred_ownership: self.background_arg_inferred_ownership.clone(),
             background_arg_sole_holder: self.background_arg_sole_holder.clone(),
+            union_coercions: self.union_coercions.clone(),
             cross_thread_padded_shapes: self.cross_thread_padded_shapes.clone(),
             back_edge_yield_admitted: self.back_edge_yield_admitted.clone(),
             binding_names: self.binding_names.clone(),
@@ -642,6 +661,7 @@ pub fn check(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
+        union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
@@ -663,6 +683,7 @@ pub fn check(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         background_arg_sole_holder: checker.bg_sole_holder,
+        union_coercions: checker.union_coercions,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
@@ -735,6 +756,7 @@ pub fn check_with_kernel_mode(
         current_fn_suspends: false,
         bg_inferred: HashMap::new(),
         bg_sole_holder: HashMap::new(),
+        union_coercions: HashMap::new(),
         next_arc_group: 0,
         conduit_root_spans: HashSet::new(),
         derivable_conduits: HashSet::new(),
@@ -756,6 +778,7 @@ pub fn check_with_kernel_mode(
         expr_types: checker.expr_types,
         background_arg_inferred_ownership: checker.bg_inferred,
         background_arg_sole_holder: checker.bg_sole_holder,
+        union_coercions: checker.union_coercions,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
@@ -941,6 +964,8 @@ struct Checker<'b> {
     /// `TypedModule::background_arg_sole_holder` is moved from. Written by the ONE spawn-arg
     /// recording function (`record_spawn_arg_ownership`).
     bg_sole_holder: HashMap<(usize, usize), SoleHolder>,
+    /// The record `TypedModule::union_coercions` is moved from (`record_union_coercion`).
+    union_coercions: HashMap<(usize, usize), UnionCoercion>,
 
     /// v0.3-M8 Phase 5: the next Auto-Arc group id (minted per admitted group, module-wide).
     next_arc_group: u32,
@@ -2679,6 +2704,7 @@ impl<'b> Checker<'b> {
             } else if matches!(ann_ty, Type::Union { .. }) {
                 // M6: for union type annotations, use the declared union type as the binding type,
                 // not the concrete variant. `let s: Shape = circle` → s is Shape, not Circle.
+                self.record_union_coercion(value, ann_ty, &value_ty);
                 ann_ty.clone()
             } else {
                 // Use the value_ty to preserve size information from ArrayLit inference.
@@ -4023,6 +4049,15 @@ impl<'b> Checker<'b> {
                             ),
                         ));
                     }
+                }
+                // A plain value returned into a union slot (`-> Thing`, or `-> Thing errors`:
+                // the success type is the slot) is wrapped in the tagged envelope.
+                let returned_slot = match ret {
+                    Type::ErrorsCapable { inner } => inner.as_ref(),
+                    _ => ret,
+                };
+                if val_ty != Type::Error && can_assign(returned_slot, &val_ty) {
+                    self.record_union_coercion(expr, returned_slot, &val_ty);
                 }
             }
         }
@@ -6502,6 +6537,21 @@ impl<'b> Checker<'b> {
         true
     }
 
+    /// THE recording of a value meeting a slot of declared type: when `value` is a plain value
+    /// of one variant of an envelope union `slot_ty`, codegen must wrap it in the tagged
+    /// envelope (`TypedModule::union_coercions`). Every slot kind calls this, once the value
+    /// is known assignable: annotated `let`, argument (plain, dot-call, generic), `return`,
+    /// shape field, and the fallback of `.or(...)`.
+    ///
+    /// Time: O(v) for v variants  Space: O(size of the slot type) per recorded value
+    fn record_union_coercion(&mut self, value: &Expr, slot_ty: &Type, value_ty: &Type) {
+        if let Some(coercion) = union_coercion_for(slot_ty, value_ty) {
+            let span = value.span();
+            self.union_coercions
+                .insert((span.start, span.end), coercion);
+        }
+    }
+
     fn check_user_fn_call(
         &mut self,
         call: &CallExpr,
@@ -6648,6 +6698,8 @@ impl<'b> Checker<'b> {
                         },
                     ));
                 }
+            } else if actual_ty != Type::Error {
+                self.record_union_coercion(arg, expected_ty, &actual_ty);
             }
         }
         // Reject Range return values (shouldn't be in sig_table, but guard anyway)
@@ -6891,12 +6943,8 @@ impl<'b> Checker<'b> {
         // `unify_param` mismatch above is discarded, so without this the callee reads the
         // 16-byte tagged envelope as the variant (C1b, #409). Same teaching diagnostic as the
         // plain and UFCS call forms.
-        //
-        // And a plain variant into a parameter whose type is a type parameter bound to a union
-        // (`same(thing, big)`, `T = Tiny | Big`): codegen wraps a plain shape into an envelope
-        // only where the DECLARED parameter type is a union, never through a substituted `T`,
-        // so the callee would read the bare shape as `{tag, data}` (C1c, #410). Refused until
-        // the one coercion point (#421) covers substituted parameters.
+        // A plain variant into a parameter whose resolved type is an envelope union is recorded
+        // below as a coercion (`record_union_coercion`).
         for (index, (arg, (_, param_ty))) in
             call.args.iter().zip(non_self_params.iter()).enumerate()
         {
@@ -6912,34 +6960,12 @@ impl<'b> Checker<'b> {
                     &resolved,
                     &format!("`{name}` expects a `{}` here", type_name(&resolved)),
                 ));
-            } else if matches!(param_ty, Type::TypeParam { .. })
-                && is_envelope_union(&resolved)
-                && !matches!(actual_ty, Type::Union { .. })
-                && can_assign(&resolved, &actual_ty)
-            {
-                let type_param = type_name(param_ty);
-                let union_name = type_name(&resolved);
-                self.diags.push(Diagnostic::error(
-                    arg.span().clone(),
-                    format!(
-                        "`{}` is a `{}`, but `{name}` takes it as `{type_param}`, which this call \
-                         makes a `{union_name}`.",
-                        expr_source_text(arg),
-                        type_name(&actual_ty),
-                    ),
-                    format!(
-                        "Put it in a `{union_name}` first, then pass that: \
-                         `let asUnion: {union_name} = {}`.",
-                        expr_source_text(arg),
-                    ),
-                    format!(
-                        "A `{union_name}` is a box with a tag saying which variant is inside. \
-                         A generic parameter does not build that box for a plain `{}` yet, so \
-                         `{name}` would read the plain value's bytes as the box and get the \
-                         wrong variant.",
-                        type_name(&actual_ty),
-                    ),
-                ));
+            } else {
+                // A plain variant into a parameter whose resolved type is an envelope union
+                // (declared, or a type parameter the call bound to one: `same(thing, big)`,
+                // `T = Tiny | Big`): wrapped at the one coercion point, through the substituted
+                // type (#421).
+                self.record_union_coercion(arg, &resolved, &actual_ty);
             }
         }
 
@@ -7093,6 +7119,21 @@ impl<'b> Checker<'b> {
         for (pos, slot_ty) in collection_method_arg_slots(receiver_ty, method) {
             if let Some(arg) = args.get(pos) {
                 self.reject_int_literal_number_arg(method, &slot_ty, arg);
+                // `.or(fallback)`: the fallback IS the result when the receiver is empty, so it
+                // flows into the element slot; wrapped like any other value entering a union
+                // slot. The other element-typed positions are not a plain flow into a slot:
+                // `add`/`set` STORE into the receiver (an envelope that must outlive the frame:
+                // the lifetime class of #423), `contains`/`remove`/`get` only look a value up.
+                if method == "or" {
+                    let argument_span = arg.span();
+                    if let Some(actual_ty) = self
+                        .expr_types
+                        .get(&(argument_span.start, argument_span.end))
+                        .cloned()
+                    {
+                        self.record_union_coercion(arg, &slot_ty, &actual_ty);
+                    }
+                }
             }
         }
 
@@ -7328,6 +7369,8 @@ impl<'b> Checker<'b> {
                                         type_name(expected_ty)
                                     ),
                                 ));
+                            } else {
+                                self.record_union_coercion(arg, expected_ty, &actual_ty);
                             }
                         }
                         // Kernel-mode rejection for UFCS suspending method calls. The
@@ -7369,6 +7412,20 @@ impl<'b> Checker<'b> {
         // M7 P3a: errors-capable value method dispatch.
         if let Type::ErrorsCapable { inner } = receiver_ty {
             let inner = inner.as_ref().clone();
+            // `.or(fallback)` on a failed result: the fallback is the success value, so it flows
+            // into the success type's slot (a plain shape for a union success type is wrapped).
+            if method == "or" {
+                if let Some(arg) = args.first() {
+                    let argument_span = arg.span();
+                    if let Some(actual_ty) = self
+                        .expr_types
+                        .get(&(argument_span.start, argument_span.end))
+                        .cloned()
+                    {
+                        self.record_union_coercion(arg, &inner, &actual_ty);
+                    }
+                }
+            }
             return self.check_errors_capable_method(receiver_expr, method, method_span, &inner);
         }
 
@@ -8821,6 +8878,8 @@ impl<'b> Checker<'b> {
                                 type_name(&expected)
                             ),
                         ));
+                    } else if actual != Type::Error {
+                        self.record_union_coercion(&lit_field.value, &expected, &actual);
                     }
                 }
             }
@@ -9726,6 +9785,45 @@ fn can_assign(target: &Type, source: &Type) -> bool {
 /// container of the other? True when each is assignable to the other.
 fn same_layout(first: &Type, second: &Type) -> bool {
     can_assign(first, second) && can_assign(second, first)
+}
+
+/// The coercion a value of type `value_ty` needs to enter a slot of type `slot_ty`: `Some` when
+/// the slot is an envelope union and the value is one of its variants but not itself a union,
+/// `None` otherwise (a union value already is an envelope; `nothing` is the null pointer; a
+/// union with no shape variant is the raw pointer, and has no envelope to build).
+///
+/// The tag is the variant the value IS: an exact type match first, then the first variant the
+/// value is assignable to (`number<A>` into `number<B>`).
+///
+/// Time: O(v) for v variants  Space: O(size of the slot type)
+fn union_coercion_for(slot_ty: &Type, value_ty: &Type) -> Option<UnionCoercion> {
+    if !is_envelope_union(slot_ty) {
+        return None;
+    }
+    let Type::Union { variants } = slot_ty else {
+        return None;
+    };
+    if matches!(
+        value_ty,
+        Type::Union { .. } | Type::Nothing | Type::Error | Type::ErrorsCapable { .. }
+    ) {
+        return None;
+    }
+    let tag = variants
+        .iter()
+        .position(|variant| variant == value_ty)
+        .or_else(|| {
+            variants
+                .iter()
+                .position(|variant| can_assign(variant, value_ty))
+        })?;
+    if matches!(variants[tag], Type::Nothing) {
+        return None;
+    }
+    Some(UnionCoercion {
+        slot: slot_ty.clone(),
+        tag,
+    })
 }
 
 /// A union with a shape variant (`Tiny | Big`, `Circle | nothing`) is a pointer to a tagged
