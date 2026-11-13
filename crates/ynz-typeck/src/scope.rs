@@ -87,6 +87,11 @@ pub struct ScopeEntry {
 /// `lookup` searches from innermost to outermost, returning the first match.
 pub struct Scope {
     frames: Vec<HashMap<String, ScopeEntry>>,
+    /// One id per open frame, parallel to `frames`: the path of ids from the function frame
+    /// down to the innermost frame names a scope, and a frame is inside another exactly when
+    /// its path extends the other's (the transfer record's scope-exit order).
+    frame_ids: Vec<u32>,
+    next_frame_id: u32,
     /// Mint for alias-class ids — each fresh value gets its own class.
     next_class: u64,
 }
@@ -101,18 +106,45 @@ impl Scope {
     pub fn new() -> Self {
         Self {
             frames: vec![HashMap::new()],
+            frame_ids: vec![0],
+            next_frame_id: 1,
             next_class: 1,
         }
     }
 
     pub fn push(&mut self) {
         self.frames.push(HashMap::new());
+        self.frame_ids.push(self.next_frame_id);
+        self.next_frame_id += 1;
     }
 
     pub fn pop(&mut self) {
         if self.frames.len() > 1 {
             self.frames.pop();
+            self.frame_ids.pop();
         }
+    }
+
+    /// The path of frame ids from the outermost frame to the innermost one. O(depth).
+    pub fn path(&self) -> Vec<u32> {
+        self.frame_ids.clone()
+    }
+
+    /// Index of the innermost frame (frames below it enclose the current scope).
+    pub fn innermost_frame(&self) -> usize {
+        self.frames.len() - 1
+    }
+
+    /// Index of the frame holding the entry `lookup(name)` finds.
+    pub fn frame_of(&self, name: &str) -> Option<usize> {
+        self.frames
+            .iter()
+            .rposition(|frame| frame.contains_key(name))
+    }
+
+    /// The entry named `name` in the frame at `frame_index`, if that frame still holds it.
+    pub fn entry_in_frame(&self, frame_index: usize, name: &str) -> Option<&ScopeEntry> {
+        self.frames.get(frame_index).and_then(|frame| frame.get(name))
     }
 
     /// A brand-new alias class (a value with exactly one holder so far).
@@ -178,14 +210,41 @@ impl Scope {
 
     /// Consume a binding's WHOLE alias class (ownership transferred): every entry in any
     /// frame that shares the class is marked with `cause`. No-op if the name is not found.
-    pub fn consume(&mut self, name: &str, cause: ConsumedBy) {
+    ///
+    /// Returns the entries newly marked (frame index, name, declaration), in no particular
+    /// order: the loop-carried-give check and the transfer record both need to know exactly
+    /// which entries this transfer reached.
+    pub fn consume(&mut self, name: &str, cause: ConsumedBy) -> Vec<ConsumedEntry> {
         let Some(class) = self.class_of(name) else {
-            return;
+            return Vec::new();
         };
-        for frame in self.frames.iter_mut() {
-            for entry in frame.values_mut() {
+        let mut reached = Vec::new();
+        for (frame_index, frame) in self.frames.iter_mut().enumerate() {
+            for (entry_name, entry) in frame.iter_mut() {
                 if entry.alias_class == class && entry.consumed.is_none() {
                     entry.consumed = Some(cause.clone());
+                    reached.push(ConsumedEntry {
+                        frame_index,
+                        name: entry_name.clone(),
+                        defined_at: entry.defined_at.clone(),
+                    });
+                }
+            }
+        }
+        reached
+    }
+
+    /// Join two alias classes into one: every live entry of `absorbed` moves to `kept`. Used
+    /// where one value comes to hold another (a literal built from several named values, a
+    /// store into a container), so consuming or returning any member covers all of them.
+    pub fn merge_classes(&mut self, kept: u64, absorbed: u64) {
+        if kept == absorbed {
+            return;
+        }
+        for frame in self.frames.iter_mut() {
+            for entry in frame.values_mut() {
+                if entry.alias_class == absorbed {
+                    entry.alias_class = kept;
                 }
             }
         }
@@ -216,4 +275,12 @@ impl Scope {
         }
         names
     }
+}
+
+/// An entry a transfer reached: where it lives now and which declaration it is.
+#[derive(Clone, Debug)]
+pub struct ConsumedEntry {
+    pub frame_index: usize,
+    pub name: String,
+    pub defined_at: SourceSpan,
 }

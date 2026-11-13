@@ -8,7 +8,7 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind, SourceSpan};
 
 use crate::{
     builtins::{
-        array_method_is_mutating, array_method_return, collection_method_arg_slots,
+        array_method_is_mutating, array_method_return, collection_method_arg_slots, collection_store_positions,
         fixed_method_is_mutating, fixed_method_return, map_method_is_mutating, map_method_return,
         maybe_method_return, sensitive_method_return, string_method_return,
     },
@@ -23,12 +23,24 @@ use crate::{
     intrinsics::PrimitiveIntrinsicTable,
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
-    scope::{ConsumedBy, Origin, Scope, ScopeEntry},
+    scope::{ConsumedBy, ConsumedEntry, Origin, Scope, ScopeEntry},
     shapes::ShapeTable,
     signatures::SignatureTable,
     suspension_source::{is_base_suspension_intrinsic, CHANNEL_SUSPENDING_METHODS},
+    transfer_record::{Escape, RoleEvidence},
     types::{arc_shareable, channel_elem_drop, type_name, Type},
 };
+
+use crate::binding_names::{decl_key, DeclKey};
+
+/// One give made while a loop body was being checked: where it happened, why the entries it
+/// reached are gone, and which entries those are. At the loop's end each is checked against the
+/// NEXT pass (`Checker::check_loop_carried_gives`).
+struct LoopGive {
+    span: SourceSpan,
+    cause: ConsumedBy,
+    reached: Vec<ConsumedEntry>,
+}
 
 /// A transfer sink — where a value is about to leave this frame for a holder that will free
 /// it (`IMP-ownership.md` "The transfer decision"). The list of sinks is closed and small;
@@ -113,6 +125,24 @@ fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)])
     .with_kind(kind)
 }
 
+/// What a binding event (`let`, reassignment) makes the name denote: the origin and live alias
+/// class it takes, and every declaration whose value it now holds (the transfer record's join
+/// edges — the live scope only needs the class).
+struct BindingEvent {
+    origin: Origin,
+    alias_class: u64,
+    joined: Vec<DeclKey>,
+}
+
+/// What a binding event says about the binding's part in releasing its value.
+fn role_evidence_of(origin: &Origin) -> RoleEvidence {
+    match origin {
+        Origin::Owned | Origin::Param(Some(OwnershipModifier::Give)) => RoleEvidence::Owner,
+        Origin::Param(_) => RoleEvidence::BorrowedParam,
+        Origin::Cell(_) | Origin::Reaches(_) | Origin::Unknown => RoleEvidence::Piece,
+    }
+}
+
 /// THE rendering of a read of a consumed binding — the use-after-give (`Consumed`) or
 /// use-after-send (`ConsumedBySend`) template, selected by the cause `Scope::consume` stamped
 /// on the alias class, with the `{via}` slot naming the class-mate that was actually given or
@@ -151,6 +181,41 @@ fn consumed_read_diag(span: SourceSpan, name: &str, cause: &ConsumedBy) -> Diagn
                 ],
             )
         }
+    }
+}
+
+/// The use-after-give of a LOOP-CARRIED give: the loop gave a binding declared outside it away on
+/// one pass and the next pass reads it again. Same templates and slots as `consumed_read_diag`
+/// (one canonical explanation per concept); the loop is named in the `{via}` slot.
+fn loop_carried_give_diag(span: SourceSpan, cause: &ConsumedBy) -> Diagnostic {
+    match cause {
+        ConsumedBy::Given { callee, given } => registry_diag(
+            span,
+            DiagnosticKind::Consumed,
+            &[
+                ("name", given),
+                ("given", given),
+                (
+                    "via",
+                    &format!(
+                        ", because the previous pass through this loop already gave it to `{callee}`"
+                    ),
+                ),
+            ],
+        ),
+        ConsumedBy::Sent { channel, sent } => registry_diag(
+            span,
+            DiagnosticKind::ConsumedBySend,
+            &[
+                ("name", sent),
+                ("channel", channel),
+                ("sent", sent),
+                (
+                    "via",
+                    " — the previous pass through this loop already sent it",
+                ),
+            ],
+        ),
     }
 }
 
@@ -501,9 +566,13 @@ pub fn check(
         back_edge_yield_admitted: std::collections::HashSet::new(),
         bg_union_narrowed_diag_spans: HashSet::new(),
         binding_names: crate::binding_names::BindingNameRecorder::default(),
+        transfers: crate::transfer_record::TransferRecorder::default(),
+        loop_gives: Vec::new(),
+        loop_body_frames: Vec::new(),
     };
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
+    let transfers = checker.transfers.finish(&binding_names);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -512,7 +581,7 @@ pub fn check(
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
-        transfers: Default::default(),
+        transfers,
     };
     (
         typed,
@@ -590,9 +659,13 @@ pub fn check_with_kernel_mode(
         back_edge_yield_admitted: std::collections::HashSet::new(),
         bg_union_narrowed_diag_spans: HashSet::new(),
         binding_names: crate::binding_names::BindingNameRecorder::default(),
+        transfers: crate::transfer_record::TransferRecorder::default(),
+        loop_gives: Vec::new(),
+        loop_body_frames: Vec::new(),
     };
     checker.check_module(module);
     let binding_names = checker.binding_names.finish();
+    let transfers = checker.transfers.finish(&binding_names);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -601,7 +674,7 @@ pub fn check_with_kernel_mode(
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
         binding_names,
-        transfers: Default::default(),
+        transfers,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -845,6 +918,15 @@ struct Checker<'b> {
     /// each declaration (`crate::binding_names`). Recorded by `declare_binding` /
     /// `note_binding_use`; carried on `TypedModule::binding_names`.
     binding_names: crate::binding_names::BindingNameRecorder,
+    /// v0.3-M9 C5a: the persisted transfer record, filled at the same events that update the
+    /// live scope (`declare_binding`, `binding_event_origin`, the store and return sites,
+    /// `consume_binding`). Carried on `TypedModule::transfers`.
+    transfers: crate::transfer_record::TransferRecorder,
+    /// Gives made while inside a loop body, in order, so the loop can check at its end that no
+    /// give reached a binding the NEXT pass reads again (`check_loop_carried_gives`).
+    loop_gives: Vec<LoopGive>,
+    /// Frame index of the body of each enclosing loop, outermost first.
+    loop_body_frames: Vec<usize>,
 }
 
 impl<'b> Checker<'b> {
@@ -983,6 +1065,7 @@ impl<'b> Checker<'b> {
         }
 
         self.binding_names.begin_function(&f.span);
+        self.transfers.begin_function(&f.name);
 
         // ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner } already.
         let ret_ty = self.ast_type_to_type(&f.return_type);
@@ -1788,6 +1871,7 @@ impl<'b> Checker<'b> {
     /// analysis at P3a — the generic signature is trusted; codegen verifies per-instantiation.
     fn check_generic_function_body(&mut self, f: &FunctionDecl) {
         self.binding_names.begin_function(&f.span);
+        self.transfers.begin_function(&f.name);
         // Push type param names into the type_param_scope.
         for gp in &f.generics {
             self.type_param_scope.insert(gp.name.clone(), ());
@@ -1911,9 +1995,14 @@ impl<'b> Checker<'b> {
                         ),
                         None => (false, vec![name.to_string()]),
                     };
-                    let used_after = remaining
-                        .iter()
-                        .any(|s| members.iter().any(|m| ident_read_in_stmt(s, m.as_str())));
+                    // The NEXT pass of an enclosing loop reads a binding declared outside it as
+                    // surely as a later statement does, and `remaining` ends at this block's end.
+                    let used_after = self.bound_outside_current_loop(name)
+                        || remaining.iter().any(|s| {
+                            members
+                                .iter()
+                                .any(|m| ident_read_in_stmt(s, m.as_str()))
+                        });
                     if origin_ok && !used_after {
                         BgOwnership::Give
                     } else {
@@ -2142,6 +2231,7 @@ impl<'b> Checker<'b> {
     }
 
     fn check_stmts(&mut self, stmts: &[Stmt]) {
+        let gives_at_start = self.loop_gives.len();
         // Collect early-return narrowing facts: when an `if (!m.exists()) { return }` or
         // `if (!m.exists()) { panic(...) }` is detected, mark `m` as non-none for all
         // subsequent statements in this block.
@@ -2243,12 +2333,13 @@ impl<'b> Checker<'b> {
                                 // const distinction.
                                 if let Some(entry) = self.scope.lookup(name.as_str()) {
                                     if !entry.is_const && entry.consumed.is_none() {
-                                        self.scope.consume(
+                                        self.consume_binding(
                                             name.as_str(),
                                             ConsumedBy::Given {
                                                 callee: spawn_callee.clone(),
                                                 given: name.clone(),
                                             },
+                                            expr.span(),
                                         );
                                     }
                                 }
@@ -2372,6 +2463,13 @@ impl<'b> Checker<'b> {
         // Clean up early-return narrowing facts when leaving the block.
         for name in &early_return_narrowed {
             self.maybe_non_none.remove(name.as_str());
+        }
+        // A block that always returns never reaches a loop's back-edge, so a give made in it is
+        // not carried into the next pass. O(n) per block that made a give, only then.
+        if self.loop_gives.len() > gives_at_start
+            && crate::return_paths::analyze_stmts(stmts).all_paths_return
+        {
+            self.loop_gives.truncate(gives_at_start);
         }
     }
 
@@ -2503,7 +2601,8 @@ impl<'b> Checker<'b> {
         // and alias class come from the initializer's provenance — a NEW entry; a shadowed
         // outer entry keeps its own origin, class and consumed state (it still names its
         // old value). The same rule `check_assign` applies on a reassignment.
-        let (origin, alias_class) = self.binding_event_origin(value);
+        let event = self.binding_event_origin(value);
+        let declaration = decl_key(name_span, name);
         self.declare_binding(
             name.to_string(),
             ScopeEntry {
@@ -2513,11 +2612,12 @@ impl<'b> Checker<'b> {
                 param_ownership: None,
                 is_loop_var: false,
                 consumed: None,
-                origin,
-                alias_class,
+                origin: event.origin,
+                alias_class: event.alias_class,
                 defined_at: name_span.clone(),
             },
         );
+        self.record_joins(&declaration, &event.joined);
     }
 
     /// fr23 (v0.3-M7 Phase 9, FRAGO 016; unified FRAGO 020; consumption redesigned
@@ -3285,10 +3385,12 @@ impl<'b> Checker<'b> {
                 // reassigned names a NEW value — revive-on-reassign: `eat(rows); rows =
                 // [4, 5]; rows.count()` is a correct program), and it joins the new value's
                 // class per the initializer table.
-                let (origin, alias_class) = self.binding_event_origin(value);
+                let event = self.binding_event_origin(value);
+                let declaration = self.declaration_of(target);
+                self.transfers_note_reassign(declaration.as_ref(), &event);
                 if let Some(e) = self.scope.lookup_mut(target) {
-                    e.origin = origin;
-                    e.alias_class = alias_class;
+                    e.origin = event.origin;
+                    e.alias_class = event.alias_class;
                     e.consumed = None;
                 }
                 if value_ty != Type::Error && value_ty != bound_ty {
@@ -3613,7 +3715,9 @@ impl<'b> Checker<'b> {
             ));
         }
         self.scope.push();
+        let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
+        self.end_loop_body(loop_mark);
         self.scope.pop();
     }
 
@@ -3677,7 +3781,14 @@ impl<'b> Checker<'b> {
                 defined_at: var_span.clone(),
             },
         );
+        if let (Some(declaration), Some(root)) = (self.declaration_of(var), &iterated_root) {
+            if let Some(root_declaration) = self.declaration_of(root) {
+                self.transfers.join(&declaration, &root_declaration);
+            }
+        }
+        let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
+        self.end_loop_body(loop_mark);
         self.scope.pop();
     }
 
@@ -3746,6 +3857,7 @@ impl<'b> Checker<'b> {
             }
             (Some(expr), ret) => {
                 let val_ty = self.infer_expr(expr, Some(ret));
+                self.record_return(expr);
                 // Int literal returned from a `-> number` function — the hinted
                 // infer silently types it `number` and the LLVM verifier rejects
                 // the raw-i64 ret at codegen (Future-Req #14, shared gate).
@@ -4428,9 +4540,179 @@ impl<'b> Checker<'b> {
     /// declaration for the per-binding codegen names (`crate::binding_names`), keyed by where
     /// the binding was declared and the name it was declared with.
     fn declare_binding(&mut self, name: String, entry: ScopeEntry) {
-        self.binding_names
-            .declare(crate::binding_names::decl_key(&entry.defined_at, &name));
+        let declaration = decl_key(&entry.defined_at, &name);
+        self.binding_names.declare(declaration.clone());
+        self.transfers.declare(
+            declaration,
+            self.scope.path(),
+            role_evidence_of(&entry.origin),
+        );
         self.scope.insert(name, entry);
+    }
+
+    /// The declaration key of the binding `name` currently resolves to.
+    fn declaration_of(&self, name: &str) -> Option<DeclKey> {
+        self.scope
+            .lookup(name)
+            .map(|entry| decl_key(&entry.defined_at, name))
+    }
+
+    /// Record that the binding just declared (or reassigned) as `target` now denotes or reaches
+    /// the same value as every binding in `joined`.
+    fn record_joins(&mut self, target: &DeclKey, joined: &[DeclKey]) {
+        for other in joined {
+            self.transfers.join(target, other);
+        }
+    }
+
+    /// A reassignment is a binding event: it adds role evidence for the binding and joins it to
+    /// the declarations its new value holds.
+    fn transfers_note_reassign(&mut self, declaration: Option<&DeclKey>, event: &BindingEvent) {
+        let Some(declaration) = declaration else {
+            return;
+        };
+        self.transfers
+            .note_event(declaration, role_evidence_of(&event.origin));
+        self.record_joins(declaration, &event.joined);
+    }
+
+    /// The named bindings that hold (some of) the heap value `value` denotes, as (name,
+    /// declaration). Empty when the value is fresh, not a heap value, or held by nobody named.
+    /// An untraceable value (an imported call's result) may hold anything its expression
+    /// mentions, so it yields every mentioned binding.
+    fn heap_holders_of(&self, value: &Expr) -> Vec<(String, DeclKey)> {
+        let span = value.span();
+        if self
+            .expr_types
+            .get(&(span.start, span.end))
+            .is_some_and(crate::effective_ownership::value_like)
+        {
+            return Vec::new();
+        }
+        let names: Vec<String> = match self.provenance_of(value) {
+            Provenance::Fresh => Vec::new(),
+            Provenance::Whole(name) => vec![name],
+            Provenance::Reaches(roots) => roots,
+            Provenance::Unknown => {
+                let mut mentioned: HashSet<String> = HashSet::new();
+                crate::independence::collect_ident_names(value, &mut mentioned);
+                let mut sorted: Vec<String> = mentioned.into_iter().collect();
+                sorted.sort();
+                sorted
+            }
+        };
+        names
+            .into_iter()
+            .filter_map(|name| self.declaration_of(&name).map(|key| (name, key)))
+            .collect()
+    }
+
+    /// A heap value stored into a place (`o.add(a)`, `o.set(i, a)`, `o[i] = a`, `b.f = a`):
+    /// the place's root binding and the value's holders now reach one value, so they join —
+    /// in the live scope (giving or returning either covers both) and in the record. A store
+    /// does NOT consume the source: that would reject programs that compile today, and would
+    /// need new user-facing syntax (B4).
+    fn record_store(&mut self, place: &Expr, value: &Expr) {
+        let holders = self.heap_holders_of(value);
+        if holders.is_empty() {
+            return;
+        }
+        let root = root_binding_name(place).map(str::to_string);
+        let Some(root) = root.filter(|name| self.scope.lookup(name).is_some()) else {
+            for (_, holder) in holders {
+                self.transfers.escape(&holder, Escape::StoredIntoTemporary);
+            }
+            return;
+        };
+        let (Some(place_declaration), Some(place_class)) =
+            (self.declaration_of(&root), self.scope.class_of(&root))
+        else {
+            return;
+        };
+        for (name, holder) in holders {
+            if let Some(holder_class) = self.scope.class_of(&name) {
+                self.scope.merge_classes(place_class, holder_class);
+            }
+            self.transfers.join(&place_declaration, &holder);
+        }
+    }
+
+    /// A `return`: every binding holding (a piece of) the returned value escapes.
+    fn record_return(&mut self, value: &Expr) {
+        for (_, holder) in self.heap_holders_of(value) {
+            self.transfers.escape(&holder, Escape::Returned);
+        }
+    }
+
+    /// THE consume: mark `name`'s whole alias class consumed with `cause`, record the escape, and
+    /// remember the give when a loop body is open so the loop can check it against the next
+    /// pass. Every transfer sink (`check_transfer`, the `background` liveness give) comes here.
+    fn consume_binding(&mut self, name: &str, cause: ConsumedBy, span: &SourceSpan) {
+        let declaration = self.declaration_of(name);
+        let reached = self.scope.consume(name, cause.clone());
+        if let Some(declaration) = &declaration {
+            self.transfers.escape(
+                declaration,
+                match &cause {
+                    ConsumedBy::Given { callee, .. } => Escape::Given {
+                        callee: callee.clone(),
+                    },
+                    ConsumedBy::Sent { channel, .. } => Escape::Sent {
+                        channel: channel.clone(),
+                    },
+                },
+            );
+        }
+        if !self.loop_body_frames.is_empty() && !reached.is_empty() {
+            self.loop_gives.push(LoopGive {
+                span: span.clone(),
+                cause,
+                reached,
+            });
+        }
+    }
+
+    /// True when a loop body is open and `name` resolves to a binding declared outside the
+    /// innermost one — a binding the next pass reads again.
+    fn bound_outside_current_loop(&self, name: &str) -> bool {
+        match (self.loop_body_frames.last(), self.scope.frame_of(name)) {
+            (Some(body_frame), Some(frame)) => frame < *body_frame,
+            _ => false,
+        }
+    }
+
+    /// Open a loop body (its frame is already pushed). Returns the mark `end_loop_body` needs.
+    fn begin_loop_body(&mut self) -> usize {
+        self.loop_body_frames.push(self.scope.innermost_frame());
+        self.loop_gives.len()
+    }
+
+    /// Close a loop body. A give made in it reaches the NEXT pass whenever it consumed a binding
+    /// declared outside the loop and the binding is still consumed here (a reassignment on the
+    /// way to the back-edge revives it; a path that returns never gets here —
+    /// `check_stmts` drops the gives of a block that always returns). Rust rejects the same
+    /// program: use of a moved value in a later iteration. The text is the one canonical
+    /// use-after-give wording with the loop named in the `{via}` slot.
+    fn end_loop_body(&mut self, mark: usize) {
+        let Some(body_frame) = self.loop_body_frames.pop() else {
+            return;
+        };
+        let gives = self.loop_gives.split_off(mark);
+        for give in gives {
+            let carried = give.reached.iter().any(|entry| {
+                entry.frame_index < body_frame
+                    && self
+                        .scope
+                        .entry_in_frame(entry.frame_index, &entry.name)
+                        .is_some_and(|live| {
+                            live.defined_at == entry.defined_at && live.consumed.is_some()
+                        })
+            });
+            if carried {
+                let diag = loop_carried_give_diag(give.span, &give.cause);
+                self.diags.push(diag);
+            }
+        }
     }
 
     /// Record which declaration the identifier `name` written at `use_span` resolves to — the
@@ -5534,27 +5816,77 @@ impl<'b> Checker<'b> {
     /// `Fresh` → `Owned`, own class; `Whole(b)` → b's origin, JOINS b's class (two names, one
     /// value); `Reaches(roots)` → `Reaches`, joins every root's class (giving a root away
     /// consumes this name with it); `Unknown` → `Unknown`, own class.
-    fn binding_event_origin(&mut self, value: &Expr) -> (Origin, u64) {
+    fn binding_event_origin(&mut self, value: &Expr) -> BindingEvent {
         match self.provenance_of(value) {
-            Provenance::Fresh => (Origin::Owned, self.scope.new_class()),
+            Provenance::Fresh => BindingEvent {
+                origin: Origin::Owned,
+                alias_class: self.scope.new_class(),
+                joined: Vec::new(),
+            },
             Provenance::Whole(b) => match self.scope.lookup(&b) {
-                Some(entry) => (entry.origin.clone(), entry.alias_class),
+                Some(entry) => BindingEvent {
+                    origin: entry.origin.clone(),
+                    alias_class: entry.alias_class,
+                    joined: vec![decl_key(&entry.defined_at, &b)],
+                },
                 // An undefined name — already diagnosed by `resolve_ident`.
-                None => (Origin::Unknown, self.scope.new_class()),
+                None => BindingEvent {
+                    origin: Origin::Unknown,
+                    alias_class: self.scope.new_class(),
+                    joined: Vec::new(),
+                },
             },
             Provenance::Reaches(roots) => {
                 let reason = self.reaches_reason(value, &roots);
-                // Join the first root's class (the roots of one initializer denote one
-                // value's holders; `[a, b]` joins `a`'s — consuming either root consumes
-                // this name because both roots are consumed through the same sink rule).
-                let class = roots
+                // Join EVERY root's class: the roots of one initializer are all held by the
+                // value it builds (`{ first: a, second: c }` holds both), so giving or
+                // returning any one of them must reach this name, and this name must reach
+                // them. Joining only the first root left `c` free to be released while the
+                // returned literal still held it (spike S3 probe t7).
+                let root_entries: Vec<(u64, DeclKey)> = roots
                     .iter()
-                    .find_map(|r| self.scope.class_of(r))
-                    .unwrap_or_else(|| self.scope.new_class());
-                (Origin::Reaches(reason), class)
+                    .filter_map(|r| {
+                        self.scope
+                            .lookup(r)
+                            .map(|e| (e.alias_class, decl_key(&e.defined_at, r)))
+                    })
+                    .collect();
+                let alias_class = match root_entries.first() {
+                    Some((kept, _)) => {
+                        for (class, _) in &root_entries[1..] {
+                            self.scope.merge_classes(*kept, *class);
+                        }
+                        *kept
+                    }
+                    None => self.scope.new_class(),
+                };
+                BindingEvent {
+                    origin: Origin::Reaches(reason),
+                    alias_class,
+                    joined: root_entries.into_iter().map(|(_, key)| key).collect(),
+                }
             }
-            Provenance::Unknown => (Origin::Unknown, self.scope.new_class()),
+            // Untraceable: the live scope gives it a class of its own (never transferable),
+            // but the record must still assume the result may hold any named value the
+            // expression mentions (an imported call can hand back a piece of its argument).
+            Provenance::Unknown => BindingEvent {
+                origin: Origin::Unknown,
+                alias_class: self.scope.new_class(),
+                joined: self.mentioned_declarations(value),
+            },
         }
+    }
+
+    /// Every binding the expression names, as declarations. For the transfer record only.
+    fn mentioned_declarations(&self, expr: &Expr) -> Vec<DeclKey> {
+        let mut names: HashSet<String> = HashSet::new();
+        crate::independence::collect_ident_names(expr, &mut names);
+        let mut keys: Vec<DeclKey> = names
+            .iter()
+            .filter_map(|name| self.declaration_of(name))
+            .collect();
+        keys.sort();
+        keys
     }
 
     /// The `{reason}` slot of `TransferNeedsCopy` for a `Reaches` expression: who still
@@ -5687,7 +6019,7 @@ impl<'b> Checker<'b> {
                 match origin {
                     Origin::Owned | Origin::Param(Some(OwnershipModifier::Give)) => {
                         let cause = sink.cause(&name);
-                        self.scope.consume(&name, cause);
+                        self.consume_binding(&name, cause, &span);
                         true
                     }
                     Origin::Param(_) => unreachable!("non-give parameter handled above"),
@@ -6553,6 +6885,16 @@ impl<'b> Checker<'b> {
         for (pos, slot_ty) in collection_method_arg_slots(receiver_ty, method) {
             if let Some(arg) = args.get(pos) {
                 self.reject_int_literal_number_arg(method, &slot_ty, arg);
+            }
+        }
+
+        // A heap value stored by an in-place collection method (`add`, `set`) joins the
+        // receiver's alias class — the same edge as a field or index store.
+        if let Some(receiver) = receiver_expr {
+            for position in collection_store_positions(receiver_ty, method) {
+                if let Some(stored) = args.get(*position) {
+                    self.record_store(receiver, stored);
+                }
             }
         }
 
@@ -8364,6 +8706,7 @@ impl<'b> Checker<'b> {
         // Resolve the field and check the value type.
         let field_ty = self.infer_field_access(receiver, field, field_span);
         let value_ty = self.infer_expr(value, Some(&field_ty));
+        self.record_store(receiver, value);
 
         // Int literal assigned to a `number`-typed field — the hinted infer
         // silently types it `number` and ICEs at codegen (Future-Req #14).
@@ -8538,6 +8881,18 @@ impl<'b> Checker<'b> {
 
     /// Type-check an index assignment `receiver[index] = value`.
     fn check_index_assign(
+        &mut self,
+        receiver: &Expr,
+        index: &Expr,
+        value: &Expr,
+        span: &SourceSpan,
+    ) {
+        self.check_index_assign_types(receiver, index, value, span);
+        // The value is inferred by now on every path, so its provenance is answerable.
+        self.record_store(receiver, value);
+    }
+
+    fn check_index_assign_types(
         &mut self,
         receiver: &Expr,
         index: &Expr,

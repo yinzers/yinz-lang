@@ -38,9 +38,9 @@
 //! the class and whether the class may be released at all. Leaks are acceptable meanwhile;
 //! an early or a double free never is.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::binding_names::DeclKey;
+use crate::binding_names::{BindingNames, DeclKey};
 
 /// How a member can take part in releasing its class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,5 +156,268 @@ impl TransferRecord {
     /// The classes of the function named `function_name` (functions are unique by name).
     pub fn function(&self, function_name: &str) -> Option<&FunctionTransfers> {
         self.functions.get(function_name)
+    }
+}
+
+// ── The recorder ────────────────────────────────────────────────────────────
+
+/// What one binding event says about the binding's part in releasing a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoleEvidence {
+    /// Bound to a fresh value (`Origin::Owned`) or a `give` parameter.
+    Owner,
+    /// A parameter that is `share`, `lend` or bare.
+    BorrowedParam,
+    /// Bound to a piece of something else, a loop cell, or an untraceable value.
+    Piece,
+}
+
+struct BindingState {
+    decl: DeclKey,
+    /// The frame path (`Scope::path`) of the scope the binding was declared in.
+    path: Vec<u32>,
+    borrowed_param: bool,
+    /// True once any event bound it to a non-owned value: it cannot be trusted to hold only
+    /// fresh values, so it never anchors a release.
+    ever_piece: bool,
+}
+
+struct FunctionState {
+    name: String,
+    bindings: Vec<BindingState>,
+    index: HashMap<DeclKey, usize>,
+    /// Union-find parent links over `bindings`.
+    parent: Vec<usize>,
+    escapes: Vec<(usize, Escape)>,
+}
+
+impl FunctionState {
+    fn find(&mut self, mut node: usize) -> usize {
+        while self.parent[node] != node {
+            self.parent[node] = self.parent[self.parent[node]];
+            node = self.parent[node];
+        }
+        node
+    }
+}
+
+/// Fills a [`TransferRecord`] while the checker walks the module, one function at a time.
+/// Mirrors `BindingNameRecorder`: the checker calls it at the same events that update its live
+/// scope, so the record can never disagree with what the checker decided.
+#[derive(Default)]
+pub struct TransferRecorder {
+    current: Option<FunctionState>,
+    finished: Vec<FunctionState>,
+}
+
+impl TransferRecorder {
+    /// Start walking the function `function_name`; closes the previous one.
+    pub fn begin_function(&mut self, function_name: &str) {
+        if let Some(previous) = self.current.take() {
+            self.finished.push(previous);
+        }
+        self.current = Some(FunctionState {
+            name: function_name.to_string(),
+            bindings: Vec::new(),
+            index: HashMap::new(),
+            parent: Vec::new(),
+            escapes: Vec::new(),
+        });
+    }
+
+    /// Record a declaration in the scope at `path`. A node walked twice is declared once; its
+    /// later events only add evidence.
+    pub fn declare(&mut self, decl: DeclKey, path: Vec<u32>, event: RoleEvidence) {
+        let Some(function) = self.current.as_mut() else {
+            return;
+        };
+        if let Some(&existing) = function.index.get(&decl) {
+            Self::apply_event(&mut function.bindings[existing], event);
+            return;
+        }
+        let position = function.bindings.len();
+        let mut binding = BindingState {
+            decl: decl.clone(),
+            path,
+            borrowed_param: false,
+            ever_piece: false,
+        };
+        Self::apply_event(&mut binding, event);
+        function.bindings.push(binding);
+        function.index.insert(decl, position);
+        function.parent.push(position);
+    }
+
+    fn apply_event(binding: &mut BindingState, event: RoleEvidence) {
+        match event {
+            RoleEvidence::Owner => {}
+            RoleEvidence::BorrowedParam => binding.borrowed_param = true,
+            RoleEvidence::Piece => binding.ever_piece = true,
+        }
+    }
+
+    /// A later binding event (a reassignment) bound `decl` to a value of this role.
+    pub fn note_event(&mut self, decl: &DeclKey, event: RoleEvidence) {
+        let Some(function) = self.current.as_mut() else {
+            return;
+        };
+        if let Some(&position) = function.index.get(decl) {
+            Self::apply_event(&mut function.bindings[position], event);
+        }
+    }
+
+    /// The two bindings denote or reach one value from now on.
+    pub fn join(&mut self, first: &DeclKey, second: &DeclKey) {
+        let Some(function) = self.current.as_mut() else {
+            return;
+        };
+        let (Some(&first_position), Some(&second_position)) =
+            (function.index.get(first), function.index.get(second))
+        else {
+            return;
+        };
+        let first_root = function.find(first_position);
+        let second_root = function.find(second_position);
+        if first_root != second_root {
+            // The smaller index stays the root so class order follows declaration order.
+            let (kept, absorbed) = if first_root < second_root {
+                (first_root, second_root)
+            } else {
+                (second_root, first_root)
+            };
+            function.parent[absorbed] = kept;
+        }
+    }
+
+    /// The value `decl` holds leaves this function's hands.
+    pub fn escape(&mut self, decl: &DeclKey, escape: Escape) {
+        let Some(function) = self.current.as_mut() else {
+            return;
+        };
+        if let Some(&position) = function.index.get(decl) {
+            function.escapes.push((position, escape));
+        }
+    }
+
+    /// Close the last function and build the record. Codegen names come from `names`, which
+    /// must have named every declaration this recorder saw (the checker declares both at the
+    /// same event).
+    ///
+    /// O(b · d) time and O(b) memory for b bindings at frame depth d.
+    pub fn finish(mut self, names: &BindingNames) -> TransferRecord {
+        if let Some(last) = self.current.take() {
+            self.finished.push(last);
+        }
+        let mut record = TransferRecord::default();
+        for function in self.finished {
+            let name = function.name.clone();
+            record
+                .functions
+                .insert(name, build_function(function, names));
+        }
+        record
+    }
+}
+
+fn build_function(mut function: FunctionState, names: &BindingNames) -> FunctionTransfers {
+    let count = function.bindings.len();
+    let mut roots: Vec<usize> = Vec::with_capacity(count);
+    for position in 0..count {
+        roots.push(function.find(position));
+    }
+    let mut class_order: Vec<usize> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    for &root in &roots {
+        if seen.insert(root) {
+            class_order.push(root);
+        }
+    }
+    let mut classes = Vec::with_capacity(class_order.len());
+    for root in class_order {
+        let positions: Vec<usize> = (0..count).filter(|&p| roots[p] == root).collect();
+        let members: Vec<ClassMember> = positions
+            .iter()
+            .map(|&p| {
+                let binding = &function.bindings[p];
+                let role = if binding.borrowed_param {
+                    MemberRole::BorrowedParam
+                } else if binding.ever_piece {
+                    MemberRole::Piece
+                } else {
+                    MemberRole::Owner
+                };
+                ClassMember {
+                    decl: binding.decl.clone(),
+                    codegen_name: names
+                        .codegen_name(&binding.decl)
+                        .expect("every recorded binding is declared with BindingNames")
+                        .to_string(),
+                    role,
+                }
+            })
+            .collect();
+        let anchor = anchor_of(&members, &positions, &function.bindings);
+        let mut escapes: Vec<Escape> = Vec::new();
+        for (position, escape) in &function.escapes {
+            if roots[*position] == root && !escapes.contains(escape) {
+                escapes.push(escape.clone());
+            }
+        }
+        classes.push(AliasClass {
+            members,
+            anchor,
+            escapes,
+        });
+    }
+    FunctionTransfers { classes }
+}
+
+/// The founder rule: the owner whose scope exits last. `positions[i]` is the binding behind
+/// `members[i]`.
+fn anchor_of(
+    members: &[ClassMember],
+    positions: &[usize],
+    bindings: &[BindingState],
+) -> ReleaseAnchor {
+    if let Some(parameter) = members
+        .iter()
+        .find(|member| member.role == MemberRole::BorrowedParam)
+    {
+        return ReleaseAnchor::CallerOwns {
+            parameter: parameter.codegen_name.clone(),
+        };
+    }
+    if !members.iter().any(|member| member.role == MemberRole::Owner) {
+        return ReleaseAnchor::NoOwner;
+    }
+    // The scope that exits last is the one every member's scope is inside: the longest path
+    // all members share. A member declared exactly there is "outermost".
+    let mut shared: &[u32] = &bindings[positions[0]].path;
+    for &position in positions {
+        let path = &bindings[position].path;
+        let common = shared
+            .iter()
+            .zip(path.iter())
+            .take_while(|(first, second)| first == second)
+            .count();
+        shared = &shared[..common];
+    }
+    let outermost: Vec<usize> = (0..members.len())
+        .filter(|&i| bindings[positions[i]].path.len() == shared.len())
+        .collect();
+    if outermost.is_empty() {
+        return ReleaseAnchor::NoStaticFounder(NoFounderReason::SiblingScopes);
+    }
+    match outermost
+        .iter()
+        .find(|&&i| members[i].role == MemberRole::Owner)
+    {
+        Some(&i) => ReleaseAnchor::Founder {
+            decl: members[i].decl.clone(),
+            codegen_name: members[i].codegen_name.clone(),
+        },
+        None => ReleaseAnchor::NoStaticFounder(NoFounderReason::OutlivedByNonOwner {
+            holder: members[outermost[0]].codegen_name.clone(),
+        }),
     }
 }
