@@ -126,6 +126,8 @@ Missing a variant is a compile error. The compiler names which ones are missing:
 // Add: is Triangle => ...  or add: else => ...
 ```
 
+A variant that is not a shape (`int`, `string`, …) counts too: `is` arms name shape variants only, so for `Circle | int` the missing `int` is handled with `else =>`. `nothing` is the one exemption: in `T | nothing` a match with only the arms for `T` is complete, because no arm can name `nothing` and skipping the absent case drops no data.
+
 ---
 
 ## `maybe<T>` is a union

@@ -3708,30 +3708,47 @@ impl<'b> Checker<'b> {
                 })
                 .collect();
             if else_arm.is_none() {
-                let missing: Vec<String> = variants
+                // Every variant an `is` arm does not name is unhandled, shape or not. Two
+                // exemptions, each because no arm CAN name the variant:
+                //   - `nothing` is the absent case of `T | nothing`; there is no `is nothing`
+                //     arm, and skipping the absent case is the defined "only if present"
+                //     idiom (no data is dropped), so it never needs an `else`.
+                //   - a non-shape variant (`int`, `string`, …) is also unnameable today — the
+                //     `is` arm accepts shape variants only (`check_is_arm_pattern`) — so it can
+                //     only be handled by `else =>`, which is why it is reported rather than
+                //     exempted: skipping it would silently drop a real value.
+                let missing: Vec<(String, bool)> = variants
                     .iter()
-                    .filter_map(|v| {
-                        if let Type::Shape { name } = v {
-                            if !covered.contains(name) {
-                                Some(name.clone())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
+                    .filter_map(|v| match v {
+                        Type::Nothing => None,
+                        Type::Shape { name } if covered.contains(name) => None,
+                        Type::Shape { name } => Some((name.clone(), true)),
+                        other => Some((type_name(other), false)),
                     })
                     .collect();
                 if !missing.is_empty() {
+                    let missing_names: Vec<String> =
+                        missing.iter().map(|(name, _)| name.clone()).collect();
+                    // Only suggest what compiles today: an `is` arm names a shape variant
+                    // only, so a non-shape variant is handled by `else =>`.
+                    let what_instead = match missing.iter().find(|(_, is_shape)| *is_shape) {
+                        Some((shape_name, _)) => format!(
+                            "Add the missing arms (e.g. `is {shape_name} =>`) or add an `else =>` default arm."
+                        ),
+                        None => format!(
+                            "Add an `else =>` default arm to handle {}.",
+                            missing_names.join(", ")
+                        ),
+                    };
                     self.diags.push(Diagnostic::error(
                         scrutinee.span().clone(),
                         format!(
                             "Non-exhaustive union multi-case — {} variant{} not handled: {}.",
                             missing.len(),
                             if missing.len() == 1 { " is" } else { "s are" },
-                            missing.join(", ")
+                            missing_names.join(", ")
                         ),
-                        format!("Add the missing arms (e.g. `is {} =>`) or add an `else =>` default arm.", missing[0]),
+                        what_instead,
                         "The compiler knows every union variant at compile time. A missing arm means some values silently fall through — likely a bug.",
                     ));
                 }
