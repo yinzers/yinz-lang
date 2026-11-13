@@ -1,0 +1,40 @@
+// v0.3-M9 C1: `is Variant =>` narrowing reads the variant PAYLOAD, not the union envelope.
+// Correct behavior: inside `is Circle =>`, `fig.radius` is the Circle's radius -> prints `5.0`
+// (and `is Square =>` reads `side` -> `3.0`), exit 0. Fields are `number` (prints `5.0`): a
+// plain `float` prints `0.000...` in any program (separate pre-existing bug), unrelated to narrowing.
+// Pre-fix failure: the arm typed `fig` as Circle but codegen left the binding pointing at the
+// 16-byte `{i64 tag, i64 data}` envelope, so the field read returned the TAG word
+// (printed a zero value for a `radius: 5.0` circle).
+
+shape Circle {
+  radius: number
+}
+
+shape Square {
+  side: number
+}
+
+shape Figure = Circle | Square
+
+function entrypoint() -> nothing {
+  let c: Circle = { radius: 5.0 }
+  let fig: Figure = c
+  if (fig) {
+    is Circle => {
+      print(fig.radius)
+    }
+    is Square => {
+      print(fig.side)
+    }
+  }
+  let s: Square = { side: 3.0 }
+  let fig2: Figure = s
+  if (fig2) {
+    is Circle => {
+      print(fig2.radius)
+    }
+    is Square => {
+      print(fig2.side)
+    }
+  }
+}
