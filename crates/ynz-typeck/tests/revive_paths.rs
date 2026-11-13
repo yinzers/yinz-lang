@@ -18,8 +18,11 @@
 // loop, a loop-carried back-edge, an arm that gives while another revives, a revive nested under
 // two `if`s). An accepted case is a shape the join must still treat as revived (every arm
 // including `else`, an arm that always returns, a revive after a loop, a revive both in and after
-// a loop, a give and revive inside one branch, the straight-line rule, nested matches). Two
-// shapes that take the same checker path are not both here.
+// a loop, a give and revive inside one branch, the straight-line rule, nested matches). The
+// security-round cases add the shapes the join still got wrong: a re-give after a reassignment
+// in one arm, a `while` condition, a union with a non-shape variant, and the alias class and
+// origin a one-path reassignment changes. Two shapes that take the same checker path are not both
+// here.
 
 #[macro_use]
 mod support;
@@ -245,4 +248,75 @@ cases! { assert_maybe_given_names_the_path;
   while (c) { x = [0] }
   return x.count()
 }"), "the same over-claim after a loop whose body reassigns but may run zero times (High)";
+}
+
+// Security round 2: each case below was accepted on `855b79e` (a give or read of a value
+// already given away on some path, or a give of a piece another value still holds).
+
+cases! { assert_revive_rejected;
+    an_arm_that_reassigns_then_gives_again_stays_given: "function l(c: boolean) -> int {
+  let x: array<int> = [1, 2, 3]
+  eat(x)
+  if (c) {
+    x = [0]
+    eat(x)
+    x = [1]
+  }
+  return x.count()
+}", "an arm that reassigned a given binding and then gave it again was put back as live, not as given, for the paths after it (High: double give)";
+}
+
+cases! { assert_revive_rejected;
+    a_while_condition_give_holds_after_the_loop: "function ok(give rows: array<int>) -> boolean {
+  return true
+}
+function l() -> nothing {
+  let x: array<int> = [1, 2, 3]
+  while (ok(x)) { x = [0] }
+  eat(x)
+}", "the last, false check of a `while` condition gives `x` on every path out of the loop; a reassignment in the body hid it (High: double give)";
+}
+
+cases! { assert_revive_rejected;
+    a_union_with_a_non_shape_variant_is_not_exhaustive: "shape Circle { radius: number }
+shape Pair = Circle | int
+function l(s: Pair) -> int {
+  let x: array<int> = [1, 2, 3]
+  eat(x)
+  if (s) {
+    is Circle => { x = [0] }
+  }
+  return x.count()
+}", "a union match counted as covering every value though its `int` variant enters no arm (High: read after give)";
+}
+
+cases! { assert_revive_rejected;
+    an_alias_reassigned_on_one_path_still_aliases_on_the_other: "function l(c: boolean) -> int {
+  let x: array<int> = [1, 2, 3]
+  let y = x
+  if (c) { y = [0] }
+  eat(x)
+  return y.count()
+}", "a reassignment under `if` moved `y` out of `x`'s alias class on every path, so giving `x` left `y` readable where it still holds `x`'s value (High: read after give)";
+}
+
+/// The give itself must be refused: the value may be a piece another value still holds.
+fn assert_give_refused(source: &str) {
+    let program = format!("{EAT}{source}");
+    let found = support::errors(&support::run(&program));
+    assert!(
+        found
+            .iter()
+            .any(|message| message.contains("this line gives it away")),
+        "expected the give to be refused for:\n{program}\ngot {found:#?}"
+    );
+}
+
+cases! { assert_give_refused;
+    a_piece_reassigned_on_one_path_is_still_a_piece_on_the_other: "shape Box { items: array<int> }
+function l(c: boolean, b: Box) -> nothing {
+  let y: array<int> = b.items
+  if (c) { y = [0] }
+  eat(y)
+}", "a reassignment under `if` made `y` owned on every path, so a field of a borrowed parameter could be given away (High: double free)";
 }

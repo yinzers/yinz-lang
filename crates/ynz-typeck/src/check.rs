@@ -3455,14 +3455,11 @@ impl<'b> Checker<'b> {
                 let event = self.binding_event_origin(value);
                 let declaration = self.declaration_of(target);
                 self.transfers_note_reassign(declaration.as_ref(), &event);
-                // A reassignment names a NEW value, so the binding is no longer given away on
-                // the path that reaches here; a branch join decides what holds after it
-                // (`Scope::revive`, `Scope::end_branches`).
-                self.scope.revive(target);
-                if let Some(e) = self.scope.lookup_mut(target) {
-                    e.origin = event.origin;
-                    e.alias_class = event.alias_class;
-                }
+                // A reassignment names a NEW value, so the binding is no longer given away, and
+                // takes the new value's origin and class, on the path that reaches here only; a
+                // branch join decides what holds after it (`Scope::rebind`,
+                // `Scope::end_branches`).
+                self.scope.rebind(target, event.origin, event.alias_class);
                 if value_ty != Type::Error && value_ty != bound_ty {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
@@ -3768,11 +3765,37 @@ impl<'b> Checker<'b> {
         if let Some(else_body) = else_arm {
             self.check_branch_body(else_body);
         }
-        // A path enters no arm unless the match is exhaustive: an `else` arm, or an options /
-        // union scrutinee (typeck rejects a missing variant above).
-        let exhaustive =
-            else_arm.is_some() || matches!(scrutinee_ty, Type::Options { .. } | Type::Union { .. });
+        // A path enters no arm unless the arms cover every value (`match_covers_every_value`).
+        let exhaustive = else_arm.is_some() || self.match_covers_every_value(&scrutinee_ty, arms);
         self.scope.end_branches(!exhaustive);
+    }
+
+    /// True only when `arms` (no `else`) provably cover every value of `scrutinee_ty`: an options
+    /// type whose every variant has its arm, or a union whose every variant is a shape with its
+    /// `is` arm. Decided from the arms themselves, not from the exhaustiveness diagnostics above:
+    /// those skip a union's non-shape variants (`Circle | int` with only `is Circle` is not
+    /// diagnosed), and the branch join must not believe a path enters an arm when it may not.
+    /// O(arms + variants) time.
+    fn match_covers_every_value(&self, scrutinee_ty: &Type, arms: &[MatchArm]) -> bool {
+        match scrutinee_ty {
+            Type::Options { name } => {
+                let Some(entry) = self.options_table.get(name) else {
+                    return false;
+                };
+                entry.variants.iter().all(|variant| {
+                    arms.iter().any(|arm| {
+                        matches!(&arm.pattern.kind, MatchPatternKind::OptionName(covered) if covered == variant)
+                    })
+                })
+            }
+            Type::Union { variants } => variants.iter().all(|variant| match variant {
+                Type::Shape { name } => arms.iter().any(|arm| {
+                    matches!(&arm.pattern.kind, MatchPatternKind::Is(type_path) if &type_path.name == name)
+                }),
+                _ => false,
+            }),
+            _ => false,
+        }
     }
 
     /// One arm of an open branch point (an `if` body, a match arm): its own frame, and what it
@@ -3796,10 +3819,7 @@ impl<'b> Checker<'b> {
         // The loop is open before the condition is checked: the condition runs at the top of
         // EVERY pass, so a give made in it (`while (ok(x))` with `ok(give rows)`) reaches the next
         // pass exactly as a give in the body does.
-        // A loop body may run zero times: a revive in it covers only its own pass.
-        self.scope.begin_branches(BranchKind::Loop);
         self.scope.push();
-        self.scope.begin_arm();
         let loop_mark = self.begin_loop_body();
         let cond_ty = self.infer_expr(cond, None);
         if cond_ty != Type::Error && cond_ty != Type::Bool {
@@ -3810,6 +3830,12 @@ impl<'b> Checker<'b> {
                 "`while` loops until the condition becomes `false`. Any other type cannot be used as a condition.",
             ));
         }
+        // The body's branch point opens AFTER the condition: the condition also runs on the path
+        // that leaves the loop (the last check that is false), so its gives hold on every path
+        // after the loop, the zero-trip one included. A body may run zero times: a reassignment
+        // in it covers only its own pass.
+        self.scope.begin_branches(BranchKind::Loop);
+        self.scope.begin_arm();
         self.check_stmts(&body.stmts);
         self.end_loop_body(loop_mark, Some(cond), body);
         self.end_branch_arm(body);

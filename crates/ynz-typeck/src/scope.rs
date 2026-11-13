@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use ynz_ast::nodes::OwnershipModifier;
 use ynz_diagnostics::SourceSpan;
@@ -154,8 +154,8 @@ pub struct Scope {
     next_frame_id: u32,
     /// Mint for alias-class ids — each fresh value gets its own class.
     next_class: u64,
-    /// The open branch points (an `if`, a match, a loop), innermost last: where a revive is made
-    /// on ONE path and the join must not believe it covers the others.
+    /// The open branch points (an `if`, a match, a loop), innermost last: where a give or a
+    /// reassignment is made on ONE path and the join must not believe it covers the others.
     branches: Vec<Branches>,
 }
 
@@ -172,24 +172,68 @@ fn entry_key(frame_index: usize, name: &str, defined_at: &SourceSpan) -> EntryKe
     )
 }
 
-/// What the join after a branch point needs (see [`Scope::begin_branches`]).
+/// The part of an entry a path can change and a join must reconcile: whether it is given away,
+/// where its value came from, and which alias class it is in. A reassignment changes all three
+/// (`Scope::rebind`); a give changes the first (`Scope::consume`).
+#[derive(Clone, Debug)]
+struct PathState {
+    consumed: Option<ConsumedBy>,
+    origin: Origin,
+    alias_class: u64,
+}
+
+impl PathState {
+    fn of(entry: &ScopeEntry) -> PathState {
+        PathState {
+            consumed: entry.consumed.clone(),
+            origin: entry.origin.clone(),
+            alias_class: entry.alias_class,
+        }
+    }
+}
+
+/// True when a give of a value of this origin is allowed (`check_transfer`'s rule).
+fn origin_transferable(origin: &Origin) -> bool {
+    matches!(
+        origin,
+        Origin::Owned | Origin::Param(Some(OwnershipModifier::Give))
+    )
+}
+
+/// What the join after a branch point needs (see [`Scope::begin_branches`]). Ordered maps, so
+/// the join visits entries and paths in one fixed order (the cause a read names, the class kept
+/// by a merge).
 struct Branches {
     /// The statement that opened it.
     kind: BranchKind,
-    /// Entries consumed when the branch point opened, with their cause.
-    consumed_before: HashMap<EntryKey, ConsumedBy>,
-    /// Frame index of the arm being checked: only entries BELOW it outlive the arm.
+    /// Frame index of the arm being checked: only entries BELOW it outlive the arm. 0 between
+    /// arms, so nothing is tracked there.
     arm_frame: usize,
-    /// Entries revived in the current arm, with the state each had just before its first revive.
-    arm_revived: Vec<EntryKey>,
-    arm_prior: HashMap<EntryKey, ConsumedBy>,
-    /// Entries the current arm itself gave away (so they were live when the arm began).
-    arm_consumed: HashSet<EntryKey>,
-    /// Per entry revived in some arm: how many arms that reach the join recorded it, and the
-    /// cause it was left consumed with by the first arm that left it consumed.
-    recorded: HashMap<EntryKey, (usize, Option<ConsumedBy>)>,
-    /// Arms that reach the join (an arm that always returns does not).
-    arms_reaching_join: usize,
+    /// Every entry outliving the arms that some arm changed, with its state when the branch
+    /// point opened. Every arm starts from that state: `end_arm` puts it back.
+    opened: BTreeMap<EntryKey, PathState>,
+    /// The entries the current arm changed.
+    arm_touched: BTreeSet<EntryKey>,
+    /// Per arm that reaches the join (an arm that always returns does not), in order: the end
+    /// state of every entry that arm changed. An entry an arm did not change ends it as opened.
+    arm_ends: Vec<BTreeMap<EntryKey, PathState>>,
+    /// Entries some arm reassigned: a maybe-given read of one names the path that did not.
+    reassigned: BTreeSet<EntryKey>,
+}
+
+impl Branches {
+    /// An absorbed class is now `kept` (`Scope::merge_classes`): the recorded states follow.
+    fn rename_class(&mut self, kept: u64, absorbed: u64) {
+        let states = self
+            .opened
+            .values_mut()
+            .chain(self.arm_ends.iter_mut().flat_map(|end| end.values_mut()));
+        for state in states {
+            if state.alias_class == absorbed {
+                state.alias_class = kept;
+            }
+        }
+    }
 }
 
 impl Default for Scope {
@@ -269,17 +313,6 @@ impl Scope {
         None
     }
 
-    /// Mutable form of [`Scope::lookup`] — for the binding-event rule (a reassignment
-    /// changes the entry's origin, class and consumed state in place).
-    pub fn lookup_mut(&mut self, name: &str) -> Option<&mut ScopeEntry> {
-        for frame in self.frames.iter_mut().rev() {
-            if let Some(e) = frame.get_mut(name) {
-                return Some(e);
-            }
-        }
-        None
-    }
-
     /// The alias class of the entry `lookup(name)` finds, if any.
     pub fn class_of(&self, name: &str) -> Option<u64> {
         self.lookup(name).map(|e| e.alias_class)
@@ -320,10 +353,9 @@ impl Scope {
             return Vec::new();
         };
         let mut reached = Vec::new();
-        for (frame_index, frame) in self.frames.iter_mut().enumerate() {
-            for (entry_name, entry) in frame.iter_mut() {
+        for (frame_index, frame) in self.frames.iter().enumerate() {
+            for (entry_name, entry) in frame {
                 if entry.alias_class == class && entry.consumed.is_none() {
-                    entry.consumed = Some(cause.clone());
                     reached.push(ConsumedEntry {
                         frame_index,
                         name: entry_name.clone(),
@@ -332,34 +364,69 @@ impl Scope {
                 }
             }
         }
-        for entry in &reached {
-            let key = entry_key(entry.frame_index, &entry.name, &entry.defined_at);
-            for branch in self.branches.iter_mut() {
-                branch.arm_consumed.insert(key.clone());
+        for reached_entry in &reached {
+            let key = entry_key(
+                reached_entry.frame_index,
+                &reached_entry.name,
+                &reached_entry.defined_at,
+            );
+            self.touch(&key);
+            if let Some(entry) = self.entry_mut(&key) {
+                entry.consumed = Some(cause.clone());
             }
         }
         reached
     }
 
-    /// Revive `name`: a reassignment gives it a NEW value, so it is no longer given away on the
-    /// path that reaches here. Inside an open branch point the revive covers only that arm; the
-    /// join (`end_branches`) decides what is true after it.
-    /// O(frames + revived entries in the open arm) time.
-    pub fn revive(&mut self, name: &str) {
+    /// Rebind `name` to a NEW value (a reassignment): it is no longer given away, and it takes
+    /// the new value's `origin` and `alias_class` (it leaves its old class, whose other members
+    /// still hold the old value). Inside an open branch point this holds only on that arm's path;
+    /// the join (`end_branches`) decides what is true after it. No-op if the name is not found.
+    /// O(frames + open branch points) time.
+    pub fn rebind(&mut self, name: &str, origin: Origin, alias_class: u64) {
         let Some(frame_index) = self.frame_of(name) else {
             return;
         };
-        let Some(entry) = self.frames[frame_index].get_mut(name) else {
+        let Some(defined_at) = self.frames[frame_index]
+            .get(name)
+            .map(|entry| entry.defined_at.clone())
+        else {
             return;
         };
-        let Some(prior) = entry.consumed.take() else {
-            return;
-        };
-        let key = entry_key(frame_index, name, &entry.defined_at);
+        let key = entry_key(frame_index, name, &defined_at);
+        self.touch(&key);
         if let Some(branch) = self.branches.last_mut() {
-            if frame_index < branch.arm_frame && !branch.arm_revived.contains(&key) {
-                branch.arm_prior.insert(key.clone(), prior);
-                branch.arm_revived.push(key);
+            if key.0 < branch.arm_frame {
+                branch.reassigned.insert(key.clone());
+            }
+        }
+        if let Some(entry) = self.entry_mut(&key) {
+            entry.consumed = None;
+            entry.origin = origin;
+            entry.alias_class = alias_class;
+        }
+    }
+
+    /// Called BEFORE the entry `key` changes its path state: every open branch point whose arm
+    /// it outlives remembers the entry's state when the branch point opened (the first change it
+    /// sees is made from that state, since every arm starts from it) and that the current arm
+    /// changed it. O(open branch points).
+    fn touch(&mut self, key: &EntryKey) {
+        let Some(before) = self
+            .frames
+            .get(key.0)
+            .and_then(|frame| frame.get(&key.1))
+            .map(PathState::of)
+        else {
+            return;
+        };
+        for branch in self.branches.iter_mut() {
+            if key.0 < branch.arm_frame {
+                branch
+                    .opened
+                    .entry(key.clone())
+                    .or_insert_with(|| before.clone());
+                branch.arm_touched.insert(key.clone());
             }
         }
     }
@@ -369,29 +436,23 @@ impl Scope {
         (entry.defined_at.start == key.2 && entry.defined_at.end == key.3).then_some(entry)
     }
 
-    /// Open a branch point of `kind`: an `if` body, the arms of a match, a loop body. Records
-    /// which entries are given away now. O(entries).
-    pub fn begin_branches(&mut self, kind: BranchKind) {
-        let mut consumed_before = HashMap::new();
-        for (frame_index, frame) in self.frames.iter().enumerate() {
-            for (name, entry) in frame {
-                if let Some(cause) = &entry.consumed {
-                    consumed_before.insert(
-                        entry_key(frame_index, name, &entry.defined_at),
-                        cause.clone(),
-                    );
-                }
-            }
+    fn set_path_state(&mut self, key: &EntryKey, state: PathState) {
+        if let Some(entry) = self.entry_mut(key) {
+            entry.consumed = state.consumed;
+            entry.origin = state.origin;
+            entry.alias_class = state.alias_class;
         }
+    }
+
+    /// Open a branch point of `kind`: an `if` body, the arms of a match, a loop body. O(1).
+    pub fn begin_branches(&mut self, kind: BranchKind) {
         self.branches.push(Branches {
             kind,
-            consumed_before,
             arm_frame: 0,
-            arm_revived: Vec::new(),
-            arm_prior: HashMap::new(),
-            arm_consumed: HashSet::new(),
-            recorded: HashMap::new(),
-            arms_reaching_join: 0,
+            opened: BTreeMap::new(),
+            arm_touched: BTreeSet::new(),
+            arm_ends: Vec::new(),
+            reassigned: BTreeSet::new(),
         });
     }
 
@@ -400,91 +461,111 @@ impl Scope {
         let innermost = self.innermost_frame();
         if let Some(branch) = self.branches.last_mut() {
             branch.arm_frame = innermost;
-            branch.arm_revived.clear();
-            branch.arm_prior.clear();
-            branch.arm_consumed.clear();
+            branch.arm_touched.clear();
         }
     }
 
     /// An arm ends (before its frame pops). `returns`: it always returns, so it never reaches the
-    /// join. What the arm revived is recorded for the join and then put back to the state before
-    /// the branch point, so the NEXT arm does not inherit this arm's revive.
-    /// O(revived entries in the arm) time.
+    /// join. The end state of every entry the arm changed is kept for the join, and the entry is
+    /// put back to its state when the branch point opened, so the NEXT arm does not inherit this
+    /// arm's gives or reassignments. O(entries the arm changed . log) time.
     pub fn end_arm(&mut self, returns: bool) {
         let Some(mut branch) = self.branches.pop() else {
             return;
         };
-        let revived = std::mem::take(&mut branch.arm_revived);
-        for key in revived {
-            let end_state = self
-                .entry_mut(&key)
-                .and_then(|entry| entry.consumed.clone());
-            if !returns {
-                let slot = branch.recorded.entry(key.clone()).or_insert((0, None));
-                slot.0 += 1;
-                if slot.1.is_none() {
-                    slot.1 = end_state;
-                }
-            }
-            // Put it back to what the NEXT arm should see: live if this arm gave it away itself
-            // (it was live when the arm began), else what it was when the arm revived it.
-            let restored = if branch.arm_consumed.contains(&key) {
-                None
-            } else {
-                branch.arm_prior.get(&key).cloned()
+        let touched = std::mem::take(&mut branch.arm_touched);
+        let mut ends = BTreeMap::new();
+        for key in touched {
+            let end_state = self.entry_mut(&key).map(|entry| PathState::of(entry));
+            let (Some(end_state), Some(opened)) = (end_state, branch.opened.get(&key).cloned())
+            else {
+                continue;
             };
-            if let Some(entry) = self.entry_mut(&key) {
-                entry.consumed = restored;
-            }
+            ends.insert(key.clone(), end_state);
+            self.set_path_state(&key, opened);
         }
         if !returns {
-            branch.arms_reaching_join += 1;
+            branch.arm_ends.push(ends);
         }
+        branch.arm_frame = 0;
         self.branches.push(branch);
     }
 
-    /// Close the branch point. An entry revived in an arm is live after it only if EVERY path
-    /// that reaches the join revived it: each arm that reaches the join, and the path that
-    /// enters no arm when `skip_path` (an `if` without an else, a loop that may run zero times, a
-    /// match with no else that is not exhaustive). Otherwise it stays given away (maybe given),
-    /// and reading it is the use-after-give error; its cause is marked with this branch point's
-    /// kind, so the read names the path that did not reassign it. A revive that holds at the join
-    /// is a revive for the enclosing branch point too. O(revived entries).
+    /// Close the branch point. Every entry an arm changed is joined over every path that reaches
+    /// here: each arm that reaches the join, and the path that enters no arm when `skip_path` (an
+    /// `if`, a loop that may run zero times, a match with no else that is not exhaustive).
+    /// - Given away on ANY path: given away (maybe given), so reading it is the use-after-give
+    ///   error. When an arm reassigned it, its cause is marked with this branch point's kind, so
+    ///   the read names the path that did not reassign it.
+    /// - Origin: the one every path shares, else the first that cannot be given away (a give
+    ///   must be allowed on every path).
+    /// - Alias class: every path's class, merged into one (it may hold any of those values).
+    ///
+    /// The enclosing branch points already saw each change when it was made (`touch`).
+    /// O(changed entries . paths + merges . entries) time.
     pub fn end_branches(&mut self, skip_path: bool) {
-        let Some(branch) = self.branches.pop() else {
+        let Some(mut branch) = self.branches.pop() else {
             return;
         };
-        let consumed_before = branch.consumed_before;
-        let kind = branch.kind;
-        for (key, (recorded_arms, left_consumed)) in branch.recorded {
-            let covered = !skip_path && recorded_arms == branch.arms_reaching_join;
-            let now = self.entry_mut(&key).map(|entry| entry.consumed.clone());
-            let Some(now) = now else {
+        let keys: Vec<EntryKey> = branch.opened.keys().cloned().collect();
+        for key in keys {
+            let Some(opened) = branch.opened.get(&key).cloned() else {
                 continue;
             };
-            let exit = left_consumed
-                .or(if covered { None } else { now })
-                .map(|cause| cause.marked_missed_revive(kind));
-            if let Some(entry) = self.entry_mut(&key) {
-                entry.consumed = exit.clone();
+            let mut paths: Vec<PathState> = branch
+                .arm_ends
+                .iter()
+                .map(|ends| ends.get(&key).cloned().unwrap_or_else(|| opened.clone()))
+                .collect();
+            if skip_path {
+                paths.push(opened.clone());
             }
-            if exit.is_none() {
-                if let Some(parent) = self.branches.last_mut() {
-                    if key.0 < parent.arm_frame && !parent.arm_revived.contains(&key) {
-                        if let Some(before) = consumed_before.get(&key) {
-                            parent.arm_prior.insert(key.clone(), before.clone());
-                        }
-                        parent.arm_revived.push(key);
-                    }
+            let Some(first) = paths.first().cloned() else {
+                // No path reaches the join (every arm returns): nothing after it runs.
+                continue;
+            };
+            let consumed = match paths.iter().find_map(|path| path.consumed.clone()) {
+                Some(cause) if branch.reassigned.contains(&key) => {
+                    Some(cause.marked_missed_revive(branch.kind))
                 }
+                other => other,
+            };
+            let origin = if paths.iter().all(|path| path.origin == first.origin) {
+                first.origin.clone()
+            } else {
+                paths
+                    .iter()
+                    .map(|path| &path.origin)
+                    .find(|origin| !origin_transferable(origin))
+                    .unwrap_or(&first.origin)
+                    .clone()
+            };
+            let kept = first.alias_class;
+            let absorbed: BTreeSet<u64> = paths
+                .iter()
+                .map(|path| path.alias_class)
+                .filter(|class| *class != kept)
+                .collect();
+            for class in absorbed {
+                self.merge_classes(kept, class);
+                branch.rename_class(kept, class);
             }
+            self.set_path_state(
+                &key,
+                PathState {
+                    consumed,
+                    origin,
+                    alias_class: kept,
+                },
+            );
         }
     }
 
-    /// Join two alias classes into one: every live entry of `absorbed` moves to `kept`. Used
-    /// where one value comes to hold another (a literal built from several named values, a
-    /// store into a container), so consuming or returning any member covers all of them.
-    /// O(entries) time: scans every live entry of every frame.
+    /// Join two alias classes into one: every entry of `absorbed` moves to `kept`. Used where
+    /// one value comes to hold another (a literal built from several named values, a store into
+    /// a container), so consuming or returning any member covers all of them, and at a branch
+    /// join. The states the open branch points recorded follow, so a later restore or join
+    /// cannot split the class again. O(entries + recorded states) time.
     pub fn merge_classes(&mut self, kept: u64, absorbed: u64) {
         if kept == absorbed {
             return;
@@ -495,6 +576,9 @@ impl Scope {
                     entry.alias_class = kept;
                 }
             }
+        }
+        for branch in self.branches.iter_mut() {
+            branch.rename_class(kept, absorbed);
         }
     }
 
