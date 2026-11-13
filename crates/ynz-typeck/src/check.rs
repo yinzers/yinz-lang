@@ -3748,6 +3748,11 @@ impl<'b> Checker<'b> {
     }
 
     fn check_stmt_while(&mut self, cond: &Expr, body: &Block) {
+        // The loop is open before the condition is checked: the condition runs at the top of
+        // EVERY pass, so a give made in it (`while (ok(x))` with `ok(give rows)`) reaches the next
+        // pass exactly as a give in the body does.
+        self.scope.push();
+        let loop_mark = self.begin_loop_body();
         let cond_ty = self.infer_expr(cond, None);
         if cond_ty != Type::Error && cond_ty != Type::Bool {
             self.diags.push(Diagnostic::error(
@@ -3757,8 +3762,6 @@ impl<'b> Checker<'b> {
                 "`while` loops until the condition becomes `false`. Any other type cannot be used as a condition.",
             ));
         }
-        self.scope.push();
-        let loop_mark = self.begin_loop_body();
         self.check_stmts(&body.stmts);
         self.end_loop_body(loop_mark, Some(cond), body);
         self.scope.pop();

@@ -314,6 +314,17 @@ cases! { assert_loop_give_rejected;
   }}
 }}"
     ), "(High) t3 through an alias: the binding given (`y`) is declared outside the loop and its class-mate `x` is what the next pass would read";
+    give_in_a_while_condition_is_rejected: format!(
+        "function holds(give rows: array<int>) -> boolean {{
+  return rows.count() > 0
+}}
+{EAT}function l() -> nothing {{
+  let x: array<int> = [1, 2, 3]
+  while (holds(x)) {{
+    print(`pass`)
+  }}
+}}"
+    ), "(High) t3 through the condition: a `while` condition runs at the top of every pass, so a give made in it reaches the next pass; the loop was opened only after the condition was checked, so typeck accepted a double give";
     give_in_an_inner_loop_reaches_the_outer_pass: format!(
         "{EAT}function l() -> nothing {{
   let x: array<int> = [1, 2, 3]
