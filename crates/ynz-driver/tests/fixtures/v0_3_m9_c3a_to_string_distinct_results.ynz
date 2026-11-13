@@ -1,0 +1,29 @@
+// v0.3-M9 C3a fixture: two `toString()` results alive at the same time must be two strings.
+// Before C3a, `int`/`float`/`number` `.toString()` returned a pointer into one thread-local
+// buffer, so the second call overwrote the first and both lines printed the second value.
+//
+// Expected output: 111 222 7 9 3.25 4.75 (one per line)
+
+function entrypoint() -> nothing {
+  let firstInt: int = 111
+  let secondInt: int = 222
+  let firstIntText: string = firstInt.toString()
+  let secondIntText: string = secondInt.toString()
+
+  let firstFloat: float = (7).toFloat()
+  let secondFloat: float = (9).toFloat()
+  let firstFloatText: string = firstFloat.toString()
+  let secondFloatText: string = secondFloat.toString()
+
+  let firstNumber: number = 3.25
+  let secondNumber: number = 4.75
+  let firstNumberText: string = firstNumber.toString()
+  let secondNumberText: string = secondNumber.toString()
+
+  print(firstIntText)
+  print(secondIntText)
+  print(firstFloatText)
+  print(secondFloatText)
+  print(firstNumberText)
+  print(secondNumberText)
+}

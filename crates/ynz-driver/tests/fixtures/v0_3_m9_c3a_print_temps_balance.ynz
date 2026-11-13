@@ -1,0 +1,22 @@
+// v0.3-M9 C3a fixture: the temporary text `print` and `${}` make of an `int`, `float` or
+// `number` is owned heap now (it used to be a shared thread-local buffer), so the compiled code
+// must release it. 1,000 iterations print each kind once, and interpolate each kind once.
+// Printing frees every temporary; each interpolation result is a string the program still holds
+// (freed by the C7 release pass, not by C3a), so at most one string per iteration may stay
+// allocated: a leaked temporary would leave three or more.
+//
+// Expected last line: 1000
+
+function entrypoint() -> nothing {
+  let i: int = 0
+  let ratio: float = (3).toFloat()
+  let price: number = 9.5
+  while (i < 1000) {
+    print(i)
+    print(ratio)
+    print(price)
+    let line: string = `n=${i} f=${ratio} d=${price}`
+    i = i + 1
+  }
+  print(i)
+}
