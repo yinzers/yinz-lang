@@ -320,3 +320,24 @@ function l(c: boolean, b: Box) -> nothing {
   eat(y)
 }", "a reassignment under `if` made `y` owned on every path, so a field of a borrowed parameter could be given away (High: double free)";
 }
+
+cases! { assert_revive_accepted;
+    sibling_arms_may_each_give_the_same_binding: "function l(n: int) -> nothing {
+  let x: array<int> = [1, 2, 3]
+  if (n) {
+    1 => { eat(x) }
+    else => { eat(x) }
+  }
+}", "arm 1's give leaked into arm 2, so a binding given once on each of two sibling paths was rejected as already given away (High: false rejection of a valid give)";
+}
+
+cases! { assert_revive_rejected;
+    read_after_sibling_arms_that_each_give: "function l(n: int) -> int {
+  let x: array<int> = [1, 2, 3]
+  if (n) {
+    1 => { eat(x) }
+    else => { eat(x) }
+  }
+  return x.count()
+}", "every arm gives `x`, then a read: given on every path, so the join must still reject it (High: read after give)";
+}
