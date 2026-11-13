@@ -210,13 +210,13 @@ fn find_clang() -> &'static str {
         .expect("ASan fixtures need `clang-18` or `clang` on PATH (with libclang-rt-18-dev)")
 }
 
-/// Compile `built`'s emitted IR with the ASan instrumentation pass and link it against the
-/// bundled runtime archive. Returns the path of the sanitized binary.
-pub fn build_asan(built: &Built) -> PathBuf {
-    let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
-    let sanitized_ir = built.ir.with_extension("asan.ll");
-    std::fs::write(&sanitized_ir, instrument_for_asan(&ir)).expect("write instrumented IR");
-    let sanitized_binary = built.binary.with_extension("asan");
+/// Instrument `ir` (LLVM IR text) for ASan, compile it with `clang -fsanitize=address` and link
+/// it against the bundled runtime archive. The files are written into `dir`; returns the path
+/// of the sanitized binary.
+pub fn build_asan_from_ir(dir: &Path, ir: &str) -> PathBuf {
+    let sanitized_ir = dir.join("program.asan.ll");
+    std::fs::write(&sanitized_ir, instrument_for_asan(ir)).expect("write instrumented IR");
+    let sanitized_binary = dir.join("program.asan");
     let output = Command::new(find_clang())
         .args(["-O0", "-g", "-fsanitize=address", "-no-pie"])
         .arg(&sanitized_ir)
@@ -235,11 +235,55 @@ pub fn build_asan(built: &Built) -> PathBuf {
     sanitized_binary
 }
 
-/// Build `fixture_name`, instrument it, run it under AddressSanitizer.
-pub fn run_under_asan(fixture_name: &str, no_optimize: bool) -> RunOutput {
-    let built = build(fixture_name, no_optimize);
-    let sanitized_binary = build_asan(&built);
+/// Compile `built`'s emitted IR with the ASan instrumentation pass and link it against the
+/// bundled runtime archive. Returns the path of the sanitized binary.
+pub fn build_asan(built: &Built) -> PathBuf {
+    let ir = std::fs::read_to_string(&built.ir).expect("read emitted IR");
+    let dir = built
+        .ir
+        .parent()
+        .expect("emitted IR has a parent directory");
+    build_asan_from_ir(dir, &ir)
+}
+
+/// Run an ASan-built binary under the fixtures' `ASAN_OPTIONS`, with the liveness watchdog.
+pub fn run_asan_binary(sanitized_binary: &Path) -> RunOutput {
     let mut cmd = Command::new(sanitized_binary);
     cmd.env("ASAN_OPTIONS", ASAN_OPTIONS);
     run_with_watchdog(cmd)
+}
+
+/// Build `fixture_name`, instrument it, run it under AddressSanitizer.
+pub fn run_under_asan(fixture_name: &str, no_optimize: bool) -> RunOutput {
+    let built = build(fixture_name, no_optimize);
+    run_asan_binary(&build_asan(&built))
+}
+
+/// Build `fixture_name` with `ynz build` and run the binary (no sanitizer, no counters) under
+/// the liveness watchdog. The binary is the watchdog's direct child, so a hang is killed with
+/// the program itself rather than leaving it orphaned behind a `ynz run` parent.
+pub fn run_plain(fixture_name: &str, no_optimize: bool) -> RunOutput {
+    let built = build(fixture_name, no_optimize);
+    run_with_watchdog(Command::new(&built.binary))
+}
+
+/// The shared check of the output-assertion suites: `fixture_name` exits 0 and prints exactly
+/// `expected_stdout`. `what_it_guards` completes the failure message.
+pub fn assert_fixture_prints(
+    fixture_name: &str,
+    no_optimize: bool,
+    expected_stdout: &str,
+    what_it_guards: &str,
+) {
+    let run = run_plain(fixture_name, no_optimize);
+    assert_eq!(
+        run.exit_code, 0,
+        "{fixture_name} (no_optimize={no_optimize}) must run clean; stderr:\n{}",
+        run.stderr
+    );
+    assert_eq!(
+        run.stdout, expected_stdout,
+        "{fixture_name} (no_optimize={no_optimize}): {what_it_guards}; stderr:\n{}",
+        run.stderr
+    );
 }

@@ -2,7 +2,7 @@
 //! `{i64 tag, i64 data}` envelope. Tier: High (data integrity — a wrong read is silent
 //! garbage or an out-of-bounds read).
 //!
-//! RED-first: both fixtures fail on the pre-fix tree.
+//! RED-first: all three fixtures fail on the pre-fix tree (`sm_host` is described below).
 //!   - `field_read`: the arm typed `fig` as the variant but codegen left the binding on the
 //!     16-byte envelope, so `fig.radius` returned the tag word (a zero value, not `5.0`).
 //!   - `payload_copy`: `let inner: Circle = fig` memcpy'd `sizeof(Circle)` bytes out of the
@@ -12,44 +12,21 @@
 //! The AddressSanitizer run itself is not in this suite (it needs the sanitizer runtime);
 //! the output assertions here catch the same defect deterministically: the pre-fix reads
 //! are never the fixture's values. Each fixture runs at the default optimization level and
-//! under `YNZ_NO_OPTIMIZE=1` (what `ynz build --no-optimize` sets) — one named test per case
-//! so the runner parallelizes them and names the failing case.
+//! under `--no-optimize` — one named test per case, built with `ynz build` into its own temp
+//! directory and run as its own process under a liveness watchdog, so the runner parallelizes
+//! them and names the failing case.
 
-use std::path::PathBuf;
-use std::process::Command;
+mod support;
 
-fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
+use support::assert_fixture_prints as assert_prints;
 
-/// Run `ynz run <fixture>` and return (stdout, stderr, exit code; -1 when signalled).
-fn run_fixture(name: &str, no_optimize: bool) -> (String, String, i32) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ynz"));
-    cmd.args(["run", fixture(name).to_str().unwrap()])
-        .env("CLICOLOR", "0");
-    if no_optimize {
-        cmd.env("YNZ_NO_OPTIMIZE", "1");
-    }
-    let output = cmd.output().expect("failed to spawn ynz binary");
-    (
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-        output.status.code().unwrap_or(-1),
-    )
-}
-
+/// The check every case here shares: the narrowed arm reads the variant payload.
 fn assert_fixture_prints(name: &str, no_optimize: bool, expected_stdout: &str) {
-    let (stdout, stderr, code) = run_fixture(name, no_optimize);
-    assert_eq!(
-        code, 0,
-        "{name} (no_optimize={no_optimize}) must run clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, expected_stdout,
-        "{name} (no_optimize={no_optimize}): the narrowed arm must read the variant payload; \
-         stderr:\n{stderr}"
+    assert_prints(
+        name,
+        no_optimize,
+        expected_stdout,
+        "the narrowed arm must read the variant payload",
     );
 }
 
@@ -87,11 +64,19 @@ const SM_HOST: &str = "v0_3_m9_union_narrow_sm_host.ynz";
 fn v03_m9_union_narrow_sm_host_optimized() {
     // WHY: `lower_sm_match` is a second, separate `is`-arm lowering site; fixing only the
     // plain-match site would leave narrowing in any suspending function reading the envelope.
-    assert_fixture_prints(SM_HOST, false, "round\n5.0\nround\nround\n5.0\nround\nresumed\nend\n");
+    assert_fixture_prints(
+        SM_HOST,
+        false,
+        "round\n5.0\nround\nround\n5.0\nround\nresumed\nend\n",
+    );
 }
 
 #[test]
 fn v03_m9_union_narrow_sm_host_no_optimize() {
     // WHY: same SM-site defect at -O0.
-    assert_fixture_prints(SM_HOST, true, "round\n5.0\nround\nround\n5.0\nround\nresumed\nend\n");
+    assert_fixture_prints(
+        SM_HOST,
+        true,
+        "round\n5.0\nround\nround\n5.0\nround\nresumed\nend\n",
+    );
 }

@@ -8,45 +8,32 @@
 //! a slot's width came from the FIRST `let` of that name. The `p01` / `p11` rows pin that the
 //! fix does not disturb the sibling cases that were already right.
 //!
-//! Each case runs at the default optimization level and under `YNZ_NO_OPTIMIZE=1` (what
-//! `ynz build --no-optimize` sets). One generated module per case, one named test per
-//! optimization level, so the runner parallelizes them and names the failing case. Each
-//! `ynz run` is its own process (`.claude/rules/test-parallelism.md`).
+//! Each case runs at the default optimization level and under `--no-optimize`. One generated
+//! module per case, one named test per optimization level, so the runner parallelizes them and
+//! names the failing case. Each case builds with `ynz build` into its own temp directory and
+//! runs the binary as its own process, under a liveness watchdog
+//! (`.claude/rules/test-parallelism.md`).
+//!
+//! Why 34 tests where the SOP says "about 8" per High-tier unit: the 17 rows are the table of
+//! edge cases at this contract's boundary, not 17 copies of one check. Each row is a distinct
+//! binding shape (param / local / `for` var / destructure alias / `errors` value / background
+//! argument; crossing vs non-crossing; int / number / shape / string widths) that reached the
+//! mis-compile through a different keyed-by-name site (one S2 probe each). The second level
+//! exists because at the default level the optimizer's
+//! alloca promotion can split a shared alloca by access type and hide a width or aliasing
+//! defect (rows `p26`..`p29`, `m03`); `--no-optimize` keeps the shared alloca visible.
 
-use std::path::PathBuf;
-use std::process::Command;
+mod support;
 
-fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
+use support::assert_fixture_prints as assert_prints;
 
-/// Run `ynz run <fixture>`; return (stdout, stderr, exit code; -1 when signalled).
-fn run_fixture(name: &str, no_optimize: bool) -> (String, String, i32) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ynz"));
-    cmd.args(["run", fixture(name).to_str().unwrap()])
-        .env("CLICOLOR", "0");
-    if no_optimize {
-        cmd.env("YNZ_NO_OPTIMIZE", "1");
-    }
-    let output = cmd.output().expect("failed to spawn ynz binary");
-    (
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-        output.status.code().unwrap_or(-1),
-    )
-}
-
+/// The check every case here shares: each binding keeps its own slot.
 fn assert_fixture_prints(name: &str, no_optimize: bool, expected_stdout: &str) {
-    let (stdout, stderr, code) = run_fixture(name, no_optimize);
-    assert_eq!(
-        code, 0,
-        "{name} (no_optimize={no_optimize}) must run clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, expected_stdout,
-        "{name} (no_optimize={no_optimize}): each binding must keep its own slot; stderr:\n{stderr}"
+    assert_prints(
+        name,
+        no_optimize,
+        expected_stdout,
+        "each binding must keep its own slot",
     );
 }
 
