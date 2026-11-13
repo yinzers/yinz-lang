@@ -22,7 +22,7 @@ pub struct RuntimeDecls<'ctx> {
     // Decimal conversion from float: (double x, ptr out) → void
     pub decimal_from_float: FunctionValue<'ctx>,
 
-    // Formatting: (value, ptr buf, i64 buf_len) → i64 bytes_written
+    // Formatting: (value) → ptr to a fresh heap string the caller owns (`ynz_string_release`)
     pub decimal_to_string: FunctionValue<'ctx>,
     pub int_to_string: FunctionValue<'ctx>,
     pub float_to_string: FunctionValue<'ctx>,

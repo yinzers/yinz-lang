@@ -3217,9 +3217,9 @@ pub unsafe extern "C" fn ynz_bignum_neg(a: *const i8, precision: u16) -> *mut i8
     bignum_binop(c"0".as_ptr().cast(), a, precision, bignum_sub_op)
 }
 
-/// Parse one bignum operand of a comparison. A compare has no value to fall back to, so text
-/// that is not a number is a compiler bug (every bignum text comes from a bignum operation or a
-/// decimal128 conversion): abort loudly rather than compare against a made-up zero.
+/// Parse one bignum operand of an arithmetic or comparison entry point. Text that is not a
+/// number is a compiler bug (every bignum text comes from a bignum operation or a decimal128
+/// conversion): abort loudly rather than compute with a made-up zero.
 ///
 /// # Safety
 /// `text` must be a valid null-terminated string.
@@ -3232,7 +3232,7 @@ unsafe fn parse_bignum_operand(text: *const i8, precision: u16) -> BigNum {
         Some(number) => number,
         None => {
             eprintln!(
-                "INTERNAL ERROR: a bignum comparison was given text that is not a number. \
+                "INTERNAL ERROR: a bignum operation was given text that is not a number. \
                  This is a compiler bug — please file an issue at \
                  https://github.com/yinz-lang/yinz/issues with the source file attached."
             );
@@ -3251,10 +3251,8 @@ unsafe fn bignum_binop(
     precision: u16,
     op: fn(&BigNum, &BigNum) -> BigNum,
 ) -> *mut i8 {
-    let a_str = std::ffi::CStr::from_ptr(a).to_str().unwrap_or("0");
-    let b_str = std::ffi::CStr::from_ptr(b).to_str().unwrap_or("0");
-    let an = parse_bignum(a_str, precision).unwrap_or_else(|| BigNum::zero(precision));
-    let bn_val = parse_bignum(b_str, precision).unwrap_or_else(|| BigNum::zero(precision));
+    let an = parse_bignum_operand(a, precision);
+    let bn_val = parse_bignum_operand(b, precision);
     let result = op(&an, &bn_val);
     let formatted = format_bignum(&result);
     if formatted.as_bytes().contains(&0) {
