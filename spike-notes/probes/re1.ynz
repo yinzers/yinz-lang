@@ -1,0 +1,6 @@
+function entrypoint() -> nothing {
+  let x: array<int> = [1, 2, 3]
+  let y: array<int> = [4]
+  x = y
+  print(x.count().toString())
+}

@@ -4572,6 +4572,9 @@ fn lower_function<'ctx, 'g>(
         }
         lower_stmt(&mut cg, stmt)?;
     }
+    if !is_block_terminated(&cg) {
+        emit_block_release(&mut cg, &f.body)?;
+    }
 
     // Implicit terminator if the current block has no terminator yet.
     //
@@ -6260,6 +6263,10 @@ fn lower_sm_body<'ctx, 'g>(
         &mut current_state,
     )?;
 
+    if !is_block_terminated(cg) {
+        emit_block_release(cg, body)?;
+    }
+
     // Emit the terminal transition: write typed return value to return_slot@16, return Ready.
     if !is_block_terminated(cg) {
         // For nothing-returning fns: store 0 as the return value (harmless to read).
@@ -7246,6 +7253,9 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 shape_table,
                 current_state,
             )?;
+            if !is_block_terminated(cg) {
+                emit_block_release(cg, body)?;
+            }
             cg.sm_scope_depth -= 1;
             // Restore ALL snapshot entries — same lexical-scoping rationale as lower_stmt's
             // Stmt::If arm. Crossing sm_entry allocas stay active; shadow bindings are unwound.
@@ -7384,6 +7394,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 current_state,
             )?;
             if !is_block_terminated(cg) {
+                emit_block_release(cg, body)?;
                 // Body didn't contain a return: release this iteration's allocas (leaf
                 // wait-free bodies only), then the back edge — a poll-yield suspension
                 // point when this function is admitted (Phase 6), else the legacy
@@ -14070,8 +14081,8 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             r?;
         }
 
-        Stmt::Return { value, .. } => {
-            lower_stmt_return(cg, value.as_ref())?;
+        Stmt::Return { value, span } => {
+            lower_stmt_return(cg, value.as_ref(), span)?;
         }
 
         Stmt::FieldAssign { target, value, .. } => {
@@ -14181,6 +14192,9 @@ fn lower_stmt_if<'ctx>(
             break;
         }
         lower_stmt(cg, stmt)?;
+    }
+    if !is_block_terminated(cg) {
+        emit_block_release(cg, body)?;
     }
     if !is_block_terminated(cg) {
         cg.builder
@@ -14437,6 +14451,7 @@ fn lower_stmt_while<'ctx>(
         lower_stmt(cg, stmt)?;
     }
     if !is_block_terminated(cg) {
+        emit_block_release(cg, body)?;
         emit_loop_preempt(cg)?;
         cg.loop_stack_restore(loop_sp)?;
         cg.builder
@@ -15083,7 +15098,95 @@ fn lower_stmt_for<'ctx>(
     Ok(())
 }
 
-fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Result<(), String> {
+// ── SPIKE S3: THE release helper ────────────────────────────────────────────────────────────
+//
+// One function serves BOTH codegen paths. It reads a typeck-persisted exit record
+// (`TypedModule::release_plan`) and frees every `Fate::Release` binding by loading the
+// binding's pointer from its slot (`cg.locals[name]`) — a plain alloca in a normal function, the
+// sm_entry crossing alloca (re-loaded from the frame at each resume) in a state-machine resume
+// function — and calling the type's drop. It asks no ownership question: moved / returned /
+// not-owner bindings arrive as `Omitted*` and are skipped. Names must be unique per list
+// (S2/C4 uniquify pass); a duplicate is a loud error, never a guess.
+//
+// O(k) time, O(1) space for k release entries: one load + one call each.
+fn emit_release_list<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    entries: &[ynz_typeck::release_plan::ReleaseEntry],
+    site: &str,
+) -> Result<(), String> {
+    use ynz_typeck::release_plan::{Fate, ReleaseKind};
+    if std::env::var("YNZ_SPIKE_NO_RELEASE").is_ok() {
+        return Ok(()); // negative control for the spike harness only
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for entry in entries {
+        if seen.contains(&entry.name.as_str()) {
+            return Err(format!(
+                "release pass ({site}): two live bindings named `{}` in one exit list — \
+                 names must be unique per function (binding-uniquify pass)",
+                entry.name
+            ));
+        }
+        seen.push(entry.name.as_str());
+    }
+    for entry in entries {
+        if entry.fate != Fate::Release {
+            continue;
+        }
+        let kind = entry
+            .kind
+            .ok_or_else(|| format!("release pass ({site}): `{}` has Release but no kind", entry.name))?;
+        let slot = *cg
+            .locals
+            .get(entry.name.as_str())
+            .ok_or_else(|| format!("release pass ({site}): no slot for `{}`", entry.name))?;
+        let value = cg
+            .builder
+            .build_load(cg.ptr(), slot, &format!("rel_{}", entry.name))
+            .map_err(|e| format!("release load: {e}"))?;
+        match kind {
+            ReleaseKind::ArrayPrimitive => {
+                cg.builder
+                    .build_call(cg.rt.ynz_array_drop, &[value.into()], "rel_array_drop")
+                    .map_err(|e| format!("release call: {e}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fallthrough end of `block` (and loop back-edge for its per-iteration locals).
+fn emit_block_release<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    block: &ynz_ast::nodes::Block,
+) -> Result<(), String> {
+    let key = (block.span.start, block.span.end);
+    let typed = cg.typed;
+    match typed.release_plan.block_end.get(&key) {
+        Some(list) => emit_release_list(cg, list, "block end"),
+        // Generic function bodies are not recorded by the prototype (leak, sound).
+        None => Ok(()),
+    }
+}
+
+/// A `return` statement's exit edge: all open scopes minus what the value carries out.
+fn emit_return_release<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    span: &ynz_diagnostics::SourceSpan,
+) -> Result<(), String> {
+    let key = (span.start, span.end);
+    let typed = cg.typed;
+    match typed.release_plan.return_edge.get(&key) {
+        Some(list) => emit_release_list(cg, list, "return"),
+        None => Ok(()),
+    }
+}
+
+fn lower_stmt_return<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    value: Option<&Expr>,
+    span: &ynz_diagnostics::SourceSpan,
+) -> Result<(), String> {
     // v0.3-M2 P7: inside a state-machine resume function, explicit `return expr` must
     // store the typed value in the frame's return_slot@16 and emit `ret i32 0` (Ready).
     // This is the fix for Bug A (value-returning SM) — the resume fn returns i32, not the Yinz type.
@@ -15455,6 +15558,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                 }
             }
         }
+        emit_return_release(cg, span)?;
         cg.builder
             .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
             .map_err(|e| format!("sm resume ready ret: {e}"))?;
@@ -15462,6 +15566,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
     }
 
     if cg.is_main {
+        emit_return_release(cg, span)?;
         // Drain in-flight background tasks before exiting.
         cg.builder
             .build_call(cg.rt.ynz_rt_shutdown, &[], "rt_shutdown")
@@ -15543,12 +15648,14 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
     }
     match value {
         None => {
+            emit_return_release(cg, span)?;
             cg.builder
                 .build_return(None)
                 .map_err(|e| format!("void ret: {e}"))?;
         }
         Some(expr) => {
             let val = lower_expr(cg, expr)?;
+            emit_return_release(cg, span)?;
             // v0.3-M7 Phase 3 / R9: number / maybe / shape return BY VALUE — never
             // `ret ptr <callee-own-alloca>` (the "copy-and-forget" ABI the optimizer
             // legally miscompiled: stores to the dying alloca get deleted and the
@@ -15790,7 +15897,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             Ok(g.as_pointer_value().into())
         }
 
-        Expr::Ident(name, _) => {
+        Expr::Ident(name, ident_span) => {
             let slot = *cg
                 .locals
                 .get(name.as_str())
@@ -15826,7 +15933,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     } else {
                         ty.clone()
                     };
-                    let success_val = lower_ec_auto_propagate(cg, result_struct, &inner_ty)?;
+                    let success_val = lower_ec_auto_propagate(cg, result_struct, &inner_ty, ident_span)?;
                     let new_slot = cg.alloca(&inner_ty, &format!("{name}_ec_inner"))?;
                     store(cg, success_val, &inner_ty, new_slot)?;
                     cg.locals.insert(name.to_string(), new_slot);
@@ -15876,6 +15983,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             .map_err(|e| format!("sm nap branch: {e}"))?;
                         // Error path: store {error_ptr, 0} to frame return slot, signal Ready.
                         cg.builder.position_at_end(propagate_bb);
+                        emit_return_release(cg, ident_span)?;
                         state_machine::store_return_value_errors(
                             cg.ctx,
                             &cg.builder,
@@ -21165,6 +21273,7 @@ fn lower_ec_auto_propagate<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     result_struct: inkwell::values::StructValue<'ctx>,
     inner_ty: &Type,
+    site: &ynz_diagnostics::SourceSpan,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let result_ty = errors_result_type(cg.ctx);
 
@@ -21191,6 +21300,7 @@ fn lower_ec_auto_propagate<'ctx>(
 
     // Propagation block: pop frame, wrap error, early-return.
     cg.builder.position_at_end(propagate_bb);
+    emit_return_release(cg, site)?;
     cg.builder
         .build_call(cg.rt.ynz_frame_pop, &[], "ap_pop")
         .map_err(|e| format!("ap pop: {e}"))?;

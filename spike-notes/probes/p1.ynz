@@ -1,0 +1,27 @@
+function eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+
+function plain(c: boolean) -> int {
+  let a: array<int> = [1, 2, 3]
+  let b: array<int> = [4, 5]
+  if (c) {
+    let inner: array<int> = [7]
+    print(inner.count().toString())
+  }
+  let i: int = 0
+  while (i < 3) {
+    let per: array<int> = [i, i]
+    i = i + 1
+  }
+  if (c) {
+    return a.count()
+  }
+  eat(b)
+  return 0
+}
+
+function entrypoint() -> nothing {
+  print(plain(true).toString())
+  print(plain(false).toString())
+}

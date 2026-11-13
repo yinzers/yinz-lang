@@ -1,0 +1,33 @@
+function eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+
+function susp(c: boolean) -> int {
+  let a: array<int> = [1, 2, 3]
+  let b: array<int> = [4, 5]
+  wait sleep(1)
+  if (c) {
+    let inner: array<int> = [7]
+    wait sleep(1)
+    print(inner.count().toString())
+  }
+  let i: int = 0
+  while (i < 2) {
+    let per: array<int> = [i, i]
+    wait sleep(1)
+    print(per.count().toString())
+    i = i + 1
+  }
+  if (c) {
+    return a.count()
+  }
+  eat(b)
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let r1: int = susp(true)
+  print(r1.toString())
+  let r2: int = susp(false)
+  print(r2.toString())
+}

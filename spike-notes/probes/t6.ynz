@@ -1,0 +1,10 @@
+shape Bag {
+  items: array<int>
+}
+function entrypoint() -> nothing {
+  let a: array<int> = [1, 2, 3]
+  let b: Bag = { items: [0] }
+  b.items = a
+  print(b.items.count().toString())
+  print(a.count().toString())
+}

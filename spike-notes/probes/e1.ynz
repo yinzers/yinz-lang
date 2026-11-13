@@ -1,0 +1,17 @@
+function fallibleStep(fail: boolean) -> int errors {
+  let local: array<int> = [1, 2, 3]
+  let other: array<int> = [4]
+  wait sleep(1)
+  let v = wait __testFallibleAsync(fail)
+  print(local.count().toString())
+  return v
+}
+
+function entrypoint() -> nothing {
+  let r = fallibleStep(true)
+  let safe = r.or(99)
+  print(safe.toString())
+  let r2 = fallibleStep(false)
+  let safe2 = r2.or(99)
+  print(safe2.toString())
+}

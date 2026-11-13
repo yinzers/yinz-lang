@@ -1,0 +1,10 @@
+function entrypoint() -> nothing {
+  let x: array<int> = [1, 2, 3]
+  let c: boolean = true
+  if (c) {
+    let x: array<int> = [9]
+    print(x.count().toString())
+    return
+  }
+  print(x.count().toString())
+}

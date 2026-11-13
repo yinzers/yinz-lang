@@ -1,0 +1,15 @@
+shape Pair {
+  first: array<int>
+  second: array<int>
+}
+function make() -> Pair {
+  let a: array<int> = [1, 2, 3]
+  let c: array<int> = [4, 5]
+  let p: Pair = { first: a, second: c }
+  return p
+}
+function entrypoint() -> nothing {
+  let p: Pair = make()
+  print(p.first.count().toString())
+  print(p.second.count().toString())
+}

@@ -4586,6 +4586,7 @@ impl<'b> Checker<'b> {
                     // on-failure IR at P4a; for typeck, just return the inner type.
                     self.errors_success_narrowed.insert(entry.alias_class);
                     self.errors_consumed.insert(entry.alias_class);
+                    self.record_return_exit(None, span);
                     return inner;
                 }
                 // Outside an errors function: return the full ErrorsCapable type.

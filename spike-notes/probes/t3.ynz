@@ -1,0 +1,15 @@
+function eat(give rows: array<int>) -> nothing {
+  print(rows.count().toString())
+}
+function l(c: boolean) -> nothing {
+  let x: array<int> = [1, 2, 3]
+  let i: int = 0
+  while (i < 3) {
+    if (c) { return }
+    eat(x)
+    i = i + 1
+  }
+}
+function entrypoint() -> nothing {
+  l(false)
+}

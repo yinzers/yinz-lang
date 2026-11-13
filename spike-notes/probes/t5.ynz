@@ -1,0 +1,12 @@
+shape Bag {
+  items: array<int>
+}
+function make() -> Bag {
+  let a: array<int> = [1, 2, 3]
+  let b: Bag = { items: a }
+  return b
+}
+function entrypoint() -> nothing {
+  let bag: Bag = make()
+  print(bag.items.count().toString())
+}
