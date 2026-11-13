@@ -87,11 +87,11 @@ const SM_HOST: &str = "v0_3_m9_union_narrow_sm_host.ynz";
 fn v03_m9_union_narrow_sm_host_optimized() {
     // WHY: `lower_sm_match` is a second, separate `is`-arm lowering site; fixing only the
     // plain-match site would leave narrowing in any suspending function reading the envelope.
-    assert_fixture_prints(SM_HOST, false, "round\n5.0\nround\nend\n");
+    assert_fixture_prints(SM_HOST, false, "round\n5.0\nround\nround\n5.0\nround\nresumed\nend\n");
 }
 
 #[test]
 fn v03_m9_union_narrow_sm_host_no_optimize() {
     // WHY: same SM-site defect at -O0.
-    assert_fixture_prints(SM_HOST, true, "round\n5.0\nround\nend\n");
+    assert_fixture_prints(SM_HOST, true, "round\n5.0\nround\nround\n5.0\nround\nresumed\nend\n");
 }
