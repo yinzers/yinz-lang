@@ -543,6 +543,50 @@ mod tests {
         assert_eq!(receiver_name(&function.body.stmts[3]), "x", "outer read");
     }
 
+    // WHY: the scope-exit release pass (card C5) asks "which binding does this use name?" through
+    // `declaration_of_use` and `codegen_name`. Two live bindings share the name `x` here; a
+    // lookup that went by the name would answer the same for both and release (or keep) the
+    // wrong one. Tier: High (data integrity — the same class as the slot sharing this map closes).
+    #[test]
+    fn declaration_lookup_by_use_distinguishes_same_name_bindings() {
+        let source = "function entrypoint() -> nothing {\n  let flag = true\n  let x = 1\n  \
+                      if (flag) {\n    let x = 2\n    print(x.toString())\n  }\n  \
+                      print(x.toString())\n}\n";
+        let (module, names) = recorded(source);
+        let Item::Function(function) = &module.items[0] else {
+            panic!("expected the entrypoint function");
+        };
+        let receiver_use = |stmt: &Stmt| {
+            let Stmt::Expr(Expr::Call(call)) = stmt else {
+                panic!("expected a print call");
+            };
+            let Expr::MethodCall { receiver, .. } = &call.args[0] else {
+                panic!("expected x.toString()");
+            };
+            let Expr::Ident(name, span) = receiver.as_ref() else {
+                panic!("expected an identifier receiver");
+            };
+            (name.clone(), span.clone())
+        };
+        let Stmt::If { body, .. } = &function.body.stmts[2] else {
+            panic!("expected the if");
+        };
+        let (inner_name, inner_span) = receiver_use(&body.stmts[1]);
+        let (outer_name, outer_span) = receiver_use(&function.body.stmts[3]);
+        let inner_declaration = names
+            .declaration_of_use(&inner_span, &inner_name)
+            .expect("the inner use is resolved");
+        let outer_declaration = names
+            .declaration_of_use(&outer_span, &outer_name)
+            .expect("the outer use is resolved");
+        assert_ne!(
+            inner_declaration, outer_declaration,
+            "two bindings named `x` are two declarations"
+        );
+        assert_eq!(names.codegen_name(inner_declaration), Some("x__1"));
+        assert_eq!(names.codegen_name(outer_declaration), Some("x"));
+    }
+
     // WHY: Fail Fast — a declaration typeck never recorded must be a hard error, never the raw
     // name (which would silently share a slot with another binding).
     #[test]
