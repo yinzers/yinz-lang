@@ -1582,6 +1582,7 @@ fn lower_generic_function<'ctx>(
         sm_crossing_shape_names: HashMap::new(),
         sm_crossing_shape_allocas: HashMap::new(),
         sm_scope_depth: 0,
+        narrowed_unions: Vec::new(),
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
         // Generic functions cannot contain `wait` — auto-parallel is never applicable.
@@ -1878,6 +1879,18 @@ struct SoaArrayInfo<'ctx> {
     segments: Vec<SoaSegment<'ctx>>,
 }
 
+/// One union `is`-arm narrowing in force (see `Cg::narrowed_unions`).
+struct NarrowedUnion<'ctx> {
+    /// The scrutinee binding's codegen name.
+    name: String,
+    /// The scrutinee expression, re-lowered against `outer_slot` to re-derive the envelope.
+    scrutinee: Expr,
+    /// The binding's slot outside the arm: holds the union envelope.
+    outer_slot: PointerValue<'ctx>,
+    /// The arm's slot: holds the variant payload pointer; `cg.locals[name]` inside the arm.
+    narrowed_slot: PointerValue<'ctx>,
+}
+
 struct Cg<'ctx, 'g> {
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
@@ -2034,6 +2047,12 @@ struct Cg<'ctx, 'g> {
     // bindings (a `let x` where outer `x` crosses a wait) are rejected at typeck
     // (ShadowsCrossingLocal), so at codegen time depth > 0 never signals a shadow.
     sm_scope_depth: usize,
+    // Union `is`-arm narrowings in force at the current lowering point, innermost last
+    // (`narrow_union_local_to_variant` pushes, `restore_narrowed_local` pops). A state-machine
+    // resume reloads bindings from the frame AFTER the arm entry that narrowed them, so
+    // `reload_params_from_frame` reads this to write the reloaded envelope to the OUTER slot
+    // and re-derive the payload pointer (`renarrow_union_locals`).
+    narrowed_unions: Vec<NarrowedUnion<'ctx>>,
     // Counter tracking how many suspending for-loops have been emitted in this SM function.
     // Generates the matching synthetic crossing-local name `__ynz_for_idx_N` that
     // typeck pre-allocates a frame slot for. Must increment in the same order as
@@ -3670,6 +3689,12 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .build_store(narrowed_slot, payload)
             .map_err(|err| format!("{site}: store narrowed payload: {err}"))?;
         self.locals.insert(name.to_string(), narrowed_slot);
+        self.narrowed_unions.push(NarrowedUnion {
+            name: name.to_string(),
+            scrutinee: scrutinee.clone(),
+            outer_slot,
+            narrowed_slot,
+        });
         Ok(Some((name.to_string(), outer_slot)))
     }
 
@@ -3677,8 +3702,60 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     /// overlay at the same point).
     fn restore_narrowed_local(&mut self, narrowed: Option<(String, PointerValue<'ctx>)>) {
         if let Some((name, outer_slot)) = narrowed {
+            let closed = self.narrowed_unions.pop();
+            debug_assert!(
+                closed.as_ref().is_some_and(|entry| entry.name == name),
+                "narrowed_unions is out of step with the `is` arm being closed"
+            );
             self.locals.insert(name, outer_slot);
         }
+    }
+
+    /// The slot a frame reload writes `name`'s value to: the binding's OUTER slot while an
+    /// `is` arm narrows it (the arm's slot holds the payload pointer, never the envelope),
+    /// otherwise `cg.locals[name]`.
+    ///
+    /// Time: O(d) for d nested narrowings (the `is`-arm nesting depth)  Space: O(1)
+    fn reload_slot(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        self.narrowed_unions
+            .iter()
+            .rev()
+            .find(|entry| entry.name == name)
+            .map(|entry| entry.outer_slot)
+            .or_else(|| self.locals.get(name).copied())
+    }
+
+    /// Re-derive every narrowed binding's payload pointer from its just-reloaded envelope.
+    /// A state-machine resume enters the arm at a post-`wait` state block, skipping the arm
+    /// entry where `narrow_union_local_to_variant` stored the payload pointer, so in this
+    /// invocation the arm's entry-block slot is uninitialized until this runs. It re-lowers
+    /// the scrutinee against the outer slot: the same derivation the arm entry used.
+    ///
+    /// Time: O(d) for d nested narrowings  Space: O(d)
+    fn renarrow_union_locals(&mut self) -> Result<(), String> {
+        let narrowings: Vec<(String, Expr, PointerValue<'ctx>, PointerValue<'ctx>)> = self
+            .narrowed_unions
+            .iter()
+            .map(|entry| {
+                (
+                    entry.name.clone(),
+                    entry.scrutinee.clone(),
+                    entry.outer_slot,
+                    entry.narrowed_slot,
+                )
+            })
+            .collect();
+        for (name, scrutinee, outer_slot, narrowed_slot) in narrowings {
+            self.locals.insert(name.clone(), outer_slot);
+            let envelope = lower_expr(self, &scrutinee);
+            self.locals.insert(name.clone(), narrowed_slot);
+            let payload =
+                self.union_payload_ptr(envelope?.into_pointer_value(), "is_arm_resume")?;
+            self.builder
+                .build_store(narrowed_slot, payload)
+                .map_err(|err| format!("re-narrow `{name}` after resume: {err}"))?;
+        }
+        Ok(())
     }
 
     /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
@@ -4590,6 +4667,7 @@ fn lower_function<'ctx, 'g>(
         sm_crossing_shape_names: HashMap::new(),
         sm_crossing_shape_allocas: HashMap::new(),
         sm_scope_depth: 0,
+        narrowed_unions: Vec::new(),
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
         // Non-SM functions cannot contain independent suspending groups.
@@ -5101,6 +5179,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_ec_number_set: HashSet::new(),  // populated during alloca creation below
         sm_crossing_ec_number_i128_allocas: HashMap::new(), // populated during alloca creation below
         sm_scope_depth: 0,
+        narrowed_unions: Vec::new(),
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: number_errors_staging_offset,
         // When set, lower_sm_block skips independence analysis and lowers all stmts
@@ -6029,9 +6108,8 @@ fn reload_params_from_frame<'ctx>(
         let bits = state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, pname)?;
         let param_decl = &f.params[slot_idx];
         let param_ty = ast_type_to_typeck_type(&param_decl.ty, shape_table);
-        let alloca = *cg
-            .locals
-            .get(pname)
+        let alloca = cg
+            .reload_slot(pname)
             .ok_or_else(|| format!("sm reload: alloca for {pname} missing"))?;
         let bits_to_store = cg.to_i64_bits(cg.i64_bits_to(bits, &param_ty)?, &param_ty)?;
         cg.builder
@@ -6066,7 +6144,7 @@ fn reload_params_from_frame<'ctx>(
                 let slot_idx = slot_indices[i];
                 let bits =
                     state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, cname)?;
-                if let Some(&alloca) = cg.locals.get(cname) {
+                if let Some(alloca) = cg.reload_slot(cname) {
                     let is_int = scalar_set.contains(cname.as_str());
                     let is_bool = bool_set.contains(cname.as_str());
                     let is_float = float_set.contains(cname.as_str());
@@ -6287,7 +6365,7 @@ fn reload_params_from_frame<'ctx>(
             }
         }
     } // end reload_crossing guard
-    Ok(())
+    cg.renarrow_union_locals()
 }
 
 /// Lower the body of a state-machine function.
@@ -8352,15 +8430,18 @@ fn lower_sm_match<'ctx, 'g>(
                 || (cg.m3d_spike
                     && stmt_block_has_direct_cpu_group(&arm.body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
-        // `is Variant =>`: re-point the scrutinee binding at the variant payload (the
-        // snapshot restore below undoes it, the same window typeck's overlay uses).
-        if matches!(arm.pattern.kind, MatchPatternKind::Is(_)) {
+        // `is Variant =>`: re-point the scrutinee binding at the variant payload for the arm
+        // body, the same window typeck's overlay uses. A `wait` inside the arm re-derives the
+        // payload on resume (`reload_params_from_frame` → `renarrow_union_locals`).
+        let narrowed = if matches!(arm.pattern.kind, MatchPatternKind::Is(_)) {
             cg.narrow_union_local_to_variant(
                 scrutinee,
                 scrutinee_val.into_pointer_value(),
                 "sm_is_arm",
-            )?;
-        }
+            )?
+        } else {
+            None
+        };
         cg.sm_scope_depth += 1;
         if arm_routes_to_sm {
             lower_sm_block(
@@ -8384,6 +8465,7 @@ fn lower_sm_match<'ctx, 'g>(
             }
         }
         cg.sm_scope_depth -= 1;
+        cg.restore_narrowed_local(narrowed);
         for (name, &outer_alloca) in &locals_snapshot {
             cg.locals.insert(name.clone(), outer_alloca);
         }

@@ -60,59 +60,69 @@ fn v03_m9_union_narrow_payload_copy_no_optimize() {
     assert_fixture_prints(PAYLOAD_COPY, true, "round\n5.0\n78.5\nt\n");
 }
 
-/// `let inner: Circle = fig` inside `is Circle =>` must read exactly the payload's bytes: the
-/// pre-fix copy ran `sizeof(Circle)` bytes past the 16-byte envelope (ASan: READ in memcpy).
-/// Tier: High (data integrity / memory safety).
-fn assert_payload_copy_asan_clean(no_optimize: bool) {
-    let run = run_under_asan(PAYLOAD_COPY, no_optimize);
+/// `fixture_name` runs clean under AddressSanitizer and prints `expected_stdout`: a narrowed
+/// read that lands in the envelope can return plausible bytes, so the output alone does not
+/// prove the read stayed inside the payload. Tier: High (data integrity / memory safety).
+fn assert_asan_clean(fixture_name: &str, no_optimize: bool, expected_stdout: &str) {
+    let run = run_under_asan(fixture_name, no_optimize);
     assert!(
         !run.stderr.contains("AddressSanitizer"),
-        "{PAYLOAD_COPY} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
+        "{fixture_name} (no_optimize={no_optimize}): AddressSanitizer reported an error:\n{}",
         run.stderr
     );
     assert_eq!(
         run.exit_code, 0,
-        "{PAYLOAD_COPY} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
+        "{fixture_name} (no_optimize={no_optimize}) must exit 0; stderr:\n{}",
         run.stderr
     );
     assert_eq!(
-        run.stdout, "round\n5.0\n78.5\nt\n",
-        "{PAYLOAD_COPY} (no_optimize={no_optimize}): wrong values; stderr:\n{}",
+        run.stdout, expected_stdout,
+        "{fixture_name} (no_optimize={no_optimize}): wrong values; stderr:\n{}",
         run.stderr
     );
 }
 
 #[test]
 fn v03_m9_union_narrow_payload_copy_asan_optimized() {
-    // WHY: C1 criterion 2 — the payload copy is memory-safe, not merely plausible-looking.
-    assert_payload_copy_asan_clean(false);
+    // WHY: C1 criterion 2 — `let inner: Circle = fig` read sizeof(Circle) bytes out of the
+    // 16-byte envelope (ASan: READ in memcpy); the copy must be memory-safe, not merely
+    // plausible-looking.
+    assert_asan_clean(PAYLOAD_COPY, false, "round\n5.0\n78.5\nt\n");
 }
 
 #[test]
 fn v03_m9_union_narrow_payload_copy_asan_no_optimize() {
     // WHY: same out-of-bounds copy at -O0, where nothing optimizes the read away.
-    assert_payload_copy_asan_clean(true);
+    assert_asan_clean(PAYLOAD_COPY, true, "round\n5.0\n78.5\nt\n");
 }
 
-const SM_HOST: &str ="v0_3_m9_union_narrow_sm_host.ynz";
+const SM_HOST: &str = "v0_3_m9_union_narrow_sm_host.ynz";
+const SM_HOST_STDOUT: &str =
+    "round\n5.0\nround\nround\n5.0\nround\nresumed\n5.0\nround\nround\nend\n";
 
 #[test]
 fn v03_m9_union_narrow_sm_host_optimized() {
     // WHY: `lower_sm_match` is a second, separate `is`-arm lowering site; fixing only the
     // plain-match site would leave narrowing in any suspending function reading the envelope.
-    assert_fixture_prints(
-        SM_HOST,
-        false,
-        "round\n5.0\nround\nround\n5.0\nround\nresumed\nend\n",
-    );
+    // The post-`wait` reads catch a resume that reloads the envelope into the payload slot.
+    assert_fixture_prints(SM_HOST, false, SM_HOST_STDOUT);
 }
 
 #[test]
 fn v03_m9_union_narrow_sm_host_no_optimize() {
     // WHY: same SM-site defect at -O0.
-    assert_fixture_prints(
-        SM_HOST,
-        true,
-        "round\n5.0\nround\nround\n5.0\nround\nresumed\nend\n",
-    );
+    assert_fixture_prints(SM_HOST, true, SM_HOST_STDOUT);
+}
+
+#[test]
+fn v03_m9_union_narrow_sm_host_asan_optimized() {
+    // WHY: after a `wait` inside the arm, `let after: Circle = fig` copied sizeof(Circle) bytes
+    // out of the 16-byte envelope the resume reload had written into the payload slot.
+    assert_asan_clean(SM_HOST, false, SM_HOST_STDOUT);
+}
+
+#[test]
+fn v03_m9_union_narrow_sm_host_asan_no_optimize() {
+    // WHY: same post-resume envelope read at -O0.
+    assert_asan_clean(SM_HOST, true, SM_HOST_STDOUT);
 }

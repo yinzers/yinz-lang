@@ -5,12 +5,15 @@
 //     suspend, so the statement lowers through the plain-match site inside a state-machine host.
 //   - `showSuspending` has a `wait` INSIDE the `is Circle` arm, so the statement lowers through
 //     `lower_sm_match`, the state-machine site. (A union local cannot cross a `wait` yet, so the
-//     union is a `share` parameter there and is not read after the suspension.)
+//     union is a `share` parameter there.) The arm reads `fig` again AFTER the `wait`: the
+//     resume re-enters the arm at a fresh invocation, past the arm entry that narrowed `fig`.
 // In both, the narrowed `fig` is passed to a function, used as a UFCS receiver, and copied
 // with `let inner: Circle = fig`.
 // Correct behavior: prints `round`, `5.0`, `round`, then `round`, `5.0`, `round`, `resumed`,
-// then `end`; clean under AddressSanitizer.
-// Pre-fix failure: every one of those reads went through the 16-byte union envelope.
+// `5.0`, `round`, `round`, then `end`; clean under AddressSanitizer.
+// Pre-fix failure: every one of those reads went through the 16-byte union envelope. After the
+// narrowing fix, the post-`wait` reads still did: the resume's frame reload wrote the envelope
+// into the arm's payload slot (`0.000...` for `fig.radius`, SIGSEGV on `fig.label`).
 // Fields are `number` (a plain `float` prints `0.000...` — separate pre-existing bug).
 
 shape Circle {
@@ -39,6 +42,10 @@ function showSuspending(share fig: Figure) -> nothing {
       print(inner.label)
       wait sleep(1)
       print(`resumed`)
+      print(fig.radius)
+      print(fig.label)
+      let after: Circle = fig
+      print(after.label)
     }
     is Square => {
       print(fig.side)
