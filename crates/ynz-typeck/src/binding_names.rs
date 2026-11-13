@@ -445,6 +445,7 @@ mod tests {
     //! Tier: High (data integrity — the names decide which binding owns a frame slot).
 
     use ynz_ast::nodes::{Expr, Item, Module, Stmt};
+    use ynz_diagnostics::SourceSpan;
     use ynz_parser::{CompilerDb, SourceFile};
 
     use crate::queries::check_query;
@@ -489,6 +490,26 @@ mod tests {
         out
     }
 
+    /// A function whose inner `x` shadows its outer `x`; both are printed.
+    const SHADOWED_X_SOURCE: &str =
+        "function entrypoint() -> nothing {\n  let flag = true\n  let x = 1\n  \
+                                     if (flag) {\n    let x = 2\n    print(x.toString())\n  }\n  \
+                                     print(x.toString())\n}\n";
+
+    /// The identifier `x` (name and span) read by the `print(x.toString())` call `stmt`.
+    fn printed_receiver(stmt: &Stmt) -> (String, SourceSpan) {
+        let Stmt::Expr(Expr::Call(call)) = stmt else {
+            panic!("expected a print call");
+        };
+        let Expr::MethodCall { receiver, .. } = &call.args[0] else {
+            panic!("expected x.toString()");
+        };
+        let Expr::Ident(name, span) = receiver.as_ref() else {
+            panic!("expected an identifier receiver");
+        };
+        (name.clone(), span.clone())
+    }
+
     // WHY: two live bindings named `x` must get two codegen names, and a name the user wrote
     // (`x__1`) must never be handed out for a different binding — a clash would put two
     // bindings back in one slot, the exact bug class this map exists to close.
@@ -516,31 +537,20 @@ mod tests {
     // the inner `x`, the outer one reads the outer `x`.
     #[test]
     fn uses_follow_their_declaration_not_the_name() {
-        let source = "function entrypoint() -> nothing {\n  let flag = true\n  let x = 1\n  \
-                      if (flag) {\n    let x = 2\n    print(x.toString())\n  }\n  \
-                      print(x.toString())\n}\n";
-        let (module, names) = recorded(source);
+        let (module, names) = recorded(SHADOWED_X_SOURCE);
         let renamed = names.apply(&module).expect("a complete record applies");
         let Item::Function(function) = &renamed.items[0] else {
             panic!("expected the entrypoint function");
         };
-        let receiver_name = |stmt: &Stmt| -> String {
-            let Stmt::Expr(Expr::Call(call)) = stmt else {
-                panic!("expected a print call");
-            };
-            let Expr::MethodCall { receiver, .. } = &call.args[0] else {
-                panic!("expected x.toString()");
-            };
-            let Expr::Ident(name, _) = receiver.as_ref() else {
-                panic!("expected an identifier receiver");
-            };
-            name.clone()
-        };
         let Stmt::If { body, .. } = &function.body.stmts[2] else {
             panic!("expected the if");
         };
-        assert_eq!(receiver_name(&body.stmts[1]), "x__1", "inner read");
-        assert_eq!(receiver_name(&function.body.stmts[3]), "x", "outer read");
+        assert_eq!(printed_receiver(&body.stmts[1]).0, "x__1", "inner read");
+        assert_eq!(
+            printed_receiver(&function.body.stmts[3]).0,
+            "x",
+            "outer read"
+        );
     }
 
     // WHY: the scope-exit release pass (card C5) asks "which binding does this use name?" through
@@ -549,30 +559,15 @@ mod tests {
     // wrong one. Tier: High (data integrity — the same class as the slot sharing this map closes).
     #[test]
     fn declaration_lookup_by_use_distinguishes_same_name_bindings() {
-        let source = "function entrypoint() -> nothing {\n  let flag = true\n  let x = 1\n  \
-                      if (flag) {\n    let x = 2\n    print(x.toString())\n  }\n  \
-                      print(x.toString())\n}\n";
-        let (module, names) = recorded(source);
+        let (module, names) = recorded(SHADOWED_X_SOURCE);
         let Item::Function(function) = &module.items[0] else {
             panic!("expected the entrypoint function");
-        };
-        let receiver_use = |stmt: &Stmt| {
-            let Stmt::Expr(Expr::Call(call)) = stmt else {
-                panic!("expected a print call");
-            };
-            let Expr::MethodCall { receiver, .. } = &call.args[0] else {
-                panic!("expected x.toString()");
-            };
-            let Expr::Ident(name, span) = receiver.as_ref() else {
-                panic!("expected an identifier receiver");
-            };
-            (name.clone(), span.clone())
         };
         let Stmt::If { body, .. } = &function.body.stmts[2] else {
             panic!("expected the if");
         };
-        let (inner_name, inner_span) = receiver_use(&body.stmts[1]);
-        let (outer_name, outer_span) = receiver_use(&function.body.stmts[3]);
+        let (inner_name, inner_span) = printed_receiver(&body.stmts[1]);
+        let (outer_name, outer_span) = printed_receiver(&function.body.stmts[3]);
         let inner_declaration = names
             .declaration_of_use(&inner_span, &inner_name)
             .expect("the inner use is resolved");
