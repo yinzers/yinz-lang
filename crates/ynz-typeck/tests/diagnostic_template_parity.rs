@@ -43,6 +43,8 @@ const TEMPLATES_WITHOUT_A_VARIANT: &[&str] = &[
     "UnawaitedSleepAsync",
     "WaitRequiredOnStateMachineCall",
     "StatementNestingTooDeep",
+    "UnionWhereVariantExpectedNameIt",
+    "UnionWhereVariantExpectedNoIsArm",
 ];
 
 /// PRE-EXISTING variant-backed templates whose emit sites still hand-write their text
@@ -694,5 +696,188 @@ fn union_where_variant_expected_is_rendered_from_the_registry() {
             ("variant", "Big"),
             ("needs", "`showBig` expects a `Big` here"),
         ],
+    );
+}
+
+// Golden Rule 11: the WHAT-INSTEAD of `UnionWhereVariantExpected` may only name code that
+// compiles today. The base template names `if (value) { is Variant => … }`; that is wrong for a
+// value that is not a name, a variant that is not a shape, and a union with no shape variant
+// (it is the variant's own pointer, not a tag box). Each recovery has its own registry template,
+// and each suggestion below is compiled to prove it.
+
+fn assert_compiles(source: &str) {
+    let errors = errors_for(source);
+    assert!(
+        errors.is_empty(),
+        "the suggested code must compile, got {:#?}",
+        errors.iter().map(|d| &d.what).collect::<Vec<_>>()
+    );
+}
+
+/// Every recovery of `UnionWhereVariantExpected` is rendered from its own registry template:
+/// a variant-less sibling carries the diagnostic's kind, and the WHAT is the base template's.
+fn assert_recovery_rendered(template_name: &str, source: &str, slots: &[(&str, &str)]) {
+    let base = ynz_registry::diagnostic_template_lookup("UnionWhereVariantExpected")
+        .expect("the base template exists");
+    let template = ynz_registry::diagnostic_template_lookup(template_name)
+        .unwrap_or_else(|| panic!("no template for {template_name}"));
+    assert_eq!(
+        template.what_template, base.what_template,
+        "{template_name}: the WHAT must be the base template's"
+    );
+    let expected_what = fill(template.what_template, slots);
+    let errors = errors_for(source);
+    let hit = errors
+        .iter()
+        .find(|d| d.what == expected_what)
+        .unwrap_or_else(|| {
+            panic!(
+                "{template_name}: no diagnostic rendered the WHAT {expected_what:?}; got {:#?}",
+                errors.iter().map(|d| &d.what).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(
+        hit.what_instead,
+        fill(template.what_instead_template, slots),
+        "{template_name}: WHAT-INSTEAD drifted"
+    );
+    assert_eq!(
+        hit.why,
+        fill(template.why_template, slots),
+        "{template_name}: WHY drifted"
+    );
+    assert_eq!(hit.kind, Some(DiagnosticKind::UnionWhereVariantExpected));
+}
+
+#[test]
+fn union_where_variant_expected_base_suggestion_compiles() {
+    // The `is` arm on the name, with the other variant handled, is what the base text suggests.
+    assert_compiles(
+        "shape Tiny { flag: boolean }\n\
+         shape Big { label: string }\n\
+         shape Thing = Tiny | Big\n\
+         function showBig(share b: Big) -> string { return b.label }\n\
+         function entrypoint() -> nothing {\n\
+           let big: Big = { label: `hello` }\n\
+           let thing: Thing = big\n\
+           if (thing) {\n\
+             is Big => { print(showBig(thing)) }\n\
+             else => { print(`tiny`) }\n\
+           }\n\
+         }",
+    );
+}
+
+#[test]
+fn union_where_variant_expected_for_a_field_read_asks_for_a_name_first() {
+    // `holder.inner` is an expression: an `is` arm checks a named binding only.
+    assert_recovery_rendered(
+        "UnionWhereVariantExpectedNameIt",
+        "shape Tiny { flag: boolean }\n\
+         shape Big { label: string }\n\
+         shape Thing = Tiny | Big\n\
+         shape Holder { inner: Tiny | Big }\n\
+         function showBig(share b: Big) -> string { return b.label }\n\
+         function entrypoint() -> nothing {\n\
+           let big: Big = { label: `hello` }\n\
+           let thing: Thing = big\n\
+           let holder: Holder = { inner: thing }\n\
+           print(showBig(holder.inner))\n\
+         }",
+        &[
+            ("value", "holder.inner"),
+            ("union", "Tiny | Big"),
+            ("variant", "Big"),
+            ("needs", "`showBig` expects a `Big` here"),
+        ],
+    );
+    // The suggested code: name it, check the name, use it in the arm.
+    assert_compiles(
+        "shape Tiny { flag: boolean }\n\
+         shape Big { label: string }\n\
+         shape Thing = Tiny | Big\n\
+         shape Holder { inner: Tiny | Big }\n\
+         function showBig(share b: Big) -> string { return b.label }\n\
+         function entrypoint() -> nothing {\n\
+           let big: Big = { label: `hello` }\n\
+           let thing: Thing = big\n\
+           let holder: Holder = { inner: thing }\n\
+           let checked = holder.inner\n\
+           if (checked) {\n\
+             is Big => { print(showBig(checked)) }\n\
+             else => { print(`tiny`) }\n\
+           }\n\
+         }",
+    );
+}
+
+#[test]
+fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is_arm() {
+    // `map<string, string> | nothing` is the map's own pointer: no `is` arm can name `map<..>`
+    // (it does not even parse), and there is no tag box for the WHY to describe.
+    let source =
+        "function takesTable(share table: map<string, string>) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let table: map<string, string> = { `a`: `b` }\n\
+           let maybeTable: map<string, string> | nothing = table\n\
+           print(takesTable(maybeTable))\n\
+         }";
+    assert_recovery_rendered(
+        "UnionWhereVariantExpectedNoIsArm",
+        source,
+        &[
+            ("value", "maybeTable"),
+            ("union", "map<string, string> | nothing"),
+            ("variant", "map<string, string>"),
+            ("needs", "`takesTable` expects a `map<string, string>` here"),
+            ("others", "`nothing`"),
+        ],
+    );
+    let diagnostic = errors_for(source).remove(0);
+    assert!(
+        !diagnostic.what_instead.contains("if (maybeTable)") && !diagnostic.why.contains("a box"),
+        "a raw-pointer union has no `is` arm to suggest and no tag box to describe: {diagnostic:?}"
+    );
+    // The suggested code: let the receiving slot take the union.
+    assert_compiles(
+        "function describeTable(share table: map<string, string> | nothing) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let table: map<string, string> = { `a`: `b` }\n\
+           let maybeTable: map<string, string> | nothing = table\n\
+           print(describeTable(maybeTable))\n\
+         }",
+    );
+}
+
+#[test]
+fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
+    // `is int =>` does not lower (#418): the suggestion must not name it.
+    let source = "function takesInt(share number: int) -> int { return number }\n\
+         function entrypoint() -> nothing {\n\
+           let v: int | string = 5\n\
+           print(takesInt(v).toString())\n\
+         }";
+    assert_recovery_rendered(
+        "UnionWhereVariantExpectedNoIsArm",
+        source,
+        &[
+            ("value", "v"),
+            ("union", "int | string"),
+            ("variant", "int"),
+            ("needs", "`takesInt` expects a `int` here"),
+            ("others", "`string`"),
+        ],
+    );
+    let diagnostic = errors_for(source).remove(0);
+    assert!(
+        !diagnostic.what_instead.contains("is int"),
+        "no `is int` arm exists to suggest: {diagnostic:?}"
+    );
+    assert_compiles(
+        "function takesEither(share either: int | string) -> string { return `ok` }\n\
+         function entrypoint() -> nothing {\n\
+           let v: int | string = 5\n\
+           print(takesEither(v))\n\
+         }",
     );
 }

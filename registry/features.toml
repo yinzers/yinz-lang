@@ -1685,6 +1685,29 @@ what_template = "`{value}` is a `{union}` — it might hold any one of those —
 what_instead_template = "Check which variant it holds first, then use it inside that arm: `if ({value}) { is {variant} => { … } }` — inside the arm, `{value}` is a `{variant}`. Handle the other variants in their own `is` arms, or in an `else =>` arm."
 why_template = "A `{union}` is a box with a tag saying which variant is inside. Code that expects a plain `{variant}` reads the box's bytes as `{variant}` fields, which is only right when the tag says `{variant}` — for any other variant it reads the wrong bytes, or memory past the box, and can crash. Inside an `is {variant}` arm the compiler knows the tag matched, so `{value}` is a `{variant}` there and can be passed on."
 
+# The two other recoveries of `UnionWhereVariantExpected`, selected by `union_where_variant_expected_diag`
+# so the WHAT-INSTEAD only ever names code that compiles today (Golden Rule 11). They have no
+# `DiagnosticKind` variant of their own: the diagnostic carries `UnionWhereVariantExpected`.
+# `{value}`, `{union}`, `{variant}` and `{needs}` are the base template's slots; `{others}` is the
+# union's other variants, backticked and comma-separated ("`nothing`", "`int`, `string`").
+#
+# `...NameIt`: the value is not a bare name (`holder.inner`, `pick()`); an `is` arm checks a
+# named binding only. The union has a shape variant and the slot expects exactly that shape.
+[[diagnostic_template]]
+kind_name = "UnionWhereVariantExpectedNameIt"
+what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
+what_instead_template = "Give it a name first, then check the name: `let checked = {value}`, then `if (checked) { is {variant} => { … } }` — inside the arm, `checked` is a `{variant}`. Handle the other variants in their own `is` arms, or in an `else =>` arm."
+why_template = "A `{union}` is a box with a tag saying which variant is inside. Code that expects a plain `{variant}` reads the box's bytes as `{variant}` fields, which is only right when the tag says `{variant}` — for any other variant it reads the wrong bytes, or memory past the box, and can crash. An `is` arm checks a named binding, not an expression like `{value}`; inside an `is {variant}` arm the compiler knows the tag matched, so the named binding is a `{variant}` there and can be passed on."
+
+# `...NoIsArm`: no `is` arm can hand the value over as the expected variant today — the variant is
+# not a shape (`is` arms name shape variants only), or the union has no shape variant at all (it is
+# the variant's own pointer, with no tag box). The recoveries that compile are on the slot's side.
+[[diagnostic_template]]
+kind_name = "UnionWhereVariantExpectedNoIsArm"
+what_template = "`{value}` is a `{union}` — it might hold any one of those — but {needs}."
+what_instead_template = "No `is` arm can hand `{value}` over as a `{variant}`: `is` arms name shape variants only. Change what receives it to accept a `{union}` and handle each variant there, or keep the value a `{variant}` from where it is created instead of storing it in a `{union}`."
+why_template = "A `{union}` might hold any one of its variants, not only a `{variant}`: also {others}. Code that expects a plain `{variant}` is written for that variant alone, so given another variant it would read the wrong kind of data, and can crash. No check the compiler can run today proves `{value}` is a `{variant}`, so it refuses the hand-over."
+
 # v0.3-M8 Phase 4 fix round 3: `.message`/`.suggestions`/`.trace`/`.source` require a
 # `.failed()` check first (`REF-errors.md:171-175`). `{name}` is the receiver rendered as
 # source text (`expr_source_text` — an identifier for the common bound-value case, the full

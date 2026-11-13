@@ -123,6 +123,11 @@ function describe(share figure: Shape) -> string {
 
 Inside `is Circle =>`, `figure` is a `Circle`, so `describeCircle(figure)` compiles there. This applies everywhere a value must have one exact type: arguments, `return`, annotated `let`, and shape fields.
 
+The suggestion changes with what can be checked. An `is` arm checks a name and names a shape variant, so:
+
+- A value that is not a name (`holder.inner`, `pick()`): the error asks you to bind it first, `let checked = holder.inner`, then check `checked`.
+- A variant that is not a shape (`int`, `string`), or a union with no shape variant (`map<string, string> | nothing`): no `is` arm can name the variant, so the error suggests making the receiving function accept the union, or keeping the value as the variant from where it is created.
+
 ---
 
 ## Exhaustiveness — all variants must be handled

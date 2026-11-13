@@ -104,10 +104,22 @@ impl TransferSink<'_> {
 /// be dead data beside a hand-written twin). A missing template is a build-time invariant
 /// (`diagnostic_templates_render_from_the_registry` in the tests) — panicking here names it.
 fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)]) -> Diagnostic {
-    let kind_name = kind.kind_name();
-    let template = ynz_registry::diagnostic_template_lookup(kind_name).unwrap_or_else(|| {
+    let template_name = kind.kind_name();
+    registry_diag_template(span, kind, template_name, slots)
+}
+
+/// `registry_diag` for a kind whose text has more than one recovery: `template_name` names the
+/// `[[diagnostic_template]]` to render (a variant-less sibling of the kind's own template), and
+/// the diagnostic still carries `kind`.
+fn registry_diag_template(
+    span: SourceSpan,
+    kind: DiagnosticKind,
+    template_name: &str,
+    slots: &[(&str, &str)],
+) -> Diagnostic {
+    let template = ynz_registry::diagnostic_template_lookup(template_name).unwrap_or_else(|| {
         panic!(
-            "registry/features.toml has no [[diagnostic_template]] with kind_name = {kind_name:?}"
+            "registry/features.toml has no [[diagnostic_template]] with kind_name = {template_name:?}"
         )
     });
     let fill = |text: &str| -> String {
@@ -126,25 +138,76 @@ fn registry_diag(span: SourceSpan, kind: DiagnosticKind, slots: &[(&str, &str)])
     .with_kind(kind)
 }
 
+/// Which recovery the WHAT-INSTEAD may name for a union reaching a variant slot. Only code that
+/// compiles today is ever suggested: an `is` arm parses a bare shape-variant name and checks a
+/// named binding (`check_is_arm_pattern`; non-shape variants are #418).
+enum UnionRecovery {
+    /// `if (value) { is Variant => … }` — the value is a name and the variant a listed shape of
+    /// a union that has a shape variant.
+    IsArmOnTheValue,
+    /// The same, after `let checked = value` — the value is an expression, not a name.
+    IsArmOnANamedCopy,
+    /// No `is` arm can hand the value over: the variant is not a shape, or the union has no
+    /// shape variant (it is the variant's own pointer, with no tag box).
+    NoIsArm,
+}
+
+fn union_recovery(value: &Expr, source_union: &Type, expected_variant: &Type) -> UnionRecovery {
+    let is_arm_can_name_variant = is_envelope_union(source_union)
+        && matches!(expected_variant, Type::Shape { .. })
+        && matches!(source_union, Type::Union { variants } if variants.contains(expected_variant));
+    match (is_arm_can_name_variant, value) {
+        (false, _) => UnionRecovery::NoIsArm,
+        (true, Expr::Ident(..)) => UnionRecovery::IsArmOnTheValue,
+        (true, _) => UnionRecovery::IsArmOnANamedCopy,
+    }
+}
+
 /// The teaching diagnostic for a union value reaching a slot that expects one of its variants
 /// (`UnionWhereVariantExpected`). `needs` finishes the sentence "…, but {needs}" and names the
-/// slot: `showBig` expects a `Big` here, the function must return a `Big`, ….
+/// slot: `showBig` expects a `Big` here, the function must return a `Big`, …. The WHAT-INSTEAD
+/// and WHY come from the registry template for the recovery that compiles (`union_recovery`).
 fn union_where_variant_expected_diag(
     value: &Expr,
     source_union: &Type,
     expected_variant: &Type,
     needs: &str,
 ) -> Diagnostic {
-    registry_diag(
-        value.span().clone(),
-        DiagnosticKind::UnionWhereVariantExpected,
-        &[
-            ("value", &expr_source_text(value)),
-            ("union", &type_name(source_union)),
-            ("variant", &type_name(expected_variant)),
-            ("needs", needs),
-        ],
-    )
+    let other_variants = match source_union {
+        Type::Union { variants } => variants
+            .iter()
+            .filter(|variant| *variant != expected_variant)
+            .map(|variant| format!("`{}`", type_name(variant)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => String::new(),
+    };
+    let slots = [
+        ("value", expr_source_text(value)),
+        ("union", type_name(source_union)),
+        ("variant", type_name(expected_variant)),
+        ("needs", needs.to_string()),
+        ("others", other_variants),
+    ];
+    let slots: Vec<(&str, &str)> = slots.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let span = value.span().clone();
+    match union_recovery(value, source_union, expected_variant) {
+        UnionRecovery::IsArmOnTheValue => {
+            registry_diag(span, DiagnosticKind::UnionWhereVariantExpected, &slots)
+        }
+        UnionRecovery::IsArmOnANamedCopy => registry_diag_template(
+            span,
+            DiagnosticKind::UnionWhereVariantExpected,
+            "UnionWhereVariantExpectedNameIt",
+            &slots,
+        ),
+        UnionRecovery::NoIsArm => registry_diag_template(
+            span,
+            DiagnosticKind::UnionWhereVariantExpected,
+            "UnionWhereVariantExpectedNoIsArm",
+            &slots,
+        ),
+    }
 }
 
 /// What a binding event (`let`, reassignment) makes the name denote: the origin and live alias
