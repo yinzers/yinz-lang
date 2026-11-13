@@ -14,13 +14,11 @@ declare noundef i32 @puts(ptr nocapture noundef readonly) local_unnamed_addr #0
 
 declare void @ynz_decimal_add(ptr, ptr, ptr) local_unnamed_addr
 
-declare ptr @ynz_decimal_to_string(ptr) local_unnamed_addr
+declare void @ynz_int_print(i64) local_unnamed_addr
 
-declare ptr @ynz_int_to_string(i64) local_unnamed_addr
+declare void @ynz_decimal_print(ptr) local_unnamed_addr
 
 declare void @ynz_siphash_init() local_unnamed_addr
-
-declare void @ynz_string_release(ptr) local_unnamed_addr
 
 declare void @ynz_rt_init() local_unnamed_addr
 
@@ -39,13 +37,9 @@ entry:
   %dec_bits = load i128, ptr %dadd, align 16
   %price2 = alloca i128, align 16
   store i128 %dec_bits, ptr %price2, align 16
-  %dec_str = call ptr @ynz_decimal_to_string(ptr nonnull %price2)
-  %puts = call i32 @puts(ptr nonnull dereferenceable(1) %dec_str)
-  call void @ynz_string_release(ptr %dec_str)
-  %int_str = call ptr @ynz_int_to_string(i64 1763)
-  %puts10 = call i32 @puts(ptr nonnull dereferenceable(1) %int_str)
-  call void @ynz_string_release(ptr %int_str)
-  %puts13 = call i32 @puts(ptr nonnull dereferenceable(1) getelementptr inbounds ({ i64, [5 x i8] }, ptr @.str.true, i64 0, i32 1))
+  call void @ynz_decimal_print(ptr nonnull %price2)
+  call void @ynz_int_print(i64 1763)
+  %puts = call i32 @puts(ptr nonnull dereferenceable(1) getelementptr inbounds ({ i64, [5 x i8] }, ptr @.str.true, i64 0, i32 1))
   call void @ynz_rt_shutdown()
   ret i32 0
 }
