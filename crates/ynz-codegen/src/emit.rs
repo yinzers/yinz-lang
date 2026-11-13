@@ -3586,6 +3586,101 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// Read the `data` word (field 1) of a non-null union envelope `{i64 tag, i64 data}`.
+    /// For a shape variant these are the `ptr_to_int` bits of the payload's storage
+    /// (union-ctor Let arm); for any other variant they are the value's own i64 bits.
+    ///
+    /// The ONE place the envelope's `data` field is read: `union_payload_ptr` (variant
+    /// narrowing) and `union_to_heap_cell` (binding promotion) both go through it, so
+    /// the layout lives in one derivation (authoritative-derivation).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn union_data_bits(
+        &self,
+        envelope: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let union_st = self
+            .ctx
+            .struct_type(&[self.i64().into(), self.i64().into()], false);
+        let data_gep = self
+            .builder
+            .build_struct_gep(union_st, envelope, 1, &format!("{site}_src_data"))
+            .map_err(|e| format!("union data gep {site}: {e}"))?;
+        Ok(self
+            .builder
+            .build_load(self.i64(), data_gep, &format!("{site}_data"))
+            .map_err(|e| format!("union data load {site}: {e}"))?
+            .into_int_value())
+    }
+
+    /// Envelope → payload pointer: the pointer to a SHAPE variant's own storage, read
+    /// out of a non-null union envelope. The ONE routine both consumers call:
+    /// `union_to_heap_cell` (deep-copies the payload into a counted cell) and the
+    /// `is`-arm narrowing (`narrow_union_local_to_variant`, re-points the narrowed
+    /// binding at the payload so shape field reads and `let inner: Variant = fig`
+    /// copies see the variant, not the 16-byte envelope).
+    ///
+    /// Valid only after a tag check selected a shape variant — the caller owns that
+    /// check (the `is` arm's tag compare / the heap-cell tag switch).
+    ///
+    /// Time: O(1)  Space: O(1)
+    fn union_payload_ptr(
+        &self,
+        envelope: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let bits = self.union_data_bits(envelope, site)?;
+        self.builder
+            .build_int_to_ptr(bits, self.ptr(), &format!("{site}_payload_ptr"))
+            .map_err(|e| format!("union payload int_to_ptr {site}: {e}"))
+    }
+
+    /// Inside an `is Variant =>` arm, typeck types the scrutinee binding as the variant
+    /// shape (`union_narrowed` overlay, `simple_ident_name` predicate). Codegen mirrors
+    /// that: re-point the binding's local slot at a fresh slot holding the variant's
+    /// PAYLOAD pointer (`union_payload_ptr`), so every shape-typed read of the name in
+    /// the arm resolves through the ordinary shape-local path. Without it the arm reads
+    /// the `{tag, data}` envelope as if it were the shape (field reads return the tag;
+    /// `let inner: Variant = fig` memcpys `sizeof(Variant)` bytes out of 16 — an
+    /// out-of-bounds read).
+    ///
+    /// Must run inside the arm body block (after the tag compare branched there), so
+    /// the payload load only happens when the tag matched. Returns the handle for
+    /// `restore_narrowed_local` at arm end; `None` when the scrutinee is not a
+    /// narrowable binding (typeck applies no overlay then either).
+    ///
+    /// Time: O(1)  Space: O(1) (one pointer-sized entry-block slot per arm site)
+    fn narrow_union_local_to_variant(
+        &mut self,
+        scrutinee: &Expr,
+        envelope: PointerValue<'ctx>,
+        site: &str,
+    ) -> Result<Option<(String, PointerValue<'ctx>)>, String> {
+        let Some(name) = ynz_typeck::check::simple_ident_name(scrutinee) else {
+            return Ok(None);
+        };
+        let outer_slot = *self
+            .locals
+            .get(name)
+            .ok_or_else(|| format!("{site}: narrowed binding `{name}` has no local slot"))?;
+        let payload = self.union_payload_ptr(envelope, site)?;
+        let narrowed_slot = self.alloca_in_entry_llvm(self.ptr(), &format!("{name}_variant"))?;
+        self.builder
+            .build_store(narrowed_slot, payload)
+            .map_err(|e| format!("{site}: store narrowed payload: {e}"))?;
+        self.locals.insert(name.to_string(), narrowed_slot);
+        Ok(Some((name.to_string(), outer_slot)))
+    }
+
+    /// Undo `narrow_union_local_to_variant` at the end of the arm (typeck removes its
+    /// overlay at the same point).
+    fn restore_narrowed_local(&mut self, narrowed: Option<(String, PointerValue<'ctx>)>) {
+        if let Some((name, outer_slot)) = narrowed {
+            self.locals.insert(name, outer_slot);
+        }
+    }
+
     /// Binding-side heap promotion for UNION values (v0.3-M6 Phase 1c step 3c,
     /// FRAGOs 006/007/013) — the union sibling of `maybe_to_heap_cell`: clone a
     /// union value into counted heap cells so a CROSSING binding's pointer
@@ -3665,15 +3760,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         self.builder
             .build_store(dst_tag_gep, tag)
             .map_err(|e| format!("{e}"))?;
-        let src_data_gep = self
-            .builder
-            .build_struct_gep(union_st, src, 1, &format!("{site}_src_data"))
-            .map_err(|e| format!("{e}"))?;
-        let data = self
-            .builder
-            .build_load(self.i64(), src_data_gep, &format!("{site}_data"))
-            .map_err(|e| format!("{e}"))?
-            .into_int_value();
+        let data = self.union_data_bits(src, site)?;
         let dst_data_gep = self
             .builder
             .build_struct_gep(union_st, cell, 1, &format!("{site}_dst_data"))
@@ -3706,10 +3793,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             .map_err(|e| format!("union cell tag switch {site}: {e}"))?;
         for ((i, shape_name), case_bb) in shape_cases.iter().zip(case_blocks.iter()) {
             self.builder.position_at_end(*case_bb);
-            let src_pay = self
-                .builder
-                .build_int_to_ptr(data, self.ptr(), &format!("{site}_src_pay{i}"))
-                .map_err(|e| format!("{e}"))?;
+            let src_pay = self.union_payload_ptr(src, &format!("{site}_src_pay{i}"))?;
             let size = self.shape_abi_size_const(shape_name, "union_to_heap_cell")?;
             let pay_cell = self.heap_cell(size, &format!("{site}_pay{i}"))?;
             self.builder
@@ -8276,6 +8360,15 @@ fn lower_sm_match<'ctx, 'g>(
                 || (cg.m3d_spike
                     && stmt_block_has_direct_cpu_group(&arm.body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
+        // `is Variant =>`: re-point the scrutinee binding at the variant payload (the
+        // snapshot restore below undoes it, the same window typeck's overlay uses).
+        if matches!(arm.pattern.kind, MatchPatternKind::Is(_)) {
+            cg.narrow_union_local_to_variant(
+                scrutinee,
+                scrutinee_val.into_pointer_value(),
+                "sm_is_arm",
+            )?;
+        }
         cg.sm_scope_depth += 1;
         if arm_routes_to_sm {
             lower_sm_block(
@@ -14302,12 +14395,24 @@ fn lower_stmt_match<'ctx>(
             .map_err(|e| format!("match branch: {e}"))?;
 
         cg.builder.position_at_end(arm_body_bb);
+        // `is Variant =>`: re-point the scrutinee binding at the variant payload for the
+        // arm body (typeck's `union_narrowed` overlay covers the same window).
+        let narrowed = if matches!(arm.pattern.kind, MatchPatternKind::Is(_)) {
+            cg.narrow_union_local_to_variant(
+                scrutinee,
+                scrutinee_val.into_pointer_value(),
+                "is_arm",
+            )?
+        } else {
+            None
+        };
         for stmt in &arm.body.stmts {
             if is_block_terminated(cg) {
                 break;
             }
             lower_stmt(cg, stmt)?;
         }
+        cg.restore_narrowed_local(narrowed);
         if !is_block_terminated(cg) {
             cg.builder
                 .build_unconditional_branch(merge_bb)

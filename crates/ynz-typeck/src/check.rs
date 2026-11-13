@@ -13648,7 +13648,7 @@ enum NumberSlotRole<'a> {
     StoreBinding { name: &'a str },
 }
 
-fn simple_ident_name(expr: &Expr) -> Option<&str> {
+pub fn simple_ident_name(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Ident(name, _) => Some(name.as_str()),
         Expr::SelfValue { .. } => Some("self"),
