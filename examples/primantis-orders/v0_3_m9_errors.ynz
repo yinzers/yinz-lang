@@ -1,0 +1,64 @@
+// v0.3-M9 compile-error gallery (C1b union-into-variant, C1d union exhaustiveness)
+//
+// Every block below intentionally triggers a diagnostic added or extended in v0.3-M9.
+// Run `ynz build v0_3_m9_errors.ynz` to see all diagnostics.
+// Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
+//
+// Each block has a // WHY: comment naming the diagnostic class.
+
+// A sandwich that is either a plain order or a special; `Special` is the variant the
+// kitchen helpers below expect.
+shape Plain {
+  table: int
+}
+shape Special {
+  label: string
+}
+shape Order = Plain | Special
+
+shape Ticket {
+  held: Special
+}
+
+shape Round = Plain | int
+
+function plateSpecial(share special: Special) -> string {
+  return special.label
+}
+
+function pickSpecial(share order: Order) -> Special {
+  return order
+}
+
+function describeRound(share round: Round) -> string {
+  if (round) {
+    is Plain => {
+      return `plain`
+    }
+  }
+  return `other`
+}
+
+function entrypoint() -> nothing {
+  let special: Special = { label: `cheesesteak` }
+  let order: Order = special
+
+  // WHY: UnionWhereVariantExpected (argument) — an `Order` might hold a `Plain`, but
+  // `plateSpecial` reads a `Special`.
+  print(plateSpecial(order))
+
+  // WHY: UnionWhereVariantExpected (annotated `let`) — same refusal for a declared type.
+  let again: Special = order
+
+  // WHY: UnionWhereVariantExpected (shape field) — the field is declared as a `Special`.
+  let ticket: Ticket = { held: order }
+
+  print(again.label)
+  print(ticket.held.label)
+
+  // WHY: non-exhaustive union multi-case with a non-shape variant — `describeRound`
+  // names `Plain` only, so an `int` round would fall through every arm.
+  let plain: Plain = { table: 4 }
+  let round: Round = plain
+  print(describeRound(round))
+}
