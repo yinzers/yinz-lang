@@ -1536,7 +1536,6 @@ fn lower_generic_function<'ctx>(
         current_fn: fn_val,
         is_main: false,
         current_fn_ret_ty: ret_ty,
-        current_fn_param_names: f.params.iter().map(|p| p.name.clone()).collect(),
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -1923,10 +1922,6 @@ struct Cg<'ctx, 'g> {
     is_main: bool,
     /// Return type of the current function.
     current_fn_ret_ty: Type,
-    /// The current function's parameter names. A union PARAMETER returned as-is is the caller's
-    /// envelope (it outlives this frame), so `return t` needs no copy; any other union value
-    /// returned is promoted to a heap cell (`coerce_into_union_slot`).
-    current_fn_param_names: Vec<String>,
     locals: HashMap<String, PointerValue<'ctx>>,
     // M4 additions:
     shape_table: &'g ShapeTable,
@@ -3888,9 +3883,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     ///   that outlives this frame: an argument staged into a suspending callee's frame, and a
     ///   returned value;
     /// - under `Return` home, a union-typed value is copied to a heap cell too, unless it is a
-    ///   call result (the callee already homed it), or this function's own parameter (the
-    ///   caller's envelope outlives this call) — otherwise a callee-built envelope would come
-    ///   back as a pointer into its dead frame;
+    ///   call result (the callee returned a heap cell: every union return promotes, a returned
+    ///   PARAMETER included — its envelope is the caller's Frame slot, which dies with the
+    ///   caller's own frame when the call result is returned onward). Otherwise a callee-built or
+    ///   pass-through envelope would come back as a pointer into a dead frame;
     /// - an `is` arm's narrowed binding already lowers to its envelope (`narrowed_envelope_use`)
     ///   and is never re-wrapped.
     ///
@@ -3934,7 +3930,6 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 let is_union_value = narrowed || matches!(source_ty, Type::Union { .. });
                 let already_homed = match expr {
                     Expr::Call(_) | Expr::MethodCall { .. } | Expr::Wait(..) => true,
-                    Expr::Ident(name, _) => self.current_fn_param_names.contains(name),
                     _ => false,
                 };
                 if home == EnvelopeHome::Return && is_union_value && !already_homed {
@@ -4881,7 +4876,6 @@ fn lower_function<'ctx, 'g>(
         current_fn: fn_val,
         is_main,
         current_fn_ret_ty: ret_ty,
-        current_fn_param_names: f.params.iter().map(|p| p.name.clone()).collect(),
         locals: HashMap::new(),
         shape_table,
         shape_types,
@@ -5390,7 +5384,6 @@ fn lower_function_with_waits<'ctx, 'g>(
         current_fn: resume_fn,
         is_main: false,
         current_fn_ret_ty: Type::Nothing, // resume fn returns i32, not the Yinz type
-        current_fn_param_names: f.params.iter().map(|p| p.name.clone()).collect(),
         locals: HashMap::new(),
         shape_table,
         shape_types,

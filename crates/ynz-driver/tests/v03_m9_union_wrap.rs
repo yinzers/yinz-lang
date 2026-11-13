@@ -54,7 +54,7 @@ fn v03_m9_union_wrap_arg_asan_no_optimize() {
 }
 
 const RETURN: &str = "v0_3_m9_union_wrap_return.ynz";
-const RETURN_STDOUT: &str = "big hello\ntiny\nbig local\ntiny\ntiny\nend\n";
+const RETURN_STDOUT: &str = "big hello\ntiny\nbig local\ntiny\nbig wrapped\ntiny\nend\n";
 
 #[test]
 fn v03_m9_union_wrap_return_optimized() {
