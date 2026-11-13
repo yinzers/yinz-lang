@@ -7184,6 +7184,33 @@ impl<'b> Checker<'b> {
                         for (arg, (_, expected_ty)) in args.iter().zip(sig.params.iter().skip(1)) {
                             self.reject_int_literal_number_arg(method, expected_ty, arg);
                         }
+                        // A union value into a non-receiver parameter that expects one of
+                        // its variants (`a.useBig(thing)`): the UFCS arm checks no other
+                        // argument types, so without this the callee reads the 16-byte
+                        // tagged envelope as a `Big` (the C1b hole through the dot-call
+                        // form). Same teaching diagnostic as the plain call form. The
+                        // arguments were inferred upstream; their types are in `expr_types`.
+                        for (arg, (_, expected_ty)) in args.iter().zip(sig.params.iter().skip(1)) {
+                            let argument_span = arg.span();
+                            let Some(actual_ty) = self
+                                .expr_types
+                                .get(&(argument_span.start, argument_span.end))
+                                .cloned()
+                            else {
+                                continue;
+                            };
+                            if is_union_into_its_variant(expected_ty, &actual_ty) {
+                                self.diags.push(union_where_variant_expected_diag(
+                                    arg,
+                                    &actual_ty,
+                                    expected_ty,
+                                    &format!(
+                                        "`{method}` expects a `{}` here",
+                                        type_name(expected_ty)
+                                    ),
+                                ));
+                            }
+                        }
                         // Kernel-mode rejection for UFCS suspending method calls. The
                         // bare call-dispatch arm guards `Expr::Call name =>` at the call site;
                         // UFCS calls route through this path and need the same guard so that

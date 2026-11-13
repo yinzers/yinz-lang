@@ -80,6 +80,13 @@ fn v03_m9_union_into_variant_argument_is_rejected() {
             "`showBig` expects a `Big` here",
         ],
     );
+    // The dot-call form `big.useBig(thing)` is the same argument slot: its non-receiver
+    // arguments had no type check at all, so the union compiled and the callee printed a stack
+    // address.
+    assert_rejected_with_teaching(
+        "v0_3_m9_union_into_variant_ufcs_arg.ynz",
+        &["`thing` is a `Tiny | Big`", "`useBig` expects a `Big` here"],
+    );
 }
 
 #[test]
