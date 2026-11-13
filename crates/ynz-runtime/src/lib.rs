@@ -468,11 +468,11 @@ unsafe fn heap_string_buffer(size: usize) -> *mut u8 {
         YNZ_STRING_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
         YNZ_STRING_ALLOC_BYTES.fetch_add(size as u64, Ordering::Relaxed);
     }
-    let buf = malloc(size) as *mut u8;
-    if buf.is_null() {
+    let buffer = malloc(size) as *mut u8;
+    if buffer.is_null() {
         std::process::abort();
     }
-    buf
+    buffer
 }
 
 /// Release a heap string returned by any string allocator in this module.
@@ -484,18 +484,22 @@ unsafe fn heap_string_buffer(size: usize) -> *mut u8 {
 /// (`ynz_int_to_string` & co.) — only pointers a string allocator returned.
 ///
 /// # Safety
-/// `s` must be null, or a pointer returned by a heap string allocator and not yet freed.
+/// `heap_string` must be null, or a pointer returned by a heap string allocator and not yet
+/// freed.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_string_free(s: *const u8) {
-    if s.is_null() {
+pub unsafe extern "C" fn ynz_string_free(heap_string: *const u8) {
+    if heap_string.is_null() {
         return;
     }
     if alloc_counter_enabled() {
-        let bytes = std::ffi::CStr::from_ptr(s as *const i8).to_bytes().len() + 1;
+        let bytes = std::ffi::CStr::from_ptr(heap_string as *const i8)
+            .to_bytes()
+            .len()
+            + 1;
         YNZ_STRING_FREE_COUNT.fetch_add(1, Ordering::Relaxed);
         YNZ_STRING_FREE_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
     }
-    free(s as *mut core::ffi::c_void);
+    free(heap_string as *mut core::ffi::c_void);
 }
 
 /// Read the current heap-string alloc count. Zero when counter not enabled.
@@ -1714,10 +1718,10 @@ pub unsafe extern "C" fn ynz_string_to_number(ptr: *const u8, len: i64, out: *mu
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_from_static(ptr: *const u8, len: i64) -> *const u8 {
     let size = len as usize + 1; // +1 for null terminator
-    let buf = heap_string_buffer(size);
-    std::ptr::copy_nonoverlapping(ptr, buf, len as usize);
-    *buf.add(len as usize) = 0;
-    buf as *const u8
+    let buffer = heap_string_buffer(size);
+    std::ptr::copy_nonoverlapping(ptr, buffer, len as usize);
+    *buffer.add(len as usize) = 0;
+    buffer as *const u8
 }
 
 // ── M6 helper: float → maybe<int> (locked codegen sequence from design/narrowing.md) ──
@@ -1878,11 +1882,11 @@ pub unsafe extern "C" fn ynz_string_concat(a: *const u8, b: *const u8) -> *const
     let a_str = unsafe { std::ffi::CStr::from_ptr(a as *const i8) }.to_bytes();
     let b_str = unsafe { std::ffi::CStr::from_ptr(b as *const i8) }.to_bytes();
     let total = a_str.len() + b_str.len() + 1;
-    let buf = heap_string_buffer(total);
-    std::ptr::copy_nonoverlapping(a_str.as_ptr(), buf, a_str.len());
-    std::ptr::copy_nonoverlapping(b_str.as_ptr(), buf.add(a_str.len()), b_str.len());
-    *buf.add(a_str.len() + b_str.len()) = 0;
-    buf as *const u8
+    let buffer = heap_string_buffer(total);
+    std::ptr::copy_nonoverlapping(a_str.as_ptr(), buffer, a_str.len());
+    std::ptr::copy_nonoverlapping(b_str.as_ptr(), buffer.add(a_str.len()), b_str.len());
+    *buffer.add(a_str.len() + b_str.len()) = 0;
+    buffer as *const u8
 }
 
 /// Count Unicode code points in a null-terminated UTF-8 string.
@@ -2214,9 +2218,9 @@ pub unsafe extern "C" fn ynz_string_builder_finalize(builder: *mut u8) -> *const
     let mut vec = unsafe { *Box::from_raw(builder as *mut Vec<u8>) };
     vec.push(0); // null-terminate
     let len = vec.len();
-    let buf = heap_string_buffer(len);
-    std::ptr::copy_nonoverlapping(vec.as_ptr(), buf, len);
-    buf as *const u8
+    let buffer = heap_string_buffer(len);
+    std::ptr::copy_nonoverlapping(vec.as_ptr(), buffer, len);
+    buffer as *const u8
 }
 
 /// Free the builder without producing a string.
@@ -2229,19 +2233,19 @@ pub unsafe extern "C" fn ynz_string_builder_drop(builder: *mut u8) {
 }
 
 /// Internal helper: allocate a heap null-terminated copy of a Rust `&str`.
-fn heap_string_from_str(s: &str) -> *const u8 {
-    let bytes = s.as_bytes();
+fn heap_string_from_str(text: &str) -> *const u8 {
+    let bytes = text.as_bytes();
     let len = bytes.len();
-    let buf = unsafe { heap_string_buffer(len + 1) };
+    let buffer = unsafe { heap_string_buffer(len + 1) };
     if len > 0 {
         unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, len);
         }
     }
     unsafe {
-        *buf.add(len) = 0;
+        *buffer.add(len) = 0;
     }
-    buf as *const u8
+    buffer as *const u8
 }
 
 // ── M7 P4a: errors runtime — YnzError, YnzFrame, frame stack ─────────────────
@@ -3177,8 +3181,8 @@ unsafe fn bignum_binop(
     let an = parse_bignum(a_str, precision).unwrap_or_else(|| BigNum::zero(precision));
     let bn_val = parse_bignum(b_str, precision).unwrap_or_else(|| BigNum::zero(precision));
     let result = op(&an, &bn_val);
-    let s = format_bignum(&result);
-    if s.as_bytes().contains(&0) {
+    let formatted = format_bignum(&result);
+    if formatted.as_bytes().contains(&0) {
         eprintln!(
             "INTERNAL ERROR: bignum formatting produced an unexpected NUL byte. \
                   This is a compiler bug — please file an issue at \
@@ -3190,7 +3194,7 @@ unsafe fn bignum_binop(
     // counted, libc-`malloc` string allocator (`heap_string_from_str`), never `CString::into_raw`
     // (the Rust allocator, invisible to the string alloc/free counter and not freeable by
     // `ynz_string_free`).
-    heap_string_from_str(&s) as *mut i8
+    heap_string_from_str(&formatted) as *mut i8
 }
 
 // The CPU-parallel join shim tests exercise the three production C-ABI shims in isolation —
