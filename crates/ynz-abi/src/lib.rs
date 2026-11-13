@@ -236,3 +236,19 @@ mod bg_arg_kind_tests {
         );
     }
 }
+
+// ── String ownership header ──────────────────────────────────────────────────
+//
+// A `string` is a pointer to NUL-terminated UTF-8 bytes. STRING_HEADER_BYTES bytes in front of
+// those bytes hold one u64 that tells `ynz_string_release` whether the bytes are owned.
+// Codegen emits it in front of every static string (`{ i64, [N x i8] }`); the runtime writes it
+// in front of every heap string. One home here so the two sides cannot drift on the layout.
+
+/// Bytes of header in front of a string's first byte. A multiple of 8 so the string bytes stay
+/// 8-aligned after a 16-aligned `malloc`.
+pub const STRING_HEADER_BYTES: u64 = 8;
+
+/// Header value of static bytes (a literal, `true`/`false`, a display name, `[REDACTED]`):
+/// never freed. Any other value is the byte capacity (length + NUL, so always at least 1) of a
+/// heap string, which `ynz_string_release` frees.
+pub const STATIC_STRING_HEADER: u64 = 0;

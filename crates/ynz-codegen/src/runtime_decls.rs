@@ -152,6 +152,10 @@ pub struct RuntimeDecls<'ctx> {
     // ABI: (ptr: *const u8, len: i64) → *const u8 (null-terminated)
     pub ynz_string_from_static: FunctionValue<'ctx>,
 
+    // C3a: the one release entry point for string bytes — frees an owned (heap) string, leaves
+    // static bytes alone, ignores null. ABI: (ptr) → void
+    pub ynz_string_release: FunctionValue<'ctx>,
+
     // M7 P4a: errors runtime — frame stack + error allocation.
     // ynz_frame_push(file: ptr, line: i64, function: ptr) → void
     pub ynz_frame_push: FunctionValue<'ctx>,
@@ -347,8 +351,8 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_decimal_from_float",
                 void.fn_type(&[f64.into(), ptr.into()], false),
             ),
-            // Format shims: value → ptr to null-terminated string in thread-local buffer.
-            // Runtime uses thread-local static buffers, not caller-allocated buffers.
+            // Format shims: value → ptr to a fresh heap string the caller owns (release it with
+            // `ynz_string_release`).
             decimal_to_string: declare_fn(
                 module,
                 "ynz_decimal_to_string",
@@ -582,6 +586,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 ptr.fn_type(&[ptr.into(), i64.into()], false),
             ),
 
+            ynz_string_release: declare_fn(
+                module,
+                "ynz_string_release",
+                void.fn_type(&[ptr.into()], false),
+            ),
             // M7 P4a: errors runtime.
             ynz_frame_push: declare_fn(
                 module,

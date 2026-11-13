@@ -995,8 +995,8 @@ pub fn emit_artifact(
 }
 
 struct ModuleGlobals<'ctx> {
-    str_true: GlobalValue<'ctx>,
-    str_false: GlobalValue<'ctx>,
+    str_true: StaticString<'ctx>,
+    str_false: StaticString<'ctx>,
     dec_zero: GlobalValue<'ctx>,
     panic_int_add: GlobalValue<'ctx>,
     panic_int_sub: GlobalValue<'ctx>,
@@ -1094,19 +1094,24 @@ fn build_module<'ctx, 'g>(
         str_true: build_string_global(ctx, module, "true", ".str.true"),
         str_false: build_string_global(ctx, module, "false", ".str.false"),
         dec_zero: build_decimal_global(ctx, module, zero_bits, ".dec.zero"),
-        panic_int_add: build_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
-        panic_int_sub: build_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
-        panic_int_mul: build_string_global(ctx, module, "int overflow in '*'", ".panic.imul"),
-        panic_int_div: build_string_global(ctx, module, "division by zero (int)", ".panic.idiv"),
-        panic_int_rem: build_string_global(ctx, module, "remainder by zero (int)", ".panic.irem"),
-        panic_dec_div: build_string_global(ctx, module, "division by zero (number)", ".panic.ddiv"),
-        panic_dec_rem: build_string_global(
+        panic_int_add: build_c_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
+        panic_int_sub: build_c_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
+        panic_int_mul: build_c_string_global(ctx, module, "int overflow in '*'", ".panic.imul"),
+        panic_int_div: build_c_string_global(ctx, module, "division by zero (int)", ".panic.idiv"),
+        panic_int_rem: build_c_string_global(ctx, module, "remainder by zero (int)", ".panic.irem"),
+        panic_dec_div: build_c_string_global(
+            ctx,
+            module,
+            "division by zero (number)",
+            ".panic.ddiv",
+        ),
+        panic_dec_rem: build_c_string_global(
             ctx,
             module,
             "remainder by zero (number)",
             ".panic.drem",
         ),
-        source_file: build_string_global(ctx, module, source_path, ".source.file"),
+        source_file: build_c_string_global(ctx, module, source_path, ".source.file"),
     };
 
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
@@ -4780,8 +4785,8 @@ fn lower_function<'ctx, 'g>(
 
     // M7 P4a: errors-capable functions push a frame on entry for the call trace.
     if is_errors_capable {
-        let file_g = build_string_global(ctx, module, f.name.as_str(), ".ec.file");
-        let fn_g = build_string_global(ctx, module, f.name.as_str(), ".ec.fn");
+        let file_g = build_c_string_global(ctx, module, f.name.as_str(), ".ec.file");
+        let fn_g = build_c_string_global(ctx, module, f.name.as_str(), ".ec.fn");
         cg.builder
             .build_call(
                 cg.rt.ynz_frame_push,
@@ -16221,22 +16226,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::StringLit(bytes, _) => {
             let mut null = bytes.clone();
             push_c_string_terminator(&mut null);
-            let i8t = cg.i8();
-            let arr_ty = i8t.array_type(null.len() as u32);
-            let arr = i8t.const_array(
-                &null
-                    .iter()
-                    .map(|&b| i8t.const_int(b as u64, false))
-                    .collect::<Vec<_>>(),
-            );
-            let g = cg
-                .module
-                .add_global(arr_ty, Some(AddressSpace::default()), "str");
-            g.set_initializer(&arr);
-            g.set_constant(true);
-            g.set_linkage(inkwell::module::Linkage::Private);
-            g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-            Ok(g.as_pointer_value().into())
+            Ok(build_static_string(cg.ctx, cg.module, &null, "str")
+                .as_pointer_value()
+                .into())
         }
 
         Expr::Ident(name, ident_span) => {
@@ -17191,22 +17183,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     })
                     .collect();
                 push_c_string_terminator(&mut bytes);
-                let i8t = cg.i8();
-                let arr_ty = i8t.array_type(bytes.len() as u32);
-                let arr = i8t.const_array(
-                    &bytes
-                        .iter()
-                        .map(|&b| i8t.const_int(b as u64, false))
-                        .collect::<Vec<_>>(),
-                );
-                let g = cg
-                    .module
-                    .add_global(arr_ty, Some(AddressSpace::default()), "bts");
-                g.set_initializer(&arr);
-                g.set_constant(true);
-                g.set_linkage(inkwell::module::Linkage::Private);
-                g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
-                Ok(g.as_pointer_value().into())
+                Ok(build_static_string(cg.ctx, cg.module, &bytes, "bts")
+                    .as_pointer_value()
+                    .into())
             } else {
                 // Interpolated string: build via ynz_string_builder_*.
                 let builder = cg
@@ -17253,14 +17232,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             let val = lower_expr(cg, sub_expr)?;
                             let sub_ty = cg.expr_type(sub_expr);
                             // Produce a null-terminated string from the expression value.
-                            let s_ptr = expr_to_cstring(cg, val, &sub_ty)?;
+                            let text = expr_to_cstring(cg, val, &sub_ty)?;
                             cg.builder
                                 .build_call(
                                     cg.rt.ynz_string_builder_append,
-                                    &[builder.into(), s_ptr.into()],
+                                    &[builder.into(), text.ptr.into()],
                                     "",
                                 )
                                 .map_err(|e| format!("{e}"))?;
+                            release_value_text(cg, &text)?;
                         }
                     }
                 }
@@ -18509,27 +18489,39 @@ fn lower_sm_background_spawn<'ctx>(
 }
 
 /// Coerce a decimal128 (N≤34) operand to a bignum C-string when the other side is
-/// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed.
+/// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed, and the
+/// strings the coercion allocated: the caller releases them once the operation has read them.
 fn coerce_to_bignum_pair<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
     lhs_ty: &Type,
     rhs_ty: &Type,
-) -> Result<(BasicValueEnum<'ctx>, BasicValueEnum<'ctx>), String> {
+) -> Result<
+    (
+        BasicValueEnum<'ctx>,
+        BasicValueEnum<'ctx>,
+        Vec<PointerValue<'ctx>>,
+    ),
+    String,
+> {
     let lhs_big = matches!(lhs_ty, Type::Number { precision } if *precision > 34);
     let rhs_big = matches!(rhs_ty, Type::Number { precision } if *precision > 34);
     if !lhs_big && !rhs_big {
-        return Ok((lhs, rhs));
+        return Ok((lhs, rhs, Vec::new()));
     }
+    let mut converted = Vec::new();
     let lhs2 = if matches!(lhs_ty, Type::Number { precision } if *precision <= 34) {
         let s = cg
             .builder
             .build_call(cg.rt.decimal_to_string, &[lhs.into()], "lhs_dec2str")
             .map_err(|e| format!("{e}"))?;
-        s.try_as_basic_value()
+        let text = s
+            .try_as_basic_value()
             .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+            .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+        converted.push(text.into_pointer_value());
+        text
     } else {
         lhs
     };
@@ -18538,13 +18530,16 @@ fn coerce_to_bignum_pair<'ctx>(
             .builder
             .build_call(cg.rt.decimal_to_string, &[rhs.into()], "rhs_dec2str")
             .map_err(|e| format!("{e}"))?;
-        s.try_as_basic_value()
+        let text = s
+            .try_as_basic_value()
             .basic()
-            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+            .ok_or_else(|| "decimal_to_string returned void".to_string())?;
+        converted.push(text.into_pointer_value());
+        text
     } else {
         rhs
     };
-    Ok((lhs2, rhs2))
+    Ok((lhs2, rhs2, converted))
 }
 
 fn lower_binop<'ctx>(
@@ -18564,43 +18559,61 @@ fn lower_binop<'ctx>(
 
     // M8 P6: when one operand is bignum (N>34) and the other is decimal128 (N≤34),
     // coerce the N≤34 side to a C string so both operands are bignum-compatible.
-    let (lhs, rhs) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
+    let (lhs, rhs, converted_operands) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
+    let result = lower_binop_operands(cg, op, lhs, rhs, lhs_e.span().start as u32, lhs_ty)?;
+    for converted in converted_operands {
+        cg.builder
+            .build_call(cg.rt.ynz_string_release, &[converted.into()], "")
+            .map_err(|e| format!("{e}"))?;
+    }
+    Ok(result)
+}
 
+/// The operation itself, on operands already lowered (and coerced to bignum text where needed).
+fn lower_binop_operands<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    op: &BinOpKind,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    lhs_start: u32,
+    lhs_ty: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    use BinOpKind::*;
     match (op, lhs_ty) {
         (Add, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Sub, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Mul, Type::Int) => int_arith_overflow(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             op,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Div, Type::Int) => int_divrem(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             false,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
         (Rem, Type::Int) => int_divrem(
             cg,
             lhs.into_int_value(),
             rhs.into_int_value(),
             true,
-            lhs_e.span().start as u32,
+            lhs_start,
         ),
 
         (Add, Type::Float) => cg
@@ -19151,11 +19164,11 @@ fn lower_print<'ctx>(
     val: BasicValueEnum<'ctx>,
     ty: &Type,
 ) -> Result<(), String> {
-    let p = to_c_string(cg, val, ty)?;
+    let text = value_text(cg, val, ty)?;
     cg.builder
-        .build_call(cg.rt.puts, &[p.into()], "puts")
+        .build_call(cg.rt.puts, &[text.ptr.into()], "puts")
         .map_err(|e| format!("{e}"))?;
-    Ok(())
+    release_value_text(cg, &text)
 }
 
 /// Terminate a byte vector as a C string, aborting with an ICE message if any
@@ -19280,7 +19293,7 @@ fn to_c_string<'ctx>(
 
             // Helper closure: append a static string literal to the builder.
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "dbg_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "dbg_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19347,15 +19360,16 @@ fn to_c_string<'ctx>(
                         .into_int_value();
                     cg.i64_bits_to(bits, field_ty)?
                 };
-                let field_str = to_c_string(cg, field_val, field_ty)?;
+                let field_text = value_text(cg, field_val, field_ty)?;
 
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
-                        &[builder_val.into(), field_str.into()],
+                        &[builder_val.into(), field_text.ptr.into()],
                         "",
                     )
                     .map_err(|e| format!("{e}"))?;
+                release_value_text(cg, &field_text)?;
             }
 
             append_static(cg, builder_val, " }")?;
@@ -19393,7 +19407,7 @@ fn to_c_string<'ctx>(
                 .into_pointer_value();
 
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "arr_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "arr_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19485,15 +19499,16 @@ fn to_c_string<'ctx>(
             let out = cg.array_elem_out_buffer(&elem, "arr_dbg")?;
             let _flag = cg.array_elem_get_into(arr_ptr, i, out, "arr_dbg_get", None)?;
             let elem_val = cg.array_elem_from_out(out, &elem, "arr_dbg")?;
-            let elem_str = to_c_string(cg, elem_val, &elem)?;
+            let elem_text = value_text(cg, elem_val, &elem)?;
 
             cg.builder
                 .build_call(
                     cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), elem_str.into()],
+                    &[builder_val.into(), elem_text.ptr.into()],
                     "",
                 )
                 .map_err(|e| format!("{e}"))?;
+            release_value_text(cg, &elem_text)?;
 
             // i += 1
             let next_i = cg
@@ -19542,6 +19557,9 @@ fn to_c_string<'ctx>(
                     "",
                 )
                 .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_call(cg.rt.ynz_string_release, &[rem_str.into()], "")
+                .map_err(|e| format!("{e}"))?;
             append_static(cg, builder_val, " more")?;
             cg.builder
                 .build_unconditional_branch(finish_bb)
@@ -19584,7 +19602,7 @@ fn to_c_string<'ctx>(
                 .into_pointer_value();
 
             let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
-                let g = build_string_global(cg.ctx, cg.module, s, "mdbg_lit");
+                let g = build_c_string_global(cg.ctx, cg.module, s, "mdbg_lit");
                 cg.builder
                     .build_call(
                         cg.rt.ynz_string_builder_append,
@@ -19670,14 +19688,15 @@ fn to_c_string<'ctx>(
             append_static(cg, builder_val, ": ")?;
 
             let val_val = cg.array_elem_from_out(val_out, &val_ty, "mdbg_vv")?;
-            let val_str = to_c_string(cg, val_val, &val_ty)?;
+            let val_text = value_text(cg, val_val, &val_ty)?;
             cg.builder
                 .build_call(
                     cg.rt.ynz_string_builder_append,
-                    &[builder_val.into(), val_str.into()],
+                    &[builder_val.into(), val_text.ptr.into()],
                     "",
                 )
                 .map_err(|e| format!("{e}"))?;
+            release_value_text(cg, &val_text)?;
 
             let next_i = cg
                 .builder
@@ -19780,6 +19799,60 @@ fn to_c_string<'ctx>(
     }
 }
 
+/// The text of a value for a consumer that reads it once and drops it (a `print`, a `${}`
+/// part, a debug-print part), and whether that consumer must release it afterwards.
+struct ValueText<'ctx> {
+    ptr: PointerValue<'ctx>,
+    release_after_use: bool,
+}
+
+/// Whether `to_c_string(_, _, ty)` returns text the converter just allocated and nothing else
+/// holds: `int`/`float`/`number` conversions allocate a fresh heap string per call, and a
+/// `T | nothing` union is either that or the static text `none`, which a release leaves alone.
+///
+/// Never true for a type whose text aliases a string someone else holds (`string`, a revealed
+/// `sensitive`, a bignum `number`): releasing that would free the holder's bytes. Debug text of
+/// a shape/array/map/options value is also fresh but is not released here (pre-existing leak,
+/// left to the scope-exit release pass).
+fn converts_to_fresh_text(ty: &Type) -> bool {
+    match ty {
+        Type::Int | Type::Float => true,
+        Type::Number { precision } => *precision <= 34,
+        Type::Union { variants } => {
+            let mut non_nothing = variants
+                .iter()
+                .filter(|variant| !matches!(variant, Type::Nothing));
+            match (non_nothing.next(), non_nothing.next()) {
+                (Some(inner), None) => converts_to_fresh_text(inner),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// `to_c_string` plus the release duty the consumer inherits (see `converts_to_fresh_text`).
+fn value_text<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<ValueText<'ctx>, String> {
+    Ok(ValueText {
+        ptr: to_c_string(cg, val, ty)?,
+        release_after_use: converts_to_fresh_text(ty),
+    })
+}
+
+/// Release `text` through `ynz_string_release` when its consumer owes that.
+fn release_value_text<'ctx>(cg: &mut Cg<'ctx, '_>, text: &ValueText<'ctx>) -> Result<(), String> {
+    if text.release_after_use {
+        cg.builder
+            .build_call(cg.rt.ynz_string_release, &[text.ptr.into()], "")
+            .map_err(|e| format!("{e}"))?;
+    }
+    Ok(())
+}
+
 /// Convert any Yinz value to a null-terminated C string pointer for interpolation.
 ///
 /// Delegates to `to_c_string` for the types it knows. For Options types, emits a call
@@ -19788,12 +19861,13 @@ fn expr_to_cstring<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
     ty: &Type,
-) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+) -> Result<ValueText<'ctx>, String> {
     match ty {
-        Type::Options { name } => {
-            lower_options_to_string(cg, val, name).map(|v| v.into_pointer_value())
-        }
-        _ => to_c_string(cg, val, ty),
+        Type::Options { name } => Ok(ValueText {
+            ptr: lower_options_to_string(cg, val, name)?.into_pointer_value(),
+            release_after_use: false,
+        }),
+        _ => value_text(cg, val, ty),
     }
 }
 
@@ -19953,11 +20027,8 @@ fn lower_field_access<'ctx>(
                 .ok_or_else(|| "ec_msg: builder has no insert block after call".to_string())?;
 
             cg.builder.position_at_end(merge_bb);
-            let empty = cg
-                .builder
-                .build_global_string_ptr("", "ec_msg_empty")
-                .map_err(|e| format!("{e}"))?
-                .as_pointer_value();
+            let empty =
+                build_string_global(cg.ctx, cg.module, "", "ec_msg_empty").as_pointer_value();
             let phi = cg
                 .builder
                 .build_phi(cg.ptr(), "ec_msg")
@@ -22000,7 +22071,7 @@ fn lower_options_to_string<'ctx>(
             .map_err(|e| format!("{e}"))?;
 
         cg.builder.position_at_end(arm_bb);
-        let g = build_string_global(
+        let g = build_c_string_global(
             cg.ctx,
             cg.module,
             display,
@@ -23053,7 +23124,74 @@ fn load<'ctx>(
     }
 }
 
+/// A static Yinz `string`: `{ i64 STATIC_STRING_HEADER, [N x i8] }`, the header telling
+/// `ynz_string_release` these bytes are never freed.
+#[derive(Clone, Copy)]
+struct StaticString<'ctx> {
+    bytes: PointerValue<'ctx>,
+}
+
+impl<'ctx> StaticString<'ctx> {
+    /// The string pointer Yinz code holds: the first byte, with the header in front of it.
+    fn as_pointer_value(&self) -> PointerValue<'ctx> {
+        self.bytes
+    }
+}
+
+/// Emit `bytes_with_nul` as a static Yinz `string` (header + bytes, private constant) and
+/// return its string pointer. O(n) time and memory in the string length.
+fn build_static_string<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    bytes_with_nul: &[u8],
+    name: &str,
+) -> StaticString<'ctx> {
+    let i8t = ctx.i8_type();
+    let i32t = ctx.i32_type();
+    let header = ctx
+        .i64_type()
+        .const_int(ynz_abi::STATIC_STRING_HEADER, false);
+    let bytes = i8t.const_array(
+        &bytes_with_nul
+            .iter()
+            .map(|&byte| i8t.const_int(byte as u64, false))
+            .collect::<Vec<_>>(),
+    );
+    let initializer = ctx.const_struct(&[header.into(), bytes.into()], false);
+    let global = module.add_global(initializer.get_type(), Some(AddressSpace::default()), name);
+    global.set_initializer(&initializer);
+    global.set_constant(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+    global.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+    // The header is read as a u64 in front of the first byte.
+    global.set_alignment(ynz_abi::STRING_HEADER_BYTES as u32);
+    // SAFETY: field 1 of the struct just built; index 0 steps over the global itself.
+    let bytes = unsafe {
+        global.as_pointer_value().const_in_bounds_gep(
+            initializer.get_type(),
+            &[i32t.const_zero(), i32t.const_int(1, false)],
+        )
+    };
+    StaticString { bytes }
+}
+
+/// A static Yinz `string` from Rust text (no embedded NUL; the NUL terminator is added).
 fn build_string_global<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    s: &str,
+    name: &str,
+) -> StaticString<'ctx> {
+    let mut bytes: Vec<u8> = s.bytes().collect();
+    bytes.push(0);
+    build_static_string(ctx, module, &bytes, name)
+}
+
+/// A static C string the compiler uses internally (a panic message, a source file name, a
+/// debug-print fragment, the source of a copy): never a Yinz `string` value, so it has no
+/// ownership header. Anything that can reach Yinz code as a `string` goes through
+/// `build_string_global` instead.
+fn build_c_string_global<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
     s: &str,
