@@ -1,0 +1,13 @@
+// Q1: `x` is an int in one sibling scope (no wait) and a string crossing a wait in the other.
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let x: int = 7
+    print(x.toString())
+  }
+  if (a) {
+    let x = `str`
+    wait sleep(5)
+    print(x)
+  }
+}

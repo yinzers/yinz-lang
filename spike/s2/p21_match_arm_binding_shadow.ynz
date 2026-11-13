@@ -1,0 +1,16 @@
+// Q1: match arms: arm 1 non-crossing `let x`, arm 2 crossing `let x`, top-level crossing x absent.
+function entrypoint() -> nothing {
+  let k: int = 1
+  if (k) {
+    1 => {
+      let x = `armone`
+      print(x)
+    }
+    2 => {
+      let x = `armtwo`
+      wait sleep(5)
+      print(x)
+    }
+    else => { print(`other`) }
+  }
+}

@@ -1,0 +1,11 @@
+// Q1: nested non-crossing `let x` BEFORE the top-level crossing `let x`.
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let x = `early`
+    print(x)
+  }
+  let x = `late`
+  wait sleep(5)
+  print(x)
+}

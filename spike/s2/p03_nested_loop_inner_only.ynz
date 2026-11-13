@@ -1,0 +1,17 @@
+// Q1: same, via while loops.
+function entrypoint() -> nothing {
+  let i = 0
+  while (i < 1) {
+    let s = `outer`
+    wait sleep(5)
+    let j = 0
+    while (j < 1) {
+      let s = `inner`
+      wait sleep(5)
+      print(s)
+      j = j + 1
+    }
+    print(s)
+    i = i + 1
+  }
+}

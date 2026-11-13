@@ -1,0 +1,16 @@
+// Q1: background handles (conduit crossing) with same name in nested scopes.
+function work(tag: string) -> nothing {
+  wait sleep(5)
+  print(tag)
+}
+function entrypoint() -> nothing {
+  let a = true
+  if (a) {
+    let h = background work(`outer-task`)
+    wait sleep(20)
+    if (a) {
+      let h = background work(`inner-task`)
+      wait sleep(20)
+    }
+  }
+}

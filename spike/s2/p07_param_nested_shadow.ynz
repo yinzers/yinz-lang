@@ -1,0 +1,13 @@
+// Q1: param shadowed by nested let in suspending fn.
+function worker(p: string) -> nothing {
+  wait sleep(5)
+  let a = true
+  if (a) {
+    let p = `shadow`
+    print(p)
+  }
+  print(p)
+}
+function entrypoint() -> nothing {
+  worker(`param`)
+}

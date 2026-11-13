@@ -1,0 +1,13 @@
+// Q1: top-level `x` never crosses (only read before the wait inside the if... and after the if);
+// inner `x` crosses. Outer is read again after the inner scope exits.
+function entrypoint() -> nothing {
+  let x = `top`
+  print(x)
+  let a = true
+  if (a) {
+    let x = `inner`
+    wait sleep(5)
+    print(x)
+  }
+  print(x)
+}

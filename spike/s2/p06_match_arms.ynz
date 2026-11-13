@@ -1,0 +1,19 @@
+// Q1: two match arms each with crossing `let x`.
+function entrypoint() -> nothing {
+  let k: int = 2
+  if (k) {
+    1 => {
+      let x = `one`
+      wait sleep(5)
+      print(x)
+    }
+    2 => {
+      let x = `two`
+      wait sleep(5)
+      print(x)
+    }
+    else => {
+      print(`other`)
+    }
+  }
+}

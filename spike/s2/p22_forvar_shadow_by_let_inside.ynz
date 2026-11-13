@@ -1,0 +1,9 @@
+// Q1: let inside for body with the loop var's name.
+function entrypoint() -> nothing {
+  let names: array<string> = [`amy`, `bob`]
+  for (n in names) {
+    wait sleep(5)
+    let n = `shadow`
+    print(n)
+  }
+}

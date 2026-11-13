@@ -1,0 +1,11 @@
+// Q1: param shadow where the suspension is in a different function entirely (callee suspends, caller sync?).
+function leaf() -> nothing {
+  wait sleep(1)
+}
+function mid(p: string) -> nothing {
+  leaf()
+  print(p)
+}
+function entrypoint() -> nothing {
+  mid(`param`)
+}

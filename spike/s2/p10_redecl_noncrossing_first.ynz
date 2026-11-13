@@ -1,0 +1,9 @@
+// Q1: two top-level `let x`, the FIRST never read after a wait (dead before it), second crosses.
+function entrypoint() -> nothing {
+  let x = `first`
+  print(x)
+  wait sleep(5)
+  let x = `second`
+  wait sleep(5)
+  print(x)
+}

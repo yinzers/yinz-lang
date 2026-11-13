@@ -1,0 +1,12 @@
+// Q1: top-level x crosses only via its own wait; a nested shadow in a later wait-free arm
+// after x's last read.
+function entrypoint() -> nothing {
+  let x = `outer`
+  wait sleep(5)
+  print(x)
+  let a = true
+  if (a) {
+    let x = `late-inner`
+    print(x)
+  }
+}

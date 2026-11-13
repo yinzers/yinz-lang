@@ -1,0 +1,10 @@
+// Q1: loop-carried: let inside loop body crossing, re-declared each iteration (same binding site).
+function entrypoint() -> nothing {
+  let i = 0
+  while (i < 3) {
+    let s = `iter`
+    wait sleep(1)
+    print(s)
+    i = i + 1
+  }
+}

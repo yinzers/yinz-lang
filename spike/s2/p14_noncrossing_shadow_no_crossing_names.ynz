@@ -1,0 +1,12 @@
+// Q1: suspending fn, shadow that never crosses; nothing in the fn is a crossing local.
+function entrypoint() -> nothing {
+  let x = `outer`
+  let a = true
+  if (a) {
+    let x = `inner`
+    print(x)
+  }
+  print(x)
+  wait sleep(5)
+  print(`done`)
+}
