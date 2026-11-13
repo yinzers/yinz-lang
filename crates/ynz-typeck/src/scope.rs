@@ -78,6 +78,9 @@ pub struct ScopeEntry {
     pub alias_class: u64,
     /// Where the binding was declared (for "previously defined here" spans).
     pub defined_at: SourceSpan,
+    /// SPIKE S3: true for the first entry of its alias class (the binding whose binding event was
+    /// `Fresh`, or a parameter) — the only member with a release duty. Set by `Scope::insert`.
+    pub founder: bool,
 }
 
 /// Block-scoped variable environment.
@@ -89,6 +92,10 @@ pub struct Scope {
     frames: Vec<HashMap<String, ScopeEntry>>,
     /// Mint for alias-class ids — each fresh value gets its own class.
     next_class: u64,
+    /// SPIKE S3: alias classes that already have a founder.
+    founded: HashSet<u64>,
+    /// SPIKE S3: for each consumed class, the frame count at the moment it was consumed.
+    consumed_depth: HashMap<u64, usize>,
 }
 
 impl Default for Scope {
@@ -102,6 +109,8 @@ impl Scope {
         Self {
             frames: vec![HashMap::new()],
             next_class: 1,
+            founded: HashSet::new(),
+            consumed_depth: HashMap::new(),
         }
     }
 
@@ -122,7 +131,8 @@ impl Scope {
         id
     }
 
-    pub fn insert(&mut self, name: String, entry: ScopeEntry) {
+    pub fn insert(&mut self, name: String, mut entry: ScopeEntry) {
+        entry.founder = self.founded.insert(entry.alias_class);
         if let Some(frame) = self.frames.last_mut() {
             frame.insert(name, entry);
         }
@@ -182,6 +192,7 @@ impl Scope {
         let Some(class) = self.class_of(name) else {
             return;
         };
+        self.consumed_depth.entry(class).or_insert(self.frames.len());
         for frame in self.frames.iter_mut() {
             for entry in frame.values_mut() {
                 if entry.alias_class == class && entry.consumed.is_none() {
@@ -215,5 +226,25 @@ impl Scope {
             names.extend(frame.keys().map(String::as_str));
         }
         names
+    }
+}
+
+// ── SPIKE S3: read-only views for the release record ─────────────────────────────────────────
+impl Scope {
+    /// Number of open frames (1 = function top level).
+    pub fn depth(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Frame count at which `class` was consumed, if it was.
+    pub fn consumed_at_depth(&self, class: u64) -> Option<usize> {
+        self.consumed_depth.get(&class).copied()
+    }
+
+    /// Entries of frame `index` (0 = outermost), declaration order.
+    pub fn frame_entries(&self, index: usize) -> Vec<(&String, &ScopeEntry)> {
+        let mut v: Vec<_> = self.frames[index].iter().collect();
+        v.sort_by_key(|(_, e)| (e.defined_at.start, e.defined_at.end));
+        v
     }
 }

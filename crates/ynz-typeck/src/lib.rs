@@ -55,6 +55,7 @@ pub mod may_block;
 pub mod options_table;
 pub mod owned_copy;
 pub mod queries;
+pub mod release_plan;
 pub mod resolve_import;
 pub mod return_paths;
 pub mod scope;

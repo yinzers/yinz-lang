@@ -390,6 +390,8 @@ pub struct TypedModule {
     /// flag — so all consumers key off ONE producer (authoritative-derivation.md), never
     /// a per-consumer re-derivation.
     pub back_edge_yield_admitted: std::collections::HashSet<String>,
+    /// SPIKE S3: the persisted scope-exit release record (see `release_plan`).
+    pub release_plan: crate::release_plan::ReleasePlan,
 }
 
 /// Run the M5 type checker over all function bodies.
@@ -441,6 +443,8 @@ pub fn check(
         expr_types: HashMap::new(),
         diags,
         scope: Scope::new(),
+        release_plan: Default::default(),
+        reassigned_bindings: HashSet::new(),
         current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
         current_shape: None,
@@ -470,6 +474,7 @@ pub fn check(
         bg_union_narrowed_diag_spans: HashSet::new(),
     };
     checker.check_module(module);
+    checker.finalize_release_plan();
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -477,6 +482,7 @@ pub fn check(
         background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
+        release_plan: checker.release_plan,
     };
     (
         typed,
@@ -526,6 +532,8 @@ pub fn check_with_kernel_mode(
         expr_types: HashMap::new(),
         diags,
         scope: Scope::new(),
+        release_plan: Default::default(),
+        reassigned_bindings: HashSet::new(),
         current_fn_name: String::new(),
         current_fn_ret: Type::Nothing,
         current_shape: None,
@@ -555,6 +563,7 @@ pub fn check_with_kernel_mode(
         bg_union_narrowed_diag_spans: HashSet::new(),
     };
     checker.check_module(module);
+    checker.finalize_release_plan();
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
@@ -562,6 +571,7 @@ pub fn check_with_kernel_mode(
         background_arg_sole_holder: checker.bg_sole_holder,
         cross_thread_padded_shapes: checker.padded_shapes,
         back_edge_yield_admitted: checker.back_edge_yield_admitted,
+        release_plan: checker.release_plan,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -793,6 +803,10 @@ struct Checker<'b> {
     /// v0.3-M7 Phase 6: per-function back-edge poll-yield admission verdicts —
     /// moved into `TypedModule::back_edge_yield_admitted` at the end of `check`.
     back_edge_yield_admitted: std::collections::HashSet<String>,
+    /// SPIKE S3: release record under construction.
+    release_plan: crate::release_plan::ReleasePlan,
+    /// SPIKE S3: bindings reassigned anywhere in the current function (demoted at function end).
+    reassigned_bindings: HashSet<crate::release_plan::BindingKey>,
     /// v0.3-M7 FRAGO 024 (round 8): dedup guard for `background_spawn_call_form`'s
     /// union-narrowed-receiver diagnostic (FRAGO 026). That helper is now called
     /// from MULTIPLE sites for the SAME spawn (the Stmt::Expr / handle-form
@@ -995,6 +1009,7 @@ impl<'b> Checker<'b> {
                     origin: Origin::Param(param.ownership.clone()),
                     alias_class,
                     defined_at: param.name_span.clone(),
+                    founder: false,
                 },
             );
         }
@@ -1122,6 +1137,7 @@ impl<'b> Checker<'b> {
         // M3b's auto-parallelization of independent statements works naturally: two
         // `let a = wait fa()` / `let b = wait fb()` lines get parallelized automatically.
         self.check_stmts(&f.body.stmts);
+        self.record_block_exit(&f.body);
         self.scope.pop();
 
         // Check 3 runs AFTER check_stmts (v0.3-M6 P1-1 site 9 reorder, mirroring checks
@@ -1774,6 +1790,7 @@ impl<'b> Checker<'b> {
                     origin: Origin::Param(param.ownership.clone()),
                     alias_class,
                     defined_at: param.name_span.clone(),
+                    founder: false,
                 },
             );
         }
@@ -2359,6 +2376,7 @@ impl<'b> Checker<'b> {
                     origin: Origin::Owned,
                     alias_class,
                     defined_at: name_span.clone(),
+                    founder: false,
                 },
             );
             return;
@@ -2399,6 +2417,7 @@ impl<'b> Checker<'b> {
                         origin: Origin::Owned,
                         alias_class,
                         defined_at: name_span.clone(),
+                    founder: false,
                     },
                 );
                 return;
@@ -2469,6 +2488,7 @@ impl<'b> Checker<'b> {
                 origin,
                 alias_class,
                 defined_at: name_span.clone(),
+                    founder: false,
             },
         );
     }
@@ -3239,6 +3259,7 @@ impl<'b> Checker<'b> {
                 // class per the initializer table.
                 let (origin, alias_class) = self.binding_event_origin(value);
                 if let Some(e) = self.scope.lookup_mut(target) {
+                    self.reassigned_bindings.insert((e.defined_at.start, e.defined_at.end));
                     e.origin = origin;
                     e.alias_class = alias_class;
                     e.consumed = None;
@@ -3311,6 +3332,7 @@ impl<'b> Checker<'b> {
 
         self.scope.push();
         self.check_stmts(&body.stmts);
+        self.record_block_exit(body);
         self.scope.pop();
 
         for class in &failed_binding_classes {
@@ -3450,6 +3472,7 @@ impl<'b> Checker<'b> {
                     }
                     self.scope.push();
                     self.check_stmts(&arm.body.stmts);
+                    self.record_block_exit(&arm.body);
                     self.scope.pop();
                     if let Some(ref name) = narrowed_name {
                         self.union_narrowed.remove(name);
@@ -3463,6 +3486,7 @@ impl<'b> Checker<'b> {
             }
             self.scope.push();
             self.check_stmts(&arm.body.stmts);
+            self.record_block_exit(&arm.body);
             self.scope.pop();
         }
 
@@ -3550,6 +3574,7 @@ impl<'b> Checker<'b> {
         if let Some(else_body) = else_arm {
             self.scope.push();
             self.check_stmts(&else_body.stmts);
+            self.record_block_exit(else_body);
             self.scope.pop();
         }
     }
@@ -3566,6 +3591,7 @@ impl<'b> Checker<'b> {
         }
         self.scope.push();
         self.check_stmts(&body.stmts);
+        self.record_block_exit(body);
         self.scope.pop();
     }
 
@@ -3627,9 +3653,11 @@ impl<'b> Checker<'b> {
                 origin: Origin::Cell(cell_reason),
                 alias_class,
                 defined_at: var_span.clone(),
+                    founder: false,
             },
         );
         self.check_stmts(&body.stmts);
+        self.record_block_exit(body);
         self.scope.pop();
     }
 
@@ -3671,7 +3699,130 @@ impl<'b> Checker<'b> {
         Type::Error
     }
 
+    // ── SPIKE S3: release record producers ────────────────────────────────────────────────
+    //
+    // ONE entry function (`release_entry`) classifies a binding leaving scope; ONE recorder per
+    // exit-edge kind calls it. Everything reads `Scope` state at the moment of the exit in
+    // source order, which is exactly what `consume` has written so far.
+
+    fn release_entry(
+        &self,
+        name: &str,
+        entry: &ScopeEntry,
+        frame_index: usize,
+        returned_classes: &HashSet<u64>,
+        returned_untraceable: bool,
+    ) -> crate::release_plan::ReleaseEntry {
+        use crate::release_plan::{release_kind_of, Fate, ReleaseEntry};
+        let kind = release_kind_of(&entry.ty);
+        let owner_origin = matches!(
+            entry.origin,
+            Origin::Owned | Origin::Param(Some(ynz_ast::nodes::OwnershipModifier::Give))
+        );
+        let fate = if kind.is_none() {
+            Fate::OmittedUnsupportedType
+        } else if !(entry.founder && owner_origin) {
+            Fate::OmittedNotOwner
+        } else if returned_untraceable || returned_classes.contains(&entry.alias_class) {
+            Fate::OmittedReturned
+        } else if entry.consumed.is_some() {
+            match self.scope.consumed_at_depth(entry.alias_class) {
+                Some(depth) if depth > frame_index + 1 => Fate::OmittedMaybeMoved,
+                _ => Fate::OmittedMoved,
+            }
+        } else {
+            Fate::Release
+        };
+        ReleaseEntry {
+            name: name.to_string(),
+            binding: (entry.defined_at.start, entry.defined_at.end),
+            ty: entry.ty.clone(),
+            kind,
+            fate,
+        }
+    }
+
+    /// Fallthrough end of `block` (also the loop back-edge for its per-iteration locals):
+    /// the innermost frame, last-declared first. Call BEFORE `scope.pop()`.
+    fn record_block_exit(&mut self, block: &Block) {
+        let index = self.scope.depth() - 1;
+        let none = HashSet::new();
+        let mut list: Vec<_> = self
+            .scope
+            .frame_entries(index)
+            .into_iter()
+            .map(|(n, e)| self.release_entry(n, e, index, &none, false))
+            .collect();
+        list.reverse();
+        self.release_plan
+            .block_end
+            .insert((block.span.start, block.span.end), list);
+    }
+
+    /// A `return`: every open frame, innermost first, last-declared first, minus whatever the
+    /// returned value is or reaches. Call AFTER the return expression was inferred.
+    fn record_return_exit(&mut self, value: Option<&Expr>, span: &SourceSpan) {
+        let mut returned: HashSet<u64> = HashSet::new();
+        let mut untraceable = false;
+        if let Some(expr) = value {
+            match self.provenance_of(expr) {
+                Provenance::Fresh => {}
+                Provenance::Whole(name) => {
+                    if let Some(c) = self.scope.class_of(&name) {
+                        returned.insert(c);
+                    }
+                }
+                Provenance::Reaches(roots) => {
+                    for root in roots {
+                        if let Some(c) = self.scope.class_of(&root) {
+                            returned.insert(c);
+                        }
+                    }
+                }
+                Provenance::Unknown => untraceable = true,
+            }
+        }
+        let mut list = Vec::new();
+        for index in (0..self.scope.depth()).rev() {
+            let mut frame: Vec<_> = self
+                .scope
+                .frame_entries(index)
+                .into_iter()
+                .map(|(n, e)| self.release_entry(n, e, index, &returned, untraceable))
+                .collect();
+            frame.reverse();
+            list.extend(frame);
+        }
+        self.release_plan
+            .return_edge
+            .insert((span.start, span.end), list);
+    }
+
+    /// Demotions that need the whole function: a binding reassigned anywhere may hold a
+    /// non-owned value at an exit recorded before the reassignment (loop-carried), so it never releases.
+    fn finalize_release_plan(&mut self) {
+        use crate::release_plan::Fate;
+        let reassigned = std::mem::take(&mut self.reassigned_bindings);
+        for list in self
+            .release_plan
+            .block_end
+            .values_mut()
+            .chain(self.release_plan.return_edge.values_mut())
+        {
+            for entry in list.iter_mut() {
+                if entry.fate == Fate::Release && reassigned.contains(&entry.binding) {
+                    entry.fate = Fate::OmittedReassigned;
+                }
+            }
+        }
+    }
+
     fn check_stmt_return(&mut self, value: Option<&Expr>, span: &SourceSpan) {
+        self.check_stmt_return_inner(value, span);
+        self.record_return_exit(value, span);
+    }
+
+    fn check_stmt_return_inner(&mut self, value: Option<&Expr>, span: &SourceSpan) {
         let expected = self.current_fn_ret.clone();
         match (value, &expected) {
             (None, Type::Nothing) => {}
