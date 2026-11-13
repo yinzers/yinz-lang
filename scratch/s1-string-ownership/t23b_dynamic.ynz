@@ -1,0 +1,11 @@
+function pick(names: array<string>, index: int) -> string {
+  return names[index].or(`none`)
+}
+function entrypoint() -> nothing {
+  let n: int = 5
+  let names: array<string> = [`a${n}`]
+  let hit: string = pick(names, 0)
+  let miss: string = pick(names, 9)
+  print(hit)
+  print(miss)
+}

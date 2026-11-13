@@ -1,0 +1,8 @@
+function entrypoint() -> nothing {
+  let n: int = 5
+  let names: array<string> = [`a${n}`]
+  let hit: string = names[0].or(`none`)
+  let miss: string = names[9].or(`none`)
+  print(hit)
+  print(miss)
+}

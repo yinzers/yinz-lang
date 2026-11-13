@@ -1,0 +1,108 @@
+== t00_baseline_interp: exit=0 CLEAN
+     out: x5
+== t01_literal: exit=1 ERROR: AddressSanitizer: SEGV on unknown address 0x0000005fa0ab (pc 0x7bb18ce2d6e5 bp 0x00
+         #4 0x413248 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t02_pure_interp_literal: exit=0 CLEAN
+     out: hello world
+== t03_copy_alias: exit=1 ERROR: AddressSanitizer: attempting double-free on 0x5020000004b0 in thread T0:
+         #1 0x4132b8 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b8ac in main (/tmp/s1bin/t03_copy_alias+0x40b8ac) (BuildId: 0b001f1e41f7a832f51112a423187b67820f5386)
+== t04_dot_copy: exit=1 ERROR: AddressSanitizer: attempting double-free on 0x5020000004b0 in thread T0:
+         #1 0x4132b8 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b8ac in main (/tmp/s1bin/t04_dot_copy+0x40b8ac) (BuildId: 3978c9c8af749362c657b482eb81aa1ac445acd4)
+== t05_int_tostring: exit=1 ERROR: AddressSanitizer: attempting free on address which was not malloc()-ed: 0x78102a51c
+         #1 0x413258 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b84d in main (/tmp/s1bin/t05_int_tostring+0x40b84d) (BuildId: 0eb59e9cf6e729594d4f9bdbce3a656d27d74338)
+== t05b_float_tostring: exit=1 ERROR: AddressSanitizer: attempting free on address which was not malloc()-ed: 0x77182c9f0
+         #1 0x413278 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b864 in main (/tmp/s1bin/t05b_float_tostring+0x40b864) (BuildId: 07cd005bb7a9978a3debb0fd871793eeaafd5659)
+== t05c_number_tostring: exit=1 ERROR: AddressSanitizer: attempting free on address which was not malloc()-ed: 0x78c45cf5c
+         #1 0x413298 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b884 in main (/tmp/s1bin/t05c_number_tostring+0x40b884) (BuildId: e3a700ddfb83eab04e8d39598ef923299a266928)
+== t06_tostring_clobber: exit=1 ERROR: AddressSanitizer: attempting free on address which was not malloc()-ed: 0x789556588
+         #1 0x413288 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b86f in main (/tmp/s1bin/t06_tostring_clobber+0x40b86f) (BuildId: 54fd15ddce9299ec86316d082636987a218e4d3b)
+== t07_upper_lower_trim: exit=0 CLEAN
+     out:  HELLO5 
+     out:  hello5 
+     out: Hello5
+== t08_substring: exit=0 CLEAN
+     out: el
+== t08c_trim_noop: exit=0 CLEAN
+     out: Hello5
+== t08d_replace_noop: exit=0 CLEAN
+     out: Hello5
+== t09_split: exit=0 CLEAN
+     out: a
+== t10_options_tostring: exit=0 CLEAN
+     out: red
+== t11_codepoint_at: exit=0 CLEAN
+     out: a
+     out: b
+     out: c
+     out: 5
+== t12_shape_field: exit=1 ERROR: AddressSanitizer: attempting double-free on 0x5020000004b0 in thread T0:
+         #1 0x4132d8 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b8c8 in main (/tmp/s1bin/t12_shape_field+0x40b8c8) (BuildId: d78211a5e7a16d340e6231da0037c2c98637830a)
+== t13_array: exit=1 ERROR: AddressSanitizer: attempting double-free on 0x5020000004b0 in thread T0:
+         #1 0x413328 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b918 in main (/tmp/s1bin/t13_array+0x40b918) (BuildId: e69361797d7181c26517ed9aa57b97a5967ca29f)
+== t14_channel: exit=1 ERROR: AddressSanitizer: attempting double-free on 0x5020000004b0 in thread T0:
+         #1 0x42a8d8 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40ba6a in ynz_sm_entrypoint_resume (/tmp/s1bin/t14_channel+0x40ba6a) (BuildId: 1d1375a6b0ae70b5122d08d9602ed0855aee7845)
+== t15_background_arg: exit=1 ERROR: AddressSanitizer: heap-use-after-free on address 0x5020000004b0 at pc 0x7bade083e2e
+     out: READ of size 2 at 0x5020000004b0 thread T0
+     out: Thread T4 created by T0 here:
+         #1 0x40ba8b in ynz_sm_entrypoint_resume (/tmp/s1bin/t15_background_arg+0x40ba8b) (BuildId: 272a004e2dabfe90d65b85188f1540fe0b651b56)
+         #1 0x42a068 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t16_param_alias: exit=1 ERROR: AddressSanitizer: heap-use-after-free on address 0x5020000004b0 at pc 0x7e91c665f2e
+     out: READ of size 2 at 0x5020000004b0 thread T0
+         #1 0x40b8bc in main (/tmp/s1bin/t16_param_alias+0x40b8bc) (BuildId: 47c78c972555da25d0fbb25ff0d05e6f3421289c)
+         #1 0x4132d8 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t17_return_string: exit=0 CLEAN
+     out: bob7
+== t18_map: exit=0 CLEAN
+     out: 2
+== t19_reassign: exit=1 ERROR: AddressSanitizer: attempting double-free on 0x5020000004b0 in thread T0:
+         #1 0x4132c8 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b8bb in main (/tmp/s1bin/t19_reassign+0x40b8bb) (BuildId: a17667458650457127e38cb71eb0a576568eb91e)
+== t20_sensitive: exit=0 CLEAN
+     out: [REDACTED]
+== t21_shape_literal_field: exit=1 ERROR: AddressSanitizer: SEGV on unknown address 0x0000005fa0ab (pc 0x7a1c6de776e5 bp 0x00
+         #4 0x413278 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t22_array_literal_elem: exit=1 ERROR: AddressSanitizer: SEGV on unknown address 0x0000005fa0ab (pc 0x7cb6a12666e5 bp 0x00
+         #4 0x4132d8 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t23_array_or_default: exit=1 ERROR: AddressSanitizer: SEGV on unknown address 0x0000005fa0ad (pc 0x71c76ff576e5 bp 0x00
+         #4 0x413308 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t24_channel_literal: exit=1 ERROR: AddressSanitizer: SEGV on unknown address 0x0000005fa0ab (pc 0x72b3c17b26e5 bp 0x00
+         #4 0x42a858 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t25_channel_ptr_identity: exit=1 ERROR: AddressSanitizer: attempting double-free on 0x5020000004b0 in thread T0:
+         #1 0x42a908 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40ba92 in ynz_sm_entrypoint_resume (/tmp/s1bin/t25_channel_ptr_identity+0x40ba92) (BuildId: 0551d19be9f3af968a8d0ea67e0fc740c53f2c62)
+== t26_map_get_alias: exit=1 ERROR: AddressSanitizer: attempting double-free on 0x5020000004b0 in thread T0:
+         #1 0x413378 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b970 in main (/tmp/s1bin/t26_map_get_alias+0x40b970) (BuildId: b4125b8acc2e79a6fa3b1e8ba88f09a44e857c71)
+== t28_bg_fire_and_forget_cpu: exit=1 ERROR: AddressSanitizer: heap-use-after-free on address 0x5020000004b0 at pc 0x7190cf7622e
+     out: READ of size 2 at 0x5020000004b0 thread T17
+     out: Thread T17 created by T0 here:
+         #2 0x40b8d8 in ynz_bg_worker_0 (/tmp/s1bin/t28_bg_fire_and_forget_cpu+0x40b8d8) (BuildId: b590b07065da41fa107bb179447224ccdbdeb2d2)
+         #1 0x4132d8 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t29_grapheme_at: exit=0 CLEAN
+     out: b
+== t30_substring_variants: exit=0 CLEAN
+     out: Hello5
+== t31_bool_tostring: exit=1 ERROR: AddressSanitizer: SEGV on unknown address 0x0000005fa0a0 (pc 0x78c8227d56e5 bp 0x00
+         #4 0x413268 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t32_error_message: exit=1 ERROR: AddressSanitizer: SEGV on unknown address 0x000000602a10 (pc 0x7902a920c6e5 bp 0x00
+         #4 0x42a798 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t33_interp_of_string_part: exit=0 CLEAN
+     out: x5
+     out: x5
+== t34_bg_parent_frees_early: exit=1 ERROR: AddressSanitizer: heap-use-after-free on address 0x5020000004b0 at pc 0x7f53a93f82e
+     out: READ of size 2 at 0x5020000004b0 thread T2
+     out: Thread T2 created by T0 here:
+         #1 0x40b8b8 in ynz_sm_worker_resume (/tmp/s1bin/t34_bg_parent_frees_early+0x40b8b8) (BuildId: 83ec3462363bea63dfc40ca1c7b33a017d1a157c)
+         #1 0x413538 in ynz_free crates/ynz-runtime/src/lib.rs:488
+== t35_string_param_to_shape: exit=1 ERROR: AddressSanitizer: attempting double-free on 0x5020000004b0 in thread T0:
+         #1 0x413318 in ynz_free crates/ynz-runtime/src/lib.rs:488
+         #2 0x40b904 in main (/tmp/s1bin/t35_string_param_to_shape+0x40b904) (BuildId: a1fed7cb282882a2783e86acb3631a70a75b6fb2)
