@@ -7,11 +7,12 @@
 //! call discarded `unify_param`'s mismatch; the dot-call form checked non-receiver arguments
 //! for the union case only); built under ASan at -O0 the first four overflow the stack.
 //!
-//! Test count: 11 — one per refused case and per call form (generic with a sibling argument,
+//! Test count: 12 — one per refused case and per call form (generic with a sibling argument,
 //! with an explicit type argument, with a concrete parameter, with two scalar types, with a
 //! shape that fits a union parameter only through its type parameter; dot-call
 //! with a shape and with an int), the plain-form guard (already clean when probed), and the
-//! legal calls, container parameters and union-bound type parameters that must keep running.
+//! legal calls, container parameters, union-bound type parameters and the instance each
+//! generic call was checked with that must keep running.
 
 mod support;
 
@@ -191,5 +192,20 @@ fn v03_m9_c1g_union_bound_to_a_type_parameter_inside_a_union_parameter_is_accept
         false,
         "hello\ntiny2\n",
         "a union bound to a type parameter inside a union parameter must still compile and run",
+    );
+}
+
+#[test]
+fn v03_m9_c1g_generic_call_runs_the_instance_the_type_checker_chose() {
+    // BUG (found in round 2): codegen re-derived each call's instance from its argument types;
+    // `pickA(tiny, big)` fits both `pickA<Big>` and `pickA<Big | Tiny>`, so a legal program
+    // stopped with an internal compiler error, and a wrong pick reads a bare `Big` as a tagged
+    // box. Codegen now reads the type arguments typeck recorded for the call. TIER: High (call
+    // dispatch, memory safety).
+    support::assert_fixture_prints(
+        "v0_3_m9_c1g_generic_call_runs_its_checked_instance.ynz",
+        false,
+        "hello\nhello\ntiny\n",
+        "every generic call must run the instance it was checked with",
     );
 }
